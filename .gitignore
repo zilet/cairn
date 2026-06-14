@@ -1,0 +1,27 @@
+# dependencies & build output
+node_modules/
+dist/
+
+# runtime SQLite database (created on first boot)
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# distribution bundle / archives
+files.zip
+*.zip
+
+# local secrets (copy of .env.example with real keys)
+.env
+
+# personal, local-only files — kept on disk, never published. One folder holds
+# everything you use privately, mirroring the repo layout:
+#   .local/scripts/   deploy-rpi.sh, rpi-bootstrap.sh, rpi-https.sh, rpi-backup.sh
+#   .local/docs/      RPI.md (and any other private notes)
+#   .local/examples/  design-reference material (videos, mocks)
+.local/
+
+# logs & OS cruft
+*.log
+.DS_Store

@@ -1,0 +1,9 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- monochrome silhouette for Safari pinned tabs (recoloured via the link's color attr) -->
+  <g fill="#000000">
+    <rect x="156" y="320" width="200" height="66" rx="33"/>
+    <rect x="183" y="258" width="162" height="56" rx="28"/>
+    <rect x="187" y="202" width="126" height="50" rx="25"/>
+    <rect x="214" y="150" width="92"  height="46" rx="23"/>
+  </g>
+</svg>

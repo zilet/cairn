@@ -1,0 +1,32 @@
+{
+  "name": "cairn",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Cairn \u2014 self-hosted training, nutrition & performance tracker with an agentic coaching loop.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "seed": "tsx src/seed.ts",
+    "garmin:sync": "tsx src/garmin.ts",
+    "reset": "rm -f data/cairn.db data/cairn.db-* && npm run seed",
+    "migrate": "tsx src/migrate.ts",
+    "backup": "curl -fsS http://localhost:8787/api/export -o cairn-export.json && echo saved cairn-export.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.21.2",
+    "garmin-connect": "^1.6.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

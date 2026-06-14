@@ -1,0 +1,546 @@
+import path from "node:path";
+import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { db } from "./db.js";
+import * as repo from "./repo.js";
+import { runAgentWithFallback } from "./agents.js";
+import { buildEnrichPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
+
+const execFileP = promisify(execFile);
+
+// Background, in-process enrichment engine.
+//
+// Free-text logs/notes are saved INSTANTLY by the offline regex parser; this
+// engine later runs a coaching agent over each entry to (a) improve its
+// structured fields and (b) distill genuinely notable durable facts into the
+// `memory` table. It is a SERIAL queue — only one CLI agent runs at a time —
+// and degrades gracefully: if enrichment is disabled or no agent is reachable,
+// the regex-parsed entry stands untouched and nothing throws.
+
+// 'review' is a follow-on job (no row of its own): after a health document
+// enriches successfully, the whole-picture health review is refreshed on the
+// same serial queue. id is unused for review jobs.
+// 'garmin_strength' reconciles a synced Garmin strength activity into the day's
+// Cairn session — id is the garmin_activities row id (no status column of its own).
+type Kind = "activity" | "food" | "health" | "review" | "garmin_strength";
+interface Job {
+  kind: Kind;
+  id: number;
+}
+
+const queue: Job[] = [];
+let draining = false;
+
+// Re-entry guard: at most ONE review-refresh job sits in the queue at a time.
+// Several health docs finishing back-to-back collapse into a single refresh
+// (cleared when the review job starts, so data landing mid-run queues the next).
+let reviewQueued = false;
+
+export function enqueueReviewRefresh(): void {
+  if (reviewQueued) return;
+  reviewQueued = true;
+  queue.push({ kind: "review", id: 0 });
+  if (!draining) void drain();
+}
+
+// Enrichment is a small structuring task; cap it well under the default agent
+// timeout so one hanging agent can't block the whole serial queue for 5 minutes.
+const ENRICH_TIMEOUT_MS = 120_000;
+// Health ingestion can mean reading a multi-MB PDF or a whole CCDA export folder
+// and splitting years of results into panels — give it the fuller agent budget.
+const HEALTH_INGEST_TIMEOUT_MS = 300_000;
+
+// Refuse pathological archives before unzipping (zip-bomb / huge export guard).
+const ZIP_MAX_UNCOMPRESSED = 200 * 1024 * 1024; // 200 MB
+const ZIP_MAX_FILES = 3000;
+
+function looksLikeZip(fp: string, mime?: string | null): boolean {
+  const m = (mime || "").toLowerCase();
+  return m === "application/zip" || m === "application/x-zip-compressed" || /\.zip$/i.test(fp);
+}
+
+// Unzip an uploaded archive into an isolated sibling folder under uploads, after
+// a size/count sanity check. Returns the extraction dir, or null if unzip is
+// unavailable / the archive is unsafe / extraction fails (caller then hands the
+// agent the raw file instead). Reads happen only inside this dir.
+async function unzipToFolder(zipPath: string): Promise<string | null> {
+  const destDir = `${zipPath}-x`;
+  try {
+    // `unzip -l` trailer: "  <total bytes>  <file count> files"
+    const { stdout } = await execFileP("unzip", ["-l", zipPath], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+    const lines = stdout.trim().split("\n");
+    const last = lines[lines.length - 1] || "";
+    const mTotal = last.match(/^\s*(\d+)\s+(\d+)\s+files?/i);
+    if (mTotal) {
+      const total = Number(mTotal[1]);
+      const count = Number(mTotal[2]);
+      if (total > ZIP_MAX_UNCOMPRESSED || count > ZIP_MAX_FILES) {
+        console.warn(`[enrich] zip too large to ingest (${total} bytes, ${count} files) — skipping unpack.`);
+        return null;
+      }
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+    // -o overwrite, -qq quiet; modern unzip sanitizes path traversal, and we only
+    // ever read back from destDir regardless.
+    await execFileP("unzip", ["-o", "-qq", zipPath, "-d", destDir], { timeout: 60_000, maxBuffer: 16 * 1024 * 1024 });
+    return destDir;
+  } catch (e: any) {
+    console.warn(`[enrich] unzip failed (${e?.code ?? e?.message ?? e}) — handing the archive to the agent as-is.`);
+    return null;
+  }
+}
+
+// Coerce agent-provided values defensively — the model may return numbers as
+// strings ("45"), oversized notes, or junk. Keep regex values when unusable.
+const asNum = (v: any): number | undefined => {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+const asStr = (v: any): string | undefined => {
+  if (v === null || v === undefined) return undefined;
+  const s = String(v).trim();
+  return s ? s.slice(0, 1000) : undefined;
+};
+
+// Push a job and start the drain loop if it isn't already running.
+export function enqueueEnrich(kind: Kind, id: number): void {
+  queue.push({ kind, id });
+  if (!draining) void drain();
+}
+
+async function drain(): Promise<void> {
+  if (draining) return;
+  draining = true;
+  try {
+    while (queue.length) {
+      const job = queue.shift()!;
+      try {
+        await processJob(job);
+      } catch (e: any) {
+        // A failing job must never break the loop. Mark it failed (regex data
+        // is left intact) and continue with the next.
+        try {
+          markFailed(job);
+        } catch {
+          /* ignore */
+        }
+        console.error(`[enrich] job ${job.kind}#${job.id} failed: ${e?.message ?? e}`);
+      }
+    }
+  } finally {
+    draining = false;
+  }
+}
+
+function markStatus(job: Job, status: string): void {
+  if (job.kind === "review" || job.kind === "garmin_strength") return; // no row status of their own
+  if (job.kind === "activity") repo.setActivityEnrichStatus(job.id, status);
+  else if (job.kind === "food") repo.setFoodNoteEnrichStatus(job.id, status);
+  else repo.setHealthDocEnrichStatus(job.id, status);
+}
+
+function markFailed(job: Job): void {
+  markStatus(job, "failed");
+}
+
+async function processJob(job: Job): Promise<void> {
+  if (job.kind === "review") return processReviewJob();
+  if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
+
+  // Check enablement BEFORE picking an agent: pickAgentOrder() advances the
+  // round-robin cursor as a side effect, so calling it for a job we then skip
+  // would burn rotation state against a phantom invocation.
+  const settings = repo.getSettings();
+  if (!settings.enrich_enabled) {
+    markStatus(job, "skipped");
+    return;
+  }
+  const order = repo.pickAgentOrder();
+  if (!order.length) {
+    // No usable agent → skip, keep the regex parse as-is.
+    markStatus(job, "skipped");
+    return;
+  }
+
+  // Build the prompt. Health jobs hand the agent an absolute path to read (a file,
+  // or an unpacked archive folder) and ask it to split multi-date history into
+  // panels; activity/food jobs hand it the raw free-text entry.
+  let prompt: string;
+  let timeoutMs = ENRICH_TIMEOUT_MS;
+  if (job.kind === "health") {
+    const row = repo.getHealthDocumentRaw(job.id) as any;
+    const fp = (row?.file_path ?? "").toString().trim();
+    if (!fp) {
+      // No binary on disk (e.g. a client-recorded analysis); nothing to read.
+      markStatus(job, "skipped");
+      return;
+    }
+    // Uploaded files are always stored as an absolute path under UPLOADS_DIR.
+    // Refuse anything else rather than resolving it relative to cwd — that's the
+    // only thing keeping the agent's file read constrained to uploaded docs.
+    if (!path.isAbsolute(fp)) {
+      markStatus(job, "skipped");
+      return;
+    }
+    // Mark in-progress before any slow work (unzip / agent) so a crash leaves a
+    // recoverable marker rather than a stuck 'pending'.
+    markStatus(job, "in_progress");
+    let target = fp;
+    let isDir = false;
+    if (looksLikeZip(fp, row?.mime)) {
+      const dir = await unzipToFolder(fp);
+      if (dir) { target = dir; isDir = true; }
+    }
+    prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
+    timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
+  } else {
+    const raw = jobRawText(job);
+    if (!raw) {
+      // Nothing to enrich from; treat as not-applicable.
+      markStatus(job, "skipped");
+      return;
+    }
+    prompt = buildEnrichPrompt(job.kind, raw);
+    // Mark in-progress BEFORE the first await: if the process is killed mid-flight
+    // the row carries a recoverable marker (recoverPendingEnrich picks 'in_progress'
+    // up too) instead of being stuck 'pending' forever.
+    markStatus(job, "in_progress");
+  }
+
+  let parsed: any = null;
+  try {
+    const fb = await runAgentWithFallback(order, prompt, timeoutMs);
+    parsed = fb.result?.parsed ?? null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    markStatus(job, "failed");
+    return;
+  }
+
+  // Apply the structured fields the agent provided; keep regex values otherwise.
+  // Health docs carry a top-level `summary` alongside `structured`, so they take
+  // a dedicated apply path.
+  const appliedFields =
+    job.kind === "health" ? applyHealthIngest(job.id, parsed) : applyStructured(job, parsed.structured);
+
+  // Add each genuinely-new memory item (the prompt instructs the agent to skip
+  // anything already on record; addMemory also dedupes exact repeats).
+  let addedMemory = 0;
+  if (Array.isArray(parsed.memory)) {
+    for (const m of parsed.memory) {
+      const content = (m?.content ?? "").toString().trim();
+      if (!content) continue;
+      try {
+        repo.addMemory(content, m?.kind || "observation", "enrich");
+        addedMemory++;
+      } catch {
+        /* one bad memory item shouldn't fail the job */
+      }
+    }
+  }
+
+  // Parseable JSON of the wrong shape (e.g. a coach-proposal response) yields no
+  // fields and no memory — the regex parse stands. Surface it rather than letting
+  // a silent no-op masquerade as a successful enrichment.
+  if (!appliedFields && !addedMemory) {
+    console.warn(`[enrich] ${job.kind}#${job.id}: agent returned parseable JSON but nothing usable (wrong shape?) — kept regex parse.`);
+  }
+
+  markStatus(job, "done");
+
+  // A health document successfully analyzed means new marker data. Re-run the
+  // deterministic markers→directives propagation (idempotent: clears + re-derives
+  // only the 'markers' source) so the connected brain reflects the latest panel
+  // without waiting for a manual Derive, then refresh the whole-picture health
+  // review as a follow-on job on this same serial queue. Never for activity/food.
+  if (job.kind === "health") {
+    try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+    enqueueReviewRefresh();
+  }
+}
+
+// Refresh the whole-picture health review after a health doc enriched. Failures
+// log and no-op — the previous review stands, and the triggering document's
+// 'done' status is never touched because of a review problem.
+async function processReviewJob(): Promise<void> {
+  reviewQueued = false; // a health doc finishing while we run may queue the next refresh
+  const settings = repo.getSettings();
+  if (!settings.enrich_enabled) return;
+  const order = repo.pickAgentOrder();
+  if (!order.length) return;
+
+  const prompt = buildHealthReviewPrompt();
+  let agent: string | null = null;
+  let raw: string | undefined;
+  let parsed: any = null;
+  try {
+    const fb = await runAgentWithFallback(order, prompt, ENRICH_TIMEOUT_MS);
+    agent = fb.agent ?? null;
+    raw = fb.result?.raw;
+    parsed = fb.result?.parsed ?? null;
+  } catch (e: any) {
+    console.warn(`[enrich] health review refresh failed: ${e?.message ?? e}`);
+    return;
+  }
+
+  const saved = parsed && typeof parsed === "object" ? repo.addHealthReview(parsed, agent, raw) : null;
+  if (!saved) {
+    console.warn("[enrich] health review refresh: agent returned no usable review — previous review kept.");
+  }
+}
+
+// Reconcile a Garmin strength activity into the day's Cairn session. The
+// deterministic physiology merge already ran during sync (reconcileGarminStrength);
+// here the agent adds the one-line "body's reaction" read and logs the exercises
+// Garmin detected that the athlete did NOT already log by hand. Degrades to a
+// clean no-op (the deterministic merge stands) when enrichment/agents are off.
+async function processGarminStrengthJob(garminActivityId: number): Promise<void> {
+  let ga = repo.getGarminActivity(garminActivityId) as any;
+  if (!ga) return;
+  // Ensure the deterministic merge happened (a re-enqueue after restart / manual
+  // trigger may reach here before reconcileGarminStrength has run).
+  if (!ga.session_id) {
+    try { repo.reconcileGarminStrength(garminActivityId); } catch { /* not strength / nothing to attach */ }
+    ga = repo.getGarminActivity(garminActivityId) as any;
+  }
+  if (!ga?.session_id) return; // not a strength activity, or no session to attach to
+
+  const settings = repo.getSettings();
+  if (!settings.enrich_enabled) return; // physiology already merged; skip the narrative layer
+  const order = repo.pickAgentOrder();
+  if (!order.length) return;
+
+  let parsed: any = null;
+  let agent: string | null = null;
+  try {
+    const fb = await runAgentWithFallback(order, buildGarminStrengthPrompt(ga), ENRICH_TIMEOUT_MS);
+    agent = fb.agent ?? null;
+    parsed = fb.result?.parsed ?? null;
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || typeof parsed !== "object") return; // deterministic merge stands
+
+  // Which exercises already have logged sets this session — never duplicate them.
+  // This code-level guard is the real protection; the prompt instruction is a hint.
+  const session = repo.getSessionDetail(ga.session_id) as any;
+  const already = new Set(
+    (Array.isArray(session?.sets) ? session.sets : []).map((s: any) => String(s.exercise || "").toLowerCase())
+  );
+
+  let logged = 0;
+  if (Array.isArray(parsed.sets)) {
+    for (const raw of parsed.sets) {
+      const name = asStr(raw?.exercise);
+      if (!name || already.has(name.toLowerCase())) continue;
+      const mode = raw?.mode === "timed" ? "timed" : "reps";
+      const weight = asNum(raw?.weight);
+      const reps = asNum(raw?.reps);
+      const duration = asNum(raw?.duration_sec);
+      // Must carry something loggable for its mode.
+      if (mode === "timed" ? duration == null : reps == null && weight == null) continue;
+      try {
+        repo.logSetByName({
+          exercise: name,
+          weight: mode === "timed" ? null : weight ?? null,
+          reps: mode === "timed" ? null : reps ?? null,
+          duration_sec: mode === "timed" ? duration ?? null : null,
+          exercise_mode: mode,
+          date: ga.date,
+        });
+        already.add(name.toLowerCase()); // guard against duplicate names within one response
+        logged++;
+      } catch {
+        /* one bad set shouldn't fail the job */
+      }
+    }
+  }
+
+  repo.updateSessionGarminNarrative(ga.session_id, {
+    summary: asStr(parsed.summary) ?? null,
+    intensity: ["easy", "moderate", "hard"].includes(parsed.intensity) ? parsed.intensity : null,
+    extrapolated: !!parsed.extrapolated || logged > 0,
+    agent,
+  });
+  if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} extrapolated set(s) into session ${ga.session_id}.`);
+}
+
+function jobRawText(job: Job): string {
+  if (job.kind === "activity") {
+    const row = repo.getActivity(job.id) as any;
+    return (row?.raw_text ?? "").toString().trim();
+  }
+  const row = repo.getFoodNote(job.id) as any;
+  return (row?.raw_output ?? "").toString().trim();
+}
+
+// Store the agent's extracted markers + plain-language summary on the health doc.
+// Returns true if it wrote anything usable (used to detect a no-op result).
+// Apply a multi-record ingestion result. The agent returns `panels[]` (one per
+// distinct test date). The NEWEST panel is written onto the source row (which
+// owns the binary); every older panel becomes its own dated record linked back
+// via source_doc_id. A single-date upload yields one panel → enriched in place,
+// no extra rows. Falls back to the legacy single-doc {structured} shape.
+function applyHealthIngest(id: number, parsed: any): boolean {
+  // Normalize to a panels array.
+  let panels: any[] = Array.isArray(parsed?.panels) ? parsed.panels : [];
+  if (!panels.length && parsed?.structured && typeof parsed.structured === "object") {
+    panels = [{
+      doc_date: parsed.doc_date ?? parsed.structured.doc_date ?? parsed.structured.date,
+      kind: parsed.kind ?? parsed.structured.type,
+      summary: parsed.summary,
+      markers: parsed.structured.markers,
+      type: parsed.structured.type,
+    }];
+  }
+
+  const cleanMarkers = (raw: any): any[] =>
+    (Array.isArray(raw) ? raw : [])
+      .filter((m: any) => m && typeof m === "object")
+      .slice(0, 100)
+      .map((m: any) => ({
+        name: asStr(m.name) ?? "",
+        value: typeof m.value === "number" ? m.value : asStr(m.value) ?? null,
+        unit: asStr(m.unit) ?? null,
+        flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
+      }))
+      .filter((m: any) => m.name);
+
+  const cleaned = panels
+    .filter((p: any) => p && typeof p === "object")
+    .map((p: any) => {
+      const date = asStr(p.doc_date);
+      const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+      const kind = ["bloodwork", "dexa", "other"].includes(p.kind) ? p.kind : (["bloodwork", "dexa", "other"].includes(p.type) ? p.type : "other");
+      return {
+        doc_date: validDate,
+        kind,
+        summary: asStr(p.summary) ?? null,
+        markers: cleanMarkers(p.markers),
+        type: asStr(p.type) ?? null,
+      };
+    })
+    .filter((p) => p.markers.length || p.summary);
+
+  if (!cleaned.length) return false;
+
+  // Newest first (date-bearing panels ahead of date-less ones).
+  cleaned.sort((a, b) => {
+    if (a.doc_date && b.doc_date) return a.doc_date < b.doc_date ? 1 : a.doc_date > b.doc_date ? -1 : 0;
+    if (a.doc_date) return -1;
+    if (b.doc_date) return 1;
+    return 0;
+  });
+
+  const row = repo.getHealthDocumentRaw(id) as any;
+  const primary = cleaned[0];
+  const rest = cleaned.slice(1);
+
+  // Write the newest panel onto the source row.
+  const out: Record<string, any> = { markers: primary.markers };
+  if (primary.type) out.type = primary.type;
+  const fields: { parsed_json?: any; summary?: string | null; kind?: string | null; doc_date?: string | null } = {
+    parsed_json: out,
+    kind: primary.kind,
+  };
+  if (primary.doc_date) fields.doc_date = primary.doc_date;
+  // Prefer the cross-import overview as the source row's summary when there are
+  // multiple panels (it reads as "what this whole import means"); else the panel's.
+  fields.summary = (rest.length ? asStr(parsed?.summary) : null) ?? primary.summary ?? asStr(parsed?.summary) ?? null;
+  repo.updateHealthDocFields(id, fields);
+
+  // Older panels become their own dated records (replacing any prior set, so a
+  // re-analysis is idempotent).
+  const created = repo.replaceHealthPanels(id, rest, row?.original_name ?? null);
+  if (created.length) {
+    console.log(`[enrich] health#${id}: split import into ${cleaned.length} dated panel(s) (${created.length} derived).`);
+  }
+  return true;
+}
+
+// Returns true if it wrote any structured field (used to detect a no-op result).
+function applyStructured(job: Job, structured: any): boolean {
+  if (!structured || typeof structured !== "object") return false;
+
+  if (job.kind === "activity") {
+    // Only overwrite fields the agent actually provided, coerced to the column's
+    // type so a string-number or junk value can't silently corrupt the row.
+    const fields: Record<string, any> = {};
+    const type = asStr(structured.type); if (type !== undefined) fields.type = type;
+    const dur = asNum(structured.duration_min); if (dur !== undefined) fields.duration_min = dur;
+    const dist = asNum(structured.distance_km); if (dist !== undefined) fields.distance_km = dist;
+    const pace = asStr(structured.pace); if (pace !== undefined) fields.pace = pace;
+    const rpe = asNum(structured.rpe); if (rpe !== undefined) fields.rpe = rpe;
+    const notes = asStr(structured.notes); if (notes !== undefined) fields.notes = notes;
+    if (Object.keys(fields).length) {
+      repo.updateActivityFields(job.id, fields);
+      return true;
+    }
+    return false;
+  }
+
+  // food: merge the agent's coerced estimate over the existing parsed_json blob.
+  const cur = (repo.getFoodNote(job.id) as any)?.parsed ?? {};
+  const merged: Record<string, any> = { ...cur };
+  let changed = false;
+  const summary = asStr(structured.summary);
+  if (summary !== undefined) { merged.summary = summary; changed = true; }
+  if (Array.isArray(structured.items)) {
+    merged.items = structured.items.map((x: any) => String(x).slice(0, 200)).slice(0, 50);
+    changed = true;
+  }
+  if (Array.isArray(structured.ingredients)) {
+    merged.ingredients = structured.ingredients
+      .filter((x: any) => x && typeof x === "object")
+      .slice(0, 50)
+      .map((x: any) => {
+        const item = asStr(x.item ?? x.name);
+        if (!item) return null;
+        const out: Record<string, any> = { item };
+        const amount = asStr(x.amount ?? x.qty ?? x.quantity);
+        if (amount !== undefined) out.amount = amount;
+        for (const key of ["kcal", "protein_g", "carbs_g", "fat_g"] as const) {
+          const n = asNum(x[key]);
+          if (n !== undefined) out[key] = n;
+        }
+        return out;
+      })
+      .filter(Boolean);
+    changed = true;
+  }
+  const kcal = asNum(structured.kcal); if (kcal !== undefined) { merged.kcal = kcal; changed = true; }
+  const protein = asNum(structured.protein_g); if (protein !== undefined) { merged.protein_g = protein; changed = true; }
+  const carbs = asNum(structured.carbs_g); if (carbs !== undefined) { merged.carbs_g = carbs; changed = true; }
+  const fat = asNum(structured.fat_g); if (fat !== undefined) { merged.fat_g = fat; changed = true; }
+  const fiber = asNum(structured.fiber_g); if (fiber !== undefined) { merged.fiber_g = fiber; changed = true; }
+  const fnotes = asStr(structured.notes); if (fnotes !== undefined) { merged.notes = fnotes; changed = true; }
+  if (changed) repo.updateFoodNoteParsed(job.id, merged);
+  return changed;
+}
+
+// Crash recovery: re-enqueue every row left 'pending' (queued, never started) or
+// 'in_progress' (started but interrupted by a restart). Called once at startup
+// from server.ts. A re-run ends in 'done' or 'failed', so jobs don't loop.
+export function recoverPendingEnrich(): { activities: number; food: number; health: number } {
+  const acts = db
+    .prepare(`SELECT id FROM activities WHERE enrichment_status IN ('pending','in_progress')`)
+    .all() as any[];
+  const foods = db
+    .prepare(`SELECT id FROM food_notes WHERE enrichment_status IN ('pending','in_progress')`)
+    .all() as any[];
+  const health = db
+    .prepare(`SELECT id FROM health_documents WHERE enrichment_status IN ('pending','in_progress')`)
+    .all() as any[];
+  for (const a of acts) enqueueEnrich("activity", a.id);
+  for (const f of foods) enqueueEnrich("food", f.id);
+  for (const h of health) enqueueEnrich("health", h.id);
+  if (acts.length || foods.length || health.length) {
+    console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health pending job(s).`);
+  }
+  return { activities: acts.length, food: foods.length, health: health.length };
+}

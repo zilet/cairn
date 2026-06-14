@@ -1,0 +1,33 @@
+name: CI
+
+# Typecheck/build gate. Runs on pushes to main and on every PR. Tag pushes are
+# intentionally excluded — the release workflow's image build is itself a tsc gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Never let two runs for the same ref pile up; cancel the stale one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc)
+        run: npm run build

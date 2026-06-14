@@ -1,0 +1,64 @@
+services:
+  cairn:
+    build:
+      context: .
+      args:
+        # Which coaching CLIs to bake into the image. claude/codex are reliable;
+        # antigravity/grok are beta installers (verify your target architecture) - set "0" to skip.
+        INSTALL_CLAUDE: "1"
+        INSTALL_CODEX: "1"
+        INSTALL_ANTIGRAVITY: "1"
+        INSTALL_GROK: "1"
+        AGENT_CLI_CACHE_BUST: ${AGENT_CLI_CACHE_BUST:-}
+    image: cairn:latest
+    container_name: cairn
+    restart: unless-stopped
+    ports:
+      # Reachable on the LAN by default so you can open it from your phone. If the
+      # host is exposed beyond a trusted network, set CAIRN_AUTH_TOKEN below and/or
+      # bind to loopback only: "127.0.0.1:8787:8787".
+      - "8787:8787"
+    volumes:
+      - cairn-data:/data        # SQLite database
+      - cairn-home:/home/app    # persists ALL CLI logins (~/.claude, ~/.codex, ~/.gemini, ~/.grok, ...)
+    environment:
+      - TZ=${TZ:-America/New_York}
+      # Optional shared-token auth. Unset = no auth (localhost/trusted-network
+      # default). Set it to gate /api and /mcp behind a bearer token — recommended
+      # whenever the port is reachable beyond loopback.
+      - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
+      # Subscription logins live in the home volume. These API keys are OPTIONAL
+      # fallbacks (Grok headless in particular may need XAI_API_KEY):
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      # Generated artwork (src/art.ts, gemini-3.1-flash-image). Without it the PWA
+      # falls back to the built-in SVG illustrations.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Optional weekly auto-draft. Set COACH_AGENT to enable (e.g. "claude").
+      - COACH_AGENT=${COACH_AGENT:-}
+      - COACH_DAY=${COACH_DAY:-0}    # 0=Sun .. 6=Sat
+      - COACH_HOUR=${COACH_HOUR:-20} # local hour (uses TZ)
+      # Optional CLI updater. Manual updates are available in Settings either way.
+      - AGENT_CLI_AUTO_UPDATE=${AGENT_CLI_AUTO_UPDATE:-0}
+      - AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=${AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS:-168}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# cairn-data  — SQLite database (/data/cairn.db + WAL files).
+#               runMigrations() applies any new schema migrations automatically
+#               on every boot (tracked via PRAGMA user_version), so a new image
+#               upgrades the schema in place — no manual migration step needed.
+# cairn-home  — CLI logins (~/.claude, ~/.codex, ~/.gemini [agy], ~/.grok, ...).
+#               Log in once per provider; the volume keeps auth across restarts.
+#
+# One-shot volume backup (run from the Docker host while the container is up):
+#   docker run --rm -v cairn-data:/data -v "$PWD":/backup busybox \
+#     tar czf /backup/cairn-data-$(date +%F).tgz -C /data .
+volumes:
+  cairn-data:
+  cairn-home:
