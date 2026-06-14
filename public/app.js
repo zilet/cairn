@@ -29,9 +29,46 @@ const api = (p, opts = {}) => {
   if (t) headers["X-Cairn-Token"] = t;
   return fetch("/api" + p, { ...opts, headers }).then((r) => {
     if (r.status === 401) { handleUnauthorized(); return new Promise(() => {}); }
+    setOffline(false); // a real response landed — Cairn is reachable
     return r.json();
+  }).catch((err) => {
+    setOffline(true); // the network dropped — surface the calm hairline banner
+    throw err;
   });
 };
+
+// ---------- offline hairline ----------
+// A calm, non-alarming banner ("Can't reach Cairn — changes will retry") that
+// rides just under the header whenever a fetch fails or the browser reports
+// offline. It clears itself the moment any request succeeds (or `online` fires).
+// Constitution: information, never an alarm — one thin warm line, no modal.
+let _offline = false;
+function setOffline(on) {
+  on = !!on;
+  if (on === _offline) return;
+  _offline = on;
+  let bar = document.querySelector(".offline-bar");
+  if (on) {
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.className = "offline-bar";
+      bar.setAttribute("role", "status");
+      bar.setAttribute("aria-live", "polite");
+      bar.innerHTML = `<span class="offline-dot" aria-hidden="true"></span><span>Can't reach Cairn — changes will retry</span>`;
+      document.body.appendChild(bar);
+    }
+    requestAnimationFrame(() => bar.classList.add("show"));
+    document.body.classList.add("is-offline");
+  } else if (bar) {
+    bar.classList.remove("show");
+    document.body.classList.remove("is-offline");
+  }
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("offline", () => setOffline(true));
+  window.addEventListener("online", () => setOffline(false));
+  if (navigator.onLine === false) setOffline(true);
+}
 
 function localISO(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -754,6 +791,37 @@ function loadingState(label) {
   </div>`;
 }
 
+// Skeleton-first paint helpers — reuse the .hshimmer shimmer primitive so every
+// tab paints its shape instantly, then hydrates. Never invent a one-off spinner;
+// these mirror the loading vocabulary in docs/DESIGN.md. `aria-hidden` because the
+// real content carries its own labels once it lands.
+function skelLines(n = 3) {
+  let s = `<div class="skel-card" aria-hidden="true"><div class="hshimmer hshimmer-lg"></div>`;
+  for (let i = 0; i < n; i++) s += `<div class="hshimmer${i === n - 1 ? " hshimmer-sm" : ""}"></div>`;
+  return s + `</div>`;
+}
+// Today: a Brief-shaped block + a couple of card silhouettes.
+function todaySkeleton() {
+  return `<div class="today-wrap today-skel" aria-busy="true">
+    <div class="skel-brief" aria-hidden="true">
+      <div class="hshimmer hshimmer-sm" style="width:34%"></div>
+      <div class="hshimmer hshimmer-lg" style="width:64%;height:26px"></div>
+      <div class="hshimmer"></div>
+    </div>
+    ${skelLines(2)}
+    ${skelLines(3)}
+  </div>`;
+}
+// A seg-bar tab (Progress / Plan / Me sub-views) — paint the REAL segmented
+// control synchronously (it's constant, no await) so the thumb sits where the
+// user tapped, then a hero + a couple of card silhouettes shimmer below until the
+// data lands. The seg is already wired by the real render that follows.
+function segSkeleton(active, seg, cards = 2) {
+  let s = segBar(active, seg) + `<div class="skel-region" aria-busy="true">${skelLines(2)}`;
+  for (let i = 0; i < cards; i++) s += skelLines(3);
+  return s + `</div>`;
+}
+
 // humanized big numbers: 12450 → "12.4k"
 const fmtK = (n) => {
   const v = Number(n) || 0;
@@ -1099,24 +1167,94 @@ const BRIEF_OVERRIDES = [
 // object — the endpoint is always 200 (agentic or deterministic fallback). On a
 // hard network failure we synthesize a minimal "train" read so the launchpad still
 // works; the Brief never blocks the rest of Today.
-async function loadBrief(date, override) {
+// A bare provisional read used only to paint Today's structure instantly when the
+// agentic read isn't warm yet. Marked _provisional so the background upgrade knows
+// to replace it; it's never cached as the final read.
+function provisionalRead(date) {
+  return { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true };
+}
+
+async function loadBrief(date, override, opts = {}) {
   const cached = state.brief;
-  if (cached && cached.date === date && cached.override === (override || "")) return cached.read;
-  let read = null;
-  try {
-    const qs = new URLSearchParams({ date, agent: "auto" });
-    if (override) qs.set("override", override);
-    read = await api("/today-read?" + qs.toString());
-  } catch { read = null; }
-  if (!read || !read.kind) {
-    read = { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic" };
+  // Reuse a non-provisional cached read for the same date/override.
+  if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional) return cached.read;
+  const fetchRead = (async () => {
+    let read = null;
+    try {
+      const qs = new URLSearchParams({ date, agent: "auto" });
+      if (override) qs.set("override", override);
+      read = await api("/today-read?" + qs.toString());
+    } catch { read = null; }
+    if (!read || !read.kind) read = provisionalRead(date);
+    return read;
+  })();
+  // Fast mode (first paint): never block more than ~the timeout. The endpoint
+  // returns a cached read instantly, so the common case resolves immediately;
+  // only a cold cache (first-ever agentic compute) hits the timeout, where we
+  // paint a provisional read and let the background upgrade swap the real one in.
+  if (opts.fast) {
+    const TIMEOUT = 1200;
+    const raced = await Promise.race([
+      fetchRead.then((r) => ({ r })),
+      new Promise((resolve) => setTimeout(() => resolve(null), TIMEOUT)),
+    ]);
+    if (raced && raced.r && !raced.r._provisional) {
+      // Adopt the server-persisted steer (read.override) on a fresh open/reload —
+      // the warm-cache reload hits this fast path, so the steer must survive here.
+      state.brief = { date, override: override || raced.r.override || "", read: raced.r };
+      return raced.r;
+    }
+    // timed out (or only got a provisional) — keep the real fetch alive so the
+    // upgrade can await the SAME promise instead of firing a second request.
+    state._briefInflight = { date, override: override || "", promise: fetchRead };
+    const prov = (raced && raced.r) || provisionalRead(date);
+    state.brief = { date, override: override || "", read: prov };
+    return prov;
   }
-  // The server now PERSISTS the athlete's steer on the read (read.override). When we
+  state._briefInflight = null; // a non-fast (deliberate) load supersedes any pending upgrade
+  const read = await fetchRead;
+  // The server PERSISTS the athlete's steer on the read (read.override). When we
   // didn't request one explicitly (a fresh open / reload), adopt the persisted steer
   // so the chips filter correctly and the active-steer styling shows — this is what
   // makes "Easy day instead" survive a reload instead of snapping back to canonical.
   state.brief = { date, override: override || read.override || "", read };
   return read;
+}
+
+// Upgrade a provisionally-painted Brief to the real (agentic) read in place,
+// without re-rendering the rest of Today. Runs the .is-thinking filament while
+// it waits, then swaps the .brief element. No-op if the read was already real,
+// the tab changed, or the date/override moved on. Pull-never-push: it just
+// quietly settles into the better read; nothing nags.
+async function upgradeBriefInPlace(date, isToday) {
+  const inflight = state._briefInflight;
+  if (!inflight || inflight.date !== date) return; // nothing provisional to upgrade
+  const briefEl = view.querySelector(".brief");
+  if (briefEl && !reducedMotion()) briefEl.classList.add("is-thinking");
+  let read = null;
+  try { read = await inflight.promise; } catch { read = null; }
+  // Stale-guard: bail if we navigated away or the date moved while waiting.
+  if (state.tab !== "today" || state.logDate !== date) return;
+  if (state._briefInflight === inflight) state._briefInflight = null;
+  if (!read || read._provisional) { briefEl?.classList.remove("is-thinking"); return; }
+  // Adopt the server-persisted steer when the real read settles (cold-cache path).
+  state.brief = { date, override: inflight.override || read.override || "", read };
+  const live = view.querySelector(".brief");
+  if (!live) return;
+  // Re-derive showPlan in case the real read flipped train↔rest/easy; only the
+  // Brief element is swapped, so the logging surface below is untouched.
+  const day = state.plan.find((d) => d.day_number === state.day) || state.plan[0] || { items: [] };
+  const hasPlanDay = (day.items || []).length > 0;
+  const showPlan = !!view.querySelector(".plansurface");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = briefHtml(read, { showPlan, hasPlanDay, isToday });
+  const fresh = tmp.firstElementChild;
+  if (!fresh) { live.classList.remove("is-thinking"); return; }
+  fresh.classList.add(reducedMotion() ? "" : "brief-settle");
+  live.replaceWith(fresh);
+  wireBrief(read, { isToday });
+  runCountUps(fresh);
+  if (showPlan) loadTrainingProvenance(isToday); // re-attach the causal line after the swap
 }
 
 // A relevant log just reshaped today (an activity, a check-in) — drop the cached
@@ -1209,11 +1347,16 @@ function briefHtml(read, { showPlan, hasPlanDay, isToday }) {
   // skip the entrance `rise` so the two motions don't stack.
   const morph = state._briefMorph ? " brief-morph" : "";
   const enter = state._briefMorph ? "" : " reveal";
-  return `<section class="brief brief-${kind}${morph}${enter}" style="--i:0" aria-live="polite">
+  // A provisional (cold-cache) read paints with the terracotta→gold filament so
+  // the wait reads as the agentic read still arriving, not a stalled guess.
+  const thinking = read._provisional && !reducedMotion() ? " is-thinking" : "";
+  const busy = read._provisional ? ` aria-busy="true"` : "";
+  return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
       <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${meta.word.toUpperCase()} DAY${est ? ` · ${escHtml(est)}` : ""}</div>
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      <div id="briefProvenance" class="prov-slot"></div>
       <div class="brief-launch">${actions.join("")}</div>
       ${steer}
       <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
@@ -1424,10 +1567,15 @@ function revealPlanThen(after) {
 
 async function renderToday() {
   pollToken++; // invalidate any in-flight enrichment polls from a previous render
-  if (!state.plan.length) state.plan = await api("/plan");
   if (!state.logDate) state.logDate = localISO();
-  const isToday = state.logDate === localISO();
   setTodayHeaderTitle();
+  // Skeleton-first: paint the shell synchronously so a tab switch never leaves the
+  // previous tab frozen during the data/agent awaits below. The real render swaps
+  // view.innerHTML wholesale once the data is in hand. Skip when re-rendering
+  // in-place (the Brief is already on screen — a skeleton flash would be jarring).
+  if (!view.querySelector(".today-wrap")) view.innerHTML = todaySkeleton();
+  if (!state.plan.length) state.plan = await api("/plan");
+  const isToday = state.logDate === localISO();
 
   // session for the selected date (single object or null)
   const session = await api("/sessions?date=" + state.logDate);
@@ -1522,7 +1670,13 @@ async function renderToday() {
   const hasLoggedSets = !!(session && (session.sets || []).length);
   const hasPlanDay = (day.items || []).length > 0;
   const revealOn = state.planReveal && state.planReveal.date === state.logDate && state.planReveal.on;
-  const read = await loadBrief(state.logDate, state.brief && state.brief.date === state.logDate ? state.brief.override : "");
+  // Non-blocking Brief: fetch the read in FAST mode — the endpoint returns a warm
+  // cached read instantly, so the common case is immediate; a cold cache resolves
+  // to a provisional read (painted with the .is-thinking filament) and the real
+  // agentic read swaps in via upgradeBriefInPlace() once it lands. First paint
+  // never waits on agent:"auto". (Honors an active override.)
+  const briefOverride = state.brief && state.brief.date === state.logDate ? state.brief.override : "";
+  const read = await loadBrief(state.logDate, briefOverride, { fast: true });
   const hasGarmin = !!(session && session.garmin);
   const showPlan = !isToday || hasLoggedSets || hasGarmin || revealOn || read.kind === "train";
   // Focus mode strips Today to the logging surface (see focusEngaged). Progress for
@@ -1644,6 +1798,12 @@ async function renderToday() {
   if (qlInput) qlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") quickLog(); });
 
   wireBrief(read, { isToday });
+  // If we painted a provisional (cold-cache) read, upgrade it to the agentic read
+  // in place — the filament keeps running until the real read settles in.
+  if (read._provisional) upgradeBriefInPlace(state.logDate, isToday);
+  // Connected-brain provenance: a quiet causal line under the Brief on a training
+  // day, if a training/watch directive shaped it ("eased volume — RHR ran high · why").
+  if (!focus && showPlan) loadTrainingProvenance(isToday);
 
   loadTableHint();
   // The chrome — capture row, context banners, insight, frequents, week tier — only
@@ -1820,8 +1980,10 @@ function wireBrief(read, { isToday }) {
       b.classList.add("brief-steer-busy");
       b.innerHTML = `<span class="aspin aspin-xs"></span>${escHtml(chipLabel)}`;
       brief.classList.add("is-thinking");
+      brief.setAttribute("aria-busy", "true"); // screen readers hear "busy" while the read reshapes
       const note = document.createElement("div");
       note.className = "athinking-note chip-in";
+      note.setAttribute("role", "status");
       note.textContent = "Reading the day again…";
       (b.closest(".brief-steer") || b.parentElement).after(note); // the line sits under the steer block
       // bust the per-date cache so loadBrief re-fetches with the override
@@ -2453,6 +2615,83 @@ async function loadHealthFocusBanner() {
   });
 }
 
+// ====================================================================
+// Connected-brain provenance — make the product's deepest differentiator
+// FELT at the point of consumption. When a flagged lab marker shaped a meal
+// plan or the day's training (via a cross-domain directive), surface ONE quiet
+// causal line right where the consequence lands ("tilted toward fish — ApoB
+// came back high · why"), deep-linking to Me → Health → Brain. Informational,
+// never a verdict; soft/uncertain directives read tentative.
+// ====================================================================
+
+// Active directives for a domain, newest-first. Short-lived in-memory cache so the
+// Brief + Meals don't double-fetch within one render pass. Always degrades to [].
+let _provCache = null;
+async function activeDirectives() {
+  if (_provCache && Date.now() - _provCache.at < 4000) return _provCache.rows;
+  let rows = [];
+  try {
+    const res = await api("/directives");
+    rows = (res && Array.isArray(res.directives) ? res.directives : []).filter((d) => !d.status || d.status === "active");
+  } catch { rows = []; }
+  _provCache = { at: Date.now(), rows };
+  return rows;
+}
+
+// Build the quiet causal line for one directive. The "consequence" half comes from
+// the directive text (already plain-language); the "because" half is the marker.
+// Returns {html} or null when there's nothing worth saying.
+function provenanceLineHtml(d, label) {
+  if (!d) return null;
+  const consequence = String(d.directive || "").trim();
+  if (!consequence) return null;
+  const soft = d.uncertain && !d.citation;
+  const because = d.marker ? `<span class="prov-marker">${escHtml(String(d.marker))}</span>` : "";
+  const lead = soft ? `<span class="prov-soft">Worth looking into · </span>` : "";
+  // The whole line is the deep-link to Me → Health → Brain (where the directive lives).
+  return `<button class="prov-line" data-prov aria-label="${escAttr(label + ": " + consequence)}">
+      <span class="prov-glyph" aria-hidden="true">✦</span>
+      <span class="prov-text">${lead}${escHtml(consequence)}${because ? ` — ${because}` : ""}</span>
+      <span class="prov-why" aria-hidden="true">why</span>
+    </button>`;
+}
+
+// Wire any rendered provenance line to deep-link into Me → Health → Brain.
+function wireProvenance(scope) {
+  (scope || view).querySelectorAll("[data-prov]").forEach((b) => b.addEventListener("click", () => {
+    state.meSeg = "health";
+    state.healthSeg = "brain"; // the directives live in the Brain view
+    activateTab("me");
+  }));
+}
+
+// Today's Brief: the training/watch directive shaping the day, rendered under the why.
+async function loadTrainingProvenance(isToday) {
+  const slot = view.querySelector("#briefProvenance");
+  if (!slot) return;
+  const rows = await activeDirectives();
+  if (state.tab !== "today" || !slot.isConnected) return;
+  // training first (it's what shapes the session), then a watch item
+  const d = rows.find((x) => (x.domain || "watch") === "training") || rows.find((x) => (x.domain || "watch") === "watch");
+  const html = provenanceLineHtml(d, "Training shaped by your labs");
+  if (!html) { slot.innerHTML = ""; return; }
+  slot.innerHTML = html;
+  wireProvenance(slot);
+}
+
+// Meals: the nutrition directive that tilted the plan, rendered under the hero.
+async function loadMealProvenance() {
+  const slot = view.querySelector("#mealProvenance");
+  if (!slot) return;
+  const rows = await activeDirectives();
+  if (state.tab !== "plan" || !slot.isConnected) return;
+  const d = rows.find((x) => (x.domain || "watch") === "nutrition");
+  const html = provenanceLineHtml(d, "Meals shaped by your labs");
+  if (!html) { slot.innerHTML = ""; return; }
+  slot.innerHTML = html;
+  wireProvenance(slot);
+}
+
 async function quickLog() {
   const inp = document.querySelector("#qlInput");
   const text = inp.value.trim();
@@ -3009,6 +3248,7 @@ function sessionCardHtml(s, i) {
 
 async function renderHistory() {
   headerTitle.textContent = "Progress";
+  view.innerHTML = segSkeleton("sessions", PROGRESS_SEG, 3); // skeleton-first: seg paints now, cards hydrate
   const sessions = await api("/sessions?limit=30");
   const head = segBar("sessions", PROGRESS_SEG);
   if (!sessions.length) {
@@ -3036,6 +3276,7 @@ async function renderHistory() {
 // ---------- Progress: est-1RM trend ----------
 async function renderProgress() {
   headerTitle.textContent = "Progress";
+  view.innerHTML = segSkeleton("trend", PROGRESS_SEG, 1);
   const exercises = await api("/exercises");
   const saved = state.progressEx || exercises[0]?.name;
   view.innerHTML = segBar("trend", PROGRESS_SEG) + `<div id="trendHero"></div>
@@ -3050,6 +3291,7 @@ async function renderProgress() {
 // ---------- Progress: bodyweight ----------
 async function renderWeight() {
   headerTitle.textContent = "Progress";
+  view.innerHTML = segSkeleton("weight", PROGRESS_SEG, 1);
   const [rows, profile] = await Promise.all([api("/bodyweight?limit=90"), api("/profile")]);
   const head = segBar("weight", PROGRESS_SEG);
   const pts = (rows || []).map((p) => ({ date: p.date, v: p.weight_lb }));
@@ -3104,6 +3346,7 @@ async function drawProgress(name) {
 // ---------- Progress: volume by muscle group ----------
 async function renderVolume() {
   headerTitle.textContent = "Progress";
+  view.innerHTML = segSkeleton("volume", PROGRESS_SEG, 2);
   const data = await api("/volume?days=30");
   const groups = (data.by_muscle || []).slice().sort((a, b) => (b.sets || 0) - (a.sets || 0));
   const head = segBar("volume", PROGRESS_SEG);
@@ -3164,6 +3407,7 @@ function calMonthHtml(ym, byDate, todayIso, idx) {
 
 async function renderCalendar() {
   headerTitle.textContent = "Progress";
+  view.innerHTML = segSkeleton("calendar", PROGRESS_SEG, 2);
   const [data, stats] = await Promise.all([api("/calendar?days=84"), api("/stats").catch(() => ({}))]);
   const cells = data.cells || [];
   const head = segBar("calendar", PROGRESS_SEG);
@@ -3241,7 +3485,7 @@ async function renderEnergy() {
   headerTitle.textContent = "Progress";
   const head = segBar("energy", PROGRESS_SEG);
   view.innerHTML = head + `<div id="energyHero"></div>
-    <div id="energyCard"></div>
+    <div id="energyCard">${loadingState("Reading your trend…")}</div>
     <div id="checkinResult" class="checkin-result"></div>`;
   wireSeg(PROGRESS_HANDLERS);
 
@@ -3366,6 +3610,7 @@ function renderCheckinProposal(out, r) {
 // ---------- Coach ----------
 async function renderCoach() {
   headerTitle.textContent = "Coach";
+  view.innerHTML = segSkeleton("coach", PLAN_SEG, 2);
   const agents = await api("/agents");
   const proposals = await api("/proposals?limit=10");
   const agentOpts =
@@ -4016,6 +4261,7 @@ function wireRecipeCta(sheet, current, dayLabel, di, mi) {
 async function renderMeals() {
   headerTitle.textContent = "Plan";
   pollToken++;
+  view.innerHTML = segSkeleton("meals", PLAN_SEG, 3); // skeleton-first: seg paints now, plan hydrates
   const [plansRes, settingsData] = await Promise.all([
     api("/mealplans?limit=12").catch(() => []),
     api("/settings").catch(() => null),
@@ -4067,6 +4313,7 @@ async function renderMeals() {
           <div><span class="numeral numeral-lg" data-cu="${Number(m.daily_protein_g) || 0}">0</span><span class="lbl" style="display:block;margin-top:3px">g protein</span></div>
         </div>
         ${m.summary ? `<div class="sess-line">${escHtml(m.summary)}</div>` : ""}
+        <div id="mealProvenance" class="prov-slot"></div>
         ${actions}
       </div>
       ${mealPrefsHtml(mealPrefs, 1)}
@@ -4089,7 +4336,7 @@ async function renderMeals() {
 
   renderMealPlans(plans, "#mealHist", () => renderMeals());
   wireMealPrefs();
-  if (current) wireMealRows(view, current, ctx);
+  if (current) { wireMealRows(view, current, ctx); loadMealProvenance(); }
 
   // shopping chips check off (persisted per plan, local-only)
   if (current) view.querySelectorAll("[data-shop]").forEach((c) =>
@@ -4143,6 +4390,7 @@ async function renderMeProfile() {
   headerTitle.textContent = "Me";
   state.meSeg = "profile";
   pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
+  view.innerHTML = segSkeleton("profile", ME_SEG, 2); // skeleton-first: seg paints now, fields hydrate
   const [profile, goal, acts, notes] = await Promise.all([
     api("/profile"), api("/goal"), api("/activities?limit=8"), api("/food-notes?limit=10"),
   ]);
@@ -6280,6 +6528,7 @@ function startFamilyDelete(btn) {
 // ---------- Plan editor (manual) ----------
 async function renderPlanEditor() {
   headerTitle.textContent = "Plan";
+  view.innerHTML = segSkeleton("edit", PLAN_SEG, 3);
   const plan = await api("/plan");
   view.innerHTML = segBar("edit", PLAN_SEG) + `<div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
@@ -6749,17 +6998,25 @@ async function renderChat() {
     if (!text && !img) return;
     input.value = "";
     clearAttach();
+    // Optimistic user bubble lands instantly; the assistant turn shows phased
+    // captions ("Thinking…" → "Drafting…") so the (one-shot JSON) CLI round-trip
+    // never reads as a frozen three-dot stall. True token streaming is out of
+    // scope — the backend returns one blob — so this is the strongest honest
+    // non-streaming latency UX: a phase the user can believe, never faked tokens.
     appendMsg({ role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null });
-    const pending = appendMsg({ role: "assistant", content: img ? "Reading your plate…" : "", pending: true });
+    const pending = appendMsg({ role: "assistant", content: img ? "Reading your plate…" : "Thinking…", pending: true });
+    const stopPhases = runChatPhases(pending, img);
     sendBtn.disabled = true;
     try {
       const body = { message: text };
       if (img) { body.image_base64 = img.base64; body.image_mime = img.mime; }
       const r = await api("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      stopPhases();
       pending.remove();
       appendMsg(r.message || { role: "assistant", content: r.reply || r.error || "(no reply)" });
       if ((r.drafts || []).length) { state.plan = []; toast("Draft ready — Apply below"); }
     } catch (e) {
+      stopPhases();
       pending.remove();
       appendMsg({ role: "assistant", content: "Failed: " + e.message });
     } finally { sendBtn.disabled = false; if (matchMedia("(hover:hover)").matches) input.focus(); }
@@ -6893,8 +7150,12 @@ function appendMsg(m, noScroll, parent, opts = {}) {
   // ("Reading your plate…") leads, the dots follow. Early-return so a pending
   // bubble never picks up a timestamp or copy affordance.
   if (m.pending) {
+    // role=status + aria-busy couples the visible "thinking" dots to a screen-
+    // reader signal; the caption is the live phase ("Thinking…" → "Drafting…").
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-busy", "true");
     const lead = m.content && m.content !== "…" ? `${escHtml(m.content)} ` : "";
-    el.innerHTML = `<div class="bubble-text">${lead}<span class="typing" aria-label="thinking"><i></i><i></i><i></i></span></div>`;
+    el.innerHTML = `<div class="bubble-text"><span class="typing-cap">${lead}</span><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></div>`;
     host.appendChild(el);
     if (!noScroll && log) log.scrollTop = log.scrollHeight;
     return el;
@@ -6946,6 +7207,39 @@ function appendMsg(m, noScroll, parent, opts = {}) {
   }
   if (!noScroll && log) log.scrollTop = log.scrollHeight;
   return el;
+}
+
+// Advance a pending assistant bubble's caption through honest phases while the
+// (one-shot) chat round-trip runs, so the wait reads as a process rather than a
+// frozen spinner. The agent returns one JSON blob — we never fake streamed
+// tokens — so these are TIME-based phase labels, not content. Returns a stop()
+// to call the moment the real reply (or an error) lands; idempotent + safe if
+// the bubble was already removed. Captions are gentle, never urgent.
+function runChatPhases(bubble, isPhoto) {
+  // [delayMs, caption] — only advance to a phase once enough time has passed that
+  // it's a believable description of where the call is. Photo logging leads with
+  // its own caption from send(); both then converge on "Drafting…".
+  const phases = isPhoto
+    ? [[1500, "Reading your plate…"], [4500, "Estimating macros…"], [9000, "Drafting…"], [16000, "Almost there…"]]
+    : [[0, "Thinking…"], [4500, "Looking at your day…"], [9000, "Drafting…"], [16000, "Almost there…"]];
+  const t0 = performance.now();
+  let timer = 0;
+  const set = (txt) => {
+    if (!bubble || !bubble.isConnected) return;
+    const cap = bubble.querySelector(".typing-cap");
+    if (!cap) return;
+    cap.textContent = txt + " ";
+    if (!reducedMotion()) { cap.style.animation = "none"; void cap.offsetWidth; cap.style.animation = ""; } // restart the gentle fade
+  };
+  const schedule = (i) => {
+    if (i >= phases.length) return;
+    const [delay, txt] = phases[i];
+    const wait = Math.max(0, delay - (performance.now() - t0));
+    timer = setTimeout(() => { set(txt); schedule(i + 1); }, wait);
+  };
+  // start from the first phase whose delay has already elapsed (delay 0 = now)
+  schedule(0);
+  return () => { clearTimeout(timer); };
 }
 
 // Show/hide the "jump to latest" pill as the log scrolls away from the bottom.
@@ -7096,14 +7390,52 @@ function garminStatusLine(s, syncing) {
     <span class="sync-text">${ok ? "Synced" : "Sync failed"} ${escHtml(relTime(at))}${text ? ` · ${escHtml(text)}` : ""}</span>`;
 }
 
+// Agent-health card — a small, calm read on the coaching brain's reliability:
+// overall ok-rate + per-agent latency, mirroring the art-spend card's ledger
+// style. NO scores, just plain words. Returns "" when the endpoint is absent or
+// empty (Stream 1's GET /api/agent-stats may 404 on an older backend → silent).
+function agentHealthCard(st) {
+  if (!st || !Number(st.runs)) return "";
+  const pct = st.ok_rate != null ? Math.round(Number(st.ok_rate) * 100) : null;
+  const ms = (v) => { const n = Number(v) || 0; return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)}ms`; };
+  const okLine = pct != null
+    ? `<b>${pct}%</b> of recent runs returned cleanly · ${Number(st.runs)} run${Number(st.runs) === 1 ? "" : "s"} tracked`
+    : `${Number(st.runs)} run${Number(st.runs) === 1 ? "" : "s"} tracked`;
+  const rows = (Array.isArray(st.by_agent) ? st.by_agent : []).filter((a) => a && a.agent).map((a) => {
+    const tot = (Number(a.ok) || 0) + (Number(a.fail) || 0);
+    const apct = tot ? Math.round((Number(a.ok) || 0) / tot * 100) : null;
+    const lat = a.p50_ms != null ? ` · ${ms(a.p50_ms)} typical` : "";
+    return `<div class="agenthealth-row">
+        <span class="agenthealth-name">${escHtml(String(a.agent))}</span>
+        <span class="agenthealth-stat">${apct != null ? `${apct}% clean` : "—"}${lat}</span>
+      </div>`;
+  }).join("");
+  return `
+    <div class="sess agenthealth" style="margin-top:14px">
+      <div class="lbl" style="margin-bottom:6px">Agent health</div>
+      <div class="sess-line">${okLine}</div>
+      ${rows ? `<div class="agenthealth-rows">${rows}</div>` : ""}
+      <div class="sess-line" style="color:var(--muted);margin-top:8px">A failed run just falls through to the next enabled agent — this is the quiet pulse, not a verdict.</div>
+    </div>`;
+}
+
 async function renderSettings() {
   headerTitle.textContent = "Settings";
-  const [data, artStats] = await Promise.all([api("/settings"), api("/art/stats").catch(() => null)]);
+  const [data, artStats, agentStats] = await Promise.all([
+    api("/settings"),
+    api("/art/stats").catch(() => null),
+    api("/agent-stats").catch(() => null), // 404s on a backend without telemetry → degrade silently
+  ]);
   const s = data.settings;
   const agents = data.agents; // ordered: {name, description, env_ok, enabled}
 
   const stratOpt = (v, label) => `<option value="${v}" ${s.agent_strategy === v ? "selected" : ""}>${label}</option>`;
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  // Agent-health card (server telemetry; see GET /api/agent-stats — Stream 1).
+  // Mirrors the art-spend card's calm ledger style. No scores, just ok-rate +
+  // per-agent latency, plain words. Renders nothing if the endpoint is absent.
+  const agentHealthHtml = agentHealthCard(agentStats);
 
   // Artwork spend telemetry card (server estimates; see GET /api/art/stats).
   let artSpendHtml = "";
@@ -7136,6 +7468,7 @@ async function renderSettings() {
         <button id="updateAgentClis" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Update CLI tools</button>
         <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
       </div>
+      ${agentHealthHtml}
 
       <h1 class="lbl" style="margin:22px 0 8px">Weekly auto-coach</h1>
       <label class="toggle"><input type="checkbox" id="coachEnabled" ${s.coach_enabled ? "checked" : ""}>
@@ -7370,15 +7703,43 @@ function renderTab(tab) {
   if (tab === "me") return renderMe();
   return renderSettings();
 }
+// Synchronous skeleton for a tab, so the view-transition crossfade lands on a
+// shaped placeholder INSTANTLY — the old tab never sits frozen through the data/
+// agent awaits. Each render function paints its own matching skeleton on entry
+// (idempotent), then hydrates in place once data lands. Chat owns its own
+// shell-first paint, so we don't pre-skeleton it.
+function tabSkeleton(tab) {
+  if (tab === "today") return todaySkeleton();
+  if (tab === "progress") return segSkeleton("sessions", PROGRESS_SEG, 3);
+  if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : "edit", PLAN_SEG, 3);
+  if (tab === "me") {
+    const seg = state.meSeg || "profile";
+    return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
+  }
+  if (tab === "settings") return skelLines(2) + skelLines(3);
+  return "";
+}
+
+// Switch tabs: crossfade the old tab → a synchronous skeleton (the view
+// transition only waits for THIS, never the async render), then hydrate outside
+// the transition. The frozen-tab problem is gone: paint is always instant.
+function switchTab(tab) {
+  closeDetail(true); // overlays never outlive a tab switch
+  closeMealSheet(true);
+  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+  state.tab = tab;
+  const paintSkeleton = () => {
+    const skel = tabSkeleton(tab);
+    if (skel) { view.innerHTML = skel; viewEnter(); }
+  };
+  // Wrap ONLY the synchronous skeleton paint in the transition; the (possibly
+  // slow, agentic) render runs after, swapping skeleton→content with no wait.
+  Promise.resolve(withViewTransition(paintSkeleton)).finally(() => {
+    Promise.resolve(renderTab(tab));
+  });
+}
 document.querySelectorAll(".tab").forEach((t) =>
-  t.addEventListener("click", () => {
-    closeDetail(true); // overlays never outlive a tab switch
-    closeMealSheet(true);
-    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-    t.classList.add("active");
-    state.tab = t.dataset.tab;
-    withViewTransition(() => Promise.resolve(renderTab(state.tab)).then(viewEnter));
-  })
+  t.addEventListener("click", () => switchTab(t.dataset.tab))
 );
 
 // ---------- first-run onboarding ----------
@@ -7559,7 +7920,40 @@ function activateTab(name) {
   Promise.resolve(renderTab(tab)).then(viewEnter);
 }
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+// ---------- service-worker lifecycle: register + "update ready" nudge ----------
+// A new sw.js no longer skipWaiting()s on its own (see sw.js) — it waits so we can
+// surface a calm, actionable "Cairn updated — tap to refresh" toast. Tapping it
+// asks the waiting worker to take over and reloads once it does. Pull-never-push:
+// nothing nags, nothing reloads under the user's feet.
+let _swReloading = false;
+function offerSwUpdate(worker) {
+  if (!worker || _swReloading) return;
+  toast("Cairn updated", {
+    action: "Refresh",
+    onAction: () => { _swReloading = true; worker.postMessage("skipWaiting"); },
+  });
+}
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").then((reg) => {
+    // A worker already parked in `waiting` (updated while the app was closed).
+    if (reg.waiting && navigator.serviceWorker.controller) offerSwUpdate(reg.waiting);
+    // A new worker is downloading — offer the refresh once it finishes installing
+    // (only when one was already controlling, so the first-ever install stays silent).
+    reg.addEventListener("updatefound", () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener("statechange", () => {
+        if (nw.state === "installed" && navigator.serviceWorker.controller) offerSwUpdate(nw);
+      });
+    });
+  }).catch(() => {});
+  // The waiting worker activated (after our skipWaiting nudge) — reload once.
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!_swReloading) return;
+    _swReloading = false;
+    location.reload();
+  });
+}
 activateTab(new URLSearchParams(location.search).get("tab"));
 maybeOnboard();
 
