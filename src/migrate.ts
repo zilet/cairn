@@ -173,6 +173,16 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "health_directives", "resurfaced_from_id INTEGER");
     db.exec("CREATE INDEX IF NOT EXISTS idx_directives_feedback ON health_directives(source, marker, domain, directive_key, status)");
   } },
+  // v27 (memory cols) and v28 (settings.research_enabled) are owned by other
+  // elite-build streams; this stream's assigned version is v29 (the plan reserves
+  // the gap). runMigrations applies pending versions in order, so the gap is
+  // harmless — they all coexist and apply ascending at merge time.
+  { version: 29, name: "settings-proactive-enabled", up: (db) => {
+    // Gate for nightly quiet-insight / weekly-read / nutrition-checkin precompute
+    // (pull-never-push: these only STORE a waiting read, never notify). Default
+    // on so existing deployments get calm proactivity; toggle in Settings.
+    addColumn(db, "settings", "proactive_enabled INTEGER DEFAULT 1");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {
