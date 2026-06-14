@@ -729,6 +729,36 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
 .mp-badge.ok{color:var(--sage);background:var(--sage-bg);border:1px solid transparent}
 .mp-badge.off{color:var(--warn);background:var(--warn-bg);border:1px solid transparent}
 
+/* Trust transparency — the calm "adjusted to a safe step" note shown when a code
+   guardrail clamped an applied value. A hairline, never an alarm: a quiet gold edge,
+   plain words, the requested→applied move and the reason. */
+.clampnote{margin-top:12px;padding:10px 12px;border-left:2px solid var(--gold);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;background:rgba(201,168,106,.07)}
+.clampnote-lbl{display:flex;align-items:center;gap:6px;color:var(--ink-2);margin-bottom:6px}
+.clampnote-glyph{color:var(--gold);font-size:.78rem}
+.clampnote-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
+  font-size:.8rem;color:var(--ink-2);line-height:1.5;padding:2px 0}
+.clampnote-what{font-weight:600;color:var(--ink)}
+.clampnote-move{font-variant-numeric:lining-nums;color:var(--ink-2)}
+.clampnote-move b{color:var(--ink);font-weight:600}
+.clampnote-why{color:var(--muted)}
+
+/* Trust transparency — the quiet "checked against your floors" badge on a verified
+   meal plan / suggested session. Sage, reassuring, with the named adjustments tucked
+   behind a disclosure when present. Trust through honesty, not a boast. */
+.verified-badge{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:11px;
+  font-family:var(--font-ui);font-size:.74rem;font-weight:600;color:var(--sage)}
+.verified-mark{display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:50%;background:var(--sage-bg);color:var(--sage);font-size:.7rem;flex:0 0 auto}
+.verified-text{letter-spacing:.01em}
+.verified-detail{flex:1 1 100%;margin-top:2px}
+.verified-detail summary{color:var(--muted);font-weight:600;font-size:.7rem;cursor:pointer;
+  letter-spacing:.02em;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-2);list-style:none}
+.verified-detail summary::-webkit-details-marker{display:none}
+.verified-detail summary:hover{color:var(--ink-2)}
+.verified-list{margin:7px 0 0;padding-left:18px;color:var(--ink-2);font-weight:400;font-size:.78rem;line-height:1.5}
+.verified-list li{margin:2px 0}
+
 .mp-day{border-top:1px solid var(--line);margin-top:11px;padding-top:10px}
 .mp-dayname{
   font-family:var(--font-display);font-style:italic;font-weight:520;
@@ -1029,6 +1059,26 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   color:var(--ink)}
 .agenthealth-stat{color:var(--muted);font-variant-numeric:lining-nums;text-align:right;
   flex:0 0 auto}
+
+/* "What Cairn did" — the quiet activity log of recent agent runs. Transparency, never
+   a grade: each row reads op · agent · when · clean/needed-a-retry. Ledger-calm. */
+.actlog-rows{margin-top:9px;border-top:1px solid var(--line);padding-top:6px}
+.actlog-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:.8rem;
+  border-bottom:1px solid var(--line)}
+.actlog-row:last-child{border-bottom:none}
+.actlog-op{flex:1 1 auto;min-width:0;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.actlog-meta{flex:0 0 auto;color:var(--muted);font-size:.72rem;display:flex;align-items:baseline;gap:5px}
+.actlog-agent{font-variant-numeric:lining-nums}
+.actlog-dot{opacity:.6}
+.actlog-when{font-variant-numeric:lining-nums}
+.actlog-flag{flex:0 0 auto;font-family:var(--font-ui);font-size:.56rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.actlog-clean{color:var(--sage);background:var(--sage-bg)}
+.actlog-retry{color:var(--ink-2);background:var(--card-2);border:1px solid var(--line-2)}
+@media (max-width:440px){
+  .actlog-row{flex-wrap:wrap;gap:4px 8px}
+  .actlog-op{flex:1 1 100%}
+}
 .togglebtn{background:var(--card-2);border:1px solid var(--line);color:var(--muted);
   border-radius:999px;min-width:44px;height:30px;font-family:var(--font-ui);
   font-size:.66rem;font-weight:700;letter-spacing:.1em}
@@ -1266,6 +1316,11 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .offline-dot{width:6px;height:6px;border-radius:50%;background:var(--warn);
   flex:0 0 auto;animation:offlinepulse 1.8s var(--ease) infinite}
 @keyframes offlinepulse{0%,100%{opacity:.4}50%{opacity:1}}
+/* Offline placement nicety — the banner is fixed at top:0 above the sticky header
+   (z 48 > 30) with pointer-events:none, so taps pass through and it never blocks the
+   header control. Give it a soft hairline shadow so it reads as a clean band floating
+   over the page rather than crashing into the header edge. Information, never alarm. */
+.offline-bar{box-shadow:0 2px 10px rgba(72,58,35,.10)}
 
 /* -------------------------------------------------------------------
    23b · Floating unsaved-changes save bar (docks above the tab bar)
@@ -2201,6 +2256,11 @@ body.sheet-open{overflow:hidden}
 .insight-glyph{color:var(--gold);font-size:.78rem;line-height:1}
 .insight-text{font-family:var(--font-display);font-weight:480;font-variation-settings:"opsz" 40;
   font-size:1.06rem;line-height:1.4;color:var(--ink);margin:0;max-width:62ch;position:relative}
+/* honest uncertainty — a tentative insight reads soft, the same way a soft directive
+   does: the lead phrase in gold, the body in italic secondary ink. Consistent voice. */
+.insight-card-soft{border-left-color:var(--line-2)}
+.insight-card-soft .insight-text{font-style:italic;color:var(--ink-2)}
+.insight-soft{color:var(--gold);font-style:normal;font-weight:600}
 /* the optional concrete suggestion — its own scannable line, never buried in prose */
 .insight-step{font-size:.9rem;color:var(--ink);line-height:1.5;margin:11px 0 0;max-width:62ch;position:relative}
 .insight-step-lbl{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.08em;
@@ -2666,6 +2726,27 @@ button.hmk-row:active{background:var(--card-2)}
 .hb-dsoft{color:var(--gold);font-style:normal;font-weight:600}
 .hb-drat{font-size:.8rem;color:var(--muted);line-height:1.45;margin:5px 0 0;max-width:50ch}
 .hb-dcite{font-size:.68rem;color:var(--muted);font-style:italic;margin-top:6px;opacity:.85}
+/* "see the evidence" — a calm disclosure that turns a cited claim into a verifiable
+   one. Quiet underlined affordance; the box opens into the source(s). */
+.hb-devidence{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
+  font-size:.68rem;font-weight:600;letter-spacing:.02em;text-decoration:underline;
+  text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;margin-top:7px;cursor:pointer}
+.hb-devidence:hover{color:var(--accent);text-decoration-color:var(--accent)}
+.hb-evbox{margin-top:9px;display:grid;gap:11px}
+.hb-evbox[hidden]{display:none}
+.hb-ev-loading{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.hb-ev-empty{font-size:.78rem;color:var(--muted);font-style:italic;line-height:1.45;
+  border-left:2px solid var(--line-2);padding-left:11px}
+.hb-ev-row{border-left:2px solid var(--sage);padding-left:11px}
+.hb-ev-link{font-family:var(--font-ui);font-weight:600;font-size:.82rem;color:var(--accent);
+  text-decoration:none;border-bottom:1px solid rgba(180,85,45,.35)}
+.hb-ev-link:hover{border-bottom-color:var(--accent)}
+.hb-ev-title{font-family:var(--font-ui);font-weight:600;font-size:.82rem;color:var(--ink)}
+.hb-ev-claim{font-size:.8rem;color:var(--ink-2);line-height:1.45;margin-top:3px}
+.hb-ev-body{font-size:.78rem;color:var(--muted);line-height:1.5;margin-top:4px}
+.hb-ev-meta{margin-top:5px}
+.hb-ev-conf{display:inline-block;font-family:var(--font-ui);font-size:.58rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--sage)}
 .hb-dctl{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
 .hb-dbtn{background:transparent;border:1px solid var(--line-2);color:var(--ink-2);
   border-radius:999px;padding:6px 13px;font-family:var(--font-ui);font-weight:600;
