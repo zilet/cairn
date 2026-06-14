@@ -3,10 +3,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import type { Request, Response } from "express";
 import * as repo from "./repo.js";
-import { buildCoachPrompt, buildMealPlanPrompt, buildChatDistillPrompt } from "./prompt.js";
+import { buildCoachPrompt, buildChatDistillPrompt } from "./prompt.js";
 import {
   runChosen,
   suggestSession,
+  draftMealPlan,
   nutritionCheckin,
   swapMealAgentic,
   generateRecipe,
@@ -423,12 +424,9 @@ export function buildMcpServer(): McpServer {
     async ({ max }) => asText(reconcileOutcomes({ maxPerPass: max })));
 
   server.tool("draft_meal_plan",
-    "Run an agent to draft a goal-aware weekly meal plan (lean-safe deficit, protein target).",
+    "Run an agent to draft a goal-aware weekly meal plan (lean-safe deficit, protein target), then a bounded self-critique verify pass against the lean-safe/longevity floors before saving. The saved plan is the verified draft; `verified:{checked,adjustments}` shows it was checked against your protein/fiber/kcal floors. Verify fails open (no agent ⇒ ships unverified).",
     { agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"), instruction: z.string().optional() },
-    async ({ agent, instruction }) => {
-      const { agent: chosen, result, tried } = await runChosen(agent, buildMealPlanPrompt(instruction));
-      return asText({ plan: repo.createMealPlan(chosen, result.raw, result.parsed), ok: !!result.parsed, agent: chosen, tried });
-    });
+    async ({ agent, instruction }) => asText(await draftMealPlan(agent, instruction)));
 
   // ---- adaptive nutrition (T3) ----
   server.tool("get_expenditure",
@@ -874,6 +872,13 @@ export function buildMcpServer(): McpServer {
       force: z.boolean().optional().describe("re-research even when cached evidence exists for this topic"),
     },
     async ({ question, markers, agent, force }) => asText(await runResearch(question, { markers, agent, force }))
+  );
+
+  server.tool(
+    "get_evidence",
+    "Make a directive's citation INSPECTABLE: returns the cited evidence behind ONE marker as { marker, evidence:[{claim, source_title, source_url, body, confidence, retrieved_at}] }. Reads the evidence cache only (never the network), so it works with research disabled; evidence:[] when research never ran for that marker. INFORMATIONAL, not medical advice.",
+    { marker: z.string().optional().describe("the marker name, e.g. 'ApoB' (omit for the most-recent cached evidence overall)"), limit: z.number().int().optional() },
+    async ({ marker, limit }) => asText(repo.getEvidenceForMarker(marker, limit))
   );
 
   // ---- T5: effortless capture (frequents, optional check-in, Apple Health) ----
