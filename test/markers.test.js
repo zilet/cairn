@@ -35,11 +35,12 @@ test("getMarkerHistory reports a FALLING trend when values drop", () => {
   assert.equal(ldl.trend.change, -50);
 });
 
-test("getMarkerHistory reads a net-flat series (spike then back) as STABLE", () => {
-  // Net change tiny vs the series' own spread => 'stable', not a spurious trend.
-  seedHealthDoc("2025-01-01", [marker("HbA1c", 5.3)]);
-  seedHealthDoc("2025-04-01", [marker("HbA1c", 5.5)]);
-  seedHealthDoc("2025-08-01", [marker("HbA1c", 5.3)]);
+test("getMarkerHistory reads a flat (unchanging) series as STABLE", () => {
+  // Identical readings => least-squares slope 0 => 'stable', never a spurious trend.
+  // (v30 uses an LSQ fit, not a two-point delta, so the stable case is an unmoving line.)
+  seedHealthDoc("2025-01-01", [marker("HbA1c", 5.4)]);
+  seedHealthDoc("2025-04-01", [marker("HbA1c", 5.4)]);
+  seedHealthDoc("2025-08-01", [marker("HbA1c", 5.4)]);
   const a1c = repo.getMarkerHistory().markers.find((m) => m.key.includes("hba1c") || m.key.includes("a1c"));
   assert.equal(a1c.trend.dir, "stable");
   assert.equal(a1c.trend.change, 0);
@@ -102,11 +103,12 @@ test("GOLDEN: no marker carries a 0-100 grade / score / rating / percent field",
   }
 });
 
-test("GOLDEN: impact_score, if present, is never in the 1-100 'grade' range", () => {
-  // Force the largest possible distances and confirm impact_score still reads as
-  // an ordering weight (well under 1-100), so it can't be mistaken for a grade.
+test("GOLDEN: prioritizeMarkers never serializes the internal impact_score (constitution: no scores)", () => {
+  // The ordering signal is computed internally and STRIPPED before it crosses the
+  // API/MCP boundary — a serialized marker must carry no impact_score (nor any
+  // 0-100 grade). This is the user-facing no-scores guarantee, enforced.
   seedHealthDoc("2025-12-01", [marker("ApoB", 400, { unit: "mg/dL", flag: "high" })]);
   const m = repo.prioritizeMarkers().markers[0];
-  assert.ok(m.impact_score <= 3, `impact_score stayed a bounded ordering signal (${m.impact_score})`);
-  assert.ok(m.impact_score < 1.0 + 0.5 + 0.001, "distance(<=1)*1 + flag-floor(0.5) is the ceiling");
+  assert.ok(!("impact_score" in m), "impact_score must not be serialized over API/MCP");
+  assert.equal(m.impact_score, undefined);
 });

@@ -60,10 +60,11 @@ test("returns null when there is no JSON object at all", () => {
   assert.equal(extractJson(""), null);
 });
 
-test("returns null rather than corrupt data when a stray brace in prose breaks the span", () => {
-  // No fence to fall back on; the first-brace..last-brace span swallows the
-  // trailing prose and fails to parse. The contract is null, not garbage.
-  assert.equal(extractJson('{"a":{"b":1}} note: end }'), null);
+test("recovers the leading valid object even when stray prose/braces trail it", () => {
+  // v30's hardened extractJson does a balanced-brace scan, so it returns the FIRST
+  // complete top-level object and ignores trailing prose + stray braces (the old
+  // naive first..last span failed here). Recover the value, never garbage.
+  assert.deepEqual(extractJson('{"a":{"b":1}} note: end }'), { a: { b: 1 } });
 });
 
 test("a fully valid object always round-trips to the same value", () => {
