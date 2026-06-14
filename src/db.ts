@@ -308,7 +308,8 @@ CREATE TABLE IF NOT EXISTS settings (
   gemini_api_key TEXT DEFAULT '',             -- optional override for GEMINI_API_KEY / GOOGLE_AI_KEY
   art_enabled_at TEXT DEFAULT '',             -- when art_enabled last flipped on (spend telemetry window)
   garmin_last_sync_at TEXT DEFAULT '',        -- when the last Garmin sync finished (UTC ISO)
-  garmin_last_sync_status TEXT DEFAULT ''     -- short result: "ok: 12 activities · 14 daily" | "failed: …"
+  garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
+  proactive_enabled INTEGER DEFAULT 1         -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each
@@ -492,6 +493,35 @@ CREATE TABLE IF NOT EXISTS day_reads (
   agent TEXT,                         -- which agent produced it (when source='agent')
   override TEXT,                      -- the athlete's persisted steer for the day (null = canonical read)
   computed_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Agent-run telemetry (one row per agent ATTEMPT, written from the runChosen /
+-- runAgentWithFallback / day-read paths). Makes the agentic loop observable:
+-- ok-rate, per-agent latency, how often the JSON-repair retry was needed. Writes
+-- are cheap + failure-safe (never throw into the coaching loop). Regenerable —
+-- pure telemetry, safe to prune. Surfaced via getAgentStats / GET /api/agent-stats
+-- / MCP get_agent_stats. No numeric score is ever derived from this for the user;
+-- it's an operator/health view, not a grade.
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op TEXT,                            -- which operation: day_read | session_suggest | nutrition_checkin | insight | coach_draft | ...
+  agent TEXT,                         -- the agent that produced (or failed) this attempt
+  ok INTEGER,                         -- 1 = produced a usable parsed result
+  parsed INTEGER,                     -- 1 = output parsed as JSON
+  latency_ms INTEGER,                 -- wall-clock for this attempt
+  tried_json INTEGER,                 -- 1 = the one-shot JSON-repair retry was used
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);
+
+-- Tiny generic key/value scratchpad for scheduler bookkeeping (last-run stamps
+-- for the miss-tolerant coach draft + the weekly proactive passes). Survives a
+-- restart so a missed slot still fires once when the process comes back up.
+-- Regenerable — losing it just means a proactive pass might run one extra time.
+CREATE TABLE IF NOT EXISTS app_state (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
 );
 `);
 

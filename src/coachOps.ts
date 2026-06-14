@@ -8,7 +8,7 @@
 // response and never an MCP wrapper.
 
 import * as repo from "./repo.js";
-import { runAgent, runAgentWithFallback } from "./agents.js";
+import { runAgent, runAgentWithFallback, INTERACTIVE_TIMEOUT_MS, type RunOpts } from "./agents.js";
 import {
   buildMealSwapPrompt,
   buildRecipePrompt,
@@ -21,12 +21,36 @@ import {
 
 // Run a prompt with an explicit agent, or "auto"/blank to use the configured
 // rotation (round-robin / random / priority) with fallthrough on failure.
-export async function runChosen(agent: string | undefined, prompt: string) {
+// `opts.op` labels the run for agent-stats telemetry; `opts.timeoutMs` lets
+// interactive callers (session-suggest) shorten the leash. The "auto" path
+// records telemetry itself (inside runAgentWithFallback); the explicit-agent
+// path records one row here, failure-safe (telemetry never breaks the loop).
+export async function runChosen(
+  agent: string | undefined,
+  prompt: string,
+  opts: RunOpts & { op?: string } = {}
+) {
+  const op = opts.op ?? "auto";
   if (!agent || agent === "auto") {
-    const fb = await runAgentWithFallback(repo.pickAgentOrder(), prompt);
+    const fb = await runAgentWithFallback(repo.pickAgentOrder(), prompt, opts);
     return { agent: fb.agent, result: fb.result, tried: fb.tried };
   }
-  return { agent, result: await runAgent(agent, prompt), tried: [] as any[] };
+  const started = Date.now();
+  let result: Awaited<ReturnType<typeof runAgent>> | null = null;
+  try {
+    result = await runAgent(agent, prompt, { timeoutMs: opts.timeoutMs });
+    return { agent, result, tried: [] as any[] };
+  } finally {
+    try {
+      repo.recordAgentRun({
+        op, agent,
+        ok: !!result?.parsed,
+        parsed: !!result?.parsed,
+        latency_ms: Date.now() - started,
+        tried_json: false,
+      });
+    } catch { /* telemetry never breaks the loop */ }
+  }
 }
 
 // Build ONE session on demand. ok:false is the designed failure signal when the
@@ -36,7 +60,8 @@ export async function suggestSession(
   opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string }
 ) {
   const prompt = buildSessionPrompt(undefined, opts);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  // Interactive: a user is waiting on the request path — short the leash.
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "session_suggest", timeoutMs: INTERACTIVE_TIMEOUT_MS });
   const p = result.parsed;
   const sane = p && typeof p === "object" && Array.isArray(p.items) && p.items.length > 0;
   if (!sane) return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried };
@@ -50,7 +75,7 @@ export async function suggestSession(
 export async function nutritionCheckin(agent: string | undefined, windowDays?: number) {
   const expenditure = repo.estimateExpenditure(Number.isFinite(windowDays as number) ? (windowDays as number) : 21);
   const prompt = buildNutritionCheckinPrompt(undefined, { windowDays });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "nutrition_checkin" });
   const p = result.parsed;
   if (!p || typeof p !== "object") {
     return { ok: false as const, error: "agent returned no usable check-in", agent: chosen, tried, expenditure };
@@ -80,7 +105,7 @@ export async function swapMealAgentic(
 ) {
   const { plan, id, day, mealIndex, hint } = args;
   const prompt = buildMealSwapPrompt({ plan, day, mealIndex, hint });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "meal_swap" });
   const p = result.parsed;
   const saneMeal = p && typeof p === "object" && typeof p.name === "string" && p.name.trim() && Number.isFinite(Number(p.kcal));
   if (!saneMeal) return { ok: false as const, error: "agent returned no usable meal", agent: chosen, tried };
@@ -99,7 +124,7 @@ export async function generateRecipe(
 ) {
   const { plan, id, day, mealIndex } = args;
   const prompt = buildRecipePrompt({ plan, day, mealIndex });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "recipe" });
   const p = result.parsed;
   const saved = p && typeof p === "object" ? repo.setMealRecipe(id, day, mealIndex, p) : null;
   if (!saved) return { ok: false as const, error: "agent returned no usable recipe", agent: chosen, tried };
@@ -111,7 +136,7 @@ export async function generateRecipe(
 // the shape (the agent returned garbage).
 export async function runHealthReview(agent: string | undefined) {
   const prompt = buildHealthReviewPrompt();
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "health_review" });
   const review = result.parsed && typeof result.parsed === "object"
     ? repo.addHealthReview(result.parsed, chosen, result.raw)
     : null;
@@ -127,7 +152,7 @@ export async function generateInsight(agent: string | undefined, kind?: string) 
   const k = kind === "weekly_read" ? "weekly_read" : "connection";
   const recent = repo.recentInsightTexts(12);
   const prompt = k === "weekly_read" ? buildWeeklyReadPrompt() : buildInsightPrompt(undefined, recent);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: k === "weekly_read" ? "weekly_read" : "insight" });
   const p: any = result.parsed;
   const text = p && typeof p === "object" ? String(p.text ?? "").trim() : "";
   if (!p || typeof p !== "object" || p.found === false || !text || repo.isDuplicateInsight(text, recent)) {

@@ -179,6 +179,15 @@ export const MIGRATIONS: Migration[] = [
     // in, instead of the steer being a throwaway client-only reshape.
     addColumn(db, "day_reads", "override TEXT");
   } },
+  // Elite-build migration ladder: v27 day-read-override, v28 settings.research_enabled
+  // (Stream 4), v29 settings.proactive_enabled (Stream 1), v30 memory self-updating
+  // (Stream 2, renumbered from v27 to avoid the day-read-override collision).
+  { version: 29, name: "settings-proactive-enabled", up: (db) => {
+    // Gate for nightly quiet-insight / weekly-read / nutrition-checkin precompute
+    // (pull-never-push: these only STORE a waiting read, never notify). Default
+    // on so existing deployments get calm proactivity; toggle in Settings.
+    addColumn(db, "settings", "proactive_enabled INTEGER DEFAULT 1");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

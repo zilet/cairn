@@ -1,35 +1,155 @@
 import * as repo from "./repo.js";
-import { runAgentWithFallback } from "./agents.js";
+import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
+import { generateInsight, nutritionCheckin } from "./coachOps.js";
 import { precomputeDayRead, localToday } from "./dayread.js";
 
-// Weekly auto-draft. Configured in Settings (persisted in the DB, editable from
-// the PWA at runtime — no restart needed): coach_enabled, coach_day (0=Sun..6=Sat),
-// coach_hour (local). When the slot arrives it drafts ONE proposal using the
-// configured agent rotation (round-robin / random / priority, with fallthrough).
-// It never auto-applies — you review and tap Apply.
+// Weekly auto-draft + quiet proactivity. Configured in Settings (persisted in
+// the DB, editable from the PWA at runtime — no restart needed): coach_enabled,
+// coach_day (0=Sun..6=Sat), coach_hour (local). When the slot arrives it drafts
+// ONE proposal using the configured agent rotation (round-robin / random /
+// priority, with fallthrough). It never auto-applies — you review and tap Apply.
+//
+// The weekly coach draft is MISS-TOLERANT: rather than firing only on exact
+// hour equality (which silently skips the week if the process was asleep at that
+// minute), it fires when the most recent scheduled slot has passed and it hasn't
+// run for that slot yet — tracked via a persisted last-run stamp (app_state), so
+// a missed slot still drafts once when the server comes back.
+//
+// Proactivity (gated behind settings.proactive_enabled, default on) is PULL,
+// NEVER push: it only STORES a waiting read (a quiet nightly insight, a weekly
+// read, a drifted-nutrition draft) — no notification, no nag ever fires.
 //
 // First-run defaults seed from COACH_AGENT/COACH_DAY/COACH_HOUR env vars so
 // existing deployments keep working until you change anything in Settings.
 //
 // Also hosts the Garmin auto-sync (boot + ~6h cadence, only when configured).
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The most recent past (or current) occurrence of weekday `day` at hour `hour`,
+// as a local Date. Used for miss-tolerant weekly slots: if `now >= slot` and we
+// haven't run for that slot's date, the slot is due.
+function lastScheduledSlot(now: Date, day: number, hour: number): Date {
+  const slot = new Date(now);
+  slot.setHours(hour, 0, 0, 0);
+  // Walk back to the target weekday (0..6). If today IS the day but the hour
+  // hasn't arrived yet, this still lands today and the now>=slot guard defers it.
+  let back = (now.getDay() - day + 7) % 7;
+  // If it's the right weekday but before the hour, the most recent occurrence was
+  // a week ago.
+  if (back === 0 && now.getTime() < slot.getTime()) back = 7;
+  slot.setTime(slot.getTime() - back * DAY_MS);
+  return slot;
+}
+
+// A local YYYY-MM-DD stamp for a Date (mirrors dayread.localToday()).
+function localStamp(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// True when the weekly slot's most recent occurrence has passed and the persisted
+// last-run stamp doesn't already cover it. Records the stamp as a side effect
+// when it returns true (so it fires once per slot, restart-tolerant).
+function weeklySlotDue(now: Date, day: number, hour: number, stateKey: string): boolean {
+  const slot = lastScheduledSlot(now, day, hour);
+  if (now.getTime() < slot.getTime()) return false; // the slot hasn't arrived yet
+  const slotStamp = localStamp(slot);
+  if (repo.getAppState(stateKey) === slotStamp) return false; // already ran for this slot
+  repo.setAppState(stateKey, slotStamp);
+  return true;
+}
+
 export function startScheduler() {
-  let lastRunDate = "";
+  // Wire agent-run telemetry: agents.ts can't import repo.ts (circular), so it
+  // emits through a registered sink. recordAgentRun is itself failure-safe.
+  setAgentRunSink((r) => repo.recordAgentRun(r));
+
+  // The small-hours hour the nightly Brief precompute + quiet insight run at.
+  // Declared up front so both the proactive tick and the precompute tick share it.
+  const PRECOMPUTE_HOUR = (() => {
+    const h = Number(process.env.DAYREAD_PRECOMPUTE_HOUR);
+    return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 4; // default 4am local
+  })();
+
+  // ---- Weekly coach draft (miss-tolerant) ----
+  let coachBusy = false;
   const tick = async () => {
+    if (coachBusy) return;
     const s = repo.getSettings();
     if (!s.coach_enabled) return;
     const now = new Date();
-    if (now.getDay() !== s.coach_day || now.getHours() !== s.coach_hour) return;
-    const stamp = now.toISOString().slice(0, 10);
-    if (stamp === lastRunDate) return; // already ran this day
-    lastRunDate = stamp;
+    if (!weeklySlotDue(now, s.coach_day, s.coach_hour, "coach_last_slot")) return;
+    coachBusy = true;
     try {
       const prompt = buildCoachPrompt("Weekly automatic review.");
-      const { agent, result } = await runAgentWithFallback(repo.pickAgentOrder(), prompt);
+      const { agent, result } = await runAgentWithFallback(repo.pickAgentOrder(), prompt, { op: "coach_draft" });
       repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
       console.log(`Auto-coach drafted a proposal via ${agent} (parsed=${!!result.parsed}).`);
     } catch (e: any) {
       console.error(`Auto-coach failed: ${e.message}`);
+    } finally {
+      coachBusy = false;
+    }
+  };
+
+  // ---- Quiet proactivity (pull-never-push): nightly insight, weekly read,
+  //      weekly nutrition check-in. Each only STORES a waiting read/draft. ----
+  let proactiveBusy = false;
+  const proactiveTick = async () => {
+    if (proactiveBusy) return;
+    const s = repo.getSettings();
+    if (!s.proactive_enabled) return;
+    const now = new Date();
+
+    // (a) Nightly quiet insight — once per day, in the small hours alongside the
+    //     Brief precompute. generateInsight emits ONE genuine connection or
+    //     ok:false (dedup-guarded); a near-repeat / nothing-real is a calm no-op.
+    const insightDue =
+      now.getHours() === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localStamp(now);
+    // (b) Weekly read — on the configured coach day/hour (miss-tolerant). A
+    //     standing "how the week went + the one change", stored as a weekly_read
+    //     insight. Reuses the coach slot so it lands on the same cadence.
+    const weeklyDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "weekly_read_last_slot");
+    // (c) Weekly nutrition check-in — on the coach day/hour too (miss-tolerant).
+    //     Drafts a nutrition_target proposal ONLY on meaningful drift; the calm,
+    //     common answer is change:false (no draft).
+    const nutritionDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "nutrition_checkin_last_slot");
+
+    if (!insightDue && !weeklyDue && !nutritionDue) return;
+    proactiveBusy = true;
+    try {
+      if (insightDue) {
+        repo.setAppState("insight_last_date", localStamp(now));
+        try {
+          const r = await generateInsight("auto", "connection");
+          console.log(r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`);
+        } catch (e: any) {
+          console.error(`[proactive] insight pass failed: ${e?.message ?? e}`);
+        }
+      }
+      if (weeklyDue) {
+        try {
+          const r = await generateInsight("auto", "weekly_read");
+          console.log(r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`);
+        } catch (e: any) {
+          console.error(`[proactive] weekly read failed: ${e?.message ?? e}`);
+        }
+      }
+      if (nutritionDue) {
+        try {
+          const r: any = await nutritionCheckin("auto");
+          console.log(
+            r.ok && r.change ? `[proactive] drafted an adaptive nutrition change (waiting for review).`
+              : r.ok ? `[proactive] nutrition steady — no change (calm no-op).`
+              : `[proactive] nutrition check-in unavailable (calm no-op).`
+          );
+        } catch (e: any) {
+          console.error(`[proactive] nutrition check-in failed: ${e?.message ?? e}`);
+        }
+      }
+    } finally {
+      proactiveBusy = false;
     }
   };
 
@@ -62,11 +182,7 @@ export function startScheduler() {
   // Nightly Brief precompute: once per day in the small hours, compute & cache
   // today's canonical day-read so the morning open is instant (no agent wait on
   // the request path). Runs against the configured rotation; a failed compute
-  // still caches the deterministic floor. The hour is overridable for testing.
-  const PRECOMPUTE_HOUR = (() => {
-    const h = Number(process.env.DAYREAD_PRECOMPUTE_HOUR);
-    return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 4; // default 4am local
-  })();
+  // still caches the deterministic floor. PRECOMPUTE_HOUR is declared up top.
   let lastPrecomputeDate = "";
   let precomputeBusy = false;
   const precomputeTick = async () => {
@@ -93,7 +209,9 @@ export function startScheduler() {
       ? `Auto-coach enabled: day=${s.coach_day}, hour=${s.coach_hour}, strategy=${s.agent_strategy}.`
       : "Auto-coach disabled (enable it in Settings)."
   );
+  console.log(s.proactive_enabled ? "Quiet proactivity enabled (insights wait in-app; never pushed)." : "Quiet proactivity disabled (enable it in Settings).");
   setInterval(tick, 60_000); // check every minute
+  setInterval(proactiveTick, 60_000);
   setInterval(garminTick, 60_000);
   setInterval(precomputeTick, 60_000);
   setTimeout(garminTick, 45_000); // the boot-time pass; later passes ride the minute tick

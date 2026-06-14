@@ -425,6 +425,7 @@ export function buildMcpServer(): McpServer {
       coach_day: z.number().int().optional(),
       coach_hour: z.number().int().optional(),
       enrich_enabled: z.boolean().optional(),
+      proactive_enabled: z.boolean().optional().describe("quiet proactivity on/off: nightly insight + weekly read + weekly nutrition check-in precompute (pull-never-push — only stores a waiting read, never notifies)"),
       art_enabled: z.boolean().optional().describe("generated artwork on/off (needs a Gemini key to do anything)"),
       meal_prefs: z.string().optional().describe("free-text meal/schedule preferences the meal-plan coach always sees (e.g. 'I train fasted first thing most mornings')"),
       gemini_api_key: z.string().optional().describe("optional saved Gemini key; overrides GOOGLE_AI_KEY/GEMINI_API_KEY when non-empty"),
@@ -439,6 +440,11 @@ export function buildMcpServer(): McpServer {
     "Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size.",
     {},
     async () => asText(repo.getArtStats()));
+
+  server.tool("get_agent_stats",
+    "Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up).",
+    { recent: z.number().int().optional(), days: z.number().int().optional() },
+    async ({ recent, days }) => asText(repo.getAgentStats({ recent, days })));
 
   server.tool("list_meal_plans", "List recent meal plans.", { limit: z.number().int().optional() },
     async ({ limit }) => asText(repo.listMealPlans(limit ?? 10)));

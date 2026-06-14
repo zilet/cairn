@@ -1787,6 +1787,7 @@ export interface Settings {
   coach_hour: number;
   onboarded: boolean;
   enrich_enabled: boolean;
+  proactive_enabled: boolean;           // nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
   art_enabled: boolean;
   art_enabled_at: string | null;
   meal_prefs: string;
@@ -1812,6 +1813,7 @@ function defaultSettings(): Settings {
     coach_hour: Number(process.env.COACH_HOUR ?? 20),
     onboarded: false,
     enrich_enabled: true, // background enrichment on by default
+    proactive_enabled: true, // calm precompute (quiet insight / weekly read / nutrition check-in) on by default
     art_enabled: true,    // generated artwork on by default (no-op without GEMINI_API_KEY)
     art_enabled_at: null, // unset → spend telemetry shows all-time
     meal_prefs: "",       // free-text meal/schedule preferences embedded in meal prompts
@@ -1859,6 +1861,7 @@ function rowToSettings(row: any): Settings {
     onboarded: !!row.onboarded,
     // NULL on old rows (column added by migration) defaults to enabled.
     enrich_enabled: row.enrich_enabled == null ? true : !!row.enrich_enabled,
+    proactive_enabled: row.proactive_enabled == null ? true : !!row.proactive_enabled,
     art_enabled: row.art_enabled == null ? true : !!row.art_enabled,
     art_enabled_at: String(row.art_enabled_at ?? "").trim() || null,
     meal_prefs: row.meal_prefs == null ? "" : String(row.meal_prefs),
@@ -1878,9 +1881,9 @@ export function getSettings(): Settings {
   if (row) return rowToSettings(row);
   const d = defaultSettings();
   db.prepare(
-    `INSERT INTO settings (id, agent_strategy, agent_order, disabled_agents, rr_cursor, coach_enabled, coach_day, coach_hour, enrich_enabled, art_enabled, meal_prefs)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(d.agent_strategy, JSON.stringify(d.agent_order), JSON.stringify(d.disabled_agents), d.rr_cursor, d.coach_enabled ? 1 : 0, d.coach_day, d.coach_hour, d.enrich_enabled ? 1 : 0, d.art_enabled ? 1 : 0, d.meal_prefs);
+    `INSERT INTO settings (id, agent_strategy, agent_order, disabled_agents, rr_cursor, coach_enabled, coach_day, coach_hour, enrich_enabled, proactive_enabled, art_enabled, meal_prefs)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(d.agent_strategy, JSON.stringify(d.agent_order), JSON.stringify(d.disabled_agents), d.rr_cursor, d.coach_enabled ? 1 : 0, d.coach_day, d.coach_hour, d.enrich_enabled ? 1 : 0, d.proactive_enabled ? 1 : 0, d.art_enabled ? 1 : 0, d.meal_prefs);
   return d;
 }
 
@@ -1907,6 +1910,7 @@ export function setSettings(patch: any): Settings {
     coach_hour: patch.coach_hour ?? cur.coach_hour,
     onboarded: patch.onboarded !== undefined ? !!patch.onboarded : cur.onboarded,
     enrich_enabled: patch.enrich_enabled !== undefined ? !!patch.enrich_enabled : cur.enrich_enabled,
+    proactive_enabled: patch.proactive_enabled !== undefined ? !!patch.proactive_enabled : cur.proactive_enabled,
     art_enabled: patch.art_enabled !== undefined ? !!patch.art_enabled : cur.art_enabled,
     // Stamp the moment art flips off→on; spend telemetry reports from here.
     // Stored as UTC "YYYY-MM-DD HH:MM:SS" so it compares with datetime('now').
@@ -1928,12 +1932,12 @@ export function setSettings(patch: any): Settings {
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
   db.prepare(
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
-       coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
+       coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, gemini_api_key=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy, JSON.stringify(merged.agent_order), JSON.stringify(merged.disabled_agents),
     merged.rr_cursor, merged.coach_enabled ? 1 : 0, merged.coach_day, merged.coach_hour,
-    merged.onboarded ? 1 : 0, merged.enrich_enabled ? 1 : 0, merged.art_enabled ? 1 : 0, merged.art_enabled_at ?? "", merged.meal_prefs,
+    merged.onboarded ? 1 : 0, merged.enrich_enabled ? 1 : 0, merged.proactive_enabled ? 1 : 0, merged.art_enabled ? 1 : 0, merged.art_enabled_at ?? "", merged.meal_prefs,
     merged.garmin_username, garminPassword, geminiApiKey
   );
   return getSettings();
@@ -2058,6 +2062,111 @@ export function getArtStats() {
     cached_assets: Number(assets?.n ?? 0),
     aliases: Number(aliases?.n ?? 0),
   };
+}
+
+// ---------- agent-run telemetry (see src/agents.ts) ----------
+// One row per agent ATTEMPT, written from the runChosen / runAgentWithFallback /
+// day-read paths. Makes the agentic loop observable. Mirrors the art_usage
+// telemetry shape: a cheap insert + a stats roll-up. recordAgentRun NEVER throws
+// into the coaching loop (callers wrap it in try/catch; we also guard here).
+export function recordAgentRun(r: {
+  op: string;
+  agent: string;
+  ok: boolean;
+  parsed: boolean;
+  latency_ms: number;
+  tried_json: boolean;
+}) {
+  try {
+    db.prepare(
+      `INSERT INTO agent_runs (op, agent, ok, parsed, latency_ms, tried_json)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      String(r.op ?? "").slice(0, 60),
+      String(r.agent ?? "").slice(0, 60),
+      r.ok ? 1 : 0,
+      r.parsed ? 1 : 0,
+      Number.isFinite(r.latency_ms) ? Math.round(r.latency_ms) : null,
+      r.tried_json ? 1 : 0
+    );
+  } catch {
+    /* telemetry is best-effort — never break the loop on a write error */
+  }
+}
+
+// Roll-up for the Settings "agent health" card / MCP get_agent_stats. ok_rate is
+// a plain reliability fraction over the window (NOT a user-facing grade — this is
+// an operator/health view, never surfaced as a score against the athlete). p50_ms
+// is the per-agent median latency. `recent` carries the last N raw attempts.
+export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
+  const recentN = Math.min(Math.max(Number(opts.recent) || 25, 1), 200);
+  const days = Number.isFinite(opts.days) && (opts.days as number) > 0 ? (opts.days as number) : null;
+  const where = days ? `WHERE created_at >= datetime('now', ?)` : ``;
+  const bind: any[] = days ? [`-${days} days`] : [];
+
+  const totalRow = db.prepare(
+    `SELECT COUNT(*) AS runs, COALESCE(SUM(ok), 0) AS ok FROM agent_runs ${where}`
+  ).get(...bind) as any;
+  const runs = Number(totalRow?.runs ?? 0);
+  const okCount = Number(totalRow?.ok ?? 0);
+
+  const perAgent = db.prepare(
+    `SELECT agent,
+            COALESCE(SUM(ok), 0) AS ok,
+            COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) AS fail,
+            COUNT(*) AS n
+       FROM agent_runs ${where}
+      GROUP BY agent
+      ORDER BY n DESC`
+  ).all(...bind) as any[];
+
+  const by_agent = perAgent.map((a) => {
+    // Median latency for this agent over the window (SQLite has no percentile fn).
+    const lats = (db.prepare(
+      `SELECT latency_ms FROM agent_runs ${where ? where + " AND" : "WHERE"} agent = ? AND latency_ms IS NOT NULL ORDER BY latency_ms`
+    ).all(...bind, a.agent) as any[]).map((r) => Number(r.latency_ms));
+    const p50 = lats.length ? lats[Math.floor((lats.length - 1) / 2)] : null;
+    return { agent: a.agent, ok: Number(a.ok), fail: Number(a.fail), p50_ms: p50 };
+  });
+
+  const recent = db.prepare(
+    `SELECT op, agent, ok, parsed, latency_ms, tried_json, created_at
+       FROM agent_runs ${where} ORDER BY id DESC LIMIT ?`
+  ).all(...bind, recentN).map((r: any) => ({
+    op: r.op,
+    agent: r.agent,
+    ok: !!r.ok,
+    parsed: !!r.parsed,
+    latency_ms: r.latency_ms == null ? null : Number(r.latency_ms),
+    tried_json: !!r.tried_json,
+    created_at: r.created_at,
+  }));
+
+  return {
+    runs,
+    ok_rate: runs ? Number((okCount / runs).toFixed(3)) : null,
+    by_agent,
+    recent,
+  };
+}
+
+// ---------- app_state: tiny KV scratchpad for scheduler bookkeeping ----------
+// Used by the proactive scheduler to persist last-run stamps so a missed slot
+// still fires once after a restart. Best-effort; failure-safe.
+export function getAppState(key: string): string | null {
+  try {
+    const row = db.prepare(`SELECT value FROM app_state WHERE key = ?`).get(key) as any;
+    return row?.value ?? null;
+  } catch { return null; }
+}
+
+export function setAppState(key: string, value: string) {
+  try {
+    db.prepare(
+      `INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    ).run(key, String(value ?? ""));
+  } catch { /* best-effort */ }
 }
 
 // agents.json merged with settings: effective order + enabled/usable flags.
