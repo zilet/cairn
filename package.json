@@ -15,7 +15,9 @@
     "garmin:sync": "tsx src/garmin.ts",
     "reset": "rm -f data/cairn.db data/cairn.db-* && npm run seed",
     "migrate": "tsx src/migrate.ts",
-    "backup": "curl -fsS http://localhost:8787/api/export -o cairn-export.json && echo saved cairn-export.json"
+    "backup": "curl -fsS http://localhost:8787/api/export -o cairn-export.json && echo saved cairn-export.json",
+    "pretest": "npm run build",
+    "test": "node test/run.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
