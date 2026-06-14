@@ -871,10 +871,88 @@ export function computeGoalCheck() {
     message = `No target date set. Lean-safe pace ~${recommended.weekly_rate_lb} lb/wk → ${recommended.weeks_to_goal} weeks to lose ${lbsToLose} lb, eating ~${recommended.target_intake_kcal} kcal, ~${recommended.protein_g} g protein.`;
   }
 
+  // ---- goal-pace projection (from the ACTUAL weigh-in trend, not the plan) ----
+  // The static math above asks "what rate would HIT the date"; this projects
+  // where the CURRENT measured trend actually lands. Plain language + a date —
+  // never a score. Null/silent when there isn't enough scale data or no goal.
+  const goalPace = projectGoalPace(p, lbsToLose);
+
   return {
     ok: true, bmr: Math.round(bmr), tdee, lbs_to_lose: lbsToLose,
     safe_max_rate_lb: safeMaxRate, requested, recommended, message,
+    // Additive (older consumers ignore): the measured-trend forecast.
+    trend_lb_wk: goalPace.trend_lb_wk,
+    projected_goal_date: goalPace.projected_goal_date,
+    projection_text: goalPace.projection_text,
   };
+}
+
+// Project where the athlete's CURRENT measured weight trend lands their goal —
+// a real forecast off the scale, not the plan's required pace. Returns the
+// measured weekly trend, a projected goal date (or null), and a plain-language
+// line ("at this trend, ~Aug 20 — about 3 weeks past your date"). Words + a
+// date, never a number-as-score. Null-safe: too little scale data / no goal →
+// quiet (trend or date null, no false precision).
+function projectGoalPace(p: any, lbsToLose: number): {
+  trend_lb_wk: number | null;
+  projected_goal_date: string | null;
+  projection_text: string | null;
+} {
+  // Measured weekly trend over the last 28 days of weigh-ins (a bit longer than
+  // the 21-day weekly-stats window so a goal forecast is steadier).
+  const since = new Date(Date.now() - 28 * 864e5).toISOString().slice(0, 10);
+  const wpts = db.prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? ORDER BY date, id`).all(since) as any[];
+  let trend: number | null = null; // lb/week (negative = losing)
+  if (wpts.length >= 2) {
+    const pts = wpts.map((w) => ({ date: String(w.date), value: Number(w.weight_lb) })).filter((x) => Number.isFinite(x.value));
+    const xs = pts.map((x) => Date.parse(x.date + "T00:00:00Z") / 864e5);
+    if (pts.length >= 2 && xs[xs.length - 1] - xs[0] >= 4) {
+      const slope = lsqSlopePerDay(pts);
+      if (slope != null) trend = Math.round(slope * 7 * 100) / 100;
+    }
+  }
+  const curW = wpts.length ? Number(wpts[wpts.length - 1].weight_lb) : (p?.weight_lb ?? null);
+  if (lbsToLose <= 0 || curW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
+  if (trend == null) return { trend_lb_wk: null, projected_goal_date: null, projection_text: "Not enough recent weigh-ins to project a date yet — a few more and the forecast sharpens." };
+
+  const goalW = p?.goal_weight_lb;
+  if (goalW == null) return { trend_lb_wk: trend, projected_goal_date: null, projection_text: null };
+
+  // Not actually losing (trend flat or gaining) while there's still weight to
+  // lose → no honest date; say so plainly rather than inventing one.
+  if (trend >= -0.05) {
+    return {
+      trend_lb_wk: trend,
+      projected_goal_date: null,
+      projection_text: trend > 0.05
+        ? "At your current trend you're drifting up, not down — no date to project until the trend turns."
+        : "Your weight's holding steady right now — a small deficit would start moving it toward your goal.",
+    };
+  }
+
+  const weeksToGoal = (curW - goalW) / Math.abs(trend);
+  if (!Number.isFinite(weeksToGoal) || weeksToGoal <= 0 || weeksToGoal > 520) {
+    return { trend_lb_wk: trend, projected_goal_date: null, projection_text: "At this trend the goal is a long way out — worth revisiting the pace." };
+  }
+  const projDate = new Date(Date.now() + weeksToGoal * 7 * 864e5);
+  const projected_goal_date = projDate.toISOString().slice(0, 10);
+  const niceDate = projDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  let projection_text: string;
+  if (p?.goal_date) {
+    const goalDateMs = Date.parse(p.goal_date);
+    if (Number.isFinite(goalDateMs)) {
+      const diffWeeks = Math.round((projDate.getTime() - goalDateMs) / (7 * 864e5));
+      if (diffWeeks <= -1) projection_text = `At your current trend, ~${niceDate} — about ${Math.abs(diffWeeks)} week${Math.abs(diffWeeks) === 1 ? "" : "s"} ahead of your date.`;
+      else if (diffWeeks >= 1) projection_text = `At your current trend, ~${niceDate} — about ${diffWeeks} week${diffWeeks === 1 ? "" : "s"} past your date.`;
+      else projection_text = `At your current trend, ~${niceDate} — right around your target date.`;
+    } else {
+      projection_text = `At your current trend, you'd reach your goal around ${niceDate}.`;
+    }
+  } else {
+    projection_text = `At your current trend, you'd reach your goal around ${niceDate} — no target date set, so this is just where the scale's heading.`;
+  }
+  return { trend_lb_wk: trend, projected_goal_date, projection_text };
 }
 
 // ---------- activities ----------
@@ -1407,6 +1485,7 @@ export function getGarminCoachSummary(days = 14) {
        ROUND(AVG(active_calories), 1) AS avg_active_calories,
        ROUND(AVG(intensity_min_vigorous), 1) AS avg_vigorous_min,
        ROUND(AVG(training_readiness), 1) AS avg_training_readiness,
+       ROUND(AVG(acute_load), 1) AS avg_acute_load,
        MAX(vo2max) AS vo2max,
        MAX(training_status) AS training_status,
        MAX(hrv_status) AS hrv_status,
@@ -1418,6 +1497,20 @@ export function getGarminCoachSummary(days = 14) {
      FROM garmin_daily_metrics
      WHERE date >= ?`
   ).get(since) as any;
+  // Latest non-null point-in-time signals (acute training load and fitness age
+  // are CURRENT values, not things to average — take the most recent reading).
+  // These were captured by the sync but dropped here until now.
+  const latestOf = (col: string): number | null => {
+    try {
+      const r = db.prepare(
+        `SELECT ${col} AS v FROM garmin_daily_metrics WHERE date >= ? AND ${col} IS NOT NULL ORDER BY date DESC LIMIT 1`
+      ).get(since) as any;
+      return r?.v != null && Number.isFinite(Number(r.v)) ? Number(r.v) : null;
+    } catch { return null; }
+  };
+  daily.acute_load = latestOf("acute_load");
+  daily.fitness_age = latestOf("fitness_age");
+  daily.training_readiness = latestOf("training_readiness"); // latest readiness, alongside the window avg
   return { days, since, source, activities, hard_sessions: hard, recovery: daily };
 }
 
@@ -2243,6 +2336,130 @@ export function deleteHealthDocument(id: number) {
   return { deleted, derived };
 }
 
+// ---------- marker forecasting (least-squares slope → plain-language projection) ----------
+// A marker series read as a TREND, not a two-point delta: an ordinary
+// least-squares line over the (date→value) points gives a per-day slope that's
+// robust to one noisy reading. From the slope plus the optimal band we derive a
+// PLAIN-LANGUAGE projection ("trending toward optimal, roughly 6 weeks out" /
+// "drifting away from optimal" / "stable") — words and a direction only, NEVER a
+// number-as-score (the constitution bans 0-100 grades). `eta_weeks` is kept
+// internal for ordering (prioritizeMarkers); only the text is ever surfaced.
+interface MarkerForecast {
+  // direction RELATIVE TO OPTIMAL: improving = heading toward the band,
+  // worsening = drifting away the bad way, stable = no meaningful drift,
+  // null = not enough data / no zone to judge against.
+  direction: "improving" | "worsening" | "stable" | null;
+  eta_text: string | null;      // human ETA to reach (or leave) optimal, or null
+  eta_weeks: number | null;     // INTERNAL ordering signal — never surfaced as a grade
+  crossing: "entering" | "leaving" | null; // projected to cross the optimal edge
+}
+
+// Ordinary least-squares slope (value per DAY) over ascending (date,value)
+// points. Returns null with <2 points or a degenerate (single-day) span.
+function lsqSlopePerDay(points: { date: string; value: number }[]): number | null {
+  if (!points || points.length < 2) return null;
+  const xs = points.map((p) => Date.parse(p.date + "T00:00:00Z") / 864e5);
+  const ys = points.map((p) => p.value);
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) { num += (xs[i] - mx) * (ys[i] - my); den += (xs[i] - mx) ** 2; }
+  if (den <= 0) return null;
+  return num / den; // value units per day
+}
+
+// Plain-language ETA for a count of weeks — words only.
+function weeksText(weeks: number): string {
+  if (weeks <= 1.5) return "roughly a week out";
+  if (weeks <= 8) return `roughly ${Math.round(weeks)} weeks out`;
+  if (weeks <= 16) return `a few months out`;
+  if (weeks <= 78) return `roughly ${Math.round(weeks / 4.345)} months out`;
+  return "well over a year out at this pace";
+}
+
+// From a marker's series + its optimal zone, derive a forecast relative to the
+// OPTIMAL band (not the lab range). Slope sign vs the "worse" direction decides
+// improving / worsening; an ETA is projected only when the line will actually
+// cross the relevant edge. No zone (or a flat/short series) → a stable/unknown,
+// never a fabricated trend. Everything is plain language + direction.
+function forecastMarker(
+  points: { date: string; value: number }[],
+  slopePerDay: number | null,
+  zone: OptimalZone | null
+): MarkerForecast {
+  if (slopePerDay == null || !points.length) {
+    return { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+  }
+  const latest = points[points.length - 1].value;
+  const weekly = slopePerDay * 7;
+  // Span and spread gate "stable": a slope that won't move the value materially
+  // across the series' own window reads as stable, not a trend to act on.
+  const xs = points.map((p) => Date.parse(p.date + "T00:00:00Z") / 864e5);
+  const spanDays = Math.max(1, xs[xs.length - 1] - xs[0]);
+  const projectedMove = Math.abs(slopePerDay) * spanDays;
+  const vals = points.map((p) => p.value);
+  const spread = Math.max(...vals) - Math.min(...vals);
+  // Need a zone to speak "toward / away from optimal".
+  if (!zone) {
+    if (projectedMove < Math.max(spread * 0.05, 1e-9)) {
+      return { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
+    }
+    return { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+  }
+  const [lo, hi] = zone.optimal;
+  const width = Math.max(hi - lo, 1);
+  // "Stable" when the slope barely moves the value vs the optimal band's width.
+  if (projectedMove < width * 0.1 && projectedMove < Math.max(spread * 0.05, 1e-9)) {
+    return { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
+  }
+  const dist = optimalDistance(latest, zone); // 0 when inside optimal
+  const inside = dist === 0;
+  // Which way is the value moving, and is that toward or away from optimal?
+  // dir 'high' = high is worse, 'low' = low is worse, 'band' = either side worse.
+  let improving: boolean;
+  let edge: number | null = null; // the optimal edge it would cross
+  if (zone.dir === "high") {
+    improving = weekly < 0;                 // falling = toward optimal
+    edge = hi;                              // crossing the upper edge either way
+  } else if (zone.dir === "low") {
+    improving = weekly > 0;                 // rising = toward optimal
+    edge = lo;
+  } else {
+    // band: judge against the nearer edge it's heading at.
+    if (latest > hi) { improving = weekly < 0; edge = hi; }
+    else if (latest < lo) { improving = weekly > 0; edge = lo; }
+    else { improving = weekly < 0 ? latest <= (lo + hi) / 2 : latest >= (lo + hi) / 2; edge = weekly > 0 ? hi : lo; }
+  }
+  // ETA to cross the relevant edge, when the slope actually heads there.
+  let eta_weeks: number | null = null;
+  let crossing: MarkerForecast["crossing"] = null;
+  let eta_text: string | null = null;
+  if (edge != null && Math.abs(weekly) > 1e-9) {
+    const weeksToEdge = (edge - latest) / weekly;
+    if (weeksToEdge > 0 && weeksToEdge < 260) {
+      eta_weeks = Math.round(weeksToEdge * 10) / 10;
+      crossing = inside ? "leaving" : "entering";
+    }
+  }
+  const direction: MarkerForecast["direction"] = improving ? "improving" : "worsening";
+  if (eta_weeks != null) {
+    const when = weeksText(eta_weeks);
+    eta_text = inside
+      ? `drifting toward the edge of optimal, ${when}`
+      : improving
+        ? `trending toward optimal, ${when}`
+        : `drifting further from optimal, ${when}`;
+  } else {
+    eta_text = inside
+      ? "holding within optimal"
+      : improving
+        ? "trending toward optimal"
+        : "drifting away from optimal";
+  }
+  return { direction, eta_text, eta_weeks, crossing };
+}
+
 // ---------- health insights: marker history across all documents ----------
 // Aggregates every marker from every health document into one per-marker series.
 // Docs are walked in effective-date order (doc_date, falling back to the upload
@@ -2311,9 +2528,18 @@ export function getMarkerHistory() {
     // series' own spread (so a marker that barely moved doesn't read as a trend),
     // else 'rising'/'falling'. No score — just direction + raw change + span.
     const n = points.length;
-    let trend: { dir: "rising" | "falling" | "stable" | null; change: number | null; span_days: number | null; n: number };
+    const zone = matchOptimalZone(last.name);
+    let trend: {
+      dir: "rising" | "falling" | "stable" | null;
+      change: number | null;
+      span_days: number | null;
+      n: number;
+      slope_per_week: number | null;        // least-squares slope, value/week (rounded)
+      projection: string | null;            // PLAIN-LANGUAGE forecast vs optimal — words, no score
+    };
+    let forecast: MarkerForecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
     if (n < 2) {
-      trend = { dir: null, change: null, span_days: null, n };
+      trend = { dir: null, change: null, span_days: null, n, slope_per_week: null, projection: null };
     } else {
       const first = points[0];
       const lastP = points[n - 1];
@@ -2322,8 +2548,29 @@ export function getMarkerHistory() {
       const vals = points.map((p) => p.value);
       const range = Math.max(...vals) - Math.min(...vals);
       const span_days = Math.round((Date.parse(lastP.date) - Date.parse(first.date)) / 86_400_000) || 0;
-      const dir = range > 0 && Math.abs(change) < range * 0.05 ? "stable" : change > 0 ? "rising" : change < 0 ? "falling" : "stable";
-      trend = { dir, change, span_days, n };
+      // Least-squares slope over the whole series (robust to a single noisy
+      // reading) — supersedes the two-point delta for direction. `change` (the raw
+      // first→last delta) stays for back-compat. dir 'stable' when the line barely
+      // moves the value across the series' own window vs its spread.
+      const slope = lsqSlopePerDay(points);
+      const weekly = slope != null ? slope * 7 : null;
+      const projectedMove = slope != null ? Math.abs(slope) * Math.max(1, span_days) : 0;
+      const dir: "rising" | "falling" | "stable" | null =
+        weekly == null
+          ? (range > 0 && Math.abs(change) < range * 0.05 ? "stable" : change > 0 ? "rising" : change < 0 ? "falling" : "stable")
+          : projectedMove < Math.max(range * 0.05, 1e-9)
+            ? "stable"
+            : weekly > 0 ? "rising" : weekly < 0 ? "falling" : "stable";
+      // Forecast vs the OPTIMAL band — plain-language projection + eta direction.
+      forecast = forecastMarker(points, slope, zone);
+      trend = {
+        dir,
+        change,
+        span_days,
+        n,
+        slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000,
+        projection: forecast.eta_text,
+      };
     }
     const grp = markerGroup(last.name);
     return {
@@ -2335,6 +2582,10 @@ export function getMarkerHistory() {
       latest: { value: last.value, flag: last.flag, date: last.date, doc_id: last.doc_id, kind: last.kind },
       prev: before ? { value: before.value, date: before.date } : null,
       trend,
+      // Forecast vs the OPTIMAL band: {direction:'improving'|'worsening'|'stable',
+      // eta_text (plain language), crossing}. eta_weeks is kept INTERNAL (ordering
+      // only) and never surfaced as a grade. Null fields when there's nothing to say.
+      forecast: { direction: forecast.direction, eta_text: forecast.eta_text, crossing: forecast.crossing },
       points,
     };
   });
@@ -3093,12 +3344,49 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     skin_temp_dev_c: g.skin_temp_dev_c ?? null,
     avg_vigorous_min: g.avg_vigorous_min ?? null,
     avg_training_readiness: g.avg_training_readiness ?? null,
+    // Load/fitness point-in-time signals — captured by the sync, now surfaced so
+    // the agent can ANTICIPATE fatigue (rising acute load) rather than only react.
+    acute_load: g.acute_load ?? null,
+    fitness_age: g.fitness_age ?? null,
     vo2max: g.vo2max ?? null,
     training_status: g.training_status ?? null,
     weight_kg: g.weight_kg ?? null,
     body_fat_pct: g.body_fat_pct ?? null,
     muscle_mass_kg: g.muscle_mass_kg ?? null,
     last_date: g.last_date || other?.last_date || null,
+  };
+
+  // ---- acute-vs-chronic baselines (vs the user's OWN norm, not a population) ----
+  // The prompt asks the agent to read recovery "vs their norm" but historically
+  // got a single window average to compare against itself. Give it a real
+  // baseline: recent = last 7d, baseline = last 30d, delta = recent − baseline,
+  // for the three load-bearing recovery signals (sleep / HRV / resting HR),
+  // preferring Garmin and falling back to other sources. Null-safe throughout.
+  const avgWindow = (winDays: number): { sleep: number | null; hrv: number | null; rhr: number | null } => {
+    const s = new Date(Date.now() - Math.max(1, winDays - 1) * 864e5).toISOString().slice(0, 10);
+    const gw = db.prepare(
+      `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
+       FROM garmin_daily_metrics WHERE date >= ?`
+    ).get(s) as any;
+    const ow = db.prepare(
+      `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
+       FROM daily_metrics WHERE date >= ?`
+    ).get(s) as any;
+    return {
+      sleep: pick(gw?.sleep, ow?.sleep),
+      hrv: pick(gw?.hrv, ow?.hrv),
+      rhr: pick(gw?.rhr, ow?.rhr),
+    };
+  };
+  const recent = avgWindow(7);
+  const baseline = avgWindow(30);
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  const diff = (a: number | null, b: number | null): number | null =>
+    a != null && b != null ? round1(a - b) : null;
+  const delta = {
+    sleep: diff(recent.sleep, baseline.sleep),
+    hrv: diff(recent.hrv, baseline.hrv),
+    rhr: diff(recent.rhr, baseline.rhr),
   };
 
   // Which sources contributed, for transparency / graceful-degradation copy.
@@ -3117,6 +3405,11 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     sources,
     has_data,
     recovery,
+    // Acute-vs-chronic: the athlete's recent week against their 30-day norm, so
+    // the agent compares against THEIR baseline (additive — older consumers ignore).
+    recent,
+    baseline,
+    delta,
     // Carry the Garmin activity/hard-session detail through unchanged so any
     // consumer that wants the sports layer still has it.
     activities: garmin?.activities ?? [],
@@ -3197,7 +3490,6 @@ const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["apob", "apolipoprotein b", "apo b"], unit: "mg/dL", optimal: [40, 80], dir: "high", actionable: true, label: "ApoB" },
   { keys: ["ldl"], unit: "mg/dL", optimal: [40, 100], dir: "high", actionable: true, label: "LDL-C" },
   { keys: ["non-hdl", "non hdl"], unit: "mg/dL", optimal: [50, 130], dir: "high", actionable: true, label: "Non-HDL-C" },
-  { keys: ["lp(a)", "lipoprotein(a)", "lipoprotein (a)"], unit: "nmol/L", optimal: [0, 75], dir: "high", actionable: false, label: "Lp(a)" },
   { keys: ["triglyceride"], unit: "mg/dL", optimal: [40, 100], dir: "high", actionable: true, label: "Triglycerides" },
   { keys: ["hdl"], unit: "mg/dL", optimal: [50, 90], dir: "low", actionable: true, label: "HDL-C" },
   { keys: ["hs-crp", "hscrp", "c-reactive", "c reactive", "crp"], unit: "mg/L", optimal: [0, 1], dir: "high", actionable: true, label: "hs-CRP" },
@@ -3210,8 +3502,17 @@ const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["egfr"], unit: "mL/min", optimal: [90, 130], dir: "low", actionable: false, label: "eGFR" },
   { keys: ["creatinine"], unit: "mg/dL", optimal: [0.7, 1.1], dir: "band", actionable: false, label: "Creatinine" },
   { keys: ["alt", "sgpt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "ALT" },
+  { keys: ["ast", "sgot"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "AST" },
   { keys: ["ggt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "GGT" },
   { keys: ["tsh"], unit: "uIU/mL", optimal: [0.5, 2.5], dir: "band", actionable: false, label: "TSH" },
+  { keys: ["free t3", "free triiodothyronine", "ft3"], unit: "pg/mL", optimal: [3.0, 4.2], dir: "band", actionable: false, label: "Free T3" },
+  { keys: ["free t4", "free thyroxine", "ft4"], unit: "ng/dL", optimal: [1.0, 1.5], dir: "band", actionable: false, label: "Free T4" },
+  { keys: ["vitamin b12", "b12", "cobalamin"], unit: "pg/mL", optimal: [400, 900], dir: "low", actionable: true, label: "Vitamin B12" },
+  { keys: ["folate", "folic acid"], unit: "ng/mL", optimal: [5, 20], dir: "low", actionable: true, label: "Folate" },
+  { keys: ["magnesium, rbc", "rbc magnesium", "magnesium"], unit: "mg/dL", optimal: [2.0, 2.6], dir: "low", actionable: true, label: "Magnesium" },
+  { keys: ["total testosterone", "testosterone, total", "testosterone"], unit: "ng/dL", optimal: [500, 900], dir: "low", actionable: true, label: "Testosterone" },
+  { keys: ["estradiol", "e2"], unit: "pg/mL", optimal: [10, 40], dir: "band", actionable: false, label: "Estradiol" },
+  { keys: ["lp(a)", "lipoprotein(a)", "lipoprotein (a)"], unit: "nmol/L", optimal: [0, 75], dir: "high", actionable: false, label: "Lp(a)" },
   { keys: ["uric acid"], unit: "mg/dL", optimal: [3, 6], dir: "high", actionable: true, label: "Uric acid" },
   { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP" },
 ];
@@ -3272,10 +3573,25 @@ export function prioritizeMarkers() {
       }
     }
     const actionable = z ? z.actionable : false;
+    // TRAJECTORY boost: a marker HEADING the wrong way matters more than one
+    // sitting stably borderline. The forecast (from getMarkerHistory, vs the
+    // OPTIMAL band) tells us direction + whether it's projected to cross an edge,
+    // and eta_weeks (INTERNAL only — never surfaced) sharpens "how soon".
+    const fc: any = m?.forecast ?? {};
+    let trajectory = 0;
+    if (fc.direction === "worsening") {
+      // Worsening always counts; a near-term projected crossing (within ~12 weeks)
+      // out of — or further from — optimal is the strongest pull.
+      trajectory = 0.35;
+      if (fc.crossing === "leaving") trajectory = 0.7; // inside now, projected to exit optimal
+    } else if (fc.direction === "improving") {
+      // Genuinely improving earns a small discount — it needs less attention.
+      trajectory = -0.15;
+    }
     // Impact-Score: distance from optimal (the real signal) weighted up when we
-    // have a lever for it, plus a floor from the lab's own flag so a flagged
-    // marker we lack an optimal band for still ranks.
-    const impact_score = distance * (actionable ? 1 : 0.55) + (flagged ? 0.5 : 0);
+    // have a lever for it, a floor from the lab's own flag, and the trajectory
+    // nudge so a marker drifting the wrong way outranks a stable borderline one.
+    const impact_score = Math.max(0, distance * (actionable ? 1 : 0.55) + (flagged ? 0.5 : 0) + trajectory);
     return { ...m, optimal, distance, in_optimal, actionable, impact_score };
   });
 
@@ -3422,9 +3738,14 @@ const MARKER_MAPPINGS: MarkerMapping[] = [
     { domain: "nutrition", directive: "Do not add iron to chase ferritin down; high ferritin needs clinical context rather than a diet lever.", rationale: "Ferritin can rise with inflammation, liver stress, iron overload, or recent illness, so the cause matters.", citation: "WHO 2020 Ferritin Guideline" },
     { domain: "watch", directive: "Discuss elevated ferritin with your doctor and consider iron studies / CBC to understand why it is high.", rationale: "A high ferritin result is a context marker, not a standalone nutrition target.", citation: "WHO 2020 Ferritin Guideline" },
   ] },
-  { zone: "Vitamin D", derive: () => [
-    { domain: "nutrition", directive: "If vitamin D is low, get sensible sun exposure and consider a D3 supplement with a fat-containing meal — confirm the dose with your doctor.", rationale: "Low 25-OH vitamin D is common and corrects reliably with D3; dosing should be clinically guided.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
+  { zone: "Vitamin D", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "nutrition", directive: "Vitamin D is low — get sensible sun exposure and consider a D3 supplement with a fat-containing meal — confirm the dose with your doctor.", rationale: "Low 25-OH vitamin D is common and corrects reliably with D3; dosing should be clinically guided.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
     { domain: "watch", directive: "Recheck vitamin D in ~3 months after supplementing to confirm you've reached an adequate level.", rationale: "Vitamin D corrects over weeks-months; a retest confirms repletion and avoids over-supplementation.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
+  ] : [
+    // A HIGH vitamin D must NEVER trigger "supplement D3" — that was the bug. A
+    // high level needs the opposite: stop supplementing and check with a doctor.
+    { domain: "nutrition", directive: "Vitamin D is on the high side — do NOT add more D3; pause any supplement and confirm the dose with your doctor.", rationale: "Excess vitamin D can raise calcium and cause harm; a high level calls for backing off, not adding.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
+    { domain: "watch", directive: "Discuss a high vitamin D with your doctor and recheck — it usually reflects over-supplementation.", rationale: "High 25-OH vitamin D is almost always supplement-driven and worth a recheck.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
   ] },
   { zone: "Systolic BP", derive: () => [
     { domain: "nutrition", directive: "Lean toward a DASH-style pattern: more vegetables, fruit and potassium, less sodium and alcohol, to support a healthier blood pressure.", rationale: "DASH and sodium reduction are first-line, evidence-backed dietary levers for blood pressure.", citation: "ACC/AHA 2017 Hypertension Guideline" },
@@ -3441,6 +3762,62 @@ const MARKER_MAPPINGS: MarkerMapping[] = [
   { zone: "GGT", derive: () => [
     { domain: "watch", directive: "Elevated GGT often tracks with alcohol intake and fatty liver; cutting alcohol is the clearest lever — discuss a persistent elevation with your doctor.", rationale: "GGT is sensitive to alcohol and hepatic stress; reduction is the first dietary lever.", citation: "AASLD 2023 NAFLD/MASLD Guidance", uncertain: true },
   ] },
+  { zone: "AST", derive: () => [
+    { domain: "watch", directive: "Mildly elevated AST, especially alongside ALT, often reflects fatty liver or recent hard training; cut alcohol and added sugar, and discuss a persistent elevation with your doctor.", rationale: "AST rises with hepatic stress and also transiently after intense exercise, so context (and the AST:ALT ratio) matters before it means liver disease.", citation: "AASLD 2023 NAFLD/MASLD Guidance", uncertain: true },
+  ] },
+  { zone: "Lp(a)", derive: () => [
+    { domain: "watch", directive: "Lp(a) is largely genetic and set for life — measure it ONCE; an elevated result is a reason to be stricter on every modifiable risk (especially ApoB/LDL) and to discuss it with your doctor, not a diet you can change.", rationale: "Lp(a) barely responds to lifestyle, but a high level raises lifetime cardiovascular risk, so it lowers the target you want for ApoB/LDL.", citation: "EAS 2022 Lp(a) Consensus Statement; ACC/AHA" },
+    { domain: "nutrition", directive: "Because Lp(a) is elevated, be especially diligent on the ApoB/LDL levers you CAN move — lower saturated fat, raise soluble fiber, favor oily fish — to compound risk down where Lp(a) won't budge.", rationale: "You can't lower Lp(a) much by diet, so the payoff is in pushing the modifiable atherogenic markers further toward optimal.", citation: "EAS 2022 Lp(a) Consensus Statement", uncertain: true },
+  ] },
+  { zone: "eGFR", derive: () => [
+    { domain: "watch", directive: "A reduced eGFR is a kidney-function signal worth confirming (it can dip transiently with dehydration or after heavy training) — recheck and discuss a persistent reading with your doctor before acting on it.", rationale: "eGFR is estimated from creatinine and varies with hydration and muscle mass, so a single low value needs confirmation.", citation: "KDIGO 2024 CKD Guideline" },
+    { domain: "nutrition", directive: "While eGFR is reduced, be cautious with high-dose creatine and very high protein loads, and avoid NSAIDs around hard training — discuss supplement choices with your doctor.", rationale: "Some supplements and very high protein intakes add filtration load; caution is sensible until kidney function is confirmed.", citation: "KDIGO 2024 CKD Guideline", uncertain: true },
+  ] },
+  { zone: "Creatinine", derive: (ctx) => ctx.side === "high" ? [
+    { domain: "watch", directive: "A high creatinine often just reflects muscle mass, recent hard training or dehydration rather than kidney trouble — confirm with eGFR/cystatin C and your hydration before worrying, and discuss a persistent rise with your doctor.", rationale: "Creatinine is produced by muscle and rises with training and dehydration, so it's a poor standalone kidney marker.", citation: "KDIGO 2024 CKD Guideline" },
+    { domain: "nutrition", directive: "If creatinine is up, ease off high-dose creatine for a recheck and stay well hydrated — both move the number without meaning kidney disease.", rationale: "Creatine supplementation and dehydration both raise serum creatinine independent of kidney function.", citation: "KDIGO 2024 CKD Guideline", uncertain: true },
+  ] : [
+    { domain: "watch", directive: "A low creatinine usually just reflects lower muscle mass and is rarely a problem on its own — no action needed beyond your normal labs.", rationale: "Low creatinine tracks with low muscle mass and is generally benign.", citation: "KDIGO 2024 CKD Guideline", uncertain: true },
+  ] },
+  { zone: "TSH", derive: (ctx) => ctx.side === "high" ? [
+    { domain: "watch", directive: "A raised TSH can point to an underactive thyroid (and explains stubborn fatigue, cold, or weight that won't move) — confirm with free T4 (and free T3) and discuss with your doctor; this is clinical, not a diet fix.", rationale: "TSH above the optimal band suggests hypothyroidism, which needs free-hormone confirmation and clinical management.", citation: "American Thyroid Association 2014 Hypothyroidism Guideline" },
+    { domain: "training", directive: "If thyroid is underactive, expect recovery and energy to lag until it's addressed — keep volume conservative and don't read the fatigue as poor effort.", rationale: "Untreated hypothyroidism blunts recovery and exercise tolerance.", citation: "American Thyroid Association 2014 Hypothyroidism Guideline", uncertain: true },
+  ] : [
+    { domain: "watch", directive: "A low TSH can reflect an overactive thyroid — confirm with free T4/T3 and discuss with your doctor; this is clinical, not a lifestyle lever.", rationale: "Suppressed TSH suggests hyperthyroidism, which needs clinical evaluation.", citation: "American Thyroid Association 2016 Hyperthyroidism Guideline" },
+  ] },
+  { zone: "Free T4", derive: () => [
+    { domain: "watch", directive: "An out-of-optimal free T4 belongs with its TSH and free T3 for a full thyroid picture — discuss the pattern with your doctor; thyroid is a clinical, not dietary, lever.", rationale: "Free T4 is interpreted alongside TSH/free T3, not in isolation.", citation: "American Thyroid Association 2014 Hypothyroidism Guideline" },
+  ] },
+  { zone: "Free T3", derive: () => [
+    { domain: "watch", directive: "Free T3 can run low with very aggressive dieting or overtraining as well as thyroid issues — read it with TSH/free T4 and your recent deficit, and discuss a persistent abnormality with your doctor.", rationale: "Low free T3 (low-T3 syndrome) commonly accompanies large energy deficits and heavy training, separate from primary thyroid disease.", citation: "American Thyroid Association 2014 Hypothyroidism Guideline", uncertain: true },
+    { domain: "nutrition", directive: "If free T3 is low during a long deficit, a diet break / refeed toward maintenance often helps — this is a sign to ease the deficit, not push it.", rationale: "Energy availability strongly influences T3; restoring intake can normalize it.", citation: "Endocrine Society / sports-nutrition literature on low energy availability", uncertain: true },
+  ] },
+  { zone: "Vitamin B12", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "nutrition", directive: "B12 is low — prioritize animal foods (meat, fish, eggs, dairy) or a B12 supplement if you eat little animal protein; confirm the cause with your doctor.", rationale: "Low B12 impairs red-cell formation and nerve function and corrects with dietary or supplemental B12.", citation: "BSH 2014 Cobalamin & Folate Guideline" },
+    { domain: "watch", directive: "Recheck B12 (and consider methylmalonic acid) after repleting; persistent low B12 despite intake needs a doctor to rule out absorption issues.", rationale: "Ongoing low B12 despite intake can signal malabsorption (e.g. pernicious anemia) worth investigating.", citation: "BSH 2014 Cobalamin & Folate Guideline" },
+  ] : [
+    { domain: "watch", directive: "A high B12 is usually just supplementation; if you aren't supplementing, mention a markedly high B12 to your doctor.", rationale: "High B12 is typically benign and supplement-driven, but an unexplained high level occasionally warrants review.", citation: "BSH 2014 Cobalamin & Folate Guideline", uncertain: true },
+  ] },
+  { zone: "Folate", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "nutrition", directive: "Folate is low — load up on leafy greens, legumes and other folate-rich foods (or a folate/B-complex), and check B12 at the same time so you don't mask it.", rationale: "Folate deficiency impairs red-cell formation; it should be repleted alongside B12 to avoid masking a B12 deficiency.", citation: "BSH 2014 Cobalamin & Folate Guideline" },
+  ] : [
+    { domain: "watch", directive: "A high folate is generally harmless and usually reflects supplementation; no action beyond noting it.", rationale: "Elevated folate is typically benign.", citation: "BSH 2014 Cobalamin & Folate Guideline", uncertain: true },
+  ] },
+  { zone: "Magnesium", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "nutrition", directive: "Magnesium is on the low side — lean on nuts, seeds, legumes, leafy greens and whole grains; a glycinate/citrate supplement can help, especially if cramping or sleep is off. Confirm dose with your doctor if you have kidney concerns.", rationale: "Low magnesium is common and supports muscle, sleep and glucose handling; food first, then a well-tolerated supplement.", citation: "Magnesium status literature (serum underestimates body stores)", uncertain: true },
+  ] : [
+    { domain: "watch", directive: "A high magnesium is unusual outside supplementation or reduced kidney clearance — if you aren't supplementing heavily, mention it to your doctor.", rationale: "Elevated magnesium can reflect over-supplementation or impaired renal clearance.", citation: "Magnesium status literature", uncertain: true },
+  ] },
+  { zone: "Testosterone", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "training", directive: "Low testosterone (alongside fatigue or stalled progress) is often downstream of under-recovery — protect sleep, avoid chronic over-reaching, and keep resistance training in the week; don't read it as a reason to train harder.", rationale: "Low total testosterone in active men frequently reflects low energy availability and under-recovery, which lifestyle addresses before any clinical step.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+    { domain: "nutrition", directive: "Make sure you're eating enough (not stuck in a deep deficit), getting adequate fat and zinc, and recovering — chronic under-fueling suppresses testosterone. Discuss a confirmed low level with your doctor.", rationale: "Energy and fat availability influence endogenous testosterone; a deep, prolonged deficit can suppress it.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+    { domain: "watch", directive: "Confirm a low testosterone with a morning repeat (and LH/SHBG) before drawing conclusions, and discuss it with your doctor — diurnal variation is large.", rationale: "Testosterone peaks in the morning and varies day to day, so a single low value needs confirmation.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline" },
+  ] : [
+    { domain: "watch", directive: "A high testosterone in a man not on therapy is worth mentioning to your doctor; if you're using exogenous hormones, that's the likely cause.", rationale: "Unexplained high testosterone warrants clinical context.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+  ] },
+  { zone: "Estradiol", derive: () => [
+    { domain: "watch", directive: "An out-of-band estradiol is best read alongside testosterone (and with your doctor) — in men it often tracks with body fat and aromatization; chasing it in isolation isn't useful.", rationale: "Estradiol is interpreted in the context of testosterone and body composition, not as a standalone target.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+  ] },
 ];
 
 // THE PROPAGATION ENGINE. A flagged/sub-optimal biomarker propagates into every
@@ -3455,16 +3832,20 @@ export function deriveDirectives() {
   clearDirectivesForSource(SOURCE);
   const { markers } = prioritizeMarkers();
   let saved = 0;
+  // Collect every off-optimal marker as we go — the cluster layer (below) reads
+  // this to make markers COMPOUND into one read instead of firing in isolation.
+  const offMarkers = new Map<string, MarkerContext>();
   for (const m of markers) {
     const z = matchOptimalZone(m?.name);
     if (!z) continue;
-    const mapping = MARKER_MAPPINGS.find((x) => x.zone === z.label);
-    if (!mapping) continue;
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     if (!Number.isFinite(numericVal)) continue;
     const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
     if (!offOptimal(numericVal, z.label, flag)) continue;
     const ctx: MarkerContext = { value: numericVal, flag, zone: z, side: markerSide(numericVal, z, flag), marker: m };
+    if (!offMarkers.has(z.label)) offMarkers.set(z.label, ctx);
+    const mapping = MARKER_MAPPINGS.find((x) => x.zone === z.label);
+    if (!mapping) continue;
     for (const d of mapping.derive(ctx)) {
       const directive_key = mappingDirectiveKey(z.label, d);
       const feedback = lastDirectiveFeedback(SOURCE, z.label, d.domain, directive_key);
@@ -3487,7 +3868,140 @@ export function deriveDirectives() {
       if (row) saved++;
     }
   }
+
+  // ---- cross-marker synthesis (the cluster layer) ----
+  // Some findings only make sense TOGETHER: ApoB + Lp(a) + hs-CRP is one
+  // elevated-cardiovascular-risk story, not three; low ferritin + low hemoglobin
+  // + a low/altered MCV is an anemia PATTERN, not three loose flags. These fire
+  // ONE synthesized directive when the cluster is genuinely present, so the brain
+  // reasons across markers instead of repeating itself. Still INFORMATIONAL.
+  saved += deriveMarkerClusters(SOURCE, offMarkers);
+
   return { source: SOURCE, derived: saved, directives: listActiveDirectives() };
+}
+
+// Cluster definitions: each names the off-optimal zones (and required sides) that
+// together tell one story, plus the synthesized directive. Fires only when the
+// cluster's threshold of members is met. The directive_key is namespaced
+// ("cluster:<name>:<domain>") so the feedback/suppression machinery treats it
+// like any other directive (Done/Dismiss memory still works).
+interface MarkerCluster {
+  name: string;
+  // members: zone label → the side that counts toward the cluster (null = any off side)
+  members: { label: string; side?: "low" | "high" }[];
+  minHits: number;
+  build: (hits: { label: string; ctx: MarkerContext }[]) => MappingDirective[];
+}
+
+const MARKER_CLUSTERS: MarkerCluster[] = [
+  {
+    name: "elevated-cardiovascular-risk",
+    members: [
+      { label: "ApoB", side: "high" },
+      { label: "LDL-C", side: "high" },
+      { label: "Non-HDL-C", side: "high" },
+      { label: "Lp(a)", side: "high" },
+      { label: "hs-CRP", side: "high" },
+      { label: "Triglycerides", side: "high" },
+    ],
+    minHits: 2,
+    build: (hits) => {
+      const names = hits.map((h) => h.label).join(" + ");
+      const hasLpa = hits.some((h) => h.label === "Lp(a)");
+      const lpaNote = hasLpa
+        ? " Lp(a) is largely genetic and won't move with diet, which makes pushing the modifiable markers (ApoB/LDL) toward optimal matter even more."
+        : "";
+      return [
+        { domain: "watch", directive: `Several cardiovascular markers are elevated together (${names}) — read as one elevated-risk picture, not separate flags. This is the highest-leverage area to address; discuss the combined picture with your doctor.${lpaNote}`, rationale: "Multiple atherogenic / inflammatory markers off-optimal at once compound cardiovascular risk beyond any single value.", citation: "ACC/AHA 2018 Cholesterol Guideline; ESC/EAS 2019 Dyslipidaemia" },
+        { domain: "nutrition", directive: "Because several heart markers are elevated together, make the lipid-lowering pattern the priority: cut saturated fat, raise soluble fiber (oats, legumes, psyllium), favor oily fish and olive oil, and trim refined carbs/alcohol.", rationale: "One coherent anti-atherogenic, anti-inflammatory dietary pattern moves this whole cluster at once.", citation: "ACC/AHA 2018 Cholesterol Guideline" },
+        { domain: "training", directive: "Keep regular aerobic work in the week — it helps the whole cardiovascular cluster (lipids, inflammation, blood pressure) at once.", rationale: "Aerobic exercise is a shared lever across the atherogenic/inflammatory markers in this cluster.", citation: "ACC/AHA 2018 Cholesterol Guideline", uncertain: true },
+      ];
+    },
+  },
+  // The anemia PATTERN (ferritin + hemoglobin + MCV) needs cross-marker reads
+  // that aren't all in OPTIMAL_ZONES, so it's handled by buildAnemiaCluster()
+  // rather than this declarative table.
+];
+
+function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerContext>): number {
+  let saved = 0;
+  // anemia pattern needs cross-marker reads (hemoglobin / MCV) that aren't all in
+  // OPTIMAL_ZONES, so handle it specially off the marker history rather than the
+  // off-optimal map alone.
+  const anemia = buildAnemiaCluster(offMarkers);
+  const clusters: { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext }[] = [];
+
+  for (const c of MARKER_CLUSTERS) {
+    const hits = c.members
+      .map((mem) => {
+        const ctx = offMarkers.get(mem.label);
+        if (!ctx) return null;
+        if (mem.side && ctx.side !== mem.side) return null;
+        return { label: mem.label, ctx };
+      })
+      .filter(Boolean) as { label: string; ctx: MarkerContext }[];
+    if (hits.length < c.minHits) continue;
+    clusters.push({ name: c.name, directives: c.build(hits), markerLabel: hits.map((h) => h.label).join("+"), ctx: hits[0].ctx });
+  }
+  if (anemia) clusters.push(anemia);
+
+  for (const cl of clusters) {
+    for (const d of cl.directives) {
+      const directive_key = normalizeDirectiveKey(`cluster:${cl.name}:${d.domain}:${d.key || d.directive}`);
+      const feedback = lastDirectiveFeedback(source, cl.markerLabel, d.domain, directive_key);
+      if (shouldSuppressDirective(feedback, cl.ctx)) continue;
+      const row = addDirective({
+        source,
+        domain: d.domain,
+        marker: cl.markerLabel,
+        directive_key,
+        directive: d.directive,
+        rationale: d.rationale,
+        citation: d.citation ?? null,
+        uncertain: d.uncertain || !d.citation,
+        trigger_value: cl.ctx.value,
+        trigger_side: cl.ctx.side,
+        trigger_date: cl.ctx.marker?.latest?.date ?? null,
+        resurfaced_from_id: feedback?.id ?? null,
+        status: "active",
+      });
+      if (row) saved++;
+    }
+  }
+  return saved;
+}
+
+// Anemia is a PATTERN across iron + red-cell indices, not a single zone. Low
+// ferritin (depleted stores) alongside low hemoglobin and/or a small MCV reads
+// as iron-deficiency anemia; ferritin alone is just low stores. Reads hemoglobin
+// & MCV from the full marker history (they aren't all in OPTIMAL_ZONES). Returns
+// one synthesized cluster or null.
+function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>): { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext } | null {
+  const ferritin = offMarkers.get("Ferritin");
+  if (!ferritin || ferritin.side !== "low") return null;
+  const { markers } = getMarkerHistory();
+  const find = (re: RegExp) => markers.find((m: any) => re.test(String(m?.name ?? "").toLowerCase()));
+  const hgbM = find(/\b(hemoglobin|haemoglobin|hgb|hb)\b/);
+  const mcvM = find(/\bmcv\b|mean corpuscular volume/);
+  const numOf = (m: any): number | null => {
+    if (!m) return null;
+    const v = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
+    return Number.isFinite(v) ? v : null;
+  };
+  const hgbLow = hgbM?.latest?.flag === "low" || (numOf(hgbM) != null && (numOf(hgbM) as number) < 13.0);
+  const mcvVal = numOf(mcvM);
+  const mcvLow = mcvM?.latest?.flag === "low" || (mcvVal != null && mcvVal < 80);
+  // Genuine pattern: low ferritin PLUS (low hemoglobin OR a small/low MCV).
+  if (!hgbLow && !mcvLow) return null;
+  const bits = ["low ferritin"];
+  if (hgbLow) bits.push("low hemoglobin");
+  if (mcvLow) bits.push("low MCV");
+  const directives: MappingDirective[] = [
+    { domain: "watch", directive: `These read together as an iron-deficiency anemia pattern (${bits.join(" + ")}), not separate flags — confirm with iron studies / a full CBC and discuss iron repletion with your doctor before training hard through it.`, rationale: "Low ferritin with low hemoglobin and/or a small MCV is the classic iron-deficiency anemia signature, which needs confirmation and repletion.", citation: "WHO 2020 Ferritin Guideline; BSH iron-deficiency anemia guidance" },
+    { domain: "training", directive: "While this anemia pattern is present, hold endurance volume and keep easy days genuinely easy — oxygen transport is limited until iron and hemoglobin recover.", rationale: "Iron and hemoglobin are rate-limiting for oxygen delivery; hard training on an anemia pattern impairs recovery and adaptation.", citation: "IOC consensus on iron in athletes" },
+    { domain: "nutrition", directive: "Pair iron-rich foods (red meat, lentils, spinach) with vitamin C, keep tea/coffee away from iron-rich meals, and follow your doctor's guidance on supplemental iron.", rationale: "Dietary and supplemental iron, with absorption-friendly pairing, repletes stores when clinically appropriate.", citation: "WHO 2020 Ferritin Guideline" },
+  ];
+  return { name: "anemia-pattern", directives, markerLabel: bits.join("+"), ctx: ferritin };
 }
 
 // Persist the agent-emitted directives carried on a saved health review. Stored
@@ -3608,6 +4122,31 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360; // <6h average
   const lowSubjective = checkin && ((checkin.energy != null && checkin.energy <= 2) || (checkin.sleep_feel != null && checkin.sleep_feel <= 2));
 
+  // ---- predictive deload anticipation ----
+  // Don't wait for 3 hard days to already be logged: read the acute-vs-chronic
+  // recovery DRIFT (HRV below their norm, resting HR above it) plus rising acute
+  // training load, and ANTICIPATE the reset a day or two early. This NEVER forces
+  // rest — it's a soft heads-up the agent can voice ("two more hard days and
+  // you'll likely want a reset"). Null-safe: no baseline → no anticipation.
+  const dl = rec?.delta ?? null;
+  let recoveryDrift = 0; // count of signals pointing the wrong way vs the athlete's own norm
+  // HRV running meaningfully below baseline (>~5% of baseline) is a fatigue tell.
+  if (dl?.hrv != null && rec?.baseline?.hrv != null && rec.baseline.hrv > 0 && dl.hrv < -Math.max(2, rec.baseline.hrv * 0.05)) recoveryDrift++;
+  // Resting HR running above baseline (>~2 bpm) the same way.
+  if (dl?.rhr != null && dl.rhr > 2) recoveryDrift++;
+  // Sleep running short vs their norm.
+  if (dl?.sleep != null && dl.sleep < -25) recoveryDrift++;
+  const acuteLoad = rec?.recovery?.acute_load ?? null;
+  // Garmin's own readiness running low is corroborating, not required.
+  const lowReadiness = rec?.recovery?.avg_training_readiness != null && rec.recovery.avg_training_readiness < 35;
+  // Mounting fatigue: at least 2 straight training days AND recovery drifting the
+  // wrong way (or readiness low) — i.e. heading toward a reset but not there yet.
+  const buildingFatigue = consec >= 2 && (recoveryDrift >= 1 || lowReadiness);
+  // A soft, plain-language anticipation note (never a verdict). Only when we're
+  // building toward the rest trigger but the floor hasn't tripped it yet.
+  const daysToLikelyReset = consec >= 3 ? 0 : Math.max(0, 3 - consec);
+  const anticipateDeload = buildingFatigue && consec < 3;
+
   // What's already been logged for `d` — a lifting session (sets) or a real
   // activity (a run/ride/class). The Brief must reflect this: once you've moved
   // today it should acknowledge it, not keep suggesting a fresh session as if the
@@ -3631,6 +4170,20 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     logged_today: {
       sets: todaysSetCount,
       activities: todaysActivities.map((a) => ({ type: a.type, duration_min: a.duration_min, distance_km: a.distance_km })),
+    },
+    // Predictive deload anticipation — a soft, forward-looking fatigue read.
+    // anticipate_deload true ⇒ heading toward a reset (recovery drifting below the
+    // athlete's own norm while training days stack up), but the rest floor hasn't
+    // tripped yet. days_to_likely_reset is a gentle countdown, never a deadline.
+    fatigue: {
+      anticipate_deload: anticipateDeload,
+      days_to_likely_reset: anticipateDeload ? daysToLikelyReset : null,
+      recovery_drift_signals: recoveryDrift,
+      acute_load: acuteLoad,
+      low_readiness: lowReadiness,
+      hrv_vs_norm: dl?.hrv ?? null,
+      rhr_vs_norm: dl?.rhr ?? null,
+      sleep_vs_norm: dl?.sleep ?? null,
     },
   };
 
@@ -3718,7 +4271,12 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   }
   const sd = suggestedPlanDay();
   if (sd) {
-    return { kind: "train", focus: sd.focus, why: "You're recovered and due — good to go.", est_minutes: 60, signals };
+    // Still a green-light to train (a suggestion, never a gate), but when fatigue
+    // is quietly building toward a reset, voice it now — a heads-up, not a brake.
+    const why = anticipateDeload
+      ? `You're good to train — though recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset.`
+      : "You're recovered and due — good to go.";
+    return { kind: "train", focus: sd.focus, why, est_minutes: 60, signals };
   }
   return { kind: "easy", focus: null, why: "Nothing programmed — some easy movement is plenty today.", est_minutes: 20, signals };
 }
@@ -3784,6 +4342,10 @@ export interface ExpenditureEstimate {
   window_days: number;
   intake_avg_kcal: number | null;
   trend_lb_wk: number | null;    // weighted bodyweight trend over the window
+  // Goal-pace projection off the ACTUAL weigh-in trend (plain language, no score).
+  // null/absent when there's no goal or too little scale data.
+  projected_goal_date?: string | null;
+  projection_text?: string | null;
 }
 
 // Energy-balance derivation (MacroFactor-style, adherence-neutral). TDEE ≈ avg
@@ -3799,6 +4361,13 @@ export interface ExpenditureEstimate {
 export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
   const since = new Date(Date.now() - Math.max(1, windowDays - 1) * 864e5).toISOString().slice(0, 10);
   const nowDay = Date.now() / 864e5;
+
+  // Goal-pace projection off the measured weigh-in trend — surfaced on the Energy
+  // Balance view alongside the expenditure read (plain language, never a score).
+  // Shared with computeGoalCheck so /api/goal and /api/nutrition/expenditure agree.
+  const prof = getProfile() as any;
+  const lbsToLose = prof?.goal_weight_lb != null && prof?.weight_lb != null ? Math.max(0, prof.weight_lb - prof.goal_weight_lb) : 0;
+  const goalPace = projectGoalPace(prof, lbsToLose);
 
   // Bodyweight trend over the window — a RECENCY-WEIGHTED least-squares slope
   // (lb/week). Each weigh-in gets weight exp(-ageDays / halfLife*1.4427) so the
@@ -3845,7 +4414,7 @@ export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
 
   const points = dayTotals.length;
   if (intakeAvg == null || trend == null) {
-    return { tdee: null, confidence: "none", points, window_days: windowDays, intake_avg_kcal: intakeAvg, trend_lb_wk: trend == null ? null : Math.round(trend * 100) / 100 };
+    return { tdee: null, confidence: "none", points, window_days: windowDays, intake_avg_kcal: intakeAvg, trend_lb_wk: trend == null ? null : Math.round(trend * 100) / 100, projected_goal_date: goalPace.projected_goal_date, projection_text: goalPace.projection_text };
   }
   // TDEE = intake − (weekly Δweight as a daily kcal balance).
   const dailyBalance = (trend * KCAL_PER_LB) / 7; // +ve trend (gaining) ⇒ surplus
@@ -3865,7 +4434,7 @@ export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
     confidence = confidence === "high" ? "medium" : "low";
   }
 
-  return { tdee, confidence, points, window_days: windowDays, intake_avg_kcal: intakeAvg, trend_lb_wk: Math.round(trend * 100) / 100 };
+  return { tdee, confidence, points, window_days: windowDays, intake_avg_kcal: intakeAvg, trend_lb_wk: Math.round(trend * 100) / 100, projected_goal_date: goalPace.projected_goal_date, projection_text: goalPace.projection_text };
 }
 
 // True when an active/upcoming context_event makes intake + weight unreliable

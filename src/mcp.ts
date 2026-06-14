@@ -368,7 +368,7 @@ export function buildMcpServer(): McpServer {
     });
 
   server.tool("get_recovery",
-    "Unified recovery view: Garmin + Apple/other daily metrics merged into one sleep / HRV / resting-HR / steps picture over the window. Graceful (has_data:false) when empty. Use as context, not plan authority.",
+    "Unified recovery view: Garmin + Apple/other daily metrics merged into one sleep / HRV / resting-HR / steps picture over the window, plus acute training load / training readiness / fitness age when present. Also returns acute-vs-chronic baselines: recent (last 7d avg), baseline (30d avg) and delta (recent − baseline) for sleep/hrv/rhr — compare against the athlete's OWN norm, not a population. Graceful (has_data:false) when empty. Use as context, not plan authority.",
     { days: z.number().int().optional() },
     async ({ days }) => asText(repo.getRecoverySummary(days ?? 14)));
 
@@ -400,7 +400,7 @@ export function buildMcpServer(): McpServer {
 
   // ---- adaptive nutrition (T3) ----
   server.tool("get_expenditure",
-    "Derived real daily energy expenditure (TDEE), MacroFactor-style and adherence-neutral: avg logged intake minus the recency-weighted bodyweight trend. Returns { tdee, confidence:'none'|'low'|'medium'|'high', points, window_days, intake_avg_kcal, trend_lb_wk }. Null tdee / 'none' confidence when there's too little data; confidence is lowered during a travel/illness window. window defaults to 21 days.",
+    "Derived real daily energy expenditure (TDEE), MacroFactor-style and adherence-neutral: avg logged intake minus the recency-weighted bodyweight trend. Returns { tdee, confidence:'none'|'low'|'medium'|'high', points, window_days, intake_avg_kcal, trend_lb_wk, projected_goal_date, projection_text }. projection_text is a PLAIN-LANGUAGE goal-pace forecast off the measured weigh-in trend ('at this trend, ~Aug 20 — about 3 weeks past your date'); never a score. Null tdee / 'none' confidence when there's too little data; confidence is lowered during a travel/illness window. window defaults to 21 days.",
     { window: z.number().int().optional().describe("days to derive over (default 21)") },
     async ({ window }) => asText(repo.estimateExpenditure(window ?? 21)));
 
@@ -799,7 +799,7 @@ export function buildMcpServer(): McpServer {
   // ---- the connected brain: priority markers + propagation directives (T4) ----
   server.tool(
     "get_priority_markers",
-    "Markers re-ranked by impact: distance from the OPTIMAL zone (not just the lab's normal range), most-actionable first, flagged (low/high) markers always on top. Each marker carries optimal/distance/in_optimal/actionable, plus its health group (group/group_label) and trend ({dir: rising|falling|stable, change, span_days, n}) so you can group findings and speak to their direction; the top-level `groups` lists the canonical-ordered groups present. Informational, not medical advice — the internal impact_score is an ordering signal only, never a user-facing grade.",
+    "Markers re-ranked by impact: distance from the OPTIMAL zone (not just the lab's normal range), most-actionable first, flagged (low/high) markers always on top, and a marker HEADING out of optimal ranked above a stably-borderline one. Each marker carries optimal/distance/in_optimal/actionable, its health group (group/group_label), a least-squares trend ({dir: rising|falling|stable, change, span_days, n, slope_per_week, projection}) and a forecast ({direction: improving|worsening|stable, eta_text, crossing}) — eta_text is a PLAIN-LANGUAGE projection vs optimal ('trending toward optimal, roughly 6 weeks out'); never a score. The top-level `groups` lists the canonical-ordered groups present. Informational, not medical advice — the internal impact_score is an ordering signal only, never a user-facing grade.",
     {},
     async () => asText(repo.prioritizeMarkers())
   );

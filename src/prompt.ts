@@ -108,7 +108,9 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     if (rec.avg_spo2 != null) bits.push(`SpO2 ~${rec.avg_spo2}%`);
     if (rec.skin_temp_dev_c != null) bits.push(`skin-temp dev ${rec.skin_temp_dev_c > 0 ? "+" : ""}${rec.skin_temp_dev_c}°C`);
     if (rec.avg_training_readiness != null) bits.push(`training readiness ~${Math.round(rec.avg_training_readiness)}/100`);
+    if (rec.acute_load != null) bits.push(`acute training load ~${Math.round(rec.acute_load)}`);
     if (rec.vo2max != null) bits.push(`VO2max ${rec.vo2max}`);
+    if (rec.fitness_age != null) bits.push(`fitness age ~${Math.round(rec.fitness_age)}`);
     if (rec.training_status) bits.push(`status: ${String(rec.training_status).toLowerCase()}`);
     if (rec.avg_steps != null) bits.push(`~${Math.round(rec.avg_steps)} steps/day`);
     if (rec.avg_vigorous_min != null && rec.avg_vigorous_min > 0) bits.push(`~${Math.round(rec.avg_vigorous_min)} vigorous min/day`);
@@ -117,6 +119,21 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     if (rec.body_fat_pct != null) body.push(`body fat ${rec.body_fat_pct}%`);
     if (rec.muscle_mass_kg != null) body.push(`muscle ${rec.muscle_mass_kg} kg`);
     if (bits.length) lines.push(`RECOVERY (last ${ctx.recovery.days}d, ${(ctx.recovery.sources || []).join("+") || "no source"}): ${bits.join(", ")} — read the WHOLE picture; bias toward recovery when sleep/HRV/readiness are low or resting HR/stress are elevated vs their norm.`);
+    // Acute-vs-chronic baseline: the last 7 days against the 30-day norm, so the
+    // agent compares the athlete to THEIR OWN baseline (not a population number).
+    const dl = ctx?.recovery?.delta;
+    const rc = ctx?.recovery?.recent;
+    const bl = ctx?.recovery?.baseline;
+    if (dl && rc && bl) {
+      const cmp: string[] = [];
+      if (rc.sleep != null && bl.sleep != null && dl.sleep != null)
+        cmp.push(`sleep ${Math.round(rc.sleep)} min vs ~${Math.round(bl.sleep)} norm (${dl.sleep >= 0 ? "+" : ""}${Math.round(dl.sleep)})`);
+      if (rc.hrv != null && bl.hrv != null && dl.hrv != null)
+        cmp.push(`HRV ${rc.hrv} vs ~${bl.hrv} norm (${dl.hrv >= 0 ? "+" : ""}${dl.hrv})`);
+      if (rc.rhr != null && bl.rhr != null && dl.rhr != null)
+        cmp.push(`resting HR ${rc.rhr} vs ~${bl.rhr} norm (${dl.rhr >= 0 ? "+" : ""}${dl.rhr})`);
+      if (cmp.length) lines.push(`RECOVERY vs THEIR NORM (last 7d against 30d baseline): ${cmp.join("; ")} — lower sleep/HRV or a raised resting HR vs their own norm means lean toward recovery; this is the comparison that matters, not absolute numbers.`);
+    }
     if (body.length) lines.push(`BODY COMPOSITION (latest): ${body.join(", ")}.`);
   }
   return lines.length ? `\n${lines.join("\n")}\n` : "";
@@ -587,6 +604,12 @@ export function buildHealthReviewPrompt(): string {
     actionable: m.actionable ?? false,
     // Direction over time + how recent the latest reading is — speak to these.
     trend: m.trend ? { dir: m.trend.dir, change: m.trend.change } : null,
+    // Forward-looking forecast vs the OPTIMAL band — a PLAIN-LANGUAGE projection
+    // ("trending toward optimal, roughly 6 weeks out" / "drifting away"). Words
+    // only; never restate it as a number/score.
+    forecast: m.forecast?.eta_text
+      ? { direction: m.forecast.direction, projection: m.forecast.eta_text }
+      : (m.trend?.projection ? { direction: null, projection: m.trend.projection } : null),
     recency: recencyOf(m.latest?.date),
   }));
   return `You are a longevity & wellness coach reviewing this person's WHOLE health picture for
@@ -608,6 +631,11 @@ NON-NEGOTIABLE FRAMING:
   falling / stable, with the net change and over what span) and a recency (e.g. "3 months ago").
   Say where a marker is heading and roughly how long ago it was measured — a stale reading deserves
   a recheck, and a clear direction is more informative than a single number.
+- USE THE FORECAST: each priority marker may carry a "forecast" — a plain-language projection vs the
+  OPTIMAL band ("trending toward optimal, roughly 6 weeks out" / "drifting away from optimal"). When
+  present, weave it in to show trajectory ("ApoB is drifting away from optimal — worth acting now")
+  and to celebrate genuine improvement. It is WORDS, never a number: never restate it as a score or
+  invent an exact date beyond what the forecast already says in plain language.
 - You MAY organize findings by health group (each marker carries a group — Lipids &
   Cardiovascular, Metabolic & Glucose, Iron & Red Blood, …) so related markers read as one story.
 - DATES: don't restate the latest panel's date in every line — the UI shows recency once. Write
@@ -737,6 +765,12 @@ THE CONSTITUTION (binding):
 - Protect rest when it's earned (several hard days running, short sleep, run-down) — do NOT default
   to opening a lifting plan every morning. Never insist on rest either. When you suggest rest, frame
   it as the wise, earned choice ("rest is wisdom"), never as falling behind.
+- ANTICIPATE fatigue, don't just react to it. When the signals carry a "fatigue" block with
+  anticipate_deload=true, recovery is drifting below the athlete's OWN norm (HRV down / resting HR up
+  / sleep short vs baseline) while training days stack up — so today can still be a GREEN-LIGHT to
+  train, but add a gentle forward-looking heads-up in a friend's voice ("you're good today, but a
+  couple more hard days and you'll likely want a reset"). It's a kind early warning, never a brake or
+  a verdict — the athlete still drives.
 
 DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call):
 ${JSON.stringify(baseline.signals)}
