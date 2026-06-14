@@ -1111,7 +1111,11 @@ async function loadBrief(date, override) {
   if (!read || !read.kind) {
     read = { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic" };
   }
-  state.brief = { date, override: override || "", read };
+  // The server now PERSISTS the athlete's steer on the read (read.override). When we
+  // didn't request one explicitly (a fresh open / reload), adopt the persisted steer
+  // so the chips filter correctly and the active-steer styling shows — this is what
+  // makes "Easy day instead" survive a reload instead of snapping back to canonical.
+  state.brief = { date, override: override || read.override || "", read };
   return read;
 }
 
@@ -1156,9 +1160,10 @@ function visibleBriefOverrides({ kind, estMinutes, activeOverride }) {
   });
 }
 
-// Build the Brief hero + override chips + launchpad. `showPlan` = the plan surface
-// is already (or about to be) visible, so we don't offer "train anyway" again.
-// `hasPlanDay` = a planned day exists to pull in. `revealIdx` seeds the reveal stagger.
+// Build the Brief hero + actions row + steer line. `showPlan` = the plan surface
+// is already (or about to be) visible. The controls split into two clear tiers:
+// an ACTIONS row (one primary thing to do, scaled to the day) and a quiet, labeled
+// STEER line ("tell me different" — each option reshapes the read agentically).
 function briefHtml(read, { showPlan, hasPlanDay, isToday }) {
   const kind = BRIEF_KIND[read.kind] ? read.kind : "train";
   const meta = BRIEF_KIND[kind];
@@ -1169,29 +1174,38 @@ function briefHtml(read, { showPlan, hasPlanDay, isToday }) {
   const headline = escHtml(read.headline || meta.lead);
   const why = read.why ? escHtml(read.why) : "";
 
-  // Launchpad: scaled to the day. On rest/easy we don't drop into the plan — we
-  // offer the redirects. On train (or once revealed) the plan surface leads.
-  const redirects = [];
-  if (kind === "train" && !showPlan) {
-    // train day not yet revealed (shouldn't normally happen — train auto-reveals)
-    redirects.push(briefRedirect("reveal-plan", "Start session", true));
+  // ---- Actions: ONE clear thing to do. The accent primary is reserved for a
+  // train day ("start the session"); easy/rest stay calm with NO accent CTA, so
+  // the card never contradicts a read the athlete just chose to take easy.
+  const actions = [];
+  if (kind === "train") {
+    actions.push(briefRedirect("start-session", "Start session", true));
+  } else if (!showPlan) {
+    // easy / rest — a quiet way into the plan if they want it, never shouted
+    actions.push(briefRedirect("reveal-plan", "Train anyway", false));
   }
-  if (kind !== "train" && !showPlan) {
-    redirects.push(briefRedirect("reveal-plan", "Train anyway", true));
-  }
-  redirects.push(briefRedirect("ask-session", "Ask for a session", false));
-  if (hasPlanDay && !showPlan && kind === "train") redirects.push(briefRedirect("pull-plan", "Pull in your plan", false));
+  actions.push(briefRedirect("ask-session", "Ask for a session", false));
 
-  // Override chips — only meaningful for today (a live read to reshape).
+  // ---- Steer line: visually subordinate to the actions. Only meaningful for
+  // today (a live read to reshape). When a steer is already active, the label
+  // shifts and a quiet "back to today's read" clears it (the un-steer escape).
   const activeOverride = state.brief && state.brief.date === state.logDate ? state.brief.override : "";
-  const overrides = visibleBriefOverrides({ kind, estMinutes, activeOverride });
-  const chips = isToday
-    ? (overrides.length ? `<div class="brief-overrides">${overrides.map((o) =>
-        `<button class="brief-chip" data-override="${escAttr(o.intent)}">${escHtml(o.label)}</button>`).join("")}</div>`
-      : "")
-    : "";
+  const steered = !!activeOverride;
+  const opts = visibleBriefOverrides({ kind, estMinutes, activeOverride });
+  let steer = "";
+  if (isToday && (opts.length || steered)) {
+    const optBtns = opts.map((o) =>
+      `<button class="brief-steer-opt" data-override="${escAttr(o.intent)}">${escHtml(o.label)}</button>`
+    ).join(`<span class="brief-steer-dot" aria-hidden="true">·</span>`);
+    const reset = steered ? `<button class="brief-steer-reset" data-steerreset>back to today's read</button>` : "";
+    steer = `<div class="brief-steer">
+        <span class="brief-steer-lead">${steered ? "Changed your mind?" : "Not quite right?"}</span>
+        <span class="brief-steer-opts">${optBtns}</span>
+        ${reset}
+      </div>`;
+  }
 
-  // When reshaping via an override, the hero morphs through a view transition —
+  // When reshaping via a steer, the hero morphs through a view transition —
   // skip the entrance `rise` so the two motions don't stack.
   const morph = state._briefMorph ? " brief-morph" : "";
   const enter = state._briefMorph ? "" : " reveal";
@@ -1200,8 +1214,8 @@ function briefHtml(read, { showPlan, hasPlanDay, isToday }) {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
-      ${chips}
-      <div class="brief-launch">${redirects.join("")}</div>
+      <div class="brief-launch">${actions.join("")}</div>
+      ${steer}
       <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
     </section>`;
 }
@@ -1788,26 +1802,28 @@ function wireBrief(read, { isToday }) {
   const brief = view.querySelector(".brief");
   if (!brief) return;
 
-  // Override chips → re-fetch today-read with ?override= and re-render the Brief.
+  // Steer options → re-fetch today-read with ?override= and re-render the Brief.
   brief.querySelectorAll("[data-override]").forEach((b) =>
     b.addEventListener("click", async () => {
       const intent = b.dataset.override;
       if (brief.classList.contains("is-thinking")) return; // a reshape is already in flight
-      // Visible "thinking" state for the (slow, agentic) reshape: the tapped chip
+      // Visible "thinking" state for the (slow, agentic) reshape: the tapped option
       // carries a ring, the rest freeze, a filament sweeps the card, and a quiet line
       // makes the wait read as intentional rather than stalled.
       const chipLabel = (b.textContent || "").trim();
-      brief.querySelectorAll(".brief-chip").forEach((c) => {
-        c.classList.toggle("brief-chip-active", c === b);
+      brief.querySelectorAll(".brief-steer-opt").forEach((c) => {
+        c.classList.toggle("brief-steer-active", c === b);
         if (c !== b) c.disabled = true;
       });
-      b.classList.add("brief-chip-busy");
+      const resetBtn = brief.querySelector("[data-steerreset]");
+      if (resetBtn) resetBtn.disabled = true;
+      b.classList.add("brief-steer-busy");
       b.innerHTML = `<span class="aspin aspin-xs"></span>${escHtml(chipLabel)}`;
       brief.classList.add("is-thinking");
       const note = document.createElement("div");
       note.className = "athinking-note chip-in";
       note.textContent = "Reading the day again…";
-      b.parentElement.after(note); // b is a chip inside .brief-overrides — insert the line under it
+      (b.closest(".brief-steer") || b.parentElement).after(note); // the line sits under the steer block
       // bust the per-date cache so loadBrief re-fetches with the override
       state.brief = null;
       const reshaped = await loadBrief(state.logDate, intent);
@@ -1831,11 +1847,21 @@ function wireBrief(read, { isToday }) {
     })
   );
 
-  // Redirects: reveal the plan, pull in a plan day, or ask for a session.
+  // Redirects: start the session (reveal + scroll), reveal the plan, pull in a
+  // plan day, or ask for a session. None is a gate — each is one tap to a path.
   brief.querySelectorAll("[data-redirect]").forEach((b) =>
     b.addEventListener("click", () => {
       const action = b.dataset.redirect;
       if (action === "ask-session") { askForSession(); return; }
+      if (action === "start-session") {
+        // the day's primary on a train day: make sure the logging surface exists,
+        // then bring its first card into view so "start" lands you in the work.
+        revealPlanThen(() => {
+          const surface = view.querySelector(".plansurface") || view.querySelector(".addex");
+          surface?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+        });
+        return;
+      }
       if (action === "reveal-plan") {
         state.planReveal = { date: state.logDate, on: true };
         renderToday();
@@ -1850,6 +1876,37 @@ function wireBrief(read, { isToday }) {
       }
     })
   );
+
+  // "Back to today's read" — clear a persisted steer and recompute the canonical
+  // read (?reset=1 invalidates the cached steer server-side). The athlete is never
+  // trapped in an override they changed their mind about.
+  const steerReset = brief.querySelector("[data-steerreset]");
+  if (steerReset) steerReset.addEventListener("click", async () => {
+    if (brief.classList.contains("is-thinking")) return;
+    brief.querySelectorAll(".brief-steer-opt").forEach((c) => { c.disabled = true; });
+    steerReset.disabled = true;
+    steerReset.innerHTML = `<span class="aspin aspin-xs"></span>back to today's read`;
+    brief.classList.add("is-thinking");
+    const note = document.createElement("div");
+    note.className = "athinking-note chip-in";
+    note.textContent = "Reading the day again…";
+    (steerReset.closest(".brief-steer") || steerReset.parentElement).after(note);
+    state.brief = null;
+    try {
+      const qs = new URLSearchParams({ date: state.logDate, agent: "auto", reset: "1" });
+      const fresh = await api("/today-read?" + qs.toString());
+      state.brief = {
+        date: state.logDate,
+        override: fresh && fresh.override ? fresh.override : "",
+        read: fresh && fresh.kind ? fresh : { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic" },
+      };
+    } catch { state.brief = null; }
+    if (state.tab !== "today") return;
+    const morph = !reducedMotion();
+    if (morph) { brief.classList.add("brief-morph"); state._briefMorph = true; }
+    try { await withViewTransition(() => renderToday()); }
+    finally { state._briefMorph = false; view.querySelector(".brief")?.classList.remove("brief-morph"); }
+  });
 
   // "Tap to see why" — plain-language signals (never raw numbers as a verdict),
   // shown only on a deliberate tap, in a quiet inline line under the headline.

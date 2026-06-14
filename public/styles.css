@@ -1837,23 +1837,41 @@ body.sheet-open{overflow:hidden}
 .brief-why-more:hover{color:var(--ink-2)}
 .brief-signals{font-size:.82rem;color:var(--muted);line-height:1.5;margin:12px 0 0;font-style:italic}
 
-/* escape-hatch override chips — small, secondary; they reshape, never scold */
-.brief-overrides{display:flex;flex-wrap:wrap;gap:7px;margin-top:15px}
-.brief-chip{
-  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
-  border-radius:999px;padding:6px 13px;font-family:var(--font-ui);font-weight:600;
-  font-size:.72rem;letter-spacing:.01em;cursor:pointer;
-  transition:border-color var(--dur-1),color var(--dur-1),background var(--dur-1),transform var(--dur-1);
+/* "Steer line" — the calm, subordinate "tell me different" row. Each option is a
+   light text-button (not a pill) so the day's primary action stays the visual
+   lead; a tap reshapes the read agentically. The lead label sits on its own line
+   above the options so the row reads as one labeled group, never a second CTA bank. */
+.brief-steer{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 8px;margin-top:18px}
+.brief-steer-lead{
+  width:100%;font-family:var(--font-ui);font-weight:600;font-size:.72rem;
+  letter-spacing:.02em;color:var(--muted);margin-bottom:1px;
 }
-.brief-chip:hover{border-color:var(--line-2);color:var(--ink)}
-.brief-chip:active{transform:scale(.96)}
-.brief-chip-active{border-color:var(--accent);color:var(--accent)}
-/* the tapped chip while a reshape runs — it also carries .brief-chip-active, which
-   supplies the accent border+color; this only lays out the inline ring + a faint lift */
-.brief-chip-busy{display:inline-flex;align-items:center;gap:6px;cursor:progress;
-  background:rgba(180,85,45,.07)}
-/* the other chips freeze (disabled) and recede while we think */
-.brief-chip:disabled{opacity:.45;cursor:default;transform:none}
+.brief-steer-opts{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:7px}
+.brief-steer-opt{
+  background:none;border:none;padding:0;cursor:pointer;
+  font-family:var(--font-ui);font-weight:600;font-size:.8rem;letter-spacing:.01em;
+  color:var(--ink-2);text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:var(--line-2);
+  transition:color var(--dur-1),text-decoration-color var(--dur-1);
+}
+.brief-steer-opt:hover{color:var(--accent);text-decoration-color:var(--accent)}
+.brief-steer-opt:active{color:var(--accent-deep)}
+.brief-steer-dot{color:var(--line-2);font-size:.8rem;user-select:none}
+/* the un-steer link — quieter still; only shown when a steer is active */
+.brief-steer-reset{
+  background:none;border:none;padding:0;margin-left:1px;cursor:pointer;
+  font-family:var(--font-ui);font-weight:600;font-size:.72rem;letter-spacing:.02em;
+  color:var(--muted);text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:transparent;
+  transition:color var(--dur-1),text-decoration-color var(--dur-1);
+}
+.brief-steer-reset::before{content:"·\00a0";color:var(--line-2);text-decoration:none}
+.brief-steer-reset:hover{color:var(--ink-2);text-decoration-color:var(--line-2)}
+/* the tapped option while a reshape runs — inline ring + accent */
+.brief-steer-active{color:var(--accent)}
+.brief-steer-busy{display:inline-flex;align-items:center;gap:6px;cursor:progress;color:var(--accent)}
+/* the other options freeze while we think */
+.brief-steer-opt:disabled,.brief-steer-reset:disabled{opacity:.45;cursor:default;text-decoration-color:transparent}
 
 /* launchpad redirects — the heart of "you drive": always present, quiet */
 .brief-launch{display:flex;flex-wrap:wrap;gap:9px;margin-top:17px}

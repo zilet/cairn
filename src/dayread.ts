@@ -68,9 +68,11 @@ export async function computeDayRead(
   } catch (e: any) {
     out = { ...baseline, headline: deterministicHeadline(baseline), source: "deterministic", error: e?.message };
   }
-  if (!override) {
-    try { repo.saveDayRead(date || localToday(), out); } catch {}
-  }
+  // Record the athlete's steer on the read and ALWAYS persist it (the no-clobber
+  // guard in saveDayRead protects a stored steer from a later canonical recompute).
+  // Persisting the steer is what makes it survive a reload and reach the coach context.
+  out.override = override && override.trim() ? override.trim() : null;
+  try { repo.saveDayRead(date || localToday(), out); } catch {}
   return out;
 }
 

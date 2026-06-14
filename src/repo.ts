@@ -1,6 +1,14 @@
 import { db, todayISO } from "./db.js";
 import { listAgents } from "./agents.js";
 
+// The day_reads cache is keyed by the server's LOCAL calendar date (the PWA drives
+// every read with its local date, and a home server shares the owner's timezone) —
+// mirror dayread.localToday() here so getCoachContext reads the same row the Brief
+// wrote. Defined locally to avoid a circular import (dayread.ts imports repo.ts).
+function localDateISO(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // ---------- exercises ----------
 const EXERCISE_MODES = ["reps", "timed"];
 
@@ -2567,7 +2575,11 @@ export function getCoachContext() {
     recovery,                                 // unified Garmin + Apple/other recovery view
     checkins: listCheckins(7),                // optional subjective morning check-ins
     family: listFamily(),                     // family roster the coach plans around
-    day_read: dayRead(undefined, recovery),   // T1: deterministic read of today (so chat echoes the Brief)
+    // The persisted read carries the agentic sentence AND the athlete's steer
+    // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
+    // actually looking at; the deterministic floor backs it when nothing's cached.
+    // Keyed by the server's LOCAL date to match the day_reads cache (saveDayRead).
+    day_read: getCachedDayRead(localDateISO()) ?? dayRead(undefined, recovery),
     // Recent quiet cross-domain insights (bounded) so the chat/coach brain can
     // reference and build on connections it has already surfaced — closing the
     // "one brain" loop instead of re-deriving them each turn.
@@ -3743,19 +3755,29 @@ export function getCachedDayRead(date: string): any | null {
     signals,
     source: row.source || "deterministic",
     agent: row.agent || undefined,
+    override: row.override ?? null,
     computed_at: row.computed_at,
   };
 }
 
 export function saveDayRead(date: string, read: any): void {
   if (!date || !read || !read.kind) return;
+  const override = read.override != null && String(read.override).trim() ? String(read.override).trim() : null;
+  // No-clobber guard: a canonical (no-steer) recompute — nightly precompute, boot
+  // warm, a cache-miss compute — must never overwrite an athlete's persisted steer
+  // for the day. Only a real material change (a logged set / check-in) clears it,
+  // via invalidateDayRead() deleting the row first.
+  if (!override) {
+    const existing = db.prepare(`SELECT override FROM day_reads WHERE date = ?`).get(date) as any;
+    if (existing && existing.override) return;
+  }
   db.prepare(
-    `INSERT INTO day_reads (date, kind, headline, why, focus, est_minutes, signals, source, agent, computed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO day_reads (date, kind, headline, why, focus, est_minutes, signals, source, agent, override, computed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(date) DO UPDATE SET
        kind=excluded.kind, headline=excluded.headline, why=excluded.why, focus=excluded.focus,
        est_minutes=excluded.est_minutes, signals=excluded.signals, source=excluded.source,
-       agent=excluded.agent, computed_at=excluded.computed_at`
+       agent=excluded.agent, override=excluded.override, computed_at=excluded.computed_at`
   ).run(
     date,
     read.kind,
@@ -3765,7 +3787,8 @@ export function saveDayRead(date: string, read: any): void {
     read.est_minutes != null && Number.isFinite(Number(read.est_minutes)) ? Math.round(Number(read.est_minutes)) : null,
     JSON.stringify(read.signals ?? {}),
     read.source ?? "deterministic",
-    read.agent ?? null
+    read.agent ?? null,
+    override
   );
   // Keep the table to a rolling few weeks — old reads are never served.
   try { db.prepare(`DELETE FROM day_reads WHERE date < date('now','-21 days')`).run(); } catch {}

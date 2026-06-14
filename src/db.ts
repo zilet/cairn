@@ -490,6 +490,7 @@ CREATE TABLE IF NOT EXISTS day_reads (
   signals TEXT,                       -- JSON: the deterministic inputs behind the call
   source TEXT,                        -- agent | deterministic
   agent TEXT,                         -- which agent produced it (when source='agent')
+  override TEXT,                      -- the athlete's persisted steer for the day (null = canonical read)
   computed_at TEXT DEFAULT (datetime('now'))
 );
 `);

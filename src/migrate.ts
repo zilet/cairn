@@ -173,6 +173,12 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "health_directives", "resurfaced_from_id INTEGER");
     db.exec("CREATE INDEX IF NOT EXISTS idx_directives_feedback ON health_directives(source, marker, domain, directive_key, status)");
   } },
+  { version: 27, name: "day-read-override", up: (db) => {
+    // Persist the athlete's day-read steer ("rough night" / "easy day" / …) on the
+    // cached read so a reload restores their choice and the coach context can fold it
+    // in, instead of the steer being a throwaway client-only reshape.
+    addColumn(db, "day_reads", "override TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {
