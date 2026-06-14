@@ -18,6 +18,7 @@ import {
   buildInsightPrompt,
   buildWeeklyReadPrompt,
 } from "./prompt.js";
+import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 
 // Run a prompt with an explicit agent, or "auto"/blank to use the configured
 // rotation (round-robin / random / priority) with fallthrough on failure.
@@ -109,14 +110,29 @@ export async function generateRecipe(
 // Run a fresh whole-picture health review via the shared agent rotation.
 // ok:false at 200 is the designed failure signal when addHealthReview rejects
 // the shape (the agent returned garbage).
+//
+// GROUNDING (Stream 4): when settings.research_enabled is on, a host-side research
+// pass first gathers cited evidence for the top off-optimal markers and the review
+// prompt is asked to cite it; the agent-emitted citations are then VERIFIED inside
+// addHealthReview → applyReviewDirectives (repo.verifyCitation). Research off / a
+// research failure → ungrounded review, exactly today's behavior (never blocks).
 export async function runHealthReview(agent: string | undefined) {
-  const prompt = buildHealthReviewPrompt();
+  let grounding: { passages?: any[] } | undefined;
+  if (researchEnabled()) {
+    try {
+      const passages = await gatherReviewGrounding(agent);
+      if (passages.length) grounding = { passages };
+    } catch {
+      /* research failed → run ungrounded (graceful degrade) */
+    }
+  }
+  const prompt = buildHealthReviewPrompt(grounding);
   const { agent: chosen, result, tried } = await runChosen(agent, prompt);
   const review = result.parsed && typeof result.parsed === "object"
     ? repo.addHealthReview(result.parsed, chosen, result.raw)
     : null;
   if (!review) return { ok: false as const, error: "agent returned no usable review", agent: chosen, tried };
-  return { ok: true as const, review, agent: chosen, tried };
+  return { ok: true as const, review, agent: chosen, tried, grounded: !!grounding };
 }
 
 // Run ONE agentic pass over the whole picture for a single genuine cross-domain
@@ -135,4 +151,15 @@ export async function generateInsight(agent: string | undefined, kind?: string) 
   }
   const insight = repo.addInsight({ kind: k, text, rationale: p.rationale ?? null, next_step: p.next_step ?? null, status: "new" });
   return { ok: true as const, insight, agent: chosen, tried };
+}
+
+// Host-side research for the optional POST /api/research + MCP `research` tool.
+// Runs a cited, web-grounded evidence pass and returns the cached rows. Gated by
+// settings.research_enabled — when off it serves only what's already cached and
+// reports ok:false (never reaches the network). INFORMATIONAL, not medical advice.
+export async function runResearch(
+  question: string,
+  opts: { markers?: string[]; agent?: string; force?: boolean } = {}
+) {
+  return researchEvidence(String(question ?? ""), opts.markers ?? [], { agent: opts.agent, force: opts.force });
 }

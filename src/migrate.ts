@@ -173,6 +173,13 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "health_directives", "resurfaced_from_id INTEGER");
     db.exec("CREATE INDEX IF NOT EXISTS idx_directives_feedback ON health_directives(source, marker, domain, directive_key, status)");
   } },
+  { version: 28, name: "research-enabled", up: (db) => {
+    // Host-side research / evidence grounding (Stream 4). Default OFF: when off,
+    // the system behaves exactly as before — deterministic, no network. The
+    // evidence_cache table is created via CREATE TABLE IF NOT EXISTS in db.ts and
+    // needs no migration; only this column add does. (v27 is owned by Stream 2.)
+    addColumn(db, "settings", "research_enabled INTEGER DEFAULT 0");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

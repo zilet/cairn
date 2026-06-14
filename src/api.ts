@@ -17,6 +17,7 @@ import {
   generateRecipe,
   runHealthReview,
   generateInsight,
+  runResearch,
 } from "./coachOps.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
@@ -986,6 +987,30 @@ api.put("/directives/:id", (req, res) => {
 api.post("/directives/derive", (_req, res) => {
   const out = repo.deriveDirectives();
   res.json({ ok: true, derived: out.derived, directives: out.directives });
+});
+
+// ---- host-side research & grounding (Stream 4) ----
+// Read cached evidence (by ?topic= and/or ?marker=). Always available — reads the
+// cache only, never the network — so it works even with research disabled.
+api.get("/research", (req, res) => {
+  const topic = typeof req.query.topic === "string" ? req.query.topic : undefined;
+  const marker = typeof req.query.marker === "string" ? req.query.marker : undefined;
+  res.json({ enabled: repo.getSettings().research_enabled, evidence: repo.getEvidence({ topic, marker }) });
+});
+
+// Run a cited, web-grounded evidence pass for ONE question and cache it. Gated by
+// settings.research_enabled: when off, serves only cached evidence and returns
+// ok:false (the designed signal, at 200) — never reaches the network. Informational,
+// not medical advice.
+api.post("/research", async (req, res) => {
+  try {
+    const question = String(req.body?.question ?? "").trim();
+    if (!question) return res.status(400).json({ ok: false, error: "question required" });
+    const markers = Array.isArray(req.body?.markers) ? req.body.markers.map(String) : [];
+    res.json(await runResearch(question, { markers, agent: req.body?.agent, force: !!req.body?.force }));
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ---- quiet cross-domain insights (Phase 6: pull-based, never pushed) ----

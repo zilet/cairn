@@ -4,7 +4,9 @@
     "args": ["-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
-    "env_required": []
+    "env_required": [],
+    "web_access": true,
+    "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required."
   },
   "codex": {
     "command": "codex",

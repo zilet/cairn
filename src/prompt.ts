@@ -557,9 +557,22 @@ const HEALTH_REVIEW_SCHEMA = `{
 // per marker with trends) and produces one structured, plain-language review.
 // Stored via repo.addHealthReview (coerced/clamped) and fed back into
 // getCoachContext() as `health_review`.
-export function buildHealthReviewPrompt(): string {
+// `grounding` (Stream 4): when host-side research ran (research_enabled on, agent
+// reachable), the caller passes retrieved cited passages; the prompt injects them
+// and REQUIRES the agent to cite them. Absent/empty → identical to today's prompt
+// (deterministic degrade). This is a LOCALIZED, additive edit; the directives/
+// connected-brain framing it sits beside overlaps conceptually with Stream 3's
+// prompt edits — see the stream summary's clean-merge note.
+export function buildHealthReviewPrompt(grounding?: { passages?: { marker?: string | null; claim?: string | null; source_title?: string | null; source_url?: string | null; confidence?: string | null }[] }): string {
   const ctx = repo.getCoachContext();
   const markers = repo.getMarkerHistory();
+  const passages = Array.isArray(grounding?.passages) ? grounding!.passages!.slice(0, 12) : [];
+  const groundingBlock = passages.length
+    ? `\nRETRIEVED EVIDENCE (host-side research the system ran for you — these are real, cited sources;
+GROUND your watchlist/directive guidance in these and CITE them by their source title/url in the
+"citation" field where you use them; do NOT invent additional sources):
+${JSON.stringify(passages)}\n`
+    : "";
   // Impact-ranked view (distance from OPTIMAL, most-actionable first) so the
   // review LEADS with the highest-impact markers, not just lab-flagged ones.
   const priority = repo.prioritizeMarkers();
@@ -633,7 +646,7 @@ EVIDENCE & THE CONNECTED BRAIN (this is what makes the review act across the who
   & poultry over red meat, raise soluble fiber, cap saturated fat" + training "note cardiovascular
   load"; low ferritin → training "hold endurance volume, watch fatigue" + nutrition "iron-rich foods
   paired with vitamin C". Keep "directives" empty when nothing is out of optimal — silence on good markers.
-
+${groundingBlock}
 ${CONTEXT_GUARDRAILS}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -647,6 +660,52 @@ ${JSON.stringify(markers)}
 
 DATA:
 ${JSON.stringify(ctx)}`;
+}
+
+// ---------- host-side research / grounding (Stream 4) ----------
+// A dedicated, web-capable agent call that answers ONE health/longevity question
+// grounded in CURRENT clinical evidence and returns a strict, CITED contract. The
+// host (src/research.ts) validates every source URL and discards sourceless claims
+// before caching, so this is the hallucination firewall: the agent is told that an
+// uncited claim will be thrown away. INFORMATIONAL, not medical advice.
+const RESEARCH_SCHEMA = `{
+  "summary": "<one or two plain-language sentences answering the question>",
+  "claims": [
+    {
+      "claim": "<one specific, plain-language evidence-based statement>",
+      "body": "<the supporting detail / context, plain language>",
+      "marker": "<the marker this is about, e.g. 'ApoB', or null>",
+      "confidence": "high|moderate|low",
+      "sources": [ { "title": "<source / guideline name>", "url": "https://..." } ]
+    }
+  ],
+  "sources": [ { "title": "<overall source/guideline name>", "url": "https://..." } ]
+}`;
+
+export function buildResearchPrompt(question: string, markers: string[] = []): string {
+  const q = String(question ?? "").trim().slice(0, 600);
+  const m = (Array.isArray(markers) ? markers : []).map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 12);
+  return `You are a careful clinical-evidence researcher for a personal longevity & wellness tool.
+Answer the QUESTION below grounded in CURRENT, reputable clinical evidence (recognized guideline
+bodies — AHA/ACC, ESC/EAS, ADA, Endocrine Society, USPSTF, NICE, WHO, Cochrane, KDIGO, ATA, and
+peer-reviewed literature). Use your web access to consult current sources.
+
+NON-NEGOTIABLE RULES:
+- This is INFORMATIONAL, NOT medical advice or diagnosis. Frame guidance as "discuss with a clinician"
+  for anything clinical. Never prescribe a dose or a drug.
+- EVERY claim MUST carry at least one real source with a working http(s) URL. A claim with no source,
+  or a made-up / placeholder URL, will be DISCARDED by the system — so do not pad. Prefer fewer,
+  well-sourced claims over many thin ones.
+- Do NOT invent sources, titles, or URLs. If you are unsure of a URL, omit that claim entirely.
+- Plain language for a motivated non-clinician. No score, no 0-100 grade.
+- Keep it tight: at most ~6 claims, the ones that genuinely answer the question.
+${m.length ? `\nRELEVANT MARKERS for this question: ${m.join(", ")}` : ""}
+
+QUESTION:
+${q}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${RESEARCH_SCHEMA}`;
 }
 
 // ---------- the day read (Phase 1A — the soul) ----------

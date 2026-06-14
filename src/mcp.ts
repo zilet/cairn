@@ -12,6 +12,7 @@ import {
   generateRecipe,
   runHealthReview,
   generateInsight,
+  runResearch,
 } from "./coachOps.js";
 import { computeDayRead, localToday } from "./dayread.js";
 
@@ -432,6 +433,7 @@ export function buildMcpServer(): McpServer {
       garmin_password: z.string().optional().describe("optional saved Garmin password; overrides GARMIN_PASSWORD when non-empty"),
       clear_gemini_api_key: z.boolean().optional().describe("clear the saved Gemini key; env fallback still applies"),
       clear_garmin_password: z.boolean().optional().describe("clear the saved Garmin password; env fallback still applies"),
+      research_enabled: z.boolean().optional().describe("host-side evidence research on/off (default OFF; off ⇒ deterministic, no network — used to ground & verify health-review citations)"),
     },
     async (p) => asText({ settings: repo.setSettings(p), agents: repo.getAgentConfig() }));
 
@@ -823,6 +825,18 @@ export function buildMcpServer(): McpServer {
     "Re-run the deterministic propagation engine over the latest markers: clears the 'markers' directive source and re-derives evidence-based nutrition/training/watch directives for every out-of-optimal marker, while honoring prior Done/Dismiss feedback. Idempotent; leaves agent-emitted 'health_review' directives untouched.",
     {},
     async () => asText(repo.deriveDirectives())
+  );
+
+  server.tool(
+    "research",
+    "Host-side research & grounding (Stream 4). Runs a cited, web-grounded evidence pass for ONE health/longevity question and caches the sourced claims (each claim must carry a real http(s) source URL — sourceless claims are discarded). Gated by settings.research_enabled: when OFF this serves only already-cached evidence and returns ok:false, never reaching the network. The cached evidence grounds the health review and verifies its citations. INFORMATIONAL, not medical advice.",
+    {
+      question: z.string().describe("the health/longevity question to ground"),
+      markers: z.array(z.string()).optional().describe("relevant marker names, e.g. ['ApoB']"),
+      agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
+      force: z.boolean().optional().describe("re-research even when cached evidence exists for this topic"),
+    },
+    async ({ question, markers, agent, force }) => asText(await runResearch(question, { markers, agent, force }))
   );
 
   // ---- T5: effortless capture (frequents, optional check-in, Apple Health) ----
