@@ -267,6 +267,37 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   return runAgentImpl(name, prompt, timeoutMs);
 }
 
+// ---------- subprocess env hardening (Trust build V1) ----------
+// The agent CLIs are full subprocesses and (for research/grounding) now have web
+// egress, so the blast radius of an exfiltrated secret is real. We pass a COPY of
+// process.env with Cairn-only secrets/config the CLIs never need REMOVED. This is
+// a DENYLIST (not an allowlist) so no agent login ever breaks: HOME/PATH/LANG/
+// USER, the CLI auth dirs (~/.claude, ~/.codex, ~/.gemini reached via HOME), and
+// every other inherited var still pass through untouched. Each agent's declared
+// env_required is force-restored after the strip, so even a future agent that
+// legitimately needs one of these still gets it.
+const AGENT_ENV_DENYLIST = [
+  "CAIRN_AUTH_TOKEN",   // the shared API/MCP gate token — never the CLI's business
+  "GARMIN_PASSWORD",    // Garmin credentials
+  "GARMIN_USERNAME",
+  "GEMINI_API_KEY",     // image/text-art keys (Cairn's own Gemini calls, not the CLI's)
+  "GOOGLE_AI_KEY",
+  "DB_PATH",            // host filesystem layout — internal config the CLI shouldn't see
+  "DATA_DIR",           // already passed to the child as cwd; not needed (or wanted) in its env
+  "GARMIN_TOKEN_DIR",
+];
+
+function buildAgentEnv(def: AgentDef): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of AGENT_ENV_DENYLIST) delete env[k];
+  // Restore anything an agent explicitly declared it needs (belt-and-suspenders;
+  // our bundled agents declare none of the denylisted vars).
+  for (const k of def.env_required || []) {
+    if (process.env[k] !== undefined) env[k] = process.env[k];
+  }
+  return env;
+}
+
 function runAgentImpl(name: string, prompt: string, timeoutMs: number): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
@@ -280,7 +311,7 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number): Promise<
 
   return new Promise((resolve, reject) => {
     const child = spawn(def.command, args, {
-      env: process.env,
+      env: buildAgentEnv(def),
       cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,
     });
     let out = "";
