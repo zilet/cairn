@@ -173,6 +173,17 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "health_directives", "resurfaced_from_id INTEGER");
     db.exec("CREATE INDEX IF NOT EXISTS idx_directives_feedback ON health_directives(source, marker, domain, directive_key, status)");
   } },
+  { version: 27, name: "memory-self-updating", up: (db) => {
+    // Turn memory from a flat append-only log into a self-updating store: a row
+    // can be re-observed (updated_at + confidence), superseded by a newer row
+    // (superseded_by — MARK, never hard-delete), and stamped when last surfaced
+    // to the coach (last_referenced_at). The 'suggestions' outcome-learning table
+    // is a new CREATE TABLE IF NOT EXISTS in db.ts and needs no migration here.
+    addColumn(db, "memory", "updated_at TEXT");
+    addColumn(db, "memory", "superseded_by INTEGER");
+    addColumn(db, "memory", "confidence REAL DEFAULT 1");
+    addColumn(db, "memory", "last_referenced_at TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {
