@@ -1112,6 +1112,15 @@ api.post("/art/warm", (_req, res) => {
 // all-time totals, generations avoided via semantic reuse, and cache size.
 api.get("/art/stats", (_req, res) => res.json(repo.getArtStats()));
 
+// Agent-run telemetry: ok-rate, per-agent reliability + median latency, and the
+// recent raw attempts. An operator/health view — NOT a user-facing score.
+// Optional ?recent=N (last N attempts) and ?days=N (window the roll-up).
+api.get("/agent-stats", (req, res) => {
+  const recent = req.query.recent != null ? Number(req.query.recent) : undefined;
+  const days = req.query.days != null ? Number(req.query.days) : undefined;
+  res.json(repo.getAgentStats({ recent, days }));
+});
+
 api.get("/health", (_req, res) => res.json({ ok: true, auth_required: authEnabled }));
 
 // Global JSON error handler — registered LAST so any uncaught route error
