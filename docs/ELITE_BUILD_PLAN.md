@@ -122,6 +122,6 @@ If a stream needs a migration version beyond its assignment, STOP and flag the o
 - [x] Stream 5 ui — merged (sw → cairn-v49)
 - [x] Quality review — 3 parallel reviewers (correctness / vision-alignment / security); all fixes applied (impact_score strip, tab-error fallback, limit clamps)
 - [x] Housekeeping + docs — CLAUDE.md (schema → v30), DESIGN.md (`--muted` AA), this tracker
-- [ ] elite-build → main
+- [x] elite-build → main — fast-forwarded; fresh-DB boot migrates v1→v30, `user_version = 30`; worktrees cleaned up
 
 **Final migration ladder:** v27 day-read-override · v28 research-enabled · v29 settings-proactive-enabled · v30 memory-self-updating. Boot smoke test confirmed `user_version` = 30 with all four applying in order. `npm run build` clean.
