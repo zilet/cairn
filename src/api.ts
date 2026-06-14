@@ -7,11 +7,12 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
-import { buildCoachPrompt, buildMealPlanPrompt, buildChatPrompt, buildChatDistillPrompt } from "./prompt.js";
+import { buildCoachPrompt, buildChatPrompt, buildChatDistillPrompt } from "./prompt.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
 import {
   runChosen,
   suggestSession,
+  draftMealPlan,
   nutritionCheckin,
   swapMealAgentic,
   generateRecipe,
@@ -540,13 +541,14 @@ api.post("/suggestions/reconcile", (req, res) =>
 );
 
 // ---- meal plans ----
+// Draft a goal-aware weekly meal plan, then run a bounded self-critique verify
+// pass against the lean-safe / longevity floors before persisting (see
+// coachOps.draftMealPlan). The persisted plan is the verified draft; `verified`
+// carries the "checked against your floors" signal. Verify fails open.
 api.post("/coach/mealplan", async (req, res) => {
   const { agent, instruction } = req.body ?? {};
   try {
-    const prompt = buildMealPlanPrompt(instruction);
-    const { agent: chosen, result, tried } = await runChosen(agent, prompt);
-    const plan = repo.createMealPlan(chosen, result.raw, result.parsed);
-    res.json({ plan, ok: !!result.parsed, agent: chosen, tried, stderr: (result.stderr || "").slice(0, 800) });
+    res.json(await draftMealPlan(agent, instruction));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -1057,6 +1059,16 @@ api.get("/research", (req, res) => {
   const topic = typeof req.query.topic === "string" ? req.query.topic : undefined;
   const marker = typeof req.query.marker === "string" ? req.query.marker : undefined;
   res.json({ enabled: repo.getSettings().research_enabled, evidence: repo.getEvidence({ topic, marker }) });
+});
+
+// Make a directive's citation INSPECTABLE: the cited evidence behind ONE marker,
+// projected to the verifiable fields { claim, source_title, source_url, body,
+// confidence, retrieved_at }. Reads the cache only (never the network), so it
+// works with research disabled; evidence:[] when research never ran for it.
+api.get("/evidence", (req, res) => {
+  const marker = typeof req.query.marker === "string" ? req.query.marker : undefined;
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  res.json(repo.getEvidenceForMarker(marker, Number.isFinite(limit as number) ? (limit as number) : undefined));
 });
 
 // Run a cited, web-grounded evidence pass for ONE question and cache it. Gated by

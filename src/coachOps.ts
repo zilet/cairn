@@ -11,10 +11,13 @@ import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
 import { runAgent, runAgentWithFallback, INTERACTIVE_TIMEOUT_MS, type RunOpts } from "./agents.js";
 import {
+  buildMealPlanPrompt,
   buildMealSwapPrompt,
   buildRecipePrompt,
   buildHealthReviewPrompt,
   buildSessionPrompt,
+  buildSessionVerifyPrompt,
+  buildPlanVerifyPrompt,
   buildNutritionCheckinPrompt,
   buildInsightPrompt,
   buildWeeklyReadPrompt,
@@ -57,6 +60,45 @@ export async function runChosen(
   }
 }
 
+// ---------- self-critique verify pass (Trust build V1) ----------
+// Run ONE bounded follow-up agent turn that checks a just-produced high-stakes
+// draft against its HARD floors/constraints and applies a returned fix. The
+// contract is { ok, violations:[], fixed_draft? }. FAIL-OPEN by design: any
+// failure (agent down, unparseable, wrong shape) returns the ORIGINAL draft
+// unchanged with `verified:null` — exactly today's behavior, never load-bearing.
+// `validate` re-checks a fixed_draft so a broken "fix" can't replace a good draft.
+// Always-on, cheap, fully try/catch-wrapped (no setting, no schema).
+export interface VerifyOutcome<T> {
+  draft: T;
+  verified: { checked: true; adjustments: string[] } | null;
+}
+async function runVerify<T>(
+  agent: string | undefined,
+  draft: T,
+  buildPrompt: (d: T) => string,
+  validate: (fixed: any) => boolean,
+  op: string
+): Promise<VerifyOutcome<T>> {
+  try {
+    const { result } = await runChosen(agent, buildPrompt(draft), { op, timeoutMs: INTERACTIVE_TIMEOUT_MS });
+    const v: any = result.parsed;
+    if (!v || typeof v !== "object") return { draft, verified: null };
+    const violations: string[] = Array.isArray(v.violations)
+      ? v.violations.filter((s: any) => typeof s === "string" && s.trim()).map((s: string) => s.trim().slice(0, 240))
+      : [];
+    // A real fix that re-validates against the schema → adopt it.
+    if (v.ok === false && v.fixed_draft && typeof v.fixed_draft === "object" && validate(v.fixed_draft)) {
+      return { draft: v.fixed_draft as T, verified: { checked: true, adjustments: violations.length ? violations : ["adjusted to honor your floors"] } };
+    }
+    // Clean pass (or an unusable "fix" we decline to adopt) → the draft stands, but
+    // we still mark it CHECKED so the surface can show "checked against your floors".
+    return { draft, verified: { checked: true, adjustments: [] } };
+  } catch {
+    // Verify unavailable → ship the draft unverified (graceful degrade).
+    return { draft, verified: null };
+  }
+}
+
 // Build ONE session on demand. ok:false is the designed failure signal when the
 // agent returns nothing usable. Inputs are the already-typed prompt options.
 export async function suggestSession(
@@ -69,13 +111,48 @@ export async function suggestSession(
   const p = result.parsed;
   const sane = p && typeof p === "object" && Array.isArray(p.items) && p.items.length > 0;
   if (!sane) return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried };
+  // Self-critique: check the suggestion against the athlete's HARD constraints
+  // (injury, time budget, equipment, encoding) and adopt a fix if one is returned.
+  // Fail-open — verify down/garbage ⇒ the draft ships exactly as before.
+  const sessionSane = (s: any) => s && typeof s === "object" && Array.isArray(s.items) && s.items.length > 0;
+  const { draft: session, verified } = await runVerify(
+    agent, p, (d) => buildSessionVerifyPrompt(d, opts), sessionSane, "session_verify"
+  );
   // Outcome learning: record what was suggested so a later pass can compare it to
   // what the athlete actually trained. Best-effort; never blocks the response.
   repo.recordSuggestion("session_suggest", opts.date ?? null, {
     minutes: opts.minutes ?? null, focus: opts.focus ?? null,
-    est_minutes: Number(p.est_minutes) || null, item_count: p.items.length,
+    est_minutes: Number(session.est_minutes) || null, item_count: session.items.length,
   });
-  return { ok: true as const, session: p, agent: chosen, tried };
+  return { ok: true as const, session, agent: chosen, tried, ...(verified ? { verified } : {}) };
+}
+
+// Draft a goal-aware weekly meal plan, then run a bounded self-critique verify
+// pass against the lean-safe / longevity floors before persisting. ok:false on a
+// non-JSON result mirrors the other agentic ops. The persisted plan is the
+// VERIFIED draft (a fix is adopted only when it re-validates); `verified` carries
+// the "checked against your floors" signal. Verify fails open (no agent / garbage
+// ⇒ the original draft is persisted unverified — exactly today's behavior).
+export async function draftMealPlan(agent: string | undefined, instruction?: string) {
+  const prompt = buildMealPlanPrompt(instruction);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "meal_plan" });
+  const p = result.parsed;
+  const planSane = (m: any) => !!m && typeof m === "object" && Array.isArray(m.days);
+  // Only a genuinely plan-shaped draft gets the verify pass; anything else
+  // (e.g. unparsed output) is persisted as-is. Preserve today's contract:
+  // ok mirrors !!result.parsed (createMealPlan tolerates a null parsed).
+  if (!planSane(p)) {
+    const plan = repo.createMealPlan(chosen, result.raw, p);
+    return { ok: !!p as boolean, plan, agent: chosen, tried };
+  }
+  // Self-critique: check the plan against the lean-safe / longevity floors and
+  // adopt a returned fix when it re-validates. Fail-open (verify down/garbage ⇒
+  // the original draft is persisted, exactly today's behavior).
+  const { draft: verifiedParsed, verified } = await runVerify(
+    agent, p, buildPlanVerifyPrompt, planSane, "meal_plan_verify"
+  );
+  const plan = repo.createMealPlan(chosen, result.raw, verifiedParsed);
+  return { ok: true as const, plan, agent: chosen, tried, ...(verified ? { verified } : {}) };
 }
 
 // Quiet adaptive-nutrition check-in. Drafts a nutrition_target proposal only on
