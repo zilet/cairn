@@ -242,8 +242,34 @@ CREATE TABLE IF NOT EXISTS memory (
   created_at TEXT DEFAULT (datetime('now')),
   kind TEXT,
   content TEXT NOT NULL,
-  source TEXT
+  source TEXT,
+  -- Self-updating memory (v27): a memory is no longer a flat append-only log.
+  -- updated_at advances when a near-duplicate folds into this row; superseded_by
+  -- points at the row that replaced this one (we MARK, never hard-delete — same
+  -- discipline as chat archiving); confidence rises as a fact is re-observed and
+  -- is read by retrieval ranking; last_referenced_at stamps when the coach last saw it.
+  updated_at TEXT,
+  superseded_by INTEGER,
+  confidence REAL DEFAULT 1,
+  last_referenced_at TEXT
 );
+
+-- Outcome learning (v27 batch, new table — no migration needed): what the Brief /
+-- session-suggest / nutrition check-in PROPOSED, so a quiet reconciliation pass can
+-- later compare suggestion → actual (logged sets, weight trend, autoregulation
+-- feedback) and write a durable learning memory. Suggestion-not-a-gate: this only
+-- learns the athlete's tendencies, it never enforces them.
+CREATE TABLE IF NOT EXISTS suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,                 -- day_read | session_suggest | nutrition_checkin
+  date TEXT,                          -- the date the suggestion was FOR (local)
+  payload_json TEXT,                  -- what was proposed (read kind/focus, target kcal, …)
+  outcome_json TEXT,                  -- filled in at reconciliation (what actually happened)
+  created_at TEXT DEFAULT (datetime('now')),
+  reconciled_at TEXT                  -- NULL until reconciled; set once a learning is drawn
+);
+CREATE INDEX IF NOT EXISTS idx_suggestions_unreconciled
+  ON suggestions(kind, date) WHERE reconciled_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS meal_plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

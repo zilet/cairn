@@ -3,6 +3,8 @@ import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
 import { generateInsight, nutritionCheckin } from "./coachOps.js";
 import { precomputeDayRead, localToday } from "./dayread.js";
+// Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
+// reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
 // Weekly auto-draft + quiet proactivity. Configured in Settings (persisted in
 // the DB, editable from the PWA at runtime — no restart needed): coach_enabled,
@@ -203,6 +205,45 @@ export function startScheduler() {
     }
   };
 
+  // Stream 2 — quiet nightly memory housekeeping (runs once per day at MEMORY_HOUR,
+  // default 3am local, an hour before the Brief precompute so the agent isn't
+  // double-booked). Each pass: reconcile passed suggestions → durable learnings
+  // (deterministic, always), then consolidate the memory store and grow about_me
+  // (agentic, best-effort — a failed agent is a calm no-op). NEVER notifies; this
+  // is pure background curation the user never has to think about.
+  const MEMORY_HOUR = (() => {
+    const h = Number(process.env.MEMORY_MAINT_HOUR);
+    return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 3; // default 3am local
+  })();
+  let lastMemoryDate = "";
+  let memoryBusy = false;
+  const memoryTick = async () => {
+    if (memoryBusy) return;
+    const now = new Date();
+    if (now.getHours() !== MEMORY_HOUR) return;
+    const stamp = localToday(now);
+    if (stamp === lastMemoryDate) return; // already ran today
+    lastMemoryDate = stamp;
+    memoryBusy = true;
+    try {
+      // 1. Deterministic outcome reconciliation — no agent, never fails the pass.
+      try {
+        const rec = repo.reconcileSuggestions();
+        if (rec.learnings > 0) console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
+      } catch (e: any) { console.error(`[memory] reconcile failed: ${e?.message ?? e}`); }
+      // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
+      try {
+        const { consolidateMemory, growAboutMe } = await import("./coachOps.js");
+        const c = await consolidateMemory("auto");
+        if (c.ok && (c.merged || c.superseded || c.promoted)) console.log(`[memory] consolidated: ${c.merged} merged, ${c.superseded} superseded, ${c.promoted} promoted.`);
+        const g = await growAboutMe("auto");
+        if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
+      } catch (e: any) { console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`); }
+    } finally {
+      memoryBusy = false;
+    }
+  };
+
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
   console.log(
     s.coach_enabled
@@ -214,6 +255,7 @@ export function startScheduler() {
   setInterval(proactiveTick, 60_000);
   setInterval(garminTick, 60_000);
   setInterval(precomputeTick, 60_000);
+  setInterval(memoryTick, 60_000); // Stream 2: nightly memory maintenance
   setTimeout(garminTick, 45_000); // the boot-time pass; later passes ride the minute tick
 
   // Boot warm: if today's read isn't cached yet (e.g. a mid-day restart), compute

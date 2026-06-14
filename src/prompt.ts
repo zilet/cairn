@@ -208,6 +208,8 @@ const CHAT_SCHEMA = `{
     { "type": "log_set", "exercise": "Dead Hang", "duration_sec": 45, "exercise_mode": "timed" },
     { "type": "set_profile", "weight_lb": 176 },
     { "type": "add_memory", "content": "Prefers morning training", "kind": "preference" },
+    { "type": "update_memory", "id": <existing memory id from DATA.memory>, "content": "<corrected fact>", "kind": "preference|constraint|decision|injury|milestone|goal|observation" },
+    { "type": "supersede_memory", "id": <id of the now-WRONG memory from DATA.memory>, "reason": "<what changed>", "replacement": "<optional new fact to remember instead>" },
     { "type": "log_food", "meal": "breakfast|lunch|dinner|snack", "summary": "<clean dish name>",
       "items": ["<component>"], "ingredients": [
         { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
@@ -266,11 +268,17 @@ GUARDRAILS:
   training-time or food like/dislike) you MAY ask ONE brief, low-friction question when it fits the
   conversation naturally — never a questionnaire, never more than one per turn — and emit an
   add_memory action capturing any durable answer they give. If nothing fits naturally, skip it.
+- SELF-UPDATING MEMORY: each row in DATA.memory carries an "id". When the athlete tells you something
+  that CONTRADICTS or CHANGES a remembered fact, don't pile on a new memory — keep the store coherent:
+  emit update_memory{id,...} to correct a fact in place (a refined or now-different version of the same
+  thing), or supersede_memory{id, reason, replacement?} when an old fact is simply no longer true (e.g.
+  "I switched to evenings" supersedes "prefers morning training"). add_memory is only for genuinely NEW
+  facts. Never invent ids — only use ids present in DATA.memory.
 
 ${CONTEXT_GUARDRAILS}
 
 ACTIONS — only when the athlete clearly asks to log or change something:
-- log_activity, log_set, set_profile, add_memory, log_food, log_health, add_context_event are APPLIED immediately.
+- log_activity, log_set, set_profile, add_memory, update_memory, supersede_memory, log_food, log_health, add_context_event are APPLIED immediately.
 - log_food records a meal estimate (food note) — use it when the athlete reports something they
   ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.
 - log_health records lab/bloodwork/DEXA results the athlete reports in chat — pull out EVERY marker
@@ -335,6 +343,87 @@ ${DISTILL_SCHEMA}
 
 CONVERSATION BEING ARCHIVED:
 ${convo || "(empty)"}`;
+}
+
+const CONSOLIDATION_SCHEMA = `{
+  "merges":      [ { "ids": [<id>, <id>, ...], "content": "<the single combined fact>", "kind": "preference|constraint|decision|injury|milestone|goal|observation" } ],
+  "supersedes":  [ { "id": <stale id>, "reason": "<why it's no longer true>", "replacement": "<optional newer fact, or omit>" } ],
+  "promotions":  [ { "id": <observation id>, "kind": "preference|constraint|decision|goal", "content": "<optional sharper wording, or omit to keep as-is>" } ]
+}`;
+
+// Quiet, periodic memory consolidation: reads the live memory store and proposes
+// (a) merges of near-duplicate facts into one, (b) supersessions where a newer
+// fact contradicts an older one, and (c) promotions of a recurring OBSERVATION
+// into a durable PREFERENCE/CONSTRAINT/DECISION/GOAL. It changes nothing on its
+// own — coachOps.consolidateMemory applies the result via the repo functions
+// (which MARK, never hard-delete). Empty arrays are the calm, common answer.
+export function buildMemoryConsolidationPrompt(): string {
+  const rows = (repo.listMemory(120) as any[]).map(
+    (m) => `- [id ${m.id}] (${m.kind ?? "observation"}${Number(m.confidence) > 1 ? `, seen×${Math.round(Number(m.confidence) * 2) / 2}` : ""}) ${String(m.content ?? "").slice(0, 240)}`
+  ).join("\n");
+  return `You are Cairn's coaching memory librarian. Tidy the athlete's memory store so it stays a
+coherent, non-redundant model of who they are — WITHOUT losing anything real. This is housekeeping,
+not coaching: be conservative, only act when you're confident.
+
+WHAT TO DO (each is optional; empty arrays are a perfectly good answer):
+- MERGE near-duplicate facts that say essentially the same thing into ONE clear sentence (list every
+  id involved; the rest are folded into the first).
+- SUPERSEDE a fact that a LATER fact contradicts (e.g. an old "trains mornings" when a newer note says
+  "switched to evenings"). Give the stale id + the reason; add a "replacement" only if a single clean
+  combined fact is clearer than what's already there.
+- PROMOTE a recurring OBSERVATION that has clearly become a stable trait into a preference/constraint/
+  decision/goal (e.g. three notes about skipping breakfast → a "prefers fasted mornings" preference).
+- Do NOT merge facts that are merely on the same topic but say different things. Do NOT invent facts.
+  Do NOT touch ids you don't see below. Never surface a numeric score.
+
+CURRENT MEMORY (most recent first):
+${rows || "(empty)"}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${CONSOLIDATION_SCHEMA}`;
+}
+
+const ABOUT_ME_SCHEMA = `{
+  "about_me": "<the rewritten person-model, a few short paragraphs of plain prose>",
+  "changed": <true|false>
+}`;
+
+// Grow profile.about_me into a coherent person-model from typed memory + family +
+// recent check-ins. AUGMENTS, never overwrites blindly: the existing about_me
+// (which the user curates) is preserved and only extended/sharpened with what the
+// data clearly supports. The user still edits it freely afterward.
+export function buildAboutMeGrowthPrompt(): string {
+  const ctx = repo.getCoachContext();
+  const profile = ctx.profile || {};
+  const mem = (ctx.memory as any[] || []).map((m) => `- (${m.kind ?? "observation"}) ${String(m.content ?? "").slice(0, 240)}`).join("\n");
+  const family = (ctx.family as any[] || []).map((f: any) => `- ${f.name ?? "member"}${f.relation ? ` (${f.relation})` : ""}${f.notes ? `: ${String(f.notes).slice(0, 120)}` : ""}`).join("\n");
+  const checkins = (ctx.checkins as any[] || []).slice(0, 7).map((c: any) => `- ${c.date}: mood ${c.mood ?? "—"}, energy ${c.energy ?? "—"}, sleep ${c.sleep_feel ?? "—"}${c.note ? ` · ${String(c.note).slice(0, 80)}` : ""}`).join("\n");
+  return `You are Cairn's coaching memory, maintaining the athlete's "about me" — a short, warm,
+person-model their coach reads to personalize tone and plans. Update it from the data below.
+
+RULES:
+- AUGMENT, never replace wholesale. The EXISTING about-me is partly user-authored; preserve its
+  meaning and any personal voice. Only add or sharpen what the memory/family/check-in data clearly
+  supports. If the data adds nothing, set "changed": false and return the existing text unchanged.
+- A few short paragraphs of plain prose — training style & schedule, food preferences/constraints,
+  what they're working toward, the people they plan around, how they tend to feel/recover. No lists,
+  no headers, no numeric scores, no medical claims. Write it TO the coach, ABOUT the athlete.
+- Never invent. Only what's in the data.
+
+EXISTING ABOUT-ME (preserve & extend; may be empty):
+${profile.about_me ? String(profile.about_me).slice(0, 4000) : "(empty)"}
+
+TYPED MEMORY:
+${mem || "(none)"}
+
+FAMILY THE COACH PLANS AROUND:
+${family || "(none)"}
+
+RECENT CHECK-INS:
+${checkins || "(none)"}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${ABOUT_ME_SCHEMA}`;
 }
 
 const ENRICH_ACTIVITY_SCHEMA = `{

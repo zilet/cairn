@@ -8,6 +8,7 @@
 // response and never an MCP wrapper.
 
 import * as repo from "./repo.js";
+import { todayISO } from "./db.js";
 import { runAgent, runAgentWithFallback, INTERACTIVE_TIMEOUT_MS, type RunOpts } from "./agents.js";
 import {
   buildMealSwapPrompt,
@@ -17,6 +18,8 @@ import {
   buildNutritionCheckinPrompt,
   buildInsightPrompt,
   buildWeeklyReadPrompt,
+  buildMemoryConsolidationPrompt,
+  buildAboutMeGrowthPrompt,
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 
@@ -66,6 +69,12 @@ export async function suggestSession(
   const p = result.parsed;
   const sane = p && typeof p === "object" && Array.isArray(p.items) && p.items.length > 0;
   if (!sane) return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried };
+  // Outcome learning: record what was suggested so a later pass can compare it to
+  // what the athlete actually trained. Best-effort; never blocks the response.
+  repo.recordSuggestion("session_suggest", opts.date ?? null, {
+    minutes: opts.minutes ?? null, focus: opts.focus ?? null,
+    est_minutes: Number(p.est_minutes) || null, item_count: p.items.length,
+  });
   return { ok: true as const, session: p, agent: chosen, tried };
 }
 
@@ -92,6 +101,15 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
     nutrition: p.nutrition,
     notes: typeof p.notes === "string" ? p.notes : "",
     expenditure,
+  });
+  // Outcome learning: record the proposed target + implied direction so a later
+  // pass can check whether the bodyweight trend actually followed. Best-effort.
+  const targetKcal = Number(p.nutrition.target_kcal);
+  const tdee = Number((expenditure as any)?.tdee);
+  repo.recordSuggestion("nutrition_checkin", todayISO(), {
+    target_kcal: Number.isFinite(targetKcal) ? targetKcal : null,
+    tdee: Number.isFinite(tdee) ? tdee : null,
+    direction: Number.isFinite(targetKcal) && Number.isFinite(tdee) ? (targetKcal < tdee ? "down" : targetKcal > tdee ? "up" : "hold") : null,
   });
   return { ok: true as const, change: true, proposal, summary: typeof p.summary === "string" ? p.summary : "", agent: chosen, tried, expenditure };
 }
@@ -187,4 +205,68 @@ export async function runResearch(
   opts: { markers?: string[]; agent?: string; force?: boolean } = {}
 ) {
   return researchEvidence(String(question ?? ""), opts.markers ?? [], { agent: opts.agent, force: opts.force });
+}
+
+// ---------- self-updating memory ops (Stream 2) ----------
+
+// Quiet memory consolidation: ask an agent to propose merges / supersessions /
+// promotions over the live store, then apply them through the repo functions
+// (which MARK, never hard-delete). Calm by default — an empty result is a clean
+// no-op. Scheduled nightly; also callable on demand. NEVER notifies.
+export async function consolidateMemory(agent: string | undefined) {
+  const prompt = buildMemoryConsolidationPrompt();
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const p: any = result.parsed;
+  if (!p || typeof p !== "object") return { ok: false as const, error: "agent returned no usable plan", agent: chosen, tried };
+
+  const idSet = new Set((repo.listMemory(200, { includeSuperseded: true }) as any[]).map((m: any) => Number(m.id)));
+  let merged = 0, superseded = 0, promoted = 0;
+
+  // MERGES: fold every other id into the first, with one combined sentence.
+  for (const m of Array.isArray(p.merges) ? p.merges : []) {
+    const ids = (Array.isArray(m?.ids) ? m.ids : []).map(Number).filter((n: number) => idSet.has(n));
+    if (ids.length < 2 || !m?.content) continue;
+    const [keep, ...rest] = ids;
+    try {
+      repo.updateMemory(keep, { content: String(m.content), kind: m.kind });
+      for (const dup of rest) { repo.supersedeMemory(dup, { replacementId: keep, reason: "merged duplicate" }); merged++; }
+    } catch { /* skip a bad row, keep going */ }
+  }
+  // SUPERSEDES: a later fact contradicts an older one.
+  for (const s of Array.isArray(p.supersedes) ? p.supersedes : []) {
+    const id = Number(s?.id);
+    if (!idSet.has(id)) continue;
+    try { repo.supersedeMemory(id, { content: s?.replacement, reason: s?.reason || "superseded" }); superseded++; } catch {}
+  }
+  // PROMOTIONS: a recurring observation has become a stable trait.
+  for (const pr of Array.isArray(p.promotions) ? p.promotions : []) {
+    const id = Number(pr?.id);
+    if (!idSet.has(id) || !pr?.kind) continue;
+    try { repo.updateMemory(id, { content: pr?.content, kind: String(pr.kind) }); promoted++; } catch {}
+  }
+  return { ok: true as const, merged, superseded, promoted, agent: chosen, tried };
+}
+
+// Grow profile.about_me into a coherent person-model from typed memory + family +
+// check-ins. AUGMENTS, never overwrites blindly — the prompt preserves existing
+// (user-authored) content, and we only write when the agent reports a real change.
+export async function growAboutMe(agent: string | undefined) {
+  const prompt = buildAboutMeGrowthPrompt();
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+  const p: any = result.parsed;
+  const text = p && typeof p === "object" ? String(p.about_me ?? "").trim() : "";
+  if (!p || typeof p !== "object" || p.changed === false || !text) {
+    return { ok: true as const, changed: false, agent: chosen, tried };
+  }
+  const before = String((repo.getProfile() || {}).about_me ?? "").trim();
+  if (text === before) return { ok: true as const, changed: false, agent: chosen, tried };
+  const profile = repo.setProfile({ about_me: text });
+  return { ok: true as const, changed: true, profile, agent: chosen, tried };
+}
+
+// Reconcile passed suggestions to actuals and write durable learnings. Pure repo
+// math — no agent needed (calm, deterministic). Returns the counts.
+export function reconcileOutcomes(opts?: { maxPerPass?: number }) {
+  const r = repo.reconcileSuggestions(opts);
+  return { ok: true as const, ...r };
 }

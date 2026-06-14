@@ -195,6 +195,17 @@ export const MIGRATIONS: Migration[] = [
     // on so existing deployments get calm proactivity; toggle in Settings.
     addColumn(db, "settings", "proactive_enabled INTEGER DEFAULT 1");
   } },
+  { version: 30, name: "memory-self-updating", up: (db) => {
+    // Turn memory from a flat append-only log into a self-updating store: a row
+    // can be re-observed (updated_at + confidence), superseded by a newer row
+    // (superseded_by — MARK, never hard-delete), and stamped when last surfaced
+    // to the coach (last_referenced_at). The 'suggestions' outcome-learning table
+    // is a new CREATE TABLE IF NOT EXISTS in db.ts and needs no migration here.
+    addColumn(db, "memory", "updated_at TEXT");
+    addColumn(db, "memory", "superseded_by INTEGER");
+    addColumn(db, "memory", "confidence REAL DEFAULT 1");
+    addColumn(db, "memory", "last_referenced_at TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

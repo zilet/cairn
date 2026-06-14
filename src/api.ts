@@ -18,6 +18,9 @@ import {
   runHealthReview,
   generateInsight,
   runResearch,
+  consolidateMemory,
+  growAboutMe,
+  reconcileOutcomes,
 } from "./coachOps.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
@@ -200,7 +203,12 @@ api.get("/today-read", async (req, res) => {
       const cached = repo.getCachedDayRead(date || localToday());
       if (cached) return res.json({ ...cached, cached: true });
     }
-    return res.json(await computeDayRead({ date, override, agent: agentParam }));
+    const read: any = await computeDayRead({ date, override, agent: agentParam });
+    // Outcome learning: record what the Brief proposed for this date (once per
+    // fresh compute — the cached path above short-circuits repeats) so a later
+    // reconciliation pass can compare it to what the athlete actually did.
+    try { repo.recordSuggestion("day_read", date || localToday(), { kind: read?.kind ?? null, focus: read?.focus ?? null, est_minutes: read?.est_minutes ?? null, override: override ?? null }); } catch {}
+    return res.json(read);
   } catch (e: any) {
     // Last-resort floor — computeDayRead already swallows agent failures, so this
     // only fires on an unexpected repo error. Still return a real read, never 500.
@@ -481,8 +489,9 @@ api.get("/recovery", (req, res) =>
 );
 
 // ---- memory ----
+// ?all=1 includes superseded rows (history) for the curation UI; default hides them.
 api.get("/memory", (req, res) =>
-  res.json(repo.listMemory(req.query.limit ? Number(req.query.limit) : 50))
+  res.json(repo.listMemory(req.query.limit ? Number(req.query.limit) : 50, { includeSuperseded: req.query.all === "1" }))
 );
 api.post("/memory", (req, res) => {
   const b = req.body ?? {};
@@ -491,11 +500,44 @@ api.post("/memory", (req, res) => {
 });
 api.put("/memory/:id", (req, res) => {
   const b = req.body ?? {};
-  const updated = repo.updateMemory(Number(req.params.id), { content: b.content, kind: b.kind });
+  const updated = repo.updateMemory(Number(req.params.id), { content: b.content, kind: b.kind, confidence: b.confidence });
   if (!updated) return res.status(404).json({ error: "not found" });
   res.json(updated);
 });
+// Supersede (mark, never hard-delete): optionally provide a replacement content
+// (a new row is created) or replacement_id (point at an existing row).
+api.post("/memory/:id/supersede", (req, res) => {
+  const b = req.body ?? {};
+  const r = repo.supersedeMemory(Number(req.params.id), { content: b.replacement ?? b.content, kind: b.kind, replacementId: b.replacement_id, reason: b.reason });
+  if (!r) return res.status(404).json({ error: "not found" });
+  res.json(r);
+});
 api.delete("/memory/:id", (req, res) => res.json(repo.deleteMemory(Number(req.params.id))));
+
+// Quiet memory consolidation: merge near-duplicates, supersede contradictions,
+// promote recurring observations. Marks, never hard-deletes. On demand here; also
+// scheduled nightly. Designed ok:false at 200 when the agent returns nothing usable.
+api.post("/memory/consolidate", async (req, res) => {
+  try { res.json(await consolidateMemory(req.body?.agent)); }
+  catch (e: any) { res.json({ ok: false, error: e.message }); }
+});
+
+// Grow profile.about_me from typed memory + family + check-ins (augments, never
+// overwrites blindly). changed:false is the calm, common answer.
+api.post("/profile/grow-about-me", async (req, res) => {
+  try { res.json(await growAboutMe(req.body?.agent)); }
+  catch (e: any) { res.json({ ok: false, error: e.message }); }
+});
+
+// ---- outcome learning (suggestions → actuals) ----
+api.get("/suggestions", (req, res) =>
+  res.json(repo.listSuggestions(req.query.limit ? Number(req.query.limit) : 50))
+);
+// Reconcile past suggestions to what actually happened, writing durable learnings.
+// Deterministic, no agent. Also scheduled quietly.
+api.post("/suggestions/reconcile", (req, res) =>
+  res.json(reconcileOutcomes({ maxPerPass: req.body?.max != null ? Number(req.body.max) : undefined }))
+);
 
 // ---- meal plans ----
 api.post("/coach/mealplan", async (req, res) => {
@@ -729,6 +771,17 @@ api.post("/chat", async (req, res) => {
             break;
           case "add_memory":
             applied.push({ type: a.type, result: repo.addMemory(a.content, a.kind, "chat") });
+            break;
+          case "update_memory":
+            // A fact CHANGED: edit the existing memory row in place (self-updating
+            // memory — the agent saw the row id in DATA.memory and is correcting it).
+            applied.push({ type: a.type, result: repo.updateMemory(Number(a.id), { content: a.content, kind: a.kind }) ?? { error: "not found", id: a.id } });
+            break;
+          case "supersede_memory":
+            // A fact was CONTRADICTED/REPLACED: mark the old row superseded (never
+            // hard-deleted), optionally with a replacement. The old fact stays in
+            // history for the curation UI and export.
+            applied.push({ type: a.type, result: repo.supersedeMemory(Number(a.id), { content: a.replacement, reason: a.reason }) ?? { error: "not found", id: a.id } });
             break;
           case "log_food": {
             // The chat agent already produced the structured estimate (it saw the
