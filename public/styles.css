@@ -15,7 +15,7 @@
   --card-2:  #f8f3ea;   /* inset surfaces: inputs, wells, chips */
   --ink:     #211d17;   /* primary text, near-black warm ink */
   --ink-2:   #57503f;   /* secondary text */
-  --muted:   #8c8475;   /* tertiary text, labels */
+  --muted:   #746c5c;   /* tertiary text, labels — darkened to clear WCAG AA (4.5:1) on card-2/paper; was #8c8475 (3.35:1) */
   --line:    #e7dfd2;   /* hairlines */
   --line-2:  #d8cfbd;   /* stronger hairlines */
   --accent:  #b4552d;   /* terracotta — primary actions, highlights */
@@ -297,6 +297,29 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   font-size:.84rem;color:var(--ink-2);line-height:1.45;
 }
 .ctxbanner-sep{color:var(--line-2)}
+
+/* connected-brain provenance — the quiet causal line on a meal/session card when
+   a flagged lab shaped it ("tilted toward fish — ApoB came back high · why"). A
+   soft gold-edged whisper, the whole row a deep-link into Me → Health → Brain.
+   Information, never a verdict — it never raises its voice. */
+.prov-slot:empty{display:none}
+.prov-line{
+  display:flex;align-items:baseline;gap:7px;width:100%;text-align:left;
+  margin:12px 0 0;padding:8px 11px;
+  background:transparent;border:none;border-left:2px solid var(--gold);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  color:var(--ink-2);font-family:var(--font-ui);font-size:.8rem;line-height:1.4;
+  cursor:pointer;transition:background var(--dur-1) var(--ease);
+}
+.prov-line:hover{background:var(--card-2)}
+.prov-line:active{transform:scale(.99)}
+.prov-glyph{color:var(--gold);font-size:.74rem;flex:0 0 auto;line-height:1.4}
+.prov-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.prov-marker{font-weight:600;color:var(--ink)}
+.prov-soft{color:var(--muted);font-style:italic}
+.prov-why{flex:0 0 auto;font-size:.62rem;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);align-self:center}
+.prov-line:hover .prov-why{color:var(--accent)}
 
 /* free-text quick log */
 .quicklog{display:flex;gap:8px;align-items:center;margin:2px 0 8px}
@@ -766,6 +789,12 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .bubble.assistant{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
   border-bottom-left-radius:5px}
 .bubble.pending{background:var(--card);box-shadow:var(--shadow-sm);color:var(--muted)}
+/* the live phase caption ("Thinking…" → "Drafting…") inside a pending bubble —
+   each swap settles in gently so the wait reads as motion, never a jump */
+.bubble.pending .typing-cap{display:inline-block;font-style:italic;
+  animation:capfade var(--dur-2) var(--ease)}
+.bubble.pending .typing-cap:empty{display:none}
+@keyframes capfade{from{opacity:.35}to{opacity:1}}
 .bubble.bubble-in{animation:bubblein .34s var(--ease) both}
 @keyframes bubblein{from{opacity:0;transform:translateY(7px) scale(.98)}to{opacity:1;transform:none}}
 
@@ -990,6 +1019,16 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .agentctl{display:flex;align-items:center;gap:5px;flex:0 0 auto}
 .agent-update{margin-top:4px}
 .agent-update-status{color:var(--muted);margin-top:7px;min-height:18px;text-align:center}
+
+/* agent-health card — the coaching brain's quiet pulse (ok-rate + per-agent
+   latency). Mirrors the art-spend card; ledger rows, no scores. */
+.agenthealth-rows{margin-top:9px;border-top:1px solid var(--line);padding-top:8px}
+.agenthealth-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:4px 0;font-size:.82rem}
+.agenthealth-name{font-family:var(--font-display);font-weight:540;font-variation-settings:"opsz" 28;
+  color:var(--ink)}
+.agenthealth-stat{color:var(--muted);font-variant-numeric:lining-nums;text-align:right;
+  flex:0 0 auto}
 .togglebtn{background:var(--card-2);border:1px solid var(--line);color:var(--muted);
   border-radius:999px;min-width:44px;height:30px;font-family:var(--font-ui);
   font-size:.66rem;font-weight:700;letter-spacing:.1em}
@@ -1209,6 +1248,24 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;padding:4px 2px;line-height:1;
 }
 .toast-act:active{transform:scale(.94)}
+
+/* offline hairline — a calm, non-alarming line under the header when a request
+   fails / the browser is offline. Information, never an alarm: one thin warm
+   band that retracts the instant any request lands. */
+.offline-bar{
+  position:fixed;top:0;left:0;right:0;z-index:48;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:calc(env(safe-area-inset-top,0px) + 6px) 14px 6px;
+  background:var(--warn-bg);color:var(--warn);
+  font-family:var(--font-ui);font-weight:600;font-size:.74rem;letter-spacing:.01em;
+  border-bottom:1px solid var(--line-2);
+  transform:translateY(-100%);transition:transform var(--dur-2) var(--ease);
+  pointer-events:none;
+}
+.offline-bar.show{transform:translateY(0)}
+.offline-dot{width:6px;height:6px;border-radius:50%;background:var(--warn);
+  flex:0 0 auto;animation:offlinepulse 1.8s var(--ease) infinite}
+@keyframes offlinepulse{0%,100%{opacity:.4}50%{opacity:1}}
 
 /* -------------------------------------------------------------------
    23b · Floating unsaved-changes save bar (docks above the tab bar)
@@ -1799,6 +1856,10 @@ body.sheet-open{overflow:hidden}
    The name is applied dynamically (JS) only for that moment, so ordinary tab
    transitions keep the unified root crossfade. */
 .brief.brief-morph{view-transition-name:brief-hero}
+/* the provisional→agentic Brief upgrade settles in gently (no view transition —
+   it's an in-place element swap), so the real read doesn't pop the filament off */
+.brief.brief-settle{animation:briefsettle var(--dur-3) var(--ease) both}
+@keyframes briefsettle{from{opacity:.55}to{opacity:1}}
 /* a soft warm wash bleeds in from the accent edge — kind-tinted, very quiet.
    On an override reshape the whole hero (incl. this wash) morphs via the
    brief-hero view transition, so no per-property transition is needed here. */
@@ -2266,10 +2327,37 @@ body.sheet-open{overflow:hidden}
 .weekfold[open] .statstrip-compass{animation:rise var(--dur-3) var(--ease) both}
 
 /* -------------------------------------------------------------------
-   30 · Reduced motion — kill it all
+   30 · Reduced motion — kill the decorative, keep the functional
    ------------------------------------------------------------------- */
+/* The old rule was a sledgehammer: `*{animation:none;transition:none}`. That
+   silenced the "an agent is thinking" vocabulary (spinner ring, filament,
+   typing dots, shimmer) AND the short functional transitions that carry meaning
+   (focus rings, the segmented-control thumb, disclosure chevrons). Both matter
+   for legibility, so this splits the rule:
+   1. Kill decorative ENTRANCE/looping animations and long transitions.
+   2. Slow — not stop — the loading indicators, so "working" still reads.
+   3. Preserve the curated set of short functional transitions below. */
 @media (prefers-reduced-motion: reduce){
-  *{animation:none!important;transition:none!important}
+  /* decorative entrances + idle loops go silent */
+  *{animation:none!important}
+  /* most transitions snap, but functional micro-states are restored below */
+  *{transition:none!important}
+
+  /* loading vocabulary stays alive — slowed and gentle, never frantic — so a
+     long agent call still reads as "working", not frozen (per docs/DESIGN.md) */
+  .aspin{animation:sugspin 1.6s linear infinite!important}
+  .is-thinking::after{animation:atelier-filament 2.4s linear infinite!important}
+  .typing i{animation:typingdot 1.8s var(--ease) infinite!important}
+  .hshimmer{animation:hshine 2.4s linear infinite!important}
+  .offline-dot{animation:offlinepulse 2.6s ease infinite!important}
+
+  /* short FUNCTIONAL transitions kept (the seg thumb sliding to the tapped
+     sub-view, disclosure chevrons, save/offline bars) — these communicate
+     state, not decoration. The focus ring is an instant `outline`, so it never
+     needed a transition to stay visible. */
+  .seg-thumb{transition:transform var(--dur-1) ease!important}
+  .weekfold-chev,.hdoc-chev{transition:transform var(--dur-1) ease!important}
+  .offline-bar,.savebar{transition:transform var(--dur-1) ease!important}
 }
 
 /* -------------------------------------------------------------------
@@ -2373,6 +2461,17 @@ body.sheet-open{overflow:hidden}
 @media (prefers-reduced-motion: no-preference){.hshimmer{animation:hshine 1.5s linear infinite}}
 @keyframes hshine{from{background-position:120% 0}to{background-position:-120% 0}}
 .hpic-busynote{margin-top:16px;font-size:.8rem;color:var(--muted);line-height:1.5}
+
+/* skeleton-first paint — card silhouettes built from .hshimmer so every tab
+   shows its shape instantly, then hydrates. Reuses the shimmer primitive; never
+   a one-off spinner. A gentle fade-out would be ideal but the real content
+   simply replaces these, so they just hold the space calmly. */
+.skel-card,.skel-brief{background:var(--card);box-shadow:var(--shadow-sm);
+  border-radius:var(--radius);padding:18px;margin-bottom:12px}
+.skel-card .hshimmer:first-child,.skel-brief .hshimmer:first-child{margin-top:0}
+.skel-brief{border-left:3px solid var(--line-2)}
+.today-skel,.skel-region{opacity:.9}
+.skel-region{margin-top:12px}
 
 /* empty-state hero + build-my-picture CTA */
 .hpic-hero{text-align:center;padding:34px 22px 26px}
