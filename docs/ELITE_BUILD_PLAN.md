@@ -115,11 +115,13 @@ If a stream needs a migration version beyond its assignment, STOP and flag the o
 - Commit work in the worktree with a clear message; do not edit files outside ownership; do not touch `CLAUDE.md`/`docs/*` (orchestrator housekeeping).
 
 ## Progress tracker
-- [ ] Stream 1 runtime — spawned / merged
-- [ ] Stream 2 memory — spawned / merged
-- [ ] Stream 3 brain — spawned / merged
-- [ ] Stream 4 research — spawned / merged
-- [ ] Stream 5 ui — spawned / merged
-- [ ] Quality review
-- [ ] Housekeeping + docs
+- [x] Stream 1 runtime — merged (migration v29; `agent_runs`/`app_state` tables)
+- [x] Stream 2 memory — merged (migration v30, renumbered from v27; `suggestions` table)
+- [x] Stream 3 brain — merged (no schema; forecasting + recovery baselines + marker medicine)
+- [x] Stream 4 research — merged (migration v28; `evidence_cache` table; `src/research.ts`)
+- [x] Stream 5 ui — merged (sw → cairn-v49)
+- [x] Quality review — 3 parallel reviewers (correctness / vision-alignment / security); all fixes applied (impact_score strip, tab-error fallback, limit clamps)
+- [x] Housekeeping + docs — CLAUDE.md (schema → v30), DESIGN.md (`--muted` AA), this tracker
 - [ ] elite-build → main
+
+**Final migration ladder:** v27 day-read-override · v28 research-enabled · v29 settings-proactive-enabled · v30 memory-self-updating. Boot smoke test confirmed `user_version` = 30 with all four applying in order. `npm run build` clean.

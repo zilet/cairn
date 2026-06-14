@@ -16,7 +16,7 @@ listed here are load-bearing — change them in all three places or not at all.
 --card-2:  #f8f3ea;  /* inset surfaces: inputs, wells, chips */
 --ink:     #211d17;  /* primary text, near-black warm ink */
 --ink-2:   #57503f;  /* secondary text */
---muted:   #8c8475;  /* tertiary text, labels */
+--muted:   #746c5c;  /* tertiary text, labels — darkened from #8c8475 to clear WCAG AA on --card-2 */
 --line:    #e7dfd2;  /* hairlines */
 --line-2:  #d8cfbd;  /* stronger hairlines */
 --accent:  #b4552d;  /* terracotta — primary actions, highlights */
