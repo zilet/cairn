@@ -1605,6 +1605,7 @@ export function addMemory(content: string, kind = "observation", source = "user"
 // history kept for the curation UI / export, never surfaced to the coach);
 // pass includeSuperseded for the full curate-able list.
 export function listMemory(limit = 50, opts: { includeSuperseded?: boolean } = {}) {
+  limit = Math.max(1, Math.min(500, Number(limit) || 50)); // clamp caller-supplied limit
   const where = opts.includeSuperseded ? "" : "WHERE superseded_by IS NULL";
   return db.prepare(`SELECT * FROM memory ${where} ORDER BY id DESC LIMIT ?`).all(limit);
 }
@@ -1716,6 +1717,7 @@ function hydrateSuggestion(r: any) {
 }
 
 export function listSuggestions(limit = 50) {
+  limit = Math.max(1, Math.min(500, Number(limit) || 50)); // clamp caller-supplied limit
   return (db.prepare(`SELECT * FROM suggestions ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map(hydrateSuggestion);
 }
 
@@ -4000,7 +4002,11 @@ export function prioritizeMarkers() {
 
   // enriched carries group/group_label/trend via `...m` from getMarkerHistory;
   // recompute the present-groups list in canonical order off the enriched set.
-  return { flagged_count, markers: enriched, groups: presentGroups(enriched) };
+  // Strip the INTERNAL impact_score before it crosses the API/MCP boundary — it's
+  // an ordering signal only, NEVER a user-facing grade (constitution: no scores).
+  // Mirrors the eta_weeks→eta_text discipline used by getMarkerHistory.
+  const publicMarkers = enriched.map(({ impact_score, ...rest }: any) => rest);
+  return { flagged_count, markers: publicMarkers, groups: presentGroups(publicMarkers) };
 }
 
 // ---------- the propagation engine: derive cross-domain directives (T4) ----------

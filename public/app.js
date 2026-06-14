@@ -791,6 +791,18 @@ function loadingState(label) {
   </div>`;
 }
 
+// Calm fallback when a tab's (possibly agentic) render rejects — e.g. a network
+// blip during a skeleton-first paint. Replaces the stranded shimmer with a quiet
+// retry instead of freezing on the skeleton. No nag, just an option.
+function tabErrorState(tab) {
+  view.innerHTML = `<div class="loadstate" role="alert">
+    <div class="loadstate-label">Couldn't load this view — check your connection.</div>
+    <button class="ghostbtn" data-tabretry style="margin-top:10px">Try again</button>
+  </div>`;
+  const btn = view.querySelector("[data-tabretry]");
+  if (btn) btn.addEventListener("click", () => switchTab(tab));
+}
+
 // Skeleton-first paint helpers — reuse the .hshimmer shimmer primitive so every
 // tab paints its shape instantly, then hydrates. Never invent a one-off spinner;
 // these mirror the loading vocabulary in docs/DESIGN.md. `aria-hidden` because the
@@ -7735,7 +7747,7 @@ function switchTab(tab) {
   // Wrap ONLY the synchronous skeleton paint in the transition; the (possibly
   // slow, agentic) render runs after, swapping skeleton→content with no wait.
   Promise.resolve(withViewTransition(paintSkeleton)).finally(() => {
-    Promise.resolve(renderTab(tab));
+    Promise.resolve(renderTab(tab)).catch(() => tabErrorState(tab));
   });
 }
 document.querySelectorAll(".tab").forEach((t) =>
@@ -7917,7 +7929,7 @@ function activateTab(name) {
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   state.tab = tab;
-  Promise.resolve(renderTab(tab)).then(viewEnter);
+  Promise.resolve(renderTab(tab)).then(viewEnter).catch(() => tabErrorState(tab));
 }
 
 // ---------- service-worker lifecycle: register + "update ready" nudge ----------
