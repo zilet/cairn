@@ -109,16 +109,111 @@ export function getPlanDay(dayNumber: number) {
   };
 }
 
+// ---------- code-enforced apply guardrails (Trust build V1) ----------
+// A deterministic safety clamp on a load-progression step. Prompts ALREADY ask
+// for conservative progression, but a prompt is a request, not a rule: an
+// off-spec agent value (a +50 lb jump, a fat-finger 10x) would otherwise be
+// written verbatim. This caps the *applied* (auto/reviewed) value to a safe step
+// vs. the CURRENT target — transparently (every adjustment is returned and
+// surfaced), NEVER silently. It only ever runs on the apply path; a deliberate
+// manual edit (PUT /plan/:day/target, MCP update_target) is unclamped — the user
+// drives and may choose any value directly.
+//
+// Encoding (domain gotchas): weight null = bodyweight, negative = assist (e.g.
+// -30 = 30 lb assist). We clamp the signed difficulty value, preserving the sign.
+// Bodyweight↔loaded transitions (a null on either side) are left alone — that's a
+// kind change, not a progression step, and the coach owns that decision.
+const CLAMP_STEP_FRAC = 0.1;      // max progression step = 10% of the current target…
+const CLAMP_WEIGHT_FLOOR_LB = 10; // …or this many lb, whichever is larger (so light weights still move)
+const CLAMP_SECONDS_FLOOR = 10;   // …or this many seconds for timed holds
+
+// The transparent record of a code-enforced adjustment (V3 renders these as a
+// calm "adjusted to a safe step" note). `field` is the value that was capped
+// (target_weight/target_seconds for training; target_kcal/protein_g for the
+// nutrition advisory). `exercise` names the subject (an exercise, or "nutrition
+// target"). NEVER silent — every cap produces one of these.
+export interface ClampAdjustment {
+  exercise: string;
+  field: string;
+  requested: number;
+  applied: number;
+  reason: string;
+}
+
+// Clamp one numeric step against a current value. Returns the safe value plus an
+// optional adjustment record (null when nothing was capped). `constrained` (an
+// active injury constraint_note) forbids any INCREASE in resistance/duration —
+// the move is held at its current value, never loaded heavier.
+function clampStep(
+  field: "target_weight" | "target_seconds",
+  exercise: string,
+  current: number | null,
+  requested: number,
+  floor: number,
+  constrained: boolean
+): { applied: number; adjustment: ClampAdjustment | null } {
+  // No baseline to compare against (e.g. a brand-new prescription): accept as-is.
+  if (current == null || !Number.isFinite(current)) return { applied: requested, adjustment: null };
+
+  const isWeight = field === "target_weight";
+  // For weight, "resistance" runs heavy-assist(−) → bodyweight(0) → loaded(+), so
+  // more resistance = a larger signed value; for seconds, longer = harder. In both
+  // cases the signed value IS the difficulty axis, so we clamp the signed delta.
+  const maxStep = Math.max(Math.abs(current) * CLAMP_STEP_FRAC, floor);
+  const delta = requested - current;
+
+  // Injury constraint: never increase resistance/duration on a flagged movement.
+  if (constrained && delta > 0) {
+    return {
+      applied: current,
+      adjustment: { exercise, field, requested, applied: current,
+        reason: "held — exercise has an injury constraint; load not increased" },
+    };
+  }
+
+  if (Math.abs(delta) <= maxStep) return { applied: requested, adjustment: null };
+
+  const applied = Math.round(current + Math.sign(delta) * maxStep);
+  const dir = delta > 0 ? "increase" : "decrease";
+  return {
+    applied,
+    adjustment: { exercise, field, requested, applied,
+      reason: `${dir} capped to a safe step (≤${Math.round(maxStep)}${isWeight ? " lb" : " sec"} vs current ${current})` },
+  };
+}
+
 export function updateTarget(
   dayNumber: number,
   exerciseName: string,
   target_weight?: number | null,
-  target_seconds?: number | null
+  target_seconds?: number | null,
+  opts: { clamp?: boolean } = {}
 ) {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) throw new Error(`No plan day ${dayNumber}`);
   const ex = findExercise(exerciseName);
   if (!ex) throw new Error(`No exercise "${exerciseName}"`);
+
+  // Apply-path safety clamp (off by default → manual edits pass through verbatim).
+  const clamps: ClampAdjustment[] = [];
+  if (opts.clamp) {
+    const constrained = !!(ex.constraint_note && String(ex.constraint_note).trim());
+    // Read the CURRENT prescribed targets to clamp the step against.
+    const cur = db
+      .prepare(`SELECT target_weight, target_seconds FROM plan_items WHERE plan_day_id = ? AND exercise_id = ?`)
+      .get(day.id, ex.id) as any;
+    if (target_weight !== undefined && target_weight !== null && Number.isFinite(Number(target_weight))) {
+      const r = clampStep("target_weight", ex.name, cur?.target_weight ?? null, Number(target_weight), CLAMP_WEIGHT_FLOOR_LB, constrained);
+      target_weight = r.applied;
+      if (r.adjustment) clamps.push(r.adjustment);
+    }
+    if (target_seconds !== undefined && target_seconds !== null && Number.isFinite(Number(target_seconds))) {
+      const r = clampStep("target_seconds", ex.name, cur?.target_seconds ?? null, Number(target_seconds), CLAMP_SECONDS_FLOOR, constrained);
+      target_seconds = r.applied;
+      if (r.adjustment) clamps.push(r.adjustment);
+    }
+  }
+
   const sets: string[] = [];
   const vals: any[] = [];
   if (target_weight !== undefined) { sets.push("target_weight = ?"); vals.push(target_weight); }
@@ -132,6 +227,7 @@ export function updateTarget(
     updated: info.changes, day: dayNumber, exercise: ex.name,
     ...(target_weight !== undefined ? { target_weight } : {}),
     ...(target_seconds !== undefined ? { target_seconds } : {}),
+    ...(clamps.length ? { clamped: clamps } : {}),
   };
 }
 
@@ -740,6 +836,39 @@ export function setProposalStatus(id: number, status: string) {
   return getProposal(id);
 }
 
+// Clamp an advisory nutrition target to the lean-safe kcal/protein floors before
+// it's acknowledged. The nutrition check-in already proposes only conservative
+// ±100-250 kcal nudges, but this is the code-enforced backstop: a deficit target
+// can never land below the lean-safe recommended intake (or ~1500 kcal absolute,
+// whichever is higher), and protein is never dropped below the recommended floor.
+// Returns the (possibly-adjusted) nutrition object plus transparent clamp records.
+const KCAL_ABSOLUTE_FLOOR = 1500;   // never advise a target below this for this user (mirrors buildMealPlanPrompt)
+function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampAdjustment[] } {
+  const clamped: ClampAdjustment[] = [];
+  if (!nutrition || typeof nutrition !== "object") return { nutrition, clamped };
+  const out = { ...nutrition };
+  let goal: any = null;
+  try { goal = computeGoalCheck(); } catch { /* profile incomplete → only the absolute floors apply */ }
+  const recIntake = goal?.ok ? Number(goal.recommended?.target_intake_kcal) : NaN;
+  const recProtein = goal?.ok ? Number(goal.recommended?.protein_g) : NaN;
+  // kcal floor: the lean-safe recommended intake, never below the absolute floor.
+  const kcalFloor = Math.max(KCAL_ABSOLUTE_FLOOR, Number.isFinite(recIntake) ? recIntake : 0);
+  const reqKcal = Number(out.target_kcal);
+  if (Number.isFinite(reqKcal) && reqKcal < kcalFloor) {
+    clamped.push({ exercise: "nutrition target", field: "target_kcal", requested: Math.round(reqKcal), applied: Math.round(kcalFloor),
+      reason: `kcal raised to the lean-safe floor (≥${Math.round(kcalFloor)} kcal) — never a crash deficit` });
+    out.target_kcal = Math.round(kcalFloor);
+  }
+  // protein floor: hold/raise, never below the recommended protein target.
+  const reqProtein = Number(out.protein_g);
+  if (Number.isFinite(recProtein) && recProtein > 0 && Number.isFinite(reqProtein) && reqProtein < recProtein) {
+    clamped.push({ exercise: "nutrition target", field: "protein_g", requested: Math.round(reqProtein), applied: Math.round(recProtein),
+      reason: `protein held at the recommended floor (≥${Math.round(recProtein)} g) — protein is protected under a deficit` });
+    out.protein_g = Math.round(recProtein);
+  }
+  return { nutrition: out, clamped };
+}
+
 export function applyProposal(id: number) {
   const p = getProposal(id);
   if (!p) throw new Error(`No proposal ${id}`);
@@ -748,10 +877,16 @@ export function applyProposal(id: number) {
   // there is no plan to mutate. Recognize the shape so "applying" one is a clean
   // acknowledgement on every surface (REST + MCP) instead of throwing
   // "no valid changes or days". The PWA surfaces these via the Energy Balance
-  // check-in card, not the plan-proposals apply button.
+  // check-in card, not the plan-proposals apply button. Even advisory, the target
+  // is clamped to lean-safe kcal/protein floors and any adjustment is reported.
   if (p.parsed.kind === "nutrition_target") {
+    const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition);
     setProposalStatus(id, "applied");
-    return { id, applied: [], note: "advisory nutrition target — no plan changes to apply" };
+    return {
+      id, applied: [], nutrition,
+      note: "advisory nutrition target — no plan changes to apply",
+      ...(clamped.length ? { clamped } : {}),
+    };
   }
   // Restructure proposal: full plan replacement (changed frequency / split).
   if (Array.isArray(p.parsed.days)) {
@@ -764,19 +899,23 @@ export function applyProposal(id: number) {
   }
   const applied: any[] = [];
   const skipped: any[] = [];
+  const clamped: ClampAdjustment[] = [];
   for (const c of p.parsed.changes) {
     try {
       // A change carries target_weight (reps exercises) and/or target_seconds (timed).
       const tw = c.target_weight !== undefined && c.target_weight !== null ? Number(c.target_weight) : undefined;
       const ts = c.target_seconds !== undefined && c.target_seconds !== null ? Number(c.target_seconds) : undefined;
-      const r = updateTarget(Number(c.day_number), String(c.exercise), tw, ts);
+      // clamp:true — this is the auto/reviewed APPLY path, so the deterministic
+      // safety clamp applies (a manual edit stays unclamped). Adjustments bubble up.
+      const r = updateTarget(Number(c.day_number), String(c.exercise), tw, ts, { clamp: true });
+      if (Array.isArray((r as any).clamped)) clamped.push(...(r as any).clamped);
       applied.push({ ...c, updated: r.updated });
     } catch (e: any) {
       skipped.push({ ...c, error: e.message });
     }
   }
   setProposalStatus(id, "applied");
-  return { id, applied, skipped };
+  return { id, applied, skipped, ...(clamped.length ? { clamped } : {}) };
 }
 
 // ---------- profile ----------
@@ -4559,6 +4698,34 @@ export function getEvidence(opts: { topic?: string | null; marker?: string | nul
   if (opts.marker != null && String(opts.marker).trim()) { where.push("marker = ? COLLATE NOCASE"); vals.push(String(opts.marker).trim()); }
   const sql = `SELECT * FROM evidence_cache ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY retrieved_at DESC, id DESC LIMIT ?`;
   return db.prepare(sql).all(...vals, limit) as any[];
+}
+
+// Make a directive's citation INSPECTABLE (Trust build V1). Reads the cached
+// evidence for ONE marker and projects only the verifiable fields, so the UI (and
+// any MCP client) can show the source(s) behind a claim instead of asserting it.
+// `evidence:[]` when research never ran for that marker — degrade to the citation
+// string. INFORMATIONAL, not medical advice. The marker is matched case-insensitively;
+// a falsy marker returns the most-recent rows overall (still bounded).
+export interface MarkerEvidence {
+  claim: string | null;
+  source_title: string | null;
+  source_url: string | null;
+  body: string | null;
+  confidence: string | null;
+  retrieved_at: string | null;
+}
+export function getEvidenceForMarker(marker: string | null | undefined, limit = 20): { marker: string | null; evidence: MarkerEvidence[] } {
+  const name = marker == null ? "" : String(marker).trim();
+  const rows = getEvidence({ marker: name || undefined, limit });
+  const evidence: MarkerEvidence[] = rows.map((r: any) => ({
+    claim: r.claim ?? null,
+    source_title: r.source_title ?? null,
+    source_url: r.source_url ?? null,
+    body: r.body ?? null,
+    confidence: r.confidence ?? null,
+    retrieved_at: r.retrieved_at ?? null,
+  }));
+  return { marker: name || null, evidence };
 }
 
 // Topics whose newest evidence row is older than ttlDays — the re-research pass
