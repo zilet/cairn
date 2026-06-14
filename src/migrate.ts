@@ -182,6 +182,13 @@ export const MIGRATIONS: Migration[] = [
   // Elite-build migration ladder: v27 day-read-override, v28 settings.research_enabled
   // (Stream 4), v29 settings.proactive_enabled (Stream 1), v30 memory self-updating
   // (Stream 2, renumbered from v27 to avoid the day-read-override collision).
+  { version: 28, name: "research-enabled", up: (db) => {
+    // Host-side research / evidence grounding (Stream 4). Default OFF: when off,
+    // the system behaves exactly as before — deterministic, no network. The
+    // evidence_cache table is created via CREATE TABLE IF NOT EXISTS in db.ts and
+    // needs no migration; only this column add does.
+    addColumn(db, "settings", "research_enabled INTEGER DEFAULT 0");
+  } },
   { version: 29, name: "settings-proactive-enabled", up: (db) => {
     // Gate for nightly quiet-insight / weekly-read / nutrition-checkin precompute
     // (pull-never-push: these only STORE a waiting read, never notify). Default

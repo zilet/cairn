@@ -309,7 +309,8 @@ CREATE TABLE IF NOT EXISTS settings (
   art_enabled_at TEXT DEFAULT '',             -- when art_enabled last flipped on (spend telemetry window)
   garmin_last_sync_at TEXT DEFAULT '',        -- when the last Garmin sync finished (UTC ISO)
   garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
-  proactive_enabled INTEGER DEFAULT 1         -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
+  proactive_enabled INTEGER DEFAULT 1,        -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
+  research_enabled INTEGER DEFAULT 0          -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each
@@ -523,6 +524,27 @@ CREATE TABLE IF NOT EXISTS app_state (
   value TEXT,
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Host-side research / evidence cache (Stream 4 — grounding). When research is
+-- enabled, src/research.ts runs a dedicated web-capable agent over a question and
+-- stores each cited claim here: a plain-language body + its source title/url +
+-- a confidence band, scoped to a topic and (optionally) a marker. Used to GROUND
+-- the health review (inject retrieved passages) and to VERIFY agent-emitted
+-- citations. Regenerable cache — safe to drop; a TTL re-research pass refreshes
+-- stale rows. INFORMATIONAL, not medical advice.
+CREATE TABLE IF NOT EXISTS evidence_cache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic TEXT,                         -- normalized research question / subject key
+  marker TEXT,                        -- the marker this evidence is about (e.g. 'ApoB'), or NULL
+  claim TEXT,                         -- the plain-language claim / finding
+  source_title TEXT,                  -- citation title (e.g. 'AHA/ACC 2018 Cholesterol Guideline')
+  source_url TEXT,                    -- the URL backing the claim (http/https, validated)
+  body TEXT,                          -- the supporting passage / detail
+  confidence TEXT,                    -- high | moderate | low (plain-language band, never a score)
+  retrieved_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_topic ON evidence_cache(topic);
+CREATE INDEX IF NOT EXISTS idx_evidence_marker ON evidence_cache(marker);
 `);
 
 runMigrations(db);
