@@ -720,17 +720,36 @@ function viewEnter() {
   view.classList.add("view-in");
 }
 
+// Soft fade for the skeleton→content swap: replace the busy skeleton with real
+// content inside a view transition so the skeleton crossfades out as the content
+// fades in, instead of a hard pop. Falls back to an instant swap when view
+// transitions aren't supported or under reduced motion — exactly today's behavior.
+// `fn` performs the actual `view.innerHTML = …` swap. When this render is ALREADY
+// running inside a transition (a seg-tap wraps the handler in one, and finishes with
+// viewEnter()), we DON'T nest a second one — stacking startViewTransition() aborts the
+// outer and flickers. We just swap and let the surrounding fade carry it.
+function skelSwap(fn) {
+  if (_vtActive) { return Promise.resolve(fn()); }
+  return withViewTransition(fn);
+}
+
 // Run a DOM-swapping fn inside a shared-element view transition when supported.
+// `_vtActive` guards against accidentally nesting a transition inside another
+// (which the browser would resolve by aborting the outer one).
+let _vtActive = false;
 function withViewTransition(fn) {
   const run = () => {
     try { return Promise.resolve(fn()); }
     catch (err) { return Promise.reject(err); }
   };
-  if (document.startViewTransition && !reducedMotion()) {
+  if (document.startViewTransition && !reducedMotion() && !_vtActive) {
     try {
+      _vtActive = true;
       const tx = document.startViewTransition(run);
-      return tx.updateCallbackDone || tx.finished || Promise.resolve();
-    } catch { /* fall through */ }
+      const done = tx.updateCallbackDone || tx.finished || Promise.resolve();
+      Promise.resolve(done).finally(() => { _vtActive = false; });
+      return done;
+    } catch { _vtActive = false; /* fall through */ }
   }
   return run();
 }
@@ -1459,7 +1478,7 @@ function suggestItemHtml(it, i = 0) {
 // Render the suggested session as a reviewable card under the Brief. It is a
 // SUGGESTION — not saved. "Log these" surfaces the items in the existing Today
 // logging UI (reuse appendOffPlanCard); "Dismiss" clears it.
-function suggestCardHtml(session) {
+function suggestCardHtml(session, verified) {
   const name = escHtml(session.name || "Session");
   const focus = session.focus ? escHtml(session.focus) : "";
   const est = session.est_minutes != null && Number(session.est_minutes) > 0 ? `${Math.round(session.est_minutes)} min` : "";
@@ -1473,6 +1492,7 @@ function suggestCardHtml(session) {
       </div>
       ${why ? `<p class="sug-why">${why}</p>` : ""}
       <div class="sug-items">${items || `<div class="sug-empty">No exercises came back — try again.</div>`}</div>
+      ${verifiedBadgeHtml(verified)}
       ${session.notes ? `<div class="sug-notes">${escHtml(session.notes)}</div>` : ""}
       <div class="sug-actions">
         <button class="pillbtn pill-accent" data-sugaction="log">Log these</button>
@@ -1516,7 +1536,7 @@ async function askForSession(opts = {}) {
 
   if (r && r.ok === true && r.session) {
     state.suggestedSession = r.session;
-    slot.innerHTML = suggestCardHtml(r.session);
+    slot.innerHTML = suggestCardHtml(r.session, r.verified);
     runCountUps(slot);
     wireSuggestCard(slot);
     slot.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
@@ -3020,9 +3040,15 @@ function renderInsightCard(slot, ins) {
   const why = String(ins.rationale || "").trim();
   const kicker = ins.kind === "weekly_read" ? "This week" : "A connection worth noting";
   const up = ins.feedback === "up";
-  slot.innerHTML = `<section class="insight-card settle-in">
+  // Honest uncertainty — a low-confidence / explicitly-tentative read reads soft and
+  // leads with the same "Worth looking into ·" phrasing as a soft directive, so
+  // tentativeness is consistent across every surface (degrades to nothing today —
+  // the insight schema has no such field yet, so this is forward-safe).
+  const soft = ins.uncertain === true || ins.confidence === "low";
+  const lead = soft ? `<span class="insight-soft">Worth looking into · </span>` : "";
+  slot.innerHTML = `<section class="insight-card settle-in${soft ? " insight-card-soft" : ""}">
       <div class="insight-kicker lbl"><span class="insight-glyph" aria-hidden="true">✦</span> ${kicker}</div>
-      <p class="insight-text">${text}</p>
+      <p class="insight-text">${lead}${text}</p>
       ${step ? `<p class="insight-step"><span class="insight-step-lbl">Worth trying</span>${escHtml(step)}</p>` : ""}
       ${why ? `<p class="insight-why" hidden>${escHtml(why)}</p>` : ""}
       <div class="insight-foot">
@@ -3264,8 +3290,8 @@ async function renderHistory() {
   const sessions = await api("/sessions?limit=30");
   const head = segBar("sessions", PROGRESS_SEG);
   if (!sessions.length) {
-    view.innerHTML = head + progressHero("Training history", []) +
-      emptyStateHtml(art("exercise", "barbell squat"), "No sessions logged yet \u2014 your story starts on Today.");
+    await skelSwap(() => { view.innerHTML = head + progressHero("Training history", []) +
+      emptyStateHtml(art("exercise", "barbell squat"), "No sessions logged yet \u2014 your story starts on Today."); });
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3280,7 +3306,7 @@ async function renderHistory() {
     ["lb moved \u00b7 30d", Math.round(t30), { k: true }],
     ["sets \u00b7 30d", sets30],
   ]);
-  view.innerHTML = head + hero + sessions.map((s, i) => sessionCardHtml(s, i + 1)).join("");
+  await skelSwap(() => { view.innerHTML = head + hero + sessions.map((s, i) => sessionCardHtml(s, i + 1)).join(""); });
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
 }
@@ -3291,10 +3317,10 @@ async function renderProgress() {
   view.innerHTML = segSkeleton("trend", PROGRESS_SEG, 1);
   const exercises = await api("/exercises");
   const saved = state.progressEx || exercises[0]?.name;
-  view.innerHTML = segBar("trend", PROGRESS_SEG) + `<div id="trendHero"></div>
+  await skelSwap(() => { view.innerHTML = segBar("trend", PROGRESS_SEG) + `<div id="trendHero"></div>
     <div class="field"><label>Exercise</label>
     <select id="exsel">${exercises.map((e) => `<option ${e.name === saved ? "selected" : ""}>${escHtml(e.name)}</option>`).join("")}</select></div>
-    <canvas id="chart"></canvas><div id="pstats"></div>`;
+    <canvas id="chart"></canvas><div id="pstats"></div>`; });
   wireSeg(PROGRESS_HANDLERS);
   $("#exsel").addEventListener("change", (e) => { state.progressEx = e.target.value; drawProgress(e.target.value); });
   drawProgress(saved);
@@ -3308,8 +3334,8 @@ async function renderWeight() {
   const head = segBar("weight", PROGRESS_SEG);
   const pts = (rows || []).map((p) => ({ date: p.date, v: p.weight_lb }));
   if (!pts.length) {
-    view.innerHTML = head + progressHero("Bodyweight", []) +
-      emptyStateHtml(art("activity", "walk"), "No weigh-ins yet — log one from the Today strip.");
+    await skelSwap(() => { view.innerHTML = head + progressHero("Bodyweight", []) +
+      emptyStateHtml(art("activity", "walk"), "No weigh-ins yet — log one from the Today strip."); });
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3322,8 +3348,8 @@ async function renderWeight() {
     ["change", `${delta >= 0 ? "+" : ""}${delta}`, { text: true }],
     toGoal != null ? ["to goal", toGoal > 0 ? String(toGoal) : "at goal", { text: true }] : null,
   ]);
-  view.innerHTML = head + hero + `<canvas id="chart"></canvas>
-    <div class="chart-foot lbl">${pts.length} weigh-in${pts.length === 1 ? "" : "s"}${goalW != null ? ` · goal ${goalW} lb` : ""}</div>`;
+  await skelSwap(() => { view.innerHTML = head + hero + `<canvas id="chart"></canvas>
+    <div class="chart-foot lbl">${pts.length} weigh-in${pts.length === 1 ? "" : "s"}${goalW != null ? ` · goal ${goalW} lb` : ""}</div>`; });
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   drawLineChart($("#chart"), pts, { goal: goalW ?? null, fmt: (v) => `${Math.round(v * 10) / 10} lb` });
@@ -3363,8 +3389,8 @@ async function renderVolume() {
   const groups = (data.by_muscle || []).slice().sort((a, b) => (b.sets || 0) - (a.sets || 0));
   const head = segBar("volume", PROGRESS_SEG);
   if (!groups.length) {
-    view.innerHTML = head + progressHero("Volume", []) +
-      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${data.days || 30} days.`);
+    await skelSwap(() => { view.innerHTML = head + progressHero("Volume", []) +
+      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${data.days || 30} days.`); });
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3383,8 +3409,8 @@ async function renderVolume() {
       </div>
       <div class="volbar"><div class="volbar-fill barfill" style="width:${Math.max(3, Math.round(((g.sets || 0) / maxSets) * 100))}%"></div></div>
     </div>`).join("");
-  view.innerHTML = head + hero +
-    `<div class="vol-kicker lbl reveal" style="${stagger(1)}">Last ${data.days || 30} days · ranked by sets</div>` + rows;
+  await skelSwap(() => { view.innerHTML = head + hero +
+    `<div class="vol-kicker lbl reveal" style="${stagger(1)}">Last ${data.days || 30} days · ranked by sets</div>` + rows; });
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
 }
@@ -3424,8 +3450,8 @@ async function renderCalendar() {
   const cells = data.cells || [];
   const head = segBar("calendar", PROGRESS_SEG);
   if (!cells.length) {
-    view.innerHTML = head + progressHero("Calendar", []) +
-      emptyStateHtml(art("activity", "run"), "No activity logged yet.");
+    await skelSwap(() => { view.innerHTML = head + progressHero("Calendar", []) +
+      emptyStateHtml(art("activity", "run"), "No activity logged yet."); });
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3447,7 +3473,7 @@ async function renderCalendar() {
   const months = [...new Set(cells.map((c) => (c.date || "").slice(0, 7)))].filter(Boolean).reverse();
   const grids = months.map((mo, i) => calMonthHtml(mo, byDate, todayIso, i + 1)).join("");
   const legend = `<div class="cal-legend"><span>Less</span><i class="cl0"></i><i class="cl1"></i><i class="cl2"></i><i class="cl3"></i><i class="cl4"></i><span>More</span></div>`;
-  view.innerHTML = head + hero + grids + legend;
+  await skelSwap(() => { view.innerHTML = head + hero + grids + legend; });
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // tap a day with data → open it on Today
@@ -3631,7 +3657,7 @@ async function renderCoach() {
       `<option value="${a.name}"${a.enabled ? "" : " disabled"}>${a.name}${a.enabled ? "" : " (off)"}${a.env_ok ? "" : " · no key"}</option>`
     ).join("");
 
-  view.innerHTML = segBar("coach", PLAN_SEG) + `
+  await skelSwap(() => { view.innerHTML = segBar("coach", PLAN_SEG) + `
     <div class="field"><label>Agent</label>
       <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
     <div class="field"><label>Instruction (optional)</label>
@@ -3651,7 +3677,7 @@ async function renderCoach() {
     <h1 class="lbl" style="margin:24px 0 8px">Proposals</h1>
     <div id="proplist"></div>
     <h1 class="lbl" style="margin:24px 0 8px">Meal plans</h1>
-    <div id="meallist"></div>`;
+    <div id="meallist"></div>`; });
 
   wireSeg(PLAN_HANDLERS);
   $("#presetsel").addEventListener("change", (e) => {
@@ -3700,6 +3726,46 @@ function statusBadge(status) {
   return `<span class="mp-badge ${cls}">${escHtml(status || "draft")}</span>`;
 }
 
+// Clamp/verify transparency — when an applied proposal returned `clamped[]` (a code
+// guardrail nudged a value to a safe step), surface it as a calm hairline note, never
+// an alarm: trust through honesty. Shapes: {exercise, field, requested, applied, reason}.
+// Returns "" when there was nothing to adjust. Each line reads in plain words.
+function clampNoteHtml(clamped) {
+  const rows = (Array.isArray(clamped) ? clamped : []).filter(Boolean);
+  if (!rows.length) return "";
+  const lines = rows.slice(0, 6).map((c) => {
+    const what = String(c.exercise || c.field || "a value").trim();
+    const reason = String(c.reason || "kept to a safe step").trim();
+    const from = c.requested != null && c.requested !== "" ? `${escHtml(String(c.requested))} → ` : "";
+    const to = c.applied != null && c.applied !== "" ? `<b>${escHtml(String(c.applied))}</b>` : "";
+    const move = from || to ? `<span class="clampnote-move">${from}${to}</span>` : "";
+    return `<div class="clampnote-row"><span class="clampnote-what">${escHtml(what)}</span>${move}<span class="clampnote-why">${escHtml(reason)}</span></div>`;
+  }).join("");
+  return `<div class="clampnote settle-in" role="note">
+      <div class="clampnote-lbl lbl"><span class="clampnote-glyph" aria-hidden="true">⚖</span> adjusted to a safe step</div>
+      ${lines}
+    </div>`;
+}
+
+// Clamp/verify transparency — a quiet "checked against your floors" badge for a
+// meal plan / suggested session that carried `verified.checked`. Lists the named
+// adjustments behind a disclosure when present; otherwise just the calm reassurance.
+// Trust through honesty, never alarm. Returns "" when nothing was checked.
+function verifiedBadgeHtml(verified) {
+  if (!verified || !verified.checked) return "";
+  const adj = (Array.isArray(verified.adjustments) ? verified.adjustments : []).filter((a) => a != null && String(a).trim());
+  const detail = adj.length
+    ? `<details class="verified-detail"><summary>what was adjusted</summary>
+         <ul class="verified-list">${adj.slice(0, 8).map((a) => `<li>${escHtml(String(a))}</li>`).join("")}</ul>
+       </details>`
+    : "";
+  return `<div class="verified-badge settle-in" role="note">
+      <span class="verified-mark" aria-hidden="true">✓</span>
+      <span class="verified-text">Checked against your floors</span>
+      ${detail}
+    </div>`;
+}
+
 function renderProposals(proposals) {
   const wrap = $("#proplist");
   if (!proposals.length) { wrap.innerHTML = `<div class="empty">No proposals yet.</div>`; return; }
@@ -3725,8 +3791,22 @@ function renderProposals(proposals) {
 
   wrap.querySelectorAll("[data-apply]").forEach((b) =>
     b.addEventListener("click", async () => {
-      await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" });
-      toast("Applied"); state.plan = []; renderCoach();
+      let r = null;
+      try { r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" }); } catch { r = null; }
+      // A code guardrail may have nudged a load to a safe step — surface it honestly
+      // inline on the card (before the re-render below replaces the list) AND in the
+      // toast, so the "what changed and why" reads even as the list refreshes.
+      const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
+      if (clamped) {
+        const card = b.closest(".mp-card");
+        if (card) card.insertAdjacentHTML("beforeend", clampNoteHtml(r.clamped));
+        toast("Applied · adjusted to a safe step");
+        // Let the user read the note; the proposal already reflects applied state.
+        state.plan = [];
+        return;
+      }
+      toast("Applied");
+      state.plan = []; renderCoach();
     })
   );
   wrap.querySelectorAll("[data-discard]").forEach((b) =>
@@ -3738,6 +3818,16 @@ function renderProposals(proposals) {
 }
 
 // ---------- meal plans ----------
+// `verified` (the self-critique "checked against your floors" signal) is returned at
+// DRAFT time on the /coach/mealplan response but is NOT persisted on the plan row, so
+// we remember it by the just-drafted plan's id for the journal view to surface once.
+const _verifiedByPlan = new Map();
+function rememberVerified(r) {
+  if (r && r.ok && r.plan && r.plan.id != null && r.verified && r.verified.checked) {
+    _verifiedByPlan.set(r.plan.id, r.verified);
+  }
+}
+
 async function runMealPlan() {
   const agent = $("#agentsel").value;
   const status = $("#mealstatus");
@@ -3749,6 +3839,7 @@ async function runMealPlan() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent, instruction: instructionValue() }),
     });
+    rememberVerified(r);
     status.textContent = r.error ? "Error: " + r.error : (r.ok ? "Meal plan ready." : "Ran but returned no valid JSON.");
     renderMealPlans(await api("/mealplans?limit=8"));
   } catch (e) { status.textContent = "Failed: " + e.message; }
@@ -4325,6 +4416,7 @@ async function renderMeals() {
           <div><span class="numeral numeral-lg" data-cu="${Number(m.daily_protein_g) || 0}">0</span><span class="lbl" style="display:block;margin-top:3px">g protein</span></div>
         </div>
         ${m.summary ? `<div class="sess-line">${escHtml(m.summary)}</div>` : ""}
+        ${isDraft ? verifiedBadgeHtml(_verifiedByPlan.get(current.id)) : ""}
         <div id="mealProvenance" class="prov-slot"></div>
         ${actions}
       </div>
@@ -4338,11 +4430,11 @@ async function renderMeals() {
       </div>`;
   }
 
-  view.innerHTML = segBar("meals", PLAN_SEG) + body + `
+  await skelSwap(() => { view.innerHTML = segBar("meals", PLAN_SEG) + body + `
     <details class="mp-history">
       <summary class="lbl">Past meal plans</summary>
       <div id="mealHist" style="margin-top:10px"></div>
-    </details>`;
+    </details>`; });
   wireSeg(PLAN_HANDLERS);
   runCountUps(view);
 
@@ -4380,6 +4472,7 @@ async function renderMeals() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent: "auto" }),
       });
+      rememberVerified(r);
       if (r.error) { status.textContent = "Error: " + r.error; }
       else if (!r.ok) { status.textContent = "Agent ran but returned no valid JSON."; }
       else { toast("Meal plan drafted"); renderMeals(); return; }
@@ -4416,7 +4509,7 @@ async function renderMeProfile() {
     ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${goal.message}</div>`
     : `<div class="sess-line">${goal?.message || ""}</div>`;
 
-  view.innerHTML = segBar("profile", ME_SEG) + `
+  await skelSwap(() => { view.innerHTML = segBar("profile", ME_SEG) + `
     <div class="sess">
       <div class="sess-head"><span class="sess-date">Goal check</span><span class="sess-day">${goal?.tdee ? goal.tdee + " kcal TDEE" : ""}</span></div>
       ${reqWarn}
@@ -4464,7 +4557,7 @@ async function renderMeProfile() {
       <input id="noteText" type="text" placeholder="e.g. 2 eggs, oats, banana" style="text-align:left">
       <button id="noteBtn" class="logbtn">+</button>
     </div>
-    <div id="notelist" style="margin-top:12px"></div>`;
+    <div id="notelist" style="margin-top:12px"></div>`; });
 
   wireSeg(ME_HANDLERS);
 
@@ -5608,18 +5701,84 @@ function directiveHtml(d, i = 0) {
   // uncertain (no citation) reads tentative — a lead, not gospel
   const lead = soft ? `<span class="hb-dsoft">Worth looking into · </span>` : "";
   const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
+  // "See the evidence" — turn an asserted claim into a verifiable one. Lazy-fetches
+  // GET /api/evidence?marker= on first open; degrades to the citation string alone
+  // when research never ran (evidence:[]). Keyed by the marker the directive names.
+  const ev = d.citation && d.marker
+    ? `<button class="hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence</button>
+       <div class="hb-evbox" hidden></div>`
+    : "";
   return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${d.id}">
     <div class="hb-dmain">
       ${marker}
       <p class="hb-dtext">${lead}${escHtml(d.directive || "")}</p>
       ${d.rationale ? `<p class="hb-drat">${escHtml(d.rationale)}</p>` : ""}
       ${cite}
+      ${ev}
     </div>
     <div class="hb-dctl">
       <button class="hb-dbtn hb-ddone" data-ddone="${d.id}" title="Mark handled; the coach will stop carrying this unless new results change">Done</button>
       <button class="hb-dbtn hb-ddismiss" data-ddismiss="${d.id}" title="Dismiss; the coach will avoid repeating this unless the marker materially changes">Dismiss</button>
     </div>
   </div>`;
+}
+
+// ====================================================================
+// Evidence is inspectable — a calm "see the evidence" disclosure that lazy-fetches
+// GET /api/evidence?marker= and lists the cited source(s): an outbound title link,
+// a truncated body, the confidence word. INFORMATIONAL, not medical advice. Empty
+// evidence ⇒ the citation string already shown stands alone (a quiet note here).
+// ====================================================================
+
+// Strict scheme allowlist for an outbound source URL — only real http(s) links open
+// in a new tab (rel="noopener noreferrer"); anything else degrades to plain text.
+function evidenceSafeUrl(u) {
+  const url = String(u ?? "").trim();
+  return /^https?:\/\//i.test(url) ? url.replace(/"/g, "&quot;") : null;
+}
+
+// Render the fetched evidence list (or a calm "no source on file" note when empty).
+function evidenceListHtml(evidence) {
+  const rows = (Array.isArray(evidence) ? evidence : []).filter((e) => e && (e.source_title || e.source_url || e.claim || e.body));
+  if (!rows.length) {
+    return `<div class="hb-ev-empty">No researched source on file yet — the citation above is the basis for now.</div>`;
+  }
+  return rows.slice(0, 6).map((e) => {
+    const url = evidenceSafeUrl(e.source_url);
+    const title = String(e.source_title || e.claim || "Source").trim();
+    const titleHtml = url
+      ? `<a class="hb-ev-link" href="${url}" target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>`
+      : `<span class="hb-ev-title">${escHtml(title)}</span>`;
+    const claim = e.claim && e.claim !== title ? `<div class="hb-ev-claim">${escHtml(String(e.claim))}</div>` : "";
+    const bodyText = String(e.body || "").trim();
+    const body = bodyText ? `<div class="hb-ev-body">${escHtml(bodyText.length > 240 ? bodyText.slice(0, 237).trimEnd() + "…" : bodyText)}</div>` : "";
+    const conf = e.confidence ? `<span class="hb-ev-conf">${escHtml(String(e.confidence))} confidence</span>` : "";
+    return `<div class="hb-ev-row">${titleHtml}${claim}${body}${conf ? `<div class="hb-ev-meta">${conf}</div>` : ""}</div>`;
+  }).join("");
+}
+
+// Toggle the evidence box for one directive; fetch once, then just show/hide.
+async function toggleEvidence(btn) {
+  const box = btn.nextElementSibling;
+  if (!box || !box.classList.contains("hb-evbox")) return;
+  const opening = box.hidden;
+  if (!opening) { // closing
+    box.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    btn.textContent = "see the evidence";
+    return;
+  }
+  btn.setAttribute("aria-expanded", "true");
+  btn.textContent = "hide the evidence";
+  box.hidden = false;
+  if (box.dataset.loaded === "1") { box.classList.remove("chip-in"); void box.offsetWidth; box.classList.add("chip-in"); return; }
+  box.innerHTML = `<div class="hb-ev-loading lbl"><span class="aspin aspin-xs"></span> reading the source…</div>`;
+  let res = null;
+  try { res = await api(`/evidence?marker=${encodeURIComponent(btn.dataset.evidence || "")}`); } catch { res = null; }
+  if (box.hidden) return; // user closed it mid-flight
+  box.dataset.loaded = "1";
+  box.innerHTML = evidenceListHtml(res && Array.isArray(res.evidence) ? res.evidence : []);
+  if (!reducedMotion()) { box.classList.remove("chip-in"); void box.offsetWidth; box.classList.add("chip-in"); }
 }
 
 async function loadDirectives(token) {
@@ -5659,6 +5818,7 @@ function paintDirectives(wrap, active) {
   $("#hbDerive")?.addEventListener("click", deriveDirectives);
   wrap.querySelectorAll("[data-ddone]").forEach((b) => b.addEventListener("click", () => resolveDirective(b.dataset.ddone, "resolved")));
   wrap.querySelectorAll("[data-ddismiss]").forEach((b) => b.addEventListener("click", () => resolveDirective(b.dataset.ddismiss, "dismissed")));
+  wrap.querySelectorAll("[data-evidence]").forEach((b) => b.addEventListener("click", () => toggleEvidence(b)));
 }
 
 // Flip a directive's status (the review side — nothing auto-applies). The card
@@ -6542,9 +6702,9 @@ async function renderPlanEditor() {
   headerTitle.textContent = "Plan";
   view.innerHTML = segSkeleton("edit", PLAN_SEG, 3);
   const plan = await api("/plan");
-  view.innerHTML = segBar("edit", PLAN_SEG) + `<div id="planedit"></div>
+  await skelSwap(() => { view.innerHTML = segBar("edit", PLAN_SEG) + `<div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
-    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>`;
+    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>`; });
   wireSeg(PLAN_HANDLERS);
 
   const model = plan.map((d) => ({
@@ -7203,7 +7363,10 @@ function appendMsg(m, noScroll, parent, opts = {}) {
   el.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", async () => {
     b.disabled = true;
     const r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" });
-    toast(r.restructured ? "Plan restructured" : "Applied"); state.plan = [];
+    const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
+    if (clamped) toast("Applied · adjusted to a safe step");
+    else toast(r.restructured ? "Plan restructured" : "Applied");
+    state.plan = [];
     // Settle into the same calm "done" note the message renders on reload, so a
     // just-applied draft and a long-applied one look identical.
     const label = b.textContent.replace(/^Apply:\s*/, "");
@@ -7212,6 +7375,9 @@ function appendMsg(m, noScroll, parent, opts = {}) {
     done.setAttribute("aria-disabled", "true");
     done.textContent = `✓ Applied · ${label}`;
     b.replaceWith(done);
+    // A code guardrail nudged a load to a safe step — show the honest hairline note
+    // inline under the bubble's actions (it persists exactly here on this turn).
+    if (clamped) done.insertAdjacentHTML("afterend", clampNoteHtml(r.clamped));
   }));
   if (canCopy) {
     el.querySelector(".bubble-copy")?.addEventListener("click", () => copyText(m.content));
@@ -7431,6 +7597,54 @@ function agentHealthCard(st) {
     </div>`;
 }
 
+// Plain-language label for an agentic op key (from agent_runs.op) — the activity
+// log reads in human words, never an internal token. Falls back to a tidied key.
+const AGENT_OP_LABELS = {
+  day_read: "read your day", session_suggest: "drafted a session", session_verify: "checked the session",
+  meal_plan: "drafted a meal plan", meal_plan_verify: "checked the meal plan", meal_swap: "swapped a meal",
+  recipe: "wrote a recipe", nutrition_checkin: "ran a nutrition check-in", insight: "looked for a connection",
+  weekly_read: "read the week", health_review: "reviewed your labs", chat: "answered in chat",
+  coach: "drafted a coach proposal", enrich: "tidied a log", enrich_activity: "tidied an activity",
+  enrich_food: "tidied a food note", enrich_health: "read a lab document", garmin_strength: "read a strength session",
+  chat_distill: "saved chat to memory", research: "researched evidence",
+};
+function agentOpLabel(op) {
+  const key = String(op || "").trim();
+  if (AGENT_OP_LABELS[key]) return AGENT_OP_LABELS[key];
+  return key ? key.replace(/_/g, " ") : "agent run";
+}
+
+// "What Cairn did" — a calm activity log of recent agentic runs, built from
+// GET /api/agent-stats recent[]. Transparency, NEVER a grade/score: each line is
+// op · agent · relative time · "clean" or "needed a retry" (a fall-through to the
+// next agent, or output that needed a repair). Renders nothing when empty/absent.
+function agentActivityCard(st) {
+  const recent = st && Array.isArray(st.recent) ? st.recent : [];
+  if (!recent.length) return "";
+  const rows = recent.slice(0, 12).map((r) => {
+    const op = escHtml(agentOpLabel(r.op));
+    const agent = r.agent ? `<span class="actlog-agent">${escHtml(String(r.agent))}</span>` : "";
+    const when = r.created_at ? `<span class="actlog-when" title="${escAttr(absDate((r.created_at || "").slice(0, 10)))}">${escHtml(relTime((r.created_at || "").replace(" ", "T") + "Z"))}</span>` : "";
+    // "clean" = succeeded first try with parseable output, no fall-through; otherwise
+    // it needed a retry (a repair or a hand-off to the next enabled agent).
+    const clean = r.ok && r.parsed && !r.tried_json;
+    const flag = clean
+      ? `<span class="actlog-flag actlog-clean">clean</span>`
+      : `<span class="actlog-flag actlog-retry">needed a retry</span>`;
+    return `<div class="actlog-row">
+        <span class="actlog-op">${op}</span>
+        <span class="actlog-meta">${agent}${agent && when ? `<span class="actlog-dot">·</span>` : ""}${when}</span>
+        ${flag}
+      </div>`;
+  }).join("");
+  return `
+    <div class="sess agentactivity" style="margin-top:14px">
+      <div class="lbl" style="margin-bottom:6px">What Cairn did</div>
+      <div class="sess-line" style="color:var(--muted);margin-bottom:4px">A quiet log of the most recent agent work — so you can see what ran, and when.</div>
+      <div class="actlog-rows">${rows}</div>
+    </div>`;
+}
+
 async function renderSettings() {
   headerTitle.textContent = "Settings";
   const [data, artStats, agentStats] = await Promise.all([
@@ -7448,6 +7662,9 @@ async function renderSettings() {
   // Mirrors the art-spend card's calm ledger style. No scores, just ok-rate +
   // per-agent latency, plain words. Renders nothing if the endpoint is absent.
   const agentHealthHtml = agentHealthCard(agentStats);
+  // "What Cairn did" — the quiet activity log of recent agent runs (transparency,
+  // not a grade). Sits right under Agent health; renders nothing when empty.
+  const agentActivityHtml = agentActivityCard(agentStats);
 
   // Artwork spend telemetry card (server estimates; see GET /api/art/stats).
   let artSpendHtml = "";
@@ -7481,6 +7698,7 @@ async function renderSettings() {
         <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
       </div>
       ${agentHealthHtml}
+      ${agentActivityHtml}
 
       <h1 class="lbl" style="margin:22px 0 8px">Weekly auto-coach</h1>
       <label class="toggle"><input type="checkbox" id="coachEnabled" ${s.coach_enabled ? "checked" : ""}>
