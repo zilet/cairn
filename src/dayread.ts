@@ -6,7 +6,8 @@
 // agent-running orchestration lives in one place (api and mcp were near-duplicates).
 import * as repo from "./repo.js";
 import { buildDayReadPrompt } from "./prompt.js";
-import { runAgent, runAgentWithFallback, INTERACTIVE_TIMEOUT_MS } from "./agents.js";
+import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
+import { runChosen } from "./runChosen.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -18,27 +19,6 @@ export function localToday(d: Date = new Date()): string {
 
 function deterministicHeadline(r: { kind: string; focus?: string | null }): string {
   return r.kind === "rest" ? "Rest today." : r.kind === "easy" ? "Take it easy." : r.focus ? `${r.focus}.` : "Good to train.";
-}
-
-// The day-read is interactive (the Brief is on the morning-open request path),
-// so it runs on the short leash. The "auto" path records its own telemetry
-// inside runAgentWithFallback; the explicit-agent path records one row here,
-// failure-safe — a telemetry hiccup must never break the Brief.
-async function runChosen(agent: string | undefined, prompt: string) {
-  if (!agent || agent === "auto") {
-    const fb = await runAgentWithFallback(repo.pickAgentOrder(), prompt, { op: "day_read", timeoutMs: INTERACTIVE_TIMEOUT_MS });
-    return { agent: fb.agent, result: fb.result, tried: fb.tried };
-  }
-  const started = Date.now();
-  let result: Awaited<ReturnType<typeof runAgent>> | null = null;
-  try {
-    result = await runAgent(agent, prompt, { timeoutMs: INTERACTIVE_TIMEOUT_MS });
-    return { agent, result, tried: [] as any[] };
-  } finally {
-    try {
-      repo.recordAgentRun({ op: "day_read", agent, ok: !!result?.parsed, parsed: !!result?.parsed, latency_ms: Date.now() - started, tried_json: false });
-    } catch { /* telemetry never breaks the Brief */ }
-  }
 }
 
 // Compute the agentic day-read with the deterministic floor as fallback. The
@@ -53,7 +33,8 @@ export async function computeDayRead(
   let out: any;
   try {
     const prompt = buildDayReadPrompt(undefined, { override, date });
-    const { agent: chosen, result, tried } = await runChosen(agent, prompt);
+    // Interactive (the Brief is on the morning-open path) → the short leash.
+    const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "day_read", timeoutMs: INTERACTIVE_TIMEOUT_MS });
     const p = result.parsed;
     const sane =
       p && typeof p === "object" &&

@@ -1676,10 +1676,10 @@ export function getGarminCoachSummary(days = 14) {
 // observations that age out of the recency window. Mirrors the distill allowlist.
 const LOAD_BEARING_KINDS = new Set(["constraint", "injury", "preference", "decision", "milestone", "goal"]);
 
-// Normalize for a forgiving similarity check — shared shape with normInsight
-// (lowercase, drop punctuation, collapse whitespace). A handful of generic words
-// are dropped so "prefers training in the morning" and "trains mornings" overlap
-// on the load-bearing tokens, not on filler.
+// Normalize for a forgiving similarity check (lowercase, drop punctuation,
+// collapse whitespace) — shared by memory dedup and insight dedup. A handful of
+// generic words are dropped (via memTokens) so "prefers training in the morning"
+// and "trains mornings" overlap on the load-bearing tokens, not on filler.
 const MEM_STOPWORDS = new Set("the a an and or to of in on for is are i im my me you your he she they it that this with at as be been being do does prefer prefers like likes".split(" "));
 function memNorm(s: string): string {
   return String(s ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -1687,14 +1687,18 @@ function memNorm(s: string): string {
 function memTokens(s: string): Set<string> {
   return new Set(memNorm(s).split(" ").filter((w) => w && !MEM_STOPWORDS.has(w)));
 }
-// Jaccard word-overlap between two memory contents (0..1), stopword-trimmed.
-function memOverlap(a: string, b: string): number {
-  const A = memTokens(a), B = memTokens(b);
+// Jaccard word-overlap between two token sets (0..1). Shared by the memory
+// near-dup fold (stopword-trimmed tokens) and the insight dedup guard.
+function jaccard(A: Set<string>, B: Set<string>): number {
   if (!A.size || !B.size) return 0;
   let inter = 0;
   for (const w of A) if (B.has(w)) inter++;
   const union = A.size + B.size - inter;
   return union > 0 ? inter / union : 0;
+}
+// Jaccard word-overlap between two memory contents (0..1), stopword-trimmed.
+function memOverlap(a: string, b: string): number {
+  return jaccard(memTokens(a), memTokens(b));
 }
 
 // Add a durable memory. Three-tier dedup, strongest-first:
@@ -3745,28 +3749,20 @@ export function recentInsightTexts(limit = 12): string[] {
     .filter(Boolean);
 }
 
-// Normalize for a forgiving similarity check (lowercase, collapse whitespace,
-// drop punctuation) — catches "the same connection reworded".
-function normInsight(s: string): string {
-  return String(s ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
 // True when a candidate insight essentially repeats one of the recent ones:
 // exact-after-normalize, or a high word-overlap (Jaccard) match. Keeps the
-// quiet stream from echoing the same connection twice.
+// quiet stream from echoing the same connection twice. Normalizes with the same
+// forgiving rule as memory dedup (memNorm) so "the same connection reworded"
+// collapses; unlike memory it keeps stopwords (short insight texts need them).
 export function isDuplicateInsight(candidate: string, recent: string[] = recentInsightTexts()): boolean {
-  const cand = normInsight(candidate);
+  const cand = memNorm(candidate);
   if (!cand) return true; // nothing to say is a no-op, never a fresh insight
   const candSet = new Set(cand.split(" "));
   for (const r of recent) {
-    const rn = normInsight(r);
+    const rn = memNorm(r);
     if (!rn) continue;
     if (rn === cand) return true;
-    const rSet = new Set(rn.split(" "));
-    let inter = 0;
-    for (const w of candSet) if (rSet.has(w)) inter++;
-    const union = candSet.size + rSet.size - inter;
-    if (union > 0 && inter / union >= 0.7) return true;
+    if (jaccard(candSet, new Set(rn.split(" "))) >= 0.7) return true;
   }
   return false;
 }
@@ -4556,6 +4552,9 @@ export function applyReviewDirectives(directives: any[]) {
   // field (partial / old-shape response) preserves the prior set instead.
   clearDirectivesForSource("health_review");
   const list = Array.isArray(directives) ? directives : [];
+  // Loop-invariant: the safety context is a full marker snapshot (scans + parses
+  // every health-doc blob). Build it ONCE, not once per directive.
+  const safetyCtx = buildSafetyMarkerContext();
   let count = 0;
   for (const d of list) {
     if (!d || typeof d !== "object") continue;
@@ -4575,7 +4574,7 @@ export function applyReviewDirectives(directives: any[]) {
     // suggestion the user's markers contraindicate (e.g. iron with replete ferritin).
     const safe = safetyGate(
       { domain, marker, directive, rationale: d.rationale ?? null },
-      buildSafetyMarkerContext()
+      safetyCtx
     );
     const row = addDirective({
       source: "health_review",
@@ -4659,7 +4658,7 @@ export interface EvidenceInput {
   confidence?: string | null;        // high | moderate | low (plain band, never a score)
 }
 
-function normTopic(s: any): string {
+export function normTopic(s: any): string {
   return String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200);
 }
 

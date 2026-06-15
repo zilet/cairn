@@ -14,7 +14,7 @@
 // medical advice — clinical questions defer to a clinician.
 
 import * as repo from "./repo.js";
-import { runAgent, runAgentWithFallback } from "./agents.js";
+import { runChosen } from "./runChosen.js";
 import { buildResearchPrompt } from "./prompt.js";
 
 export interface ResearchResult {
@@ -37,20 +37,6 @@ export function researchEnabled(): boolean {
   } catch {
     return false;
   }
-}
-
-function normTopic(s: any): string {
-  return String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200);
-}
-
-// Mirror of coachOps.runChosen (kept local to avoid a coachOps↔research import
-// cycle): explicit agent, or "auto"/blank → the configured rotation with fallthrough.
-async function runResearchAgent(agent: string | undefined, prompt: string, timeoutMs: number) {
-  if (!agent || agent === "auto") {
-    const fb = await runAgentWithFallback(repo.pickAgentOrder(), prompt, timeoutMs);
-    return { agent: fb.agent, result: fb.result, tried: fb.tried };
-  }
-  return { agent, result: await runAgent(agent, prompt, timeoutMs), tried: [] as { agent: string; error: string }[] };
 }
 
 // Validate + filter a single claim's sources to plausible http(s) URLs. Returns
@@ -87,7 +73,7 @@ export async function researchEvidence(
   markers: string[] = [],
   opts: { agent?: string; force?: boolean; timeoutMs?: number } = {}
 ): Promise<ResearchResult> {
-  const topic = normTopic(question);
+  const topic = repo.normTopic(question);
   if (!topic) return { ok: false, enabled: researchEnabled(), topic, evidence: [], error: "empty question" };
 
   if (!researchEnabled()) {
@@ -110,7 +96,7 @@ export async function researchEvidence(
   let tried: { agent: string; error: string }[] = [];
   let parsed: any = null;
   try {
-    const r = await runResearchAgent(opts.agent, prompt, timeoutMs);
+    const r = await runChosen(opts.agent, prompt, { op: "research", timeoutMs });
     chosen = r.agent;
     tried = r.tried;
     parsed = r.result.parsed;
@@ -184,29 +170,31 @@ export async function gatherReviewGrounding(
   } catch {
     priorityMarkers = [];
   }
-  const passages: any[] = [];
-  for (const m of priorityMarkers) {
-    const name = String(m?.name ?? "").trim();
-    if (!name) continue;
-    const side = m?.latest?.flag || (m?.optimal && typeof m?.latest?.value === "number"
-      ? (m.latest.value < m.optimal.low ? "low" : m.latest.value > m.optimal.high ? "high" : "off-optimal")
-      : "off-optimal");
-    const question = `What current clinical guidance applies to ${side} ${name}, and what are the safe, evidence-based lifestyle (diet/training) levers? Informational only.`;
-    try {
-      const r = await researchEvidence(question, [name], { agent });
-      for (const e of r.evidence.slice(0, 4)) {
-        passages.push({
+  // The (≤3) markers are independent (each caches its own evidence rows), so
+  // research them concurrently — a grounded review shouldn't pay 3× the wall-clock
+  // serially when each agent call can take minutes. Each marker yields ≤4 passages,
+  // so the flattened result is already ≤12; cap defensively all the same.
+  const perMarker = await Promise.all(
+    priorityMarkers.map(async (m) => {
+      const name = String(m?.name ?? "").trim();
+      if (!name) return [];
+      const side = m?.latest?.flag || (m?.optimal && typeof m?.latest?.value === "number"
+        ? (m.latest.value < m.optimal.low ? "low" : m.latest.value > m.optimal.high ? "high" : "off-optimal")
+        : "off-optimal");
+      const question = `What current clinical guidance applies to ${side} ${name}, and what are the safe, evidence-based lifestyle (diet/training) levers? Informational only.`;
+      try {
+        const r = await researchEvidence(question, [name], { agent });
+        return r.evidence.slice(0, 4).map((e) => ({
           marker: e.marker ?? name,
           claim: e.claim ?? null,
           source_title: e.source_title ?? null,
           source_url: e.source_url ?? null,
           confidence: e.confidence ?? null,
-        });
+        }));
+      } catch {
+        return []; // swallow — the review runs ungrounded for this marker
       }
-    } catch {
-      /* swallow — the review runs ungrounded for this marker */
-    }
-    if (passages.length >= 12) break;
-  }
-  return passages;
+    })
+  );
+  return perMarker.flat().slice(0, 12);
 }

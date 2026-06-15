@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS memory (
   kind TEXT,
   content TEXT NOT NULL,
   source TEXT,
-  -- Self-updating memory (v27): a memory is no longer a flat append-only log.
+  -- Self-updating memory (v30): a memory is no longer a flat append-only log.
   -- updated_at advances when a near-duplicate folds into this row; superseded_by
   -- points at the row that replaced this one (we MARK, never hard-delete — same
   -- discipline as chat archiving); confidence rises as a fact is re-observed and
@@ -254,7 +254,7 @@ CREATE TABLE IF NOT EXISTS memory (
   last_referenced_at TEXT
 );
 
--- Outcome learning (v27 batch, new table — no migration needed): what the Brief /
+-- Outcome learning (v30 batch, new table — no migration needed): what the Brief /
 -- session-suggest / nutrition check-in PROPOSED, so a quiet reconciliation pass can
 -- later compare suggestion → actual (logged sets, weight trend, autoregulation
 -- feedback) and write a durable learning memory. Suggestion-not-a-gate: this only

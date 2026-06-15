@@ -9,7 +9,8 @@
 
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
-import { runAgent, runAgentWithFallback, INTERACTIVE_TIMEOUT_MS, type RunOpts } from "./agents.js";
+import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
+import { runChosen } from "./runChosen.js";
 import {
   buildMealPlanPrompt,
   buildMealSwapPrompt,
@@ -26,39 +27,10 @@ import {
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 
-// Run a prompt with an explicit agent, or "auto"/blank to use the configured
-// rotation (round-robin / random / priority) with fallthrough on failure.
-// `opts.op` labels the run for agent-stats telemetry; `opts.timeoutMs` lets
-// interactive callers (session-suggest) shorten the leash. The "auto" path
-// records telemetry itself (inside runAgentWithFallback); the explicit-agent
-// path records one row here, failure-safe (telemetry never breaks the loop).
-export async function runChosen(
-  agent: string | undefined,
-  prompt: string,
-  opts: RunOpts & { op?: string } = {}
-) {
-  const op = opts.op ?? "auto";
-  if (!agent || agent === "auto") {
-    const fb = await runAgentWithFallback(repo.pickAgentOrder(), prompt, opts);
-    return { agent: fb.agent, result: fb.result, tried: fb.tried };
-  }
-  const started = Date.now();
-  let result: Awaited<ReturnType<typeof runAgent>> | null = null;
-  try {
-    result = await runAgent(agent, prompt, { timeoutMs: opts.timeoutMs });
-    return { agent, result, tried: [] as any[] };
-  } finally {
-    try {
-      repo.recordAgentRun({
-        op, agent,
-        ok: !!result?.parsed,
-        parsed: !!result?.parsed,
-        latency_ms: Date.now() - started,
-        tried_json: false,
-      });
-    } catch { /* telemetry never breaks the loop */ }
-  }
-}
+// runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
+// re-exported here because api.ts / mcp.ts import it from coachOps as the
+// single agentic-ops entry point.
+export { runChosen };
 
 // ---------- self-critique verify pass (Trust build V1) ----------
 // Run ONE bounded follow-up agent turn that checks a just-produced high-stakes

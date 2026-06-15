@@ -45,18 +45,13 @@ function lastScheduledSlot(now: Date, day: number, hour: number): Date {
   return slot;
 }
 
-// A local YYYY-MM-DD stamp for a Date (mirrors dayread.localToday()).
-function localStamp(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 // True when the weekly slot's most recent occurrence has passed and the persisted
 // last-run stamp doesn't already cover it. Records the stamp as a side effect
 // when it returns true (so it fires once per slot, restart-tolerant).
 function weeklySlotDue(now: Date, day: number, hour: number, stateKey: string): boolean {
   const slot = lastScheduledSlot(now, day, hour);
   if (now.getTime() < slot.getTime()) return false; // the slot hasn't arrived yet
-  const slotStamp = localStamp(slot);
+  const slotStamp = localToday(slot);
   if (repo.getAppState(stateKey) === slotStamp) return false; // already ran for this slot
   repo.setAppState(stateKey, slotStamp);
   return true;
@@ -108,7 +103,7 @@ export function startScheduler() {
     //     Brief precompute. generateInsight emits ONE genuine connection or
     //     ok:false (dedup-guarded); a near-repeat / nothing-real is a calm no-op.
     const insightDue =
-      now.getHours() === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localStamp(now);
+      now.getHours() === PRECOMPUTE_HOUR && repo.getAppState("insight_last_date") !== localToday(now);
     // (b) Weekly read — on the configured coach day/hour (miss-tolerant). A
     //     standing "how the week went + the one change", stored as a weekly_read
     //     insight. Reuses the coach slot so it lands on the same cadence.
@@ -122,7 +117,7 @@ export function startScheduler() {
     proactiveBusy = true;
     try {
       if (insightDue) {
-        repo.setAppState("insight_last_date", localStamp(now));
+        repo.setAppState("insight_last_date", localToday(now));
         try {
           const r = await generateInsight("auto", "connection");
           console.log(r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`);
