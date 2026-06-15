@@ -3321,18 +3321,152 @@ function healthReviewForCoach() {
   };
 }
 
+// ---------- deterministic training signals (progression-readiness + autoregulation) ----------
+// The coaching prompts ALREADY ask the agent to only progress when recent sessions hit
+// the TOP of the rep range at low RIR, and to ease off on soreness/joint flags — but they
+// hand it raw `recent_sessions` arrays and make it infer all of that. This does the
+// inference DETERMINISTICALLY, so the read is the same whether or not an agent runs and is
+// the same every time: per current-plan exercise, is recent performance progress-READY, and
+// which way is the est-1RM trending; plus a rolled-up autoregulation flag (high soreness /
+// low performance / a named joint) from the last few sessions. SIGNALS ONLY — informational,
+// suggestion-not-a-gate: progressive overload and de-loads stay the coach's call, nothing here
+// auto-applies. The point is that the athlete's own logged sets + 1-tap feedback VISIBLY shape
+// the next recommendation instead of disappearing into a JSON blob the agent may skim past.
+export interface ProgressionSignal {
+  exercise: string;
+  rep_target: string | null;   // "8–10" (reps mode) or null for timed
+  sec_target: number | null;   // timed prescription, when applicable
+  last_logged: string | null;  // ISO date of the most recent logged session for this lift
+  days_since: number | null;
+  progress_ready: boolean;     // recent working sets met the top target at RIR ≤ 3 (or met the timed hold)
+  est_1rm_trend: "up" | "down" | "flat" | null;
+  reason: string;              // plain-language ("hit 10/10 reps at RIR 2 last session")
+}
+export interface AutoregSignal {
+  soreness_flag: boolean;
+  low_performance_flag: boolean;
+  joint_areas: string[];
+  note: string;                // one rolled-up plain sentence
+}
+export function trainingSignals(recent?: any[]): { progression: ProgressionSignal[]; autoregulation: AutoregSignal | null } {
+  const sessions = (recent ?? getRecentSessions(20)) as any[];
+  const now = Date.now();
+  const daysAgo = (d: string): number | null => {
+    const t = Date.parse(String(d) + "T00:00:00Z");
+    return Number.isFinite(t) ? Math.round((now - t) / 864e5) : null;
+  };
+
+  // De-dupe the current plan's exercises (a lift can appear on more than one day).
+  const seen = new Set<string>();
+  const items: any[] = [];
+  for (const day of getPlan() as any[]) {
+    for (const it of (day.items || [])) {
+      const key = String(it.exercise || "").toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      items.push(it);
+    }
+  }
+
+  const progression: ProgressionSignal[] = items.map((it) => {
+    const name = String(it.exercise);
+    const lc = name.toLowerCase();
+    const timed = it.mode === "timed";
+    // The most recent session that logged this exercise (sessions are date-DESC),
+    // plus how many recent sessions touched it.
+    let latestSets: any[] | null = null;
+    let latestDate: string | null = null;
+    for (const s of sessions) {
+      const mine = (s.sets || []).filter((x: any) => String(x.exercise || "").toLowerCase() === lc);
+      if (!mine.length) continue;
+      if (!latestSets) { latestSets = mine; latestDate = s.date; }
+    }
+    const days = latestDate ? daysAgo(latestDate) : null;
+    const stale = days != null && days > 14; // a month-old set isn't "ready now"
+    let ready = false;
+    let reason = "no recent logs — start where the plan sits and log actual.";
+    let trend: ProgressionSignal["est_1rm_trend"] = null;
+
+    if (latestSets) {
+      if (timed) {
+        const target = Number(it.target_seconds) || null;
+        const best = latestSets.reduce((m: number, x: any) => Math.max(m, Number(x.duration_sec) || 0), 0);
+        ready = !stale && target != null && best >= target;
+        reason = target != null ? `held ${best}s vs ${target}s target${stale ? " (a while ago)" : ""}` : `held ${best}s`;
+      } else {
+        const repHigh = Number(it.rep_high) || null;
+        const working = latestSets.filter((x: any) => x.reps != null);
+        const reps = working.map((x: any) => Number(x.reps) || 0);
+        const topReps = reps.length ? Math.max(...reps) : 0;
+        const allHit = repHigh != null && reps.length > 0 && reps.every((r) => r >= repHigh);
+        const rirs = working.map((x: any) => x.rir).filter((r: any) => r != null).map(Number);
+        const lowRir = rirs.length === 0 || rirs.every((r) => r <= 3);
+        ready = !stale && allHit && lowRir;
+        const rirTxt = rirs.length ? ` at RIR ${Math.min(...rirs)}${rirs.length > 1 && Math.min(...rirs) !== Math.max(...rirs) ? `–${Math.max(...rirs)}` : ""}` : "";
+        reason = repHigh != null
+          ? `${ready ? "hit" : "last"} ${topReps}/${repHigh} reps${rirTxt}${stale ? " (a while ago)" : ""}`
+          : `last ${topReps} reps${rirTxt}`;
+        const pts = ((getProgress(name) as any).points || []) as any[];
+        if (pts.length >= 2) {
+          const a = pts[pts.length - 2].best1rm, b = pts[pts.length - 1].best1rm;
+          trend = b > a * 1.005 ? "up" : b < a * 0.995 ? "down" : "flat";
+        }
+      }
+    }
+    return {
+      exercise: name,
+      rep_target: timed ? null : (it.rep_low != null && it.rep_high != null ? `${it.rep_low}–${it.rep_high}` : null),
+      sec_target: timed ? (Number(it.target_seconds) || null) : null,
+      last_logged: latestDate,
+      days_since: days,
+      progress_ready: ready,
+      est_1rm_trend: trend,
+      reason,
+    };
+  });
+
+  // Autoregulation rollup over the last 4 sessions — a single plain-language signal
+  // the prompt can act on without re-scanning the raw session array.
+  const recent4 = sessions.slice(0, 4);
+  const soreDays = recent4.filter((s) => s.soreness != null && Number(s.soreness) >= 4);
+  const lowPerfDays = recent4.filter((s) => s.performance != null && Number(s.performance) <= 2);
+  const joints = [...new Set(recent4.map((s) => String(s.joint_pain || "").trim()).filter(Boolean))];
+  let autoregulation: AutoregSignal | null = null;
+  if (soreDays.length || lowPerfDays.length || joints.length) {
+    const parts: string[] = [];
+    if (soreDays.length) {
+      const where = [...new Set(soreDays.map((s) => s.day_name).filter(Boolean))].join(", ");
+      parts.push(`high soreness${where ? ` (${where})` : ` across ${soreDays.length} recent session(s)`}`);
+    }
+    if (lowPerfDays.length) parts.push("lower-than-usual performance recently");
+    if (joints.length) parts.push(`flagged joint/area: ${joints.join("; ")}`);
+    autoregulation = {
+      soreness_flag: soreDays.length > 0,
+      low_performance_flag: lowPerfDays.length > 0,
+      joint_areas: joints,
+      note: `${parts.join("; ")} — ease volume/load there or de-load the movements that load it; a brake, never a penalty.`,
+    };
+  }
+  return { progression, autoregulation };
+}
+
 export function getCoachContext() {
   // Compute the Garmin summary and the unified recovery view ONCE, then thread
   // them through the recovery + day_read keys so a single context build doesn't
   // fan out into getGarminCoachSummary three times.
   const garmin = getGarminCoachSummary(14);
   const recovery = getRecoverySummary(14, garmin);
+  const recentSessions = getRecentSessions(20);
   return {
     profile: getProfile(),
     goal: computeGoalCheck(),
     plan: getPlan(),
-    recent_sessions: getRecentSessions(20),
+    recent_sessions: recentSessions,
     recent_activities: listActivities(15),
+    // Deterministic progression-readiness + autoregulation rollup computed from the
+    // athlete's own recent sets + 1-tap feedback — so logged performance VISIBLY
+    // steers the next recommendation instead of being inferred from a raw array.
+    training_signals: trainingSignals(recentSessions),
     garmin,
     // Ranked retrieval (Stream 2): always the load-bearing person-model
     // (constraints/injuries/preferences/decisions) + recent observations, with

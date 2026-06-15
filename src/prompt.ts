@@ -139,6 +139,34 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
+// Render the deterministic training signals (repo.trainingSignals, carried on
+// ctx.training_signals) as a plain-language block. This is the inference the prompt
+// used to ask the agent to do over raw recent_sessions — now pre-computed so the
+// athlete's own logged sets + 1-tap feedback VISIBLY steer the next recommendation.
+// Returns "" when there's nothing load-bearing to say.
+function renderTrainingSignals(ctx: any): string {
+  const ts = ctx?.training_signals;
+  if (!ts) return "";
+  const prog = Array.isArray(ts.progression) ? ts.progression : [];
+  const ready = prog.filter((p: any) => p?.progress_ready);
+  const stalled = prog.filter((p: any) => p && !p.progress_ready && p.last_logged && p.est_1rm_trend === "down");
+  const lines: string[] = [];
+  if (ready.length) {
+    lines.push("PROGRESSION-READY (recent logs met the top of the rep range at low RIR — the small conservative step up is EARNED here; apply the normal +5 / +5-10 lb step):");
+    for (const p of ready) {
+      const tr = p.est_1rm_trend === "up" ? ", est-1RM trending up" : "";
+      lines.push(`  - ${p.exercise}: ${p.reason}${tr}`);
+    }
+  }
+  if (stalled.length) {
+    lines.push("STALLED / EASE OFF (est-1RM slipping — hold the load or rotate the movement rather than adding):");
+    for (const p of stalled) lines.push(`  - ${p.exercise}: ${p.reason}`);
+  }
+  if (ts.autoregulation?.note) lines.push(`AUTOREGULATION (recent 1-tap body feedback): ${ts.autoregulation.note}`);
+  if (!lines.length) return "";
+  return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — act on these so the plan visibly reflects what they actually did; this is the source of truth for whether a lift earned a bump):\n${lines.join("\n")}\n`;
+}
+
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
@@ -189,7 +217,7 @@ have none — that's fine, just use what's there):
   working as designed, never a penalty.
 
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}
+${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -296,8 +324,10 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   week" etc., propose a full plan_restructure with sensible exercises that honor their constraints,
   carrying over weights where it makes sense.
 - If they're just asking a question, return "actions": [].
-
-Keep "reply" short and human; confirm what you logged or drafted.
+${renderTrainingSignals(ctx)}
+Keep "reply" short and human; confirm what you logged or drafted. When the athlete says a lift
+"felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
+bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${CHAT_SCHEMA}
@@ -978,7 +1008,7 @@ GUARDRAILS:
   short unless the athlete explicitly asked to train hard.
 
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(context, { domains: ["training", "watch"] })}${wants.length ? `
+${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}
@@ -1103,6 +1133,24 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
   const prefs = (repo.getSettings().meal_prefs || "").trim();
   const split = (ctx.plan as any[]).map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`).join("; ");
+  // Make the plan adapt to the athlete's REAL inputs, not just a static goal number:
+  // (1) the foods they actually log, (2) their measured expenditure, (3) current fatigue.
+  const exp = repo.estimateExpenditure(21);
+  const freqMap = new Map<string, any>();
+  for (const h of [8, 13, 19]) for (const f of repo.frequentFoods(h).slice(0, 4)) {
+    const k = String(f.summary).toLowerCase();
+    if (!freqMap.has(k)) freqMap.set(k, f);
+  }
+  const freqList = [...freqMap.values()].sort((a, b) => b.count - a.count).slice(0, 10);
+  const freqBlock = freqList.length
+    ? `\nFREQUENTLY LOGGED FOODS (what the athlete ACTUALLY eats — build around these where they fit; reusing their own staples lifts adherence far more than novel gourmet meals):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}×${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n`
+    : "";
+  const expBlock = exp.tdee != null
+    ? `\nDERIVED EXPENDITURE (real — from logged intake minus the weighted weight trend; confidence ${exp.confidence}): TDEE ≈ ${exp.tdee} kcal/day; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. Anchor daily_kcal to goal.recommended, but SANITY-CHECK it against this measured expenditure — if they diverge a lot, trust the lean-safe target implied by this real TDEE over a stale goal number.\n`
+    : "";
+  const fatigue = ctx?.training_signals?.autoregulation?.note
+    ? `\nRECOVERY DEBT (recent training feedback): ${ctx.training_signals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
+    : "";
   return `You are a super-healthy, getting-lean, longevity-focused nutrition coach building a 7-day
 meal plan to support body recomposition (lose fat, preserve lean mass, eat for healthspan). The
 athlete's profile, goal check (with computed TDEE and a lean-safe recommended intake), training
@@ -1131,7 +1179,7 @@ ${CONTEXT_GUARDRAILS}
   flag that the athlete will be eating out.
 - HEALTH MARKERS specifically: e.g. low ferritin/iron → emphasize iron-rich foods; flag any
   marker-driven food emphasis in notes. Not medical advice.
-${renderConnectedBrain(ctx, { domains: ["nutrition"] })}
+${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}
 TASK: ${userInstruction?.trim() || "Build next week's meal plan aligned to the recommended deficit and protein target."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
