@@ -7,7 +7,8 @@ activities and recovery metrics inform load, fatigue, conditioning, and goal con
 ## Current Local Connector
 
 The local experimental connector uses the unofficial `garmin-connect` Node package.
-It is for a self-hosted personal/internal pilot only.
+It is intended for self-hosted personal use and pilots where every user explicitly
+provides their own Garmin credentials.
 
 Environment:
 
@@ -92,11 +93,12 @@ The coach receives a compact summary (it never sees the raw rows):
 
 ## Official Garmin API Request
 
-Garmin's Connect Developer Program is the right official path for a business/internal
-pilot. Position the app as an internal employee/coworker training and wellness coaching
-pilot, not as a public consumer app.
+Garmin's Connect Developer Program is the right official path for any shared,
+team, organization, or commercial deployment. Position the deployment truthfully:
+if it is a private pilot, say that; if it is a wider hosted product, do not
+borrow the private-pilot language below.
 
-Recommended application framing:
+Example private-pilot application framing:
 
 > Cairn is a private, internal training and wellness coaching application used by our
 > company team and invited coworkers. It combines user-authorized Garmin activity and
@@ -126,9 +128,10 @@ Ask for these scopes/data categories:
 - Webhook or push delivery if Garmin supports it for the approved API set; otherwise
   daily/incremental polling.
 
-Internal-use answers Garmin will likely care about:
+Answers Garmin will likely care about:
 
-- **Audience:** employees, coworkers, and invited internal pilot users only.
+- **Audience:** the actual deployment audience, such as one self-hosted user,
+  invited pilot users, employees/coworkers, or a hosted user base.
 - **Consent:** each user explicitly connects Garmin and can disconnect at any time.
 - **Purpose:** personalized coaching, training-load awareness, recovery guidance, and
   goal progress. No ad targeting, resale, or third-party data brokerage.
@@ -137,8 +140,9 @@ Internal-use answers Garmin will likely care about:
 - **Retention:** user-controlled deletion/export; delete Garmin-derived records on
   disconnect if requested.
 - **Security:** HTTPS, private network or authenticated deployment, secrets outside git,
-  audit logging for sync jobs, and no public sharing by default.
-- **Scale:** small pilot first, e.g. 5-25 users, then expand after Garmin approval.
+  audit logging for sync jobs, and no raw credential sharing.
+- **Scale:** expected initial and later user counts. For a private pilot, say so
+  directly; for a public or hosted service, describe that honestly.
 
 Suggested "why Garmin" answer:
 

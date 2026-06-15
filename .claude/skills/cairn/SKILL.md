@@ -1,6 +1,6 @@
 ---
 name: cairn
-description: Quick natural-language logging and coaching for the Cairn training/nutrition tracker. Use when the user says things like "log my ride / run", "update my plan", "how am I tracking", "I'm down to X lb", "draft a meal plan", or "what's my workout today" — over the Cairn MCP server (works from anywhere on the tailnet).
+description: Quick natural-language logging and coaching for the Cairn training/nutrition tracker. Use when the user says things like "log my ride / run", "update my plan", "how am I tracking", "I'm down to X lb", "draft a meal plan", or "what's my workout today" over a configured Cairn MCP server.
 ---
 
 # Cairn quick actions
@@ -14,10 +14,13 @@ so the user can log and adjust things by talking instead of opening the web app.
 If the `cairn` tools (e.g. `get_plan`, `log_activity`) aren't available, tell the user to add it:
 
 ```bash
-claude mcp add --transport http cairn https://<pi>.<tailnet>.ts.net/mcp
+claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
 
-(Replace with their tailnet hostname. No auth — it lives on the tailnet.)
+Replace the URL with the host where Cairn runs: `localhost`, a LAN host, or an
+HTTPS Tailscale/MagicDNS address. If that deployment has `CAIRN_AUTH_TOKEN`
+enabled, configure the MCP client to send `Authorization: Bearer <token>` (or
+use the token support provided by the client).
 
 ## Intent → tool mapping
 

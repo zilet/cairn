@@ -19,7 +19,8 @@ code housekeeping.)
 ```bash
 npm install
 npm run dev      # tsx watch on src/server.ts -> http://localhost:8787 (auto-seeds on first boot)
-npm run build    # tsc -> dist/   (this is also the typecheck gate)
+npm run build    # tsc -> dist/
+npm test         # build + offline node:test suite
 npm run reset    # delete data/cairn.db* and re-seed a fresh DB
 ```
 
@@ -75,13 +76,15 @@ it before touching `styles.css` or view markup.
 
 ## Testing & the offline smoke test
 
-There is **no test suite, linter, or formatter**. The typecheck gate is simply:
+There is a zero-dependency offline `node:test` suite. It builds first, runs
+against throwaway temp databases, and does not call agent CLIs or the network:
 
 ```bash
-npm run build   # tsc; CI runs exactly this
+npm test
 ```
 
-Please make sure `npm run build` passes before opening a PR.
+Please make sure `npm test` passes before opening a PR. There is still no
+linter or formatter configured; keep edits consistent with the existing style.
 
 For the agentic propose → apply coaching loop, the **`stub` agent** (defined in
 `agents.json`) is the offline smoke-test path: it needs no API key and returns a
@@ -93,7 +96,7 @@ external CLI configured.
 - Keep changes focused and proportionate.
 - Match the existing style (`.js` import extensions, the repo-layer-first
   architecture, the migration procedure, the `sw.js` cache bump).
-- Make sure `npm run build` is green.
+- Make sure `npm test` is green.
 - Describe the user-facing behavior change and link `docs/VISION.md` reasoning
   when relevant.
 

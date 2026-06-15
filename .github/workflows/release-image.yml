@@ -25,6 +25,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.3
 
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4.1.0
 

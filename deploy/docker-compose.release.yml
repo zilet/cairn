@@ -10,8 +10,10 @@ services:
     container_name: cairn
     restart: unless-stopped
     ports:
-      # Reachable on the LAN by default. If the host is exposed beyond a trusted
-      # network, set CAIRN_AUTH_TOKEN below and/or bind to loopback: "127.0.0.1:8787:8787".
+      # Reachable on the LAN/tailnet by default so you can open it from a phone
+      # or another trusted device. If the host is exposed beyond a trusted
+      # network, set CAIRN_AUTH_TOKEN below and/or bind to loopback only:
+      # "127.0.0.1:8787:8787".
       - "8787:8787"
     volumes:
       - cairn-data:/data
@@ -19,6 +21,7 @@ services:
     environment:
       - TZ=${TZ:-America/New_York}
       # Optional shared-token auth. Unset = no auth; set it to gate /api and /mcp.
+      # Recommended whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

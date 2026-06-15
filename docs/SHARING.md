@@ -8,11 +8,12 @@ contain user credentials or a shared AI subscription.
 
 - Docker with Compose.
 - A private place to run it: localhost, a home server, a Raspberry Pi, Tailscale,
-  VPN, or another trusted network.
+  MagicDNS, WireGuard, a VPN, or another trusted network.
 - Optional subscriptions/logins for Claude Code, Codex, Antigravity, or Grok.
 
 Cairn has no built-in user authentication. Do not expose it directly to the
-public internet.
+public internet. If another device can reach the port, set `CAIRN_AUTH_TOKEN`
+or put an authenticated private-network layer in front of it.
 
 ## Install From A Published Image
 
@@ -36,6 +37,20 @@ http://localhost:8787
 
 For a server on your LAN or tailnet, replace `localhost` with that host name or
 private IP.
+
+## Ways To Run It
+
+- **Occasional local container:** start Cairn on a laptop with
+  `docker compose up -d`, use `http://localhost:8787`, and stop it when you are
+  done.
+- **Always-on home box / VM / Raspberry Pi:** keep the release compose running
+  on a Docker host and access it from devices on the same LAN, VPN, or tailnet.
+- **Tailscale / MagicDNS:** join the host to a tailnet and use its MagicDNS name
+  from your phone or laptop. For an installable offline PWA, put HTTPS in front
+  of Cairn with Tailscale Serve or another private reverse proxy.
+- **Cloud VM:** bind the port to localhost or a private interface, then reach it
+  through a VPN, tailnet, SSH tunnel, or an authenticated reverse proxy. Do not
+  leave `8787` open to the public internet.
 
 ## Timezone
 
@@ -101,16 +116,33 @@ The GitHub Actions workflow builds and pushes images to GitHub Container Registr
 when a `v*` tag is pushed:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 It publishes:
 
 ```text
-ghcr.io/zilet/cairn:v0.2.0
+ghcr.io/zilet/cairn:v0.3.0
 ghcr.io/zilet/cairn:latest
 ```
 
 For a public repository, make sure the package visibility in GitHub Container
 Registry is public if users should pull without authentication.
+
+## Public Release Checklist
+
+- Publish from a source tree that does not include private operator history.
+  Personal deployment scripts, hostnames, backups, local videos, and private
+  notes belong under `.local/`, which is ignored by Git and Docker.
+- Keep `.env`, `data/`, SQLite files, exported archives, generated logs, and
+  local backups out of Git. The committed `.gitignore` and `.dockerignore`
+  already exclude those paths.
+- Run `npm test` before tagging.
+- Push a `v*` tag and wait for the release workflow to pass.
+- Make the GitHub repository public only when intended.
+- Make the GHCR package public if the release compose should work without a
+  Docker login.
+- Verify the anonymous path from a clean machine or fresh shell:
+  download the release `docker-compose.yml`, run `docker compose up -d`, and
+  confirm `http://localhost:8787/api/health` returns `{"ok":true}`.
