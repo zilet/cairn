@@ -1,5 +1,11 @@
 # Cairn
 
+<p align="center">
+  <img src="media/cairn-hero.gif" alt="Cairn — the Brief reads your day, a flagged lab propagates across domains, progress, and coach chat" width="300">
+  <br>
+  <sub>The Brief → the whole-picture analysis → the connected brain → progress → recipes → coach chat &middot; made with fictional demo data</sub>
+</p>
+
 A self-hosted, connected, **day-reading wellness OS** for **training, nutrition & longevity** with
 an agentic coaching loop and a memory that grows over time. It opens to a calm **Brief** that reads
 your whole picture and *suggests* what kind of day today should be (a suggestion, never a gate),
@@ -38,6 +44,51 @@ service serves:
 Storage is SQLite via Node's built-in `node:sqlite`. **Requires Node 24** (where `node:sqlite`
 is unflagged). The Docker image bundles Node 24, so users do not need Node installed on the host.
 
+> [!IMPORTANT]
+> **Security & where to run it.** Cairn ships with **no authentication by default** — it is a
+> single-user app built for a network you already trust, **not the public internet**. Run it on your
+> own machine, a home server, or a small VM. The simplest setup that is both private and reachable
+> from your phone: put the host on a [Tailscale](https://tailscale.com) (or similar) network and open
+> it by its **MagicDNS** name — no ports forwarded, no certificates to manage. **Never expose port
+> `8787` to the open internet.** If any untrusted device can reach it, set `CAIRN_AUTH_TOKEN` to
+> require a shared token, and serve it over HTTPS (Tailscale Serve / a private reverse proxy) so the
+> PWA can install offline. See [`SECURITY.md`](SECURITY.md) and the deployment shapes below.
+
+## Screens
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="media/screens/01-brief-viewport.png" alt="The Brief"><br><sub><b>The Brief.</b> Opens already having read your recovery and load — a calm rest/easy/train <i>suggestion</i> with one-tap overrides. Never a gate.</sub></td>
+<td width="33%" valign="top"><img src="media/screens/15-analysis.png" alt="Whole-picture health analysis"><br><sub><b>The analysis.</b> The agentic brain's whole-picture read — what's going well, this week's focus with concrete actions, and what's out of order.</sub></td>
+<td width="33%" valign="top"><img src="media/screens/04-brain-directives.png" alt="Cross-domain directives"><br><sub><b>Propagation.</b> A flagged lab becomes concrete nutrition / training / watch directives — each with its plain-language why and a citation.</sub></td>
+</tr>
+<tr>
+<td valign="top"><img src="media/screens/03-brain.png" alt="The connected brain"><br><sub><b>The connected brain.</b> Recovery in plain language (no scores) and the markers worth watching, framed against the <i>optimal</i> range.</sub></td>
+<td valign="top"><img src="media/screens/06-marker-chart.png" alt="Optimal-zone marker trend"><br><sub><b>Optimal-zone trends.</b> Each marker plotted against the longevity band — not just the lab's reference range — with the trend in words.</sub></td>
+<td valign="top"><img src="media/screens/16-exercise-detail.png" alt="Exercise detail"><br><sub><b>Every exercise, illustrated.</b> Tap any lift for its est-1RM trend, form cues and history — with a generated studio illustration.</sub></td>
+</tr>
+<tr>
+<td valign="top"><img src="media/screens/07-progress-1rm.png" alt="Strength progress"><br><sub><b>Strength.</b> Est-1RM trend per lift, plus history, volume-by-muscle and a calendar heatmap.</sub></td>
+<td valign="top"><img src="media/screens/08-energy-balance.png" alt="Adaptive nutrition"><br><sub><b>Adaptive nutrition.</b> Expenditure derived from your weight trend — lean-safe, adherence-neutral, never blamey.</sub></td>
+<td valign="top"><img src="media/screens/10-meals.png" alt="Goal-aware meal plan"><br><sub><b>Goal-aware meals.</b> Protein-anchored weekly plans, shaped by the same flagged labs (oily fish &amp; soluble fiber for ApoB, iron on long-run days).</sub></td>
+</tr>
+<tr>
+<td valign="top"><img src="media/screens/17-recipe.png" alt="Recipe detail"><br><sub><b>Recipe on tap.</b> Any planned meal expands into a full recipe — ingredients, steps and tips — written for that exact dish.</sub></td>
+<td valign="top"><img src="media/screens/11-chat.png" alt="Coach chat"><br><sub><b>Coach chat.</b> Logs the easy things instantly and stages plan changes as drafts you approve.</sub></td>
+<td valign="top"><img src="media/screens/13-life.png" alt="Life timeline"><br><sub><b>Life &amp; family.</b> Trips, injuries and the people you plan around — the coach eases off accordingly.</sub></td>
+</tr>
+</table>
+
+<p align="center">
+  <img src="media/today.gif" alt="Scrolling the Brief and the day's capture" width="270">
+  &nbsp;&nbsp;
+  <img src="media/brain.gif" alt="Scrolling the connected brain — recovery, markers, directives" width="270">
+  <br>
+  <sub>The Brief (left) and the connected brain (right), top to bottom.</sub>
+</p>
+
+<sub>Every screenshot uses a <b>fictional</b> demo persona — no real health data. Populate the same demo yourself with <code>npm&nbsp;run&nbsp;seed:demo</code>.</sub>
+
 ## Run
 ```bash
 npm install
@@ -51,7 +102,12 @@ fall through silently.
 
 ## Run With Docker
 
-Cairn is designed to be shared as a Docker image. For a local source checkout:
+Cairn is designed to run wherever you already keep personal services: your
+laptop, a small home server, a VM, a Raspberry Pi, or a private Tailscale /
+WireGuard network. The same container can be started only when you need it or
+left running full-time.
+
+For a local source checkout:
 
 ```bash
 docker compose up -d --build
@@ -80,6 +136,20 @@ See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow.
 - For an installable/offline PWA, serve it over HTTPS on your private network. Plain HTTP works for
   basic use, but browsers will not register the service worker except on secure origins.
 - See "Coaching agents" below for the one-time login per provider.
+
+### Common Deployment Shapes
+
+- **Occasional local app:** run `docker compose up -d` on your laptop, use
+  `http://localhost:8787`, then stop it when you are done.
+- **Always-on box or VM:** run the release compose on any Docker host. Keep the
+  host private; set `CAIRN_AUTH_TOKEN` if another device can reach the port.
+- **Tailscale / MagicDNS:** run Cairn on a home server, VM, or Pi joined to your
+  tailnet, then open it from your phone or laptop with a tailnet hostname. For
+  installable PWA/offline support, put HTTPS in front of the container with
+  Tailscale Serve, Caddy, nginx, or another private-network reverse proxy.
+- **Public cloud VM:** do not expose `8787` directly to the public internet.
+  Bind it to localhost or a private interface, then reach it through a VPN,
+  tailnet, SSH tunnel, or an authenticated reverse proxy.
 
 ## What Cairn tracks
 

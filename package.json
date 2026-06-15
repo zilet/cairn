@@ -12,6 +12,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",
+    "seed:demo": "tsx src/demoSeed.ts",
     "garmin:sync": "tsx src/garmin.ts",
     "reset": "rm -f data/cairn.db data/cairn.db-* && npm run seed",
     "migrate": "tsx src/migrate.ts",

@@ -22,6 +22,11 @@ files.zip
 #   .local/examples/  design-reference material (videos, mocks)
 .local/
 
+# marketing capture sources (full-page screenshots + scroll mp4s) — regenerable
+# via `npm run seed:demo` + the capture flow in `.local/docs/MARKETING.md`. The
+# committed README assets (media/*.gif, media/cairn-hero.mp4, media/screens/*.png) stay.
+media/frames/
+
 # logs & OS cruft
 *.log
 .DS_Store
