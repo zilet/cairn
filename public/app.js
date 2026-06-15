@@ -486,6 +486,13 @@ async function openExerciseModal(name, fromTile) {
       ${appears ? `<div class="detail-section"><div class="lbl">In your plan</div><div class="detail-body">${appears}</div></div>` : ""}
       <div class="detail-section"><div class="lbl">Recent sets</div>
         ${recentLines || `<div class="detail-body" style="color:var(--muted)">None logged yet.</div>`}</div>
+      <div class="detail-section detail-manage">
+        <div class="lbl">This exercise</div>
+        <div class="manage-row">
+          <button class="pillbtn pill-sm" id="exType">Make ${timed ? "reps-based" : "timed (hold)"}</button>
+          <button class="pillbtn pill-sm pill-warn" id="exDelete">Delete</button>
+        </div>
+      </div>
       <div class="detail-actions">
         <button class="pillbtn" id="askForm">Ask coach</button>
         <button class="pillbtn" data-close>Close</button>
@@ -496,6 +503,35 @@ async function openExerciseModal(name, fromTile) {
     if (ask) ask.addEventListener("click", () => {
       closeDetail(true);
       gotoChatWith(`How should I perform ${name} with good form? Flag anything for my injury constraints.`);
+    });
+    // Change an exercise's type (reps ⇄ timed) — upsert-by-name updates the mode.
+    const typeBtn = el.querySelector("#exType");
+    if (typeBtn) typeBtn.addEventListener("click", async () => {
+      typeBtn.disabled = true;
+      const next = timed ? "reps" : "timed";
+      try {
+        await postExerciseMode(d.name, next);
+        if (state.exModes) state.exModes[d.name] = next;
+        toast(`${d.name} is now ${next === "timed" ? "timed (hold)" : "reps-based"}`);
+        closeDetail(true);
+        if (state.tab === "today") renderToday();
+      } catch { typeBtn.disabled = false; toast("Couldn't change type — try again"); }
+    });
+    // Delete an exercise — refuses (with a reason) if it has logged sets or is in a plan.
+    const delBtn = el.querySelector("#exDelete");
+    if (delBtn) delBtn.addEventListener("click", async () => {
+      delBtn.disabled = true;
+      let r;
+      try { r = await api("/exercises/" + encodeURIComponent(d.name), { method: "DELETE" }); }
+      catch { delBtn.disabled = false; toast("Couldn't delete — try again"); return; }
+      if (r && r.ok) {
+        toast(`Deleted ${d.name}`);
+        closeDetail(true);
+        if (state.tab === "today") renderToday();
+      } else {
+        delBtn.disabled = false;
+        toast(r && r.error ? `Can't delete ${d.name}. ${r.error}` : "Couldn't delete");
+      }
     });
   });
 }
@@ -616,7 +652,30 @@ function wireSeg(handlers) {
       withViewTransition(() => Promise.resolve(f()).then(viewEnter));
     })
   );
+  view.querySelectorAll(".seg").forEach(fitSeg);
 }
+
+// Pill / segment bars stay on ONE line and SCROLL when they don't fit, rather than
+// clipping the last pill (e.g. "Calendar" on a narrow phone). Measure with
+// content-width pills (the .seg-scroll layout); if that overflows, keep scroll mode
+// — the sliding ink thumb assumes equal-width segments, so it yields to the solid
+// active-pill background — and center the active pill. Otherwise drop back to the
+// equal-width thumb. Adapts per-bar and per-viewport; no fixed breakpoint.
+function fitSeg(seg) {
+  if (!seg) return;
+  seg.classList.add("seg-scroll");
+  const overflow = seg.scrollWidth > seg.clientWidth + 1;
+  seg.classList.toggle("seg-scroll", overflow);
+  if (overflow) {
+    const active = seg.querySelector(".segbtn.active");
+    if (active) seg.scrollLeft = active.offsetLeft - (seg.clientWidth - active.offsetWidth) / 2;
+  }
+}
+let _segFitRaf = 0;
+window.addEventListener("resize", () => {
+  cancelAnimationFrame(_segFitRaf);
+  _segFitRaf = requestAnimationFrame(() => view.querySelectorAll(".seg").forEach(fitSeg));
+});
 const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["weight", "Weight"], ["energy", "Energy"], ["calendar", "Calendar"]];
 const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), weight: () => renderWeight(), energy: () => renderEnergy(), calendar: () => renderCalendar(), sessions: () => renderHistory() };
 const PLAN_SEG = [["edit", "Training"], ["meals", "Meals"], ["coach", "Coach"]];
@@ -1107,12 +1166,17 @@ function exCard(it, logged, prefill, revealIdx) {
   const skipBtn = (!offPlan && !done)
     ? `<button class="ex-skip" data-skip="${encodeURIComponent(it.exercise)}" title="Not today" aria-label="Skip ${escAttr(it.exercise)} today">✕</button>`
     : "";
-  return `<div class="ex${complete ? " ex-complete" : ""}${revealIdx != null ? " reveal" : ""}" data-card="${escAttr(it.exercise)}"${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
+  // off-plan cards (added on the fly) get a remove ✕ even before a set lands, so a
+  // mis-added exercise is never stuck on the page; planned-but-unlogged gets "skip".
+  const removeBtn = (offPlan && !done)
+    ? `<button class="ex-skip ex-remove" data-remove-card title="Remove" aria-label="Remove ${escAttr(it.exercise)}">✕</button>`
+    : "";
+  return `<div class="ex${complete ? " ex-complete" : ""}${revealIdx != null ? " reveal" : ""}" data-card="${escAttr(it.exercise)}" data-mode="${timed ? "timed" : "reps"}"${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
       <div class="ex-top">
         ${tile}
         <button class="ex-name" data-guide="${encodeURIComponent(it.exercise)}">${escHtml(it.exercise)} <span class="guide-i">ⓘ</span></button>
         ${target}
-        ${skipBtn}
+        ${skipBtn}${removeBtn}
       </div>
       <div class="ex-meta">${progress}</div>
       ${it.note ? `<div class="ex-note">${escHtml(it.note)}</div>` : ""}
@@ -1128,6 +1192,18 @@ function setChip(s, i) {
     ? fmtDur(s.duration_sec)
     : `${fmtWeight(s.weight)} <span>×</span> ${s.reps}${s.rir != null ? ` <span>@${s.rir}</span>` : ""}`;
   return `<span class="chip" data-set="${s.id}">${n != null ? `<span class="chip-n">#${n}</span> ` : ""}${figure}<button class="chip-x" data-del="${s.id}" title="delete">×</button></span>`;
+}
+
+// Tonnage = Σ weight×reps over LOADED sets (positive weight AND reps; timed and
+// bodyweight/assisted sets excluded). One definition of "what counts" — reused by
+// the done card, the finish row, and history so the rule can't drift.
+function setsTonnage(sets) {
+  return (sets || []).reduce((t, s) => t + (s.weight > 0 && s.reps ? s.weight * s.reps : 0), 0);
+}
+
+// Set an exercise's mode by name (upsert-by-name). Returns the api() promise.
+function postExerciseMode(name, mode) {
+  return api("/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, mode }) });
 }
 
 function planDayNumberForSession(session, plan) {
@@ -1702,6 +1778,7 @@ async function renderToday() {
   const hasLoggedSets = !!(session && (session.sets || []).length);
   const hasPlanDay = (day.items || []).length > 0;
   const revealOn = state.planReveal && state.planReveal.date === state.logDate && state.planReveal.on;
+  const isFinished = !!(session && session.finished_at);
   // Non-blocking Brief: fetch the read in FAST mode — the endpoint returns a warm
   // cached read instantly, so the common case is immediate; a cold cache resolves
   // to a provisional read (painted with the .is-thinking filament) and the real
@@ -1711,9 +1788,14 @@ async function renderToday() {
   const read = await loadBrief(state.logDate, briefOverride, { fast: true });
   const hasGarmin = !!(session && session.garmin);
   const showPlan = !isToday || hasLoggedSets || hasGarmin || revealOn || read.kind === "train";
-  // Focus mode strips Today to the logging surface (see focusEngaged). Progress for
-  // the slim header: how many of today's exercises have at least one logged set.
-  const focus = focusEngaged(state.logDate, { showPlan, hasLoggedSets, isToday });
+  // A finished session reads as a calm "done" card (the work now lives in History),
+  // not the live logging surface — "Log more" reopens it. Only on today: a past date
+  // keeps its full logged surface for review, and history editing has its own tab.
+  const showDone = isFinished && isToday && !revealOn;
+  // Focus mode strips Today to the logging surface (see focusEngaged). Never engages
+  // on a finished session (the done card replaces the surface). Progress for the slim
+  // header: how many of today's exercises have at least one logged set.
+  const focus = !showDone && focusEngaged(state.logDate, { showPlan, hasLoggedSets, isToday });
   const exDone = activeItems.filter((it) => (loggedByEx[it.exercise] || []).length).length;
   const exTotal = activeItems.length;
 
@@ -1742,11 +1824,31 @@ async function renderToday() {
       <div id="qlRecent" class="ql-recent"></div>
     </div>`;
 
+  // ---- A finished workout: calm "done" card, the live surface put away ----
+  if (showDone) {
+    html += sessionDoneCard(session, day, { isToday });
+  } else if (showPlan) {
   // ---- Plan / logging surface — the launchpad, shown when the day calls for it ----
-  if (showPlan) {
     html += `<div class="plansurface reveal" style="--i:2">`;
-    // When not already focused, offer a one-tap "Focus" pill above the day switcher.
-    if (!focus) html += `<div class="focus-enterrow"><button class="focus-enter" id="focusEnter" title="Distraction-free logging">${BRIEF_KIND.train.glyph} Focus</button></div>`;
+    // A designed break between the analysis above (Brief + capture) and the logging
+    // surface below — the eye lands on "here begins the work" instead of one flat,
+    // undifferentiated scroll. Focus mode has its own slim sticky header, so skip it there.
+    if (!focus) {
+      const sName = day && day.name ? day.name : "Today's session";
+      // Describe the plan day actually being logged (its own focus) — the Brief's
+      // suggested focus lives in the card above and can name a different day.
+      const sFocus = (day && day.focus) ? day.focus : "";
+      html += `<div class="session-head">
+        <div class="session-head-main">
+          <div class="session-kicker lbl">${isToday ? "TODAY'S SESSION" : "SESSION"}</div>
+          <h2 class="session-title">${escHtml(sName)}${sFocus ? `<span class="session-focus"> · ${escHtml(sFocus)}</span>` : ""}</h2>
+        </div>
+        <div class="session-head-side">
+          ${exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${exDone}</b><span class="session-prog-sep">/</span>${exTotal}</span>` : ""}
+          <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${BRIEF_KIND.train.glyph} Focus</button>
+        </div>
+      </div>`;
+    }
     html += `<div class="day-switch">`;
     for (const d of state.plan) {
       html += `<button class="daybtn ${d.day_number === state.day ? "active" : ""}" data-day="${d.day_number}">${d.day_number} · ${escHtml(d.name)}</button>`;
@@ -1781,7 +1883,7 @@ async function renderToday() {
       </div>
     </div>`;
     if (hasLoggedSets) {
-      const tonnage = session.sets.reduce((t, s) => t + (s.weight > 0 && s.reps ? s.weight * s.reps : 0), 0);
+      const tonnage = setsTonnage(session.sets);
       html += `<div class="finish">
         <div class="finish-stat" data-finishstat>${session.sets.length} sets · ${Math.round(tonnage).toLocaleString()} lb ${isToday ? "logged today" : "on " + state.logDate}</div>
         <div id="feedbackSlot" class="feedback-slot"></div>
@@ -1894,20 +1996,72 @@ async function renderToday() {
 
   const finishBtn = view.querySelector("#finishBtn");
   if (finishBtn) finishBtn.addEventListener("click", async () => {
+    finishBtn.disabled = true;
     const notes = view.querySelector("#sessNotes").value.trim();
-    const r = await api(`/sessions/${session.id}/finish`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes }),
-    });
+    let r;
+    try {
+      r = await api(`/sessions/${session.id}/finish`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes }),
+      });
+    } catch { finishBtn.disabled = false; toast("Couldn't finish — check your connection"); return; }
     const sm = r.summary || {};
     stopRest();
-    toast(`Done · ${sm.sets || 0} sets · ${(sm.tonnage || 0).toLocaleString()} lb`);
+    // Elite micro-exit: the logging surface lifts away, then Today re-renders to the
+    // calm "done" card (which reveals in). The workout now lives in your history.
+    const surface = view.querySelector(".plansurface");
+    const settle = () => {
+      if (state.tab !== "today") return; // user navigated away during the exit animation
+      toast(`Done · ${sm.sets || 0} sets · ${(sm.tonnage || 0).toLocaleString()} lb`);
+      renderToday();
+    };
+    if (surface && !reducedMotion()) {
+      surface.classList.add("slide-out");
+      setTimeout(settle, 300);
+    } else { settle(); }
   });
+
+  // Done card: reopen to keep logging, or jump to the session in History.
+  const reopenBtn = view.querySelector("#reopenBtn");
+  if (reopenBtn) reopenBtn.addEventListener("click", async () => {
+    reopenBtn.disabled = true;
+    try { await api(`/sessions/${session.id}/reopen`, { method: "POST" }); } catch {}
+    state.planReveal = { date: state.logDate, on: true };
+    withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
+  });
+  const toHistoryBtn = view.querySelector("#toHistoryBtn");
+  if (toHistoryBtn) toHistoryBtn.addEventListener("click", () => activateTab("progress"));
 
   view.querySelectorAll(".ex .logrow").forEach((row) => wireLogRow(row));
 
   if (hasLoggedSets) renderFeedback(view.querySelector("#feedbackSlot"), session);
 
   setupAddExercise();
+}
+
+// A finished workout's calm wrap-up: a quiet checkmark, the day, the numbers that
+// matter, the "how did that feel?" slot, and two soft ways forward (log more /
+// see it in history). No score, no verdict — just "that's done, well played".
+function sessionDoneCard(session, day, { isToday }) {
+  const sets = (session.sets || []).length;
+  const tonnage = setsTonnage(session.sets);
+  const name = (day && day.name) || session.day_name || "Session";
+  const chips = [
+    `${sets} set${sets === 1 ? "" : "s"}`,
+    tonnage ? `${Math.round(tonnage).toLocaleString()} lb` : null,
+    session.duration_min ? `${session.duration_min} min` : null,
+  ].filter(Boolean).map((t) => `<span class="done-chip">${escHtml(t)}</span>`).join("");
+  return `<div class="sessiondone reveal" style="--i:2">
+      <div class="done-mark" aria-hidden="true">✓</div>
+      <div class="done-kicker lbl">${isToday ? "Today · complete" : "Complete"}</div>
+      <h2 class="done-title">${escHtml(name)}</h2>
+      <div class="done-chips">${chips}</div>
+      ${session.notes ? `<div class="done-notes">“${escHtml(session.notes)}”</div>` : ""}
+      <div id="feedbackSlot" class="feedback-slot done-feedback"></div>
+      <div class="done-actions">
+        <button class="ghostbtn done-reopen" id="reopenBtn">Log more</button>
+        <button class="ghostbtn done-history" id="toHistoryBtn">In your history →</button>
+      </div>
+    </div>`;
 }
 
 // ---------- Autoregulation: gentle 1-tap "how did that feel?" ----------
@@ -2240,12 +2394,21 @@ async function undoSkip(card, anchor, exercise) {
   expandEl(card);
 }
 
+// An off-plan card with no logged sets isn't persisted anywhere — it's a transient
+// DOM card from appendOffPlanCard — so removing it is a pure in-flow collapse, no API.
+function removeOffPlanCard(card) {
+  if (!card) return;
+  collapseEl(card, () => card.remove());
+}
+
 function wireSkips() {
   view.querySelectorAll(".ex-skip").forEach((b) => {
     if (b._wired) return; b._wired = true;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      skipFromCard(b.closest(".ex"), decodeURIComponent(b.dataset.skip));
+      const card = b.closest(".ex");
+      if (b.hasAttribute("data-remove-card")) { removeOffPlanCard(card); return; }
+      skipFromCard(card, decodeURIComponent(b.dataset.skip));
     });
   });
   const line = view.querySelector("#skipLine");
@@ -2394,8 +2557,38 @@ async function setupAddExercise() {
   const add = async () => {
     const name = (input.value || "").trim();
     if (!name) { input.focus(); return; }
-    const existing = [...view.querySelectorAll(".ex[data-card]")].find((el) => el.dataset.card === name);
-    if (existing) { existing.scrollIntoView({ behavior: "smooth", block: "center" }); (existing.querySelector(".in-r") || existing.querySelector(".in-dur"))?.focus(); resetAddForm(); return; }
+    // A card for this exercise already on the page. Match on name AND mode — so
+    // re-adding "Dead hang" as Timed when only a Reps card exists is NOT swallowed.
+    const existing = [...view.querySelectorAll(".ex[data-card]")]
+      .find((el) => el.dataset.card.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      const curMode = existing.dataset.mode || "reps";
+      const hasSets = !!existing.querySelector(".logged .chip");
+      if (curMode === mode || hasSets) {
+        // same type, or it already has logged sets (can't switch type underfoot) —
+        // just bring the card into view. Tell them how to change a type that's locked.
+        existing.scrollIntoView({ behavior: "smooth", block: "center" });
+        (existing.querySelector(".in-r") || existing.querySelector(".in-dur"))?.focus();
+        resetAddForm();
+        if (curMode !== mode && hasSets) toast(`${name} already has sets — delete them to change its type`);
+        return;
+      }
+      // type change requested on an empty card → flip the exercise's mode + swap the
+      // card to the new type in place (keeps it on the page, ready to log).
+      try {
+        await postExerciseMode(name, mode);
+        (state.exModes ??= {})[name] = mode;
+      } catch { /* fall through — the set itself still carries exercise_mode */ }
+      const tpl = document.createElement("template");
+      tpl.innerHTML = exCard({ exercise: name, fromPlan: false, mode }, [], { weight: null, reps: null, rir: null, duration_sec: null }).trim();
+      const fresh = tpl.content.firstChild;
+      existing.replaceWith(fresh);
+      wireGuides(fresh); wireLogRow(fresh.querySelector(".logrow")); wireSkips();
+      fresh.scrollIntoView({ behavior: "smooth", block: "center" });
+      (fresh.querySelector(".in-dur") || fresh.querySelector(".in-r"))?.focus();
+      resetAddForm();
+      return;
+    }
     // typed a name that's sitting in today's skipped line → restore it instead
     const skippedBtn = [...view.querySelectorAll("#skipLine [data-unskip]")]
       .find((b) => decodeURIComponent(b.dataset.unskip).toLowerCase() === name.toLowerCase());
@@ -2403,7 +2596,7 @@ async function setupAddExercise() {
     if (mode === "timed" && (state.exModes || {})[name] !== "timed") {
       // register the exercise as timed so logging + history know its mode
       try {
-        await api("/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, mode: "timed" }) });
+        await postExerciseMode(name, "timed");
         (state.exModes ??= {})[name] = "timed";
       } catch { /* fall through — the set itself still carries exercise_mode */ }
     }
@@ -2430,6 +2623,7 @@ async function appendOffPlanCard(name, mode) {
   else (view.querySelector(".plansurface") || view).appendChild(cardEl);
   wireGuides(cardEl);
   wireLogRow(cardEl.querySelector(".logrow"));
+  wireSkips(); // wire the off-plan card's remove ✕
   cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
   (cardEl.querySelector(".in-r") || cardEl.querySelector(".in-dur"))?.focus();
 }
@@ -3264,18 +3458,18 @@ function sessionCardHtml(s, i) {
     }).join(`<span class="hist-sep">\u00b7</span>`);
     return `<div class="hist-line"><span class="hist-ex">${escHtml(ex)}</span><span class="hist-sets">${figs}</span></div>`;
   }).join("");
-  const tonnage = (s.sets || []).reduce((t, x) => t + (x.weight > 0 && x.reps ? x.weight * x.reps : 0), 0);
+  const tonnage = setsTonnage(s.sets);
   const nSets = (s.sets || []).length;
   const chips = [
     tonnage ? `${fmtK(Math.round(tonnage))} lb` : null,
     s.duration_min ? `${s.duration_min} min` : null,
     `${nSets} set${nSets === 1 ? "" : "s"}`,
   ].filter(Boolean).map((t) => `<span class="hist-chip">${t}</span>`).join("");
-  return `<div class="sess hist reveal" style="${stagger(i)}">
+  return `<div class="sess hist hist-tap reveal" data-sessid="${s.id}" role="button" tabindex="0" style="${stagger(i)}" aria-label="Edit ${escAttr(weekday)} session">
       <div class="hist-head">
         <div>
           <div class="hist-kicker lbl">${fmtShortDate(s.date)}${s.day_name ? ` \u00b7 ${escHtml(s.day_name)}` : ""}</div>
-          <div class="hist-day">${escHtml(weekday)}</div>
+          <div class="hist-day">${escHtml(weekday)}<span class="hist-edit" aria-hidden="true">edit</span></div>
         </div>
         <div class="hist-chips">${chips}</div>
       </div>
@@ -3299,7 +3493,7 @@ async function renderHistory() {
   const iso30 = localISO(new Date(Date.now() - 30 * 864e5));
   const inMonth = sessions.filter((s) => (s.date || "").slice(0, 7) === ym).length;
   const last30 = sessions.filter((s) => (s.date || "") >= iso30);
-  const t30 = last30.reduce((t, s) => t + (s.sets || []).reduce((tt, x) => tt + (x.weight > 0 && x.reps ? x.weight * x.reps : 0), 0), 0);
+  const t30 = last30.reduce((t, s) => t + setsTonnage(s.sets), 0);
   const sets30 = last30.reduce((t, s) => t + (s.sets || []).length, 0);
   const hero = progressHero("Training history", [
     ["sessions this month", inMonth],
@@ -3309,7 +3503,85 @@ async function renderHistory() {
   await skelSwap(() => { view.innerHTML = head + hero + sessions.map((s, i) => sessionCardHtml(s, i + 1)).join(""); });
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
+  // Tap a past session → edit its logged sets + notes (corrections flow into the brain).
+  const openFrom = (card) => {
+    const sess = sessions.find((s) => s.id === Number(card.dataset.sessid));
+    if (sess) openSessionEdit(sess, card);
+  };
+  view.querySelectorAll(".hist-tap[data-sessid]").forEach((card) => {
+    card.addEventListener("click", () => openFrom(card));
+    card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openFrom(card); } });
+  });
 }
+
+// Edit a past session: correct any logged set's numbers (or duration), delete a
+// mis-entry, fix the notes. Saves via PUT /sets/:id + PUT /sessions/:id/notes — and
+// because trainingSignals re-reads sessions live, the coach sees the correction on
+// its next read. No score, no judgement — just "fix what you logged".
+async function openSessionEdit(sess, fromEl) {
+  const sets = (sess.sets || []).slice().sort((a, b) => (a.id || 0) - (b.id || 0));
+  const byEx = {};
+  for (const s of sets) (byEx[s.exercise] ??= []).push(s);
+  const groups = Object.entries(byEx).map(([ex, list]) => {
+    const setRows = list.map((s) => {
+      const timed = s.duration_sec != null || s.mode === "timed";
+      const fields = timed
+        ? `<input class="edset-dur" inputmode="numeric" value="${s.duration_sec != null ? fmtDur(s.duration_sec) : ""}" placeholder="1:30" aria-label="duration">`
+        : `<input class="edset-w" type="number" inputmode="decimal" value="${s.weight ?? ""}" placeholder="wt" aria-label="weight">
+           <input class="edset-r" type="number" inputmode="numeric" value="${s.reps ?? ""}" placeholder="reps" aria-label="reps">
+           <input class="edset-rir" type="number" inputmode="numeric" value="${s.rir ?? ""}" placeholder="rir" aria-label="rir">`;
+      return `<div class="edset" data-setid="${s.id}" data-kind="${timed ? "timed" : "reps"}">
+          ${fields}
+          <button class="edset-del" data-eddel="${s.id}" title="Delete set" aria-label="Delete set">×</button>
+        </div>`;
+    }).join("");
+    return `<div class="ed-exgroup"><div class="ed-exname">${escHtml(ex)}</div>${setRows}</div>`;
+  }).join("");
+
+  openDetailFrom(fromEl, () => {
+    const el = mountDetail(`
+      <h2 class="detail-title">${escHtml(sess.day_name || "Session")}</h2>
+      <div class="detail-ctx lbl">${escHtml(fmtShortDate(sess.date))} · edit logged sets</div>
+      <div class="ed-sets">${groups || `<div class="detail-body" style="color:var(--muted)">No sets logged.</div>`}</div>
+      <div class="detail-section"><div class="lbl">Session notes</div>
+        <textarea id="edNotes" class="ed-notes" rows="2" placeholder="How did it go?">${escHtml(sess.notes || "")}</textarea></div>
+      <div class="detail-actions">
+        <button class="pillbtn pill-accent" id="edSave">Save changes</button>
+        <button class="pillbtn" data-close>Close</button>
+      </div>`);
+    wireDetailCommon();
+    // delete a set inline (collapses out; deletion is immediate on the server)
+    el.querySelectorAll("[data-eddel]").forEach((b) => b.addEventListener("click", async () => {
+      try { await api(`/sets/${b.dataset.eddel}`, { method: "DELETE" }); } catch { toast("Couldn't delete set"); return; }
+      const row = b.closest(".edset"); if (row) collapseEl(row, () => row.remove());
+    }));
+    const save = el.querySelector("#edSave");
+    if (save) save.addEventListener("click", async () => {
+      save.disabled = true;
+      const tasks = [];
+      el.querySelectorAll(".edset").forEach((row) => {
+        if (!row.isConnected) return; // a set deleted mid-edit
+        const id = row.dataset.setid;
+        const body = row.dataset.kind === "timed"
+          ? { duration_sec: parseDur(row.querySelector(".edset-dur").value) }
+          : {
+              weight: numOrNull(row.querySelector(".edset-w").value),
+              reps: numOrNull(row.querySelector(".edset-r").value),
+              rir: numOrNull(row.querySelector(".edset-rir").value),
+            };
+        tasks.push(api(`/sets/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+      });
+      tasks.push(api(`/sessions/${sess.id}/notes`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes: el.querySelector("#edNotes").value.trim() }) }));
+      try { await Promise.all(tasks); toast("Updated"); } catch { toast("Some changes didn't save"); }
+      closeDetail(true);
+      renderHistory();
+    });
+  });
+}
+// Coerce an edit-field value to a number or null. The empty-string guard is
+// load-bearing: a blank input must clear the field, but Number("") is 0 — so don't
+// "simplify" it away to a bare Number.isFinite check.
+function numOrNull(v) { return v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null); }
 
 // ---------- Progress: est-1RM trend ----------
 async function renderProgress() {
@@ -5425,6 +5697,7 @@ function setHealthSegActive(seg) {
   if (!target) return;
   hseg.style.setProperty("--segi", btns.indexOf(target));
   btns.forEach((x) => x.classList.toggle("active", x === target));
+  fitSeg(hseg); // keep the active pill centered when the bar is in scroll mode
 }
 
 // Programmatic inner-tab switch from a CTA. openPicker keeps the .click() in the
@@ -8140,6 +8413,10 @@ async function maybeBuildStarterPlan(dpw) {
 }
 
 // Activate a tab programmatically (used at startup + by manifest shortcuts via ?tab=).
+// Skeleton-first, exactly like switchTab(): paint the synchronous skeleton now so the
+// view never sits frozen on the previous tab while the (possibly agentic) render
+// awaits its data — the content swaps in once it lands. This is what makes tapping
+// Today feel instant instead of "stuck until the fetch returns".
 function activateTab(name) {
   const valid = ["today", "plan", "progress", "chat", "me", "settings"];
   const tab = valid.includes(name) ? name : "today";
@@ -8147,7 +8424,13 @@ function activateTab(name) {
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   state.tab = tab;
-  Promise.resolve(renderTab(tab)).then(viewEnter).catch(() => tabErrorState(tab));
+  const paintSkeleton = () => {
+    const skel = tabSkeleton(tab);
+    if (skel) { view.innerHTML = skel; viewEnter(); }
+  };
+  Promise.resolve(withViewTransition(paintSkeleton)).finally(() => {
+    Promise.resolve(renderTab(tab)).catch(() => tabErrorState(tab));
+  });
 }
 
 // ---------- service-worker lifecycle: register + "update ready" nudge ----------
@@ -8214,5 +8497,15 @@ window.addEventListener("orientationchange", syncChatViewport);
   vv.addEventListener("resize", sync);
   vv.addEventListener("scroll", sync); // keyboard open/close shifts offsetTop
   window.addEventListener("orientationchange", sync);
+  // Returning to the app — tab switch back, app resume from background, or a bfcache
+  // restore — can leave visualViewport metrics stale: --vvb keeps an old keyboard-inset
+  // value, so the fixed tab bar sits off the bottom and swallows taps until a manual
+  // scroll forces a reflow (the "looks stuck on resume" bug). Re-measure on every resume
+  // path. iOS reports the final layout viewport a frame or two AFTER pageshow, so settle
+  // with a double rAF in addition to the immediate read.
+  const resync = () => { sync(); requestAnimationFrame(() => requestAnimationFrame(sync)); };
+  window.addEventListener("pageshow", resync);
+  window.addEventListener("focus", resync);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resync(); });
   sync();
 })();

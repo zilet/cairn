@@ -115,6 +115,17 @@ New/changed components (CSS must implement, app.js must emit):
   with `.mp-dayname` (Fraunces italic). Each meal `.meal-row`: `.meal-art` (`.artile-md` food art)
   | `.meal-main` (`.meal-name` 600, `.meal-items` muted) | `.meal-macros` right column —
   kcal numeral + tiny `P / C / F` caps figures when present.
+- Finished-session **done card** `.sessiondone`: centered card with a sage `.done-mark`
+  check, `.done-kicker` (`.lbl`), `.done-title` (Fraunces), `.done-chips` (cream pills:
+  sets/tonnage/duration), optional `.done-notes` (italic), the `#feedbackSlot` ("how did
+  that feel?"), and `.done-actions` (Log more / In your history →). No score, ever.
+- History session card `.sess.hist` is tappable (`.hist-tap`, `role="button"`) → opens the
+  edit overlay; a quiet `.hist-edit` caps cue sits by the weekday. Edit overlay reuses the
+  `.detail` scaffold with `.ed-sets` / `.ed-exgroup` / `.edset` (inline number inputs +
+  `.edset-del`) and `.ed-notes`.
+- Exercise detail manage row `.detail-manage` / `.manage-row`: small `.pill-sm` pills to
+  change type (reps⇄timed) or delete (`.pill-warn`). Off-plan cards reuse `.ex-skip` styling
+  as `.ex-remove` (a remove ✕ before any set lands).
 - Macro bars `.macrobar`: hairline track, ink fill, label left + value right (screenshot style).
 - Activity entries `.qlent`: small `.qlent-art` (CairnArt.activity) + text + enrichment badge.
 - Buttons: `.logbtn` terracotta ink-on-cream → solid terracotta circle/pill, cream glyph;
@@ -172,7 +183,14 @@ The motion vocabulary on top of the existing `.reveal` stagger:
 - **Sliding seg thumb** — `segBar()` emits `.seg.seg-sliding` with a `.seg-thumb` pill
   positioned by `--segn`/`--segi`; `wireSeg` updates `--segi` on tap and swaps the
   sub-view inside a view transition. Hand-built segs (onboarding) keep the classic
-  background-swap active state — only `.seg-sliding` suppresses it.
+  background-swap active state — only `.seg-sliding` suppresses it. The thumb math
+  assumes equal-width segments, so when a bar's pills won't fit (`fitSeg` measures
+  `scrollWidth > clientWidth`) it adds `.seg-scroll`: the bar scrolls horizontally
+  with content-width pills and the thumb yields to the solid active-pill background.
+  Never clip the last pill — overflow always scrolls.
+- **Finish micro-exit** — `@keyframes slideOut` (`.slide-out`, `--dur-2`) lifts the
+  finished logging surface away (translateY + fade) before Today re-renders to the
+  calm `.sessiondone` "done" card, which reveals in. Reduced-motion-gated in JS.
 - **View transitions** — `withViewTransition(fn)` wraps tab and sub-view swaps in
   `document.startViewTransition` when available (instant fallback otherwise; disabled
   under reduced motion). Shared-element zooms use the `detail-art` view-transition-name
