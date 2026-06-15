@@ -76,10 +76,12 @@ MUST bump `public/sw.js` CACHE → `cairn-v50`. Build against the contracts abov
 - Commit in the worktree with clear messages; don't touch files outside ownership; don't edit `CLAUDE.md`/`docs/*`.
 
 ## Progress tracker
-- [ ] V1 trust-core — spawned / merged
-- [ ] V2 verify-harness — spawned / merged
-- [ ] V3 trust-ux — spawned / merged
-- [ ] Orchestrator guardrail-clamp tests
-- [ ] Quality review + fixes
-- [ ] Housekeeping + docs
+- [x] V1 trust-core — merged (clamp guardrails, self-verify, `/api/evidence`, env denylist; no migration)
+- [x] V2 verify-harness — merged (`node:test`, zero-dep, throwaway DB)
+- [x] V3 trust-ux — merged (first agent got the stale v26 base → stopped; rebuilt by a second agent that self-reset to `trust-build`; sw → cairn-v50)
+- [x] Orchestrator guardrail-clamp tests — added; recalibrated 3 v26 assertions to v30; **73 tests green**
+- [x] Quality review + fixes — vision/correctness PASS, security SAFE; fixed: server-side http(s) guard on stored evidence URLs, "untrusted passages" note in the grounded review prompt
+- [x] Housekeeping + docs — CLAUDE.md (test suite + trust-build round), this tracker
 - [ ] trust-build → main
+
+**Note — worktree base hazard:** the harness cut every worktree from the original base commit `0c9f5e6` (v26) regardless of the current branch; agents had to `git reset --hard trust-build` before editing. V1 and the 2nd V3 self-corrected; the 1st V3 and V2 came back on the stale base (V2 was new files only → mergeable after recalibration; the 1st V3 was discarded). Verify worktree base before trusting any future worktree diff.
