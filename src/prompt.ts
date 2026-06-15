@@ -1,4 +1,5 @@
 import * as repo from "./repo.js";
+import { extractJson } from "./agents.js";
 
 const PLAN_SCHEMA = `{
   "summary": "one or two sentences on the overall adjustment",
@@ -227,9 +228,39 @@ DATA:
 ${JSON.stringify(ctx)}`;
 }
 
-const CHAT_SCHEMA = `{
-  "reply": "<concise, friendly answer to the athlete>",
-  "actions": [
+// ---- prose-first chat contract ----
+// The chat reply STREAMS, so its contract is prose-first: the model writes the
+// human answer as plain prose (rendered live, token by token), then — only when
+// it needs to log or change something — emits this sentinel on its own line
+// followed by ONE JSON object {"actions":[…]}. Everything before the sentinel is
+// the reply; everything after is parsed for actions. A pure-prose answer (a
+// question, no side effects) omits the sentinel entirely. parseChatReply tolerates
+// a missing/garbled actions block (reply still stands) AND the legacy {reply,
+// actions} JSON shape, so nothing breaks if a model ignores the contract.
+export const CHAT_ACTION_SENTINEL = "===CAIRN_ACTIONS===";
+
+export function parseChatReply(text: string): { reply: string; actions: any[] } {
+  const raw = (text ?? "").toString();
+  const idx = raw.indexOf(CHAT_ACTION_SENTINEL);
+  if (idx === -1) {
+    // No sentinel: pure prose — UNLESS the model emitted the legacy {reply,actions}
+    // JSON, which we salvage so older agents keep working.
+    const obj = extractJson(raw);
+    if (obj && typeof obj === "object" && (typeof obj.reply === "string" || Array.isArray(obj.actions))) {
+      return {
+        reply: ((obj.reply ?? "").toString().trim()) || raw.trim(),
+        actions: Array.isArray(obj.actions) ? obj.actions : [],
+      };
+    }
+    return { reply: raw.trim(), actions: [] };
+  }
+  const reply = raw.slice(0, idx).trim();
+  const obj = extractJson(raw.slice(idx + CHAT_ACTION_SENTINEL.length));
+  const actions = obj && Array.isArray(obj.actions) ? obj.actions : (Array.isArray(obj) ? obj : []);
+  return { reply, actions };
+}
+
+const CHAT_ACTIONS_SCHEMA = `[
     // zero or more — ONLY when the athlete clearly asked to log or change something.
     { "type": "log_activity", "text": "ran 50 min @ 5:30/km" },
     { "type": "log_set", "exercise": "Back Squat", "weight": 195, "reps": 8, "rir": 2, "day_number": 1 },
@@ -255,8 +286,7 @@ const CHAT_SCHEMA = `{
     { "type": "add_context_event", "kind": "trip|injury|life_event|family_event", "title": "<short>",
       "detail": "<optional>", "start_date": "YYYY-MM-DD|null", "end_date": "YYYY-MM-DD|null",
       "meta": { "area": "<injuries: knee / lower back>", "severity": "mild|moderate|severe", "location": "<trips>", "member": "<family_event: who>", "recurrence": "<family_event: e.g. Tue 17:00>" } }
-  ]
-}`;
+]`;
 
 // Conversational coach. Sees all data; may emit actions the server applies/drafts.
 // imagePath: absolute path of a photo the athlete attached this turn — the agent
@@ -323,14 +353,22 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   DRAFT for the athlete to review and apply — never assume they're live. When they ask for "5 days a
   week" etc., propose a full plan_restructure with sensible exercises that honor their constraints,
   carrying over weights where it makes sense.
-- If they're just asking a question, return "actions": [].
+- If they're just asking a question, write ONLY the prose reply — no actions block at all.
 ${renderTrainingSignals(ctx)}
-Keep "reply" short and human; confirm what you logged or drafted. When the athlete says a lift
+Keep the reply short and human; confirm what you logged or drafted. When the athlete says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
 bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${CHAT_SCHEMA}
+OUTPUT CONTRACT — respond in TWO parts so your reply can stream as you type:
+1. FIRST, your reply to the athlete as plain, warm prose (markdown allowed). Nothing before it — no
+   preamble, no JSON, no code fence. This is shown to them live, word by word, so write it for a human.
+2. THEN, ONLY IF you need to log or change something, put this exact marker on its own line:
+${CHAT_ACTION_SENTINEL}
+   and immediately after it ONE JSON object: {"actions": [ ... ]} drawn from the shapes below.
+   If there is nothing to log or change, STOP after the prose — do NOT write the marker or any JSON.
+
+ACTION SHAPES (each item inside the "actions" array):
+${CHAT_ACTIONS_SCHEMA}
 ${photoBlock}
 CONVERSATION SO FAR:
 ${convo || "(new conversation)"}

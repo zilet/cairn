@@ -314,6 +314,34 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   archived_at TEXT           -- set by chat reset/clear ("fresh start"); archived turns leave the live conversation but are never deleted
 );
 
+-- Durable chat-turn outbox + job state. A chat turn is no longer a blocking
+-- request/response: POST /api/chat persists the user message, opens a turn here
+-- (status 'queued'), and a serial in-process worker (src/chatTurns.ts, mirrors
+-- the enrich queue) drains it — runs the agent, applies actions, writes the
+-- assistant chat_messages row, links it back. The PWA reconstructs in-flight +
+-- queued turns from this table on (re)load, so a follow-up queued while the coach
+-- is thinking — or a turn interrupted by a tab switch / reload / restart — never
+-- disappears. New table → no migration needed (created on every boot).
+CREATE TABLE IF NOT EXISTS chat_turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  started_at TEXT,                          -- stamped when the worker picks it up
+  finished_at TEXT,                         -- stamped on done/error/canceled
+  status TEXT NOT NULL DEFAULT 'queued',    -- queued | running | done | error | canceled
+  user_message_id INTEGER,                  -- the chat_messages row for the user's turn
+  message TEXT,                             -- the user's text (prompt build + queued-bubble display)
+  image_path TEXT,                          -- absolute path to an attached photo (agent reads it), or NULL
+  image_url TEXT,                           -- public /api/chat-images/... URL for the bubble, or NULL
+  agent TEXT,                               -- requested agent ('auto'/NULL or an explicit name)
+  chosen_agent TEXT,                        -- the agent that actually produced the reply
+  phase TEXT,                               -- latest progress phase (for late SSE subscribers / poll)
+  reply TEXT,                               -- the assistant reply text once done
+  assistant_message_id INTEGER,             -- the chat_messages row for the assistant turn
+  meta TEXT,                                -- JSON { applied, drafts }
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_turns_status ON chat_turns(status, id);
+
 -- Single-row app settings (like profile). Controls how coaching agents are
 -- chosen when none is named, and the weekly auto-coach schedule.
 CREATE TABLE IF NOT EXISTS settings (

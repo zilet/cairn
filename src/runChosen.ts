@@ -24,7 +24,7 @@ export async function runChosen(
   const started = Date.now();
   let result: Awaited<ReturnType<typeof runAgent>> | null = null;
   try {
-    result = await runAgent(agent, prompt, { timeoutMs: opts.timeoutMs });
+    result = await runAgent(agent, prompt, { timeoutMs: opts.timeoutMs, signal: opts.signal });
     return { agent, result, tried: [] as { agent: string; error: string }[] };
   } finally {
     try {

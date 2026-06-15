@@ -7,7 +7,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
-import { buildCoachPrompt, buildChatPrompt, buildChatDistillPrompt } from "./prompt.js";
+import { buildCoachPrompt, buildChatDistillPrompt } from "./prompt.js";
+import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
 import {
   runChosen,
@@ -761,7 +762,12 @@ api.get("/chat-images/:name", (req, res) => {
   }).pipe(res);
 });
 
-api.post("/chat", async (req, res) => {
+// Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the
+// user message + a chat_turn and hand it to the serial worker, returning at once.
+// The PWA streams progress over GET /api/chat/turns/:id/stream and rebuilds the
+// in-flight + queued thread from GET /api/chat/turns on (re)load — so a follow-up
+// queued mid-think, or a turn interrupted by navigation/reload/restart, survives.
+api.post("/chat", (req, res) => {
   const b = req.body ?? {};
   const message = (b.message ?? "").toString().trim();
 
@@ -785,111 +791,65 @@ api.post("/chat", async (req, res) => {
   }
 
   if (!message && !imagePath) return res.status(400).json({ error: "message or image required" });
-  repo.addChatMessage("user", message || "(photo)", null, imageUrl ? { image: imageUrl } : undefined);
-  try {
-    const history = repo.listChatMessages(20).map((m: any) => ({
-      role: m.role,
-      content: m.content + (m.meta?.image ? " [photo attached]" : ""),
-    }));
-    const prompt = buildChatPrompt(history, message || "(no text — see the attached photo)", imagePath ?? undefined);
-    const { agent, result } = await runChosen(req.body?.agent, prompt);
-    const parsed = result.parsed;
-    const reply = (parsed?.reply ?? result.raw ?? "").toString().trim() || "(no reply)";
 
-    const applied: any[] = [];
-    const drafts: any[] = [];
-    for (const a of Array.isArray(parsed?.actions) ? parsed.actions : []) {
-      try {
-        switch (a.type) {
-          case "log_activity":
-            applied.push({ type: a.type, result: repo.addActivity({ text: a.text, date: a.date, notes: a.notes }) });
-            break;
-          case "log_set":
-            applied.push({ type: a.type, result: repo.logSetByName(a) });
-            break;
-          case "set_profile":
-            applied.push({ type: a.type, result: repo.setProfile(a) });
-            break;
-          case "add_memory":
-            applied.push({ type: a.type, result: repo.addMemory(a.content, a.kind, "chat") });
-            break;
-          case "update_memory":
-            // A fact CHANGED: edit the existing memory row in place (self-updating
-            // memory — the agent saw the row id in DATA.memory and is correcting it).
-            applied.push({ type: a.type, result: repo.updateMemory(Number(a.id), { content: a.content, kind: a.kind }) ?? { error: "not found", id: a.id } });
-            break;
-          case "supersede_memory":
-            // A fact was CONTRADICTED/REPLACED: mark the old row superseded (never
-            // hard-deleted), optionally with a replacement. The old fact stays in
-            // history for the curation UI and export.
-            applied.push({ type: a.type, result: repo.supersedeMemory(Number(a.id), { content: a.replacement, reason: a.reason }) ?? { error: "not found", id: a.id } });
-            break;
-          case "log_food": {
-            // The chat agent already produced the structured estimate (it saw the
-            // photo), so store it directly with raw="" — a non-empty raw would
-            // queue text-only background enrichment that overwrites this parse.
-            const parsedNote = {
-              summary: (a.summary ?? a.name ?? message ?? "meal").toString(),
-              items: Array.isArray(a.items) ? a.items : undefined,
-              ingredients: Array.isArray(a.ingredients) ? a.ingredients : undefined,
-              kcal: a.kcal ?? null,
-              protein_g: a.protein_g ?? null,
-              carbs_g: a.carbs_g ?? null,
-              fat_g: a.fat_g ?? null,
-              fiber_g: a.fiber_g ?? null,
-              notes: a.notes ?? null,
-            };
-            applied.push({ type: a.type, result: repo.addFoodNote(a.meal || "meal", "", parsedNote, imagePath ?? undefined) });
-            break;
-          }
-          case "log_health": {
-            // Lab/DEXA results reported in chat → a 'done' health record (no binary),
-            // mirroring the MCP add_health_record path. Markers feed the trend view.
-            const markers = Array.isArray(a.markers)
-              ? a.markers
-              : (a.parsed && Array.isArray(a.parsed.markers) ? a.parsed.markers : []);
-            const parsed = a.parsed && typeof a.parsed === "object"
-              ? a.parsed
-              : (markers.length ? { markers } : null);
-            applied.push({ type: a.type, result: repo.addHealthDocument({
-              kind: a.kind,
-              doc_date: a.doc_date ?? null,
-              summary: a.summary ?? null,
-              parsed_json: parsed,
-              enrichment_status: "done",
-            }) });
-            // New markers from chat → refresh the deterministic markers→directives
-            // propagation (idempotent), mirroring the enrichment path.
-            try { repo.deriveDirectives(); } catch { /* never fail the chat action */ }
-            break;
-          }
-          case "add_context_event":
-            applied.push({ type: a.type, result: repo.addContextEvent({
-              kind: a.kind, title: a.title, detail: a.detail,
-              start_date: a.start_date, end_date: a.end_date, meta: a.meta,
-            }) });
-            break;
-          case "plan_update":
-            drafts.push(repo.createProposal(agent, "chat: plan update", "", { summary: a.summary, changes: a.changes }));
-            break;
-          case "plan_restructure":
-            drafts.push(repo.createProposal(agent, "chat: restructure", "", { summary: a.summary, days: a.days }));
-            break;
-          default:
-            break;
-        }
-      } catch (e: any) {
-        applied.push({ type: a.type, error: e.message });
-      }
-    }
+  const userMsg = repo.addChatMessage("user", message || "(photo)", null, imageUrl ? { image: imageUrl } : undefined);
+  const turn = repo.createChatTurn({
+    message,
+    image_path: imagePath,
+    image_url: imageUrl,
+    agent: b.agent ?? null,
+    user_message_id: (userMsg as any).id,
+  });
+  enqueueChatTurn((turn as any).id);
+  res.json({ ok: true, turn, user_message: userMsg });
+});
 
-    const meta = { applied, drafts: drafts.map((d) => ({ id: d.id, kind: d.parsed?.days ? "restructure" : "plan_update", summary: d.parsed?.summary })) };
-    const assistant = repo.addChatMessage("assistant", reply, agent, meta);
-    res.json({ message: assistant, reply, agent, applied, drafts });
-  } catch (e: any) {
-    const assistant = repo.addChatMessage("assistant", `Couldn't reach a coaching agent: ${e.message}`, null, { error: true });
-    res.json({ message: assistant, reply: assistant.content, error: e.message });
-  }
+// Active (queued + running) turns, oldest-first — the PWA reconstructs the live
+// in-flight + queued thread from this on every (re)load (durable across restarts).
+api.get("/chat/turns", (_req, res) => res.json(repo.listActiveChatTurns()));
+
+// One turn's current state (poll fallback when SSE is unavailable).
+api.get("/chat/turns/:id", (req, res) => res.json(repo.getChatTurn(Number(req.params.id)) ?? null));
+
+// Stop a queued or running turn (drops it / SIGKILLs the live subprocess).
+api.post("/chat/turns/:id/cancel", (req, res) => {
+  const turn = cancelTurn(Number(req.params.id));
+  res.json({ ok: !!turn, turn: turn ?? null });
+});
+
+// Live progress for one turn (Server-Sent Events). Sends an immediate snapshot
+// (so a late subscriber / poll-fallback sees current state), then forwards every
+// phase + the terminal event from the worker bus, then closes. A keepalive comment
+// holds the connection through proxies. EventSource can't set headers, so the PWA
+// reaches this with ?token= (withToken) when auth is on.
+api.get("/chat/turns/:id/stream", (req, res) => {
+  const id = Number(req.params.id);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const send = (event: string, data: any) => {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
+  };
+
+  const turn = repo.getChatTurn(id) as any;
+  if (!turn) { send("error", { error: "no such turn" }); return res.end(); }
+
+  // Initial snapshot, with the assistant message if the turn already finished.
+  const assistantMsg = turn.assistant_message_id ? repo.getChatMessage(turn.assistant_message_id) : null;
+  send("snapshot", { turn, message: assistantMsg });
+  if (["done", "error", "canceled"].includes(turn.status)) return res.end();
+
+  const keepalive = setInterval(() => { try { res.write(`: keepalive\n\n`); } catch { /* client gone */ } }, 15000);
+  let unsubscribe = () => {};
+  const cleanup = () => { clearInterval(keepalive); unsubscribe(); };
+  unsubscribe = onTurnEvent(id, (e) => {
+    send(e.type, e);
+    if (e.type === "done" || e.type === "error" || e.type === "canceled") { cleanup(); res.end(); }
+  });
+  req.on("close", cleanup);
 });
 
 api.get("/stats", (_req, res) => res.json(repo.getWeeklyStats()));

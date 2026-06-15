@@ -863,6 +863,26 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   animation:capfade var(--dur-2) var(--ease)}
 .bubble.pending .typing-cap:empty{display:none}
 @keyframes capfade{from{opacity:.35}to{opacity:1}}
+/* quiet Stop control on a streaming/queued turn — a calm steer, never an alarm */
+.bubble.pending .turn-stop,.bubble.streaming .turn-stop{margin-left:10px;padding:0;border:none;background:none;
+  font-family:var(--font-ui);font-size:.68rem;font-weight:600;letter-spacing:.04em;
+  color:var(--muted);cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  vertical-align:middle}
+.bubble.pending .turn-stop:hover,.bubble.streaming .turn-stop:hover{color:var(--ink)}
+/* a turn rendering its reply token-by-token (true headless streaming) */
+.bubble.assistant.streaming{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
+  border-bottom-left-radius:5px}
+.bubble.streaming .stream-text{white-space:pre-wrap}
+.bubble.streaming .turn-stop{display:inline-block;margin:6px 0 0}
+/* blinking caret trailing the streamed text */
+.stream-caret{display:inline-block;width:2px;height:1.02em;margin-left:1px;border-radius:1px;
+  background:var(--accent);vertical-align:text-bottom;animation:streamcaret 1.1s steps(1) infinite}
+@keyframes streamcaret{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.stream-caret{animation:none;opacity:.6}}
+/* a stopped turn settles into a subtle in-place note */
+.bubble.turn-stopped{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
+  border-bottom-left-radius:5px}
+.bubble.turn-stopped .turn-stopped-note{font-style:italic;font-size:.82rem;color:var(--muted)}
 .bubble.bubble-in{animation:bubblein .34s var(--ease) both}
 @keyframes bubblein{from{opacity:0;transform:translateY(7px) scale(.98)}to{opacity:1;transform:none}}
 

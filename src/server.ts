@@ -6,6 +6,7 @@ import { handleMcpPost, methodNotAllowed } from "./mcp.js";
 import { seedIfEmpty } from "./seed.js";
 import { startScheduler } from "./scheduler.js";
 import { recoverPendingEnrich } from "./enrich.js";
+import { recoverChatTurns } from "./chatTurns.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled } from "./auth.js";
@@ -68,6 +69,9 @@ app.listen(PORT, HOST, () => {
   maybeScheduleAgentCliAutoUpdate();
   // Re-process any free-text entries left 'pending' by a prior restart.
   recoverPendingEnrich();
+  // Re-drain queued chat turns and fail any interrupted mid-flight (their actions
+  // may have partially applied — see recoverChatTurns) so the thread isn't stuck.
+  recoverChatTurns();
   // Warm the generated-art cache shortly after boot so PWA tiles have photos
   // immediately. requestArt() no-ops without a Gemini key / art_enabled.
   setTimeout(() => {

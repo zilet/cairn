@@ -6,7 +6,11 @@
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "env_required": [],
     "web_access": true,
-    "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required."
+    "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required.",
+    "stream": {
+      "format": "claude",
+      "args": ["-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+    }
   },
   "codex": {
     "command": "codex",
@@ -27,7 +31,11 @@
     "args": ["-p", "{prompt}"],
     "input": "arg",
     "description": "xAI Grok Build (SuperGrok/X Premium+). Headless may need XAI_API_KEY.",
-    "env_required": []
+    "env_required": [],
+    "stream": {
+      "format": "grok",
+      "args": ["-p", "{prompt}", "--output-format", "streaming-json"]
+    }
   },
   "stub": {
     "command": "sh",

@@ -18,6 +18,10 @@ export interface AgentDef {
   input?: "arg" | "stdin";        // how the prompt reaches the CLI (default: arg)
   description?: string;
   env_required?: string[];        // env vars that indicate this agent is usable
+  // Optional headless token-streaming. When present, the chat path can run the CLI
+  // in its NDJSON streaming mode (separate args) and render the reply live. `format`
+  // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
+  stream?: { format: "claude" | "grok"; args: string[] };
 }
 
 export function loadAgents(): Record<string, AgentDef> {
@@ -116,6 +120,7 @@ export function extractJson(text: string): any | null {
 
 export interface RunOpts {
   timeoutMs?: number;
+  signal?: AbortSignal;   // abort to kill the live subprocess mid-run (chat-turn Stop)
 }
 
 // Interactive callers (day-read, session-suggest, chat) pass the short timeout so
@@ -219,6 +224,7 @@ export async function runAgentWithFallback(
   const o: RunOpts & { op?: string } = typeof opts === "number" ? { timeoutMs: opts } : opts;
   const baseTimeout = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const op = o.op ?? "auto";
+  const signal = o.signal;
   const tried: { agent: string; error: string }[] = [];
 
   // Prefer agents whose breaker is closed; tripped ones go to the back so they're
@@ -228,6 +234,9 @@ export async function runAgentWithFallback(
   const sequence = [...healthy, ...tripped];
 
   for (let i = 0; i < sequence.length; i++) {
+    // Abort = a deliberate Stop: bail the whole rotation, never fall through to
+    // the next agent (the caller wants the turn killed, not retried elsewhere).
+    if (signal?.aborted) throw new Error("canceled");
     const name = sequence[i];
     const isProbe = breakerIsOpen(name);
     // A tripped agent is probed only on a short leash; if healthier agents exist
@@ -236,12 +245,12 @@ export async function runAgentWithFallback(
     const started = Date.now();
     let triedJson = false;
     try {
-      let result = await runAgent(name, prompt, { timeoutMs });
+      let result = await runAgent(name, prompt, { timeoutMs, signal });
       // One-shot JSON-repair retry: it ran but emitted nothing parseable.
-      if (!result.parsed) {
+      if (!result.parsed && !signal?.aborted) {
         triedJson = true;
         try {
-          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, { timeoutMs });
+          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, { timeoutMs, signal });
         } catch { /* keep the first (unparsed) result; fall through below */ }
       }
       if (result.parsed) {
@@ -253,6 +262,7 @@ export async function runAgentWithFallback(
       emitAgentRun({ op, agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: triedJson });
       tried.push({ agent: name, error: `ran but returned no valid JSON (exit ${result.code})` });
     } catch (e: any) {
+      if (signal?.aborted) throw e; // canceled mid-run — stop the rotation
       breakerNoteFail(name);
       emitAgentRun({ op, agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: triedJson });
       tried.push({ agent: name, error: e.message });
@@ -264,7 +274,8 @@ export async function runAgentWithFallback(
 export function runAgent(name: string, prompt: string, opts: RunOpts | number = {}): Promise<AgentResult> {
   // Back-compat: older call sites pass a bare timeout number.
   const timeoutMs = typeof opts === "number" ? opts : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  return runAgentImpl(name, prompt, timeoutMs);
+  const signal = typeof opts === "number" ? undefined : opts.signal;
+  return runAgentImpl(name, prompt, timeoutMs, signal);
 }
 
 // ---------- subprocess env hardening (Trust build V1) ----------
@@ -298,7 +309,7 @@ function buildAgentEnv(def: AgentDef): NodeJS.ProcessEnv {
   return env;
 }
 
-function runAgentImpl(name: string, prompt: string, timeoutMs: number): Promise<AgentResult> {
+function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: AbortSignal): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
 
@@ -310,6 +321,8 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number): Promise<
   const MAX_OUT = 4 * 1024 * 1024; // 4 MB — far beyond any real JSON proposal.
 
   return new Promise((resolve, reject) => {
+    // Already-aborted before launch (Stop landed while queued): don't spawn.
+    if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
     const child = spawn(def.command, args, {
       env: buildAgentEnv(def),
       cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,
@@ -320,16 +333,142 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number): Promise<
       child.kill("SIGKILL");
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
     }, timeoutMs);
+    // A Stop on a running turn aborts the signal: SIGKILL the live subprocess so
+    // the worker isn't left waiting on a now-unwanted run.
+    const onAbort = () => {
+      clearTimeout(timer);
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      reject(new Error(`agent "${name}" canceled`));
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
 
     child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += d.toString(); });
     child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += d.toString(); });
     child.on("error", (e) => {
-      clearTimeout(timer);
+      cleanup();
       reject(new Error(`failed to launch "${def.command}": ${e.message}`));
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      cleanup();
       resolve({ code, raw: out, stderr: err, parsed: extractJson(out) });
+    });
+
+    if (useStdin) child.stdin.write(prompt);
+    child.stdin.end();
+  });
+}
+
+// ---------- headless token streaming (chat) ----------
+// Three of the four CLIs emit a streaming NDJSON event format in headless mode,
+// each with its OWN schema:
+//   - claude  `--output-format stream-json --include-partial-messages`  (verified live)
+//             {"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"…"}}}
+//   - grok    `--output-format streaming-json`  (verified live, grok 0.2.51)
+//             {"type":"text","data":"…"}  — assistant text deltas
+//             {"type":"thought","data":"…"} reasoning (ignored); {"type":"end",…} terminal
+//   - codex   exec `--json` delivers the agent message ONLY as a complete item
+//             (no token deltas), so streaming buys nothing — codex stays one-shot.
+//   - agy     has no streaming flag at all — one-shot.
+// streamDelta maps ONE line to the assistant text it carries, or null for any non-
+// text event. It is deliberately CONSERVATIVE: an unrecognized shape yields null
+// (empty accumulation → the caller falls back to the one-shot path), never garbage.
+export function streamDelta(format: string, line: string): string | null {
+  const s = line.trim();
+  if (!s) return null;
+  let obj: any;
+  try { obj = JSON.parse(s); } catch { return null; }
+  if (format === "claude") {
+    if (obj?.type === "stream_event" && obj.event?.type === "content_block_delta" && obj.event.delta?.type === "text_delta") {
+      return typeof obj.event.delta.text === "string" ? obj.event.delta.text : null;
+    }
+    return null;
+  }
+  if (format === "grok") {
+    // grok 0.2.51 streaming-json: {"type":"text","data":"…"} carries assistant
+    // text; {"type":"thought",…} is reasoning (skip), {"type":"end",…} is terminal.
+    if (obj?.type === "text" && typeof obj.data === "string") return obj.data;
+    // Tolerate the older xAI ACP shape too, in case a future grok emits it.
+    const u = obj?.params?.update ?? obj?.update;
+    if (u && u.sessionUpdate === "agent_message_chunk") {
+      const c = u.content;
+      if (typeof c === "string") return c;
+      if (c && typeof c.text === "string") return c.text;
+    }
+    return null;
+  }
+  return null;
+}
+
+export function agentSupportsStream(name: string): boolean {
+  const def = loadAgents()[name];
+  return !!(def && def.stream && Array.isArray(def.stream.args) && def.stream.args.length);
+}
+
+export interface StreamRunOpts extends RunOpts {
+  onDelta?: (text: string) => void; // called with each assistant text chunk as it arrives
+}
+
+// Streaming sibling of runAgent for the chat path. Spawns the CLI in its headless
+// streaming mode (def.stream.args), reads stdout LINE BY LINE, maps each NDJSON
+// event to assistant text via the format adapter, and calls onDelta as tokens land.
+// `raw` accumulates the full assistant text (prose + the trailing actions block),
+// parsed downstream by parseChatReply. Honors the same timeout + AbortSignal (Stop)
+// as the one-shot path. Falls back to runAgent when the agent has no stream config.
+export function runAgentStreaming(name: string, prompt: string, opts: StreamRunOpts = {}): Promise<AgentResult> {
+  const def = loadAgents()[name];
+  if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
+  if (!def.stream?.args?.length) return runAgent(name, prompt, opts); // no stream mode → one-shot
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const signal = opts.signal;
+  const onDelta = opts.onDelta;
+  const format = def.stream.format;
+  const useStdin = def.input === "stdin";
+  const args = def.stream.args.map((a) => (useStdin ? a : a.replaceAll("{prompt}", prompt)));
+  const MAX_OUT = 4 * 1024 * 1024;
+
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
+    const child = spawn(def.command, args, {
+      env: buildAgentEnv(def),
+      cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,
+    });
+    let text = "";  // accumulated assistant text (the model's full output)
+    let err = "";
+    let buf = "";   // stdout line buffer (NDJSON)
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      reject(new Error(`agent "${name}" canceled`));
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
+
+    const consume = (line: string) => {
+      const piece = streamDelta(format, line);
+      if (piece == null || text.length >= MAX_OUT) return;
+      text += piece;
+      try { onDelta?.(piece); } catch { /* a bad consumer must never kill the stream */ }
+    };
+    child.stdout.on("data", (d) => {
+      buf += d.toString();
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        consume(line);
+      }
+    });
+    child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += d.toString(); });
+    child.on("error", (e) => { cleanup(); reject(new Error(`failed to launch "${def.command}": ${e.message}`)); });
+    child.on("close", (code) => {
+      cleanup();
+      if (buf.trim()) consume(buf); // flush a trailing line with no newline
+      resolve({ code, raw: text, stderr: err, parsed: extractJson(text) });
     });
 
     if (useStdin) child.stdin.write(prompt);

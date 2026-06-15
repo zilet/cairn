@@ -2257,6 +2257,12 @@ export function addChatMessage(role: string, content: string, agent?: string | n
   return hydrateChat(db.prepare(`SELECT * FROM chat_messages WHERE id = ?`).get(info.lastInsertRowid));
 }
 
+// One chat message by id, hydrated (drafts stamped with current proposal status).
+// Used by the chat-turn SSE snapshot to deliver a finished turn's assistant row.
+export function getChatMessage(id: number) {
+  return hydrateChat(db.prepare(`SELECT * FROM chat_messages WHERE id = ?`).get(id));
+}
+
 // The live conversation: archived turns are excluded (they stay in the DB and
 // in /api/export, but a "fresh start" or clear removes them from view).
 export function listChatMessages(limit = 50) {
@@ -2291,6 +2297,137 @@ export function saveDistilledMemories(parsed: any) {
     saved++;
   }
   return saved;
+}
+
+// Live conversation up to (and excluding) a given message id. The chat worker
+// builds each turn's prompt from only what PRECEDED its user message, so a
+// follow-up queued while the coach was still thinking can't leak backward into
+// an earlier turn's context (turns drain serially, newest-queued last).
+export function listChatMessagesBefore(beforeId: number, limit = 20) {
+  const rows = db
+    .prepare(`SELECT * FROM chat_messages WHERE archived_at IS NULL AND id < ? ORDER BY id DESC LIMIT ?`)
+    .all(beforeId, limit) as any[];
+  return rows.reverse().map(hydrateChat);
+}
+
+// ---------- chat turns (durable outbox + worker job state) ----------
+// A chat turn is the unit the serial worker (src/chatTurns.ts) drains. Persisting
+// it (not just holding the request open) is what makes a queued follow-up — or a
+// turn interrupted by a tab switch / reload / restart — survive: the PWA rebuilds
+// the in-flight + queued thread from listActiveChatTurns() on every (re)load.
+function hydrateChatTurn(row: any) {
+  if (!row) return row;
+  let meta: any = null;
+  try { meta = row.meta ? JSON.parse(row.meta) : null; } catch { meta = null; }
+  // Stamp each draft with its CURRENT proposal status (mirrors hydrateChat) so a
+  // turn snapshot reflects an applied/missing proposal, never a stale "Apply".
+  if (meta?.drafts?.length) {
+    for (const d of meta.drafts) {
+      if (d?.id == null) continue;
+      const p = db.prepare(`SELECT status FROM plan_proposals WHERE id = ?`).get(d.id) as any;
+      d.status = p?.status ?? "missing";
+    }
+  }
+  return { ...row, meta };
+}
+
+export function createChatTurn(t: {
+  message?: string | null;
+  image_path?: string | null;
+  image_url?: string | null;
+  agent?: string | null;
+  user_message_id?: number | null;
+}) {
+  const info = db
+    .prepare(`INSERT INTO chat_turns (status, phase, message, image_path, image_url, agent, user_message_id)
+              VALUES ('queued', 'queued', ?, ?, ?, ?, ?)`)
+    .run(t.message ?? null, t.image_path ?? null, t.image_url ?? null, t.agent ?? null, t.user_message_id ?? null);
+  return getChatTurn(Number(info.lastInsertRowid));
+}
+
+export function getChatTurn(id: number) {
+  return hydrateChatTurn(db.prepare(`SELECT * FROM chat_turns WHERE id = ?`).get(id));
+}
+
+// Active = not yet terminal, oldest-first. The worker drains in this order and
+// the PWA reconstructs the live in-flight + queued thread from it.
+export function listActiveChatTurns() {
+  const rows = db
+    .prepare(`SELECT * FROM chat_turns WHERE status IN ('queued','running') ORDER BY id ASC`)
+    .all() as any[];
+  return rows.map(hydrateChatTurn);
+}
+
+// queued → running (guarded so a canceled-while-queued turn is never picked up).
+export function markChatTurnRunning(id: number) {
+  db.prepare(`UPDATE chat_turns SET status='running', phase='running', started_at=datetime('now')
+              WHERE id=? AND status='queued'`).run(id);
+  return getChatTurn(id);
+}
+
+export function setChatTurnPhase(id: number, phase: string) {
+  db.prepare(`UPDATE chat_turns SET phase=? WHERE id=? AND status='running'`).run(phase, id);
+  return getChatTurn(id);
+}
+
+export function finishChatTurn(
+  id: number,
+  fields: { reply: string; chosen_agent?: string | null; assistant_message_id?: number | null; meta?: any }
+) {
+  db.prepare(`UPDATE chat_turns
+                 SET status='done', phase='done', finished_at=datetime('now'),
+                     reply=?, chosen_agent=?, assistant_message_id=?, meta=?
+               WHERE id=?`)
+    .run(
+      (fields.reply ?? "").toString(),
+      fields.chosen_agent ?? null,
+      fields.assistant_message_id ?? null,
+      fields.meta ? JSON.stringify(fields.meta) : null,
+      id,
+    );
+  return getChatTurn(id);
+}
+
+export function failChatTurn(id: number, error: string, assistantMessageId?: number | null) {
+  db.prepare(`UPDATE chat_turns
+                 SET status='error', phase='error', finished_at=datetime('now'), error=?, assistant_message_id=?
+               WHERE id=?`)
+    .run((error ?? "").toString().slice(0, 1000), assistantMessageId ?? null, id);
+  return getChatTurn(id);
+}
+
+// User-requested Stop. A queued turn just drops; a running turn is flipped here
+// AND its live subprocess aborted by the worker (it polls status / holds the
+// AbortController). Returns the turn, or null if it was already terminal.
+export function cancelChatTurn(id: number) {
+  const row = getChatTurn(id) as any;
+  if (!row || !["queued", "running"].includes(row.status)) return null;
+  db.prepare(`UPDATE chat_turns SET status='canceled', phase='canceled', finished_at=datetime('now') WHERE id=?`).run(id);
+  return getChatTurn(id);
+}
+
+// Crash recovery (boot): a 'running' turn was interrupted mid-flight — its actions
+// may have PARTIALLY applied, so re-running risks duplicate logs/proposals; mark
+// it 'error' and drop a calm note into the thread so the orphaned question isn't
+// silent. A 'queued' turn never started → safe to re-enqueue. Returns the queued
+// ids for the worker to re-drain.
+export function recoverChatTurns(): { requeue: number[]; interrupted: number } {
+  const interrupted = db.prepare(`SELECT id FROM chat_turns WHERE status='running'`).all() as any[];
+  for (const r of interrupted) {
+    let amid: number | null = null;
+    try {
+      const msg = addChatMessage(
+        "assistant",
+        "That turn was interrupted by a restart — ask again if you still need it.",
+        null,
+        { error: true },
+      );
+      amid = (msg as any)?.id ?? null;
+    } catch { /* never block recovery on the note */ }
+    failChatTurn(r.id, "interrupted by a restart", amid);
+  }
+  const queued = db.prepare(`SELECT id FROM chat_turns WHERE status='queued' ORDER BY id ASC`).all() as any[];
+  return { requeue: queued.map((r) => r.id), interrupted: interrupted.length };
 }
 
 // ---------- chat history (read-only browse + search over archived turns) ----------

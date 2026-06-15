@@ -7339,6 +7339,7 @@ async function chatFreshStart() {
 async function renderChat() {
   headerTitle.textContent = "Chat";
   document.body.classList.add("chat-mode"); // the chat column owns the viewport; drop body's tab-bar padding
+  chatTeardownMonitor(); // the log is about to be rebuilt — drop the old stream + bubble map
   const token = ++pollToken; // bump so the async hydrate below can detect a stale tab
   const { freshBtn } = ensureChatHeaderBtns();
   // Paint the shell FIRST so the composer is usable instantly; the log hydrates
@@ -7437,40 +7438,42 @@ async function renderChat() {
   };
   document.addEventListener("paste", chatPasteHandler);
 
+  // Send = enqueue a durable turn and return immediately; the input never blocks,
+  // so a follow-up typed while the coach is thinking simply queues (its own turn,
+  // drained serially server-side). The monitor streams real progress + finalizes.
   const send = async () => {
     const text = input.value.trim();
     const img = attached;
     if (!text && !img) return;
     input.value = "";
+    saveChatDraft("");
     clearAttach();
-    // Optimistic user bubble lands instantly; the assistant turn shows phased
-    // captions ("Thinking…" → "Drafting…") so the (one-shot JSON) CLI round-trip
-    // never reads as a frozen three-dot stall. True token streaming is out of
-    // scope — the backend returns one blob — so this is the strongest honest
-    // non-streaming latency UX: a phase the user can believe, never faked tokens.
-    appendMsg({ role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null });
-    const pending = appendMsg({ role: "assistant", content: img ? "Reading your plate…" : "Thinking…", pending: true });
-    const stopPhases = runChatPhases(pending, img);
-    sendBtn.disabled = true;
+    // Optimistic user bubble lands instantly (the server persists it too; a full
+    // re-render later draws from server truth, so no duplicate).
+    const userBubble = appendMsg({ role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null });
     try {
       const body = { message: text };
       if (img) { body.image_base64 = img.base64; body.image_mime = img.mime; }
       const r = await api("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      stopPhases();
-      pending.remove();
-      appendMsg(r.message || { role: "assistant", content: r.reply || r.error || "(no reply)" });
-      if ((r.drafts || []).length) { state.plan = []; toast("Draft ready — Apply below"); }
+      if (r && r.turn) { spawnPendingBubble(r.turn); chatMonitorEnsure(); }
+      else appendMsg({ role: "assistant", content: (r && r.error) || "(no reply)" });
     } catch (e) {
-      stopPhases();
-      pending.remove();
-      appendMsg({ role: "assistant", content: "Failed: " + e.message });
-    } finally { sendBtn.disabled = false; if (matchMedia("(hover:hover)").matches) input.focus(); }
+      // Couldn't even enqueue (offline): roll the optimistic bubble back and put
+      // the text back in the composer so nothing is lost — the offline banner says why.
+      userBubble?.remove();
+      if (!input.value) { input.value = text; saveChatDraft(text); }
+      toast("Couldn't send — check your connection");
+    } finally { if (matchMedia("(hover:hover)").matches) input.focus(); }
   };
   sendBtn.addEventListener("click", send);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  // Persist the unsent draft on every keystroke so it survives a tab switch /
+  // reload — restored below unless a deep-link prefill takes precedence.
+  input.addEventListener("input", () => saveChatDraft(input.value));
   // Deep links (e.g. the compass nudge) arrive with the question pre-written —
-  // leave it editable rather than auto-sending.
-  if (state.chatPrefill) { input.value = state.chatPrefill; state.chatPrefill = null; }
+  // leave it editable rather than auto-sending. Otherwise restore the saved draft.
+  if (state.chatPrefill) { input.value = state.chatPrefill; state.chatPrefill = null; saveChatDraft(input.value); }
+  else { const d = loadChatDraft(); if (d) input.value = d; }
   // desktop only — on mobile, auto-focus pops the keyboard over half the view
   if (matchMedia("(hover:hover)").matches) input.focus();
 
@@ -7480,6 +7483,8 @@ async function renderChat() {
   if (token !== pollToken || !log.isConnected) return; // navigated away / re-rendered
   freshBtn.hidden = !msgs.length;
   drawChat(msgs);
+  // Rebuild any in-flight + queued turns from the server and resume streaming.
+  chatReconnect();
   requestAnimationFrame(measureChatTop);
 }
 
@@ -7570,7 +7575,11 @@ const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 function appendMsg(m, noScroll, parent, opts = {}) {
   const log = $("#chatlog");
   const host = parent || log;
+  if (!host) return null; // log torn down (tab switch mid-stream) — bail safely
   const readonly = !!opts.readonly;
+  // Optional position-preserving insert: a streaming turn finalizes in place even
+  // when a queued follow-up's pending bubble already sits below it.
+  const before = opts.before && opts.before.isConnected && opts.before.parentElement === host ? opts.before : null;
   if (!noScroll && !parent) {
     // a live turn: clear the loading/empty state + starter chips, and make sure
     // it lands under a "Today" divider
@@ -7584,12 +7593,13 @@ function appendMsg(m, noScroll, parent, opts = {}) {
     if (fresh && state.tab === "chat") fresh.hidden = false;
   }
   // Grouping: continue a same-role run (skip for the pending typing bubble).
-  const prev = m.pending ? null : host.lastElementChild;
+  const prev = m.pending ? null : (before ? before.previousElementSibling : host.lastElementChild);
   const cont = !!prev && prev.classList?.contains("bubble") && prev.classList.contains(m.role) && !prev.classList.contains("pending");
   if (cont) { prev.classList.add("grouped"); prev.querySelector(".bubble-time")?.remove(); }
 
   const el = document.createElement("div");
   el.className = `bubble ${m.role}${m.pending ? " pending" : ""}${cont ? " cont" : ""}${noScroll ? "" : " bubble-in"}`;
+  if (m.id != null) el.dataset.mid = m.id; // anchor for re-attaching a turn's pending bubble after reload
 
   // Pending = the house typing indicator (breathing dots); an optional caption
   // ("Reading your plate…") leads, the dots follow. Early-return so a pending
@@ -7632,7 +7642,7 @@ function appendMsg(m, noScroll, parent, opts = {}) {
   const canCopy = m.role === "assistant" && !hideText && !!m.content;
   const copyBtn = canCopy ? `<button class="bubble-copy" aria-label="Copy reply" title="Copy">${COPY_ICON}</button>` : "";
   el.innerHTML = `${copyBtn}${photo}${body}${extra}${time}`;
-  host.appendChild(el);
+  if (before) host.insertBefore(el, before); else host.appendChild(el);
   el.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", async () => {
     b.disabled = true;
     const r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" });
@@ -7656,41 +7666,239 @@ function appendMsg(m, noScroll, parent, opts = {}) {
     el.querySelector(".bubble-copy")?.addEventListener("click", () => copyText(m.content));
     attachLongPressCopy(el, m.content);
   }
-  if (!noScroll && log) log.scrollTop = log.scrollHeight;
+  if (!noScroll && log && (!before || before === host.lastElementChild)) log.scrollTop = log.scrollHeight;
   return el;
 }
 
-// Advance a pending assistant bubble's caption through honest phases while the
-// (one-shot) chat round-trip runs, so the wait reads as a process rather than a
-// frozen spinner. The agent returns one JSON blob — we never fake streamed
-// tokens — so these are TIME-based phase labels, not content. Returns a stop()
-// to call the moment the real reply (or an error) lands; idempotent + safe if
-// the bubble was already removed. Captions are gentle, never urgent.
-function runChatPhases(bubble, isPhoto) {
-  // [delayMs, caption] — only advance to a phase once enough time has passed that
-  // it's a believable description of where the call is. Photo logging leads with
-  // its own caption from send(); both then converge on "Drafting…".
-  const phases = isPhoto
-    ? [[1500, "Reading your plate…"], [4500, "Estimating macros…"], [9000, "Drafting…"], [16000, "Almost there…"]]
-    : [[0, "Thinking…"], [4500, "Looking at your day…"], [9000, "Drafting…"], [16000, "Almost there…"]];
-  const t0 = performance.now();
-  let timer = 0;
-  const set = (txt) => {
-    if (!bubble || !bubble.isConnected) return;
-    const cap = bubble.querySelector(".typing-cap");
-    if (!cap) return;
-    cap.textContent = txt + " ";
-    if (!reducedMotion()) { cap.style.animation = "none"; void cap.offsetWidth; cap.style.animation = ""; } // restart the gentle fade
+// ============================================================================
+// Durable chat turns — non-blocking queue + live (SSE) progress.
+//
+// A chat turn is now a server-side job (chat_turns): POST /api/chat enqueues it
+// and returns at once, so the composer is never blocked — a follow-up typed
+// while the coach is thinking just queues. Each active turn gets a pending
+// "Queued…/Thinking…" bubble; a SINGLE EventSource streams the oldest active
+// turn's real phases (the server emits them — never faked tokens) and advances
+// to the next as each finishes. The queue + draft survive a tab switch, reload,
+// or server restart: the unsent draft is mirrored to localStorage, and the
+// in-flight + queued thread is rebuilt from GET /api/chat/turns on every render.
+// ============================================================================
+
+const CHAT_DRAFT_KEY = "cairn.chat.draft";
+function saveChatDraft(v) { try { v ? localStorage.setItem(CHAT_DRAFT_KEY, v) : localStorage.removeItem(CHAT_DRAFT_KEY); } catch {} }
+function loadChatDraft() { try { return localStorage.getItem(CHAT_DRAFT_KEY) || ""; } catch { return ""; } }
+
+let chatStream = null;        // the single open EventSource
+let chatStreamId = null;      // the turn id it's streaming
+const chatPendingBubbles = new Map(); // turnId -> its pending/streaming assistant bubble
+const chatStreamText = new Map();     // turnId -> accumulated streamed reply text (live tokens)
+const chatDoneTurns = new Set();      // turn ids already finalized — keeps finalize idempotent
+
+// Honest, server-driven phase caption (NOT a faked token stream / timer).
+function chatPhaseCaption(turn) {
+  if (!turn) return "Thinking…";
+  if (turn.status === "queued") return "Queued";
+  if (turn.phase === "applying") return "Saving…";
+  return turn.image_url ? "Reading your plate…" : "Thinking…";
+}
+
+// Build a pending bubble (same vocabulary as appendMsg's typing indicator) with
+// a Stop control, WITHOUT appending it — the caller positions it.
+function makePendingBubble(turn) {
+  const el = document.createElement("div");
+  el.className = "bubble assistant pending bubble-in";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-busy", "true");
+  el.dataset.turn = turn.id;
+  const cap = chatPhaseCaption(turn);
+  el.innerHTML = `<div class="bubble-text"><span class="typing-cap">${escHtml(cap)} </span>` +
+    `<span class="typing" aria-hidden="true"><i></i><i></i><i></i></span>` +
+    `<button class="turn-stop" type="button" aria-label="Stop this turn">Stop</button></div>`;
+  el.querySelector(".turn-stop").addEventListener("click", () => cancelTurn(turn.id));
+  return el;
+}
+
+function setPendingCaption(el, txt) {
+  const cap = el && el.querySelector(".typing-cap");
+  if (!cap) return;
+  cap.textContent = txt + " ";
+  if (!reducedMotion()) { cap.style.animation = "none"; void cap.offsetWidth; cap.style.animation = ""; }
+}
+
+// First live token: convert a pending (typing-dots) bubble into a streaming text
+// bubble — a growing text node + a blinking caret + the Stop control. Built once;
+// later tokens just update the text node (cheap — markdown is rendered only at
+// finalize). Returns the bubble, or null if it's gone (navigated away).
+function ensureStreamingBubble(id) {
+  const el = chatPendingBubbles.get(id);
+  if (!el || !el.isConnected) return null;
+  if (!el.classList.contains("streaming")) {
+    el.classList.remove("pending");
+    el.removeAttribute("aria-busy");
+    el.classList.add("streaming");
+    el.innerHTML =
+      `<div class="bubble-text"><span class="stream-text"></span><span class="stream-caret" aria-hidden="true"></span></div>` +
+      `<button class="turn-stop" type="button" aria-label="Stop this turn">Stop</button>`;
+    el.querySelector(".turn-stop").addEventListener("click", () => cancelTurn(id));
+  }
+  return el;
+}
+
+function appendStreamDelta(id, text) {
+  if (!text) return;
+  const el = ensureStreamingBubble(id);
+  if (!el) return;
+  const next = (chatStreamText.get(id) || "") + text;
+  chatStreamText.set(id, next);
+  const span = el.querySelector(".stream-text");
+  if (span) span.textContent = next;
+  // Keep pinned to the latest only if the reader is already near the bottom.
+  const log = $("#chatlog");
+  if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 200) log.scrollTop = log.scrollHeight;
+}
+
+// A streaming attempt fell back to one-shot: drop the partial text and return the
+// bubble to its calm "Thinking…" state until the final reply lands.
+function resetStreamingBubble(id) {
+  chatStreamText.delete(id);
+  const el = chatPendingBubbles.get(id);
+  if (!el || !el.isConnected) return;
+  el.classList.remove("streaming");
+  el.classList.add("pending");
+  el.setAttribute("aria-busy", "true");
+  el.innerHTML =
+    `<div class="bubble-text"><span class="typing-cap">Thinking… </span>` +
+    `<span class="typing" aria-hidden="true"><i></i><i></i><i></i></span>` +
+    `<button class="turn-stop" type="button" aria-label="Stop this turn">Stop</button></div>`;
+  el.querySelector(".turn-stop").addEventListener("click", () => cancelTurn(id));
+}
+
+// Place a turn's pending bubble after its user message (so order holds even with
+// several queued), tracked in chatPendingBubbles.
+function spawnPendingBubble(turn) {
+  const log = $("#chatlog");
+  if (!log || chatPendingBubbles.has(turn.id)) return chatPendingBubbles.get(turn.id) || null;
+  const el = makePendingBubble(turn);
+  const anchor = turn.user_message_id ? log.querySelector(`[data-mid="${turn.user_message_id}"]`) : null;
+  if (anchor && anchor.parentElement === log) anchor.after(el);
+  else log.appendChild(el);
+  chatPendingBubbles.set(turn.id, el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+// Replace a turn's pending bubble with its final message, in place.
+function finalizeTurn(turn, message) {
+  const id = turn?.id;
+  if (id != null) { if (chatDoneTurns.has(id)) return; chatDoneTurns.add(id); } // idempotent: never append twice
+  const el = chatPendingBubbles.get(id);
+  chatPendingBubbles.delete(id);
+  chatStreamText.delete(id);
+  const m = message || {
+    role: "assistant",
+    content: (turn && (turn.reply || turn.error)) || "(no reply)",
+    meta: turn && turn.meta,
+    created_at: turn && turn.finished_at,
+    id: turn && turn.assistant_message_id,
   };
-  const schedule = (i) => {
-    if (i >= phases.length) return;
-    const [delay, txt] = phases[i];
-    const wait = Math.max(0, delay - (performance.now() - t0));
-    timer = setTimeout(() => { set(txt); schedule(i + 1); }, wait);
+  appendMsg(m, false, null, { before: el });
+  if (el && el.isConnected) el.remove();
+  if (turn && (turn.meta?.drafts || []).length) { state.plan = []; toast("Draft ready — Apply below"); }
+}
+
+// A stopped turn settles into a quiet "Stopped" note in place.
+function finalizeCanceled(turn) {
+  const id = turn?.id;
+  if (id != null) { if (chatDoneTurns.has(id)) return; chatDoneTurns.add(id); } // idempotent
+  const el = chatPendingBubbles.get(id);
+  chatPendingBubbles.delete(id);
+  chatStreamText.delete(id);
+  if (el && el.isConnected) {
+    el.classList.remove("pending");
+    el.removeAttribute("aria-busy");
+    el.classList.add("turn-stopped");
+    el.innerHTML = `<span class="turn-stopped-note">Stopped</span>`;
+  }
+}
+
+// Stop a queued or running turn. The POST returns the canceled turn; we finalize
+// locally (the SSE 'canceled' event, if this is the streamed turn, is idempotent).
+async function cancelTurn(id) {
+  let r = null;
+  try { r = await api(`/chat/turns/${id}/cancel`, { method: "POST" }); } catch {}
+  finalizeCanceled(r?.turn || { id });
+  if (chatStreamId === id) closeChatStream();
+  chatMonitorEnsure();
+}
+
+function closeChatStream() {
+  if (chatStream) { try { chatStream.close(); } catch {} }
+  chatStream = null;
+  chatStreamId = null;
+}
+
+function chatTeardownMonitor() {
+  closeChatStream();
+  chatPendingBubbles.clear();
+  chatStreamText.clear();
+  chatDoneTurns.clear();
+}
+
+// Open the single EventSource on the oldest active turn that still has a bubble.
+function chatMonitorEnsure() {
+  if (chatStream || state.tab !== "chat") return;
+  const ids = [...chatPendingBubbles.keys()].filter((id) => chatPendingBubbles.get(id)?.isConnected).sort((a, b) => a - b);
+  if (!ids.length) return;
+  chatOpenStream(ids[0]);
+}
+
+function chatOpenStream(id) {
+  chatStreamId = id;
+  let es;
+  try { es = new EventSource(withToken(`/api/chat/turns/${id}/stream`)); }
+  catch { chatStreamId = null; return; }
+  chatStream = es;
+
+  // If we navigated away mid-stream, drop the connection — the turn keeps running
+  // server-side and is rebuilt from /chat + /chat/turns when chat re-renders.
+  const guard = () => {
+    if (state.tab === "chat" && document.getElementById("chatlog")) return false;
+    if (chatStream === es) closeChatStream();
+    else { try { es.close(); } catch {} }
+    return true;
   };
-  // start from the first phase whose delay has already elapsed (delay 0 = now)
-  schedule(0);
-  return () => { clearTimeout(timer); };
+  const terminal = () => { if (chatStream === es) closeChatStream(); else { try { es.close(); } catch {} } chatMonitorEnsure(); };
+  const phase = (turn) => { const el = chatPendingBubbles.get(id); if (el?.isConnected) setPendingCaption(el, chatPhaseCaption(turn)); };
+
+  es.addEventListener("snapshot", (e) => {
+    if (guard()) return;
+    const d = JSON.parse(e.data);
+    if (d.turn && ["done", "error", "canceled"].includes(d.turn.status)) {
+      if (d.turn.status === "canceled") finalizeCanceled(d.turn); else finalizeTurn(d.turn, d.message);
+      terminal();
+    } else { phase(d.turn || d); }
+  });
+  es.addEventListener("phase", (e) => { if (guard()) return; phase(JSON.parse(e.data).turn); });
+  es.addEventListener("delta", (e) => { if (guard()) return; appendStreamDelta(id, JSON.parse(e.data).text); });
+  es.addEventListener("reset", () => { if (guard()) return; resetStreamingBubble(id); });
+  es.addEventListener("done", (e) => { if (guard()) return; const d = JSON.parse(e.data); finalizeTurn(d.turn, d.message); terminal(); });
+  es.addEventListener("canceled", (e) => { if (guard()) return; finalizeCanceled(JSON.parse(e.data).turn); terminal(); });
+  es.addEventListener("error", (e) => {
+    // Our app-level error carries data; the native EventSource connection-error
+    // event does not — leave the latter alone so it auto-reconnects (a blip just
+    // re-receives the snapshot). On an app error, finalize and stop reconnecting.
+    if (e.data) { if (guard()) return; const d = JSON.parse(e.data); finalizeTurn(d.turn, d.message); terminal(); }
+  });
+}
+
+// Rebuild the in-flight + queued thread from the server (durable across reload /
+// restart). User messages are already drawn from /chat; we add a pending bubble
+// for each active turn that doesn't yet have one, then stream the oldest.
+async function chatReconnect() {
+  let turns = [];
+  try { turns = await api("/chat/turns"); } catch { turns = []; }
+  if (state.tab !== "chat" || !$("#chatlog")) return;
+  for (const t of turns) spawnPendingBubble(t);
+  chatMonitorEnsure();
 }
 
 // Show/hide the "jump to latest" pill as the log scrolls away from the bottom.
@@ -8227,6 +8435,7 @@ function tabSkeleton(tab) {
 // transition only waits for THIS, never the async render), then hydrate outside
 // the transition. The frozen-tab problem is gone: paint is always instant.
 function switchTab(tab) {
+  if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
   closeDetail(true); // overlays never outlive a tab switch
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
@@ -8420,6 +8629,7 @@ async function maybeBuildStarterPlan(dpw) {
 function activateTab(name) {
   const valid = ["today", "plan", "progress", "chat", "me", "settings"];
   const tab = valid.includes(name) ? name : "today";
+  if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
   closeDetail(true);
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
