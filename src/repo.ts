@@ -75,6 +75,28 @@ export function updateExercise(
   return getExercise(id);
 }
 
+// Delete an exercise by name. Refuses (200 + ok:false) when it's still referenced
+// by a plan day or any logged set — neither table cascades, so a blind DELETE would
+// orphan a foreign key. The caller surfaces the reason and offers the safe path
+// (remove it from the plan / delete the logged sets first). A clean delete returns
+// ok:true so the UI can drop the row.
+export function deleteExercise(name: string) {
+  const ex = findExercise(name);
+  if (!ex) return { ok: false, deleted: 0, error: "not found", exercise: name };
+  const inPlan = (db.prepare(`SELECT COUNT(*) AS c FROM plan_items WHERE exercise_id = ?`).get(ex.id) as any)?.c ?? 0;
+  const inLogs = (db.prepare(`SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?`).get(ex.id) as any)?.c ?? 0;
+  if (inPlan > 0 || inLogs > 0) {
+    return {
+      ok: false, deleted: 0, exercise: name, plan_count: inPlan, log_count: inLogs,
+      error: inLogs > 0
+        ? "It still has logged sets — delete those first."
+        : "It's still in your plan — remove it from the plan first.",
+    };
+  }
+  const changes = db.prepare(`DELETE FROM exercises WHERE id = ?`).run(ex.id).changes;
+  return { ok: changes > 0, deleted: changes, exercise: name };
+}
+
 // ---------- plan ----------
 export function getPlan() {
   const days = db.prepare(`SELECT * FROM plan_days ORDER BY day_number`).all() as any[];
@@ -369,9 +391,30 @@ export function finishSession(sessionId: number, notes?: string | null) {
     const mins = Math.round((new Date(span.last + "Z").getTime() - new Date(span.first + "Z").getTime()) / 60000);
     if (mins > 0) duration_min = mins;
   }
-  db.prepare(`UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes) WHERE id = ?`)
+  db.prepare(`UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes), finished_at = datetime('now') WHERE id = ?`)
     .run(duration_min, notes ?? null, sessionId);
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
+}
+
+// Reopen a finished session to keep logging (clears finished_at). Idempotent — a
+// no-op on an already-open session. The Today "done" card offers this so a wrap-up
+// is never a one-way door.
+export function reopenSession(sessionId: number) {
+  const s = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId) as any;
+  if (!s) return null;
+  db.prepare(`UPDATE sessions SET finished_at = NULL WHERE id = ?`).run(sessionId);
+  return getSessionDetail(sessionId);
+}
+
+// Edit a session's notes after the fact (history correction). Returns the full
+// session detail, or null if the id is unknown. trainingSignals reads sessions
+// live, so the coach sees the corrected note on its next prompt — no re-trigger.
+export function updateSessionNotes(sessionId: number, notes: string | null) {
+  const s = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId) as any;
+  if (!s) return null;
+  const clean = notes != null ? String(notes).trim().slice(0, 1000) || null : null;
+  db.prepare(`UPDATE sessions SET notes = ? WHERE id = ?`).run(clean, sessionId);
+  return getSessionDetail(sessionId);
 }
 
 // Optional per-session autoregulation feedback (Phase 3B): 1-tap soreness /
@@ -537,6 +580,35 @@ export function logSetByName(input: LogSetInput) {
 
 export function deleteSet(id: number) {
   return { deleted: db.prepare(`DELETE FROM logged_sets WHERE id = ?`).run(id).changes };
+}
+
+// Edit a single logged set after the fact (history correction: a mistyped weight,
+// a wrong rep count). Only the fields provided are touched; numeric fields coerce,
+// note trims/caps. Returns the refreshed set row (with exercise name), or null on
+// an unknown id. The connected brain (trainingSignals) re-reads logged_sets on
+// every coach prompt, so a correction flows into future planning with no extra step.
+export function updateSet(
+  id: number,
+  fields: { weight?: number | null; reps?: number | null; rir?: number | null; note?: string | null; duration_sec?: number | null }
+) {
+  const cur = db.prepare(`SELECT id FROM logged_sets WHERE id = ?`).get(id) as any;
+  if (!cur) return null;
+  const num = (v: any): number | null => (v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+  const sets: string[] = [];
+  const vals: any[] = [];
+  if (fields.weight !== undefined) { sets.push("weight = ?"); vals.push(num(fields.weight)); }
+  if (fields.reps !== undefined) { sets.push("reps = ?"); vals.push(num(fields.reps)); }
+  if (fields.rir !== undefined) { sets.push("rir = ?"); vals.push(num(fields.rir)); }
+  if (fields.duration_sec !== undefined) { sets.push("duration_sec = ?"); vals.push(num(fields.duration_sec)); }
+  if (fields.note !== undefined) { sets.push("note = ?"); vals.push(fields.note == null ? null : String(fields.note).trim().slice(0, 500) || null); }
+  if (sets.length) {
+    vals.push(id);
+    db.prepare(`UPDATE logged_sets SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  }
+  return db.prepare(
+    `SELECT ls.*, e.name AS exercise, e.mode AS mode FROM logged_sets ls
+     JOIN exercises e ON e.id = ls.exercise_id WHERE ls.id = ?`
+  ).get(id);
 }
 
 // Most recent logged set for an exercise across all sessions (for prefill).

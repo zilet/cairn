@@ -206,6 +206,13 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "memory", "confidence REAL DEFAULT 1");
     addColumn(db, "memory", "last_referenced_at TEXT");
   } },
+  { version: 31, name: "sessions-finished-at", up: (db) => {
+    // A finished workout reads differently from one mid-flight: Today shows a calm
+    // "done" card instead of the full logging surface. NULL = open; a UTC stamp =
+    // finished (reopen sets it back to NULL). Existing rows stay NULL (open) — only
+    // newly-finished sessions get a stamp, which is the correct, conservative default.
+    addColumn(db, "sessions", "finished_at TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

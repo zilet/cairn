@@ -142,6 +142,17 @@ api.put("/exercises/:id", (req, res) => {
   }
 });
 
+// Delete an exercise by name. Returns 200 with ok:false (not an HTTP error) when
+// it's still referenced by a plan or logged sets — a designed, recoverable state
+// the PWA surfaces as a gentle reason, mirroring the swap/skip failure signal.
+api.delete("/exercises/:name", (req, res) => {
+  try {
+    res.json(repo.deleteExercise(decodeURIComponent(req.params.name)));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 api.get("/exercise/:name", (req, res) =>
   res.json(repo.getExerciseDetail(decodeURIComponent(req.params.name)))
 );
@@ -175,6 +186,20 @@ api.post("/sessions/:id/finish", (req, res) => {
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// Reopen a finished session to keep logging (clears finished_at).
+api.post("/sessions/:id/reopen", (req, res) => {
+  const s = repo.reopenSession(Number(req.params.id));
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(s);
+});
+
+// Edit a finished/past session's notes (history correction).
+api.put("/sessions/:id/notes", (req, res) => {
+  const s = repo.updateSessionNotes(Number(req.params.id), (req.body ?? {}).notes ?? null);
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(s);
 });
 
 // The day intelligence read — the soul of the product. Judges what KIND of day
@@ -291,6 +316,20 @@ api.post("/sets", (req, res) => {
 });
 
 api.delete("/sets/:id", (req, res) => res.json(repo.deleteSet(Number(req.params.id))));
+
+// Edit a single logged set (history correction). Only provided fields are touched.
+api.put("/sets/:id", (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const updated = repo.updateSet(Number(req.params.id), {
+      weight: b.weight, reps: b.reps, rir: b.rir, note: b.note, duration_sec: b.duration_sec,
+    });
+    if (!updated) return res.status(404).json({ error: "not found" });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 api.get("/progress/:exercise", (req, res) =>
   res.json(repo.getProgress(decodeURIComponent(req.params.exercise)))

@@ -102,6 +102,37 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "update_set",
+    "Edit one logged set by id (history correction): any subset of weight (lb), reps, rir, note, duration_sec (timed work). Only provided fields change.",
+    {
+      id: z.number().int(),
+      weight: z.number().nullable().optional(),
+      reps: z.number().int().nullable().optional(),
+      rir: z.number().nullable().optional(),
+      note: z.string().nullable().optional(),
+      duration_sec: z.number().nullable().optional(),
+    },
+    async ({ id, ...fields }) => {
+      const r = repo.updateSet(id, fields);
+      return asText(r ?? { error: "not found", id });
+    }
+  );
+
+  server.tool(
+    "reopen_session",
+    "Reopen a finished session to keep logging (clears its finished stamp).",
+    { id: z.number().int() },
+    async ({ id }) => asText(repo.reopenSession(id) ?? { error: "not found", id })
+  );
+
+  server.tool(
+    "update_session_notes",
+    "Edit a session's notes after the fact (history correction).",
+    { id: z.number().int(), notes: z.string().nullable() },
+    async ({ id, notes }) => asText(repo.updateSessionNotes(id, notes ?? null) ?? { error: "not found", id })
+  );
+
+  server.tool(
     "update_target",
     "Update the prescribed target for an exercise on a given plan day: target_weight (lb) for reps exercises and/or target_seconds for timed exercises.",
     {
@@ -190,6 +221,13 @@ export function buildMcpServer(): McpServer {
       if (!ex) return asText({ error: "not found", exercise });
       return asText(repo.updateExercise(ex.id, patch));
     }
+  );
+
+  server.tool(
+    "delete_exercise",
+    "Delete an exercise by name. Refuses (ok:false) if it still has logged sets or is referenced in a plan — remove those first.",
+    { name: z.string().describe("exact exercise name") },
+    async ({ name }) => asText(repo.deleteExercise(name))
   );
 
   server.tool(

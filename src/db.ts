@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   performance INTEGER,                   -- how the session felt vs expected (1-5; NULL = not given)
   joint_pain TEXT,                       -- free-text joint/area flag, e.g. "left knee" (NULL = none)
   garmin_json TEXT,                      -- reconciled Garmin strength physiology blob (HR/zones/calories/TE + agent narrative)
+  finished_at TEXT,                      -- UTC stamp set by finishSession; NULL = session still open (mid-workout). Reopen clears it.
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS logged_sets (
