@@ -4671,7 +4671,11 @@ export function addEvidence(fields: EvidenceInput) {
   const claim = fields.claim == null ? null : String(fields.claim).trim().slice(0, 800) || null;
   const body = fields.body == null ? null : String(fields.body).trim().slice(0, 4000) || null;
   if (!claim && !body) return null;
-  const sourceUrl = fields.source_url == null ? null : String(fields.source_url).trim().slice(0, 600) || null;
+  // Server-side scheme guard (defense-in-depth): never persist a javascript:/data:/
+  // internal URL even if a research source supplied one — mirrors the client filter
+  // so the stored URL is genuinely http(s)-validated, not trusting the renderer alone.
+  const rawUrl = fields.source_url == null ? null : String(fields.source_url).trim().slice(0, 600) || null;
+  const sourceUrl = rawUrl && isPlausibleSourceUrl(rawUrl) ? rawUrl : null;
   const confidence = EVIDENCE_CONFIDENCE.has(String(fields.confidence)) ? String(fields.confidence) : "moderate";
   const info = db
     .prepare(`INSERT INTO evidence_cache (topic, marker, claim, source_title, source_url, body, confidence, retrieved_at)
