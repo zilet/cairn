@@ -1050,6 +1050,16 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   animation:rise .45s var(--ease) both}
 .distill-check{color:var(--sage);font-size:1.1rem}
 
+/* fresh-start settle pill — a quiet, self-dismissing confirmation in the chat
+   header actions row after a non-blocking fresh start (the composer never locks). */
+.fresh-pill{display:flex;align-items:center;gap:6px;white-space:nowrap;
+  padding:4px 11px;border-radius:999px;background:var(--card);border:1px solid var(--line-2);
+  color:var(--ink-2);font-family:var(--font-ui);font-size:.72rem;font-weight:600;
+  opacity:0;transform:translateY(-3px);transition:opacity var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.fresh-pill .distill-check{font-size:.9rem}
+.fresh-pill-in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){ .fresh-pill{transition:none;opacity:1;transform:none} }
+
 /* jump-to-latest pill — floats bottom-right of the log when scrolled up */
 .chat-jump{position:absolute;right:8px;bottom:10px;z-index:3;width:38px;height:38px;
   display:flex;align-items:center;justify-content:center;
@@ -1774,11 +1784,15 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .meal-swap-actions{display:flex;gap:8px;margin-top:10px}
 .meal-swap-actions .pillbtn{padding:8px 18px;font-size:.78rem}
 
-/* swap in flight: soft skeleton pulse on the row, controls frozen */
-.meal-busy{pointer-events:none}
+/* swap in flight: soft skeleton pulse on the row, controls frozen, with the
+   evolving "thinking" caption floating centered over the pulsing row content. */
+.meal-busy{pointer-events:none;position:relative}
 .meal-busy .meal-art,.meal-busy .meal-main,.meal-busy .meal-macros{
   animation:mealpulse 1.6s var(--ease) infinite}
 @keyframes mealpulse{0%,100%{opacity:.85}50%{opacity:.4}}
+.meal-cap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  z-index:1;white-space:nowrap;color:var(--ink-2);font-family:var(--font-display);
+  font-style:italic;font-size:.9rem;pointer-events:none}
 .meal-swap-busy{opacity:.75}
 
 /* gentle settle highlight after a swap / reorder lands */
@@ -1864,6 +1878,9 @@ body.sheet-open{overflow:hidden}
 .sheet-section-c{text-align:center}
 .sheet-recipe-cta{margin-top:4px}
 .sheet-recipe-note{font-size:.74rem;color:var(--muted);margin-top:9px}
+/* recipe being written (durable background job): spinner + evolving caption */
+.sheet-recipe-loading{display:flex;flex-direction:column;align-items:center;gap:11px;padding:8px 0}
+.sheet-recipe-load-line{color:var(--ink-2);font-family:var(--font-display);font-style:italic;font-size:.95rem}
 .recipe-lede{font-family:var(--font-display);font-style:italic;font-weight:480;
   font-variation-settings:"opsz" 40;font-size:1.02rem;color:var(--ink-2);line-height:1.55;
   margin:20px auto 0;max-width:430px}

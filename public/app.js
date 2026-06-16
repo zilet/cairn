@@ -1038,6 +1038,7 @@ function loadingState(label) {
 const THINKING_SCRIPTS = {
   session_suggest: ["Reading your week…", "Weighing recovery…", "Shaping today's session…", "Choosing the right load…"],
   meal_plan: ["Reading your week…", "Balancing the macros…", "Plating the days…", "Checking the protein floor…"],
+  meal_swap: ["Reading the meal…", "Finding a match…", "Holding the macros…", "Plating the swap…"],
   recipe: ["Opening the kitchen…", "Sourcing the ingredients…", "Writing the steps…", "Tasting as it goes…"],
   nutrition_checkin: ["Reading your intake…", "Tracing the trend…", "Weighing the drift…", "Settling on a number…"],
   day_read_override: ["Hearing you…", "Re-reading the day…", "Reshaping the brief…"],
@@ -1118,9 +1119,12 @@ const fmtK = (n) => {
 };
 
 // Run count-ups for every [data-cu] numeral in scope (data-cufmt="k" → humanized).
-function runCountUps(scope) {
+// `snap:true` writes the final value with no animation — used when a warm SWR
+// re-render replaces already-shown numerals, so they don't re-count from zero.
+function runCountUps(scope, { snap = false } = {}) {
   (scope || view).querySelectorAll("[data-cu]").forEach((el) => {
     const fmt = el.dataset.cufmt === "k" ? fmtK : (x) => Math.round(x).toLocaleString();
+    if (snap) { el.textContent = fmt(Number(el.dataset.cu) || 0); return; }
     countUp(el, Number(el.dataset.cu) || 0, { fmt });
   });
 }
@@ -1570,6 +1574,12 @@ async function upgradeBriefInPlace(date, isToday) {
 // nulling state.brief there lets that render pick up the fresh read.
 async function reshapeToday() {
   state.brief = null;
+  // A relevant log (activity / food / weight / check-in) can shift the day's
+  // session, weekly stats, and energy read — drop their SWR caches so the
+  // re-render below reads truth instead of a stale warm peek.
+  swrInvalidate("today:session:" + state.logDate);
+  swrInvalidate("stats");
+  swrInvalidate("progress:energy");
   if (state.tab !== "today") return;
   // Re-fetch the read BEFORE the transition so renderToday's loadBrief hits the
   // warm cache and the DOM update is instant — running the (slow, agentic) fetch
@@ -1912,7 +1922,11 @@ function revealPlanThen(after) {
   Promise.resolve(renderToday()).then(() => { after && after(); });
 }
 
-async function renderToday() {
+async function renderToday(opts = {}) {
+  // `soft:true` marks a warm SWR re-render (a background revalidate found new data):
+  // numerals snap to their final value instead of re-counting from zero. Passed
+  // explicitly (not a shared flag) so re-entrant renders never race over it.
+  const soft = !!opts.soft;
   pollToken++; // invalidate any in-flight enrichment polls from a previous render
   if (!state.logDate) state.logDate = localISO();
   setTodayHeaderTitle();
@@ -1920,12 +1934,41 @@ async function renderToday() {
   // previous tab frozen during the data/agent awaits below. The real render swaps
   // view.innerHTML wholesale once the data is in hand. Skip when re-rendering
   // in-place (the Brief is already on screen — a skeleton flash would be jarring).
-  if (!view.querySelector(".today-wrap")) view.innerHTML = todaySkeleton();
-  if (!state.plan.length) state.plan = await api("/plan");
+  // SWR data load: when every input is warm in cache, Today paints REAL content
+  // instantly (no skeleton, no network wait) and a single background revalidate
+  // upgrades it in place only if something changed. A cold input keeps the existing
+  // skeleton + await. The Brief self-SWRs (loadBrief), so it's left untouched.
+  // `changed` accumulates from each revalidate; once any input differs we softly
+  // re-render Today (guarded against clobbering active logging). `warm` drives the
+  // count-up snap so already-shown numerals never re-count from zero.
+  const sessKey = "today:session:" + state.logDate;
+  const peeks = {
+    plan: state.plan.length ? { data: state.plan, fresh: true } : peekCached("plan"),
+    session: peekCached(sessKey),
+    stats: peekCached("stats"),
+    profile: peekCached("profile"),
+    exercises: peekCached("exercises"),
+  };
+  const warm = Object.values(peeks).every(Boolean);
+  const myToken = pollToken; // staleness guard for the background revalidate tail
+  let _todayChanged = false;
+  const revals = [];
+  // Background revalidations; each writes its cache tier and flags a change. Only the
+  // 5 primary inputs feed the soft-repaint decision (last-set prefills don't).
+  const reval = (path, key) => { revals.push(cachedApi(path, { key, onUpgrade: (_d, { changed }) => { if (changed) _todayChanged = true; } }).catch(() => {})); };
+  // Cold + no existing surface → skeleton-first (the old frozen-tab guard). Warm
+  // skips the skeleton entirely: the prior content stays until the synchronous
+  // render below swaps in the real today-wrap, so there's no blank/skeleton flash.
+  if (!warm && !view.querySelector(".today-wrap")) view.innerHTML = todaySkeleton();
+
+  // /plan
+  if (!state.plan.length) state.plan = peeks.plan ? peeks.plan.data : await api("/plan");
+  reval("/plan", "plan");
   const isToday = state.logDate === localISO();
 
   // session for the selected date (single object or null)
-  const session = await api("/sessions?date=" + state.logDate);
+  const session = peeks.session ? peeks.session.data : await api("/sessions?date=" + state.logDate);
+  reval("/sessions?date=" + state.logDate, sessKey);
   const loggedByEx = {};
   if (session) for (const s of session.sets) (loggedByEx[s.exercise] ??= []).push(s);
   for (const k of Object.keys(loggedByEx)) loggedByEx[k].sort((a, b) => (a.set_number ?? 0) - (b.set_number ?? 0));
@@ -1946,13 +1989,18 @@ async function renderToday() {
   const activeItems = (day.items || []).filter((it) => !isSkipped(it));
   const skippedItems = (day.items || []).filter(isSkipped);
 
-  // prefill: for plan exercises with no set yet this session, fetch most-recent-ever once.
+  // prefill: for plan exercises with no set yet this session, fetch most-recent-ever
+  // once. Cache-first per exercise so a warm Today never waits on these either; cold
+  // ones are fetched (and cached) in parallel as before.
   const planEx = activeItems.map((it) => it.exercise);
   const offPlanEx = Object.keys(loggedByEx).filter((ex) => !planNames.has(ex));
   const needLast = [...new Set(planEx)].filter((ex) => !(loggedByEx[ex] && loggedByEx[ex].length));
   const lastSets = {};
   await Promise.all(needLast.map(async (ex) => {
-    try { lastSets[ex] = await api("/last-set?exercise=" + encodeURIComponent(ex)); } catch { lastSets[ex] = null; }
+    const lk = "last-set:" + ex;
+    const pk = peekCached(lk);
+    if (pk) { lastSets[ex] = pk.data; cachedApi("/last-set?exercise=" + encodeURIComponent(ex), { key: lk }).catch(() => {}); return; }
+    try { lastSets[ex] = await cachedApi("/last-set?exercise=" + encodeURIComponent(ex), { key: lk }); } catch { lastSets[ex] = null; }
   }));
 
   function prefillFor(it) {
@@ -1963,9 +2011,12 @@ async function renderToday() {
     return { weight: it.target_weight ?? null, reps: it.rep_low ?? null, rir: null, duration_sec: it.target_seconds ?? null };
   }
 
-  const [stats, profile, exercises] = await Promise.all([
-    api("/stats"), api("/profile").catch(() => null), api("/exercises").catch(() => []),
-  ]);
+  const stats = peeks.stats ? peeks.stats.data : await api("/stats");
+  const profile = peeks.profile ? peeks.profile.data : await api("/profile").catch(() => null);
+  const exercises = peeks.exercises ? peeks.exercises.data : await api("/exercises").catch(() => []);
+  reval("/stats", "stats");
+  reval("/profile", "profile");
+  reval("/exercises", "exercises");
   // exercise → mode map ('reps'|'timed'), used by exCard + the add-exercise flow
   state.exModes = Object.fromEntries((exercises || []).map((e) => [e.name, e.mode || "reps"]));
   const curW = stats.weight_lb ?? (profile && profile.weight_lb != null ? profile.weight_lb : null);
@@ -2163,7 +2214,9 @@ async function renderToday() {
   // replaces #view wholesale) can never leave the class stranded.
   view.innerHTML = `<div class="today-wrap${focus ? " today-focus" : ""}">${html}</div>`;
   updateHeaderCondense(); // re-render may reset scroll → recompute the pinned-header state
-  runCountUps(view);
+  // On a warm SWR re-render (a background revalidate found new data) snap the
+  // numerals to their final value — never re-count an already-shown number from 0.
+  runCountUps(view, { snap: soft });
 
   const qlBtn = view.querySelector("#qlBtn");
   const qlInput = view.querySelector("#qlInput");
@@ -2244,6 +2297,12 @@ async function renderToday() {
       });
     } catch { finishBtn.disabled = false; toast("Couldn't finish — check your connection"); return; }
     const sm = r.summary || {};
+    // finishing stamps the session (Today flips to the done card) and lands it in
+    // History — invalidate so renderToday + History read the finished state.
+    state.brief = null;
+    swrInvalidate("today:session:" + state.logDate);
+    swrInvalidate("history:sessions");
+    swrInvalidate("stats");
     stopRest();
     // Elite micro-exit: the logging surface lifts away, then Today re-renders to the
     // calm "done" card (which reveals in). The workout now lives in your history.
@@ -2264,6 +2323,10 @@ async function renderToday() {
   if (reopenBtn) reopenBtn.addEventListener("click", async () => {
     reopenBtn.disabled = true;
     try { await api(`/sessions/${session.id}/reopen`, { method: "POST" }); } catch {}
+    // reopening clears finished_at — Today returns to the live surface; refresh caches.
+    state.brief = null;
+    swrInvalidate("today:session:" + state.logDate);
+    swrInvalidate("history:sessions");
     state.planReveal = { date: state.logDate, on: true };
     withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
   });
@@ -2275,6 +2338,20 @@ async function renderToday() {
   if (hasLoggedSets) renderFeedback(view.querySelector("#feedbackSlot"), session);
 
   setupAddExercise();
+
+  // SWR tail: once the background revalidations settle, if any of the 5 primary
+  // inputs actually changed, softly re-render Today in place (numerals SNAP, never
+  // re-count). Guarded so a refresh never clobbers what the athlete is doing: bail
+  // if we navigated away / the date moved (pollToken), if a logging input is
+  // focused, or if the Brief is mid-reshape.
+  if (revals.length) Promise.all(revals).then(() => {
+    if (!_todayChanged) return;
+    if (myToken !== pollToken || state.tab !== "today") return; // moved on / a newer render superseded us
+    const ae = document.activeElement;
+    if (ae && (ae.closest?.(".ex") || ae.closest?.(".quicklog") || ae.closest?.(".addex") || ae.closest?.(".wt-inline"))) return; // mid-entry
+    if (view.querySelector(".brief.is-thinking")) return; // a steer reshape is in flight
+    renderToday({ soft: true });
+  });
 }
 
 // A finished workout's calm wrap-up: a quiet checkmark, the day, the numbers that
@@ -2387,50 +2464,22 @@ function wireBrief(read, { isToday }) {
   const brief = view.querySelector(".brief");
   if (!brief) return;
 
-  // Steer options → re-fetch today-read with ?override= and re-render the Brief.
+  // Steer options → reshape the read agentically (POST /today-read/reshape) as a
+  // durable background job, so a steer survives a tab switch / reload / restart
+  // like the other ops. runOp streams the wait into the Brief; the `done` result
+  // is the raw read object, which the op's render adopts + morphs into place.
   brief.querySelectorAll("[data-override]").forEach((b) =>
-    b.addEventListener("click", async () => {
+    b.addEventListener("click", () => {
       const intent = b.dataset.override;
       if (brief.classList.contains("is-thinking")) return; // a reshape is already in flight
       // Visible "thinking" state for the (slow, agentic) reshape: the tapped option
       // carries a ring, the rest freeze, a filament sweeps the card, and a quiet line
       // makes the wait read as intentional rather than stalled.
-      const chipLabel = (b.textContent || "").trim();
-      brief.querySelectorAll(".brief-steer-opt").forEach((c) => {
-        c.classList.toggle("brief-steer-active", c === b);
-        if (c !== b) c.disabled = true;
-      });
-      const resetBtn = brief.querySelector("[data-steerreset]");
-      if (resetBtn) resetBtn.disabled = true;
-      b.classList.add("brief-steer-busy");
-      b.innerHTML = `<span class="aspin aspin-xs"></span>${escHtml(chipLabel)}`;
-      brief.classList.add("is-thinking");
-      brief.setAttribute("aria-busy", "true"); // screen readers hear "busy" while the read reshapes
-      const note = document.createElement("div");
-      note.className = "athinking-note chip-in";
-      note.setAttribute("role", "status");
-      note.textContent = "Reading the day again…";
-      (b.closest(".brief-steer") || b.parentElement).after(note); // the line sits under the steer block
-      // bust the per-date cache so loadBrief re-fetches with the override
+      paintBriefReshaping(brief, b);
+      // bust the per-date cache so the next plain render re-reads the steered Brief
       state.brief = null;
-      const reshaped = await loadBrief(state.logDate, intent);
-      // "short on time" also offers a shorter session straight away. The re-render
-      // runs inside a view transition so the hero (brief-hero shared element)
-      // morphs to its reshaped read fluidly instead of popping. Name the hero only
-      // for this moment: tag the live brief now, and the fresh render re-tags via
-      // state._briefMorph, so old+new both carry brief-hero during the capture.
-      if (state.tab === "today") {
-        const morph = !reducedMotion();
-        if (morph) { brief.classList.add("brief-morph"); state._briefMorph = true; }
-        try {
-          await withViewTransition(() => renderToday());
-        } finally {
-          state._briefMorph = false;
-          // drop the transient name so ordinary tab transitions keep the root crossfade
-          view.querySelector(".brief")?.classList.remove("brief-morph");
-        }
-        if (/short on time/i.test(intent)) askForSession({ minutes: 30, focus: reshaped.focus || read.focus || undefined });
-      }
+      runOp("day_read_override", { date: state.logDate, override: intent, agent: "auto" },
+        dayReadOverrideOpOpts({ intent, isToday, prevFocus: read.focus }));
     })
   );
 
@@ -2515,6 +2564,96 @@ function wireBrief(read, { isToday }) {
   }
 }
 
+// Paint the Brief's "reshaping" state when a steer chip is tapped: the chosen
+// option carries a ring, the rest freeze, the card gets the filament, and a quiet
+// "Reading the day again…" line makes the wait read as intentional. Reused by the
+// reload reconnector so a mid-flight reshape shows the same state after a refresh.
+function paintBriefReshaping(brief, chip) {
+  const chipLabel = chip ? (chip.textContent || "").trim() : "";
+  brief.querySelectorAll(".brief-steer-opt").forEach((c) => {
+    c.classList.toggle("brief-steer-active", c === chip);
+    if (c !== chip) c.disabled = true;
+  });
+  const resetBtn = brief.querySelector("[data-steerreset]");
+  if (resetBtn) resetBtn.disabled = true;
+  if (chip) {
+    chip.classList.add("brief-steer-busy");
+    chip.innerHTML = `<span class="aspin aspin-xs"></span>${escHtml(chipLabel)}`;
+  }
+  if (!reducedMotion()) brief.classList.add("is-thinking");
+  brief.setAttribute("aria-busy", "true"); // screen readers hear "busy" while the read reshapes
+  if (!brief.querySelector(".athinking-note")) {
+    const note = document.createElement("div");
+    note.className = "athinking-note chip-in";
+    note.setAttribute("role", "status");
+    note.textContent = "Reading the day again…";
+    const anchor = brief.querySelector(".brief-steer") || brief;
+    anchor.after ? anchor.after(note) : brief.appendChild(note);
+  }
+}
+
+// The shared runOp options for a Brief override reshape — used by both the live
+// chip tap and the reload reconnector, so the morph/fail behavior is identical
+// whether the read lands now or after a refresh. The job's `done` result is the
+// raw read object (byte-for-byte what GET /api/today-read?override= returns).
+function dayReadOverrideOpOpts({ intent, isToday, prevFocus } = {}) {
+  return {
+    path: "/today-read/reshape",
+    anchor: ".brief",
+    // No .job-cap inside the Brief — the chip + athinking-note carry the wait, so
+    // skip runOp's caption (it still drives the filament + reconnect via the host).
+    guard: () => !view.querySelector(".brief")?.isConnected,
+    isFail: (r) => !r || !r.kind,
+    render: (read) => {
+      if (state.tab !== "today") { state.brief = null; return; }
+      // Adopt the reshaped read exactly like loadBrief: carry the persisted steer.
+      state.brief = { date: state.logDate, override: intent || read.override || "", read };
+      // The re-render runs inside a view transition so the hero (brief-hero shared
+      // element) morphs to its reshaped read fluidly instead of popping.
+      const morph = !reducedMotion();
+      if (morph) { view.querySelector(".brief")?.classList.add("brief-morph"); state._briefMorph = true; }
+      Promise.resolve(withViewTransition(() => renderToday())).finally(() => {
+        state._briefMorph = false;
+        view.querySelector(".brief")?.classList.remove("brief-morph");
+      });
+      // "short on time" also offers a shorter session straight away.
+      if (/short on time/i.test(intent || "")) askForSession({ minutes: 30, focus: read.focus || prevFocus || undefined });
+    },
+    onFail: (err) => {
+      // designed failure (no read) or unreachable — fall back to the canonical read.
+      // A null err means the POST itself failed; either way, clear the steer and let
+      // Today re-read the calm cached Brief so the chip never stays stuck "thinking".
+      state.brief = null;
+      const live = view.querySelector(".brief");
+      if (live) { live.classList.remove("is-thinking"); live.removeAttribute("aria-busy"); live.querySelector(".athinking-note")?.remove(); }
+      if (state.tab === "today") renderToday();
+    },
+  };
+}
+
+// Reconnector: after a reload mid-reshape, jobReconnect rebuilds the Brief's
+// thinking state and returns the handlers runOp would have used, so a steer that
+// finished (or finishes) while we were away lands in place. Mirrors the
+// session-suggest reconnector's option→handler translation.
+function reconnectDayReadOverride(job) {
+  if (state.tab !== "today") return null; // not on Today — a later renderToday() retries
+  const brief = view.querySelector(".brief");
+  if (!brief) return null;
+  const intent = (job && job.input && job.input.override) || "";
+  // Mark the active chip (best-effort) and paint the reshaping state.
+  const chip = [...brief.querySelectorAll(".brief-steer-opt")].find((c) => c.dataset.override === intent) || null;
+  state.brief = null;
+  paintBriefReshaping(brief, chip);
+  const o = dayReadOverrideOpOpts({ intent, isToday: state.logDate === localISO(), prevFocus: null });
+  const clearBusy = () => { const b = view.querySelector(".brief"); if (b) b.classList.remove("is-thinking", "is-thinking--determinate"); };
+  return {
+    guard: o.guard,
+    onDone: (result) => { clearBusy(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
+    onError: () => { clearBusy(); o.onFail(null); },
+    onCanceled: () => { clearBusy(); o.onFail(null); },
+  };
+}
+
 // delete wiring (re-callable after inline chip inserts; guards against double-binding)
 function wireDeletes() {
   view.querySelectorAll("[data-del]").forEach((b) => {
@@ -2522,6 +2661,13 @@ function wireDeletes() {
     b.addEventListener("click", async (e) => {
       e.stopPropagation();
       await api(`/sets/${b.dataset.del}`, { method: "DELETE" });
+      // a removed set changes this date's session + stats + History — invalidate so
+      // the wholesale renderToday below (and other surfaces) read truth.
+      state.brief = null;
+      swrInvalidate("today:session:" + state.logDate);
+      swrInvalidate("stats");
+      swrInvalidate("history:sessions");
+      swrInvalidate("progress:volume");
       // refresh from server so set numbers + counts stay correct
       renderToday();
     });
@@ -2607,6 +2753,7 @@ async function skipFromCard(card, exercise) {
     toast(res && res.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
     return;
   }
+  swrInvalidate("today:session:" + state.logDate); // the session's skips changed
   // remember where the card sat so UNDO can put it back in place, wiring intact
   const anchor = card.nextElementSibling;
   collapseEl(card, () => { card.remove(); addSkipName(exercise); });
@@ -2620,6 +2767,7 @@ async function undoSkip(card, anchor, exercise) {
       body: JSON.stringify({ date: state.logDate, exercise }),
     });
   } catch { toast("Couldn't restore — try again"); return; }
+  swrInvalidate("today:session:" + state.logDate); // the session's skips changed
   if (state.tab !== "today") return;
   removeSkipName(exercise);
   if (!card.isConnected) {
@@ -2663,6 +2811,7 @@ function wireSkips() {
           body: JSON.stringify({ date: state.logDate, exercise }),
         });
       } catch { toast("Couldn't restore — try again"); return; }
+      swrInvalidate("today:session:" + state.logDate); // the session's skips changed
       toast(`${exercise} is back on`);
       renderToday(); // full refresh rebuilds the card in its plan position
     });
@@ -2705,6 +2854,12 @@ function wireLogRow(row) {
       body: JSON.stringify(body),
     });
     state.brief = null; // a logged set reshapes today — the next Today render re-reads the Brief
+    // a logged set changes this date's session, the weekly stats, and the History
+    // list — drop their SWR caches so every surface revalidates to truth.
+    swrInvalidate("today:session:" + state.logDate);
+    swrInvalidate("stats");
+    swrInvalidate("history:sessions");
+    swrInvalidate("progress:volume"); // muscle-group volume shifts too
     // inline: append chip, tick progress, keep inputs populated for the next tap
     const card = row.closest(".ex");
     const loggedWrap = card.querySelector("[data-logged]");
@@ -3216,6 +3371,12 @@ function setupWeightChip() {
     try {
       await api("/bodyweight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weight_lb: w }) });
     } catch { toast("Failed"); return; }
+    // a weigh-in syncs profile.weight_lb and moves the weight trend / pace — drop the
+    // caches that read it so Today's compass + the Weight/Energy views stay honest.
+    swrInvalidate("progress:weight");
+    swrInvalidate("stats");
+    swrInvalidate("profile");
+    swrInvalidate("progress:energy");
     const valEl = chip && chip.querySelector("[data-wtval]");
     if (valEl) valEl.innerHTML = `${w}<span class="stat-plus">+</span>`;
     if (mini) mini.innerHTML = `${w}<span class="wt-mini-unit">lb</span><span class="stat-plus">+</span>`;
@@ -3428,17 +3589,22 @@ async function loadInsightCard() {
   let list = [];
   try { list = await api("/insights"); } catch { list = []; }
   if (state.tab !== "today" || !slot.isConnected) return;
-  let ins = Array.isArray(list) && list.length ? list[0] : null;
-  if (!ins) {
-    slot.innerHTML = ""; // quiet by default — no empty-state nag
-    // Pull-based producer: nothing scheduled writes insights, so when the stream
-    // is empty, opportunistically ask the agent to look for ONE — gated to at most
-    // once per ~20h so opening Today never spams the agent. Never a push.
-    ins = await maybeGenerateInsight();
-    if (!ins || state.tab !== "today" || !slot.isConnected) return;
-  }
+  const ins = Array.isArray(list) && list.length ? list[0] : null;
+  if (ins) { renderInsightInSlot(slot, ins); return; }
+  slot.innerHTML = ""; // quiet by default — no empty-state nag
+  // Pull-based producer: nothing scheduled writes insights, so when the stream is
+  // empty, opportunistically ask the agent to look for ONE — gated to at most once
+  // per ~20h so opening Today never spams the agent. Fully background now (a durable
+  // job), so it survives a tab switch / reload; the card settles in when it lands.
+  maybeGenerateInsight();
+}
+
+// Render an insight card into a slot + mark it seen (fire-and-forget, only when
+// still new). Shared by the existing-insight path and the background generator's
+// render callback so the card looks identical either way.
+function renderInsightInSlot(slot, ins) {
+  if (!slot || !ins) return;
   renderInsightCard(slot, ins);
-  // mark seen on view (fire-and-forget; only when still new)
   if (ins.status === "new") {
     api(`/insights/${ins.id}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -3448,19 +3614,63 @@ async function loadInsightCard() {
 }
 
 // Opportunistic, gated insight generation — the pull-based producer for the Brief
-// insight card. At most ~once per 20h (the agent "looking" — ok:true or ok:false
-// — burns the gate; a network error does not, so a transient failure retries on
-// the next open). Returns the new insight, or null when there's nothing to say.
-async function maybeGenerateInsight() {
-  try {
-    const last = Number(localStorage.getItem("cairn:lastInsightGen") || 0);
-    if (Date.now() - last < 20 * 3600 * 1000) return null;
-    const r = await api("/insights/generate", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-    });
-    localStorage.setItem("cairn:lastInsightGen", String(Date.now()));
-    return r && r.ok && r.insight ? r.insight : null;
-  } catch { return null; }
+// insight card. At most ~once per 20h: the agent "looking" (a real RESULT, ok:true
+// or ok:false) burns the gate; a transport failure (the POST itself never landing)
+// does NOT, so a transient drop retries on the next open. Runs as a durable
+// background job (runOp), fully non-blocking — the card settles in when an insight
+// lands and stays quiet otherwise. Never a push.
+function maybeGenerateInsight() {
+  const slot = view.querySelector("#insightSlot");
+  if (!slot) return;
+  const last = Number(localStorage.getItem("cairn:lastInsightGen") || 0);
+  if (Date.now() - last < 20 * 3600 * 1000) return;
+  // Don't paint a loading state — an empty insight slot stays silent until (and
+  // unless) a genuine connection lands. The job streams in the background only.
+  const burnGate = () => { try { localStorage.setItem("cairn:lastInsightGen", String(Date.now())); } catch {} };
+  runOp("insight", {}, {
+    path: "/insights/generate",
+    anchor: "#insightSlot",
+    // The slot leaving the DOM (tab switch / re-render) drops the stream; the job
+    // keeps running server-side and re-attaches via jobReconnect.
+    guard: () => !view.querySelector("#insightSlot")?.isConnected,
+    isFail: (r) => !r || r.ok === false || !r.insight,
+    render: (r) => {
+      burnGate(); // a genuine connection landed — the agent looked
+      if (state.tab !== "today") return;
+      const s = view.querySelector("#insightSlot");
+      if (s) renderInsightInSlot(s, r.insight);
+    },
+    onFail: (err) => {
+      // A RESULT-shaped failure (ok:false / no insight) still means the agent looked
+      // → burn the gate. A null err is a transport drop → leave the gate so it
+      // retries next open. The slot stays silent either way (never a nag).
+      if (err) burnGate();
+    },
+  });
+}
+
+// Reconnector: an insight job running across a reload re-attaches and settles its
+// card into #insightSlot when it lands. Stays silent on no-connection / failure —
+// the insight surface is quiet by default. No loading state to rebuild (the slot
+// shows nothing while generating).
+function reconnectInsight() {
+  if (state.tab !== "today") return null; // not on Today — a later renderToday() retries
+  const slot = view.querySelector("#insightSlot");
+  if (!slot) return null;
+  const burnGate = () => { try { localStorage.setItem("cairn:lastInsightGen", String(Date.now())); } catch {} };
+  const isFail = (r) => !r || r.ok === false || !r.insight;
+  return {
+    guard: () => !view.querySelector("#insightSlot")?.isConnected,
+    onDone: (r) => {
+      if (isFail(r)) { burnGate(); return; }
+      burnGate();
+      if (state.tab !== "today") return;
+      const s = view.querySelector("#insightSlot");
+      if (s) renderInsightInSlot(s, r.insight);
+    },
+    onError: () => {},
+    onCanceled: () => {},
+  };
 }
 
 // The card leads with the headline (the one thing to read), renders an optional
@@ -3717,14 +3927,31 @@ function sessionCardHtml(s, i) {
     </div>`;
 }
 
+// SWR over /sessions?limit=30 (key history:sessions): a warm re-entry into the
+// History seg paints the hero + session cards instantly, then revalidates and
+// re-paints only on change. A set-log / session-edit invalidates the key.
 async function renderHistory() {
   headerTitle.textContent = "Progress";
-  view.innerHTML = segSkeleton("sessions", PROGRESS_SEG, 3); // skeleton-first: seg paints now, cards hydrate
-  const sessions = await api("/sessions?limit=30");
+  const token = ++pollToken;
+  const peek = peekCached("history:sessions");
+  if (!peek) view.innerHTML = segSkeleton("sessions", PROGRESS_SEG, 3); // cold: skeleton-first
+  return paintSWR({
+    key: "history:sessions",
+    path: "/sessions?limit=30",
+    peek,
+    token,
+    tab: "progress",
+    render: (sessions) => paintHistoryBody(sessions || []),
+  });
+}
+
+// Build + wire the History view from a sessions list. Idempotent: re-queries the
+// freshly-written DOM each call (warm peek + changed revalidate both route here).
+function paintHistoryBody(sessions) {
   const head = segBar("sessions", PROGRESS_SEG);
   if (!sessions.length) {
-    await skelSwap(() => { view.innerHTML = head + progressHero("Training history", []) +
-      emptyStateHtml(art("exercise", "barbell squat"), "No sessions logged yet \u2014 your story starts on Today."); });
+    view.innerHTML = head + progressHero("Training history", []) +
+      emptyStateHtml(art("exercise", "barbell squat"), "No sessions logged yet \u2014 your story starts on Today.");
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3739,7 +3966,7 @@ async function renderHistory() {
     ["lb moved \u00b7 30d", Math.round(t30), { k: true }],
     ["sets \u00b7 30d", sets30],
   ]);
-  await skelSwap(() => { view.innerHTML = head + hero + sessions.map((s, i) => sessionCardHtml(s, i + 1)).join(""); });
+  view.innerHTML = head + hero + sessions.map((s, i) => sessionCardHtml(s, i + 1)).join("");
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // Tap a past session → edit its logged sets + notes (corrections flow into the brain).
@@ -3812,6 +4039,13 @@ async function openSessionEdit(sess, fromEl) {
       });
       tasks.push(api(`/sessions/${sess.id}/notes`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes: el.querySelector("#edNotes").value.trim() }) }));
       try { await Promise.all(tasks); toast("Updated"); } catch { toast("Some changes didn't save"); }
+      // corrected sets/notes change the History list, weekly stats, volume, and (if
+      // it's that date's session) Today — drop the caches so renderHistory below and
+      // any later paint read truth.
+      swrInvalidate("history:sessions");
+      swrInvalidate("stats");
+      swrInvalidate("progress:volume");
+      if (sess.date) swrInvalidate("today:session:" + sess.date);
       closeDetail(true);
       renderHistory();
     });
@@ -3823,30 +4057,65 @@ async function openSessionEdit(sess, fromEl) {
 function numOrNull(v) { return v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null); }
 
 // ---------- Progress: est-1RM trend ----------
+// SWR over /exercises (key progress:exercises): the 1RM seg paints its exercise
+// picker + chart shell instantly on a warm re-entry, then revalidates.
 async function renderProgress() {
   headerTitle.textContent = "Progress";
-  view.innerHTML = segSkeleton("trend", PROGRESS_SEG, 1);
-  const exercises = await api("/exercises");
+  const token = ++pollToken;
+  const peek = peekCached("progress:exercises");
+  if (!peek) view.innerHTML = segSkeleton("trend", PROGRESS_SEG, 1); // cold: skeleton-first
+  return paintSWR({
+    key: "progress:exercises",
+    path: "/exercises",
+    peek,
+    token,
+    tab: "progress",
+    render: (exercises) => paintProgressBody(exercises || []),
+  });
+}
+
+function paintProgressBody(exercises) {
   const saved = state.progressEx || exercises[0]?.name;
-  await skelSwap(() => { view.innerHTML = segBar("trend", PROGRESS_SEG) + `<div id="trendHero"></div>
+  view.innerHTML = segBar("trend", PROGRESS_SEG) + `<div id="trendHero"></div>
     <div class="field"><label>Exercise</label>
     <select id="exsel">${exercises.map((e) => `<option ${e.name === saved ? "selected" : ""}>${escHtml(e.name)}</option>`).join("")}</select></div>
-    <canvas id="chart"></canvas><div id="pstats"></div>`; });
+    <canvas id="chart"></canvas><div id="pstats"></div>`;
   wireSeg(PROGRESS_HANDLERS);
   $("#exsel").addEventListener("change", (e) => { state.progressEx = e.target.value; drawProgress(e.target.value); });
   drawProgress(saved);
 }
 
 // ---------- Progress: bodyweight ----------
+// SWR over /bodyweight?limit=90 (key progress:weight) + the shared /profile (key
+// `profile`, for the goal line): the Weight seg paints its chart instantly on a
+// warm re-entry, then revalidates. A bodyweight log invalidates progress:weight.
 async function renderWeight() {
   headerTitle.textContent = "Progress";
-  view.innerHTML = segSkeleton("weight", PROGRESS_SEG, 1);
-  const [rows, profile] = await Promise.all([api("/bodyweight?limit=90"), api("/profile")]);
+  const token = ++pollToken;
+  const peekRows = peekCached("progress:weight");
+  const peekProfile = peekCached("profile");
+  if (!peekRows) view.innerHTML = segSkeleton("weight", PROGRESS_SEG, 1); // cold: skeleton-first
+  const paint = (rows, profile) => {
+    if (token !== pollToken || state.tab !== "progress") return;
+    paintWeightBody(rows || [], profile || null);
+  };
+  // Profile rides along (peeked + revalidated under its shared key); the weight
+  // rows are the SWR-keyed surface that actually changes here.
+  let profile = peekProfile ? peekProfile.data : null;
+  cachedApi("/profile", { key: "profile", onUpgrade: (data) => { profile = data; } }).catch(() => {});
+  if (peekRows) { paint(peekRows.data, profile); if (!peekRows.fresh) markRefreshing(true); }
+  cachedApi("/bodyweight?limit=90", {
+    key: "progress:weight",
+    onUpgrade: (rows, { changed }) => { if (peekRows && !peekRows.fresh) markRefreshing(false); if (changed || !peekRows) skelSwap(() => paint(rows, profile)); },
+  }).catch(() => { if (peekRows && !peekRows.fresh) markRefreshing(false); });
+}
+
+function paintWeightBody(rows, profile) {
   const head = segBar("weight", PROGRESS_SEG);
   const pts = (rows || []).map((p) => ({ date: p.date, v: p.weight_lb }));
   if (!pts.length) {
-    await skelSwap(() => { view.innerHTML = head + progressHero("Bodyweight", []) +
-      emptyStateHtml(art("activity", "walk"), "No weigh-ins yet — log one from the Today strip."); });
+    view.innerHTML = head + progressHero("Bodyweight", []) +
+      emptyStateHtml(art("activity", "walk"), "No weigh-ins yet — log one from the Today strip.");
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3859,8 +4128,8 @@ async function renderWeight() {
     ["change", `${delta >= 0 ? "+" : ""}${delta}`, { text: true }],
     toGoal != null ? ["to goal", toGoal > 0 ? String(toGoal) : "at goal", { text: true }] : null,
   ]);
-  await skelSwap(() => { view.innerHTML = head + hero + `<canvas id="chart"></canvas>
-    <div class="chart-foot lbl">${pts.length} weigh-in${pts.length === 1 ? "" : "s"}${goalW != null ? ` · goal ${goalW} lb` : ""}</div>`; });
+  view.innerHTML = head + hero + `<canvas id="chart"></canvas>
+    <div class="chart-foot lbl">${pts.length} weigh-in${pts.length === 1 ? "" : "s"}${goalW != null ? ` · goal ${goalW} lb` : ""}</div>`;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   drawLineChart($("#chart"), pts, { goal: goalW ?? null, fmt: (v) => `${Math.round(v * 10) / 10} lb` });
@@ -3893,15 +4162,29 @@ async function drawProgress(name) {
 }
 
 // ---------- Progress: volume by muscle group ----------
+// SWR over /volume?days=30 (key progress:volume): the Volume seg paints the
+// per-muscle bars instantly on a warm re-entry, then revalidates.
 async function renderVolume() {
   headerTitle.textContent = "Progress";
-  view.innerHTML = segSkeleton("volume", PROGRESS_SEG, 2);
-  const data = await api("/volume?days=30");
+  const token = ++pollToken;
+  const peek = peekCached("progress:volume");
+  if (!peek) view.innerHTML = segSkeleton("volume", PROGRESS_SEG, 2); // cold: skeleton-first
+  return paintSWR({
+    key: "progress:volume",
+    path: "/volume?days=30",
+    peek,
+    token,
+    tab: "progress",
+    render: (data) => paintVolumeBody(data || {}),
+  });
+}
+
+function paintVolumeBody(data) {
   const groups = (data.by_muscle || []).slice().sort((a, b) => (b.sets || 0) - (a.sets || 0));
   const head = segBar("volume", PROGRESS_SEG);
   if (!groups.length) {
-    await skelSwap(() => { view.innerHTML = head + progressHero("Volume", []) +
-      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${data.days || 30} days.`); });
+    view.innerHTML = head + progressHero("Volume", []) +
+      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${data.days || 30} days.`);
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3920,8 +4203,8 @@ async function renderVolume() {
       </div>
       <div class="volbar"><div class="volbar-fill barfill" style="width:${Math.max(3, Math.round(((g.sets || 0) / maxSets) * 100))}%"></div></div>
     </div>`).join("");
-  await skelSwap(() => { view.innerHTML = head + hero +
-    `<div class="vol-kicker lbl reveal" style="${stagger(1)}">Last ${data.days || 30} days · ranked by sets</div>` + rows; });
+  view.innerHTML = head + hero +
+    `<div class="vol-kicker lbl reveal" style="${stagger(1)}">Last ${data.days || 30} days · ranked by sets</div>` + rows;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
 }
@@ -3954,15 +4237,29 @@ function calMonthHtml(ym, byDate, todayIso, idx) {
     </div>`;
 }
 
+// SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its
+// month grids instantly on a warm re-entry, then revalidates.
 async function renderCalendar() {
   headerTitle.textContent = "Progress";
-  view.innerHTML = segSkeleton("calendar", PROGRESS_SEG, 2);
-  const [data, stats] = await Promise.all([api("/calendar?days=84"), api("/stats").catch(() => ({}))]);
+  const token = ++pollToken;
+  const peek = peekCached("progress:calendar");
+  if (!peek) view.innerHTML = segSkeleton("calendar", PROGRESS_SEG, 2); // cold: skeleton-first
+  return paintSWR({
+    key: "progress:calendar",
+    path: "/calendar?days=84",
+    peek,
+    token,
+    tab: "progress",
+    render: (data) => paintCalendarBody(data || {}),
+  });
+}
+
+function paintCalendarBody(data) {
   const cells = data.cells || [];
   const head = segBar("calendar", PROGRESS_SEG);
   if (!cells.length) {
-    await skelSwap(() => { view.innerHTML = head + progressHero("Calendar", []) +
-      emptyStateHtml(art("activity", "run"), "No activity logged yet."); });
+    view.innerHTML = head + progressHero("Calendar", []) +
+      emptyStateHtml(art("activity", "run"), "No activity logged yet.");
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
@@ -3984,7 +4281,7 @@ async function renderCalendar() {
   const months = [...new Set(cells.map((c) => (c.date || "").slice(0, 7)))].filter(Boolean).reverse();
   const grids = months.map((mo, i) => calMonthHtml(mo, byDate, todayIso, i + 1)).join("");
   const legend = `<div class="cal-legend"><span>Less</span><i class="cl0"></i><i class="cl1"></i><i class="cl2"></i><i class="cl3"></i><i class="cl4"></i><span>More</span></div>`;
-  await skelSwap(() => { view.innerHTML = head + hero + grids + legend; });
+  view.innerHTML = head + hero + grids + legend;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // tap a day with data → open it on Today
@@ -4030,18 +4327,35 @@ function energyRead(exp) {
 
 const CONF_WORD = { high: "well-established", medium: "settling in", low: "still early" };
 
+// SWR over /nutrition/expenditure?window=21 (key progress:energy): the Energy
+// Balance seg paints its derived read instantly on a warm re-entry, then
+// revalidates. The shell (#checkinResult) is preserved across re-fills so an
+// in-flight nutrition check-in card is never clobbered by a background refresh.
 async function renderEnergy() {
   headerTitle.textContent = "Progress";
+  const token = ++pollToken;
   const head = segBar("energy", PROGRESS_SEG);
+  const peek = peekCached("progress:energy");
+  // Always paint the shell; only the #energyCard slot shows a loading state on cold.
   view.innerHTML = head + `<div id="energyHero"></div>
-    <div id="energyCard">${loadingState("Reading your trend…")}</div>
+    <div id="energyCard">${peek ? "" : loadingState("Reading your trend…")}</div>
     <div id="checkinResult" class="checkin-result"></div>`;
   wireSeg(PROGRESS_HANDLERS);
 
-  let exp = null;
-  try { exp = await api("/nutrition/expenditure?window=21"); } catch { exp = null; }
-  if (state.tab !== "progress" || !view.querySelector("#energyCard")) return; // navigated away
+  const paint = (exp) => {
+    if (token !== pollToken || state.tab !== "progress" || !view.querySelector("#energyCard")) return;
+    paintEnergyBody(exp);
+  };
+  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  cachedApi("/nutrition/expenditure?window=21", {
+    key: "progress:energy",
+    onUpgrade: (exp, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(exp); },
+  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
+}
 
+// Fill the Energy Balance hero + card from a derived-expenditure payload. Leaves
+// #checkinResult untouched (the check-in renders there independently). Idempotent.
+function paintEnergyBody(exp) {
   const read = energyRead(exp);
   const usable = exp && exp.tdee != null && exp.confidence !== "none";
 
@@ -4058,6 +4372,7 @@ async function renderEnergy() {
   }
 
   const card = view.querySelector("#energyCard");
+  if (!card) return;
   const ctx = usable
     ? `<div class="eb-ctx lbl">${escHtml(CONF_WORD[exp.confidence] || "")} · ${exp.points} day${exp.points === 1 ? "" : "s"} of data · ${exp.window_days}-day window</div>`
     : "";
@@ -4079,35 +4394,70 @@ async function renderEnergy() {
 // Nutrition check-in: a REVIEWED recommendation, never auto-applied. The common
 // case is "no change needed". When the trend has genuinely moved, the agent
 // drafts a target the user can take into their meal plan — advisory, dismissible.
-async function runNutritionCheckin(btn) {
+// Run the nutrition check-in as a durable background job (POST /nutrition/checkin),
+// so a long agentic read survives a tab switch / reload mid-run and streams its
+// evolving caption into #checkinResult. runOp renders the inline result at once
+// when background ops are off. The render mirrors the old await path exactly:
+// no-change card on r.change===false, the advisory proposal otherwise; ok:false
+// (or unreachable) is the gentle failure line.
+function runNutritionCheckin(btn) {
   const out = view.querySelector("#checkinResult");
   if (!out) return;
   const restore = btnBusy(btn, "Checking…");
-  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> reading your trend…</div>`;
-  let r = null;
-  try {
-    r = await api("/nutrition/checkin", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ window: 21 }),
-    });
-  } catch { r = null; }
-  if (!view.querySelector("#checkinResult")) return; // navigated away
-  restore();
+  // A .job-cap carries the evolving thinkingCaption while the agent reads.
+  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> <span class="job-cap">reading your trend…</span></div>`;
+  runOp("nutrition_checkin", { window: 21 }, nutritionCheckinOpOpts(restore));
+}
 
-  if (!r || r.ok === false || r.error) {
-    out.innerHTML = `<div class="eb-checkin-quiet">Couldn't run a check-in right now — no worries, your read above still stands. Try again in a bit.</div>`;
-    return;
-  }
-  if (!r.change) {
-    const summary = r.summary && String(r.summary).trim();
-    out.innerHTML = `<div class="eb-checkin-ok settle-in">
-        <span class="eb-ok-mark" aria-hidden="true">✓</span>
-        <div><div class="eb-ok-lead">No change needed — you're tracking well.</div>
-        ${summary ? `<p class="eb-ok-body">${escHtml(summary)}</p>` : ""}</div>
-      </div>`;
-    return;
-  }
-  renderCheckinProposal(out, r);
+// Shared runOp options for the nutrition check-in — used by the live trigger and
+// the reload reconnector, so the render/fail behavior is identical either way.
+function nutritionCheckinOpOpts(restore) {
+  const done = () => { try { restore && restore(); } catch {} };
+  return {
+    path: "/nutrition/checkin",
+    anchor: "#checkinResult",
+    caption: "nutrition_checkin",
+    guard: () => { const gone = !view.querySelector("#checkinResult")?.isConnected; if (gone) done(); return gone; },
+    isFail: (r) => !r || r.ok === false || !!r.error,
+    render: (r) => {
+      done();
+      const out = view.querySelector("#checkinResult");
+      if (!out) return;
+      if (!r.change) {
+        const summary = r.summary && String(r.summary).trim();
+        out.innerHTML = `<div class="eb-checkin-ok settle-in">
+            <span class="eb-ok-mark" aria-hidden="true">✓</span>
+            <div><div class="eb-ok-lead">No change needed — you're tracking well.</div>
+            ${summary ? `<p class="eb-ok-body">${escHtml(summary)}</p>` : ""}</div>
+          </div>`;
+        return;
+      }
+      renderCheckinProposal(out, r);
+    },
+    onFail: () => {
+      done();
+      const out = view.querySelector("#checkinResult");
+      if (out) out.innerHTML = `<div class="eb-checkin-quiet">Couldn't run a check-in right now — no worries, your read above still stands. Try again in a bit.</div>`;
+    },
+  };
+}
+
+// Reconnector: after a reload mid-check-in, rebuild the loading line in
+// #checkinResult and return the handlers runOp would have used.
+function reconnectNutritionCheckin() {
+  const out = view.querySelector("#checkinResult");
+  if (!out) return null; // not on Energy — a later renderEnergy() retries reconnect
+  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> <span class="job-cap">reading your trend…</span></div>`;
+  const o = nutritionCheckinOpOpts(null);
+  let stop = () => {};
+  const capEl = out.querySelector(".job-cap");
+  if (capEl) stop = thinkingCaption(capEl, o.caption);
+  return {
+    guard: o.guard,
+    onDone: (result) => { stop(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
+    onError: () => { stop(); o.onFail(null); },
+    onCanceled: () => { stop(); o.onFail(null); },
+  };
 }
 
 // A calm, reviewable advisory card. NOT applied — there's no apply endpoint for
@@ -4313,11 +4663,11 @@ function renderProposals(proposals) {
         if (card) card.insertAdjacentHTML("beforeend", clampNoteHtml(r.clamped));
         toast("Applied · adjusted to a safe step");
         // Let the user read the note; the proposal already reflects applied state.
-        state.plan = [];
+        state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
         return;
       }
       toast("Applied");
-      state.plan = []; renderCoach();
+      state.plan = []; swrInvalidate("plan"); renderCoach();
     })
   );
   wrap.querySelectorAll("[data-discard]").forEach((b) =>
@@ -4329,6 +4679,13 @@ function renderProposals(proposals) {
 }
 
 // ---------- meal plans ----------
+// SWR cache keys for the meals journal — drafts/swaps/reorders/recipes mutate
+// `current.parsed` in memory or change the plan server-side, so any such write
+// swrInvalidate()s MEALS_KEY to keep the next warm paint honest. MEALS_SETTINGS_KEY
+// caches /settings for the verbatim meal_prefs that ride along into the journal.
+const MEALS_KEY = "meals:plans";
+const MEALS_SETTINGS_KEY = "meals:settings";
+
 // `verified` (the self-critique "checked against your floors" signal) is returned at
 // DRAFT time on the /coach/mealplan response but is NOT persisted on the plan row, so
 // we remember it by the just-drafted plan's id for the journal view to surface once.
@@ -4339,22 +4696,45 @@ function rememberVerified(r) {
   }
 }
 
-async function runMealPlan() {
+// Draft a meal plan from the Coach sub-view (#mealbtn). Runs as a durable
+// background job so a long draft survives a reload mid-run (streaming its evolving
+// caption + determinate filament into #mealstatus); when background ops are off,
+// runOp renders the inline result immediately. On done we refresh the meal-plan
+// list in place and invalidate the journal SWR key so the journal paints truth.
+function runMealPlan() {
   const agent = $("#agentsel").value;
   const status = $("#mealstatus");
   const btn = $("#mealbtn");
-  const restore = btnBusy(btn, "Drafting\u2026");
-  status.textContent = `Drafting meal plan with ${agent}\u2026 10\u201360s.`;
-  try {
-    const r = await api("/coach/mealplan", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent, instruction: instructionValue() }),
-    });
-    rememberVerified(r);
-    status.textContent = r.error ? "Error: " + r.error : (r.ok ? "Meal plan ready." : "Ran but returned no valid JSON.");
-    renderMealPlans(await api("/mealplans?limit=8"));
-  } catch (e) { status.textContent = "Failed: " + e.message; }
-  finally { restore(); }
+  if (btn) btnBusy(btn, "Drafting\u2026");
+  if (status) status.innerHTML = `<span class="job-cap"></span>`;
+  runOp("meal_plan", { agent, instruction: instructionValue() }, coachMealPlanOpOpts());
+}
+
+// Shared runOp options for a Coach-view meal-plan draft \u2014 used by the trigger and
+// the reload reconnector so render/fail behavior is identical.
+function coachMealPlanOpOpts() {
+  return {
+    path: "/coach/mealplan",
+    anchor: "#mealstatus",
+    caption: "meal_plan",
+    guard: () => !$("#mealstatus")?.isConnected,
+    isFail: (r) => !r || r.ok !== true || !r.plan,
+    render: async (r) => {
+      rememberVerified(r);
+      const status = $("#mealstatus");
+      if (status) status.textContent = "Meal plan ready.";
+      const btn = $("#mealbtn");
+      if (btn && btn._busyRestore) btn._busyRestore();
+      swrInvalidate(MEALS_KEY); // the journal's SWR cache is now stale
+      try { renderMealPlans(await api("/mealplans?limit=8")); } catch {}
+    },
+    onFail: (err) => {
+      const status = $("#mealstatus");
+      if (status) status.textContent = err ? "Failed \u2014 try again." : "Ran but returned no valid plan.";
+      const btn = $("#mealbtn");
+      if (btn && btn._busyRestore) btn._busyRestore();
+    },
+  };
 }
 
 // One meal row: studio food art | name + items | macros column.
@@ -4588,50 +4968,106 @@ function rerenderMealDay(current, di, ctx, settleMi = null) {
 }
 
 // Agentic swap of one planned meal — POST /meal-plans/:id/swap runs an external CLI
-// agent (15–120s). Row goes busy (non-blocking, the rest of the view stays live);
-// one swap in flight at a time; pollToken guards stale renders.
-let mealSwapInFlight = false;
+// agent (15–120s) as a durable background job (runOp): the row goes busy while the
+// rest of the view stays live, the job survives a reload mid-run (the swap caption
+// streams into the busy row), and the job system itself is the in-flight lock — no
+// client-side flag needed (a second swap on the same row is gated by .meal-busy).
+// When background ops are off, runOp renders the inline result immediately.
 async function submitMealSwap(current, ctx, di, mi, panel) {
-  if (mealSwapInFlight) { toast("A swap is already running"); return; }
   const day = current.parsed?.days?.[di];
   if (!day) return;
-  const hint = panel.querySelector(".meal-swap-hint")?.value.trim() || "";
   const row = panel.previousElementSibling;
+  if (row && row.classList.contains("meal-busy")) { toast("A swap is already running"); return; }
+  const hint = panel.querySelector(".meal-swap-hint")?.value.trim() || "";
   const go = panel.querySelector(".meal-swap-go");
-  mealSwapInFlight = true;
-  const token = pollToken;
-  if (row) row.classList.add("meal-busy");
+  if (row) { row.classList.add("meal-busy"); row.querySelector(".meal-cap")?.remove(); row.insertAdjacentHTML("beforeend", `<span class="meal-cap job-cap"></span>`); }
   panel.classList.add("meal-swap-busy");
-  const restoreGo = btnBusy(go, "Asking the coach…", { ghost: true });
+  btnBusy(go, "Asking the coach…", { ghost: true });
   panel.querySelectorAll("button,input").forEach((el) => { if (el !== go) el.disabled = true; });
 
-  // browsers don't time fetch out on their own — belt-and-braces abort at 180s
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 180000);
-  let r = null;
-  try {
-    r = await api(`/meal-plans/${current.id}/swap`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(hint ? { day: day.day, meal_index: mi, hint } : { day: day.day, meal_index: mi }),
-      signal: ctrl.signal,
-    });
-  } catch { r = null; } // network error / abort / non-JSON (e.g. a 404 page) → failure
-  clearTimeout(timer);
-  mealSwapInFlight = false;
-  if (token !== pollToken) return; // view re-rendered since — the fresh render owns the DOM
+  const body = hint ? { day: day.day, meal_index: mi, hint } : { day: day.day, meal_index: mi };
+  await runOp("meal_swap", { id: current.id, ...body }, mealSwapOpOpts(current, ctx, di, mi));
+}
 
-  if (r && r.ok && (r.plan?.parsed || r.meal)) {
-    if (r.plan?.parsed) current.parsed = r.plan.parsed; // server copy is the source of truth
-    else day.meals[mi] = r.meal;
-    rerenderMealDay(current, di, ctx, mi);
-    toast("Meal swapped");
-  } else {
-    if (row && row.isConnected) row.classList.remove("meal-busy");
-    panel.classList.remove("meal-swap-busy");
-    panel.querySelectorAll("button,input").forEach((el) => { if (el !== go) el.disabled = false; });
-    restoreGo();
-    toast("Coach couldn't draft a swap — try again");
-  }
+// Shared runOp options for a meal swap — used by the trigger and the reload
+// reconnector. The anchor is the busy meal row (carrying the .meal-cap caption +
+// data-job-anchor); on done the day re-renders with the new meal settled in place.
+function mealSwapOpOpts(current, ctx, di, mi) {
+  const rowSel = `.mealday[data-mday="${di}"] .meal-row[data-mi="${mi}"]`;
+  return {
+    path: `/meal-plans/${current.id}/swap`,
+    anchor: rowSel,
+    caption: "meal_swap",
+    guard: () => !view.querySelector(rowSel)?.isConnected,
+    isFail: (r) => !r || r.ok !== true || !(r.plan?.parsed || r.meal),
+    render: (r) => {
+      if (r.plan?.parsed) current.parsed = r.plan.parsed; // server copy is the source of truth
+      else { const d = current.parsed?.days?.[di]; if (d?.meals) d.meals[mi] = r.meal; }
+      swrInvalidate(MEALS_KEY); // the journal's cached plan list is now stale
+      rerenderMealDay(current, di, ctx, mi);
+      toast("Meal swapped");
+    },
+    onFail: () => {
+      const row = view.querySelector(rowSel);
+      if (row) { row.classList.remove("meal-busy"); row.querySelector(".meal-cap")?.remove(); }
+      const panel = row?.nextElementSibling;
+      if (panel && panel.classList.contains("meal-swap")) {
+        panel.classList.remove("meal-swap-busy");
+        panel.querySelectorAll("button,input").forEach((el) => { el.disabled = false; });
+        const go = panel.querySelector(".meal-swap-go");
+        if (go && go._busyRestore) go._busyRestore();
+      }
+      toast("Coach couldn't draft a swap — try again");
+    },
+  };
+}
+
+// Reconnector: after a reload mid-swap, find the meal row by the job's plan/day/meal
+// and re-mark it busy so the swap (finished or finishing) settles in place. The
+// current plan + ctx are rebuilt from the freshly-rendered meals view; null when the
+// meals view isn't mounted (a later renderMeals retries reconnect).
+function reconnectMealSwap(job) {
+  const input = (job && job.input) || {};
+  const planId = Number(input.id);
+  // The journal view keys its rows by day INDEX, but the job carries the day NAME —
+  // match it to recover di. We only have the rendered DOM here, so read the plan
+  // from the SWR cache (the meals view just painted it).
+  const cached = peekCached(MEALS_KEY)?.data || [];
+  const current = (Array.isArray(cached) ? cached : []).find((p) => Number(p.id) === planId);
+  if (!current?.parsed?.days) return null; // plan not in view — retry on a later render
+  const di = current.parsed.days.findIndex(
+    (d) => String(d?.day ?? "").trim().toLowerCase() === String(input.day ?? "").trim().toLowerCase()
+  );
+  const mi = Number(input.meal_index);
+  if (di < 0 || !Number.isFinite(mi)) return null;
+  const ctx = mealsCtxFor(current);
+  const rowSel = `.mealday[data-mday="${di}"] .meal-row[data-mi="${mi}"]`;
+  const row = view.querySelector(rowSel);
+  if (!row) return null; // row not on screen (e.g. a different sub-view) — retry later
+  row.classList.add("meal-busy");
+  row.querySelector(".meal-cap")?.remove();
+  row.insertAdjacentHTML("beforeend", `<span class="meal-cap job-cap"></span>`);
+  const o = mealSwapOpOpts(current, ctx, di, mi);
+  let stop = () => {};
+  const capEl = row.querySelector(".job-cap");
+  if (capEl) stop = thinkingCaption(capEl, o.caption);
+  if (!reducedMotion()) row.classList.add("is-thinking");
+  const clear = () => { stop(); const r = view.querySelector(rowSel); if (r) { r.classList.remove("is-thinking", "is-thinking--determinate"); r.style.removeProperty("--frac"); } };
+  return {
+    guard: o.guard,
+    onDone: (result) => { clear(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
+    onError: () => { clear(); o.onFail(null); },
+    onCanceled: () => { clear(); o.onFail(null); },
+  };
+}
+
+// Rebuild the meals ctx ({weekOf, targetKcal, todayName}) for a plan row — mirrors
+// the ctx renderMeals computes, so the swap reconnector can re-render a day section.
+function mealsCtxFor(current) {
+  const m = current.parsed || {};
+  const weekOf = current.week_of || (current.created_at || "").slice(0, 10);
+  const todayName = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
+  return { weekOf, targetKcal: Number(m.daily_kcal) || 0, todayName };
 }
 
 // Move a meal up/down within its day: optimistic re-render, then persist the full
@@ -4649,6 +5085,7 @@ async function moveMealRow(current, ctx, di, mi, dir) {
       body: JSON.stringify({ days: current.parsed.days }),
     });
     if (!r || r.error) throw new Error(r && r.error);
+    swrInvalidate(MEALS_KEY); // reorder persisted — the journal's cached plan list is stale
   } catch {
     [meals[mi], meals[j]] = [meals[j], meals[mi]]; // revert in memory
     if (token === pollToken) {
@@ -4741,8 +5178,8 @@ function wireMealRows(scope, current, ctx) {
 
 // ---------- meal detail bottom sheet (Plan tab · Meals) ----------
 // Tapping a planner meal row opens a bottom sheet: hero food art, macros, and an
-// agent-written recipe (cached on the plan by the server once fetched).
-let _recipeInFlight = false;
+// agent-written recipe (cached on the plan by the server once fetched). A recipe in
+// flight is detected by a .job-cap in the sheet's [data-recipe] (the job IS the lock).
 
 function closeMealSheet(instant) {
   const s = document.querySelector(".sheet");
@@ -4824,64 +5261,135 @@ function recipeHtml(r) {
     ${ings}${steps}${tips}`;
 }
 
-// POST /meal-plans/:id/recipe — runs an external CLI agent (15–120s). The sheet
-// stays open and scrollable; closing it mid-flight is fine (the result is still
-// stored into the in-memory plan, the DOM is only touched if the sheet survives).
+// A calm recipe-loading state inside the [data-recipe] wrapper — the .job-cap
+// carries the evolving "writing the recipe" caption; the host gets the filament.
+function recipeLoadingHtml() {
+  return `<div class="sheet-section sheet-section-c sheet-recipe-loading">
+      <span class="aspin aspin-sm" aria-hidden="true"></span>
+      <div class="sheet-recipe-load-line job-cap"></div>
+    </div>`;
+}
+
+// POST /meal-plans/:id/recipe — runs an external CLI agent (15–120s) as a durable
+// background job (runOp). A CACHED recipe comes back inline+instantly (runOp renders
+// it with no job); a fresh one streams its caption into the open sheet and survives a
+// reload mid-run. Closing the sheet mid-flight is fine — the result still stores into
+// the in-memory plan (server-side) and the DOM is only touched if the sheet survives.
 function wireRecipeCta(sheet, current, dayLabel, di, mi) {
   const btn = sheet.querySelector("[data-getrecipe]");
   if (!btn) return;
-  btn.addEventListener("click", async () => {
-    if (_recipeInFlight) { toast("A recipe is already being written"); return; }
-    _recipeInFlight = true;
+  btn.addEventListener("click", () => {
     const key = sheet.dataset.key;
-    btnBusy(btn, "Writing the recipe…", { ghost: true });
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 180000);
-    let r = null;
-    try {
-      r = await api(`/meal-plans/${current.id}/recipe`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ day: dayLabel, meal_index: mi }),
-        signal: ctrl.signal,
-      });
-    } catch { r = null; } // abort / network / non-JSON (e.g. a 404 page) → failure path
-    clearTimeout(timer);
-    _recipeInFlight = false;
+    const wrap = document.querySelector(`.sheet[data-key="${key}"] [data-recipe]`);
+    if (!wrap || wrap.querySelector(".job-cap")) { if (wrap?.querySelector(".job-cap")) toast("A recipe is already being written"); return; }
+    wrap.innerHTML = recipeLoadingHtml();
+    runOp("recipe", { id: current.id, day: dayLabel, meal_index: mi }, recipeOpOpts(current, dayLabel, di, mi, key));
+  });
+}
 
-    if (r && r.ok && r.recipe) {
+// Shared runOp options for a recipe — used by the CTA and the reload reconnector.
+// The anchor is the live sheet's [data-recipe] wrapper (keyed so a re-opened sheet
+// matches); on done the recipe stores into the in-memory plan and renders with the
+// gentle sage settle flash.
+function recipeOpOpts(current, dayLabel, di, mi, key) {
+  const wrapSel = `.sheet[data-key="${key}"] [data-recipe]`; // key is numeric (id:di:mi)
+  return {
+    path: `/meal-plans/${current.id}/recipe`,
+    anchor: wrapSel,
+    caption: "recipe",
+    guard: () => !document.querySelector(wrapSel)?.isConnected, // sheet closed — keep the job alive
+    isFail: (r) => !r || r.ok !== true || !r.recipe,
+    render: (r) => {
       // store into the in-memory plan first so it survives rerenders & reopen
       if (r.plan?.parsed) current.parsed = r.plan.parsed;
       else {
         const m = current.parsed?.days?.[di]?.meals?.[mi];
         if (m) m.recipe = r.recipe;
       }
-      const live = document.querySelector(`.sheet[data-key="${key}"] [data-recipe]`);
+      if (!r.cached) swrInvalidate(MEALS_KEY); // a freshly written recipe changed the plan
+      const live = document.querySelector(wrapSel);
       if (live) {
         live.innerHTML = recipeHtml(r.recipe);
         live.classList.add("meal-settled"); // gentle sage settle flash
       }
-    } else {
-      const liveSheet = document.querySelector(`.sheet[data-key="${key}"]`);
-      const wrap = liveSheet?.querySelector("[data-recipe]");
+    },
+    onFail: () => {
+      const wrap = document.querySelector(wrapSel);
       if (wrap) {
+        const liveSheet = wrap.closest(".sheet");
         wrap.innerHTML = recipeCtaHtml();
-        wireRecipeCta(liveSheet, current, dayLabel, di, mi);
+        if (liveSheet) wireRecipeCta(liveSheet, current, dayLabel, di, mi);
       }
       toast("Coach couldn't write the recipe — try again");
-    }
+    },
+  };
+}
+
+// Reconnector: after a reload mid-recipe, find the open sheet by its data-key and
+// re-mount the loading state so a recipe that finished while away settles in. The
+// plan is read from the SWR cache; null when no matching open sheet (job stays alive).
+function reconnectRecipe(job) {
+  const input = (job && job.input) || {};
+  const planId = Number(input.id);
+  const dayLabel = String(input.day ?? "");
+  const mi = Number(input.meal_index);
+  const cached = peekCached(MEALS_KEY)?.data || [];
+  const current = (Array.isArray(cached) ? cached : []).find((p) => Number(p.id) === planId);
+  if (!current?.parsed?.days) return null;
+  const di = current.parsed.days.findIndex(
+    (d) => String(d?.day ?? "").trim().toLowerCase() === dayLabel.trim().toLowerCase()
+  );
+  if (di < 0 || !Number.isFinite(mi)) return null;
+  const key = `${planId}:${di}:${mi}`;
+  const wrap = document.querySelector(`.sheet[data-key="${key}"] [data-recipe]`);
+  if (!wrap) return null; // the sheet isn't open — a re-open will show the cached recipe
+  wrap.innerHTML = recipeLoadingHtml();
+  const o = recipeOpOpts(current, dayLabel, di, mi, key);
+  let stop = () => {};
+  const capEl = wrap.querySelector(".job-cap");
+  if (capEl) stop = thinkingCaption(capEl, o.caption);
+  const host = document.querySelector(o.anchor);
+  if (host && !reducedMotion()) host.classList.add("is-thinking");
+  const clear = () => { stop(); const h = document.querySelector(o.anchor); if (h) { h.classList.remove("is-thinking", "is-thinking--determinate"); h.style.removeProperty("--frac"); } };
+  return {
+    guard: o.guard,
+    onDone: (result) => { clear(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
+    onError: () => { clear(); o.onFail(null); },
+    onCanceled: () => { clear(); o.onFail(null); },
+  };
+}
+
+// The meals journal paints instantly from a warm peek and upgrades on change. The
+// plans list (the surface that actually changes) is the SWR-keyed surface; meal
+// prefs ride along from /settings (peeked, revalidated, but a prefs-only change is
+// rare enough that we just reuse whatever the peek/last fetch gave us per paint).
+async function renderMeals() {
+  headerTitle.textContent = "Plan";
+  const token = ++pollToken;
+  const peek = peekCached(MEALS_KEY);
+  if (!peek) view.innerHTML = segSkeleton("meals", PLAN_SEG, 3); // cold: skeleton-first
+  // meal prefs come from /settings; peek it so a warm paint has the verbatim text,
+  // and revalidate in the background (cheap, shares the SWR tiers).
+  let mealPrefs = String(peekCached(MEALS_SETTINGS_KEY)?.data?.settings?.meal_prefs || "");
+  cachedApi("/settings", {
+    key: MEALS_SETTINGS_KEY,
+    onUpgrade: (data) => { mealPrefs = String(data?.settings?.meal_prefs || ""); },
+  }).catch(() => {});
+
+  return paintSWR({
+    key: MEALS_KEY,
+    path: "/mealplans?limit=12",
+    peek,
+    token,
+    tab: "plan",
+    render: (plansRes, { warm } = {}) => paintMealsBody(plansRes || [], mealPrefs, { warm }),
   });
 }
 
-async function renderMeals() {
-  headerTitle.textContent = "Plan";
-  pollToken++;
-  view.innerHTML = segSkeleton("meals", PLAN_SEG, 3); // skeleton-first: seg paints now, plan hydrates
-  const [plansRes, settingsData] = await Promise.all([
-    api("/mealplans?limit=12").catch(() => []),
-    api("/settings").catch(() => null),
-  ]);
-  const plans = plansRes || [];
-  const mealPrefs = String(settingsData?.settings?.meal_prefs || "");
+// Build + wire the whole meals journal from a plans list (+ verbatim meal prefs).
+// Called synchronously on a warm peek and again on a changed revalidate; the inner
+// wiring is idempotent (it re-queries the freshly-written DOM each time).
+function paintMealsBody(plans, mealPrefs, { warm } = {}) {
   const KEPT = ["accepted", "applied", "kept"];
   const current =
     plans.find((p) => KEPT.includes(p.status) && p.parsed) ||
@@ -4941,11 +5449,11 @@ async function renderMeals() {
       </div>`;
   }
 
-  await skelSwap(() => { view.innerHTML = segBar("meals", PLAN_SEG) + body + `
+  view.innerHTML = segBar("meals", PLAN_SEG) + body + `
     <details class="mp-history">
       <summary class="lbl">Past meal plans</summary>
       <div id="mealHist" style="margin-top:10px"></div>
-    </details>`; });
+    </details>`;
   wireSeg(PLAN_HANDLERS);
   runCountUps(view);
 
@@ -4974,22 +5482,83 @@ async function renderMeals() {
   });
 
   const draftBtn = view.querySelector("#mealDraftBtn");
-  if (draftBtn) draftBtn.addEventListener("click", async () => {
-    const status = view.querySelector("#mealDraftStatus");
-    const restore = btnBusy(draftBtn, "Drafting…", { ghost: true });
-    status.textContent = "Drafting with the auto rotation… 10–60s.";
-    try {
-      const r = await api("/coach/mealplan", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent: "auto" }),
-      });
+  if (draftBtn) draftBtn.addEventListener("click", () => draftWeeklyMeals());
+}
+
+// Draft a fresh weekly meal plan from the journal view. Runs as a durable
+// background job (runOp) so the draft survives a reload mid-run and streams its
+// evolving "thinking" caption + determinate filament into #mealDraftStatus; when
+// background ops are off, runOp renders the inline result immediately. On done we
+// invalidate the SWR key and re-render so the fresh plan paints from truth.
+function draftWeeklyMeals() {
+  const draftBtn = view.querySelector("#mealDraftBtn");
+  const status = view.querySelector("#mealDraftStatus");
+  if (!status) return;
+  if (draftBtn) btnBusy(draftBtn, "Drafting…", { ghost: true });
+  // The status line carries the .job-cap caption slot + the data-job-anchor so a
+  // running draft re-attaches after a reload mid-run.
+  status.innerHTML = `<span class="job-cap"></span>`;
+  runOp("meal_plan", { agent: "auto" }, mealPlanDraftOpOpts());
+}
+
+// Shared runOp options for a journal-view meal-plan draft — used by the trigger
+// and the reload reconnector so render/fail behavior is identical.
+function mealPlanDraftOpOpts() {
+  return {
+    path: "/coach/mealplan",
+    anchor: "#mealDraftStatus",
+    caption: "meal_plan",
+    guard: () => !view.querySelector("#mealDraftStatus")?.isConnected,
+    isFail: (r) => !r || r.ok !== true || !r.plan,
+    render: (r) => {
       rememberVerified(r);
-      if (r.error) { status.textContent = "Error: " + r.error; }
-      else if (!r.ok) { status.textContent = "Agent ran but returned no valid JSON."; }
-      else { toast("Meal plan drafted"); renderMeals(); return; }
-    } catch (e) { status.textContent = "Failed: " + e.message; }
-    restore();
-  });
+      toast("Meal plan drafted");
+      swrInvalidate(MEALS_KEY);
+      renderMeals();
+    },
+    onFail: (err) => {
+      const s = view.querySelector("#mealDraftStatus");
+      if (s) s.textContent = err ? "Couldn't draft a plan — try again." : "Agent ran but returned no valid plan.";
+      const b = view.querySelector("#mealDraftBtn");
+      if (b && b._busyRestore) b._busyRestore();
+    },
+  };
+}
+
+// Shared "rebuild a loading caption on a status host" reconnector body for the two
+// meal-plan draft entry points (the journal #mealDraftStatus and the Coach
+// #mealstatus). Both enqueue the same `meal_plan` job kind, so a single registered
+// reconnector picks whichever host is currently mounted; the matching draft button
+// (if present) is re-frozen and the op's render/fail lands in place.
+function reconnectMealPlanStatus(o, statusSel, btnSel, ghost) {
+  const status = view.querySelector(statusSel);
+  if (!status) return null; // host not mounted — a later render retries
+  const btn = btnSel ? view.querySelector(btnSel) : null;
+  if (btn) btnBusy(btn, "Drafting…", { ghost });
+  status.innerHTML = `<span class="job-cap"></span>`;
+  let stop = () => {};
+  const capEl = status.querySelector(".job-cap");
+  if (capEl) stop = thinkingCaption(capEl, o.caption);
+  if (!reducedMotion()) status.classList.add("is-thinking");
+  const clear = () => { stop(); const s = view.querySelector(statusSel); if (s) { s.classList.remove("is-thinking", "is-thinking--determinate"); s.style.removeProperty("--frac"); } };
+  return {
+    guard: o.guard,
+    onDone: (result) => { clear(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
+    onError: () => { clear(); o.onFail(null); },
+    onCanceled: () => { clear(); o.onFail(null); },
+  };
+}
+
+// The single registered reconnector for `meal_plan` jobs: prefer the journal host
+// (#mealDraftStatus), else the Coach host (#mealstatus); null when neither is up.
+function reconnectMealPlan() {
+  if (view.querySelector("#mealDraftStatus")) {
+    return reconnectMealPlanStatus(mealPlanDraftOpOpts(), "#mealDraftStatus", "#mealDraftBtn", true);
+  }
+  if (view.querySelector("#mealstatus")) {
+    return reconnectMealPlanStatus(coachMealPlanOpOpts(), "#mealstatus", "#mealbtn", false);
+  }
+  return null;
 }
 
 // ---------- Me (segmented: Profile / Memory / Health / Life) ----------
@@ -5080,6 +5649,8 @@ async function renderMeProfile() {
       about_me: ($("#about_me")?.value ?? "").trim(),
     };
     await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    // new goal weight/date/factor moves the pace + goal lines across surfaces.
+    ["profile", "stats", "progress:weight", "progress:energy"].forEach(swrInvalidate);
     renderMe(); // refresh the goal check with the new numbers; flash continues on top
     return true;
   };
@@ -5095,6 +5666,11 @@ async function renderMeProfile() {
     const w = +$("#bwInput").value;
     if (!w) return;
     await api("/bodyweight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weight_lb: w }) });
+    // a weigh-in syncs profile.weight_lb + the weight trend / pace across surfaces
+    swrInvalidate("progress:weight");
+    swrInvalidate("stats");
+    swrInvalidate("profile");
+    swrInvalidate("progress:energy");
     toast("Weight logged"); renderMe();
   });
   $("#actBtn").addEventListener("click", async () => {
@@ -5846,57 +6422,67 @@ function hmkRowHtml(m, i) {
   </div>`;
 }
 
-async function loadHealthMarkers(token) {
+// SWR over /markers/priority (key shared with the Brain tab's priority view): a
+// warm re-entry paints the grouped marker list instantly, then revalidates and
+// re-paints only if the payload changed. The render is unchanged — SWR only
+// changes WHEN the data arrives.
+function loadHealthMarkers(token) {
   const wrap = $("#hMarkers");
   if (!wrap || !wrap.isConnected) return;
-  let res = null;
   // /markers/priority is the superset: it carries the optimal bands (for the chart) plus
   // group + trend on top of the flat marker shape /health/markers returns.
-  try { res = await api("/markers/priority"); } catch { res = null; }
-  if (token !== pollToken || !wrap.isConnected) return;
-  const markers = res && Array.isArray(res.markers) ? res.markers : [];
-  if (!markers.length) {
-    wrap.innerHTML = healthMarkersEmptyHtml();
-    const b = wrap.querySelector("#hMkToRecords");
-    if (b) b.addEventListener("click", () => switchHealthSeg("records", { openPicker: true }));
-    return;
-  }
-  // Server `groups` is the canonical ordered list of groups that hold ≥1 marker; render
-  // headers in that order, preserving each group's server order (flagged/impact-first).
-  // Degrade gracefully if the backend hasn't shipped grouping yet: derive an ordered list
-  // from the markers themselves, falling everything ungrouped into a single "Markers" bucket.
-  let groups = res && Array.isArray(res.groups) ? res.groups.filter((g) => g && g.key) : [];
-  if (!groups.length) {
-    const seen = new Set(), derived = [];
-    for (const m of markers) {
-      const key = m.group || "other";
-      if (!seen.has(key)) { seen.add(key); derived.push({ key, label: m.group_label || (m.group ? m.group : "Markers") }); }
+  const paint = (res) => {
+    if (token !== pollToken || !wrap.isConnected) return;
+    const markers = res && Array.isArray(res.markers) ? res.markers : [];
+    if (!markers.length) {
+      wrap.innerHTML = healthMarkersEmptyHtml();
+      const b = wrap.querySelector("#hMkToRecords");
+      if (b) b.addEventListener("click", () => switchHealthSeg("records", { openPicker: true }));
+      return;
     }
-    groups = derived;
-  }
-  const byGroup = new Map(groups.map((g) => [g.key, []]));
-  for (const m of markers) {
-    const key = byGroup.has(m.group) ? m.group : (groups[0] && groups[0].key);
-    if (byGroup.has(key)) byGroup.get(key).push(m);
-  }
-  let i = 0;
-  const sections = groups.map((g) => {
-    const list = byGroup.get(g.key) || [];
-    if (!list.length) return "";
-    const rows = list.map((m) => hmkRowHtml(m, i++)).join("");
-    // single-group view (e.g. ungrouped fallback) skips the header — no value labelling one bucket
-    const head = groups.length > 1
-      ? `<div class="hmk-grouphead lbl reveal" style="${stagger(i)}">${escHtml(g.label || g.key)}</div>`
-      : "";
-    return `${head}<div class="hmk-card">${rows}</div>`;
-  }).join("");
-  wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
-  wrap.querySelectorAll(".hmk-x .hmk-row").forEach((b) =>
-    b.addEventListener("click", () => {
-      const item = b.closest(".hmk");
-      const open = item.classList.toggle("open");
-      b.setAttribute("aria-expanded", open ? "true" : "false");
-    }));
+    // Server `groups` is the canonical ordered list of groups that hold ≥1 marker; render
+    // headers in that order, preserving each group's server order (flagged/impact-first).
+    // Degrade gracefully if the backend hasn't shipped grouping yet: derive an ordered list
+    // from the markers themselves, falling everything ungrouped into a single "Markers" bucket.
+    let groups = res && Array.isArray(res.groups) ? res.groups.filter((g) => g && g.key) : [];
+    if (!groups.length) {
+      const seen = new Set(), derived = [];
+      for (const m of markers) {
+        const key = m.group || "other";
+        if (!seen.has(key)) { seen.add(key); derived.push({ key, label: m.group_label || (m.group ? m.group : "Markers") }); }
+      }
+      groups = derived;
+    }
+    const byGroup = new Map(groups.map((g) => [g.key, []]));
+    for (const m of markers) {
+      const key = byGroup.has(m.group) ? m.group : (groups[0] && groups[0].key);
+      if (byGroup.has(key)) byGroup.get(key).push(m);
+    }
+    let i = 0;
+    const sections = groups.map((g) => {
+      const list = byGroup.get(g.key) || [];
+      if (!list.length) return "";
+      const rows = list.map((m) => hmkRowHtml(m, i++)).join("");
+      // single-group view (e.g. ungrouped fallback) skips the header — no value labelling one bucket
+      const head = groups.length > 1
+        ? `<div class="hmk-grouphead lbl reveal" style="${stagger(i)}">${escHtml(g.label || g.key)}</div>`
+        : "";
+      return `${head}<div class="hmk-card">${rows}</div>`;
+    }).join("");
+    wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
+    wrap.querySelectorAll(".hmk-x .hmk-row").forEach((b) =>
+      b.addEventListener("click", () => {
+        const item = b.closest(".hmk");
+        const open = item.classList.toggle("open");
+        b.setAttribute("aria-expanded", open ? "true" : "false");
+      }));
+  };
+  const peek = peekCached("markers:priority");
+  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  cachedApi("/markers/priority", {
+    key: "markers:priority",
+    onUpgrade: (data, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(data); },
+  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
 const HEALTH_SEG = [["analysis", "Analysis"], ["brain", "Brain"], ["markers", "Markers"], ["records", "Records"]];
@@ -6000,21 +6586,31 @@ function paintHealthBrainTab() {
 // Render a quiet line about how recovery's been over the window. Used both at the
 // top of Analysis and inside the Brain tab. Bails to nothing / a quiet hint when
 // there's no wearable or check-in data.
-async function loadRecoverySummary(token, sel) {
+// SWR over /recovery?days=14 (key recovery:14, shared by both the Analysis tab's
+// #hRecovery and the Brain tab's #hbRecovery): a warm re-entry paints the recovery
+// read instantly, then revalidates. `sel` targets which slot this call paints.
+function loadRecoverySummary(token, sel) {
   const wrap = $(sel);
   if (!wrap || !wrap.isConnected) return;
-  let r = null;
-  try { r = await api("/recovery?days=14"); } catch { r = null; }
-  if (token !== pollToken || !wrap.isConnected) return;
-  if (!r || !r.has_data) {
-    // quiet hint, not a nag — capture is offered, never demanded
-    wrap.innerHTML = `<div class="hb-recovery hb-recovery-empty reveal" style="${stagger(0)}">
-      <span class="lbl">Recovery</span>
-      <p class="hb-recovery-hint">No sleep or recovery signal yet. Connect a wearable, or jot how you're feeling, and the buddy will fold it into your day.</p>
-    </div>`;
-    return;
-  }
-  wrap.innerHTML = recoveryHtml(r);
+  const paint = (r) => {
+    const w = $(sel);
+    if (token !== pollToken || !w || !w.isConnected) return;
+    if (!r || !r.has_data) {
+      // quiet hint, not a nag — capture is offered, never demanded
+      w.innerHTML = `<div class="hb-recovery hb-recovery-empty reveal" style="${stagger(0)}">
+        <span class="lbl">Recovery</span>
+        <p class="hb-recovery-hint">No sleep or recovery signal yet. Connect a wearable, or jot how you're feeling, and the buddy will fold it into your day.</p>
+      </div>`;
+      return;
+    }
+    w.innerHTML = recoveryHtml(r);
+  };
+  const peek = peekCached("recovery:14");
+  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  cachedApi("/recovery?days=14", {
+    key: "recovery:14",
+    onUpgrade: (data, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(data); },
+  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
 // Plain-language recovery summary. Each chip is a phrase, not a number you must
@@ -6170,34 +6766,42 @@ function priorityMarkerHtml(m, i) {
   </div>`;
 }
 
-async function loadPriorityMarkers(token) {
+// SWR over /markers/priority (key shared with the Markers tab): a warm re-entry
+// into the Brain tab paints "what matters now" instantly, then revalidates.
+function loadPriorityMarkers(token) {
   const wrap = $("#hbMarkers");
   if (!wrap || !wrap.isConnected) return;
-  let res = null;
-  try { res = await api("/markers/priority"); } catch { res = null; }
-  if (token !== pollToken || !wrap.isConnected) return;
-  const markers = res && Array.isArray(res.markers) ? res.markers : [];
-  if (!markers.length) {
+  const paint = (res) => {
+    if (token !== pollToken || !wrap.isConnected) return;
+    const markers = res && Array.isArray(res.markers) ? res.markers : [];
+    if (!markers.length) {
+      wrap.innerHTML = `<div class="hb-section">
+        <div class="hb-sechead"><span class="lbl">What matters now</span></div>
+        <div class="empty">No markers yet. Add a lab report on the Records tab and Cairn pulls out what matters most.</div>
+      </div>`;
+      return;
+    }
+    // Lead with the few that genuinely matter (flagged or out-of-optimal); keep the
+    // good ones quietly behind a fold so already-optimal markers stay silent.
+    const matters = markers.filter((m) => {
+      const ph = optimalPhrase(m);
+      return ph.tone !== "ok";
+    });
+    const good = markers.filter((m) => optimalPhrase(m).tone === "ok");
+    const lead = (matters.length ? matters : markers).slice(0, 4);
+    const rest = (matters.length ? matters.slice(4).concat(good) : markers.slice(4));
     wrap.innerHTML = `<div class="hb-section">
-      <div class="hb-sechead"><span class="lbl">What matters now</span></div>
-      <div class="empty">No markers yet. Add a lab report on the Records tab and Cairn pulls out what matters most.</div>
+      <div class="hb-sechead"><span class="lbl">What matters now</span>${matters.length ? `<span class="hb-secnote">${matters.length} to keep an eye on</span>` : `<span class="hb-secnote">all looking good</span>`}</div>
+      <div class="hb-mklist">${lead.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div>
+      ${rest.length ? `<details class="hb-more"><summary>Everything else (${rest.length})</summary><div class="hb-mklist hb-mklist-quiet">${rest.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div></details>` : ""}
     </div>`;
-    return;
-  }
-  // Lead with the few that genuinely matter (flagged or out-of-optimal); keep the
-  // good ones quietly behind a fold so already-optimal markers stay silent.
-  const matters = markers.filter((m) => {
-    const ph = optimalPhrase(m);
-    return ph.tone !== "ok";
-  });
-  const good = markers.filter((m) => optimalPhrase(m).tone === "ok");
-  const lead = (matters.length ? matters : markers).slice(0, 4);
-  const rest = (matters.length ? matters.slice(4).concat(good) : markers.slice(4));
-  wrap.innerHTML = `<div class="hb-section">
-    <div class="hb-sechead"><span class="lbl">What matters now</span>${matters.length ? `<span class="hb-secnote">${matters.length} to keep an eye on</span>` : `<span class="hb-secnote">all looking good</span>`}</div>
-    <div class="hb-mklist">${lead.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div>
-    ${rest.length ? `<details class="hb-more"><summary>Everything else (${rest.length})</summary><div class="hb-mklist hb-mklist-quiet">${rest.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div></details>` : ""}
-  </div>`;
+  };
+  const peek = peekCached("markers:priority");
+  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  cachedApi("/markers/priority", {
+    key: "markers:priority",
+    onUpgrade: (data, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(data); },
+  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
 // ---- Cross-domain directives, grouped by domain (the review side) ----
@@ -7210,13 +7814,34 @@ function startFamilyDelete(btn) {
 }
 
 // ---------- Plan editor (manual) ----------
+// SWR over /plan (key `plan`, shared with Today — one revalidate feeds both): a
+// warm re-entry paints the training editor instantly, then revalidates. A changed
+// payload re-renders, but only when the user isn't mid-edit (a day flipped into the
+// editor) so an in-flight edit is never clobbered by a background refresh.
 async function renderPlanEditor() {
   headerTitle.textContent = "Plan";
-  view.innerHTML = segSkeleton("edit", PLAN_SEG, 3);
-  const plan = await api("/plan");
-  await skelSwap(() => { view.innerHTML = segBar("edit", PLAN_SEG) + `<div id="planedit"></div>
+  const peek = peekCached("plan");
+  if (!peek) view.innerHTML = segSkeleton("edit", PLAN_SEG, 3); // cold: skeleton-first
+  // Background revalidate populates the shared `plan` key for both surfaces; on a
+  // changed payload re-render, but only when idle (no open day editor / unsaved
+  // structural edit) so an in-flight edit is never clobbered by the refresh.
+  const revalidate = cachedApi("/plan", {
+    key: "plan",
+    onUpgrade: (data, { changed }) => {
+      if (peek && !peek.fresh) markRefreshing(false);
+      if (!changed || !peek) return; // cold load already rendered; no-op revalidate stays quiet
+      if (state.tab !== "plan" || state.planJump === "meals") return; // moved on
+      if (view.querySelector(".pday") || document.querySelector(".savebar.show")) return; // mid-edit — don't clobber
+      renderPlanEditor();
+    },
+  });
+  // Cold: wait on the revalidate's data (one fetch). Warm: paint from the peek now,
+  // and let the background revalidate above upgrade in place.
+  const plan = peek ? peek.data : await revalidate.catch(() => []);
+  if (peek && !peek.fresh) markRefreshing(true);
+  view.innerHTML = segBar("edit", PLAN_SEG) + `<div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
-    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>`; });
+    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>`;
   wireSeg(PLAN_HANDLERS);
 
   const model = plan.map((d) => ({
@@ -7377,6 +8002,7 @@ async function renderPlanEditor() {
     const r = await api("/plan", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days }) });
     if (r.error) { $("#planstatus").textContent = "Error: " + r.error; return false; }
     state.plan = [];
+    swrInvalidate("plan"); // the shared plan cache (Today + this editor) is now stale
     renderPlanEditor(); // fresh render — the save bar finishes its success flash on top
     return true;
   };
@@ -7545,34 +8171,58 @@ function ensureChatHeaderBtns() {
   return { freshBtn: b, historyBtn: hist };
 }
 
-// POST /api/chat/reset with an elegant in-log transition. The server distills
-// durable facts into memory, then archives the conversation — archiving never
-// blocks on the agent, so this always lands on a clean empty chat.
+// POST /api/chat/reset — non-blocking fresh start. The server ARCHIVES the live
+// conversation at once (so the composer is usable instantly — never disabled) and
+// distills durable facts into memory in the BACKGROUND as a chat_distill job. We
+// optimistically clear the log to an empty, fully-enabled composer, then settle a
+// quiet "✓ N remembered" / "Fresh start" pill when the distill job lands. A message
+// typed during the distill just queues as a normal chat turn (the server orders
+// archive-before-turn). bg_ops OFF → the response carries `distilled` inline.
 async function chatFreshStart() {
   const log = $("#chatlog");
   if (!log || state.tab !== "chat") return;
   const token = pollToken; // any full re-render bumps this — treat as stale
   const fresh = document.getElementById("hdrFresh");
-  if (fresh) fresh.hidden = true;
-  const sendBtn = $("#chatSend");
-  if (sendBtn) sendBtn.disabled = true; // a mid-distill send would race the archive
-  log.innerHTML = `<div class="distill"><span class="aspin aspin-sm" aria-hidden="true"></span><span>Distilling what matters…</span></div>`;
-  log.scrollTop = 0;
+  if (fresh) fresh.hidden = true; // the thread is empty now
+  // Optimistic clear — empty state + chips, composer stays fully enabled & focused.
+  drawChat([]);
+  const input = $("#chatInput");
+  if (input && matchMedia("(hover:hover)").matches) input.focus();
   let r = null;
   try {
-    r = await api("/chat/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-  } catch { /* archive happens server-side; a network blip just means we re-render */ }
-  if (token !== pollToken || state.tab !== "chat" || !log.isConnected) return;
-  const n = (r && r.ok && r.distilled) || 0;
-  const el = log.querySelector(".distill");
-  if (el) {
-    el.innerHTML = `<span class="distill-check">✓</span><span>${n ? `${n} thing${n === 1 ? "" : "s"} remembered` : "Fresh start"}</span>`;
-  }
-  setTimeout(() => {
-    if (token !== pollToken || state.tab !== "chat" || !log.isConnected) return;
-    if (sendBtn) sendBtn.disabled = false;
-    drawChat([]);
-  }, 1200);
+    r = await enqueueJob("/chat/reset", {});
+  } catch { /* the archive happens server-side; a blip just means no pill */ return; }
+  if (token !== pollToken || state.tab !== "chat") return;
+
+  // bg_ops OFF (legacy): the distilled count is already on the response — settle now.
+  if (!r || !r.distilling) { settleFreshPill(r && r.ok ? r.distilled : 0, token); return; }
+
+  // bg_ops ON: stream the distill job; settle the pill on done. The job lives
+  // server-side, so it survives a reload (a re-render's chatReconnect leaves the
+  // turn stream alone; this pill is best-effort and simply won't reappear).
+  openJobStream(r.distilling, {
+    guard: () => state.tab !== "chat" || token !== pollToken,
+    onDone: (result) => settleFreshPill(result && result.ok ? result.distilled : 0, token),
+    onError: () => {},
+    onCanceled: () => {},
+  });
+}
+
+// A quiet, self-dismissing "✓ N remembered" / "Fresh start" pill in the chat header
+// actions row — stale-guarded on token + tab so it never lands on a navigated-away
+// view. Replaces any prior pill so a fast double fresh-start doesn't stack.
+function settleFreshPill(distilled, token) {
+  if (token !== pollToken || state.tab !== "chat") return;
+  const host = document.getElementById("hdrChatActions");
+  if (!host) return;
+  const n = Number(distilled) || 0;
+  host.querySelector(".fresh-pill")?.remove();
+  const pill = document.createElement("span");
+  pill.className = "fresh-pill";
+  pill.innerHTML = `<span class="distill-check">✓</span><span>${n ? `${n} thing${n === 1 ? "" : "s"} remembered` : "Fresh start"}</span>`;
+  host.prepend(pill);
+  requestAnimationFrame(() => pill.classList.add("fresh-pill-in"));
+  setTimeout(() => { pill.classList.remove("fresh-pill-in"); setTimeout(() => pill.remove(), 360); }, 2600);
 }
 
 async function renderChat() {
@@ -7888,7 +8538,7 @@ function appendMsg(m, noScroll, parent, opts = {}) {
     const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
     if (clamped) toast("Applied · adjusted to a safe step");
     else toast(r.restructured ? "Plan restructured" : "Applied");
-    state.plan = [];
+    state.plan = []; swrInvalidate("plan"); // a chat-applied plan change makes the cache stale
     // Settle into the same calm "done" note the message renders on reload, so a
     // just-applied draft and a long-applied one look identical.
     const label = b.textContent.replace(/^Apply:\s*/, "");
@@ -8903,6 +9553,18 @@ function tabSkeleton(tab) {
   return "";
 }
 
+// The cache key whose warm presence means a tab's render can paint REAL content
+// from the peek immediately — so switchTab/activateTab skip the skeleton on a warm
+// re-entry (the render then SWR-paints in place). Returns null for tabs that own
+// their own paint (chat) or have no single primary surface (me/settings keep their
+// skeleton). The plan tab lands on History/Training/Meals per state.planJump.
+function primaryKeyFor(tab) {
+  if (tab === "today") return "plan"; // Today's first input; warm => render paints from cache
+  if (tab === "progress") return "history:sessions"; // the default (History) seg
+  if (tab === "plan") return state.planJump === "meals" ? MEALS_KEY : "plan";
+  return null;
+}
+
 // Switch tabs: crossfade the old tab → a synchronous skeleton (the view
 // transition only waits for THIS, never the async render), then hydrate outside
 // the transition. The frozen-tab problem is gone: paint is always instant.
@@ -8912,8 +9574,12 @@ function switchTab(tab) {
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   state.tab = tab;
+  // Warm re-entry (the tab's primary surface is cached) skips the skeleton — the
+  // render paints REAL content from the peek (its own SWR), so there's no flash.
+  // Cold keeps the skeleton-first crossfade.
+  const warm = !!peekCached(primaryKeyFor(tab));
   const paintSkeleton = () => {
-    const skel = tabSkeleton(tab);
+    const skel = warm ? "" : tabSkeleton(tab);
     if (skel) { view.innerHTML = skel; viewEnter(); }
   };
   // Wrap ONLY the synchronous skeleton paint in the transition; the (possibly
@@ -9038,6 +9704,10 @@ function openOnboarding() {
       try { await maybeBuildStarterPlan(dpw); } catch { /* never block onboarding on plan build */ }
       await persistOnboarded();
       state.plan = []; state.day = null; state.dayPicked = false;
+      // a fresh setup rewrote the profile + (maybe) the plan — clear the SWR caches
+      // those surfaces read so nothing paints pre-onboarding data.
+      ["plan", "profile", "stats", "progress:weight", "progress:energy"].forEach(swrInvalidate);
+      swrInvalidate("today:session:");
       m.remove();
       toast("Profile saved");
       // back to Today
@@ -9106,8 +9776,11 @@ function activateTab(name) {
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   state.tab = tab;
+  // Warm re-entry skips the skeleton (the render paints from cache) — same as
+  // switchTab, so a programmatic/first activate is also flash-free when cached.
+  const warm = !!peekCached(primaryKeyFor(tab));
   const paintSkeleton = () => {
-    const skel = tabSkeleton(tab);
+    const skel = warm ? "" : tabSkeleton(tab);
     if (skel) { view.innerHTML = skel; viewEnter(); }
   };
   Promise.resolve(withViewTransition(paintSkeleton)).finally(() => {
@@ -9153,6 +9826,12 @@ swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the ca
 // Register reconnectors so a job running across a reload re-attaches to its host
 // (the registry const is defined in the job-runner section, so this runs at boot).
 registerJobReconnector("session_suggest", reconnectSessionSuggest);
+registerJobReconnector("meal_plan", reconnectMealPlan);
+registerJobReconnector("meal_swap", reconnectMealSwap);
+registerJobReconnector("recipe", reconnectRecipe);
+registerJobReconnector("day_read_override", reconnectDayReadOverride);
+registerJobReconnector("nutrition_checkin", reconnectNutritionCheckin);
+registerJobReconnector("insight", reconnectInsight);
 activateTab(new URLSearchParams(location.search).get("tab"));
 maybeOnboard();
 // Re-attach any agent job that was running when the app last closed. The first
