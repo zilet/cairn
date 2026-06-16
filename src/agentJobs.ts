@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import {
   suggestSession,
@@ -38,56 +38,33 @@ export type JobEvent =
   | { type: "error"; job: any; message: string }
   | { type: "canceled"; job: any };
 
-const bus = new EventEmitter();
-bus.setMaxListeners(0); // many jobs × subscribers; the warning isn't meaningful here
-
+const jobBus = createProgressBus<JobEvent>("job");
+function emit(id: number, payload: JobEvent): void { jobBus.emit(id, payload); }
 export function onJobEvent(id: number, listener: (e: JobEvent) => void): () => void {
-  const ev = `job:${id}`;
-  bus.on(ev, listener);
-  return () => bus.off(ev, listener);
-}
-
-function emit(id: number, payload: JobEvent): void {
-  try { bus.emit(`job:${id}`, payload); } catch { /* a bad subscriber must never break the worker */ }
+  return jobBus.on(id, listener);
 }
 
 // ---------- serial queue ----------
-const queue: number[] = [];
-let draining = false;
 // Live AbortControllers keyed by job id, so a Stop can SIGKILL the running CLI.
+// processAgentJob releases its own controller in a finally; the runner backstop
+// below only records a failure that escaped processAgentJob's own handling.
 const controllers = new Map<number, AbortController>();
 
-export function enqueueAgentJob(id: number): void {
-  queue.push(id);
-  if (!draining) void drain();
-}
-
-async function drain(): Promise<void> {
-  if (draining) return;
-  draining = true;
+const runner = createSerialRunner(processAgentJob, (id, e) => {
+  // A failing job must never break the loop. processAgentJob already persists its
+  // own failure; this is the last-resort backstop.
   try {
-    while (queue.length) {
-      const id = queue.shift()!;
-      try {
-        await processAgentJob(id);
-      } catch (e: any) {
-        // A failing job must never break the loop. processAgentJob already
-        // persists its own failure; this is the last-resort backstop.
-        try {
-          const cur = repo.getAgentJob(id) as any;
-          if (cur && (cur.status === "queued" || cur.status === "running")) {
-            const failed = repo.failAgentJob(id, e?.message ?? String(e));
-            emit(id, { type: "error", job: failed, message: e?.message ?? String(e) });
-          }
-        } catch { /* ignore */ }
-        console.error(`[jobs] job#${id} failed: ${e?.message ?? e}`);
-      } finally {
-        controllers.delete(id);
-      }
+    const cur = repo.getAgentJob(id) as any;
+    if (cur && (cur.status === "queued" || cur.status === "running")) {
+      const failed = repo.failAgentJob(id, e?.message ?? String(e));
+      emit(id, { type: "error", job: failed, message: e?.message ?? String(e) });
     }
-  } finally {
-    draining = false;
-  }
+  } catch { /* ignore */ }
+  console.error(`[jobs] job#${id} failed: ${e?.message ?? e}`);
+});
+
+export function enqueueAgentJob(id: number): void {
+  runner.enqueue(id);
 }
 
 async function processAgentJob(id: number): Promise<void> {

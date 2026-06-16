@@ -93,7 +93,14 @@ if (typeof window !== "undefined") {
 const SWR_NS = "cairn.swr.v1."; // bump the version segment in lockstep with any payload-shape change
 const _swrMem = new Map();      // key -> { data, ts } (this-session tier, fastest)
 
+// Health-sensitive surfaces stay in the MEMORY tier only — never written to disk.
+// Lab markers and recovery (HRV / RHR / sleep / body-battery) are the most personal
+// data the app holds; they still paint instantly WITHIN a session from _swrMem, they
+// just don't persist to localStorage across a cold start (where everything else does).
+const _swrMemOnly = (key) => /^(markers:|recovery:)/.test(key || "");
+
 function _swrLsGet(key) {
+  if (_swrMemOnly(key)) return null; // health data is never read back from disk
   try {
     const raw = localStorage.getItem(SWR_NS + key);
     if (!raw) return null;
@@ -103,6 +110,7 @@ function _swrLsGet(key) {
   return null;
 }
 function _swrLsSet(key, entry) {
+  if (_swrMemOnly(key)) return; // health data never lands on disk
   try { localStorage.setItem(SWR_NS + key, JSON.stringify(entry)); } catch {}
 }
 
@@ -1862,8 +1870,8 @@ async function askForSession(opts = {}) {
   const slot = view.querySelector("#sugSlot");
   if (!slot) return;
   sessionSuggestInFlight = true;
-  // The loading card carries a .job-cap for the evolving thinkingCaption and a
-  // data-job-anchor so jobReconnect() can re-attach after a reload mid-run.
+  // The loading card carries a .job-cap for the evolving thinkingCaption; a running
+  // session re-attaches after a reload via its registered reconnector.
   slot.innerHTML = `<div class="sug-card sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
       <div class="sug-loading-line job-cap"></div>
@@ -4992,8 +5000,8 @@ async function submitMealSwap(current, ctx, di, mi, panel) {
 }
 
 // Shared runOp options for a meal swap — used by the trigger and the reload
-// reconnector. The anchor is the busy meal row (carrying the .meal-cap caption +
-// data-job-anchor); on done the day re-renders with the new meal settled in place.
+// reconnector. The anchor is the busy meal row (carrying the .meal-cap caption);
+// on done the day re-renders with the new meal settled in place.
 function mealSwapOpOpts(current, ctx, di, mi) {
   const rowSel = `.mealday[data-mday="${di}"] .meal-row[data-mi="${mi}"]`;
   return {
@@ -5497,8 +5505,8 @@ function draftWeeklyMeals() {
   const status = view.querySelector("#mealDraftStatus");
   if (!status) return;
   if (draftBtn) btnBusy(draftBtn, "Drafting…", { ghost: true });
-  // The status line carries the .job-cap caption slot + the data-job-anchor so a
-  // running draft re-attaches after a reload mid-run.
+  // The status line carries the .job-cap caption slot; a running draft re-attaches
+  // after a reload via its registered reconnector.
   status.innerHTML = `<span class="job-cap"></span>`;
   runOp("meal_plan", { agent: "auto" }, mealPlanDraftOpOpts());
 }
@@ -8686,10 +8694,10 @@ function openJobStream(jobId, handlers = {}) {
   });
 }
 
-// Re-attach a stream to every active job whose anchor still exists (or can be
-// recreated). Called at boot, and (in later rounds) from each hosting render so a
-// running op picks back up after a reload/restart. Jobs are keyed to the DOM by a
-// stable `data-job-anchor="<kind>"` so the render can rebuild the host element.
+// Re-attach a stream to every active job whose host still exists (or can be
+// recreated). Called at boot so a running op picks back up after a reload/restart.
+// Hosts are rebuilt by the kind's registered reconnector (jobReconnectors), keyed
+// by job.kind — not by any DOM attribute.
 async function jobReconnect() {
   let jobs = [];
   try { const r = await api("/agent-jobs"); jobs = (r && r.jobs) || (Array.isArray(r) ? r : []); } catch { jobs = []; }
@@ -8731,8 +8739,8 @@ function teardownJobs(pred) {
 // Options:
 //   path     — the op's POST endpoint (e.g. "/session-suggest"). The endpoint
 //              decides background-vs-inline; runOp handles both shapes. Required.
-//   anchor   — CSS selector for the host element (carries data-job-anchor=<kind> +
-//              the caption slot + the determinate filament). Drives reconnect.
+//   anchor   — CSS selector for the host element (the caption slot + the
+//              determinate filament render here).
 //   render   — (result, job?) => void. The SAME render the old await path used.
 //   onFail   — (errOrNull) => void. Designed-failure / unreachable line.
 //   caption  — a THINKING_SCRIPTS key (or omit for the host's existing caption).
@@ -8740,8 +8748,8 @@ function teardownJobs(pred) {
 //              (e.g. r.ok === false). Default: !result || result.ok === false.
 //   guard    — () => bool, true when the host left the DOM (default: the anchor
 //              is gone). Drops the stream, keeps the job alive server-side.
-// `kind` is the job-anchor discriminator + reconnect key; the server echoes it as
-// job.kind so jobReconnect can find this host again after a reload.
+// `kind` is the op discriminator + reconnect key: the server echoes it as job.kind,
+// and jobReconnect rebuilds this host via the matching registered reconnector.
 async function runOp(kind, body, opts = {}) {
   const { path, anchor, render, onFail, caption, isFail, guard } = opts;
   if (!path) return;
@@ -8750,9 +8758,6 @@ async function runOp(kind, body, opts = {}) {
   const anchorGone = () => (anchor ? !document.querySelector(anchor)?.isConnected : false);
   const guardFn = guard || anchorGone;
   const clearFilament = (h) => { if (h) { h.classList.remove("is-thinking", "is-thinking--determinate"); h.style.removeProperty("--frac"); } };
-
-  // Mark the host so jobReconnect can find it after a reload.
-  if (host) host.setAttribute("data-job-anchor", kind);
 
   // Start a caption + filament on the host while we wait (warm, evolving).
   let stopCaption = () => {};
@@ -9839,8 +9844,8 @@ registerJobReconnector("insight", reconnectInsight);
 activateTab(new URLSearchParams(location.search).get("tab"));
 maybeOnboard();
 // Re-attach any agent job that was running when the app last closed. The first
-// paint is async, so defer a tick; a surface with a matching data-job-anchor can
-// also call jobReconnect() itself once it renders.
+// paint is async, so defer a tick; jobReconnect rebuilds each running job's host
+// via its registered reconnector.
 setTimeout(() => { jobReconnect(); }, 0);
 
 // Keep the bottom-fixed UI (tab bar, rest timer, toast) clear of the mobile

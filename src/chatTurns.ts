@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { buildChatPrompt, parseChatReply, CHAT_ACTION_SENTINEL } from "./prompt.js";
 import { runAgent, runAgentStreaming, agentSupportsStream, INTERACTIVE_TIMEOUT_MS } from "./agents.js";
@@ -30,57 +30,34 @@ export type TurnEvent =
   | { type: "error"; turn: any; message: any }
   | { type: "canceled"; turn: any };
 
-const bus = new EventEmitter();
-bus.setMaxListeners(0); // many turns × subscribers; the warning isn't meaningful here
-
+const turnBus = createProgressBus<TurnEvent>("turn");
+function emit(id: number, payload: TurnEvent): void { turnBus.emit(id, payload); }
 export function onTurnEvent(id: number, listener: (e: TurnEvent) => void): () => void {
-  const ev = `turn:${id}`;
-  bus.on(ev, listener);
-  return () => bus.off(ev, listener);
-}
-
-function emit(id: number, payload: TurnEvent): void {
-  try { bus.emit(`turn:${id}`, payload); } catch { /* a bad subscriber must never break the worker */ }
+  return turnBus.on(id, listener);
 }
 
 // ---------- serial queue ----------
-const queue: number[] = [];
-let draining = false;
 // Live AbortControllers keyed by turn id, so a Stop can SIGKILL the running CLI.
+// processChatTurn releases its own controller in a finally; the runner backstop
+// below only records a failure that escaped processChatTurn's own handling.
 const controllers = new Map<number, AbortController>();
 
-export function enqueueChatTurn(id: number): void {
-  queue.push(id);
-  if (!draining) void drain();
-}
-
-async function drain(): Promise<void> {
-  if (draining) return;
-  draining = true;
+const runner = createSerialRunner(processChatTurn, (id, e) => {
+  // A failing turn must never break the loop. processChatTurn already persists its
+  // own failure; this is the last-resort backstop.
   try {
-    while (queue.length) {
-      const id = queue.shift()!;
-      try {
-        await processChatTurn(id);
-      } catch (e: any) {
-        // A failing turn must never break the loop. processChatTurn already
-        // persists its own failure; this is the last-resort backstop.
-        try {
-          const cur = repo.getChatTurn(id) as any;
-          if (cur && (cur.status === "queued" || cur.status === "running")) {
-            const assistant = repo.addChatMessage("assistant", `Something went wrong: ${e?.message ?? e}`, null, { error: true });
-            const failed = repo.failChatTurn(id, e?.message ?? String(e), (assistant as any).id);
-            emit(id, { type: "error", turn: failed, message: assistant });
-          }
-        } catch { /* ignore */ }
-        console.error(`[chat] turn#${id} failed: ${e?.message ?? e}`);
-      } finally {
-        controllers.delete(id);
-      }
+    const cur = repo.getChatTurn(id) as any;
+    if (cur && (cur.status === "queued" || cur.status === "running")) {
+      const assistant = repo.addChatMessage("assistant", `Something went wrong: ${e?.message ?? e}`, null, { error: true });
+      const failed = repo.failChatTurn(id, e?.message ?? String(e), (assistant as any).id);
+      emit(id, { type: "error", turn: failed, message: assistant });
     }
-  } finally {
-    draining = false;
-  }
+  } catch { /* ignore */ }
+  console.error(`[chat] turn#${id} failed: ${e?.message ?? e}`);
+});
+
+export function enqueueChatTurn(id: number): void {
+  runner.enqueue(id);
 }
 
 async function processChatTurn(id: number): Promise<void> {
