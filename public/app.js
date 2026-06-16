@@ -4842,6 +4842,7 @@ function renderMealPlans(plans, sel = "#meallist", refresh = null) {
     b.addEventListener("click", async () => {
       await api(`/mealplans/${b.dataset.accept}/accept`, { method: "POST" });
       toast("Meal plan accepted");
+      swrInvalidate(MEALS_KEY); // status flipped to kept — the journal's warm cache is now stale
       if (refresh) refresh(); else renderMealPlans(await api("/mealplans?limit=8"), sel);
     })
   );
@@ -4849,6 +4850,7 @@ function renderMealPlans(plans, sel = "#meallist", refresh = null) {
     b.addEventListener("click", async () => {
       await api(`/mealplans/${b.dataset.discard}/discard`, { method: "POST" });
       toast("Discarded");
+      swrInvalidate(MEALS_KEY); // status flipped to discarded — the journal's warm cache is now stale
       if (refresh) refresh(); else renderMealPlans(await api("/mealplans?limit=8"), sel);
     })
   );
@@ -9570,6 +9572,7 @@ function primaryKeyFor(tab) {
 // the transition. The frozen-tab problem is gone: paint is always instant.
 function switchTab(tab) {
   if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
+  teardownJobs(); // close agent-job streams from the leaving tab (jobs keep running server-side; reload reconnects)
   closeDetail(true); // overlays never outlive a tab switch
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
@@ -9772,6 +9775,7 @@ function activateTab(name) {
   const valid = ["today", "plan", "progress", "chat", "me", "settings"];
   const tab = valid.includes(name) ? name : "today";
   if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
+  teardownJobs(); // close agent-job streams from the leaving tab (jobs keep running server-side; reload reconnects)
   closeDetail(true);
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
