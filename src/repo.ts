@@ -2454,6 +2454,11 @@ function hydrateAgentJob(row: any): any {
   const out: any = { ...row, input, meta };
   delete out.input_json;
   delete out.result_json;
+  // chat_distill carries the full pre-archive conversation in input_json so the
+  // worker can distill it — the CLIENT never needs it, so don't echo that blob
+  // back through the active-jobs list or the SSE snapshot. The worker reads the
+  // untrimmed history via getAgentJobRawInput().
+  if (out.input && out.input.history) delete out.input.history;
   // The hydrated `result` is only present on a terminal job (done carries the
   // contract body; error/canceled carry whatever was recorded, usually null).
   if (result !== null) out.result = result;
@@ -2480,6 +2485,15 @@ export function createAgentJob(j: {
 
 export function getAgentJob(id: number) {
   return hydrateAgentJob(db.prepare(`SELECT * FROM agent_jobs WHERE id = ?`).get(id));
+}
+
+// The worker's full, un-sanitized input — hydrateAgentJob strips heavy
+// client-irrelevant fields (chat_distill's `history`), so the worker reads the
+// raw input_json here instead. Internal use only.
+export function getAgentJobRawInput(id: number): any {
+  const row = db.prepare(`SELECT input_json FROM agent_jobs WHERE id = ?`).get(id) as any;
+  if (!row || !row.input_json) return null;
+  try { return JSON.parse(row.input_json); } catch { return null; }
 }
 
 // Active = not yet terminal, oldest-first — the worker drains in this order and
@@ -2551,6 +2565,11 @@ export function cancelAgentJob(id: number) {
 // 'error'. A 'queued' job never started → safe to re-enqueue. Returns the queued
 // ids for the worker to re-drain. Mirrors recoverChatTurns.
 export function recoverAgentJobs(): { requeue: number[]; interrupted: number } {
+  // Retention: terminal job rows are pure telemetry once read — prune anything
+  // finished >30 days ago so agent_jobs never grows unbounded (mirrors the
+  // ai_cache 30-day discipline; the rows are ephemeral + regenerable).
+  db.prepare(`DELETE FROM agent_jobs WHERE status IN ('done','error','canceled')
+                AND finished_at IS NOT NULL AND finished_at < datetime('now','-30 days')`).run();
   const interrupted = db.prepare(`SELECT id FROM agent_jobs WHERE status='running'`).all() as any[];
   for (const r of interrupted) failAgentJob(r.id, "interrupted by a restart");
   const queued = db.prepare(`SELECT id FROM agent_jobs WHERE status='queued' ORDER BY id ASC`).all() as any[];

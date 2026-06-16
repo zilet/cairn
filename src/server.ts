@@ -29,7 +29,13 @@ app.use((_req, res, next) => {
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
+    "default-src 'self'; img-src 'self' data: blob:; " +
+      // The Atelier type system (Fraunces + Schibsted Grotesk) loads from the Google
+      // Fonts CDN — the stylesheet from fonts.googleapis.com, the font files from
+      // fonts.gstatic.com. Without these the display type silently falls back to
+      // system fonts on a cold (uncached) client. This is the canonical Google Fonts CSP.
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' https://fonts.gstatic.com; " +
       "script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; " +
       "base-uri 'self'; frame-ancestors 'none'"
   );

@@ -195,7 +195,9 @@ async function processAgentJob(id: number): Promise<void> {
       case "chat_distill": {
         // The conversation was archived BEFORE this job was enqueued; the
         // pre-archive history rides in input_json so the distill still sees it.
-        result = await distillChat(agent, Array.isArray(input.history) ? input.history : [], hooks);
+        // Read it RAW — the hydrated `input` strips `history` from client echoes.
+        const hist = repo.getAgentJobRawInput(id)?.history;
+        result = await distillChat(agent, Array.isArray(hist) ? hist : [], hooks);
         break;
       }
       default:
