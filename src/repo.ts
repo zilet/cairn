@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { db, todayISO } from "./db.js";
 import { listAgents } from "./agents.js";
 
@@ -2430,6 +2431,201 @@ export function recoverChatTurns(): { requeue: number[]; interrupted: number } {
   return { requeue: queued.map((r) => r.id), interrupted: interrupted.length };
 }
 
+// ---------- durable agent jobs (the generalized chat-turn spine) ----------
+// One agent_jobs row tracks status/phase for a backgrounded agentic op. On done
+// the worker records a thin pointer to the ALREADY-persisted result row
+// (ref_table / ref_id) plus a thin result_json snapshot (the exact body the
+// synchronous endpoint returned), never duplicating the heavy payload. Mirrors
+// the chat-turn CRUD above.
+
+// Resolve a job row's ref pointer to the live result. A `done` job carries the
+// snapshot the sync endpoint returned in result_json; if it also points at a row
+// (ref_table / ref_id) we return the snapshot as-is (it IS the contract body) —
+// the pointer is there for provenance / future re-hydration, never overwriting
+// the wire shape the client renders against.
+function hydrateAgentJob(row: any): any {
+  if (!row) return null;
+  let input: any = null;
+  try { input = row.input_json ? JSON.parse(row.input_json) : null; } catch { input = null; }
+  let result: any = null;
+  try { result = row.result_json ? JSON.parse(row.result_json) : null; } catch { result = null; }
+  let meta: any = null;
+  try { meta = row.meta ? JSON.parse(row.meta) : null; } catch { meta = null; }
+  const out: any = { ...row, input, meta };
+  delete out.input_json;
+  delete out.result_json;
+  // The hydrated `result` is only present on a terminal job (done carries the
+  // contract body; error/canceled carry whatever was recorded, usually null).
+  if (result !== null) out.result = result;
+  return out;
+}
+
+export function createAgentJob(j: {
+  kind: string;
+  input?: any;
+  agent?: string | null;
+  phase?: string | null;
+}) {
+  const info = db
+    .prepare(`INSERT INTO agent_jobs (status, kind, phase, input_json, agent)
+              VALUES ('queued', ?, ?, ?, ?)`)
+    .run(
+      String(j.kind),
+      j.phase ?? "queued",
+      j.input != null ? JSON.stringify(j.input) : null,
+      j.agent ?? null,
+    );
+  return getAgentJob(Number(info.lastInsertRowid));
+}
+
+export function getAgentJob(id: number) {
+  return hydrateAgentJob(db.prepare(`SELECT * FROM agent_jobs WHERE id = ?`).get(id));
+}
+
+// Active = not yet terminal, oldest-first — the worker drains in this order and
+// the PWA reconstructs the live in-flight + queued jobs from it on (re)load.
+export function listActiveAgentJobs() {
+  const rows = db
+    .prepare(`SELECT * FROM agent_jobs WHERE status IN ('queued','running') ORDER BY id ASC`)
+    .all() as any[];
+  return rows.map(hydrateAgentJob);
+}
+
+// queued → running (guarded so a canceled-while-queued job is never picked up).
+export function markAgentJobRunning(id: number) {
+  db.prepare(`UPDATE agent_jobs SET status='running', phase='running', started_at=datetime('now')
+              WHERE id=? AND status='queued'`).run(id);
+  return getAgentJob(id);
+}
+
+// Update the live progress phase (+ optional determinate meta) of a running job.
+export function setAgentJobPhase(id: number, phase: string, meta?: any) {
+  if (meta !== undefined) {
+    db.prepare(`UPDATE agent_jobs SET phase=?, meta=? WHERE id=? AND status='running'`)
+      .run(phase, meta != null ? JSON.stringify(meta) : null, id);
+  } else {
+    db.prepare(`UPDATE agent_jobs SET phase=? WHERE id=? AND status='running'`).run(phase, id);
+  }
+  return getAgentJob(id);
+}
+
+export function finishAgentJob(
+  id: number,
+  fields: { result?: any; chosen_agent?: string | null; ref_table?: string | null; ref_id?: number | null; cache_key?: string | null }
+) {
+  db.prepare(`UPDATE agent_jobs
+                 SET status='done', phase='done', finished_at=datetime('now'),
+                     result_json=?, chosen_agent=?, ref_table=?, ref_id=?, cache_key=?
+               WHERE id=?`)
+    .run(
+      fields.result !== undefined ? JSON.stringify(fields.result) : null,
+      fields.chosen_agent ?? null,
+      fields.ref_table ?? null,
+      fields.ref_id ?? null,
+      fields.cache_key ?? null,
+      id,
+    );
+  return getAgentJob(id);
+}
+
+export function failAgentJob(id: number, error: string) {
+  db.prepare(`UPDATE agent_jobs
+                 SET status='error', phase='error', finished_at=datetime('now'), error=?
+               WHERE id=?`)
+    .run((error ?? "").toString().slice(0, 1000), id);
+  return getAgentJob(id);
+}
+
+// User-requested Stop. A queued job just drops; a running job is flipped here AND
+// its live subprocess aborted by the worker (which holds the AbortController).
+// Returns the job, or null if it was already terminal.
+export function cancelAgentJob(id: number) {
+  const row = getAgentJob(id) as any;
+  if (!row || !["queued", "running"].includes(row.status)) return null;
+  db.prepare(`UPDATE agent_jobs SET status='canceled', phase='canceled', finished_at=datetime('now') WHERE id=?`).run(id);
+  return getAgentJob(id);
+}
+
+// Crash recovery (boot): a 'running' job was interrupted mid-flight — its coachOp
+// may have PARTIALLY persisted a draft, so re-running risks a duplicate; mark it
+// 'error'. A 'queued' job never started → safe to re-enqueue. Returns the queued
+// ids for the worker to re-drain. Mirrors recoverChatTurns.
+export function recoverAgentJobs(): { requeue: number[]; interrupted: number } {
+  const interrupted = db.prepare(`SELECT id FROM agent_jobs WHERE status='running'`).all() as any[];
+  for (const r of interrupted) failAgentJob(r.id, "interrupted by a restart");
+  const queued = db.prepare(`SELECT id FROM agent_jobs WHERE status='queued' ORDER BY id ASC`).all() as any[];
+  return { requeue: queued.map((r) => r.id), interrupted: interrupted.length };
+}
+
+// ---------- AI result cache (serve-stale-then-revalidate) ----------
+// A stable fingerprint over an idempotent op's normalized inputs (+ a coarse
+// context stamp) keyed to the parsed result it produced. sha1 like art.ts's
+// cacheKey; key inputs are JSON-canonicalized so equal inputs always fingerprint
+// the same. Regenerable — safe to drop.
+export function fingerprint(parts: any): string {
+  const canonical = (v: any): any => {
+    if (v == null) return null;
+    if (Array.isArray(v)) return v.map(canonical);
+    if (typeof v === "object") {
+      const out: any = {};
+      for (const k of Object.keys(v).sort()) out[k] = canonical(v[k]);
+      return out;
+    }
+    return v;
+  };
+  return crypto.createHash("sha1").update(JSON.stringify(canonical(parts))).digest("hex");
+}
+
+export interface AiCacheHit {
+  result: any;
+  chosen_agent: string | null;
+  ref_table: string | null;
+  ref_id: number | null;
+  computed_at: string;
+  stale: boolean;        // true → still served, but a fresh compute should run in the background
+}
+
+export function getAiCache(kind: string, cacheKey: string): AiCacheHit | null {
+  const row = db.prepare(`SELECT * FROM ai_cache WHERE kind = ? AND cache_key = ?`).get(kind, cacheKey) as any;
+  if (!row) return null;
+  let result: any = null;
+  try { result = row.result_json ? JSON.parse(row.result_json) : null; } catch { result = null; }
+  if (result == null) return null;
+  // Stale boundary: stale_after is a UTC "now"-comparable stamp; past it the hit
+  // is still served (instant) but flagged so the caller can revalidate.
+  const staleRow = db.prepare(`SELECT (stale_after IS NOT NULL AND stale_after < datetime('now')) AS stale FROM ai_cache WHERE kind=? AND cache_key=?`).get(kind, cacheKey) as any;
+  return {
+    result,
+    chosen_agent: row.chosen_agent ?? null,
+    ref_table: row.ref_table ?? null,
+    ref_id: row.ref_id ?? null,
+    computed_at: row.computed_at,
+    stale: !!staleRow?.stale,
+  };
+}
+
+export function saveAiCache(
+  kind: string,
+  cacheKey: string,
+  fields: { result: any; chosen_agent?: string | null; ref_table?: string | null; ref_id?: number | null; freshForMs?: number }
+): void {
+  if (!kind || !cacheKey || fields.result == null) return;
+  const freshForMs = Number.isFinite(fields.freshForMs as number) ? (fields.freshForMs as number) : 6 * 60 * 60 * 1000;
+  const staleAfter = new Date(Date.now() + freshForMs).toISOString().slice(0, 19).replace("T", " ");
+  db.prepare(
+    `INSERT INTO ai_cache (kind, cache_key, ref_table, ref_id, result_json, chosen_agent, computed_at, stale_after)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+     ON CONFLICT(kind, cache_key) DO UPDATE SET
+       ref_table=excluded.ref_table, ref_id=excluded.ref_id, result_json=excluded.result_json,
+       chosen_agent=excluded.chosen_agent, computed_at=excluded.computed_at, stale_after=excluded.stale_after`
+  ).run(
+    kind, cacheKey, fields.ref_table ?? null, fields.ref_id ?? null,
+    JSON.stringify(fields.result), fields.chosen_agent ?? null, staleAfter,
+  );
+  // Keep the cache bounded — old rows are never served past their staleness.
+  try { db.prepare(`DELETE FROM ai_cache WHERE computed_at < datetime('now','-30 days')`).run(); } catch {}
+}
+
 // ---------- chat history (read-only browse + search over archived turns) ----------
 // Each "fresh start" stamps the live turns with one shared archived_at, so a
 // past conversation IS the set of rows sharing an archived_at. Group them into
@@ -2506,6 +2702,7 @@ export interface Settings {
   gemini_api_key_configured: boolean;
   gemini_api_key_source: "settings" | "env" | "none";
   research_enabled: boolean;            // host-side evidence research (default OFF; off ⇒ deterministic, no network)
+  bg_ops_enabled: boolean;              // run the 7 agentic ops as durable background jobs (off ⇒ legacy inline blocking)
   updated_at?: string;
 }
 
@@ -2533,6 +2730,7 @@ function defaultSettings(): Settings {
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
     gemini_api_key_source: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY ? "env" : "none",
     research_enabled: false, // host-side research off by default — opt-in, deterministic when off
+    bg_ops_enabled: true, // durable background jobs on by default (the calm, fast path)
   };
 }
 
@@ -2583,6 +2781,8 @@ function rowToSettings(row: any): Settings {
     gemini_api_key_source: rowGemini ? "settings" : envGemini ? "env" : "none",
     // NULL on old rows (column added by migration v28) defaults to OFF.
     research_enabled: row.research_enabled == null ? false : !!row.research_enabled,
+    // NULL on old rows (column added by migration v32) defaults to ON.
+    bg_ops_enabled: row.bg_ops_enabled == null ? true : !!row.bg_ops_enabled,
     updated_at: row.updated_at,
   };
 }
@@ -2640,17 +2840,18 @@ export function setSettings(patch: any): Settings {
     gemini_api_key_configured: !!geminiApiKey || cur.gemini_api_key_configured,
     gemini_api_key_source: cur.gemini_api_key_source,
     research_enabled: patch.research_enabled !== undefined ? !!patch.research_enabled : cur.research_enabled,
+    bg_ops_enabled: patch.bg_ops_enabled !== undefined ? !!patch.bg_ops_enabled : cur.bg_ops_enabled,
   };
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
   db.prepare(
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
-       garmin_username=?, garmin_password=?, gemini_api_key=?, research_enabled=?, updated_at=datetime('now') WHERE id = 1`
+       garmin_username=?, garmin_password=?, gemini_api_key=?, research_enabled=?, bg_ops_enabled=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy, JSON.stringify(merged.agent_order), JSON.stringify(merged.disabled_agents),
     merged.rr_cursor, merged.coach_enabled ? 1 : 0, merged.coach_day, merged.coach_hour,
     merged.onboarded ? 1 : 0, merged.enrich_enabled ? 1 : 0, merged.proactive_enabled ? 1 : 0, merged.art_enabled ? 1 : 0, merged.art_enabled_at ?? "", merged.meal_prefs,
-    merged.garmin_username, garminPassword, geminiApiKey, merged.research_enabled ? 1 : 0
+    merged.garmin_username, garminPassword, geminiApiKey, merged.research_enabled ? 1 : 0, merged.bg_ops_enabled ? 1 : 0
   );
   return getSettings();
 }

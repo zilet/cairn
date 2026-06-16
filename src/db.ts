@@ -342,6 +342,56 @@ CREATE TABLE IF NOT EXISTS chat_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_turns_status ON chat_turns(status, id);
 
+-- Durable agent-job spine — the GENERALIZATION of chat_turns for the 7 other
+-- blocking agentic ops (session-suggest, meal-plan draft/swap/recipe, nutrition
+-- check-in, insight/weekly-read, day-read override, chat-distill, health review).
+-- POST /api/<op> persists a job here (status 'queued') and a serial in-process
+-- worker (src/agentJobs.ts, mirrors the chat-turn queue) drains it: runs the
+-- coachOp, and on done records a thin ref to the ALREADY-persisted result row
+-- (ref_table / ref_id) instead of duplicating the payload. The PWA reconstructs
+-- in-flight + queued jobs from this table on (re)load, so a backgrounded op
+-- survives a tab switch / reload / restart. New table → no migration needed.
+CREATE TABLE IF NOT EXISTS agent_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT DEFAULT (datetime('now')),
+  started_at TEXT,                          -- stamped when the worker picks it up
+  finished_at TEXT,                         -- stamped on done/error/canceled
+  status TEXT NOT NULL DEFAULT 'queued',    -- queued | running | done | error | canceled
+  kind TEXT NOT NULL,                       -- session_suggest | meal_plan | meal_swap | recipe | nutrition_checkin | insight | weekly_read | day_read_override | chat_distill | health_review
+  phase TEXT,                               -- latest progress phase (for late SSE subscribers / poll)
+  input_json TEXT,                          -- the op's typed inputs (agent + per-kind args)
+  agent TEXT,                               -- requested agent ('auto'/NULL or an explicit name)
+  chosen_agent TEXT,                        -- the agent that actually produced the result
+  ref_table TEXT,                           -- table holding the persisted result (e.g. meal_plans, plan_proposals, insights)
+  ref_id INTEGER,                           -- row id in ref_table (resolved live on hydrate)
+  result_json TEXT,                         -- thin result snapshot (the exact body the sync endpoint returned)
+  cache_key TEXT,                           -- ai_cache key when this job served/wrote the cache
+  meta TEXT,                                -- JSON { frac:{done,total}, ... } for determinate progress
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_status ON agent_jobs(status, id);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_kind ON agent_jobs(kind, id);
+
+-- Host-side AI result cache (serve-stale-then-revalidate). A fingerprint of an
+-- idempotent agentic op's inputs maps to the parsed result it produced, so an
+-- identical request inside the freshness window is served instantly (no agent
+-- run, no spend) and a stale hit is served immediately while a fresh compute runs
+-- in the background. Regenerable — mirrors evidence_cache; NOT Anthropic SDK
+-- prompt caching, just SQLite result caching. Only the safe-to-cache ops write
+-- here (session_suggest / insight / weekly_read); always-fresh ops never do.
+CREATE TABLE IF NOT EXISTS ai_cache (
+  kind TEXT NOT NULL,                       -- the op kind (session_suggest | insight | weekly_read)
+  cache_key TEXT NOT NULL,                  -- sha1 fingerprint of the normalized inputs + a coarse context stamp
+  ref_table TEXT,                           -- optional pointer to a persisted result row
+  ref_id INTEGER,
+  result_json TEXT,                         -- the cached parsed result (the sync-endpoint body)
+  chosen_agent TEXT,                        -- the agent that produced it
+  computed_at TEXT DEFAULT (datetime('now')),
+  stale_after TEXT,                         -- UTC stamp past which the entry is stale (served, then revalidated)
+  PRIMARY KEY (kind, cache_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_cache_computed ON ai_cache(computed_at);
+
 -- Single-row app settings (like profile). Controls how coaching agents are
 -- chosen when none is named, and the weekly auto-coach schedule.
 CREATE TABLE IF NOT EXISTS settings (
@@ -365,7 +415,8 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_sync_at TEXT DEFAULT '',        -- when the last Garmin sync finished (UTC ISO)
   garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
   proactive_enabled INTEGER DEFAULT 1,        -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
-  research_enabled INTEGER DEFAULT 0          -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
+  research_enabled INTEGER DEFAULT 0,         -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
+  bg_ops_enabled INTEGER DEFAULT 1            -- 1 = run the 7 agentic ops as durable background jobs (off ⇒ legacy inline blocking behavior)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each

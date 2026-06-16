@@ -213,6 +213,14 @@ export const MIGRATIONS: Migration[] = [
     // newly-finished sessions get a stamp, which is the correct, conservative default.
     addColumn(db, "sessions", "finished_at TEXT");
   } },
+  { version: 32, name: "settings-bg-ops-enabled", up: (db) => {
+    // Safety toggle for the durable agent-job spine: when on (default), the 7
+    // blocking agentic ops run as background jobs the PWA streams; when off, they
+    // run INLINE exactly as before (legacy blocking behavior). The agent_jobs and
+    // ai_cache tables are CREATE TABLE IF NOT EXISTS in db.ts and need no migration;
+    // only this column add does.
+    addColumn(db, "settings", "bg_ops_enabled INTEGER DEFAULT 1");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

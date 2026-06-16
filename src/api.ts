@@ -7,8 +7,9 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
-import { buildCoachPrompt, buildChatDistillPrompt } from "./prompt.js";
+import { buildCoachPrompt } from "./prompt.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
+import { enqueueAgentJob, cancelAgentJob, onJobEvent } from "./agentJobs.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
 import {
   runChosen,
@@ -23,12 +24,29 @@ import {
   consolidateMemory,
   growAboutMe,
   reconcileOutcomes,
+  distillChat,
 } from "./coachOps.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
 import { authEnabled } from "./auth.js";
 
 export const api = Router();
+
+// The 7 heavy agentic ops are durable BACKGROUND JOBS by default: the POST
+// handler persists an agent_jobs row, enqueues it, and returns { ok, job } at
+// once (the PWA streams progress + reconnects across reloads). The
+// settings.bg_ops_enabled toggle (default on) is a safety valve: when OFF, the
+// handler falls through to run the op INLINE and returns the legacy body
+// unchanged. backgroundOp() encapsulates that fork: when backgrounding is on it
+// creates + enqueues the job and responds { ok, job }; when off it returns false
+// so the caller runs the op inline exactly as before.
+function backgroundOp(res: Response, kind: string, input: any, agent?: string | null): boolean {
+  if (!repo.getSettings().bg_ops_enabled) return false;
+  const job = repo.createAgentJob({ kind, input, agent: agent ?? null });
+  enqueueAgentJob((job as any).id);
+  res.json({ ok: true, job });
+  return true;
+}
 
 // Uploaded health docs live next to the DB, inside the mounted data volume, so
 // they survive container rebuilds. Mirrors db.ts's DATA_DIR resolution.
@@ -245,19 +263,54 @@ api.get("/today-read", async (req, res) => {
   }
 });
 
+// Background the Brief OVERRIDE reshape ("rough night" / "short on time" / "train
+// anyway") as a durable job, so a steer survives a tab switch / reload / restart
+// like the other 7 ops. The canonical GET /api/today-read (and ?reset=1) stays
+// synchronous (cached + deterministic floor); this POST is ONLY for the agentic
+// override reshape. The job's `done` result is byte-for-byte what
+// GET /api/today-read?override= returns, so the PWA reuses its Brief render.
+// When bg_ops is OFF this computes inline and returns the legacy read body.
+api.post("/today-read/reshape", async (req, res) => {
+  const b = req.body ?? {};
+  const date = b.date != null ? String(b.date) : undefined;
+  const override = b.override != null ? String(b.override) : undefined;
+  const agentParam = b.agent != null ? String(b.agent) : undefined;
+  if (repo.getSettings().bg_ops_enabled) {
+    const job = repo.createAgentJob({ kind: "day_read_override", input: { date, override, agent: agentParam ?? null }, agent: agentParam ?? null });
+    enqueueAgentJob((job as any).id);
+    return res.json({ ok: true, job });
+  }
+  // Legacy inline path (bg_ops off) — same body the GET override branch returns.
+  try {
+    const read: any = await computeDayRead({ date, override, agent: agentParam });
+    try { repo.recordSuggestion("day_read", date || localToday(), { kind: read?.kind ?? null, focus: read?.focus ?? null, est_minutes: read?.est_minutes ?? null, override: override ?? null }); } catch {}
+    return res.json(read);
+  } catch (e: any) {
+    const f = repo.dayRead(date);
+    const headline = f.kind === "rest" ? "Rest today." : f.kind === "easy" ? "Take it easy." : f.focus ? `${f.focus}.` : "Good to train.";
+    return res.json({ ...f, headline, source: "deterministic", error: e.message });
+  }
+});
+
 // Build ONE session for today on demand ("ask it for a session right now"). A
 // SUGGESTION the user can act on or ignore — NOT saved/applied as the plan. Like
 // the meal-swap endpoint, ok:false at status 200 is the designed failure signal
 // (the PWA api() helper reads the body regardless of status).
 api.post("/session-suggest", async (req, res) => {
   const b = req.body ?? {};
+  const input = {
+    agent: b.agent ?? null,
+    minutes: b.minutes != null ? Number(b.minutes) : undefined,
+    equipment: b.equipment != null ? String(b.equipment) : undefined,
+    focus: b.focus != null ? String(b.focus) : undefined,
+    constraints: b.constraints != null ? String(b.constraints) : undefined,
+    date: b.date != null ? String(b.date) : undefined,
+  };
+  if (backgroundOp(res, "session_suggest", input, b.agent)) return;
   try {
     res.json(await suggestSession(b.agent, {
-      minutes: b.minutes != null ? Number(b.minutes) : undefined,
-      equipment: b.equipment != null ? String(b.equipment) : undefined,
-      focus: b.focus != null ? String(b.focus) : undefined,
-      constraints: b.constraints != null ? String(b.constraints) : undefined,
-      date: b.date != null ? String(b.date) : undefined,
+      minutes: input.minutes, equipment: input.equipment, focus: input.focus,
+      constraints: input.constraints, date: input.date,
     }));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -587,6 +640,7 @@ api.post("/suggestions/reconcile", (req, res) =>
 // carries the "checked against your floors" signal. Verify fails open.
 api.post("/coach/mealplan", async (req, res) => {
   const { agent, instruction } = req.body ?? {};
+  if (backgroundOp(res, "meal_plan", { agent: agent ?? null, instruction }, agent)) return;
   try {
     res.json(await draftMealPlan(agent, instruction));
   } catch (e: any) {
@@ -612,8 +666,9 @@ api.get("/nutrition/expenditure", (req, res) => {
 // designed failure signal, mirroring the swap/recipe endpoints.
 api.post("/nutrition/checkin", async (req, res) => {
   const b = req.body ?? {};
+  const window = b.window ? Number(b.window) : undefined;
+  if (backgroundOp(res, "nutrition_checkin", { agent: b.agent ?? null, window }, b.agent)) return;
   try {
-    const window = b.window ? Number(b.window) : undefined;
     res.json(await nutritionCheckin(b.agent, window));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -628,6 +683,7 @@ api.post("/meal-plans/:id/swap", async (req, res) => {
   const id = Number(req.params.id);
   const plan = repo.getMealPlan(id);
   if (!plan) return res.status(404).json({ error: "not found" });
+  if (backgroundOp(res, "meal_swap", { agent: b.agent ?? null, id, day: String(b.day ?? ""), meal_index: Number(b.meal_index), hint: b.hint }, b.agent)) return;
   try {
     res.json(await swapMealAgentic(b.agent, { plan, id, day: String(b.day ?? ""), mealIndex: Number(b.meal_index), hint: b.hint }));
   } catch (e: any) {
@@ -650,6 +706,7 @@ api.post("/meal-plans/:id/recipe", async (req, res) => {
   );
   const existing = Array.isArray(dayObj?.meals) ? dayObj.meals[mealIndex]?.recipe : undefined;
   if (existing && !b.force) return res.json({ ok: true, recipe: existing, cached: true });
+  if (backgroundOp(res, "recipe", { agent: b.agent ?? null, id, day, meal_index: mealIndex }, b.agent)) return;
   try {
     res.json(await generateRecipe(b.agent, { plan, id, day, mealIndex }));
   } catch (e: any) {
@@ -716,31 +773,27 @@ api.get("/chat/sessions/:archivedAt", (req, res) =>
 // part of the athlete's history/export, so nothing is hard-deleted anymore.
 api.delete("/chat", (_req, res) => res.json(repo.clearChat()));
 
-// "Fresh start": distill durable facts from the live conversation into memory
-// (one agent call via buildChatDistillPrompt), then archive every current
-// message. The archive NEVER blocks on the agent — a dead CLI login or timeout
-// still yields a clean empty chat, just with nothing distilled.
+// "Fresh start": ARCHIVE the live conversation immediately (so the composer is
+// usable at once — no blocking on the agent), then distill durable facts from the
+// pre-archive history into memory in the BACKGROUND as a chat_distill job. The
+// PWA settles a "✓ N remembered" pill when the job lands; a message typed during
+// the distill just queues as a normal chat turn (archive-before-enqueue keeps the
+// ordering). When bg_ops is OFF this falls back to the legacy blocking inline path.
 api.post("/chat/reset", async (req, res) => {
   const history = repo.listChatMessages(200);
   if (!history.length) return res.json({ ok: true, distilled: 0, archived: 0 });
-  let distilled = 0;
-  let farewell: string | undefined;
-  let note: string | undefined;
-  try {
-    const prompt = buildChatDistillPrompt(history.map((m: any) => ({ role: m.role, content: m.content })));
-    const { result } = await runChosen(req.body?.agent, prompt);
-    if (result.parsed) {
-      distilled = repo.saveDistilledMemories(result.parsed);
-      const f = result.parsed.farewell;
-      if (typeof f === "string" && f.trim()) farewell = f.trim().slice(0, 240);
-    } else {
-      note = "agent unavailable";
-    }
-  } catch {
-    note = "agent unavailable";
+  const agent = req.body?.agent ?? null;
+  if (repo.getSettings().bg_ops_enabled) {
+    const snapshot = history.map((m: any) => ({ role: m.role, content: m.content }));
+    const { archived } = repo.archiveChat();
+    const job = repo.createAgentJob({ kind: "chat_distill", input: { agent, history: snapshot }, agent });
+    enqueueAgentJob((job as any).id);
+    return res.json({ ok: true, archived, distilling: (job as any).id });
   }
+  // Legacy inline path (bg_ops off): distill (best-effort) then archive.
+  const r = await distillChat(agent, history.map((m: any) => ({ role: m.role, content: m.content })));
   const { archived } = repo.archiveChat();
-  res.json({ ok: true, distilled, archived, ...(farewell ? { farewell } : {}), ...(note ? { note } : {}) });
+  res.json({ ok: true, distilled: r.distilled, archived, ...(r.farewell ? { farewell: r.farewell } : {}), ...(r.note ? { note: r.note } : {}) });
 });
 
 // Serve a chat-attached photo back to the PWA. Filename is locked to the
@@ -846,6 +899,63 @@ api.get("/chat/turns/:id/stream", (req, res) => {
   let unsubscribe = () => {};
   const cleanup = () => { clearInterval(keepalive); unsubscribe(); };
   unsubscribe = onTurnEvent(id, (e) => {
+    send(e.type, e);
+    if (e.type === "done" || e.type === "error" || e.type === "canceled") { cleanup(); res.end(); }
+  });
+  req.on("close", cleanup);
+});
+
+// ---- durable agent jobs (the backgrounded heavy agentic ops) ----
+// Mirrors the chat-turns surface verbatim (the PWA's kind-agnostic job runner
+// codes against this). The `done` event's `result` (and GET /:id's job.result) is
+// byte-for-byte the body the corresponding op endpoint returned synchronously
+// before this change — so the client's done-handler reuses its old rendering.
+
+// Active (queued + running) jobs, oldest-first — the PWA reconstructs in-flight +
+// queued ops from this on every (re)load (durable across restarts).
+api.get("/agent-jobs", (_req, res) => res.json({ ok: true, jobs: repo.listActiveAgentJobs() }));
+
+// One job's current state (poll fallback when SSE is unavailable). A `done` job
+// includes job.result = the ref-hydrated contract body.
+api.get("/agent-jobs/:id", (req, res) => {
+  const job = repo.getAgentJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ ok: false, error: "not found" });
+  res.json({ ok: true, job });
+});
+
+// Stop a queued or running job (drops it / SIGKILLs the live subprocess).
+api.post("/agent-jobs/:id/cancel", (req, res) => {
+  const job = cancelAgentJob(Number(req.params.id));
+  res.json({ ok: !!job, job: job ?? null });
+});
+
+// Live progress for one job (Server-Sent Events). An immediate `snapshot` (so a
+// late subscriber / poll-fallback sees current state, with the result if already
+// terminal), then every phase + the terminal event from the worker bus, then
+// close. EventSource can't set headers, so the PWA reaches this with ?token=.
+api.get("/agent-jobs/:id/stream", (req, res) => {
+  const id = Number(req.params.id);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const send = (event: string, data: any) => {
+    try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
+  };
+
+  const job = repo.getAgentJob(id) as any;
+  if (!job) { send("error", { error: "no such job" }); return res.end(); }
+
+  // Initial snapshot, with the result if the job already finished.
+  send("snapshot", { job, ...(job.result !== undefined ? { result: job.result } : {}) });
+  if (["done", "error", "canceled"].includes(job.status)) return res.end();
+
+  const keepalive = setInterval(() => { try { res.write(`: keepalive\n\n`); } catch { /* client gone */ } }, 15000);
+  let unsubscribe = () => {};
+  const cleanup = () => { clearInterval(keepalive); unsubscribe(); };
+  unsubscribe = onJobEvent(id, (e) => {
     send(e.type, e);
     if (e.type === "done" || e.type === "error" || e.type === "canceled") { cleanup(); res.end(); }
   });
@@ -1013,8 +1123,10 @@ api.get("/health/review", (_req, res) => res.json(repo.getLatestHealthReview()))
 // Like the meal swap, ok:false at status 200 is the designed failure signal
 // when the agent returns garbage (addHealthReview rejects the shape).
 api.post("/health/review", async (req, res) => {
+  const agent = req.body?.agent;
+  if (backgroundOp(res, "health_review", { agent: agent ?? null }, agent)) return;
   try {
-    res.json(await runHealthReview(req.body?.agent));
+    res.json(await runHealthReview(agent));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -1099,8 +1211,11 @@ api.get("/insights", (req, res) =>
 // agent found nothing real (found:false) or returned an unusable shape. NO push
 // notification ever fires; the result simply waits in-app.
 api.post("/insights/generate", async (req, res) => {
+  const agent = req.body?.agent;
+  const kind = req.body?.kind === "weekly_read" ? "weekly_read" : "insight";
+  if (backgroundOp(res, kind, { agent: agent ?? null, kind: req.body?.kind }, agent)) return;
   try {
-    res.json(await generateInsight(req.body?.agent, req.body?.kind));
+    res.json(await generateInsight(agent, req.body?.kind));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

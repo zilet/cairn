@@ -222,6 +222,50 @@ one-off spinner. Motion is slow and legible under `prefers-reduced-motion`.
   label for a whole region that's fetching/thinking — the one case the inline
   pieces above don't cover (the chat log hydrating, the history overlay loading).
 - **`.hshimmer`** — the shimmer skeleton placeholder (Health-view picture build).
+- **`.is-thinking--determinate`** — the `.is-thinking` filament becomes a
+  left-anchored progress fill driven by a `--frac` custom property (0..1), same
+  gradient/glow family as the indeterminate sweep. The job runner sets `--frac`
+  from real `phase` fractions (`job.meta.frac = {done, total}`). Reduced motion →
+  the fill jumps to its width (transition killed), no sweep.
+- **`thinkingCaption(el, op)`** — rotates a curated, op-specific script through `el`
+  (~2.6s/line, the chat `.typing-cap`/`capfade` crossfade), looping the tail;
+  returns `stop()`. Replaces a static "Drafting…/Reading…" line on a long-op anchor
+  with evolving copy. Scripts live in `THINKING_SCRIPTS` (`session_suggest`,
+  `meal_plan`, `recipe`, `nutrition_checkin`, `day_read_override`, `chat_distill`,
+  `insight`). Under reduced motion it shows line 1 statically. The host carries a
+  `.job-cap` (or `.typing-cap`) slot for it to write into.
+
+## Instant, alive: SWR cache + durable agent jobs
+
+The spine that makes the app feel instant. Two client layers (`public/app.js`),
+both generalizing proven code (`upgradeBriefInPlace` + the chat SSE client):
+
+- **Stale-while-revalidate** — `peekCached(key)` / `cachedApi(path,{key,freshFor,
+  onUpgrade})` / `paintSWR({key,path,peek,render,token})` / `swrInvalidate(keyOrPrefix)`
+  / `swrSweep()`. A surface paints **real last-known content instantly** (skeleton
+  only on a true cold start), then revalidates in the background and upgrades in
+  place **only when the JSON payload changed**. Both tiers (in-memory Map over
+  `localStorage` `cairn.swr.v1.<key>`) are JSON-only — never cache DOM; rendering
+  still flows through `escHtml`/`escAttr`. A stale paint flies the **`.swr-refreshing`**
+  hairline (`body.swr-busy::after` — a calm low-opacity top filament, distinct from
+  the `.offline-bar` warn band; reduced motion → a static tinted 1px border). A
+  mutating write that changes a surface calls `swrInvalidate(key)` so the next paint
+  refetches (the role `state.brief = null` plays for the Brief). **`SWR_NS`**
+  (`"cairn.swr.v1."`) is the version segment — bump it in lockstep with any
+  payload-shape change so old cached bodies are dropped.
+- **Durable agent jobs** — the kind-agnostic counterpart to the chat-turn client:
+  `enqueueJob(path,body)` / `openJobStream(id,handlers)` / `jobReconnect()` /
+  `teardownJobs(pred)` / `runOp(kind,body,{path,anchor,render,onFail,caption})`.
+  A heavy/agentic op is a server-side job streamed for evolving progress; it
+  survives a tab switch / reload / restart (`jobReconnect()` re-attaches via a
+  stable `data-job-anchor="<kind>"`, rebuilding handlers through a
+  `registerJobReconnector(kind, factory)` for ops that should resume after a
+  reload). A SEPARATE `jobStreams` map keeps the single chat `EventSource`
+  untouched. **`runOp`** is robust to the server's `bg_ops_enabled` toggle: the op
+  POST returns `{ok, job}` (background — stream it) or a legacy inline result (no
+  `.job` — render now), and the `done` event's `result` is byte-for-byte the object
+  the endpoint returned synchronously before, so the `done` render reuses the old
+  await-path render verbatim.
 
 ## Progressive artwork — `artImg()`
 

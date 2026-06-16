@@ -2230,6 +2230,27 @@ body.sheet-open{overflow:hidden}
   animation:atelier-filament 1.25s var(--ease) infinite}
 @keyframes atelier-filament{0%{background-position:-45% 0}100%{background-position:140% 0}}
 
+/* determinate filament — the same gradient/glow family as the indeterminate
+   sweep, but a left-anchored progress fill driven by --frac (0..1). The job runner
+   sets --frac from real phase fractions (meal-plan day k/7, recipe draft→verify).
+   --determinate overrides the indeterminate ::after when both classes are present. */
+.is-thinking--determinate::after{
+  right:auto;width:calc(var(--frac,0) * 100%);
+  background:linear-gradient(90deg,var(--accent) 0,var(--gold) 100%);
+  background-size:100% 100%;
+  animation:none;
+  transition:width var(--dur-2) var(--ease)}
+
+/* swr-refreshing — the calm "we already have your data, just checking" hairline:
+   a single low-opacity, slow filament at the very top of the page (under the
+   header), distinct from the .offline-bar warn band. It rides while a stale-while-
+   revalidate paint is reconfirming in the background; nothing else moves. */
+body.swr-busy::after{
+  content:"";position:fixed;top:0;left:0;right:0;height:2px;z-index:46;pointer-events:none;
+  background:linear-gradient(90deg,transparent 0,var(--accent) 42%,var(--gold) 58%,transparent 100%);
+  background-size:42% 100%;background-repeat:no-repeat;opacity:.5;
+  animation:atelier-filament 2.4s var(--ease) infinite}
+
 /* a button mid-request: btnBusy() swaps the label for a ring + working text and
    pins min-width so the footprint never jumps */
 .btn-busy{cursor:progress!important}
@@ -2539,6 +2560,13 @@ body.sheet-open{overflow:hidden}
   .typing i{animation:typingdot 1.8s var(--ease) infinite!important}
   .hshimmer{animation:hshine 2.4s linear infinite!important}
   .offline-dot{animation:offlinepulse 2.6s ease infinite!important}
+
+  /* the new background-work primitives degrade to STATIC state, no motion:
+     the determinate fill keeps its --frac width (transition killed → it jumps);
+     the SWR hairline becomes a calm static tinted 1px top border, no sweep. */
+  .is-thinking--determinate::after{animation:none!important}
+  body.swr-busy::after{animation:none!important;height:1px;opacity:.45;
+    background:var(--accent)!important}
 
   /* short FUNCTIONAL transitions kept (the seg thumb sliding to the tapped
      sub-view, disclosure chevrons, save/offline bars) — these communicate

@@ -70,6 +70,169 @@ if (typeof window !== "undefined") {
   if (navigator.onLine === false) setOffline(true);
 }
 
+// ---------- stale-while-revalidate (SWR) cache layer ----------
+// The spine that makes the whole app feel instant: tabs paint REAL last-known
+// content the moment you re-enter (skeleton only on a true cold start), then
+// quietly revalidate in the background and upgrade in place — generalizing the
+// Brief's `upgradeBriefInPlace`. Two tiers: an in-memory Map (this session) over
+// localStorage (`cairn.swr.v1.<key>`, survives reload/restart). JSON-only — never
+// cache DOM; rendering still flows through escHtml/escAttr everywhere.
+//
+// HOW A SURFACE ADOPTS IT (4 lines):
+//   const KEY = "today:" + date;
+//   const peek = peekCached(KEY);
+//   paintSWR({ key: KEY, path: "/today?date=" + date, peek, token: pollToken,
+//     render: (data, { warm } = {}) => { view.querySelector("#slot").innerHTML = buildHtml(data); } });
+// `render` runs synchronously for a warm peek (no skeleton, just a `.swr-refreshing`
+// hairline while it revalidates), then once more only if the payload changed. A cold
+// surface keeps its existing skeleton until the first resolve.
+//
+// A MUTATING WRITE that invalidates a surface calls `swrInvalidate(key)` (or a
+// prefix) so the next paint refetches — the same role `state.brief = null` plays
+// for the Brief.
+const SWR_NS = "cairn.swr.v1."; // bump the version segment in lockstep with any payload-shape change
+const _swrMem = new Map();      // key -> { data, ts } (this-session tier, fastest)
+
+function _swrLsGet(key) {
+  try {
+    const raw = localStorage.getItem(SWR_NS + key);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (o && typeof o === "object" && "data" in o) return o;
+  } catch {}
+  return null;
+}
+function _swrLsSet(key, entry) {
+  try { localStorage.setItem(SWR_NS + key, JSON.stringify(entry)); } catch {}
+}
+
+// Read the last-known value for a key without firing a request. Memory first,
+// then hydrate from localStorage (and warm the memory tier). Returns
+// { data, fresh } where fresh = age < freshFor (default 60s), or null if absent.
+function peekCached(key, freshFor = 60000) {
+  if (!key) return null;
+  let entry = _swrMem.get(key);
+  if (!entry) {
+    entry = _swrLsGet(key);
+    if (entry) _swrMem.set(key, entry);
+  }
+  if (!entry) return null;
+  const age = Date.now() - (entry.ts || 0);
+  return { data: entry.data, fresh: age < freshFor };
+}
+
+function _swrStore(key, data) {
+  const entry = { data, ts: Date.now() };
+  _swrMem.set(key, entry);
+  _swrLsSet(key, entry);
+  return entry;
+}
+
+// Stable structural compare for "did the JSON payload actually change?" — cheap
+// JSON.stringify, since these are small API bodies we already serialize anyway.
+function _swrSame(a, b) {
+  if (a === b) return true;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
+// Fire `api(path)`, write both cache tiers on resolve, and call
+// `onUpgrade(data, { changed })` ONLY when the payload changed vs what's cached
+// (so a no-op revalidate never re-renders / re-animates). Revalidate errors are
+// swallowed (api() already surfaced the offline hairline) and the stale value is
+// returned so callers never blank out. Returns a promise of the fresh data — so a
+// deliberate caller can still `await cachedApi(...)` like a plain fetch.
+function cachedApi(path, { key, freshFor = 60000, onUpgrade } = {}) {
+  const k = key || path;
+  const prior = peekCached(k, freshFor);
+  return api(path).then((data) => {
+    const changed = !prior || !_swrSame(prior.data, data);
+    _swrStore(k, data);
+    if (onUpgrade) { try { onUpgrade(data, { changed }); } catch {} }
+    return data;
+  }).catch(() => (prior ? prior.data : Promise.reject(new Error("swr-offline"))));
+}
+
+// The orchestrator generalizing upgradeBriefInPlace. Given a cache key + a path +
+// a `render(data, {warm})` callback:
+//   • warm peek present → render(peek.data, {warm:true}) SYNCHRONOUSLY (no skeleton),
+//     and add a `.swr-refreshing` hairline if the peek is stale;
+//   • no peek → leave the existing skeleton in place;
+// then revalidate; on resolve, stale-guard on token/tab, drop the hairline, and
+// re-render via skelSwap() only if the payload changed (or we were cold).
+// `peek` is passed in (the caller already peeked to decide skeleton-vs-not in
+// switchTab); if omitted we peek here.
+function paintSWR({ key, path, peek, render, token, freshFor = 60000, tab } = {}) {
+  if (!key || !path || typeof render !== "function") return Promise.resolve();
+  const p = peek !== undefined ? peek : peekCached(key, freshFor);
+  const tabAtStart = tab !== undefined ? tab : state.tab;
+  const stale = () => (token != null && token !== pollToken) || (tabAtStart != null && state.tab !== tabAtStart);
+
+  if (p) {
+    render(p.data, { warm: true });
+    if (!p.fresh) markRefreshing(true);
+  }
+  return cachedApi(path, {
+    key, freshFor,
+    onUpgrade: (data, { changed }) => {
+      if (stale()) return;
+      markRefreshing(false);
+      if (changed || !p) skelSwap(() => render(data, { warm: false }));
+    },
+  }).then((data) => { if (!stale()) markRefreshing(false); return data; })
+    .catch(() => { if (!stale()) markRefreshing(false); });
+}
+
+// The calm "we have your data, just checking" hairline — a single low-key filament
+// under the header, distinct from the offline bar. Reference-counted so concurrent
+// surfaces don't fight over it. Reduced-motion → a static tinted top border (CSS).
+let _swrRefreshing = 0;
+function markRefreshing(on) {
+  _swrRefreshing = Math.max(0, _swrRefreshing + (on ? 1 : -1));
+  document.body.classList.toggle("swr-busy", _swrRefreshing > 0);
+}
+
+// Drop a cache entry (and its localStorage twin). With a trailing-prefix match
+// (`swrInvalidate("today:")`) it drops every key under that prefix — for surfaces
+// keyed by date/window. Also clears the refresh hairline bookkeeping is untouched.
+function swrInvalidate(keyOrPrefix) {
+  if (!keyOrPrefix) return;
+  const prefix = keyOrPrefix.endsWith(":") || keyOrPrefix.endsWith(".");
+  if (prefix) {
+    for (const k of [..._swrMem.keys()]) if (k.startsWith(keyOrPrefix)) _swrMem.delete(k);
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const lk = localStorage.key(i);
+        if (lk && lk.startsWith(SWR_NS + keyOrPrefix)) localStorage.removeItem(lk);
+      }
+    } catch {}
+  } else {
+    _swrMem.delete(keyOrPrefix);
+    try { localStorage.removeItem(SWR_NS + keyOrPrefix); } catch {}
+  }
+}
+
+// Boot housekeeping: evict stale localStorage SWR rows (older than ~24h) and cap
+// the namespace at ~40 entries (drop the oldest), so the cache never grows
+// unbounded. Cheap, runs once at startup.
+function swrSweep() {
+  const MAX_AGE = 24 * 60 * 60 * 1000;
+  const CAP = 40;
+  try {
+    const rows = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const lk = localStorage.key(i);
+      if (!lk || !lk.startsWith(SWR_NS)) continue;
+      let ts = 0;
+      try { ts = (JSON.parse(localStorage.getItem(lk)) || {}).ts || 0; } catch {}
+      rows.push({ lk, ts });
+    }
+    const now = Date.now();
+    for (const r of rows) if (now - r.ts > MAX_AGE) { try { localStorage.removeItem(r.lk); } catch {} }
+    const fresh = rows.filter((r) => now - r.ts <= MAX_AGE).sort((a, b) => a.ts - b.ts);
+    for (let i = 0; i < fresh.length - CAP; i++) { try { localStorage.removeItem(fresh[i].lk); } catch {} }
+  } catch {}
+}
+
 function localISO(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -869,6 +1032,42 @@ function loadingState(label) {
   </div>`;
 }
 
+// Curated, op-specific "an agent is thinking" scripts — calm, Atelier-voiced, a
+// few lines each so a long wait reads as quiet motion rather than a frozen line.
+// thinkingCaption() crossfades through these (~2.6s/line) and loops the tail.
+const THINKING_SCRIPTS = {
+  session_suggest: ["Reading your week…", "Weighing recovery…", "Shaping today's session…", "Choosing the right load…"],
+  meal_plan: ["Reading your week…", "Balancing the macros…", "Plating the days…", "Checking the protein floor…"],
+  recipe: ["Opening the kitchen…", "Sourcing the ingredients…", "Writing the steps…", "Tasting as it goes…"],
+  nutrition_checkin: ["Reading your intake…", "Tracing the trend…", "Weighing the drift…", "Settling on a number…"],
+  day_read_override: ["Hearing you…", "Re-reading the day…", "Reshaping the brief…"],
+  chat_distill: ["Looking back over the thread…", "Keeping what matters…", "Tidying the rest away…"],
+  insight: ["Connecting the dots…", "Crossing the domains…", "Listening for one real thread…"],
+};
+
+// Rotate an op's script through `el` with a gentle crossfade (reusing the chat
+// `.typing-cap` / capfade vocabulary), ~2.6s a line, looping the tail. Under
+// reduced motion it shows line 1 statically. Returns stop() — call it when the
+// op settles. Safe on a null element / unknown op (falls back to a calm line).
+function thinkingCaption(el, op) {
+  if (!el) return () => {};
+  const lines = THINKING_SCRIPTS[op] || ["Thinking…"];
+  const paint = (txt) => {
+    el.textContent = txt;
+    if (!reducedMotion()) { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
+  };
+  el.classList.add("typing-cap");
+  paint(lines[0]);
+  if (reducedMotion() || lines.length < 2) return () => {};
+  let i = 0;
+  const timer = setInterval(() => {
+    if (!el.isConnected) { clearInterval(timer); return; }
+    i = i + 1 >= lines.length ? Math.max(1, lines.length - 2) : i + 1; // loop the tail, never restart at the intro
+    paint(lines[i]);
+  }, 2600);
+  return () => clearInterval(timer);
+}
+
 // Calm fallback when a tab's (possibly agentic) render rejects — e.g. a network
 // blip during a skeleton-first paint. Replaces the stranded shimmer with a quiet
 // retry instead of freezing on the skeleton. No nag, just an option.
@@ -1578,52 +1777,92 @@ function suggestCardHtml(session, verified) {
     </section>`;
 }
 
-// Ask the buddy for a session right now. POSTs /session-suggest (with optional
-// minutes for the short-on-time path). Mirrors the meal-swap failure UX: ok:false
-// (or a thrown 500 with no ok) surfaces as a gentle inline line, never a hard error.
+// The shared runOp options for a session-suggest — used by both the live trigger
+// (askForSession) and the reload reconnector, so the render/fail behavior is
+// identical whether the result lands now or after a refresh.
+function sessionSuggestOpOpts() {
+  return {
+    path: "/session-suggest",
+    anchor: "#sugSlot",
+    caption: "session_suggest",
+    // The slot left the DOM (re-render / tab switch): drop the stream — the job
+    // keeps running server-side and re-attaches via jobReconnect. Release the lock
+    // so a later trigger isn't wedged on a stale in-flight flag.
+    guard: () => { const gone = !view.querySelector("#sugSlot")?.isConnected; if (gone) sessionSuggestInFlight = false; return gone; },
+    isFail: (r) => !r || r.ok !== true || !r.session,
+    render: (r) => {
+      sessionSuggestInFlight = false;
+      const s = view.querySelector("#sugSlot");
+      if (!s) return;
+      state.suggestedSession = r.session;
+      s.innerHTML = suggestCardHtml(r.session, r.verified);
+      runCountUps(s);
+      wireSuggestCard(s);
+      s.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
+    },
+    onFail: () => {
+      sessionSuggestInFlight = false;
+      const s = view.querySelector("#sugSlot");
+      if (!s) return;
+      // designed failure (ok:false) or unreachable — gentle, never an error
+      s.innerHTML = `<div class="sug-card sug-fail settle-in">
+          <div class="sug-fail-line">Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.</div>
+          <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>
+        </div>`;
+      wireSuggestCard(s);
+    },
+  };
+}
+
+// Reconnector: after a reload mid-run, jobReconnect rebuilds the loading card in
+// #sugSlot and returns the same handlers runOp would have used, so a session that
+// finished (or finishes) while we were away lands in place. The translation from
+// runOp's option shape to raw openJobStream handlers mirrors runOp's internals.
+// Registered at boot (the job-runner registry is defined later in the file).
+function reconnectSessionSuggest() {
+  const slot = view.querySelector("#sugSlot");
+  if (!slot) return null; // not on Today — a later renderToday() will retry reconnect
+  sessionSuggestInFlight = true;
+  slot.innerHTML = `<div class="sug-card sug-loading settle-in">
+      <span class="aspin" aria-hidden="true"></span>
+      <div class="sug-loading-line job-cap"></div>
+    </div>`;
+  const o = sessionSuggestOpOpts();
+  let stop = () => {};
+  const capEl = slot.querySelector(".job-cap");
+  if (capEl) stop = thinkingCaption(capEl, o.caption);
+  if (!reducedMotion()) slot.classList.add("is-thinking");
+  const clear = () => { stop(); const s = view.querySelector("#sugSlot"); if (s) { s.classList.remove("is-thinking", "is-thinking--determinate"); s.style.removeProperty("--frac"); } };
+  return {
+    guard: o.guard,
+    onDone: (result) => { clear(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
+    onError: () => { clear(); o.onFail(null); },
+    onCanceled: () => { clear(); o.onFail(null); },
+  };
+}
+
+// Ask the buddy for a session right now. POSTs /session-suggest as a durable
+// background job (server backgrounds it; falls back to an inline result when the
+// toggle is off — runOp handles both). The op streams evolving progress into
+// #sugSlot and reconnects after a reload. Mirrors the meal-swap failure UX:
+// ok:false (or unreachable) surfaces as a gentle inline line, never a hard error.
 let sessionSuggestInFlight = false;
 async function askForSession(opts = {}) {
   if (sessionSuggestInFlight) { toast("Already drafting a session…"); return; }
   const slot = view.querySelector("#sugSlot");
   if (!slot) return;
   sessionSuggestInFlight = true;
-  const token = pollToken;
+  // The loading card carries a .job-cap for the evolving thinkingCaption and a
+  // data-job-anchor so jobReconnect() can re-attach after a reload mid-run.
   slot.innerHTML = `<div class="sug-card sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
-      <div class="sug-loading-line">Asking your buddy for a session…</div>
+      <div class="sug-loading-line job-cap"></div>
     </div>`;
   const body = { date: state.logDate };
   if (opts.minutes != null) body.minutes = opts.minutes;
   if (opts.focus) body.focus = opts.focus;
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 180000);
-  let r = null;
-  try {
-    r = await api("/session-suggest", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body), signal: ctrl.signal,
-    });
-  } catch { r = null; }
-  clearTimeout(timer);
-  sessionSuggestInFlight = false;
-  if (token !== pollToken) return; // re-rendered since — the fresh render owns the DOM
-  if (!slot.isConnected) return;
-
-  if (r && r.ok === true && r.session) {
-    state.suggestedSession = r.session;
-    slot.innerHTML = suggestCardHtml(r.session, r.verified);
-    runCountUps(slot);
-    wireSuggestCard(slot);
-    slot.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
-  } else {
-    // designed failure (ok:false) or unreachable — gentle, never an error
-    slot.innerHTML = `<div class="sug-card sug-fail settle-in">
-        <div class="sug-fail-line">Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.</div>
-        <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>
-      </div>`;
-    wireSuggestCard(slot);
-  }
+  await runOp("session_suggest", body, sessionSuggestOpOpts());
 }
 
 // Wire the suggest card's actions (log these / dismiss / retry).
@@ -7671,6 +7910,239 @@ function appendMsg(m, noScroll, parent, opts = {}) {
 }
 
 // ============================================================================
+// Durable agent jobs — kind-agnostic non-blocking ops + live (SSE) progress.
+//
+// The general-purpose counterpart to the chat-turn client below: any heavy/agentic
+// op (session-suggest, meal-plan, recipe, nutrition-checkin, day-read override,
+// insight, chat-distill) is enqueued as a server-side job and streamed for
+// evolving progress. Structurally mirrors the chat SSE client (chatOpenStream /
+// chatReconnect / teardown), but with a SEPARATE jobStreams Map so the single chat
+// EventSource is never disturbed, and no `delta` (these are one-shot JSON results).
+//
+// THE WIRE CONTRACT (the server toggle makes this robust to either shape):
+//   • Enqueue: the op's POST returns {ok, job:{id,kind,status,phase,created_at}}
+//     when backgrounding is ON; the LEGACY inline result (no `.job`) when OFF.
+//     `runOp` branches on `.job` — stream it, or render the inline result now.
+//   • GET /api/agent-jobs            → {ok, jobs:[…]} active, oldest-first
+//   • GET /api/agent-jobs/:id        → {ok, job}  (a done job carries job.result)
+//   • SSE /api/agent-jobs/:id/stream → snapshot{job,result?} · phase{job}
+//       (job.meta.frac={done,total} drives the determinate filament) ·
+//       done{job,result} · error{job,message} · canceled{job}
+//   • POST /api/agent-jobs/:id/cancel → {ok, job}
+//   • CRUCIAL: a done event's `result` is byte-for-byte the object the endpoint
+//     returned synchronously before — so a `done` handler reuses the old await-path
+//     render verbatim.
+//
+// HOW A CALL SITE ADOPTS IT (askForSession before/after):
+//   BEFORE: btnBusy + a client AbortController + `await api('/session-suggest',…)`
+//           then render r.session.
+//   AFTER:  runOp('session_suggest', body, {
+//             anchor:'#sugSlot', caption:'session_suggest',
+//             render: (result) => { /* same render the await path used: r.session */ },
+//             onFail: () => { /* the gentle inline failure line */ },
+//           });
+//   No client timeout/AbortController — the job lives server-side and reconnects
+//   after a reload via jobReconnect().
+// ============================================================================
+
+const jobStreams = new Map();   // jobId -> its open EventSource
+const jobDone = new Set();      // job ids already finalized — keeps `done` idempotent
+const jobHandlers = new Map();  // jobId -> { onPhase, onDone, onError, onCanceled, anchor }
+// kind -> (job) => handlers | null. Lets jobReconnect rebuild a stream's handlers
+// after a RELOAD (when the in-memory jobHandlers map is gone) — a call site that
+// wants its op to survive a reload registers a reconnector here once. The factory
+// recreates the host/caption and returns the same handlers runOp would have used.
+const jobReconnectors = new Map();
+function registerJobReconnector(kind, factory) { jobReconnectors.set(kind, factory); }
+
+// POST the op's endpoint and return the parsed response. Callers branch on `.job`
+// (background mode) vs a legacy inline result (toggle off). Throws on transport
+// failure so the caller can show its own gentle failure line.
+async function enqueueJob(path, body) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+}
+
+// Open an SSE stream on a job, wiring snapshot/phase/done/error/canceled exactly
+// like the chat client. Each handler is guarded by `guard()` (the anchor leaving
+// the DOM drops the stream but leaves the job running server-side). `done` is
+// idempotent via the jobDone Set. `handlers` = { guard?, onSnapshot?, onPhase?,
+// onDone?, onError?, onCanceled? }.
+function openJobStream(jobId, handlers = {}) {
+  if (jobStreams.has(jobId)) return; // already streaming this job
+  let es;
+  try { es = new EventSource(withToken(`/api/agent-jobs/${jobId}/stream`)); }
+  catch { return; }
+  jobStreams.set(jobId, es);
+  jobHandlers.set(jobId, handlers);
+
+  const close = () => {
+    const cur = jobStreams.get(jobId);
+    if (cur === es) jobStreams.delete(jobId);
+    try { es.close(); } catch {}
+  };
+  // Leaving the host DOM: drop the connection, keep the job alive server-side.
+  const guard = () => {
+    if (typeof handlers.guard === "function" && handlers.guard()) { close(); return true; }
+    return false;
+  };
+  const terminal = () => { close(); jobHandlers.delete(jobId); };
+  const finish = (job, result) => {
+    if (jobDone.has(jobId)) return;
+    jobDone.add(jobId);
+    try { handlers.onDone?.(result, job); } catch {}
+  };
+
+  es.addEventListener("snapshot", (e) => {
+    if (guard()) return;
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    const job = d.job || d;
+    if (job && ["done", "error", "canceled"].includes(job.status)) {
+      if (job.status === "done") finish(job, d.result != null ? d.result : job.result);
+      else if (job.status === "canceled") { try { handlers.onCanceled?.(job); } catch {} }
+      else { try { handlers.onError?.(d.message || job.error, job); } catch {} }
+      terminal();
+    } else { try { handlers.onSnapshot?.(job); handlers.onPhase?.(job); } catch {} }
+  });
+  es.addEventListener("phase", (e) => {
+    if (guard()) return;
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    try { handlers.onPhase?.(d.job || d); } catch {}
+  });
+  es.addEventListener("done", (e) => {
+    if (guard()) return;
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    finish(d.job, d.result); terminal();
+  });
+  es.addEventListener("canceled", (e) => {
+    if (guard()) return;
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    try { handlers.onCanceled?.(d.job); } catch {}
+    terminal();
+  });
+  es.addEventListener("error", (e) => {
+    // App-level error carries data; a bare native connection blip does not — leave
+    // the latter so EventSource auto-reconnects (it just re-receives the snapshot).
+    if (!e.data) return;
+    if (guard()) return;
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    try { handlers.onError?.(d.message || d.job?.error, d.job); } catch {}
+    terminal();
+  });
+}
+
+// Re-attach a stream to every active job whose anchor still exists (or can be
+// recreated). Called at boot, and (in later rounds) from each hosting render so a
+// running op picks back up after a reload/restart. Jobs are keyed to the DOM by a
+// stable `data-job-anchor="<kind>"` so the render can rebuild the host element.
+async function jobReconnect() {
+  let jobs = [];
+  try { const r = await api("/agent-jobs"); jobs = (r && r.jobs) || (Array.isArray(r) ? r : []); } catch { jobs = []; }
+  for (const job of jobs) {
+    if (!job || jobStreams.has(job.id)) continue;
+    // Prefer live handlers (this session); else rebuild them via the kind's
+    // registered reconnector (survives a reload — the in-memory map is empty then).
+    let handlers = jobHandlers.get(job.id);
+    if (!handlers) {
+      const factory = jobReconnectors.get(job.kind);
+      if (!factory) continue; // unknown op (or no host yet) — a later render retries
+      try { handlers = factory(job); } catch { handlers = null; }
+    }
+    if (handlers) openJobStream(job.id, handlers);
+  }
+}
+
+// Cancel a running/queued job (Stop). The SSE 'canceled' event finalizes locally;
+// this just kicks it. Safe if the stream already closed.
+async function cancelJob(id) {
+  try { await api(`/agent-jobs/${id}/cancel`, { method: "POST" }); } catch {}
+}
+
+// Drop streams for jobs matching `pred(jobId)` (default: all) — used when leaving
+// a hosting surface. Leaves the jobs running server-side; jobReconnect re-attaches.
+function teardownJobs(pred) {
+  for (const [id, es] of [...jobStreams.entries()]) {
+    if (pred && !pred(id)) continue;
+    try { es.close(); } catch {}
+    jobStreams.delete(id);
+    jobHandlers.delete(id);
+  }
+}
+
+// The one-call adoption helper. Enqueues the op (at `path`), then:
+//   • background mode ({.job}) → open the stream, run `caption` on the anchor,
+//     wire a determinate filament from phase frac, render `result` on `done`;
+//   • toggle OFF (legacy inline result) → render immediately, exactly as today.
+// Options:
+//   path     — the op's POST endpoint (e.g. "/session-suggest"). The endpoint
+//              decides background-vs-inline; runOp handles both shapes. Required.
+//   anchor   — CSS selector for the host element (carries data-job-anchor=<kind> +
+//              the caption slot + the determinate filament). Drives reconnect.
+//   render   — (result, job?) => void. The SAME render the old await path used.
+//   onFail   — (errOrNull) => void. Designed-failure / unreachable line.
+//   caption  — a THINKING_SCRIPTS key (or omit for the host's existing caption).
+//   isFail   — (result) => bool. Treats a truthy result as a designed failure
+//              (e.g. r.ok === false). Default: !result || result.ok === false.
+//   guard    — () => bool, true when the host left the DOM (default: the anchor
+//              is gone). Drops the stream, keeps the job alive server-side.
+// `kind` is the job-anchor discriminator + reconnect key; the server echoes it as
+// job.kind so jobReconnect can find this host again after a reload.
+async function runOp(kind, body, opts = {}) {
+  const { path, anchor, render, onFail, caption, isFail, guard } = opts;
+  if (!path) return;
+  const failCheck = isFail || ((r) => !r || r.ok === false);
+  const host = anchor ? document.querySelector(anchor) : null;
+  const anchorGone = () => (anchor ? !document.querySelector(anchor)?.isConnected : false);
+  const guardFn = guard || anchorGone;
+  const clearFilament = (h) => { if (h) { h.classList.remove("is-thinking", "is-thinking--determinate"); h.style.removeProperty("--frac"); } };
+
+  // Mark the host so jobReconnect can find it after a reload.
+  if (host) host.setAttribute("data-job-anchor", kind);
+
+  // Start a caption + filament on the host while we wait (warm, evolving).
+  let stopCaption = () => {};
+  const capEl = host ? host.querySelector(".job-cap, .typing-cap") : null;
+  if (capEl && caption) stopCaption = thinkingCaption(capEl, caption);
+  if (host && !reducedMotion()) host.classList.add("is-thinking");
+
+  const renderResult = (result, job) => {
+    stopCaption();
+    clearFilament(anchor ? document.querySelector(anchor) : null);
+    if (failCheck(result)) { onFail?.(result); return; }
+    try { render?.(result, job); } catch {}
+  };
+  const fail = (err) => { stopCaption(); clearFilament(anchor ? document.querySelector(anchor) : null); onFail?.(err); };
+
+  let resp;
+  try { resp = await enqueueJob(path, body); }
+  catch { fail(null); return; }
+
+  // Toggle OFF: a legacy inline result — render now, exactly as the old await path.
+  if (!resp || !resp.job) { renderResult(resp); return; }
+
+  // Background mode: stream the job.
+  const job = resp.job;
+  openJobStream(job.id, {
+    guard: guardFn,
+    onPhase: (j) => {
+      const h = anchor ? document.querySelector(anchor) : null;
+      const frac = j && j.meta && j.meta.frac;
+      if (h && frac && frac.total > 0 && !reducedMotion()) {
+        h.classList.add("is-thinking--determinate");
+        h.style.setProperty("--frac", String(Math.max(0, Math.min(1, frac.done / frac.total))));
+      }
+    },
+    onDone: (result, j) => renderResult(result, j),
+    onError: (msg) => fail(msg || null),
+    onCanceled: () => fail(null),
+  });
+  return job;
+}
+
+// ============================================================================
 // Durable chat turns — non-blocking queue + live (SSE) progress.
 //
 // A chat turn is now a server-side job (chat_turns): POST /api/chat enqueues it
@@ -8677,8 +9149,16 @@ if ("serviceWorker" in navigator) {
     location.reload();
   });
 }
+swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the cache
+// Register reconnectors so a job running across a reload re-attaches to its host
+// (the registry const is defined in the job-runner section, so this runs at boot).
+registerJobReconnector("session_suggest", reconnectSessionSuggest);
 activateTab(new URLSearchParams(location.search).get("tab"));
 maybeOnboard();
+// Re-attach any agent job that was running when the app last closed. The first
+// paint is async, so defer a tick; a surface with a matching data-job-anchor can
+// also call jobReconnect() itself once it renders.
+setTimeout(() => { jobReconnect(); }, 0);
 
 // Keep the bottom-fixed UI (tab bar, rest timer, toast) clear of the mobile
 // browser's bottom toolbar. iOS Safari anchors position:fixed;bottom:0 to the

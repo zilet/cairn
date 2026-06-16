@@ -1,4 +1,4 @@
-const CACHE = "cairn-v54";
+const CACHE = "cairn-v55";
 const ASSETS = [
   "/", "/index.html", "/styles.css", "/app.js", "/art.js", "/manifest.json",
   "/favicon.ico",

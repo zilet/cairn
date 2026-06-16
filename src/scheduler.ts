@@ -119,7 +119,10 @@ export function startScheduler() {
       if (insightDue) {
         repo.setAppState("insight_last_date", localToday(now));
         try {
-          const r = await generateInsight("auto", "connection");
+          // Warm the ai_cache with a 12h freshness so the morning open is a
+          // guaranteed instant hit (no agent wait on the request path), like the
+          // nightly Brief precompute → saveDayRead.
+          const r = await generateInsight("auto", "connection", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
           console.log(r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`);
         } catch (e: any) {
           console.error(`[proactive] insight pass failed: ${e?.message ?? e}`);
@@ -127,7 +130,7 @@ export function startScheduler() {
       }
       if (weeklyDue) {
         try {
-          const r = await generateInsight("auto", "weekly_read");
+          const r = await generateInsight("auto", "weekly_read", undefined, { freshForMs: 12 * 60 * 60 * 1000 });
           console.log(r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`);
         } catch (e: any) {
           console.error(`[proactive] weekly read failed: ${e?.message ?? e}`);

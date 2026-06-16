@@ -7,6 +7,7 @@ import { seedIfEmpty } from "./seed.js";
 import { startScheduler } from "./scheduler.js";
 import { recoverPendingEnrich } from "./enrich.js";
 import { recoverChatTurns } from "./chatTurns.js";
+import { recoverAgentJobs } from "./agentJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled } from "./auth.js";
@@ -72,6 +73,9 @@ app.listen(PORT, HOST, () => {
   // Re-drain queued chat turns and fail any interrupted mid-flight (their actions
   // may have partially applied — see recoverChatTurns) so the thread isn't stuck.
   recoverChatTurns();
+  // Same for the durable agent-job spine: re-enqueue queued ops, fail interrupted
+  // ones (their coachOp may have partially persisted a draft — see recoverAgentJobs).
+  recoverAgentJobs();
   // Warm the generated-art cache shortly after boot so PWA tiles have photos
   // immediately. requestArt() no-ops without a Gemini key / art_enabled.
   setTimeout(() => {

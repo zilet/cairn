@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import type { Request, Response } from "express";
 import * as repo from "./repo.js";
-import { buildCoachPrompt, buildChatDistillPrompt } from "./prompt.js";
+import { buildCoachPrompt } from "./prompt.js";
 import {
   runChosen,
   suggestSession,
@@ -17,6 +17,7 @@ import {
   consolidateMemory,
   growAboutMe,
   reconcileOutcomes,
+  distillChat,
 } from "./coachOps.js";
 import { computeDayRead, localToday } from "./dayread.js";
 
@@ -502,6 +503,7 @@ export function buildMcpServer(): McpServer {
       clear_gemini_api_key: z.boolean().optional().describe("clear the saved Gemini key; env fallback still applies"),
       clear_garmin_password: z.boolean().optional().describe("clear the saved Garmin password; env fallback still applies"),
       research_enabled: z.boolean().optional().describe("host-side evidence research on/off (default OFF; off ⇒ deterministic, no network — used to ground & verify health-review citations)"),
+      bg_ops_enabled: z.boolean().optional().describe("run the heavy agentic ops (session-suggest, meal plan/swap/recipe, nutrition check-in, insight, health review) as durable background jobs (default on); off ⇒ legacy inline blocking behavior"),
     },
     async (p) => asText({ settings: repo.setSettings(p), agents: repo.getAgentConfig() }));
 
@@ -609,18 +611,11 @@ export function buildMcpServer(): McpServer {
     async ({ agent }) => {
       const history = repo.listChatMessages(200);
       if (!history.length) return asText({ ok: true, distilled: 0, archived: 0 });
-      let distilled = 0;
-      let note: string | undefined;
-      try {
-        const prompt = buildChatDistillPrompt(history.map((m: any) => ({ role: m.role, content: m.content })));
-        const { result } = await runChosen(agent, prompt);
-        if (result.parsed) distilled = repo.saveDistilledMemories(result.parsed);
-        else note = "agent unavailable";
-      } catch {
-        note = "agent unavailable";
-      }
+      // MCP is a synchronous request/response surface (a job id is useless to a
+      // one-shot call), so it distills INLINE via the shared helper, then archives.
+      const r = await distillChat(agent, history.map((m: any) => ({ role: m.role, content: m.content })));
       const { archived } = repo.archiveChat();
-      return asText({ ok: true, distilled, archived, ...(note ? { note } : {}) });
+      return asText({ ok: true, distilled: r.distilled, archived, ...(r.note ? { note: r.note } : {}) });
     });
 
   server.tool(
