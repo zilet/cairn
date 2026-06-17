@@ -808,6 +808,13 @@ export function deriveDirectives() {
   // Collect every off-optimal marker as we go — the cluster layer (below) reads
   // this to make markers COMPOUND into one read instead of firing in isolation.
   const offMarkers = new Map<string, MarkerContext>();
+  // Dedup within the run: the SAME zone can be reached by several marker entries
+  // (name variants like "Glucose" / "Fasting Glucose", or repeat lab rows), which
+  // would otherwise emit the identical directive once per entry. A directive is
+  // about the zone+domain, so the first (highest-priority) one wins; the rest are
+  // skipped. markers are sorted flagged-first then impact-desc, so first == most
+  // significant.
+  const seen = new Set<string>();
   for (const m of markers) {
     const z = matchOptimalZone(m?.name);
     if (!z) continue;
@@ -821,6 +828,7 @@ export function deriveDirectives() {
     if (!mapping) continue;
     for (const d of mapping.derive(ctx)) {
       const directive_key = mappingDirectiveKey(z.label, d);
+      if (directive_key && seen.has(directive_key)) continue; // already emitted this zone+domain directive this run
       const feedback = lastDirectiveFeedback(SOURCE, z.label, d.domain, directive_key);
       if (shouldSuppressDirective(feedback, ctx)) continue;
       const row = addDirective({
@@ -838,7 +846,7 @@ export function deriveDirectives() {
         resurfaced_from_id: feedback?.id ?? null,
         status: "active",
       });
-      if (row) saved++;
+      if (row) { saved++; if (directive_key) seen.add(directive_key); }
     }
   }
 
@@ -848,7 +856,7 @@ export function deriveDirectives() {
   // + a low/altered MCV is an anemia PATTERN, not three loose flags. These fire
   // ONE synthesized directive when the cluster is genuinely present, so the brain
   // reasons across markers instead of repeating itself. Still INFORMATIONAL.
-  saved += deriveMarkerClusters(SOURCE, offMarkers);
+  saved += deriveMarkerClusters(SOURCE, offMarkers, seen);
 
   return { source: SOURCE, derived: saved, directives: listActiveDirectives() };
 }
@@ -896,7 +904,7 @@ const MARKER_CLUSTERS: MarkerCluster[] = [
   // rather than this declarative table.
 ];
 
-function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerContext>): number {
+function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerContext>, seen: Set<string> = new Set()): number {
   let saved = 0;
   // anemia pattern needs cross-marker reads (hemoglobin / MCV) that aren't all in
   // OPTIMAL_ZONES, so handle it specially off the marker history rather than the
@@ -921,6 +929,7 @@ function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerCont
   for (const cl of clusters) {
     for (const d of cl.directives) {
       const directive_key = normalizeDirectiveKey(`cluster:${cl.name}:${d.domain}:${d.key || d.directive}`);
+      if (directive_key && seen.has(directive_key)) continue; // already emitted this cluster directive this run
       const feedback = lastDirectiveFeedback(source, cl.markerLabel, d.domain, directive_key);
       if (shouldSuppressDirective(feedback, cl.ctx)) continue;
       const row = addDirective({
@@ -938,7 +947,7 @@ function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerCont
         resurfaced_from_id: feedback?.id ?? null,
         status: "active",
       });
-      if (row) saved++;
+      if (row) { saved++; if (directive_key) seen.add(directive_key); }
     }
   }
   return saved;

@@ -87,6 +87,20 @@ test("re-deriving is idempotent — directives never accumulate", () => {
   assert.equal(repo.listActiveDirectives().length, first, "the 'markers' source is cleared + rewritten each run");
 });
 
+test("duplicate marker name-variants for one zone emit a single directive per domain (within-run dedup)", () => {
+  // "Fasting Glucose" and "Glucose" both map to the "Fasting glucose" optimal zone,
+  // so they're two marker entries (getMarkerHistory keys by lowercased name) that
+  // resolve to one zone. A directive is about the zone+domain, so the run must NOT
+  // emit it once per name-variant — the exact dup pattern seen on live data.
+  seedHealthDoc("2025-11-01", [marker("Fasting Glucose", 110, { unit: "mg/dL", flag: "high" })]);
+  seedHealthDoc("2025-12-01", [marker("Glucose", 108, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  const fg = activeFor("Fasting glucose");
+  assert.ok(fg.length >= 1, "the zone produced at least one directive");
+  const perDomainDups = fg.length - new Set(fg.map((d) => d.domain)).size;
+  assert.equal(perDomainDups, 0, "no duplicate same-domain directives for the zone");
+});
+
 test("an in-optimal, unflagged marker yields no directives at all", () => {
   seedHealthDoc("2025-12-01", [marker("ApoB", 65, { unit: "mg/dL", flag: "normal" })]); // inside [40,80]
   const res = repo.deriveDirectives();
