@@ -1685,6 +1685,13 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .detail-section{margin-top:22px;text-align:left;max-width:430px;margin-left:auto;margin-right:auto}
 .detail-section>.lbl{display:block;margin-bottom:7px}
 .detail-body{font-size:.9rem;color:var(--ink-2);line-height:1.55}
+.ex-explain{border-top:1px solid var(--line);padding-top:14px}
+.explain-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:12px;
+  padding:7px 0;border-bottom:1px solid rgba(45,40,32,.07)}
+.explain-row:last-child{border-bottom:none}
+.explain-row span{font-family:var(--font-ui);font-size:.62rem;font-weight:700;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding-top:3px}
+.explain-row p{margin:0;font-size:.88rem;line-height:1.45;color:var(--ink-2)}
 .ing-breakdown{border-top:1px solid var(--line)}
 .ing-row{
   display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline;

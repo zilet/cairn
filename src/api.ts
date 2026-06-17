@@ -14,6 +14,8 @@ import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.
 import {
   runChosen,
   suggestSession,
+  getCachedExerciseExplanation,
+  explainExercise,
   draftMealPlan,
   nutritionCheckin,
   swapMealAgentic,
@@ -184,6 +186,22 @@ api.delete("/exercises/:name", (req, res) => {
     res.json(repo.deleteExercise(decodeURIComponent(req.params.name)));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+api.get("/exercise/:name/explanation", (req, res) => {
+  try {
+    res.json(getCachedExerciseExplanation(decodeURIComponent(req.params.name)));
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+api.post("/exercise/:name/explanation", async (req, res) => {
+  try {
+    res.json(await explainExercise(req.body?.agent, decodeURIComponent(req.params.name)));
+  } catch (e: any) {
+    res.json({ ok: false, error: e.message });
   }
 });
 

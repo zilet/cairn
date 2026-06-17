@@ -17,6 +17,7 @@ import {
   buildRecipePrompt,
   buildHealthReviewPrompt,
   buildSessionPrompt,
+  buildExerciseExplanationPrompt,
   buildSessionVerifyPrompt,
   buildPlanVerifyPrompt,
   buildNutritionCheckinPrompt,
@@ -150,6 +151,135 @@ function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; fo
     date,
     dayContext,
   });
+}
+
+export interface ExerciseExplanation {
+  setup: string;
+  move: string;
+  feel: string;
+  avoid?: string;
+}
+
+const EXERCISE_EXPLANATION_KIND = "exercise_explanation";
+const EXERCISE_EXPLANATION_FRESH_MS = 14 * 24 * 60 * 60 * 1000;
+
+function cleanExerciseExplanationField(v: any): string {
+  const s = String(v ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length <= 140) return s;
+  const wordCut = s.slice(0, 140).replace(/\s+\S*$/, "");
+  return (wordCut || s.slice(0, 140)).trim();
+}
+
+export function normalizeExerciseExplanation(input: any): ExerciseExplanation | null {
+  const source = input?.explanation && typeof input.explanation === "object" ? input.explanation : input;
+  if (!source || typeof source !== "object") return null;
+  const setup = cleanExerciseExplanationField(source.setup);
+  const move = cleanExerciseExplanationField(source.move);
+  const feel = cleanExerciseExplanationField(source.feel);
+  const avoid = cleanExerciseExplanationField(source.avoid ?? source.watch ?? source.caution);
+  if (!setup || !move || !feel) return null;
+  return { setup, move, feel, ...(avoid ? { avoid } : {}) };
+}
+
+export function exerciseExplanationCacheKey(detail: any): string {
+  return repo.fingerprint({
+    name: String(detail?.name ?? "").trim().toLowerCase(),
+    muscle_group: String(detail?.muscle_group ?? "").trim().toLowerCase(),
+    mode: detail?.mode ?? "reps",
+    constraint_note: String(detail?.constraint_note ?? "").trim(),
+    cues: String(detail?.cues ?? "").trim(),
+    appears: (Array.isArray(detail?.appears) ? detail.appears : []).map((a: any) => ({
+      day: Number(a?.day_number) || null,
+      name: String(a?.day_name ?? ""),
+      sets: Number(a?.sets) || null,
+      rep_low: Number(a?.rep_low) || null,
+      rep_high: Number(a?.rep_high) || null,
+      target_seconds: Number(a?.target_seconds) || null,
+      note: String(a?.note ?? "").trim(),
+    })),
+  });
+}
+
+export function getCachedExerciseExplanation(name: string) {
+  const detail: any = repo.getExerciseDetail(name);
+  if (!detail?.found) return { ok: false as const, found: false as const, exercise: name, error: "exercise not found" };
+  const cacheKey = exerciseExplanationCacheKey(detail);
+  const cached = repo.getAiCache(EXERCISE_EXPLANATION_KIND, cacheKey);
+  const explanation = normalizeExerciseExplanation(cached?.result);
+  if (!cached || !explanation) {
+    return { ok: true as const, found: true as const, exercise: detail.name, cached: false as const };
+  }
+  return {
+    ok: true as const,
+    found: true as const,
+    exercise: detail.name,
+    explanation,
+    cached: true as const,
+    stale: cached.stale,
+    agent: cached.chosen_agent,
+    computed_at: cached.computed_at,
+  };
+}
+
+export async function explainExercise(agent: string | undefined, name: string, hooks?: OpHooks) {
+  const detail: any = repo.getExerciseDetail(name);
+  if (!detail?.found) return { ok: false as const, found: false as const, exercise: name, error: "exercise not found" };
+  const cacheKey = exerciseExplanationCacheKey(detail);
+  const cached = repo.getAiCache(EXERCISE_EXPLANATION_KIND, cacheKey);
+  const cachedExplanation = normalizeExerciseExplanation(cached?.result);
+  if (cached && cachedExplanation && !cached.stale) {
+    hooks?.onPhase?.("served from cache");
+    return {
+      ok: true as const,
+      found: true as const,
+      exercise: detail.name,
+      explanation: cachedExplanation,
+      cached: true as const,
+      stale: false as const,
+      agent: cached.chosen_agent,
+      computed_at: cached.computed_at,
+    };
+  }
+
+  hooks?.onPhase?.("writing exercise cues");
+  const prompt = buildExerciseExplanationPrompt(detail);
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, {
+    op: EXERCISE_EXPLANATION_KIND,
+    timeoutMs: INTERACTIVE_TIMEOUT_MS,
+    signal: hooks?.signal,
+  });
+  const explanation = normalizeExerciseExplanation(result.parsed);
+  if (!explanation) {
+    if (cachedExplanation) {
+      return {
+        ok: true as const,
+        found: true as const,
+        exercise: detail.name,
+        explanation: cachedExplanation,
+        cached: true as const,
+        stale: true as const,
+        agent: cached?.chosen_agent ?? null,
+        computed_at: cached?.computed_at ?? null,
+      };
+    }
+    return { ok: false as const, found: true as const, exercise: detail.name, error: "agent returned no usable exercise explanation", agent: chosen, tried };
+  }
+
+  const out = { ok: true as const, found: true as const, exercise: detail.name, explanation, cached: false as const, agent: chosen, tried };
+  try {
+    repo.saveAiCache(EXERCISE_EXPLANATION_KIND, cacheKey, {
+      result: out,
+      chosen_agent: chosen,
+      ref_table: "exercises",
+      ref_id: Number(detail.id) || null,
+      freshForMs: EXERCISE_EXPLANATION_FRESH_MS,
+    });
+  } catch {
+    /* cache write never breaks the op */
+  }
+  return out;
 }
 
 // Draft a goal-aware weekly meal plan, then run a bounded self-critique verify

@@ -24,6 +24,13 @@ const MEAL_SCHEMA = `{
   "notes": "<flags, swaps, anything the athlete should know>"
 }`;
 
+const EXERCISE_EXPLANATION_SCHEMA = `{
+  "setup": "<how to get into position, max 140 chars>",
+  "move": "<the main execution cue, max 140 chars>",
+  "feel": "<where it should be felt or what good reps feel like, max 140 chars>",
+  "avoid": "<one safety/common-mistake cue, max 140 chars>"
+}`;
+
 // Personal-context guardrails, shared by the coach / chat / meal-plan prompts.
 // The coach reads `health` and `context_events` from the DATA snapshot and is
 // expected to plan AROUND the athlete's real life.
@@ -1220,6 +1227,47 @@ ${SESSION_SUGGEST_SCHEMA}
 
 DATA:
 ${JSON.stringify(context)}`;
+}
+
+export function buildExerciseExplanationPrompt(detail: any): string {
+  const ex = {
+    name: detail?.name ?? "",
+    muscle_group: detail?.muscle_group ?? null,
+    mode: detail?.mode ?? "reps",
+    constraint_note: detail?.constraint_note ?? null,
+    cues: detail?.cues ?? null,
+    appears: (Array.isArray(detail?.appears) ? detail.appears : []).map((a: any) => ({
+      day: a?.day_number ?? null,
+      day_name: a?.day_name ?? null,
+      sets: a?.sets ?? null,
+      reps: a?.rep_low != null || a?.rep_high != null ? [a?.rep_low ?? null, a?.rep_high ?? null] : null,
+      seconds: a?.target_seconds ?? null,
+      note: a?.note ?? null,
+    })),
+    recent: (Array.isArray(detail?.recent) ? detail.recent : []).slice(0, 5).map((r: any) => ({
+      date: r?.date ?? null,
+      weight: r?.weight ?? null,
+      reps: r?.reps ?? null,
+      rir: r?.rir ?? null,
+      duration_sec: r?.duration_sec ?? null,
+    })),
+  };
+
+  return `You write compact exercise detail text inside a strength training app.
+
+Rules:
+- Return only one JSON object, no prose and no markdown fences.
+- Four short fields: setup, move, feel, avoid. Each field must be useful and <= 140 characters.
+- Use plain coaching language for an intermediate lifter. No anatomy lecture.
+- Respect constraint_note and existing cues. Never tell the athlete to push through pain.
+- If mode is "timed", describe position and hold quality. If mode is "reps", describe repeatable reps.
+- Informational only; do not diagnose or make clinical claims.
+
+OUTPUT CONTRACT:
+${EXERCISE_EXPLANATION_SCHEMA}
+
+EXERCISE DETAIL:
+${JSON.stringify(ex)}`;
 }
 
 // ---------- Garmin strength reconciliation (match → enrich → extrapolate) ----------

@@ -260,6 +260,148 @@ function wireGuides(scope) {
   });
 }
 
+function exerciseExplanation(d) {
+  const name = String(d?.name || "").toLowerCase();
+  const mg = String(d?.muscle_group || "").toLowerCase();
+  const line = (setup, move, feel, avoid = "Stop if pain changes your position or range.") => ({ setup, move, feel, avoid });
+
+  if (/bulgarian|split squat|lunge/.test(name)) return line(
+    "Front foot far enough forward that you can stay balanced; rear foot is just support.",
+    "Lower under control with a slight torso lean, then drive through the front midfoot.",
+    "Front-leg quad and glute. Stop short of any knee or hip pinch.",
+    "Do not push off the rear leg or let the front knee cave inward."
+  );
+  if (/romanian|rdl|deadlift|hinge/.test(name) || mg.includes("posterior")) return line(
+    "Soft knees, ribs down, bar or dumbbells close to the legs.",
+    "Push the hips back until the hamstrings stretch, then stand tall without leaning back.",
+    "Hamstrings and glutes, not the low back."
+  );
+  if (/squat/.test(name)) return line(
+    "Feet planted, brace before each rep, eyes fixed slightly ahead.",
+    "Sit between the hips, let knees track over toes, then drive the floor away.",
+    "Quads and glutes with a stable torso."
+  );
+  if (/pull.?up|pulldown/.test(name)) return line(
+    "Start tall with shoulders set down away from the ears.",
+    "Pull elbows toward the ribs, pause with the chest lifted, then control the stretch.",
+    "Lats and mid-back. Avoid turning it into a shrug."
+  );
+  if (/row/.test(name)) return line(
+    "Brace the trunk and keep the chest quiet.",
+    "Pull elbows back toward the pockets, pause, then return without rounding forward.",
+    "Mid-back and lats, with minimal torso swing."
+  );
+  if (/overhead|shoulder press/.test(name)) return line(
+    "Ribs down, glutes tight, forearms vertical.",
+    "Press up and slightly back so the weight finishes over the shoulders.",
+    "Shoulders and triceps without low-back arch."
+  );
+  if (/press/.test(name) && /incline|bench|db|dumbbell/.test(name)) return line(
+    "Shoulder blades tucked, feet steady, elbows about 30-45 degrees from the body.",
+    "Control the stretch, then press without letting the shoulders roll forward.",
+    "Chest and triceps, not the front of the shoulder."
+  );
+  if (/lateral raise/.test(name)) return line(
+    "Use a light load, slight lean, soft elbows.",
+    "Lead with the elbows to shoulder height, pause briefly, then lower slowly.",
+    "Side delts. If traps take over, go lighter."
+  );
+  if (/face pull|rear delt/.test(name)) return line(
+    "Cable set high, light load, ribs down.",
+    "Pull toward eye level with high elbows and rotate the hands back.",
+    "Rear delts and upper back, not neck tension."
+  );
+  if (/curl/.test(name)) return line(
+    "Elbows pinned near the ribs, wrists quiet.",
+    "Curl without swinging, squeeze, then lower all the way under control.",
+    "Biceps or forearms, depending on grip."
+  );
+  if (/triceps|pushdown|extension/.test(name)) return line(
+    "Elbows stay fixed; shoulders stay out of it.",
+    "Extend to a strong squeeze, then return until the triceps stretch.",
+    "Triceps, with no elbow pain."
+  );
+  if (/calf/.test(name)) return line(
+    "Use the full foot on the platform with knees tracking over toes.",
+    "Sink into a deep stretch, pause, rise high, and pause again.",
+    "Calves through the full range, no bouncing."
+  );
+  if (/leg extension/.test(name)) return line(
+    "Seat set so the knee lines up with the machine pivot.",
+    "Lift smoothly, pause near lockout, then lower without the stack bouncing.",
+    "Quads, especially near the knee, without joint irritation."
+  );
+  if (/leg curl/.test(name)) return line(
+    "Hips pinned down and knees lined up with the machine pivot.",
+    "Curl to a hard squeeze, then take the eccentric slowly.",
+    "Hamstrings, not hips lifting off the pad."
+  );
+
+  return line(
+    "Pick a load you can control through the full comfortable range.",
+    "Move deliberately, pause where the target muscle is working, and keep the reps repeatable.",
+    "The target muscle should work more than joints or momentum."
+  );
+}
+
+function exerciseExplanationHtml(d, explanation) {
+  const ex = explanation || exerciseExplanation(d);
+  if (!ex) return "";
+  const rows = [
+    ["Set up", ex.setup],
+    ["Move", ex.move],
+    ["Feel", ex.feel],
+    ["Avoid", ex.avoid],
+  ].filter(([, text]) => text);
+  return `<div class="detail-section ex-explain" data-exercise-explain data-exercise="${escAttr(d?.name || "")}">
+      <div class="lbl">How to do it</div>
+      ${rows.map(([label, text]) => `<div class="explain-row"><span>${escHtml(label)}</span><p>${escHtml(text)}</p></div>`).join("")}
+    </div>`;
+}
+
+const exerciseExplainMisses = new Set();
+
+function validExerciseExplanationPayload(r) {
+  return !!(r && r.ok && r.explanation && r.explanation.setup && r.explanation.move && r.explanation.feel);
+}
+
+function replaceExerciseExplanation(el, d, explanation) {
+  const current = el.querySelector("[data-exercise-explain]");
+  if (!current || current.dataset.exercise !== String(d?.name || "")) return;
+  const wrap = document.createElement("template");
+  wrap.innerHTML = exerciseExplanationHtml(d, explanation).trim();
+  const next = wrap.content.firstElementChild;
+  if (next) current.replaceWith(next);
+}
+
+async function hydrateExerciseExplanation(el, d) {
+  const key = String(d?.name || "");
+  if (!key || exerciseExplainMisses.has(key)) return;
+  try {
+    const cached = await api("/exercise/" + encodeURIComponent(key) + "/explanation");
+    if (validExerciseExplanationPayload(cached)) {
+      replaceExerciseExplanation(el, d, cached.explanation);
+      if (!cached.stale) return;
+    }
+  } catch {
+    return;
+  }
+  try {
+    const generated = await api("/exercise/" + encodeURIComponent(key) + "/explanation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: "auto" }),
+    });
+    if (validExerciseExplanationPayload(generated)) {
+      replaceExerciseExplanation(el, d, generated.explanation);
+    } else {
+      exerciseExplainMisses.add(key);
+    }
+  } catch {
+    exerciseExplainMisses.add(key);
+  }
+}
+
 async function openExerciseModal(name, fromTile) {
   const d = await api("/exercise/" + encodeURIComponent(name));
   const svg = art("exercise", name, d?.muscle_group);
@@ -307,6 +449,7 @@ async function openExerciseModal(name, fromTile) {
       ${heroVal ? `<div class="detail-kcal"><span class="numeral detail-num" ${timed ? "" : `data-cu="${heroVal}"`}>${timed ? heroTxt : "0"}</span><span class="detail-unit lbl">${heroLbl}</span></div>` : ""}
       ${sparkVals.length > 1 ? `<div class="detail-spark">${sparklineSvg(sparkVals)}</div>` : ""}
       ${d.constraint_note ? `<div class="ex-flag">${escHtml(d.constraint_note)}</div>` : ""}
+      ${exerciseExplanationHtml(d)}
       ${d.cues ? `<div class="detail-section"><div class="lbl">Form cues</div><div class="detail-body">${escHtml(d.cues)}</div></div>` : ""}
       ${appears ? `<div class="detail-section"><div class="lbl">In your plan</div><div class="detail-body">${appears}</div></div>` : ""}
       <div class="detail-section"><div class="lbl">Recent sets</div>
@@ -324,6 +467,7 @@ async function openExerciseModal(name, fromTile) {
       </div>`);
     runCountUps(el);
     wireDetailCommon();
+    hydrateExerciseExplanation(el, d);
     const ask = el.querySelector("#askForm");
     if (ask) ask.addEventListener("click", () => {
       closeDetail(true);
@@ -988,4 +1132,3 @@ function activityLine(a) {
   ].filter(Boolean).join(" · ");
   return bits || a.raw_text || a.notes || "";
 }
-
