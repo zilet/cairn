@@ -65,10 +65,24 @@ function exCard(it, logged, prefill, revealIdx) {
 // + a calm "log this" affordance that prefills the free-text capture (it routes
 // through the same activity log as everything else — no separate set-logger). Reuses
 // the .ex card vocabulary so it sits naturally among the strength cards.
-function cardioPlanCard(it, revealIdx) {
+//
+// `done` (optional) = a matched synced cardio effort (a CardioEffort from
+// /api/cardio). When present the card flips to a calm "✓ Easy run — 8.2 km · mostly
+// Z2 · synced from Garmin" read (see cardioDoneCard) with NO "log this" button — the
+// run already happened, the watch carried it. When absent we keep the prescription,
+// but "Log this run →" is the FALLBACK with a quiet "or it'll sync from your watch"
+// hint, since a synced run is the runner's preferred path. (Sync freshness rides on a
+// separate line — see cardioSyncLine — only when Garmin is configured.)
+function cardioPlanCard(it, revealIdx, done, syncline) {
+  if (done) return cardioDoneCard(it, done, revealIdx);
   const tile = artImg("activity", cardioArtPhrase(it), "artile-sm ex-art", art("activity", cardioArtPhrase(it)));
   const pres = cardioPrescription(it);
   const label = cardioLabel(it);
+  const verb = cardioVerb(label);
+  // When Garmin is configured, the single freshness line below (cardioSyncLine) carries
+  // the whole "your watch will log it · synced Xh ago · Sync now" story — so "Log this
+  // run →" reads as the fallback without a second, redundant "or it'll sync" hint
+  // stacked above it (a non-Garmin user shows neither — syncline is "").
   return `<div class="ex ex-cardio${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
       <div class="ex-top">
         ${tile}
@@ -77,9 +91,157 @@ function cardioPlanCard(it, revealIdx) {
       </div>
       ${it.interval_note || cardioIntervalNote(it.interval) ? `<div class="ex-note">${escHtml(cardioIntervalNote(it.interval) || it.interval_note)}</div>` : ""}
       <div class="cardio-logrow">
-        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(cardioLogPhrase(it))}">Log this ${escHtml(cardioVerb(label))} →</button>
+        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(cardioLogPhrase(it))}">Log this ${escHtml(verb)} →</button>
       </div>
+      ${syncline || ""}
     </div>`;
+}
+
+// A calm "the run happened" card — the cardio analogue of garminSessionCard's
+// "body's reaction" tone. Shows the real distance / zone / pace / HR off the synced
+// effort, a sage ✓, and NO log button (it's done). Falls back gracefully when a field
+// is missing. Numbers are plain reads — never a score. `eff` is a CardioEffort row
+// from /api/cardio (the matched run); `it` is the prescription it satisfied.
+function cardioDoneCard(it, eff, revealIdx) {
+  const label = cardioLabel(it);
+  const tile = artImg("activity", cardioArtPhrase(it), "artile-sm ex-art", art("activity", eff.type || cardioArtPhrase(it)));
+  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  // Headline read: "Easy run — 8.2 km" (distance preferred, else duration).
+  const dist = num(eff.distance_km);
+  const dur = num(eff.duration_min);
+  const headBits = [];
+  if (dist != null && dist > 0) headBits.push(`${fmtKm(dist)} km`);
+  else if (dur != null && dur > 0) headBits.push(`${Math.round(dur)} min`);
+  const headline = `${label}${headBits.length ? ` — ${headBits.join(" · ")}` : ""}`;
+  // Detail chips: dominant zone (in plain words), pace, avg HR, source.
+  const chips = [];
+  const zoneWord = cardioDominantZone(eff.zones);
+  if (zoneWord) chips.push(zoneWord);
+  if (eff.pace) chips.push(`${String(eff.pace)}/km`);
+  const ahr = num(eff.avg_hr);
+  if (ahr != null) chips.push(`${Math.round(ahr)} avg hr`);
+  if (dur != null && dur > 0 && headBits[0] && !headBits[0].includes("min")) chips.push(`${Math.round(dur)} min`);
+  const fromGarmin = eff.source === "garmin";
+  const chipHtml = chips.map((c) => `<span class="done-chip">${escHtml(c)}</span>`).join("");
+  return `<div class="ex ex-cardio ex-cardio-done${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
+      <div class="ex-top">
+        ${tile}
+        <span class="ex-name ex-name-static cardio-done-head">
+          <span class="cardio-done-mark" aria-hidden="true">✓</span>${escHtml(headline)}
+        </span>
+        ${fromGarmin ? `<span class="garmin-tag">✦ synced from Garmin</span>` : ""}
+      </div>
+      ${chipHtml ? `<div class="cardio-done-chips">${chipHtml}</div>` : ""}
+    </div>`;
+}
+
+// The dominant HR zone of a synced effort, in plain words ("mostly Z2"). Reads the
+// parsed hr_zones [{zone,secs}] off /api/cardio; "" when there's no zone data — never
+// a score, just where the run mostly sat. Mirrors garminSessionCard's zone handling.
+function cardioDominantZone(zones) {
+  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const zs = (Array.isArray(zones) ? zones : [])
+    .map((z) => ({ zi: Math.min(5, Math.max(1, num(z && z.zone) || 0)), secs: num(z && z.secs) || 0 }))
+    .filter((z) => z.zi >= 1 && z.secs > 0);
+  if (!zs.length) return "";
+  const total = zs.reduce((t, z) => t + z.secs, 0);
+  if (total <= 0) return "";
+  const top = zs.reduce((a, b) => (b.secs > a.secs ? b : a));
+  return top.secs / total >= 0.5 ? `mostly Z${top.zi}` : `Z${top.zi}`;
+}
+
+// Does a synced cardio effort satisfy a planned cardio item? The bar is deliberately
+// low (per spec): a compatible-type effort logged today is enough to call the
+// prescription done — a runner's plan day is "did a run happen?", not an exact-match
+// audit. Compatibility falls back to "any endurance effort" when neither side names a
+// recognizable verb (so a generic activity still flips a generic cardio prescription).
+function cardioEffortMatches(it, eff) {
+  if (!eff) return false;
+  const want = cardioVerb(cardioLabel(it));          // run / ride / swim / row / effort
+  const got = cardioVerb(eff.type || eff.name || ""); // map the effort's type the same way
+  if (want === "effort" || got === "effort") return true; // unrecognized either side → presence is enough
+  return want === got;
+}
+
+// ---------- sync trust: a quiet freshness line where a runner needs the mileage ----------
+// A runner trusts the watch — so where mileage is shown (the run card, the Endurance
+// view) we surface, calmly: "synced 2h ago · Sync now". Read freshness from the
+// settings object (garmin_last_sync_at / garmin_last_sync_status). Only shown when
+// Garmin is actually configured; otherwise we stay silent (no nag, no empty chrome).
+//
+// Garmin counts as configured when credentials are present (username/password, from
+// settings or env) — the same signal the Settings sync card uses.
+function garminConfigured(settings) {
+  if (!settings) return false;
+  if (settings.garmin_credentials_source && settings.garmin_credentials_source !== "none") return true;
+  return !!(settings.garmin_username || settings.garmin_password_configured);
+}
+
+// Build the quiet "synced 2h ago · Sync now" line for a run/Endurance surface. When a
+// run is prescribed today but nothing's synced yet AND the last sync is stale, swaps
+// the lead for a calm "this morning's run not synced yet?" nudge (never nagging).
+// Returns "" when Garmin isn't configured. `opts.expectingRun` flags the stale-nudge
+// case (a prescribed run with no synced effort today).
+function cardioSyncLine(settings, { expectingRun } = {}) {
+  if (!garminConfigured(settings)) return "";
+  const at = settings.garmin_last_sync_at;
+  const raw = String(settings.garmin_last_sync_status || "");
+  const failed = raw.startsWith("failed");
+  // "Stale" = no sync, a failed sync, or the last good sync was a while ago (>3h) —
+  // long enough that this morning's run may not be in yet.
+  const ageH = at ? Math.max(0, (Date.now() - Date.parse(at)) / 3600000) : Infinity;
+  const stale = !at || failed || ageH > 3;
+  let lead;
+  if (expectingRun && stale) {
+    lead = `<span class="cardio-sync-dot stale" aria-hidden="true"></span><span class="cardio-sync-text">this morning's run not synced yet?</span>`;
+  } else if (!at) {
+    lead = `<span class="cardio-sync-dot" aria-hidden="true"></span><span class="cardio-sync-text">not synced yet</span>`;
+  } else {
+    const dotCls = failed ? "err" : "";
+    const word = failed ? "Sync failed" : "synced";
+    lead = `<span class="cardio-sync-dot ${dotCls}" aria-hidden="true"></span><span class="cardio-sync-text">${word} ${escHtml(relTime(at))}</span>`;
+  }
+  return `<div class="cardio-sync" data-cardio-sync>
+      ${lead}
+      <button class="cardio-sync-go" type="button" data-syncnow>Sync now</button>
+    </div>`;
+}
+
+// Wire every "Sync now" control within `scope`: POST /garmin/sync, pulse while it
+// runs, then refresh the surface so the fresh mileage / synced run lands. Shared by
+// Today (re-renders Today) and Endurance (re-renders the endurance view via the passed
+// onDone). Degrades calmly: a failure restores the button + toasts, never throws.
+function wireCardioSync(scope, onDone) {
+  (scope || view).querySelectorAll("[data-syncnow]").forEach((btn) => {
+    if (btn._wired) return; btn._wired = true;
+    btn.addEventListener("click", async () => {
+      const line = btn.closest("[data-cardio-sync]");
+      btn.disabled = true;
+      const text = line && line.querySelector(".cardio-sync-text");
+      const prevText = text ? text.textContent : "";
+      const dot = line && line.querySelector(".cardio-sync-dot");
+      if (dot) dot.classList.add("pulse");
+      if (text) text.textContent = "Syncing…";
+      btn.textContent = "…";
+      let r = null;
+      try { r = await api("/garmin/sync", { method: "POST" }); } catch {}
+      if (!btn.isConnected) return; // a re-render replaced the view while we waited
+      const ok = r && r.ok;
+      toast(ok ? `Garmin synced · ${r.activities} activit${r.activities === 1 ? "y" : "ies"}` : "Garmin sync failed");
+      if (ok) {
+        // a sync may have landed today's run + reshaped the day — drop the relevant
+        // peeks so the refresh reads truth.
+        swrInvalidate("today:session:" + state.logDate);
+        swrInvalidate("stats");
+        if (onDone) { onDone(); return; }
+      }
+      // not ok (or no onDone): restore the line in place so it never stays stuck.
+      if (dot) dot.classList.remove("pulse");
+      if (text) text.textContent = prevText;
+      btn.disabled = false;
+      btn.textContent = "Sync now";
+    });
+  });
 }
 // The verb for the "Log this …" button — "run" / "ride" / "swim" / "session".
 function cardioVerb(label) {
@@ -747,6 +909,37 @@ async function renderToday(opts = {}) {
   const activeItems = (day.items || []).filter((it) => !isSkipped(it));
   const skippedItems = (day.items || []).filter(isSkipped);
 
+  // ---- Runner loop: synced cardio + sync freshness ----
+  // Pull the day's logged cardio efforts ONCE (GET /api/cardio?date=) so each
+  // prescription can flip to a calm "done" card on a matched synced run, and pull
+  // /settings ONCE for Garmin sync freshness. Both are best-effort + null-safe. We
+  // pay for these reads only when the day is plausibly about running — it prescribes
+  // cardio, OR (it's today and the plan day has no strength to log, a likely run /
+  // rest day where a synced run IS the day's training). A pure lifting day pays
+  // nothing. These are a per-render read (always-fresh), not SWR-cached.
+  const cardioItems = activeItems.filter(isCardioItem);
+  const strengthPlanned = (day.items || []).some((it) => !isCardioItem(it) && it.exercise);
+  const couldHaveRun = cardioItems.length > 0 || (isToday && !strengthPlanned);
+  let cardioEfforts = [];
+  let todaySettings = null;
+  if (couldHaveRun) {
+    [cardioEfforts, todaySettings] = await Promise.all([
+      api("/cardio?date=" + state.logDate).catch(() => []),
+      api("/settings").then((r) => (r && r.settings) || null).catch(() => null),
+    ]);
+    cardioEfforts = Array.isArray(cardioEfforts) ? cardioEfforts : [];
+  }
+  // Match each prescription to a synced effort (presence of a compatible run is
+  // enough). One effort satisfies at most one prescription (consume as matched).
+  const matchedCardio = new Map(); // plan item ref → CardioEffort
+  if (cardioItems.length && cardioEfforts.length) {
+    const pool = [...cardioEfforts];
+    for (const it of cardioItems) {
+      const i = pool.findIndex((eff) => cardioEffortMatches(it, eff));
+      if (i >= 0) matchedCardio.set(it, pool.splice(i, 1)[0]);
+    }
+  }
+
   // prefill: for plan exercises with no set yet this session, fetch most-recent-ever
   // once. Cache-first per exercise so a warm Today never waits on these either; cold
   // ones are fetched (and cached) in parallel as before.
@@ -851,6 +1044,23 @@ async function renderToday(opts = {}) {
   const exDone = strengthItems.filter((it) => (loggedByEx[it.exercise] || []).length).length;
   const exTotal = strengthItems.length;
 
+  // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
+  // When the day is about running — cardio prescribed and/or a synced run, with NO
+  // strength logged today — the run is the HERO of the plan area, not buried under a
+  // strength shell. We don't rewrite Today; we just (a) lead the session head with the
+  // run's name + prescription, and (b) order the cardio card(s) FIRST in the surface.
+  // A mixed day (both lift + cardio) keeps the lift-led head but still floats cardio
+  // up so it's never lost at the bottom. Pure lifting is unchanged.
+  const hasSyncedCardioToday = cardioEfforts.length > 0;
+  const isRunDay = (cardioItems.length > 0 || hasSyncedCardioToday) && exTotal === 0;
+  // Sync freshness: only when Garmin is configured. The stale "this morning's run not
+  // synced yet?" nudge fires when a run is prescribed today but no synced effort has
+  // landed AND the last sync is stale (see cardioSyncLine). One shared line under the
+  // run card (and on the Endurance view).
+  const expectingRun = isToday && cardioItems.length > 0
+    && !cardioItems.some((it) => matchedCardio.has(it)); // a prescribed run with nothing matched yet
+  const syncline = cardioItems.length ? cardioSyncLine(todaySettings, { expectingRun }) : "";
+
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
   // Desktop two-column model (≥1100px): the Brief + capture + logging surface are
@@ -901,20 +1111,42 @@ async function renderToday(opts = {}) {
     // surface below — the eye lands on "here begins the work" instead of one flat,
     // undifferentiated scroll. Focus mode has its own slim sticky header, so skip it there.
     if (!focus) {
-      const sName = day && day.name ? day.name : "Today's session";
-      // Describe the plan day actually being logged (its own focus) — the Brief's
-      // suggested focus lives in the card above and can name a different day.
-      const sFocus = (day && day.focus) ? day.focus : "";
-      html += `<div class="session-head">
-        <div class="session-head-main">
-          <div class="session-kicker lbl">${isToday ? "TODAY'S SESSION" : "SESSION"}</div>
-          <h2 class="session-title">${escHtml(sName)}${sFocus ? `<span class="session-focus"> · ${escHtml(sFocus)}</span>` : ""}</h2>
-        </div>
-        <div class="session-head-side">
-          ${exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${exDone}</b><span class="session-prog-sep">/</span>${exTotal}</span>` : ""}
-          <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${BRIEF_KIND.train.glyph} Focus</button>
-        </div>
-      </div>`;
+      // On a run day (cardio-led, no strength), the head names the RUN — its label +
+      // prescription — so the day reads as "today is a run", not a strength shell with
+      // a cardio card hiding inside. No focus pill (there's no set-by-set logging to
+      // focus into). Otherwise the strength session leads exactly as before.
+      if (isRunDay) {
+        const lead = cardioItems[0] || null;
+        const rName = lead ? cardioLabel(lead) : "Today's run";
+        const rPres = lead ? cardioPrescription(lead) : "";
+        html += `<div class="session-head session-head-run">
+          <div class="session-head-main">
+            <div class="session-kicker lbl">${isToday ? "TODAY · A RUN" : "A RUN"}</div>
+            <h2 class="session-title">${escHtml(rName)}${rPres ? `<span class="session-focus"> · ${escHtml(rPres)}</span>` : ""}</h2>
+          </div>
+        </div>`;
+      } else {
+        const sName = day && day.name ? day.name : "Today's session";
+        // Describe the plan day actually being logged (its own focus) — the Brief's
+        // suggested focus lives in the card above and can name a different day.
+        const sFocus = (day && day.focus) ? day.focus : "";
+        // A MIXED day (strength + a prescribed/synced run) reads as "LIFT + RUN" so a
+        // hybrid athlete sees both at a glance — the run cards float up right below.
+        const mixed = cardioItems.length > 0 || hasSyncedCardioToday;
+        const kicker = mixed
+          ? (isToday ? "TODAY · LIFT + RUN" : "LIFT + RUN")
+          : (isToday ? "TODAY'S SESSION" : "SESSION");
+        html += `<div class="session-head">
+          <div class="session-head-main">
+            <div class="session-kicker lbl">${kicker}</div>
+            <h2 class="session-title">${escHtml(sName)}${sFocus ? `<span class="session-focus"> · ${escHtml(sFocus)}</span>` : ""}</h2>
+          </div>
+          <div class="session-head-side">
+            ${exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${exDone}</b><span class="session-prog-sep">/</span>${exTotal}</span>` : ""}
+            <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${BRIEF_KIND.train.glyph} Focus</button>
+          </div>
+        </div>`;
+      }
     }
     html += `<div class="day-switch">`;
     for (const d of state.plan) {
@@ -927,10 +1159,26 @@ async function renderToday(opts = {}) {
     if (hasGarmin) html += garminSessionCard(session.garmin);
 
     let cardIdx = 0;
-    for (const it of activeItems) {
+    // The sync-freshness line rides on the first UNMATCHED cardio card (where a runner
+    // looks to trust this morning's mileage). A matched run is already "done" — no line.
+    let syncLineUsed = false;
+    // On a run/mixed day float the cardio prescription(s) to the top of the surface so
+    // the run is the hero, not the tail. A pure lifting day preserves plan order.
+    const surfaceItems = (isRunDay || cardioItems.length > 1 || (cardioItems.length && strengthItems.length))
+      ? [...activeItems.filter(isCardioItem), ...activeItems.filter((it) => !isCardioItem(it))]
+      : activeItems;
+    for (const it of surfaceItems) {
       // A planned cardio effort is a prescription + a "log this" affordance (it routes
-      // through the free-text capture), not the set-by-set logger.
-      if (isCardioItem(it)) { html += cardioPlanCard(it, cardIdx++); continue; }
+      // through the free-text capture), not the set-by-set logger. A matched synced run
+      // flips it to a calm "done" card; an unmatched one keeps the prescription + a
+      // quiet "or it'll sync from your watch" fallback and (once) the freshness line.
+      if (isCardioItem(it)) {
+        const matched = matchedCardio.get(it) || null;
+        const line = (!matched && !syncLineUsed) ? syncline : "";
+        if (line) syncLineUsed = true;
+        html += cardioPlanCard(it, cardIdx++, matched, line);
+        continue;
+      }
       html += exCard({ ...it, fromPlan: true }, loggedByEx[it.exercise] || [], prefillFor(it), cardIdx++);
     }
     for (const ex of offPlanEx) {
@@ -1043,6 +1291,9 @@ async function renderToday(opts = {}) {
     try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch {}
     inp.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" });
   }));
+  // "Sync now" on a run card's freshness line — pull from the watch, then re-render
+  // Today so this morning's run (and its zones/pace) lands in place.
+  wireCardioSync(view, () => renderToday({ soft: true }));
 
   wireBrief(read, { isToday });
   // If we painted a provisional (cold-cache) read, upgrade it to the agentic read

@@ -175,6 +175,65 @@ function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | "day"):
 - Prescribe THIS WEEK's runs concretely (easy + one quality), conservative volume. Keep lifting per the discipline.\n`;
 }
 
+// Close the race-build feedback loop (Coach loop). Reads ctx.run_compliance —
+// the deterministic prescribed-vs-actual running tally for THIS week — and folds
+// it into the running-week prompts so the coach adapts next week's runs against
+// what ACTUALLY happened (per Garmin/logged activities), conservatively. `pct_km`
+// is an INTERNAL proportion — NEVER surfaced as a score; we speak in plain words
+// ("ran X of Y km"). Quiet by default: returns "" when there's NO endurance goal
+// AND nothing was prescribed (a strength-only athlete sees nothing new). `focus`
+// tailors the binding guidance to the consuming prompt.
+function renderRunCompliance(ctx: any, focus: "training" | "day" | "weekly"): string {
+  const rc = ctx?.run_compliance;
+  if (!rc) return "";
+  const hasGoal = !!(ctx?.endurance_goal && ctx.endurance_goal.mode);
+  const prescribed = Number(rc.prescribed_sessions) > 0;
+  // Quiet by default: with no endurance goal AND nothing prescribed, say nothing.
+  if (!hasGoal && !prescribed) return "";
+
+  // Did the actual running fall short of, meet, or exceed what was prescribed?
+  // Prefer distance (the runner's native unit); fall back to session count.
+  let shortfall: "short" | "met" | "over" | "unknown" = "unknown";
+  if (prescribed && Number(rc.prescribed_km) > 0 && rc.pct_km != null) {
+    if (rc.pct_km < 0.85) shortfall = "short";
+    else if (rc.pct_km > 1.1) shortfall = "over";
+    else shortfall = "met";
+  } else if (prescribed) {
+    const a = Number(rc.actual_sessions) || 0;
+    const p = Number(rc.prescribed_sessions) || 0;
+    if (a < p) shortfall = "short";
+    else if (a > p) shortfall = "over";
+    else shortfall = "met";
+  }
+
+  const lines: string[] = [];
+  lines.push(`THIS WEEK'S RUNNING — PRESCRIBED vs ACTUAL (deterministic, from logged/Garmin activities): ${String(rc.in_words ?? "").trim() || "no running data this week"}.`);
+  if (focus === "weekly") {
+    lines.push(
+      "- When running is the story of the week, let the ONE change you suggest REFLECT this prescribed-vs-actual gap, in plain words (never a number wall, never a score)."
+    );
+    if (shortfall === "short")
+      lines.push("- Actual fell short of what was prescribed: the calm suggestion is to HOLD or only GENTLY progress next week — do NOT pile the missed volume onto next week, and never jump more than ~10%/week. A lighter week is information, not a failure.");
+    else if (shortfall === "over")
+      lines.push("- Actual met or exceeded the prescription comfortably: a small conservative progression next week is fine, but watch for stacked hard days and protect earned recovery — don't reward a big week with a bigger one if recovery is slipping.");
+    else
+      lines.push("- Actual roughly matched the prescription: steady is good — a small conservative progression is OK only if recovery looks fine; otherwise holding is a perfectly healthy call.");
+  } else if (focus === "training") {
+    lines.push("- ADAPT next week's runs to what ACTUALLY happened, conservatively:");
+    if (shortfall === "short")
+      lines.push("  - Actual fell short of prescribed → HOLD or only GENTLY progress next week. Do NOT pile the missed mileage onto next week to 'catch up' — never jump more than ~10%/week. Carry forward roughly the volume they actually ran, not the one they missed.");
+    else if (shortfall === "over")
+      lines.push("  - Actual met/exceeded prescribed comfortably → a SMALL conservative progression (~≤10% mileage) is OK. Don't stack quality on top of a big volume week.");
+    else
+      lines.push("  - Actual roughly matched prescribed → a small conservative progression is OK if recovery is good; otherwise hold.");
+    lines.push("  - Either way: protect easy/hard polarization (keep easy easy, quality sparing) and guard earned recovery after long or hard efforts.");
+  } else {
+    // day — a light touch only: today's run in the context of the week's progress.
+    lines.push("- Light touch only: read today's run against where the week stands (above) — if they're already short on the week, a calm easy/short option is fine; if they're on track, no need to pile on. Never frame a behind week as falling behind.");
+  }
+  return `\n${lines.join("\n")}\n`;
+}
+
 // The connected brain, rendered for a prompt. Pulls the active cross-domain
 // directives (deriveDirectives writes them from flagged labs) plus the unified
 // recovery view, and folds them into a compact, plain-language block so labs
@@ -426,7 +485,7 @@ have none — that's fine, just use what's there):
   working as designed, never a penalty.
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -1299,7 +1358,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1833,7 +1892,7 @@ THE CONSTITUTION (binding):
   Speak TO the athlete in everyday words — NEVER narrate the data you were handed or name its internal
   fields. The one change, if any, goes in next_step.
 - Grounded in their ACTUAL recent data only (training, recovery, nutrition, life context below).
-
+${renderRunCompliance(context, "weekly")}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 Nothing worth saying: {"found": false}
 Otherwise:

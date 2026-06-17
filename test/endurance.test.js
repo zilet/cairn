@@ -302,3 +302,64 @@ test("the endurance goal surfaces in getCoachContext (orthogonal to discipline)"
   assert.ok(ctx.endurance_goal, "endurance_goal present in coach context");
   assert.equal(ctx.endurance_goal.mode, "standing");
 });
+
+// ---------- run compliance (closing the runner loop) ----------
+// This-week Monday-anchored seeding, mirroring the getWeeklyStats endurance test.
+const thisWeekMonday = () => {
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const d = new Date(iso(new Date()) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return iso(d);
+};
+
+test("getRunCompliance: prescribed plan cardio vs this week's logged runs, in plain words", () => {
+  // Plan day with one cardio item prescribing 16 km.
+  repo.savePlanDay(1, "Run", "Endurance", [
+    { kind: "cardio", exercise: "Long run", target_distance_km: 16 },
+  ]);
+  // This week: a 10 km run logged on Monday.
+  seedActivity(thisWeekMonday(), { type: "run", duration_min: 50, distance_km: 10 });
+
+  const rc = repo.getRunCompliance();
+  assert.equal(rc.prescribed_sessions, 1, "one cardio item prescribed");
+  assert.equal(rc.prescribed_km, 16, "prescribed km summed from the cardio item");
+  assert.equal(rc.actual_sessions, 1, "one cardio effort logged this week");
+  assert.equal(rc.actual_km, 10, "actual km reflects the seeded run");
+  assert.equal(rc.pct_km, 0.63, "10 / 16 ≈ 0.63 (a proportion, not a 0-100 grade)");
+  assert.equal(typeof rc.in_words, "string");
+  assert.match(rc.in_words, /10 of 16 km/, "plain ratio in words");
+  // Constitution: in_words is NOT a digit-only 0-100 score.
+  assert.ok(!/^\s*\d{1,3}\s*$/.test(rc.in_words), "in_words is never a bare 0-100 number");
+});
+
+test("getRunCompliance: no plan cardio AND no runs → calm, null pct, no throw", () => {
+  const rc = repo.getRunCompliance();
+  assert.equal(rc.prescribed_sessions, 0);
+  assert.equal(rc.prescribed_km, 0);
+  assert.equal(rc.actual_sessions, 0);
+  assert.equal(rc.actual_km, 0);
+  assert.equal(rc.pct_km, null, "no prescribed km → pct_km null, never a divide-by-zero");
+  assert.match(rc.in_words, /no runs prescribed/i);
+});
+
+test("getRunCompliance: a strength activity row does NOT count as a run", () => {
+  repo.savePlanDay(1, "Run", "Endurance", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 8 }]);
+  // A real run plus a stray strength-typed activity row on the same week.
+  seedActivity(thisWeekMonday(), { type: "run", duration_min: 40, distance_km: 8 });
+  seedActivity(thisWeekMonday(), { type: "strength_training", duration_min: 60, distance_km: null });
+  const rc = repo.getRunCompliance();
+  assert.equal(rc.actual_sessions, 1, "only the run counts; strength is filtered out");
+  assert.equal(rc.actual_km, 8);
+});
+
+// ---------- cardio for a date ----------
+test("getCardioForDate: returns the day's cardio with distance; excludes strength", () => {
+  seedActivity("2026-02-10", { type: "run", duration_min: 45, distance_km: 9 });
+  seedActivity("2026-02-10", { type: "strength_training", duration_min: 55, distance_km: null });
+  const cardio = repo.getCardioForDate("2026-02-10");
+  assert.equal(cardio.length, 1, "only the cardio effort comes back (strength excluded)");
+  assert.equal(cardio[0].type, "run");
+  assert.equal(cardio[0].distance_km, 9, "carries the logged distance");
+  // A day with no cardio is an empty array, never a throw.
+  assert.deepEqual(repo.getCardioForDate("2026-02-11"), []);
+});

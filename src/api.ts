@@ -1029,6 +1029,14 @@ api.get("/stats", (_req, res) => res.json(repo.getWeeklyStats()));
 api.get("/endurance-prs", (req, res) =>
   res.json(repo.getEndurancePRs(req.query.type != null ? String(req.query.type) : undefined)));
 
+// Run compliance (closing the runner loop): prescribed plan cardio vs this week's
+// logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score.
+api.get("/run-compliance", (_req, res) => res.json(repo.getRunCompliance()));
+
+// The day's logged cardio efforts (hydrated with Garmin zones/pace). [] when none.
+api.get("/cardio", (req, res) =>
+  res.json(repo.getCardioForDate(req.query.date != null ? String(req.query.date) : todayISO())));
+
 // The endurance OBJECTIVE (v37), computed (race timing/phase derived). null = unset.
 // SET it via PUT /api/profile { endurance_goal: {…} } (or null to clear).
 api.get("/endurance-goal", (_req, res) => res.json(repo.getEnduranceGoal()));

@@ -224,6 +224,54 @@ export function getActivity(id: number) {
   return db.prepare(`SELECT * FROM activities WHERE id = ?`).get(id) ?? null;
 }
 
+// ---------- cardio for a date (closing the runner loop) ----------
+// The day's logged cardio efforts, each hydrated from the linked Garmin row so a
+// synced run carries its zones + pace. Reuses the activities ⨝ garmin_activities
+// LEFT JOIN (see recentTraining / getGarminActivitiesByDate). Strength is modeled
+// as a session, never an activities row, but we still guard out a stray strength
+// type so this only ever returns endurance efforts. Deterministic, null-safe —
+// [] when there's no cardio that day. Plain numbers, never a score.
+export interface CardioEffort {
+  type: string;
+  name: string;
+  distance_km: number | null;
+  duration_min: number | null;
+  pace: string | null;
+  avg_hr: number | null;
+  source: string | null;
+  zones: any | null;  // parsed hr_zones_json [{zone,secs,...}] when synced, else null
+}
+
+export function getCardioForDate(date: string): CardioEffort[] {
+  const d = date || todayISO();
+  const rows = db.prepare(
+    `SELECT a.id, a.type, a.raw_text, a.distance_km, a.duration_min, a.pace, a.source,
+            g.avg_hr AS g_avg_hr, g.start_time AS g_start, g.hr_zones_json AS g_zones
+     FROM activities a
+     LEFT JOIN garmin_activities g ON g.activity_id = a.id
+     WHERE a.date = ?
+     ORDER BY a.id`
+  ).all(d) as any[];
+
+  const out: CardioEffort[] = [];
+  for (const a of rows) {
+    if (isStrengthGarminType(a.type)) continue; // never an endurance effort
+    let zones: any = null;
+    try { zones = a.g_zones ? JSON.parse(a.g_zones) : null; } catch { zones = null; }
+    out.push({
+      type: String(a.type || "activity"),
+      name: String(a.raw_text || a.type || "activity"),
+      distance_km: a.distance_km != null ? Number(a.distance_km) : null,
+      duration_min: a.duration_min != null ? Number(a.duration_min) : null,
+      pace: a.pace ?? null,
+      avg_hr: a.g_avg_hr != null ? Number(a.g_avg_hr) : null,
+      source: a.g_start ? "garmin" : (a.source || null),
+      zones: Array.isArray(zones) ? zones : null,
+    });
+  }
+  return out;
+}
+
 // Update only the structured fields the enricher provides; leave the rest intact.
 export function updateActivityFields(id: number, fields: Record<string, any>) {
   const allowed = ["type", "duration_min", "distance_km", "pace", "rpe", "notes"];

@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**152 routes** across 57 groups.
+**154 routes** across 59 groups.
 
 ## `/activities`
 
@@ -70,6 +70,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/calendar` |  |
+
+## `/cardio`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/cardio` | The day's logged cardio efforts (hydrated with Garmin zones/pace). [] when none. |
 
 ## `/chat`
 
@@ -368,6 +374,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/research` | Read cached evidence (by ?topic= and/or ?marker=). Always available — reads the cache only, never the network — so it works even with research disabled. |
 | POST | `/api/research` | Run a cited, web-grounded evidence pass for ONE question and cache it. Gated by settings.research_enabled: when off, serves only cached evidence and returns ok:false (the designed signal, at 200) — never reaches the network. Informational, not medical advice. |
+
+## `/run-compliance`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/run-compliance` | Run compliance (closing the runner loop): prescribed plan cardio vs this week's logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score. |
 
 ## `/session-suggest`
 

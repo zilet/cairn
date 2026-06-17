@@ -547,13 +547,21 @@ async function renderEndurance() {
   const token = ++pollToken;
   view.innerHTML = segBar("endurance", PROGRESS_SEG) + `<div id="endBody">${loadingState("Reading your week…")}</div>`;
   wireSeg(PROGRESS_HANDLERS);
-  // Three reads in parallel: the weekly endurance block (off /stats), the PRs, and the
-  // endurance goal (race countdown / standing target).
-  let stats = null, prs = null, goal = null;
-  try { [stats, prs, goal] = await Promise.all([api("/stats"), api("/endurance-prs").catch(() => null), api("/endurance-goal").catch(() => null)]); }
-  catch { stats = null; }
+  // Reads in parallel: the weekly endurance block (off /stats), the PRs, the endurance
+  // goal (race countdown / standing target), the run compliance ("32 of 40 km this
+  // week"), and /settings for Garmin sync freshness.
+  let stats = null, prs = null, goal = null, compliance = null, settings = null;
+  try {
+    [stats, prs, goal, compliance, settings] = await Promise.all([
+      api("/stats"),
+      api("/endurance-prs").catch(() => null),
+      api("/endurance-goal").catch(() => null),
+      api("/run-compliance").catch(() => null),
+      api("/settings").then((r) => (r && r.settings) || null).catch(() => null),
+    ]);
+  } catch { stats = null; }
   if (token !== pollToken || !view.querySelector("#endBody")) return;
-  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal);
+  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal, compliance, settings);
 }
 
 // Race countdown / standing-readiness banner — the persistent home for the endurance
@@ -582,18 +590,35 @@ function enduranceGoalCard(g) {
     </div>`;
 }
 
-function paintEnduranceBody(end, prs, goal) {
+// A calm run-compliance line for the Endurance view — "32 of 40 km this week" in
+// plain words from GET /api/run-compliance (in_words). A ratio, never a 0–100 grade.
+// "" when there's nothing prescribed AND nothing logged (no week to speak to).
+function runComplianceLine(c) {
+  if (!c || !c.in_words) return "";
+  if (!c.prescribed_sessions && !c.actual_sessions) return ""; // nothing to say
+  return `<div class="end-compliance reveal" style="${stagger(0)}">
+      <span class="lbl">This week's runs</span>
+      <span class="end-compliance-v">${escHtml(c.in_words)}</span>
+    </div>`;
+}
+
+function paintEnduranceBody(end, prs, goal, compliance, settings) {
   const body = view.querySelector("#endBody");
   if (!body) return;
   const goalHtml = enduranceGoalCard(goal);
+  const complianceHtml = runComplianceLine(compliance);
+  // Sync trust: a quiet "synced 2h ago · Sync now" line, only when Garmin is
+  // configured (cardioSyncLine returns "" otherwise). Shared with Today's run card.
+  const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(settings, {}) : "";
   const hasWeek = end && (end.week_km > 0 || end.week_moving_min > 0 || end.longest_km != null || end.longest_min != null);
   const hasPRs = prs && (prs.longest_km || prs.longest_min || (prs.best_pace || []).length);
   if (!hasWeek && !hasPRs) {
-    body.innerHTML = progressHero("Endurance", []) + goalHtml +
+    body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + syncHtml +
       emptyStateHtml(art("activity", "run"),
         goalHtml
           ? "No runs logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your weekly runs build toward this."
           : "No runs or rides logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your mileage, zones, and pace will read here.");
+    if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderEndurance());
     return;
   }
 
@@ -605,7 +630,7 @@ function paintEnduranceBody(end, prs, goal) {
     if (end.longest_km != null) heroStats.push(["longest · km", end.longest_km, { text: true }]);
     else if (end.longest_min != null) heroStats.push(["longest · min", Math.round(end.longest_min), { text: true }]);
   }
-  let html = progressHero("Endurance", heroStats) + goalHtml;
+  let html = progressHero("Endurance", heroStats) + goalHtml + complianceHtml + syncHtml;
 
   // Longest effort line (when we have one and it didn't already lead the hero).
   if (end && (end.longest_km != null || end.longest_min != null)) {
@@ -654,6 +679,8 @@ function paintEnduranceBody(end, prs, goal) {
 
   body.innerHTML = html;
   runCountUps(body);
+  // "Sync now" on the freshness line → pull, then re-read the endurance view in place.
+  if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderEndurance());
 }
 
 // ---------- Progress: training calendar (refined month grids) ----------

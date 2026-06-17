@@ -7,7 +7,7 @@ import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, markerSide, matchOptimalZone, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
-import { getProgress, getRecentSessions } from "./sessions.js";
+import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 
 // ---------- coach context (shared by prompts) ----------
@@ -218,6 +218,10 @@ export function getCoachContext() {
     checkins: listCheckins(7),                // optional subjective morning check-ins
     family: listFamily(),                     // family roster the coach plans around
     supplements: supplementsForCoach(),       // understood supplement regimen (markers/protein it touches)
+    // Runner loop (closing): prescribed plan cardio vs this week's logged efforts,
+    // in plain words ("32 of 40 km this week") — so the coach can speak to run
+    // adherence the way week_done/week_planned covers lifting. Never a 0-100 score.
+    run_compliance: getRunCompliance(),
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.

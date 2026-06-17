@@ -134,9 +134,13 @@ async function renderMeProfile() {
     const dist = +$("#eg_distance")?.value || null;
     const wk = +$("#eg_weekly_km")?.value || null;
     if (pickedEgMode === "race") {
+      const date = $("#eg_date")?.value || null;
+      // A race needs a date to be periodized — the server would reject a dateless
+      // race to null (a silent clear). Don't clobber an existing goal mid-entry:
+      // return undefined (JSON omits it → leaves the saved goal intact) + a calm hint.
+      if (!date) { toast("Add a race date to save your race goal"); return undefined; }
       return { mode: "race", event: ($("#eg_event")?.value ?? "").trim() || null,
-        date: $("#eg_date")?.value || null, distance_km: dist,
-        target: ($("#eg_target")?.value ?? "").trim() || null, weekly_km: wk };
+        date, distance_km: dist, target: ($("#eg_target")?.value ?? "").trim() || null, weekly_km: wk };
     }
     if (pickedEgMode === "standing") {
       return { mode: "standing", label: ($("#eg_label")?.value ?? "").trim() || null, distance_km: dist, weekly_km: wk };

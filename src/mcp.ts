@@ -272,6 +272,20 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_run_compliance",
+    "Run compliance for this week (Monday-anchored): the prescribed plan cardio (sessions / km / min) vs the actual logged cardio efforts, plus a plain-language summary ('32 of 40 km this week'). A ratio, never a 0-100 score — the endurance analogue of plan-day adherence for lifting.",
+    {},
+    async () => asText(repo.getRunCompliance())
+  );
+
+  server.tool(
+    "get_cardio",
+    "The day's logged cardio efforts (runs/rides/etc.), each hydrated from the linked Garmin record so a synced effort carries its HR zones + pace. Strength is excluded (it's modeled as a session). Defaults to today; pass date YYYY-MM-DD. [] when there's no cardio that day.",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(repo.getCardioForDate(date ?? ""))
+  );
+
+  server.tool(
     "get_endurance_goal",
     "The athlete's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }.",
     {},
@@ -288,7 +302,13 @@ export function buildMcpServer(): McpServer {
       distance_km: z.number().optional(), target: z.string().optional(),
       weekly_km: z.number().optional(), weekly_sessions: z.number().optional(),
     },
-    async (g) => asText(repo.setProfile({ endurance_goal: g.mode == null ? null : g }))
+    async (g) => {
+      // A race without a date can't be periodized — normalizeEnduranceGoal would
+      // reject it to null, which setProfile reads as "clear". Guard so a caller who
+      // omits the date gets an explicit error instead of silently wiping the goal.
+      if (g.mode === "race" && !g.date) return asText({ ok: false, error: "race mode requires a date (YYYY-MM-DD)" });
+      return asText(repo.setProfile({ endurance_goal: g.mode == null ? null : g }));
+    }
   );
 
   server.tool(

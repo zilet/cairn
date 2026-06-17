@@ -1,5 +1,5 @@
 import { db, todayISO } from "../db.js";
-import { listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
+import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
 import { listContextEvents, listHealthDocuments, listHealthReviews } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
@@ -573,6 +573,93 @@ function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
     time_in_zone,
     pace_trend: { this_min_per_km, prev_min_per_km, dir },
   };
+}
+
+// ---------- run compliance (closing the runner loop) ----------
+// Prescribed (from the CURRENT plan's cardio items) vs. actual (this week's logged
+// cardio efforts), in plain language. Deterministic + null-safe — no agent. This
+// is the endurance analogue of week_done/week_planned for lifting: did the runs
+// the plan asked for actually happen? Constitution: a RATIO in plain words
+// ("32 of 40 km this week") is fine; a 0-100 score is NOT — `pct_km` stays an
+// internal proportion the UI may render as a ratio/bar, never a grade.
+//
+// Prescribed: every cardio plan item (kind==='cardio' across getPlan() days) —
+// count = number of cardio items, km/min summed (nulls skipped). The plan is
+// weekly, so the full template IS this week's prescription.
+// Actual: this week (Monday-anchored, same as computeEnduranceWeekly, or an
+// explicit weekStartISO) from `activities` — a "cardio activity" is any logged
+// activity that is NOT a strength type (strength is modeled as a session, never
+// an activities row), matching how the endurance code treats an effort.
+export interface RunCompliance {
+  prescribed_sessions: number;
+  prescribed_km: number;
+  prescribed_min: number;
+  actual_sessions: number;
+  actual_km: number;
+  actual_min: number;
+  pct_km: number | null;  // actual_km / prescribed_km when prescribed_km>0, else null — a proportion, never a 0-100 grade
+  in_words: string;
+}
+
+export function getRunCompliance(weekStartISO?: string): RunCompliance {
+  // Monday-anchored week start (mirror computeEnduranceWeekly / getWeeklyStats).
+  const monday = weekStartISO || (() => {
+    const d = new Date(todayISO() + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  })();
+
+  // Prescribed: the current plan's cardio items.
+  let prescribed_sessions = 0;
+  let prescribed_km = 0;
+  let prescribed_min = 0;
+  for (const day of getPlan() as any[]) {
+    for (const it of (day.items || [])) {
+      if (it.kind !== "cardio") continue;
+      prescribed_sessions++;
+      const km = Number(it.target_distance_km);
+      const min = Number(it.target_duration_min);
+      if (Number.isFinite(km) && km > 0) prescribed_km += km;
+      if (Number.isFinite(min) && min > 0) prescribed_min += min;
+    }
+  }
+  prescribed_km = Math.round(prescribed_km * 10) / 10;
+  prescribed_min = Math.round(prescribed_min);
+
+  // Actual: this week's logged cardio efforts (activities, excluding strength).
+  const rows = db
+    .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ?`)
+    .all(monday) as any[];
+  let actual_sessions = 0;
+  let actual_km = 0;
+  let actual_min = 0;
+  for (const r of rows) {
+    if (isStrengthGarminType(r.type)) continue; // a stray strength row never counts as a run
+    actual_sessions++;
+    const km = Number(r.distance_km);
+    const min = Number(r.duration_min);
+    if (Number.isFinite(km) && km > 0) actual_km += km;
+    if (Number.isFinite(min) && min > 0) actual_min += min;
+  }
+  actual_km = Math.round(actual_km * 10) / 10;
+  actual_min = Math.round(actual_min);
+
+  const pct_km = prescribed_km > 0 ? Math.round((actual_km / prescribed_km) * 100) / 100 : null;
+
+  // Plain-language summary — a ratio, never a grade. Prefer distance (the runner's
+  // native unit); fall back to session count when there's no prescribed mileage.
+  let in_words: string;
+  if (prescribed_sessions === 0) {
+    in_words = actual_sessions > 0
+      ? `${actual_sessions} run${actual_sessions === 1 ? "" : "s"} this week, none prescribed`
+      : "no runs prescribed this week";
+  } else if (prescribed_km > 0) {
+    in_words = `${actual_km} of ${prescribed_km} km this week`;
+  } else {
+    in_words = `${actual_sessions} of ${prescribed_sessions} run${prescribed_sessions === 1 ? "" : "s"} this week`;
+  }
+
+  return { prescribed_sessions, prescribed_km, prescribed_min, actual_sessions, actual_km, actual_min, pct_km, in_words };
 }
 
 export function getVolumeByMuscle(days = 30) {

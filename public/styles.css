@@ -3407,6 +3407,38 @@ button.hmk-row:active{background:var(--card-2)}
 .cardio-logrow{margin-top:11px}
 .cardio-log-btn{width:100%;text-align:center;margin-top:0}
 
+/* A run that already happened — the cardio analogue of garminSessionCard's calm
+   "done" read. Sage left-edge stamp (matching the strength done card vocabulary),
+   a ✓ before the headline, and real distance/zone/pace chips. No log button. */
+.ex-cardio-done{border-left:3px solid var(--sage)}
+/* flex:1 + min-width:0 so a long headline ellipsizes rather than crowding or pushing
+   the ✦ synced-from-Garmin tag (flex:none) off-row on a narrow phone. */
+.cardio-done-head{display:flex;align-items:baseline;gap:7px;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cardio-done-mark{color:var(--sage);font-weight:700;flex:0 0 auto}
+.cardio-done-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+
+/* Sync trust: a quiet "synced 2h ago · Sync now" line. Shared by Today's run card
+   and the Endurance view. A stale dot warms toward the accent when this morning's
+   run may not be in yet — calm, never alarming. */
+.cardio-sync{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;
+  padding-top:11px;border-top:1px solid var(--line)}
+.cardio-sync-dot{width:7px;height:7px;border-radius:50%;background:var(--sage);flex:none;
+  transition:background var(--dur-1) var(--ease)}
+.cardio-sync-dot.err{background:var(--warn)}
+.cardio-sync-dot.stale{background:var(--accent)}
+.cardio-sync-dot.pulse{background:var(--accent);animation:syncpulse .9s var(--ease) infinite alternate}
+.cardio-sync-text{flex:1;min-width:0;color:var(--muted);font-size:.74rem;letter-spacing:.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cardio-sync-go{flex:0 0 auto;border:none;background:transparent;cursor:pointer;
+  color:var(--accent);font:inherit;font-size:.74rem;font-weight:600;letter-spacing:.02em;
+  padding:2px 2px;transition:color var(--dur-1) var(--ease)}
+.cardio-sync-go:hover{color:var(--accent-deep)}
+.cardio-sync-go:disabled{color:var(--muted);cursor:default}
+
+/* Day-type-aware lead: a run-led session head (no focus pill — there's no set-by-set
+   logging to focus into). Otherwise inherits the .session-head layout unchanged. */
+.session-head-run{align-items:flex-start}
+
 /* Progress → Endurance read. */
 /* Race countdown / standing-goal banner — a warm editorial card at the top of the */
 /* endurance view. The big serif name + count anchor the build without a score. */
@@ -3420,6 +3452,14 @@ button.hmk-row:active{background:var(--card-2)}
 .end-goal-sub{font-size:.86rem;color:var(--ink-2);margin-top:4px}
 .end-goal-count{font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 96;
   font-size:1.1rem;color:var(--sage);margin-top:10px;font-variant-numeric:lining-nums}
+
+/* Run compliance — "32 of 40 km this week" near the race banner. A ratio in plain
+   words, never a 0–100 grade. Sits on the same hairline-divided row family as .end-line. */
+.end-compliance{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  padding:11px 0 4px;margin-top:6px}
+.end-compliance .lbl{flex:0 0 auto}
+.end-compliance-v{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:560;
+  color:var(--accent);font-size:1.02rem;font-variant-numeric:lining-nums}
 
 .end-line,.end-pace{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
   padding:11px 0;border-top:1px solid var(--line)}

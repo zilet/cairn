@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**125 tools.**
+**127 tools.**
 
 | Tool | Description |
 |---|---|
@@ -35,6 +35,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_agent_stats` | Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up). |
 | `get_art_stats` | Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size. |
 | `get_calendar` | Day-by-day training calendar/heatmap data (lifted, tonnage, activity, intensity level) for the last N days (default 84). |
+| `get_cardio` | The day's logged cardio efforts (runs/rides/etc.), each hydrated from the linked Garmin record so a synced effort carries its HR zones + pace. Strength is excluded (it's modeled as a session). Defaults to today; pass date YYYY-MM-DD. [] when there's no cardio that day. |
 | `get_chat_history` | Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the athlete has recently asked or been told. |
 | `get_chat_session` | Read one archived conversation in full (chronological), keyed by its archived_at timestamp from list_chat_sessions. |
 | `get_checkin` | Get the latest check-in for a date (or null if none). |
@@ -65,6 +66,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_progress` | Get logged history and estimated-1RM trend (Epley) for one exercise over time. |
 | `get_recent_training` | The unified 'Lately' feed: finished strength sessions and cardio activities merged newest-first, each with a real timestamp (Garmin) and body-reaction detail (HR zones, temperature, effort, VO2) when available. |
 | `get_recovery` | Unified recovery view: Garmin + Apple/other daily metrics merged into one sleep / HRV / resting-HR / steps picture over the window, plus acute training load / training readiness / fitness age when present. Also returns acute-vs-chronic baselines: recent (last 7d avg), baseline (30d avg) and delta (recent − baseline) for sleep/hrv/rhr — compare against the athlete's OWN norm, not a population. Graceful (has_data:false) when empty. Use as context, not plan authority. |
+| `get_run_compliance` | Run compliance for this week (Monday-anchored): the prescribed plan cardio (sessions / km / min) vs the actual logged cardio efforts, plus a plain-language summary ('32 of 40 km this week'). A ratio, never a 0-100 score — the endurance analogue of plan-day adherence for lifting. |
 | `get_session` | Get the logged session for a specific date (YYYY-MM-DD), with its sets and any skipped exercises. |
 | `get_session_detail` | Get one logged session by its id, with all its sets. |
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list. |
