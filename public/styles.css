@@ -3499,7 +3499,11 @@ button.hmk-row:active{background:var(--card-2)}
    clickable region. Layout is untouched (the overlay is absolutely
    positioned), so nothing shifts. One idiom across the app.
    ------------------------------------------------------------------- */
-.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn,.sheet-x{position:relative}
+/* .sheet-x is intentionally NOT here — it's already position:absolute (pinned to the
+   sheet card's top-right corner), and listing it would override that to relative,
+   dropping the ✕ into normal flow at the top-left where it clips. Its ::before tap
+   overlay below still anchors correctly to the absolutely-positioned button. */
+.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn{position:relative}
 .feel-dot::before,.iconbtn::before,.delbtn::before,
 .ex-skip::before,.togglebtn::before,.sheet-x::before{
   content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
