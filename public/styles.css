@@ -337,6 +337,27 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 /* Lately feed, now its own top-level slot (was nested in the capture row) */
 .lately-slot:empty{display:none}
 
+/* The week ahead — a calm forward sketch (lift / run / mixed / rest). A suggestion
+   to reshape, never a schedule; each kind a quiet colored glyph. */
+.weekahead-slot:empty{display:none}
+.weekahead{background:var(--card);border:none;box-shadow:var(--shadow-sm);
+  border-radius:var(--radius-sm);padding:13px 15px;margin:2px 0 14px}
+.weekahead-h{margin-bottom:9px}
+.weekahead-days{display:flex;flex-direction:column}
+.wa-row{display:flex;align-items:baseline;gap:9px;padding:6px 0;
+  border-bottom:1px solid rgba(45,40,32,.06)}
+.wa-row:last-child{border-bottom:none}
+.wa-glyph{flex:0 0 auto;font-size:.7rem;width:14px;text-align:center;color:var(--muted)}
+.wa-lift .wa-glyph{color:var(--accent)}
+.wa-run .wa-glyph{color:var(--sage)}
+.wa-mixed .wa-glyph{color:var(--gold)}
+.wa-rest .wa-glyph{color:var(--line-2)}
+.wa-day{flex:0 0 auto;min-width:38px}
+.wa-label{flex:0 0 auto;font-size:.9rem;color:var(--ink)}
+.wa-note{flex:1;min-width:0;font-size:.78rem;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.weekahead-sum{margin-top:10px;font-size:.84rem;line-height:1.5;color:var(--ink-2)}
+
 /* connected-brain provenance — the quiet causal line on a meal/session card when
    a flagged lab shaped it ("tilted toward fish — ApoB came back high · why"). A
    soft gold-edged whisper, the whole row a deep-link into Me → Health → Brain.

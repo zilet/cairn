@@ -205,6 +205,32 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   return { kind: "easy", focus: null, why: "Nothing programmed — some easy movement is plenty today.", est_minutes: 20, signals };
 }
 
+// ---------- the week ahead (deterministic floor) ----------
+// The forward-look's safety net (coachOps.weekAheadRead layers the agentic day-by-
+// day shape on top). Honest + simple: the lifting split as the week's sessions, in
+// plan order, plus a base-building note — NO fabricated calendar (the agent owns the
+// real day-by-day). Always available, never throws.
+export interface WeekAheadDay {
+  day: string | null;            // weekday label when the agent placed it; null for the floor's plan list
+  kind: "lift" | "run" | "mixed" | "rest";
+  label: string;                 // e.g. "Lower body" / "Easy 5k" / "Rest"
+  note?: string | null;
+}
+export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
+  const planDays = db.prepare(`SELECT day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
+  if (!planDays.length) return { days: [], summary: "" };
+  const days: WeekAheadDay[] = planDays.map((d) => ({
+    day: null,
+    kind: "lift",
+    label: String(d.focus || d.name || `Day ${d.day_number}`).replace(/\s+/g, " ").trim().slice(0, 60),
+  }));
+  return {
+    days,
+    summary:
+      "Your lifting week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.",
+  };
+}
+
 // ---------- Day-read cache (the Brief) ----------
 // One canonical (no-override) read per calendar day, persisted so the morning
 // open is instant. The nightly scheduler pass (and any cache miss) fills it; the

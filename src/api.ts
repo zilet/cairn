@@ -16,6 +16,7 @@ import {
   suggestSession,
   getCachedExerciseExplanation,
   explainExercise,
+  weekAheadRead,
   draftMealPlan,
   nutritionCheckin,
   swapMealAgentic,
@@ -347,6 +348,17 @@ api.post("/session-suggest", async (req, res) => {
     }));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// The week ahead — a calm forward look (lift / run / mixed / rest across the next
+// several days). Agentic with a deterministic plan-rotation floor, so it always
+// returns a usable shape even with no agent. Cached per day+plan+goal.
+api.get("/week-ahead", async (req, res) => {
+  try {
+    res.json(await weekAheadRead(req.query.agent != null ? String(req.query.agent) : undefined));
+  } catch (e: any) {
+    res.json({ ok: false, error: e.message });
   }
 });
 

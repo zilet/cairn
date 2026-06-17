@@ -18,6 +18,7 @@ import {
   buildHealthReviewPrompt,
   buildSessionPrompt,
   buildExerciseExplanationPrompt,
+  buildWeekAheadPrompt,
   buildSessionVerifyPrompt,
   buildPlanVerifyPrompt,
   buildNutritionCheckinPrompt,
@@ -280,6 +281,72 @@ export async function explainExercise(agent: string | undefined, name: string, h
     /* cache write never breaks the op */
   }
   return out;
+}
+
+// ---------- the week ahead (forward look) ----------
+const WEEK_AHEAD_KIND = "week_ahead";
+const WEEK_AHEAD_FRESH_MS = 18 * 60 * 60 * 1000; // a day's shape — recompute ~daily
+const WEEK_AHEAD_DAY_KINDS = new Set(["lift", "run", "mixed", "rest"]);
+
+function sanitizeWeekAhead(input: any): { days: any[]; summary: string } | null {
+  const rawDays = Array.isArray(input?.days) ? input.days : null;
+  if (!rawDays || !rawDays.length) return null;
+  const days = rawDays
+    .slice(0, 7)
+    .map((d: any) => ({
+      day: d?.day == null ? null : String(d.day).replace(/\s+/g, " ").trim().slice(0, 16) || null,
+      kind: WEEK_AHEAD_DAY_KINDS.has(String(d?.kind)) ? String(d.kind) : "lift",
+      label: String(d?.label ?? "").replace(/\s+/g, " ").trim().slice(0, 60),
+      ...(d?.note != null && String(d.note).trim() ? { note: String(d.note).replace(/\s+/g, " ").trim().slice(0, 90) } : {}),
+    }))
+    .filter((d: any) => d.label);
+  if (!days.length) return null;
+  return { days, summary: String(input?.summary ?? "").replace(/\s+/g, " ").trim().slice(0, 240) };
+}
+
+// A calm sketch of the next several days (lift / run / mixed / rest), the day-read
+// projected forward. Agentic with the deterministic plan-rotation floor as the
+// always-available fallback; cached per day+plan+goal (serve-stale-then-revalidate).
+export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks) {
+  const floor = repo.weekAheadPlan();
+  const floorResult = { ok: true as const, days: floor.days, summary: floor.summary, source: "deterministic" as const, cached: false as const };
+  const profile: any = repo.getProfile();
+  const cacheKey = repo.fingerprint({
+    op: WEEK_AHEAD_KIND,
+    date: new Date().toISOString().slice(0, 10),
+    plan: floor.days.map((d) => `${d.kind}:${d.label}`),
+    goal: { gw: profile?.goal_weight_lb ?? null, gd: profile?.goal_date ?? null },
+  });
+  const cached = repo.getAiCache(WEEK_AHEAD_KIND, cacheKey);
+  const cachedSane = sanitizeWeekAhead(cached?.result);
+  if (cached && cachedSane && !cached.stale) {
+    hooks?.onPhase?.("served from cache");
+    return { ok: true as const, ...cachedSane, source: "agent" as const, cached: true as const, agent: cached.chosen_agent };
+  }
+
+  hooks?.onPhase?.("sketching your week");
+  try {
+    const prompt = buildWeekAheadPrompt();
+    const { agent: chosen, result } = await runChosen(agent, prompt, {
+      op: WEEK_AHEAD_KIND,
+      timeoutMs: INTERACTIVE_TIMEOUT_MS,
+      signal: hooks?.signal,
+    });
+    const sane = sanitizeWeekAhead(result.parsed);
+    if (sane) {
+      const out = { ok: true as const, ...sane, source: "agent" as const, cached: false as const, agent: chosen };
+      try {
+        repo.saveAiCache(WEEK_AHEAD_KIND, cacheKey, { result: out, chosen_agent: chosen, freshForMs: WEEK_AHEAD_FRESH_MS });
+      } catch {
+        /* cache write never breaks the op */
+      }
+      return out;
+    }
+  } catch {
+    /* fall through to a stale-cache or the deterministic floor */
+  }
+  if (cachedSane) return { ok: true as const, ...cachedSane, source: "agent" as const, cached: true as const, stale: true as const, agent: cached?.chosen_agent ?? null };
+  return floorResult;
 }
 
 // Draft a goal-aware weekly meal plan, then run a bounded self-critique verify

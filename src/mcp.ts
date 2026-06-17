@@ -7,6 +7,7 @@ import { buildCoachPrompt } from "./prompt.js";
 import {
   runChosen,
   suggestSession,
+  weekAheadRead,
   draftMealPlan,
   nutritionCheckin,
   swapMealAgentic,
@@ -703,6 +704,13 @@ export function buildMcpServer(): McpServer {
     },
     async ({ minutes, equipment, focus, constraints, date, agent }) =>
       asText(await suggestSession(agent, { minutes, equipment, focus, constraints, date }))
+  );
+
+  server.tool(
+    "get_week_ahead",
+    "Sketch the SHAPE of the next several days — lift / run / mixed / rest — as a calm SUGGESTION to reshape, never a fixed schedule. Balances the lifting split with easy aerobic base work, honoring injuries, recovery and training health-directives. Agentic with a deterministic plan-rotation floor, so it always returns a usable shape; cached per day+plan+goal.",
+    { agent: z.string().optional().describe("omit or 'auto' to use the configured rotation") },
+    async ({ agent }) => asText(await weekAheadRead(agent))
   );
 
   server.tool(

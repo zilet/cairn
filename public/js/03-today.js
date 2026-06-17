@@ -770,6 +770,7 @@ async function renderToday(opts = {}) {
     ${briefHtml(read, { showPlan, hasPlanDay, isToday })}
     ${goalLineHtml(stats, curW, isToday)}
     <div id="draftSlot" class="draft-slot"></div>
+    ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
     <div id="weeklySlot" class="weekly-slot"></div>
     <div id="insightSlot" class="insight-slot"></div>
     ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
@@ -925,7 +926,7 @@ async function renderToday(opts = {}) {
     loadContextBanner();
     loadHealthFocusBanner();
     loadWearable(isToday);
-    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); loadDraftProposals(); }
+    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); loadDraftProposals(); loadWeekAhead(); }
     view.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
   }
 
@@ -2072,6 +2073,36 @@ async function loadDraftProposals() {
       <span class="draft-go" aria-hidden="true">→</span>
     </button>`;
   slot.querySelector("#draftCard").addEventListener("click", () => { state.planJump = "coach"; activateTab("plan"); });
+}
+
+// Today: a calm "week ahead" sketch — lift / run / mixed / rest across the next few
+// days, so the athlete can see roughly when to train and run for their goals. Pull,
+// never push: it waits quietly and is a SUGGESTION to reshape, never a schedule. The
+// endpoint is agentic with a deterministic plan-rotation floor, so it always returns
+// something usable. Renders nothing on an empty result.
+const WEEK_AHEAD_GLYPH = { lift: "◆", run: "➜", mixed: "✦", rest: "○" };
+async function loadWeekAhead() {
+  const slot = view.querySelector("#weekAheadSlot");
+  if (!slot) return;
+  let r = null;
+  try { r = await api("/week-ahead"); } catch { return; }
+  if (state.tab !== "today" || !slot.isConnected) return;
+  const days = r && r.ok && Array.isArray(r.days) ? r.days : [];
+  if (!days.length) { slot.innerHTML = ""; return; }
+  const rows = days.map((d) => {
+    const kind = WEEK_AHEAD_GLYPH[d.kind] ? d.kind : "lift";
+    return `<div class="wa-row wa-${escAttr(kind)}">
+        <span class="wa-glyph" aria-hidden="true">${WEEK_AHEAD_GLYPH[kind]}</span>
+        ${d.day ? `<span class="wa-day lbl">${escHtml(d.day)}</span>` : ""}
+        <span class="wa-label">${escHtml(d.label)}</span>
+        ${d.note ? `<span class="wa-note">${escHtml(d.note)}</span>` : ""}
+      </div>`;
+  }).join("");
+  slot.innerHTML = `<div class="weekahead reveal" style="--i:0">
+      <div class="weekahead-h"><span class="lbl">The week ahead</span></div>
+      <div class="weekahead-days">${rows}</div>
+      ${r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
+    </div>`;
 }
 
 // Today: one quiet health-focus line from the latest whole-picture review (first
