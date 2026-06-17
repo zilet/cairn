@@ -1,0 +1,79 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "src/**/*.ts",
+      "public/**/*.js",
+      "test/**/*.mjs",
+      "test/**/*.js",
+      "*.mjs",
+      "*.js",
+      "!dist",
+      "!node_modules",
+      "!data",
+      "!public/sw.js",
+      "!public/art.js"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noExplicitAny": "off",
+        "noAssignInExpressions": "off",
+        "useIterableCallbackReturn": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useTemplate": "off"
+      },
+      "complexity": {
+        "useOptionalChain": "off"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "es5",
+      "arrowParentheses": "always"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["public/js/**/*.js"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noGlobalIsNan": "off",
+            "noGlobalIsFinite": "off"
+          },
+          "correctness": {
+            "noUnusedVariables": "off"
+          },
+          "style": {
+            "useConst": "off"
+          }
+        }
+      }
+    }
+  ],
+  "assist": {
+    "enabled": false
+  }
+}

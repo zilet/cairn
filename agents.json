@@ -1,0 +1,47 @@
+{
+  "claude": {
+    "command": "claude",
+    "args": ["-p", "{prompt}"],
+    "input": "arg",
+    "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
+    "env_required": [],
+    "web_access": true,
+    "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required.",
+    "stream": {
+      "format": "claude",
+      "args": ["-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+    }
+  },
+  "codex": {
+    "command": "codex",
+    "args": ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "{prompt}"],
+    "input": "arg",
+    "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
+    "env_required": []
+  },
+  "antigravity": {
+    "command": "agy",
+    "args": ["-p", "{prompt}", "--print-timeout", "5m"],
+    "input": "arg",
+    "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
+    "env_required": []
+  },
+  "grok": {
+    "command": "grok",
+    "args": ["-p", "{prompt}"],
+    "input": "arg",
+    "description": "xAI Grok Build (SuperGrok/X Premium+). Headless may need XAI_API_KEY.",
+    "env_required": [],
+    "stream": {
+      "format": "grok",
+      "args": ["-p", "{prompt}", "--output-format", "streaming-json"]
+    }
+  },
+  "stub": {
+    "command": "sh",
+    "args": ["-c", "printf '%s' '{\"summary\":\"Stub test proposal (no API used).\",\"changes\":[{\"day_number\":1,\"exercise\":\"Back Squat\",\"target_weight\":195,\"reason\":\"pipeline smoke test\"}],\"notes\":\"Built-in offline stub. Use claude/codex/antigravity/grok for real coaching.\"}'"],
+    "input": "arg",
+    "description": "Offline stub for testing the propose/apply loop with no API key.",
+    "env_required": []
+  }
+}

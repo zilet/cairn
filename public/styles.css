@@ -1,0 +1,3101 @@
+/* ===================================================================
+   CAIRN — "Atelier" design system
+   Warm-gallery / studio-catalog aesthetic. Frozen contract: docs/DESIGN.md
+   Display: Fraunces (variable opsz/wght). UI: Schibsted Grotesk.
+   =================================================================== */
+
+/* -------------------------------------------------------------------
+   01 · Tokens
+   ------------------------------------------------------------------- */
+:root{
+  color-scheme:light;
+
+  --paper:   #f4efe7;   /* page background, warm cream */
+  --card:    #fffdf8;   /* card surface */
+  --card-2:  #f8f3ea;   /* inset surfaces: inputs, wells, chips */
+  --ink:     #211d17;   /* primary text, near-black warm ink */
+  --ink-2:   #57503f;   /* secondary text */
+  --muted:   #746c5c;   /* tertiary text, labels — darkened to clear WCAG AA (4.5:1) on card-2/paper; was #8c8475 (3.35:1) */
+  --line:    #e7dfd2;   /* hairlines */
+  --line-2:  #d8cfbd;   /* stronger hairlines */
+  --accent:  #b4552d;   /* terracotta — primary actions, highlights */
+  --accent-deep: #93421f;
+  --sage:    #6e7f5c;   /* success, completion, "done" */
+  --sage-bg: #eef0e6;
+  --warn:    #b3402e;   /* warnings, destructive */
+  --warn-bg: #f6e8e2;
+  --gold:    #c9a86a;   /* PR moments, gentle highlights */
+  --shadow-sm: 0 1px 2px rgba(72,58,35,.07), 0 4px 14px rgba(72,58,35,.07);
+  --shadow-md: 0 2px 4px rgba(72,58,35,.08), 0 14px 36px rgba(72,58,35,.11);
+  --shadow-lg: 0 6px 16px rgba(72,58,35,.12), 0 28px 64px rgba(72,58,35,.18);
+  --radius: 18px;
+  --radius-sm: 12px;
+
+  /* motion tokens — one easing family, three speeds. Nothing snaps. */
+  --ease:  cubic-bezier(.22,1,.36,1);
+  --dur-1: 200ms;   /* presses, hovers, small state flips */
+  --dur-2: 320ms;   /* thumbs, sheets, overlays */
+  --dur-3: 450ms;   /* entrances, bars growing, photo fades */
+
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-ui: 'Schibsted Grotesk', 'Helvetica Neue', system-ui, sans-serif;
+
+  /* Legacy aliases — app.js still emits inline styles referencing the
+     old dark-theme variables. Mapped into the Atelier palette so the
+     app renders correctly even before the app.js rewrite lands. */
+  --bg: var(--paper);
+  --panel: var(--card);
+  --panel-2: var(--card-2);
+  --txt: var(--ink);
+  --accent-dim: var(--accent-deep);
+}
+
+/* -------------------------------------------------------------------
+   02 · Reset & base
+   ------------------------------------------------------------------- */
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--paper); color:var(--ink);
+  font-family:var(--font-ui); line-height:1.55; font-size:16px;
+  padding-bottom:calc(84px + var(--vvb,0px)); min-height:100dvh;
+}
+/* paper grain — fixed noise wash over everything, barely-there */
+body::before{
+  content:""; position:fixed; inset:0; z-index:1; pointer-events:none;
+  opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+img,svg{display:block;max-width:100%}
+button{font-family:inherit;color:inherit;cursor:pointer}
+button:not(:disabled):active{transform:scale(.97)}
+input,select,textarea{font-family:var(--font-ui);color:var(--ink)}
+/* no double-tap-to-zoom on controls (iOS) — taps fire immediately, page never zooms */
+button,input,select,textarea,a{touch-action:manipulation}
+::placeholder{color:#b3aa97;opacity:1}
+::selection{background:var(--accent);color:#fffdf8}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+/* iOS Safari auto-zooms the page when a focused control's font-size is under
+   16px (chat input, quick-log, plan editor…). On touch devices pin every form
+   control to 16px so focusing never zooms; desktop keeps the designed sizes. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type="checkbox"]):not([type="radio"]),select,textarea{font-size:16px !important}
+}
+
+/* strip number-input spinners everywhere */
+input[type="number"]{-moz-appearance:textfield;appearance:textfield}
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+/* quiet warm scrollbars where they appear */
+*{scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:99px;border:3px solid var(--paper)}
+::-webkit-scrollbar-thumb:hover{background:#c4b9a2}
+
+/* -------------------------------------------------------------------
+   03 · Typography primitives
+   ------------------------------------------------------------------- */
+header{padding:calc(env(safe-area-inset-top) + 26px) 18px 14px;max-width:680px;margin:0 auto}
+h1{
+  font-family:var(--font-display);font-weight:580;font-size:2.05rem;line-height:1.12;
+  font-variation-settings:"opsz" 60;letter-spacing:-.01em;color:var(--ink);margin-top:4px;
+}
+h1 i,h1 em{font-style:italic;font-weight:480}
+main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
+
+/* tracked caps label — the "PROTEIN ───" style */
+.lbl{
+  font-family:var(--font-ui);text-transform:uppercase;letter-spacing:.18em;
+  font-size:.62rem;font-weight:600;color:var(--muted);
+}
+
+/* Fraunces display numerals */
+.numeral{
+  font-family:var(--font-display);font-weight:580;
+  font-variation-settings:"opsz" 144;line-height:1.05;color:var(--ink);
+  font-variant-numeric:lining-nums;
+}
+.numeral-xl{font-size:2.6rem;font-weight:600;letter-spacing:-.015em}
+.numeral-lg{font-size:1.6rem}
+
+/* -------------------------------------------------------------------
+   04 · Motion
+   ------------------------------------------------------------------- */
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+.reveal{
+  animation:rise .5s cubic-bezier(.22,1,.36,1) both;
+  animation-delay:calc(min(var(--i,0),12) * 45ms);
+}
+@keyframes chipin{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+.chip-in{animation:chipin .22s cubic-bezier(.22,1,.36,1)}
+
+/* A quieter sibling of `rise` for cards that arrive ASYNCHRONOUSLY into a slot
+   after the page has already settled (the opportunistic insight card, the
+   nutrition check-in result). A smaller 6px lift + soft fade so it eases into
+   place instead of jumping the layout below it. */
+@keyframes settlein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.settle-in{animation:settlein var(--dur-3) var(--ease) both}
+
+/* hairline bars grow to their inline width on first paint */
+@keyframes bargrow{from{width:0}}
+.barfill{animation:bargrow var(--dur-3) var(--ease) both;animation-delay:120ms}
+
+/* slow idle float for detail-view art */
+@keyframes drift{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+
+/* springy press for tappable entry cards (buttons already compress) */
+.tappable{cursor:pointer}
+.tappable:active{transform:scale(.985)}
+
+/* view transitions: same easing family, no slow crossfades */
+::view-transition-old(root),::view-transition-new(root){animation-duration:var(--dur-2)}
+::view-transition-group(detail-art){animation-duration:var(--dur-3);animation-timing-function:var(--ease)}
+::view-transition-group(seg-thumb){animation-duration:var(--dur-2);animation-timing-function:var(--ease)}
+/* the Brief hero morphs (not crossfades) when an override chip reshapes the read */
+::view-transition-group(brief-hero){animation-duration:var(--dur-3);animation-timing-function:var(--ease)}
+::view-transition-old(brief-hero),::view-transition-new(brief-hero){
+  animation-duration:var(--dur-3);animation-timing-function:var(--ease);height:100%}
+
+/* -------------------------------------------------------------------
+   04b · Loading & progress — full-area "working" state
+   The inline vocabulary (the .aspin ring, btnBusy, .typing chat dots, the
+   .is-thinking filament) lives in §"atelier loading". This is the one piece
+   they don't cover: a centered region-loader for a whole panel that's
+   fetching/thinking (chat log hydrating, history overlay). See DESIGN.md.
+   ------------------------------------------------------------------- */
+.loadstate{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:13px;padding:42px 16px;text-align:center;animation:settlein var(--dur-3) var(--ease) both}
+.loadstate-label{font-family:var(--font-display);font-style:italic;
+  font-variation-settings:"opsz" 28;font-size:1.05rem;color:var(--ink-2);line-height:1.3}
+
+/* -------------------------------------------------------------------
+   05 · Cards & illustration tiles
+   ------------------------------------------------------------------- */
+.ex,.sess,.pday,.mp-card,.prog-day,.memrow,.agentrow,.qlent,
+.hupload,.lifeadd,.heat-wrap,.stat{
+  background:var(--card);border:none;box-shadow:var(--shadow-sm);
+  transition:box-shadow .25s ease,transform .25s ease;
+}
+@media (hover:hover){
+  .ex:hover,.sess:hover,.pday:hover,.mp-card:hover,.prog-day:hover,
+  .memrow:hover,.agentrow:hover,.qlent:hover{
+    box-shadow:var(--shadow-md);transform:translateY(-2px);
+  }
+}
+
+/* illustration tile — art carries its own cream circle */
+.artile{display:grid;grid-template:100% / 100%;place-items:center;flex:0 0 auto;background:transparent}
+.artile svg{width:100%;height:100%}
+.artile-xl{width:160px;height:160px}
+.artile-lg{width:96px;height:96px}
+.artile-md{width:64px;height:64px}
+.artile-sm{width:44px;height:44px}
+.ex-art,.qlent-art,.meal-art{display:grid;place-items:center;flex:0 0 auto}
+.ex-art svg,.qlent-art svg,.meal-art svg{width:100%;height:100%}
+
+/* progressive artwork: CairnArt SVG shows instantly, the generated studio photo
+   fades in over it on load (204 / failure → SVG stays, no flash) */
+.artimg{position:relative}
+.artimg svg{grid-area:1/1}
+.artimg .artimg-photo{
+  grid-area:1/1;width:100%;height:100%;object-fit:cover;border-radius:50%;
+  opacity:0;transform:scale(1.04);
+  transition:opacity var(--dur-3) ease,transform var(--dur-3) var(--ease);
+}
+.artimg .artimg-photo.on{opacity:1;transform:scale(1)}
+
+/* -------------------------------------------------------------------
+   06 · Stat strip (Today)
+   ------------------------------------------------------------------- */
+.statstrip{display:flex;gap:7px;margin:4px 0 14px}
+.stat{flex:1;min-width:0;border-radius:var(--radius-sm);padding:11px 4px 9px;text-align:center}
+.stat-n{
+  font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
+  font-size:1.32rem;line-height:1.05;color:var(--ink);font-variant-numeric:lining-nums;
+  white-space:nowrap;
+}
+.stat-l{display:block;font-family:var(--font-ui);font-size:.54rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-top:4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* compass strip: adherence + pace + weight (replaces the vanity counters) */
+.statstrip-compass .stat{padding:12px 6px 10px}
+.stat-frac{font-size:.82em;color:var(--muted);font-weight:500}
+.stat-dots{display:flex;justify-content:center;gap:4px;margin-top:6px}
+.stat-dot{width:6px;height:6px;border-radius:50%;background:var(--line-2)}
+.stat-dot.on{background:var(--sage)}
+.stat-sub{font-family:var(--font-ui);font-size:.62rem;font-weight:600;color:var(--muted);
+  margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat-dim{color:var(--muted)}
+.stat-pace.pace-on .stat-n,.stat-pace.pace-on .stat-sub{color:var(--sage)}
+.stat-pace.pace-behind .stat-n,.stat-pace.pace-behind .stat-sub{color:var(--accent)}
+.stat-pace.pace-fast .stat-n,.stat-pace.pace-fast .stat-sub{color:var(--warn)}
+
+/* pace offer under the compass: a calm optional line into Chat (only on a real
+   trend deviation — an offer to look together, never a verdict or a nag) */
+.pace-offer{display:flex;align-items:center;gap:6px;width:100%;margin:-6px 0 14px;padding:9px 14px;
+  border:0;border-radius:var(--radius-sm);background:var(--card-2);cursor:pointer;
+  font-family:var(--font-ui);font-size:.78rem;color:var(--ink-2);text-align:left}
+.pace-offer::before{content:"";width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+.pace-offer-fast::before{background:var(--warn)}
+.pace-offer-behind::before{background:var(--accent)}
+.pace-offer-cta{margin-left:auto;color:var(--accent);font-weight:600;white-space:nowrap}
+.pace-offer:active{transform:scale(.99)}
+
+/* "Table" hint: one-line shortcut from Today to Plan → Meals */
+.tablehint{display:flex;align-items:baseline;gap:8px;width:100%;margin:2px 0 12px;padding:8px 14px;
+  border:0;border-radius:var(--radius-sm);background:transparent;cursor:pointer;
+  font-family:var(--font-ui);font-size:.82rem;color:var(--ink-2);text-align:left;
+  white-space:nowrap;overflow:hidden}
+.tablehint .lbl{flex:0 0 auto}
+.tablehint-more{color:var(--muted)}
+.tablehint-go{margin-left:auto;color:var(--accent);flex:0 0 auto}
+.tablehint:active{transform:scale(.99)}
+
+/* bodyweight quick-add chip lives in the strip */
+.stat-wt{cursor:pointer;font:inherit}
+.stat-wt .stat-n{display:inline-flex;align-items:baseline;justify-content:center;gap:3px}
+.stat-plus{font-size:.85rem;color:var(--accent);font-weight:700;line-height:1;font-family:var(--font-ui)}
+.stat-wt:active{transform:scale(.97)}
+
+/* -------------------------------------------------------------------
+   07 · Today: day switch, date, context banner, quick-log
+   ------------------------------------------------------------------- */
+.day-switch{display:flex;gap:7px;overflow-x:auto;padding:6px 0 16px;scrollbar-width:none}
+.day-switch::-webkit-scrollbar{display:none}
+.daybtn{
+  flex:0 0 auto;font-family:var(--font-ui);font-weight:600;font-size:.78rem;
+  letter-spacing:.04em;color:var(--ink-2);background:transparent;
+  border:1px solid var(--line-2);padding:8px 14px;border-radius:999px;
+  transition:background .15s,color .15s,border-color .15s;
+}
+.daybtn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+.logdate{display:flex;align-items:center;gap:9px;margin:0 0 12px}
+.logdate-lbl{flex:0 0 auto}
+.logdate-lbl,.ql-recent-h{
+  font-family:var(--font-ui);text-transform:uppercase;letter-spacing:.18em;
+  font-size:.6rem;font-weight:600;color:var(--muted);
+}
+.logdate input[type="date"]{
+  flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:var(--radius-sm);padding:9px 11px;
+  font-family:var(--font-ui);font-size:.88rem;-webkit-appearance:none;color-scheme:light;
+}
+.logdate-today{margin-top:0;flex:0 0 auto;padding:9px 13px;border-style:solid;
+  border-color:var(--accent);color:var(--accent)}
+
+/* active life-context banner */
+.ctxbanner{
+  display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  background:var(--card);border:none;box-shadow:var(--shadow-sm);
+  border-left:3px solid var(--gold);
+  border-radius:var(--radius-sm);padding:10px 14px;margin:2px 0 12px;
+  font-size:.84rem;color:var(--ink-2);line-height:1.45;
+}
+.ctxbanner-sep{color:var(--line-2)}
+
+/* connected-brain provenance — the quiet causal line on a meal/session card when
+   a flagged lab shaped it ("tilted toward fish — ApoB came back high · why"). A
+   soft gold-edged whisper, the whole row a deep-link into Me → Health → Brain.
+   Information, never a verdict — it never raises its voice. */
+.prov-slot:empty{display:none}
+.prov-line{
+  display:flex;align-items:baseline;gap:7px;width:100%;text-align:left;
+  margin:12px 0 0;padding:8px 11px;
+  background:transparent;border:none;border-left:2px solid var(--gold);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  color:var(--ink-2);font-family:var(--font-ui);font-size:.8rem;line-height:1.4;
+  cursor:pointer;transition:background var(--dur-1) var(--ease);
+}
+.prov-line:hover{background:var(--card-2)}
+.prov-line:active{transform:scale(.99)}
+.prov-glyph{color:var(--gold);font-size:.74rem;flex:0 0 auto;line-height:1.4}
+.prov-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.prov-marker{font-weight:600;color:var(--ink)}
+.prov-soft{color:var(--muted);font-style:italic}
+.prov-why{flex:0 0 auto;font-size:.62rem;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);align-self:center}
+.prov-line:hover .prov-why{color:var(--accent)}
+
+/* free-text quick log */
+.quicklog{display:flex;gap:8px;align-items:center;margin:2px 0 8px}
+.quicklog input{
+  flex:1;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:999px;padding:12px 16px;font-size:.88rem;
+}
+
+/* recent activity entries */
+.ql-recent{margin:2px 0 14px}
+.ql-recent-h{margin:8px 0 7px}
+.qlent{
+  display:flex;align-items:center;gap:11px;
+  border-radius:var(--radius-sm);padding:9px 13px;margin-bottom:8px;
+  animation:chipin .22s cubic-bezier(.22,1,.36,1);
+}
+.qlent-line{flex:1;font-size:.86rem;color:var(--ink-2);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qlent-badge{flex:0 0 auto}
+.qlent-done{box-shadow:var(--shadow-sm),inset 3px 0 0 var(--sage)}
+
+/* Lately — the unified Today feed (finished strength sessions + cardio merged).
+   Replaces the old activities-only "Recent" strip. A Garmin-enriched row taps open
+   to its body-reaction (HR zones / effort / VO2 / temp), reusing the garmin-card
+   vocabulary (.garmin-tiles / .gz-bar). A strength row carries a sage inset cue. */
+.lately-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:8px 0 7px}
+.lately-all{background:none;border:none;cursor:pointer;color:var(--accent);
+  font-family:var(--font-ui);text-transform:uppercase;letter-spacing:.1em;
+  font-size:.58rem;font-weight:600;padding:2px 0}
+@media (hover:hover){.lately-all:hover{opacity:.7}}
+.lately-row{background:var(--card);border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
+  margin-bottom:8px;overflow:hidden;animation:chipin .22s cubic-bezier(.22,1,.36,1);
+  transition:box-shadow .25s ease,transform .25s ease}
+@media (hover:hover){.lately-row:hover{box-shadow:var(--shadow-md);transform:translateY(-2px)}}
+.lately-strength{box-shadow:var(--shadow-sm),inset 3px 0 0 var(--sage)}
+@media (hover:hover){.lately-strength:hover{box-shadow:var(--shadow-md),inset 3px 0 0 var(--sage)}}
+.lately-head{display:flex;align-items:center;gap:11px;padding:9px 13px}
+.lately-head[role="button"]{cursor:pointer}
+.lately-main{flex:1;min-width:0}
+.lately-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.lately-title{font-size:.9rem;color:var(--ink);font-weight:600;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lately-when{flex:0 0 auto;color:var(--muted)}
+.lately-stats{font-size:.82rem;color:var(--ink-2);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lately-note{font-size:.76rem;color:var(--accent);margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lately-chev{flex:0 0 auto;color:var(--muted);font-size:.7rem;transition:transform .2s ease}
+.lately-open .lately-chev{transform:rotate(180deg)}
+.lately-detail{padding:10px 13px 12px;border-top:1px solid var(--line)}
+.lately-detail .garmin-tiles{margin-bottom:6px}
+.lately-detail .gz-bar{margin-bottom:4px}
+
+/* inline bodyweight add */
+.wt-inline{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.wt-inline[hidden]{display:none}
+.wt-inline input{
+  flex:1;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:10px 13px;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:1rem;
+}
+
+/* -------------------------------------------------------------------
+   08 · Exercise cards (Today)
+   ------------------------------------------------------------------- */
+.ex{border-radius:var(--radius);padding:15px 16px;margin-bottom:13px;position:relative;overflow:hidden}
+.ex-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.ex-top .ex-name{flex:1;min-width:0}
+.ex-name{
+  font-family:var(--font-display);font-weight:540;font-size:1.15rem;line-height:1.2;
+  font-variation-settings:"opsz" 32;background:none;border:none;color:var(--ink);
+  padding:0;text-align:left;display:inline-flex;align-items:center;gap:6px;
+}
+.guide-i{color:var(--accent);font-size:.78rem;font-family:var(--font-ui)}
+.ex-sets{font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap}
+.ex-target{
+  font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
+  color:var(--accent);font-size:1.2rem;font-variant-numeric:lining-nums;
+}
+.ex-note{margin-top:9px;font-size:.8rem;color:var(--muted);border-top:1px solid var(--line);padding-top:8px}
+.ex-flag{margin-top:9px;background:var(--warn-bg);border:none;border-left:3px solid var(--warn);
+  border-radius:8px;padding:8px 11px;font-size:.78rem;color:var(--warn)}
+
+/* set progress + completion */
+.ex-meta{display:flex;align-items:center;gap:9px;margin-top:5px}
+.ex-prog{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:600;
+  font-size:.85rem;color:var(--muted);font-variant-numeric:lining-nums}
+.ex-prog span{font-family:var(--font-ui);font-weight:600;text-transform:uppercase;
+  letter-spacing:.12em;font-size:.58rem}
+.ex-prog.done{color:var(--sage)}
+.ex-prog.done::before{content:"✓ ";font-family:var(--font-ui)}
+.ex-offplan{color:var(--accent-deep);text-transform:uppercase;letter-spacing:.14em;
+  font-size:.58rem;font-weight:700}
+.ex-complete{box-shadow:var(--shadow-sm),inset 3px 0 0 var(--sage)}
+.ex-complete .ex-name,.ex-complete .ex-target{opacity:.62}
+.ex-complete .ex-art,.ex-complete .qlent-art{filter:saturate(.55);opacity:.75}
+
+/* logged set chips — cream pills */
+.logged{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.logged:empty{display:none}
+.chip{
+  display:inline-flex;align-items:center;gap:4px;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  font-size:.82rem;font-variant-numeric:lining-nums;
+  background:var(--card-2);border:1px solid var(--line);border-radius:999px;
+  padding:4px 11px;color:var(--ink);
+}
+.chip span{color:var(--muted)}
+.chip-n{color:var(--accent);font-weight:620;margin-right:1px}
+.chip-x{background:none;border:none;color:#c0b6a0;font-size:1rem;line-height:1;padding:0 0 0 4px}
+.chip-x:active,.chip-x:hover{color:var(--warn)}
+
+/* set logging row */
+.logrow{display:flex;gap:7px;margin-top:10px;align-items:center}
+.logrow input{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:10px;padding:10px 8px;text-align:center;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:1rem;font-weight:520;
+}
+.logrow input::placeholder{font-family:var(--font-ui);font-size:.62rem;
+  letter-spacing:.14em;font-weight:600}
+.logrow input:focus,.quicklog input:focus,.wt-inline input:focus,.chatbar input:focus,.chatbar textarea:focus{
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(180,85,45,.12);
+}
+
+/* primary action button — solid terracotta, cream glyph */
+.logbtn{
+  flex:0 0 auto;background:var(--accent);color:#fffdf8;border:none;border-radius:999px;
+  width:44px;height:42px;font-size:1.35rem;font-weight:700;line-height:1;
+  box-shadow:0 1px 2px rgba(147,66,31,.3),0 4px 12px rgba(147,66,31,.22);
+  transition:background .15s,box-shadow .2s,transform .12s;
+}
+.logbtn:hover{background:var(--accent-deep)}
+.logbtn:active{transform:scale(.95)}
+.logbtn:disabled{opacity:.5;cursor:default}
+
+/* add off-plan exercise */
+.addex{margin:4px 0 13px}
+.addex-btn{width:100%;text-align:center}
+.addex-form[hidden]{display:none}
+.addex-row{display:flex;gap:8px;align-items:center}
+.addex-row input{
+  flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:11px 13px;font-size:.9rem;
+}
+/* Reps / Timed toggle */
+.addex-mode{display:flex;gap:6px;margin-top:8px}
+.modebtn{
+  flex:0 0 auto;background:transparent;border:1px solid var(--line-2);color:var(--muted);
+  border-radius:999px;padding:6px 14px;font-family:var(--font-ui);font-weight:600;
+  font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
+  transition:background var(--dur-1),color var(--dur-1),border-color var(--dur-1);
+}
+.modebtn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+/* skip ("not today") — quiet dismiss in the card header */
+.ex-skip{
+  flex:0 0 auto;background:none;border:none;color:#c0b6a0;font-size:.9rem;line-height:1;
+  width:28px;height:28px;border-radius:999px;display:grid;place-items:center;padding:0;
+  transition:color var(--dur-1),background var(--dur-1),transform var(--dur-1) var(--ease);
+}
+.ex-skip:hover{color:var(--ink-2);background:var(--card-2)}
+.ex-skip:active{transform:scale(.88)}
+
+/* skipped exercises — one slim, muted line at the very bottom of Today */
+.skipline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 2px 14px;padding:0 4px}
+.skipline-empty{display:none}
+.skipline-names{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.skip-name{
+  background:none;border:1px dashed var(--line-2);border-radius:999px;color:var(--muted);
+  font-family:var(--font-ui);font-weight:600;font-size:.74rem;padding:4px 11px;
+  display:inline-flex;align-items:center;gap:6px;text-decoration:line-through;
+  transition:color var(--dur-1),border-color var(--dur-1),transform var(--dur-1) var(--ease);
+}
+.skip-name:hover{color:var(--ink-2);border-color:var(--ink-2)}
+.skip-name:active{transform:scale(.95)}
+.skip-undo{display:inline-block;color:var(--accent);font-size:.82rem} /* inline-block escapes the strikethrough */
+
+/* finish workout */
+.finish{margin-top:6px;padding-top:14px;border-top:1px solid var(--line)}
+.finish-stat{font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  font-size:.92rem;color:var(--ink-2);font-variant-numeric:lining-nums}
+
+/* Finish micro-exit: the logging surface lifts away before the "done" card reveals. */
+@keyframes slideOut{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(-18px) scale(.98)}}
+.slide-out{animation:slideOut var(--dur-2) var(--ease) both;pointer-events:none}
+
+/* Finished-workout "done" card — calm wrap-up, no score, two soft ways forward. */
+.sessiondone{
+  margin-top:16px;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:26px 22px;text-align:center;
+  box-shadow:var(--shadow-sm);
+}
+.done-mark{
+  width:42px;height:42px;margin:0 auto 12px;border-radius:999px;
+  display:grid;place-items:center;font-size:1.15rem;
+  background:rgba(110,127,92,.16);color:var(--sage,#6e7f5c);
+}
+.done-kicker{margin-bottom:6px}
+.done-title{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
+  font-size:1.35rem;line-height:1.15;margin:0 0 12px}
+.done-chips{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+.done-chip{font-family:var(--font-ui);font-weight:600;font-size:.78rem;color:var(--ink-2);
+  background:var(--card-2);border:1px solid var(--line);border-radius:999px;padding:5px 12px;
+  font-variant-numeric:lining-nums tabular-nums}
+.done-notes{margin-top:12px;color:var(--muted);font-style:italic;font-size:.9rem}
+.done-feedback{margin-top:14px}
+.done-actions{display:flex;justify-content:center;gap:10px;margin-top:20px;flex-wrap:wrap}
+
+/* -------------------------------------------------------------------
+   09 · Rest timer (floats above tab bar)
+   ------------------------------------------------------------------- */
+.rest{
+  position:fixed;left:0;right:0;bottom:calc(46px + env(safe-area-inset-bottom) + var(--vvb,0px));z-index:45;
+  /* Paper-toned (not card-white) so the unfilled track blends with the page —
+     a card-white bg read as a jarring white block to the right of the fill. */
+  background:rgba(244,239,231,.95);border-top:1px solid var(--line-2);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 -6px 24px rgba(72,58,35,.1);
+  transform:translateY(calc(100% + 46px + env(safe-area-inset-bottom,0px) + var(--vvb,0px)));
+  transition:transform .3s cubic-bezier(.22,1,.36,1);overflow:hidden;pointer-events:none;
+}
+.rest.show{transform:translateY(0);pointer-events:auto}
+.rest-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(180,85,45,.13);transition:width 1s linear}
+.rest-row{position:relative;display:flex;align-items:center;gap:10px;justify-content:center;
+  padding:10px 14px;max-width:680px;margin:0 auto}
+.rest-time{
+  font-family:var(--font-display);font-weight:620;font-variation-settings:"opsz" 144;
+  font-size:1.18rem;color:var(--accent);min-width:104px;text-align:center;
+  font-variant-numeric:lining-nums tabular-nums;
+}
+.rest-btn{background:var(--card-2);border:1px solid var(--line-2);color:var(--ink);
+  border-radius:999px;padding:6px 14px;font-size:.8rem;font-weight:600}
+.rest-skip{color:var(--muted)}
+
+/* while the rest bar is up, give the page enough bottom clearance that the
+   content above it (FINISH row, chatbar) can always scroll clear of the bar */
+body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
+
+/* -------------------------------------------------------------------
+   10 · Segmented sub-nav
+   ------------------------------------------------------------------- */
+.seg{display:flex;gap:4px;background:var(--card-2);border:1px solid var(--line);
+  border-radius:999px;padding:3px;margin:2px 0 16px;position:relative;
+  overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;
+  scrollbar-width:none;-ms-overflow-style:none}
+.seg::-webkit-scrollbar{display:none}
+.segbtn{
+  flex:1;background:transparent;border:none;color:var(--muted);
+  font-family:var(--font-ui);font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  font-size:.68rem;padding:9px 4px;border-radius:999px;white-space:nowrap;
+  transition:background .15s,color .15s;position:relative;z-index:1;
+}
+.segbtn.active{background:var(--ink);color:var(--paper)}
+/* Scroll mode (set by fitSeg when the equal-width pills won't fit): content-width
+   pills on one scrollable line. The sliding thumb assumes equal widths, so it
+   yields to the solid active-pill background here. */
+.seg.seg-scroll{scroll-snap-type:x proximity}
+.seg.seg-scroll .segbtn{flex:0 0 auto;padding-left:13px;padding-right:13px;scroll-snap-align:center}
+.seg.seg-scroll .seg-thumb{display:none}
+.seg.seg-scroll.seg-sliding .segbtn.active{background:var(--ink);color:var(--paper)}
+
+/* sliding ink thumb (segBar() emits .seg-sliding + the thumb; hand-built segs keep
+   the classic background-swap active state) */
+.seg-thumb{
+  position:absolute;top:3px;bottom:3px;left:3px;pointer-events:none;
+  width:calc((100% - 6px - (var(--segn,2) - 1)*4px)/var(--segn,2));
+  background:var(--ink);border-radius:999px;
+  transform:translateX(calc(var(--segi,0)*(100% + 4px)));
+  transition:transform var(--dur-2) var(--ease);
+  view-transition-name:seg-thumb;
+}
+.seg-sliding .segbtn.active{background:transparent}
+
+/* Sticky sub-nav band: keeps the segmented switcher pinned to the top while a
+   long sub-view scrolls, so another section is always one tap away. Full-bleed
+   blurred scrim (matches the tab bar) so content slides cleanly underneath.
+   Sits below the tab bar / save bar / overlays in the z-stack (z:30 < 40+). */
+.segwrap{
+  position:sticky;top:env(safe-area-inset-top,0px);z-index:30;
+  margin:0 -18px 16px;padding:6px 18px;
+  background:rgba(252,250,244,.85);
+  backdrop-filter:blur(14px) saturate(1.1);-webkit-backdrop-filter:blur(14px) saturate(1.1);
+}
+.segwrap .seg{margin:0}
+
+/* -------------------------------------------------------------------
+   11 · Program gallery (Plan tab)
+   ------------------------------------------------------------------- */
+.prog-day{border-radius:var(--radius);padding:16px 17px 14px;margin-bottom:14px}
+.prog-head{display:flex;align-items:flex-start;gap:10px}
+.prog-head-main{flex:1;min-width:0}
+.prog-num,.prog-head-main .lbl{font-family:var(--font-ui);font-weight:700;text-transform:uppercase;
+  letter-spacing:.18em;font-size:.6rem;color:var(--accent)}
+.prog-name{
+  font-family:var(--font-display);font-style:italic;font-weight:520;
+  font-variation-settings:"opsz" 50;font-size:1.3rem;color:var(--ink);
+}
+.prog-focus{width:100%;font-size:.8rem;color:var(--muted);margin-top:1px}
+
+/* contact-strip of the day's exercise art, overlapping */
+.prog-strip{display:flex;align-items:center;padding:10px 0 4px}
+.prog-strip>*{margin-left:-10px}
+.prog-strip>*:first-child{margin-left:0}
+/* photos overlap like a contact sheet: circle-clip + a card-colored ring */
+.strip-tile{border-radius:50%;background:var(--card);box-shadow:0 0 0 3px var(--card)}
+
+.prog-list{margin-top:6px}
+.prog-row{
+  display:grid;grid-template-columns:auto 1fr auto;gap:11px;align-items:center;
+  padding:8px 0;border-top:1px solid var(--line);
+}
+.prog-row:first-child{border-top:none}
+.prog-row-main{min-width:0}
+.prog-row-name{font-size:.9rem;font-weight:500;color:var(--ink);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prog-row-hint{font-size:.74rem;color:var(--muted);margin-top:1px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prog-nums,.prog-row-nums{
+  font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:560;
+  font-size:.92rem;color:var(--ink-2);white-space:nowrap;text-align:right;
+  font-variant-numeric:lining-nums;
+}
+.prog-nums span,.prog-row-nums span{color:var(--muted);font-size:.8rem}
+.prog-row-wt{display:block;font-size:.8rem;color:var(--accent);margin-top:1px}
+.prog-head .prog-edit{margin-top:2px;flex:0 0 auto}
+
+/* -------------------------------------------------------------------
+   12 · Plan editor (inset-well restyle, same selectors)
+   ------------------------------------------------------------------- */
+.pday{border-radius:var(--radius);padding:13px 14px;margin-bottom:13px}
+.pday-head .pday-done{margin-top:0;flex:0 0 auto}
+.pday-head{display:flex;gap:8px;align-items:center}
+.pday-name{
+  flex:1;background:transparent;border:none;color:var(--ink);
+  font-family:var(--font-display);font-weight:540;font-variation-settings:"opsz" 32;
+  font-size:1.12rem;padding:2px 0;
+}
+.pday-focus{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  border-radius:9px;padding:8px 10px;font-size:.8rem;margin:8px 0 10px}
+.pitem{border-top:1px solid var(--line);padding-top:9px;margin-top:9px}
+.pi-ex{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:9px;padding:8px 10px;font-size:.9rem;font-weight:500;margin-bottom:6px}
+.pi-row1{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.pi-row1 .pi-ex{margin-bottom:0}
+.pi-ord{display:flex;gap:4px;flex:0 0 auto}
+.pi-ord .ordbtn{width:30px;height:32px}
+.pi-nums{display:flex;gap:5px;align-items:center}
+.pi-nums input{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:9px;padding:8px 4px;text-align:center;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:.9rem;
+}
+.pi-nums input::placeholder{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.08em}
+.pi-note{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  border-radius:9px;padding:8px 10px;font-size:.8rem;margin-top:6px}
+
+/* utility buttons */
+.delbtn{flex:0 0 auto;background:var(--card-2);border:1px solid var(--line);color:var(--warn);
+  border-radius:9px;width:34px;height:32px;font-size:.8rem}
+.ghostbtn{
+  background:transparent;border:1px solid var(--line-2);color:var(--ink-2);
+  border-radius:999px;padding:9px 15px;font-family:var(--font-ui);font-weight:600;
+  font-size:.76rem;letter-spacing:.06em;margin-top:4px;
+  transition:border-color .15s,color .15s,background .15s;
+}
+.ghostbtn:hover{border-color:var(--ink);color:var(--ink)}
+.iconbtn{background:var(--card-2);border:1px solid var(--line);color:var(--muted);
+  border-radius:9px;min-width:30px;height:30px;font-size:.88rem;padding:0 7px}
+.iconbtn:hover{color:var(--ink);border-color:var(--line-2)}
+.ordbtn{background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  border-radius:9px;width:30px;height:30px;font-size:.92rem}
+.ordbtn:disabled{opacity:.3;cursor:default}
+
+/* -------------------------------------------------------------------
+   13 · Session / generic entry cards
+   ------------------------------------------------------------------- */
+.sess{border-radius:var(--radius);padding:14px 16px;margin-bottom:12px}
+.sess-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.sess-date{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 32;
+  font-size:1.05rem;color:var(--ink)}
+.sess-day{font-size:.68rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.sess-line{font-size:.85rem;color:var(--ink-2);margin-top:6px}
+.sess-line b{font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  color:var(--ink);font-weight:580;font-variant-numeric:lining-nums}
+
+/* food-note entries (Me) */
+.fnent .fnent-badge{flex:0 0 auto}
+.fnent .sess-head{align-items:center}
+.fnent-done{box-shadow:var(--shadow-sm),inset 3px 0 0 var(--sage)}
+.fn-macros{
+  display:inline-block;font-family:var(--font-display);font-variation-settings:"opsz" 60;
+  font-weight:580;font-size:.9rem;color:var(--accent);margin-top:6px;
+  font-variant-numeric:lining-nums;line-height:1.35;
+}
+
+/* -------------------------------------------------------------------
+   14 · Progress: chart, volume, calendar heatmap
+   ------------------------------------------------------------------- */
+.field{margin-bottom:15px}
+.field label{
+  display:block;font-family:var(--font-ui);font-size:.62rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.18em;color:var(--muted);margin-bottom:7px;
+}
+.field input,.field select,.field textarea{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:11px 12px;font-size:.92rem;color-scheme:light;
+}
+.field select{appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%238c8475' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 13px center;padding-right:34px}
+
+#chart{width:100%;height:230px;background:var(--card);border:none;box-shadow:var(--shadow-sm);
+  border-radius:var(--radius);margin-top:4px}
+.empty{
+  color:var(--muted);text-align:center;padding:44px 12px;
+  font-family:var(--font-display);font-style:italic;font-size:1rem;
+  font-variation-settings:"opsz" 28;
+}
+
+/* volume by muscle group */
+.vol-total{
+  font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
+  font-size:2.1rem;color:var(--ink);line-height:1.05;margin-top:4px;
+  font-variant-numeric:lining-nums;letter-spacing:-.01em;
+}
+.vol-total span{font-family:var(--font-ui);font-size:.78rem;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.14em}
+.volrow{margin-bottom:14px}
+.volrow-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px}
+.volrow-name{font-size:.9rem;font-weight:600;color:var(--ink)}
+.volrow-meta{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:.82rem;
+  color:var(--muted);white-space:nowrap;font-variant-numeric:lining-nums}
+.volbar{background:var(--card-2);border:1px solid var(--line);border-radius:999px;height:8px;overflow:hidden}
+.volbar-fill{height:100%;background:var(--sage);border-radius:999px;transition:width .4s cubic-bezier(.22,1,.36,1)}
+.volrow-meta b{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:600;
+  font-size:.95rem;color:var(--ink)}
+.vol-kicker{display:block;margin:0 2px 12px}
+
+/* training calendar heatmap — sage completion scale */
+.heat-wrap{border-radius:var(--radius);padding:15px;overflow-x:auto}
+.heat{display:flex;gap:6px;min-width:max-content;align-items:flex-start}
+.heat-dows{display:grid;grid-template-rows:repeat(7,14px);gap:4px;font-family:var(--font-ui);
+  font-size:.56rem;font-weight:600;letter-spacing:.06em;color:var(--muted);padding-top:1px}
+.heat-dows span{height:14px;line-height:14px;text-align:right;width:12px}
+.heat-cols{display:flex;gap:4px;align-items:flex-start}
+.heat-col{display:grid;grid-template-rows:repeat(7,14px);gap:4px;align-content:start}
+.heatcell{width:14px;height:14px;border-radius:4px;background:var(--card-2);
+  border:1px solid var(--line);box-sizing:border-box}
+.heatcell.l0{background:var(--card-2)}
+.heatcell.hpad{background:transparent;border-color:transparent}
+.heatcell.l1{background:#dde2d1;border-color:transparent}
+.heatcell.l2{background:#bfcaa8;border-color:transparent}
+.heatcell.l3{background:#97a87e;border-color:transparent}
+.heatcell.l4{background:var(--sage);border-color:transparent}
+.heat-legend{display:flex;align-items:center;gap:5px;margin-top:13px;
+  font-family:var(--font-ui);font-size:.6rem;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted)}
+.heat-legend .heatcell{width:12px;height:12px}
+
+/* -------------------------------------------------------------------
+   15 · Meal plans (Coach tab)
+   ------------------------------------------------------------------- */
+.mp-card{border-radius:var(--radius);padding:16px 17px;margin-bottom:14px}
+.mp-hero{display:block;padding-bottom:12px}
+.mp-hero-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.mp-hero-nums{display:flex;align-items:flex-end;gap:28px}
+.mp-hero-kcal .lbl,.mp-hero-protein .lbl{display:block;margin-top:3px}
+.mp-hero>.sess-line{margin-top:10px}
+
+.mp-badge{
+  font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;border-radius:999px;padding:3px 9px;
+}
+.mp-badge.draft{color:var(--ink-2);border:1px solid var(--line-2);background:var(--card-2)}
+.mp-badge.ok{color:var(--sage);background:var(--sage-bg);border:1px solid transparent}
+.mp-badge.off{color:var(--warn);background:var(--warn-bg);border:1px solid transparent}
+
+/* Trust transparency — the calm "adjusted to a safe step" note shown when a code
+   guardrail clamped an applied value. A hairline, never an alarm: a quiet gold edge,
+   plain words, the requested→applied move and the reason. */
+.clampnote{margin-top:12px;padding:10px 12px;border-left:2px solid var(--gold);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;background:rgba(201,168,106,.07)}
+.clampnote-lbl{display:flex;align-items:center;gap:6px;color:var(--ink-2);margin-bottom:6px}
+.clampnote-glyph{color:var(--gold);font-size:.78rem}
+.clampnote-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
+  font-size:.8rem;color:var(--ink-2);line-height:1.5;padding:2px 0}
+.clampnote-what{font-weight:600;color:var(--ink)}
+.clampnote-move{font-variant-numeric:lining-nums;color:var(--ink-2)}
+.clampnote-move b{color:var(--ink);font-weight:600}
+.clampnote-why{color:var(--muted)}
+
+/* Trust transparency — the quiet "checked against your floors" badge on a verified
+   meal plan / suggested session. Sage, reassuring, with the named adjustments tucked
+   behind a disclosure when present. Trust through honesty, not a boast. */
+.verified-badge{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:11px;
+  font-family:var(--font-ui);font-size:.74rem;font-weight:600;color:var(--sage)}
+.verified-mark{display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:50%;background:var(--sage-bg);color:var(--sage);font-size:.7rem;flex:0 0 auto}
+.verified-text{letter-spacing:.01em}
+.verified-detail{flex:1 1 100%;margin-top:2px}
+.verified-detail summary{color:var(--muted);font-weight:600;font-size:.7rem;cursor:pointer;
+  letter-spacing:.02em;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-2);list-style:none}
+.verified-detail summary::-webkit-details-marker{display:none}
+.verified-detail summary:hover{color:var(--ink-2)}
+.verified-list{margin:7px 0 0;padding-left:18px;color:var(--ink-2);font-weight:400;font-size:.78rem;line-height:1.5}
+.verified-list li{margin:2px 0}
+
+.mp-day{border-top:1px solid var(--line);margin-top:11px;padding-top:10px}
+.mp-dayname{
+  font-family:var(--font-display);font-style:italic;font-weight:520;
+  font-variation-settings:"opsz" 50;font-size:1.08rem;letter-spacing:0;
+  text-transform:none;color:var(--ink);margin-bottom:5px;
+}
+.mp-meal{font-size:.84rem;color:var(--ink-2);margin-top:4px}
+.mp-meal b{font-weight:600;color:var(--ink)}
+.mp-macros{color:var(--muted);font-size:.74rem}
+
+/* meal rows: art | name+items | macros */
+.meal-row{
+  display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;
+  padding:10px 0;border-top:1px solid var(--line);
+}
+.meal-row:first-child{border-top:none}
+.meal-main{min-width:0}
+.meal-name{font-size:.92rem;font-weight:600;color:var(--ink)}
+.meal-items{font-size:.8rem;color:var(--muted);margin-top:1px}
+.meal-macros{text-align:right;white-space:nowrap}
+.meal-kcal{
+  font-family:var(--font-display);font-weight:580;font-variation-settings:"opsz" 144;
+  font-size:1.1rem;color:var(--ink);font-variant-numeric:lining-nums;
+}
+.meal-macros .lbl{display:block;letter-spacing:.12em;margin-top:2px}
+
+/* macro bars — hairline track, ink fill, label left + value right */
+.macrobar{margin-bottom:11px}
+.macrobar:last-child{margin-bottom:0}
+.macrobar-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:5px}
+.macrobar-val{
+  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
+  font-size:.88rem;color:var(--ink);font-variant-numeric:lining-nums;
+}
+.macrobar-track{height:5px;background:var(--line);border-radius:999px;overflow:hidden}
+.macrobar-fill{height:100%;background:var(--ink);border-radius:999px;
+  transition:width .5s cubic-bezier(.22,1,.36,1)}
+
+/* -------------------------------------------------------------------
+   16 · Chat
+   ------------------------------------------------------------------- */
+/* Flex viewport column: the log is the ONLY scroller and the composer dock is
+   always the bottom row, so the input bar can never scroll off — even under
+   iOS Display Zoom / Larger Text. Height is measured live in JS (measureChatTop);
+   this calc is just the pre-measure default to avoid a first-paint jump. */
+.chatview{display:flex;flex-direction:column;height:var(--chat-h,calc(100dvh - 240px))}
+/* the chat column reserves its own room above the tab bar — drop the body's
+   tab-bar padding so the page doesn't gain a stray scroll behind it */
+body.chat-mode{padding-bottom:var(--vvb,0px)}
+.chatlog-wrap{position:relative;flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.chatlog{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;gap:10px;padding:2px 1px 8px}
+.chatdock{flex:0 0 auto;padding-top:2px}
+/* Mobile: pin the header + chat column to the *visual* viewport (not the layout
+   viewport) so an opening keyboard lifts the composer above it — never the OS
+   chrome over the input — and closing it leaves no stale gap. --cvt tracks iOS
+   panning the visual viewport, --chat-top is the live header height, --chat-h
+   fills the gap down to the tab bar (keyboard closed) or the keyboard (open);
+   all three are kept current in JS (measureChatTop). Desktop keeps the in-flow
+   sidebar column untouched. */
+@media (max-width:959px){
+  body.chat-mode header{
+    position:fixed;top:var(--cvt,0px);left:0;right:0;z-index:30;background:var(--paper);
+  }
+  body.chat-mode .chatview{
+    position:fixed;left:0;right:0;z-index:25;
+    top:calc(var(--cvt,0px) + var(--chat-top,96px));
+    height:var(--chat-h,calc(100dvh - 240px));
+    max-width:720px;margin:0 auto;padding:0 18px;
+  }
+}
+
+.bubble{position:relative;max-width:85%;padding:10px 14px;border-radius:16px;font-size:.9rem;
+  line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
+.bubble.user{align-self:flex-end;background:var(--ink);color:var(--paper);border-bottom-right-radius:5px}
+.bubble.assistant{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
+  border-bottom-left-radius:5px}
+.bubble.pending{background:var(--card);box-shadow:var(--shadow-sm);color:var(--muted)}
+/* the live phase caption ("Thinking…" → "Drafting…") inside a pending bubble —
+   each swap settles in gently so the wait reads as motion, never a jump */
+.bubble.pending .typing-cap{display:inline-block;font-style:italic;
+  animation:capfade var(--dur-2) var(--ease)}
+.bubble.pending .typing-cap:empty{display:none}
+@keyframes capfade{from{opacity:.35}to{opacity:1}}
+/* quiet Stop control on a streaming/queued turn — a calm steer, never an alarm */
+.bubble.pending .turn-stop,.bubble.streaming .turn-stop{margin-left:10px;padding:0;border:none;background:none;
+  font-family:var(--font-ui);font-size:.68rem;font-weight:600;letter-spacing:.04em;
+  color:var(--muted);cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  vertical-align:middle}
+.bubble.pending .turn-stop:hover,.bubble.streaming .turn-stop:hover{color:var(--ink)}
+/* a turn rendering its reply token-by-token (true headless streaming) */
+.bubble.assistant.streaming{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
+  border-bottom-left-radius:5px}
+.bubble.streaming .stream-text{white-space:pre-wrap}
+.bubble.streaming .turn-stop{display:inline-block;margin:6px 0 0}
+/* blinking caret trailing the streamed text */
+.stream-caret{display:inline-block;width:2px;height:1.02em;margin-left:1px;border-radius:1px;
+  background:var(--accent);vertical-align:text-bottom;animation:streamcaret 1.1s steps(1) infinite}
+@keyframes streamcaret{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.stream-caret{animation:none;opacity:.6}}
+/* a stopped turn settles into a subtle in-place note */
+.bubble.turn-stopped{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
+  border-bottom-left-radius:5px}
+.bubble.turn-stopped .turn-stopped-note{font-style:italic;font-size:.82rem;color:var(--muted)}
+.bubble.bubble-in{animation:bubblein .34s var(--ease) both}
+@keyframes bubblein{from{opacity:0;transform:translateY(7px) scale(.98)}to{opacity:1;transform:none}}
+
+/* grouping: consecutive same-role turns stack tight; only the run's last bubble
+   keeps the little tail + the timestamp. `.cont` continues a run, `.grouped` is
+   a non-last bubble (tail squared off). */
+.bubble.cont{margin-top:-5px}
+.bubble.grouped.user{border-bottom-right-radius:16px}
+.bubble.grouped.assistant{border-bottom-left-radius:16px}
+.bubble.cont.user{border-top-right-radius:7px}
+.bubble.cont.assistant{border-top-left-radius:7px}
+
+/* per-message clock time on the last bubble of a run (subtle, side-aligned) */
+.bubble-time{display:block;margin-top:5px;font-family:var(--font-ui);font-size:.58rem;
+  font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.bubble.user .bubble-time{text-align:right;color:#b8a78f}
+
+/* copy affordance on coach replies — hover-revealed on desktop, long-press on touch */
+.bubble-copy{position:absolute;top:6px;right:6px;width:26px;height:26px;display:flex;
+  align-items:center;justify-content:center;border:none;border-radius:8px;
+  background:var(--card-2);color:var(--muted);box-shadow:var(--shadow-sm);
+  opacity:0;transform:scale(.9);transition:opacity var(--dur-1) var(--ease),
+  transform var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.bubble-copy svg{width:14px;height:14px}
+@media (hover:hover){ .bubble.assistant:hover .bubble-copy{opacity:1;transform:none}
+  .bubble-copy:hover{color:var(--ink)} }
+@media (hover:none){ .bubble-copy{display:none} }
+
+/* rendered markdown inside assistant bubbles */
+.bubble-text.md{white-space:normal}
+.bubble-text.md>:first-child{margin-top:0}
+.bubble-text.md>:last-child{margin-bottom:0}
+.bubble-text.md p{margin:0 0 8px}
+.bubble-text.md ul,.bubble-text.md ol{margin:0 0 8px;padding-left:20px}
+.bubble-text.md li{margin:3px 0}
+.bubble-text.md h3,.bubble-text.md h4,.bubble-text.md h5,.bubble-text.md h6{
+  font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 40;
+  line-height:1.25;margin:12px 0 6px}
+.bubble-text.md h3{font-size:1.05rem}
+.bubble-text.md h4{font-size:.98rem}
+.bubble-text.md h5,.bubble-text.md h6{font-size:.92rem}
+.bubble-text.md code{background:var(--card-2);border:1px solid var(--line);border-radius:6px;
+  padding:1px 5px;font-size:.85em;font-variant-numeric:lining-nums}
+.bubble-text.md pre{background:var(--card-2);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;margin:0 0 8px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.bubble-text.md pre code{background:none;border:none;padding:0;font-size:.82rem;white-space:pre}
+.bubble-text.md a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;word-break:break-word}
+.bubble-text.md img{max-width:100%;border-radius:10px;margin:4px 0}
+.bubble-text.md blockquote{border-left:3px solid var(--line-2);padding-left:10px;margin:0 0 8px;color:var(--ink-2)}
+.bubble-text.md hr{border:none;border-top:1px solid var(--line);margin:10px 0}
+.md-tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 8px;max-width:100%}
+.bubble-text.md table{border-collapse:collapse;font-size:.82rem;min-width:max-content}
+.bubble-text.md th,.bubble-text.md td{border:1px solid var(--line-2);padding:5px 9px;text-align:left;vertical-align:top}
+.bubble-text.md th{background:var(--card-2);font-family:var(--font-ui);font-weight:700;
+  font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.bubble-meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.bubble-tag{display:inline-flex;align-items:center;background:var(--sage-bg);
+  color:var(--sage);border-radius:999px;padding:3px 9px;
+  font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;white-space:nowrap}
+.bubble.user .bubble-meta .bubble-tag{background:rgba(255,253,248,.14);color:#d8c9b2}
+
+.draftbtn{
+  display:block;margin-top:9px;width:100%;background:transparent;
+  border:1px solid var(--accent);color:var(--accent);border-radius:999px;padding:9px 13px;
+  font-family:var(--font-ui);font-weight:600;font-size:.76rem;letter-spacing:.08em;
+  text-transform:uppercase;transition:background .15s,color .15s;
+}
+.draftbtn:hover{background:var(--accent);color:#fffdf8}
+/* an applied draft — calm, done, non-interactive (no hover, no pointer) */
+.draftbtn.applied{
+  border-color:var(--sage);background:var(--sage-bg);color:var(--sage);
+  cursor:default;text-transform:none;letter-spacing:.02em;
+}
+.draftbtn.applied:hover{background:var(--sage-bg);color:var(--sage)}
+.bubble.user .draftbtn.applied{
+  border-color:rgba(255,253,248,.22);background:rgba(255,253,248,.14);color:#d8c9b2;
+}
+
+/* photo attached to a chat turn (plate shots) */
+.bubble-img{max-width:min(220px,70vw);max-height:240px;border-radius:12px;display:block;margin-bottom:6px}
+.bubble.user .bubble-img{margin-left:auto}
+
+/* pre-send preview of the attached photo */
+.chat-preview[hidden]{display:none}
+.chat-preview{display:flex;align-items:center;gap:10px;margin-top:8px;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:7px 10px;box-shadow:var(--shadow-sm)}
+.chat-preview img{width:42px;height:42px;object-fit:cover;border-radius:9px;flex:0 0 auto}
+.chat-preview-hint{flex:1;font-size:.78rem;color:var(--ink-2);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.chatbar{display:flex;gap:8px;align-items:flex-end;margin-top:8px}
+.attachbtn{flex:0 0 auto;width:42px;height:42px;display:flex;align-items:center;justify-content:center;
+  background:var(--card);border:1px solid var(--line-2);color:var(--muted);border-radius:999px;
+  box-shadow:var(--shadow-sm);transition:color .15s,border-color .15s}
+.attachbtn svg{width:21px;height:21px}
+.attachbtn.has-img{color:var(--accent);border-color:var(--accent)}
+@media (hover:hover){ .attachbtn:hover{color:var(--ink);border-color:var(--ink)} }
+/* direct-to-camera button: touch devices only — desktop pastes or picks a file */
+.cambtn{display:none}
+@media (hover:none) and (pointer:coarse){
+  .cambtn{display:flex}
+  .chatbar .attachbtn{width:40px;height:40px}
+}
+.chatbar textarea{flex:1;min-width:0;background:var(--card);border:1px solid var(--line-2);color:var(--ink);
+  border-radius:20px;padding:10px 16px;font-size:.9rem;line-height:1.4;box-shadow:var(--shadow-sm);
+  resize:none;max-height:140px;overflow-y:hidden;display:block}
+.chatbar .logbtn{border-radius:999px;font-size:1.1rem}
+.chatnote{text-align:center;color:var(--muted);font-size:.72rem;margin-top:8px}
+
+/* day dividers — slim centered date rules between conversation days */
+.chat-divider{display:flex;align-items:center;gap:12px;flex:0 0 auto;
+  margin:8px 0 0;-webkit-user-select:none;user-select:none}
+.chat-divider::before,.chat-divider::after{content:"";flex:1;height:1px;background:var(--line)}
+.chat-divider span{font-family:var(--font-ui);font-size:.58rem;font-weight:700;
+  letter-spacing:.18em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+
+/* collapsed history above the live stretch */
+.chat-earlier{display:flex;flex-direction:column;gap:10px;flex:0 0 auto}
+.chat-earlier[hidden]{display:none}
+.chat-earlierbar{display:flex;justify-content:center;flex:0 0 auto;padding:2px 0}
+.earlierbtn{background:var(--card);border:1px solid var(--line-2);color:var(--muted);
+  border-radius:999px;padding:7px 15px;font-family:var(--font-ui);font-size:.64rem;
+  font-weight:700;letter-spacing:.12em;text-transform:uppercase;box-shadow:var(--shadow-sm);
+  transition:color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+@media (hover:hover){ .earlierbtn:hover{color:var(--ink);border-color:var(--ink)} }
+
+/* starter chips (empty chat) — pinned just above the chatbar, stagger in */
+.chatlog .empty,.chatlog .loadstate{margin:auto 0;flex:0 0 auto}
+.chat-chips{margin-top:auto;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;
+  padding:10px 2px 2px;flex:0 0 auto}
+.chat-chip{background:var(--card);border:1px solid var(--line-2);color:var(--ink-2);
+  border-radius:999px;padding:10px 15px;font-size:.82rem;box-shadow:var(--shadow-sm);
+  animation:rise .45s var(--ease) both;animation-delay:calc(var(--i,0) * 70ms);
+  transition:color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+@media (hover:hover){ .chat-chip:hover{color:var(--accent);border-color:var(--accent)} }
+
+/* Chat header affordances: a history/search circle + the fresh-start button,
+   in one cluster anchored to the (position:relative) header. */
+.hdr-chat-actions{position:absolute;right:18px;bottom:14px;display:flex;align-items:center;gap:8px}
+@media (min-width:960px){ .hdr-chat-actions{right:48px;bottom:18px} }
+.hdrcircbtn{width:34px;height:34px;display:flex;align-items:center;justify-content:center;
+  background:var(--card);border:1px solid var(--line-2);color:var(--muted);border-radius:999px;
+  box-shadow:var(--shadow-sm);
+  transition:color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.hdrcircbtn svg{width:17px;height:17px}
+@media (hover:hover){ .hdrcircbtn:hover{color:var(--ink);border-color:var(--ink)} }
+
+/* fresh-start (distill & archive) — inline two-tap confirm; lives in the cluster */
+.freshbtn{display:flex;align-items:center;gap:7px;
+  background:var(--card);border:1px solid var(--line-2);color:var(--muted);border-radius:999px;
+  height:34px;padding:0 8px;box-shadow:var(--shadow-sm);
+  transition:color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.freshbtn[hidden]{display:none}
+.freshbtn svg{width:17px;height:17px;flex:0 0 auto}
+.freshbtn-txt{display:none;font-family:var(--font-ui);font-size:.6rem;font-weight:700;
+  letter-spacing:.14em;text-transform:uppercase;white-space:nowrap}
+.freshbtn.armed{color:var(--accent);border-color:var(--accent);padding:0 13px}
+.freshbtn.armed .freshbtn-txt{display:inline}
+@media (hover:hover){ .freshbtn:hover{color:var(--ink);border-color:var(--ink)} }
+
+/* distilling transition while a fresh start runs */
+.distill{margin:auto;align-self:center;display:flex;align-items:center;gap:10px;
+  color:var(--ink-2);font-family:var(--font-display);font-style:italic;font-size:1.05rem;
+  animation:rise .45s var(--ease) both}
+.distill-check{color:var(--sage);font-size:1.1rem}
+
+/* fresh-start settle pill — a quiet, self-dismissing confirmation in the chat
+   header actions row after a non-blocking fresh start (the composer never locks). */
+.fresh-pill{display:flex;align-items:center;gap:6px;white-space:nowrap;
+  padding:4px 11px;border-radius:999px;background:var(--card);border:1px solid var(--line-2);
+  color:var(--ink-2);font-family:var(--font-ui);font-size:.72rem;font-weight:600;
+  opacity:0;transform:translateY(-3px);transition:opacity var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.fresh-pill .distill-check{font-size:.9rem}
+.fresh-pill-in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){ .fresh-pill{transition:none;opacity:1;transform:none} }
+
+/* jump-to-latest pill — floats bottom-right of the log when scrolled up */
+.chat-jump{position:absolute;right:8px;bottom:10px;z-index:3;width:38px;height:38px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--card);border:1px solid var(--line-2);color:var(--ink-2);border-radius:999px;
+  box-shadow:var(--shadow-md);animation:settlein var(--dur-2) var(--ease) both;
+  transition:color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.chat-jump[hidden]{display:none}
+.chat-jump svg{width:20px;height:20px}
+@media (hover:hover){ .chat-jump:hover{color:var(--accent);border-color:var(--accent)} }
+
+/* ---- chat history / search overlay (read-only, in the .detail scaffold) ---- */
+.chat-hist{display:flex;flex-direction:column;gap:14px}
+.chat-hist-search{display:flex;align-items:center;gap:9px;background:var(--card-2);
+  border:1px solid var(--line);border-radius:999px;padding:10px 15px}
+.chat-hist-search svg{width:17px;height:17px;color:var(--muted);flex:0 0 auto}
+.chat-hist-search input{flex:1;background:none;border:none;color:var(--ink);font-size:.92rem;
+  min-width:0;outline:none}
+.chat-hist-body{min-height:120px}
+.chat-hist-list{display:flex;flex-direction:column;gap:8px}
+.chat-hist-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:13px 14px;box-shadow:var(--shadow-sm);
+  transition:border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.chat-hist-item:active{transform:scale(.99)}
+@media (hover:hover){ .chat-hist-item:hover{border-color:var(--line-2)} }
+.chat-hist-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.chat-hist-preview{color:var(--ink);font-size:.9rem;line-height:1.4;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.chat-hist-preview mark{background:rgba(180,85,45,.18);color:var(--accent-deep);
+  border-radius:3px;padding:0 1px}
+.chat-hist-meta{font-family:var(--font-ui);font-size:.62rem;font-weight:600;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.chat-hist-chev{flex:0 0 auto;color:var(--line-2);font-size:1.4rem;line-height:1}
+.chat-hist-back{align-self:flex-start;background:none;border:none;color:var(--muted);
+  font-family:var(--font-ui);font-size:.8rem;font-weight:600;padding:2px 0;margin-bottom:2px}
+@media (hover:hover){ .chat-hist-back:hover{color:var(--ink)} }
+/* Read-only history convo grows to its full height inside .detail-scroll; it
+   must NOT inherit .chatlog's overflow/overscroll — as a no-room scroll container
+   those would swallow the touch gesture and the page wouldn't scroll at all. It
+   also lives inside .detail-scroll, which is text-align:center for the art/title
+   sheets; reset to left so the bubbles read like the live chat, not centered. */
+.chat-hist-convo{height:auto;flex:none;overflow:visible;overscroll-behavior:auto;
+  text-align:left;gap:10px;display:flex;flex-direction:column}
+
+/* -------------------------------------------------------------------
+   17 · Settings
+   ------------------------------------------------------------------- */
+.toggle{display:flex;align-items:center;gap:10px;font-size:.9rem;color:var(--ink);cursor:pointer}
+.toggle input{width:18px;height:18px;accent-color:var(--accent)}
+.selflex{flex:1;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:11px;font-size:.9rem;color-scheme:light}
+
+.agentrow{display:flex;align-items:center;gap:10px;border-radius:var(--radius);
+  padding:12px 14px;margin-bottom:10px}
+.agentrow.off{opacity:.5}
+.agentmeta{flex:1;min-width:0}
+.agentname{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 32;
+  font-size:1.02rem;display:flex;align-items:center;gap:7px}
+.agentdesc{font-size:.74rem;color:var(--muted);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agentctl{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+.agent-update{margin-top:4px}
+.agent-update-status{color:var(--muted);margin-top:7px;min-height:18px;text-align:center}
+
+/* agent-health card — the coaching brain's quiet pulse (ok-rate + per-agent
+   latency). Mirrors the art-spend card; ledger rows, no scores. */
+.agenthealth-rows{margin-top:9px;border-top:1px solid var(--line);padding-top:8px}
+.agenthealth-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:4px 0;font-size:.82rem}
+.agenthealth-name{font-family:var(--font-display);font-weight:540;font-variation-settings:"opsz" 28;
+  color:var(--ink)}
+.agenthealth-stat{color:var(--muted);font-variant-numeric:lining-nums;text-align:right;
+  flex:0 0 auto}
+
+/* "What Cairn did" — the quiet activity log of recent agent runs. Transparency, never
+   a grade: each row reads op · agent · when · clean/needed-a-retry. Ledger-calm. */
+.actlog-rows{margin-top:9px;border-top:1px solid var(--line);padding-top:6px}
+.actlog-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:.8rem;
+  border-bottom:1px solid var(--line)}
+.actlog-row:last-child{border-bottom:none}
+.actlog-op{flex:1 1 auto;min-width:0;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.actlog-meta{flex:0 0 auto;color:var(--muted);font-size:.72rem;display:flex;align-items:baseline;gap:5px}
+.actlog-agent{font-variant-numeric:lining-nums}
+.actlog-dot{opacity:.6}
+.actlog-when{font-variant-numeric:lining-nums}
+.actlog-flag{flex:0 0 auto;font-family:var(--font-ui);font-size:.56rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.actlog-clean{color:var(--sage);background:var(--sage-bg)}
+.actlog-retry{color:var(--ink-2);background:var(--card-2);border:1px solid var(--line-2)}
+@media (max-width:440px){
+  .actlog-row{flex-wrap:wrap;gap:4px 8px}
+  .actlog-op{flex:1 1 100%}
+}
+/* "What Cairn has noticed" (F2) — gentle outcome-learning observations. A calm,
+   editorial list; the sage dot keeps it quiet and un-alarming, never a metric. */
+.noticed-rows{margin-top:9px;border-top:1px solid var(--line);padding-top:8px;display:grid;gap:10px}
+.noticed-row{display:flex;align-items:baseline;gap:8px}
+.noticed-dot{flex:0 0 auto;color:var(--sage);font-weight:700;line-height:1.5}
+.noticed-body{flex:1 1 auto;min-width:0}
+.noticed-text{color:var(--ink-2);font-size:.84rem;line-height:1.5}
+.noticed-when{display:block;margin-top:2px;color:var(--muted);font-size:.68rem;
+  font-variant-numeric:lining-nums}
+.togglebtn{background:var(--card-2);border:1px solid var(--line);color:var(--muted);
+  border-radius:999px;min-width:44px;height:30px;font-family:var(--font-ui);
+  font-size:.66rem;font-weight:700;letter-spacing:.1em}
+.togglebtn.on{background:var(--sage);color:#fffdf8;border-color:var(--sage)}
+.warnpill{font-family:var(--font-ui);font-size:.56rem;font-weight:700;letter-spacing:.1em;
+  color:var(--warn);background:var(--warn-bg);border:none;border-radius:999px;
+  padding:2px 8px;text-transform:uppercase}
+
+/* -------------------------------------------------------------------
+   18 · Memory (Me)
+   ------------------------------------------------------------------- */
+.memadd{display:flex;gap:8px;align-items:center}
+.memadd select{flex:0 0 auto;width:auto;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:10px;padding:10px 9px;font-size:.84rem;
+  text-transform:capitalize;color-scheme:light}
+.memadd input{flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:10px;padding:11px 12px;font-size:.9rem}
+.memrow{display:flex;gap:11px;align-items:flex-start;border-radius:var(--radius);
+  padding:12px 14px;margin-bottom:10px}
+.memrow-main{flex:1;min-width:0}
+.memrow-top{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.memtag{font-family:var(--font-ui);font-size:.56rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--accent-deep);border:1px solid rgba(180,85,45,.35);
+  border-radius:999px;padding:2px 8px}
+.memdate{font-size:.68rem;color:var(--muted)}
+.memcontent{font-size:.88rem;color:var(--ink-2);line-height:1.5;word-wrap:break-word}
+.memctl{display:flex;gap:4px;flex:0 0 auto}
+.memdel.armed,.hdoc-del.armed,.life-del.armed{
+  color:#fffdf8;background:var(--warn);border-color:var(--warn);
+  font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.memedit-box{display:flex;gap:6px;align-items:center;margin-top:2px}
+.memedit-in{flex:1;min-width:0;background:var(--card-2);border:1px solid var(--accent);
+  color:var(--ink);border-radius:9px;padding:8px 10px;font-size:.86rem}
+.memok{color:var(--sage);border-color:var(--sage)}
+
+/* enrichment status badge */
+.enr{font-family:var(--font-ui);font-size:.56rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;border-radius:999px;padding:3px 9px;white-space:nowrap}
+.enr-pending{color:var(--muted);border:1px solid var(--line-2);background:var(--card-2)}
+.enr-pending::before{content:"";display:inline-block;width:7px;height:7px;margin-right:5px;
+  border-radius:50%;border:1.5px solid var(--accent);border-top-color:transparent;
+  animation:enrspin .7s linear infinite;vertical-align:-1px}
+@keyframes enrspin{to{transform:rotate(360deg)}}
+.enr-done{color:var(--sage);background:transparent;border:none;padding:3px 0;letter-spacing:.08em}
+
+/* -------------------------------------------------------------------
+   19 · Health docs (Me)
+   ------------------------------------------------------------------- */
+.hupload{border-radius:var(--radius);padding:14px 16px}
+.hupload-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.hupload-row .selflex{flex:1}
+.hupload-date{flex:0 0 auto;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:var(--radius-sm);padding:10px;font-size:.88rem;
+  -webkit-appearance:none;color-scheme:light}
+.hupload-file{display:flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;
+  background:transparent;border:1px dashed var(--line-2);border-radius:var(--radius-sm);
+  padding:15px 12px;margin-bottom:10px;font-size:.88rem;color:var(--muted);text-align:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  transition:border-color .15s,color .15s}
+.hupload-file:hover,.hupload-file:active,.hupload-file.dragover{border-color:var(--accent);color:var(--ink)}
+.hupload-text{width:100%;min-height:96px;margin-bottom:10px;resize:vertical;text-align:left;
+  background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+  color:var(--ink);padding:12px;font-family:var(--font-ui);line-height:1.35}
+.hupload-btn{width:100%;height:44px;font-family:var(--font-ui);font-weight:600;
+  letter-spacing:.08em;font-size:.82rem}
+.hupload-btn:disabled{opacity:.5;cursor:default}
+
+.hdoc-done{box-shadow:var(--shadow-sm),inset 3px 0 0 var(--sage)}
+.hdoc .hdoc-badge{flex:0 0 auto}
+/* "from import" provenance tag on a split dated panel */
+.hdoc-tag{font-family:var(--font-ui);font-size:.54rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);background:var(--card-2);border:1px solid var(--line);
+  border-radius:999px;padding:2px 7px;margin-left:8px;vertical-align:middle}
+
+/* card footer: date control on the left, actions on the right.
+   Divider rhythm matches the sibling section dividers (.himpacts / .mp-history). */
+.hdoc-foot{display:flex;align-items:center;justify-content:space-between;gap:10px 12px;flex-wrap:wrap;
+  margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.hdoc-date-wrap{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+/* read-only date with an explicit "change" affordance */
+.hdoc-datebtn{display:inline-flex;align-items:center;gap:6px;background:transparent;border:none;
+  cursor:pointer;color:var(--ink-2);font:inherit;font-size:.8rem;padding:7px 4px;border-radius:8px;
+  transition:color .15s}
+.hdoc-datebtn:hover{color:var(--ink)}
+.hdoc-date-ico{color:var(--muted);font-size:.78rem}
+.hdoc-date-val{font-variant-numeric:lining-nums}
+.hdoc-date-edit{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap}
+/* the hidden attribute must beat the class display rules (specificity) */
+.hdoc-datebtn[hidden],.hdoc-date-edit[hidden]{display:none}
+.hdoc-date{width:148px;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:var(--radius-sm);padding:8px 9px;font-size:.78rem;
+  -webkit-appearance:none;color-scheme:light}
+.hdoc-date-save,.hdoc-date-cancel{font-family:var(--font-ui);font-size:.72rem;font-weight:700;
+  letter-spacing:.08em;text-transform:uppercase;border-radius:999px;padding:8px 14px;cursor:pointer;
+  border:1px solid var(--line-2);background:transparent;transition:border-color .15s,color .15s,background .15s}
+.hdoc-date-save{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.hdoc-date-save:disabled{opacity:.55;cursor:default}
+.hdoc-date-cancel{color:var(--ink-2)}
+.hdoc-date-cancel:hover{border-color:var(--ink);color:var(--ink)}
+.hdoc-date-flash{font-family:var(--font-ui);font-size:.66rem;font-weight:700;letter-spacing:.06em;
+  color:var(--sage)}
+.hdoc-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+/* footer pills sized to the canonical action-pill family (.pillbtn / .ghostbtn) */
+.hdoc-link{display:inline-flex;align-items:center;font-family:var(--font-ui);font-size:.72rem;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-deep);
+  text-decoration:none;cursor:pointer;border:1px solid var(--line-2);border-radius:999px;
+  padding:8px 14px;background:transparent;transition:border-color .15s,color .15s}
+.hdoc-link:active,.hdoc-link:hover{color:var(--accent);border-color:var(--accent)}
+.hdoc-rescan:disabled{opacity:.5;cursor:default}
+/* the × delete sits at the same height as the pills for a clean baseline */
+.hdoc-del{flex:0 0 auto;height:34px;min-width:34px}
+
+/* Records list — breathing room from the upload form, and collapsible cards so a
+   continuously-growing history stays scannable. Newest opens; older collapse to a
+   one-line teaser (marker + flagged counts); tap the header/teaser to expand. */
+#hlist{margin-top:16px}
+.hdoc-head{cursor:pointer;user-select:none}
+.hdoc-headright{display:flex;align-items:center;gap:9px;flex:0 0 auto}
+.hdoc-chev{color:var(--muted);font-size:.7rem;transition:transform var(--dur-1) var(--ease)}
+.hdoc-collapsed .hdoc-chev{transform:rotate(-90deg)}
+.hdoc-teaser{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
+  background:transparent;border:none;cursor:pointer;text-align:left;margin:0;padding:9px 0 3px;
+  font-family:var(--font-ui);font-size:.85rem;color:var(--ink-2);
+}
+.hdoc-teaser-more{
+  font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--accent);flex:0 0 auto;
+}
+.hdoc:not(.hdoc-collapsed) .hdoc-teaser{display:none}
+.hdoc-collapsed .hdoc-detail,
+.hdoc-collapsed .hdoc-foot{display:none}
+
+/* markers table */
+.hmarkers{width:100%;border-collapse:collapse;margin-top:10px;font-size:.82rem}
+.hmarkers td{padding:6px;border-top:1px solid var(--line);vertical-align:top}
+.hmarkers tr:first-child td{border-top:none}
+.hm-name{color:var(--ink-2)}
+.hm-val{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:540;
+  color:var(--ink);white-space:nowrap;text-align:right;font-variant-numeric:lining-nums}
+.hm-fl{text-align:right;white-space:nowrap;width:1%}
+.hm-flag{font-family:var(--font-ui);font-size:.56rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;border-radius:999px;padding:2px 8px}
+.hm-flag.ok{color:var(--sage);background:var(--sage-bg);border:1px solid transparent}
+.hm-flag.warn{color:var(--warn);background:var(--warn-bg);border:1px solid transparent}
+
+/* -------------------------------------------------------------------
+   20 · Life timeline (Me)
+   ------------------------------------------------------------------- */
+.lifeadd{border-radius:var(--radius);padding:14px 16px}
+.lifeadd .field:last-of-type{margin-bottom:12px}
+.life-ico{display:inline-block;margin-right:5px}
+.life-ev .sess-date{display:inline-flex;align-items:center}
+.life-past{opacity:.55;filter:saturate(.7)}
+.life-edit input{margin-bottom:6px}
+.life-edit .ob-grid{margin-bottom:0}
+.life-edit .ob-grid input{margin-bottom:0}
+.life-edit input,.life-edit select{color-scheme:light}
+.life-edit-ctl{display:flex;gap:6px;margin-top:9px}
+.le-save{color:var(--sage);border-color:var(--sage)}
+
+/* structured injury → exercise links + calm swap ideas (F3). A quiet inset under
+   an active injury card — pull, not push: it reads as a note, never a control. */
+.linj{margin:11px 0 4px;padding:11px 13px;background:var(--card-2);
+  border:1px solid var(--line);border-radius:var(--radius-sm)}
+.linj-lead{font-size:.78rem;color:var(--muted);margin-bottom:9px}
+.linj-ex{padding:8px 0;border-top:1px solid var(--line)}
+.linj-ex:first-of-type{border-top:none;padding-top:2px}
+.linj-exhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.linj-exname{font-weight:560;color:var(--ink);font-size:.9rem}
+.linj-exwhere{font-size:.72rem;color:var(--muted);white-space:nowrap}
+.linj-note{font-size:.76rem;color:var(--ink-2);margin-top:3px;font-style:italic}
+.linj-swaps{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:7px}
+.linj-swaps-lbl{font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:1px}
+.linj-swap{font-size:.76rem;color:var(--ink-2);background:var(--card);
+  border:1px solid var(--line-2);border-radius:999px;padding:3px 10px}
+
+/* -------------------------------------------------------------------
+   21 · Modals — bottom sheet (mobile) / dialog (desktop)
+   ------------------------------------------------------------------- */
+.modal{position:fixed;inset:0;z-index:60;background:rgba(33,29,23,.45);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+  display:flex;align-items:flex-end;justify-content:center;padding:0}
+.modal-card{
+  background:var(--card);border:none;border-radius:22px 22px 0 0;width:100%;max-width:680px;
+  padding:22px 18px calc(28px + env(safe-area-inset-bottom));max-height:86vh;overflow-y:auto;
+  position:relative;box-shadow:var(--shadow-md);
+  animation:sheetup .3s cubic-bezier(.22,1,.36,1);
+}
+@keyframes sheetup{from{transform:translateY(24px);opacity:.5}to{transform:translateY(0);opacity:1}}
+.modal-x{position:absolute;top:15px;right:15px;background:var(--card-2);border:1px solid var(--line);
+  color:var(--muted);border-radius:999px;width:32px;height:32px;font-size:.9rem}
+.modal-x:hover{color:var(--ink)}
+.modal-title{
+  font-family:var(--font-display);font-weight:580;font-variation-settings:"opsz" 60;
+  font-size:1.55rem;line-height:1.15;letter-spacing:-.01em;padding-right:44px;
+}
+.modal-sub{font-family:var(--font-ui);color:var(--accent);font-weight:700;font-size:.64rem;
+  letter-spacing:.16em;text-transform:uppercase;margin-top:5px}
+.modal-section{margin-top:16px}
+.modal-h{font-family:var(--font-ui);text-transform:uppercase;letter-spacing:.18em;
+  font-size:.6rem;font-weight:600;color:var(--muted);margin-bottom:6px}
+.modal-body{font-size:.9rem;color:var(--ink-2);line-height:1.55}
+.modal .draftbtn{margin-top:18px}
+
+/* -------------------------------------------------------------------
+   22 · Onboarding
+   ------------------------------------------------------------------- */
+.ob-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ob-in{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:11px;font-size:.92rem;color-scheme:light}
+.ob-in::placeholder{font-size:.8rem;letter-spacing:.02em}
+.modal-card .ob-grid .field{margin-bottom:0}
+.ob-intro{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:13px 14px;font:inherit;font-size:.95rem;line-height:1.5;
+  resize:vertical;min-height:64px;color-scheme:light}
+.ob-intro::placeholder{font-size:.84rem;line-height:1.5;color:var(--muted);opacity:.8}
+/* Onboarding lead: a calm sentence-case welcome line — NOT the all-caps .modal-sub
+   kicker, which turns a full sentence into a shouty wall of tracked caps. */
+.ob-lead{font-family:var(--font-ui);color:var(--muted);font-size:.92rem;line-height:1.5;margin:7px 0 17px}
+.ob-opt{text-transform:none;letter-spacing:.01em;font-weight:500;opacity:.7}
+
+/* -------------------------------------------------------------------
+   23 · Toast
+   ------------------------------------------------------------------- */
+.toast{
+  position:fixed;bottom:calc(84px + var(--vvb,0px));left:50%;
+  transform:translate(-50%,14px) scale(.97);
+  background:var(--ink);color:var(--paper);font-family:var(--font-ui);font-weight:600;
+  padding:10px 18px;border-radius:999px;font-size:.84rem;box-shadow:var(--shadow-md);
+  opacity:0;transition:opacity var(--dur-1) ease,transform var(--dur-2) var(--ease);
+  pointer-events:none;z-index:50;
+}
+.toast.show{opacity:1;transform:translate(-50%,0) scale(1)}
+/* actionable toast (UNDO) — accepts the one tap, lingers a little longer */
+.toast.toast-actionable{pointer-events:auto;display:flex;align-items:center;gap:14px;padding-right:14px}
+.toast-act{
+  background:none;border:none;color:var(--gold);font-family:var(--font-ui);font-weight:700;
+  font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;padding:4px 2px;line-height:1;
+}
+.toast-act:active{transform:scale(.94)}
+
+/* offline hairline — a calm, non-alarming line under the header when a request
+   fails / the browser is offline. Information, never an alarm: one thin warm
+   band that retracts the instant any request lands. */
+.offline-bar{
+  position:fixed;top:0;left:0;right:0;z-index:48;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:calc(env(safe-area-inset-top,0px) + 6px) 14px 6px;
+  background:var(--warn-bg);color:var(--warn);
+  font-family:var(--font-ui);font-weight:600;font-size:.74rem;letter-spacing:.01em;
+  border-bottom:1px solid var(--line-2);
+  transform:translateY(-100%);transition:transform var(--dur-2) var(--ease);
+  pointer-events:none;
+}
+.offline-bar.show{transform:translateY(0)}
+.offline-dot{width:6px;height:6px;border-radius:50%;background:var(--warn);
+  flex:0 0 auto;animation:offlinepulse 1.8s var(--ease) infinite}
+@keyframes offlinepulse{0%,100%{opacity:.4}50%{opacity:1}}
+/* Offline placement nicety — the banner is fixed at top:0 above the sticky header
+   (z 48 > 30) with pointer-events:none, so taps pass through and it never blocks the
+   header control. Give it a soft hairline shadow so it reads as a clean band floating
+   over the page rather than crashing into the header edge. Information, never alarm. */
+.offline-bar{box-shadow:0 2px 10px rgba(72,58,35,.10)}
+
+/* -------------------------------------------------------------------
+   23b · Floating unsaved-changes save bar (docks above the tab bar)
+   ------------------------------------------------------------------- */
+.savebar{
+  position:fixed;z-index:46;left:50%;
+  bottom:calc(60px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px));
+  width:min(440px,calc(100% - 28px));
+  background:rgba(255,253,248,.94);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  border:1px solid var(--line-2);border-radius:999px;
+  box-shadow:var(--shadow-md);
+  opacity:0;transform:translate(-50%,calc(100% + 84px)) scale(.97);
+  transition:transform var(--dur-2) var(--ease),opacity var(--dur-2) var(--ease),
+    background var(--dur-1) ease,border-color var(--dur-1) ease;
+  pointer-events:none;
+}
+.savebar.show{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto}
+.savebar-row{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 18px;
+  transition:opacity var(--dur-1) ease}
+.savebar-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:0 0 auto;
+  animation:savedot 2.2s var(--ease) infinite}
+@keyframes savedot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.7);opacity:.55}}
+.savebar-msg{flex:1;min-width:0;font-family:var(--font-ui);font-size:.84rem;font-weight:600;
+  color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.savebar-discard{background:transparent;border:none;color:var(--muted);flex:0 0 auto;
+  font-size:.8rem;font-weight:600;padding:8px 10px;border-radius:999px;
+  transition:color var(--dur-1) ease,opacity var(--dur-1) ease}
+.savebar-save{background:var(--accent);border:none;color:#fffdf8;flex:0 0 auto;
+  font-size:.82rem;font-weight:700;letter-spacing:.04em;
+  padding:9px 20px;border-radius:999px;
+  transition:background var(--dur-1) ease,opacity var(--dur-1) ease}
+.savebar-save:not(:disabled):active{background:var(--accent-deep)}
+.savebar.busy .savebar-save{opacity:.55}
+.savebar.busy .savebar-discard{opacity:.4;pointer-events:none}
+
+/* success flash: row cross-fades to a sage check drawing itself in;
+   the pill's size never changes, so nothing reflows */
+.savebar-done{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;
+  color:var(--sage);font-family:var(--font-ui);font-weight:700;font-size:.86rem;
+  opacity:0;transform:scale(.94);pointer-events:none;
+  transition:opacity var(--dur-1) ease,transform var(--dur-2) var(--ease);
+}
+.savebar-done svg{width:18px;height:18px}
+.savebar-tick{stroke-dasharray:26;stroke-dashoffset:26}
+.savebar.saved{background:rgba(238,240,230,.96);border-color:rgba(110,127,92,.4)}
+.savebar.saved .savebar-row{opacity:0;pointer-events:none}
+.savebar.saved .savebar-done{opacity:1;transform:scale(1)}
+.savebar.saved .savebar-tick{animation:tickdraw .45s var(--ease) .08s forwards}
+@keyframes tickdraw{to{stroke-dashoffset:0}}
+
+/* while the bar is up: content scrolls clear of it, the toast hops above it,
+   and an active rest timer pushes it one shelf higher */
+body.savebar-open{padding-bottom:calc(168px + var(--vvb,0px))}
+body.savebar-open .toast{bottom:calc(150px + var(--vvb,0px))}
+body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px))}
+
+/* -------------------------------------------------------------------
+   24 · Tab bar (mobile: bottom, cream blur)
+   ------------------------------------------------------------------- */
+.tabbar{
+  position:fixed;bottom:var(--vvb,0px);left:0;right:0;z-index:40;display:flex;
+  background:rgba(252,250,244,.9);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border-top:1px solid var(--line);
+  padding-bottom:max(env(safe-area-inset-bottom),6px);
+}
+.tab{
+  flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;background:transparent;border:none;color:var(--muted);
+  font-family:var(--font-ui);font-weight:600;letter-spacing:.04em;
+  padding:8px 2px 4px;line-height:1;transition:color .15s;
+}
+.tab-ico{width:22px;height:22px;display:block;flex:0 0 auto;stroke-width:1.8}
+.tab-lbl{font-size:.58rem;text-transform:uppercase;letter-spacing:.1em}
+.tab::after{content:"";width:4px;height:4px;border-radius:50%;background:transparent;
+  margin-top:2px;transition:background .15s}
+.tab.active{color:var(--accent)}
+.tab.active::after{background:var(--accent)}
+.brand{display:none}
+
+/* -------------------------------------------------------------------
+   25 · Global hover polish
+   ------------------------------------------------------------------- */
+@media (hover:hover){
+  .daybtn:hover{border-color:var(--ink);color:var(--ink)}
+  .daybtn.active:hover{color:var(--paper)}
+  .segbtn:hover{color:var(--ink)}
+  .segbtn.active:hover{color:var(--paper)}
+  .rest-btn:hover{border-color:var(--ink);color:var(--ink)}
+  .savebar-discard:hover{color:var(--ink)}
+  .savebar-save:not(:disabled):hover{background:var(--accent-deep)}
+}
+
+/* -------------------------------------------------------------------
+   26 · Responsive — tablet
+   ------------------------------------------------------------------- */
+@media (min-width:680px){
+  header,main{max-width:720px}
+  .statstrip .stat-n{font-size:1.6rem}
+  h1{font-size:2.3rem}
+}
+
+/* -------------------------------------------------------------------
+   27 · Responsive — desktop: tab bar becomes left sidebar
+   ------------------------------------------------------------------- */
+@media (min-width:960px){
+  body{padding-bottom:0;padding-left:248px}
+  header{max-width:820px;margin:0 auto;padding:38px 48px 16px}
+  main{max-width:820px;margin:0 auto;padding:0 48px}
+
+  .tabbar{
+    flex-direction:column;align-items:stretch;gap:2px;
+    top:0;bottom:0;right:auto;width:248px;
+    border-top:none;border-right:1px solid var(--line);
+    padding:16px 14px calc(16px + env(safe-area-inset-bottom));
+    background:rgba(247,242,233,.97);backdrop-filter:blur(16px);
+    overflow-y:auto;
+  }
+  .brand{
+    display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);
+    padding:6px 10px 18px;margin-bottom:8px;border-bottom:1px solid var(--line);
+  }
+  .brand-mark{border-radius:10px;flex:0 0 auto}
+  .brand-text{display:flex;flex-direction:column;line-height:1.05}
+  .brand-text b{font-family:var(--font-display);font-weight:600;
+    font-variation-settings:"opsz" 40;letter-spacing:0;font-size:1.3rem}
+  .brand-text small{color:var(--muted);font-size:.58rem;letter-spacing:.22em;
+    text-transform:uppercase;margin-top:4px;font-weight:600}
+
+  .tab{
+    flex:0 0 auto;flex-direction:row;justify-content:flex-start;gap:13px;
+    padding:11px 14px;border-radius:var(--radius-sm);font-size:.92rem;letter-spacing:.01em;
+    color:var(--ink-2);transition:background .15s,color .15s,box-shadow .15s;
+  }
+  .tab::after{display:none}
+  .tab-ico{width:20px;height:20px}
+  .tab-lbl{font-size:.9rem;text-transform:none;letter-spacing:.01em;font-weight:500}
+  .tab:hover{background:rgba(255,253,248,.85);color:var(--ink)}
+  .tab.active{background:var(--card);color:var(--accent);box-shadow:var(--shadow-sm)}
+  .tab.active .tab-lbl{font-weight:700}
+
+  /* floating elements respect the sidebar */
+  .rest{left:248px}
+  .toast{left:calc(50% + 124px);bottom:30px}
+  .savebar{left:calc(50% + 124px);bottom:24px}
+  body.savebar-open{padding-bottom:110px}
+  body.savebar-open .toast{bottom:104px}
+
+  /* bottom sheets become centred dialogs */
+  .modal{align-items:center;padding:24px}
+  .modal-card{border-radius:22px;max-width:540px;max-height:88vh;animation:dlgin .22s cubic-bezier(.22,1,.36,1)}
+}
+@keyframes dlgin{from{transform:scale(.97);opacity:.4}to{transform:scale(1);opacity:1}}
+
+@media (min-width:1280px){
+  header,main{max-width:900px}
+}
+
+/* -------------------------------------------------------------------
+   28 · Detail overlay — full-screen item view (Morsel-style)
+   ------------------------------------------------------------------- */
+.detail{position:fixed;inset:0;z-index:70;background:var(--paper);overflow:hidden;
+  animation:detailin var(--dur-2) var(--ease)}
+@keyframes detailin{from{opacity:0}to{opacity:1}}
+
+/* warm blurred wash behind everything: scaled-up photo (when one exists) + cream gradient */
+.detail-bg{position:absolute;inset:-12%;z-index:0;pointer-events:none}
+.detail-bg img{width:100%;height:100%;object-fit:cover;
+  filter:blur(46px) saturate(1.08);opacity:.5;transform:scale(1.15)}
+.detail-bg::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(244,239,231,.5),rgba(244,239,231,.88) 55%,var(--paper) 92%)}
+
+.detail-x{position:absolute;z-index:2;top:calc(env(safe-area-inset-top) + 14px);right:16px;
+  background:rgba(255,253,248,.85);border:1px solid var(--line);color:var(--muted);
+  border-radius:999px;width:36px;height:36px;font-size:.95rem;box-shadow:var(--shadow-sm);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.detail-x:hover{color:var(--ink)}
+
+.detail-scroll{position:relative;z-index:1;height:100%;overflow-y:auto;
+  max-width:560px;margin:0 auto;width:100%;
+  padding:calc(env(safe-area-inset-top) + 30px) 22px calc(env(safe-area-inset-bottom) + 34px);
+  text-align:center}
+
+/* the hero plate: shared-element target, idle drift, wheel/pinch zoom inside */
+.detail-art{width:min(62vw,250px);margin:14px auto 8px;
+  animation:drift 6.5s ease-in-out infinite alternate;touch-action:none}
+.detail-art .artile{width:100%;height:auto;aspect-ratio:1;view-transition-name:detail-art;
+  filter:drop-shadow(0 22px 30px rgba(72,58,35,.22))}
+.detail-art-zoom{transition:transform var(--dur-1) ease-out;will-change:transform}
+
+.detail-title{font-family:var(--font-display);font-weight:580;font-variation-settings:"opsz" 80;
+  font-size:1.8rem;line-height:1.12;letter-spacing:-.01em;margin-top:10px}
+.detail-items{font-size:.86rem;color:var(--ink-2);margin-top:4px}
+.detail-kcal{display:flex;align-items:baseline;justify-content:center;gap:8px;margin-top:16px}
+.detail-num{font-size:2.7rem;font-weight:620;letter-spacing:-.015em;
+  font-variant-numeric:lining-nums tabular-nums}
+.detail-unit{letter-spacing:.14em}
+.detail-ctx{margin-top:7px;letter-spacing:.16em}
+.detail-spark{display:flex;justify-content:center;margin-top:10px}
+.spark{width:132px;height:30px;opacity:.9}
+
+.detail-macros{max-width:330px;margin:20px auto 0;text-align:left}
+.detail-section{margin-top:22px;text-align:left;max-width:430px;margin-left:auto;margin-right:auto}
+.detail-section>.lbl{display:block;margin-bottom:7px}
+.detail-body{font-size:.9rem;color:var(--ink-2);line-height:1.55}
+.ing-breakdown{border-top:1px solid var(--line)}
+.ing-row{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline;
+  padding:9px 0;border-bottom:1px solid var(--line);font-size:.86rem;
+}
+.ing-main{min-width:0;color:var(--ink)}
+.ing-main span{display:block;font-weight:600}
+.ing-main small{display:block;color:var(--muted);font-size:.75rem;margin-top:2px}
+.ing-nutri{
+  color:var(--muted);font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  font-size:.82rem;font-variant-numeric:lining-nums;text-align:right;white-space:nowrap;
+}
+.detail-setline{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:7px 0;border-top:1px solid var(--line);font-size:.84rem;color:var(--ink-2)}
+.detail-setline:first-of-type{border-top:none}
+.detail-setline .numeral{font-size:.95rem}
+.detail .ex-flag{max-width:430px;margin:16px auto 0;text-align:left}
+
+/* pill action row */
+.detail-actions{display:flex;justify-content:center;gap:10px;margin-top:28px;flex-wrap:wrap}
+.pillbtn{
+  background:rgba(255,253,248,.92);border:1px solid var(--line-2);color:var(--ink);
+  border-radius:999px;padding:11px 22px;font-family:var(--font-ui);font-weight:600;
+  font-size:.82rem;box-shadow:var(--shadow-sm);
+  transition:border-color var(--dur-1),color var(--dur-1),transform var(--dur-1),box-shadow var(--dur-1);
+}
+.pillbtn:hover{border-color:var(--ink);box-shadow:var(--shadow-md)}
+.pillbtn:active{transform:scale(.96)}
+.pill-warn{color:var(--warn)}
+.pill-accent{background:var(--accent);border-color:var(--accent);color:#fffdf8}
+.pill-accent:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:#fffdf8}
+.pill-sm{padding:8px 15px;font-size:.76rem}
+
+/* "This exercise" management row inside the exercise detail (change type / delete) */
+.detail-manage .manage-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+
+/* History session → tap to edit logged sets */
+.hist-tap{cursor:pointer;-webkit-tap-highlight-color:transparent;
+  transition:box-shadow var(--dur-1),transform var(--dur-1) var(--ease)}
+.hist-tap:hover{box-shadow:var(--shadow-md)}
+.hist-tap:active{transform:scale(.99)}
+.hist-tap:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hist-edit{margin-left:9px;font-family:var(--font-ui);font-weight:600;font-size:.6rem;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--muted);vertical-align:2px;opacity:.7}
+
+/* History edit overlay: per-set inline fields + delete */
+.ed-sets{max-width:430px;margin:18px auto 0;text-align:left}
+.ed-exgroup{margin-bottom:16px}
+.ed-exname{font-family:var(--font-ui);font-weight:600;font-size:.7rem;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:7px}
+.edset{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.edset input{flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);
+  border-radius:10px;padding:9px 10px;font-family:var(--font-ui);font-size:.9rem;color:var(--ink);
+  font-variant-numeric:lining-nums tabular-nums;text-align:center}
+.edset input:focus{outline:none;border-color:var(--accent)}
+.edset-del{flex:0 0 auto;background:none;border:none;color:#c0b6a0;font-size:1.1rem;line-height:1;
+  width:30px;height:30px;border-radius:999px;display:grid;place-items:center;padding:0;
+  transition:color var(--dur-1),background var(--dur-1),transform var(--dur-1) var(--ease)}
+.edset-del:hover{color:var(--warn);background:var(--card-2)}
+.edset-del:active{transform:scale(.88)}
+.ed-notes{width:100%;background:var(--card-2);border:1px solid var(--line);border-radius:12px;
+  padding:10px 12px;font-family:var(--font-ui);font-size:.9rem;color:var(--ink);resize:vertical;margin-top:7px}
+.ed-notes:focus{outline:none;border-color:var(--accent)}
+
+/* PR badge — a small gold moment */
+.prbadge{display:inline-block;font-family:var(--font-ui);font-size:.56rem;font-weight:700;
+  letter-spacing:.14em;text-transform:uppercase;color:#fffdf8;background:var(--gold);
+  border-radius:999px;padding:2px 8px;vertical-align:2px}
+
+/* -------------------------------------------------------------------
+   29 · Meals planner (Plan tab · Meals) — the journal view
+   ------------------------------------------------------------------- */
+.mealhero{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 17px;margin-bottom:18px}
+.mealhero .mp-hero-nums{display:flex;align-items:flex-end;gap:28px;margin-top:4px}
+.mealhero .sess-line{margin-top:10px}
+.meals-actions{display:flex;gap:9px;margin-top:14px}
+
+.mealday{margin-bottom:22px}
+.mealday-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
+  padding:0 2px;margin-bottom:9px}
+.mealday-name{
+  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 100;
+  font-size:1.7rem;line-height:1.08;letter-spacing:-.01em;color:var(--ink);margin-top:2px;
+}
+.mealday-total{text-align:right;white-space:nowrap}
+.mealday-total .numeral{font-size:1.25rem;font-weight:600}
+.mealday-total .lbl{letter-spacing:.1em}
+.mealday-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:6px 16px;transition:box-shadow .25s ease}
+@media (hover:hover){.mealday-card:hover{box-shadow:var(--shadow-md)}}
+
+.meals-empty{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:34px 22px 28px;text-align:center;margin-bottom:16px}
+.meals-empty-art{margin:0 auto 14px}
+.meals-empty-title{font-family:var(--font-display);font-style:italic;font-weight:520;
+  font-variation-settings:"opsz" 50;font-size:1.35rem}
+.meals-empty-sub{font-size:.86rem;color:var(--muted);max-width:330px;margin:6px auto 0;line-height:1.5}
+.meals-cta{width:auto;padding:0 24px;height:46px;font-size:.85rem;letter-spacing:.06em;margin-top:18px}
+.meals-status{margin-top:10px;color:var(--muted);font-size:.82rem;min-height:1em}
+.meals-redraft{margin:6px 0 4px}
+
+/* today's day in the weekly planner */
+.mealday-today .mealday-card{box-shadow:var(--shadow-md);outline:1.5px solid rgba(180,85,45,.28);outline-offset:-1.5px}
+.mealday-now{color:var(--accent);font-weight:700}
+/* day total vs daily target — Morsel's hairline rule */
+.mealday-bar{height:3px;background:var(--line);border-radius:999px;margin:-4px 2px 9px;overflow:hidden}
+.mealday-bar-fill{height:100%;background:var(--accent);border-radius:999px}
+.mealday-note{font-size:.8rem;color:var(--muted);margin:7px 4px 0;font-style:italic}
+
+/* "+ Log it" — planned meal straight into the journal */
+.meal-log{
+  margin-top:5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line-2);
+  background:transparent;color:var(--accent);font-family:var(--font-ui);
+  font-size:.72rem;font-weight:600;letter-spacing:.05em;cursor:pointer;
+  transition:transform var(--dur-1) var(--ease),border-color var(--dur-1) ease;
+}
+.meal-log:active{transform:scale(.94)}
+.meal-log-done{color:var(--sage);border-color:transparent;background:var(--sage-bg)}
+
+.shop-chips{display:flex;flex-wrap:wrap;gap:6px}
+.shop-chips .chip{font-family:var(--font-ui);font-size:.76rem;font-weight:500}
+.shop-chip{cursor:pointer;border:1px solid var(--line-2);transition:opacity var(--dur-1) ease}
+.shop-chip.chip-done{text-decoration:line-through;opacity:.45}
+
+/* collapsed history of past plans */
+.mp-history{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
+.mp-history summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px}
+.mp-history summary::-webkit-details-marker{display:none}
+.mp-history summary::after{content:"▾";color:var(--muted);font-size:.7rem;
+  transition:transform var(--dur-1) ease}
+.mp-history[open] summary::after{transform:rotate(180deg)}
+
+/* plan-gallery exercise names are tappable (open the detail) */
+.prog-row-name{background:none;border:none;padding:0;text-align:left;width:100%;
+  font-size:.9rem;font-weight:500;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+
+/* planning preferences — collapsed card above the day journal */
+.mealprefs{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:13px 16px;margin-bottom:16px}
+.mealprefs-head{display:block;width:100%;background:none;border:none;padding:0;
+  text-align:left;cursor:pointer;font-family:var(--font-ui)}
+.mealprefs-head .lbl{display:flex;align-items:center;justify-content:space-between}
+.mealprefs-caret{font-size:.7rem;color:var(--muted);
+  transition:transform var(--dur-1) var(--ease)}
+.mealprefs.open .mealprefs-caret{transform:rotate(180deg)}
+.mealprefs-preview{display:block;margin-top:6px;font-size:.85rem;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mealprefs-placeholder{color:var(--muted);font-style:italic}
+.mealprefs-body{margin-top:11px;border-top:1px solid var(--line);padding-top:12px}
+.mealprefs-body textarea{width:100%;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:var(--radius-sm);padding:10px 12px;font-size:.88rem;
+  font-family:var(--font-ui);resize:vertical;min-height:74px}
+.mealprefs-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.prefchip{cursor:pointer;font-family:var(--font-ui);font-size:.76rem;font-weight:500;
+  border:1px solid var(--line-2);transition:border-color var(--dur-1) ease,color var(--dur-1) ease}
+.prefchip:hover{border-color:var(--ink);color:var(--ink)}
+
+/* meal-row tools: + Log it · ⇄ Swap · ▲▼ — quiet, one line under the name */
+.meal-rowtools{display:flex;align-items:center;gap:7px;margin-top:6px}
+.meal-rowtools .meal-log{margin-top:0}
+.meal-swapbtn{padding:3px 10px;border-radius:999px;border:1px solid var(--line-2);
+  background:transparent;color:var(--ink-2);font-family:var(--font-ui);
+  font-size:.72rem;font-weight:600;letter-spacing:.05em;cursor:pointer;
+  transition:transform var(--dur-1) var(--ease),border-color var(--dur-1) ease,color var(--dur-1) ease}
+.meal-swapbtn:hover{border-color:var(--ink);color:var(--ink)}
+.meal-swapbtn:active{transform:scale(.94)}
+.meal-mvgrp{display:inline-flex;gap:2px;margin-left:auto}
+.meal-mv{width:26px;height:22px;border:none;background:none;color:var(--muted);
+  font-size:.62rem;line-height:1;cursor:pointer;padding:0;border-radius:7px;
+  transition:color var(--dur-1) ease,transform var(--dur-1) var(--ease)}
+.meal-mv:hover{color:var(--ink)}
+.meal-mv:active{transform:scale(.88)}
+.meal-mv:disabled{opacity:.25;cursor:default}
+
+/* inline swap panel under a meal row */
+.meal-swap{padding:2px 2px 13px;animation:swapin var(--dur-2) var(--ease) both}
+@keyframes swapin{from{opacity:0;translate:0 -4px}to{opacity:1;translate:0 0}}
+.meal-swap-hint{width:100%;background:var(--card-2);border:1px solid var(--line);
+  color:var(--ink);border-radius:var(--radius-sm);padding:9px 12px;font-size:.86rem;
+  font-family:var(--font-ui)}
+.meal-swap-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.hintchip{cursor:pointer;font-family:var(--font-ui);font-size:.76rem;font-weight:500;
+  border:1px solid var(--line-2);transition:background var(--dur-1) ease,color var(--dur-1) ease,border-color var(--dur-1) ease}
+.hintchip.on{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.meal-swap-actions{display:flex;gap:8px;margin-top:10px}
+.meal-swap-actions .pillbtn{padding:8px 18px;font-size:.78rem}
+
+/* swap in flight: soft skeleton pulse on the row, controls frozen, with the
+   evolving "thinking" caption floating centered over the pulsing row content. */
+.meal-busy{pointer-events:none;position:relative}
+.meal-busy .meal-art,.meal-busy .meal-main,.meal-busy .meal-macros{
+  animation:mealpulse 1.6s var(--ease) infinite}
+@keyframes mealpulse{0%,100%{opacity:.85}50%{opacity:.4}}
+.meal-cap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  z-index:1;white-space:nowrap;color:var(--ink-2);font-family:var(--font-display);
+  font-style:italic;font-size:.9rem;pointer-events:none}
+.meal-swap-busy{opacity:.75}
+
+/* gentle settle highlight after a swap / reorder lands */
+.meal-settled{animation:mealsettle 1.1s var(--ease) both;border-radius:var(--radius-sm)}
+@keyframes mealsettle{0%{background:var(--sage-bg)}100%{background:transparent}}
+
+/* -------------------------------------------------------------------
+   31 · Today header date control + back-to-today pill
+   ------------------------------------------------------------------- */
+header{position:relative}
+#header-title.hdr-tappable{cursor:pointer;-webkit-tap-highlight-color:transparent;
+  -webkit-user-select:none;user-select:none}
+.hdr-chev{display:inline-block;font-size:.85rem;color:var(--muted);margin-left:9px;
+  vertical-align:6px;transition:transform var(--dur-2) var(--ease)}
+
+/* Today: the date control stays reachable — the header pins to the top of the
+   scroll. At rest it's the full editorial header; once the page scrolls it
+   condenses to a slim blurred band (kicker recedes, date shrinks) so it leads
+   without crowding the read. In focus mode the slim .focus-bar leads instead, so
+   the header drops back into normal flow (no double-pinned bars). */
+body[data-tab="today"]:not(:has(.today-focus)) header{
+  position:sticky;top:0;z-index:25;
+  transition:padding var(--dur-2) var(--ease);
+}
+body[data-tab="today"] header::after{
+  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:rgba(252,250,244,.86);
+  backdrop-filter:blur(14px) saturate(1.1);-webkit-backdrop-filter:blur(14px) saturate(1.1);
+  border-bottom:1px solid var(--line);
+  opacity:0;transition:opacity var(--dur-2) var(--ease);
+}
+body[data-tab="today"] header #header-title{transition:font-size var(--dur-2) var(--ease)}
+body[data-tab="today"]:not(:has(.today-focus)) header.condensed{
+  padding-top:calc(env(safe-area-inset-top) + 11px);padding-bottom:11px;
+}
+body[data-tab="today"]:not(:has(.today-focus)) header.condensed::after{opacity:1}
+body[data-tab="today"]:not(:has(.today-focus)) header.condensed #header-title{font-size:1.5rem}
+.hdr-datepick{position:absolute;left:18px;bottom:0;width:1px;height:1px;opacity:0;
+  border:0;padding:0;pointer-events:none}
+.back-today{display:inline-flex;align-items:center;gap:6px;margin:0 0 12px;
+  padding:8px 15px;border-color:var(--accent);color:var(--accent)}
+
+/* -------------------------------------------------------------------
+   32 · View enter — subtle fade+rise on full content swaps
+   ------------------------------------------------------------------- */
+@keyframes viewin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+#view.view-in{animation:viewin var(--dur-2) var(--ease)}
+
+/* artwork tiles always reserve a square so photo arrival never shifts layout */
+.artile{aspect-ratio:1}
+
+/* -------------------------------------------------------------------
+   33 · Meal detail bottom sheet + recipe
+   ------------------------------------------------------------------- */
+body.sheet-open{overflow:hidden}
+.meal-row[data-di]{cursor:pointer}
+.sheet{position:fixed;inset:0;z-index:65;display:flex;align-items:flex-end;justify-content:center;
+  background:rgba(33,29,23,0);transition:background var(--dur-2) ease}
+.sheet.sheet-in{background:rgba(33,29,23,.45)}
+.sheet-card{background:var(--card);border-radius:22px 22px 0 0;width:100%;max-width:680px;
+  max-height:88dvh;display:flex;flex-direction:column;position:relative;box-shadow:var(--shadow-lg);
+  transform:translateY(100%);transition:transform var(--dur-3) var(--ease)}
+.sheet-in .sheet-card{transform:translateY(0)}
+.sheet-grab{width:40px;height:4px;border-radius:99px;background:var(--line-2);margin:10px auto 0;flex:0 0 auto}
+.sheet-x{position:absolute;top:14px;right:14px;z-index:2;background:var(--card-2);
+  border:1px solid var(--line);color:var(--muted);border-radius:999px;width:32px;height:32px;font-size:.85rem}
+.sheet-x:hover{color:var(--ink)}
+.sheet-scroll{overflow-y:auto;overscroll-behavior:contain;text-align:center;
+  padding:6px 22px calc(28px + env(safe-area-inset-bottom))}
+.sheet-hero{width:min(46vw,180px);margin:8px auto 0}
+.sheet-art{width:100%;height:auto;aspect-ratio:1;
+  filter:drop-shadow(0 16px 24px rgba(72,58,35,.18))}
+.sheet-kicker{margin-top:12px;letter-spacing:.2em;color:var(--accent)}
+.sheet-title{font-family:var(--font-display);font-weight:580;font-variation-settings:"opsz" 80;
+  font-size:1.55rem;line-height:1.15;letter-spacing:-.01em;margin-top:4px}
+.sheet-items{font-size:.86rem;color:var(--ink-2);margin:5px auto 0;max-width:420px}
+.sheet-macros{display:flex;justify-content:center;flex-wrap:wrap;gap:7px;margin-top:14px}
+.sheet-chip{display:inline-flex;align-items:baseline;gap:5px;background:var(--card-2);
+  border:1px solid var(--line);border-radius:999px;padding:5px 13px}
+.sheet-chip .numeral{font-size:.95rem;font-weight:600}
+.sheet-section{margin:24px auto 0;max-width:430px;text-align:left}
+.sheet-section>.lbl{display:block;margin-bottom:8px}
+.sheet-section-c{text-align:center}
+.sheet-recipe-cta{margin-top:4px}
+.sheet-recipe-note{font-size:.74rem;color:var(--muted);margin-top:9px}
+/* recipe being written (durable background job): spinner + evolving caption */
+.sheet-recipe-loading{display:flex;flex-direction:column;align-items:center;gap:11px;padding:8px 0}
+.sheet-recipe-load-line{color:var(--ink-2);font-family:var(--font-display);font-style:italic;font-size:.95rem}
+.recipe-lede{font-family:var(--font-display);font-style:italic;font-weight:480;
+  font-variation-settings:"opsz" 40;font-size:1.02rem;color:var(--ink-2);line-height:1.55;
+  margin:20px auto 0;max-width:430px}
+.recipe-meta{display:flex;justify-content:center;gap:7px;margin-top:12px}
+.recipe-ing{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:8px 0;border-top:1px solid var(--line);font-size:.88rem}
+.recipe-ing:first-child{border-top:none}
+.recipe-ing-item{color:var(--ink-2);min-width:0}
+.recipe-ing-qty{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  color:var(--ink);white-space:nowrap;font-variant-numeric:lining-nums}
+.recipe-steps{list-style:none;counter-reset:step;margin:0;padding:0}
+.recipe-steps li{counter-increment:step;position:relative;padding:10px 0 10px 38px;
+  border-top:1px solid var(--line);font-size:.88rem;color:var(--ink-2);line-height:1.55}
+.recipe-steps li:first-child{border-top:none}
+.recipe-steps li::before{content:counter(step);position:absolute;left:2px;top:8px;
+  font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
+  font-size:1.25rem;color:var(--accent);font-variant-numeric:lining-nums}
+.recipe-tips{display:grid;gap:8px}
+.recipe-tip{background:var(--card-2);border-radius:var(--radius-sm);padding:10px 13px;
+  font-size:.82rem;color:var(--ink-2);line-height:1.5}
+
+/* -------------------------------------------------------------------
+   34 · Progress — premium editorial
+   ------------------------------------------------------------------- */
+.phero{padding:4px 2px 18px}
+.phero-title{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 80;
+  font-size:1.55rem;line-height:1.1;letter-spacing:-.01em;color:var(--ink)}
+.phero-stats{display:flex;gap:28px;margin-top:13px;flex-wrap:wrap}
+.phero-stat{display:flex;flex-direction:column;gap:5px;min-width:0}
+.phero-n{font-size:1.7rem;font-weight:600;letter-spacing:-.01em}
+.phero-n-sm{font-size:1.25rem;line-height:1.45;text-transform:capitalize}
+.chart-foot{display:block;margin:10px 4px 0;text-align:center;letter-spacing:.14em}
+
+.empty-state{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:38px 22px;text-align:center}
+.empty-state .artile{margin:0 auto 14px}
+.empty-state-line{font-family:var(--font-display);font-style:italic;font-weight:480;
+  font-variation-settings:"opsz" 40;font-size:1.05rem;color:var(--ink-2)}
+
+/* history cards */
+.hist-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.hist-kicker{letter-spacing:.16em}
+.hist-day{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
+  font-size:1.35rem;line-height:1.12;margin-top:2px;color:var(--ink)}
+.hist-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;padding-top:3px}
+.hist-chip{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  font-size:.76rem;background:var(--card-2);border:1px solid var(--line);border-radius:999px;
+  padding:3px 10px;white-space:nowrap;font-variant-numeric:lining-nums;color:var(--ink-2)}
+.hist-line{display:flex;justify-content:space-between;gap:12px;align-items:baseline;
+  padding:7px 0;border-top:1px solid var(--line);font-size:.84rem}
+.hist .hist-line:first-of-type{border-top:none;margin-top:11px}
+.hist-ex{color:var(--ink);font-weight:500;min-width:0}
+.hist-sets{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:500;
+  color:var(--ink-2);text-align:right;font-variant-numeric:lining-nums;font-size:.84rem}
+.hist-sep{color:var(--line-2);margin:0 5px}
+.hist-best{font-weight:680;color:var(--ink);font-size:.94rem}
+.hist-notes{margin-top:10px;font-family:var(--font-display);font-style:italic;
+  font-variation-settings:"opsz" 28;color:var(--muted);font-size:.88rem}
+
+/* calendar month grids — terracotta intensity by sets logged */
+.cal-month{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:15px 16px;margin-bottom:14px}
+.cal-name{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
+  font-size:1.2rem;margin-bottom:10px;color:var(--ink)}
+.cal-dows{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;text-align:center}
+.cal-dows .lbl{letter-spacing:0;font-size:.58rem}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cal-day{aspect-ratio:1;display:grid;place-items:center;border-radius:9px;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:520;
+  font-size:.8rem;color:var(--ink-2);font-variant-numeric:lining-nums;
+  transition:transform var(--dur-1) var(--ease)}
+.cal-pad,.cal-out{background:transparent}
+.cal-out{color:#c9c0ad}
+.cl0{background:var(--card-2)}
+.cl1{background:#f4e2d5}
+.cl2{background:#eac3a7}
+.cl3{background:#d49270;color:#fffdf8}
+.cl4{background:var(--accent);color:#fffdf8}
+.cal-today{outline:2px solid var(--accent);outline-offset:1.5px}
+.cal-has{cursor:pointer}
+.cal-has:active{transform:scale(.9)}
+.cal-legend{display:flex;align-items:center;justify-content:center;gap:5px;margin:2px 0 10px;
+  font-family:var(--font-ui);font-size:.6rem;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted)}
+.cal-legend i{width:12px;height:12px;border-radius:4px;display:inline-block}
+
+/* -------------------------------------------------------------------
+   35 · Garmin — wearable strip (Today) + sync status (Settings)
+   ------------------------------------------------------------------- */
+.wearstrip{display:flex;align-items:center;gap:16px;background:var(--card);
+  border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);padding:10px 14px;
+  margin:0 0 12px;overflow-x:auto;scrollbar-width:none}
+.wearstrip::-webkit-scrollbar{display:none}
+.wear-kicker{flex:none;white-space:nowrap}
+.wear-cell{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap;flex:none}
+.wear-n{font-size:1.05rem;font-weight:600;line-height:1;color:var(--ink);
+  font-variant-numeric:lining-nums}
+.wear-l{letter-spacing:.1em;font-size:.56rem}
+
+/* Garmin "body's reaction" card — a reconciled strength session's physiology layer. */
+.garmin-card{background:var(--card);border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
+  padding:12px 14px;margin:0 0 12px;border-left:3px solid var(--sage)}
+.garmin-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.garmin-tag{flex:none;font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-wash,rgba(180,85,45,.1));border-radius:999px;padding:3px 8px}
+.garmin-tiles{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:10px}
+.gz-bar{display:flex;height:9px;border-radius:999px;overflow:hidden;background:var(--line-2);margin:2px 0 5px}
+.gz-seg{height:100%;min-width:1px}
+.gz-legend{font-size:.56rem;letter-spacing:.1em;color:var(--muted)}
+.garmin-sum{margin-top:8px;font-size:.86rem;line-height:1.45;color:var(--ink-2)}
+
+/* The calm "Garmin logged a lift not in Cairn yet — reconcile?" pull-card on Today.
+   Waits quietly (pull, never push); a single Reconcile action links it to a session. */
+.garmin-reconcile{display:flex;align-items:center;gap:12px;justify-content:space-between;
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius-sm);
+  border-left:3px solid var(--sage);padding:11px 14px;margin:0 0 12px}
+.garmin-reconcile-text{display:flex;align-items:center;gap:8px;min-width:0;
+  font-size:.84rem;line-height:1.4;color:var(--ink-2)}
+.garmin-reconcile-glyph{flex:0 0 auto;color:var(--sage)}
+.garmin-reconcile-btn{flex:0 0 auto;font:inherit;font-size:.78rem;letter-spacing:.03em;
+  cursor:pointer;color:#fffdf8;background:var(--accent);border:none;border-radius:999px;
+  padding:6px 14px;transition:background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.garmin-reconcile-btn:hover{background:var(--accent-deep)}
+.garmin-reconcile-btn:active{transform:scale(.98)}
+.garmin-reconcile-btn:disabled{opacity:.6;cursor:default}
+
+.syncrow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
+.syncstatus{display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--ink-2);min-width:0}
+.sync-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:var(--line-2);flex:none;
+  transition:background var(--dur-1) var(--ease)}
+.sync-dot.ok{background:var(--sage)}
+.sync-dot.err{background:var(--warn)}
+.sync-dot.pulse{background:var(--accent);animation:syncpulse .9s var(--ease) infinite alternate}
+.syncbtn{flex:none;margin-top:0}
+@keyframes syncpulse{from{opacity:.35;transform:scale(.78)}to{opacity:1;transform:scale(1.06)}}
+
+/* -------------------------------------------------------------------
+   29b · The Brief (Today day-read) — the editorial hero that leads Today
+   ------------------------------------------------------------------- */
+/* The day's judgment is the hero, in plain language — no score, no gauge. The
+   surface tone shifts with kind: restful for rest, light for easy, warm for
+   train. A calm card, generous whitespace, Atelier editorial. */
+.brief{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:24px 22px 20px;margin:6px 0 14px;position:relative;overflow:hidden;
+  border-left:3px solid var(--accent);
+}
+/* shared element for the override-chip reshape: the hero morphs, never pops.
+   The name is applied dynamically (JS) only for that moment, so ordinary tab
+   transitions keep the unified root crossfade. */
+.brief.brief-morph{view-transition-name:brief-hero}
+/* the provisional→agentic Brief upgrade settles in gently (no view transition —
+   it's an in-place element swap), so the real read doesn't pop the filament off */
+.brief.brief-settle{animation:briefsettle var(--dur-3) var(--ease) both}
+@keyframes briefsettle{from{opacity:.55}to{opacity:1}}
+/* a soft warm wash bleeds in from the accent edge — kind-tinted, very quiet.
+   On an override reshape the whole hero (incl. this wash) morphs via the
+   brief-hero view transition, so no per-property transition is needed here. */
+.brief::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 80% at 0% 0%, rgba(180,85,45,.05), transparent 62%);}
+.brief-rest{border-left-color:var(--sage)}
+.brief-rest::before{background:radial-gradient(120% 80% at 0% 0%, rgba(110,127,92,.07), transparent 62%)}
+.brief-easy{border-left-color:var(--gold)}
+.brief-easy::before{background:radial-gradient(120% 80% at 0% 0%, rgba(201,168,106,.08), transparent 62%)}
+.brief-train{border-left-color:var(--accent)}
+
+.brief-kicker{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:9px}
+.brief-glyph{font-size:.72rem;line-height:1}
+.brief-rest .brief-glyph{color:var(--sage)}
+.brief-easy .brief-glyph{color:var(--gold)}
+.brief-train .brief-glyph{color:var(--accent)}
+
+.brief-headline{
+  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 100;
+  font-size:1.95rem;line-height:1.1;letter-spacing:-.012em;color:var(--ink);margin:0;
+}
+.brief-rest .brief-headline{font-style:italic;font-weight:480}
+.brief-focus{
+  font-family:var(--font-display);font-style:italic;font-weight:480;
+  font-variation-settings:"opsz" 50;font-size:1.05rem;color:var(--accent);margin-top:5px;
+}
+.brief-why{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:46ch}
+
+/* the optional "tap to see why" detail — plain language, never a number */
+.brief-why-more{
+  background:none;border:none;color:var(--muted);font-family:var(--font-ui);
+  font-size:.7rem;font-weight:600;letter-spacing:.04em;text-decoration:underline;
+  text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;margin-top:12px;
+  cursor:pointer;
+}
+.brief-why-more:hover{color:var(--ink-2)}
+.brief-signals{font-size:.82rem;color:var(--muted);line-height:1.5;margin:12px 0 0;font-style:italic}
+
+/* "Steer line" — the calm, subordinate "tell me different" row. Each option is a
+   light text-button (not a pill) so the day's primary action stays the visual
+   lead; a tap reshapes the read agentically. The lead label sits on its own line
+   above the options so the row reads as one labeled group, never a second CTA bank. */
+.brief-steer{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 8px;margin-top:18px}
+.brief-steer-lead{
+  width:100%;font-family:var(--font-ui);font-weight:600;font-size:.72rem;
+  letter-spacing:.02em;color:var(--muted);margin-bottom:1px;
+}
+.brief-steer-opts{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:7px}
+.brief-steer-opt{
+  background:none;border:none;padding:0;cursor:pointer;
+  font-family:var(--font-ui);font-weight:600;font-size:.8rem;letter-spacing:.01em;
+  color:var(--ink-2);text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:var(--line-2);
+  transition:color var(--dur-1),text-decoration-color var(--dur-1);
+}
+.brief-steer-opt:hover{color:var(--accent);text-decoration-color:var(--accent)}
+.brief-steer-opt:active{color:var(--accent-deep)}
+.brief-steer-dot{color:var(--line-2);font-size:.8rem;user-select:none}
+/* the un-steer link — quieter still; only shown when a steer is active */
+.brief-steer-reset{
+  background:none;border:none;padding:0;margin-left:1px;cursor:pointer;
+  font-family:var(--font-ui);font-weight:600;font-size:.72rem;letter-spacing:.02em;
+  color:var(--muted);text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:transparent;
+  transition:color var(--dur-1),text-decoration-color var(--dur-1);
+}
+.brief-steer-reset::before{content:"·\00a0";color:var(--line-2);text-decoration:none}
+.brief-steer-reset:hover{color:var(--ink-2);text-decoration-color:var(--line-2)}
+/* the tapped option while a reshape runs — inline ring + accent */
+.brief-steer-active{color:var(--accent)}
+.brief-steer-busy{display:inline-flex;align-items:center;gap:6px;cursor:progress;color:var(--accent)}
+/* the other options freeze while we think */
+.brief-steer-opt:disabled,.brief-steer-reset:disabled{opacity:.45;cursor:default;text-decoration-color:transparent}
+
+/* launchpad redirects — the heart of "you drive": always present, quiet */
+.brief-launch{display:flex;flex-wrap:wrap;gap:9px;margin-top:17px}
+.brief-redirect{
+  background:transparent;border:1px solid var(--line-2);color:var(--ink-2);
+  border-radius:999px;padding:9px 16px;font-family:var(--font-ui);font-weight:600;
+  font-size:.78rem;letter-spacing:.02em;cursor:pointer;
+  transition:border-color var(--dur-1),color var(--dur-1),background var(--dur-1),box-shadow var(--dur-1),transform var(--dur-1);
+}
+.brief-redirect:hover{border-color:var(--ink);color:var(--ink)}
+.brief-redirect:active{transform:scale(.97)}
+.brief-redirect-primary{
+  background:var(--accent);border-color:var(--accent);color:#fffdf8;box-shadow:var(--shadow-sm);
+}
+.brief-redirect-primary:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:#fffdf8}
+.brief-rest .brief-redirect-primary,.brief-easy .brief-redirect-primary{
+  background:var(--ink);border-color:var(--ink);color:var(--paper);
+}
+.brief-rest .brief-redirect-primary:hover,.brief-easy .brief-redirect-primary:hover{
+  background:var(--ink);border-color:var(--ink);color:var(--paper);box-shadow:var(--shadow-md);transform:translateY(-1px)}
+
+/* -------------------------------------------------------------------
+   Focus mode — a distraction-free logging view (see focusEngaged in app.js).
+   Today sheds its chrome to a slim sticky header + the logging cards. Calm and
+   editorial: the header floats on a blurred paper scrim, the accent marks "you're
+   in the work", desktop centers within the column / mobile bleeds to the edges.
+   ------------------------------------------------------------------- */
+/* the quiet "Focus" entry pill, right-aligned above the day switcher */
+.focus-enterrow{display:flex;justify-content:flex-end;margin:0 0 2px}
+.focus-enter{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  border-radius:999px;padding:7px 14px;font-family:var(--font-ui);font-weight:600;
+  font-size:.72rem;letter-spacing:.04em;cursor:pointer;
+  transition:border-color var(--dur-1),color var(--dur-1),background var(--dur-1),transform var(--dur-1);
+}
+.focus-enter:hover{border-color:var(--accent);color:var(--accent);background:rgba(180,85,45,.05)}
+.focus-enter:active{transform:scale(.96)}
+
+/* the slim sticky header that leads focus mode */
+.focus-bar{
+  position:sticky;top:env(safe-area-inset-top,0px);z-index:30;
+  margin:0 -18px 14px;padding:11px 18px 12px;
+  background:rgba(252,250,244,.86);
+  backdrop-filter:blur(14px) saturate(1.1);-webkit-backdrop-filter:blur(14px) saturate(1.1);
+  border-bottom:1px solid var(--line);
+}
+.focus-bar-row{display:flex;align-items:center;gap:11px}
+.focus-glyph{color:var(--accent);font-size:.78rem;line-height:1;flex:0 0 auto}
+.focus-back{flex:0 0 auto;background:none;border:none;color:var(--ink-2);font-size:1.2rem;
+  line-height:1;padding:0 2px;cursor:pointer}
+.focus-back:hover{color:var(--ink)}
+.focus-id{flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.focus-day{
+  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
+  font-size:1.12rem;letter-spacing:-.01em;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;
+}
+.focus-prog{font-family:var(--font-ui);font-size:.72rem;font-weight:600;letter-spacing:.02em;
+  color:var(--muted);flex:0 0 auto}
+.focus-prog-done{color:var(--accent)}
+.focus-prog-sep{margin:0 1px;opacity:.55}
+.focus-exit{
+  flex:0 0 auto;background:none;border:1px solid var(--line-2);color:var(--ink-2);
+  border-radius:999px;padding:6px 12px;font-family:var(--font-ui);font-weight:600;
+  font-size:.68rem;letter-spacing:.04em;cursor:pointer;
+  transition:border-color var(--dur-1),color var(--dur-1),transform var(--dur-1);
+}
+.focus-exit:hover{border-color:var(--ink);color:var(--ink)}
+.focus-exit:active{transform:scale(.96)}
+.focus-read{
+  margin-top:7px;font-family:var(--font-display);font-style:italic;font-weight:480;
+  font-variation-settings:"opsz" 40;font-size:.92rem;color:var(--ink-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+/* in focus the logging surface is the whole show — a touch more breathing room */
+.today-focus .plansurface{margin-top:2px}
+
+/* always-on capture row — quiet, there until you want it */
+.capture-row{margin:0 0 12px}
+/* bodyweight quick-add chip living in the capture row (display + toggle) */
+.wt-mini{
+  flex:0 0 auto;background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  border-radius:999px;padding:0 13px;height:42px;display:inline-flex;align-items:center;gap:3px;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:1rem;font-weight:560;
+  font-variant-numeric:lining-nums;cursor:pointer;
+  transition:border-color var(--dur-1),color var(--dur-1),transform var(--dur-1);
+}
+.wt-mini:hover{border-color:var(--line-2);color:var(--ink)}
+.wt-mini:active{transform:scale(.97)}
+.wt-mini-unit{font-family:var(--font-ui);font-size:.6rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--muted);margin-left:1px}
+
+/* the on-demand session-suggest card — a reviewable suggestion, not a plan */
+.sug-slot:empty{display:none}
+.sug-card{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:18px 18px 16px;margin:0 0 14px;border-left:3px solid var(--sage);
+}
+.sug-kicker{color:var(--muted);margin-bottom:6px}
+.sug-name{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
+  font-size:1.3rem;line-height:1.15;color:var(--ink);margin:0}
+.sug-focus{font-family:var(--font-display);font-style:italic;font-weight:460;
+  font-size:.95rem;color:var(--accent);margin-top:3px}
+.sug-why{font-size:.86rem;color:var(--ink-2);line-height:1.5;margin:10px 0 0;max-width:46ch}
+.sug-items{margin:14px 0 4px}
+.sug-item{display:flex;align-items:center;gap:11px;padding:9px 0;border-top:1px solid var(--line)}
+.sug-item:first-child{border-top:none}
+.sug-art{width:38px;height:38px}
+.sug-item-main{flex:1;min-width:0}
+.sug-item-name{font-family:var(--font-display);font-weight:540;font-variation-settings:"opsz" 28;
+  font-size:1rem;color:var(--ink);line-height:1.2}
+.sug-item-note{font-size:.74rem;color:var(--muted);margin-top:2px;line-height:1.35}
+.sug-item-rx{font-size:.92rem;font-weight:600;color:var(--ink-2);white-space:nowrap;
+  font-variation-settings:"opsz" 60;font-variant-numeric:lining-nums}
+.sug-empty{font-size:.84rem;color:var(--muted);padding:8px 0}
+.sug-notes{font-size:.8rem;color:var(--muted);line-height:1.5;margin-top:10px;font-style:italic}
+.sug-actions{display:flex;gap:9px;margin-top:15px;flex-wrap:wrap}
+.sug-hint{font-size:.72rem;color:var(--muted);margin-top:11px;line-height:1.45}
+.sug-fail-line{font-size:.86rem;color:var(--ink-2);line-height:1.5}
+.sug-fail{border-left-color:var(--line-2)}
+/* loading: the house cairn loader + a rotating status line (see §04b) */
+.sug-loading{border-left-color:var(--gold);display:flex;align-items:center;gap:12px}
+.sug-loading-line{font-size:.88rem;color:var(--ink-2)}
+
+/* -------------------------------------------------------------------
+   atelier loading — one calm vocabulary for "an agent is thinking",
+   used app-wide. A terracotta→gold filament sweeps a surface that's
+   being (re)generated; a quiet ring stands in for a tapped button's
+   label; breathing dots carry the chat reply. Motion is slow and warm,
+   never frantic, and every piece stays legible under reduced-motion.
+   ------------------------------------------------------------------- */
+/* calm spinner ring — size via --asz (default 16px) */
+.aspin{width:var(--asz,16px);height:var(--asz,16px);border-radius:50%;box-sizing:border-box;
+  border:2px solid var(--line-2);border-top-color:var(--accent);flex:0 0 auto;
+  display:inline-block;vertical-align:-2px;animation:sugspin .8s linear infinite}
+@keyframes sugspin{to{transform:rotate(360deg)}}
+.aspin-sm{--asz:13px}
+.aspin-xs{--asz:11px;border-width:1.5px}
+.aspin-ghost{border-color:rgba(255,253,248,.45);border-top-color:#fffdf8}
+
+/* indeterminate filament — a thin sweep of warm light along the top edge of a
+   surface mid-generation (ideally overflow-clipped) */
+.is-thinking{position:relative}
+.is-thinking::after{content:"";position:absolute;left:0;right:0;top:0;height:2px;z-index:4;
+  pointer-events:none;border-radius:2px;
+  background:linear-gradient(90deg,transparent 0,var(--accent) 42%,var(--gold) 58%,transparent 100%);
+  background-size:42% 100%;background-repeat:no-repeat;
+  filter:drop-shadow(0 0 4px rgba(180,85,45,.22));
+  animation:atelier-filament 1.25s var(--ease) infinite}
+@keyframes atelier-filament{0%{background-position:-45% 0}100%{background-position:140% 0}}
+
+/* determinate filament — the same gradient/glow family as the indeterminate
+   sweep, but a left-anchored progress fill driven by --frac (0..1). The job runner
+   sets --frac from real phase fractions (meal-plan day k/7, recipe draft→verify).
+   --determinate overrides the indeterminate ::after when both classes are present. */
+.is-thinking--determinate::after{
+  right:auto;width:calc(var(--frac,0) * 100%);
+  background:linear-gradient(90deg,var(--accent) 0,var(--gold) 100%);
+  background-size:100% 100%;
+  animation:none;
+  transition:width var(--dur-2) var(--ease)}
+
+/* swr-refreshing — the calm "we already have your data, just checking" hairline:
+   a single low-opacity, slow filament at the very top of the page (under the
+   header), distinct from the .offline-bar warn band. It rides while a stale-while-
+   revalidate paint is reconfirming in the background; nothing else moves. */
+body.swr-busy::after{
+  content:"";position:fixed;top:0;left:0;right:0;height:2px;z-index:46;pointer-events:none;
+  background:linear-gradient(90deg,transparent 0,var(--accent) 42%,var(--gold) 58%,transparent 100%);
+  background-size:42% 100%;background-repeat:no-repeat;opacity:.5;
+  animation:atelier-filament 2.4s var(--ease) infinite}
+
+/* a button mid-request: btnBusy() swaps the label for a ring + working text and
+   pins min-width so the footprint never jumps */
+.btn-busy{cursor:progress!important}
+.btn-working{display:inline-flex;align-items:center;justify-content:center;gap:8px;line-height:1}
+
+/* chat "thinking" — three dots breathing in sequence */
+.typing{display:inline-flex;align-items:center;gap:5px;padding:3px 1px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--muted);display:block;
+  animation:typingdot 1.3s var(--ease) infinite}
+.typing i:nth-child(2){animation-delay:.16s}
+.typing i:nth-child(3){animation-delay:.32s}
+@keyframes typingdot{0%,62%,100%{opacity:.3;transform:translateY(0)}31%{opacity:.85;transform:translateY(-3px)}}
+
+/* a quiet inline status line under a thinking surface (Brief reshape etc.) */
+.athinking-note{display:flex;align-items:center;gap:9px;margin-top:11px;
+  font-size:.84rem;color:var(--ink-2);letter-spacing:.01em}
+
+/* -------------------------------------------------------------------
+   effortless capture — voice mic · frequents · how-you-feel
+   ------------------------------------------------------------------- */
+/* press-to-talk mic in the quicklog row (hidden when Web Speech is absent) */
+.qlmic{
+  flex:0 0 auto;width:42px;height:42px;border-radius:999px;
+  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
+}
+.qlmic[hidden]{display:none}
+.qlmic:hover{border-color:var(--line-2);color:var(--ink)}
+.qlmic:active{transform:scale(.94)}
+.qlmic svg{display:block}
+/* listening state — a calm terracotta pulse, never frantic */
+.qlmic-live{background:var(--accent);border-color:var(--accent);color:#fffdf8;
+  box-shadow:0 0 0 0 rgba(180,85,45,.35);animation:micpulse 1.6s var(--ease) infinite}
+@keyframes micpulse{
+  0%{box-shadow:0 0 0 0 rgba(180,85,45,.34)}
+  70%{box-shadow:0 0 0 9px rgba(180,85,45,0)}
+  100%{box-shadow:0 0 0 0 rgba(180,85,45,0)}
+}
+
+/* one-tap frequents — the foods most logged around this time of day */
+.freq-foods{margin:2px 0 6px}
+.freq-foods:empty{display:none}
+.freq-head{margin:6px 0 8px;color:var(--muted)}
+.freq-chips{display:flex;flex-wrap:wrap;gap:7px}
+.freq-chip{
+  display:inline-flex;align-items:center;gap:8px;max-width:100%;
+  background:var(--card-2);border:1px solid var(--line);border-radius:999px;
+  padding:5px 12px 5px 6px;cursor:pointer;color:var(--ink);
+  animation:chipin .22s var(--ease);
+  transition:border-color var(--dur-1) var(--ease),box-shadow var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+.freq-chip:hover{border-color:var(--line-2);box-shadow:var(--shadow-sm)}
+.freq-chip:active{transform:scale(.97)}
+.freq-chip-busy{opacity:.55;cursor:default}
+.freq-chip-art{flex:0 0 auto;width:30px;height:30px;display:grid;place-items:center}
+.freq-chip-art svg{width:100%;height:100%}
+.freq-chip-name{font-size:.84rem;font-weight:500;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:22ch}
+.freq-chip-kcal{font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  font-weight:560;font-size:.84rem;color:var(--accent);font-variant-numeric:lining-nums}
+
+/* optional how-you-feel — offered, never required */
+.checkin-slot{margin:2px 0 4px}
+.checkin-slot:empty{display:none}
+.checkin-open{
+  display:inline-flex;align-items:center;gap:8px;background:transparent;border:none;
+  padding:4px 2px;cursor:pointer;color:var(--muted);
+  font-family:var(--font-ui);font-size:.8rem;font-style:italic;
+  transition:color var(--dur-1) var(--ease);
+}
+.checkin-open:hover{color:var(--ink-2)}
+.checkin-open-dot{width:7px;height:7px;border-radius:50%;background:var(--sage);flex:0 0 auto;opacity:.7}
+.checkin-form{
+  display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:10px 13px;position:relative;
+}
+.feel-row{display:flex;align-items:center;gap:9px}
+.feel-lbl{color:var(--muted)}
+.feel-dots{display:inline-flex;gap:3px}
+.feel-dot{
+  width:24px;height:24px;border-radius:50%;border:1px solid var(--line-2);
+  background:var(--card);color:var(--muted);font-size:.7rem;line-height:1;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
+}
+.feel-dot:active{transform:scale(.9)}
+.feel-dot-on{background:var(--sage);border-color:var(--sage);color:#fffdf8}
+.checkin-dismiss{
+  margin-left:auto;background:none;border:none;color:var(--muted);
+  font-size:.95rem;line-height:1;cursor:pointer;padding:2px 4px;
+  transition:color var(--dur-1) var(--ease);
+}
+.checkin-dismiss:hover{color:var(--ink-2)}
+.checkin-done{display:inline-flex;align-items:center;gap:7px;color:var(--muted);
+  font-size:.8rem;font-style:italic;padding:4px 2px}
+.checkin-done-mark{color:var(--sage);font-style:normal}
+
+/* the quiet insight card — one connection, pull never push */
+.insight-slot{margin:0}
+.insight-slot:empty{display:none}
+.insight-card{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px 13px;margin:0 0 14px;border-left:3px solid var(--gold);
+  position:relative;overflow:hidden;
+}
+.insight-card::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 80% at 0% 0%, rgba(201,168,106,.08), transparent 62%)}
+.insight-kicker{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:8px;position:relative}
+.insight-glyph{color:var(--gold);font-size:.78rem;line-height:1}
+.insight-text{font-family:var(--font-display);font-weight:480;font-variation-settings:"opsz" 40;
+  font-size:1.06rem;line-height:1.4;color:var(--ink);margin:0;max-width:62ch;position:relative}
+/* honest uncertainty — a tentative insight reads soft, the same way a soft directive
+   does: the lead phrase in gold, the body in italic secondary ink. Consistent voice. */
+.insight-card-soft{border-left-color:var(--line-2)}
+.insight-card-soft .insight-text{font-style:italic;color:var(--ink-2)}
+.insight-soft{color:var(--gold);font-style:normal;font-weight:600}
+/* the optional concrete suggestion — its own scannable line, never buried in prose */
+.insight-step{font-size:.9rem;color:var(--ink);line-height:1.5;margin:11px 0 0;max-width:62ch;position:relative}
+.insight-step-lbl{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--sage);margin-right:8px}
+.insight-why{font-size:.84rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:72ch;position:relative}
+.insight-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;position:relative}
+.insight-thumbs{display:flex;gap:6px}
+/* quiet "why this" disclosure — mirrors the Brief's "tap to see why" */
+.insight-why-more{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
+  font-size:.7rem;font-weight:600;letter-spacing:.04em;text-decoration:underline;
+  text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;cursor:pointer}
+.insight-why-more:hover{color:var(--ink-2)}
+.insight-thumb{
+  width:30px;height:30px;border-radius:999px;border:1px solid var(--line-2);
+  background:var(--card-2);color:var(--muted);font-size:.7rem;line-height:1;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
+}
+.insight-thumb:hover{border-color:var(--ink-2);color:var(--ink-2)}
+.insight-thumb:active{transform:scale(.92)}
+.insight-thumb-on{background:var(--sage);border-color:var(--sage);color:#fffdf8}
+
+/* the weekly read (E3) — "how the week went + the one change". Its own editorial
+   card so a newer connection insight never buries it. Distinct identity from the
+   gold-spark connection card: a sage masthead + a larger Fraunces read + the
+   keystone "One change" in a terracotta-accented well. Reuses the insight foot. */
+.weekly-slot{margin:0}
+.weekly-slot:empty{display:none}
+.weekly-card{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:18px 20px 14px;margin:0 0 14px;border-top:3px solid var(--sage);
+  position:relative;overflow:hidden;
+}
+.weekly-card::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(130% 90% at 100% 0%, rgba(110,127,92,.10), transparent 60%)}
+.weekly-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;position:relative}
+.weekly-kicker{color:var(--sage)}
+.weekly-range{font-family:var(--font-ui);font-size:.66rem;letter-spacing:.04em;color:var(--muted)}
+.weekly-text{font-family:var(--font-display);font-weight:460;font-variation-settings:"opsz" 60;
+  font-size:1.28rem;line-height:1.36;color:var(--ink);margin:0;max-width:60ch;position:relative}
+/* the one change — the single actionable thing, set apart so it never hides in prose */
+.weekly-change{margin:14px 0 0;padding:11px 14px;border-radius:var(--radius-sm);
+  background:var(--card-2);border-left:2px solid var(--accent);position:relative}
+.weekly-change-lbl{display:block;color:var(--accent);margin-bottom:3px}
+.weekly-change-text{margin:0;font-size:.92rem;line-height:1.45;color:var(--ink)}
+.weekly-why{font-size:.85rem;color:var(--ink-2);line-height:1.5;margin:12px 0 0;max-width:72ch;position:relative}
+.weekly-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:15px;position:relative}
+
+/* autoregulation feedback (Today · finish bar) — reuses the check-in language.
+   Optional, calm, dismissible; recovery INFORMS the coach, never auto-applies. */
+.feedback-slot{margin:10px 0 2px}
+.feedback-slot:empty{display:none}
+.feedback-form{flex-direction:column;align-items:stretch;gap:11px}
+.feedback-form .feel-row{justify-content:space-between}
+.feedback-joint{
+  width:100%;background:var(--card);border:1px solid var(--line-2);border-radius:var(--radius-sm);
+  padding:8px 11px;font-family:var(--font-ui);font-size:.85rem;color:var(--ink);
+}
+.feedback-joint::placeholder{color:var(--muted)}
+.feedback-form .checkin-dismiss{position:absolute;top:8px;right:10px;margin-left:0}
+.feedback-done{font-size:.82rem}
+.feedback-edit{
+  background:none;border:none;color:var(--accent);cursor:pointer;font-family:var(--font-ui);
+  font-size:.76rem;padding:2px 4px;margin-left:4px;transition:color var(--dur-1) var(--ease);
+}
+.feedback-edit:hover{color:var(--accent-deep)}
+
+/* Energy Balance (Progress) — a calm editorial read, never a dashboard. */
+.eb-ctx{color:var(--muted);margin-top:11px}
+.eb-card{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:17px 19px 15px;margin:0 0 14px;border-left:3px solid var(--sage);
+  position:relative;overflow:hidden;
+}
+.eb-card::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 80% at 0% 0%, rgba(110,127,92,.07), transparent 62%)}
+.eb-kicker{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:9px;position:relative}
+.eb-glyph{color:var(--sage);font-size:.8rem;line-height:1}
+.eb-lead{font-family:var(--font-display);font-weight:480;font-variation-settings:"opsz" 40;
+  font-size:1.1rem;line-height:1.42;color:var(--ink);margin:0;max-width:46ch;position:relative}
+.eb-body{font-size:.86rem;color:var(--ink-2);line-height:1.55;margin:9px 0 0;max-width:48ch;position:relative}
+.eb-foot{display:flex;align-items:center;flex-wrap:wrap;gap:11px;margin-top:15px;position:relative}
+.eb-checkin{flex:none}
+.eb-note,.eb-advisory{color:var(--muted);text-transform:none;letter-spacing:.02em;font-size:.72rem}
+.eb-advisory{margin-top:11px;font-style:italic}
+
+/* check-in result (under the Energy card) */
+.checkin-result:empty{display:none}
+.checkin-result{margin-top:4px}
+.eb-checking,.eb-checkin-quiet{color:var(--muted);font-size:.84rem;padding:6px 2px}
+.eb-checkin-quiet{font-style:italic}
+.eb-checkin-ok{
+  display:flex;gap:10px;align-items:flex-start;background:var(--sage-bg);
+  border-radius:var(--radius-sm);padding:13px 15px;
+}
+.eb-ok-mark{color:var(--sage);font-size:.95rem;line-height:1.4;flex:0 0 auto}
+.eb-ok-lead{font-weight:600;color:var(--ink);font-size:.92rem}
+.eb-ok-body{margin:5px 0 0;font-size:.85rem;color:var(--ink-2);line-height:1.5}
+.eb-proposal{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px 14px;border-left:3px solid var(--accent);position:relative;overflow:hidden;
+}
+.eb-target{display:flex;align-items:baseline;gap:9px;margin-top:4px}
+.eb-target-unit{color:var(--muted)}
+.eb-macros{color:var(--ink-2);margin-top:7px;text-transform:none;letter-spacing:.02em;font-size:.8rem}
+.eb-why{font-size:.88rem;color:var(--ink);line-height:1.5;margin:10px 0 0;max-width:48ch}
+
+/* Apple Health setup (Settings) */
+.ah-steps{display:flex;flex-direction:column;gap:11px;margin-top:6px}
+.ah-step{display:flex;gap:11px;align-items:flex-start;font-size:.85rem;color:var(--ink-2);line-height:1.5}
+.ah-step b{color:var(--ink);font-weight:600}
+.ah-step code{background:var(--card-2);border-radius:6px;padding:1px 5px;font-size:.82em}
+.ah-num{
+  flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--card-2);
+  border:1px solid var(--line-2);color:var(--ink-2);font-size:.74rem;font-weight:600;
+  display:inline-flex;align-items:center;justify-content:center;margin-top:1px;
+}
+.ah-url{display:flex;align-items:center;gap:8px}
+.ah-url code{
+  flex:1;min-width:0;overflow-x:auto;white-space:nowrap;background:var(--card-2);
+  border:1px solid var(--line);border-radius:var(--radius-sm);padding:9px 11px;
+  font-size:.8rem;color:var(--ink);
+}
+.ah-copy{flex:none;margin-top:0}
+
+/* Example request body — a wrapping code block so a long JSON sample stays
+   INSIDE its card instead of clipping at the edge (the URL box still scrolls). */
+.ah-example{margin-top:12px;background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px 12px}
+.ah-example-lbl{
+  display:block;font-family:var(--font-ui);text-transform:uppercase;letter-spacing:.18em;
+  font-size:.6rem;font-weight:600;color:var(--muted);margin-bottom:5px;
+}
+.ah-example code{
+  display:block;font-size:.78rem;color:var(--ink);line-height:1.5;
+  white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
+}
+
+/* -------------------------------------------------------------------
+   Settings — meaningful groups
+   Each major cluster (Coaching / Connected sources / Automation / Backup)
+   gets a Fraunces title + a hairline rule, so the long Settings view reads
+   as a few clear sections instead of one flat stack of toggles.
+   ------------------------------------------------------------------- */
+.set-group{margin-top:30px}
+.set-group:first-child{margin-top:8px}
+.set-group-title{
+  font-family:var(--font-display);font-weight:560;font-size:1.22rem;
+  font-variation-settings:"opsz" 40;letter-spacing:-.01em;color:var(--ink);
+  padding-bottom:9px;border-bottom:1px solid var(--line);
+}
+.set-group-sub{font-size:.83rem;color:var(--muted);line-height:1.5;margin-top:8px}
+
+/* per-task agent routing — a calm, collapsed-by-default advanced disclosure */
+.route-card>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px}
+.route-card>summary::-webkit-details-marker{display:none}
+.route-card>summary::after{content:"▾";color:var(--muted);font-size:.7rem;margin-left:auto;
+  transition:transform var(--dur-1) ease}
+.route-card[open]>summary::after{transform:rotate(180deg)}
+.route-list{margin-top:6px}
+.route-row{justify-content:space-between}
+.route-task{font-size:.84rem;color:var(--ink-2);flex:0 0 auto;padding-right:10px}
+.route-sel{max-width:58%}
+
+/* plan surface — the launchpad, revealed when the day calls for it. A clear gap plus
+   the ruled session-head band below split the workout-logging zone off from the analysis
+   (Brief + capture) above, so Today reads as two calm zones rather than one long scroll. */
+.plansurface{margin-top:16px}
+/* session head — the designed break that introduces the logging zone */
+.session-head{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:14px;
+  padding-top:20px;margin-bottom:14px;border-top:1px solid var(--line);
+}
+.session-head-main{min-width:0}
+.session-head .session-kicker{margin-bottom:6px}
+.session-title{
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  font-weight:540;font-size:1.4rem;line-height:1.08;margin:0;color:var(--ink);letter-spacing:-.01em;
+}
+.session-focus{color:var(--muted);font-weight:430;font-style:italic}
+.session-head-side{display:flex;align-items:center;gap:11px;flex:none}
+.session-prog{
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  color:var(--ink-2);font-size:1.05rem;white-space:nowrap;
+}
+.session-prog b{color:var(--accent);font-weight:600}
+.session-prog-sep{color:var(--muted);margin:0 1px}
+
+/* trajectory tier (this week) — demoted below the fold, collapsed by default */
+.weekfold{margin-top:6px;border-top:1px solid var(--line);padding-top:6px}
+.weekfold-sum{
+  list-style:none;display:flex;align-items:center;gap:8px;cursor:pointer;
+  padding:8px 2px;color:var(--muted);user-select:none;
+}
+.weekfold-sum::-webkit-details-marker{display:none}
+.weekfold-sum .lbl{color:var(--muted)}
+.weekfold-recap{color:var(--ink-2);font-size:.74rem;letter-spacing:.01em}
+.weekfold-chev{margin-left:auto;font-size:.7rem;color:var(--muted);
+  transition:transform var(--dur-2) var(--ease)}
+.weekfold[open] .weekfold-chev{transform:rotate(180deg)}
+.weekfold[open] .statstrip-compass{animation:rise var(--dur-3) var(--ease) both}
+
+/* -------------------------------------------------------------------
+   30 · Reduced motion — kill the decorative, keep the functional
+   ------------------------------------------------------------------- */
+/* The old rule was a sledgehammer: `*{animation:none;transition:none}`. That
+   silenced the "an agent is thinking" vocabulary (spinner ring, filament,
+   typing dots, shimmer) AND the short functional transitions that carry meaning
+   (focus rings, the segmented-control thumb, disclosure chevrons). Both matter
+   for legibility, so this splits the rule:
+   1. Kill decorative ENTRANCE/looping animations and long transitions.
+   2. Slow — not stop — the loading indicators, so "working" still reads.
+   3. Preserve the curated set of short functional transitions below. */
+@media (prefers-reduced-motion: reduce){
+  /* decorative entrances + idle loops go silent */
+  *{animation:none!important}
+  /* most transitions snap, but functional micro-states are restored below */
+  *{transition:none!important}
+
+  /* loading vocabulary stays alive — slowed and gentle, never frantic — so a
+     long agent call still reads as "working", not frozen (per docs/DESIGN.md) */
+  .aspin{animation:sugspin 1.6s linear infinite!important}
+  .is-thinking::after{animation:atelier-filament 2.4s linear infinite!important}
+  .typing i{animation:typingdot 1.8s var(--ease) infinite!important}
+  .hshimmer{animation:hshine 2.4s linear infinite!important}
+  .offline-dot{animation:offlinepulse 2.6s ease infinite!important}
+
+  /* the new background-work primitives degrade to STATIC state, no motion:
+     the determinate fill keeps its --frac width (transition killed → it jumps);
+     the SWR hairline becomes a calm static tinted 1px top border, no sweep. */
+  .is-thinking--determinate::after{animation:none!important}
+  body.swr-busy::after{animation:none!important;height:1px;opacity:.45;
+    background:var(--accent)!important}
+
+  /* short FUNCTIONAL transitions kept (the seg thumb sliding to the tapped
+     sub-view, disclosure chevrons, save/offline bars) — these communicate
+     state, not decoration. The focus ring is an instant `outline`, so it never
+     needed a transition to stay visible. */
+  .seg-thumb{transition:transform var(--dur-1) ease!important}
+  .weekfold-chev,.hdoc-chev{transition:transform var(--dur-1) ease!important}
+  .offline-bar,.savebar{transition:transform var(--dur-1) ease!important}
+}
+
+/* -------------------------------------------------------------------
+   31 · Me · Health — the whole picture (review · markers · records)
+   ------------------------------------------------------------------- */
+/* nested Health seg (Analysis / Markers / Records) tucks just under the Me seg.
+   Its thumb needs a DISTINCT view-transition-name — two elements sharing one
+   name skips the transition (the Me seg thumb is already 'seg-thumb'). */
+.hsegwrap{top:calc(env(safe-area-inset-top,0px) + 56px);z-index:29;margin-top:-6px}
+.hseg{margin-top:0}
+.hseg .seg-thumb{view-transition-name:hseg-thumb}
+#hPicture{margin-top:2px}
+#hContent{min-width:0}
+
+/* defensive wrapping — long marker names/values or agent prose must never break
+   out of the card on narrow screens (the Health analysis overflow fix) */
+.hpic{overflow:hidden}
+.hpic-headline,.hfocus-title,.hfocus-why,.hfocus-act,
+.hwatch-name,.hwatch-why,.hwatch-act,.hfu-what,.himpact-t,
+.hwins li,.hdoc .sess-line{overflow-wrap:anywhere;word-break:break-word}
+.hfu-what{min-width:0}
+.hm-name,.hm-val{overflow-wrap:anywhere;word-break:break-word}
+
+/* the review card */
+.hpic{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:18px;margin-bottom:2px}
+.hpic-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.hpic-headline{font-family:var(--font-display);font-weight:530;font-variation-settings:"opsz" 80;
+  font-size:1.35rem;line-height:1.22;letter-spacing:-.01em;color:var(--ink);margin:8px 0 2px}
+/* one "As of 2 days ago" caption under the headline — the panel date, shown once */
+.hpic-asof{display:block;margin:0 0 4px;color:var(--muted)}
+.hpic-sub{display:block;margin:18px 0 9px;padding-top:14px;border-top:1px solid var(--line)}
+.hpic-when{font-size:.72rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hpic-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  margin-top:18px;padding-top:12px;border-top:1px solid var(--line)}
+.hpic-refresh{display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;background:transparent;
+  border:1px solid var(--line-2);color:var(--ink-2);border-radius:999px;padding:7px 14px;
+  font-family:var(--font-ui);font-size:.72rem;font-weight:600;letter-spacing:.06em;cursor:pointer;
+  transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease)}
+.hpic-refresh:hover{border-color:var(--ink);color:var(--ink)}
+.hpic-refresh:active{transform:scale(.96)}
+.hpic-refresh-stale{border-color:var(--accent);color:var(--accent-deep)}
+.hpic-err{margin-top:12px;background:var(--warn-bg);color:var(--warn);
+  border-radius:var(--radius-sm);padding:9px 12px;font-size:.8rem;line-height:1.45}
+
+/* focus chips */
+.hfocus-list{display:grid;gap:8px}
+.hfocus{background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:11px 13px}
+.hfocus-title{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 40;
+  font-size:1.02rem;line-height:1.25;color:var(--ink)}
+.hfocus-why{font-size:.8rem;color:var(--ink-2);margin-top:3px;line-height:1.45}
+.hfocus-act{font-size:.8rem;color:var(--accent-deep);font-weight:600;margin-top:6px;line-height:1.4}
+
+/* watchlist */
+.hwatch-list{display:grid;gap:11px}
+.hwatch{display:flex;gap:10px;align-items:flex-start}
+.hwatch .hdot{margin-top:5px}
+.hwatch-main{min-width:0}
+.hwatch-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.hwatch-name{font-weight:600;font-size:.9rem;color:var(--ink)}
+.hwatch-st{font-family:var(--font-ui);font-size:.56rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted)}
+.hwatch-why{font-size:.8rem;color:var(--ink-2);line-height:1.45;margin-top:1px}
+.hwatch-act{font-size:.8rem;color:var(--accent-deep);font-weight:600;margin-top:3px;line-height:1.4}
+
+/* status dots — colors mirror the marker flag pills */
+.hdot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block}
+.hdot-warn{background:var(--warn)}
+.hdot-watch{background:var(--gold)}
+.hdot-ok{background:var(--sage)}
+.hdot-mute{background:var(--line-2)}
+
+/* wins — a quiet positive list */
+.hwins{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.hwins li{position:relative;padding-left:20px;font-size:.84rem;color:var(--ink-2);line-height:1.45}
+.hwins li::before{content:"✓";position:absolute;left:0;top:0;color:var(--sage);font-weight:700}
+
+/* follow-ups */
+.hfu-list{display:grid;gap:7px}
+/* what (left) keeps a ≥60% share and wraps at word boundaries; when (right) shrinks
+   & wraps instead of forcing its full width — on narrow screens the long timeline
+   label drops to its own right-aligned line rather than collapsing the what column. */
+.hfu{display:flex;flex-wrap:wrap;gap:2px 12px;align-items:baseline}
+.hfu-what{flex:1 1 60%;min-width:0;font-size:.84rem;color:var(--ink-2);line-height:1.4}
+.hfu-when{flex:0 1 auto;margin-left:auto;text-align:right;font-family:var(--font-ui);font-size:.62rem;
+  font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+
+/* training / nutrition impact lines */
+.himpacts{display:grid;gap:9px;margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
+.himpact{display:grid;grid-template-columns:76px 1fr;gap:10px;align-items:baseline}
+.himpact-t{font-size:.82rem;color:var(--ink-2);line-height:1.45}
+
+/* busy / skeleton shimmer */
+.hshimmer{height:13px;border-radius:7px;margin:12px 0 0;
+  background:linear-gradient(90deg,var(--card-2) 30%,#efe7d6 45%,var(--card-2) 60%);
+  background-size:300% 100%}
+.hshimmer-lg{height:22px;width:72%;margin-top:14px}
+.hshimmer-sm{width:46%}
+@media (prefers-reduced-motion: no-preference){.hshimmer{animation:hshine 1.5s linear infinite}}
+@keyframes hshine{from{background-position:120% 0}to{background-position:-120% 0}}
+.hpic-busynote{margin-top:16px;font-size:.8rem;color:var(--muted);line-height:1.5}
+
+/* skeleton-first paint — card silhouettes built from .hshimmer so every tab
+   shows its shape instantly, then hydrates. Reuses the shimmer primitive; never
+   a one-off spinner. A gentle fade-out would be ideal but the real content
+   simply replaces these, so they just hold the space calmly. */
+.skel-card,.skel-brief{background:var(--card);box-shadow:var(--shadow-sm);
+  border-radius:var(--radius);padding:18px;margin-bottom:12px}
+.skel-card .hshimmer:first-child,.skel-brief .hshimmer:first-child{margin-top:0}
+.skel-brief{border-left:3px solid var(--line-2)}
+.today-skel,.skel-region{opacity:.9}
+.skel-region{margin-top:12px}
+
+/* empty-state hero + build-my-picture CTA */
+.hpic-hero{text-align:center;padding:34px 22px 26px}
+.hpic-hero-art{margin:0 auto 14px}
+.hpic-hero-title{font-family:var(--font-display);font-style:italic;font-weight:520;
+  font-variation-settings:"opsz" 60;font-size:1.25rem;color:var(--ink)}
+.hpic-hero-sub{font-size:.86rem;color:var(--muted);line-height:1.55;max-width:340px;margin:7px auto 0}
+.hpic-cta-btn{width:100%;max-width:340px;height:46px;margin:18px auto 0;display:block;
+  font-family:var(--font-ui);font-weight:600;letter-spacing:.08em;font-size:.8rem;border-radius:999px}
+.hpic-build{text-align:center;padding:26px 20px 22px}
+.hpic-build .hpic-headline{margin-top:10px}
+
+/* markers — grouped ledger cards, expandable progress-chart rows */
+.hmk-groups{display:grid;gap:18px}
+/* a calm catalog section heading per health group ("Lipids & Cardiovascular") */
+.hmk-grouphead{margin:0 0 6px 2px;color:var(--ink-2)}
+.hmk-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:4px 0;overflow:hidden}
+.hmk{border-top:1px solid var(--line)}
+.hmk:first-child{border-top:none}
+.hmk-row{display:flex;align-items:center;gap:10px;width:100%;padding:13px 16px;
+  background:transparent;border:none;text-align:left;color:var(--ink);font:inherit}
+button.hmk-row{cursor:pointer;transition:background var(--dur-1) var(--ease)}
+button.hmk-row:active{background:var(--card-2)}
+.hmk-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.hmk-name{font-size:.9rem;font-weight:500;color:var(--ink);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hmk-when{font-size:.68rem;color:var(--muted);letter-spacing:.01em}
+.hmk-right{display:flex;align-items:baseline;gap:9px;flex:0 0 auto}
+.hmk-val{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  font-size:1.05rem;font-variant-numeric:lining-nums}
+.hmk-unit{font-family:var(--font-ui);font-size:.62rem;color:var(--muted);margin-left:3px;
+  letter-spacing:.04em}
+.hmk-delta{font-size:.7rem;color:var(--muted);white-space:nowrap}
+.hmk-chev{color:var(--muted);font-size:.68rem;align-self:center;width:.8em;text-align:center;
+  transition:transform var(--dur-2) var(--ease)}
+.hmk.open .hmk-chev{transform:rotate(180deg)}
+.hmk-panel{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--dur-2) var(--ease)}
+.hmk.open .hmk-panel{grid-template-rows:1fr}
+.hmk-panel-in{overflow:hidden;min-height:0;padding:0 16px 4px}
+/* the richer inline progress chart */
+.hchart-latest{display:flex;align-items:baseline;gap:9px;padding:8px 0 2px}
+.hchart-latest-v{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  font-size:1.25rem;color:var(--ink);font-variant-numeric:lining-nums}
+.hchart-latest-when{font-size:.7rem;color:var(--muted);letter-spacing:.01em}
+.hchart{width:100%;height:auto;display:block;margin:2px 0 6px}
+.hchart-band{fill:rgba(110,127,92,.14)}
+.hchart-txt{font-family:var(--font-ui);font-size:9px;letter-spacing:.08em;fill:var(--muted)}
+.hchart-cap{margin:0 0 12px;color:var(--muted);letter-spacing:.01em;font-size:.72rem;line-height:1.4}
+@media (prefers-reduced-motion: no-preference){
+  .hchart-line{stroke-dasharray:680;stroke-dashoffset:680}
+  .hmk.open .hchart-line{animation:sparkdraw .8s var(--ease) .1s forwards}
+  .hchart-dot,.hchart-txt,.hchart-band{opacity:0;transition:opacity var(--dur-3) var(--ease)}
+  .hmk.open .hchart-band{opacity:1;transition-delay:.1s}
+  .hmk.open .hchart-dot{opacity:1;transition-delay:.4s}
+  .hmk.open .hchart-txt{opacity:1;transition-delay:.55s}
+}
+@keyframes sparkdraw{to{stroke-dashoffset:0}}
+
+/* =====================================================================
+   About-me editor (Me -> Profile) — calm invitational free-text field
+   ===================================================================== */
+.aboutme{margin-top:6px}
+.aboutme-hint{font-size:.78rem;color:var(--muted);line-height:1.5;margin:0 0 8px;max-width:48ch}
+.aboutme textarea{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:12px;padding:12px 13px;font:inherit;font-size:.9rem;line-height:1.55;resize:vertical;
+  min-height:118px;color-scheme:light}
+.aboutme textarea:focus{outline:none;border-color:var(--line-2);box-shadow:0 0 0 3px rgba(180,85,45,.08)}
+.aboutme textarea::placeholder{color:var(--muted);opacity:.85}
+
+/* inline "go there" link button (Family -> Life hint) */
+.linkbtn{background:none;border:none;padding:0;font:inherit;color:var(--accent-deep);
+  font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  text-decoration-color:var(--line-2)}
+.linkbtn:hover{text-decoration-color:var(--accent)}
+
+/* =====================================================================
+   Family roster (Me -> Family) — warm cards, colour swatches
+   ===================================================================== */
+.famadd .fam-swatches{margin-top:2px}
+.fam-swatches{display:flex;gap:9px;flex-wrap:wrap}
+.fam-swatch{width:26px;height:26px;border-radius:50%;border:2px solid transparent;
+  background:var(--fam,#b4552d);cursor:pointer;padding:0;position:relative;
+  box-shadow:inset 0 0 0 2px var(--card);transition:transform var(--dur-1) var(--ease)}
+.fam-swatch:active{transform:scale(.9)}
+.fam-swatch-on{border-color:var(--ink);transform:scale(1.06)}
+.fam-card .fam-head{display:flex;align-items:center;gap:12px}
+.fam-mono{flex:0 0 auto;width:42px;height:42px;border-radius:50%;
+  background:var(--fam,#b4552d);color:#fffdf8;display:inline-flex;align-items:center;justify-content:center;
+  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 32;font-size:1.02rem;
+  letter-spacing:.01em;box-shadow:var(--shadow-sm)}
+.fam-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fam-name{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 36;
+  font-size:1.08rem;color:var(--ink);line-height:1.1}
+.fam-meta{font-size:.74rem;color:var(--muted);letter-spacing:.01em}
+.fam-notes{margin-top:9px}
+.fam-edit{display:flex;flex-direction:column;gap:6px}
+.fam-edit .fam-swatches{margin:3px 0}
+.fam-del.armed{background:var(--warn-bg);border-color:var(--warn);color:var(--warn);width:auto;padding:0 9px}
+
+/* =====================================================================
+   The connected brain (Me -> Health -> Brain)
+   ===================================================================== */
+.hbrain-intro{margin-bottom:14px}
+.hb-load{color:var(--muted);font-size:.85rem;padding:14px 2px}
+
+/* recovery — plain-language, no score */
+.hb-recovery{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px;margin-bottom:14px}
+.hb-rtop{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:11px}
+.hb-rsrc{font-size:.66rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.hb-rlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:11px 16px}
+.hb-rline{display:flex;flex-direction:column;gap:2px}
+.hb-rphrase{font-size:.9rem;font-weight:500;color:var(--ink);line-height:1.25}
+.hb-rsub{font-size:.74rem;color:var(--muted)}
+.hb-recovery-empty{padding:16px 18px}
+.hb-recovery-hint{font-size:.83rem;color:var(--muted);line-height:1.5;margin:8px 0 0;max-width:46ch}
+
+/* shared section frame inside the Brain tab */
+.hb-section{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px 18px;margin-bottom:14px}
+
+/* supplements — understanding, not a daily log */
+.supp-sub{font-size:.8rem;color:var(--muted);line-height:1.5;margin:7px 0 12px;max-width:46ch}
+.supp-empty{font-size:.83rem;color:var(--muted);margin:0 0 12px}
+.supp-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:13px}
+.supp-chip{display:inline-flex;align-items:center;gap:7px;background:var(--paper,#f3ede1);
+  border:1px solid var(--line,rgba(0,0,0,.08));border-radius:999px;padding:5px 6px 5px 12px}
+.supp-name{font-size:.84rem;font-weight:600;color:var(--ink)}
+.supp-meta{font-size:.72rem;color:var(--muted)}
+.supp-x{border:none;background:transparent;color:var(--muted);font-size:1.05rem;line-height:1;
+  cursor:pointer;padding:0 4px;border-radius:50%}
+.supp-x:hover{color:var(--ink)}
+.supp-input{display:flex;gap:8px}
+.supp-input input{flex:1;min-width:0;font:inherit;font-size:.86rem;padding:9px 12px;
+  border:1px solid var(--line,rgba(0,0,0,.12));border-radius:10px;background:var(--card);color:var(--ink)}
+.supp-input .ghostbtn{white-space:nowrap}
+.hb-sechead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:13px}
+.hb-secnote{font-size:.72rem;color:var(--muted)}
+
+/* priority markers — optimal-zone framing, never a number-as-grade */
+.hb-mklist{display:grid;gap:14px}
+.hb-mklist-quiet{margin-top:14px}
+.hb-mk{}
+.hb-mktop{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.hb-mktop .hdot{align-self:center}
+.hb-mkname{font-weight:600;font-size:.92rem;color:var(--ink)}
+.hb-mkphrase{font-size:.8rem;font-weight:600;letter-spacing:.01em}
+.hb-mkphrase-ok{color:var(--sage)}
+.hb-mkphrase-warn{color:var(--accent-deep)}
+.hb-mkphrase-watch{color:var(--gold)}
+.hb-mkright{margin-left:auto;flex:0 0 auto}
+.hb-mkval{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  font-size:1.05rem;color:var(--ink)}
+.hb-mkmeta{display:flex;align-items:center;gap:7px;margin-top:4px;font-size:.72rem;color:var(--muted)}
+.hb-mkband{letter-spacing:.01em}
+.hb-mkdot{color:var(--line-2)}
+.hb-mktrend{margin-top:8px;opacity:.92}
+.hb-mktrend .spark{width:120px;height:26px}
+.hb-more{margin-top:13px}
+.hb-more>summary{cursor:pointer;font-size:.74rem;font-weight:600;letter-spacing:.02em;color:var(--muted);
+  list-style:none;padding:6px 0}
+.hb-more>summary::-webkit-details-marker{display:none}
+.hb-more>summary:hover{color:var(--ink-2)}
+.hb-more[open]>summary{color:var(--ink-2)}
+
+/* cross-domain directives — a quiet editorial list, grouped by domain */
+.hb-dir-section{padding-bottom:6px}
+.hb-derive{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
+  font-size:.7rem;font-weight:600;letter-spacing:.03em;text-decoration:underline;
+  text-underline-offset:3px;text-decoration-color:var(--line-2);cursor:pointer;padding:0;flex:0 0 auto}
+.hb-derive:hover{color:var(--ink-2)}
+.hb-derive:disabled{opacity:.55;cursor:default}
+.hb-dgroup{margin-bottom:18px}
+.hb-dgroup:last-child{margin-bottom:8px}
+.hb-dgrouphead{display:flex;align-items:center;gap:8px;margin-bottom:10px;
+  padding-bottom:8px;border-bottom:1px solid var(--line)}
+.hb-dglyph{color:var(--accent);font-size:.82rem;line-height:1}
+.hb-dgname{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--ink-2)}
+.hb-dlist{display:grid;gap:13px}
+.hb-directive{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
+.hb-directive-soft{opacity:.92}
+.hb-dmain{min-width:0;flex:1}
+.hb-dmarker{display:inline-block;font-family:var(--font-ui);font-size:.58rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--card-2);
+  border:1px solid var(--line);border-radius:6px;padding:2px 7px;margin-bottom:6px}
+.hb-dtext{font-size:.9rem;color:var(--ink);line-height:1.5;margin:0}
+.hb-directive-soft .hb-dtext{font-style:italic;color:var(--ink-2)}
+.hb-dsoft{color:var(--gold);font-style:normal;font-weight:600}
+.hb-drat{font-size:.8rem;color:var(--muted);line-height:1.45;margin:5px 0 0;max-width:50ch}
+.hb-dcite{font-size:.68rem;color:var(--muted);font-style:italic;margin-top:6px;opacity:.85}
+/* "see the evidence" — a calm disclosure that turns a cited claim into a verifiable
+   one. Quiet underlined affordance; the box opens into the source(s). */
+.hb-devidence{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
+  font-size:.68rem;font-weight:600;letter-spacing:.02em;text-decoration:underline;
+  text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;margin-top:7px;cursor:pointer}
+.hb-devidence:hover{color:var(--accent);text-decoration-color:var(--accent)}
+.hb-evbox{margin-top:9px;display:grid;gap:11px}
+.hb-evbox[hidden]{display:none}
+.hb-ev-loading{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.hb-ev-empty{font-size:.78rem;color:var(--muted);font-style:italic;line-height:1.45;
+  border-left:2px solid var(--line-2);padding-left:11px}
+.hb-ev-row{border-left:2px solid var(--sage);padding-left:11px}
+.hb-ev-link{font-family:var(--font-ui);font-weight:600;font-size:.82rem;color:var(--accent);
+  text-decoration:none;border-bottom:1px solid rgba(180,85,45,.35)}
+.hb-ev-link:hover{border-bottom-color:var(--accent)}
+.hb-ev-title{font-family:var(--font-ui);font-weight:600;font-size:.82rem;color:var(--ink)}
+.hb-ev-claim{font-size:.8rem;color:var(--ink-2);line-height:1.45;margin-top:3px}
+.hb-ev-body{font-size:.78rem;color:var(--muted);line-height:1.5;margin-top:4px}
+.hb-ev-meta{margin-top:5px}
+.hb-ev-conf{display:inline-block;font-family:var(--font-ui);font-size:.58rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--sage)}
+/* the cached-evidence count hint on "see the evidence (N)" — a quiet sage tally */
+.hb-evcount{color:var(--sage);font-weight:700}
+/* research-discoverability nudge (F1): a calm, single-line hint under the
+   directives that research can cite them. Informational, never a banner/nag. */
+.hb-research-nudge{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;
+  margin-top:16px;padding-top:13px;border-top:1px solid var(--line-2)}
+.hb-rn-text{font-size:.8rem;color:var(--muted);line-height:1.45}
+.hb-rn-link{background:none;border:none;color:var(--accent);font-family:var(--font-ui);
+  font-size:.8rem;font-weight:600;letter-spacing:.01em;text-decoration:underline;
+  text-underline-offset:3px;text-decoration-color:rgba(180,85,45,.4);padding:0;cursor:pointer}
+.hb-rn-link:hover{text-decoration-color:var(--accent)}
+.hb-dctl{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+.hb-dbtn{background:transparent;border:1px solid var(--line-2);color:var(--ink-2);
+  border-radius:999px;padding:6px 13px;font-family:var(--font-ui);font-weight:600;
+  font-size:.7rem;letter-spacing:.02em;cursor:pointer;white-space:nowrap;
+  transition:border-color var(--dur-1),color var(--dur-1),transform var(--dur-1)}
+.hb-dbtn:active{transform:scale(.95)}
+.hb-ddone:hover{border-color:var(--sage);color:var(--sage)}
+.hb-ddismiss:hover{border-color:var(--line);color:var(--muted)}
+@media (max-width:440px){
+  .hb-directive{flex-direction:column}
+  .hb-dctl{flex-direction:row}
+}
+
+/* records — the upload affordance gets a warm plus mark */
+.hupload-plus{flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:inline-flex;
+  align-items:center;justify-content:center;background:var(--accent);color:var(--card);
+  font-weight:700;font-size:.9rem;line-height:1}
+
+/* Today — one quiet health-focus line under the context banner */
+.ctxbanner-health{display:flex;width:100%;align-items:center;gap:8px;text-align:left;
+  cursor:pointer;font:inherit;font-size:.84rem;color:var(--ink-2);
+  border-left-color:var(--sage);transition:transform var(--dur-1) var(--ease)}
+.ctxbanner-health:active{transform:scale(.99)}
+.ctxbanner-health-line{min-width:0;overflow:hidden;text-overflow:ellipsis;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ctxbanner-go{margin-left:auto;flex:0 0 auto;color:var(--sage);font-weight:600}

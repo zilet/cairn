@@ -1,0 +1,44 @@
+# Release compose for running the published image without a source checkout.
+#   mkdir cairn && cd cairn
+#   curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml
+#   docker compose up -d
+# The release workflow pins :latest to the tagged version in the file attached to
+# each GitHub release; this committed copy tracks :latest.
+services:
+  cairn:
+    image: ghcr.io/zilet/cairn:latest
+    container_name: cairn
+    restart: unless-stopped
+    ports:
+      # Reachable on the LAN/tailnet by default so you can open it from a phone
+      # or another trusted device. If the host is exposed beyond a trusted
+      # network, set CAIRN_AUTH_TOKEN below and/or bind to loopback only:
+      # "127.0.0.1:8787:8787".
+      - "8787:8787"
+    volumes:
+      - cairn-data:/data
+      - cairn-home:/home/app
+    environment:
+      - TZ=${TZ:-America/New_York}
+      # Optional shared-token auth. Unset = no auth; set it to gate /api and /mcp.
+      # Recommended whenever the port is reachable beyond loopback.
+      - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - COACH_AGENT=${COACH_AGENT:-}
+      - COACH_DAY=${COACH_DAY:-0}
+      - COACH_HOUR=${COACH_HOUR:-20}
+      - AGENT_CLI_AUTO_UPDATE=${AGENT_CLI_AUTO_UPDATE:-0}
+      - AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=${AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS:-168}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  cairn-data:
+  cairn-home:

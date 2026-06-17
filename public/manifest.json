@@ -1,0 +1,47 @@
+{
+  "name": "Cairn — Training & Nutrition",
+  "short_name": "Cairn",
+  "description": "Self-hosted training, nutrition, and performance tracker with an agentic coaching loop.",
+  "id": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#f4efe7",
+  "theme_color": "#f4efe7",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["health", "fitness", "lifestyle", "sports"],
+  "icons": [
+    { "src": "/icons/icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Today's workout",
+      "short_name": "Today",
+      "description": "Log today's sets",
+      "url": "/?tab=today&source=shortcut",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ask the coach",
+      "short_name": "Chat",
+      "description": "Chat with your coaching agent",
+      "url": "/?tab=chat&source=shortcut",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Progress",
+      "short_name": "Progress",
+      "description": "Volume, PRs and trends",
+      "url": "/?tab=progress&source=shortcut",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false
+}

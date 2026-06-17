@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest an improvement aligned with Cairn's constitution
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Cairn is a calm, self-hosted wellness OS — suggestions should fit
+        [`docs/VISION.md`](../../docs/VISION.md): you drive, no scores, pull-never-push,
+        propose→review→apply.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      placeholder: As someone who trains at home and uploads quarterly labs...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should Cairn suggest or surface? What stays manual?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constitution
+    attributes:
+      label: Constitution check
+      options:
+        - label: This is a suggestion, not a gate — the athlete can ignore it
+          required: true
+        - label: No 0–100 scores or metric walls introduced
+          required: true
+        - label: No push notifications or engagement loops
+          required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface
+      options:
+        - Today / Brief
+        - Plan / Coach
+        - Progress / Nutrition
+        - Chat
+        - Me / Health / Brain
+        - Settings / Ops
+        - API / MCP
+        - Other

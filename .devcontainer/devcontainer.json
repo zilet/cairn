@@ -1,0 +1,38 @@
+{
+  "name": "Cairn",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24-bookworm",
+
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": {
+      "label": "Cairn (PWA + API + MCP)",
+      "onAutoForward": "openBrowser"
+    }
+  },
+
+  "postCreateCommand": "npm install && npm run build && npm run seed:demo",
+
+  "postStartCommand": "bash .devcontainer/welcome.sh",
+
+  "remoteEnv": {
+    "PORT": "8787",
+    "HOST": "0.0.0.0",
+    "TZ": "America/New_York"
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "cairn",
+  "version": "0.3.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Cairn — self-hosted training, nutrition & performance tracker with an agentic coaching loop.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zilet/cairn.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zilet/cairn/issues"
+  },
+  "homepage": "https://github.com/zilet/cairn#readme",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "seed": "tsx src/seed.ts",
+    "seed:demo": "tsx src/demoSeed.ts",
+    "garmin:sync": "tsx src/garmin.ts",
+    "reset": "rm -f data/cairn.db data/cairn.db-* && npm run seed",
+    "migrate": "tsx src/migrate.ts",
+    "backup": "curl -fsS http://localhost:8787/api/export -o cairn-export.json && echo saved cairn-export.json",
+    "docs:index": "node scripts/gen-docs.mjs",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "pretest": "npm run build",
+    "test": "node test/run.mjs",
+    "presmoke": "npm run build",
+    "smoke": "node test/smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "garmin-connect": "^1.6.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

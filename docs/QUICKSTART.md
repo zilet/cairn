@@ -1,0 +1,310 @@
+# Quick Start
+
+## 30-second start
+
+The fastest path — one command from a fresh clone:
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+./quickstart.sh
+```
+
+The script detects your environment: **Docker** if available (recommended, no Node required on the
+host), **local Node 24** otherwise. It creates `.env` from `.env.example`, starts Cairn, waits for
+`/api/health`, and prints the URL plus the next step.
+
+**First paint is instant and real.** You get the full Brief, logging, and the plan with no agent
+configured. What needs an agent: chat, coaching drafts, and meal plan generation (see
+[Connect your first agent](#connect-your-first-agent) below).
+
+## Which path should I choose?
+
+| Goal | Best path | Why |
+|---|---|---|
+| Try Cairn right now on this computer | [30-second start](#30-second-start) | Lowest friction; Docker if present, Node 24 otherwise |
+| Run it every day from your phone | [Raspberry Pi](#raspberry-pi-always-on-home-box) | Cheap, quiet, always-on, private on your tailnet |
+| Keep it online away from home | [Small VM](#small-vm-private-online-box) | Works from anywhere when joined to Tailscale/WireGuard |
+| Evaluate without a server | [`SANDBOX.md`](SANDBOX.md) | Daytona / Codespaces / Gitpod, stop when idle |
+
+The recommended daily-driver shape is **Docker on a private host** plus **Tailscale/MagicDNS**.
+Do not publish raw port `8787` to the public internet.
+
+---
+
+## Docker (recommended)
+
+**Requires Docker with Compose.** The image bundles Node 24 and all coaching CLIs — no Node
+install needed on the host.
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+cp .env.example .env   # edit TZ at minimum
+docker compose up -d --build
+```
+
+Open **http://localhost:8787**.
+
+First build bakes the coaching CLIs into the image — expect a few minutes. Later rebuilds are fast
+(BuildKit caches the layers).
+
+### Published image (no source checkout)
+
+```bash
+mkdir cairn && cd cairn
+curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml
+docker compose up -d
+```
+
+See [`SHARING.md`](SHARING.md) for the GHCR release flow.
+
+---
+
+## Local Node (dev / no Docker)
+
+**Requires Node 24.** Cairn uses `node:sqlite`, which is only unflagged in Node 24+.
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+npm install
+npm run dev       # tsx watch -- auto-seeds on first boot
+```
+
+Open **http://localhost:8787**. The DB lands at `./data/cairn.db`.
+
+For a production-style local run (built JS, no tsx watcher):
+
+```bash
+npm run build
+npm start
+```
+
+---
+
+## Raspberry Pi (always-on home box)
+
+Use the dedicated setup script (arm64 note, Docker install with consent prompt,
+low-memory/swap guidance, persistent data volume reminder):
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+./scripts/quickstart-rpi.sh
+```
+
+The script starts Cairn on the Pi and prints two URLs:
+
+- `http://localhost:8787` on the Pi itself
+- `http://<pi-ip>:8787` from another device on the same LAN
+
+For a phone-friendly private URL, install Tailscale on the Pi and your phone/laptop, then run:
+
+```bash
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
+```
+
+Open `https://<pi-name>.<tailnet>.ts.net/` from a signed-in device. On iOS, Share -> Add to Home
+Screen gives you the installable/offline PWA.
+
+Recommended `.env` edits on the Pi:
+
+```env
+TZ=Europe/London
+CAIRN_AUTH_TOKEN=use-a-long-random-string-if-anyone-else-can-reach-this-host
+```
+
+After changing `.env`, restart:
+
+```bash
+docker compose up -d
+```
+
+Backups and restore are covered in [`DEPLOYMENT.md`](DEPLOYMENT.md#backups).
+
+---
+
+## Small VM (private online box)
+
+Use this when you want Cairn available away from home without maintaining hardware. A tiny Ubuntu
+VM is enough for personal use; start with roughly **1-2 vCPU, 1-2 GB RAM, and 10+ GB disk**.
+
+Keep the VM private:
+
+- Join the VM and your devices to Tailscale/WireGuard.
+- Do **not** open inbound firewall access to `8787` from the public internet.
+- Set `CAIRN_AUTH_TOKEN` because a VM is usually reachable by more than one device.
+
+Example from a fresh Ubuntu VM after SSH login:
+
+```bash
+# 1) Install Docker if the image does not include it already.
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER"
+newgrp docker
+
+# 2) Install Tailscale, then join your tailnet.
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# 3) Run Cairn.
+git clone https://github.com/zilet/cairn.git ~/cairn
+cd ~/cairn
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+TZ=America/New_York
+CAIRN_AUTH_TOKEN=use-a-long-random-string
+```
+
+Start it:
+
+```bash
+docker compose up -d --build
+docker compose logs --tail=60 cairn
+```
+
+Private access options:
+
+```bash
+# Browser from any signed-in tailnet device:
+http://<vm-tailnet-name>:8787
+
+# Installable/offline PWA over HTTPS:
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
+```
+
+Then open `https://<vm-name>.<tailnet>.ts.net/`. If you prefer an SSH tunnel instead of Tailscale:
+
+```bash
+ssh -L 8787:127.0.0.1:8787 user@your-vm
+```
+
+Then open `http://localhost:8787` on your laptop.
+
+---
+
+## Open the Brief
+
+Once Cairn is running:
+
+1. Open **http://localhost:8787** — you land on the **Today** tab and the Brief reads your day
+   immediately. It's deterministic on first boot (no wearable data yet), but it's real: a calm
+   rest/easy/train suggestion based on your plan and profile.
+2. Tap an override chip ("rough night", "give me an easy day") to reshape it.
+3. Log a set: pick any exercise from your plan, enter weight + reps, tap Log.
+4. **Me → Profile** — replace the seeded example profile with your own weight and goal.
+
+The plan, logging, bodyweight chart, and history work fully with no agent.
+
+### First 10 minutes
+
+1. **Me -> Profile:** replace the seeded example profile with your real weight, goal, training
+   age, and any constraints.
+2. **Today:** log one set or one bodyweight entry so the charts have your first real point.
+3. **Settings -> Agents:** enable `stub` if you want to see the draft/apply workflow with no login.
+4. **Settings -> Export:** download a JSON or DB backup once you start entering real data.
+
+After that, connect a real agent when you want chat, meal plans, and adaptive coaching drafts.
+
+---
+
+## Connect your first agent
+
+Coaching drafts, chat, and meal plans need one external agent. Choose one:
+
+| Agent | Auth |
+|---|---|
+| `claude` | Claude Code — Anthropic Pro/Max subscription |
+| `codex` | Codex — ChatGPT subscription |
+| `antigravity` | Antigravity (`agy`) — Google account |
+| `grok` | Grok Build — SuperGrok / X Premium+ (headless may need `XAI_API_KEY` in `.env`) |
+| `stub` | Built-in offline stub — no key, no login, exercises the propose/apply loop |
+
+### Docker: log in inside the container
+
+Logins persist in the `cairn-home` Docker volume across restarts and image updates. Always use
+`-u app` — the server runs as the `app` user; logins written as root are invisible to the process.
+
+```bash
+docker compose exec -u app -it cairn claude        # device/OAuth prompt
+docker compose exec -u app -it cairn codex login
+docker compose exec -u app -it cairn agy           # Google sign-in (paste code quickly)
+```
+
+### Local Node: log in on the host
+
+The coaching CLIs run as the same user as `npm start`, so a normal login on the host suffices:
+
+```bash
+claude        # Anthropic OAuth / login
+codex login   # ChatGPT
+agy           # Google
+```
+
+### Enable and test the agent
+
+Open **Settings → Agents**, enable your provider, and tap **Draft plan update**. The proposal
+appears in **Plan → Coach** for review; tap Apply to accept it.
+
+To try the offline stub without any login:
+
+1. **Settings → Agents** → enable `stub`
+2. Tap **Draft plan update** — it returns a canned proposal instantly.
+
+### Agent streaming
+
+| Agent | Chat streaming |
+|---|---|
+| `claude` | Token-by-token (live delta) |
+| `grok` | Token-by-token (live delta) |
+| `codex` | One-shot (complete message) |
+| `antigravity` | One-shot headless |
+| `stub` | Offline only |
+
+Google is transitioning **Gemini CLI → Antigravity CLI**; Cairn uses `agy` for the Google path.
+
+---
+
+## Try the demo persona
+
+Populate fictional data (great for screenshots and exploration):
+
+```bash
+npm run seed:demo
+# or inside Docker:
+docker compose exec -u app cairn npm run seed:demo
+```
+
+---
+
+## Connect MCP (optional)
+
+From a machine that can reach Cairn:
+
+```bash
+claude mcp add --transport http cairn http://localhost:8787/mcp
+```
+
+If `CAIRN_AUTH_TOKEN` is set, add `?token=…` or send `Authorization: Bearer …`.
+
+---
+
+## Security reminder
+
+Cairn has **no built-in auth by default**. Run it on localhost, a LAN, or a private tailnet —
+never expose port `8787` to the public internet without setting `CAIRN_AUTH_TOKEN` and HTTPS.
+See [`SECURITY.md`](../SECURITY.md).
+
+---
+
+## Next steps
+
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) — Tailscale, HTTPS PWA install, backups
+- [`OPERATIONS.md`](OPERATIONS.md) — updates, migrations, restore
+- [`VISION.md`](VISION.md) — product constitution
+- [`GARMIN.md`](GARMIN.md) — optional Garmin Connect sync

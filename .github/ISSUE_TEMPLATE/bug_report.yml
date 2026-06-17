@@ -1,0 +1,75 @@
+name: Bug report
+description: Something broke or behaves unexpectedly
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Cairn is self-hosted — include enough detail to reproduce.
+        **Do not** paste real health data, API keys, or `CAIRN_AUTH_TOKEN` values.
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: How are you running Cairn?
+      options:
+        - Docker (source checkout)
+        - Docker (GHCR release image)
+        - Local dev (npm run dev)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: cairn-version
+    attributes:
+      label: Version or git commit
+      placeholder: v0.3.0 or commit SHA
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Today tab
+        2. Tap ...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or console output (optional)
+      render: shell
+      description: `docker compose logs --tail=80 cairn` or browser devtools console
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coaching agent in use (if relevant)
+      options:
+        - stub
+        - claude
+        - codex
+        - antigravity
+        - grok
+        - auto rotation
+        - none / not applicable
