@@ -965,7 +965,7 @@ async function renderToday(opts = {}) {
   const stats = peeks.stats ? peeks.stats.data : await api("/stats");
   const profile = peeks.profile ? peeks.profile.data : await api("/profile").catch(() => null);
   const exercises = peeks.exercises ? peeks.exercises.data : await api("/exercises").catch(() => []);
-  if (profile) setDiscipline(profile.primary_discipline); // keep the emphasis global warm for Progress/Today
+  if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); } // keep the emphasis globals warm for Progress/Today/Plan
   reval("/stats", "stats");
   reval("/profile", "profile");
   reval("/exercises", "exercises");

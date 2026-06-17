@@ -3485,6 +3485,57 @@ button.hmk-row:active{background:var(--card-2)}
 .end-pr-val{font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
   color:var(--accent);font-size:1.25rem;white-space:nowrap;font-variant-numeric:lining-nums;flex:0 0 auto}
 
+/* ===== Plan → Endurance (the running plan home) ============================ */
+/* The periodized ramp toward race day — a calm vertical timeline, current phase in
+   sage, earlier phases faded. No numbers, no grade; just where you are on the arc. */
+.end-ramp{margin:20px 0 4px}
+.end-ramp-h{margin-bottom:12px}
+.ramp-list{list-style:none;margin:0;padding:0}
+.ramp-step{display:flex;gap:12px;padding:0 0 16px;position:relative}
+.ramp-step:last-child{padding-bottom:0}
+.ramp-step::before{content:"";position:absolute;left:5px;top:15px;bottom:-1px;width:2px;background:var(--line-2)}
+.ramp-step:last-child::before{display:none}
+.ramp-dot{flex:0 0 auto;width:12px;height:12px;border-radius:50%;margin-top:3px;
+  background:var(--paper);border:2px solid var(--line-2);z-index:1}
+.ramp-step.is-done .ramp-dot{background:var(--line-2);border-color:var(--line-2)}
+.ramp-step.is-current .ramp-dot{background:var(--sage);border-color:var(--sage);box-shadow:0 0 0 4px var(--sage-bg)}
+.ramp-body{min-width:0;flex:1}
+.ramp-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.ramp-name{font-family:var(--font-display);font-variation-settings:"opsz" 48;font-weight:560;
+  font-size:1.04rem;color:var(--ink)}
+.ramp-step.is-done .ramp-name,.ramp-step.is-done .ramp-desc{color:var(--muted)}
+.ramp-when{flex:0 0 auto}
+.ramp-here{font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--sage);background:var(--sage-bg);border-radius:999px;padding:2px 8px}
+.ramp-desc{font-size:.85rem;color:var(--ink-2);margin-top:2px;line-height:1.4}
+.end-ramp-note{margin:16px 0 4px;font-size:.88rem;color:var(--ink-2);line-height:1.5}
+
+/* This week's prescribed runs + the shape-your-running composer. */
+.end-runs,.end-runs-empty{margin:20px 0 4px}
+.end-runs-h,.end-shape-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px}
+.end-link{background:none;border:none;padding:0;cursor:pointer;font-family:var(--font-ui);
+  font-size:.8rem;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.end-run-row{display:flex;align-items:center;gap:9px;padding:10px 0}
+.end-run-row+.end-run-row{border-top:1px solid var(--line)}
+.end-run-main{flex:1;min-width:0;display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.end-run-name{font-weight:500;color:var(--ink)}
+.end-run-day{flex:0 0 auto}
+.end-run-pres{font-family:var(--font-display);font-variation-settings:"opsz" 48;font-weight:560;
+  color:var(--accent);font-size:.98rem;white-space:nowrap;font-variant-numeric:lining-nums}
+.end-runs-empty p{margin:6px 0 0;font-size:.88rem;color:var(--ink-2);line-height:1.5}
+
+.end-shape{margin:24px 0 4px;padding:16px 18px;border-radius:var(--radius);
+  background:var(--card);box-shadow:var(--shadow-sm)}
+.end-shape-sub{margin:0 0 12px;font-size:.85rem;color:var(--ink-2);line-height:1.5}
+.end-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.end-chip{font-family:var(--font-ui);font-size:.82rem;color:var(--ink);background:var(--paper);
+  border:1px solid var(--line-2);border-radius:999px;padding:7px 14px;cursor:pointer;
+  transition:background .15s,border-color .15s}
+.end-chip:hover{background:var(--sage-bg);border-color:var(--sage)}
+.end-shape .form-textarea{width:100%;margin-bottom:10px}
+.end-shape-status{margin-top:10px;font-size:.82rem;color:var(--muted);line-height:1.5}
+.end-draft-card{margin-top:14px}
+
 /* Mobile (≤680px): the cardio editor's km/min/zone wrap stays usable. */
 @media (max-width:680px){
   .pi-nums-cardio{flex-wrap:wrap}

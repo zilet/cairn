@@ -667,8 +667,16 @@ window.addEventListener("resize", () => {
 // longer an orphaned Progress pill. Progress stays training-history focused.
 const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"]];
 const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory() };
-const PLAN_SEG = [["edit", "Training"], ["meals", "Meals"], ["coach", "Coach"]];
-const PLAN_HANDLERS = { edit: () => renderPlanEditor(), meals: () => renderMeals(), coach: () => renderCoach() };
+// The Plan sub-nav is dynamic: a runner/hybrid (or anyone with an endurance goal)
+// gets a dedicated ENDURANCE tab between Training and Meals — the home for the
+// periodized ramp, this week's prescribed runs, and shaping the running plan. A pure
+// strength athlete with no running goal never sees it (calm, no empty surface).
+function planSeg() {
+  return showEnduranceTab()
+    ? [["edit", "Training"], ["endurance", "Endurance"], ["meals", "Meals"], ["coach", "Coach"]]
+    : [["edit", "Training"], ["meals", "Meals"], ["coach", "Coach"]];
+}
+const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), meals: () => renderMeals(), coach: () => renderCoach() };
 
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function escAttr(s) { return escHtml(s).replace(/"/g, "&quot;"); }
@@ -992,6 +1000,15 @@ function setDiscipline(d) {
 }
 const isEndurance = () => primaryDiscipline === "endurance";
 const isHybrid = () => primaryDiscipline === "hybrid";
+
+// Whether the athlete has an endurance OBJECTIVE on file (a race or a standing
+// readiness target). Primed from the profile alongside the discipline (warm-load +
+// on save). Used to surface the Plan → Endurance tab even when the discipline label
+// is 'strength' — setting a running goal is a clear signal you want a running plan.
+let enduranceGoalSet = false;
+function setEnduranceGoalSet(present) { enduranceGoalSet = !!present; return enduranceGoalSet; }
+// A runner home is warranted when the athlete trains endurance OR has set a goal.
+const showEnduranceTab = () => isEndurance() || isHybrid() || enduranceGoalSet;
 
 // ---------- endurance formatting (min/km pace, distance, plain-word trend) ----------
 // All null-safe. Pace is min/km → "m:ss/km". Never a score, never a grade.

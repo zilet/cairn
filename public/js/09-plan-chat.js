@@ -7,7 +7,7 @@
 async function renderPlanEditor() {
   headerTitle.textContent = "Plan";
   const peek = peekCached("plan");
-  if (!peek) view.innerHTML = segSkeleton("edit", PLAN_SEG, 3); // cold: skeleton-first
+  if (!peek) view.innerHTML = segSkeleton("edit", planSeg(), 3); // cold: skeleton-first
   // Background revalidate populates the shared `plan` key for both surfaces; on a
   // changed payload re-render, but only when idle (no open day editor / unsaved
   // structural edit) so an in-flight edit is never clobbered by the refresh.
@@ -34,7 +34,7 @@ async function renderPlanEditor() {
          <a href="${escAttr(icsUrl)}" target="_blank" rel="noopener" style="color:var(--muted);opacity:.7;margin-left:8px">(.ics)</a>
        </div>`
     : "";
-  view.innerHTML = segBar("edit", PLAN_SEG) + `<div id="planedit"></div>
+  view.innerHTML = segBar("edit", planSeg()) + `<div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}`;
   wireSeg(PLAN_HANDLERS);
@@ -314,6 +314,215 @@ async function renderPlanEditor() {
   });
 
   draw();
+}
+
+// ---------- Plan → Endurance (the running plan home) ----------
+// The forward-looking counterpart to Progress → Endurance (which reads how running is
+// GOING): here you see the periodized RAMP toward race day, THIS WEEK's prescribed
+// runs, and SHAPE the running — ask the coach to plan/adjust runs, which lands as a
+// draft you apply surgically (each run attaches to its day, lifts untouched). Bound to
+// the constitution: pull-never-push, suggestion-not-a-gate, no 0–100 scores. Reuses
+// enduranceGoalCard/runComplianceLine (05), the cardio helpers (02), cardioSyncLine/
+// wireCardioSync (03), runTargetText/applyProposalById (06) — all global at runtime.
+
+// The four periodization phases, in race order. `when` mirrors the deterministic
+// cutoffs in repo.getEnduranceGoal (taper ≤2wk, sharpen ≤4wk, build ≤10wk, else base);
+// we CONSUME the server's `goal.phase` and never recompute the thresholds here.
+const ENDURANCE_PHASES = [
+  { key: "base", label: "Base", when: "11+ weeks out", desc: "Build aerobic volume — easy, conversational running." },
+  { key: "build", label: "Build", when: "5–10 weeks out", desc: "Add tempo and longer runs; raise the ceiling." },
+  { key: "sharpen", label: "Sharpen", when: "3–4 weeks out", desc: "Race-pace work as volume trims back." },
+  { key: "taper", label: "Taper", when: "final 2 weeks", desc: "Freshen up — let the training surface." },
+];
+
+// The ramp ladder — race mode only. Highlights the current phase (from goal.phase),
+// marks earlier phases done. Standing / past / no-goal → "" (nothing to ramp toward).
+function enduranceRampHtml(goal) {
+  if (!goal || goal.mode !== "race" || !goal.phase || goal.phase === "past") return "";
+  const curIdx = ENDURANCE_PHASES.findIndex((p) => p.key === goal.phase);
+  if (curIdx < 0) return "";
+  const steps = ENDURANCE_PHASES.map((p, i) => {
+    const cls = i < curIdx ? "is-done" : i === curIdx ? "is-current" : "is-next";
+    const here = i === curIdx ? `<span class="ramp-here lbl">You're here</span>` : "";
+    return `<li class="ramp-step ${cls}">
+        <span class="ramp-dot" aria-hidden="true"></span>
+        <div class="ramp-body">
+          <div class="ramp-top"><span class="ramp-name">${escHtml(p.label)}</span><span class="ramp-when lbl">${escHtml(p.when)}</span>${here}</div>
+          <div class="ramp-desc">${escHtml(p.desc)}</div>
+        </div>
+      </li>`;
+  }).join("");
+  return `<div class="end-ramp reveal" style="${stagger(1)}">
+      <div class="end-ramp-h"><span class="lbl">The ramp to race day</span></div>
+      <ol class="ramp-list">${steps}</ol>
+    </div>`;
+}
+
+// Preset "comments" the coach turns into run prescriptions — phrased like things you'd
+// actually say, phase/mode-aware. Each is just an instruction string for /agent/run.
+function endurancePresets(goal) {
+  const out = [{ t: "Plan this week's runs", i: "Plan my runs for this coming week toward my running goal — concrete sessions (easy / long / tempo or intervals) on specific days, conservative and aerobic-first." }];
+  if (goal && goal.mode === "race") {
+    out.push({ t: "Progress my long run", i: "Gently progress my long run this week toward my race, keeping it easy and aerobic — no more than about a 10% step up." });
+    out.push({ t: "Ease back — feeling flat", i: "I'm feeling flat and a bit run-down. Ease my running this week — hold or reduce volume, keep it easy, protect recovery." });
+  } else {
+    out.push({ t: "Keep me race-ready", i: "Plan a steady week of running that keeps me ready for my standing distance goal — maintain, don't peak." });
+    out.push({ t: "Ease back this week", i: "Ease my running this week — keep it light and easy, I want to recover." });
+  }
+  return out;
+}
+
+async function renderPlanEndurance() {
+  headerTitle.textContent = "Plan";
+  view.innerHTML = segBar("endurance", planSeg()) + `<div id="endPlanBody">${loadingState("Reading your running…")}</div>`;
+  wireSeg(PLAN_HANDLERS);
+  const token = ++pollToken;
+  let goal = null, compliance = null, plan = [], settings = null;
+  try {
+    [goal, compliance, plan, settings] = await Promise.all([
+      api("/endurance-goal").catch(() => null),
+      api("/run-compliance").catch(() => null),
+      api("/plan").catch(() => []),
+      api("/settings").then((r) => (r && r.settings) || null).catch(() => null),
+    ]);
+  } catch { /* paint with whatever resolved */ }
+  if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
+  paintPlanEndurance(goal, compliance, plan, settings);
+}
+
+function paintPlanEndurance(goal, compliance, plan, settings) {
+  const body = view.querySelector("#endPlanBody");
+  if (!body) return;
+
+  // No goal yet → invite setting one (the ramp + race-coach framing need an objective).
+  const goalHtml = (goal && goal.mode)
+    ? enduranceGoalCard(goal)
+    : `<div class="end-goal reveal" style="${stagger(0)}">
+         <div class="end-goal-head"><span class="lbl">Running goal</span></div>
+         <div class="end-goal-name">No goal set yet</div>
+         <div class="end-goal-sub">Set a race or a standing readiness target in <b>Me → Profile</b> and the coach will periodize your running toward it.</div>
+       </div>`;
+
+  const rampHtml = enduranceRampHtml(goal);
+  const standingNote = (goal && goal.mode === "standing")
+    ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(goal.weekly_km)} km/wk</b>.` : ""}</div>`
+    : "";
+
+  // This week's prescribed runs, from the plan's cardio items.
+  const runs = [];
+  (plan || []).forEach((d) => (d.items || []).forEach((it) => { if (isCardioItem(it)) runs.push({ it, day_number: d.day_number }); }));
+  const runRows = runs.map(({ it, day_number }, i) => `
+      <div class="end-run-row reveal" style="${stagger(i + 2)}">
+        <span class="run-pin" aria-hidden="true">▸</span>
+        <div class="end-run-main">
+          <span class="end-run-name">${escHtml(cardioLabel(it))}</span>
+          <span class="end-run-day lbl">Day ${escHtml(day_number)}</span>
+        </div>
+        <span class="end-run-pres numeral">${escHtml(cardioPrescription(it) || "—")}</span>
+      </div>`).join("");
+  const complianceHtml = (typeof runComplianceLine === "function") ? runComplianceLine(compliance) : "";
+  const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(settings, {}) : "";
+  const runsSection = runs.length
+    ? `<div class="end-runs reveal" style="${stagger(2)}">
+         <div class="end-runs-h"><span class="lbl">This week's runs</span>
+           <button class="end-link" id="endEditRuns">Edit in Training →</button></div>
+         ${runRows}
+       </div>${complianceHtml}${syncHtml}`
+    : `<div class="end-runs-empty reveal" style="${stagger(2)}">
+         <div class="lbl">This week's runs</div>
+         <p>No runs in your plan yet. Ask the coach below to build your week — each run lands on its day and keeps your lifts intact.</p>
+       </div>${complianceHtml}${syncHtml}`;
+
+  // Shape-your-running composer — the adjust/comment surface.
+  const presets = endurancePresets(goal);
+  const chips = presets.map((p, i) => `<button class="end-chip" data-egi="${i}">${escHtml(p.t)}</button>`).join("");
+  const composer = `<div class="end-shape reveal" style="${stagger(3)}">
+      <div class="end-shape-h"><span class="lbl">Shape your running</span></div>
+      <p class="end-shape-sub">Tell the coach what you want — it drafts run prescriptions you review and apply. Your lifting plan is never touched.</p>
+      <div class="end-chips">${chips}</div>
+      <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or add a tempo on Thursday"></textarea>
+      <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
+      <div id="endDraftStatus" class="end-shape-status"></div>
+      <div id="endDraft"></div>
+    </div>`;
+
+  body.innerHTML = goalHtml + rampHtml + standingNote + runsSection + composer;
+
+  const editBtn = body.querySelector("#endEditRuns");
+  if (editBtn) editBtn.addEventListener("click", () => renderPlanEditor());
+  if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderPlanEndurance());
+  body.querySelectorAll(".end-chip").forEach((b) => b.addEventListener("click", () => {
+    const p = presets[+b.dataset.egi]; if (p) draftEnduranceRuns(p.i, b);
+  }));
+  const draftBtn = body.querySelector("#endDraftBtn");
+  if (draftBtn) draftBtn.addEventListener("click", () => {
+    const txt = (body.querySelector("#endInstr")?.value || "").trim();
+    draftEnduranceRuns(txt || presets[0].i, draftBtn);
+  });
+}
+
+// One drafted run-prescription proposal, rendered inline with an APPLY button (the
+// surgical setWeeklyRuns apply, shared with the Coach list via applyProposalById).
+function endDraftCardHtml(p) {
+  const cardio = (p.parsed && Array.isArray(p.parsed.cardio)) ? p.parsed.cardio : [];
+  const rows = cardio.map((c) =>
+    `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(c.day_number)} ${escHtml(c.label || c.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(c))}</span>${(c.reason || c.note) ? ` <span style="color:var(--muted)">(${escHtml(c.reason || c.note)})</span>` : ""}</div>`
+  ).join("");
+  return `<div class="mp-card end-draft-card reveal">
+      <div class="mp-hero"><span class="lbl">Proposed runs · ${escHtml(p.agent)} · #${escHtml(p.id)}</span></div>
+      ${p.parsed && p.parsed.summary ? `<div class="sess-line">${escHtml(p.parsed.summary)}</div>` : ""}
+      ${rows}
+      <div class="logrow" style="margin-top:10px">
+        <button class="logbtn" style="width:auto;padding:0 16px;font-size:.85rem" data-egapply="${escAttr(p.id)}">APPLY TO MY PLAN</button>
+        <button class="ghostbtn" style="width:auto;padding:0 14px" data-egdiscard="${escAttr(p.id)}">DISCARD</button>
+      </div>
+    </div>`;
+}
+
+// Ask the coach to draft (or adjust) this week's runs. The created proposal comes back
+// on /agent/run directly (r.proposal) — we render its run prescriptions inline to apply
+// here, mirror it into the Coach list, and degrade calmly if the coach returned no runs.
+async function draftEnduranceRuns(instruction, triggerEl) {
+  const status = view.querySelector("#endDraftStatus");
+  const draftWrap = view.querySelector("#endDraft");
+  const restore = btnBusy(triggerEl, "Asking the coach…");
+  if (status) status.textContent = "Reading your running and your goal… this can take 10–60s.";
+  if (draftWrap) draftWrap.innerHTML = "";
+  let r = null;
+  try {
+    r = await api("/agent/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: "auto", instruction }) });
+  } catch { r = null; }
+  restore();
+  if (!view.querySelector("#endDraftStatus")) return; // navigated away mid-draft
+  const p = r && r.proposal;
+  const cardio = p && p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
+  if (!p || (r && r.error) || !p.parsed) {
+    if (status) status.textContent = "The coach couldn't finish — try again, or pick another agent in Settings.";
+    return;
+  }
+  if (!cardio.length) {
+    // The coach answered, but with strength / restructure changes rather than runs.
+    if (status) {
+      status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
+      const toCoach = status.querySelector("#endToCoach");
+      if (toCoach) toCoach.addEventListener("click", () => renderCoach());
+    }
+    return;
+  }
+  if (status) status.textContent = "";
+  if (!draftWrap) return;
+  draftWrap.innerHTML = endDraftCardHtml(p);
+  const ab = draftWrap.querySelector("[data-egapply]");
+  if (ab) ab.addEventListener("click", async () => {
+    await applyProposalById(ab.dataset.egapply, ab);
+    renderPlanEndurance(); // re-read so the applied runs show under "This week's runs"
+  });
+  const db = draftWrap.querySelector("[data-egdiscard]");
+  if (db) db.addEventListener("click", async () => {
+    try { await api(`/proposals/${db.dataset.egdiscard}/discard`, { method: "POST" }); } catch {}
+    draftWrap.innerHTML = "";
+    if (status) status.textContent = "Discarded.";
+  });
 }
 
 // ---------- Chat ----------

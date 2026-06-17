@@ -2,7 +2,7 @@
 // ---------- Coach ----------
 async function renderCoach() {
   headerTitle.textContent = "Coach";
-  view.innerHTML = segSkeleton("coach", PLAN_SEG, 2);
+  view.innerHTML = segSkeleton("coach", planSeg(), 2);
   const agents = await api("/agents");
   const proposals = await api("/proposals?limit=10");
   const agentOpts =
@@ -11,7 +11,7 @@ async function renderCoach() {
       `<option value="${a.name}"${a.enabled ? "" : " disabled"}>${a.name}${a.enabled ? "" : " (off)"}${a.env_ok ? "" : " · no key"}</option>`
     ).join("");
 
-  await skelSwap(() => { view.innerHTML = segBar("coach", PLAN_SEG) + `
+  await skelSwap(() => { view.innerHTML = segBar("coach", planSeg()) + `
     <div class="field"><label>Agent</label>
       <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
     <div class="field"><label>Instruction (optional)</label>
@@ -85,6 +85,22 @@ function statusBadge(status) {
 // re-render of the list can still surface the "adjusted to a safe step" note on the
 // card that was just applied (the clamp detail isn't persisted on the row).
 const lastApplyClamp = {};
+
+// Apply one proposal by id — the single apply path shared by the Coach list and the
+// Plan → Endurance "shape your running" composer. Flips the draft to 'applied'
+// server-side (surgical for run prescriptions), remembers any safe-step clamp so the
+// re-render can surface the honest note, toasts, and invalidates the stale plan cache.
+// Returns the apply response (or null on transport failure). Callers re-render.
+async function applyProposalById(id, btn) {
+  if (btn) btnBusy(btn, "Applying…");
+  let r = null;
+  try { r = await api(`/proposals/${id}/apply`, { method: "POST" }); } catch { r = null; }
+  const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
+  if (clamped) lastApplyClamp[id] = r.clamped;
+  toast(clamped ? "Applied · adjusted to a safe step" : "Applied");
+  state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
+  return r;
+}
 
 // Light refresh of just the proposals list — re-fetch + re-render, no skeleton/full
 // view rebuild (keeps scroll, and the apply transition reads cleanly).
@@ -203,15 +219,7 @@ function renderProposals(proposals) {
 
   wrap.querySelectorAll("[data-apply]").forEach((b) =>
     b.addEventListener("click", async () => {
-      btnBusy(b, "Applying…");
-      let r = null;
-      try { r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" }); } catch { r = null; }
-      // A code guardrail may have nudged a load to a safe step — remember it so the
-      // re-render can surface the honest "adjusted to a safe step" note on the card.
-      const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
-      if (clamped) lastApplyClamp[b.dataset.apply] = r.clamped;
-      toast(clamped ? "Applied · adjusted to a safe step" : "Applied");
-      state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
+      await applyProposalById(b.dataset.apply, b);
       refreshProposals();
     })
   );
@@ -938,7 +946,7 @@ async function renderMeals() {
   headerTitle.textContent = "Plan";
   const token = ++pollToken;
   const peek = peekCached(MEALS_KEY);
-  if (!peek) view.innerHTML = segSkeleton("meals", PLAN_SEG, 3); // cold: skeleton-first
+  if (!peek) view.innerHTML = segSkeleton("meals", planSeg(), 3); // cold: skeleton-first
   // meal prefs come from /settings; peek it so a warm paint has the verbatim text,
   // and revalidate in the background (cheap, shares the SWR tiers).
   let mealPrefs = String(peekCached(MEALS_SETTINGS_KEY)?.data?.settings?.meal_prefs || "");
@@ -1029,7 +1037,7 @@ function paintMealsBody(plans, mealPrefs) {
       <div id="energyCard">${loadingState("Reading your trend…")}</div>
       <div id="checkinResult" class="checkin-result"></div>
     </section>`;
-  view.innerHTML = segBar("meals", PLAN_SEG) + body + energyBlock + `
+  view.innerHTML = segBar("meals", planSeg()) + body + energyBlock + `
     <details class="mp-history">
       <summary class="lbl">Past meal plans</summary>
       <div id="mealHist" style="margin-top:10px"></div>

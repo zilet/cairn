@@ -489,7 +489,7 @@ function renderTab(tab) {
 function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
   if (tab === "progress") return defaultProgressSeg() === "endurance" ? segSkeleton("endurance", PROGRESS_SEG, 2) : segSkeleton("sessions", PROGRESS_SEG, 3);
-  if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", PLAN_SEG, 3);
+  if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", planSeg(), 3);
   if (tab === "me") {
     const seg = state.meSeg || "profile";
     return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
@@ -744,11 +744,12 @@ registerJobReconnector("insight", reconnectInsight);
 // landing tab is Progress and the default seg flipped, re-render it once.
 function primeDiscipline() {
   const warm = peekCached("profile");
-  if (warm && warm.data) { setDiscipline(warm.data.primary_discipline); return; }
+  if (warm && warm.data) { setDiscipline(warm.data.primary_discipline); setEnduranceGoalSet(!!warm.data.endurance_goal_json); return; }
   api("/profile").then((p) => {
     if (!p) return;
     const before = defaultProgressSeg();
     setDiscipline(p.primary_discipline);
+    setEnduranceGoalSet(!!p.endurance_goal_json);
     // only re-render if we're still sitting on the Progress tab AND nothing was
     // navigated since boot AND the endurance default actually changed the seg.
     if (state.tab === "progress" && !state.progressSeg && defaultProgressSeg() !== before) renderTab("progress");

@@ -25,6 +25,7 @@ async function renderMeProfile() {
   const [profile, goal] = await Promise.all([api("/profile"), api("/goal")]);
   const p = profile || {};
   setDiscipline(p.primary_discipline); // keep the emphasis global in sync with what's on file
+  setEnduranceGoalSet(!!p.endurance_goal_json);
   const disc = primaryDiscipline;
   // The endurance OBJECTIVE (v37) — race | standing | none. Parsed from the profile
   // row's JSON; the editor below lets the athlete set a race to build toward or a
@@ -161,6 +162,7 @@ async function renderMeProfile() {
     };
     await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     setDiscipline(pickedDisc); // the emphasis global follows what was just saved
+    setEnduranceGoalSet(!!body.endurance_goal); // a new/cleared running goal flips the Plan → Endurance tab
     // new goal weight/date/factor moves the pace + goal lines across surfaces; a
     // discipline change reshapes Today's compass + the default Progress view.
     ["profile", "stats", "progress:weight", "progress:energy"].forEach(swrInvalidate);
