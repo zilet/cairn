@@ -12,6 +12,7 @@ import { todayISO } from "./db.js";
 import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
 import { runChosen } from "./runChosen.js";
 import {
+  buildCoachPrompt,
   buildMealPlanPrompt,
   buildMealSwapPrompt,
   buildRecipePrompt,
@@ -177,6 +178,42 @@ function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; fo
     date,
     dayContext,
   });
+}
+
+// Draft a plan proposal from a free-text instruction — the agentic "ask the coach"
+// op behind the Coach tab's DRAFT PLAN UPDATE and the Plan → Endurance "shape your
+// running" composer. Runs ONE agent over buildCoachPrompt, persists the result as a
+// `draft` plan_proposals row (NEVER applied here), and returns the SAME body the
+// synchronous /agent/run handler used to return (proposal + ok + agent + tried +
+// agent_status + exit/stderr) so both surfaces render unchanged. Backgrounded via
+// the agentJobs `proposal` kind (live caption progress + reconnect) or run inline
+// when bg ops are off. Degrades like the rest of the loop: no agent → result.parsed
+// is null → ok:false with agent_status, the proposal row still persists as raw.
+export async function draftCoachProposal(
+  agent: string | undefined,
+  instruction: string | undefined,
+  hooks?: OpHooks
+) {
+  hooks?.onPhase?.("reading your training");
+  const prompt = buildCoachPrompt(instruction);
+  // No determinate `frac` here: the single draft call IS the long, opaque step, so we
+  // let the indeterminate filament keep OSCILLATING throughout rather than pinning a
+  // frozen half-full bar (a determinate frac only fits ops with a fast tail phase, like
+  // session-suggest's verify pass). The rotating client caption carries "what's happening".
+  hooks?.onPhase?.("drafting your plan");
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
+  const proposal = repo.createProposal(chosen, instruction ?? "", result.raw, result.parsed);
+  return {
+    proposal,
+    ok: !!result.parsed,
+    agent: chosen,
+    tried,
+    // Honest degradation sidecar (mirrors today-read / session-suggest / mealplan)
+    // so callers can distinguish "no agent configured" from "agent failed".
+    agent_status: agentStatusFor({ ok: !!result.parsed, agent: chosen, tried }),
+    exit_code: result.code,
+    stderr: (result.stderr || "").slice(0, 800),
+  };
 }
 
 export interface ExerciseExplanation {

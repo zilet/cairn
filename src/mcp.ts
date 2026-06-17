@@ -3,11 +3,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import type { Request, Response } from "express";
 import * as repo from "./repo.js";
-import { buildCoachPrompt } from "./prompt.js";
 import {
-  runChosen,
   agentStatusFor,
   suggestSession,
+  draftCoachProposal,
   weekAheadRead,
   draftMealPlan,
   nutritionCheckin,
@@ -326,10 +325,8 @@ export function buildMcpServer(): McpServer {
       instruction: z.string().optional().describe("optional extra guidance"),
     },
     async ({ agent, instruction }) => {
-      const prompt = buildCoachPrompt(instruction);
-      const { agent: chosen, result, tried } = await runChosen(agent, prompt);
-      const proposal = repo.createProposal(chosen, instruction ?? "", result.raw, result.parsed);
-      return asText({ proposal, ok: !!result.parsed, agent: chosen, tried });
+      const r = await draftCoachProposal(agent, instruction);
+      return asText({ proposal: r.proposal, ok: r.ok, agent: r.agent, tried: r.tried });
     }
   );
 

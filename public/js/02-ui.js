@@ -871,12 +871,15 @@ function loadingState(label) {
 // thinkingCaption() crossfades through these (~2.6s/line) and loops the tail.
 const THINKING_SCRIPTS = {
   session_suggest: ["Reading your week…", "Weighing recovery…", "Shaping today's session…", "Choosing the right load…"],
+  proposal: ["Reading your training…", "Weighing your recent sessions…", "Drafting next week's targets…", "Keeping the progression honest…"],
+  endurance_runs: ["Reading your running…", "Checking your mileage and goal…", "Shaping this week's runs…", "Keeping it aerobic and conservative…"],
   meal_plan: ["Reading your week…", "Balancing the macros…", "Plating the days…", "Checking the protein floor…"],
   meal_swap: ["Reading the meal…", "Finding a match…", "Holding the macros…", "Plating the swap…"],
   recipe: ["Opening the kitchen…", "Sourcing the ingredients…", "Writing the steps…", "Tasting as it goes…"],
   nutrition_checkin: ["Reading your intake…", "Tracing the trend…", "Weighing the drift…", "Settling on a number…"],
   day_read_override: ["Hearing you…", "Re-reading the day…", "Reshaping the brief…"],
   chat_distill: ["Looking back over the thread…", "Keeping what matters…", "Tidying the rest away…"],
+  onboard: ["Hearing you out…", "Folding it into your picture…", "Noting what matters…", "Setting things up…"],
   insight: ["Connecting the dots…", "Crossing the domains…", "Listening for one real thread…"],
 };
 

@@ -2,6 +2,7 @@ import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import {
   suggestSession,
+  draftCoachProposal,
   draftMealPlan,
   swapMealAgentic,
   generateRecipe,
@@ -104,6 +105,12 @@ async function processAgentJob(id: number): Promise<void> {
           date: input.date != null ? String(input.date) : undefined,
         }, hooks);
         chosen = result?.agent ?? null;
+        break;
+      }
+      case "proposal": {
+        result = await draftCoachProposal(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
+        chosen = result?.agent ?? null;
+        if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
         break;
       }
       case "meal_plan": {

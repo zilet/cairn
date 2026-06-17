@@ -667,7 +667,13 @@ function openOnboarding() {
     const status = m.querySelector("#obStatus");
     const btn = m.querySelector("#obStart");
     btn.disabled = true; btn.textContent = "GETTING TO KNOW YOU…";
-    status.textContent = "One moment — folding this into your picture.";
+    // Same elite loader the planning surfaces use — an oscillating filament + a calm
+    // rotating caption so a 10–60s first-run agent pass reads as quiet motion, never a
+    // frozen line. (Self-clears when enterApp() tears down the modal.)
+    status.innerHTML = `<span class="job-cap"></span>`;
+    const capEl = status.querySelector(".job-cap");
+    if (capEl) thinkingCaption(capEl, "onboard");
+    if (!reducedMotion()) status.classList.add("is-thinking");
     try {
       // /api/onboard understands + applies, then marks onboarded server-side.
       await api("/onboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
@@ -738,6 +744,7 @@ registerJobReconnector("recipe", reconnectRecipe);
 registerJobReconnector("day_read_override", reconnectDayReadOverride);
 registerJobReconnector("nutrition_checkin", reconnectNutritionCheckin);
 registerJobReconnector("insight", reconnectInsight);
+registerJobReconnector("proposal", reconnectProposal);
 // Prime the discipline emphasis global BEFORE the first paint so a landing straight
 // on Progress (?tab=progress / a PWA shortcut) honors an endurance athlete's default
 // view. Warm cache → set it synchronously (no flash). Cold → fetch, and if the

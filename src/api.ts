@@ -7,14 +7,13 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
-import { buildCoachPrompt } from "./prompt.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
 import { enqueueAgentJob, cancelAgentJob, onJobEvent } from "./agentJobs.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
 import {
-  runChosen,
   agentStatusFor,
   suggestSession,
+  draftCoachProposal,
   getCachedExerciseExplanation,
   explainExercise,
   weekAheadRead,
@@ -444,23 +443,17 @@ api.post("/agent-clis/update", (_req, res) => res.status(202).json(startAgentCli
 api.get("/settings", (_req, res) => res.json({ settings: repo.getSettings(), agents: repo.getAgentConfig() }));
 api.put("/settings", (req, res) => res.json({ settings: repo.setSettings(req.body ?? {}), agents: repo.getAgentConfig() }));
 
+// Draft a plan proposal from a free-text instruction (the Coach tab's DRAFT PLAN
+// UPDATE + the Plan → Endurance "shape your running" composer). A durable
+// background job by default — the PWA streams the evolving caption + reconnects
+// across reloads, exactly like session-suggest / meal-plan; when bg ops are off it
+// runs inline and returns the legacy body unchanged. draftCoachProposal owns the
+// agent run + proposal persistence so both paths return byte-for-byte the same body.
 api.post("/agent/run", async (req, res) => {
   const { agent, instruction } = req.body ?? {};
+  if (backgroundOp(res, "proposal", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
   try {
-    const prompt = buildCoachPrompt(instruction);
-    const { agent: chosen, result, tried } = await runChosen(agent, prompt);
-    const proposal = repo.createProposal(chosen, instruction ?? "", result.raw, result.parsed);
-    res.json({
-      proposal,
-      ok: !!result.parsed,
-      agent: chosen,
-      tried,
-      // Honest degradation sidecar (mirrors today-read / session-suggest / mealplan)
-      // so callers can distinguish "no agent configured" from "agent failed".
-      agent_status: agentStatusFor({ ok: !!result.parsed, agent: chosen, tried }),
-      exit_code: result.code,
-      stderr: (result.stderr || "").slice(0, 800),
-    });
+    res.json(await draftCoachProposal(agent, instruction));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

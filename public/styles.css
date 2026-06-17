@@ -3546,6 +3546,9 @@ button.hmk-row:active{background:var(--card-2)}
 .end-shape .form-textarea{width:100%;margin-bottom:10px}
 .end-shape-status{margin-top:10px;font-size:.82rem;color:var(--muted);line-height:1.5}
 .end-draft-card{margin-top:14px}
+/* Trailing breathing room so the composer's button never crowds the fixed tab bar
+   (the composer is the last card in the view, so it otherwise sits right above it). */
+#endPlanBody{padding-bottom:24px}
 
 /* Mobile (≤680px): the cardio editor's km/min/zone wrap stays usable. */
 @media (max-width:680px){

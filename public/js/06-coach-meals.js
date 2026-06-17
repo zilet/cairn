@@ -49,28 +49,53 @@ function instructionValue() {
   return preset;
 }
 
-async function runCoach() {
+// Draft a plan-update proposal from the Coach sub-view (#runbtn). Runs as a durable
+// background job so a long draft survives a reload mid-run, streaming its evolving
+// caption + filament into #runstatus; when background ops are off, runOp renders the
+// inline result immediately. On done we refresh the proposals list in place.
+function runCoach() {
   const agent = $("#agentsel").value;
   const status = $("#runstatus");
   const btn = $("#runbtn");
-  btn.disabled = true;
-  status.textContent = `Running ${agent}\u2026 this can take 10\u201360s.`;
-  try {
-    const r = await api("/agent/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent, instruction: instructionValue() }),
-    });
-    if (r.error) { status.textContent = "The coach couldn't finish \u2014 try again, or pick another agent in Settings."; }
-    else if (!r.ok) { status.textContent = "The coach replied but didn't return a plan. Try again, or see the raw output below."; }
-    else { status.textContent = "Draft ready \u2014 review below."; }
-    const proposals = await api("/proposals?limit=10");
-    renderProposals(proposals);
-  } catch {
-    status.textContent = "Couldn't reach the coach \u2014 check your connection.";
-  } finally {
-    btn.disabled = false;
-  }
+  if (btn) btnBusy(btn, "Drafting\u2026");
+  if (status) status.innerHTML = `<span class="job-cap"></span>`;
+  runOp("proposal", { agent, instruction: instructionValue() }, coachProposalOpOpts());
+}
+
+// Plain-words failure line for a proposal draft \u2014 honest about cause (no agent vs
+// agent failed vs unreachable), mirroring mealDraftFailLine.
+function proposalDraftFailLine(err) {
+  if (err && err.agent_status === "unconfigured") return "Drafting a plan needs a coaching agent \u2014 connect one in Settings.";
+  if (err) return "The coach replied but didn't return a plan \u2014 try again, or pick another agent in Settings.";
+  return "Couldn't reach the coach \u2014 check your connection.";
+}
+
+// Shared runOp options for a Coach-view proposal draft \u2014 used by the trigger and the
+// reload reconnector so render/fail behavior is identical. A draft always persists as
+// a row, so we refresh the proposals list on BOTH paths (the raw row shows even on a
+// no-plan reply, exactly as before).
+function coachProposalOpOpts() {
+  return {
+    path: "/agent/run",
+    anchor: "#runstatus",
+    caption: "proposal",
+    guard: () => !$("#runstatus")?.isConnected,
+    isFail: (r) => !r || r.ok !== true,
+    render: async () => {
+      const status = $("#runstatus");
+      if (status) status.textContent = "Draft ready \u2014 review below.";
+      const btn = $("#runbtn");
+      if (btn && btn._busyRestore) btn._busyRestore();
+      try { renderProposals(await api("/proposals?limit=10")); } catch {}
+    },
+    onFail: async (err) => {
+      const status = $("#runstatus");
+      if (status) status.textContent = proposalDraftFailLine(err);
+      const btn = $("#runbtn");
+      if (btn && btn._busyRestore) btn._busyRestore();
+      try { renderProposals(await api("/proposals?limit=10")); } catch {}
+    },
+  };
 }
 
 // Shared status chip for proposals + meal plans (mp-badge per contract).
@@ -1134,12 +1159,13 @@ function mealPlanDraftOpOpts() {
   };
 }
 
-// Shared "rebuild a loading caption on a status host" reconnector body for the two
-// meal-plan draft entry points (the journal #mealDraftStatus and the Coach
-// #mealstatus). Both enqueue the same `meal_plan` job kind, so a single registered
-// reconnector picks whichever host is currently mounted; the matching draft button
-// (if present) is re-frozen and the op's render/fail lands in place.
-function reconnectMealPlanStatus(o, statusSel, btnSel, ghost) {
+// Shared "rebuild a loading caption on a status host" reconnector body. Used by any
+// op whose loading state is a #status host carrying a .job-cap + a frozen draft
+// button (meal-plan from the journal/Coach, and proposal drafts from Coach/Endurance).
+// A single registered reconnector per kind picks whichever host is currently mounted;
+// the matching draft button (if present) is re-frozen and the op's render/fail lands
+// in place. Generic over (opOpts, statusSelector, buttonSelector, ghost-ring).
+function reconnectStatusHost(o, statusSel, btnSel, ghost) {
   const status = view.querySelector(statusSel);
   if (!status) return null; // host not mounted — a later render retries
   const btn = btnSel ? view.querySelector(btnSel) : null;
@@ -1162,10 +1188,26 @@ function reconnectMealPlanStatus(o, statusSel, btnSel, ghost) {
 // (#mealDraftStatus), else the Coach host (#mealstatus); null when neither is up.
 function reconnectMealPlan() {
   if (view.querySelector("#mealDraftStatus")) {
-    return reconnectMealPlanStatus(mealPlanDraftOpOpts(), "#mealDraftStatus", "#mealDraftBtn", true);
+    return reconnectStatusHost(mealPlanDraftOpOpts(), "#mealDraftStatus", "#mealDraftBtn", true);
   }
   if (view.querySelector("#mealstatus")) {
-    return reconnectMealPlanStatus(coachMealPlanOpOpts(), "#mealstatus", "#mealbtn", false);
+    return reconnectStatusHost(coachMealPlanOpOpts(), "#mealstatus", "#mealbtn", false);
+  }
+  return null;
+}
+
+// The single registered reconnector for `proposal` jobs: both the Coach draft
+// (#runstatus) and the Plan → Endurance composer (#endDraftStatus) enqueue the same
+// `proposal` kind, so this picks whichever surface is currently mounted. When neither
+// is (the user navigated elsewhere), the draft still persisted server-side and shows
+// on the next render — so a null reconnector is safe, no work is lost.
+function reconnectProposal() {
+  if (view.querySelector("#endDraftStatus")) {
+    enduranceComposerLock(); // re-lock chips + the in-flight flag, not just the button
+    return reconnectStatusHost(enduranceProposalOpOpts(), "#endDraftStatus", "#endDraftBtn", false);
+  }
+  if (view.querySelector("#runstatus")) {
+    return reconnectStatusHost(coachProposalOpOpts(), "#runstatus", "#runbtn", false);
   }
   return null;
 }

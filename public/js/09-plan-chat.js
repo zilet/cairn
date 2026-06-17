@@ -394,6 +394,8 @@ async function renderPlanEndurance() {
 function paintPlanEndurance(goal, compliance, plan, settings) {
   const body = view.querySelector("#endPlanBody");
   if (!body) return;
+  _endDrafting = false; // fresh composer — never inherit a stuck in-flight lock (any
+  // truly in-flight proposal job re-attaches via reconnectProposal and re-locks the UI)
 
   // No goal yet → invite setting one (the ramp + race-coach framing need an objective).
   const goalHtml = (goal && goal.mode)
@@ -468,12 +470,12 @@ function paintPlanEndurance(goal, compliance, plan, settings) {
   if (editBtn) editBtn.addEventListener("click", () => renderPlanEditor());
   if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderPlanEndurance());
   body.querySelectorAll(".end-chip").forEach((b) => b.addEventListener("click", () => {
-    const p = presets[+b.dataset.egi]; if (p) draftEnduranceRuns(p.i, b);
+    const p = presets[+b.dataset.egi]; if (p) draftEnduranceRuns(p.i);
   }));
   const draftBtn = body.querySelector("#endDraftBtn");
   if (draftBtn) draftBtn.addEventListener("click", () => {
     const txt = (body.querySelector("#endInstr")?.value || "").trim();
-    draftEnduranceRuns(txt || presets[0].i, draftBtn);
+    draftEnduranceRuns(txt || presets[0].i);
   });
 }
 
@@ -495,43 +497,74 @@ function endDraftCardHtml(p) {
     </div>`;
 }
 
-// Ask the coach to draft (or adjust) this week's runs. The created proposal comes back
-// on /agent/run directly (r.proposal) — we render its run prescriptions inline to apply
-// here, mirror it into the Coach list, and degrade calmly if the coach returned no runs.
-let _endDrafting = false; // serialize: chip + button both call this; never race two agent runs
-async function draftEnduranceRuns(instruction, triggerEl) {
-  if (_endDrafting) return;
+// Ask the coach to draft (or adjust) this week's runs. Runs as a durable background
+// `proposal` job (the SAME elite loader the Coach tab + session-suggest use): the
+// evolving caption + filament stream into #endDraftStatus and survive a reload —
+// replacing the old blocking ~80s await that sat on a static "Asking the coach…".
+// The created proposal's run prescriptions render inline to apply here (surgical
+// setWeeklyRuns via the shared applyProposalById), degrading calmly when the coach
+// returns no runs or no agent is configured.
+let _endDrafting = false; // chip + button both call this; never race two drafts in one render
+
+// Lock the composer for the length of a draft: hold the in-flight flag + disable the
+// chips so a chip tap can't race a second job. Used by the live trigger AND the reload
+// reconnector (reconnectProposal) — so a job still streaming after a reload re-locks
+// the whole composer, not just the button. enduranceComposerRestore() is the inverse.
+function enduranceComposerLock() {
   _endDrafting = true;
-  const myToken = pollToken; // a re-render (here or another tab) bumps it → our DOM refs go stale
-  const chips = [...view.querySelectorAll(".end-chip")];
-  chips.forEach((c) => { c.disabled = true; });
-  const restore = btnBusy(triggerEl, "Asking the coach…");
-  let status = view.querySelector("#endDraftStatus");
-  let draftWrap = view.querySelector("#endDraft");
-  if (status) status.textContent = "Reading your running and your goal… this can take 10–60s.";
-  if (draftWrap) draftWrap.innerHTML = "";
-  let r = null;
-  try {
-    r = await api("/agent/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: "auto", instruction }) });
-  } catch { r = null; }
-  restore();
-  chips.forEach((c) => { c.disabled = false; });
+  view.querySelectorAll(".end-chip").forEach((c) => { c.disabled = true; });
+}
+function enduranceComposerRestore() {
+  view.querySelectorAll(".end-chip").forEach((c) => { c.disabled = false; });
+  const btn = view.querySelector("#endDraftBtn");
+  if (btn && btn._busyRestore) btn._busyRestore();
   _endDrafting = false;
-  // Stale guard: if the view re-rendered (or we left), the captured refs are detached —
-  // re-query the LIVE nodes after confirming we're still the current render.
-  if (myToken !== pollToken) return;
-  status = view.querySelector("#endDraftStatus");
-  draftWrap = view.querySelector("#endDraft");
+}
+
+function draftEnduranceRuns(instruction) {
+  if (_endDrafting) return;
+  enduranceComposerLock();
+  const btn = view.querySelector("#endDraftBtn");
+  if (btn) btnBusy(btn, "Asking…");
+  const status = view.querySelector("#endDraftStatus");
+  if (status) status.innerHTML = `<span class="job-cap"></span>`;
+  const draftWrap = view.querySelector("#endDraft");
+  if (draftWrap) draftWrap.innerHTML = "";
+  runOp("proposal", { agent: "auto", instruction }, enduranceProposalOpOpts());
+}
+
+// Shared runOp options for an Endurance "shape your running" draft — used by the
+// trigger and the reload reconnector (reconnectProposal) so render/fail are identical.
+function enduranceProposalOpOpts() {
+  return {
+    path: "/agent/run",
+    anchor: "#endDraftStatus",
+    caption: "endurance_runs",
+    guard: () => !view.querySelector("#endDraftStatus")?.isConnected,
+    // The coach must return a parsed proposal; a parsed proposal with NO runs is NOT a
+    // failure — it's the calm "proposed changes but no runs" branch, handled in render.
+    isFail: (r) => !r || r.ok === false || !r.proposal || !r.proposal.parsed,
+    render: (r) => renderEnduranceDraftResult(r.proposal),
+    onFail: (err) => {
+      enduranceComposerRestore();
+      const status = view.querySelector("#endDraftStatus");
+      if (!status) return;
+      status.textContent = (err && err.agent_status === "unconfigured")
+        ? "Drafting runs needs a coaching agent — connect one in Settings. You can still edit runs in Training."
+        : "The coach couldn't finish — try again, or pick another agent in Settings.";
+    },
+  };
+}
+
+// Render a drafted proposal's run prescriptions inline (or the calm no-runs line),
+// then wire APPLY (surgical setWeeklyRuns) + DISCARD. Shared by the live draft and the
+// reload reconnector.
+function renderEnduranceDraftResult(p) {
+  enduranceComposerRestore();
+  const status = view.querySelector("#endDraftStatus");
+  const draftWrap = view.querySelector("#endDraft");
   if (!status || !draftWrap) return;
-  const p = r && r.proposal;
   const cardio = p && p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
-  if (!p || (r && r.error) || !p.parsed) {
-    // Honest cause: no agent configured → point at Settings (the rest of the app does).
-    status.textContent = (r && r.agent_status === "unconfigured")
-      ? "Drafting runs needs a coaching agent — connect one in Settings. You can still edit runs in Training."
-      : "The coach couldn't finish — try again, or pick another agent in Settings.";
-    return;
-  }
   if (!cardio.length) {
     // The coach answered, but with strength / restructure changes rather than runs.
     status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
