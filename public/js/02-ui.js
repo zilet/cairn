@@ -1108,11 +1108,13 @@ async function pollEnrichment(path, id, { tab, token, onUpdate, tries = 10, inte
   return row;
 }
 
-// Status badge: shows a spinner while pending, a subtle "noted" tag when the coach captured something.
+// Status badge: a quiet spinner ONLY while the coach is still refining a just-logged
+// entry. Once it settles there's NO permanent tag — the refined entry itself is the
+// result, and the capture toast already confirmed the log at the moment of action.
+// (A persistent "✦ noted" used to sit on every entry forever; that was pure noise.)
 function enrichBadge(status) {
   if (enrichmentActive(status)) return `<span class="enr enr-pending">enriching...</span>`;
-  if (status === "done") return `<span class="enr enr-done" title="coach captured a note">✦ noted</span>`;
-  return ""; // skipped / failed / undefined -> no noise
+  return ""; // done / skipped / failed / undefined -> no lingering tag
 }
 
 // One-line description of an activity row from its (possibly refined) fields.
