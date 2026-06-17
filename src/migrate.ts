@@ -238,6 +238,59 @@ export const MIGRATIONS: Migration[] = [
     // rows stay NULL, which the reader treats as {} (no routing).
     addColumn(db, "settings", "agent_routes TEXT DEFAULT ''");
   } },
+  { version: 35, name: "endurance-discipline-and-cardio", up: (db) => {
+    // Endurance/runner-first + hybrid support. profile.primary_discipline drives
+    // coach framing, the day-read, and weekly stats (default 'strength' = today's
+    // behavior); endurance_sport is optional free text ("running"/"cycling"/…).
+    addColumn(db, "profile", "primary_discipline TEXT DEFAULT 'strength'");
+    addColumn(db, "profile", "endurance_sport TEXT");
+    // First-class PLANNED cardio: a plan_items row can be a cardio prescription
+    // (kind='cardio') with no exercise_id. Existing rows stay kind='strength'.
+    addColumn(db, "plan_items", "kind TEXT DEFAULT 'strength'");
+    addColumn(db, "plan_items", "target_distance_km REAL");
+    addColumn(db, "plan_items", "target_duration_min REAL");
+    addColumn(db, "plan_items", "target_zone TEXT");
+    addColumn(db, "plan_items", "interval_json TEXT");
+    // A logged cardio effort (run/ride) modeled as a reviewable session too.
+    addColumn(db, "sessions", "kind TEXT DEFAULT 'strength'");
+  } },
+  { version: 36, name: "plan-items-exercise-nullable", up: (db) => {
+    // v35 added the cardio columns to plan_items via ALTER, but SQLite cannot
+    // drop a NOT NULL constraint with ALTER — so DBs migrated from an older
+    // schema still have exercise_id NOT NULL and reject cardio items (which have
+    // exercise_id = null). Fresh DBs get the nullable column straight from db.ts,
+    // so only rebuild when the constraint is genuinely still there. plan_items
+    // has no incoming FKs and no indexes/triggers, so a copy-rebuild is safe and
+    // runs inside this migration's BEGIN/COMMIT. (v35 already added every column
+    // referenced below, since migrations apply in ascending order.)
+    const info = db.prepare("PRAGMA table_info(plan_items)").all() as Array<{ name: string; notnull: number }>;
+    const ex = info.find((c) => c.name === "exercise_id");
+    if (!ex || ex.notnull !== 1) return; // already nullable (fresh DB) — nothing to do
+    db.exec(`
+      CREATE TABLE plan_items_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plan_day_id INTEGER NOT NULL REFERENCES plan_days(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        exercise_id INTEGER REFERENCES exercises(id),
+        sets INTEGER NOT NULL DEFAULT 3,
+        rep_low INTEGER,
+        rep_high INTEGER,
+        target_weight REAL,
+        note TEXT,
+        warmup_sets INTEGER,
+        target_seconds INTEGER,
+        kind TEXT DEFAULT 'strength',
+        target_distance_km REAL,
+        target_duration_min REAL,
+        target_zone TEXT,
+        interval_json TEXT
+      );
+      INSERT INTO plan_items_new (id, plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json)
+        SELECT id, plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json FROM plan_items;
+      DROP TABLE plan_items;
+      ALTER TABLE plan_items_new RENAME TO plan_items;
+    `);
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

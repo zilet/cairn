@@ -185,6 +185,7 @@ async function renderSettings() {
   }
 
   view.innerHTML = `
+    <p class="set-lede">Everything here is optional — Cairn works out of the box. Connect an agent below for coaching.</p>
     <section class="set-group">
       <h2 class="set-group-title">Coaching</h2>
       <p class="set-group-sub">The agent brain. When you draft without naming an agent (the Coach <b>Auto</b> option and the weekly auto-coach), Cairn rotates across the agents you enable here.</p>
@@ -336,9 +337,18 @@ async function renderSettings() {
     wrap.innerHTML = order.map((name, i) => {
       const a = meta[name];
       const off = disabled.has(name);
+      // Calm presence indicator (no alarming red) so a user isn't left guessing why
+      // coaching is silent. `present` = the CLI binary is installed; `env_ok` = any
+      // required key is set; `usable` rolls those up (plus enabled). A dot + plain
+      // word: ready / not installed / sign-in needed.
+      let dotCls, statusLbl;
+      if (a.present === false) { dotCls = "agentdot-absent"; statusLbl = "not installed"; }
+      else if (a.env_ok === false) { dotCls = "agentdot-absent"; statusLbl = "sign-in needed"; }
+      else { dotCls = "agentdot-ready"; statusLbl = "ready"; }
       return `<div class="agentrow${off ? " off" : ""} reveal" style="${stagger(i)}">
         <div class="agentmeta">
-          <div class="agentname">${name}${a.env_ok ? "" : ' <span class="warnpill">no key</span>'}</div>
+          <div class="agentname">${name}</div>
+          <div class="agentstatus"><span class="agentdot ${dotCls}" aria-hidden="true"></span>${statusLbl}</div>
           <div class="agentdesc">${a.description || ""}</div>
         </div>
         <div class="agentctl">
@@ -444,6 +454,14 @@ function downloadFile(href) {
 }
 
 // ---------- tabs ----------
+// The Progress sub-view to land on. Endurance athletes default to the Endurance
+// read; everyone else to History. Once the user picks any Progress seg this session
+// we remember it (state.progressSeg) so the default never yanks them back.
+function defaultProgressSeg() {
+  if (state.progressSeg && PROGRESS_SEG.some(([k]) => k === state.progressSeg)) return state.progressSeg;
+  return isEndurance() ? "endurance" : "sessions";
+}
+
 function renderTab(tab) {
   headerTitle.classList.remove("hdr-tappable"); // only Today re-arms the date control
   document.getElementById("hdrChatActions")?.remove(); // only Chat re-creates the header affordances
@@ -455,7 +473,10 @@ function renderTab(tab) {
     const jump = state.planJump; state.planJump = null;
     return jump === "meals" ? renderMeals() : jump === "coach" ? renderCoach() : renderPlanEditor();
   }
-  if (tab === "progress") return renderHistory();
+  // Endurance athletes land on the Endurance read first (gentle emphasis, not a
+  // different app — History/1RM/Volume are all still one tap away). A user who has
+  // navigated to another Progress seg this session keeps it.
+  if (tab === "progress") return defaultProgressSeg() === "endurance" ? renderEndurance() : renderHistory();
   if (tab === "chat") return renderChat();
   if (tab === "me") return renderMe();
   return renderSettings();
@@ -467,7 +488,7 @@ function renderTab(tab) {
 // shell-first paint, so we don't pre-skeleton it.
 function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
-  if (tab === "progress") return segSkeleton("sessions", PROGRESS_SEG, 3);
+  if (tab === "progress") return defaultProgressSeg() === "endurance" ? segSkeleton("endurance", PROGRESS_SEG, 2) : segSkeleton("sessions", PROGRESS_SEG, 3);
   if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", PLAN_SEG, 3);
   if (tab === "me") {
     const seg = state.meSeg || "profile";
@@ -484,7 +505,9 @@ function tabSkeleton(tab) {
 // skeleton). The plan tab lands on History/Training/Meals per state.planJump.
 function primaryKeyFor(tab) {
   if (tab === "today") return "plan"; // Today's first input; warm => render paints from cache
-  if (tab === "progress") return "history:sessions"; // the default (History) seg
+  // The endurance default reads /stats live (no SWR peek) — keep its skeleton; the
+  // History default warms off history:sessions exactly as before.
+  if (tab === "progress") return defaultProgressSeg() === "endurance" ? null : "history:sessions";
   if (tab === "plan") return state.planJump === "coach" ? null : state.planJump === "meals" ? MEALS_KEY : "plan";
   return null;
 }
@@ -549,6 +572,12 @@ function openOnboarding() {
             <button type="button" class="segbtn" data-dpw="6">6</button>
           </div></div>
       </div>
+      <div class="field"><label>Your sport <span class="ob-opt">— optional</span></label>
+        <div class="seg disc-seg" id="obDisc" role="group" aria-label="Primary discipline">
+          <button type="button" class="segbtn active" data-disc="strength">Strength</button>
+          <button type="button" class="segbtn" data-disc="endurance">Endurance</button>
+          <button type="button" class="segbtn" data-disc="hybrid">Hybrid</button>
+        </div></div>
       <div class="field"><label>Main goal</label>
         <select id="obGoal">
           <option value="">What matters most? (optional)</option>
@@ -572,6 +601,15 @@ function openOnboarding() {
     b.addEventListener("click", () => {
       dpw = +b.dataset.dpw;
       m.querySelectorAll("#obDays .segbtn").forEach((x) => x.classList.toggle("active", x === b));
+    })
+  );
+  // One-tap discipline so a runner self-identifies on day one. Default strength
+  // (matching the server default); it's a calm preference, never a quiz step.
+  let disc = "strength";
+  m.querySelectorAll("#obDisc [data-disc]").forEach((b) =>
+    b.addEventListener("click", () => {
+      disc = b.dataset.disc;
+      m.querySelectorAll("#obDisc .segbtn").forEach((x) => x.classList.toggle("active", x === b));
     })
   );
   const intro = m.querySelector("#obIntro");
@@ -604,14 +642,25 @@ function openOnboarding() {
     const age = +m.querySelector("#obAge").value || null;
     if (age) parts.push(`I'm ${age}.`);
     parts.push(`I train about ${dpw} days a week.`);
+    if (disc === "endurance") parts.push("I'm primarily an endurance athlete.");
+    else if (disc === "hybrid") parts.push("I train both strength and endurance (hybrid).");
     const goal = m.querySelector("#obGoal").value;
     if (goal) parts.push(`My main goal is to ${goal}.`);
     const note = (intro.value || "").trim();
     if (note) parts.push(note);
     return parts.join(" ").trim();
   }
+  // The chosen discipline is a structured field, so persist it directly (the agent's
+  // free-text pass can't be relied on to set it). Best-effort; never blocks setup.
+  async function persistDiscipline() {
+    if (disc === "strength") { setDiscipline("strength"); return; } // server default already
+    try {
+      await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ primary_discipline: disc }) });
+      setDiscipline(disc);
+    } catch {}
+  }
 
-  m.querySelector("#obSkip").addEventListener("click", async () => { await persistOnboarded(); enterApp(); });
+  m.querySelector("#obSkip").addEventListener("click", async () => { await persistDiscipline(); await persistOnboarded(); enterApp(); });
 
   m.querySelector("#obStart").addEventListener("click", async () => {
     const text = composeIntro();
@@ -622,9 +671,11 @@ function openOnboarding() {
     try {
       // /api/onboard understands + applies, then marks onboarded server-side.
       await api("/onboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      await persistDiscipline(); // structured field — set it directly, after the agent pass
       toast("You're all set");
     } catch {
       // never trap them on setup — their basics are saved on the server regardless.
+      await persistDiscipline();
       await persistOnboarded();
       toast("Saved — you can refine anytime in Me");
     }
@@ -687,7 +738,25 @@ registerJobReconnector("recipe", reconnectRecipe);
 registerJobReconnector("day_read_override", reconnectDayReadOverride);
 registerJobReconnector("nutrition_checkin", reconnectNutritionCheckin);
 registerJobReconnector("insight", reconnectInsight);
-activateTab(new URLSearchParams(location.search).get("tab"));
+// Prime the discipline emphasis global BEFORE the first paint so a landing straight
+// on Progress (?tab=progress / a PWA shortcut) honors an endurance athlete's default
+// view. Warm cache → set it synchronously (no flash). Cold → fetch, and if the
+// landing tab is Progress and the default seg flipped, re-render it once.
+function primeDiscipline() {
+  const warm = peekCached("profile");
+  if (warm && warm.data) { setDiscipline(warm.data.primary_discipline); return; }
+  api("/profile").then((p) => {
+    if (!p) return;
+    const before = defaultProgressSeg();
+    setDiscipline(p.primary_discipline);
+    // only re-render if we're still sitting on the Progress tab AND nothing was
+    // navigated since boot AND the endurance default actually changed the seg.
+    if (state.tab === "progress" && !state.progressSeg && defaultProgressSeg() !== before) renderTab("progress");
+  }).catch(() => {});
+}
+const _landingTab = new URLSearchParams(location.search).get("tab");
+primeDiscipline();
+activateTab(_landingTab);
 maybeOnboard();
 // Re-attach any agent job that was running when the app last closed. The first
 // paint is async, so defer a tick; jobReconnect rebuilds each running job's host

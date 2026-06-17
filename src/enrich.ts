@@ -169,6 +169,9 @@ async function processJob(job: Job): Promise<void> {
   // panels; activity/food jobs hand it the raw free-text entry.
   let prompt: string;
   let timeoutMs = ENRICH_TIMEOUT_MS;
+  // Track an unpacked archive dir so we can always remove it after the agent runs
+  // — an Apple Health export is hundreds of MB and would otherwise fill a Pi's disk.
+  let extractedDir: string | null = null;
   if (job.kind === "health") {
     const row = repo.getHealthDocumentRaw(job.id) as any;
     const fp = (row?.file_path ?? "").toString().trim();
@@ -191,7 +194,7 @@ async function processJob(job: Job): Promise<void> {
     let isDir = false;
     if (looksLikeZip(fp, row?.mime)) {
       const dir = await unzipToFolder(fp);
-      if (dir) { target = dir; isDir = true; }
+      if (dir) { target = dir; isDir = true; extractedDir = dir; }
     }
     prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
     timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
@@ -215,6 +218,13 @@ async function processJob(job: Job): Promise<void> {
     parsed = fb.result?.parsed ?? null;
   } catch {
     parsed = null;
+  } finally {
+    // Always remove an unpacked archive dir (could be hundreds of MB) once the
+    // agent has read it — whether the run succeeded, failed, or threw.
+    if (extractedDir) {
+      try { fs.rmSync(extractedDir, { recursive: true, force: true }); }
+      catch (e: any) { console.warn(`[enrich] failed to clean up ${extractedDir}: ${e?.message ?? e}`); }
+    }
   }
 
   if (!parsed || typeof parsed !== "object") {

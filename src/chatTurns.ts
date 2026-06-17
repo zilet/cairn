@@ -218,6 +218,15 @@ export function cancelTurn(id: number) {
   return turn;
 }
 
+// Shutdown helper: abort every live chat subprocess so a redeploy/SIGTERM stops
+// cleanly instead of orphaning CLIs. Durable recovery (recoverChatTurns) still
+// re-handles any interrupted 'running' row on the next boot.
+export function abortAllTurns() {
+  for (const c of controllers.values()) {
+    try { c.abort(); } catch { /* not running */ }
+  }
+}
+
 // Crash recovery (boot): mark interrupted 'running' turns errored (their actions
 // may have partially applied — re-running risks duplicates) and re-enqueue the
 // 'queued' ones that never started. Mirrors recoverPendingEnrich.

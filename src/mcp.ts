@@ -6,6 +6,7 @@ import * as repo from "./repo.js";
 import { buildCoachPrompt } from "./prompt.js";
 import {
   runChosen,
+  agentStatusFor,
   suggestSession,
   weekAheadRead,
   draftMealPlan,
@@ -164,7 +165,7 @@ export function buildMcpServer(): McpServer {
   );
 
   const planItemShape = z.object({
-    exercise: z.string(),
+    exercise: z.string().optional().describe("exercise name (required for a strength item; a label for a cardio item)"),
     sets: z.number().int().optional(),
     rep_low: z.number().int().nullable().optional(),
     rep_high: z.number().int().nullable().optional(),
@@ -173,6 +174,13 @@ export function buildMcpServer(): McpServer {
     warmup_sets: z.number().int().nullable().optional().describe("# of warmup sets before working sets"),
     target_seconds: z.number().int().nullable().optional().describe("prescribed hold/duration in seconds, for timed exercises"),
     mode: z.enum(["reps", "timed"]).nullable().optional().describe("exercise mode, applied when a new exercise is created"),
+    // First-class planned cardio (v35): a kind:'cardio' item carries an endurance
+    // prescription instead of a loaded exercise (no exercise_id is stored).
+    kind: z.enum(["strength", "cardio"]).nullable().optional().describe("'cardio' = an endurance prescription with no loaded exercise; default 'strength'"),
+    target_distance_km: z.number().nullable().optional().describe("planned distance in km (cardio)"),
+    target_duration_min: z.number().nullable().optional().describe("planned moving time in minutes (cardio)"),
+    target_zone: z.string().nullable().optional().describe("HR/effort zone, e.g. 'Z2' | 'tempo' | 'easy' (cardio)"),
+    interval: z.any().optional().describe("optional structured interval JSON (cardio)"),
   });
 
   server.tool(
@@ -196,7 +204,7 @@ export function buildMcpServer(): McpServer {
 
   server.tool(
     "set_plan",
-    "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days). Days not included are removed.",
+    "Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days) or to add cardio days. Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription.",
     { days: z.array(z.object({
         day_number: z.number().int().optional(),
         name: z.string(),
@@ -251,9 +259,16 @@ export function buildMcpServer(): McpServer {
 
   server.tool(
     "get_weekly_stats",
-    "Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak.",
+    "Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes.",
     {},
     async () => asText(repo.getWeeklyStats())
+  );
+
+  server.tool(
+    "get_endurance_prs",
+    "Endurance PRs from logged cardio: the longest single distance + duration and the fastest pace (min/km) at standard distances (1/5/10k, half, full). Optional type filter (e.g. 'run'|'ride'). Plain numbers, never a score — the endurance analogue of the strength est-1RM.",
+    { type: z.string().optional().describe("filter to one activity type, e.g. 'run' | 'ride'") },
+    async ({ type }) => asText(repo.getEndurancePRs(type))
   );
 
   server.tool(
@@ -309,13 +324,15 @@ export function buildMcpServer(): McpServer {
   server.tool("get_profile", "Get the athlete's profile (age, height, weight, goal).", {},
     async () => asText(repo.getProfile()));
 
-  server.tool("set_profile", "Update profile fields (any subset). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either.",
+  server.tool("set_profile", "Update profile fields (any subset). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it.",
     {
       sex: z.string().optional(), age: z.number().optional(), height_cm: z.number().optional(),
       weight_lb: z.number().optional(), goal_weight_lb: z.number().optional(),
       goal_date: z.string().optional(), activity_factor: z.number().optional(), notes: z.string().optional(),
       about_me: z.string().optional(),
       allergies: z.string().optional(), dietary_restrictions: z.string().optional(),
+      primary_discipline: z.enum(["strength", "endurance", "hybrid"]).optional(),
+      endurance_sport: z.string().optional(),
     },
     async (p) => asText(repo.setProfile(p)));
 
@@ -680,9 +697,10 @@ export function buildMcpServer(): McpServer {
       try {
         if (!override) {
           const cached = repo.getCachedDayRead(date || localToday());
-          if (cached) return asText({ ...cached, cached: true });
+          if (cached) return asText({ ...cached, cached: true, agent_status: agentStatusFor(cached) });
         }
-        return asText(await computeDayRead({ date, override, agent }));
+        const r: any = await computeDayRead({ date, override, agent });
+        return asText({ ...r, agent_status: agentStatusFor(r) });
       } catch (e: any) {
         const b = repo.dayRead(date);
         const headline = b.kind === "rest" ? "Rest today." : b.kind === "easy" ? "Take it easy." : b.focus ? `${b.focus}.` : "Good to train.";

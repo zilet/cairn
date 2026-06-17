@@ -210,6 +210,13 @@ export function cancelAgentJob(id: number) {
   return job;
 }
 
+// Shutdown helper: abort every live agent-job subprocess (see chatTurns.abortAllTurns).
+export function abortAllJobs() {
+  for (const c of controllers.values()) {
+    try { c.abort(); } catch { /* not running */ }
+  }
+}
+
 // Crash recovery (boot): mark interrupted 'running' jobs errored (their coachOp
 // may have partially persisted a draft — re-running risks duplicates) and
 // re-enqueue the 'queued' ones that never started. Mirrors recoverChatTurns.

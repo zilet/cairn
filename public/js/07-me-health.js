@@ -18,14 +18,17 @@ async function renderMeProfile() {
   state.meSeg = "profile";
   pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
   view.innerHTML = segSkeleton("profile", ME_SEG, 2); // skeleton-first: seg paints now, fields hydrate
-  const [profile, goal, acts, notes] = await Promise.all([
-    api("/profile"), api("/goal"), api("/activities?limit=8"), api("/food-notes?limit=10"),
-  ]);
+  // Profile is identity + goals + allergies/diet ONLY. Capture lives on Today
+  // (quick-log + frequents + voice + the bodyweight chip) and in Chat — never
+  // duplicated here. The activity/nutrition HISTORY lives in Today's "Lately"
+  // and Progress → History, not on Profile.
+  const [profile, goal] = await Promise.all([api("/profile"), api("/goal")]);
   const p = profile || {};
+  setDiscipline(p.primary_discipline); // keep the emphasis global in sync with what's on file
+  const disc = primaryDiscipline;
   const num = (id, label, val, step) =>
     `<div class="field" style="margin-bottom:9px"><label>${label}</label>
-     <input id="${id}" type="number" step="${step||1}" value="${val ?? ""}"
-       style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>`;
+     <input id="${id}" type="number" step="${step||1}" value="${val ?? ""}" class="form-input"></div>`;
 
   const reqWarn = goal?.requested?.aggressive
     ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${goal.message}</div>`
@@ -44,143 +47,94 @@ async function renderMeProfile() {
     ${num("weight_lb","Weight (lb)",p.weight_lb,0.1)}
     ${num("goal_weight_lb","Goal weight (lb)",p.goal_weight_lb,0.1)}
     <div class="field" style="margin-bottom:9px"><label>Goal date</label>
-      <input id="goal_date" type="date" value="${p.goal_date || ""}" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>
+      <input id="goal_date" type="date" value="${p.goal_date || ""}" class="form-input"></div>
     ${num("activity_factor","Activity factor (1.3\u20131.8)",p.activity_factor,0.05)}
+
+    <div class="field" style="margin-bottom:9px">
+      <label>Your sport</label>
+      <p class="aboutme-hint">What you mostly train. Cairn meets you in it \u2014 the language, the day's read, and Progress reshape around it. Change it anytime.</p>
+      <div class="seg disc-seg" id="discSeg" role="group" aria-label="Primary discipline">
+        <button type="button" class="segbtn${disc === "strength" ? " active" : ""}" data-disc="strength">Strength</button>
+        <button type="button" class="segbtn${disc === "endurance" ? " active" : ""}" data-disc="endurance">Endurance</button>
+        <button type="button" class="segbtn${disc === "hybrid" ? " active" : ""}" data-disc="hybrid">Hybrid</button>
+      </div>
+    </div>
+    <div class="field" id="endSportField" style="margin-bottom:9px${disc === "strength" ? ";display:none" : ""}">
+      <label for="endurance_sport">Endurance sport <span class="ob-opt">\u2014 optional</span></label>
+      <input id="endurance_sport" type="text" placeholder="e.g. running, cycling, triathlon, rowing" maxlength="120"
+        value="${escAttr(p.endurance_sport || "")}" class="form-input">
+    </div>
 
     <div class="field aboutme" style="margin-bottom:0">
       <label for="about_me">About you</label>
       <p class="aboutme-hint">What "better" means to you, a little of your history, the foods you love and avoid, how work and life run. Optional \u2014 the coach reads it to make the pointing yours.</p>
-      <textarea id="about_me" rows="6" placeholder="e.g. I've lifted on and off for 15 years; fasted mornings suit me; I'll never give up bread; two young kids, so evenings are unpredictable. Getting strong and staying around for the long game is what 'better' means."
+      <textarea id="about_me" rows="6" placeholder="e.g. lifted on and off for years; fasted mornings suit me; two young kids, so evenings are unpredictable…"
         maxlength="8000">${escHtml(p.about_me || "")}</textarea>
     </div>
     <div class="field" style="margin-top:9px;margin-bottom:9px">
       <label for="allergies">Food allergies</label>
       <p class="aboutme-hint">A hard exclusion — the coach never puts these in a meal, recipe, or swap. Leave empty if none.</p>
-      <input id="allergies" type="text" placeholder="e.g. peanuts, shellfish" maxlength="1000"
-        style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px">
+      <input id="allergies" type="text" placeholder="e.g. peanuts, shellfish" maxlength="1000" class="form-input">
     </div>
     <div class="field" style="margin-bottom:0">
       <label for="dietary_restrictions">Dietary preferences</label>
       <p class="aboutme-hint">Respected strongly in your meal plans (e.g. vegetarian, pescatarian, no pork).</p>
-      <input id="dietary_restrictions" type="text" placeholder="e.g. pescatarian, no pork" maxlength="1000"
-        style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px">
+      <input id="dietary_restrictions" type="text" placeholder="e.g. pescatarian, no pork" maxlength="1000" class="form-input">
     </div>
     </div>
 
-    <h1 class="lbl" style="margin:24px 0 8px">Log bodyweight</h1>
-    <div class="logrow">
-      <input id="bwInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)" style="text-align:left">
-      <button id="bwBtn" class="logbtn">+</button>
-    </div>
-
-    <h1 class="lbl" style="margin:24px 0 8px">Log activity</h1>
-    <div class="logrow">
-      <input id="actText" type="text" placeholder="e.g. ran 50 min @ 5:30/km" style="text-align:left">
-      <button id="actBtn" class="logbtn">+</button>
-    </div>
-    <div id="actlist" style="margin-top:12px"></div>
-
-    <h1 class="lbl" style="margin:24px 0 8px">Nutrition notes</h1>
-    <div class="logrow">
-      <select id="noteMeal" class="selflex" style="flex:0 0 auto;width:auto;font-size:.9rem">
-        <option value="breakfast">Breakfast</option>
-        <option value="lunch">Lunch</option>
-        <option value="dinner">Dinner</option>
-        <option value="snack">Snack</option>
-      </select>
-      <input id="noteText" type="text" placeholder="e.g. 2 eggs, oats, banana" style="text-align:left">
-      <button id="noteBtn" class="logbtn">+</button>
-    </div>
-    <div id="notelist" style="margin-top:12px"></div>`; });
+    <div class="prof-capture-note sess">
+      <div class="sess-line" style="color:var(--muted)">
+        Log your bodyweight, activities, and meals on <button class="linkbtn" id="profToToday">Today</button> — the quick-log, the bodyweight chip, voice, and your frequents all live there. They show up in <b>Lately</b> and <button class="linkbtn" id="profToProgress">Progress</button>.
+      </div>
+    </div>`; });
 
   wireSeg(ME_HANDLERS);
 
+  // Track the chosen discipline locally (a seg tap isn't an input/change event the
+  // save bar listens for, so we mark dirty + persist it explicitly).
+  let pickedDisc = disc;
   const persistProfile = async () => {
     const body = {
       age: +$("#age").value || null, height_cm: +$("#height_cm").value || null,
       weight_lb: +$("#weight_lb").value || null, goal_weight_lb: +$("#goal_weight_lb").value || null,
       goal_date: $("#goal_date").value || null, activity_factor: +$("#activity_factor").value || null,
+      primary_discipline: pickedDisc,
+      endurance_sport: pickedDisc === "strength" ? "" : (($("#endurance_sport")?.value ?? "").trim()),
       about_me: ($("#about_me")?.value ?? "").trim(),
       allergies: ($("#allergies")?.value ?? "").trim(),
       dietary_restrictions: ($("#dietary_restrictions")?.value ?? "").trim(),
     };
     await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    // new goal weight/date/factor moves the pace + goal lines across surfaces.
+    setDiscipline(pickedDisc); // the emphasis global follows what was just saved
+    // new goal weight/date/factor moves the pace + goal lines across surfaces; a
+    // discipline change reshapes Today's compass + the default Progress view.
     ["profile", "stats", "progress:weight", "progress:energy"].forEach(swrInvalidate);
     renderMe(); // refresh the goal check with the new numbers; flash continues on top
     return true;
   };
-  // floating save bar: scoped to the profile fields only — the bodyweight /
-  // activity / nutrition quick-logs below save instantly and never show it
-  mountSaveBar({
+  // floating save bar: scoped to the profile fields only.
+  const profBar = mountSaveBar({
     sentinel: $("#profFields"),
     fields: $("#profFields"),
     onSave: persistProfile,
     onDiscard: () => renderMeProfile(),
   });
-  $("#bwBtn").addEventListener("click", async () => {
-    const w = +$("#bwInput").value;
-    if (!w) return;
-    await api("/bodyweight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weight_lb: w }) });
-    // a weigh-in syncs profile.weight_lb + the weight trend / pace across surfaces
-    swrInvalidate("progress:weight");
-    swrInvalidate("stats");
-    swrInvalidate("profile");
-    swrInvalidate("progress:energy");
-    toast("Weight logged"); renderMe();
-  });
-  $("#actBtn").addEventListener("click", async () => {
-    const text = $("#actText").value.trim();
-    if (!text) return;
-    $("#actText").value = "";
-    let a;
-    try { a = await api("/activities", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); }
-    catch { toast("Failed"); return; }
-    toast("Logged");
-    const wrap = $("#actlist");
-    if (wrap) wrap.insertAdjacentHTML("afterbegin", actEntryHtml(a));
-    if (a && a.id && enrichmentActive(a.enrichment_status)) {
-      const tab = state.tab, token = pollToken;
-      pollEnrichment("/activities", a.id, {
-        tab, token,
-        onUpdate: (row) => {
-          const el = $(`#actlist .qlent[data-actid="${row.id}"]`);
-          if (el) updateActEntry(el, row);
-        },
-      });
-    }
-  });
-  $("#noteBtn").addEventListener("click", async () => {
-    const raw = $("#noteText").value.trim();
-    if (!raw) return;
-    const meal = $("#noteMeal").value;
-    $("#noteText").value = "";
-    let n;
-    try { n = await api("/food-notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ meal, raw }) }); }
-    catch { toast("Failed"); return; }
-    toast("Note logged");
-    const wrap = $("#notelist");
-    if (wrap) {
-      (state._notesById ??= {})[String(n.id)] = n;
-      wrap.insertAdjacentHTML("afterbegin", noteEntryHtml(n));
-      wireNoteCard(wrap.querySelector(`.fnent[data-noteid="${n.id}"]`));
-    }
-    if (n && n.id && enrichmentActive(n.enrichment_status)) {
-      const tab = state.tab, token = pollToken;
-      pollEnrichment("/food-notes", n.id, {
-        tab, token,
-        onUpdate: (row) => {
-          const el = $(`#notelist .fnent[data-noteid="${row.id}"]`);
-          if (!el) return;
-          (state._notesById ??= {})[String(row.id)] = row;
-          el.innerHTML = noteEntryInner(row);
-          if (row.enrichment_status === "done") el.classList.add("fnent-done");
-        },
-      });
-    }
-  });
-  renderActs(acts);
-  renderNotes(notes);
+  // Discipline segmented control: pick one (background-swap active state, like
+  // onboarding's days/week), reveal the optional sport field for endurance/hybrid,
+  // and mark the screen dirty so Save surfaces.
+  $("#discSeg")?.querySelectorAll("[data-disc]").forEach((b) =>
+    b.addEventListener("click", () => {
+      pickedDisc = b.dataset.disc;
+      $("#discSeg").querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
+      const sportField = $("#endSportField");
+      if (sportField) sportField.style.display = pickedDisc === "strength" ? "none" : "";
+      profBar.markDirty();
+    })
+  );
+  // Capture is consolidated on Today + Chat — these just route there.
+  $("#profToToday")?.addEventListener("click", () => activateTab("today"));
+  $("#profToProgress")?.addEventListener("click", () => activateTab("progress"));
 }
 
 function foodNum(v) {
@@ -298,7 +252,7 @@ function wireNoteCard(el) {
 
 function renderNotes(notes) {
   const wrap = $("#notelist");
-  if (!notes || !notes.length) { wrap.innerHTML = `<div class="empty">No nutrition notes yet.</div>`; return; }
+  if (!notes || !notes.length) { wrap.innerHTML = `<div class="empty">Nothing logged yet. Snap a plate or jot a meal in Chat and it shows up here.</div>`; return; }
   state._notesById = Object.fromEntries(notes.map((n) => [String(n.id), n]));
   wrap.innerHTML = notes.map((n, i) => noteEntryHtml(n, i)).join("");
   wrap.querySelectorAll(".fnent").forEach(wireNoteCard);
@@ -306,7 +260,7 @@ function renderNotes(notes) {
 
 function renderActs(acts) {
   const wrap = $("#actlist");
-  if (!acts.length) { wrap.innerHTML = `<div class="empty">No activities yet.</div>`; return; }
+  if (!acts.length) { wrap.innerHTML = `<div class="empty">Nothing logged yet. Log a ride, run, or walk on Today and it lands here.</div>`; return; }
   wrap.innerHTML = acts.map((a) => actEntryHtml(a)).join("");
 }
 
@@ -336,7 +290,7 @@ async function renderMemory() {
     const kind = $("#memKind").value;
     input.value = "";
     try { await api("/memory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, kind }) }); }
-    catch { toast("Failed"); return; }
+    catch { toast("Couldn't save that — try again."); return; }
     toast("Remembered");
     loadMemory();
   };
@@ -351,7 +305,7 @@ async function loadMemory() {
   let items = [];
   try { items = await api("/memory"); } catch { items = []; }
   if (state.tab !== "me" || state.meSeg !== "memory" || !wrap.isConnected) return;
-  if (!items || !items.length) { wrap.innerHTML = `<div class="empty">Nothing remembered yet.</div>`; return; }
+  if (!items || !items.length) { wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter — they'll gather here.</div>`; return; }
   wrap.innerHTML = items.map((m, i) => {
     const date = (m.created_at || "").slice(0, 10);
     const src = m.source && m.source !== "user" ? ` · ${escHtml(m.source)}` : "";
@@ -391,7 +345,7 @@ function startMemEdit(row) {
     const content = inp.value.trim();
     if (!content) { inp.focus(); return; }
     try { await api(`/memory/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); }
-    catch { toast("Failed"); return; }
+    catch { toast("Couldn't save that — try again."); return; }
     toast("Updated"); loadMemory();
   };
   box.querySelector(".memok").addEventListener("click", save);
@@ -399,20 +353,12 @@ function startMemEdit(row) {
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") cancel(); });
 }
 
-// inline confirm: × turns into a "remove?" chip; second tap deletes, blur/timeout cancels
+// two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js)
 function startMemDelete(btn) {
-  const row = btn.closest(".memrow");
-  const id = row.dataset.mem;
-  if (btn.dataset.armed) {
-    api(`/memory/${id}`, { method: "DELETE" }).then(() => { toast("Removed"); loadMemory(); }).catch(() => toast("Failed"));
-    return;
-  }
-  btn.dataset.armed = "1";
-  btn.classList.add("armed");
-  btn.textContent = "remove?";
-  const reset = () => { delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = "×"; clearTimeout(t); };
-  const t = setTimeout(reset, 3000);
-  btn.addEventListener("blur", reset, { once: true });
+  const id = btn.closest(".memrow").dataset.mem;
+  armDelete(btn, () => {
+    api(`/memory/${id}`, { method: "DELETE" }).then(() => { toast("Removed"); loadMemory(); }).catch(() => toast("Couldn't remove that — try again."));
+  });
 }
 
 // ---------- Me: Health (uploaded docs + agentic analysis) ----------
@@ -680,7 +626,7 @@ function reviewHtml(review, stale, err) {
 // bails unless the Health sub-view is live.
 function paintHealthPicture() {
   const wrap = $("#hPicture");
-  if (!wrap || state.tab !== "me" || state.meSeg !== "health" || state.healthSeg !== "analysis" || !wrap.isConnected) return;
+  if (!wrap || state.tab !== "me" || state.meSeg !== "health" || state.healthSeg !== "read" || !wrap.isConnected) return;
   if (_hReviewRun) { wrap.innerHTML = reviewBusyHtml(); return; }
   const pic = _hPic || {};
   const err = _hReviewErr ? `<div class="hpic-err">${escHtml(_hReviewErr)}</div>` : "";
@@ -946,15 +892,30 @@ function loadHealthMarkers(token) {
   }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); if (!peek) paint(null); });
 }
 
-const HEALTH_SEG = [["analysis", "Analysis"], ["brain", "Brain"], ["markers", "Markers"], ["records", "Records"]];
+// Health's inner views, flattened to three clear concepts (no more four-way
+// double-seg, no marker/recovery surface rendered in two places):
+//   • read    — "Read": the whole-picture narrative review (the crown jewel) PLUS
+//               the connected brain reachable in one step — recovery (its ONE home),
+//               "this week's focus" directives, what-matters-now priority, supplements.
+//   • markers — "Markers": the rich trends catalog (the ONE detailed markers home).
+//   • records — "Records": upload + the document list.
+const HEALTH_SEG = [["read", "Read"], ["markers", "Markers"], ["records", "Records"]];
 
-// Health is a nested view: the Me seg picks "Health", then an inner seg picks
-// Analysis (the whole-picture review) / Markers (trends) / Records (upload +
-// documents). Splitting these bounds each tab's scroll and keeps it focused.
+// Back-compat: an older persisted state.healthSeg ("analysis"/"brain") maps onto
+// the new "read" home so a returning client never lands on a dead inner tab.
+function normalizeHealthSeg(seg) {
+  if (seg === "analysis" || seg === "brain") return "read";
+  return HEALTH_SEG.some(([k]) => k === seg) ? seg : "read";
+}
+
+// Health is a one-level inner view: the Me seg picks "Health", then a single inner
+// seg picks Read / Markers / Records. Splitting these bounds each view's scroll and
+// keeps it focused — and the connected brain now lives on the default Read view, so
+// it's reachable in one nav step (Me → Health) instead of buried behind a second seg.
 async function renderHealth() {
   headerTitle.textContent = "Me";
   state.meSeg = "health";
-  if (!state.healthSeg) state.healthSeg = "analysis";
+  state.healthSeg = normalizeHealthSeg(state.healthSeg);
   pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
   const idx = Math.max(0, HEALTH_SEG.findIndex(([k]) => k === state.healthSeg));
   view.innerHTML = segBar("health", ME_SEG)
@@ -1003,46 +964,42 @@ function switchHealthSeg(seg, opts = {}) {
 // poll from the tab we're leaving stops cleanly (Records resumes on return).
 function paintHealthTab() {
   pollToken++;
-  if (state.healthSeg === "brain") return paintHealthBrainTab();
   if (state.healthSeg === "markers") return paintHealthMarkersTab();
   if (state.healthSeg === "records") return paintHealthRecordsTab();
-  return paintHealthAnalysisTab();
+  return paintHealthReadTab();
 }
 
-// ---- Analysis tab: the whole-picture agentic review ----
-function paintHealthAnalysisTab() {
+// ---- Read tab: the whole-picture agentic review + the connected brain ----
+// The crown-jewel narrative review leads, with the connected brain reachable in
+// the same step (recovery — its ONE home — then "this week's focus" directives,
+// what-matters-now priority, and what-you're-taking supplements). The desktop
+// two-column layout splits this: the narrative review + recovery as the primary
+// column, the brain (directives / priority / supplements) as the right rail.
+function paintHealthReadTab() {
   const c = $("#hContent");
   if (!c) return;
-  c.innerHTML = `<div id="hRecovery"></div>
-    <div id="hPicture">
-      <div class="hpic hpic-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div>
+  c.innerHTML = `<div class="hread-cols">
+      <div class="hread-main">
+        <div id="hRecovery"></div>
+        <div id="hPicture">
+          <div class="hpic hpic-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div>
+        </div>
+      </div>
+      <aside class="hread-rail">
+        <div class="hbrain-intro sess"><div class="sess-line" style="color:var(--muted)">
+          One brain across your whole picture. A finding in your labs can quietly shape your meals, your training, and what to keep an eye on. It's here to inform — never medical advice — and nothing changes your plan on its own.
+        </div></div>
+        <div id="hbDirectives"><div class="hb-load">Gathering directives…</div></div>
+        <div id="hbMarkers"><div class="hb-load">Reading what matters most…</div></div>
+        <div id="hbSupplements"></div>
+      </aside>
     </div>`;
   loadRecoverySummary(pollToken, "#hRecovery");
-  if (_hReviewRun) { paintHealthPicture(); return; } // a run is still cooking
-  loadHealthPicture(pollToken, api("/health-docs"));
-}
-
-// =====================================================================
-// The connected brain (Brain tab): recovery read · what matters now
-// (priority markers, optimal-zone framing) · cross-domain directives.
-// Plain language only — no numeric scores, ever. Informational, not advice.
-// =====================================================================
-
-function paintHealthBrainTab() {
-  const c = $("#hContent");
-  if (!c) return;
-  c.innerHTML = `
-    <div class="hbrain-intro sess"><div class="sess-line" style="color:var(--muted)">
-      One brain across your whole picture. A finding in your labs can quietly shape your meals, your training, and what to keep an eye on. It's here to inform — never medical advice — and nothing changes your plan on its own.
-    </div></div>
-    <div id="hbRecovery"></div>
-    <div id="hbMarkers"><div class="hb-load">Reading what matters most…</div></div>
-    <div id="hbDirectives"><div class="hb-load">Gathering directives…</div></div>
-    <div id="hbSupplements"></div>`;
-  loadRecoverySummary(pollToken, "#hbRecovery");
   loadPriorityMarkers(pollToken);
   loadDirectives(pollToken);
   loadSupplements(pollToken);
+  if (_hReviewRun) { paintHealthPicture(); return; } // a run is still cooking
+  loadHealthPicture(pollToken, api("/health-docs"));
 }
 
 // ---- Supplements: UNDERSTANDING, not a daily log ----
@@ -1076,7 +1033,7 @@ function renderSupplements(list, token) {
       <p class="supp-sub">Say it once in plain words — I'll approximate the rest and fold it into your picture.</p>
       ${items.length ? `<div class="supp-chips">${chips}</div>` : `<p class="supp-empty">Nothing yet. Tell me below, or just mention it in chat.</p>`}
       <div class="supp-input">
-        <input id="suppText" type="text" placeholder="creatine daily, omega-3, some D, whey occasionally" autocomplete="off" />
+        <input id="suppText" type="text" placeholder="e.g. creatine daily, omega-3…" autocomplete="off" />
         <button id="suppAdd" class="ghostbtn">Add</button>
       </div>
     </div>`;
@@ -1113,11 +1070,10 @@ async function removeSupplement(id) {
 }
 
 // ---- Recovery (calm, plain-language; never a score) ----
-// Render a quiet line about how recovery's been over the window. Used both at the
-// top of Analysis and inside the Brain tab. Bails to nothing / a quiet hint when
-// there's no wearable or check-in data.
-// SWR over /recovery?days=14 (key recovery:14, shared by both the Analysis tab's
-// #hRecovery and the Brain tab's #hbRecovery): a warm re-entry paints the recovery
+// Render a quiet line about how recovery's been over the window. ONE home now: the
+// top of the Read view (#hRecovery). Bails to nothing / a quiet hint when there's
+// no wearable or check-in data.
+// SWR over /recovery?days=14 (key recovery:14): a warm re-entry paints the recovery
 // read instantly, then revalidates. `sel` targets which slot this call paints.
 function loadRecoverySummary(token, sel) {
   const wrap = $(sel);
@@ -1324,7 +1280,9 @@ function loadPriorityMarkers(token) {
       <div class="hb-sechead"><span class="lbl">What matters now</span>${matters.length ? `<span class="hb-secnote">${matters.length} to keep an eye on</span>` : `<span class="hb-secnote">all looking good</span>`}</div>
       <div class="hb-mklist">${lead.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div>
       ${rest.length ? `<details class="hb-more"><summary>Everything else (${rest.length})</summary><div class="hb-mklist hb-mklist-quiet">${rest.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div></details>` : ""}
+      <button class="hb-mk-allbtn" id="hbToMarkers" type="button">See every trend →</button>
     </div>`;
+    $("#hbToMarkers")?.addEventListener("click", () => switchHealthSeg("markers"));
   };
   const peek = peekCached("markers:priority");
   if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }

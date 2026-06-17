@@ -34,14 +34,23 @@ CREATE TABLE IF NOT EXISTS plan_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   plan_day_id INTEGER NOT NULL REFERENCES plan_days(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
-  exercise_id INTEGER NOT NULL REFERENCES exercises(id),
+  exercise_id INTEGER REFERENCES exercises(id), -- NULLABLE: a cardio item (kind='cardio') has no exercise (v35)
   sets INTEGER NOT NULL DEFAULT 3,
   rep_low INTEGER,
   rep_high INTEGER,
   target_weight REAL,
   note TEXT,
   warmup_sets INTEGER,
-  target_seconds INTEGER                 -- prescribed hold/duration for timed exercises
+  target_seconds INTEGER,                -- prescribed hold/duration for timed exercises
+  -- First-class planned cardio (v35). kind='cardio' rows carry an endurance
+  -- prescription instead of a loaded exercise: distance, duration, an HR/effort
+  -- zone, and an optional interval structure (JSON). kind='strength' (default)
+  -- keeps the exercise_id-driven behavior exactly as before.
+  kind TEXT DEFAULT 'strength',          -- strength | cardio
+  target_distance_km REAL,               -- planned distance (cardio), e.g. 12
+  target_duration_min REAL,              -- planned moving time in minutes (cardio)
+  target_zone TEXT,                      -- HR/effort zone, free text, e.g. 'Z2' | 'tempo' | 'easy'
+  interval_json TEXT                     -- optional interval structure, JSON (e.g. [{reps:6,on:'400m',off:'90s'}])
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   joint_pain TEXT,                       -- free-text joint/area flag, e.g. "left knee" (NULL = none)
   garmin_json TEXT,                      -- reconciled Garmin strength physiology blob (HR/zones/calories/TE + agent narrative)
   finished_at TEXT,                      -- UTC stamp set by finishSession; NULL = session still open (mid-workout). Reopen clears it.
+  kind TEXT DEFAULT 'strength',          -- strength | cardio — a logged cardio effort (run/ride) is a reviewable session too (v35)
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS logged_sets (
@@ -105,6 +115,8 @@ CREATE TABLE IF NOT EXISTS profile (
   about_me TEXT,                         -- rich free-text understanding (history, work, food likes/dislikes, what "better" means)
   allergies TEXT,                        -- free-text food allergies (HARD safety exclusion for meals)
   dietary_restrictions TEXT,             -- free-text diet (vegetarian, pescatarian, no pork, …) — respected strongly
+  primary_discipline TEXT DEFAULT 'strength', -- strength | endurance | hybrid — shapes coach framing + day-read + stats (v35)
+  endurance_sport TEXT,                  -- optional free text: running | cycling | triathlon | rowing | … (v35)
   updated_at TEXT DEFAULT (datetime('now'))
 );
 

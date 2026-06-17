@@ -6,15 +6,35 @@ import { handleMcpPost, methodNotAllowed } from "./mcp.js";
 import { seedIfEmpty } from "./seed.js";
 import { startScheduler } from "./scheduler.js";
 import { recoverPendingEnrich } from "./enrich.js";
-import { recoverChatTurns } from "./chatTurns.js";
-import { recoverAgentJobs } from "./agentJobs.js";
+import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
+import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, rateLimitGuard, rateLimitEnabled } from "./auth.js";
+import { setAgentRunSink } from "./agents.js";
+import * as repo from "./repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "0.0.0.0";
+
+// Process safety net: a single stray rejection or thrown error from any of the
+// four surfaces (PWA / API / MCP / scheduler) running in this one process must
+// NOT take the whole server down. LOG and keep serving — calm degradation over a
+// hard crash. (Truly fatal states — OOM, etc. — still terminate via the runtime.)
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] unhandledRejection (kept alive):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[server] uncaughtException (kept alive):", err);
+});
+
+// Register the agent-run telemetry sink at boot, BEFORE anything can run an agent
+// (recoverChatTurns / recoverAgentJobs re-enqueue work that may fire immediately).
+// agents.ts can't import repo.ts (circular), so it emits through this sink; the
+// scheduler also sets it, but doing it here first means early runs aren't dropped.
+// recordAgentRun is itself failure-safe.
+setAgentRunSink((r) => repo.recordAgentRun(r));
 
 if (seedIfEmpty()) console.log("Database was empty — seeded with the default plan.");
 
@@ -66,7 +86,7 @@ app.delete("/mcp", methodNotAllowed);
 // PWA (static)
 app.use(express.static(path.join(__dirname, "..", "public")));
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`Cairn running:`);
   console.log(`  app  -> http://${HOST}:${PORT}/`);
   console.log(`  api  -> http://${HOST}:${PORT}/api/plan`);
@@ -96,3 +116,36 @@ app.listen(PORT, HOST, () => {
     } catch {}
   }, 5000);
 });
+
+// ---------- graceful shutdown ----------
+// `docker compose down` / a redeploy sends SIGTERM (Ctrl-C sends SIGINT). Close
+// the HTTP listener so no new connections land, abort any in-flight agent CLI
+// subprocess (chat turns + agent jobs) so a redeploy stops cleanly instead of
+// orphaning them, then exit. Every turn/job is also durable in SQLite, so a
+// half-finished one is recovered on the next boot (recoverChatTurns /
+// recoverAgentJobs) — the abort just makes the stop immediate and tidy. A short
+// watchdog forces exit if `server.close` ever hangs on a lingering keep-alive.
+let shuttingDown = false;
+function shutdown(signal: string) {
+  if (shuttingDown) return; // a second signal during teardown — let the watchdog handle it
+  shuttingDown = true;
+  console.log(`[server] ${signal} received — shutting down cleanly.`);
+  const force = setTimeout(() => {
+    console.warn("[server] shutdown timed out — forcing exit.");
+    process.exit(0);
+  }, 8000);
+  force.unref?.();
+  try { abortAllTurns(); abortAllJobs(); } catch { /* best effort */ }
+  try {
+    server.close(() => {
+      clearTimeout(force);
+      console.log("[server] HTTP server closed.");
+      process.exit(0);
+    });
+  } catch {
+    clearTimeout(force);
+    process.exit(0);
+  }
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

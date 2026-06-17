@@ -126,6 +126,13 @@ export function applyProposal(id: number) {
   const clamped: ClampAdjustment[] = [];
   for (const c of p.parsed.changes) {
     try {
+      // A cardio item belongs in a full restructure (parsed.days → replacePlan),
+      // not a per-exercise target tweak — there's no loaded exercise to updateTarget.
+      // Skip it transparently here so a mixed proposal never throws on the cardio row.
+      if (String(c?.kind ?? "").toLowerCase() === "cardio") {
+        skipped.push({ ...c, error: "cardio item — apply via a plan restructure (days), not a target change" });
+        continue;
+      }
       // A change carries target_weight (reps exercises) and/or target_seconds (timed).
       const tw = c.target_weight !== undefined && c.target_weight !== null ? Number(c.target_weight) : undefined;
       const ts = c.target_seconds !== undefined && c.target_seconds !== null ? Number(c.target_seconds) : undefined;
@@ -147,6 +154,13 @@ export function getProfile(): any {
   return db.prepare(`SELECT * FROM profile WHERE id = 1`).get() || null;
 }
 
+// The athlete's primary training discipline, normalized (default 'strength').
+// Deterministic, null-safe — the keystone of the endurance-aware reads/stats.
+export function getPrimaryDiscipline(): "strength" | "endurance" | "hybrid" {
+  const p = getProfile();
+  return normalizeDiscipline(p?.primary_discipline, p?.primary_discipline);
+}
+
 export function setProfile(p: any) {
   const cur = getProfile() || {};
   const merged = {
@@ -165,17 +179,37 @@ export function setProfile(p: any) {
     // contract as about_me: '' clears, undefined leaves intact, capped at 1000.
     allergies: p.allergies !== undefined ? (p.allergies == null ? null : String(p.allergies).slice(0, 1000)) : (cur.allergies ?? null),
     dietary_restrictions: p.dietary_restrictions !== undefined ? (p.dietary_restrictions == null ? null : String(p.dietary_restrictions).slice(0, 1000)) : (cur.dietary_restrictions ?? null),
+    // Primary training discipline (v35) — drives coach framing, the day-read, and
+    // weekly stats. Only 'strength' | 'endurance' | 'hybrid' are accepted; anything
+    // else falls back to the existing value (default 'strength'). endurance_sport is
+    // optional free text ('' clears, undefined leaves intact, capped at 60).
+    primary_discipline: normalizeDiscipline(p.primary_discipline, cur.primary_discipline),
+    endurance_sport: p.endurance_sport !== undefined ? (p.endurance_sport == null ? null : String(p.endurance_sport).trim().slice(0, 60) || null) : (cur.endurance_sport ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, weight_lb=excluded.weight_lb,
        goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
-       allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions, updated_at=datetime('now')`
-  ).run(merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions);
+       allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
+       primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport, updated_at=datetime('now')`
+  ).run(merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport);
   return getProfile();
+}
+
+// Coerce a primary_discipline value: 'strength' | 'endurance' | 'hybrid' only;
+// anything else (including undefined) leaves the existing value intact, defaulting
+// to 'strength' on a brand-new profile.
+const DISCIPLINES = new Set(["strength", "endurance", "hybrid"]);
+export function normalizeDiscipline(v: any, current?: any): "strength" | "endurance" | "hybrid" {
+  if (v !== undefined && v !== null) {
+    const s = String(v).trim().toLowerCase();
+    if (DISCIPLINES.has(s)) return s as "strength" | "endurance" | "hybrid";
+  }
+  const cur = current != null ? String(current).trim().toLowerCase() : "";
+  return (DISCIPLINES.has(cur) ? cur : "strength") as "strength" | "endurance" | "hybrid";
 }
 
 // ---------- bodyweight log ----------

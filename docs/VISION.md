@@ -114,6 +114,15 @@ a feature conflict, the principle wins.
     background; you say the messy human sentence and it does the rest. If capture ever feels like work,
     that's a bug.
 
+13. **It meets you in your sport.** Cairn adapts to your *primary discipline* — strength, endurance
+    (running, riding, rowing…), or a hybrid of both — and it is neither a lifting app with cardio bolted
+    on nor a running app that ignores the gym. It speaks the language of whatever you actually train: for
+    a runner it thinks in easy / long / tempo / interval days, weekly mileage, pace, and time-in-zone; for
+    a lifter, in sets, load, and the slow climb of a working weight; for a hybrid, both at once, balanced
+    against recovery. The day's suggestion, the plan, progress, fueling, and the connected brain all
+    reshape around the sport you're in — because the same calm pointing only earns trust when it's
+    pointing in *your* terms. (Endurance is a modality to *program*, not merely a volume to cap.)
+
 ---
 
 ## 3. Where Cairn stands today (honest assessment)

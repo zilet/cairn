@@ -29,11 +29,40 @@ function emptyStateHtml(svg, line) {
     </div>`;
 }
 
+// Canvas charts read their palette from the :root CSS tokens (never hardcoded
+// hexes) so they can't drift from the design system. Resolved once per draw.
+// `gridline`/`grid-label` have no token, so they derive from the palette here.
+// Hex (#rgb / #rrggbb) → "rgba(r,g,b,a)" so canvas fills can layer a token color
+// at a given opacity (gridlines, area gradient, halo) without hardcoding the hex.
+function withAlpha(hex, a) {
+  let h = String(hex || "").trim().replace("#", "");
+  if (h.length === 3) h = h.split("").map((x) => x + x).join("");
+  if (h.length < 6) return `rgba(0,0,0,${a})`;
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function chartColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => (cs.getPropertyValue(name).trim() || fallback);
+  return {
+    accent: v("--accent", "#b4552d"),
+    sage: v("--sage", "#6e7f5c"),
+    gold: v("--gold", "#c9a86a"),
+    ink: v("--ink", "#211d17"),
+    paper: v("--paper", "#f4efe7"),
+    card: v("--card", "#fffdf8"),
+    line2: v("--line-2", "#d8cfbd"),
+    label: v("--muted", "#746c5c"),
+  };
+}
+
 // Shared premium line chart: monotone-cubic curve, soft gradient area fill, light
 // gridlines with y labels, first/last date x labels, emphasized final point with
 // an ink value badge, optional sage dashed goal line and \u25b2 at the all-time peak.
 function drawLineChart(canvas, pts, opts = {}) {
   if (!canvas) return;
+  const C = chartColors();
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth, H = canvas.clientHeight;
   canvas.width = W * dpr; canvas.height = H * dpr;
@@ -57,9 +86,9 @@ function drawLineChart(canvas, pts, opts = {}) {
   for (let g = 0; g <= 3; g++) {
     const v = min + ((max - min) * g) / 3;
     const yy = y(v);
-    c.strokeStyle = "rgba(216,207,189,.55)"; c.lineWidth = 1;
+    c.strokeStyle = withAlpha(C.line2, 0.55); c.lineWidth = 1;
     c.beginPath(); c.moveTo(padL, yy); c.lineTo(W - padR, yy); c.stroke();
-    c.fillStyle = "#a89f8d";
+    c.fillStyle = C.label;
     c.textAlign = "right";
     c.fillText(String(Math.round(v)), padL - 7, yy + 3);
   }
@@ -69,10 +98,10 @@ function drawLineChart(canvas, pts, opts = {}) {
   if (opts.goal != null) {
     const gy = y(opts.goal);
     c.save();
-    c.strokeStyle = "#6e7f5c"; c.setLineDash([5, 5]); c.lineWidth = 1.5;
+    c.strokeStyle = C.sage; c.setLineDash([5, 5]); c.lineWidth = 1.5;
     c.beginPath(); c.moveTo(padL, gy); c.lineTo(W - padR, gy); c.stroke();
     c.restore();
-    c.fillStyle = "#6e7f5c"; c.font = "600 9px 'Schibsted Grotesk', sans-serif";
+    c.fillStyle = C.sage; c.font = "600 9px 'Schibsted Grotesk', sans-serif";
     c.fillText(`GOAL ${opts.goal}`, padL + 3, gy - 5);
   }
 
@@ -105,15 +134,15 @@ function drawLineChart(canvas, pts, opts = {}) {
     tracePath();
     c.lineTo(xs[n - 1], H - padB); c.lineTo(xs[0], H - padB); c.closePath();
     const grad = c.createLinearGradient(0, padT, 0, H - padB);
-    grad.addColorStop(0, "rgba(180,85,45,.16)");
-    grad.addColorStop(1, "rgba(180,85,45,0)");
+    grad.addColorStop(0, withAlpha(C.accent, 0.16));
+    grad.addColorStop(1, withAlpha(C.accent, 0));
     c.fillStyle = grad; c.fill();
     // the line itself
     tracePath();
-    c.strokeStyle = "#b4552d"; c.lineWidth = 2.25; c.lineJoin = "round"; c.lineCap = "round";
+    c.strokeStyle = C.accent; c.lineWidth = 2.25; c.lineJoin = "round"; c.lineCap = "round";
     c.stroke();
     // quiet intermediate points
-    c.fillStyle = "#b4552d";
+    c.fillStyle = C.accent;
     for (let i = 0; i < n - 1; i++) { c.beginPath(); c.arc(xs[i], ys[i], 2, 0, 7); c.fill(); }
   }
 
@@ -121,7 +150,7 @@ function drawLineChart(canvas, pts, opts = {}) {
   if (opts.peak && n > 1) {
     let pi = 0; vals.forEach((v, i) => { if (v > vals[pi]) pi = i; });
     if (pi !== n - 1) {
-      c.fillStyle = "#c9a86a"; c.font = "10px 'Schibsted Grotesk', sans-serif"; c.textAlign = "center";
+      c.fillStyle = C.gold; c.font = "10px 'Schibsted Grotesk', sans-serif"; c.textAlign = "center";
       c.fillText("\u25b2", xs[pi], ys[pi] - 9);
       c.textAlign = "left";
     }
@@ -129,22 +158,22 @@ function drawLineChart(canvas, pts, opts = {}) {
 
   // emphasized final point + ink value badge
   const lx = xs[n - 1], ly = ys[n - 1];
-  c.beginPath(); c.arc(lx, ly, 8, 0, 7); c.fillStyle = "rgba(180,85,45,.16)"; c.fill();
-  c.beginPath(); c.arc(lx, ly, 4.5, 0, 7); c.fillStyle = "#b4552d"; c.fill();
-  c.beginPath(); c.arc(lx, ly, 4.5, 0, 7); c.strokeStyle = "#fffdf8"; c.lineWidth = 1.6; c.stroke();
+  c.beginPath(); c.arc(lx, ly, 8, 0, 7); c.fillStyle = withAlpha(C.accent, 0.16); c.fill();
+  c.beginPath(); c.arc(lx, ly, 4.5, 0, 7); c.fillStyle = C.accent; c.fill();
+  c.beginPath(); c.arc(lx, ly, 4.5, 0, 7); c.strokeStyle = C.card; c.lineWidth = 1.6; c.stroke();
   const lastTxt = fmtVal(vals[n - 1]);
   c.font = "600 11px 'Schibsted Grotesk', sans-serif";
   const tw = c.measureText(lastTxt).width;
   const bx = Math.min(Math.max(lx - tw / 2 - 8, padL), W - padR - tw - 16);
   let by = ly - 32; if (by < 4) by = ly + 14;
-  c.fillStyle = "#211d17";
+  c.fillStyle = C.ink;
   if (c.roundRect) { c.beginPath(); c.roundRect(bx, by, tw + 16, 20, 10); c.fill(); }
   else c.fillRect(bx, by, tw + 16, 20);
-  c.fillStyle = "#f4efe7";
+  c.fillStyle = C.paper;
   c.fillText(lastTxt, bx + 8, by + 14);
 
   // first / last date labels
-  c.fillStyle = "#a89f8d"; c.font = "10px 'Schibsted Grotesk', sans-serif";
+  c.fillStyle = C.label; c.font = "10px 'Schibsted Grotesk', sans-serif";
   c.textAlign = "left"; c.fillText(fmtShortDate(pts[0].date), padL, H - 8);
   if (n > 1) { c.textAlign = "right"; c.fillText(fmtShortDate(pts[n - 1].date), W - padR, H - 8); }
   c.textAlign = "left";
@@ -193,6 +222,7 @@ function sessionCardHtml(s, i) {
 // re-paints only on change. A set-log / session-edit invalidates the key.
 async function renderHistory() {
   headerTitle.textContent = "Progress";
+  state.progressSeg = "sessions"; // remember the chosen seg so the default never yanks back
   const token = ++pollToken;
   const peek = peekCached("history:sessions");
   if (!peek) view.innerHTML = segSkeleton("sessions", PROGRESS_SEG, 3); // cold: skeleton-first
@@ -227,7 +257,7 @@ function paintHistoryBody(sessions) {
     ["lb moved \u00b7 30d", Math.round(t30), { k: true }],
     ["sets \u00b7 30d", sets30],
   ]);
-  view.innerHTML = head + hero + sessions.map((s, i) => sessionCardHtml(s, i + 1)).join("");
+  view.innerHTML = head + hero + `<div class="sess-grid">${sessions.map((s, i) => sessionCardHtml(s, i + 1)).join("")}</div>`;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // Tap a past session → edit its logged sets + notes (corrections flow into the brain).
@@ -277,11 +307,12 @@ async function openSessionEdit(sess, fromEl) {
         <button class="pillbtn" data-close>Close</button>
       </div>`);
     wireDetailCommon();
-    // delete a set inline (collapses out; deletion is immediate on the server)
-    el.querySelectorAll("[data-eddel]").forEach((b) => b.addEventListener("click", async () => {
+    // delete a set inline — two-tap armed × (the one destructive-confirm pattern),
+    // then the row collapses out (deletion is committed on the confirming tap).
+    el.querySelectorAll("[data-eddel]").forEach((b) => b.addEventListener("click", () => armDelete(b, async () => {
       try { await api(`/sets/${b.dataset.eddel}`, { method: "DELETE" }); } catch { toast("Couldn't delete set"); return; }
       const row = b.closest(".edset"); if (row) collapseEl(row, () => row.remove());
-    }));
+    })));
     const save = el.querySelector("#edSave");
     if (save) save.addEventListener("click", async () => {
       save.disabled = true;
@@ -322,6 +353,7 @@ function numOrNull(v) { return v === "" || v == null ? null : (Number.isFinite(N
 // picker + chart shell instantly on a warm re-entry, then revalidates.
 async function renderProgress() {
   headerTitle.textContent = "Progress";
+  state.progressSeg = "trend";
   const token = ++pollToken;
   const peek = peekCached("progress:exercises");
   if (!peek) view.innerHTML = segSkeleton("trend", PROGRESS_SEG, 1); // cold: skeleton-first
@@ -352,6 +384,7 @@ function paintProgressBody(exercises) {
 // warm re-entry, then revalidates. A bodyweight log invalidates progress:weight.
 async function renderWeight() {
   headerTitle.textContent = "Progress";
+  state.progressSeg = "weight";
   const token = ++pollToken;
   const peekRows = peekCached("progress:weight");
   const peekProfile = peekCached("profile");
@@ -427,6 +460,7 @@ async function drawProgress(name) {
 // per-muscle bars instantly on a warm re-entry, then revalidates.
 async function renderVolume() {
   headerTitle.textContent = "Progress";
+  state.progressSeg = "volume";
   const token = ++pollToken;
   const peek = peekCached("progress:volume");
   if (!peek) view.innerHTML = segSkeleton("volume", PROGRESS_SEG, 2); // cold: skeleton-first
@@ -470,6 +504,128 @@ function paintVolumeBody(data) {
   runCountUps(view);
 }
 
+// ---------- Progress: Endurance (runner/cyclist-first read) ----------
+// The endurance analogue to the 1RM view: this week's mileage + moving time, the
+// longest single effort, a calm time-in-HR-zone bar, the pace trend in plain words
+// (never a grade), and endurance PRs (longest distance + best pace by distance).
+// Fed by /api/stats `.endurance` + /api/endurance-prs. No 0–100 scores anywhere.
+// Plain-word pace-trend read. Never a verdict, never a grade — just direction.
+function paceTrendWord(pt) {
+  if (!pt || pt.dir == null || pt.this_min_per_km == null) return "";
+  if (pt.dir === "steady") return "holding about the same pace as last week";
+  if (pt.prev_min_per_km == null) return `averaging ${fmtPaceKm(pt.this_min_per_km)}/km`;
+  const delta = Math.abs(pt.this_min_per_km - pt.prev_min_per_km);
+  const mag = delta < 0.15 ? "a touch" : delta < 0.5 ? "a little" : "noticeably";
+  return pt.dir === "faster" ? `${mag} faster than last week` : `${mag} easier than last week`;
+}
+
+// Calm time-in-HR-zone bar (reuses the Today garmin-card .gz-* vocabulary). zones is
+// the { Z1: secs, Z2: secs, … } map from /stats .endurance.time_in_zone. "" when empty.
+function zoneBarHtml(zones) {
+  const entries = Object.entries(zones || {})
+    .map(([k, secs]) => ({ zi: Math.min(5, Math.max(1, Number(String(k).replace(/\D/g, "")) || 1)), secs: Number(secs) || 0 }))
+    .filter((z) => z.secs > 0)
+    .sort((a, b) => a.zi - b.zi);
+  const total = entries.reduce((t, z) => t + z.secs, 0);
+  if (total <= 0) return "";
+  const colors = (typeof HR_ZONE_COLORS !== "undefined" && HR_ZONE_COLORS) || ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b4552d"];
+  const segs = entries.map((z) => {
+    const pct = (z.secs / total) * 100;
+    const mins = Math.round(z.secs / 60);
+    return `<span class="gz-seg" style="width:${pct.toFixed(1)}%;background:${colors[z.zi - 1]}" title="Zone ${z.zi} · ${mins} min"></span>`;
+  }).join("");
+  return `<div class="end-zones reveal" style="${stagger(3)}">
+      <div class="lbl" style="margin-bottom:6px">Time in heart-rate zones · this week</div>
+      <div class="gz-bar">${segs}</div>
+      <div class="gz-legend lbl">${entries.map((z) => `Z${z.zi} ${Math.round(z.secs / 60)}m`).join(" · ")}</div>
+    </div>`;
+}
+
+async function renderEndurance() {
+  headerTitle.textContent = "Progress";
+  state.progressSeg = "endurance";
+  const token = ++pollToken;
+  view.innerHTML = segBar("endurance", PROGRESS_SEG) + `<div id="endBody">${loadingState("Reading your week…")}</div>`;
+  wireSeg(PROGRESS_HANDLERS);
+  // Two reads in parallel: the weekly endurance block (off /stats) + the PRs.
+  let stats = null, prs = null;
+  try { [stats, prs] = await Promise.all([api("/stats"), api("/endurance-prs").catch(() => null)]); }
+  catch { stats = null; }
+  if (token !== pollToken || !view.querySelector("#endBody")) return;
+  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs);
+}
+
+function paintEnduranceBody(end, prs) {
+  const body = view.querySelector("#endBody");
+  if (!body) return;
+  const hasWeek = end && (end.week_km > 0 || end.week_moving_min > 0 || end.longest_km != null || end.longest_min != null);
+  const hasPRs = prs && (prs.longest_km || prs.longest_min || (prs.best_pace || []).length);
+  if (!hasWeek && !hasPRs) {
+    body.innerHTML = progressHero("Endurance", []) +
+      emptyStateHtml(art("activity", "run"),
+        "No runs or rides logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your mileage, zones, and pace will read here.");
+    return;
+  }
+
+  // Hero: this week's mileage + moving time + longest effort.
+  const heroStats = [];
+  if (end) {
+    heroStats.push(["km · this week", end.week_km || 0]);
+    if (end.week_moving_min != null) heroStats.push(["moving min · wk", Math.round(end.week_moving_min)]);
+    if (end.longest_km != null) heroStats.push(["longest · km", end.longest_km, { text: true }]);
+    else if (end.longest_min != null) heroStats.push(["longest · min", Math.round(end.longest_min), { text: true }]);
+  }
+  let html = progressHero("Endurance", heroStats);
+
+  // Longest effort line (when we have one and it didn't already lead the hero).
+  if (end && (end.longest_km != null || end.longest_min != null)) {
+    const lbits = [];
+    if (end.longest_km != null) lbits.push(`${fmtKm(end.longest_km)} km`);
+    if (end.longest_min != null) lbits.push(`${Math.round(end.longest_min)} min`);
+    const tlabel = end.longest_type ? `${escHtml(end.longest_type)} · ` : "";
+    html += `<div class="end-line reveal" style="${stagger(1)}"><span class="lbl">Longest this week</span><span class="end-line-v">${tlabel}${lbits.join(" · ")}</span></div>`;
+  }
+
+  // Pace trend, in plain words (never a grade).
+  const word = paceTrendWord(end && end.pace_trend);
+  if (word) {
+    html += `<div class="end-pace reveal" style="${stagger(2)}">
+        <span class="lbl">Pace</span>
+        <span class="end-pace-read">${escHtml(word.charAt(0).toUpperCase() + word.slice(1))}.</span>
+        ${end.pace_trend.this_min_per_km != null ? `<span class="end-pace-num numeral">${fmtPaceKm(end.pace_trend.this_min_per_km)}<span class="end-pace-unit">/km</span></span>` : ""}
+      </div>`;
+  }
+
+  // Time-in-zone bar.
+  html += zoneBarHtml(end && end.time_in_zone);
+
+  // Endurance PRs — the endurance analogue of the est-1RM view. Longest distance +
+  // best pace at each standard distance, each a plain number with its date.
+  if (hasPRs) {
+    const prRows = [];
+    if (prs.longest_km) prRows.push({ label: "Longest distance", val: `${fmtKm(prs.longest_km.value)} km`, date: prs.longest_km.date, type: prs.longest_km.type });
+    if (prs.longest_min) prRows.push({ label: "Longest duration", val: `${Math.round(prs.longest_min.value)} min`, date: prs.longest_min.date, type: prs.longest_min.type });
+    for (const bp of (prs.best_pace || [])) {
+      prRows.push({ label: `Best ${prDistLabel(bp.distance_km)} pace`, val: `${fmtPaceKm(bp.min_per_km)}/km`, date: bp.date, type: bp.type });
+    }
+    const rows = prRows.map((r, i) => `
+      <div class="end-pr reveal" style="${stagger(i + 4)}">
+        <div class="end-pr-id">
+          <span class="end-pr-label">${escHtml(r.label)}</span>
+          ${r.date ? `<span class="end-pr-when lbl" title="${escAttr(absDate(r.date))}">${escHtml(relAge(r.date))}${r.type ? ` · ${escHtml(r.type)}` : ""}</span>` : ""}
+        </div>
+        <span class="end-pr-val numeral">${escHtml(r.val)}</span>
+      </div>`).join("");
+    html += `<div class="end-prs">
+        <div class="lbl end-prs-head reveal" style="${stagger(3)}">Personal bests</div>
+        <div class="end-pr-card">${rows}</div>
+      </div>`;
+  }
+
+  body.innerHTML = html;
+  runCountUps(body);
+}
+
 // ---------- Progress: training calendar (refined month grids) ----------
 function calMonthHtml(ym, byDate, todayIso, idx) {
   const [y, m] = ym.split("-").map(Number);
@@ -502,6 +658,7 @@ function calMonthHtml(ym, byDate, todayIso, idx) {
 // month grids instantly on a warm re-entry, then revalidates.
 async function renderCalendar() {
   headerTitle.textContent = "Progress";
+  state.progressSeg = "calendar";
   const token = ++pollToken;
   const peek = peekCached("progress:calendar");
   if (!peek) view.innerHTML = segSkeleton("calendar", PROGRESS_SEG, 2); // cold: skeleton-first
@@ -604,7 +761,7 @@ async function renderEnergy() {
   wireSeg(PROGRESS_HANDLERS);
 
   const paint = (exp) => {
-    if (token !== pollToken || state.tab !== "progress" || !view.querySelector("#energyCard")) return;
+    if (token !== pollToken || !view.querySelector("#energyCard")) return;
     paintEnergyBody(exp);
   };
   if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }

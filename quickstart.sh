@@ -114,7 +114,14 @@ try_docker() {
 
   setup_env
 
-  info "Building and starting Cairn with Docker (first run bakes the CLIs -- a few minutes)..."
+  banner "Heads up before the first build"
+  info "The first Docker build bakes the coaching CLIs into the image -- expect ~3-6 minutes."
+  info "Later rebuilds are fast (BuildKit caches the layers)."
+  info "The beta 'agy' (Antigravity) and 'grok' installers can fail on some architectures"
+  info "(e.g. Raspberry Pi / arm64). That's fine -- claude and codex still work, and you can"
+  info "set INSTALL_ANTIGRAVITY/INSTALL_GROK to \"0\" in docker-compose.yml to skip them."
+  info ""
+  info "Building and starting Cairn with Docker..."
   $COMPOSE up -d --build
 
   USE_DOCKER=1

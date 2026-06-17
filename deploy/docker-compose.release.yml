@@ -10,11 +10,14 @@ services:
     container_name: cairn
     restart: unless-stopped
     ports:
-      # Reachable on the LAN/tailnet by default so you can open it from a phone
-      # or another trusted device. If the host is exposed beyond a trusted
-      # network, set CAIRN_AUTH_TOKEN below and/or bind to loopback only:
-      # "127.0.0.1:8787:8787".
-      - "8787:8787"
+      # SAFE DEFAULT: bound to loopback only, so a fresh cloud VM with a permissive
+      # firewall and auth off does NOT expose Cairn to the internet. Reach it via an
+      # SSH tunnel (`ssh -L 8787:127.0.0.1:8787 user@host`) or Tailscale Serve
+      # (recommended remote path — see docs/DEPLOYMENT.md).
+      #
+      # To open it to your LAN/tailnet, change this to "8787:8787" (all interfaces).
+      # NEVER widen it on an internet-reachable host without setting CAIRN_AUTH_TOKEN.
+      - "127.0.0.1:8787:8787"
     volumes:
       - cairn-data:/data
       - cairn-home:/home/app
@@ -23,9 +26,12 @@ services:
       # Optional shared-token auth. Unset = no auth; set it to gate /api and /mcp.
       # Recommended whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
+      # Coaching: claude/codex/antigravity use their CLI subscription login (in the
+      # cairn-home volume), NOT these env keys. Only Grok headless uses XAI_API_KEY.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - XAI_API_KEY=${XAI_API_KEY:-}
+      # ARTWORK only (gemini image model) — not a coaching agent.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - COACH_AGENT=${COACH_AGENT:-}
       - COACH_DAY=${COACH_DAY:-0}

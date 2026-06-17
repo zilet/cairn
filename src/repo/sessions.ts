@@ -325,6 +325,68 @@ function epley1RM(weight: number, reps: number): number {
   return Math.round(weight * (1 + reps / 30) * 10) / 10;
 }
 
+// ---------- endurance PRs (v35) ----------
+// The endurance analogue to the Epley est-1RM: best efforts from the logged cardio
+// (the `activities` table). Deterministic, null-safe — no agent. Returns the
+// fastest pace at or above standard distances (a longer effort counts toward a
+// shorter PR), the single longest distance, and the longest duration, each over an
+// optional `type` filter (e.g. 'run' / 'ride'). PLAIN numbers, never a score.
+export interface EndurancePRs {
+  type: string | null;
+  longest_km: { value: number; date: string; type: string } | null;
+  longest_min: { value: number; date: string; type: string } | null;
+  best_pace: { distance_km: number; min_per_km: number; date: string; type: string }[]; // one per standard distance hit
+}
+
+const PR_DISTANCES_KM = [1, 5, 10, 21.0975, 42.195];
+
+export function getEndurancePRs(type?: string | null): EndurancePRs {
+  const t = type != null && String(type).trim() ? String(type).trim().toLowerCase() : null;
+  const rows = (t
+    ? db.prepare(
+        `SELECT date, type, distance_km, duration_min FROM activities
+         WHERE lower(COALESCE(type,'')) = ? AND (distance_km IS NOT NULL OR duration_min IS NOT NULL)
+         ORDER BY date`
+      ).all(t)
+    : db.prepare(
+        `SELECT date, type, distance_km, duration_min FROM activities
+         WHERE (distance_km IS NOT NULL OR duration_min IS NOT NULL) ORDER BY date`
+      ).all()) as any[];
+
+  let longest_km: EndurancePRs["longest_km"] = null;
+  let longest_min: EndurancePRs["longest_min"] = null;
+  // Best pace (min/km) achieved at or beyond each standard distance — a longer run
+  // counts toward a shorter PR distance (you covered it en route).
+  const bestPace = new Map<number, { min_per_km: number; date: string; type: string }>();
+
+  for (const r of rows) {
+    const km = Number(r.distance_km);
+    const min = Number(r.duration_min);
+    const rowType = String(r.type ?? "activity");
+    if (Number.isFinite(km) && km > 0) {
+      if (!longest_km || km > longest_km.value) longest_km = { value: Math.round(km * 100) / 100, date: r.date, type: rowType };
+    }
+    if (Number.isFinite(min) && min > 0) {
+      if (!longest_min || min > longest_min.value) longest_min = { value: Math.round(min), date: r.date, type: rowType };
+    }
+    // A pace PR needs BOTH distance and duration.
+    if (Number.isFinite(km) && km > 0 && Number.isFinite(min) && min > 0) {
+      const pace = min / km; // min/km (lower is faster)
+      for (const dist of PR_DISTANCES_KM) {
+        if (km + 1e-9 < dist) continue; // effort didn't reach this distance
+        const cur = bestPace.get(dist);
+        if (!cur || pace < cur.min_per_km) bestPace.set(dist, { min_per_km: Math.round(pace * 100) / 100, date: r.date, type: rowType });
+      }
+    }
+  }
+
+  const best_pace = [...bestPace.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([distance_km, v]) => ({ distance_km, min_per_km: v.min_per_km, date: v.date, type: v.type }));
+
+  return { type: t, longest_km, longest_min, best_pace };
+}
+
 // Compact dashboard: training days + tonnage over the last 7 days, plus a
 // consistency streak (consecutive days with a logged session or activity).
 export function getWeeklyStats() {
@@ -375,6 +437,13 @@ export function getWeeklyStats() {
     .prepare(`SELECT COUNT(*) AS c, COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ?`)
     .get(monday) as any;
 
+  // ---- endurance weekly read (v35, additive) ----
+  // A runner/cyclist-first picture: mileage, moving time, the longest single
+  // effort, time-in-HR-zone (from synced Garmin activities), and a pace trend.
+  // All deterministic + null-safe. The `activities` table is the source-agnostic
+  // log; `garmin_activities` adds richer per-effort detail (zones, moving time).
+  const endurance = computeEnduranceWeekly(monday);
+
   // Weight trend: least-squares slope over the last 21 days of weigh-ins,
   // in lb/week. Needs ≥2 points spanning ≥3 days to mean anything.
   const since21 = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
@@ -417,6 +486,92 @@ export function getWeeklyStats() {
     week_cardio: Number(weekCardio?.c ?? 0), week_cardio_km: Math.round(Number(weekCardio?.km ?? 0) * 10) / 10,
     trend_lb_wk: trend, needed_lb_wk: needed, pace_status: pace,
     weight_lb: currentW, goal_weight_lb: prof?.goal_weight_lb ?? null, goal_date: prof?.goal_date ?? null,
+    // Endurance/runner-first weekly read (v35) — additive; existing consumers ignore.
+    endurance,
+  };
+}
+
+// Endurance weekly stats (v35). Deterministic, null-safe. Mileage + moving time
+// from the source-agnostic `activities` log; longest single effort; time-in-HR-zone
+// rolled up from synced `garmin_activities` (hr_zones_json); and a pace trend — this
+// week's avg pace (min/km) vs the prior week's, in plain words. Everything degrades to
+// nulls/empties when there's no endurance data, never throwing.
+export interface EnduranceWeekly {
+  week_km: number;
+  week_moving_min: number;
+  longest_km: number | null;
+  longest_min: number | null;
+  longest_type: string | null;
+  time_in_zone: Record<string, number>; // { Z1: secs, Z2: secs, … } from Garmin, when present
+  pace_trend: { this_min_per_km: number | null; prev_min_per_km: number | null; dir: "faster" | "slower" | "steady" | null };
+}
+
+function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
+  const prevMonday = new Date(new Date(mondayISO + "T00:00:00Z").getTime() - 7 * 864e5).toISOString().slice(0, 10);
+
+  // Mileage + moving time this week (activities table is the modality-agnostic log).
+  const wk = db.prepare(
+    `SELECT COALESCE(SUM(distance_km), 0) AS km, COALESCE(SUM(duration_min), 0) AS min FROM activities WHERE date >= ?`
+  ).get(mondayISO) as any;
+  const week_km = Math.round(Number(wk?.km ?? 0) * 10) / 10;
+  const week_moving_min = Math.round(Number(wk?.min ?? 0));
+
+  // Longest single effort this week (by distance, falling back to duration).
+  const longest = db.prepare(
+    `SELECT type, distance_km, duration_min FROM activities WHERE date >= ?
+     ORDER BY COALESCE(distance_km, 0) DESC, COALESCE(duration_min, 0) DESC LIMIT 1`
+  ).get(mondayISO) as any;
+  const longest_km = longest?.distance_km != null ? Math.round(Number(longest.distance_km) * 10) / 10 : null;
+  const longest_min = longest?.duration_min != null ? Math.round(Number(longest.duration_min)) : null;
+  const longest_type = longest?.type ?? null;
+
+  // Time-in-HR-zone rolled up from this week's Garmin activities (hr_zones_json is
+  // [{zone, secs, ...}]). Best-effort: malformed JSON / no Garmin → empty object.
+  const time_in_zone: Record<string, number> = {};
+  const gz = db.prepare(
+    `SELECT hr_zones_json FROM garmin_activities WHERE date >= ? AND hr_zones_json IS NOT NULL`
+  ).all(mondayISO) as any[];
+  for (const r of gz) {
+    let zones: any = null;
+    try { zones = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null; } catch { zones = null; }
+    if (!Array.isArray(zones)) continue;
+    for (const z of zones) {
+      const label = z?.zone != null ? `Z${z.zone}` : z?.label != null ? String(z.label) : null;
+      const secs = Number(z?.secs ?? z?.seconds ?? z?.secsInZone);
+      if (!label || !Number.isFinite(secs) || secs <= 0) continue;
+      time_in_zone[label] = Math.round((time_in_zone[label] ?? 0) + secs);
+    }
+  }
+
+  // Pace trend: avg pace (min/km) this week vs the prior week, from activities that
+  // carry BOTH distance and duration. Lower min/km = faster. Plain direction word.
+  const avgPace = (startIso: string, endIso?: string): number | null => {
+    const rows = end(startIso, endIso);
+    let km = 0, min = 0;
+    for (const r of rows) {
+      const dk = Number(r.distance_km), dm = Number(r.duration_min);
+      if (Number.isFinite(dk) && dk > 0 && Number.isFinite(dm) && dm > 0) { km += dk; min += dm; }
+    }
+    return km > 0 ? Math.round((min / km) * 100) / 100 : null;
+  };
+  function end(startIso: string, endIso?: string): any[] {
+    return endIso
+      ? (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`).all(startIso, endIso) as any[])
+      : (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ?`).all(startIso) as any[]);
+  }
+  const this_min_per_km = avgPace(mondayISO);
+  const prev_min_per_km = avgPace(prevMonday, mondayISO);
+  let dir: "faster" | "slower" | "steady" | null = null;
+  if (this_min_per_km != null && prev_min_per_km != null) {
+    const delta = this_min_per_km - prev_min_per_km;
+    dir = Math.abs(delta) < 0.1 ? "steady" : delta < 0 ? "faster" : "slower";
+  }
+
+  return {
+    week_km, week_moving_min,
+    longest_km, longest_min, longest_type,
+    time_in_zone,
+    pace_trend: { this_min_per_km, prev_min_per_km, dir },
   };
 }
 

@@ -174,8 +174,16 @@ export function getCoachContext() {
   const garmin = getGarminCoachSummary(14);
   const recovery = getRecoverySummary(14, garmin);
   const recentSessions = getRecentSessions(20);
+  const profile = getProfile() as any;
   return {
-    profile: getProfile(),
+    profile,
+    // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
+    // framing without digging into profile. Defaults to 'strength' (today's
+    // behavior); endurance/hybrid make endurance progression a first-class driver.
+    discipline: {
+      primary: (profile?.primary_discipline as string) || "strength",
+      endurance_sport: profile?.endurance_sport ?? null,
+    },
     goal: computeGoalCheck(),
     plan: getPlan(),
     recent_sessions: recentSessions,

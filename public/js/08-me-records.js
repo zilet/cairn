@@ -168,9 +168,7 @@ async function deriveDirectives() {
 function paintHealthMarkersTab() {
   const c = $("#hContent");
   if (!c) return;
-  c.innerHTML = `<div id="hMarkers">
-      <div class="hmk-card"><div class="hmk-row" style="color:var(--muted);font-size:.85rem">Loading markers…</div></div>
-    </div>
+  c.innerHTML = `<div id="hMarkers">${skelLines(4)}</div>
     <div id="hExport" hidden style="margin:18px 2px 4px">
       <button id="hExportBtn" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Export health summary</button>
       <div class="hpic-hero-sub" style="margin-top:7px;text-align:center">A structured JSON of your markers over time — to hand a physician or another tool.</div>
@@ -290,7 +288,7 @@ function wireHealthUpload() {
     if (!f && !pastedText) { toast("Add a file or text first"); return; }
     if (f && f.size > MAX_DOC_BYTES) { toast("File too large (max 15MB)"); return; }
     if (!f && pastedText.length > MAX_DOC_TEXT) { toast("Text is too long"); return; }
-    uploadBtn.disabled = true; uploadBtn.style.opacity = ".6";
+    uploadBtn.disabled = true;
     status.textContent = "Uploading…";
 
     const body = {};
@@ -304,8 +302,8 @@ function wireHealthUpload() {
           fr.readAsDataURL(f);
         });
       } catch {
-        status.textContent = "Couldn't read that file.";
-        uploadBtn.disabled = false; uploadBtn.style.opacity = "1";
+        status.textContent = "Couldn't read that file. Try a different one.";
+        uploadBtn.disabled = false;
         return;
       }
       body.original_name = f.name || "Pasted image";
@@ -322,15 +320,15 @@ function wireHealthUpload() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-    } catch (e) { status.textContent = "Upload failed: " + e.message; uploadBtn.disabled = false; uploadBtn.style.opacity = "1"; return; }
+    } catch { status.textContent = "Couldn't upload that — check your connection."; uploadBtn.disabled = false; return; }
 
-    if (!row || row.error) { status.textContent = "Upload failed" + (row && row.error ? ": " + row.error : ""); uploadBtn.disabled = false; uploadBtn.style.opacity = "1"; return; }
+    if (!row || row.error) { status.textContent = "Couldn't upload that — try again."; uploadBtn.disabled = false; return; }
 
     status.textContent = "";
     toast("Uploaded");
     // reset the picker
     fileInput.value = ""; textInput.value = ""; pendingFile = null; fileName.textContent = H_FILE_PROMPT;
-    uploadBtn.style.opacity = "1"; // stays disabled until a new file is picked
+    // stays disabled until a new file is picked
 
     // prepend the new doc and poll for analysis if pending
     const wrap = $("#hlist");
@@ -496,11 +494,11 @@ async function loadHealthDocs() {
   return docs;
 }
 
-// armed-× delete (no confirm dialog)
+// two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js)
 function startHealthDelete(btn) {
   const row = btn.closest(".hdoc");
   const id = row.dataset.hdoc;
-  if (btn.dataset.armed) {
+  armDelete(btn, () => {
     api(`/health-docs/${id}`, { method: "DELETE" })
       .then(() => {
         toast("Removed"); row.remove();
@@ -508,15 +506,8 @@ function startHealthDelete(btn) {
         if (_hPic && _hPic.docCount > 0) { _hPic.docCount--; paintHealthPicture(); }
         loadHealthMarkers(pollToken);
       })
-      .catch(() => toast("Failed"));
-    return;
-  }
-  btn.dataset.armed = "1";
-  btn.classList.add("armed");
-  btn.textContent = "remove?";
-  const reset = () => { delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = "×"; clearTimeout(t); };
-  const t = setTimeout(reset, 3000);
-  btn.addEventListener("blur", reset, { once: true });
+      .catch(() => toast("Couldn't remove that — try again."));
+  });
 }
 
 // ---------- Me: Life (trips / injuries / life events) ----------
@@ -594,11 +585,10 @@ async function renderLife() {
 function drawLifeFields(kind) {
   const wrap = $("#lFields");
   if (!wrap) return;
-  const inputStyle = `style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"`;
   const text = (id, label, ph = "") =>
-    `<div class="field" style="margin-bottom:9px"><label>${label}</label><input id="${id}" type="text" placeholder="${escAttr(ph)}" ${inputStyle}></div>`;
+    `<div class="field" style="margin-bottom:9px"><label>${label}</label><input id="${id}" type="text" placeholder="${escAttr(ph)}" class="form-input"></div>`;
   const date = (id, label) =>
-    `<div class="field" style="margin-bottom:9px"><label>${label}</label><input id="${id}" type="date" ${inputStyle} value=""></div>`;
+    `<div class="field" style="margin-bottom:9px"><label>${label}</label><input id="${id}" type="date" class="form-input" value=""></div>`;
   if (kind === "trip") {
     wrap.innerHTML =
       text("lTitle", "Title", "e.g. Lisbon work trip") +
@@ -647,17 +637,17 @@ async function submitLifeEvent() {
   const body = collectLifeForm();
   if (!body.title) { status.textContent = "Add a title first."; $("#lTitle")?.focus(); return; }
   const btn = $("#lAdd");
-  btn.disabled = true; btn.style.opacity = ".6";
+  btn.disabled = true;
   try {
     const r = await api("/context-events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (r && r.error) { status.textContent = "Failed: " + r.error; return; }
+    if (r && r.error) { status.textContent = "Couldn't save that — try again."; return; }
     status.textContent = "";
     toast("Added");
     // reset the text + dates but keep the kind
     drawLifeFields($("#lKind").value);
     loadLifeEvents();
-  } catch (e) { status.textContent = "Failed: " + e.message; }
-  finally { btn.disabled = false; btn.style.opacity = "1"; }
+  } catch { status.textContent = "Couldn't save that — check your connection."; }
+  finally { btn.disabled = false; }
 }
 
 // The connected-brain block for an active injury: the planned movements it
@@ -772,22 +762,21 @@ function startLifeEdit(card) {
   const ev = (state._lifeById || {})[id];
   if (!ev) return;
   const meta = parsedMeta(ev);
-  const inputStyle = `style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:8px 9px;font-size:.9rem"`;
   const metaField = ev.kind === "trip"
-    ? `<input class="le-meta" placeholder="Location" value="${escAttr(meta.location || "")}" ${inputStyle}>`
+    ? `<input class="le-meta form-input" placeholder="Location" value="${escAttr(meta.location || "")}">`
     : ev.kind === "injury"
-      ? `<input class="le-meta" placeholder="Area" value="${escAttr(meta.area || "")}" ${inputStyle}>`
+      ? `<input class="le-meta form-input" placeholder="Area" value="${escAttr(meta.area || "")}">`
       : "";
   const box = document.createElement("div");
   box.className = "life-edit";
   box.innerHTML = `
-    <input class="le-title" placeholder="Title" value="${escAttr(ev.title || "")}" ${inputStyle}>
+    <input class="le-title form-input" placeholder="Title" value="${escAttr(ev.title || "")}">
     ${metaField}
     <div class="ob-grid" style="margin-top:6px">
-      <input class="le-start" type="date" value="${escAttr(ev.start_date || "")}" ${inputStyle}>
-      <input class="le-end" type="date" value="${escAttr(ev.end_date || "")}" ${inputStyle}>
+      <input class="le-start form-input" type="date" value="${escAttr(ev.start_date || "")}">
+      <input class="le-end form-input" type="date" value="${escAttr(ev.end_date || "")}">
     </div>
-    <input class="le-detail" placeholder="Detail" value="${escAttr(ev.detail || "")}" ${inputStyle} >
+    <input class="le-detail form-input" placeholder="Detail" value="${escAttr(ev.detail || "")}">
     <div class="life-edit-ctl">
       <button class="iconbtn memok le-save" title="save">✓</button>
       <button class="iconbtn le-cancel" title="cancel">×</button>
@@ -810,7 +799,7 @@ function startLifeEdit(card) {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: ev.kind, title, detail: v(".le-detail"), start_date: v(".le-start"), end_date: v(".le-end"), meta: newMeta }),
       });
-    } catch { toast("Failed"); return; }
+    } catch { toast("Couldn't save that — try again."); return; }
     toast("Updated"); loadLifeEvents();
   };
   box.querySelector(".le-save").addEventListener("click", save);
@@ -822,22 +811,14 @@ function rewireLifeCard(card) {
   const d = card.querySelector("[data-ldel]"); if (d) d.addEventListener("click", () => startLifeDelete(d));
 }
 
-// armed-× delete (no confirm dialog)
+// two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js)
 function startLifeDelete(btn) {
-  const card = btn.closest(".life-ev");
-  const id = card.dataset.life;
-  if (btn.dataset.armed) {
+  const id = btn.closest(".life-ev").dataset.life;
+  armDelete(btn, () => {
     api(`/context-events/${id}`, { method: "DELETE" })
       .then(() => { toast("Removed"); loadLifeEvents(); })
-      .catch(() => toast("Failed"));
-    return;
-  }
-  btn.dataset.armed = "1";
-  btn.classList.add("armed");
-  btn.textContent = "remove?";
-  const reset = () => { delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = "×"; clearTimeout(t); };
-  const t = setTimeout(reset, 3000);
-  btn.addEventListener("blur", reset, { once: true });
+      .catch(() => toast("Couldn't remove that — try again."));
+  });
 }
 
 // ---------- Me: Family (the people the coach plans around) ----------
@@ -932,18 +913,18 @@ async function renderFamily() {
     <h1 class="lbl" style="margin:20px 0 8px">Add someone</h1>
     <div class="lifeadd famadd">
       <div class="field" style="margin-bottom:9px"><label>Name</label>
-        <input id="fName" type="text" placeholder="e.g. Mara" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>
+        <input id="fName" type="text" placeholder="e.g. Mara" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Relationship (optional)</label>
-        <input id="fRel" type="text" placeholder="e.g. daughter / partner" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>
+        <input id="fRel" type="text" placeholder="e.g. daughter / partner" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Birthday (optional)</label>
-        <input id="fBirth" type="date" max="${localISO()}" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px;color-scheme:light"></div>
+        <input id="fBirth" type="date" max="${localISO()}" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Colour</label>${familySwatches(FAMILY_DEFAULT_COLOR)}</div>
       <div class="field" style="margin-bottom:9px"><label>Notes (optional)</label>
-        <input id="fNotes" type="text" placeholder="e.g. trains with me on weekends" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>
+        <input id="fNotes" type="text" placeholder="e.g. trains with me on weekends" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Allergies (optional)</label>
-        <input id="fAllergy" type="text" placeholder="e.g. peanuts, shellfish" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>
+        <input id="fAllergy" type="text" placeholder="e.g. peanuts, shellfish" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Dietary needs (optional)</label>
-        <input id="fDiet" type="text" placeholder="e.g. vegetarian, no pork" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px"></div>
+        <input id="fDiet" type="text" placeholder="e.g. vegetarian, no pork" class="form-input"></div>
       <button id="fAdd" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ADD</button>
       <div id="fStatus" style="margin-top:6px;color:var(--muted);font-size:.82rem"></div>
     </div>
@@ -974,17 +955,17 @@ async function renderFamily() {
       dietary_restrictions: $("#fDiet").value.trim() || null,
     };
     const btn = $("#fAdd");
-    btn.disabled = true; btn.style.opacity = ".6";
+    btn.disabled = true;
     try {
       const r = await api("/family", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (r && r.error) { status.textContent = "Failed: " + r.error; return; }
+      if (r && r.error) { status.textContent = "Couldn't save that — try again."; return; }
       status.textContent = "";
       toast("Added");
       $("#fName").value = ""; $("#fRel").value = ""; $("#fBirth").value = ""; $("#fNotes").value = "";
       $("#fAllergy").value = ""; $("#fDiet").value = "";
       loadFamily();
-    } catch (e) { status.textContent = "Failed: " + e.message; }
-    finally { btn.disabled = false; btn.style.opacity = "1"; }
+    } catch { status.textContent = "Couldn't save that — check your connection."; }
+    finally { btn.disabled = false; }
   });
 
   loadFamily();
@@ -1012,18 +993,17 @@ function startFamilyEdit(card) {
   const id = card.dataset.fam;
   const f = (state._famById || {})[id];
   if (!f) return;
-  const inputStyle = `style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:8px 9px;font-size:.9rem"`;
   let editColor = familyColor(f.color);
   const box = document.createElement("div");
   box.className = "fam-edit";
   box.innerHTML = `
-    <input class="fe-name" placeholder="Name" value="${escAttr(f.name || "")}" ${inputStyle}>
-    <input class="fe-rel" placeholder="Relationship" value="${escAttr(f.relationship || "")}" ${inputStyle}>
-    <input class="fe-birth" type="date" max="${localISO()}" value="${escAttr(f.birthdate || "")}" ${inputStyle} style="color-scheme:light">
+    <input class="fe-name form-input" placeholder="Name" value="${escAttr(f.name || "")}">
+    <input class="fe-rel form-input" placeholder="Relationship" value="${escAttr(f.relationship || "")}">
+    <input class="fe-birth form-input" type="date" max="${localISO()}" value="${escAttr(f.birthdate || "")}">
     ${familySwatches(editColor)}
-    <input class="fe-notes" placeholder="Notes" value="${escAttr(f.notes || "")}" ${inputStyle}>
-    <input class="fe-allergy" placeholder="Allergies" value="${escAttr(f.allergies || "")}" ${inputStyle}>
-    <input class="fe-diet" placeholder="Dietary needs" value="${escAttr(f.dietary_restrictions || "")}" ${inputStyle}>
+    <input class="fe-notes form-input" placeholder="Notes" value="${escAttr(f.notes || "")}">
+    <input class="fe-allergy form-input" placeholder="Allergies" value="${escAttr(f.allergies || "")}">
+    <input class="fe-diet form-input" placeholder="Dietary needs" value="${escAttr(f.dietary_restrictions || "")}">
     <div class="life-edit-ctl">
       <button class="iconbtn memok fe-save" title="save">✓</button>
       <button class="iconbtn fe-cancel" title="cancel">×</button>
@@ -1047,7 +1027,7 @@ function startFamilyEdit(card) {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, relationship: v(".fe-rel"), birthdate: v(".fe-birth"), color: editColor, notes: v(".fe-notes"), allergies: v(".fe-allergy"), dietary_restrictions: v(".fe-diet") }),
       });
-    } catch { toast("Failed"); return; }
+    } catch { toast("Couldn't save that — try again."); return; }
     toast("Updated"); loadFamily();
   };
   box.querySelector(".fe-save").addEventListener("click", save);
@@ -1059,21 +1039,13 @@ function rewireFamilyCard(card) {
   const d = card.querySelector("[data-fdel]"); if (d) d.addEventListener("click", () => startFamilyDelete(d));
 }
 
-// armed-× delete (no confirm dialog) — same idiom as Life / Memory / Health docs.
+// two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js)
 function startFamilyDelete(btn) {
-  const card = btn.closest(".fam-card");
-  const id = card.dataset.fam;
-  if (btn.dataset.armed) {
+  const id = btn.closest(".fam-card").dataset.fam;
+  armDelete(btn, () => {
     api(`/family/${id}`, { method: "DELETE" })
       .then(() => { toast("Removed"); loadFamily(); })
-      .catch(() => toast("Failed"));
-    return;
-  }
-  btn.dataset.armed = "1";
-  btn.classList.add("armed");
-  btn.textContent = "remove?";
-  const reset = () => { delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = "×"; clearTimeout(t); };
-  const t = setTimeout(reset, 3000);
-  btn.addEventListener("blur", reset, { once: true });
+      .catch(() => toast("Couldn't remove that — try again."));
+  });
 }
 

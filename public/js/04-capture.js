@@ -89,8 +89,8 @@ async function quickLog() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-  } catch (_e) { toast("Failed"); return; }
-  if (a && a.error) { toast("Failed"); return; }
+  } catch (_e) { toast("Couldn't log that — check your connection."); return; }
+  if (a && a.error) { toast("Couldn't log that — try again."); return; }
   toast("Logged");
 
   // Instant feedback: show the regex result at the top of Lately right away. The
@@ -140,7 +140,7 @@ function setupWeightChip() {
     if (!w) { input.focus(); return; }
     try {
       await api("/bodyweight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weight_lb: w }) });
-    } catch { toast("Failed"); return; }
+    } catch { toast("Couldn't save your weight — try again."); return; }
     // a weigh-in syncs profile.weight_lb and moves the weight trend / pace — drop the
     // caches that read it so Today's compass + the Weight/Energy views stay honest.
     swrInvalidate("progress:weight");
@@ -273,7 +273,7 @@ async function relogFrequent(summary, chip) {
   } catch { f = null; }
   _relogInFlight = false;
   if (chip) chip.classList.remove("freq-chip-busy");
-  if (!f || f.error) { toast("Failed"); return; }
+  if (!f || f.error) { toast("Couldn't log that — try again."); return; }
   toast("Logged · " + meal);
   // poll the enrichment upgrade quietly (no visible row on Today; the meal lives in Plan → Meals)
   if (f.id && enrichmentActive(f.enrichment_status)) {

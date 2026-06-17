@@ -13,6 +13,7 @@ import { enqueueAgentJob, cancelAgentJob, onJobEvent } from "./agentJobs.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
 import {
   runChosen,
+  agentStatusFor,
   suggestSession,
   getCachedExerciseExplanation,
   explainExercise,
@@ -276,18 +277,19 @@ api.get("/today-read", async (req, res) => {
   try {
     if (reset) {
       repo.invalidateDayRead(date || localToday());
-      return res.json(await computeDayRead({ date, agent: agentParam }));
+      const r: any = await computeDayRead({ date, agent: agentParam });
+      return res.json({ ...r, agent_status: agentStatusFor(r) });
     }
     if (!override) {
       const cached = repo.getCachedDayRead(date || localToday());
-      if (cached) return res.json({ ...cached, cached: true });
+      if (cached) return res.json({ ...cached, cached: true, agent_status: agentStatusFor(cached) });
     }
     const read: any = await computeDayRead({ date, override, agent: agentParam });
     // Outcome learning: record what the Brief proposed for this date (once per
     // fresh compute — the cached path above short-circuits repeats) so a later
     // reconciliation pass can compare it to what the athlete actually did.
     try { repo.recordSuggestion("day_read", date || localToday(), { kind: read?.kind ?? null, focus: read?.focus ?? null, est_minutes: read?.est_minutes ?? null, override: override ?? null }); } catch {}
-    return res.json(read);
+    return res.json({ ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {
     // Last-resort floor — computeDayRead already swallows agent failures, so this
     // only fires on an unexpected repo error. Still return a real read, never 500.
@@ -318,7 +320,7 @@ api.post("/today-read/reshape", async (req, res) => {
   try {
     const read: any = await computeDayRead({ date, override, agent: agentParam });
     try { repo.recordSuggestion("day_read", date || localToday(), { kind: read?.kind ?? null, focus: read?.focus ?? null, est_minutes: read?.est_minutes ?? null, override: override ?? null }); } catch {}
-    return res.json(read);
+    return res.json({ ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {
     const f = repo.dayRead(date);
     const headline = f.kind === "rest" ? "Rest today." : f.kind === "easy" ? "Take it easy." : f.focus ? `${f.focus}.` : "Good to train.";
@@ -1020,6 +1022,12 @@ api.get("/agent-jobs/:id/stream", (req, res) => {
 });
 
 api.get("/stats", (_req, res) => res.json(repo.getWeeklyStats()));
+
+// Endurance PRs (v35): best efforts from the logged cardio (longest distance /
+// duration + fastest pace at standard distances). ?type=run|ride filters. Plain
+// numbers, never a score. The strength analogue is the est-1RM in /progress.
+api.get("/endurance-prs", (req, res) =>
+  res.json(repo.getEndurancePRs(req.query.type != null ? String(req.query.type) : undefined)));
 
 api.get("/volume", (req, res) => res.json(repo.getVolumeByMuscle(Number(req.query.days) || 30)));
 

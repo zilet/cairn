@@ -2,19 +2,34 @@ import { db } from "../db.js";
 import { findExercise, findOrCreateExercise } from "./exercises.js";
 
 // ---------- plan ----------
+// LEFT JOIN on exercises (v35): a cardio plan item (kind='cardio') has no
+// exercise_id, so an INNER JOIN would silently drop it. A cardio row's `exercise`
+// is its own label (planned in the note/name) and its endurance fields carry the
+// prescription. hydratePlanItem coerces the row so the surface shape is stable.
+const PLAN_ITEM_COLS = `pi.id, pi.plan_day_id, pi.position, pi.sets, pi.rep_low, pi.rep_high,
+                pi.target_weight, pi.note, pi.warmup_sets, pi.target_seconds,
+                pi.kind, pi.target_distance_km, pi.target_duration_min, pi.target_zone, pi.interval_json,
+                e.name AS exercise, e.muscle_group, e.unit, e.constraint_note, e.mode`;
+
+function hydratePlanItem(row: any) {
+  if (!row) return row;
+  const kind = row.kind === "cardio" ? "cardio" : "strength";
+  let interval: any = null;
+  try { interval = row.interval_json ? JSON.parse(row.interval_json) : null; } catch { interval = null; }
+  const { interval_json, ...rest } = row;
+  return { ...rest, kind, interval };
+}
+
 export function getPlan() {
   const days = db.prepare(`SELECT * FROM plan_days ORDER BY day_number`).all() as any[];
+  const stmt = db.prepare(
+    `SELECT ${PLAN_ITEM_COLS}
+       FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
+       WHERE pi.plan_day_id = ? ORDER BY pi.position`
+  );
   return days.map((d) => ({
     ...d,
-    items: db
-      .prepare(
-        `SELECT pi.id, pi.plan_day_id, pi.position, pi.sets, pi.rep_low, pi.rep_high,
-                pi.target_weight, pi.note, pi.warmup_sets, pi.target_seconds,
-                e.name AS exercise, e.muscle_group, e.unit, e.constraint_note, e.mode
-         FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
-         WHERE pi.plan_day_id = ? ORDER BY pi.position`
-      )
-      .all(d.id),
+    items: (stmt.all(d.id) as any[]).map(hydratePlanItem),
   }));
 }
 
@@ -23,15 +38,13 @@ export function getPlanDay(dayNumber: number) {
   if (!d) return null;
   return {
     ...d,
-    items: db
+    items: (db
       .prepare(
-        `SELECT pi.id, pi.plan_day_id, pi.position, pi.sets, pi.rep_low, pi.rep_high,
-                pi.target_weight, pi.note, pi.warmup_sets, pi.target_seconds,
-                e.name AS exercise, e.muscle_group, e.unit, e.constraint_note, e.mode
-         FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+        `SELECT ${PLAN_ITEM_COLS}
+         FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
          WHERE pi.plan_day_id = ? ORDER BY pi.position`
       )
-      .all(d.id),
+      .all(d.id) as any[]).map(hydratePlanItem),
   };
 }
 
@@ -71,6 +84,15 @@ export function buildPlanICS(opts: { now?: Date; startWeekday?: number } = {}): 
     return out.join("\r\n");
   };
   const fmtItem = (it: any) => {
+    // A cardio item renders its endurance prescription ("Long run — 12 km, Z2").
+    if (it.kind === "cardio") {
+      const label = String(it.note || it.exercise || "Cardio").trim();
+      const bits: string[] = [];
+      if (it.target_distance_km != null) bits.push(`${it.target_distance_km} km`);
+      if (it.target_duration_min != null) bits.push(`${Math.round(it.target_duration_min)} min`);
+      if (it.target_zone) bits.push(String(it.target_zone));
+      return bits.length ? `${label} — ${bits.join(", ")}` : label;
+    }
     const name = it.exercise || "exercise";
     if (it.mode === "timed" && it.target_seconds) return `${name} ${it.sets || 1}×${it.target_seconds}s`;
     const lo = it.rep_low, hi = it.rep_high;
@@ -236,7 +258,7 @@ export function updateTarget(
 
 // ---------- plan editing (manual + restructure) ----------
 export interface PlanItemInput {
-  exercise: string;
+  exercise?: string;            // optional for a cardio item (its label can live in `note`)
   sets?: number;
   rep_low?: number | null;
   rep_high?: number | null;
@@ -245,9 +267,36 @@ export interface PlanItemInput {
   warmup_sets?: number | null;
   target_seconds?: number | null;
   mode?: string | null; // applied when the exercise is created (reps | timed)
+  // First-class planned cardio (v35). kind:'cardio' carries an endurance
+  // prescription with NO loaded exercise; kind:'strength' (default) is unchanged.
+  kind?: string | null;                 // strength | cardio
+  target_distance_km?: number | null;
+  target_duration_min?: number | null;
+  target_zone?: string | null;
+  interval?: any;                       // structured interval JSON (any shape)
+  interval_json?: string | null;        // raw JSON string accepted too
+}
+
+const numOrNull = (v: any): number | null => {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+function intervalJson(it: PlanItemInput): string | null {
+  if (it.interval_json != null) {
+    const s = String(it.interval_json).trim();
+    if (!s) return null;
+    try { JSON.parse(s); return s.slice(0, 4000); } catch { return null; }
+  }
+  if (it.interval != null) {
+    try { return JSON.stringify(it.interval).slice(0, 4000); } catch { return null; }
+  }
+  return null;
 }
 
 // Upsert one day and replace its full exercise list. Unknown exercises are created.
+// A cardio item (kind:'cardio') is written with a NULL exercise_id and its endurance
+// prescription columns — strength items keep their exercise-id behavior unchanged.
 export function savePlanDay(day_number: number, name: string, focus: string | null, items: PlanItemInput[]) {
   const existing = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   let dayId: number;
@@ -261,13 +310,29 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
     );
   }
   const ins = db.prepare(
-    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   (items || []).forEach((it, i) => {
+    const isCardio = String(it.kind ?? "").toLowerCase() === "cardio";
+    if (isCardio) {
+      // A cardio item needs no exercise; its label rides in `note` (or `exercise`,
+      // folded into the note so the column stays NULL). Endurance prescription only.
+      const label = String(it.exercise ?? "").trim();
+      const note = it.note != null && String(it.note).trim() ? String(it.note).trim() : (label || null);
+      ins.run(
+        dayId, i, null, it.sets ?? 1, null, null, null,
+        note ? note.slice(0, 500) : null, null, null,
+        "cardio", numOrNull(it.target_distance_km), numOrNull(it.target_duration_min),
+        it.target_zone != null && String(it.target_zone).trim() ? String(it.target_zone).trim().slice(0, 40) : null,
+        intervalJson(it)
+      );
+      return;
+    }
     if (!it.exercise || !String(it.exercise).trim()) return;
     const ex = findOrCreateExercise(String(it.exercise), undefined, undefined, it.mode ?? undefined);
-    ins.run(dayId, i, ex.id, it.sets ?? 3, it.rep_low ?? null, it.rep_high ?? null, it.target_weight ?? null, it.note ?? null, it.warmup_sets ?? null, it.target_seconds ?? null);
+    ins.run(dayId, i, ex.id, it.sets ?? 3, it.rep_low ?? null, it.rep_high ?? null, it.target_weight ?? null, it.note ?? null, it.warmup_sets ?? null, it.target_seconds ?? null,
+      "strength", null, null, null, null);
   });
   return getPlanDay(day_number);
 }

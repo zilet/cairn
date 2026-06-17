@@ -42,9 +42,17 @@ async function renderPlanEditor() {
   const model = plan.map((d) => ({
     day_number: d.day_number, name: d.name, focus: d.focus || "",
     items: d.items.map((it) => ({
+      kind: it.kind === "cardio" ? "cardio" : "strength",
       exercise: it.exercise, sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high, target_weight: it.target_weight,
       note: it.note ?? "", warmup_sets: it.warmup_sets ?? null, muscle_group: it.muscle_group ?? null,
       target_seconds: it.target_seconds ?? null, mode: it.mode ?? null, // carried through so saving never drops timed targets
+      // cardio prescription (kind:'cardio') — null on a strength item, preserved on save.
+      target_distance_km: it.target_distance_km ?? null,
+      target_duration_min: it.target_duration_min ?? null,
+      target_zone: it.target_zone ?? null,
+      // the interval is structured JSON server-side; the editor surfaces a plain note,
+      // read from a {note} blob (or a bare string) when present.
+      interval_note: cardioIntervalNote(it.interval),
     })),
   }));
   const editing = new Set(); // day indices currently flipped into the editor
@@ -57,20 +65,50 @@ async function renderPlanEditor() {
     });
     view.querySelectorAll(".pitem").forEach((itEl) => {
       const d = model[+itEl.dataset.d]; const it = d && d.items[+itEl.dataset.i]; if (!it) return;
-      const num = (sel) => { const v = itEl.querySelector(sel).value; return v === "" ? null : Number(v); };
-      it.exercise = itEl.querySelector(".pi-ex").value;
+      const num = (sel) => { const el = itEl.querySelector(sel); if (!el) return null; const v = el.value; return v === "" ? null : Number(v); };
+      const txt = (sel) => { const el = itEl.querySelector(sel); return el ? el.value : ""; };
+      if (itEl.dataset.kind === "cardio") {
+        // The cardio label rides in `note`; the exercise input doubles as the label.
+        it.note = txt(".pi-ex");
+        it.target_distance_km = num(".pi-km");
+        it.target_duration_min = num(".pi-min");
+        it.target_zone = (txt(".pi-zone") || "").trim() || null;
+        it.interval_note = (txt(".pi-ivl") || "").trim();
+        return;
+      }
+      it.exercise = txt(".pi-ex");
       it.sets = num(".pi-sets") ?? 3; it.rep_low = num(".pi-lo"); it.rep_high = num(".pi-hi"); it.target_weight = num(".pi-tw");
-      it.warmup_sets = num(".pi-wu"); it.note = itEl.querySelector(".pi-note").value;
+      it.warmup_sets = num(".pi-wu"); it.note = txt(".pi-note");
     });
   }
+
+  // A blank item of a given kind, used by "+ exercise" / "+ cardio" / the kind toggle.
+  const blankStrength = () => ({ kind: "strength", exercise: "", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" });
+  const blankCardio = () => ({ kind: "cardio", exercise: "", sets: 1, rep_low: null, rep_high: null, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" });
 
   // Gallery card: the default, beautiful state of a plan day (read-only catalog page).
   function progDayHtml(d, di) {
     const strip = d.items.map((it) => {
+      if (isCardioItem(it)) {
+        const t = artImg("activity", cardioArtPhrase(it), "artile-md strip-tile", art("activity", cardioArtPhrase(it)));
+        return t ? `<div>${t}</div>` : "";
+      }
       const t = artImg("exercise", it.exercise, "artile-md strip-tile", art("exercise", it.exercise, it.muscle_group));
       return t ? `<div data-guide="${encodeURIComponent(it.exercise)}" style="cursor:pointer">${t}</div>` : "";
     }).join("");
     const rows = d.items.map((it) => {
+      if (isCardioItem(it)) {
+        const t = artImg("activity", cardioArtPhrase(it), "artile-sm", art("activity", cardioArtPhrase(it)));
+        const pres = cardioPrescription(it);
+        return `<div class="prog-row prog-row-cardio">
+            ${t}
+            <div class="prog-row-main">
+              <span class="prog-row-name prog-row-name-static">${escHtml(cardioLabel(it))}</span>
+              <div class="prog-row-hint"><span class="cardio-tag lbl">cardio</span></div>
+            </div>
+            <div class="prog-row-nums"><span class="numeral prog-row-cardio-pres">${escHtml(pres || "—")}</span></div>
+          </div>`;
+      }
       const t = artImg("exercise", it.exercise, "artile-sm", art("exercise", it.exercise, it.muscle_group));
       const timed = it.mode === "timed" || it.target_seconds != null;
       const range = timed
@@ -106,6 +144,52 @@ async function renderPlanEditor() {
       </div>`;
   }
 
+  // One item editor: a strength prescription (the original .pi-* markup) or a cardio
+  // prescription (distance/duration/zone/interval). A kind toggle flips between them.
+  function pitemHtml(it, di, ii, lastIdx) {
+    const cardio = isCardioItem(it);
+    const ord = `<div class="pi-ord">
+        <button class="ordbtn" data-upitem="${di}:${ii}" ${ii === 0 ? "disabled" : ""}>↑</button>
+        <button class="ordbtn" data-downitem="${di}:${ii}" ${ii === lastIdx ? "disabled" : ""}>↓</button>
+      </div>`;
+    const kindToggle = `<div class="pi-kind" role="group" aria-label="Item type">
+        <button type="button" class="pi-kindbtn${cardio ? "" : " active"}" data-pikind="${di}:${ii}:strength">Lift</button>
+        <button type="button" class="pi-kindbtn${cardio ? " active" : ""}" data-pikind="${di}:${ii}:cardio">Cardio</button>
+      </div>`;
+    if (cardio) {
+      return `<div class="pitem pitem-cardio" data-d="${di}" data-i="${ii}" data-kind="cardio">
+          <div class="pi-row1">
+            <input class="pi-ex" value="${escAttr(it.note || "")}" placeholder="e.g. Long run, Tempo, Easy ride">
+            ${ord}
+          </div>
+          ${kindToggle}
+          <div class="pi-nums pi-nums-cardio">
+            <input class="pi-km" type="number" inputmode="decimal" step="0.1" value="${it.target_distance_km ?? ""}" placeholder="km">
+            <input class="pi-min" type="number" inputmode="numeric" value="${it.target_duration_min ?? ""}" placeholder="min">
+            <input class="pi-zone" type="text" value="${escAttr(it.target_zone || "")}" placeholder="zone (Z2)">
+            <button class="delbtn" data-delitem="${di}:${ii}">✕</button>
+          </div>
+          <input class="pi-ivl" value="${escAttr(it.interval_note || "")}" placeholder="Interval note (optional, e.g. 6×400m @ Z4)">
+        </div>`;
+    }
+    return `<div class="pitem" data-d="${di}" data-i="${ii}" data-kind="strength">
+        <div class="pi-row1">
+          <input class="pi-ex" value="${escAttr(it.exercise)}" placeholder="Exercise">
+          ${ord}
+        </div>
+        ${kindToggle}
+        <div class="pi-nums">
+          <input class="pi-sets" type="number" inputmode="numeric" value="${it.sets ?? ""}" placeholder="sets">
+          <input class="pi-lo" type="number" inputmode="numeric" value="${it.rep_low ?? ""}" placeholder="lo">
+          <input class="pi-hi" type="number" inputmode="numeric" value="${it.rep_high ?? ""}" placeholder="hi">
+          <input class="pi-tw" type="number" inputmode="decimal" value="${it.target_weight ?? ""}" placeholder="wt">
+          <input class="pi-wu" type="number" inputmode="numeric" value="${it.warmup_sets ?? ""}" placeholder="WU">
+          <button class="delbtn" data-delitem="${di}:${ii}">✕</button>
+        </div>
+        <input class="pi-note" value="${escAttr(it.note || "")}" placeholder="Note (optional)">
+      </div>`;
+  }
+
   // Editor card: the pre-existing .pday / .pi-* markup, flipped in per day via "Edit day".
   function pdayHtml(d, di) {
     return `<div class="pday" data-d="${di}">
@@ -115,26 +199,11 @@ async function renderPlanEditor() {
           <button class="delbtn" data-delday="${di}">✕</button>
         </div>
         <input class="pday-focus" value="${escAttr(d.focus)}" placeholder="Focus (optional)">
-        ${d.items.map((it, ii) => `
-          <div class="pitem" data-d="${di}" data-i="${ii}">
-            <div class="pi-row1">
-              <input class="pi-ex" value="${escAttr(it.exercise)}" placeholder="Exercise">
-              <div class="pi-ord">
-                <button class="ordbtn" data-upitem="${di}:${ii}" ${ii === 0 ? "disabled" : ""}>↑</button>
-                <button class="ordbtn" data-downitem="${di}:${ii}" ${ii === d.items.length - 1 ? "disabled" : ""}>↓</button>
-              </div>
-            </div>
-            <div class="pi-nums">
-              <input class="pi-sets" type="number" inputmode="numeric" value="${it.sets ?? ""}" placeholder="sets">
-              <input class="pi-lo" type="number" inputmode="numeric" value="${it.rep_low ?? ""}" placeholder="lo">
-              <input class="pi-hi" type="number" inputmode="numeric" value="${it.rep_high ?? ""}" placeholder="hi">
-              <input class="pi-tw" type="number" inputmode="decimal" value="${it.target_weight ?? ""}" placeholder="wt">
-              <input class="pi-wu" type="number" inputmode="numeric" value="${it.warmup_sets ?? ""}" placeholder="WU">
-              <button class="delbtn" data-delitem="${di}:${ii}">✕</button>
-            </div>
-            <input class="pi-note" value="${escAttr(it.note || "")}" placeholder="Note (optional)">
-          </div>`).join("")}
-        <button class="ghostbtn" data-additem="${di}">+ exercise</button>
+        ${d.items.map((it, ii) => pitemHtml(it, di, ii, d.items.length - 1)).join("")}
+        <div class="pday-add">
+          <button class="ghostbtn" data-additem="${di}">+ exercise</button>
+          <button class="ghostbtn" data-addcardio="${di}">+ cardio</button>
+        </div>
       </div>`;
   }
 
@@ -160,7 +229,21 @@ async function renderPlanEditor() {
       sync(); const [di, ii] = b.dataset.delitem.split(":").map(Number); model[di].items.splice(ii, 1); planBar.markDirty(); draw();
     }));
     view.querySelectorAll("[data-additem]").forEach((b) => b.addEventListener("click", () => {
-      sync(); model[+b.dataset.additem].items.push({ exercise: "", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "", warmup_sets: null }); planBar.markDirty(); draw();
+      sync(); model[+b.dataset.additem].items.push(blankStrength()); planBar.markDirty(); draw();
+    }));
+    view.querySelectorAll("[data-addcardio]").forEach((b) => b.addEventListener("click", () => {
+      sync(); model[+b.dataset.addcardio].items.push(blankCardio()); planBar.markDirty(); draw();
+    }));
+    // Flip one item between a lift and a cardio prescription — preserves the note/label,
+    // resets the kind-specific numbers (they don't translate between modalities).
+    view.querySelectorAll("[data-pikind]").forEach((b) => b.addEventListener("click", () => {
+      sync(); const [di, ii, kind] = b.dataset.pikind.split(":");
+      const it = model[+di] && model[+di].items[+ii]; if (!it) return;
+      if (it.kind === kind) return; // already this kind
+      const label = it.kind === "cardio" ? (it.note || "") : (it.exercise || "");
+      const next = kind === "cardio" ? blankCardio() : blankStrength();
+      if (kind === "cardio") next.note = label; else next.exercise = label;
+      model[+di].items[+ii] = next; planBar.markDirty(); draw();
     }));
     view.querySelectorAll("[data-upitem]").forEach((b) => b.addEventListener("click", () => {
       sync(); const [di, ii] = b.dataset.upitem.split(":").map(Number);
@@ -186,16 +269,36 @@ async function renderPlanEditor() {
     sync();
     const days = model.map((d, i) => ({
       day_number: i + 1, name: d.name || `Day ${i + 1}`, focus: d.focus || null,
-      items: d.items.filter((it) => it.exercise && it.exercise.trim()).map((it) => ({
-        exercise: it.exercise.trim(), sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high,
-        target_weight: it.target_weight, note: it.note && it.note.trim() ? it.note.trim() : null,
-        warmup_sets: it.warmup_sets ?? null,
-        target_seconds: it.target_seconds ?? null, // preserve timed targets across edits
-      })),
+      items: d.items
+        // a cardio item is kept when it has any prescription or a label; a strength
+        // item still needs a non-empty exercise name (an empty row is dropped).
+        .filter((it) => isCardioItem(it)
+          ? ((it.note && it.note.trim()) || it.target_distance_km != null || it.target_duration_min != null || (it.target_zone && String(it.target_zone).trim()))
+          : (it.exercise && it.exercise.trim()))
+        .map((it) => {
+          if (isCardioItem(it)) {
+            const ivl = (it.interval_note || "").trim();
+            return {
+              kind: "cardio",
+              note: it.note && it.note.trim() ? it.note.trim() : null,
+              target_distance_km: it.target_distance_km ?? null,
+              target_duration_min: it.target_duration_min ?? null,
+              target_zone: it.target_zone && String(it.target_zone).trim() ? String(it.target_zone).trim() : null,
+              interval: ivl ? { note: ivl } : null,
+            };
+          }
+          return {
+            kind: "strength",
+            exercise: it.exercise.trim(), sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high,
+            target_weight: it.target_weight, note: it.note && it.note.trim() ? it.note.trim() : null,
+            warmup_sets: it.warmup_sets ?? null,
+            target_seconds: it.target_seconds ?? null, // preserve timed targets across edits
+          };
+        }),
     }));
     if (!days.length) { $("#planstatus").textContent = "Add at least one day before saving."; return false; }
     const r = await api("/plan", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days }) });
-    if (r.error) { $("#planstatus").textContent = "Error: " + r.error; return false; }
+    if (r.error) { $("#planstatus").textContent = "Couldn't save your plan — try again."; return false; }
     state.plan = [];
     swrInvalidate("plan"); // the shared plan cache (Today + this editor) is now stale
     renderPlanEditor(); // fresh render — the save bar finishes its success flash on top
@@ -462,7 +565,7 @@ async function renderChat() {
           <textarea id="chatInput" rows="1" autocomplete="off" placeholder="Ask your coach, log a ride, snap a plate…"></textarea>
           <button id="chatSend" class="logbtn">↑</button>
         </div>
-        <div class="chatnote">Logs apply instantly · plan changes arrive as drafts you Apply</div>
+        <div class="chatnote">Logs save instantly. Plan changes arrive as drafts for you to apply.</div>
       </div>
     </div>`;
 
@@ -493,7 +596,7 @@ async function renderChat() {
       preview.hidden = false;
       attachBtn.classList.add("has-img");
       camBtn.classList.add("has-img");
-    } catch (e) { toast(e.message || "Couldn't read that image"); clearAttach(); }
+    } catch { toast("Couldn't read that image — try another."); clearAttach(); }
   };
   attachBtn.addEventListener("click", () => fileInput.click());
   camBtn.addEventListener("click", () => camInput.click());

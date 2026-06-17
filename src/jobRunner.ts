@@ -12,7 +12,11 @@ import { EventEmitter } from "node:events";
 // on the terminal transition. `on` returns an unsubscribe.
 export function createProgressBus<E>(prefix: string) {
   const bus = new EventEmitter();
-  bus.setMaxListeners(0); // many entities × subscribers; the warning isn't meaningful here
+  // A finite, generous cap: each entity id is its own event name with typically
+  // one SSE subscriber, so this comfortably allows normal concurrency (many turns/
+  // jobs in flight) while still surfacing Node's warning if a genuine listener leak
+  // ever accumulates — which `setMaxListeners(0)` would silence entirely.
+  bus.setMaxListeners(50);
   return {
     on(id: number, listener: (e: E) => void): () => void {
       const ev = `${prefix}:${id}`;

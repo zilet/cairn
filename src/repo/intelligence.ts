@@ -1,7 +1,7 @@
 import { db, todayISO } from "../db.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { listContextEvents } from "./health.js";
-import { KCAL_PER_LB, getProfile, projectGoalPace } from "./profile.js";
+import { KCAL_PER_LB, getPrimaryDiscipline, getProfile, projectGoalPace } from "./profile.js";
 
 // ============================================================================
 // STUBS for the Stage-2 feature teams. Each has the FINAL signature + return
@@ -25,13 +25,60 @@ export interface DayRead {
 export function dayRead(date?: string, recovery?: any): DayRead {
   const d = date || todayISO();
 
-  // Consecutive training days ending the day before `d` (a logged session counts).
+  // Discipline shapes what "a training day" means for the consecutive-days +
+  // earned-rest rules. For a strength athlete a logged lifting session counts;
+  // for an endurance/hybrid athlete a real cardio effort (a run/ride) is also a
+  // training day — otherwise a runner's whole week is invisible and the Brief
+  // keeps suggesting fresh sessions on top of hard mileage. Default 'strength'
+  // keeps the existing behavior byte-for-byte.
+  const discipline = getPrimaryDiscipline();
+  const countsCardio = discipline === "endurance" || discipline === "hybrid";
+
+  // Lifting-session days (a logged set).
   const sessionDates = new Set(
     (db.prepare(`SELECT DISTINCT s.date AS dt FROM sessions s JOIN logged_sets l ON l.session_id = s.id`).all() as any[]).map((r) => r.dt)
   );
+  // Cardio/activity days that count as training for an endurance/hybrid athlete:
+  // a real effort (≥20 min or any logged distance), so an incidental short walk
+  // doesn't read as a hard day. Empty for a strength athlete.
+  const cardioDates = countsCardio
+    ? new Set(
+        (db.prepare(
+          `SELECT DISTINCT date AS dt FROM activities WHERE (duration_min >= 20 OR distance_km IS NOT NULL)`
+        ).all() as any[]).map((r) => r.dt)
+      )
+    : new Set<string>();
+  const trainingDay = (iso: string) => sessionDates.has(iso) || cardioDates.has(iso);
+
+  // Consecutive training days ending the day before `d`.
   let consec = 0;
   let t = new Date(d + "T00:00:00Z").getTime() - 864e5; // start from yesterday
-  while (sessionDates.has(new Date(t).toISOString().slice(0, 10))) { consec++; t -= 864e5; }
+  while (trainingDay(new Date(t).toISOString().slice(0, 10))) { consec++; t -= 864e5; }
+
+  // Endurance volume spike: a weekly-mileage jump well above the prior weeks'
+  // average is its own earned-rest signal (consecutive-day counting can miss a
+  // single very-long effort). Deterministic + null-safe; only for endurance/hybrid.
+  let volumeSpike = false;
+  let lastWeekKm: number | null = null;
+  if (countsCardio) {
+    const weekKm = (endIso: string): number => {
+      const end = new Date(endIso + "T00:00:00Z").getTime();
+      const start = new Date(end - 6 * 864e5).toISOString().slice(0, 10);
+      const row = db.prepare(
+        `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date <= ?`
+      ).get(start, endIso) as any;
+      return Math.round(Number(row?.km ?? 0) * 10) / 10;
+    };
+    const yesterdayIso = new Date(new Date(d + "T00:00:00Z").getTime() - 864e5).toISOString().slice(0, 10);
+    lastWeekKm = weekKm(yesterdayIso);
+    // The three prior weeks' average (the chronic base), ending a week back.
+    const priorEnds = [7, 14, 21].map((n) => new Date(new Date(d + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10));
+    const priorKm = priorEnds.map(weekKm);
+    const chronic = priorKm.reduce((a, b) => a + b, 0) / priorKm.length;
+    // A meaningful spike: this week clearly above the chronic base (and a real
+    // amount of running, so a near-zero base doesn't trip on a single short run).
+    volumeSpike = lastWeekKm >= 25 && chronic > 0 && lastWeekKm > chronic * 1.5;
+  }
 
   // Recovery signal (unified). "clearly low" = short sleep or a low subjective
   // check-in for the day. All optional — absent signals never force rest. The
@@ -84,6 +131,11 @@ export function dayRead(date?: string, recovery?: any): DayRead {
 
   const signals = {
     consecutive_training_days: consec,
+    // Discipline-aware context (v35): what "training day" counts as, and the
+    // endurance volume read when it applies. Strength athletes see discipline
+    // 'strength' + a null volume block (today's behavior).
+    discipline,
+    endurance_volume: countsCardio ? { last_week_km: lastWeekKm, volume_spike: volumeSpike } : null,
     avg_sleep_min: avgSleepMin,
     low_sleep: lowSleep,
     checkin: checkin ? { energy: checkin.energy, sleep_feel: checkin.sleep_feel, soreness: checkin.soreness, mood: checkin.mood } : null,
@@ -173,15 +225,17 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     return shape(days[idx % days.length]);
   }
 
-  if (consec >= 3 || lowSleep || lowSubjective) {
+  if (consec >= 3 || volumeSpike || lowSleep || lowSubjective) {
     return {
       kind: "rest",
       focus: null,
       why: consec >= 3
         ? "You've trained several days running — let it consolidate."
-        : lowSleep
-          ? "Sleep's run short lately — an easier day will serve you better."
-          : "You're feeling run-down today — rest is the smart call.",
+        : volumeSpike
+          ? "Your mileage has jumped this week — an easier day lets it absorb."
+          : lowSleep
+            ? "Sleep's run short lately — an easier day will serve you better."
+            : "You're feeling run-down today — rest is the smart call.",
       est_minutes: null,
       signals,
     };

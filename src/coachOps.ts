@@ -36,6 +36,31 @@ import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./rese
 // single agentic-ops entry point.
 export { runChosen };
 
+// Agent-status contract (v35) — a calm, additive provenance hint the PWA reads to
+// distinguish "no coaching CLI is configured" from "an agent was tried and failed"
+// from a real agentic result. NEVER changes existing fields; it's a sidecar string.
+//   'unconfigured' — repo.pickAgentOrder() is empty (no usable agent installed/enabled)
+//   'all_failed'   — agents WERE available but every attempt failed (fell to the floor)
+//   'ok'           — an agent produced the result
+// A `result` carries `source`/`agent`/`tried`/`ok` from the op; any subset is fine.
+export function agentStatusFor(result: {
+  source?: string | null;
+  agent?: string | null;
+  ok?: boolean;
+  tried?: { agent: string; error: string }[] | null;
+} = {}): "ok" | "unconfigured" | "all_failed" {
+  let configured = true;
+  try { configured = repo.pickAgentOrder().length > 0; } catch { configured = true; }
+  if (!configured) return "unconfigured";
+  // An agentic result is one that came from an agent (source === 'agent') or that
+  // succeeded (ok !== false with a chosen agent). The deterministic floor / a
+  // failed op means every available attempt failed.
+  const agentic =
+    result.source === "agent" ||
+    (result.ok !== false && !!result.agent && result.source !== "deterministic");
+  return agentic ? "ok" : "all_failed";
+}
+
 // Optional hooks the durable agent-job worker threads into a backgrounded op:
 // `signal` lets a Stop SIGKILL the live subprocess (through runChosen→runAgent),
 // `onPhase` reports real progress to the job bus. ADDITIVE — when both are
@@ -113,7 +138,7 @@ export async function suggestSession(
   if (!sane) {
     // Nothing fresh and usable — fall back to a stale cache hit rather than fail.
     if (cached) return cached.result;
-    return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried };
+    return { ok: false as const, error: "agent returned no usable session", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
   }
   // Self-critique: check the suggestion against the athlete's HARD constraints
   // (injury, time budget, equipment, encoding) and adopt a fix if one is returned.
@@ -129,7 +154,7 @@ export async function suggestSession(
     minutes: opts.minutes ?? null, focus: opts.focus ?? null,
     est_minutes: Number(session.est_minutes) || null, item_count: session.items.length,
   });
-  const out = { ok: true as const, session, agent: chosen, tried, ...(verified ? { verified } : {}) };
+  const out = { ok: true as const, session, agent: chosen, tried, agent_status: "ok" as const, ...(verified ? { verified } : {}) };
   try { repo.saveAiCache("session_suggest", cacheKey, { result: out, chosen_agent: chosen, freshForMs: 3 * 60 * 60 * 1000 }); } catch { /* cache write never breaks the op */ }
   return out;
 }
@@ -366,7 +391,7 @@ export async function draftMealPlan(agent: string | undefined, instruction?: str
   // ok mirrors !!result.parsed (createMealPlan tolerates a null parsed).
   if (!planSane(p)) {
     const plan = repo.createMealPlan(chosen, result.raw, p);
-    return { ok: !!p as boolean, plan, agent: chosen, tried };
+    return { ok: !!p as boolean, plan, agent: chosen, tried, agent_status: agentStatusFor({ ok: !!p, agent: chosen, tried }) };
   }
   // Self-critique: check the plan against the lean-safe / longevity floors and
   // adopt a returned fix when it re-validates. Fail-open (verify down/garbage ⇒
@@ -376,7 +401,7 @@ export async function draftMealPlan(agent: string | undefined, instruction?: str
     agent, p, buildPlanVerifyPrompt, planSane, "meal_plan_verify", hooks
   );
   const plan = repo.createMealPlan(chosen, result.raw, verifiedParsed);
-  return { ok: true as const, plan, agent: chosen, tried, ...(verified ? { verified } : {}) };
+  return { ok: true as const, plan, agent: chosen, tried, agent_status: "ok" as const, ...(verified ? { verified } : {}) };
 }
 
 // Quiet adaptive-nutrition check-in. Drafts a nutrition_target proposal only on
@@ -514,10 +539,14 @@ export async function generateInsight(
   const p: any = result.parsed;
   const text = p && typeof p === "object" ? String(p.text ?? "").trim() : "";
   if (!p || typeof p !== "object" || p.found === false || !text || repo.isDuplicateInsight(text, recent)) {
-    return { ok: false as const, error: "no genuine new insight", agent: chosen, tried };
+    // Distinguish "no agent configured / every attempt failed" from a legitimate
+    // quiet answer (the agent ran and genuinely found nothing new). When the agent
+    // DID parse a result (p is an object), it succeeded — found:false is calm 'ok'.
+    const status = p && typeof p === "object" ? ("ok" as const) : agentStatusFor({ ok: false, agent: chosen, tried });
+    return { ok: false as const, error: "no genuine new insight", agent: chosen, tried, agent_status: status };
   }
   const insight = repo.addInsight({ kind: k, text, rationale: p.rationale ?? null, next_step: p.next_step ?? null, status: "new" });
-  const out = { ok: true as const, insight, agent: chosen, tried };
+  const out = { ok: true as const, insight, agent: chosen, tried, agent_status: "ok" as const };
   // Short freshness by default (a quiet insight should refresh within the hour);
   // the nightly scheduler passes a longer window so the morning open is a fresh hit.
   const freshForMs = Number.isFinite(opts?.freshForMs as number) ? (opts!.freshForMs as number) : 60 * 60 * 1000;

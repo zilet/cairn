@@ -203,8 +203,9 @@ function weeksText(weeks: number): string {
 // OPTIMAL band (not the lab range). Slope sign vs the "worse" direction decides
 // improving / worsening; an ETA is projected only when the line will actually
 // cross the relevant edge. No zone (or a flat/short series) → a stable/unknown,
-// never a fabricated trend. Everything is plain language + direction.
-function forecastMarker(
+// never a fabricated trend. Everything is plain language + direction. Exported so
+// the wearable-fitness marker builder (propagation.ts) reuses the SAME forecast.
+export function forecastMarker(
   points: { date: string; value: number }[],
   slopePerDay: number | null,
   zone: OptimalZone | null

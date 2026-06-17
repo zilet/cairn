@@ -17,6 +17,8 @@ services:
       # Reachable on the LAN by default so you can open it from your phone. If the
       # host is exposed beyond a trusted network, set CAIRN_AUTH_TOKEN below and/or
       # bind to loopback only: "127.0.0.1:8787:8787".
+      # SAFETY: never leave 8787 reachable from the public internet without
+      # CAIRN_AUTH_TOKEN set. The release compose (deploy/) defaults to loopback.
       - "8787:8787"
     volumes:
       - cairn-data:/data        # SQLite database
@@ -27,13 +29,16 @@ services:
       # default). Set it to gate /api and /mcp behind a bearer token — recommended
       # whenever the port is reachable beyond loopback.
       - CAIRN_AUTH_TOKEN=${CAIRN_AUTH_TOKEN:-}
-      # Subscription logins live in the home volume. These API keys are OPTIONAL
-      # fallbacks (Grok headless in particular may need XAI_API_KEY):
+      # Coaching auth: claude/codex/antigravity use their CLI's subscription login
+      # (stored in the cairn-home volume) — NOT these env keys. Only Grok headless
+      # reliably uses XAI_API_KEY. ANTHROPIC_API_KEY / OPENAI_API_KEY are passed
+      # through for completeness but are not the claude/codex coaching path.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - XAI_API_KEY=${XAI_API_KEY:-}
-      # Generated artwork (src/art.ts, gemini-3.1-flash-image). Without it the PWA
-      # falls back to the built-in SVG illustrations.
+      # Generated ARTWORK only (src/art.ts, gemini-3.1-flash-image) — this is NOT a
+      # coaching agent; Cairn strips it from the agent subprocess env. Without it the
+      # PWA falls back to the built-in SVG illustrations.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       # Optional weekly auto-draft. Set COACH_AGENT to enable (e.g. "claude").
       - COACH_AGENT=${COACH_AGENT:-}

@@ -22,7 +22,7 @@ async function renderCoach() {
         <option value="custom">Custom\u2026</option>
       </select></div>
     <div class="field" id="customwrap" style="display:none">
-      <textarea id="custominstr" rows="3" style="width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:11px;font-size:.9rem" placeholder="Tell the coach what to focus on\u2026"></textarea>
+      <textarea id="custominstr" rows="3" class="form-textarea" placeholder="e.g. focus on lower body; hold everything else\u2026"></textarea>
     </div>
     <button id="runbtn" class="logbtn" style="width:100%;height:46px;font-size:1rem;letter-spacing:.05em">DRAFT PLAN UPDATE</button>
     <div id="runstatus" style="margin-top:10px;color:var(--muted);font-size:.85rem"></div>
@@ -53,7 +53,7 @@ async function runCoach() {
   const agent = $("#agentsel").value;
   const status = $("#runstatus");
   const btn = $("#runbtn");
-  btn.disabled = true; btn.style.opacity = ".6";
+  btn.disabled = true;
   status.textContent = `Running ${agent}\u2026 this can take 10\u201360s.`;
   try {
     const r = await api("/agent/run", {
@@ -61,15 +61,15 @@ async function runCoach() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent, instruction: instructionValue() }),
     });
-    if (r.error) { status.textContent = "Error: " + r.error; }
-    else if (!r.ok) { status.textContent = "Agent ran but returned no valid JSON. See raw output below."; }
+    if (r.error) { status.textContent = "The coach couldn't finish \u2014 try again, or pick another agent in Settings."; }
+    else if (!r.ok) { status.textContent = "The coach replied but didn't return a plan. Try again, or see the raw output below."; }
     else { status.textContent = "Draft ready \u2014 review below."; }
     const proposals = await api("/proposals?limit=10");
     renderProposals(proposals);
-  } catch (e) {
-    status.textContent = "Request failed: " + e.message;
+  } catch {
+    status.textContent = "Couldn't reach the coach \u2014 check your connection.";
   } finally {
-    btn.disabled = false; btn.style.opacity = "1";
+    btn.disabled = false;
   }
 }
 
@@ -122,7 +122,7 @@ function verifiedBadgeHtml(verified) {
 
 function renderProposals(proposals) {
   const wrap = $("#proplist");
-  if (!proposals.length) { wrap.innerHTML = `<div class="empty">No proposals yet.</div>`; return; }
+  if (!proposals.length) { wrap.innerHTML = `<div class="empty">No drafts yet. Ask the coach above for next week's targets — every change waits here for you to apply.</div>`; return; }
   wrap.innerHTML = proposals.map((p, pi) => {
     const parsed = p.parsed;
     const changes = parsed && Array.isArray(parsed.changes) ? parsed.changes : [];
@@ -183,6 +183,17 @@ const MEALS_SETTINGS_KEY = "meals:settings";
 // DRAFT time on the /coach/mealplan response but is NOT persisted on the plan row, so
 // we remember it by the just-drafted plan's id for the journal view to surface once.
 const _verifiedByPlan = new Map();
+
+// One warm status line for a meal-plan draft that didn't land. The runOp onFail arg
+// is either the RESULT object (a designed ok:false — carries agent_status) or null
+// (a transport drop). When coaching is simply unconfigured, name the honest cause
+// and point at Settings; otherwise a calm "try again".
+function mealDraftFailLine(err) {
+  if (err && err.agent_status === "unconfigured") return "Drafting a plan needs a coaching agent — connect one in Settings.";
+  if (err) return "The coach replied but didn't return a plan — try again.";
+  return "Couldn't reach the coach — check your connection.";
+}
+
 function rememberVerified(r) {
   if (r && r.ok && r.plan && r.plan.id != null && r.verified && r.verified.checked) {
     _verifiedByPlan.set(r.plan.id, r.verified);
@@ -223,7 +234,7 @@ function coachMealPlanOpOpts() {
     },
     onFail: (err) => {
       const status = $("#mealstatus");
-      if (status) status.textContent = err ? "Failed \u2014 try again." : "Ran but returned no valid plan.";
+      if (status) status.textContent = mealDraftFailLine(err);
       const btn = $("#mealbtn");
       if (btn && btn._busyRestore) btn._busyRestore();
     },
@@ -287,7 +298,7 @@ function mealSlotFor(name, i) {
 function renderMealPlans(plans, sel = "#meallist", refresh = null) {
   const wrap = $(sel);
   if (!wrap) return;
-  if (!plans.length) { wrap.innerHTML = `<div class="empty">No meal plans yet.</div>`; return; }
+  if (!plans.length) { wrap.innerHTML = `<div class="empty">No meal plans yet. Draft one above and a week of meals built around your training lands here.</div>`; return; }
   wrap.innerHTML = plans.map((p, pi) => {
     const m = p.parsed;
     let hero, body;
@@ -353,7 +364,7 @@ function renderMealPlans(plans, sel = "#meallist", refresh = null) {
 // A Morsel-style journal over the current weekly meal plan: big serif day names,
 // floating food art, per-meal macro chips, per-day totals. The classic mp-card
 // list survives as a collapsed history beneath it.
-const MEAL_PREFS_PLACEHOLDER = "Tell the coach how you train & eat — e.g. fasted morning training, simple prep on busy days";
+const MEAL_PREFS_PLACEHOLDER = "e.g. fasted morning training, simple prep on busy days";
 const MEAL_PREF_CHIPS = ["Fasted AM training", "Train before lunch some days", "Simple prep, busy weekdays", "More fish, less red meat"];
 
 // Collapsed-by-default "Planning preferences" card: shows the saved meal_prefs (or a
@@ -944,13 +955,23 @@ function paintMealsBody(plans, mealPrefs) {
       </div>`;
   }
 
-  view.innerHTML = segBar("meals", PLAN_SEG) + body + `
+  // Energy Balance (TDEE) + the nutrition check-in are co-located here, with the
+  // meal plan — the expenditure read and the meal-plan loop in one place. The slot
+  // ids (#energyHero / #energyCard / #checkinResult) match the shared renderers in
+  // 05-progress.js (paintEnergyBody / runNutritionCheckin), reused verbatim.
+  const energyBlock = `<section class="meal-energy" id="mealEnergy">
+      <div id="energyHero"></div>
+      <div id="energyCard">${loadingState("Reading your trend…")}</div>
+      <div id="checkinResult" class="checkin-result"></div>
+    </section>`;
+  view.innerHTML = segBar("meals", PLAN_SEG) + body + energyBlock + `
     <details class="mp-history">
       <summary class="lbl">Past meal plans</summary>
       <div id="mealHist" style="margin-top:10px"></div>
     </details>`;
   wireSeg(PLAN_HANDLERS);
   runCountUps(view);
+  loadMealsEnergy(pollToken);
 
   renderMealPlans(plans, "#mealHist", () => renderMeals());
   wireMealPrefs();
@@ -978,6 +999,23 @@ function paintMealsBody(plans, mealPrefs) {
 
   const draftBtn = view.querySelector("#mealDraftBtn");
   if (draftBtn) draftBtn.addEventListener("click", () => draftWeeklyMeals());
+}
+
+// SWR over the derived expenditure (key shared with the old Energy view), painted
+// into the Meals view's #energyHero/#energyCard via the shared paintEnergyBody. A
+// warm re-entry paints instantly, then revalidates. Bails if the slot's gone.
+function loadMealsEnergy(token) {
+  if (!view.querySelector("#energyCard")) return;
+  const peek = peekCached("progress:energy");
+  const paint = (exp) => {
+    if (token !== pollToken || !view.querySelector("#energyCard")) return;
+    paintEnergyBody(exp);
+  };
+  if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
+  cachedApi("/nutrition/expenditure?window=21", {
+    key: "progress:energy",
+    onUpgrade: (exp, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(exp); },
+  }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
 // Draft a fresh weekly meal plan from the journal view. Runs as a durable
@@ -1013,7 +1051,7 @@ function mealPlanDraftOpOpts() {
     },
     onFail: (err) => {
       const s = view.querySelector("#mealDraftStatus");
-      if (s) s.textContent = err ? "Couldn't draft a plan — try again." : "Agent ran but returned no valid plan.";
+      if (s) s.textContent = mealDraftFailLine(err);
       const b = view.querySelector("#mealDraftBtn");
       if (b && b._busyRestore) b._busyRestore();
     },

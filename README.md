@@ -106,6 +106,29 @@ external agent (Claude Code, Codex, Antigravity, or Grok) — or enable the buil
 agent in Settings to explore offline. See
 [Connect your first agent](docs/QUICKSTART.md#connect-your-first-agent) in the full guide.
 
+### What works out of the box vs. what needs a coaching agent
+
+Cairn is **fully usable the moment it boots**, with no agent and no API key. A coaching agent
+adds the conversational and generative layer on top — and the app stays useful while you set
+one up.
+
+| Works out of the box (no agent) | Needs a logged-in coaching agent |
+|---|---|
+| The Brief — calm rest/easy/train suggestion | The agentic Brief sentence (the plain-language read on top) |
+| Set-by-set logging, history, PRs, est-1RM | Coach **chat** |
+| The plan editor (add/remove/reorder days) | Plan & meal **drafting** (propose → review → apply) |
+| Bodyweight chart, goal feasibility check | Health-review **narrative** |
+| Marker extraction view & optimal-zone trends | Quiet cross-domain **insights** / weekly read |
+| Recovery view, deterministic TDEE / expenditure | Recipe generation, single-meal swaps |
+| Activities, food notes, memory, family, life context | Background enrichment of free-text logs |
+
+A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
+**Antigravity**, or **Grok** — installed on the host **and logged in** with your own account.
+There is no shared key and no built-in model: each provider needs its own CLI and login (the
+Docker image bakes the CLIs in; you log in once). The built-in `stub` agent exercises the same
+propose/apply loop offline with no key, so you can explore the agentic flow before connecting a
+real one.
+
 ### Pick a run target
 
 | If you want... | Start here |
@@ -136,10 +159,14 @@ spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](
 | [`docs/WHY-CAIRN.md`](docs/WHY-CAIRN.md) | How Cairn compares (vs MacroFactor, Oura/Garmin, ChatGPT) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
-Coaching needs an agent: either a coaching CLI logged in on the host (or an `ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY` / `XAI_API_KEY` in the environment), or pick the built-in **`stub`** agent in
-Settings to exercise the propose/apply loop offline with no key. Without one, draft/coach actions
-fall through silently.
+Coaching needs an agent. For **Claude Code**, **Codex**, and **Antigravity** that means the
+provider's CLI installed and **logged in** on the host — they use their subscription OAuth login
+directory, not an environment API key (`claude -p` and `codex exec` ignore `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` for this flow). Only **Grok headless** reliably uses an API key (`XAI_API_KEY`).
+`GEMINI_API_KEY` is for the optional generated **artwork** only — it is not a coaching path (Cairn
+even strips it from the agent subprocess env). Or pick the built-in **`stub`** agent in Settings to
+exercise the propose/apply loop offline with no key. Without an agent, draft/coach actions fall
+through silently.
 
 ## Run With Docker
 
@@ -148,15 +175,20 @@ laptop, a small home server, a VM, a Raspberry Pi, or a private Tailscale /
 WireGuard network. The same container can be started only when you need it or
 left running full-time.
 
-For a local source checkout:
+**Build from source (works today).** This is the recommended path right now — it builds the
+image locally, so it does not depend on any published artifact:
 
 ```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
 docker compose up -d --build
 ```
 
-Then open `http://localhost:8787`.
+Then open `http://localhost:8787`. The first build bakes the coaching CLIs into the image and
+takes ~3–6 minutes; later rebuilds are fast (BuildKit caches the layers).
 
-For a published release image, use the release compose file:
+**Prebuilt release image (once the public image is published).** When the GHCR image and repo
+are public, you can skip the build entirely with the release compose file:
 
 ```bash
 mkdir cairn
@@ -165,7 +197,11 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow.
+> Until the repository and its GHCR package are made public, the prebuilt-image command above
+> returns `401 Unauthorized` for anyone without access — use the build-from-source path instead.
+
+See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow and the maintainer release
+checklist.
 
 - `cairn-data` volume = SQLite DB; `cairn-home` volume = all CLI logins. Rebuilds never touch either.
 - **No built-in auth by default** — keep Cairn behind localhost, a LAN, Tailscale/VPN, or another
@@ -194,6 +230,9 @@ See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow.
 
 ## What Cairn tracks
 
+- **Your primary discipline:** Cairn adapts to how you train — strength/lifting,
+  running/endurance, or a hybrid of both — so the Brief, the plan, and the coaching read speak to
+  what you're actually working toward.
 - **Lifting** (precise): the 5-day plan with per-exercise targets, logged sets, est-1RM trends.
   This is the part that gets actively optimized.
 - **Profile & goal**: a neutral example profile ships seeded — replace it with your own in the Me

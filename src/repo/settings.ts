@@ -489,6 +489,9 @@ export function setAppState(key: string, value: string) {
 }
 
 // agents.json merged with settings: effective order + enabled/usable flags.
+// `present` reports whether the agent's CLI binary is actually installed (cached
+// probe in agents.ts); `usable` rolls up the three things a run needs — enabled
+// by the user, the binary present, and any required env var set.
 export function getAgentConfig() {
   const s = getSettings();
   const all = listAgents() as any[];
@@ -499,7 +502,10 @@ export function getAgentConfig() {
   const disabled = new Set(s.disabled_agents);
   return ordered.map((name) => {
     const a = byName.get(name);
-    return { name, description: a.description, env_ok: a.env_ok, enabled: !disabled.has(name) };
+    const enabled = !disabled.has(name);
+    const present = !!a.present;
+    const env_ok = !!a.env_ok;
+    return { name, description: a.description, env_ok, present, enabled, usable: enabled && present && env_ok };
   });
 }
 
@@ -522,17 +528,26 @@ export function resolveAgentForTask(
   const routes = cfg?.routes ?? getSettings().agent_routes;
   const pinned = routes[task];
   if (!pinned) return requested;
-  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.enabled).map((a) => a.name);
-  // Honor the route only if that agent is enabled — a disabled pin silently falls
-  // back to the rotation (the deterministic base must always stand).
+  // Honor the route only if that agent is USABLE (enabled + binary present + env
+  // ok). A disabled/missing pin silently falls back to the rotation so the
+  // deterministic base always stands. Tests inject `cfg.enabled` directly; in
+  // production we use the usable set (CLI presence included).
+  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.usable).map((a) => a.name);
   return enabled.includes(pinned) ? pinned : requested;
 }
 
 // The order in which to try agents for an "auto" run, per the configured strategy.
 // Round-robin advances a persisted cursor so usage rotates across drafts.
+//
+// Only agents that are USABLE (enabled by the user AND whose CLI binary is present
+// AND whose required env is set) are returned — an agent that can't spawn would
+// otherwise look like a failed run rather than "not configured". With no coaching
+// CLI installed this returns [], which callers treat as "unconfigured" (the agent
+// loop throws a calm "No agents enabled — turn one on in Settings", surfaced as the
+// designed ok:false / graceful-degradation path, NEVER fake coaching).
 export function pickAgentOrder(): string[] {
   const s = getSettings();
-  const enabled = getAgentConfig().filter((a) => a.enabled).map((a) => a.name);
+  const enabled = getAgentConfig().filter((a) => a.usable).map((a) => a.name);
   if (enabled.length <= 1) return enabled;
   if (s.agent_strategy === "priority") return enabled;
   if (s.agent_strategy === "random") {

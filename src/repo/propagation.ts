@@ -1,7 +1,7 @@
 import { db } from "../db.js";
 import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirectiveKey, hydrateDirective, listActiveDirectives, normalizeDirectiveKey } from "./coach.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
-import { getMarkerHistory } from "./health.js";
+import { forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { getProfile } from "./profile.js";
 
 // ============================================================================
@@ -336,6 +336,14 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["lp(a)", "lipoprotein(a)", "lipoprotein (a)"], unit: "nmol/L", optimal: [0, 75], dir: "high", actionable: false, label: "Lp(a)" },
   { keys: ["uric acid"], unit: "mg/dL", optimal: [3, 6], dir: "high", actionable: true, label: "Uric acid" },
   { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP" },
+  // Endurance / cardiorespiratory fitness markers (v35). These come from wearables
+  // (injected into prioritizeMarkers from the recovery summary) but also match a lab
+  // VO2max test. Optimal-ZONE framing only — higher VO2max is better, lower resting
+  // HR is better, higher HRV is better — NEVER a 0-100 score. The bands are broad,
+  // population-level orienting ranges (an athletic adult), not a personal verdict.
+  { keys: ["vo2max", "vo2 max", "vo₂max"], unit: "mL/kg/min", optimal: [42, 60], dir: "low", actionable: true, label: "VO2max" },
+  { keys: ["resting heart rate", "resting hr", "rhr"], unit: "bpm", optimal: [40, 60], dir: "high", actionable: true, label: "Resting HR" },
+  { keys: ["hrv", "heart rate variability", "rmssd"], unit: "ms", optimal: [50, 120], dir: "low", actionable: true, label: "HRV" },
 ];
 
 export function matchOptimalZone(name: string): OptimalZone | null {
@@ -374,8 +382,95 @@ export function optimalDistance(value: number, z: OptimalZone): number {
 // impact_score is an INTERNAL ordering signal ONLY — never surface it to the
 // user as a 0-100 grade (the constitution bans those). The UI shows optimal-zone
 // framing (in/out of optimal, the direction), never the number.
+// Wearable-derived endurance/fitness markers (v35) as TRENDING marker series, so
+// VO2max / resting HR / HRV flow into the SAME connected-brain surfaces as labs
+// (priority ranking, trend, forecast, directives) — optimal-ZONE framing only,
+// never a score. Built deterministically from the recovery tables: VO2max + a
+// distinct daily resting-HR / HRV reading per day (most recent N days). Returns
+// marker objects shaped exactly like getMarkerHistory's (key/name/unit/group/
+// latest/prev/trend/forecast/points) so prioritizeMarkers can treat them uniformly.
+// Empty when there's no wearable data — never throws.
+function wearableFitnessMarkers(days = 120): any[] {
+  const since = new Date(Date.now() - Math.max(1, days - 1) * 864e5).toISOString().slice(0, 10);
+  // Each spec: the marker label + the daily-metrics column it reads (Garmin
+  // preferred, daily_metrics fallback), and a sane plausibility clamp.
+  const specs: { label: string; gCol: string; oCol: string | null; unit: string; lo: number; hi: number }[] = [
+    { label: "VO2max", gCol: "vo2max", oCol: null, unit: "mL/kg/min", lo: 15, hi: 90 },
+    { label: "Resting HR", gCol: "resting_hr", oCol: "resting_hr", unit: "bpm", lo: 25, hi: 120 },
+    { label: "HRV", gCol: "hrv_ms", oCol: "hrv_ms", unit: "ms", lo: 5, hi: 300 },
+  ];
+  const out: any[] = [];
+  for (const spec of specs) {
+    // One reading per day: prefer Garmin's value, else the source-agnostic one.
+    const byDate = new Map<string, number>();
+    const g = db.prepare(
+      `SELECT date, ${spec.gCol} AS v FROM garmin_daily_metrics WHERE date >= ? AND ${spec.gCol} IS NOT NULL ORDER BY date`
+    ).all(since) as any[];
+    for (const r of g) {
+      const v = Number(r.v);
+      if (Number.isFinite(v) && v >= spec.lo && v <= spec.hi) byDate.set(String(r.date), v);
+    }
+    if (spec.oCol) {
+      const o = db.prepare(
+        `SELECT date, ${spec.oCol} AS v FROM daily_metrics WHERE date >= ? AND ${spec.oCol} IS NOT NULL ORDER BY date`
+      ).all(since) as any[];
+      for (const r of o) {
+        const date = String(r.date);
+        if (byDate.has(date)) continue; // Garmin already supplied this day
+        const v = Number(r.v);
+        if (Number.isFinite(v) && v >= spec.lo && v <= spec.hi) byDate.set(date, v);
+      }
+    }
+    if (!byDate.size) continue;
+    const points = [...byDate.entries()]
+      .map(([date, value]) => ({ date, value: Math.round(value * 10) / 10, flag: null as null, doc_id: null as null }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const last = points[points.length - 1];
+    const before = points.length > 1 ? points[points.length - 2] : null;
+    const zone = matchOptimalZone(spec.label);
+    const slope = lsqSlopePerDay(points);
+    const n = points.length;
+    let trend: any;
+    if (n < 2) {
+      trend = { dir: null, change: null, span_days: null, n, slope_per_week: null, projection: null };
+    } else {
+      const change = Math.round((last.value - points[0].value) * 100) / 100;
+      const vals = points.map((p) => p.value);
+      const range = Math.max(...vals) - Math.min(...vals);
+      const span_days = Math.round((Date.parse(last.date) - Date.parse(points[0].date)) / 864e5) || 0;
+      const weekly = slope != null ? slope * 7 : null;
+      const projectedMove = slope != null ? Math.abs(slope) * Math.max(1, span_days) : 0;
+      const dir = weekly == null
+        ? (range > 0 && Math.abs(change) < range * 0.05 ? "stable" : change > 0 ? "rising" : change < 0 ? "falling" : "stable")
+        : projectedMove < Math.max(range * 0.05, 1e-9) ? "stable" : weekly > 0 ? "rising" : weekly < 0 ? "falling" : "stable";
+      const fc = forecastMarker(points, slope, zone);
+      trend = { dir, change, span_days, n, slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000, projection: fc.eta_text };
+    }
+    const grp = markerGroup(spec.label);
+    out.push({
+      key: spec.label.toLowerCase(),
+      name: spec.label,
+      unit: spec.unit,
+      group: grp.key,
+      group_label: grp.label,
+      source: "wearable", // provenance hint — these are device-derived, not a lab draw
+      latest: { value: last.value, flag: null, date: last.date, doc_id: null, kind: "wearable" },
+      prev: before ? { value: before.value, date: before.date } : null,
+      trend,
+      forecast: forecastMarker(points, slope, zone),
+      points,
+    });
+  }
+  return out;
+}
+
 export function prioritizeMarkers() {
-  const { markers } = getMarkerHistory();
+  const { markers: labMarkers } = getMarkerHistory();
+  // Fold in wearable fitness markers (VO2max/RHR/HRV) — a LAB reading of the same
+  // marker always wins (a blood/test draw supersedes a device estimate).
+  const haveKey = new Set(labMarkers.map((m: any) => String(m?.key ?? "").toLowerCase()));
+  const wearable = wearableFitnessMarkers().filter((m) => !haveKey.has(m.key));
+  const markers = [...labMarkers, ...wearable];
   let flagged_count = 0;
   const enriched = markers.map((m: any) => {
     const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
@@ -791,6 +886,21 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
   { zone: "Estradiol", derive: () => [
     { domain: "watch", directive: "An out-of-band estradiol is best read alongside testosterone (and with your doctor) — in men it often tracks with body fat and aromatization; chasing it in isolation isn't useful.", rationale: "Estradiol is interpreted in the context of testosterone and body composition, not as a standalone target.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
   ] },
+  // ---- endurance / cardiorespiratory fitness (v35) ----
+  // Device-derived markers — INFORMATIONAL, optimal-zone framing only, never a score.
+  // The levers are lifestyle (training + recovery), so these are softer nudges
+  // (uncertain) anchored to the consensus that cardiorespiratory fitness is one of
+  // the strongest longevity signals.
+  { zone: "VO2max", derive: () => [
+    { domain: "training", directive: "Your estimated VO2max is below optimal — keep a steady aerobic base and add ONE weekly higher-intensity session (intervals or a tempo effort) to nudge it up; cardiorespiratory fitness is one of the strongest longevity levers.", rationale: "VO2max responds to a polarized mix of easy volume plus targeted high-intensity work, and higher fitness tracks with lower all-cause mortality.", citation: "ACSM / AHA cardiorespiratory fitness consensus", uncertain: true },
+  ] },
+  { zone: "Resting HR", derive: (ctx) => ctx.side === "high" ? [
+    { domain: "training", directive: "Your resting heart rate is running higher than optimal — build easy aerobic volume and protect recovery; a single high reading can also just mean a poor night or building fatigue, so read the trend, not one day.", rationale: "A lower resting HR generally reflects better aerobic fitness and parasympathetic tone; a persistently elevated one can flag accumulated fatigue.", citation: "Cardiorespiratory fitness literature", uncertain: true },
+    { domain: "watch", directive: "If resting HR stays elevated alongside poor sleep or stalled training, treat it as a fatigue signal (ease off) — and mention a sustained unexplained rise to your doctor.", rationale: "A sustained resting-HR rise that isn't training-explained is worth clinical context.", citation: null, uncertain: true },
+  ] : [] },
+  { zone: "HRV", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "training", directive: "Your HRV is running below your optimal range — favor easy aerobic work, protect sleep, and don't stack hard days while it's suppressed; HRV is a recovery/readiness signal, read it as a trend, not a single night.", rationale: "Low HRV often reflects accumulated training or life stress and under-recovery; backing off intensity tends to restore it.", citation: "Heart-rate-variability training-readiness literature", uncertain: true },
+  ] : [] },
 ];
 
 // THE PROPAGATION ENGINE. A flagged/sub-optimal biomarker propagates into every

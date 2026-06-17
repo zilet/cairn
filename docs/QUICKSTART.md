@@ -18,6 +18,25 @@ host), **local Node 24** otherwise. It creates `.env` from `.env.example`, start
 configured. What needs an agent: chat, coaching drafts, and meal plan generation (see
 [Connect your first agent](#connect-your-first-agent) below).
 
+### What works out of the box vs. what needs a coaching agent
+
+Cairn is fully usable the moment it boots — no agent, no API key. A coaching agent adds the
+conversational and generative layer, and the app stays useful while you set one up.
+
+| Works out of the box (no agent) | Needs a logged-in coaching agent |
+|---|---|
+| The Brief (rest/easy/train suggestion) | The agentic Brief sentence on top |
+| Logging, history, PRs, est-1RM | Coach **chat** |
+| The plan editor | Plan & meal **drafting** (propose → review → apply) |
+| Bodyweight chart, goal feasibility | Health-review **narrative** |
+| Marker extraction & optimal-zone trends | Quiet **insights** / weekly read |
+| Recovery view, deterministic TDEE | Recipe generation, single-meal swaps |
+
+A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
+**Antigravity**, or **Grok** — installed on the host **and logged in** with your own account.
+There is no shared key or built-in model; each provider needs its own CLI and login. The built-in
+`stub` agent exercises the same propose/apply loop offline with no key.
+
 ## Which path should I choose?
 
 | Goal | Best path | Why |
@@ -49,7 +68,9 @@ Open **http://localhost:8787**.
 First build bakes the coaching CLIs into the image — expect a few minutes. Later rebuilds are fast
 (BuildKit caches the layers).
 
-### Published image (no source checkout)
+### Published image — no source checkout (once the public image is published)
+
+When the GHCR image and repository are public, you can skip the local build entirely:
 
 ```bash
 mkdir cairn && cd cairn
@@ -57,7 +78,10 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-See [`SHARING.md`](SHARING.md) for the GHCR release flow.
+> Until the repository and its GHCR package have been made public, this command returns
+> `401 Unauthorized`. Use the build-from-source path above (`docker compose up -d --build`)
+> instead. See [`SHARING.md`](SHARING.md) for the GHCR release flow and the maintainer
+> release checklist.
 
 ---
 
@@ -98,6 +122,11 @@ The script starts Cairn on the Pi and prints two URLs:
 
 - `http://localhost:8787` on the Pi itself
 - `http://<pi-ip>:8787` from another device on the same LAN
+
+> **arm64 / Pi note.** The first build takes a while on a Pi, and the beta `agy` (Antigravity) and
+> `grok` installers can fail on arm64 — that is fine, `claude` and `codex` still work. To skip the
+> beta CLIs and speed up the build, set `INSTALL_ANTIGRAVITY: "0"` and `INSTALL_GROK: "0"` in
+> `docker-compose.yml` before building (you can re-enable them later).
 
 For a phone-friendly private URL, install Tailscale on the Pi and your phone/laptop, then run:
 
@@ -219,11 +248,16 @@ Coaching drafts, chat, and meal plans need one external agent. Choose one:
 
 | Agent | Auth |
 |---|---|
-| `claude` | Claude Code — Anthropic Pro/Max subscription |
-| `codex` | Codex — ChatGPT subscription |
-| `antigravity` | Antigravity (`agy`) — Google account |
-| `grok` | Grok Build — SuperGrok / X Premium+ (headless may need `XAI_API_KEY` in `.env`) |
+| `claude` | Claude Code — Anthropic Pro/Max subscription (CLI **login**, not an env key) |
+| `codex` | Codex — ChatGPT subscription (CLI **login**, not an env key) |
+| `antigravity` | Antigravity (`agy`) — Google account (CLI **login**) |
+| `grok` | Grok Build — SuperGrok / X Premium+ (headless coaching uses `XAI_API_KEY` in `.env`) |
 | `stub` | Built-in offline stub — no key, no login, exercises the propose/apply loop |
+
+> `claude`/`codex`/`antigravity` authenticate through the CLI's own subscription login directory —
+> `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment are **not** the coaching path for them.
+> Only **Grok headless** reliably uses an API key. `GEMINI_API_KEY` is for generated artwork only,
+> not coaching.
 
 ### Docker: log in inside the container
 

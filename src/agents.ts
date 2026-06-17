@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,19 @@ const CONFIG_PATH = process.env.AGENTS_CONFIG || path.join(__dirname, "..", "age
 // auto-denies reads outside its working directory, and in Docker uploads live
 // in /data while the app runs from /app.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
+
+// Opt-in stderr surfacing. By default a failed/unparseable agent run is quiet —
+// the loop just falls through to the next agent — which hides the actual cause
+// (e.g. "claude: not logged in") from a self-hoster. Set CAIRN_DEBUG (or DEBUG)
+// to print the captured stderr so the first-run failure is diagnosable. Truncated
+// so a verbose CLI can't flood the log.
+const AGENT_DEBUG = !!(process.env.CAIRN_DEBUG || process.env.DEBUG);
+function debugAgentStderr(name: string, code: number | null, stderr: string) {
+  if (!AGENT_DEBUG) return;
+  const s = (stderr || "").trim();
+  if (!s) return;
+  console.error(`[agent:${name}] exit ${code} stderr:\n${s.slice(0, 4000)}`);
+}
 
 export interface AgentDef {
   command: string;
@@ -39,7 +52,63 @@ export function listAgents() {
     env_required: def.env_required || [],
     // usable if no env requirement (subscription/cred-based) OR the env var is present
     env_ok: !def.env_required?.length || def.env_required.every((k) => !!process.env[k]),
+    // whether the agent's CLI binary is actually installed/on PATH (cached probe)
+    present: commandPresent(def.command),
   }));
+}
+
+// ---------- CLI-presence probe (the #1 first-run guard) ----------
+// A fresh install with no coaching CLI installed must NOT serve fake coaching.
+// `pickAgentOrder()` filters to agents whose binary is actually present, so an
+// agent that can't even spawn is never tried (which would otherwise look like a
+// "failed run" rather than "not configured"). The probe is a `<cmd> --version`
+// spawn — succeeds (any exit code) if the binary launched, fails with ENOENT if
+// it isn't on PATH — falling back to a PATH/absolute-path lookup. It is cached
+// PER COMMAND for the lifetime of the process (a restart re-probes), so a normal
+// request never pays for it; only the first lookup of each distinct command does.
+const presenceCache = new Map<string, boolean>();
+
+function lookupOnPath(cmd: string): boolean {
+  // Absolute / relative path → just stat it.
+  if (cmd.includes("/")) {
+    try { return fs.existsSync(cmd); } catch { return false; }
+  }
+  const PATH = process.env.PATH || "";
+  const exts = process.platform === "win32"
+    ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";")
+    : [""];
+  for (const dir of PATH.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      try { if (fs.existsSync(path.join(dir, cmd + ext))) return true; } catch { /* keep scanning */ }
+    }
+  }
+  return false;
+}
+
+export function commandPresent(cmd: string): boolean {
+  if (!cmd) return false;
+  const cached = presenceCache.get(cmd);
+  if (cached !== undefined) return cached;
+  let present = false;
+  try {
+    // A quick `--version` spawn: ENOENT (no such binary) surfaces as r.error,
+    // any actual launch (even a non-zero exit) means the binary exists. 4s is
+    // ample for a CLI version print; a wedge just reports "not present" (safe).
+    const r = spawnSync(cmd, ["--version"], { stdio: "ignore", timeout: 4000 });
+    if (r.error) {
+      const code = (r.error as NodeJS.ErrnoException).code;
+      // ENOENT = not installed. A timeout/other error → fall back to a PATH scan
+      // rather than wrongly declaring a slow-but-present binary absent.
+      present = code === "ENOENT" ? false : lookupOnPath(cmd);
+    } else {
+      present = true;
+    }
+  } catch {
+    present = lookupOnPath(cmd);
+  }
+  presenceCache.set(cmd, present);
+  return present;
 }
 
 // Scan from `start` for the FIRST complete, balanced top-level {…} object,
@@ -351,7 +420,12 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
     });
     child.on("close", (code) => {
       cleanup();
-      resolve({ code, raw: out, stderr: err, parsed: extractJson(out) });
+      const parsed = extractJson(out);
+      // Surface stderr (under DEBUG) when the run looks unhealthy: a non-zero exit,
+      // or a clean exit that nonetheless produced no parseable JSON. This is what
+      // a self-hoster needs to see "not logged in" / "no such model" first-run errors.
+      if (code !== 0 || !parsed) debugAgentStderr(name, code, err);
+      resolve({ code, raw: out, stderr: err, parsed });
     });
 
     if (useStdin) child.stdin.write(prompt);
@@ -468,6 +542,9 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
     child.on("close", (code) => {
       cleanup();
       if (buf.trim()) consume(buf); // flush a trailing line with no newline
+      // Chat's success is non-empty text (not JSON); log stderr when the stream
+      // came back empty or the process exited non-zero so a failure is diagnosable.
+      if (code !== 0 || !text.trim()) debugAgentStderr(name, code, err);
       resolve({ code, raw: text, stderr: err, parsed: extractJson(text) });
     });
 

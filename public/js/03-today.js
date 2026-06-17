@@ -31,9 +31,9 @@ function exCard(it, logged, prefill, revealIdx) {
         <button class="logbtn">+</button>
       </div>`
     : `<div class="logrow" data-ex="${encodeURIComponent(it.exercise)}" data-day="${state.day}">
-        <input type="number" inputmode="decimal" placeholder="WT" class="in-w" value="${pw ?? ""}">
-        <input type="number" inputmode="numeric" placeholder="REPS" class="in-r" value="${pr ?? ""}">
-        <input type="number" inputmode="decimal" placeholder="RIR" class="in-rir" value="${prir ?? ""}">
+        <input type="number" inputmode="decimal" placeholder="WT" class="in-w" aria-label="Weight" value="${pw ?? ""}">
+        <input type="number" inputmode="numeric" placeholder="REPS" class="in-r" aria-label="Reps" value="${pr ?? ""}">
+        <input type="number" inputmode="decimal" placeholder="RIR" class="in-rir" title="Reps in reserve — how many more you could have done" aria-label="RIR (reps in reserve)" value="${prir ?? ""}">
         <button class="logbtn">+</button>
       </div>`;
   // "Not today" — only a planned exercise with nothing logged yet is skippable
@@ -59,6 +59,47 @@ function exCard(it, logged, prefill, revealIdx) {
       <div class="logged" data-logged>${logged.map(setChip).join("")}</div>
       ${logrow}
     </div>`;
+}
+
+// Today: a planned cardio effort. A prescription (distance/duration/zone/interval)
+// + a calm "log this" affordance that prefills the free-text capture (it routes
+// through the same activity log as everything else — no separate set-logger). Reuses
+// the .ex card vocabulary so it sits naturally among the strength cards.
+function cardioPlanCard(it, revealIdx) {
+  const tile = artImg("activity", cardioArtPhrase(it), "artile-sm ex-art", art("activity", cardioArtPhrase(it)));
+  const pres = cardioPrescription(it);
+  const label = cardioLabel(it);
+  return `<div class="ex ex-cardio${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
+      <div class="ex-top">
+        ${tile}
+        <span class="ex-name ex-name-static">${escHtml(label)} <span class="cardio-tag lbl">cardio</span></span>
+        ${pres ? `<span class="ex-sets ex-cardio-pres">${escHtml(pres)}</span>` : ""}
+      </div>
+      ${it.interval_note || cardioIntervalNote(it.interval) ? `<div class="ex-note">${escHtml(cardioIntervalNote(it.interval) || it.interval_note)}</div>` : ""}
+      <div class="cardio-logrow">
+        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(cardioLogPhrase(it))}">Log this ${escHtml(cardioVerb(label))} →</button>
+      </div>
+    </div>`;
+}
+// The verb for the "Log this …" button — "run" / "ride" / "swim" / "session".
+function cardioVerb(label) {
+  const l = String(label || "").toLowerCase();
+  if (/run|jog|tempo|interval|long/.test(l)) return "run";
+  if (/ride|bike|cycl|spin/.test(l)) return "ride";
+  if (/swim/.test(l)) return "swim";
+  if (/row/.test(l)) return "row";
+  return "effort";
+}
+// A natural-language prefill for the capture box — "ran 12 km easy (Z2)" style — so
+// one tap drops a sensible sentence in and they tweak the actuals before logging.
+function cardioLogPhrase(it) {
+  const verb = cardioVerb(cardioLabel(it));
+  const v = verb === "run" ? "ran" : verb === "ride" ? "rode" : verb === "swim" ? "swam" : verb === "row" ? "rowed" : "did";
+  const bits = [];
+  if (it.target_distance_km != null) bits.push(`${fmtKm(it.target_distance_km)} km`);
+  else if (it.target_duration_min != null) bits.push(`${Math.round(Number(it.target_duration_min))} min`);
+  if (it.target_zone) bits.push(`(${it.target_zone})`);
+  return `${v} ${bits.join(" ")}`.trim() || `${v} my planned ${verb}`;
 }
 
 function setChip(s, i) {
@@ -286,6 +327,39 @@ function visibleBriefOverrides({ kind, estMinutes, activeOverride }) {
   });
 }
 
+// ---------- honest degradation: one calm line when coaching is offline ----------
+// The agentic endpoints (day-read, session-suggest, meal-plan, insight) return an
+// `agent_status` of 'ok' | 'unconfigured' | 'all_failed'. When no agent is reachable
+// the deterministic floor still answers, but silently — so we surface ONE quiet,
+// dismissible line where the agentic read was expected. Never alarming (no red,
+// no warn band — a hairline aside), absent when status is 'ok'/missing, and
+// dismissed for the session so it never nags. Pull-never-push.
+let _agentOfflineDismissed = false;
+function agentOffline(status) {
+  return status === "unconfigured" || status === "all_failed";
+}
+function agentOfflineNoticeHtml(status) {
+  if (_agentOfflineDismissed || !agentOffline(status)) return "";
+  const line = status === "unconfigured"
+    ? "Coaching is offline — connect an agent in Settings for the agentic read."
+    : "Couldn't reach a coaching agent just now — showing the deterministic read.";
+  return `<div class="agent-offline" role="note">
+      <span class="agent-offline-dot" aria-hidden="true"></span>
+      <span class="agent-offline-text">${escHtml(line)}</span>
+      <button class="agent-offline-x" data-agentoffx aria-label="Dismiss">✕</button>
+    </div>`;
+}
+// Wire the dismiss ✕ on any rendered offline notice within `scope`. Dismissal is
+// for the session (a module flag), so it stays quiet until the next reload.
+function wireAgentOffline(scope) {
+  (scope || view).querySelectorAll("[data-agentoffx]").forEach((b) =>
+    b.addEventListener("click", () => {
+      _agentOfflineDismissed = true;
+      const el = b.closest(".agent-offline");
+      if (el) collapseEl(el, () => el.remove()); else b.remove();
+    }));
+}
+
 // Build the Brief hero + actions row + steer line. `showPlan` = the plan surface
 // is already (or about to be) visible. The controls split into two clear tiers:
 // an ACTIONS row (one primary thing to do, scaled to the day) and a quiet, labeled
@@ -339,7 +413,12 @@ function briefHtml(read, { showPlan, isToday }) {
   // the wait reads as the agentic read still arriving, not a stalled guess.
   const thinking = read._provisional && !reducedMotion() ? " is-thinking" : "";
   const busy = read._provisional ? ` aria-busy="true"` : "";
+  // Honest degradation: a real (non-provisional) read whose agent_status says no
+  // agent answered surfaces ONE calm line. Skipped while provisional (the agentic
+  // read may still be arriving via upgradeBriefInPlace).
+  const offline = read._provisional ? "" : agentOfflineNoticeHtml(read.agent_status);
   return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
+      ${offline}
       <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${meta.word.toUpperCase()} DAY${est ? ` · ${escHtml(est)}` : ""}</div>
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
@@ -482,13 +561,17 @@ function sessionSuggestOpOpts() {
       wireSuggestCard(s);
       s.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
     },
-    onFail: () => {
+    onFail: (r) => {
       sessionSuggestInFlight = false;
       const s = view.querySelector("#sugSlot");
       if (!s) return;
-      // designed failure (ok:false) or unreachable — gentle, never an error
+      // designed failure (ok:false) or unreachable — gentle, never an error. When the
+      // result says coaching is simply unconfigured, point at Settings (honest cause).
+      const line = r && r.agent_status === "unconfigured"
+        ? "Building a session needs a coaching agent — connect one in Settings. You can train anyway in the meantime."
+        : "Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.";
       s.innerHTML = `<div class="sug-card sug-fail settle-in">
-          <div class="sug-fail-line">Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.</div>
+          <div class="sug-fail-line">${escHtml(line)}</div>
           <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>
         </div>`;
       wireSuggestCard(s);
@@ -652,19 +735,22 @@ async function renderToday(opts = {}) {
   }
 
   const day = state.plan.find((d) => d.day_number === state.day) || state.plan[0] || { items: [] };
-  const planNames = new Set((day.items || []).map((it) => it.exercise));
+  // Cardio plan items (kind:'cardio') carry NO loaded exercise — they're a prescription
+  // logged through the free-text capture, not the set logger. Keep them out of the
+  // name/skip/prefill plumbing (all keyed on a strength exercise name).
+  const planNames = new Set((day.items || []).filter((it) => !isCardioItem(it) && it.exercise).map((it) => it.exercise));
 
   // "Not today" skips for this session. A skip only holds while the exercise
   // has no logged sets — if sets exist (e.g. logged via chat/MCP), the card wins.
   const skippedSet = new Set(((session && session.skips) || []).map((n) => String(n).toLowerCase()));
-  const isSkipped = (it) => skippedSet.has(it.exercise.toLowerCase()) && !(loggedByEx[it.exercise] || []).length;
+  const isSkipped = (it) => !isCardioItem(it) && it.exercise && skippedSet.has(it.exercise.toLowerCase()) && !(loggedByEx[it.exercise] || []).length;
   const activeItems = (day.items || []).filter((it) => !isSkipped(it));
   const skippedItems = (day.items || []).filter(isSkipped);
 
   // prefill: for plan exercises with no set yet this session, fetch most-recent-ever
   // once. Cache-first per exercise so a warm Today never waits on these either; cold
   // ones are fetched (and cached) in parallel as before.
-  const planEx = activeItems.map((it) => it.exercise);
+  const planEx = activeItems.filter((it) => !isCardioItem(it) && it.exercise).map((it) => it.exercise);
   const offPlanEx = Object.keys(loggedByEx).filter((ex) => !planNames.has(ex));
   const needLast = [...new Set(planEx)].filter((ex) => !(loggedByEx[ex] && loggedByEx[ex].length));
   const lastSets = {};
@@ -686,6 +772,7 @@ async function renderToday(opts = {}) {
   const stats = peeks.stats ? peeks.stats.data : await api("/stats");
   const profile = peeks.profile ? peeks.profile.data : await api("/profile").catch(() => null);
   const exercises = peeks.exercises ? peeks.exercises.data : await api("/exercises").catch(() => []);
+  if (profile) setDiscipline(profile.primary_discipline); // keep the emphasis global warm for Progress/Today
   reval("/stats", "stats");
   reval("/profile", "profile");
   reval("/exercises", "exercises");
@@ -758,11 +845,29 @@ async function renderToday(opts = {}) {
   // on a finished session (the done card replaces the surface). Progress for the slim
   // header: how many of today's exercises have at least one logged set.
   const focus = !showDone && focusEngaged(state.logDate, { showPlan, hasLoggedSets, isToday });
-  const exDone = activeItems.filter((it) => (loggedByEx[it.exercise] || []).length).length;
-  const exTotal = activeItems.length;
+  // The "n / m exercises logged" progress is a strength-logging count — cardio items
+  // are logged through the activity feed, not the set logger, so they don't count here.
+  const strengthItems = activeItems.filter((it) => !isCardioItem(it));
+  const exDone = strengthItems.filter((it) => (loggedByEx[it.exercise] || []).length).length;
+  const exTotal = strengthItems.length;
 
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
+  // Desktop two-column model (≥1100px): the Brief + capture + logging surface are
+  // the PRIMARY column (.today-main); the week-ahead / weekly-read / connection-
+  // insight / garmin-reconcile / "lately" are the secondary RIGHT RAIL (.today-rail).
+  // The rail slots keep their stable ids — every loader (loadWeekAhead, loadTodayReads,
+  // loadRecentActivities, loadGarminReconcile) binds to them exactly as before. On
+  // mobile/tablet the two wrappers stack (single column): the rail flows right after
+  // the capture row, where the week-ahead/reads naturally sat before.
+  const railHtml = focus ? "" : `<aside class="today-rail">
+    ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
+    <div id="weeklySlot" class="weekly-slot"></div>
+    <div id="insightSlot" class="insight-slot"></div>
+    ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
+    <div id="qlRecent" class="ql-recent lately-slot"></div>
+  </aside>`;
+
   let html = focus
     ? focusBarHtml(read, day, { exDone, exTotal, isToday })
     : `${isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
@@ -770,10 +875,6 @@ async function renderToday(opts = {}) {
     ${briefHtml(read, { showPlan, hasPlanDay, isToday })}
     ${goalLineHtml(stats, curW, isToday)}
     <div id="draftSlot" class="draft-slot"></div>
-    ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
-    <div id="weeklySlot" class="weekly-slot"></div>
-    <div id="insightSlot" class="insight-slot"></div>
-    ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
     <div id="sugSlot" class="sug-slot"></div>
     <div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
@@ -788,8 +889,7 @@ async function renderToday(opts = {}) {
       </div>
       <div id="freqFoods" class="freq-foods"></div>
       ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
-    </div>
-    <div id="qlRecent" class="ql-recent lately-slot"></div>`;
+    </div>`;
 
   // ---- A finished workout: calm "done" card, the live surface put away ----
   if (showDone) {
@@ -828,6 +928,9 @@ async function renderToday(opts = {}) {
 
     let cardIdx = 0;
     for (const it of activeItems) {
+      // A planned cardio effort is a prescription + a "log this" affordance (it routes
+      // through the free-text capture), not the set-by-set logger.
+      if (isCardioItem(it)) { html += cardioPlanCard(it, cardIdx++); continue; }
       html += exCard({ ...it, fromPlan: true }, loggedByEx[it.exercise] || [], prefillFor(it), cardIdx++);
     }
     for (const ex of offPlanEx) {
@@ -868,35 +971,58 @@ async function renderToday(opts = {}) {
 
   // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
   if (!focus) {
-    // Collapsed-state recap: speak to BOTH modalities (lifts + cardio), so the week
-    // is the honest container for everything in Lately above — not just lift adherence.
-    const recapBits = [];
-    if (done) recapBits.push(`${done} lift${done === 1 ? "" : "s"}`);
-    if (stats.week_cardio) recapBits.push(`${stats.week_cardio} cardio`);
-    if (stats.week_cardio_km) recapBits.push(`${stats.week_cardio_km} km`);
+    // Discipline-aware emphasis (gentle): an endurance athlete leads with mileage,
+    // a hybrid shows lifts + mileage side by side, a lifter is unchanged. Never
+    // hides a surface — only reorders which number the week opens with.
+    const end = stats.endurance || {};
+    const weekKm = Number(end.week_km) || 0;
+    const mileageTile = `<div class="stat" title="Distance logged this week">
+        <div class="stat-n numeral"><span data-cu="${weekKm}">0</span><span class="stat-frac">km</span></div>
+        <div class="stat-l lbl">this week${end.week_moving_min ? ` · ${Math.round(end.week_moving_min)} min` : ""}</div>
+      </div>`;
+    const adherenceTile = `<div class="stat" title="Training sessions logged this week vs your plan">
+        <div class="stat-n numeral"><span data-cu="${done}">0</span><span class="stat-frac">/${planned || "—"}</span></div>
+        ${dots}
+        <div class="stat-l lbl">this week</div>
+      </div>`;
+    const wtTile = `<button class="stat stat-wt" id="wtChip" title="Log bodyweight">
+        <div class="stat-n numeral" data-wtval>${curW != null ? curW : "—"}<span class="stat-plus">+</span></div>
+        <div class="stat-l lbl">${stats.goal_weight_lb != null ? `lb → ${escHtml(String(stats.goal_weight_lb))}` : "weight · lb"}</div>
+      </button>`;
+    // Compass cells per mode: endurance leads mileage; hybrid pairs lifts+mileage;
+    // strength keeps the original adherence + pace + weight.
+    let compassCells;
+    if (isEndurance()) compassCells = `${mileageTile}${paceTile}${wtTile}`;
+    else if (isHybrid()) compassCells = `${adherenceTile}${mileageTile}${wtTile}`;
+    else compassCells = `${adherenceTile}${paceTile}${wtTile}`;
+
+    // Collapsed-state recap: speak to BOTH modalities, ordering by the active
+    // discipline so the summary opens with what the athlete trains for.
+    const liftBit = done ? `${done} lift${done === 1 ? "" : "s"}` : "";
+    const cardioBits = [];
+    if (stats.week_cardio) cardioBits.push(`${stats.week_cardio} cardio`);
+    if (weekKm) cardioBits.push(`${fmtKm(weekKm)} km`);
+    const cardioBit = cardioBits.join(" · ");
+    const recapBits = (isEndurance() ? [cardioBit, liftBit] : [liftBit, cardioBit]).filter(Boolean);
     const weekRecap = recapBits.join(" · ");
     html += `${paceOffer}
     <details class="weekfold" id="weekFold">
       <summary class="weekfold-sum"><span class="lbl">This week</span>${weekRecap ? `<span class="weekfold-recap">${escHtml(weekRecap)}</span>` : ""}<span class="weekfold-chev" aria-hidden="true">▾</span></summary>
       <div class="statstrip statstrip-compass">
-        <div class="stat" title="Training sessions logged this week vs your plan">
-          <div class="stat-n numeral"><span data-cu="${done}">0</span><span class="stat-frac">/${planned || "—"}</span></div>
-          ${dots}
-          <div class="stat-l lbl">this week</div>
-        </div>
-        ${paceTile}
-        <button class="stat stat-wt" id="wtChip" title="Log bodyweight">
-          <div class="stat-n numeral" data-wtval>${curW != null ? curW : "—"}<span class="stat-plus">+</span></div>
-          <div class="stat-l lbl">${stats.goal_weight_lb != null ? `lb → ${escHtml(String(stats.goal_weight_lb))}` : "weight · lb"}</div>
-        </button>
+        ${compassCells}
       </div>
       <div id="wearStrip"></div>
     </details>`;
   }
 
   // Scope the focus class to this render via a wrapper, so a tab switch (which
-  // replaces #view wholesale) can never leave the class stranded.
-  view.innerHTML = `<div class="today-wrap${focus ? " today-focus" : ""}">${html}</div>`;
+  // replaces #view wholesale) can never leave the class stranded. The primary
+  // column (.today-main) holds the Brief, capture, and logging surface; the rail
+  // (.today-rail) sits beside it on wide screens (section 36) and stacks under it
+  // on mobile/tablet. Focus mode is a single centered column — no rail.
+  view.innerHTML = focus
+    ? `<div class="today-wrap today-focus">${html}</div>`
+    : `<div class="today-wrap"><div class="today-main">${html}</div>${railHtml}</div>`;
   updateHeaderCondense(); // re-render may reset scroll → recompute the pinned-header state
   // On a warm SWR re-render (a background revalidate found new data) snap the
   // numerals to their final value — never re-count an already-shown number from 0.
@@ -906,6 +1032,17 @@ async function renderToday(opts = {}) {
   const qlInput = view.querySelector("#qlInput");
   if (qlBtn) qlBtn.addEventListener("click", quickLog);
   if (qlInput) qlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") quickLog(); });
+  // "Log this run/ride" on a planned cardio card: prefill the free-text capture with
+  // a sensible sentence and focus it, so logging the effort is one tap + a tweak —
+  // the same activity-log path everything else flows through, never a new logger.
+  view.querySelectorAll("[data-cardio-log]").forEach((b) => b.addEventListener("click", () => {
+    const inp = view.querySelector("#qlInput");
+    if (!inp) return;
+    inp.value = b.dataset.cardioLog;
+    inp.focus();
+    try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch {}
+    inp.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" });
+  }));
 
   wireBrief(read, { isToday });
   // If we painted a provisional (cold-cache) read, upgrade it to the agentic read
@@ -1148,6 +1285,7 @@ function renderFeedbackDone(slot, session) {
 function wireBrief(read, { isToday }) {
   const brief = view.querySelector(".brief");
   if (!brief) return;
+  wireAgentOffline(brief); // dismiss ✕ on the "coaching offline" notice, when present
 
   // Steer options → reshape the read agentically (POST /today-read/reshape) as a
   // durable background job, so a steer survives a tab switch / reload / restart

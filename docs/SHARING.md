@@ -15,9 +15,30 @@ Cairn has no built-in user authentication. Do not expose it directly to the
 public internet. If another device can reach the port, set `CAIRN_AUTH_TOKEN`
 or put an authenticated private-network layer in front of it.
 
-## Install From A Published Image
+## Install (Build From Source — Works Today)
 
-Download the release compose file:
+This is the recommended path right now. It builds the image locally, so it does
+not depend on a published artifact or registry access:
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+docker compose up -d --build
+```
+
+The first build bakes the coaching CLIs in and takes a few minutes; later
+rebuilds are fast. Then open:
+
+```text
+http://localhost:8787
+```
+
+For a server on your LAN or tailnet, replace `localhost` with that host name or
+private IP.
+
+## Install From A Published Image (Once The Public Image Is Published)
+
+When the GHCR image and repository are public, you can skip the build entirely:
 
 ```bash
 mkdir cairn
@@ -29,14 +50,10 @@ docker compose up -d
 The compose file attached to a release already points at that release's GHCR
 image tag.
 
-Then open:
-
-```text
-http://localhost:8787
-```
-
-For a server on your LAN or tailnet, replace `localhost` with that host name or
-private IP.
+> Until the repository and its GHCR package have been made public, this command
+> returns `401 Unauthorized` for anyone without registry access. Use the
+> build-from-source path above instead. See the **Maintainer release checklist**
+> below for what flips this on.
 
 ## Ways To Run It
 
@@ -48,9 +65,11 @@ private IP.
 - **Tailscale / MagicDNS:** join the host to a tailnet and use its MagicDNS name
   from your phone or laptop. For an installable offline PWA, put HTTPS in front
   of Cairn with Tailscale Serve or another private reverse proxy.
-- **Cloud VM:** bind the port to localhost or a private interface, then reach it
-  through a VPN, tailnet, SSH tunnel, or an authenticated reverse proxy. Do not
-  leave `8787` open to the public internet.
+- **Cloud VM:** the release compose binds `8787` to **loopback only by default**
+  (`127.0.0.1:8787:8787`), so a fresh VM is not exposed even with auth off. Reach
+  it through Tailscale Serve (recommended), a VPN, an SSH tunnel, or an
+  authenticated reverse proxy. Only widen the binding once `CAIRN_AUTH_TOKEN` is
+  set — never leave `8787` open to the public internet.
 
 ## Timezone
 
@@ -130,7 +149,11 @@ ghcr.io/zilet/cairn:latest
 For a public repository, make sure the package visibility in GitHub Container
 Registry is public if users should pull without authentication.
 
-## Public Release Checklist
+## Maintainer Release Checklist
+
+Until these steps are done, **the prebuilt-image path 401s for strangers** — only the
+build-from-source path works. This checklist is the owner's action; it cannot be done from
+inside the codebase.
 
 - Publish from a source tree that does not include private operator history.
   Personal deployment scripts, hostnames, backups, local videos, and private
@@ -140,9 +163,14 @@ Registry is public if users should pull without authentication.
   already exclude those paths.
 - Run `npm test` before tagging.
 - Push a `v*` tag and wait for the release workflow to pass.
-- Make the GitHub repository public only when intended.
-- Make the GHCR package public if the release compose should work without a
-  Docker login.
-- Verify the anonymous path from a clean machine or fresh shell:
-  download the release `docker-compose.yml`, run `docker compose up -d`, and
-  confirm `http://localhost:8787/api/health` returns `{"ok":true}`.
+- **Make the GitHub repository public** (GitHub → repo → Settings → General →
+  Danger Zone → Change visibility). This is a one-time owner action.
+- **Make the GHCR package public** (GitHub → your packages → `cairn` → Package
+  settings → Change visibility → Public) so the release compose can pull without
+  a Docker login. A public repo does **not** automatically make the package
+  public.
+- **Re-verify the anonymous path** from a clean machine or a fresh shell with no
+  GitHub/Docker credentials: download the release `docker-compose.yml`, run
+  `docker compose up -d`, and confirm `http://localhost:8787/api/health` returns
+  `{"ok":true}`. Only after this passes should the README/QUICKSTART
+  prebuilt-image command be presented as the easy default.

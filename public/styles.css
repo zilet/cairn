@@ -785,10 +785,16 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
   display:block;font-family:var(--font-ui);font-size:.62rem;font-weight:600;
   text-transform:uppercase;letter-spacing:.18em;color:var(--muted);margin-bottom:7px;
 }
-.field input,.field select,.field textarea{
+.field input,.field select,.field textarea,
+.form-input,.form-textarea{
   width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
   border-radius:var(--radius-sm);padding:11px 12px;font-size:.92rem;color-scheme:light;
 }
+/* the shared inline form-field class (replaces a ~20× repeated style string across
+   Life / Family / Profile / edit forms) — same look as a .field input, on its own
+   so it can be used without the .field label wrapper. */
+.form-input{padding:10px 12px}
+.form-textarea{padding:10px 12px;font-size:.9rem;resize:vertical}
 .field select{appearance:none;-webkit-appearance:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%238c8475' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right 13px center;padding-right:34px}
@@ -1102,7 +1108,7 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   border-radius:20px;padding:10px 16px;font-size:.9rem;line-height:1.4;box-shadow:var(--shadow-sm);
   resize:none;max-height:140px;overflow-y:hidden;display:block}
 .chatbar .logbtn{border-radius:999px;font-size:1.1rem}
-.chatnote{text-align:center;color:var(--muted);font-size:.72rem;margin-top:8px}
+.chatnote{text-align:center;color:var(--muted);font-size:.72rem;margin-top:8px;line-height:1.45;text-wrap:balance}
 
 /* day dividers — slim centered date rules between conversation days */
 .chat-divider{display:flex;align-items:center;gap:12px;flex:0 0 auto;
@@ -1229,7 +1235,12 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .agentmeta{flex:1;min-width:0}
 .agentname{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 32;
   font-size:1.02rem;display:flex;align-items:center;gap:7px}
-.agentdesc{font-size:.74rem;color:var(--muted);margin-top:2px;
+.agentstatus{display:flex;align-items:center;gap:6px;font-size:.68rem;font-weight:600;
+  letter-spacing:.04em;color:var(--muted);margin-top:3px}
+.agentdot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--line-2)}
+.agentdot-ready{background:var(--sage)}
+.agentdot-absent{background:var(--gold)} /* calm, never alarming red */
+.agentdesc{font-size:.74rem;color:var(--muted);margin-top:3px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agentctl{display:flex;align-items:center;gap:5px;flex:0 0 auto}
 .agent-update{margin-top:4px}
@@ -1468,6 +1479,10 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .modal-x{position:absolute;top:15px;right:15px;background:var(--card-2);border:1px solid var(--line);
   color:var(--muted);border-radius:999px;width:32px;height:32px;font-size:.9rem}
 .modal-x:hover{color:var(--ink)}
+/* Expand the hit area to ~44px without growing the visual size (a centered
+   invisible overlay). One idiom for every sub-44px tap target — see the
+   ".hit-44 ::before" group below. */
+.modal-x::before{content:"";position:absolute;inset:-7px;border-radius:inherit}
 .modal-title{
   font-family:var(--font-display);font-weight:580;font-variation-settings:"opsz" 60;
   font-size:1.55rem;line-height:1.15;letter-spacing:-.01em;padding-right:44px;
@@ -1694,8 +1709,18 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 }
 @keyframes dlgin{from{transform:scale(.97);opacity:.4}to{transform:scale(1);opacity:1}}
 
-@media (min-width:1280px){
-  header,main{max-width:900px}
+/* Wide-screen canvas: the column grows so two-column Today / Me-Read and the
+   multi-column card grids (section 36) have real room — not a stretched mobile
+   strip in a void. The header tracks main so the date control + titles stay
+   aligned to the content. */
+@media (min-width:1100px){
+  header,main{max-width:1040px}
+}
+@media (min-width:1440px){
+  header,main{max-width:1180px}
+}
+@media (min-width:1800px){
+  header,main{max-width:1280px}
 }
 
 /* -------------------------------------------------------------------
@@ -1739,7 +1764,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .detail-unit{letter-spacing:.14em}
 .detail-ctx{margin-top:7px;letter-spacing:.16em}
 .detail-spark{display:flex;justify-content:center;margin-top:10px}
-.spark{width:132px;height:30px;opacity:.9}
+.spark{width:132px;height:30px;opacity:.9;color:var(--accent)}
 
 .detail-macros{max-width:330px;margin:20px auto 0;text-align:left}
 .detail-section{margin-top:22px;text-align:left;max-width:430px;margin-left:auto;margin-right:auto}
@@ -1812,6 +1837,10 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   transition:color var(--dur-1),background var(--dur-1),transform var(--dur-1) var(--ease)}
 .edset-del:hover{color:var(--warn);background:var(--card-2)}
 .edset-del:active{transform:scale(.88)}
+/* two-tap armed state — × becomes a "remove?" chip (the shared destructive idiom) */
+.edset-del.armed{width:auto;padding:0 10px;color:#fffdf8;background:var(--warn);
+  font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase}
 .ed-notes{width:100%;background:var(--card-2);border:1px solid var(--line);border-radius:12px;
   padding:10px 12px;font-family:var(--font-ui);font-size:.9rem;color:var(--ink);resize:vertical;margin-top:7px}
 .ed-notes:focus{outline:none;border-color:var(--accent)}
@@ -1876,6 +1905,10 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .shop-chips .chip{font-family:var(--font-ui);font-size:.76rem;font-weight:500}
 .shop-chip{cursor:pointer;border:1px solid var(--line-2);transition:opacity var(--dur-1) ease}
 .shop-chip.chip-done{text-decoration:line-through;opacity:.45}
+
+/* Energy Balance — co-located with the meal plan (TDEE read + nutrition check-in).
+   A divided section so it reads as part of the meal-plan loop, not a stray card. */
+.meal-energy{margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
 
 /* collapsed history of past plans */
 .mp-history{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
@@ -2235,6 +2268,24 @@ body.sheet-open{overflow:hidden}
 }
 .brief-why-more:hover{color:var(--ink-2)}
 .brief-signals{font-size:.82rem;color:var(--muted);line-height:1.5;margin:12px 0 0;font-style:italic}
+
+/* Honest degradation — one calm, dismissible line when no coaching agent is
+   reachable. A quiet hairline aside (NOT the warn band): muted ink on an inset
+   well, a small gold dot, never red. Used under the Brief + where a draft was
+   expected. Overflow-clamps to the offline-bar's tone only in intent, not color. */
+.agent-offline{
+  display:flex;align-items:center;gap:9px;margin:0 0 12px;
+  background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius-sm);
+  padding:9px 11px;color:var(--ink-2);font-size:.78rem;line-height:1.4;
+}
+.agent-offline-dot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--gold)}
+.agent-offline-text{flex:1;min-width:0}
+.agent-offline-x{
+  flex:0 0 auto;position:relative;background:none;border:none;color:var(--muted);
+  font-size:.95rem;line-height:1;padding:6px;margin:-6px -4px -6px 0;cursor:pointer;border-radius:8px;
+}
+.agent-offline-x:hover{color:var(--ink)}
+.agent-offline-x:active{transform:scale(.9)}
 
 /* "Steer line" — the calm, subordinate "tell me different" row. Each option is a
    light text-button (not a pill) so the day's primary action stays the visual
@@ -2709,8 +2760,9 @@ body.swr-busy::after{
    gets a Fraunces title + a hairline rule, so the long Settings view reads
    as a few clear sections instead of one flat stack of toggles.
    ------------------------------------------------------------------- */
+.set-lede{font-size:.9rem;color:var(--ink-2);line-height:1.55;margin:8px 2px 0}
 .set-group{margin-top:30px}
-.set-group:first-child{margin-top:8px}
+.set-group:first-child,.set-lede + .set-group{margin-top:20px}
 .set-group-title{
   font-family:var(--font-display);font-weight:560;font-size:1.22rem;
   font-variation-settings:"opsz" 40;letter-spacing:-.01em;color:var(--ink);
@@ -2809,16 +2861,29 @@ body.swr-busy::after{
 }
 
 /* -------------------------------------------------------------------
-   31 · Me · Health — the whole picture (review · markers · records)
+   31 · Me · Health — the whole picture (Read · Markers · Records)
    ------------------------------------------------------------------- */
-/* nested Health seg (Analysis / Markers / Records) tucks just under the Me seg.
-   Its thumb needs a DISTINCT view-transition-name — two elements sharing one
-   name skips the transition (the Me seg thumb is already 'seg-thumb'). */
+/* The Health inner seg is now a SINGLE level (Read / Markers / Records). It still
+   carries its own .hseg / hseg-thumb view-transition-name so the thumb never
+   collides with the Me seg thumb, and a small top offset stacks it under the Me
+   seg when both are pinned. No more four-way / brain-vs-markers confusion. */
 .hsegwrap{top:calc(env(safe-area-inset-top,0px) + 56px);z-index:29;margin-top:-6px}
 .hseg{margin-top:0}
 .hseg .seg-thumb{view-transition-name:hseg-thumb}
 #hPicture{margin-top:2px}
 #hContent{min-width:0}
+
+/* Read view: narrative review + recovery (primary) over the connected brain
+   (directives / what-matters-now / supplements). Single column on mobile; the
+   desktop two-column rail split is layered on in section 36. */
+.hread-cols{display:block}
+.hread-main,.hread-rail{min-width:0}
+/* the "see every trend →" link out of the what-matters-now list to the Markers home */
+.hb-mk-allbtn{margin-top:12px;background:none;border:none;padding:4px 0;cursor:pointer;
+  font-family:var(--font-ui);font-size:.78rem;font-weight:600;letter-spacing:.01em;
+  color:var(--accent);text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:rgba(180,85,45,.35);transition:text-decoration-color var(--dur-1)}
+.hb-mk-allbtn:hover{text-decoration-color:var(--accent)}
 
 /* defensive wrapping — long marker names/values or agent prose must never break
    out of the card on narrow screens (the Health analysis overflow fix) */
@@ -3170,3 +3235,227 @@ button.hmk-row:active{background:var(--card-2)}
 .ctxbanner-health-line{min-width:0;overflow:hidden;text-overflow:ellipsis;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .ctxbanner-go{margin-left:auto;flex:0 0 auto;color:var(--sage);font-weight:600}
+
+/* -------------------------------------------------------------------
+   36 · Responsive layout — tablet 2-up grids + real desktop two-column
+   ------------------------------------------------------------------- */
+/* The app is mobile-first; below ≤680px NOTHING in this section applies, so the
+   phone layout is exactly as before. Above that we use the room with structure:
+   data-dense lists become card grids, and on wide screens Today / Me→Read split
+   into a primary column + a secondary rail. Every grid child gets min-width:0 so
+   long content never blows the track out. Safe-area insets + reduced-motion rules
+   from earlier sections are untouched. */
+
+/* ---- Tablet band (≈681–1099px): 2-up card grids, still one main column ---- */
+@media (min-width:681px) and (max-width:1099px){
+  /* Progress history, Me family / records / memory: two cards across. The
+     containers already exist; we only switch them to a grid here. */
+  .sess-grid,
+  #flist,#hlist,#memlist{
+    display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start;
+  }
+  .sess-grid>*,#flist>*,#hlist>*,#memlist>*{margin-bottom:0;min-width:0}
+  /* the calm empty-state line should never be squeezed into one half-column */
+  #flist>.empty,#hlist>.empty,#memlist>.empty,.sess-grid>.empty{grid-column:1/-1}
+}
+
+/* ---- Wide screen (≥1100px): genuine multi-column editorial layout ---- */
+@media (min-width:1100px){
+  /* TODAY — primary content column + secondary right rail. The main column holds
+     the Brief, capture, and the logging surface; the rail holds the week-ahead,
+     weekly read, connection insight, garmin reconcile, and "lately". Two real
+     wrappers → each column packs to the top independently (no row coupling). */
+  .today-wrap:not(.today-focus){
+    display:grid;grid-template-columns:minmax(0,1.6fr) minmax(290px,1fr);
+    column-gap:28px;align-items:start;
+  }
+  .today-main,.today-rail{min-width:0}
+  .today-rail>*:empty{display:none}            /* an empty slot adds no gap */
+  /* focus mode stays a single centered column — no rail */
+  .today-wrap.today-focus{display:block}
+
+  /* PROGRESS — history sessions as a two/three-up card grid under the hero */
+  .sess-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+  .sess-grid>*{margin-bottom:0;min-width:0}
+  .sess-grid>.empty{grid-column:1/-1}
+
+  /* ME → Family / Records / Memory — multi-column card grids */
+  #flist,#memlist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+  #flist>*,#memlist>*{margin-bottom:0;min-width:0}
+  #flist>.empty,#memlist>.empty{grid-column:1/-1}
+  /* health records can run a little wider per card (markers tables) — keep 2-up */
+  #hlist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+  #hlist>*{margin-bottom:0;min-width:0}
+  #hlist>.empty{grid-column:1/-1}
+
+  /* ME → Health → Read — narrative review + recovery as the primary column, the
+     connected brain (directives / what-matters-now / supplements) as a right rail */
+  .hread-cols{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(300px,1fr);
+    gap:24px;align-items:start}
+  .hread-main,.hread-rail{min-width:0}
+
+  /* ME → Markers — the grouped catalog flows two columns of group cards */
+  .hmk-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:18px 22px;align-items:start}
+  .hmk-groups>.hmk-grouphead{grid-column:1/-1}
+
+  /* ME → Profile — the lean identity form would stretch single inputs across the
+     full wide column and read unfinished. Cap it and flow the short fields two-up,
+     so the form looks intentional; full-width items (about_me, the sport seg, the
+     capture note) span both columns. */
+  #profFields{max-width:680px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    column-gap:16px;align-items:start}
+  #profFields>.field{margin-bottom:9px}
+  #profFields>.aboutme,#profFields>#endSportField{grid-column:1/-1}
+  #profFields>.field:has(#discSeg),#profFields>.field:has(#allergies),
+  #profFields>.field:has(#dietary_restrictions){grid-column:1/-1}
+}
+
+/* ---- Extra-wide (≥1500px): Progress / Family / Records gain a third column ---- */
+@media (min-width:1500px){
+  .sess-grid,#flist,#hlist,#memlist{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+
+/* -------------------------------------------------------------------
+   37 · Runner / endurance surfaces — meets you in your sport (calm,
+        no scores). Discipline selector, planned cardio (Plan + Today),
+        and the Progress → Endurance read. Existing tokens only.
+   ------------------------------------------------------------------- */
+
+/* Discipline segmented control (Profile + onboarding) — hand-built seg, the
+   classic background-swap active state (matches onboarding's days/week). */
+.disc-seg{display:flex;gap:0;background:var(--card-2);border:1px solid var(--line);
+  border-radius:999px;padding:3px;width:100%}
+.disc-seg .segbtn{flex:1;border:none;background:transparent;color:var(--ink-2);
+  border-radius:999px;padding:9px 8px;font-family:var(--font-ui);font-weight:600;
+  font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.disc-seg .segbtn.active{background:var(--ink);color:var(--paper)}
+
+/* The cardio "tag" caps chip used wherever a cardio item names its modality. */
+.cardio-tag{display:inline-block;color:var(--sage);background:var(--sage-bg);
+  border-radius:999px;padding:1px 7px;font-size:.54rem;letter-spacing:.12em;vertical-align:middle}
+
+/* Plan view — a cardio row in the catalog gallery. */
+.prog-row-cardio .prog-row-name-static{font-size:.9rem;font-weight:500;color:var(--ink);
+  display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prog-row-cardio-pres{color:var(--accent)!important;font-size:.86rem!important}
+
+/* Plan editor — the strength/cardio kind toggle + cardio number fields. */
+.pi-kind{display:inline-flex;gap:0;background:var(--card-2);border:1px solid var(--line);
+  border-radius:999px;padding:2px;margin:0 0 6px}
+.pi-kindbtn{border:none;background:transparent;color:var(--muted);border-radius:999px;
+  padding:5px 13px;font-family:var(--font-ui);font-weight:600;font-size:.66rem;
+  letter-spacing:.06em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.pi-kindbtn.active{background:var(--accent);color:var(--paper)}
+.pi-nums-cardio{display:flex;gap:5px;align-items:center}
+.pi-nums-cardio input{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:9px;padding:8px 6px;text-align:center;
+  font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:.9rem;
+}
+.pi-nums-cardio input::placeholder{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.06em}
+.pi-ivl{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  border-radius:9px;padding:8px 10px;font-size:.8rem;margin-top:6px}
+.pday-add{display:flex;gap:8px;flex-wrap:wrap}
+.pday-add .ghostbtn{flex:0 0 auto}
+
+/* Today — a planned cardio card (reuses .ex card scaffold). */
+.ex-cardio .ex-name-static{flex:1;min-width:0}
+.ex-cardio-pres{color:var(--accent);font-family:var(--font-display);font-weight:600;
+  font-variation-settings:"opsz" 60;font-size:1rem;white-space:nowrap;font-variant-numeric:lining-nums}
+.cardio-logrow{margin-top:11px}
+.cardio-log-btn{width:100%;text-align:center;margin-top:0}
+
+/* Progress → Endurance read. */
+.end-line,.end-pace{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  padding:11px 0;border-top:1px solid var(--line)}
+.end-line .lbl,.end-pace .lbl{flex:0 0 auto}
+.end-line-v{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:560;
+  color:var(--ink);font-size:1rem;font-variant-numeric:lining-nums}
+.end-pace-read{flex:1;min-width:0;color:var(--ink-2);font-size:.92rem}
+.end-pace-num{font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
+  color:var(--accent);font-size:1.35rem;font-variant-numeric:lining-nums}
+.end-pace-unit{font-size:.6em;color:var(--muted);font-family:var(--font-ui);letter-spacing:.04em}
+.end-zones{margin:16px 0 4px}
+.end-prs{margin-top:20px}
+.end-prs-head{margin-bottom:10px}
+.end-pr-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:6px 16px}
+.end-pr{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:11px 0;border-top:1px solid var(--line)}
+.end-pr:first-child{border-top:none}
+.end-pr-id{min-width:0}
+.end-pr-label{display:block;font-size:.9rem;font-weight:500;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.end-pr-when{display:block;margin-top:1px}
+.end-pr-val{font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 144;
+  color:var(--accent);font-size:1.25rem;white-space:nowrap;font-variant-numeric:lining-nums;flex:0 0 auto}
+
+/* Mobile (≤680px): the cardio editor's km/min/zone wrap stays usable. */
+@media (max-width:680px){
+  .pi-nums-cardio{flex-wrap:wrap}
+  .pi-nums-cardio input{min-width:64px;flex:1}
+  .pi-nums-cardio .delbtn{flex:0 0 auto}
+}
+
+/* -------------------------------------------------------------------
+   38 · Accessibility — tap-target padding (WCAG 2.5.5, ~44px)
+   High-traffic controls that render smaller than 44px keep their visual
+   size but get a centered invisible ::before overlay that expands the
+   clickable region. Layout is untouched (the overlay is absolutely
+   positioned), so nothing shifts. One idiom across the app.
+   ------------------------------------------------------------------- */
+.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn,.sheet-x{position:relative}
+.feel-dot::before,.iconbtn::before,.delbtn::before,
+.ex-skip::before,.togglebtn::before,.sheet-x::before{
+  content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  min-width:44px;min-height:44px;width:100%;height:100%;
+}
+/* Inline glyph deletes (chip ×, supplement ×) sit at the tail of a pill among
+   siblings — expand to 44px tall but only modestly wide so the overlay never
+   reaches into a neighbouring chip. */
+.chip-x,.supp-x{position:relative}
+.chip-x::before,.supp-x::before{
+  content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:calc(100% + 10px);height:44px;
+}
+
+/* -------------------------------------------------------------------
+   39 · High-contrast mode (prefers-contrast: more)
+   Hairlines and small status dots are deliberately soft in the Atelier
+   theme; users asking for more contrast get firmer hairlines (darken
+   --line/--line-2 toward ink) and stronger-edged dots/markers so data
+   never reads as color-on-color-only. Light theme only; no palette flip.
+   ------------------------------------------------------------------- */
+@media (prefers-contrast: more){
+  :root{
+    --line:#c9bfa9;     /* was #e7dfd2 — firmer hairline */
+    --line-2:#b3a78c;   /* was #d8cfbd — firmer stronger hairline */
+    --muted:#5c5544;    /* lift tertiary text a touch for legibility */
+  }
+  /* small status / completion / level dots get a defining ring so they read
+     even where the fill is close to its surround */
+  .stat-dot,.agentdot,.sync-dot,.checkin-open-dot,.savebar-dot,
+  .offline-dot,.noticed-dot,.agent-offline-dot{
+    box-shadow:0 0 0 1px rgba(33,29,23,.55);
+  }
+  /* directive + marker chips and the marker-chart geometry firm up their edges */
+  .hb-dmarker,.prov-marker{border-color:var(--ink-2)}
+  .hchart-band{fill:rgba(110,127,92,.24)}
+  .hchart-dot{stroke:var(--ink);stroke-width:.6}
+  .hm-flag.ok,.hm-flag.warn{border-color:currentColor}
+  /* calendar / heatmap completion cells gain a hairline so adjacent levels are
+     distinguishable beyond color alone */
+  .cal-day.cal-has,.heatcell.l1,.heatcell.l2,.heatcell.l3,.heatcell.l4{
+    border:1px solid rgba(33,29,23,.35);
+  }
+}
+/* Tightly-packed pairs (reorder ▲▼, order arrows) sit side-by-side with a small
+   gap — a full 44px-wide overlay would overlap the sibling and cause mis-taps.
+   Expand vertically to 44px and only a little horizontally so each stays its
+   own target. */
+.meal-mv,.ordbtn{position:relative}
+.meal-mv::before,.ordbtn::before{
+  content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:calc(100% + 6px);height:44px;
+}

@@ -63,6 +63,29 @@ function toast(msg, opts = {}) {
   _toastTimer = setTimeout(() => t.classList.remove("show", "toast-actionable"), opts.action ? 5000 : 1400);
 }
 
+// ---------- one destructive-confirm pattern: the two-tap armed × ----------
+// Every delete in the app uses THIS: first tap arms the × into a "remove?" chip,
+// a second tap (within ~3s, or until blur) confirms; otherwise it disarms. One
+// idiom across Memory / Life / Family / Health docs / session-set edits — never a
+// blocking dialog, never an immediate destructive click. `onConfirm` runs on the
+// confirming tap; it owns the actual delete + any toast/UI update.
+function armDelete(btn, onConfirm, { label = "remove?" } = {}) {
+  if (!btn) return;
+  if (btn.dataset.armed) { onConfirm(); return; }
+  if (!btn.dataset.restGlyph) btn.dataset.restGlyph = btn.textContent || "×";
+  btn.dataset.armed = "1";
+  btn.classList.add("armed");
+  btn.textContent = label;
+  const reset = () => {
+    delete btn.dataset.armed;
+    btn.classList.remove("armed");
+    btn.textContent = btn.dataset.restGlyph || "×";
+    clearTimeout(t);
+  };
+  const t = setTimeout(reset, 3000);
+  btn.addEventListener("blur", reset, { once: true });
+}
+
 // ---------- rest timer ----------
 const rest = { id: null, remaining: 0, total: 0 };
 function ensureRestBar() {
@@ -639,8 +662,11 @@ window.addEventListener("resize", () => {
   cancelAnimationFrame(_segFitRaf);
   _segFitRaf = requestAnimationFrame(() => view.querySelectorAll(".seg").forEach(fitSeg));
 });
-const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["weight", "Weight"], ["energy", "Energy"], ["calendar", "Calendar"]];
-const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), weight: () => renderWeight(), energy: () => renderEnergy(), calendar: () => renderCalendar(), sessions: () => renderHistory() };
+// Energy Balance (TDEE + the nutrition check-in) now lives WITH the meal plan
+// (Plan → Meals), where the read and the meal-plan loop sit together — so it's no
+// longer an orphaned Progress pill. Progress stays training-history focused.
+const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"]];
+const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory() };
 const PLAN_SEG = [["edit", "Training"], ["meals", "Meals"], ["coach", "Coach"]];
 const PLAN_HANDLERS = { edit: () => renderPlanEditor(), meals: () => renderMeals(), coach: () => renderCoach() };
 
@@ -955,6 +981,81 @@ function fmtDur(sec) {
 // (the 204 itself kicks off background generation; an <img> treats 204 as an error).
 let artEnabled = true; // refreshed from /settings at boot + on Settings save
 
+// Primary training discipline ('strength'|'endurance'|'hybrid'), read once from the
+// profile and used for a GENTLE emphasis reframe — never to hide a surface. Default
+// 'strength' so a profile that never set it behaves exactly as before. Refreshed by
+// the profile loader (renderToday/renderMeProfile) and on a profile save.
+let primaryDiscipline = "strength";
+function setDiscipline(d) {
+  primaryDiscipline = d === "endurance" || d === "hybrid" ? d : "strength";
+  return primaryDiscipline;
+}
+const isEndurance = () => primaryDiscipline === "endurance";
+const isHybrid = () => primaryDiscipline === "hybrid";
+
+// ---------- endurance formatting (min/km pace, distance, plain-word trend) ----------
+// All null-safe. Pace is min/km → "m:ss/km". Never a score, never a grade.
+function fmtPaceKm(minPerKm) {
+  const v = Number(minPerKm);
+  if (!Number.isFinite(v) || v <= 0) return "—";
+  const m = Math.floor(v);
+  const s = Math.round((v - m) * 60);
+  // 60s rounding carry
+  const mm = s === 60 ? m + 1 : m;
+  const ss = s === 60 ? 0 : s;
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+function fmtKm(km) {
+  const v = Number(km);
+  if (!Number.isFinite(v)) return "—";
+  return Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : (Math.round(v * 10) / 10).toFixed(1);
+}
+// Human label for a standard PR distance (1/5/10/half/full + anything else).
+function prDistLabel(km) {
+  const v = Number(km);
+  if (Math.abs(v - 21.0975) < 0.01) return "Half";
+  if (Math.abs(v - 42.195) < 0.01) return "Full";
+  return `${fmtKm(v)} km`;
+}
+
+// ---------- planned cardio (kind:'cardio') shared rendering ----------
+// A cardio plan item carries an endurance prescription (no loaded exercise). Its
+// label rides in `note`; the structured interval is JSON server-side. These helpers
+// are shared by the Plan view, the Plan editor, and Today's session surface.
+const isCardioItem = (it) => it && it.kind === "cardio";
+// Pull a plain-text interval note out of the structured interval blob (we store it
+// as {note} but tolerate a bare string or anything stringly).
+function cardioIntervalNote(interval) {
+  if (interval == null) return "";
+  if (typeof interval === "string") return interval.trim();
+  if (typeof interval === "object" && typeof interval.note === "string") return interval.note.trim();
+  return "";
+}
+// A phrase to feed CairnArt.activity / artImg for a cardio item — its label text
+// (which keyword-maps to run/ride/swim/row in art.js), falling back to "run".
+function cardioArtPhrase(it) {
+  const label = (it.note || "").trim();
+  return label || "run";
+}
+// The label for a cardio item — its note text, falling back to a sport-ish default.
+function cardioLabel(it) {
+  const note = (it.note || "").trim();
+  if (note) return note;
+  if (it.target_distance_km != null && Number(it.target_distance_km) >= 12) return "Long run";
+  return "Cardio";
+}
+// The prescription line: "12 km · Z2", "45 min · Z3", "8 km · Z2 · 6×400m". Distance
+// preferred; duration when no distance; zone + interval note appended when present.
+function cardioPrescription(it) {
+  const bits = [];
+  if (it.target_distance_km != null) bits.push(`${fmtKm(it.target_distance_km)} km`);
+  else if (it.target_duration_min != null) bits.push(`${Math.round(Number(it.target_duration_min))} min`);
+  if (it.target_zone) bits.push(String(it.target_zone));
+  const ivl = cardioIntervalNote(it.interval) || it.interval_note;
+  if (ivl) bits.push(ivl);
+  return bits.join(" · ");
+}
+
 window._artOk = (img) => { img.classList.add("on"); };
 window._artErr = (img) => {
   img.classList.remove("on");
@@ -989,8 +1090,8 @@ function sparklineSvg(vals, w = 132, h = 30) {
   const pts = v.map((n, i) => `${x(i).toFixed(1)},${y(n).toFixed(1)}`).join(" ");
   const last = v[v.length - 1];
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true">
-      <polyline points="${pts}" fill="none" stroke="#b4552d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="${x(v.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3" fill="#b4552d"/>
+      <polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="${x(v.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3" fill="currentColor"/>
     </svg>`;
 }
 

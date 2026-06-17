@@ -126,8 +126,14 @@ export function seed() {
 }
 
 export function seedIfEmpty(): boolean {
-  const c = db.prepare(`SELECT COUNT(*) AS c FROM plan_days`).get() as any;
-  if (c.c > 0) return false;
+  // "Empty" must mean a pristine, never-initialized DB — NOT merely "no plan
+  // days." A user can delete every plan day in-app (deletePlanDay is a feature),
+  // and an exercise catalog persists independently; keying only on plan_days
+  // would then re-run seed() on a populated DB and throw on the UNIQUE exercise
+  // name. Seed only when neither the plan nor the exercise catalog exists.
+  const days = db.prepare(`SELECT COUNT(*) AS c FROM plan_days`).get() as any;
+  const exs = db.prepare(`SELECT COUNT(*) AS c FROM exercises`).get() as any;
+  if (days.c > 0 || exs.c > 0) return false;
   seed();
   return true;
 }

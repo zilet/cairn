@@ -9,7 +9,15 @@ const PLAN_SCHEMA = `{
     { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_seconds": <number>, "reason": "<why — ONLY for mode:'timed' exercises>" }
   ],
   "notes": "<optional coaching notes, may be empty>"
-}`;
+}
+// To CHANGE FREQUENCY/STRUCTURE or to add/adjust CARDIO days, return a full
+// restructure as "days" instead of "changes" — each item may be a strength
+// exercise OR a cardio prescription:
+//   "days": [ { "day_number": <n>, "name": "<day name>", "focus": "<focus>", "items": [
+//     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null> },
+//     { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
+//       "target_duration_min": <n|null>, "target_zone": "<Z2|tempo|easy|null>", "note": "<optional>" }
+//   ] } ]`;
 
 const MEAL_SCHEMA = `{
   "summary": "approach for the week, and the daily kcal / protein target used",
@@ -61,6 +69,61 @@ const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context_events
   pressure), and RESPECT every "watch" directive (surface the re-check, don't program around it).
   A directive flagged "uncertain" or lacking a citation is a softer nudge, not a hard rule. This is
   informational, NOT medical advice — defer anything clinical to a clinician.`;
+
+// Discipline framing (v35), rendered into the plan-shaping prompts. The athlete's
+// primary discipline (strength | endurance | hybrid) decides whether endurance
+// progression is a FIRST-CLASS driver or supporting context. Defaults to
+// 'strength' (today's behavior) when nothing is set. Returns a compact block.
+function disciplineOf(ctx: any): "strength" | "endurance" | "hybrid" {
+  const d = String(ctx?.discipline?.primary ?? ctx?.profile?.primary_discipline ?? "strength").toLowerCase();
+  return d === "endurance" || d === "hybrid" ? (d as "endurance" | "hybrid") : "strength";
+}
+function enduranceSportOf(ctx: any): string | null {
+  const s = ctx?.discipline?.endurance_sport ?? ctx?.profile?.endurance_sport ?? null;
+  return s ? String(s).trim() || null : null;
+}
+// `focus` tailors the line to the consuming prompt: 'training' for the coach/session,
+// 'nutrition' for meals, 'day' for the Brief. Returns "" for a strength athlete in
+// the training/day case (no behavior change) so the existing prompts read identically.
+function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "day"): string {
+  const disc = disciplineOf(ctx);
+  const sport = enduranceSportOf(ctx);
+  const sportTxt = sport ? ` (${sport})` : "";
+  if (disc === "strength") {
+    // Meals still want one explicit line so an endurance-leaning athlete isn't
+    // assumed; for training/day a strength athlete is the default — say nothing.
+    if (focus === "nutrition") return `\nPRIMARY DISCIPLINE: strength-first — fuel for lifting + recovery; a lean-safe deficit is appropriate when fat loss is the goal.\n`;
+    return "";
+  }
+  const lead = disc === "endurance"
+    ? `PRIMARY DISCIPLINE: ENDURANCE-first${sportTxt}. Endurance progression is the PRIMARY driver, not a brake — lifting is SUPPORTIVE (strength maintenance, durability, injury-proofing), not the center.`
+    : `PRIMARY DISCIPLINE: HYBRID${sportTxt}. Balance endurance and strength as co-equal goals — progress BOTH, and let recovery/scheduling arbitrate when they compete.`;
+  if (focus === "nutrition") {
+    return `\n${lead}
+ENDURANCE FUELING (binding for this athlete):
+- PROTECT CARBOHYDRATE for fueling — carbs power endurance work; do NOT slash them to chase a deficit.
+- Do NOT force a calorie deficit unless fat loss is an explicit goal. For an endurance athlete eating to
+  TRAIN and PERFORM, anchor to maintenance (or a small surplus on the biggest weeks), not a cut.
+- PERIODIZE carbs around the week: more carbs on/around LONG and QUALITY (tempo/interval) sessions,
+  lighter on easy/rest days. Time a real pre-/during-/post-long-session carb intake.
+- Keep protein adequate for recovery; fat fills the rest. Fuel the work, don't starve it.\n`;
+  }
+  if (focus === "day") {
+    return `\n${lead}
+Read the day in endurance terms when it fits: a session can be EASY/recovery, a LONG run/ride, a
+TEMPO/threshold day, INTERVALS, or genuine REST — not only lift/easy/rest. Protect easy days as easy
+and hard days as hard (polarized), and guard earned recovery after long or quality efforts.\n`;
+  }
+  // training
+  return `\n${lead}
+- Make endurance progression FIRST-CLASS: build the aerobic base, periodize easy vs quality work
+  (long / tempo / threshold / intervals), and progress volume and quality CONSERVATIVELY (the ~10%/week
+  rule of thumb for mileage; don't stack hard days).
+- Lifting is the SUPPORT here — keep it brief and durability-focused (it should not compromise the key
+  endurance sessions). Hold or trim lifting volume on big endurance weeks.
+- Read runs/rides as the MAIN training stress, not just "cardio-load context": fatigue, soreness and
+  readiness flow largely from the endurance work.\n`;
+}
 
 // The connected brain, rendered for a prompt. Pulls the active cross-domain
 // directives (deriveDirectives writes them from flagged labs) plus the unified
@@ -260,7 +323,13 @@ function renderTrainingSignals(ctx: any): string {
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
-  return `You are a strength coach updating a training plan. The athlete's profile, goal check,
+  const disc = disciplineOf(ctx);
+  const coachRole = disc === "endurance"
+    ? "an endurance coach (with strength as supporting work)"
+    : disc === "hybrid"
+      ? "a hybrid coach balancing endurance and strength"
+      : "a strength coach";
+  return `You are ${coachRole} updating a training plan. The athlete's profile, goal check,
 current plan, recent training sessions, recent cardio/activities, and accumulated memory are in
 the DATA section below.
 
@@ -307,7 +376,7 @@ have none — that's fine, just use what's there):
   working as designed, never a penalty.
 
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
+${renderDiscipline(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -1040,9 +1109,9 @@ ${RESEARCH_SCHEMA}`;
 // ---------- the day read (Phase 1A — the soul) ----------
 const DAY_READ_SCHEMA = `{
   "kind": "train|easy|rest",
-  "headline": "<2-4 word plain-language state, e.g. 'Lower body.' or 'Rest today.'>",
+  "headline": "<2-4 word plain-language state, e.g. 'Lower body.', 'Long run.', or 'Rest today.'>",
   "why": "<one warm, plain sentence — what you saw and why; NO numbers, NO scores>",
-  "focus": "<train: the focus, e.g. 'Lower body' / null on rest>",
+  "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE athlete it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
   "est_minutes": <rough minutes for the suggestion, or null>
 }`;
 
@@ -1171,7 +1240,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
+${renderDiscipline(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1181,7 +1250,7 @@ ${JSON.stringify(context)}`;
 
 // ---------- on-demand session ("build me a session for today" — Phase 1D) ----------
 const SESSION_SUGGEST_SCHEMA = `{
-  "name": "<short session name, e.g. 'Lower body — quad focus'>",
+  "name": "<short session name, e.g. 'Lower body — quad focus' or 'Easy Z2 run'>",
   "focus": "<muscle/quality focus>",
   "est_minutes": <total minutes, number>,
   "why": "<one plain sentence on why this fits today>",
@@ -1189,7 +1258,10 @@ const SESSION_SUGGEST_SCHEMA = `{
     { "exercise": "<exact name; reuse plan/exercise names where sensible>",
       "sets": <number>, "rep_low": <number|null>, "rep_high": <number|null>,
       "target_weight": <number|null>, "target_seconds": <number|null>,
-      "mode": "reps|timed", "note": "<short cue / why, optional>" }
+      "mode": "reps|timed", "note": "<short cue / why, optional>" },
+    { "kind": "cardio", "exercise": "<the activity, e.g. 'Easy run' / 'Z2 ride'>",
+      "target_distance_km": <number|null>, "target_duration_min": <number|null>,
+      "target_zone": "<'Z2' | 'tempo' | 'easy' | null>", "note": "<optional — interval structure / cue>" }
   ],
   "notes": "<optional — swaps, equipment, anything to flag>"
 }`;
@@ -1221,7 +1293,7 @@ GUARDRAILS:
   short unless the athlete explicitly asked to train hard.
 
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}
@@ -1433,8 +1505,8 @@ ${CONTEXT_GUARDRAILS}
   flag that the athlete will be eating out.
 - HEALTH MARKERS specifically: e.g. low ferritin/iron → emphasize iron-rich foods; flag any
   marker-driven food emphasis in notes. Not medical advice.
-${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
-TASK: ${userInstruction?.trim() || "Build next week's meal plan aligned to the recommended deficit and protein target."}
+${renderDiscipline(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
+TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to the recommended deficit and protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${MEAL_SCHEMA}
@@ -1507,10 +1579,14 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   never a crash cut. Respect goal.recommended (lean-safe) as the floor — never below ~1500 kcal.
 - MACRO FLOORS under a deficit: protect PROTEIN first (hold or raise — protein_g >= the current
   protein target), then fat to a healthy minimum, and let CARBS take the adjustment.
-- If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.
+- If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.${disciplineOf(context) !== "strength" ? `
+- ENDURANCE/HYBRID athlete: do NOT propose a deficit unless fat loss is an EXPLICIT goal — the default is
+  to FUEL the training (anchor to maintenance). Protect CARBOHYDRATE; if anything, a sustained calorie
+  deficit while mileage is high is the thing to flag (suggest eating MORE, not less). Carbs are not the
+  adjustment lever to cut here.` : ""}
 
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(context, { domains: ["nutrition"] })}
+${renderDiscipline(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}
 ATHLETE: profile: ${JSON.stringify(profile)}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
