@@ -1,28 +1,29 @@
 // ==== 02-ui.js ====
 // ---------- header date control (Today) ----------
-// On the Today tab the big header title IS the date control: tapping it opens a
-// native date picker via a visually-hidden input anchored under the header.
-let _hdrDate = null;
-function ensureHeaderDateInput() {
-  if (_hdrDate) return _hdrDate;
-  _hdrDate = document.createElement("input");
-  _hdrDate.type = "date";
-  _hdrDate.className = "hdr-datepick";
-  _hdrDate.setAttribute("aria-hidden", "true");
-  _hdrDate.tabIndex = -1;
-  document.querySelector("header").appendChild(_hdrDate);
-  _hdrDate.addEventListener("change", () => {
-    if (!_hdrDate.value) return;
-    state.logDate = _hdrDate.value;
+// On the Today tab the big header title IS the date control — change the date to
+// review OR log a past workout. A REAL full-size (transparent) date input overlays
+// the title, so a genuine tap opens the native picker on every browser (the old
+// showPicker()-over-a-1px-hidden-input failed silently where showPicker throws).
+// Other tabs set headerTitle via textContent, which removes this input automatically.
+function setTodayHeaderTitle() {
+  headerTitle.innerHTML =
+    `${escHtml(dateLabel(state.logDate))}<span class="hdr-chev" aria-hidden="true">▾</span>` +
+    `<input type="date" class="hdr-datepick" aria-label="Choose a date to view or log a past workout">`;
+  headerTitle.classList.add("hdr-tappable");
+  const inp = headerTitle.querySelector(".hdr-datepick");
+  inp.value = state.logDate || localISO();
+  inp.max = localISO();
+  // Desktop: a click on a date input only focuses it (the calendar indicator is
+  // hidden by appearance:none) — showPicker opens the calendar. Mobile taps open
+  // the native picker on their own. Either way the change handler reloads Today.
+  inp.addEventListener("click", () => { try { inp.showPicker?.(); } catch { /* unsupported → native focus */ } });
+  inp.addEventListener("change", () => {
+    if (!inp.value) return;
+    state.logDate = inp.value;
     state.day = null;
     state.dayPicked = false;
     renderToday();
   });
-  return _hdrDate;
-}
-function setTodayHeaderTitle() {
-  headerTitle.innerHTML = `${escHtml(dateLabel(state.logDate))}<span class="hdr-chev" aria-hidden="true">▾</span>`;
-  headerTitle.classList.add("hdr-tappable");
 }
 // On Today the header pins to the top so the date control is always reachable.
 // At rest it's the full editorial header; once the page scrolls past a few px it
@@ -32,13 +33,6 @@ function updateHeaderCondense() {
   document.querySelector("header").classList.toggle("condensed", on);
 }
 window.addEventListener("scroll", updateHeaderCondense, { passive: true });
-headerTitle.addEventListener("click", () => {
-  if (state.tab !== "today") return;
-  const inp = ensureHeaderDateInput();
-  inp.value = state.logDate || localISO();
-  inp.max = localISO();
-  try { inp.showPicker(); } catch { inp.click(); inp.focus(); }
-});
 
 // toast(msg) — fire-and-forget pill. toast(msg, {action, onAction}) — actionable
 // variant (e.g. UNDO) that lingers longer and accepts one tap.

@@ -1939,7 +1939,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
    31 · Today header date control + back-to-today pill
    ------------------------------------------------------------------- */
 header{position:relative}
-#header-title.hdr-tappable{cursor:pointer;-webkit-tap-highlight-color:transparent;
+#header-title.hdr-tappable{position:relative;cursor:pointer;-webkit-tap-highlight-color:transparent;
   -webkit-user-select:none;user-select:none}
 .hdr-chev{display:inline-block;font-size:.85rem;color:var(--muted);margin-left:9px;
   vertical-align:6px;transition:transform var(--dur-2) var(--ease)}
@@ -1966,8 +1966,12 @@ body[data-tab="today"]:not(:has(.today-focus)) header.condensed{
 }
 body[data-tab="today"]:not(:has(.today-focus)) header.condensed::after{opacity:1}
 body[data-tab="today"]:not(:has(.today-focus)) header.condensed #header-title{font-size:1.5rem}
-.hdr-datepick{position:absolute;left:18px;bottom:0;width:1px;height:1px;opacity:0;
-  border:0;padding:0;pointer-events:none}
+/* full-size transparent overlay over the title — a real tap target that opens the
+   native date picker reliably (a genuine pointer event on a real input). */
+.hdr-datepick{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;border:0;
+  opacity:0;cursor:pointer;background:transparent;color:transparent;
+  -webkit-appearance:none;appearance:none}
+.hdr-datepick::-webkit-calendar-picker-indicator{opacity:0}
 .back-today{display:inline-flex;align-items:center;gap:6px;margin:0 0 12px;
   padding:8px 15px;border-color:var(--accent);color:var(--accent)}
 
