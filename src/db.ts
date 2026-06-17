@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS profile (
   dietary_restrictions TEXT,             -- free-text diet (vegetarian, pescatarian, no pork, …) — respected strongly
   primary_discipline TEXT DEFAULT 'strength', -- strength | endurance | hybrid — shapes coach framing + day-read + stats (v35)
   endurance_sport TEXT,                  -- optional free text: running | cycling | triathlon | rowing | … (v35)
+  endurance_goal_json TEXT,              -- the endurance OBJECTIVE (race | standing), orthogonal to discipline (v37)
   updated_at TEXT DEFAULT (datetime('now'))
 );
 

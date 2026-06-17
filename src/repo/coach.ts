@@ -5,7 +5,7 @@ import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js"
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
-import { computeGoalCheck, getProfile } from "./profile.js";
+import { computeGoalCheck, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, markerSide, matchOptimalZone, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
 import { getProgress, getRecentSessions } from "./sessions.js";
 import { localDateISO } from "./shared.js";
@@ -184,6 +184,11 @@ export function getCoachContext() {
       primary: (profile?.primary_discipline as string) || "strength",
       endurance_sport: profile?.endurance_sport ?? null,
     },
+    // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
+    // (no date, maintain readiness), with race timing/phase pre-computed. Null when
+    // unset. Orthogonal to discipline: a strength-first athlete can hold a standing
+    // running goal ("running on the side"). The coach prescribes runs accordingly.
+    endurance_goal: getEnduranceGoal(),
     goal: computeGoalCheck(),
     plan: getPlan(),
     recent_sessions: recentSessions,

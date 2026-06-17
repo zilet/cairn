@@ -788,7 +788,7 @@ api.put("/meal-plans/:id/days", (req, res) => {
 api.post("/mealplans/:id/:status", (req, res) => {
   const s = req.params.status;
   if (!["accept", "discard"].includes(s)) return res.status(400).json({ error: "bad status" });
-  res.json(repo.setMealPlanStatus(Number(req.params.id), s === "accept" ? "accepted" : "discarded"));
+  res.json(s === "accept" ? repo.acceptMealPlan(Number(req.params.id)) : repo.setMealPlanStatus(Number(req.params.id), "discarded"));
 });
 
 // ---- food notes (vision happens in the Claude client; this stores the result) ----
@@ -1028,6 +1028,10 @@ api.get("/stats", (_req, res) => res.json(repo.getWeeklyStats()));
 // numbers, never a score. The strength analogue is the est-1RM in /progress.
 api.get("/endurance-prs", (req, res) =>
   res.json(repo.getEndurancePRs(req.query.type != null ? String(req.query.type) : undefined)));
+
+// The endurance OBJECTIVE (v37), computed (race timing/phase derived). null = unset.
+// SET it via PUT /api/profile { endurance_goal: {…} } (or null to clear).
+api.get("/endurance-goal", (_req, res) => res.json(repo.getEnduranceGoal()));
 
 api.get("/volume", (req, res) => res.json(repo.getVolumeByMuscle(Number(req.query.days) || 30)));
 

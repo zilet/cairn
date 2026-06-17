@@ -291,6 +291,14 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE plan_items_new RENAME TO plan_items;
     `);
   } },
+  { version: 37, name: "profile-endurance-goal", up: (db) => {
+    // The endurance OBJECTIVE, orthogonal to primary_discipline (which says how much
+    // running matters vs lifting). One JSON blob holds either mode:
+    //   race     → { mode:'race', event, date, distance_km, target?, weekly_km?, weekly_sessions? }
+    //   standing → { mode:'standing', label?, distance_km?, weekly_km?, weekly_sessions? }
+    // Null = no endurance goal (today's behavior). Validated/normalized in repo.
+    addColumn(db, "profile", "endurance_goal_json TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

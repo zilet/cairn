@@ -25,8 +25,8 @@ beforeEach(() => {
     "logged_sets", "sessions", "session_skips", "plan_items", "plan_days",
     "checkins", "daily_metrics", "garmin_daily_metrics", "activities", "health_documents", "health_directives"
   );
-  // Reset the profile discipline to the default so cases don't bleed into each other.
-  repo.setProfile({ primary_discipline: "strength", endurance_sport: "" });
+  // Reset the profile discipline + endurance goal to defaults so cases don't bleed.
+  repo.setProfile({ primary_discipline: "strength", endurance_sport: "", endurance_goal: null });
 });
 
 // ---------- A.1 primary_discipline round-trip ----------
@@ -257,4 +257,48 @@ test("GOLDEN: wearable endurance markers carry no impact_score / 0-100 grade ove
       assert.ok(!/grade|rating|percent|pct|out_of|score/i.test(k), `${m.key}.${k} must not be a grade-shaped field`);
     }
   }
+});
+
+// ---------- v37 endurance goal: race + standing modes ----------
+test("a race goal round-trips and derives weeks/days-to-race + a phase hint", () => {
+  // Pick the race date relative to a fixed 'today' we pass into the reader so the
+  // test is deterministic (getEnduranceGoal accepts an explicit today).
+  repo.setProfile({ endurance_goal: { mode: "race", event: "Cambridge Half", date: "2026-11-01", distance_km: 21.1, target: "sub-1:45", weekly_km: 40, weekly_sessions: 4 } });
+  const g = repo.getEnduranceGoal("2026-09-06"); // ~8 weeks out
+  assert.equal(g.mode, "race");
+  assert.equal(g.is_race, true);
+  assert.equal(g.event, "Cambridge Half");
+  assert.equal(g.days_to_race, 56);
+  assert.equal(g.weeks_to_race, 8);
+  assert.equal(g.phase, "build", "8 weeks out reads as the build phase");
+  // Two weeks out → taper; one day after → past.
+  assert.equal(repo.getEnduranceGoal("2026-10-20").phase, "taper");
+  assert.equal(repo.getEnduranceGoal("2026-11-02").phase, "past");
+});
+
+test("a standing goal has no date/phase — maintain, not ramp", () => {
+  repo.setProfile({ endurance_goal: { mode: "standing", label: "10k-ready", distance_km: 10, weekly_km: 25, weekly_sessions: 3 } });
+  const g = repo.getEnduranceGoal("2026-09-06");
+  assert.equal(g.mode, "standing");
+  assert.equal(g.is_race, false);
+  assert.equal(g.label, "10k-ready");
+  assert.equal(g.distance_km, 10);
+  assert.ok(!("phase" in g) || g.phase == null, "standing goals carry no periodization phase");
+});
+
+test("an unusable endurance goal clears it; a race without a date is rejected", () => {
+  repo.setProfile({ endurance_goal: { mode: "race", event: "No Date 5k" } }); // no date
+  assert.equal(repo.getEnduranceGoal("2026-09-06"), null, "a dateless race is rejected (can't periodize)");
+  repo.setProfile({ endurance_goal: { mode: "standing", distance_km: 10 } });
+  assert.ok(repo.getEnduranceGoal(), "standing goal set");
+  repo.setProfile({ endurance_goal: null });
+  assert.equal(repo.getEnduranceGoal(), null, "null clears the goal");
+});
+
+test("the endurance goal surfaces in getCoachContext (orthogonal to discipline)", () => {
+  repo.setProfile({ primary_discipline: "strength", endurance_goal: { mode: "standing", label: "10k-ready", distance_km: 10 } });
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.discipline.primary, "strength", "discipline unchanged — running is 'on the side'");
+  assert.ok(ctx.endurance_goal, "endurance_goal present in coach context");
+  assert.equal(ctx.endurance_goal.mode, "standing");
 });

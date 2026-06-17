@@ -864,6 +864,47 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
 .mp-badge.draft{color:var(--ink-2);border:1px solid var(--line-2);background:var(--card-2)}
 .mp-badge.ok{color:var(--sage);background:var(--sage-bg);border:1px solid transparent}
 .mp-badge.off{color:var(--warn);background:var(--warn-bg);border:1px solid transparent}
+.mp-badge.muted{color:var(--muted);background:transparent;border:1px solid var(--line-2)}
+
+/* A superseded proposal/meal plan (retired when a sibling was applied/accepted) — */
+/* still readable, but visibly stepped back so the active one reads first. */
+.mp-card-faded{opacity:.62}
+.mp-card-faded:hover{opacity:1}
+
+/* Just-applied confirmation line on a proposal card — calm, sage, unmistakable so */
+/* "it landed" is never in doubt (the prior subtle status flip alone read as a no-op). */
+.apply-done{
+  display:flex;align-items:center;gap:7px;margin-top:10px;
+  font-family:var(--font-ui);font-size:.82rem;font-weight:600;color:var(--sage);
+}
+.apply-done-mark{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:999px;background:var(--sage-bg);
+  font-size:.7rem;flex:0 0 auto;
+}
+
+/* Collapsed history of earlier proposals / meal plans — quiet by default, the active */
+/* work sits above it. Mirrors the calm "Show earlier" affordance used in Chat. */
+.hist-fold{margin-top:14px}
+.hist-fold>summary{
+  list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--font-ui);font-size:.74rem;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);padding:6px 2px;
+}
+.hist-fold>summary::-webkit-details-marker{display:none}
+.hist-fold>summary::before{content:"▸";font-size:.7rem;transition:transform .15s ease}
+.hist-fold[open]>summary::before{transform:rotate(90deg)}
+.hist-fold>summary:hover{color:var(--ink-2)}
+.hist-fold-body{margin-top:10px;display:flex;flex-direction:column;gap:14px}
+
+/* A prescribed run on a proposal card — a small sage pin so the week's runs read */
+/* distinctly from the strength target tweaks above them. */
+.run-pin{color:var(--sage);font-size:.7rem;margin-right:5px}
+
+/* Running-goal editor (Profile): the shared distance/weekly-km fields sit two-up */
+/* where there's room, stacking on narrow screens. */
+.eg-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+@media (max-width:430px){.eg-grid{grid-template-columns:1fr}}
 
 /* Trust transparency — the calm "adjusted to a safe step" note shown when a code
    guardrail clamped an applied value. A hairline, never an alarm: a quiet gold edge,
@@ -3367,6 +3408,19 @@ button.hmk-row:active{background:var(--card-2)}
 .cardio-log-btn{width:100%;text-align:center;margin-top:0}
 
 /* Progress → Endurance read. */
+/* Race countdown / standing-goal banner — a warm editorial card at the top of the */
+/* endurance view. The big serif name + count anchor the build without a score. */
+.end-goal{margin:14px 0 4px;padding:16px 18px;border-radius:var(--radius);
+  background:var(--sage-bg);border:1px solid var(--line-2)}
+.end-goal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.end-goal-phase{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--sage);background:var(--paper);border-radius:999px;padding:3px 10px}
+.end-goal-name{font-family:var(--font-display);font-variation-settings:"opsz" 72;font-weight:560;
+  font-size:1.42rem;color:var(--ink);margin-top:6px;line-height:1.15}
+.end-goal-sub{font-size:.86rem;color:var(--ink-2);margin-top:4px}
+.end-goal-count{font-family:var(--font-display);font-weight:600;font-variation-settings:"opsz" 96;
+  font-size:1.1rem;color:var(--sage);margin-top:10px;font-variant-numeric:lining-nums}
+
 .end-line,.end-pace{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
   padding:11px 0;border-top:1px solid var(--line)}
 .end-line .lbl,.end-pace .lbl{flex:0 0 auto}

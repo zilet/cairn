@@ -18,6 +18,14 @@ export function setMealPlanStatus(id: number, status: string) {
   return hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id));
 }
 
+// Accepting a meal plan retires the OTHER open meal-plan drafts — they were
+// alternative weeks, so once one is kept the rest are stale. Marked 'superseded'
+// (the system retiring them), distinct from a user 'discarded'.
+export function acceptMealPlan(id: number) {
+  db.prepare(`UPDATE meal_plans SET status = 'superseded' WHERE status = 'draft' AND id != ?`).run(id);
+  return setMealPlanStatus(id, "accepted");
+}
+
 export function getMealPlan(id: number) {
   const row = db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(id);
   return row ? hydrate(row) : null;

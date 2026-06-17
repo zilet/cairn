@@ -76,8 +76,20 @@ async function runCoach() {
 // Shared status chip for proposals + meal plans (mp-badge per contract).
 function statusBadge(status) {
   const cls = status === "accepted" || status === "applied" || status === "kept" ? "ok"
-    : status === "discarded" ? "off" : "draft";
+    : status === "discarded" ? "off"
+    : status === "superseded" ? "muted" : "draft";
   return `<span class="mp-badge ${cls}">${escHtml(status || "draft")}</span>`;
+}
+
+// Clamp transparency from the most recent apply, keyed by proposal id, so a light
+// re-render of the list can still surface the "adjusted to a safe step" note on the
+// card that was just applied (the clamp detail isn't persisted on the row).
+const lastApplyClamp = {};
+
+// Light refresh of just the proposals list — re-fetch + re-render, no skeleton/full
+// view rebuild (keeps scroll, and the apply transition reads cleanly).
+async function refreshProposals() {
+  try { renderProposals(await api("/proposals?limit=10")); } catch { /* keep last paint */ }
 }
 
 // Clamp/verify transparency — when an applied proposal returned `clamped[]` (a code
@@ -120,53 +132,93 @@ function verifiedBadgeHtml(verified) {
     </div>`;
 }
 
+// A run prescription's target in plain words — "8 km · Z2", "45 min · easy".
+function runTargetText(c) {
+  const bits = [];
+  if (c.target_distance_km != null) bits.push(`${c.target_distance_km} km`);
+  if (c.target_duration_min != null) bits.push(`${Math.round(c.target_duration_min)} min`);
+  if (c.target_zone) bits.push(String(c.target_zone));
+  return bits.join(" · ") || "run";
+}
+
+// A proposal is "open work" only while it's a draft that still has something to
+// apply (strength changes, a restructure, or run prescriptions). An advisory
+// nutrition_target draft (applied from Energy Balance, not here) is NOT open work,
+// so it collapses with the settled history instead of sitting at the top forever.
+function isOpenProposal(p) {
+  return p.status === "draft" && (
+    (p.parsed && Array.isArray(p.parsed.changes) && p.parsed.changes.length) ||
+    (p.parsed && Array.isArray(p.parsed.cardio) && p.parsed.cardio.length) ||
+    (p.parsed && Array.isArray(p.parsed.days) && p.parsed.days.length)
+  );
+}
+
 function renderProposals(proposals) {
   const wrap = $("#proplist");
   if (!proposals.length) { wrap.innerHTML = `<div class="empty">No drafts yet. Ask the coach above for next week's targets — every change waits here for you to apply.</div>`; return; }
-  wrap.innerHTML = proposals.map((p, pi) => {
+  const proposalCardHtml = (p, pi) => {
     const parsed = p.parsed;
     const changes = parsed && Array.isArray(parsed.changes) ? parsed.changes : [];
+    const cardio = parsed && Array.isArray(parsed.cardio) ? parsed.cardio : [];
+    const cardioHtml = cardio.map((c) =>
+      `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(c.day_number)} ${escHtml(c.label || c.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(c))}</span> <span style="color:var(--muted)">(${escHtml(c.reason || c.note || "")})</span></div>`
+    ).join("");
     const body = parsed
       ? `<div class="sess-line">${escHtml(parsed.summary || "")}</div>` +
         changes.map((c) => `<div class="sess-line"><b>D${c.day_number} ${escHtml(c.exercise)}</b> \u2192 <span class="numeral">${escHtml(c.target_weight)}</span> <span style="color:var(--muted)">(${escHtml(c.reason || "")})</span></div>`).join("") +
+        cardioHtml +
         (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "")
       : `<div class="sess-line" style="color:var(--warn)">Unparseable output</div><div class="sess-line" style="color:var(--muted);font-size:.78rem">${escHtml((p.raw_output || "").slice(0, 200))}\u2026</div>`;
-    const actions = p.status === "draft" && changes.length
+    const actions = isOpenProposal(p)
       ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-apply="${p.id}">APPLY</button>
          <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${p.id}">DISCARD</button></div>`
       : "";
-    return `<div class="mp-card reveal" style="${stagger(pi)}">
+    // Just-applied confirmation: a calm "lands in your plan" line + the (un-persisted)
+    // clamp note, so applying clearly registered even after the light re-render.
+    const applied = p.status === "applied"
+      ? `<div class="apply-done settle-in"><span class="apply-done-mark" aria-hidden="true">✓</span> Applied to your plan</div>`
+        + (lastApplyClamp[p.id] ? clampNoteHtml(lastApplyClamp[p.id]) : "")
+      : "";
+    return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(pi)}">
       <div class="mp-hero">
         <span class="lbl">${escHtml(p.agent)} \u00b7 #${p.id} \u00b7 ${escHtml(p.created_at || "")}</span>
         ${statusBadge(p.status)}
       </div>
-      ${body}${actions}</div>`;
-  }).join("");
+      ${body}${actions}${applied}</div>`;
+  };
+
+  // Show open drafts + the single most-recent settled proposal (the result you just
+  // acted on); fold everything older behind a "show earlier" disclosure. Applying one
+  // draft retires its siblings (server-side 'superseded'), so the list stays calm.
+  const open = proposals.filter(isOpenProposal);
+  const settled = proposals.filter((p) => !isOpenProposal(p)); // newest first (id DESC)
+  const shown = [...open, ...settled.slice(0, 1)];
+  const earlier = settled.slice(1);
+  wrap.innerHTML =
+    shown.map((p, i) => proposalCardHtml(p, i)).join("") +
+    (earlier.length
+      ? `<details class="hist-fold"><summary>Show earlier proposals (${earlier.length})</summary>
+           <div class="hist-fold-body">${earlier.map((p, i) => proposalCardHtml(p, i)).join("")}</div></details>`
+      : "");
 
   wrap.querySelectorAll("[data-apply]").forEach((b) =>
     b.addEventListener("click", async () => {
+      btnBusy(b, "Applying…");
       let r = null;
       try { r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" }); } catch { r = null; }
-      // A code guardrail may have nudged a load to a safe step — surface it honestly
-      // inline on the card (before the re-render below replaces the list) AND in the
-      // toast, so the "what changed and why" reads even as the list refreshes.
+      // A code guardrail may have nudged a load to a safe step — remember it so the
+      // re-render can surface the honest "adjusted to a safe step" note on the card.
       const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
-      if (clamped) {
-        const card = b.closest(".mp-card");
-        if (card) card.insertAdjacentHTML("beforeend", clampNoteHtml(r.clamped));
-        toast("Applied · adjusted to a safe step");
-        // Let the user read the note; the proposal already reflects applied state.
-        state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
-        return;
-      }
-      toast("Applied");
-      state.plan = []; swrInvalidate("plan"); renderCoach();
+      if (clamped) lastApplyClamp[b.dataset.apply] = r.clamped;
+      toast(clamped ? "Applied · adjusted to a safe step" : "Applied");
+      state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
+      refreshProposals();
     })
   );
   wrap.querySelectorAll("[data-discard]").forEach((b) =>
     b.addEventListener("click", async () => {
-      await api(`/proposals/${b.dataset.discard}/discard`, { method: "POST" });
-      renderCoach();
+      try { await api(`/proposals/${b.dataset.discard}/discard`, { method: "POST" }); } catch {}
+      refreshProposals();
     })
   );
 }
@@ -299,7 +351,7 @@ function renderMealPlans(plans, sel = "#meallist", refresh = null) {
   const wrap = $(sel);
   if (!wrap) return;
   if (!plans.length) { wrap.innerHTML = `<div class="empty">No meal plans yet. Draft one above and a week of meals built around your training lands here.</div>`; return; }
-  wrap.innerHTML = plans.map((p, pi) => {
+  const mealCardHtml = (p, pi) => {
     const m = p.parsed;
     let hero, body;
     if (m) {
@@ -338,9 +390,22 @@ function renderMealPlans(plans, sel = "#meallist", refresh = null) {
       ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-accept="${p.id}">ACCEPT</button>
          <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${p.id}">DISCARD</button></div>`
       : "";
-    return `<div class="mp-card reveal" style="${stagger(pi)}">
+    return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(pi)}">
       ${hero}${body}${actions}</div>`;
-  }).join("");
+  };
+
+  // Same calm history as proposals: show open drafts + the most-recent settled plan,
+  // fold older ones away. Accepting a plan retires the other drafts (server 'superseded').
+  const drafts = plans.filter((p) => p.status === "draft");
+  const settled = plans.filter((p) => p.status !== "draft"); // newest first (id DESC)
+  const shown = [...drafts, ...settled.slice(0, 1)];
+  const earlier = settled.slice(1);
+  wrap.innerHTML =
+    shown.map((p, i) => mealCardHtml(p, i)).join("") +
+    (earlier.length
+      ? `<details class="hist-fold"><summary>Show earlier meal plans (${earlier.length})</summary>
+           <div class="hist-fold-body">${earlier.map((p, i) => mealCardHtml(p, i)).join("")}</div></details>`
+      : "");
 
   wrap.querySelectorAll("[data-accept]").forEach((b) =>
     b.addEventListener("click", async () => {

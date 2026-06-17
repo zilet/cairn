@@ -264,6 +264,13 @@ export function applyChatActions(
         case "set_profile":
           applied.push({ type: a.type, result: repo.setProfile(a) });
           break;
+        case "set_endurance_goal": {
+          // The endurance OBJECTIVE — applied through setProfile's endurance_goal
+          // path (normalized/validated there). The action's own fields ARE the goal.
+          const { type, ...goal } = a;
+          applied.push({ type: a.type, result: repo.setProfile({ endurance_goal: goal }) });
+          break;
+        }
         case "add_memory":
           applied.push({ type: a.type, result: repo.addMemory(a.content, a.kind, "chat") });
           break;

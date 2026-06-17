@@ -337,6 +337,60 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
   return getPlanDay(day_number);
 }
 
+// A single run prescription the coach can hand back for THIS week, applyable without
+// a full plan restructure (the heavy `days` path). Each maps onto a plan day.
+export interface RunPrescription {
+  day_number: number;
+  label?: string | null;               // e.g. "Easy run", "Long run", "Tempo"
+  target_distance_km?: number | null;
+  target_duration_min?: number | null;
+  target_zone?: string | null;          // Z2 | easy | tempo | threshold | intervals | long
+  note?: string | null;
+  day_name?: string | null;             // used only when CREATING a new day for this run
+  focus?: string | null;
+}
+
+// Apply a week of run prescriptions onto the plan WITHOUT touching strength work: for
+// each day, keep its strength items and replace its cardio items with the given runs.
+// A day_number with no plan day yet is created as a dedicated run day. This is the
+// surgical counterpart to a full `replacePlan` restructure — used by the apply path so
+// a runner/hybrid athlete can accept "this week's runs" while lifting stays intact.
+export function setWeeklyRuns(runs: RunPrescription[]) {
+  const byDay = new Map<number, RunPrescription[]>();
+  for (const r of runs || []) {
+    const dn = Math.trunc(Number(r?.day_number));
+    if (!Number.isFinite(dn) || dn < 1) continue;
+    if (!byDay.has(dn)) byDay.set(dn, []);
+    byDay.get(dn)?.push(r);
+  }
+  const applied: { day_number: number; runs: number; created: boolean }[] = [];
+  for (const [dn, dayRuns] of byDay) {
+    const existing = getPlanDay(dn);
+    const strength: PlanItemInput[] = existing
+      ? existing.items
+          .filter((it: any) => it.kind !== "cardio")
+          .map((it: any) => ({
+            exercise: it.exercise, sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high,
+            target_weight: it.target_weight, note: it.note, warmup_sets: it.warmup_sets,
+            target_seconds: it.target_seconds, mode: it.mode,
+          }))
+      : [];
+    const cardio: PlanItemInput[] = dayRuns.map((r) => ({
+      kind: "cardio",
+      exercise: (r.label ?? "Run") || "Run",
+      target_distance_km: numOrNull(r.target_distance_km),
+      target_duration_min: numOrNull(r.target_duration_min),
+      target_zone: r.target_zone ?? null,
+      note: r.note ?? null,
+    }));
+    const name = existing?.name ?? (dayRuns[0]?.day_name || "Run");
+    const focus = existing?.focus ?? (dayRuns[0]?.focus || "Endurance");
+    savePlanDay(dn, name, focus, [...strength, ...cardio]);
+    applied.push({ day_number: dn, runs: cardio.length, created: !existing });
+  }
+  return { applied };
+}
+
 export function deletePlanDay(day_number: number) {
   const d = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   if (!d) return { deleted: 0, day_number };

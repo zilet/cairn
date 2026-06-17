@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**147 routes** across 54 groups.
+**152 routes** across 57 groups.
 
 ## `/activities`
 
@@ -123,6 +123,18 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | PUT | `/api/directives/:id` | User-controlled status flip (the review side of propose-review-apply). This is feedback memory, not just a hide: resolved/dismissed directives suppress equivalent future advice until the relevant marker changes enough. Nothing auto-applies. 400 on a bad status, 404 on an unknown id. |
 | POST | `/api/directives/derive` | Re-run the deterministic propagation engine over the latest markers. |
 
+## `/endurance-goal`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/endurance-goal` | The endurance OBJECTIVE (v37), computed (race timing/phase derived). null = unset. SET it via PUT /api/profile { endurance_goal: {…} } (or null to clear). |
+
+## `/endurance-prs`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/endurance-prs` | Endurance PRs (v35): best efforts from the logged cardio (longest distance / duration + fastest pace at standard distances). ?type=run\|ride filters. Plain numbers, never a score. The strength analogue is the est-1RM in /progress. |
+
 ## `/evidence`
 
 | Method | Path | Notes |
@@ -135,6 +147,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/exercise/:name` |  |
+| GET | `/api/exercise/:name/explanation` |  |
+| POST | `/api/exercise/:name/explanation` |  |
 
 ## `/exercises`
 
@@ -424,6 +438,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/volume` |  |
+
+## `/week-ahead`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/week-ahead` | The week ahead — a calm forward look (lift / run / mixed / rest across the next several days). Agentic with a deterministic plan-rotation floor, so it always returns a usable shape even with no agent. Cached per day+plan+goal. |
 
 ---
 

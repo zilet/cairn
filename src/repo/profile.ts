@@ -1,7 +1,7 @@
 import { db, todayISO } from "../db.js";
 import { findExercise } from "./exercises.js";
 import { lsqSlopePerDay } from "./health.js";
-import { type ClampAdjustment, replacePlan, updateTarget } from "./plan.js";
+import { type ClampAdjustment, type RunPrescription, replacePlan, setWeeklyRuns, updateTarget } from "./plan.js";
 import { getProgress } from "./sessions.js";
 
 // ---------- exercise guide ----------
@@ -60,6 +60,23 @@ export function setProposalStatus(id: number, status: string) {
   return getProposal(id);
 }
 
+// Applying a training proposal retires the OTHER open training drafts — they were
+// alternative reads of the same week, so once one lands the rest are stale. Marked
+// 'superseded' (the system retiring them), distinct from a user 'discarded'. Scoped
+// to training drafts only: an advisory nutrition_target draft is a different category
+// (surfaced via Energy Balance) and is left untouched.
+function supersedeSiblingTrainingDrafts(appliedId: number) {
+  const drafts = db
+    .prepare(`SELECT id, parsed_json FROM plan_proposals WHERE status = 'draft' AND id != ?`)
+    .all(appliedId) as any[];
+  for (const d of drafts) {
+    let kind: any = null;
+    try { kind = d.parsed_json ? JSON.parse(d.parsed_json).kind : null; } catch { /* keep null */ }
+    if (kind === "nutrition_target") continue; // different category — leave it
+    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+  }
+}
+
 // Clamp an advisory nutrition target to the lean-safe kcal/protein floors before
 // it's acknowledged. The nutrition check-in already proposes only conservative
 // ±100-250 kcal nudges, but this is the code-enforced backstop: a deficit target
@@ -116,21 +133,26 @@ export function applyProposal(id: number) {
   if (Array.isArray(p.parsed.days)) {
     replacePlan(p.parsed.days);
     setProposalStatus(id, "applied");
+    supersedeSiblingTrainingDrafts(id);
     return { id, restructured: true, days: p.parsed.days.length };
   }
-  if (!Array.isArray(p.parsed.changes)) {
-    throw new Error("Proposal has no valid changes or days");
+  // A proposal may carry strength `changes`, a week of run prescriptions (`cardio`),
+  // or both. (A full split/frequency rewrite uses `days` → replacePlan above.)
+  const hasChanges = Array.isArray(p.parsed.changes);
+  const hasCardio = Array.isArray(p.parsed.cardio) && p.parsed.cardio.length;
+  if (!hasChanges && !hasCardio) {
+    throw new Error("Proposal has no valid changes, cardio, or days");
   }
   const applied: any[] = [];
   const skipped: any[] = [];
   const clamped: ClampAdjustment[] = [];
-  for (const c of p.parsed.changes) {
+  const cardioRuns: any[] = [];
+  for (const c of hasChanges ? p.parsed.changes : []) {
     try {
-      // A cardio item belongs in a full restructure (parsed.days → replacePlan),
-      // not a per-exercise target tweak — there's no loaded exercise to updateTarget.
-      // Skip it transparently here so a mixed proposal never throws on the cardio row.
+      // A cardio entry inside `changes` has no loaded exercise to tweak — route it to
+      // the weekly-runs applier instead of skipping it (so mixed proposals apply runs).
       if (String(c?.kind ?? "").toLowerCase() === "cardio") {
-        skipped.push({ ...c, error: "cardio item — apply via a plan restructure (days), not a target change" });
+        cardioRuns.push(c);
         continue;
       }
       // A change carries target_weight (reps exercises) and/or target_seconds (timed).
@@ -145,8 +167,35 @@ export function applyProposal(id: number) {
       skipped.push({ ...c, error: e.message });
     }
   }
+  if (hasCardio) cardioRuns.push(...p.parsed.cardio);
+  let runs: { applied: any[] } | undefined;
+  if (cardioRuns.length) {
+    try {
+      runs = setWeeklyRuns(cardioRuns.map(toRunPrescription).filter((r): r is RunPrescription => r != null));
+    } catch (e: any) {
+      skipped.push({ kind: "cardio", error: e.message });
+    }
+  }
   setProposalStatus(id, "applied");
-  return { id, applied, skipped, ...(clamped.length ? { clamped } : {}) };
+  supersedeSiblingTrainingDrafts(id);
+  return { id, applied, skipped, ...(runs ? { runs: runs.applied } : {}), ...(clamped.length ? { clamped } : {}) };
+}
+
+// Map a coach-emitted cardio entry (from parsed.cardio, or a kind:'cardio' change)
+// onto a RunPrescription. Returns null when there's no usable day to attach it to.
+function toRunPrescription(c: any): RunPrescription | null {
+  const day_number = Math.trunc(Number(c?.day_number));
+  if (!Number.isFinite(day_number) || day_number < 1) return null;
+  return {
+    day_number,
+    label: c?.label ?? c?.exercise ?? null,
+    target_distance_km: c?.target_distance_km ?? null,
+    target_duration_min: c?.target_duration_min ?? null,
+    target_zone: c?.target_zone ?? null,
+    note: c?.note ?? null,
+    day_name: c?.day_name ?? null,
+    focus: c?.focus ?? null,
+  };
 }
 
 // ---------- profile ----------
@@ -185,17 +234,23 @@ export function setProfile(p: any) {
     // optional free text ('' clears, undefined leaves intact, capped at 60).
     primary_discipline: normalizeDiscipline(p.primary_discipline, cur.primary_discipline),
     endurance_sport: p.endurance_sport !== undefined ? (p.endurance_sport == null ? null : String(p.endurance_sport).trim().slice(0, 60) || null) : (cur.endurance_sport ?? null),
+    // The endurance OBJECTIVE (v37). undefined leaves intact, null clears, else it's
+    // normalized (race | standing) and re-serialized; an unusable shape clears it.
+    endurance_goal_json: p.endurance_goal !== undefined
+      ? serializeEnduranceGoal(p.endurance_goal)
+      : (cur.endurance_goal_json ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, weight_lb=excluded.weight_lb,
        goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
-       primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport, updated_at=datetime('now')`
-  ).run(merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport);
+       primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
+       endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
+  ).run(merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
   return getProfile();
 }
 
@@ -210,6 +265,85 @@ export function normalizeDiscipline(v: any, current?: any): "strength" | "endura
   }
   const cur = current != null ? String(current).trim().toLowerCase() : "";
   return (DISCIPLINES.has(cur) ? cur : "strength") as "strength" | "endurance" | "hybrid";
+}
+
+// ---------- endurance goal (v37) ----------
+// The endurance OBJECTIVE, orthogonal to primary_discipline. Two modes:
+//   race     → a dated event the coach periodizes a ramp + taper toward
+//   standing → an ongoing readiness target (no date): maintain + gently build
+// Normalized/clamped at the trust boundary; an unusable shape returns null (= clear).
+export type EnduranceGoal = {
+  mode: "race" | "standing";
+  event?: string | null;          // race name (race mode)
+  date?: string | null;           // race date YYYY-MM-DD (race mode)
+  label?: string | null;          // readiness label, e.g. "10k-ready" (standing mode)
+  distance_km?: number | null;    // target/readiness distance
+  target?: string | null;         // qualitative target, e.g. "sub-1:45"
+  weekly_km?: number | null;      // optional volume anchor
+  weekly_sessions?: number | null;
+};
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+function clampPos(v: any, max: number): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, max) : null;
+}
+function capStr(v: any, max: number): string | null {
+  if (v == null) return null;
+  const s = String(v).trim().slice(0, max);
+  return s || null;
+}
+export function normalizeEnduranceGoal(input: any): EnduranceGoal | null {
+  let g: any = input;
+  if (typeof g === "string") { try { g = JSON.parse(g); } catch { return null; } }
+  if (!g || typeof g !== "object") return null;
+  const mode = String(g.mode || "").trim().toLowerCase();
+  const distance_km = clampPos(g.distance_km, 500);
+  const weekly_km = clampPos(g.weekly_km, 400);
+  const weekly_sessions = clampPos(g.weekly_sessions, 14);
+  if (mode === "race") {
+    const date = ISO_DATE.test(String(g.date || "")) ? String(g.date) : null;
+    if (!date) return null; // a race without a date can't be periodized — reject
+    return { mode: "race", event: capStr(g.event, 120), date, distance_km, target: capStr(g.target, 60), weekly_km, weekly_sessions };
+  }
+  if (mode === "standing") {
+    return { mode: "standing", label: capStr(g.label, 80), distance_km, target: capStr(g.target, 60), weekly_km, weekly_sessions };
+  }
+  return null;
+}
+function serializeEnduranceGoal(input: any): string | null {
+  if (input == null) return null;
+  const g = normalizeEnduranceGoal(input);
+  return g ? JSON.stringify(g) : null;
+}
+
+// Inclusive whole-day difference toISO − fromISO (UTC midnight, day granularity).
+function daysBetweenISO(fromISO: string, toISO: string): number {
+  const a = Date.parse(`${fromISO}T00:00:00Z`);
+  const b = Date.parse(`${toISO}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.NaN;
+  return Math.round((b - a) / 86400000);
+}
+
+// Deterministic read of the active endurance goal, with race timing derived for the
+// coach (weeks/days out + a coarse periodization PHASE hint). Standing goals have no
+// date, so no phase — the coach maintains rather than ramps. Returns null when unset.
+export function getEnduranceGoal(today?: string): (EnduranceGoal & {
+  is_race: boolean;
+  days_to_race?: number | null;
+  weeks_to_race?: number | null;
+  phase?: "base" | "build" | "sharpen" | "taper" | "past" | null;
+}) | null {
+  const p = getProfile();
+  const g = normalizeEnduranceGoal(p?.endurance_goal_json);
+  if (!g) return null;
+  if (g.mode !== "race" || !g.date) return { ...g, is_race: false };
+  const days = daysBetweenISO(today || todayISO(), g.date);
+  if (!Number.isFinite(days)) return { ...g, is_race: true, days_to_race: null, weeks_to_race: null, phase: null };
+  const weeks = Math.ceil(days / 7);
+  // Coarse phase hint from time-to-race (the coach refines against actual base):
+  // past → done; ≤2wk taper; ≤4wk sharpen; ≤10wk build; else base.
+  const phase = days < 0 ? "past" : weeks <= 2 ? "taper" : weeks <= 4 ? "sharpen" : weeks <= 10 ? "build" : "base";
+  return { ...g, is_race: true, days_to_race: days, weeks_to_race: Math.max(0, weeks), phase };
 }
 
 // ---------- bodyweight log ----------

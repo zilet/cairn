@@ -547,23 +547,53 @@ async function renderEndurance() {
   const token = ++pollToken;
   view.innerHTML = segBar("endurance", PROGRESS_SEG) + `<div id="endBody">${loadingState("Reading your week…")}</div>`;
   wireSeg(PROGRESS_HANDLERS);
-  // Two reads in parallel: the weekly endurance block (off /stats) + the PRs.
-  let stats = null, prs = null;
-  try { [stats, prs] = await Promise.all([api("/stats"), api("/endurance-prs").catch(() => null)]); }
+  // Three reads in parallel: the weekly endurance block (off /stats), the PRs, and the
+  // endurance goal (race countdown / standing target).
+  let stats = null, prs = null, goal = null;
+  try { [stats, prs, goal] = await Promise.all([api("/stats"), api("/endurance-prs").catch(() => null), api("/endurance-goal").catch(() => null)]); }
   catch { stats = null; }
   if (token !== pollToken || !view.querySelector("#endBody")) return;
-  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs);
+  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal);
 }
 
-function paintEnduranceBody(end, prs) {
+// Race countdown / standing-readiness banner — the persistent home for the endurance
+// goal. Race: event + phase + how long to go. Standing: what you're staying ready for.
+// No 0–100 scores; a calm anchor, never a gate.
+function enduranceGoalCard(g) {
+  if (!g || !g.mode) return "";
+  if (g.mode === "race") {
+    const d = g.days_to_race;
+    const when = d == null ? "" : d < 0 ? "race day passed"
+      : d === 0 ? "race day" : d <= 14 ? `${d} day${d === 1 ? "" : "s"} to go` : `${g.weeks_to_race} weeks to go`;
+    const phaseLabel = { base: "Base building", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Race done" }[g.phase] || "";
+    const sub = [g.distance_km ? `${g.distance_km} km` : null, g.target ? `target ${g.target}` : null, g.date ? absDate(g.date) : null].filter(Boolean).join(" · ");
+    return `<div class="end-goal reveal" style="${stagger(0)}">
+        <div class="end-goal-head"><span class="lbl">Race goal</span>${phaseLabel ? `<span class="end-goal-phase">${escHtml(phaseLabel)}</span>` : ""}</div>
+        <div class="end-goal-name">${escHtml(g.event || "Your race")}</div>
+        ${sub ? `<div class="end-goal-sub">${escHtml(sub)}</div>` : ""}
+        ${when ? `<div class="end-goal-count numeral">${escHtml(when)}</div>` : ""}
+      </div>`;
+  }
+  const sub = [g.distance_km ? `${g.distance_km} km` : null, g.weekly_km ? `~${g.weekly_km} km/wk` : null].filter(Boolean).join(" · ");
+  return `<div class="end-goal reveal" style="${stagger(0)}">
+      <div class="end-goal-head"><span class="lbl">Standing goal</span></div>
+      <div class="end-goal-name">Staying ${escHtml(g.label || "race-ready")}</div>
+      ${sub ? `<div class="end-goal-sub">${escHtml(sub)}</div>` : ""}
+    </div>`;
+}
+
+function paintEnduranceBody(end, prs, goal) {
   const body = view.querySelector("#endBody");
   if (!body) return;
+  const goalHtml = enduranceGoalCard(goal);
   const hasWeek = end && (end.week_km > 0 || end.week_moving_min > 0 || end.longest_km != null || end.longest_min != null);
   const hasPRs = prs && (prs.longest_km || prs.longest_min || (prs.best_pace || []).length);
   if (!hasWeek && !hasPRs) {
-    body.innerHTML = progressHero("Endurance", []) +
+    body.innerHTML = progressHero("Endurance", []) + goalHtml +
       emptyStateHtml(art("activity", "run"),
-        "No runs or rides logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your mileage, zones, and pace will read here.");
+        goalHtml
+          ? "No runs logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your weekly runs build toward this."
+          : "No runs or rides logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your mileage, zones, and pace will read here.");
     return;
   }
 
@@ -575,7 +605,7 @@ function paintEnduranceBody(end, prs) {
     if (end.longest_km != null) heroStats.push(["longest · km", end.longest_km, { text: true }]);
     else if (end.longest_min != null) heroStats.push(["longest · min", Math.round(end.longest_min), { text: true }]);
   }
-  let html = progressHero("Endurance", heroStats);
+  let html = progressHero("Endurance", heroStats) + goalHtml;
 
   // Longest effort line (when we have one and it didn't already lead the hero).
   if (end && (end.longest_km != null || end.longest_min != null)) {

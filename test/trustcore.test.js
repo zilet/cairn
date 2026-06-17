@@ -37,6 +37,70 @@ test("apply-path clamp holds load on an injury-constrained exercise", () => {
   assert.ok(item.target_weight <= 100, `constrained exercise held on increase, got ${item.target_weight}`);
 });
 
+// Applying one training proposal retires the OTHER open training drafts (they were
+// alternative reads of the same week) — marked 'superseded', distinct from a user
+// 'discarded'. An advisory nutrition_target draft is a different category and is left
+// alone (it's applied from Energy Balance, not the proposals list).
+test("applying a training proposal retires sibling training drafts, leaves a nutrition_target draft", () => {
+  resetTables("plan_proposals", "plan_items", "plan_days");
+  repo.savePlanDay(1, "Day 1", "legs", [{ exercise: "ZSupSquat", sets: 3, target_weight: 190 }]);
+  const draftA = repo.createProposal("stub", "", "{}", { summary: "a", changes: [{ day_number: 1, exercise: "ZSupSquat", target_weight: 195, reason: "x" }] });
+  const draftB = repo.createProposal("stub", "", "{}", { summary: "b", changes: [{ day_number: 1, exercise: "ZSupSquat", target_weight: 200, reason: "y" }] });
+  const nut = repo.createProposal("stub", "", "{}", { kind: "nutrition_target", nutrition: { target_kcal: 2400, protein_g: 180 } });
+
+  repo.applyProposal(draftB.id);
+
+  const byId = Object.fromEntries(repo.listProposals(20).map((p) => [p.id, p.status]));
+  assert.equal(byId[draftB.id], "applied", "the applied proposal is applied");
+  assert.equal(byId[draftA.id], "superseded", "the sibling training draft is retired");
+  assert.equal(byId[nut.id], "draft", "the nutrition_target draft is a different category — untouched");
+});
+
+test("accepting a meal plan retires the other meal-plan drafts", () => {
+  resetTables("meal_plans");
+  const a = repo.createMealPlan("stub", "{}", { daily_kcal: 2200, days: [] });
+  const b = repo.createMealPlan("stub", "{}", { daily_kcal: 2300, days: [] });
+  repo.acceptMealPlan(b.id);
+  const byId = Object.fromEntries(repo.listMealPlans(20).map((p) => [p.id, p.status]));
+  assert.equal(byId[b.id], "accepted", "the accepted plan is kept");
+  assert.equal(byId[a.id], "superseded", "the other draft is retired");
+});
+
+// A proposal can carry a week of run prescriptions (`cardio`) applied SURGICALLY:
+// each run attaches to its day, replacing that day's cardio while strength stays put;
+// a day with no plan yet is created as a dedicated run day. This is how a runner/hybrid
+// athlete accepts "this week's runs" without a full-plan restructure.
+test("applying a proposal's cardio prescriptions adds runs without disturbing strength", () => {
+  resetTables("plan_proposals", "plan_items", "plan_days");
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "ZRunSquat", sets: 3, target_weight: 185 }]);
+  const p = repo.createProposal("stub", "", "{}", {
+    summary: "base week",
+    changes: [{ day_number: 1, exercise: "ZRunSquat", target_weight: 190, reason: "progress" }],
+    cardio: [
+      { day_number: 1, label: "Easy run", target_distance_km: 8, target_zone: "Z2", reason: "aerobic base" },
+      { day_number: 6, label: "Long run", target_distance_km: 16, target_zone: "easy", reason: "weekly long" },
+    ],
+  });
+  repo.applyProposal(p.id);
+
+  // Day 1 keeps its (progressed) strength item AND gains the easy run.
+  const d1 = repo.getPlanDay(1);
+  const d1strength = d1.items.filter((i) => i.kind !== "cardio");
+  const d1cardio = d1.items.filter((i) => i.kind === "cardio");
+  assert.equal(d1strength.length, 1, "strength work preserved");
+  assert.equal(d1strength[0].target_weight, 190, "strength target progressed in place");
+  assert.equal(d1cardio.length, 1, "the easy run was added to day 1");
+  assert.equal(d1cardio[0].target_distance_km, 8);
+  assert.equal(d1cardio[0].target_zone, "Z2");
+
+  // Day 6 was created as a dedicated run day with the long run.
+  const d6 = repo.getPlanDay(6);
+  assert.ok(d6, "a dedicated run day was created");
+  const d6cardio = d6.items.filter((i) => i.kind === "cardio");
+  assert.equal(d6cardio.length, 1);
+  assert.equal(d6cardio[0].target_distance_km, 16);
+});
+
 // ---------- evidence cache + citation verification + safety gate (grounding) ----------
 
 test("getEvidenceForMarker is empty until research caches a row, then round-trips", () => {

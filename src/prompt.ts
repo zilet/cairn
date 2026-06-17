@@ -8,11 +8,22 @@ const PLAN_SCHEMA = `{
     { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_weight": <number>, "reason": "<why>" },
     { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_seconds": <number>, "reason": "<why — ONLY for mode:'timed' exercises>" }
   ],
+  "cardio": [
+    { "day_number": <1-7>, "label": "<e.g. Easy run / Long run / Tempo / Intervals>",
+      "target_distance_km": <number|null>, "target_duration_min": <number|null>,
+      "target_zone": "<Z2|easy|tempo|threshold|intervals|long|null>", "reason": "<why this run, this week>", "note": "<optional pacing/structure>" }
+  ],
   "notes": "<optional coaching notes, may be empty>"
 }
-// To CHANGE FREQUENCY/STRUCTURE or to add/adjust CARDIO days, return a full
-// restructure as "days" instead of "changes" — each item may be a strength
-// exercise OR a cardio prescription:
+// "changes"  → tweak strength targets on existing plan days (applied in place).
+// "cardio"   → prescribe THIS WEEK's runs (one entry per planned run). Applied
+//              surgically: each attaches to its day_number, REPLACING that day's
+//              cardio while leaving its strength work intact; a day_number with no
+//              plan day yet is created as a dedicated run day. This is the headline
+//              output for a runner/hybrid athlete with an endurance goal — use it
+//              alongside (or instead of) "changes". DON'T wrap runs in "days".
+// "days"     → ONLY for a real split/FREQUENCY rewrite (whole plan replaced). Each
+//              item may be strength OR { "kind":"cardio", … } as below:
 //   "days": [ { "day_number": <n>, "name": "<day name>", "focus": "<focus>", "items": [
 //     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null> },
 //     { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
@@ -123,6 +134,45 @@ and hard days as hard (polarized), and guard earned recovery after long or quali
   endurance sessions). Hold or trim lifting volume on big endurance weeks.
 - Read runs/rides as the MAIN training stress, not just "cardio-load context": fatigue, soreness and
   readiness flow largely from the endurance work.\n`;
+}
+
+// The endurance OBJECTIVE (v37), rendered for a prompt. Orthogonal to discipline:
+// a RACE goal makes the coach periodize a conservative ramp + taper toward a date;
+// a STANDING goal makes it maintain readiness (no peak/taper). Both ask the coach to
+// prescribe THIS WEEK's runs concretely so a runner/hybrid athlete gets an actionable
+// plan, not just prose. `focus` tailors it to the consuming prompt. Returns "" when
+// there's no endurance goal (today's behavior unchanged).
+function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | "day"): string {
+  const g = ctx?.endurance_goal;
+  if (!g || !g.mode) return "";
+  const dist = g.distance_km ? `${g.distance_km} km` : null;
+  if (g.mode === "race") {
+    const when = g.weeks_to_race != null
+      ? (g.weeks_to_race <= 0 ? "this week" : `~${g.weeks_to_race} week${g.weeks_to_race === 1 ? "" : "s"} out`)
+      : "upcoming";
+    const head = `ENDURANCE GOAL — RACE: ${g.event || "a race"}${dist ? ` (${dist})` : ""}${g.target ? `, target ${g.target}` : ""}, ${when}${g.date ? ` (${g.date})` : ""}. Phase hint: ${g.phase || "build"}.`;
+    if (focus === "nutrition") {
+      return `\n${head}\n- Fuel the build: periodize carbs to the week's long/quality runs; don't cut into fueling. In race week, top up carbs and ease off any deficit.\n`;
+    }
+    if (focus === "day") {
+      return `\n${head}\n- Read today's run against this phase (base→build→sharpen→taper). In the taper (final ~2 weeks) protect freshness — shorter & sharper, more rest — and guard the long run's recovery.\n`;
+    }
+    return `\n${head}
+- PERIODIZE toward the date: build the aerobic base, add quality (tempo/threshold/intervals) through the build, sharpen near the race, then TAPER the final ~2 weeks (cut volume, keep some intensity, arrive fresh).
+- Progress run volume CONSERVATIVELY (~10%/week; a down week every ~4th). Honor the phase hint above unless the athlete's actual base says to hold.
+- Prescribe THIS WEEK's runs concretely (easy / long / quality, each with a zone + a distance or duration) — this is the headline output for a runner, alongside any lifting tweaks. Keep lifting supportive so it doesn't compromise the key runs.\n`;
+  }
+  // standing
+  const head = `ENDURANCE GOAL — STANDING: stay ${g.label || (dist ? `${dist}-ready` : "race-ready")}.${g.weekly_km ? ` Aim ~${g.weekly_km} km/wk.` : ""}`;
+  if (focus === "nutrition") {
+    return `\n${head}\n- No peak to fuel for — anchor to maintenance and keep carbs adequate for steady aerobic work. A lean-safe deficit is fine only if fat loss is an explicit goal.\n`;
+  }
+  if (focus === "day") {
+    return `\n${head}\n- No taper or peak — keep runs steady and sustainable (mostly easy aerobic, one quality touch a week). Today's run maintains readiness, it doesn't chase a date.\n`;
+  }
+  return `\n${head}
+- MAINTAIN rather than ramp to a date: a steady, sustainable base (mostly easy) + one quality session/week keeps the athlete ${dist ? `${dist}-ready` : "ready"} at any time. Consistency over peaking.
+- Prescribe THIS WEEK's runs concretely (easy + one quality), conservative volume. Keep lifting per the discipline.\n`;
 }
 
 // The connected brain, rendered for a prompt. Pulls the active cross-domain
@@ -376,7 +426,7 @@ have none — that's fine, just use what's there):
   working as designed, never a penalty.
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -459,6 +509,15 @@ const CHAT_ACTIONS_SCHEMA = `[
     { "type": "log_set", "exercise": "Back Squat", "weight": 195, "reps": 8, "rir": 2, "day_number": 1 },
     { "type": "log_set", "exercise": "Dead Hang", "duration_sec": 45, "exercise_mode": "timed" },
     { "type": "set_profile", "weight_lb": 176 },
+    // The endurance OBJECTIVE (running goal), orthogonal to the lifting plan. Use mode
+    // "race" for a dated event (the coach periodizes a ramp + taper), or "standing" for
+    // an ongoing readiness target with NO date (e.g. "stay 10k-ready"). Set this when the
+    // athlete states a running goal ("I want to run the Cambridge Half on Nov 1", "keep me
+    // able to run a 10k anytime"). Distinct from primary_discipline (set via set_profile).
+    { "type": "set_endurance_goal", "mode": "race",
+      "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",
+      "label": "<readiness label, e.g. '10k-ready' — standing mode>",
+      "distance_km": <number|null>, "target": "<e.g. 'sub-1:45'|null>", "weekly_km": <number|null>, "weekly_sessions": <number|null> },
     { "type": "add_memory", "content": "Prefers morning training", "kind": "preference" },
     { "type": "update_memory", "id": <existing memory id from DATA.memory>, "content": "<corrected fact>", "kind": "preference|constraint|decision|injury|milestone|goal|observation" },
     { "type": "supersede_memory", "id": <id of the now-WRONG memory from DATA.memory>, "reason": "<what changed>", "replacement": "<optional new fact to remember instead>" },
@@ -541,7 +600,7 @@ GUARDRAILS:
 ${CONTEXT_GUARDRAILS}
 
 ACTIONS — only when the athlete clearly asks to log or change something:
-- log_activity, log_set, set_profile, add_memory, update_memory, supersede_memory, log_food, log_health, add_context_event, log_supplement are APPLIED immediately.
+- log_activity, log_set, set_profile, set_endurance_goal, add_memory, update_memory, supersede_memory, log_food, log_health, add_context_event, log_supplement are APPLIED immediately.
 - log_food records a meal estimate (food note) — use it when the athlete reports something they
   ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.
 - log_health records lab/bloodwork/DEXA results the athlete reports in chat — pull out EVERY marker
@@ -1240,7 +1299,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1293,7 +1352,7 @@ GUARDRAILS:
   short unless the athlete explicitly asked to train hard.
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}
@@ -1505,7 +1564,7 @@ ${CONTEXT_GUARDRAILS}
   flag that the athlete will be eating out.
 - HEALTH MARKERS specifically: e.g. low ferritin/iron → emphasize iron-rich foods; flag any
   marker-driven food emphasis in notes. Not medical advice.
-${renderDiscipline(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
+${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to the recommended deficit and protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -1586,7 +1645,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   adjustment lever to cut here.` : ""}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}
+${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}
 ATHLETE: profile: ${JSON.stringify(profile)}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

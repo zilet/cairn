@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**121 tools.**
+**125 tools.**
 
 | Tool | Description |
 |---|---|
@@ -40,6 +40,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_checkin` | Get the latest check-in for a date (or null if none). |
 | `get_daily_metrics` | Recent daily metric rows for a source (default all sources) over the last N days (default 30). |
 | `get_day_read` | Read what KIND of day today should be — train, easy, or rest — as a calm SUGGESTION (never a verdict, never a score). Synthesizes recent training, recovery, check-ins and life context. The agentic read writes the human sentence; if no agent is reachable it falls back to a deterministic floor. override reshapes the read ('rough night' / 'short on time' / 'I want to train anyway'). |
+| `get_endurance_goal` | The athlete's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }. |
+| `get_endurance_prs` | Endurance PRs from logged cardio: the longest single distance + duration and the fastest pace (min/km) at standard distances (1/5/10k, half, full). Optional type filter (e.g. 'run'\|'ride'). Plain numbers, never a score — the endurance analogue of the strength est-1RM. |
 | `get_evidence` | Make a directive's citation INSPECTABLE: returns the cited evidence behind ONE marker as { marker, evidence:[{claim, source_title, source_url, body, confidence, retrieved_at}] }. Reads the evidence cache only (never the network), so it works with research disabled; evidence:[] when research never ran for that marker. INFORMATIONAL, not medical advice. |
 | `get_evidence_summary` | Make the evidence cache DISCOVERABLE without an N-fetch fan-out: returns { research_enabled, total, by_marker:[{marker, count}] } — the per-marker count of cited rows on file, so a UI can show a 'see the evidence (N)' hint and know up-front where evidence exists. Reads the cache only (never the network). INFORMATIONAL, not medical advice. |
 | `get_exercise` | Get the guide for one exercise: muscle group, injury constraint, form cues, where it appears in the plan, est-1RM trend, and recent sets. |
@@ -67,7 +69,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_session_detail` | Get one logged session by its id, with all its sets. |
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list. |
 | `get_volume` | Training volume (tonnage) broken down by muscle group over the last N days (default 30). |
-| `get_weekly_stats` | Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak. |
+| `get_week_ahead` | Sketch the SHAPE of the next several days — lift / run / mixed / rest — as a calm SUGGESTION to reshape, never a fixed schedule. Balances the lifting split with easy aerobic base work, honoring injuries, recovery and training health-directives. Agentic with a deterministic plan-rotation floor, so it always returns a usable shape; cached per day+plan+goal. |
+| `get_weekly_stats` | Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes. |
 | `grow_about_me` | Grow profile.about_me into a coherent person-model from typed memory + family + check-ins. Augments existing (user-authored) content, never overwrites blindly. changed:false is the common answer. |
 | `list_activities` | List recent logged activities. |
 | `list_agents` | List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, and whether any required API key is present. |
@@ -104,9 +107,10 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `run_health_review` | Run a coaching agent over the athlete's full context plus aggregated marker history to produce a fresh whole-picture health review (informational, not medical advice). Returns ok:false when the agent's output is unusable. |
 | `save_plan_day` | Create or replace one training day and its full exercise list (manual plan edit). Unknown exercises are created. |
 | `search_chat` | Keyword-search the whole coaching history (live + archived turns). Returns matches with a snippet and the session they belong to (archived_at, or null for the live thread). |
+| `set_endurance_goal` | Set or clear the athlete's endurance OBJECTIVE (running goal). mode 'race' → a dated event the coach periodizes a ramp + taper toward (needs date YYYY-MM-DD; optional event, distance_km, target like 'sub-1:45'). mode 'standing' → an ongoing readiness target with NO date (e.g. label '10k-ready', distance_km 10). Pass null to clear. Orthogonal to primary_discipline (a strength-first athlete can hold a standing running goal). |
 | `set_meal_plan_status` | Accept or discard a drafted meal plan. |
-| `set_plan` | Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days). Days not included are removed. |
-| `set_profile` | Update profile fields (any subset). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. |
+| `set_plan` | Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days) or to add cardio days. Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription. |
+| `set_profile` | Update profile fields (any subset). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'\|'endurance'\|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it. |
 | `set_session_feedback` | Record optional per-session autoregulation feedback for a date (creates that date's session if needed): soreness 1-5, performance 1-5 (how the session felt vs expected), and a free-text joint_pain area (e.g. 'left knee'). The coach reads these to pull volume/load back when sore or under-performing and to de-load/swap movements that load a painful joint. Omit any field to leave it unchanged. |
 | `set_settings` | Update app settings (any subset). agent_strategy: round_robin\|random\|priority. agent_order / disabled_agents: arrays of agent names. agent_routes: optional per-task agent map pinning a task to one agent. coach_enabled/coach_day(0-6)/coach_hour(0-23) control the weekly auto-draft. |
 | `skip_exercise` | Mark a planned exercise consciously skipped ('not today') for a date's session — it stops counting against that day's plan. Refuses (ok:false) when the exercise already has logged sets that session. |

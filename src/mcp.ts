@@ -272,6 +272,26 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_endurance_goal",
+    "The athlete's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }.",
+    {},
+    async () => asText(repo.getEnduranceGoal())
+  );
+
+  server.tool(
+    "set_endurance_goal",
+    "Set or clear the athlete's endurance OBJECTIVE (running goal). mode 'race' → a dated event the coach periodizes a ramp + taper toward (needs date YYYY-MM-DD; optional event, distance_km, target like 'sub-1:45'). mode 'standing' → an ongoing readiness target with NO date (e.g. label '10k-ready', distance_km 10). Pass null to clear. Orthogonal to primary_discipline (a strength-first athlete can hold a standing running goal).",
+    {
+      mode: z.enum(["race", "standing"]).nullable().optional().describe("'race' | 'standing'; omit/null with no other fields to clear"),
+      event: z.string().optional(), date: z.string().optional().describe("YYYY-MM-DD (race mode)"),
+      label: z.string().optional().describe("readiness label (standing mode), e.g. '10k-ready'"),
+      distance_km: z.number().optional(), target: z.string().optional(),
+      weekly_km: z.number().optional(), weekly_sessions: z.number().optional(),
+    },
+    async (g) => asText(repo.setProfile({ endurance_goal: g.mode == null ? null : g }))
+  );
+
+  server.tool(
     "list_agents",
     "List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, and whether any required API key is present.",
     {},

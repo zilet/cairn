@@ -26,6 +26,12 @@ async function renderMeProfile() {
   const p = profile || {};
   setDiscipline(p.primary_discipline); // keep the emphasis global in sync with what's on file
   const disc = primaryDiscipline;
+  // The endurance OBJECTIVE (v37) — race | standing | none. Parsed from the profile
+  // row's JSON; the editor below lets the athlete set a race to build toward or a
+  // standing "stay ready" target, orthogonal to the sport/discipline above.
+  let egCur = {};
+  try { egCur = p.endurance_goal_json ? JSON.parse(p.endurance_goal_json) : {}; } catch { egCur = {}; }
+  const egMode = egCur && egCur.mode ? egCur.mode : "none";
   const num = (id, label, val, step) =>
     `<div class="field" style="margin-bottom:9px"><label>${label}</label>
      <input id="${id}" type="number" step="${step||1}" value="${val ?? ""}" class="form-input"></div>`;
@@ -65,6 +71,34 @@ async function renderMeProfile() {
         value="${escAttr(p.endurance_sport || "")}" class="form-input">
     </div>
 
+    <div class="field" id="endGoalField" style="margin-bottom:9px">
+      <label>Running goal <span class="ob-opt">— optional</span></label>
+      <p class="aboutme-hint">A race the coach builds you toward, or an ongoing "stay ready" target. Either way it prescribes your runs each week alongside lifting — separate from the sport above.</p>
+      <div class="seg" id="endGoalMode" role="group" aria-label="Running goal mode">
+        <button type="button" class="segbtn${egMode === "none" ? " active" : ""}" data-egmode="none">None</button>
+        <button type="button" class="segbtn${egMode === "race" ? " active" : ""}" data-egmode="race">Race</button>
+        <button type="button" class="segbtn${egMode === "standing" ? " active" : ""}" data-egmode="standing">Standing</button>
+      </div>
+      <div id="egRace" class="eg-sub" style="${egMode === "race" ? "" : "display:none"}">
+        <div class="field" style="margin:9px 0 0"><label for="eg_event">Race</label>
+          <input id="eg_event" type="text" maxlength="120" placeholder="e.g. Cambridge Half" value="${escAttr(egCur.event || "")}" class="form-input"></div>
+        <div class="field" style="margin:9px 0 0"><label for="eg_date">Race date</label>
+          <input id="eg_date" type="date" value="${escAttr(egCur.date || "")}" class="form-input"></div>
+        <div class="field" style="margin:9px 0 0"><label for="eg_target">Target <span class="ob-opt">— optional</span></label>
+          <input id="eg_target" type="text" maxlength="60" placeholder="e.g. sub-1:45, just finish" value="${escAttr(egCur.target || "")}" class="form-input"></div>
+      </div>
+      <div id="egStanding" class="eg-sub" style="${egMode === "standing" ? "" : "display:none"}">
+        <div class="field" style="margin:9px 0 0"><label for="eg_label">Readiness</label>
+          <input id="eg_label" type="text" maxlength="80" placeholder="e.g. 10k-ready, half-ready" value="${escAttr(egCur.label || "")}" class="form-input"></div>
+      </div>
+      <div id="egShared" class="eg-grid" style="${egMode === "none" ? "display:none" : ""}">
+        <div class="field" style="margin:9px 0 0"><label for="eg_distance">Distance (km) <span class="ob-opt">— optional</span></label>
+          <input id="eg_distance" type="number" step="0.1" value="${egCur.distance_km ?? ""}" class="form-input"></div>
+        <div class="field" style="margin:9px 0 0"><label for="eg_weekly_km">Weekly km <span class="ob-opt">— optional</span></label>
+          <input id="eg_weekly_km" type="number" step="1" value="${egCur.weekly_km ?? ""}" class="form-input"></div>
+      </div>
+    </div>
+
     <div class="field aboutme" style="margin-bottom:0">
       <label for="about_me">About you</label>
       <p class="aboutme-hint">What "better" means to you, a little of your history, the foods you love and avoid, how work and life run. Optional \u2014 the coach reads it to make the pointing yours.</p>
@@ -94,6 +128,21 @@ async function renderMeProfile() {
   // Track the chosen discipline locally (a seg tap isn't an input/change event the
   // save bar listens for, so we mark dirty + persist it explicitly).
   let pickedDisc = disc;
+  let pickedEgMode = egMode;
+  // Assemble the endurance goal from the active mode's fields (none → null clears it).
+  const egPayload = () => {
+    const dist = +$("#eg_distance")?.value || null;
+    const wk = +$("#eg_weekly_km")?.value || null;
+    if (pickedEgMode === "race") {
+      return { mode: "race", event: ($("#eg_event")?.value ?? "").trim() || null,
+        date: $("#eg_date")?.value || null, distance_km: dist,
+        target: ($("#eg_target")?.value ?? "").trim() || null, weekly_km: wk };
+    }
+    if (pickedEgMode === "standing") {
+      return { mode: "standing", label: ($("#eg_label")?.value ?? "").trim() || null, distance_km: dist, weekly_km: wk };
+    }
+    return null; // none
+  };
   const persistProfile = async () => {
     const body = {
       age: +$("#age").value || null, height_cm: +$("#height_cm").value || null,
@@ -101,6 +150,7 @@ async function renderMeProfile() {
       goal_date: $("#goal_date").value || null, activity_factor: +$("#activity_factor").value || null,
       primary_discipline: pickedDisc,
       endurance_sport: pickedDisc === "strength" ? "" : (($("#endurance_sport")?.value ?? "").trim()),
+      endurance_goal: egPayload(),
       about_me: ($("#about_me")?.value ?? "").trim(),
       allergies: ($("#allergies")?.value ?? "").trim(),
       dietary_restrictions: ($("#dietary_restrictions")?.value ?? "").trim(),
@@ -129,6 +179,18 @@ async function renderMeProfile() {
       $("#discSeg").querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
       const sportField = $("#endSportField");
       if (sportField) sportField.style.display = pickedDisc === "strength" ? "none" : "";
+      profBar.markDirty();
+    })
+  );
+  // Running-goal mode: None / Race / Standing — toggle the relevant fields, mark dirty.
+  $("#endGoalMode")?.querySelectorAll("[data-egmode]").forEach((b) =>
+    b.addEventListener("click", () => {
+      pickedEgMode = b.dataset.egmode;
+      $("#endGoalMode").querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
+      const race = $("#egRace"), standing = $("#egStanding"), shared = $("#egShared");
+      if (race) race.style.display = pickedEgMode === "race" ? "" : "none";
+      if (standing) standing.style.display = pickedEgMode === "standing" ? "" : "none";
+      if (shared) shared.style.display = pickedEgMode === "none" ? "none" : "";
       profBar.markDirty();
     })
   );
