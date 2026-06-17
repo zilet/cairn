@@ -162,7 +162,15 @@ async function renderMeProfile() {
     };
     await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     setDiscipline(pickedDisc); // the emphasis global follows what was just saved
-    setEnduranceGoalSet(!!body.endurance_goal); // a new/cleared running goal flips the Plan → Endurance tab
+    // Only re-derive the goal flag when the payload actually CARRIED a goal decision.
+    // egPayload() returns undefined for a rejected race-with-no-date (the server then
+    // leaves the existing goal intact), so we must NOT flip the tab off in that case.
+    if (body.endurance_goal !== undefined) {
+      const hadGoal = !!(egCur && egCur.mode);
+      setEnduranceGoalSet(!!body.endurance_goal);
+      // First time a running goal lands → point the athlete at its planning home.
+      if (!hadGoal && body.endurance_goal) toast("Your running plan now lives in Plan → Endurance");
+    }
     // new goal weight/date/factor moves the pace + goal lines across surfaces; a
     // discipline change reshapes Today's compass + the default Progress view.
     ["profile", "stats", "progress:weight", "progress:energy"].forEach(swrInvalidate);

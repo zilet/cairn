@@ -95,7 +95,10 @@ async function applyProposalById(id, btn) {
   if (btn) btnBusy(btn, "Applying…");
   let r = null;
   try { r = await api(`/proposals/${id}/apply`, { method: "POST" }); } catch { r = null; }
-  const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
+  // Honest failure: the apply endpoint returns {error} (400) or drops on transport —
+  // never claim "Applied" then. The caller re-renders, so the draft stays actionable.
+  if (!r || r.error) { toast("Couldn't apply — try again"); return r; }
+  const clamped = Array.isArray(r.clamped) && r.clamped.length;
   if (clamped) lastApplyClamp[id] = r.clamped;
   toast(clamped ? "Applied · adjusted to a safe step" : "Applied");
   state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale

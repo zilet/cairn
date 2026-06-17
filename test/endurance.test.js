@@ -187,6 +187,27 @@ test("the iCal export renders a cardio plan item as an endurance line", () => {
   assert.match(ics, /Long run.*12 km.*Z2/);
 });
 
+// ---------- B2 week-ahead floor reflects prescribed cardio ----------
+// Regression: the deterministic floor used to hardcode every day to kind:'lift', so a
+// runner saw zero runs in the Today week-ahead floor. It now reads plan_items.
+test("weekAheadPlan floor marks lift / run / mixed days from plan_items", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  repo.savePlanDay(2, "Easy run", "Aerobic", [{ kind: "cardio", exercise: "Easy run", target_distance_km: 8, target_zone: "Z2" }]);
+  repo.savePlanDay(3, "Run + lift", "Mixed", [
+    { kind: "cardio", exercise: "Tempo", target_distance_km: 6, target_zone: "Z3" },
+    { exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5 },
+  ]);
+  const { days } = repo.weekAheadPlan();
+  assert.equal(days.length, 3);
+  assert.equal(days[0].kind, "lift", "strength-only day → lift");
+  assert.equal(days[1].kind, "run", "cardio-only day → run");
+  assert.equal(days[2].kind, "mixed", "cardio + strength day → mixed");
+});
+
+test("weekAheadPlan returns no days when there is no plan", () => {
+  assert.deepEqual(repo.weekAheadPlan().days, []);
+});
+
 // ---------- C endurance PRs ----------
 test("getEndurancePRs surfaces longest distance/duration and fastest pace per distance", () => {
   seedActivity("2026-01-01", { type: "run", duration_min: 50, distance_km: 10 });   // 5.0 min/km

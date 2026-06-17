@@ -748,11 +748,15 @@ function primeDiscipline() {
   api("/profile").then((p) => {
     if (!p) return;
     const before = defaultProgressSeg();
+    const beforeEnd = showEnduranceTab();
     setDiscipline(p.primary_discipline);
     setEnduranceGoalSet(!!p.endurance_goal_json);
     // only re-render if we're still sitting on the Progress tab AND nothing was
     // navigated since boot AND the endurance default actually changed the seg.
     if (state.tab === "progress" && !state.progressSeg && defaultProgressSeg() !== before) renderTab("progress");
+    // Likewise: a cold-boot landing straight on Plan painted the 3-tab sub-nav before
+    // the profile resolved — repaint so the Endurance pill appears once we know.
+    if (state.tab === "plan" && showEnduranceTab() !== beforeEnd) renderTab("plan");
   }).catch(() => {});
 }
 const _landingTab = new URLSearchParams(location.search).get("tab");

@@ -271,17 +271,34 @@ export interface WeekAheadDay {
   note?: string | null;
 }
 export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
-  const planDays = db.prepare(`SELECT day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
+  const planDays = db.prepare(`SELECT id, day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
   if (!planDays.length) return { days: [], summary: "" };
-  const days: WeekAheadDay[] = planDays.map((d) => ({
-    day: null,
-    kind: "lift",
-    label: String(d.focus || d.name || `Day ${d.day_number}`).replace(/\s+/g, " ").trim().slice(0, 60),
-  }));
+  // Per-day modality from plan_items so the floor REFLECTS a runner's prescribed
+  // cardio instead of hardcoding every day to a lift — without this a runner sees
+  // zero runs in the Today week-ahead floor. cardio-only → run; cardio+strength →
+  // mixed; otherwise lift. (The agentic weekAheadRead still layers the real shape.)
+  const counts = new Map<number, { cardio: number; strength: number }>();
+  for (const r of db.prepare(
+    `SELECT plan_day_id AS id,
+            SUM(CASE WHEN kind='cardio' THEN 1 ELSE 0 END) AS cardio,
+            SUM(CASE WHEN kind='cardio' THEN 0 ELSE 1 END) AS strength
+       FROM plan_items GROUP BY plan_day_id`
+  ).all() as any[]) {
+    counts.set(Number(r.id), { cardio: Number(r.cardio) || 0, strength: Number(r.strength) || 0 });
+  }
+  const days: WeekAheadDay[] = planDays.map((d) => {
+    const c = counts.get(Number(d.id)) || { cardio: 0, strength: 0 };
+    const kind: WeekAheadDay["kind"] = c.cardio > 0 ? (c.strength > 0 ? "mixed" : "run") : "lift";
+    return {
+      day: null,
+      kind,
+      label: String(d.focus || d.name || `Day ${d.day_number}`).replace(/\s+/g, " ").trim().slice(0, 60),
+    };
+  });
   return {
     days,
     summary:
-      "Your lifting week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.",
+      "Your training week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.",
   };
 }
 

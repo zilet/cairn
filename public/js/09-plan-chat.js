@@ -355,6 +355,7 @@ function enduranceRampHtml(goal) {
   return `<div class="end-ramp reveal" style="${stagger(1)}">
       <div class="end-ramp-h"><span class="lbl">The ramp to race day</span></div>
       <ol class="ramp-list">${steps}</ol>
+      <p class="end-ramp-cap">A typical arc — the coach adapts each phase to the running you've actually banked, not a fixed schedule.</p>
     </div>`;
 }
 
@@ -411,6 +412,15 @@ function paintPlanEndurance(goal, compliance, plan, settings) {
   // This week's prescribed runs, from the plan's cardio items.
   const runs = [];
   (plan || []).forEach((d) => (d.items || []).forEach((it) => { if (isCardioItem(it)) runs.push({ it, day_number: d.day_number }); }));
+  // Weekly volume at a glance — a runner thinks in total mileage first. Plain words,
+  // never a score; shown against the goal's weekly_km anchor when one is set.
+  const totalKm = runs.reduce((s, { it }) => s + (Number(it.target_distance_km) || 0), 0);
+  const totalMin = runs.reduce((s, { it }) => s + (Number(it.target_duration_min) || 0), 0);
+  let volText = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
+  if (totalKm > 0) volText += ` · ${fmtKm(totalKm)} km planned`;
+  else if (totalMin > 0) volText += ` · ${Math.round(totalMin)} min planned`;
+  if (totalKm > 0 && goal && goal.weekly_km) volText += ` · target ~${goal.weekly_km} km/wk`;
+  const volLine = runs.length ? `<div class="end-runs-total numeral">${escHtml(volText)}</div>` : "";
   const runRows = runs.map(({ it, day_number }, i) => `
       <div class="end-run-row reveal" style="${stagger(i + 2)}">
         <span class="run-pin" aria-hidden="true">▸</span>
@@ -426,6 +436,7 @@ function paintPlanEndurance(goal, compliance, plan, settings) {
     ? `<div class="end-runs reveal" style="${stagger(2)}">
          <div class="end-runs-h"><span class="lbl">This week's runs</span>
            <button class="end-link" id="endEditRuns">Edit in Training →</button></div>
+         ${volLine}
          ${runRows}
        </div>${complianceHtml}${syncHtml}`
     : `<div class="end-runs-empty reveal" style="${stagger(2)}">
@@ -446,7 +457,12 @@ function paintPlanEndurance(goal, compliance, plan, settings) {
       <div id="endDraft"></div>
     </div>`;
 
-  body.innerHTML = goalHtml + rampHtml + standingNote + runsSection + composer;
+  // A one-line lead so this reads as the PLANNING home, distinct from Progress →
+  // Endurance (which is the backward-looking analytics on the same goal banner).
+  const leadHtml = (goal && goal.mode)
+    ? `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
+    : "";
+  body.innerHTML = goalHtml + leadHtml + rampHtml + standingNote + runsSection + composer;
 
   const editBtn = body.querySelector("#endEditRuns");
   if (editBtn) editBtn.addEventListener("click", () => renderPlanEditor());
@@ -482,10 +498,16 @@ function endDraftCardHtml(p) {
 // Ask the coach to draft (or adjust) this week's runs. The created proposal comes back
 // on /agent/run directly (r.proposal) — we render its run prescriptions inline to apply
 // here, mirror it into the Coach list, and degrade calmly if the coach returned no runs.
+let _endDrafting = false; // serialize: chip + button both call this; never race two agent runs
 async function draftEnduranceRuns(instruction, triggerEl) {
-  const status = view.querySelector("#endDraftStatus");
-  const draftWrap = view.querySelector("#endDraft");
+  if (_endDrafting) return;
+  _endDrafting = true;
+  const myToken = pollToken; // a re-render (here or another tab) bumps it → our DOM refs go stale
+  const chips = [...view.querySelectorAll(".end-chip")];
+  chips.forEach((c) => { c.disabled = true; });
   const restore = btnBusy(triggerEl, "Asking the coach…");
+  let status = view.querySelector("#endDraftStatus");
+  let draftWrap = view.querySelector("#endDraft");
   if (status) status.textContent = "Reading your running and your goal… this can take 10–60s.";
   if (draftWrap) draftWrap.innerHTML = "";
   let r = null;
@@ -493,24 +515,31 @@ async function draftEnduranceRuns(instruction, triggerEl) {
     r = await api("/agent/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: "auto", instruction }) });
   } catch { r = null; }
   restore();
-  if (!view.querySelector("#endDraftStatus")) return; // navigated away mid-draft
+  chips.forEach((c) => { c.disabled = false; });
+  _endDrafting = false;
+  // Stale guard: if the view re-rendered (or we left), the captured refs are detached —
+  // re-query the LIVE nodes after confirming we're still the current render.
+  if (myToken !== pollToken) return;
+  status = view.querySelector("#endDraftStatus");
+  draftWrap = view.querySelector("#endDraft");
+  if (!status || !draftWrap) return;
   const p = r && r.proposal;
   const cardio = p && p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
   if (!p || (r && r.error) || !p.parsed) {
-    if (status) status.textContent = "The coach couldn't finish — try again, or pick another agent in Settings.";
+    // Honest cause: no agent configured → point at Settings (the rest of the app does).
+    status.textContent = (r && r.agent_status === "unconfigured")
+      ? "Drafting runs needs a coaching agent — connect one in Settings. You can still edit runs in Training."
+      : "The coach couldn't finish — try again, or pick another agent in Settings.";
     return;
   }
   if (!cardio.length) {
     // The coach answered, but with strength / restructure changes rather than runs.
-    if (status) {
-      status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
-      const toCoach = status.querySelector("#endToCoach");
-      if (toCoach) toCoach.addEventListener("click", () => renderCoach());
-    }
+    status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
+    const toCoach = status.querySelector("#endToCoach");
+    if (toCoach) toCoach.addEventListener("click", () => renderCoach());
     return;
   }
-  if (status) status.textContent = "";
-  if (!draftWrap) return;
+  status.textContent = "";
   draftWrap.innerHTML = endDraftCardHtml(p);
   const ab = draftWrap.querySelector("[data-egapply]");
   if (ab) ab.addEventListener("click", async () => {

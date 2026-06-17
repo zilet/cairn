@@ -455,6 +455,9 @@ api.post("/agent/run", async (req, res) => {
       ok: !!result.parsed,
       agent: chosen,
       tried,
+      // Honest degradation sidecar (mirrors today-read / session-suggest / mealplan)
+      // so callers can distinguish "no agent configured" from "agent failed".
+      agent_status: agentStatusFor({ ok: !!result.parsed, agent: chosen, tried }),
       exit_code: result.code,
       stderr: (result.stderr || "").slice(0, 800),
     });

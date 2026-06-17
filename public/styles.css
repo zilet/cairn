@@ -3350,6 +3350,11 @@ button.hmk-row:active{background:var(--card-2)}
   #profFields>.aboutme,#profFields>#endSportField{grid-column:1/-1}
   #profFields>.field:has(#discSeg),#profFields>.field:has(#allergies),
   #profFields>.field:has(#dietary_restrictions){grid-column:1/-1}
+
+  /* PLAN → Endurance — the Plan view gets no two-column grid, so cap the running
+     plan to an editorial column instead of stretching the ramp/run-rows/composer
+     across the full wide canvas (same reason + cap as #profFields). */
+  #endPlanBody{max-width:680px}
 }
 
 /* ---- Extra-wide (≥1500px): Progress / Family / Records gain a third column ---- */
@@ -3493,7 +3498,7 @@ button.hmk-row:active{background:var(--card-2)}
 .ramp-list{list-style:none;margin:0;padding:0}
 .ramp-step{display:flex;gap:12px;padding:0 0 16px;position:relative}
 .ramp-step:last-child{padding-bottom:0}
-.ramp-step::before{content:"";position:absolute;left:5px;top:15px;bottom:-1px;width:2px;background:var(--line-2)}
+.ramp-step::before{content:"";position:absolute;left:5px;top:13px;bottom:-1px;width:2px;background:var(--line-2)}
 .ramp-step:last-child::before{display:none}
 .ramp-dot{flex:0 0 auto;width:12px;height:12px;border-radius:50%;margin-top:3px;
   background:var(--paper);border:2px solid var(--line-2);z-index:1}
@@ -3508,7 +3513,13 @@ button.hmk-row:active{background:var(--card-2)}
 .ramp-here{font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;
   text-transform:uppercase;color:var(--sage);background:var(--sage-bg);border-radius:999px;padding:2px 8px}
 .ramp-desc{font-size:.85rem;color:var(--ink-2);margin-top:2px;line-height:1.4}
+/* honest caveat under the ramp — it's the typical arc, not a logged history */
+.end-ramp-cap{margin:12px 0 0;font-size:.78rem;color:var(--muted);line-height:1.5;font-style:italic}
 .end-ramp-note{margin:16px 0 4px;font-size:.88rem;color:var(--ink-2);line-height:1.5}
+/* one-line lead distinguishing the planning home from Progress→Endurance analytics */
+.end-lead{margin:8px 0 4px;font-size:.9rem;color:var(--ink-2);line-height:1.5}
+/* weekly volume at a glance — plain words, never a score */
+.end-runs-total{margin:2px 0 6px;font-size:.92rem;color:var(--accent);font-variant-numeric:lining-nums}
 
 /* This week's prescribed runs + the shape-your-running composer. */
 .end-runs,.end-runs-empty{margin:20px 0 4px}
@@ -3585,9 +3596,11 @@ button.hmk-row:active{background:var(--card-2)}
   /* small status / completion / level dots get a defining ring so they read
      even where the fill is close to its surround */
   .stat-dot,.agentdot,.sync-dot,.checkin-open-dot,.savebar-dot,
-  .offline-dot,.noticed-dot,.agent-offline-dot{
+  .offline-dot,.noticed-dot,.agent-offline-dot,.ramp-step:not(.is-current) .ramp-dot{
     box-shadow:0 0 0 1px rgba(33,29,23,.55);
   }
+  /* the sage current-phase dot already carries a glow; firm it to a defining ring */
+  .ramp-step.is-current .ramp-dot{box-shadow:0 0 0 1px rgba(33,29,23,.55)}
   /* directive + marker chips and the marker-chart geometry firm up their edges */
   .hb-dmarker,.prov-marker{border-color:var(--ink-2)}
   .hchart-band{fill:rgba(110,127,92,.24)}
