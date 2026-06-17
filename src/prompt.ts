@@ -484,7 +484,10 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   weeks, dial volume back during a stressful stretch, keep family days shorter/more flexible. Use
   "injury" for any pain/niggle they mention, "trip" for travel, "family_event" for a recurring
   family/kids commitment (meta {member, recurrence}, e.g. "Tue 17:00 soccer"), "life_event" otherwise.
-  Set start/end dates when known.
+  Set start/end dates ONLY when the athlete actually gave them. NEVER guess or approximate a date
+  (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't
+  know. If the exact date matters (e.g. a race they're training for), record the event with null
+  dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.
 - plan_update (target tweaks) and plan_restructure (changing the split or days-per-week) are saved as a
   DRAFT for the athlete to review and apply — never assume they're live. When they ask for "5 days a
   week" etc., propose a full plan_restructure with sensible exercises that honor their constraints,

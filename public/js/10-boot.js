@@ -453,7 +453,7 @@ function renderTab(tab) {
   if (tab === "today") return renderToday();
   if (tab === "plan") {
     const jump = state.planJump; state.planJump = null;
-    return jump === "meals" ? renderMeals() : renderPlanEditor();
+    return jump === "meals" ? renderMeals() : jump === "coach" ? renderCoach() : renderPlanEditor();
   }
   if (tab === "progress") return renderHistory();
   if (tab === "chat") return renderChat();
@@ -468,7 +468,7 @@ function renderTab(tab) {
 function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
   if (tab === "progress") return segSkeleton("sessions", PROGRESS_SEG, 3);
-  if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : "edit", PLAN_SEG, 3);
+  if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", PLAN_SEG, 3);
   if (tab === "me") {
     const seg = state.meSeg || "profile";
     return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
@@ -485,7 +485,7 @@ function tabSkeleton(tab) {
 function primaryKeyFor(tab) {
   if (tab === "today") return "plan"; // Today's first input; warm => render paints from cache
   if (tab === "progress") return "history:sessions"; // the default (History) seg
-  if (tab === "plan") return state.planJump === "meals" ? MEALS_KEY : "plan";
+  if (tab === "plan") return state.planJump === "coach" ? null : state.planJump === "meals" ? MEALS_KEY : "plan";
   return null;
 }
 

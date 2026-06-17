@@ -768,6 +768,8 @@ async function renderToday(opts = {}) {
     : `${isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${briefHtml(read, { showPlan, hasPlanDay, isToday })}
+    ${goalLineHtml(stats, curW, isToday)}
+    <div id="draftSlot" class="draft-slot"></div>
     <div id="weeklySlot" class="weekly-slot"></div>
     <div id="insightSlot" class="insight-slot"></div>
     ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
@@ -785,8 +787,8 @@ async function renderToday(opts = {}) {
       </div>
       <div id="freqFoods" class="freq-foods"></div>
       ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
-      <div id="qlRecent" class="ql-recent"></div>
-    </div>`;
+    </div>
+    <div id="qlRecent" class="ql-recent lately-slot"></div>`;
 
   // ---- A finished workout: calm "done" card, the live surface put away ----
   if (showDone) {
@@ -923,7 +925,8 @@ async function renderToday(opts = {}) {
     loadContextBanner();
     loadHealthFocusBanner();
     loadWearable(isToday);
-    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); }
+    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); loadDraftProposals(); }
+    view.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
   }
 
   // Focus toggle — enter (pill above the cards) / exit (slim header), each a smooth
@@ -1961,30 +1964,56 @@ async function loadTableHint() {
   wrap.querySelector("#tableHintBtn").addEventListener("click", () => { state.planJump = "meals"; activateTab("plan"); });
 }
 
-// Today: a subtle banner summarising active/upcoming context (trips, injuries, life events).
-const CTX_ICONS = { trip: "✈", injury: "🤕", life_event: "◆" };
+// Today: a subtle banner summarising NEAR-TERM context (active injuries, ongoing or
+// imminent trips/events). A far-future life event (a race months out) is deliberately
+// NOT pinned here — Today stays focused on what's near; the event still lives in Plan
+// and Me → Life. Dated context gains a calm countdown as it draws closer.
+const CTX_ICONS = { trip: "✈", injury: "🤕", life_event: "◆", family_event: "◆" };
+const CTX_NEAR_DAYS = 21; // an upcoming dated event surfaces on Today only within this window
+
+function daysUntil(startISO) {
+  if (!startISO) return null;
+  const d = new Date(startISO + "T00:00:00"), now = new Date(localISO() + "T00:00:00");
+  return Math.round((d - now) / 86400000);
+}
+function eventCountdown(days) {
+  if (days == null) return "";
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days <= 14) return `in ${days} days`;
+  return `in ${Math.round(days / 7)} weeks`;
+}
+
+// Near-term = an active injury (always shapes today), an ongoing event, or a dated
+// event within CTX_NEAR_DAYS. A far-future OR undated non-injury event is hidden from
+// Today (it keeps living in Plan / Me → Life) — so a race months out, or one with no
+// date yet, never dominates the top of Today.
+function isNearTermContext(ev) {
+  if (ev.archived) return false;
+  if (ev.kind === "injury") return true; // an active injury always shapes today
+  const today = localISO();
+  const start = ev.start_date, end = ev.end_date;
+  if (start && start <= today && (!end || end >= today)) return true; // ongoing
+  if (start && start > today) return daysUntil(start) <= CTX_NEAR_DAYS; // imminent
+  return false; // undated or far-future non-injury → not on Today
+}
+
 function ctxBannerLine(ev) {
   let meta = ev.meta_json;
   if (typeof meta === "string") { try { meta = JSON.parse(meta); } catch { meta = null; } }
   meta = meta || {};
   const icon = CTX_ICONS[ev.kind] || "◆";
   const title = ev.title || ev.kind;
-  if (ev.kind === "trip") {
-    const today = localISO();
-    let when = "";
-    if (ev.start_date && ev.start_date > today) {
-      const d = new Date(ev.start_date + "T00:00:00"), now = new Date(today + "T00:00:00");
-      const days = Math.round((d - now) / 86400000);
-      when = days === 0 ? " today" : ` in ${days} day${days === 1 ? "" : "s"}`;
-    } else if (ev.start_date && (!ev.end_date || ev.end_date >= today)) {
-      when = " now";
-    }
-    return `${icon} ${escHtml(title)}${meta.location ? ` to ${escHtml(meta.location)}` : ""}${escHtml(when)}`;
-  }
   if (ev.kind === "injury") {
     return `${icon} ${escHtml(title)}${meta.area && !String(title).toLowerCase().includes(String(meta.area).toLowerCase()) ? ` (${escHtml(meta.area)})` : ""} — go easy`;
   }
-  return `${icon} ${escHtml(title)}`;
+  // trips / life / family events — title (+ trip destination) + a calm countdown / "now"
+  const today = localISO();
+  let when = "";
+  if (ev.start_date && ev.start_date > today) when = ` · ${eventCountdown(daysUntil(ev.start_date))}`;
+  else if (ev.start_date && (!ev.end_date || ev.end_date >= today)) when = " · now";
+  const where = ev.kind === "trip" && meta.location ? ` to ${escHtml(meta.location)}` : "";
+  return `${icon} ${escHtml(title)}${where}${escHtml(when)}`;
 }
 
 async function loadContextBanner() {
@@ -1993,10 +2022,56 @@ async function loadContextBanner() {
   let events = [];
   try { events = await api("/context-events?active=1"); } catch { events = []; }
   if (state.tab !== "today" || !wrap.isConnected) return;
-  events = (events || []).filter((e) => !e.archived);
+  events = (events || []).filter(isNearTermContext);
   if (!events.length) { wrap.innerHTML = ""; return; }
   const lines = events.slice(0, 3).map(ctxBannerLine);
   wrap.innerHTML = `<div class="ctxbanner">${lines.join('<span class="ctxbanner-sep">·</span>')}</div>`;
+}
+
+// Today: a calm near-term goal anchor under the Brief — "Toward 164 lb · ~11 weeks".
+// The nearer-term arc (recomp by the goal date) is what Today should keep in view,
+// not a score; tapping opens Progress. Renders nothing without a weight goal + a
+// future goal date, and never on a past-date view.
+function goalLineHtml(stats, curW, isToday) {
+  if (!isToday || !stats) return "";
+  const gw = stats.goal_weight_lb != null ? Number(stats.goal_weight_lb) : null;
+  const gd = stats.goal_date || null;
+  if (gw == null || !gd) return "";
+  const days = daysUntil(gd);
+  if (days == null || days < 0) return ""; // goal date passed → don't nag
+  const when = days <= 7 ? "this week" : days <= 112 ? `~${Math.round(days / 7)} wk` : `~${Math.round(days / 30)} mo`;
+  const from = curW != null && Number(curW) !== gw ? ` <span class="goalline-from">from ${escHtml(String(curW))}</span>` : "";
+  return `<button class="goalline reveal" id="goalLine" style="--i:0" type="button">
+      <span class="goalline-ico" aria-hidden="true">◎</span>
+      <span class="goalline-txt">Toward <b>${gw} lb</b>${from} · ${escHtml(when)}</span>
+      <span class="goalline-go" aria-hidden="true">→</span>
+    </button>`;
+}
+
+// Today: react to agentic work — a quiet card when the coach has drafted a plan
+// change waiting for review (a scheduler weekly-review draft, or a chat plan change).
+// Pull, never push: it only appears when a `draft` proposal exists and clears the
+// moment it's applied/discarded in Plan → Coach. Tapping jumps straight there.
+async function loadDraftProposals() {
+  const slot = view.querySelector("#draftSlot");
+  if (!slot) return;
+  let plans = [];
+  try { plans = await api("/proposals?limit=8"); } catch { return; }
+  if (state.tab !== "today" || !slot.isConnected) return;
+  const drafts = (plans || []).filter((p) => p && p.status === "draft");
+  if (!drafts.length) { slot.innerHTML = ""; return; }
+  const head = drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting";
+  const raw = (drafts[0].instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
+  const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Drafted by your coach";
+  slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
+      <span class="draft-ico" aria-hidden="true">✦</span>
+      <span class="draft-body">
+        <span class="draft-h">${escHtml(head)}</span>
+        <span class="draft-sub">${escHtml(sub)} · review</span>
+      </span>
+      <span class="draft-go" aria-hidden="true">→</span>
+    </button>`;
+  slot.querySelector("#draftCard").addEventListener("click", () => { state.planJump = "coach"; activateTab("plan"); });
 }
 
 // Today: one quiet health-focus line from the latest whole-picture review (first

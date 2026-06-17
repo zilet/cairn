@@ -298,6 +298,45 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 }
 .ctxbanner-sep{color:var(--line-2)}
 
+/* near-term goal anchor under the Brief — calm, score-free; taps into Progress.
+   The nearer-term arc (recomp by the goal date) Today should keep in view. */
+.goalline{
+  display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  background:transparent;border:none;border-left:2px solid var(--sage);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  margin:-4px 0 14px;padding:8px 12px;cursor:pointer;
+  color:var(--ink-2);font-size:.84rem;line-height:1.4;
+  transition:background var(--dur-1) var(--ease);
+}
+.goalline:hover{background:var(--card-2)}
+.goalline:active{transform:scale(.99)}
+.goalline-ico{flex:0 0 auto;color:var(--sage);font-size:.82rem}
+.goalline-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goalline-txt b{color:var(--ink);font-weight:600}
+.goalline-from{color:var(--muted)}
+.goalline-go{margin-left:auto;flex:0 0 auto;color:var(--sage);font-weight:600}
+
+/* react-to-agent: a quiet "a plan change is waiting" card (a scheduler or chat
+   draft proposal). Pull, never push — clears the moment it's applied/discarded. */
+.draft-slot:empty{display:none}
+.draft-card{
+  display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+  background:var(--card);border:none;box-shadow:var(--shadow-sm);
+  border-left:3px solid var(--gold);border-radius:var(--radius-sm);
+  padding:11px 14px;margin:2px 0 14px;cursor:pointer;
+  transition:background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
+}
+.draft-card:hover{background:var(--card-2)}
+.draft-card:active{transform:scale(.99)}
+.draft-ico{flex:0 0 auto;color:var(--gold)}
+.draft-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.draft-h{font-size:.88rem;color:var(--ink);font-weight:600}
+.draft-sub{font-size:.78rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.draft-go{margin-left:auto;flex:0 0 auto;color:var(--gold);font-weight:600}
+
+/* Lately feed, now its own top-level slot (was nested in the capture row) */
+.lately-slot:empty{display:none}
+
 /* connected-brain provenance — the quiet causal line on a meal/session card when
    a flagged lab shaped it ("tilted toward fish — ApoB came back high · why"). A
    soft gold-edged whisper, the whole row a deep-link into Me → Health → Brain.
