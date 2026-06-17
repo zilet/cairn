@@ -40,6 +40,41 @@ export const ROUTABLE_TASKS = [
 export type RoutableTask = (typeof ROUTABLE_TASKS)[number];
 const ROUTABLE_TASK_SET = new Set<string>(ROUTABLE_TASKS);
 
+const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
+  ["agent_strategy", "TEXT DEFAULT 'round_robin'"],
+  ["agent_order", "TEXT"],
+  ["disabled_agents", "TEXT"],
+  ["rr_cursor", "TEXT"],
+  ["coach_enabled", "INTEGER DEFAULT 0"],
+  ["coach_day", "INTEGER DEFAULT 0"],
+  ["coach_hour", "INTEGER DEFAULT 20"],
+  ["updated_at", "TEXT"],
+  ["onboarded", "INTEGER DEFAULT 0"],
+  ["enrich_enabled", "INTEGER DEFAULT 1"],
+  ["proactive_enabled", "INTEGER DEFAULT 1"],
+  ["art_enabled", "INTEGER DEFAULT 1"],
+  ["art_enabled_at", "TEXT DEFAULT ''"],
+  ["meal_prefs", "TEXT DEFAULT ''"],
+  ["garmin_username", "TEXT DEFAULT ''"],
+  ["garmin_password", "TEXT DEFAULT ''"],
+  ["gemini_api_key", "TEXT DEFAULT ''"],
+  ["garmin_last_sync_at", "TEXT DEFAULT ''"],
+  ["garmin_last_sync_status", "TEXT DEFAULT ''"],
+  ["research_enabled", "INTEGER DEFAULT 0"],
+  ["bg_ops_enabled", "INTEGER DEFAULT 1"],
+  ["agent_routes", "TEXT DEFAULT ''"],
+];
+let settingsSchemaChecked = false;
+
+function ensureSettingsSchema() {
+  if (settingsSchemaChecked) return;
+  const cols = new Set((db.prepare(`PRAGMA table_info(settings)`).all() as any[]).map((r) => String(r.name)));
+  for (const [name, def] of SETTINGS_COLUMN_REPAIRS) {
+    if (!cols.has(name)) db.exec(`ALTER TABLE settings ADD COLUMN ${name} ${def}`);
+  }
+  settingsSchemaChecked = true;
+}
+
 function defaultSettings(): Settings {
   // Seed from env on first run so existing COACH_* deployments keep working.
   return {
@@ -144,6 +179,7 @@ function rowToSettings(row: any): Settings {
 }
 
 export function getSettings(): Settings {
+  ensureSettingsSchema();
   const row = db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
   if (row) return rowToSettings(row);
   const d = defaultSettings();
@@ -155,6 +191,7 @@ export function getSettings(): Settings {
 }
 
 export function setSettings(patch: any): Settings {
+  ensureSettingsSchema();
   const cur = getSettings();
   const raw = db.prepare(`SELECT garmin_username, garmin_password, gemini_api_key FROM settings WHERE id = 1`).get() as any;
   const incomingGarminPassword = patch.garmin_password !== undefined ? String(patch.garmin_password).trim() : undefined;
@@ -224,6 +261,7 @@ export function setSettings(patch: any): Settings {
 }
 
 export function getGarminCredentials() {
+  ensureSettingsSchema();
   const row = db.prepare(`SELECT garmin_username, garmin_password FROM settings WHERE id = 1`).get() as any;
   const username = String(row?.garmin_username ?? "").trim() || process.env.GARMIN_USERNAME || "";
   const password = String(row?.garmin_password ?? "").trim() || process.env.GARMIN_PASSWORD || "";
@@ -242,6 +280,7 @@ export function setGarminSyncStatus(status: string) {
 }
 
 export function getGeminiApiKey() {
+  ensureSettingsSchema();
   const row = db.prepare(`SELECT gemini_api_key FROM settings WHERE id = 1`).get() as any;
   return String(row?.gemini_api_key ?? "").trim() || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
 }
@@ -511,4 +550,3 @@ export function pickAgentOrder(): string[] {
   setSettings({ rr_cursor: rotated[0] });
   return rotated;
 }
-
