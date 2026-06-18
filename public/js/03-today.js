@@ -820,7 +820,7 @@ function wireSuggestCard(slot) {
             const s = view.querySelector("#sugSlot");
             if (s) s.innerHTML = "";
             toast("Added to today — log as you go");
-          });
+          }, { blank: true });
         };
         // when the plan surface is already shown the hand-off happens in place, so
         // collapse the card first for continuity; otherwise the full re-render
@@ -833,9 +833,12 @@ function wireSuggestCard(slot) {
 
 // Reveal the plan/logging surface for the selected date, then run `after` once the
 // surface exists in the DOM. If it's already shown, run immediately.
-function revealPlanThen(after) {
+function revealPlanThen(after, opts = {}) {
   if (view.querySelector(".addex")) { after && after(); return; }
-  state.planReveal = { date: state.logDate, on: true };
+  // `blank`: reveal a clean logging surface with NO plan day pre-loaded (used by a
+  // logged session suggestion). On a day with nothing planned, this stops Today from
+  // borrowing — and mislabeling the session as — the next rotation day's workout.
+  state.planReveal = { date: state.logDate, on: true, blank: !!opts.blank };
   Promise.resolve(renderToday()).then(() => { after && after(); });
 }
 
@@ -890,13 +893,22 @@ async function renderToday(opts = {}) {
   if (session) for (const s of session.sets) (loggedByEx[s.exercise] ??= []).push(s);
   for (const k of Object.keys(loggedByEx)) loggedByEx[k].sort((a, b) => (a.set_number ?? 0) - (b.set_number ?? 0));
 
+  // A blank reveal (a logged session suggestion on a day with nothing planned): don't
+  // auto-pick a rotation day — leave the session unlinked and the surface clean, so
+  // only the suggested/off-plan cards show. The day-switch still lets the athlete pull
+  // a real plan day in (which sets dayPicked and exits this branch).
+  const revealBlank = !!(state.planReveal && state.planReveal.date === state.logDate && state.planReveal.on && state.planReveal.blank);
   const hasSelectedDay = state.plan.some((d) => d.day_number === state.day);
-  if (!state.dayPicked || state.day === null || !hasSelectedDay) {
+  if (revealBlank && !state.dayPicked) {
+    state.day = null;
+  } else if (!state.dayPicked || state.day === null || !hasSelectedDay) {
     state.day = await suggestedPlanDayNumber(session, isToday);
     state.dayPicked = false;
   }
 
-  const day = state.plan.find((d) => d.day_number === state.day) || state.plan[0] || { items: [] };
+  const day = (revealBlank && state.day === null)
+    ? { items: [] }
+    : (state.plan.find((d) => d.day_number === state.day) || state.plan[0] || { items: [] });
   // Cardio plan items (kind:'cardio') carry NO loaded exercise — they're a prescription
   // logged through the free-text capture, not the set logger. Keep them out of the
   // name/skip/prefill plumbing (all keyed on a strength exercise name).
@@ -945,7 +957,20 @@ async function renderToday(opts = {}) {
   // ones are fetched (and cached) in parallel as before.
   const planEx = activeItems.filter((it) => !isCardioItem(it) && it.exercise).map((it) => it.exercise);
   const offPlanEx = Object.keys(loggedByEx).filter((ex) => !planNames.has(ex));
-  const needLast = [...new Set(planEx)].filter((ex) => !(loggedByEx[ex] && loggedByEx[ex].length));
+  // Pending off-plan cards: exercises added on the fly ("+ Add exercise" or a logged
+  // session suggestion) that have NO set yet, so they live only in state. A full
+  // re-render — e.g. the first set on a previously-empty day brings in the FINISH
+  // block via refreshFinishStat — would otherwise drop them, since off-plan cards are
+  // rebuilt from loggedByEx alone. Re-materialize any not already covered by the plan
+  // or a logged set, and prune the rest (a now-logged/planned exercise is no longer
+  // "pending" — it owns a real card, so deleting its sets drops it as before).
+  const planLower = new Set([...planNames].map((n) => n.toLowerCase()));
+  const loggedLower = new Set(Object.keys(loggedByEx).map((n) => n.toLowerCase()));
+  const pendingOffPlan = (((state.pendingOffPlan || {})[state.logDate]) || []).filter(
+    (p) => p && p.name && !planLower.has(p.name.toLowerCase()) && !loggedLower.has(p.name.toLowerCase()),
+  );
+  if (state.pendingOffPlan && state.pendingOffPlan[state.logDate]) state.pendingOffPlan[state.logDate] = pendingOffPlan;
+  const needLast = [...new Set([...planEx, ...pendingOffPlan.map((p) => p.name)])].filter((ex) => !(loggedByEx[ex] && loggedByEx[ex].length));
   const lastSets = {};
   await Promise.all(needLast.map(async (ex) => {
     const lk = "last-set:" + ex;
@@ -1185,6 +1210,15 @@ async function renderToday(opts = {}) {
       const logged = loggedByEx[ex];
       const s = logged[logged.length - 1];
       html += exCard({ exercise: ex, fromPlan: false }, logged, { weight: s.weight, reps: s.reps, rir: s.rir }, cardIdx++);
+    }
+    // Pending off-plan cards (added but not yet logged) — rebuilt so a re-render never
+    // drops a freshly-added exercise before its first set lands. Prefill from last-set.
+    for (const p of pendingOffPlan) {
+      const last = lastSets[p.name];
+      const prefill = last
+        ? { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null }
+        : { weight: null, reps: null, rir: null, duration_sec: null };
+      html += exCard({ exercise: p.name, fromPlan: false, mode: p.mode || null }, [], prefill, cardIdx++);
     }
     html += `<div class="addex">
       <button id="addExBtn" class="ghostbtn addex-btn">+ Add exercise</button>
@@ -1859,6 +1893,13 @@ async function undoSkip(card, anchor, exercise) {
 // DOM card from appendOffPlanCard — so removing it is a pure in-flow collapse, no API.
 function removeOffPlanCard(card) {
   if (!card) return;
+  // drop it from the pending list too, so a later re-render doesn't bring it back.
+  const name = card.dataset && card.dataset.card;
+  if (name && state.pendingOffPlan && state.pendingOffPlan[state.logDate]) {
+    state.pendingOffPlan[state.logDate] = state.pendingOffPlan[state.logDate].filter(
+      (p) => p.name.toLowerCase() !== name.toLowerCase(),
+    );
+  }
   collapseEl(card, () => card.remove());
 }
 
@@ -2076,6 +2117,11 @@ async function setupAddExercise() {
 }
 
 async function appendOffPlanCard(name, mode) {
+  // Remember it in state (keyed by date) so a re-render rebuilds it instead of dropping
+  // it — an unlogged off-plan card otherwise lives only in the DOM. Deduped by name.
+  (state.pendingOffPlan ??= {});
+  const list = (state.pendingOffPlan[state.logDate] ??= []);
+  if (!list.some((p) => p.name.toLowerCase() === name.toLowerCase())) list.push({ name, mode: mode || "reps" });
   let prefill = { weight: null, reps: null, rir: null, duration_sec: null };
   try {
     const last = await api("/last-set?exercise=" + encodeURIComponent(name));
