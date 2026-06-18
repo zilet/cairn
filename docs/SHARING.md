@@ -1,12 +1,12 @@
 # Sharing Cairn
 
-Cairn is easiest to share as a prebuilt Docker image plus a small Compose file.
-The image contains the app, Node 24, and the supported CLI runners. It does not
-contain user credentials or a shared AI subscription.
+Cairn is easiest to share as a prebuilt Docker image — a single `docker run`, no clone. The image
+contains the app, Node 24, and the supported CLI runners. It does not contain user credentials or a
+shared AI subscription.
 
 ## What Users Need
 
-- Docker with Compose.
+- Docker (Compose optional — the one-line `docker run` below does not need it).
 - A private place to run it: localhost, a home server, a Raspberry Pi, Tailscale,
   MagicDNS, WireGuard, a VPN, or another trusted network.
 - Optional subscriptions/logins for Claude Code, Codex, Antigravity, or Grok.
@@ -15,31 +15,18 @@ Cairn has no built-in user authentication. Do not expose it directly to the
 public internet. If another device can reach the port, set `CAIRN_AUTH_TOKEN`
 or put an authenticated private-network layer in front of it.
 
-## Install (Build From Source — Works Today)
+## Install From The Published Image (Recommended — No Clone)
 
-This is the recommended path right now. It builds the image locally, so it does
-not depend on a published artifact or registry access:
+A multi-arch image (amd64 + arm64) is published to GHCR with every tagged release, so most people
+never touch the source. Shortest path — one `docker run`, no compose file:
 
 ```bash
-git clone https://github.com/zilet/cairn.git
-cd cairn
-docker compose up -d --build
+docker run -d --name cairn -p 8787:8787 \
+  -v cairn-data:/data -v cairn-home:/home/app \
+  --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
-The first build bakes the coaching CLIs in and takes a few minutes; later
-rebuilds are fast. Then open:
-
-```text
-http://localhost:8787
-```
-
-For a server on your LAN or tailnet, replace `localhost` with that host name or
-private IP.
-
-## Install From A Published Image (Once The Public Image Is Published)
-
-A multi-arch image is published to GHCR with every tagged release, so you can skip the build
-entirely:
+Or use the release compose file (env vars + loopback-safe port binding already wired up):
 
 ```bash
 mkdir cairn
@@ -48,13 +35,31 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-The compose file attached to a release already points at that release's GHCR
-image tag.
+The compose file attached to a release already points at that release's GHCR image tag. Either way,
+then open:
 
-> The prebuilt pull needs the GHCR package's visibility set to **public** (the package's GHCR page →
-> Package settings → Danger Zone → Change visibility). If anonymous `docker pull` returns `401`/`403`,
-> the package is still private — use the build-from-source path above instead. See the
-> **Maintainer release checklist** below.
+```text
+http://localhost:8787
+```
+
+For a server on your LAN or tailnet, replace `localhost` with that host name or private IP.
+
+> If anonymous `docker pull` ever returns `401`/`403`, the GHCR package visibility has regressed to
+> private (the package's GHCR page → Package settings → Danger Zone → Change visibility) — use the
+> build-from-source path below until it is public again. See the **Maintainer release checklist**.
+
+## Install By Building From Source
+
+Only needed to develop or change the code — it builds the image locally instead of pulling it:
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+docker compose up -d --build
+```
+
+The first build bakes the coaching CLIs in and takes a few minutes; later rebuilds are fast. Then
+open `http://localhost:8787`.
 
 ## Ways To Run It
 
@@ -100,16 +105,19 @@ Updating the image does not remove either volume.
 
 ## CLI Logins
 
-Each user logs into their own provider accounts inside the container:
+Each user logs into their own provider accounts inside the container. The container is named
+`cairn` whichever way you started it (`docker run` or compose), so `docker exec` works in both:
 
 ```bash
-docker compose exec -u app -it cairn claude
-docker compose exec -u app -it cairn codex login
-docker compose exec -u app -it cairn agy
-docker compose exec -u app -it cairn grok
+docker exec -u app -it cairn claude        # Claude Code — OAuth/device-code prompt
+docker exec -u app -it cairn codex login   # Codex — ChatGPT login
+docker exec -u app -it cairn agy           # Antigravity (Google) — paste the code quickly
+docker exec -u app -it cairn grok          # Grok — interactive login (or set XAI_API_KEY)
 ```
 
-The app also has an offline `stub` agent for smoke tests.
+Pick **one** to start; the login persists in the `cairn-home` volume. Always use `-u app` — a login
+written as root is invisible to the server process. The app also has an offline `stub` agent for
+smoke tests. (If you started Cairn via `docker compose`, `docker compose exec …` is equivalent.)
 
 ## Updating CLI Tools
 
@@ -117,7 +125,7 @@ The image installs the latest supported CLIs when it is built. On a long-running
 host, update them from Settings -> Agents -> Update CLI tools, or run:
 
 ```bash
-docker compose exec -u app cairn cairn-update-agent-clis
+docker exec -u app cairn cairn-update-agent-clis
 ```
 
 Automatic CLI updates are available but opt-in:

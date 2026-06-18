@@ -100,20 +100,44 @@ is unflagged). The Docker image bundles Node 24, so users do not need Node insta
 
 ## Quickstart (30 seconds)
 
+**Just want to run it?** You don't need the source. The image is published to GHCR (multi-arch,
+amd64 + arm64) — one command, no clone, no Node:
+
+```bash
+docker run -d --name cairn -p 8787:8787 \
+  -v cairn-data:/data -v cairn-home:/home/app \
+  --restart unless-stopped ghcr.io/zilet/cairn:latest
+```
+
+Open **http://localhost:8787** — you land on the Brief immediately. The two named volumes keep your
+data (`cairn-data`) and CLI logins (`cairn-home`) across updates; to update, `docker pull
+ghcr.io/zilet/cairn:latest` and re-run the command. Add `-e TZ=Europe/Belgrade` for your timezone.
+Prefer a compose file (env vars, loopback-safe defaults)?
+`curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml && docker compose up -d`.
+
+**Want the source** — to build locally, develop, or run on Node instead of Docker?
+
 ```bash
 git clone https://github.com/zilet/cairn.git
 cd cairn
 ./quickstart.sh
 ```
 
-That's it. The script detects Docker (preferred, no Node needed on the host) or falls back to
+The script detects Docker (preferred, no Node needed on the host) or falls back to
 local Node 24, starts Cairn, waits for health, and prints the URL. Open
 **http://localhost:8787** — you land on the Brief immediately.
 
-**First paint is real**, no agent required. Chat, coaching drafts, and meal plans need one
-external agent (Claude Code, Codex, Antigravity, or Grok) — or enable the built-in `stub`
-agent in Settings to explore offline. See
-[Connect your first agent](docs/QUICKSTART.md#connect-your-first-agent) in the full guide.
+**First paint is real**, no agent required. For chat, coaching drafts, and meal plans, log in to
+**one** agent — the CLIs are baked into the image, and the container is named `cairn`, so it's one
+`docker exec`:
+
+```bash
+docker exec -u app -it cairn claude   # or: codex login · agy · grok  (pick one; -u app is required)
+```
+
+Then enable it in **Settings → Agents** — or enable the built-in `stub` agent there to explore
+offline with no login. Full detail (Grok API key, local-Node logins):
+[Connect your first agent](docs/QUICKSTART.md#connect-your-first-agent).
 
 ### What works out of the box vs. what needs a coaching agent
 
@@ -143,7 +167,8 @@ real one.
 
 | If you want... | Start here |
 |---|---|
-| Try Cairn on your laptop | `./quickstart.sh` |
+| Just run it on your laptop (no clone) | the `docker run … ghcr.io/zilet/cairn:latest` above |
+| Build from source / develop | `./quickstart.sh` |
 | Keep it always-on at home | `./scripts/quickstart-rpi.sh` on a Raspberry Pi or small home box |
 | Run it on a cheap VM | Docker + Tailscale; see [`docs/QUICKSTART.md#small-vm-private-online-box`](docs/QUICKSTART.md#small-vm-private-online-box) |
 | Try it on demand in the cloud | [`docs/SANDBOX.md`](docs/SANDBOX.md) for Daytona / Codespaces / Gitpod |
@@ -185,20 +210,17 @@ laptop, a small home server, a VM, a Raspberry Pi, or a private Tailscale /
 WireGuard network. The same container can be started only when you need it or
 left running full-time.
 
-**Build from source.** This always works and depends on no published artifact — it builds the
-image locally:
+**Prebuilt image (no clone).** A multi-arch image (amd64 + arm64) is published to GHCR with every
+tagged release, so you can skip the build entirely. The shortest path is one `docker run` — no source,
+no compose file:
 
 ```bash
-git clone https://github.com/zilet/cairn.git
-cd cairn
-docker compose up -d --build
+docker run -d --name cairn -p 8787:8787 \
+  -v cairn-data:/data -v cairn-home:/home/app \
+  --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
-Then open `http://localhost:8787`. The first build bakes the coaching CLIs into the image and
-takes ~3–6 minutes; later rebuilds are fast (BuildKit caches the layers).
-
-**Prebuilt release image.** A multi-arch image is published to GHCR with every tagged release, so
-you can skip the build entirely with the release compose file:
+Or, for a compose file with the env vars and loopback-safe defaults already wired up:
 
 ```bash
 mkdir cairn
@@ -207,9 +229,20 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-> The prebuilt pull needs the GHCR package's visibility set to **public** (a maintainer setting on
-> the package's GHCR page). If anonymous `docker pull` returns `401`/`403`, the package is still
-> private — use the build-from-source path above.
+Either way, then open `http://localhost:8787`. Update later with `docker pull
+ghcr.io/zilet/cairn:latest` and re-run.
+
+**Build from source.** Only needed if you want to develop or change the code — it builds the image
+locally instead of pulling it:
+
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+docker compose up -d --build
+```
+
+The first build bakes the coaching CLIs into the image and takes ~3–6 minutes; later rebuilds are
+fast (BuildKit caches the layers).
 
 See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow and the maintainer release
 checklist.
@@ -313,14 +346,19 @@ keeps each login across restarts.
 > `agy` (auth under `~/.gemini`). Headless streaming is not available yet — chat falls back to
 > one-shot for Codex and Antigravity.
 
-Bake CLIs in via compose build args (`INSTALL_CLAUDE/CODEX/ANTIGRAVITY/GROK`). Log in once:
+The CLIs are baked into the published image (and into a source build via the
+`INSTALL_CLAUDE/CODEX/ANTIGRAVITY/GROK` build args). The container is named `cairn` whether you
+started it with `docker run` or compose, so log in once with `docker exec` — pick **one** to start:
 ```bash
-docker compose exec -u app -it cairn claude       # /login (URL + code)
-docker compose exec -u app -it cairn codex login
-docker compose exec -u app -it cairn agy          # Google sign-in (paste code fast, ~30s)
+docker exec -u app -it cairn claude       # Claude Code — /login (URL + code)
+docker exec -u app -it cairn codex login  # Codex — ChatGPT login
+docker exec -u app -it cairn agy          # Antigravity (Google) — paste code fast, ~30s
+docker exec -u app -it cairn grok         # Grok — interactive login (or set XAI_API_KEY)
 ```
-Notes: `claude -p` on subscription draws from a separate Agent SDK credit pool from 2026-06-15;
-`agy`/`grok` are beta installers - verify them on your target architecture.
+Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
+(re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent
+in **Settings → Agents**. Notes: `claude -p` on subscription draws from a separate Agent SDK credit
+pool from 2026-06-15; `agy`/`grok` are beta installers — verify them on your target architecture.
 
 Cairn does **not** proxy a shared API key or shared subscription. The container only ships the
 runner binaries; each user logs in with their own Claude / ChatGPT / Google / xAI account, and
@@ -332,7 +370,7 @@ The image installs the latest enabled CLIs at build time. For a long-running ins
 from **Settings → Agents → Update CLI tools**, or from the shell:
 
 ```bash
-docker compose exec -u app cairn cairn-update-agent-clis
+docker exec -u app cairn cairn-update-agent-clis
 ```
 
 To force a fresh CLI install during an image rebuild without a full Docker cache wipe:

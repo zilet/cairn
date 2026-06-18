@@ -1,22 +1,54 @@
 # Quick Start
 
-## 30-second start
+Cairn ships as one published Docker image. **Start at the top — it's a single command.** Read on
+only if you want to configure it, build from source, or run it somewhere other than this machine.
 
-The fastest path — one command from a fresh clone:
+## 1 · Run it — 30 seconds, no clone
+
+Pull the published multi-arch image (amd64 + arm64) and run it. No source, no compose file, no Node
+on the host:
 
 ```bash
-git clone https://github.com/zilet/cairn.git
-cd cairn
-./quickstart.sh
+docker run -d --name cairn -p 8787:8787 \
+  -v cairn-data:/data -v cairn-home:/home/app \
+  --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
-The script detects your environment: **Docker** if available (recommended, no Node required on the
-host), **local Node 24** otherwise. It creates `.env` from `.env.example`, starts Cairn, waits for
-`/api/health`, and prints the URL plus the next step.
+Open **http://localhost:8787** — you land on the Brief. That's the whole install.
 
-**First paint is instant and real.** You get the full Brief, logging, and the plan with no agent
-configured. What needs an agent: chat, coaching drafts, and meal plan generation (see
-[Connect your first agent](#connect-your-first-agent) below).
+- **Your data survives updates.** `cairn-data` holds the SQLite DB and `cairn-home` holds your CLI
+  logins. To update: `docker pull ghcr.io/zilet/cairn:latest`, then `docker rm -f cairn` and re-run
+  the command — both volumes persist.
+- **Timezone:** add `-e TZ=Europe/Belgrade` (the weekly auto-coach uses the container's local time).
+- **First paint is real with no agent.** The Brief, set logging, the plan editor, charts, and marker
+  views all work immediately. The next step only adds the *conversational* layer.
+
+Prefer an editable config file over a long command line? Use the
+[compose file](#configure-with-a-compose-file) instead — still no clone.
+
+## 2 · Add a coaching agent — optional, for chat & drafts
+
+Chat, coaching drafts, and meal-plan generation need one external agent. The CLIs are already baked
+into the image, and the container is named `cairn`, so logging in is one `docker exec` — pick **one**
+provider to start:
+
+```bash
+docker exec -u app -it cairn claude        # Claude Code  — OAuth/device-code prompt
+docker exec -u app -it cairn codex login   # Codex        — ChatGPT login
+docker exec -u app -it cairn agy           # Antigravity  — Google sign-in (paste the code quickly)
+docker exec -u app -it cairn grok          # Grok         — interactive login (or use XAI_API_KEY)
+```
+
+The login persists in the `cairn-home` volume across restarts and updates. Always use `-u app` — the
+server runs as that user, so a login written as root is invisible to it. Then enable the agent in
+**Settings → Agents**.
+
+- **No subscription handy?** Enable the built-in **`stub`** agent in Settings instead — it runs the
+  draft/apply loop offline with no key.
+- **Grok via API key** (instead of the interactive login): add `-e XAI_API_KEY=xai-…` to the
+  `docker run` command and re-create the container.
+- Running on Node, or want the streaming / auth-directory detail? See
+  [Connect your first agent](#connect-your-first-agent).
 
 ### What works out of the box vs. what needs a coaching agent
 
@@ -37,40 +69,16 @@ A **coaching agent** means one of the supported CLIs — **Claude Code**, **Code
 There is no shared key or built-in model; each provider needs its own CLI and login. The built-in
 `stub` agent exercises the same propose/apply loop offline with no key.
 
-## Which path should I choose?
+## Going deeper
 
-| Goal | Best path | Why |
-|---|---|---|
-| Try Cairn right now on this computer | [30-second start](#30-second-start) | Lowest friction; Docker if present, Node 24 otherwise |
-| Run it every day from your phone | [Raspberry Pi](#raspberry-pi-always-on-home-box) | Cheap, quiet, always-on, private on your tailnet |
-| Keep it online away from home | [Small VM](#small-vm-private-online-box) | Works from anywhere when joined to Tailscale/WireGuard |
-| Evaluate without a server | [`SANDBOX.md`](SANDBOX.md) | Daytona / Codespaces / Gitpod, stop when idle |
+Everything above is all most people need. These are the options for configuring it, building from
+source, or running it on Node — reach for them only when you want to.
 
-The recommended daily-driver shape is **Docker on a private host** plus **Tailscale/MagicDNS**.
-Do not publish raw port `8787` to the public internet.
+### Configure with a compose file
 
----
-
-## Docker (recommended)
-
-**Requires Docker with Compose.** The image bundles Node 24 and all coaching CLIs — no Node
-install needed on the host.
-
-```bash
-git clone https://github.com/zilet/cairn.git
-cd cairn
-cp .env.example .env   # edit TZ at minimum
-docker compose up -d --build
-```
-
-Open **http://localhost:8787**.
-
-First build bakes the coaching CLIs into the image — expect a few minutes. Later rebuilds are fast
-(BuildKit caches the layers).
-
-### Published image — no source checkout
-
-A multi-arch image is published to GHCR with every release, so you can skip the local build entirely:
+Prefer a file you can edit over a long `docker run`? The release compose has `TZ`,
+`CAIRN_AUTH_TOKEN`, the agent keys, and a loopback-safe port binding already wired up — still no
+clone:
 
 ```bash
 mkdir cairn && cd cairn
@@ -78,32 +86,56 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-> The prebuilt pull needs the GHCR package set to **public**. If anonymous `docker pull` returns
-> `401`/`403`, the package is still private — use the build-from-source path above
-> (`docker compose up -d --build`). See [`SHARING.md`](SHARING.md) for the GHCR release flow and the maintainer
-> release checklist.
+Put `TZ` / `CAIRN_AUTH_TOKEN` / `XAI_API_KEY` / `GEMINI_API_KEY` in a `.env` next to it and re-run
+`docker compose up -d`. Agent logins are identical — `docker exec -u app -it cairn …` (the
+`docker compose exec …` form works too).
 
----
+### Build from source (to develop or change the code)
 
-## Local Node (dev / no Docker)
+```bash
+git clone https://github.com/zilet/cairn.git
+cd cairn
+./quickstart.sh                 # guided: detects Docker or Node 24, seeds, prints the URL
+```
 
-**Requires Node 24.** Cairn uses `node:sqlite`, which is only unflagged in Node 24+.
+`./quickstart.sh` creates `.env` from `.env.example`, starts Cairn, waits for `/api/health`, and
+prints the URL. To drive Docker yourself instead of the script:
+
+```bash
+cp .env.example .env            # edit TZ at minimum
+docker compose up -d --build    # first build bakes the CLIs in (~minutes); rebuilds are cached
+```
+
+### Run on Node, without Docker
+
+**Requires Node 24** — Cairn uses `node:sqlite`, unflagged only in 24+:
 
 ```bash
 git clone https://github.com/zilet/cairn.git
 cd cairn
 npm install
-npm run dev       # tsx watch -- auto-seeds on first boot
+npm run dev                     # tsx watch — auto-seeds on first boot
 ```
 
-Open **http://localhost:8787**. The DB lands at `./data/cairn.db`.
+Open **http://localhost:8787** (the DB lands at `./data/cairn.db`). For a production-style local run:
+`npm run build && npm start`.
 
-For a production-style local run (built JS, no tsx watcher):
+---
 
-```bash
-npm run build
-npm start
-```
+## Where to run it
+
+The fastest try is right here on your computer (step 1). For an always-on setup you reach from your
+phone, run the **same image** on a private host:
+
+| Goal | Best path | Why |
+|---|---|---|
+| Try Cairn right now on this computer | [Run it](#1--run-it--30-seconds-no-clone) | Lowest friction — one `docker run` |
+| Run it every day from your phone | [Raspberry Pi](#raspberry-pi-always-on-home-box) | Cheap, quiet, always-on, private on your tailnet |
+| Keep it online away from home | [Small VM](#small-vm-private-online-box) | Works from anywhere when joined to Tailscale/WireGuard |
+| Evaluate without a server | [`SANDBOX.md`](SANDBOX.md) | Daytona / Codespaces / Gitpod, stop when idle |
+
+The recommended daily-driver shape is **Docker on a private host** plus **Tailscale/MagicDNS**. Do
+not publish raw port `8787` to the public internet — see [Security reminder](#security-reminder).
 
 ---
 
@@ -261,14 +293,39 @@ Coaching drafts, chat, and meal plans need one external agent. Choose one:
 
 ### Docker: log in inside the container
 
-Logins persist in the `cairn-home` Docker volume across restarts and image updates. Always use
-`-u app` — the server runs as the `app` user; logins written as root are invisible to the process.
+The container is named `cairn` whether you started it with `docker run` or compose, so the same
+`docker exec` command works either way. Each command opens that provider's sign-in flow (a URL +
+code you complete in a browser); you log in **once** per provider and the `cairn-home` volume keeps
+it across restarts and image updates. Always use `-u app` — the server runs as the `app` user, so
+logins written as root are invisible to it.
 
 ```bash
-docker compose exec -u app -it cairn claude        # device/OAuth prompt
-docker compose exec -u app -it cairn codex login
-docker compose exec -u app -it cairn agy           # Google sign-in (paste code quickly)
+docker exec -u app -it cairn claude        # Claude Code — OAuth/device-code prompt
+docker exec -u app -it cairn codex login   # Codex — ChatGPT login
+docker exec -u app -it cairn agy           # Antigravity (Google) — paste the code quickly (~30s)
+docker exec -u app -it cairn grok          # Grok — interactive login (or use XAI_API_KEY, below)
 ```
+
+After logging in, enable that agent in **Settings → Agents** and tap **Draft plan update** to test
+it. You only need **one** to unlock chat, drafts, and meal plans; add more later for the rotation.
+
+> Started with the source checkout via `docker compose`? `docker compose exec -u app -it cairn …`
+> is equivalent — but the `docker exec` form above works for both, so prefer it.
+
+**Grok via API key instead of an interactive login.** Grok headless can read `XAI_API_KEY` rather
+than the `grok` login. With the bare `docker run`, pass it on the command and re-run:
+
+```bash
+docker rm -f cairn
+docker run -d --name cairn -p 8787:8787 \
+  -v cairn-data:/data -v cairn-home:/home/app \
+  -e XAI_API_KEY=xai-... \
+  --restart unless-stopped ghcr.io/zilet/cairn:latest
+```
+
+With the compose path, put `XAI_API_KEY=…` in the `.env` next to `docker-compose.yml` instead and
+`docker compose up -d`. (`GEMINI_API_KEY` for generated **artwork** — not coaching — is provided the
+same way: `-e` on `docker run`, or `.env` for compose.)
 
 ### Local Node: log in on the host
 
@@ -309,9 +366,9 @@ Google is transitioning **Gemini CLI → Antigravity CLI**; Cairn uses `agy` for
 Populate fictional data (great for screenshots and exploration):
 
 ```bash
+docker exec -u app cairn npm run seed:demo
+# or, from a source checkout running on Node:
 npm run seed:demo
-# or inside Docker:
-docker compose exec -u app cairn npm run seed:demo
 ```
 
 ---
