@@ -11,9 +11,9 @@ import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
-import { authGuard, authEnabled, rateLimitGuard, rateLimitEnabled } from "./auth.js";
+import { authGuard, authEnabled, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
 import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents.js";
-import { startLoginSession } from "./agentLogin.js";
+import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
 import * as repo from "./repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -152,12 +152,21 @@ server.on("upgrade", (req, socket, head) => {
   }
   if (url.pathname !== LOGIN_WS_PATH) return;
 
-  // Auth: mirror the rest of the app. WebSocket can't set headers, so the token
-  // rides the query string (same pattern as the chat SSE stream). Unset env =
-  // open (loopback/trusted-network model).
-  const expected = process.env.CAIRN_AUTH_TOKEN;
+  // Rate-limit the upgrade BEFORE auth (mirrors rateLimitGuard sitting in front of
+  // authGuard) so a token-guessing flood on this pre-auth entry point is throttled.
+  // WS upgrades bypass Express, so we apply the shared per-IP window here directly.
+  const ip = req.socket.remoteAddress || "unknown";
+  if (!checkRateLimit(ip).allowed) {
+    socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  // Auth: mirror the rest of the app via the shared timing-safe check. WebSocket
+  // can't set headers, so the token rides the query string (same pattern as the
+  // chat SSE stream). No token configured = open (loopback/trusted-network model).
   const token = url.searchParams.get("token");
-  if (expected && token !== expected) {
+  if (!tokenMatches(token)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return;
@@ -279,7 +288,7 @@ function shutdown(signal: string) {
     process.exit(0);
   }, 8000);
   force.unref?.();
-  try { abortAllTurns(); abortAllJobs(); } catch { /* best effort */ }
+  try { abortAllTurns(); abortAllJobs(); killActiveLoginSession(); } catch { /* best effort */ }
   try {
     server.close(() => {
       clearTimeout(force);

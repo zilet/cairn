@@ -78,6 +78,16 @@ export function loginSessionActive(): boolean {
   return !!active && !active.closed;
 }
 
+// Kill any in-progress login session — called on server shutdown so a mid-login
+// PTY (and its child CLI) isn't orphaned on redeploy/restart.
+export function killActiveLoginSession(): void {
+  try {
+    active?.kill();
+  } catch {
+    /* best effort */
+  }
+}
+
 // Resolve the login argv for an agent from the allowlist. Throws if the agent is
 // unknown / has no command. Returns null only when the agent is known but has no
 // login capability declared anywhere (caller decides how to surface that).
@@ -117,8 +127,12 @@ export function buildPtyInvocation(loginArgv: string[]): { command: string; args
     return { command: "python3", args: ["-c", code] };
   }
   // Linux (util-linux) and other POSIX with util-linux `script`: -c takes a single
-  // command STRING. This is the Docker path, verified end-to-end.
-  return { command: "script", args: ["-qfc", loginArgv.join(" "), "/dev/null"] };
+  // command STRING run via /bin/sh, so each token is shell-quoted (the argv is
+  // server-chosen, but a future agents.json entry with a space / metachar must not
+  // word-split or inject — parity with the macOS JSON.stringify path). This is the
+  // Docker path, verified end-to-end.
+  const cmd = loginArgv.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(" ");
+  return { command: "script", args: ["-qfc", cmd, "/dev/null"] };
 }
 
 // Cached presence probe for the macOS python3 PTY path (mirrors agents.ts).
@@ -146,9 +160,13 @@ export function startLoginSession(opts: { agent: string } & LoginCallbacks): Log
   const { command, args } = buildPtyInvocation(loginArgv);
 
   // Interactive login needs to reach ~/.claude etc., so we KEEP HOME/PATH/USER
-  // (and the rest of the inherited env). This is a human-driven login, not a
-  // headless agent run, so we deliberately do NOT strip secrets here.
+  // (and the rest of the inherited env). The login CLIs authenticate to EXTERNAL
+  // providers (Anthropic/OpenAI/xAI/Google), never to Cairn — and every byte of
+  // their PTY output is streamed to the browser. So we strip Cairn's OWN secrets,
+  // which the login flow has no use for and which must never reach the terminal.
   const env = { ...process.env };
+  delete env.CAIRN_AUTH_TOKEN;
+  delete env.GARMIN_PASSWORD;
 
   const child = spawn(command, args, {
     cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,

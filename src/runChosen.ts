@@ -9,7 +9,7 @@
 // copy: research can't import coachOps (coachOps imports research → a cycle), and
 // three drifting hand-rolled copies is exactly what this consolidates.
 import * as repo from "./repo.js";
-import { runAgent, runAgentWithFallback, type RunOpts } from "./agents.js";
+import { runAgentWithFallback, type RunOpts } from "./agents.js";
 
 export async function runChosen(
   agent: string | undefined,
@@ -17,29 +17,15 @@ export async function runChosen(
   opts: RunOpts & { op?: string } = {}
 ) {
   const op = opts.op ?? "auto";
-  // Per-task routing: when the caller left it "auto"/blank for a known task and
-  // the user pinned that task to an enabled agent, run that agent. A no-op when
-  // nothing is routed (the common case) — falls through to the rotation below.
+  // Per-task routing: when the caller left it "auto"/blank for a known task and the
+  // user pinned that task to an enabled agent, run that agent. A no-op when nothing
+  // is routed (the common case) — falls through to the rotation.
   const routed = repo.resolveAgentForTask(op, agent);
-  if (!routed || routed === "auto") {
-    const fb = await runAgentWithFallback(repo.pickAgentOrder(), prompt, opts);
-    return { agent: fb.agent, result: fb.result, tried: fb.tried };
-  }
-  agent = routed;
-  const started = Date.now();
-  let result: Awaited<ReturnType<typeof runAgent>> | null = null;
-  try {
-    result = await runAgent(agent, prompt, { timeoutMs: opts.timeoutMs, signal: opts.signal });
-    return { agent, result, tried: [] as { agent: string; error: string }[] };
-  } finally {
-    try {
-      repo.recordAgentRun({
-        op, agent,
-        ok: !!result?.parsed,
-        parsed: !!result?.parsed,
-        latency_ms: Date.now() - started,
-        tried_json: false,
-      });
-    } catch { /* telemetry never breaks the loop */ }
-  }
+  // BOTH paths go through runAgentWithFallback so a pinned agent gets the SAME
+  // JSON-repair retry, circuit breaker, and telemetry as the rotation — a single
+  // pin is just a one-element order. (resolveAgentForTask only returns a pin that's
+  // already usable, so the one-element order won't be filtered out from under us.)
+  const order = !routed || routed === "auto" ? repo.pickAgentOrder() : [routed];
+  const fb = await runAgentWithFallback(order, prompt, opts);
+  return { agent: fb.agent, result: fb.result, tried: fb.tried };
 }

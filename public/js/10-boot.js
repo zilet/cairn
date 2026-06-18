@@ -19,18 +19,24 @@ function garminStatusLine(s, syncing) {
 // empty (Stream 1's GET /api/agent-stats may 404 on an older backend → silent).
 function agentHealthCard(st) {
   if (!st || !Number(st.runs)) return "";
-  const pct = st.ok_rate != null ? Math.round(Number(st.ok_rate) * 100) : null;
+  const runs = Number(st.runs);
+  const runWord = `${runs} run${runs === 1 ? "" : "s"} tracked`;
   const ms = (v) => { const n = Number(v) || 0; return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)}ms`; };
-  const okLine = pct != null
-    ? `<b>${pct}%</b> of recent runs returned cleanly · ${Number(st.runs)} run${Number(st.runs) === 1 ? "" : "s"} tracked`
-    : `${Number(st.runs)} run${Number(st.runs) === 1 ? "" : "s"} tracked`;
+  // Qualitative ONLY — the constitution bans numeric scores; this is a calm pulse,
+  // not a grade. Thresholds map an internal ok-rate to plain words.
+  const word = (p) => (p == null ? null : p >= 0.9 ? "reliable" : p >= 0.6 ? "mostly clean" : "often retries");
+  const rate = st.ok_rate != null ? Number(st.ok_rate) : null;
+  const okLine = rate == null ? runWord
+    : rate >= 0.9 ? `Recent runs have been completing cleanly · ${runWord}`
+    : rate >= 0.6 ? `Most recent runs completed — a few needed a retry · ${runWord}`
+    : `Several recent runs needed a retry · ${runWord}`;
   const rows = (Array.isArray(st.by_agent) ? st.by_agent : []).filter((a) => a && a.agent).map((a) => {
     const tot = (Number(a.ok) || 0) + (Number(a.fail) || 0);
-    const apct = tot ? Math.round((Number(a.ok) || 0) / tot * 100) : null;
+    const w = tot ? word((Number(a.ok) || 0) / tot) : null;
     const lat = a.p50_ms != null ? ` · ${ms(a.p50_ms)} typical` : "";
     return `<div class="agenthealth-row">
         <span class="agenthealth-name">${escHtml(String(a.agent))}</span>
-        <span class="agenthealth-stat">${apct != null ? `${apct}% clean` : "—"}${lat}</span>
+        <span class="agenthealth-stat">${w || "—"}${lat}</span>
       </div>`;
   }).join("");
   return `
@@ -257,7 +263,7 @@ async function renderSettings() {
         `<option value="${escAttr(a.name)}" ${cur === a.name ? "selected" : ""}>${escHtml(a.name)}</option>`).join("");
       return `<div class="logrow route-row">
         <span class="route-task">${escHtml(label)}</span>
-        <select class="route-sel selflex" data-route="${escAttr(task)}">${opts}</select>
+        <select class="route-sel selflex" data-route="${escAttr(task)}" aria-label="Agent for ${escAttr(label)}">${opts}</select>
       </div>`;
     }).join("");
 
@@ -350,7 +356,7 @@ async function renderSettings() {
             ${a.models_list ? `<button class="agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
           </div>
         </div>
-        ${off && a.configured === false ? `<div class="agent-card-note">Not in rotation until connected.</div>` : ""}
+        ${a.configured === false ? `<div class="agent-card-note">Not in rotation until connected${a.can_login ? " — tap Connect" : ""}.</div>` : ""}
         ${infoLine ? `<div class="agent-info-line">${infoLine}</div>` : ""}
         ${Array.isArray(models) ? `<ul class="agent-models">${modelsList}</ul>` : ""}
       </div>`;

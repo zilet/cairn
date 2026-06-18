@@ -241,12 +241,26 @@ function mountSaveBar({ sentinel, fields, onSave, onDiscard }) {
   return { markDirty: setSaveDirty, save: saveBarCommit };
 }
 
+// True when a form control still holds its rendered-in value (selects/inputs are
+// rendered with `selected`/`value`/`checked` attributes, which set the DOM defaults).
+// Used to ignore a spurious mount-time change event that doesn't actually change a
+// value — the cause of the bar flashing "Unsaved changes" on a fresh Settings load.
+function controlAtDefault(el) {
+  if (!el || !el.tagName) return false;
+  if (el.tagName === "SELECT") { const o = el.selectedOptions && el.selectedOptions[0]; return !o || o.defaultSelected; }
+  if (el.type === "checkbox" || el.type === "radio") return el.checked === el.defaultChecked;
+  if ("defaultValue" in el) return el.value === el.defaultValue;
+  return false;
+}
+
 // dirty tracking: any input/change inside the mounted screen's fields
 for (const evt of ["input", "change"]) {
   document.addEventListener(evt, (e) => {
     if (!saveCtx || saveCtx.dirty || saveCtx.busy) return;
     if (!saveCtx.sentinel?.isConnected) return;
-    if (saveCtx.fields && saveCtx.fields.contains(e.target)) setSaveDirty();
+    if (!saveCtx.fields || !saveCtx.fields.contains(e.target)) return;
+    if (controlAtDefault(e.target)) return; // no real change → not a user edit (mount-time noise)
+    setSaveDirty();
   }, true);
 }
 // auto-dismiss when a re-render replaces the owning screen (tab/seg switches)
@@ -1322,7 +1336,7 @@ function ensureAgentLoginStyles() {
 .agent-login-x:hover{color:var(--ink,#211d17);background:var(--paper,#f4efe7)}
 .agent-login-bd{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;overflow:auto}
 .agent-login-term{background:#1c1b1a;border-radius:12px;padding:10px 8px 8px;
-  border:1px solid #2b2926;min-height:300px}
+  border:1px solid #2b2926;min-height:180px;height:clamp(180px,42vh,340px)}
 .agent-login-term .xterm{padding:0}
 .agent-login-status{font-size:13px;color:var(--muted,#746c5c);min-height:18px;display:flex;align-items:center;gap:6px}
 .agent-login-status.is-ok{color:var(--sage,#6e7f5c);font-weight:600}
@@ -1335,6 +1349,7 @@ function ensureAgentLoginStyles() {
   padding:9px 16px;border-radius:11px;border:1px solid var(--line,#c9bfa9);
   background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
 .agent-login-btn:hover{background:var(--card,#fffdf8)}
+.agent-login-btn:focus-visible,.agent-login-x:focus-visible{outline:2px solid var(--accent,#b4552d);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.agent-login-ov{animation:none}}
 `;
   document.head.appendChild(s);
@@ -1390,8 +1405,32 @@ async function openAgentLoginModal(agentName) {
     statusEl.classList.remove("is-ok", "is-err");
     if (cls) statusEl.classList.add(cls);
   };
-  // Esc + the × and Cancel buttons all tear down (which closes the WS session).
-  ov._onKey = (e) => { if (e.key === "Escape") closeAgentLoginModal(ov); };
+  const footer = ov.querySelector(".agent-login-ft");
+  // On a failed/aborted login, keep the modal open so the terminal output stays
+  // readable, turn Cancel into Close, and offer a one-tap retry (reopen).
+  const markFailed = (msg) => {
+    setStatus(msg, "is-err");
+    ov._failed = true;
+    if (closeBtn) closeBtn.textContent = "Close";
+    if (footer && !footer.querySelector("[data-retry]")) {
+      const r = document.createElement("button");
+      r.className = "agent-login-btn"; r.type = "button"; r.dataset.retry = "1"; r.textContent = "Try again";
+      r.addEventListener("click", () => { closeAgentLoginModal(ov); openAgentLoginModal(name); });
+      footer.insertBefore(r, closeBtn);
+    }
+  };
+  // Esc + the × and Cancel buttons all tear down (which closes the WS session). Tab
+  // is trapped within the modal chrome so focus can't escape to the page behind
+  // (the terminal owns Tab while focused, so this mainly guards the chrome buttons).
+  ov._onKey = (e) => {
+    if (e.key === "Escape") { closeAgentLoginModal(ov); return; }
+    if (e.key !== "Tab") return;
+    const f = [...ov.querySelectorAll("button")].filter((b) => b.offsetParent !== null);
+    if (f.length < 2) return;
+    const first = f[0], last = f[f.length - 1], act = document.activeElement;
+    if (e.shiftKey && act === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && act === last) { e.preventDefault(); first.focus(); }
+  };
   document.addEventListener("keydown", ov._onKey);
   ov.querySelector(".agent-login-x").addEventListener("click", () => closeAgentLoginModal(ov));
   closeBtn.addEventListener("click", () => closeAgentLoginModal(ov));
@@ -1454,19 +1493,28 @@ async function openAgentLoginModal(agentName) {
     if (!m || typeof m !== "object") return;
     switch (m.t) {
       case "exit": {
-        const ok = m.code === 0;
-        setStatus(ok ? "✓ Connected" : "Login exited", ok ? "is-ok" : "is-err");
-        setTimeout(() => {
-          closeAgentLoginModal(ov);
-          if (typeof renderSettings === "function") renderSettings();
-        }, 1200);
+        if (m.code === 0) {
+          // Success: brief confirm, then close + refresh the cards (Installed → ✓ Connected).
+          setStatus("✓ Connected", "is-ok");
+          setTimeout(() => {
+            closeAgentLoginModal(ov);
+            if (typeof renderSettings === "function") renderSettings();
+          }, 1200);
+        } else {
+          // Non-zero exit (cancelled / wrong code / login refused): leave the modal
+          // up so the terminal output is readable; offer Close + Try again.
+          markFailed("Login didn't complete — check the terminal above, then try again.");
+        }
         break;
       }
       case "busy":
-        setStatus("Another login is in progress — try again in a moment.", "is-err");
+        // The server closes the socket right after, so there's nothing to do here —
+        // surface it as a toast and dismiss the empty terminal.
+        if (typeof toast === "function") toast("Another login is already running — try again in a moment.");
+        closeAgentLoginModal(ov);
         break;
       case "error":
-        setStatus(m.message ? String(m.message) : "Something went wrong.", "is-err");
+        markFailed(m.message ? String(m.message) : "Something went wrong.");
         break;
       default:
         break;
@@ -1484,11 +1532,14 @@ async function openAgentLoginModal(agentName) {
       term.write(new Uint8Array(ev.data));
     }
   };
-  ws.onerror = () => { setStatus("Connection error.", "is-err"); };
+  ws.onerror = () => {
+    if (!ov._failed) markFailed("Connection error — make sure the server is reachable, then try again.");
+  };
   ws.onclose = () => {
-    // Only surface if we weren't already done (exit handler closes the modal).
-    if (ov.isConnected && !ov.dataset.closing && !statusEl.classList.contains("is-ok")) {
-      setStatus("Disconnected.", "is-err");
+    // Surface only an UNEXPECTED drop — don't clobber a success flash or an already-
+    // shown failure message (exit/error handlers own those).
+    if (ov.isConnected && !ov.dataset.closing && !ov._failed && !statusEl.classList.contains("is-ok")) {
+      markFailed("Disconnected before the login finished — try again.");
     }
   };
 

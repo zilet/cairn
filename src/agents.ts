@@ -172,8 +172,12 @@ function parseStatusOutput(name: string, stdout: string): boolean | null {
   }
   if (name === "codex") {
     if (/not logged in/i.test(s)) return false;
-    // codex login status prints a logged-in banner (account / email) otherwise.
-    return true;
+    // Require a POSITIVE logged-in signal ("Logged in using ChatGPT", an account /
+    // email banner). An error or unknown banner must fall through to null
+    // (undetectable) — never be misread as logged-in, which would keep a broken
+    // agent in the rotation. ("not logged in" is matched first, above.)
+    if (/logged in|account|email/i.test(s)) return true;
+    return null;
   }
   // Generic fallback for any future status_check: an explicit "not logged in".
   if (/not logged in|logged out|please (log|sign) in/i.test(s)) return false;
@@ -194,7 +198,11 @@ function probeConfigured(name: string, def: AgentDef): boolean | null {
       });
       // A spawn error (ENOENT / timeout) tells us nothing about login state.
       if (r.error) return null;
-      const verdict = parseStatusOutput(name, (r.stdout || "") + "\n" + (r.stderr || ""));
+      // claude emits its JSON on stdout — parse THAT alone first so a stderr notice
+      // (update banner, deprecation warning) can't corrupt the JSON parse. Fall back
+      // to the combined stream only for the plain-text heuristics.
+      let verdict = parseStatusOutput(name, r.stdout || "");
+      if (verdict === null) verdict = parseStatusOutput(name, (r.stdout || "") + "\n" + (r.stderr || ""));
       if (verdict !== null) return verdict;
       // status_check ran but we couldn't read it — fall through to auth_state.
     } catch { /* fall through to the fallback signals */ }
@@ -223,12 +231,25 @@ export function agentConfigured(name: string): boolean | null {
   return verdict;
 }
 
-// Drop the cached configured verdict so the next agentConfigured() re-probes.
-// Called after an in-app login completes — the boot-time probe ran before the
-// auth state existed, so without this the card stays "Installed" until restart.
+// Drop the cached login verdict AND the derived version/model read-caches, so the
+// next probe re-reads everything. Called after an in-app login completes (the
+// boot-time probe ran before the auth state existed — without this the card stays
+// "Installed" until restart) and after a CLI update (so a new version / model list
+// shows without a restart).
 export function invalidateAgentConfigured(name?: string): void {
-  if (name) configuredCache.delete(name);
-  else configuredCache.clear();
+  _codexModel = undefined; // codex model is read from ~/.codex/config.toml
+  if (name) {
+    configuredCache.delete(name);
+    modelsRawCache.delete(name);
+    modelsCache.delete(name);
+    const cmd = loadAgents()[name]?.command;
+    if (cmd) versionCache.delete(cmd);
+  } else {
+    configuredCache.clear();
+    modelsRawCache.clear();
+    modelsCache.clear();
+    versionCache.clear();
+  }
 }
 
 // ---------- version / model visibility (read-only) ----------

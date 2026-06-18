@@ -81,6 +81,12 @@ export function startAgentCliUpdate(reason = "manual"): AgentCliUpdateState {
       state.exit_code = code;
       state.finished_at = new Date().toISOString();
       current = null;
+      // A successful update may have changed installed versions / model catalogs —
+      // drop the cached version/model reads so the Settings cards refresh without a
+      // server restart. (Lazy import avoids a static cycle with agents.ts.)
+      if (code === 0) {
+        import("./agents.js").then((m) => m.invalidateAgentConfigured()).catch(() => {});
+      }
       resolve();
     });
   });

@@ -114,6 +114,25 @@ function pruneRateState(now: number) {
   for (const [k, v] of rateState.hits) if (now >= v.resetAt) rateState.hits.delete(k);
 }
 
+// Non-Express token check for the WebSocket upgrade path. WS upgrades bypass
+// Express middleware, so that handler must authenticate itself — this mirrors
+// authGuard (allow-all when no token is set; otherwise a timing-safe compare).
+export function tokenMatches(token: string | null | undefined): boolean {
+  if (!authEnabled) return true;
+  return !!token && safeEqual(token, TOKEN);
+}
+
+// Non-Express rate-limit check for the WS upgrade path, sharing the same fixed
+// window + per-IP state as rateLimitGuard. No-op (allowed) unless auth is on and a
+// positive limit is configured. `key` is the client IP.
+export function checkRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
+  if (!rateLimitEnabled) return { allowed: true, retryAfterMs: 0 };
+  const now = Date.now();
+  pruneRateState(now);
+  const d = rateLimitDecision(rateState, key || "unknown", now, RATE_LIMIT, RATE_WINDOW_MS);
+  return { allowed: d.allowed, retryAfterMs: d.retryAfterMs };
+}
+
 // Sits in FRONT of authGuard so it also throttles token-guessing on the auth
 // boundary. No-op unless auth is on and a positive limit is configured. Same
 // scope as authGuard (/api + /mcp, /api/health exempt).
