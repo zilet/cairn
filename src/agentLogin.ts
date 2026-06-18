@@ -107,19 +107,22 @@ export function resolveLoginArgv(agent: string): string[] {
   return [def.command, ...argv];
 }
 
-// Build the platform-specific invocation that wraps the login command in a real
-// PTY — no native module (see the file header for why each platform differs).
+// Pure, platform-PARAMETERIZED PTY invocation shape — no host probing and no side
+// effects, so every platform's wrapper can be unit-tested from any dev machine, the
+// Linux/Docker path (the one that actually ships) INCLUDED. That coverage is the
+// whole point: a shell-quoting change to this function once passed local macOS tests
+// yet failed the Linux CI build, because the host-bound branch was the only one a
+// dev box ever exercised. `buildPtyInvocation` below is the thin host-bound wrapper
+// that adds the runtime guard (macOS python3 presence) this pure function omits.
 // The login argv is a fixed, server-chosen array — never client data.
-export function buildPtyInvocation(loginArgv: string[]): { command: string; args: string[] } {
-  if (process.platform === "win32") {
+export function ptyInvocationFor(
+  platform: NodeJS.Platform,
+  loginArgv: string[],
+): { command: string; args: string[] } {
+  if (platform === "win32") {
     throw new Error("In-app login is unsupported on Windows — run the CLI login in a terminal (e.g. `docker exec`).");
   }
-  if (process.platform === "darwin") {
-    if (!python3Present()) {
-      throw new Error(
-        "In-app login on macOS needs python3 (it ships with the Xcode Command Line Tools: `xcode-select --install`), or run Cairn via Docker.",
-      );
-    }
+  if (platform === "darwin") {
     // python3's pty.spawn allocates a PTY for the child even when its OWN stdio is
     // piped — BSD `script` instead errors (tcgetattr) on a non-tty stdin. The argv
     // is server-chosen + JSON-encoded into a Python string-list literal (safe).
@@ -133,6 +136,18 @@ export function buildPtyInvocation(loginArgv: string[]): { command: string; args
   // Docker path, verified end-to-end.
   const cmd = loginArgv.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(" ");
   return { command: "script", args: ["-qfc", cmd, "/dev/null"] };
+}
+
+// Build the host's PTY invocation: delegate the shape to `ptyInvocationFor` and add
+// the runtime guard it deliberately omits — on macOS the python3 PTY path needs
+// python3 actually present (it ships with the Xcode CLT, but isn't guaranteed).
+export function buildPtyInvocation(loginArgv: string[]): { command: string; args: string[] } {
+  if (process.platform === "darwin" && !python3Present()) {
+    throw new Error(
+      "In-app login on macOS needs python3 (it ships with the Xcode Command Line Tools: `xcode-select --install`), or run Cairn via Docker.",
+    );
+  }
+  return ptyInvocationFor(process.platform, loginArgv);
 }
 
 // Cached presence probe for the macOS python3 PTY path (mirrors agents.ts).

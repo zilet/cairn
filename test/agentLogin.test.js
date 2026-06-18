@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import "./_seed.js"; // ensures DATA_DIR/DB_PATH-backed db is initialized for the dist imports
-import { resolveLoginArgv, buildPtyInvocation, loginSessionActive } from "../dist/agentLogin.js";
+import { resolveLoginArgv, buildPtyInvocation, ptyInvocationFor, loginSessionActive } from "../dist/agentLogin.js";
 import { parseModelsOutput, parseDefaultModel, parseTomlModel, invalidateAgentConfigured, loadAgents } from "../dist/agents.js";
 
 test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
@@ -31,6 +31,37 @@ test("resolveLoginArgv REJECTS an agent with no login flow (stub)", () => {
   // stub is the offline fixture — it declares no login, so it can never be driven
   // through the terminal bridge.
   assert.throws(() => resolveLoginArgv("stub"), /does not support an interactive login/i);
+});
+
+test("ptyInvocationFor builds EVERY platform's PTY wrapper from any host OS", () => {
+  // The blind spot this closes: buildPtyInvocation branches on process.platform, so a
+  // macOS dev box only ever exercised the darwin branch — a shell-quoting change to the
+  // Linux/Docker branch (the path that actually ships) passed local `npm test` yet
+  // failed the Linux CI build. ptyInvocationFor is platform-PARAMETERIZED + pure, so we
+  // assert all three shapes in one run regardless of the host.
+  const argv = ["claude", "auth", "login"];
+
+  // Linux / Docker: util-linux `script -qfc "<shell-quoted cmd>" /dev/null`.
+  const linux = ptyInvocationFor("linux", argv);
+  assert.equal(linux.command, "script");
+  assert.deepEqual(linux.args, ["-qfc", "'claude' 'auth' 'login'", "/dev/null"]);
+
+  // macOS: python3 pty.spawn with the argv JSON-encoded into a Python list literal.
+  const mac = ptyInvocationFor("darwin", argv);
+  assert.equal(mac.command, "python3");
+  assert.equal(mac.args[0], "-c");
+  assert.match(mac.args[1], /pty\.spawn\(\["claude","auth","login"\]\)/);
+
+  // Windows has no PTY bridge — it must throw, never silently mis-spawn.
+  assert.throws(() => ptyInvocationFor("win32", argv), /unsupported on Windows/i);
+});
+
+test("ptyInvocationFor shell-quotes a token with a space/quote/metachar (Linux injection guard)", () => {
+  // A future agents.json login token with a space or quote must stay ONE shell word
+  // when wrapped by `script -qfc "<cmd>"` (run via /bin/sh) — never word-split or inject.
+  const inv = ptyInvocationFor("linux", ["my agent", "log'in", "; rm -rf /"]);
+  assert.equal(inv.command, "script");
+  assert.deepEqual(inv.args, ["-qfc", "'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
 });
 
 test("buildPtyInvocation wraps the login argv in a real PTY (no native module)", () => {
