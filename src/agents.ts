@@ -31,6 +31,15 @@ export interface AgentDef {
   input?: "arg" | "stdin";        // how the prompt reaches the CLI (default: arg)
   description?: string;
   env_required?: string[];        // env vars that indicate this agent is usable
+  // Declarative login / connected-state fields (Agent Connect). Every argv array is
+  // APPENDED to `command` (like `args`). None of these change how a coaching run is
+  // built — they drive the login flow, the connected-state probe, and read-only
+  // model visibility only. `command`/`args`/`input`/`stream` stay exactly as before.
+  login?: string[] | null;        // argv to start the interactive login flow (run by the PTY bridge, Stream A)
+  status_check?: string[] | null; // argv for a non-interactive login probe; its STDOUT is parsed (NEVER the exit code) — see agentConfigured
+  auth_state?: string[] | null;   // HOME-relative paths whose presence is a fallback "logged in" signal when there is no status_check
+  models_list?: string[] | null;  // argv that prints the available models (grok/agy); null ⇒ no model catalog
+  model_flag?: string[] | null;   // ["--model","{model}"] — DECLARED for a future optional pin; UNUSED this batch (never injected)
   // Optional headless token-streaming. When present, the chat path can run the CLI
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
   // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
@@ -54,6 +63,13 @@ export function listAgents() {
     env_ok: !def.env_required?.length || def.env_required.every((k) => !!process.env[k]),
     // whether the agent's CLI binary is actually installed/on PATH (cached probe)
     present: commandPresent(def.command),
+    // tri-state login/connected probe (true logged-in / false logged-out / null
+    // undetectable). Only `false` excludes from the rotation — see agentConfigured.
+    configured: agentConfigured(name),
+    // whether this agent declares an interactive login flow / a model catalog —
+    // pure config reads, surfaced so the UI can render the right affordances.
+    can_login: def.login != null,
+    models_list: def.models_list != null,
   }));
 }
 
@@ -109,6 +125,206 @@ export function commandPresent(cmd: string): boolean {
   }
   presenceCache.set(cmd, present);
   return present;
+}
+
+// ---------- connected-state probe (rotation eligibility) ----------
+// An installed-but-not-logged-in CLI must NOT enter the auto-rotation: it would
+// only fail and look like a "broken run" instead of "not connected". This probe
+// returns a TRI-STATE — true (logged in) / false (logged out) / null (can't tell)
+// — and the usability filter excludes ONLY `false`, never `null` (a working agent
+// must never be false-negatived out of the rotation).
+//
+// CRITICAL: the CLIs exit 0 whether logged in or out, so we NEVER trust the exit
+// code — we parse STDOUT per each CLI's signal. Cached per process like the
+// presence probe (a restart re-probes); a normal request never pays for it.
+const configuredCache = new Map<string, boolean | null>();
+
+function homeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || "";
+}
+
+// Fallback signal when an agent has no `status_check`: any of its HOME-relative
+// auth_state paths exists. Used only where a status probe isn't available.
+function authStatePresent(def: AgentDef): boolean {
+  const home = homeDir();
+  if (!home || !Array.isArray(def.auth_state) || !def.auth_state.length) return false;
+  return def.auth_state.some((rel) => {
+    try { return fs.existsSync(path.join(home, rel)); } catch { return false; }
+  });
+}
+
+// Interpret a status_check's STDOUT into the tri-state. Per-CLI, verified against
+// the live image (exit code is unreliable for all of them — parse stdout):
+//   - claude  `auth status`  → JSON with { loggedIn: bool }
+//   - codex   `login status` → "Not logged in" when logged out, else a logged-in banner
+// A shape we don't recognize / a parse failure ⇒ null (undetectable, don't exclude).
+function parseStatusOutput(name: string, stdout: string): boolean | null {
+  const s = (stdout || "").trim();
+  if (!s) return null;
+  if (name === "claude") {
+    try {
+      const v = JSON.parse(s);
+      if (v && typeof v.loggedIn === "boolean") return v.loggedIn;
+    } catch { /* not JSON — fall through to the generic heuristic */ }
+    // Tolerate a non-JSON banner: an explicit "not logged in" reads as false.
+    if (/not logged in/i.test(s)) return false;
+    return null;
+  }
+  if (name === "codex") {
+    if (/not logged in/i.test(s)) return false;
+    // codex login status prints a logged-in banner (account / email) otherwise.
+    return true;
+  }
+  // Generic fallback for any future status_check: an explicit "not logged in".
+  if (/not logged in|logged out|please (log|sign) in/i.test(s)) return false;
+  return null;
+}
+
+function probeConfigured(name: string, def: AgentDef): boolean | null {
+  // 1. A status_check is the strongest signal — run it and parse stdout.
+  if (Array.isArray(def.status_check) && def.status_check.length) {
+    // Don't even spawn if the binary isn't installed (and don't false-negative —
+    // an absent binary is "present:false" territory, not "logged out").
+    if (!commandPresent(def.command)) return null;
+    try {
+      const r = spawnSync(def.command, def.status_check, {
+        timeout: 5000,
+        encoding: "utf8",
+        env: buildAgentEnv(def),
+      });
+      // A spawn error (ENOENT / timeout) tells us nothing about login state.
+      if (r.error) return null;
+      const verdict = parseStatusOutput(name, (r.stdout || "") + "\n" + (r.stderr || ""));
+      if (verdict !== null) return verdict;
+      // status_check ran but we couldn't read it — fall through to auth_state.
+    } catch { /* fall through to the fallback signals */ }
+  }
+  // 2. grok has no status command — XAI_API_KEY presence is its only signal.
+  if (name === "grok") return process.env.XAI_API_KEY ? true : null;
+  // 3. auth_state fallback: a known post-login file/dir exists ⇒ logged in; absent
+  //    ⇒ null (NOT false — many CLIs create the dir before login, so absence is
+  //    only weak evidence and we must never exclude on it).
+  if (authStatePresent(def)) return true;
+  return null;
+}
+
+// Public tri-state: true logged-in / false logged-out / null undetectable.
+export function agentConfigured(name: string): boolean | null {
+  if (configuredCache.has(name)) return configuredCache.get(name) ?? null;
+  const def = loadAgents()[name];
+  let verdict: boolean | null = null;
+  if (def) {
+    try { verdict = probeConfigured(name, def); } catch { verdict = null; }
+  }
+  configuredCache.set(name, verdict);
+  return verdict;
+}
+
+// ---------- version / model visibility (read-only) ----------
+// A cheap `<cmd> --version`, cached per command like the presence probe. Strips
+// the print to the first clean version-looking token so a chatty banner doesn't
+// leak into the UI. null when the binary isn't present or prints nothing usable.
+const versionCache = new Map<string, string | null>();
+
+function cleanVersion(raw: string): string | null {
+  const s = (raw || "").trim();
+  if (!s) return null;
+  // Prefer a semver-ish token (e.g. "1.2.3", "0.2.54", "2.38.1") anywhere in the
+  // first line; else the first whitespace-trimmed line, capped so a verbose banner
+  // can't flood the card.
+  const firstLine = s.split(/\r?\n/)[0].trim();
+  const m = firstLine.match(/\d+\.\d+(?:\.\d+)?(?:[-+][\w.]+)?/);
+  if (m) return m[0];
+  return firstLine.slice(0, 60) || null;
+}
+
+export function agentVersion(name: string): string | null {
+  const def = loadAgents()[name];
+  if (!def) return null;
+  const cmd = def.command;
+  if (versionCache.has(cmd)) return versionCache.get(cmd) ?? null;
+  let version: string | null = null;
+  if (commandPresent(cmd)) {
+    try {
+      const r = spawnSync(cmd, ["--version"], { timeout: 5000, encoding: "utf8", env: buildAgentEnv(def) });
+      if (!r.error) version = cleanVersion((r.stdout || "") + (r.stderr || ""));
+    } catch { version = null; }
+  }
+  versionCache.set(cmd, version);
+  return version;
+}
+
+// Best-effort "what's running" probe for the Settings info line. `version` is
+// reliable; `model_current` is BEST-EFFORT (no cheap universal signal exists yet
+// — null is acceptable and the UI degrades to "—"); `update_available` is left
+// null for now (no per-CLI registry lookup this batch).
+export function agentInfo(name: string): { version: string | null; model_current: string | null; update_available: boolean | null } {
+  return {
+    version: agentVersion(name),
+    model_current: agentModelCurrent(name),
+    update_available: null,
+  };
+}
+
+// Best-effort current default model. There's no cheap universal way to read the
+// model a CLI would use on the next run without making a (possibly paid) call, so
+// this is intentionally conservative: only return something when a CLI exposes it
+// for free, else null (the UI shows "—"). Never makes a coaching/paid call.
+function agentModelCurrent(_name: string): string | null {
+  // Deferred (§10 of the build plan): no reliable free signal per CLI yet. Kept as
+  // a single seam so a future cheap probe slots in here without touching callers.
+  return null;
+}
+
+// Read a CLI's model catalog (grok/agy declare `models_list`). Returns a clean
+// string[] (one model per line), or [] for a CLI with no catalog / on any failure.
+// Informational only — no pinning this batch.
+const modelsCache = new Map<string, string[]>();
+
+export function listAgentModels(name: string): string[] {
+  const def = loadAgents()[name];
+  if (!def || !Array.isArray(def.models_list) || !def.models_list.length) return [];
+  if (modelsCache.has(name)) return modelsCache.get(name) ?? [];
+  let models: string[] = [];
+  if (commandPresent(def.command)) {
+    try {
+      const r = spawnSync(def.command, def.models_list, { timeout: 8000, encoding: "utf8", env: buildAgentEnv(def) });
+      if (!r.error) models = parseModelsOutput((r.stdout || "") + "\n" + (r.stderr || ""));
+    } catch { models = []; }
+  }
+  modelsCache.set(name, models);
+  return models;
+}
+
+// Parse a `models` listing into clean entries. CLIs print one model per line
+// (sometimes with a leading bullet/marker, a trailing " (current)" note, or a
+// status/banner line first); keep the model entries, drop empties/headers/banners.
+// Conservative + capped. Informational only — no pinning this batch — so a stray
+// banner line is cosmetic, not load-bearing.
+function parseModelsOutput(raw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const lineRaw of (raw || "").split(/\r?\n/)) {
+    let line = lineRaw.trim();
+    if (!line) continue;
+    // Drop a common leading list marker ("- ", "* ", "• ", "› ", "→ ").
+    line = line.replace(/^[-*•›→]\s+/, "").trim();
+    // Skip obvious header / status / banner noise (the grok/agy listings prepend a
+    // "You are logged in…" / "Default model: …" line before the catalog).
+    if (/^(available models|models?:|usage:|select|choose|default model|current model|you are (logged|signed) in)\b/i.test(line)) continue;
+    // A prose sentence (ends with a period, has interior spaces) is a banner, not a
+    // model id — model ids don't end in a period.
+    if (/[.!?]$/.test(line) && /\s/.test(line)) continue;
+    // Take the first column as the model entry (keep a friendly label intact, e.g.
+    // "Gemini 3.5 Flash (Medium)"; only split on a 2+-space / tab column gutter).
+    const token = line.split(/\s{2,}|\t/)[0].trim().replace(/\s*\((?:current|default)\)\s*$/i, "").trim();
+    if (!token || token.length > 80) continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+    if (out.length >= 50) break;
+  }
+  return out;
 }
 
 // Scan from `start` for the FIRST complete, balanced top-level {…} object,

@@ -7,6 +7,11 @@
     "env_required": [],
     "web_access": true,
     "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required.",
+    "login": ["auth", "login"],
+    "status_check": ["auth", "status"],
+    "auth_state": [".claude.json", ".claude"],
+    "models_list": null,
+    "model_flag": ["--model", "{model}"],
     "stream": {
       "format": "claude",
       "args": ["-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
@@ -17,14 +22,24 @@
     "args": ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "{prompt}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
-    "env_required": []
+    "env_required": [],
+    "login": ["login"],
+    "status_check": ["login", "status"],
+    "auth_state": [".codex/auth.json"],
+    "models_list": null,
+    "model_flag": ["--model", "{model}"]
   },
   "antigravity": {
     "command": "agy",
     "args": ["-p", "{prompt}", "--print-timeout", "5m"],
     "input": "arg",
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
-    "env_required": []
+    "env_required": [],
+    "login": [],
+    "status_check": null,
+    "auth_state": [".gemini"],
+    "models_list": ["models"],
+    "model_flag": ["--model", "{model}"]
   },
   "grok": {
     "command": "grok",
@@ -32,6 +47,11 @@
     "input": "arg",
     "description": "xAI Grok Build (SuperGrok/X Premium+). Headless may need XAI_API_KEY.",
     "env_required": [],
+    "login": ["login", "--device-auth"],
+    "status_check": null,
+    "auth_state": null,
+    "models_list": ["models"],
+    "model_flag": ["--model", "{model}"],
     "stream": {
       "format": "grok",
       "args": ["-p", "{prompt}", "--output-format", "streaming-json"]
@@ -42,6 +62,11 @@
     "args": ["-c", "printf '%s' '{\"summary\":\"Stub test proposal (no API used).\",\"changes\":[{\"day_number\":1,\"exercise\":\"Back Squat\",\"target_weight\":195,\"reason\":\"pipeline smoke test\"}],\"notes\":\"Built-in offline stub. Use claude/codex/antigravity/grok for real coaching.\"}'"],
     "input": "arg",
     "description": "Offline stub for testing the propose/apply loop with no API key.",
-    "env_required": []
+    "env_required": [],
+    "login": null,
+    "status_check": null,
+    "auth_state": null,
+    "models_list": null,
+    "model_flag": ["--model", "{model}"]
   }
 }
