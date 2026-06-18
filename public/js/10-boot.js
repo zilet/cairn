@@ -119,6 +119,25 @@ function noticedCard(data) {
     </div>`;
 }
 
+// Settings sub-nav: the long single-scroll tab is split into four calm sections,
+// using the SAME sliding-thumb segmented switcher the Me/Progress/Plan tabs use
+// (segBar/fitSeg). The slices read from ONE in-memory working model (built once on
+// entry) so switching sub-tabs never refetches /settings and never loses an unsaved
+// edit; the floating save bar (mounted once on a stable sentinel) persists the whole
+// model regardless of which slice is on screen.
+const SET_SEG = [["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
+
+// A state chip for an agent connect-card, derived from the declarative fields the
+// settings endpoint now supplies (present/configured/can_login/…). Calm, never
+// alarming: "Not installed" when the CLI binary is missing; otherwise the connection
+// state — Connected / Connect → / Installed. Returns {cls, label}.
+function agentChipState(a) {
+  if (a.present === false) return { cls: "agent-chip-absent", label: "Not installed" };
+  if (a.configured === true) return { cls: "agent-chip-ok", label: "✓ Connected" };
+  if (a.configured === false) return { cls: "agent-chip-connect", label: "Connect →" };
+  return { cls: "agent-chip-installed", label: "Installed" }; // configured === null/undefined
+}
+
 async function renderSettings() {
   headerTitle.textContent = "Settings";
   const [data, artStats, agentStats, learnings] = await Promise.all([
@@ -128,50 +147,38 @@ async function renderSettings() {
     api("/learnings").catch(() => null),   // F2: outcome learnings → "What Cairn has noticed"; absent on an older backend
   ]);
   const s = data.settings;
-  const agents = data.agents; // ordered: {name, description, env_ok, enabled}
+  const agents = data.agents; // ordered: {name, description, env_ok, enabled, configured?, present?, version?, can_login?, models_list?, usable?}
 
-  const stratOpt = (v, label) => `<option value="${v}" ${s.agent_strategy === v ? "selected" : ""}>${label}</option>`;
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  // ---- ONE in-memory working model, built once on entry. Every editable control
+  // mirrors into this on change; persistSettings() serializes from HERE (never from
+  // DOM elements, which may not be mounted in the active slice). Switching sub-tabs
+  // re-renders a slice FROM the model — no refetch, no lost edits.
+  const wm = {
+    agent_strategy: s.agent_strategy,
+    order: agents.map((a) => a.name),
+    disabled: new Set(agents.filter((a) => !a.enabled).map((a) => a.name)),
+    routes: { ...(s.agent_routes || {}) },
+    enrich_enabled: !!s.enrich_enabled,
+    art_enabled: !!(s.art_enabled ?? 1),
+    research_enabled: !!s.research_enabled,
+    gemini_api_key: "",       // blank = preserve existing; only a typed value is sent
+    garmin_username: s.garmin_username || "",
+    garmin_password: "",      // blank = preserve existing
+    coach_enabled: !!s.coach_enabled,
+    coach_day: s.coach_day,
+    coach_hour: s.coach_hour,
+  };
+  const meta = Object.fromEntries(agents.map((a) => [a.name, a])); // name → declarative fields
+  // lazily-fetched per-agent detail (version/model/update + models list), cached so a
+  // re-render of the Agents slice doesn't re-hit the network for what we already have.
+  const agentInfo = {};   // name → {version, model_current, update_available}
+  const agentModels = {}; // name → [..]
 
-  // Per-task agent routing (optional). Calm, advanced: each task can pin a specific
-  // agent or stay on Auto (= the rotation above). Plain-language task labels; only
-  // enabled agents are offered. "Auto" everywhere is today's behavior.
-  const ROUTE_TASKS = [
-    ["chat", "Chat"],
-    ["day_read", "Daily brief"],
-    ["session_suggest", "Build me a session"],
-    ["meal_plan", "Meal plan"],
-    ["meal_swap", "Meal swap"],
-    ["recipe", "Recipe"],
-    ["nutrition_checkin", "Nutrition check-in"],
-    ["insight", "Quiet insight"],
-    ["weekly_read", "Weekly read"],
-    ["health_review", "Health review"],
-  ];
-  const routes = { ...(s.agent_routes || {}) }; // working copy, persisted on Save
-  const enabledAgents = agents.filter((a) => a.enabled);
-  const routeRowsHtml = ROUTE_TASKS.map(([task, label]) => {
-    const cur = routes[task] || "";
-    const opts = `<option value="">⟳ Auto</option>` + enabledAgents.map((a) =>
-      `<option value="${escAttr(a.name)}" ${cur === a.name ? "selected" : ""}>${escHtml(a.name)}</option>`).join("");
-    return `<div class="logrow route-row">
-      <span class="route-task">${escHtml(label)}</span>
-      <select class="route-sel selflex" data-route="${escAttr(task)}">${opts}</select>
-    </div>`;
-  }).join("");
-
-  // Agent-health card (server telemetry; see GET /api/agent-stats — Stream 1).
-  // Mirrors the art-spend card's calm ledger style. No scores, just ok-rate +
-  // per-agent latency, plain words. Renders nothing if the endpoint is absent.
+  // Side cards (built once; folded into the Agents slice). All degrade to "" when the
+  // backing endpoint is absent/empty.
   const agentHealthHtml = agentHealthCard(agentStats);
-  // "What Cairn did" — the quiet activity log of recent agent runs (transparency,
-  // not a grade). Sits right under Agent health; renders nothing when empty.
   const agentActivityHtml = agentActivityCard(agentStats);
-  // "What Cairn has noticed" (F2) — gentle outcome-learning observations. Sits with
-  // the other quiet Coaching cards; renders nothing until reconciliation finds one.
   const noticedHtml = noticedCard(learnings);
-
-  // Artwork spend telemetry card (server estimates; see GET /api/art/stats).
   let artSpendHtml = "";
   if (artStats) {
     const money = (v) => { const n = Number(v) || 0; return "$" + (n && n < 0.005 ? n.toFixed(4) : n.toFixed(2)); };
@@ -184,267 +191,391 @@ async function renderSettings() {
     </div>`;
   }
 
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const ROUTE_TASKS = [
+    ["chat", "Chat"], ["day_read", "Daily brief"], ["session_suggest", "Build me a session"],
+    ["meal_plan", "Meal plan"], ["meal_swap", "Meal swap"], ["recipe", "Recipe"],
+    ["nutrition_checkin", "Nutrition check-in"], ["insight", "Quiet insight"],
+    ["weekly_read", "Weekly read"], ["health_review", "Health review"],
+  ];
+
+  if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) state.setSeg = "agents";
+
+  // ---- Stable shell. The sub-nav band + a #setSlice container persist across slice
+  // swaps (only #setSlice's innerHTML changes), so the save-bar sentinel below — which
+  // lives in the shell, NOT in a slice — stays connected and the bar survives a sub-tab
+  // switch with edits pending. A full renderTab() re-render replaces the whole view,
+  // disconnecting the sentinel, which correctly dismisses the bar.
   view.innerHTML = `
-    <p class="set-lede">Everything here is optional — Cairn works out of the box. Connect an agent below for coaching.</p>
-    <section class="set-group">
-      <h2 class="set-group-title">Coaching</h2>
-      <p class="set-group-sub">The agent brain. When you draft without naming an agent (the Coach <b>Auto</b> option and the weekly auto-coach), Cairn rotates across the agents you enable here.</p>
+    <span id="setSaveSentinel" hidden></span>
+    ${segBar(state.setSeg, SET_SEG)}
+    <p class="set-lede">Everything here is optional — Cairn works out of the box. Connect an agent for coaching.</p>
+    <div id="setSlice"></div>`;
 
-      <div class="field" style="margin-top:14px"><label>Selection strategy</label>
-        <select id="strat">
-          ${stratOpt("round_robin", "Round-robin · even rotation")}
-          ${stratOpt("random", "Random · dice")}
-          ${stratOpt("priority", "Priority · top first, fall back on failure")}
-        </select></div>
-
-      <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
-      <div id="agentlist"></div>
-      <div class="agent-update">
-        <button id="updateAgentClis" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Update CLI tools</button>
-        <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
-      </div>
-      ${agentHealthHtml}
-      ${agentActivityHtml}
-      ${noticedHtml}
-
-      <details class="route-card">
-        <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">Route tasks to agents</h1></summary>
-        <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
-        <div id="routelist" class="route-list">${routeRowsHtml}</div>
-      </details>
-
-      <h1 class="lbl" style="margin:22px 0 8px">Weekly auto-coach</h1>
-      <label class="toggle"><input type="checkbox" id="coachEnabled" ${s.coach_enabled ? "checked" : ""}>
-        <span>Draft a proposal automatically each week</span></label>
-      <div class="logrow" style="margin-top:12px">
-        <select id="coachDay" class="selflex">${dayNames.map((d, i) => `<option value="${i}" ${s.coach_day === i ? "selected" : ""}>${d}</option>`).join("")}</select>
-        <select id="coachHour" class="selflex">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${s.coach_hour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select>
-      </div>
-    </section>
-
-    <section class="set-group">
-      <h2 class="set-group-title">Connected sources</h2>
-      <p class="set-group-sub">Where your recovery and activity data come in. Both are optional and gracefully absent.</p>
-
-      <h1 class="lbl" style="margin:14px 0 8px">Garmin Connect</h1>
-      <div class="field"><label>Garmin email</label>
-        <input id="garminUsername" type="email" autocomplete="username" value="${escAttr(s.garmin_username || "")}" placeholder="you@example.com">
-      </div>
-      <div class="field"><label>Garmin password</label>
-        <input id="garminPassword" type="password" autocomplete="current-password" placeholder="${s.garmin_password_configured ? `Configured via ${escAttr(s.garmin_credentials_source)}` : "Optional: GARMIN_PASSWORD"}">
-      </div>
-      <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings credentials override GARMIN_USERNAME / GARMIN_PASSWORD. Garmin remains an input source for coaching context.</div>
-      <div class="syncrow">
-        <div class="syncstatus" id="garminStatus">${garminStatusLine(s, false)}</div>
-        <button id="garminSyncBtn" class="ghostbtn syncbtn">Sync now</button>
-      </div>
-      <div class="sess-line" style="color:var(--muted);margin-top:6px">Once configured, Cairn syncs automatically every ~6 hours.</div>
-
-      <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
-      <div class="sess-line" style="color:var(--muted)">
-        No App Store, no account — an iOS Shortcut posts your daily metrics straight to Cairn. Steps
-        and sleep feed the day-read and the energy-balance estimate.
-      </div>
-      <div class="ah-steps">
-        <div class="ah-step"><span class="ah-num">1</span><div>Open <b>Shortcuts</b> on your iPhone → <b>+</b> → add the <b>Get Health Sample</b> actions you want (Steps, Sleep, Resting Heart Rate, Heart Rate Variability, Active Energy).</div></div>
-        <div class="ah-step"><span class="ah-num">2</span><div>Build one JSON row per day: <code>date</code> (YYYY-MM-DD) plus any of <code>steps</code>, <code>sleep_min</code>, <code>sleep_score</code>, <code>resting_hr</code>, <code>hrv_ms</code>, <code>active_calories</code>. Wrap the rows in an array — a backfill is one array with many rows.</div></div>
-        <div class="ah-step"><span class="ah-num">3</span><div>Add a <b>Get Contents of URL</b> action: method <b>POST</b>, request body <b>JSON</b> (the array), to the URL below.</div></div>
-        <div class="ah-step"><span class="ah-num">4</span><div>Set it to run on an <b>Automation</b> each morning. Posts are idempotent per source + date (source defaults to <code>apple</code>), so re-running never duplicates a day.</div></div>
-      </div>
-      <div class="field" style="margin-top:12px"><label>POST URL</label>
-        <div class="ah-url"><code id="ahUrl"></code><button id="ahUrlCopy" class="ghostbtn ah-copy" type="button">Copy</button></div>
-      </div>
-      <div class="ah-example">
-        <span class="ah-example-lbl">Example body</span>
-        <code>[{"date":"2026-06-13","steps":8421,"sleep_min":437,"resting_hr":52}]</code>
-      </div>
-    </section>
-
-    <section class="set-group">
-      <h2 class="set-group-title">Automation &amp; artwork</h2>
-      <p class="set-group-sub">Background touches that make logging effortless. Both fall back gracefully when off.</p>
-
-      <h1 class="lbl" style="margin:14px 0 8px">Agentic enrichment</h1>
-      <label class="toggle"><input type="checkbox" id="enrichEnabled" ${s.enrich_enabled ? "checked" : ""}>
-        <span>Refine free-text logs &amp; capture coaching notes via an agent</span></label>
-      <div class="sess-line" style="color:var(--muted);margin-top:6px">Logs stay instant; an agent upgrades them in the background. Falls back to offline parsing when off.</div>
-
-      <h1 class="lbl" style="margin:22px 0 8px">Artwork generation</h1>
-      <label class="toggle"><input type="checkbox" id="artEnabled" ${(s.art_enabled ?? 1) ? "checked" : ""}>
-        <span>Generate studio photos for foods, exercises &amp; activities</span></label>
-      <div class="field" style="margin-top:10px"><label>Gemini API key</label>
-        <input id="geminiApiKey" type="password" autocomplete="off" placeholder="${s.gemini_api_key_configured ? `Configured via ${escAttr(s.gemini_api_key_source)}` : "Optional: GOOGLE_AI_KEY / GEMINI_API_KEY"}">
-      </div>
-      <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings key overrides GOOGLE_AI_KEY / GEMINI_API_KEY from the server environment. Blank preserves the current key.</div>
-      ${artSpendHtml}
-
-      <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
-      <label class="toggle"><input type="checkbox" id="researchEnabled" ${s.research_enabled ? "checked" : ""}>
-        <span>Let Cairn research your findings and cite real sources</span></label>
-      <div class="sess-line" style="color:var(--muted);margin-top:6px">When on, a web-capable agent grounds your lab findings against current clinical guidance and attaches the sources behind each directive — open them under “see the evidence” in <b>Me → Brain</b>. Off by default; everything stays deterministic and offline when off. Informational, never medical advice.</div>
-    </section>
-
-    <section class="set-group">
-      <h2 class="set-group-title">Backup &amp; reset</h2>
-      <p class="set-group-sub">Keep an offline copy of everything, or start the first-time setup over.</p>
-
-      <h1 class="lbl" style="margin:14px 0 8px">Data &amp; backup</h1>
-      <button id="dlJson" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Download JSON backup</button>
-      <button id="dlDb" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">Download SQLite snapshot</button>
-
-      <h1 class="lbl" style="margin:22px 0 8px">Setup</h1>
-      <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>
-    </section>`;
-
-  // working copy edited in place, persisted on Save
-  const order = agents.map((a) => a.name);
-  const disabled = new Set(agents.filter((a) => !a.enabled).map((a) => a.name));
-  const meta = Object.fromEntries(agents.map((a) => [a.name, a]));
-
+  // ---- Persist EVERYTHING from the working model, regardless of the visible slice.
   const persistSettings = async () => {
-    await api("/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agent_strategy: $("#strat").value,
-        agent_order: order,
-        disabled_agents: [...disabled],
-        enrich_enabled: $("#enrichEnabled").checked,
-        art_enabled: $("#artEnabled").checked,
-        research_enabled: $("#researchEnabled").checked,
-        gemini_api_key: $("#geminiApiKey").value.trim(),
-        garmin_username: $("#garminUsername").value.trim(),
-        garmin_password: $("#garminPassword").value.trim(),
-        coach_enabled: $("#coachEnabled").checked,
-        coach_day: +$("#coachDay").value,
-        coach_hour: +$("#coachHour").value,
-        agent_routes: routes,
-      }),
-    });
-    artEnabled = $("#artEnabled").checked; // take effect on the next render, no reload
+    const body = {
+      agent_strategy: wm.agent_strategy,
+      agent_order: wm.order,
+      disabled_agents: [...wm.disabled],
+      enrich_enabled: wm.enrich_enabled,
+      art_enabled: wm.art_enabled,
+      research_enabled: wm.research_enabled,
+      garmin_username: wm.garmin_username.trim(),
+      coach_enabled: wm.coach_enabled,
+      coach_day: +wm.coach_day,
+      coach_hour: +wm.coach_hour,
+      agent_routes: wm.routes,
+    };
+    // password / api-key fields: blank means "leave the configured value intact" — only
+    // send a typed value (matches the old per-field placeholder behavior).
+    if (wm.gemini_api_key.trim()) body.gemini_api_key = wm.gemini_api_key.trim();
+    if (wm.garmin_password.trim()) body.garmin_password = wm.garmin_password.trim();
+    await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    artEnabled = wm.art_enabled; // take effect on the next render, no reload
     return true;
   };
-  // floating save bar: every field edit (inputs below + agent list buttons)
-  // surfaces Save/Discard right above the tab bar, no scrolling to the button
+  // Floating save bar — mounted ONCE on the shell-level sentinel so it persists across
+  // sub-tab switches (sentinel stays connected while only #setSlice swaps).
   const settingsBar = mountSaveBar({
-    sentinel: $("#agentlist"),
+    sentinel: $("#setSaveSentinel"),
     fields: view,
     onSave: persistSettings,
     onDiscard: () => renderSettings(),
   });
 
-  function renderAgentList() {
-    const wrap = $("#agentlist");
-    wrap.innerHTML = order.map((name, i) => {
-      const a = meta[name];
-      const off = disabled.has(name);
-      // Calm presence indicator (no alarming red) so a user isn't left guessing why
-      // coaching is silent. `present` = the CLI binary is installed; `env_ok` = any
-      // required key is set; `usable` rolls those up (plus enabled). A dot + plain
-      // word: ready / not installed / sign-in needed.
-      let dotCls, statusLbl;
-      if (a.present === false) { dotCls = "agentdot-absent"; statusLbl = "not installed"; }
-      else if (a.env_ok === false) { dotCls = "agentdot-absent"; statusLbl = "sign-in needed"; }
-      else { dotCls = "agentdot-ready"; statusLbl = "ready"; }
-      return `<div class="agentrow${off ? " off" : ""} reveal" style="${stagger(i)}">
-        <div class="agentmeta">
-          <div class="agentname">${name}</div>
-          <div class="agentstatus"><span class="agentdot ${dotCls}" aria-hidden="true"></span>${statusLbl}</div>
-          <div class="agentdesc">${a.description || ""}</div>
-        </div>
-        <div class="agentctl">
-          <button class="ordbtn" data-up="${name}" ${i === 0 ? "disabled" : ""}>↑</button>
-          <button class="ordbtn" data-down="${name}" ${i === order.length - 1 ? "disabled" : ""}>↓</button>
-          <button class="togglebtn${off ? "" : " on"}" data-toggle="${name}">${off ? "OFF" : "ON"}</button>
-        </div>
+  // ---- Slice renderers. Each writes #setSlice and wires its own controls; all reads
+  // come from `wm`, all writes go back into `wm` + settingsBar.markDirty().
+  const slice = () => $("#setSlice");
+
+  function renderAgentsSlice() {
+    const stratOpt = (v, label) => `<option value="${v}" ${wm.agent_strategy === v ? "selected" : ""}>${label}</option>`;
+    const enabledAgents = wm.order.map((n) => meta[n]).filter((a) => a && !wm.disabled.has(a.name));
+    const routeRowsHtml = ROUTE_TASKS.map(([task, label]) => {
+      const cur = wm.routes[task] || "";
+      const opts = `<option value="">⟳ Auto</option>` + enabledAgents.map((a) =>
+        `<option value="${escAttr(a.name)}" ${cur === a.name ? "selected" : ""}>${escHtml(a.name)}</option>`).join("");
+      return `<div class="logrow route-row">
+        <span class="route-task">${escHtml(label)}</span>
+        <select class="route-sel selflex" data-route="${escAttr(task)}">${opts}</select>
       </div>`;
     }).join("");
+
+    slice().innerHTML = `
+      <section class="set-group set-group--flush">
+        <p class="set-group-sub">The agent brain. When you draft without naming an agent (the Coach <b>Auto</b> option and the weekly auto-coach), Cairn rotates across the agents you enable here.</p>
+
+        <div class="field" style="margin-top:14px"><label>Selection strategy</label>
+          <select id="strat">
+            ${stratOpt("round_robin", "Round-robin · even rotation")}
+            ${stratOpt("random", "Random · dice")}
+            ${stratOpt("priority", "Priority · top first, fall back on failure")}
+          </select></div>
+
+        <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
+        <div id="agentlist"></div>
+        <div class="agent-update">
+          <button id="updateAgentClis" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Update CLI tools</button>
+          <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
+        </div>
+        ${agentHealthHtml}
+        ${agentActivityHtml}
+        ${noticedHtml}
+
+        <details class="route-card">
+          <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">Route tasks to agents</h1></summary>
+          <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
+          <div id="routelist" class="route-list">${routeRowsHtml}</div>
+        </details>
+
+        <h1 class="lbl" style="margin:22px 0 8px">Weekly auto-coach</h1>
+        <label class="toggle"><input type="checkbox" id="coachEnabled" ${wm.coach_enabled ? "checked" : ""}>
+          <span>Draft a proposal automatically each week</span></label>
+        <div class="logrow" style="margin-top:12px">
+          <select id="coachDay" class="selflex">${dayNames.map((d, i) => `<option value="${i}" ${wm.coach_day === i ? "selected" : ""}>${d}</option>`).join("")}</select>
+          <select id="coachHour" class="selflex">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${wm.coach_hour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select>
+        </div>
+      </section>`;
+
+    // strategy + coach fields → working model
+    $("#strat").addEventListener("change", (e) => { wm.agent_strategy = e.target.value; });
+    $("#coachEnabled").addEventListener("change", (e) => { wm.coach_enabled = e.target.checked; });
+    $("#coachDay").addEventListener("change", (e) => { wm.coach_day = +e.target.value; });
+    $("#coachHour").addEventListener("change", (e) => { wm.coach_hour = +e.target.value; });
+    // per-task routing selects (mirror into the model; empty clears the pin → Auto)
+    slice().querySelectorAll("[data-route]").forEach((sel) => sel.addEventListener("change", () => {
+      const task = sel.dataset.route; const v = sel.value;
+      if (v) wm.routes[task] = v; else delete wm.routes[task];
+    }));
+
+    renderAgentList();
+    wireCliUpdate();
+  }
+
+  // Agent connect-cards: enable/disable + ordering (as before) PLUS a state chip, a
+  // Connect button (when can_login), a lazily-fetched info line, and a "view models"
+  // disclosure (when models_list). All visibility-only — no model picker; defaults rule.
+  function renderAgentList() {
+    const wrap = $("#agentlist");
+    if (!wrap) return;
+    wrap.innerHTML = wm.order.map((name, i) => {
+      const a = meta[name] || {};
+      const off = wm.disabled.has(name);
+      const chip = agentChipState(a);
+      const cached = agentInfo[name];
+      const infoLine = cached
+        ? `CLI ${cached.version ? `v${escHtml(String(cached.version))}` : "version —"} · model: ${escHtml(String(cached.model_current || "—"))}${cached.update_available ? ` · <span class="agent-upd">update available</span>` : ""}`
+        : "";
+      const models = agentModels[name];
+      const modelsList = Array.isArray(models)
+        ? (models.length ? models.map((m) => `<li>${escHtml(String(m))}</li>`).join("") : `<li class="agent-models-empty">No models reported.</li>`)
+        : "";
+      return `<div class="agent-card${off ? " off" : ""} reveal" style="${stagger(i)}">
+        <div class="agent-card-top">
+          <div class="agentmeta">
+            <div class="agentname">${escHtml(name)}</div>
+            <div class="agentdesc">${escHtml(a.description || "")}</div>
+          </div>
+          <span class="agent-chip ${chip.cls}">${chip.label}</span>
+        </div>
+        <div class="agent-card-ctl">
+          <div class="agentctl">
+            <button class="ordbtn" data-up="${escAttr(name)}" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+            <button class="ordbtn" data-down="${escAttr(name)}" ${i === wm.order.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+            <button class="togglebtn${off ? "" : " on"}" data-toggle="${escAttr(name)}">${off ? "OFF" : "ON"}</button>
+          </div>
+          <div class="agent-card-actions">
+            ${a.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
+            <button class="agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>
+            ${a.models_list ? `<button class="agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
+          </div>
+        </div>
+        ${off && a.configured === false ? `<div class="agent-card-note">Not in rotation until connected.</div>` : ""}
+        ${infoLine ? `<div class="agent-info-line">${infoLine}</div>` : ""}
+        ${Array.isArray(models) ? `<ul class="agent-models">${modelsList}</ul>` : ""}
+      </div>`;
+    }).join("");
+
     wrap.querySelectorAll("[data-toggle]").forEach((b) => b.addEventListener("click", () => {
-      const n = b.dataset.toggle; disabled.has(n) ? disabled.delete(n) : disabled.add(n); settingsBar.markDirty(); renderAgentList();
+      const n = b.dataset.toggle; wm.disabled.has(n) ? wm.disabled.delete(n) : wm.disabled.add(n);
+      settingsBar.markDirty(); renderAgentList();
     }));
     wrap.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
-      const i = order.indexOf(b.dataset.up); if (i > 0) { [order[i - 1], order[i]] = [order[i], order[i - 1]]; settingsBar.markDirty(); renderAgentList(); }
+      const i = wm.order.indexOf(b.dataset.up);
+      if (i > 0) { [wm.order[i - 1], wm.order[i]] = [wm.order[i], wm.order[i - 1]]; settingsBar.markDirty(); renderAgentList(); }
     }));
     wrap.querySelectorAll("[data-down]").forEach((b) => b.addEventListener("click", () => {
-      const i = order.indexOf(b.dataset.down); if (i < order.length - 1) { [order[i + 1], order[i]] = [order[i], order[i + 1]]; settingsBar.markDirty(); renderAgentList(); }
+      const i = wm.order.indexOf(b.dataset.down);
+      if (i < wm.order.length - 1) { [wm.order[i + 1], wm.order[i]] = [wm.order[i], wm.order[i + 1]]; settingsBar.markDirty(); renderAgentList(); }
+    }));
+    // Connect → hand off to the login modal provided by another module (guarded: it
+    // exists after integration; until then the button is a calm no-op).
+    wrap.querySelectorAll("[data-connect]").forEach((b) => b.addEventListener("click", () => {
+      const n = b.dataset.connect;
+      if (typeof openAgentLoginModal === "function") openAgentLoginModal(n);
+      else toast("Agent connect is unavailable here");
+    }));
+    // Lazy detail (NOT fetched on paint — only on tap): version / current model /
+    // update-available. Cached, so re-renders are free.
+    wrap.querySelectorAll("[data-detail]").forEach((b) => b.addEventListener("click", async () => {
+      const n = b.dataset.detail;
+      if (agentInfo[n]) return; // already shown
+      b.disabled = true; b.textContent = "checking…";
+      try {
+        const r = await api(`/agents/${encodeURIComponent(n)}/info`);
+        if (r && r.ok) agentInfo[n] = { version: r.version, model_current: r.model_current, update_available: r.update_available };
+        else agentInfo[n] = { version: null, model_current: null, update_available: false };
+      } catch { agentInfo[n] = { version: null, model_current: null, update_available: false }; }
+      renderAgentList();
+    }));
+    // "view models" disclosure (lazy, cached) — a plain list, no picker.
+    wrap.querySelectorAll("[data-models]").forEach((b) => b.addEventListener("click", async () => {
+      const n = b.dataset.models;
+      if (Array.isArray(agentModels[n])) { delete agentModels[n]; renderAgentList(); return; } // toggle off
+      b.disabled = true; b.textContent = "loading…";
+      try {
+        const r = await api(`/agents/${encodeURIComponent(n)}/models`);
+        agentModels[n] = r && r.ok && Array.isArray(r.models) ? r.models : [];
+      } catch { agentModels[n] = []; }
+      renderAgentList();
     }));
   }
-  renderAgentList();
 
-  // Per-task routing selects: keep the working copy in sync (the global save-bar
-  // change listener marks dirty). An empty value clears the pin (back to Auto).
-  view.querySelectorAll("[data-route]").forEach((sel) => sel.addEventListener("change", () => {
-    const task = sel.dataset.route;
-    const v = sel.value;
-    if (v) routes[task] = v; else delete routes[task];
-  }));
-
-  const renderCliStatus = (r) => {
-    const el = $("#agentCliUpdateStatus");
-    if (!el || !r) return;
-    if (r.status === "running") el.textContent = `Updating since ${(r.started_at || "").replace("T", " ").slice(0, 16)}`;
-    else if (r.status === "succeeded") el.textContent = `Updated ${(r.finished_at || "").replace("T", " ").slice(0, 16)}`;
-    else if (r.status === "failed") el.textContent = `Update failed${r.error ? `: ${r.error}` : ""}`;
-    else el.textContent = "";
-  };
-  const pollCliStatus = async () => {
-    const btn = $("#updateAgentClis");
-    let r = await api("/agent-clis/update");
-    renderCliStatus(r);
-    btn.disabled = r.status === "running";
-    while (r.status === "running") {
-      await sleep(2000);
-      r = await api("/agent-clis/update");
+  // "Update CLI tools" — unchanged behavior, just wired from inside the Agents slice.
+  function wireCliUpdate() {
+    const renderCliStatus = (r) => {
+      const el = $("#agentCliUpdateStatus");
+      if (!el || !r) return;
+      if (r.status === "running") el.textContent = `Updating since ${(r.started_at || "").replace("T", " ").slice(0, 16)}`;
+      else if (r.status === "succeeded") el.textContent = `Updated ${(r.finished_at || "").replace("T", " ").slice(0, 16)}`;
+      else if (r.status === "failed") el.textContent = `Update failed${r.error ? `: ${r.error}` : ""}`;
+      else el.textContent = "";
+    };
+    const pollCliStatus = async () => {
+      const btn = $("#updateAgentClis");
+      if (!btn) return;
+      let r = await api("/agent-clis/update");
       renderCliStatus(r);
+      if (!btn.isConnected) return;
       btn.disabled = r.status === "running";
-    }
-  };
-  $("#updateAgentClis").addEventListener("click", async () => {
-    const btn = $("#updateAgentClis");
-    btn.disabled = true;
-    renderCliStatus({ status: "running", started_at: new Date().toISOString() });
-    await api("/agent-clis/update", { method: "POST" });
-    await pollCliStatus();
-    toast("CLI update finished");
-  });
-  pollCliStatus().catch(() => {});
+      while (r.status === "running") {
+        await sleep(2000);
+        r = await api("/agent-clis/update");
+        if (!$("#agentCliUpdateStatus")) return; // slice swapped away
+        renderCliStatus(r);
+        const b2 = $("#updateAgentClis"); if (b2) b2.disabled = r.status === "running";
+      }
+    };
+    $("#updateAgentClis").addEventListener("click", async () => {
+      const btn = $("#updateAgentClis");
+      btn.disabled = true;
+      renderCliStatus({ status: "running", started_at: new Date().toISOString() });
+      await api("/agent-clis/update", { method: "POST" });
+      await pollCliStatus();
+      toast("CLI update finished");
+    });
+    pollCliStatus().catch(() => {});
+  }
 
-  // Manual Garmin sync: pulse while the connector runs, then re-pull /settings
-  // so the status line shows exactly what the server recorded.
-  $("#garminSyncBtn").addEventListener("click", async () => {
-    const btn = $("#garminSyncBtn");
-    const status = $("#garminStatus");
-    btn.disabled = true;
-    btn.textContent = "Syncing…";
-    status.innerHTML = garminStatusLine(null, true);
-    let r = null;
-    try { r = await api("/garmin/sync", { method: "POST" }); } catch {}
-    let fresh = s;
-    try { fresh = (await api("/settings")).settings; } catch {}
-    // a tab switch may have replaced the view while we waited
-    if (!btn.isConnected) return;
-    status.innerHTML = garminStatusLine(fresh, false);
-    btn.disabled = false;
-    btn.textContent = "Sync now";
-    toast(r && r.ok ? `Garmin synced · ${r.activities} activit${r.activities === 1 ? "y" : "ies"}` : "Garmin sync failed");
-  });
+  function renderSourcesSlice() {
+    slice().innerHTML = `
+      <section class="set-group set-group--flush">
+        <p class="set-group-sub">Where your recovery and activity data come in. Both are optional and gracefully absent.</p>
 
-  // Apple Health: show the page-origin POST URL + one-tap copy.
-  const ahUrl = $("#ahUrl");
-  if (ahUrl) ahUrl.textContent = location.origin + "/api/health-metrics";
-  const ahCopy = $("#ahUrlCopy");
-  if (ahCopy) ahCopy.addEventListener("click", async () => {
-    const url = location.origin + "/api/health-metrics";
-    try { await navigator.clipboard.writeText(url); ahCopy.textContent = "Copied"; }
-    catch { ahCopy.textContent = "Copy failed"; }
-    setTimeout(() => { ahCopy.textContent = "Copy"; }, 1600);
-  });
+        <h1 class="lbl" style="margin:14px 0 8px">Garmin Connect</h1>
+        <div class="field"><label>Garmin email</label>
+          <input id="garminUsername" type="email" autocomplete="username" value="${escAttr(wm.garmin_username)}" placeholder="you@example.com">
+        </div>
+        <div class="field"><label>Garmin password</label>
+          <input id="garminPassword" type="password" autocomplete="current-password" placeholder="${s.garmin_password_configured ? `Configured via ${escAttr(s.garmin_credentials_source)}` : "Optional: GARMIN_PASSWORD"}">
+        </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings credentials override GARMIN_USERNAME / GARMIN_PASSWORD. Garmin remains an input source for coaching context.</div>
+        <div class="syncrow">
+          <div class="syncstatus" id="garminStatus">${garminStatusLine(s, false)}</div>
+          <button id="garminSyncBtn" class="ghostbtn syncbtn">Sync now</button>
+        </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Once configured, Cairn syncs automatically every ~6 hours.</div>
 
-  $("#dlJson").addEventListener("click", () => downloadFile(withToken("/api/export")));
-  $("#dlDb").addEventListener("click", () => downloadFile(withToken("/api/export/db")));
-  $("#rerunSetup").addEventListener("click", async () => {
-    await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ onboarded: false }) });
-    location.reload();
-  });
+        <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
+        <div class="sess-line" style="color:var(--muted)">
+          No App Store, no account — an iOS Shortcut posts your daily metrics straight to Cairn. Steps
+          and sleep feed the day-read and the energy-balance estimate.
+        </div>
+        <div class="ah-steps">
+          <div class="ah-step"><span class="ah-num">1</span><div>Open <b>Shortcuts</b> on your iPhone → <b>+</b> → add the <b>Get Health Sample</b> actions you want (Steps, Sleep, Resting Heart Rate, Heart Rate Variability, Active Energy).</div></div>
+          <div class="ah-step"><span class="ah-num">2</span><div>Build one JSON row per day: <code>date</code> (YYYY-MM-DD) plus any of <code>steps</code>, <code>sleep_min</code>, <code>sleep_score</code>, <code>resting_hr</code>, <code>hrv_ms</code>, <code>active_calories</code>. Wrap the rows in an array — a backfill is one array with many rows.</div></div>
+          <div class="ah-step"><span class="ah-num">3</span><div>Add a <b>Get Contents of URL</b> action: method <b>POST</b>, request body <b>JSON</b> (the array), to the URL below.</div></div>
+          <div class="ah-step"><span class="ah-num">4</span><div>Set it to run on an <b>Automation</b> each morning. Posts are idempotent per source + date (source defaults to <code>apple</code>), so re-running never duplicates a day.</div></div>
+        </div>
+        <div class="field" style="margin-top:12px"><label>POST URL</label>
+          <div class="ah-url"><code id="ahUrl"></code><button id="ahUrlCopy" class="ghostbtn ah-copy" type="button">Copy</button></div>
+        </div>
+        <div class="ah-example">
+          <span class="ah-example-lbl">Example body</span>
+          <code>[{"date":"2026-06-13","steps":8421,"resting_hr":52}]</code>
+        </div>
+      </section>`;
+
+    $("#garminUsername").addEventListener("input", (e) => { wm.garmin_username = e.target.value; });
+    $("#garminPassword").addEventListener("input", (e) => { wm.garmin_password = e.target.value; });
+
+    // Manual Garmin sync: pulse while the connector runs, then re-pull /settings so the
+    // status line shows exactly what the server recorded.
+    $("#garminSyncBtn").addEventListener("click", async () => {
+      const btn = $("#garminSyncBtn");
+      const status = $("#garminStatus");
+      btn.disabled = true; btn.textContent = "Syncing…";
+      status.innerHTML = garminStatusLine(null, true);
+      let r = null;
+      try { r = await api("/garmin/sync", { method: "POST" }); } catch {}
+      let fresh = s;
+      try { fresh = (await api("/settings")).settings; } catch {}
+      if (!btn.isConnected) return; // slice/tab swapped while we waited
+      status.innerHTML = garminStatusLine(fresh, false);
+      btn.disabled = false; btn.textContent = "Sync now";
+      toast(r && r.ok ? `Garmin synced · ${r.activities} activit${r.activities === 1 ? "y" : "ies"}` : "Garmin sync failed");
+    });
+
+    // Apple Health: page-origin POST URL + one-tap copy.
+    const ahUrl = $("#ahUrl");
+    if (ahUrl) ahUrl.textContent = location.origin + "/api/health-metrics";
+    const ahCopy = $("#ahUrlCopy");
+    if (ahCopy) ahCopy.addEventListener("click", async () => {
+      const url = location.origin + "/api/health-metrics";
+      try { await navigator.clipboard.writeText(url); ahCopy.textContent = "Copied"; }
+      catch { ahCopy.textContent = "Copy failed"; }
+      setTimeout(() => { ahCopy.textContent = "Copy"; }, 1600);
+    });
+  }
+
+  function renderAutomationSlice() {
+    slice().innerHTML = `
+      <section class="set-group set-group--flush">
+        <p class="set-group-sub">Background touches that make logging effortless. Both fall back gracefully when off.</p>
+
+        <h1 class="lbl" style="margin:14px 0 8px">Agentic enrichment</h1>
+        <label class="toggle"><input type="checkbox" id="enrichEnabled" ${wm.enrich_enabled ? "checked" : ""}>
+          <span>Refine free-text logs &amp; capture coaching notes via an agent</span></label>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Logs stay instant; an agent upgrades them in the background. Falls back to offline parsing when off.</div>
+
+        <h1 class="lbl" style="margin:22px 0 8px">Artwork generation</h1>
+        <label class="toggle"><input type="checkbox" id="artEnabled" ${wm.art_enabled ? "checked" : ""}>
+          <span>Generate studio photos for foods, exercises &amp; activities</span></label>
+        <div class="field" style="margin-top:10px"><label>Gemini API key</label>
+          <input id="geminiApiKey" type="password" autocomplete="off" placeholder="${s.gemini_api_key_configured ? `Configured via ${escAttr(s.gemini_api_key_source)}` : "Optional: GOOGLE_AI_KEY / GEMINI_API_KEY"}">
+        </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings key overrides GOOGLE_AI_KEY / GEMINI_API_KEY from the server environment. Blank preserves the current key.</div>
+        ${artSpendHtml}
+
+        <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
+        <label class="toggle"><input type="checkbox" id="researchEnabled" ${wm.research_enabled ? "checked" : ""}>
+          <span>Let Cairn research your findings and cite real sources</span></label>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">When on, a web-capable agent grounds your lab findings against current clinical guidance and attaches the sources behind each directive — open them under “see the evidence” in <b>Me → Brain</b>. Off by default; everything stays deterministic and offline when off. Informational, never medical advice.</div>
+      </section>`;
+
+    $("#enrichEnabled").addEventListener("change", (e) => { wm.enrich_enabled = e.target.checked; });
+    $("#artEnabled").addEventListener("change", (e) => { wm.art_enabled = e.target.checked; });
+    $("#researchEnabled").addEventListener("change", (e) => { wm.research_enabled = e.target.checked; });
+    $("#geminiApiKey").addEventListener("input", (e) => { wm.gemini_api_key = e.target.value; });
+  }
+
+  function renderDataSlice() {
+    slice().innerHTML = `
+      <section class="set-group set-group--flush">
+        <p class="set-group-sub">Keep an offline copy of everything, or start the first-time setup over.</p>
+
+        <h1 class="lbl" style="margin:14px 0 8px">Data &amp; backup</h1>
+        <button id="dlJson" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Download JSON backup</button>
+        <button id="dlDb" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">Download SQLite snapshot</button>
+
+        <h1 class="lbl" style="margin:22px 0 8px">Setup</h1>
+        <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>
+      </section>`;
+
+    $("#dlJson").addEventListener("click", () => downloadFile(withToken("/api/export")));
+    $("#dlDb").addEventListener("click", () => downloadFile(withToken("/api/export/db")));
+    $("#rerunSetup").addEventListener("click", async () => {
+      await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ onboarded: false }) });
+      location.reload();
+    });
+  }
+
+  const SLICES = { agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
+  const paintSlice = (key) => (SLICES[key] || renderAgentsSlice)();
+
+  // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no
+  // refetch, edits preserved), keep the save bar mounted on the stable sentinel.
+  view.querySelectorAll(".segbtn").forEach((b) => b.addEventListener("click", () => {
+    const key = b.dataset.seg;
+    if (!SLICES[key] || key === state.setSeg) return;
+    state.setSeg = key;
+    const seg = b.closest(".seg");
+    if (seg) seg.style.setProperty("--segi", [...seg.querySelectorAll(".segbtn")].indexOf(b));
+    withViewTransition(() => { paintSlice(key); viewEnter(); });
+  }));
+  view.querySelectorAll(".seg").forEach(fitSeg);
+
+  paintSlice(state.setSeg);
 }
 
 function downloadFile(href) {

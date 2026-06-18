@@ -9,7 +9,7 @@
 
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
-import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
+import { INTERACTIVE_TIMEOUT_MS, agentInfo, listAgentModels, loadAgents } from "./agents.js";
 import { runChosen } from "./runChosen.js";
 import {
   buildCoachPrompt,
@@ -36,6 +36,27 @@ import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./rese
 // re-exported here because api.ts / mcp.ts import it from coachOps as the
 // single agentic-ops entry point.
 export { runChosen };
+
+// ---- agent connect/visibility helpers (read-only; see src/agents.ts) ----
+// The two protocol surfaces (api.ts / mcp.ts) read agent connect-state through
+// coachOps so they stay thin adapters. These wrap the agents.ts probes and shape
+// the designed { ok, ... } result — version/model visibility + the model catalog,
+// neither of which makes a coaching/paid call.
+
+// "What's running" for one agent: installed version + best-effort current model.
+// ok:false (at the adapter's HTTP 200) for an unknown agent.
+export function agentInfoOp(name: string) {
+  if (!loadAgents()[name]) return { ok: false as const, error: `unknown agent "${name}"` };
+  const info = agentInfo(name);
+  return { ok: true as const, ...info };
+}
+
+// A CLI's model catalog (grok/agy). Empty list for a CLI with no `models_list`
+// or on any probe failure; ok:false only for an unknown agent.
+export function agentModelsOp(name: string) {
+  if (!loadAgents()[name]) return { ok: false as const, error: `unknown agent "${name}"`, models: [] as string[] };
+  return { ok: true as const, models: listAgentModels(name) };
+}
 
 // Agent-status contract (v35) — a calm, additive provenance hint the PWA reads to
 // distinguish "no coaching CLI is configured" from "an agent was tried and failed"

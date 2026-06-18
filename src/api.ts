@@ -29,6 +29,8 @@ import {
   reconcileOutcomes,
   distillChat,
   onboardFromText,
+  agentInfoOp,
+  agentModelsOp,
 } from "./coachOps.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
@@ -436,6 +438,11 @@ api.get("/progress/:exercise", (req, res) =>
 );
 
 api.get("/agents", (_req, res) => res.json(repo.getAgentConfig()));
+// Per-agent read-only visibility (subprocess probes — fetched lazily, not on every
+// Settings open). Both return ok:false at HTTP 200 (the PWA api() helper reads the
+// body regardless of status), mirroring the rest of the designed failure signals.
+api.get("/agents/:name/info", (req, res) => res.json(agentInfoOp(req.params.name)));
+api.get("/agents/:name/models", (req, res) => res.json(agentModelsOp(req.params.name)));
 api.get("/agent-clis/update", (_req, res) => res.json(getAgentCliUpdateStatus()));
 api.post("/agent-clis/update", (_req, res) => res.status(202).json(startAgentCliUpdate("manual")));
 

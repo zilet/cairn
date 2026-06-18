@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { listAgents } from "../agents.js";
+import { listAgents, agentVersion } from "../agents.js";
 
 // ---------- settings & agent selection ----------
 export interface Settings {
@@ -490,8 +490,12 @@ export function setAppState(key: string, value: string) {
 
 // agents.json merged with settings: effective order + enabled/usable flags.
 // `present` reports whether the agent's CLI binary is actually installed (cached
-// probe in agents.ts); `usable` rolls up the three things a run needs — enabled
-// by the user, the binary present, and any required env var set.
+// probe in agents.ts); `configured` is the tri-state login probe (true logged-in /
+// false logged-out / null undetectable); `usable` rolls up the four things a run
+// needs — enabled by the user, the binary present, any required env var set, AND
+// the agent not KNOWN logged-out. Only `configured === false` excludes (never
+// `null` — an undetectable agent stays in the rotation). `version`/`can_login`/
+// `models_list` are read-only visibility fields (computed here, never persisted).
 export function getAgentConfig() {
   const s = getSettings();
   const all = listAgents() as any[];
@@ -505,7 +509,20 @@ export function getAgentConfig() {
     const enabled = !disabled.has(name);
     const present = !!a.present;
     const env_ok = !!a.env_ok;
-    return { name, description: a.description, env_ok, present, enabled, usable: enabled && present && env_ok };
+    const configured: boolean | null = a.configured ?? null;
+    return {
+      name,
+      description: a.description,
+      env_ok,
+      present,
+      enabled,
+      configured,
+      // installed CLI version (cached --version probe; null when absent/unreadable)
+      version: present ? agentVersion(name) : null,
+      can_login: !!a.can_login,
+      models_list: !!a.models_list,
+      usable: enabled && present && env_ok && configured !== false,
+    };
   });
 }
 

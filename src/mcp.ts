@@ -20,6 +20,8 @@ import {
   reconcileOutcomes,
   distillChat,
   onboardFromText,
+  agentInfoOp,
+  agentModelsOp,
 } from "./coachOps.js";
 import { computeDayRead, localToday } from "./dayread.js";
 
@@ -312,9 +314,23 @@ export function buildMcpServer(): McpServer {
 
   server.tool(
     "list_agents",
-    "List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, and whether any required API key is present.",
+    "List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, whether the CLI binary is present, the tri-state login/connected probe (configured: true|false|null), installed version, and whether each declares an interactive login / a model catalog. usable rolls these up (only a KNOWN logged-out agent — configured:false — is excluded from the rotation).",
     {},
     async () => asText(repo.getAgentConfig())
+  );
+
+  server.tool(
+    "get_agent_info",
+    "Read-only 'what's running' for one coaching CLI: installed version and (best-effort) the model it would use. Cheap subprocess probe — no coaching/paid call, no model pinning. ok:false for an unknown agent.",
+    { name: z.string().describe("agent name from list_agents (claude, codex, grok, antigravity, ...)") },
+    async ({ name }) => asText(agentInfoOp(name))
+  );
+
+  server.tool(
+    "list_agent_models",
+    "List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent.",
+    { name: z.string().describe("agent name from list_agents") },
+    async ({ name }) => asText(agentModelsOp(name))
   );
 
   server.tool(
