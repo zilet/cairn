@@ -49,7 +49,7 @@
     "env_required": [],
     "login": ["login", "--device-auth"],
     "status_check": null,
-    "auth_state": null,
+    "auth_state": [".grok/auth.json"],
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],
     "stream": {

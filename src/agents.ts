@@ -199,8 +199,11 @@ function probeConfigured(name: string, def: AgentDef): boolean | null {
       // status_check ran but we couldn't read it — fall through to auth_state.
     } catch { /* fall through to the fallback signals */ }
   }
-  // 2. grok has no status command — XAI_API_KEY presence is its only signal.
-  if (name === "grok") return process.env.XAI_API_KEY ? true : null;
+  // 2. grok has no status command. The HEADLESS path needs XAI_API_KEY; the in-app
+  //    `grok login --device-auth` flow instead writes ~/.grok/auth.json. So an env
+  //    key is a definite yes, but its absence is NOT a no — fall through to the
+  //    auth_state check below so a Connect login flips Installed → Connected.
+  if (name === "grok" && process.env.XAI_API_KEY) return true;
   // 3. auth_state fallback: a known post-login file/dir exists ⇒ logged in; absent
   //    ⇒ null (NOT false — many CLIs create the dir before login, so absence is
   //    only weak evidence and we must never exclude on it).
@@ -218,6 +221,14 @@ export function agentConfigured(name: string): boolean | null {
   }
   configuredCache.set(name, verdict);
   return verdict;
+}
+
+// Drop the cached configured verdict so the next agentConfigured() re-probes.
+// Called after an in-app login completes — the boot-time probe ran before the
+// auth state existed, so without this the card stays "Installed" until restart.
+export function invalidateAgentConfigured(name?: string): void {
+  if (name) configuredCache.delete(name);
+  else configuredCache.clear();
 }
 
 // ---------- version / model visibility (read-only) ----------
@@ -271,10 +282,48 @@ export function agentInfo(name: string): { version: string | null; model_current
 // this is intentionally conservative: only return something when a CLI exposes it
 // for free, else null (the UI shows "—"). Never makes a coaching/paid call.
 function agentModelCurrent(name: string): string | null {
+  // codex has no `models` catalog, but its CURRENT model is pinned in
+  // ~/.codex/config.toml (`model = "…"`) — a free, local, read-only lookup (never a
+  // coaching/paid call). null when unpinned ⇒ the UI shows "—".
+  if (name === "codex") return readCodexConfigModel();
   // The catalog listing exposes the default for free: `grok models` (and similarly
   // `agy models`) prints a "Default model: <id>" line above the catalog. Read THAT —
   // never a coaching/paid call. null when no such line exists ⇒ the UI shows "—".
   return parseDefaultModel(rawModelsOutput(name));
+}
+
+// Read codex's pinned model from ~/.codex/config.toml. codex exposes no `models`
+// catalog command, so this config read is its only free, non-interactive current-
+// model signal. Cached per process; null when the file or key is absent.
+let _codexModel: string | null | undefined;
+function readCodexConfigModel(): string | null {
+  if (_codexModel !== undefined) return _codexModel;
+  _codexModel = null;
+  try {
+    const home = homeDir();
+    if (home) _codexModel = parseTomlModel(fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8"));
+  } catch {
+    _codexModel = null;
+  }
+  return _codexModel;
+}
+
+// Pure: pull the ROOT-table `model = "…"` out of a TOML string. Stops at the first
+// [section] header so a nested `model` key (e.g. [tui.model_availability_nux]) can't
+// match, and the `model\s*=` anchor skips `model_reasoning_effort`. null when absent.
+export function parseTomlModel(raw: string): string | null {
+  if (!raw) return null;
+  for (const lineRaw of raw.split(/\r?\n/)) {
+    const line = lineRaw.trim();
+    if (line.startsWith("[")) break; // entered a sub-table — root `model` only
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^model\s*=\s*(.+)$/);
+    if (m) {
+      const v = m[1].replace(/\s+#.*$/, "").trim().replace(/^["']|["']$/g, "").trim();
+      if (v && v.length <= 80) return v;
+    }
+  }
+  return null;
 }
 
 // Pure: pull the "Default model: <id>" / "Current model: <id>" line out of a

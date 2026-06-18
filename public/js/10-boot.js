@@ -570,7 +570,15 @@ async function renderSettings() {
     if (!SLICES[key] || key === state.setSeg) return;
     state.setSeg = key;
     const seg = b.closest(".seg");
-    if (seg) seg.style.setProperty("--segi", [...seg.querySelectorAll(".segbtn")].indexOf(b));
+    if (seg) {
+      // Slide the ink thumb AND move the .active state (paper text) with it — the
+      // shell persists across slice swaps, so without this the active class stays
+      // stuck on the first tab (cream-on-cream, invisible) while the thumb is
+      // elsewhere. Mirrors setHealthSegActive.
+      const btns = [...seg.querySelectorAll(".segbtn")];
+      seg.style.setProperty("--segi", btns.indexOf(b));
+      btns.forEach((x) => x.classList.toggle("active", x === b));
+    }
     withViewTransition(() => { paintSlice(key); viewEnter(); });
   }));
   view.querySelectorAll(".seg").forEach(fitSeg);

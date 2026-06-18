@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import "./_seed.js"; // ensures DATA_DIR/DB_PATH-backed db is initialized for the dist imports
 import { resolveLoginArgv, buildPtyInvocation, loginSessionActive } from "../dist/agentLogin.js";
-import { parseModelsOutput, parseDefaultModel } from "../dist/agents.js";
+import { parseModelsOutput, parseDefaultModel, parseTomlModel, invalidateAgentConfigured, loadAgents } from "../dist/agents.js";
 
 test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("claude"), ["claude", "auth", "login"]);
@@ -60,6 +60,36 @@ test("parseDefaultModel pulls the free 'Default model' line (grok/agy) or null",
   assert.equal(parseDefaultModel("Current model = some-model-v2"), "some-model-v2");
   assert.equal(parseDefaultModel("no default here\njust noise"), null);
   assert.equal(parseDefaultModel(""), null);
+});
+
+test("grok's in-app device-auth login is detectable via auth_state", () => {
+  // grok has no status_check and the headless XAI_API_KEY may be unset, so the only
+  // signal that a Connect (`grok login --device-auth`) login happened is the file it
+  // writes. agents.json MUST declare that as grok's auth_state, or the card is stuck
+  // on "Installed" forever after a successful in-app login. (The fix for that bug.)
+  const grok = loadAgents().grok;
+  assert.ok(Array.isArray(grok.auth_state) && grok.auth_state.includes(".grok/auth.json"));
+});
+
+test("parseTomlModel reads codex's root model and ignores decoys", () => {
+  // codex has no `models` catalog — its current model comes from ~/.codex/config.toml.
+  const cfg = `model = "gpt-5.5"\nmodel_reasoning_effort = "xhigh"\n[tui.model_availability_nux]\nmodel = "nested-should-not-win"`;
+  assert.equal(parseTomlModel(cfg), "gpt-5.5");
+  // model_reasoning_effort must NOT be mistaken for the model key
+  assert.equal(parseTomlModel(`model_reasoning_effort = "high"`), null);
+  // unquoted + inline comment
+  assert.equal(parseTomlModel(`model = o3  # the default`), "o3");
+  assert.equal(parseTomlModel(""), null);
+  // a model declared only inside a sub-table is not the root model
+  assert.equal(parseTomlModel(`[profiles.x]\nmodel = "x"`), null);
+});
+
+test("invalidateAgentConfigured is exported and never throws", () => {
+  // Called after an in-app login exits so the next probe re-reads the (now-written)
+  // auth state instead of the boot-time verdict.
+  assert.equal(typeof invalidateAgentConfigured, "function");
+  assert.doesNotThrow(() => invalidateAgentConfigured("grok"));
+  assert.doesNotThrow(() => invalidateAgentConfigured()); // whole-cache clear
 });
 
 test("parseModelsOutput keeps model ids and drops banners/headers", () => {

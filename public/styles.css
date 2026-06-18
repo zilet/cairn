@@ -635,6 +635,9 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
   transition:background .15s,color .15s;position:relative;z-index:1;
 }
 .segbtn.active{background:var(--ink);color:var(--paper)}
+/* Keyboard focus ring follows the pill shape (the global :focus-visible default is
+   a 6px-radius rectangle, which looks broken hugging a 999px pill). */
+.segbtn:focus-visible{border-radius:999px;outline-offset:1px}
 /* Scroll mode (set by fitSeg when the equal-width pills won't fit): content-width
    pills on one scrollable line. The sliding thumb assumes equal widths, so it
    yields to the solid active-pill background here. */

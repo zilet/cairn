@@ -32,6 +32,26 @@ docker compose exec cairn cairn-update-agent-clis
 The same updater backs the Settings → Agents → Update CLI tools button. Optional boot/interval
 updates use `AGENT_CLI_AUTO_UPDATE=1` and `AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS` (default 168).
 
+### Connecting (and re-connecting) agents
+
+CLI logins live in the `cairn-home` volume (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`). The
+easiest way to (re-)authenticate after install or a token expiry is **in the app — Settings →
+Agents → Connect**: it opens a browser terminal and runs the provider's sign-in *as the server
+user*, so the credential lands where the agent reads it (no `-u app` to remember). From a shell it's
+one `docker exec` per provider — always `-u app`, or the login is written as root and the server
+can't see it:
+
+```bash
+docker exec -u app -it cairn claude auth login   # Claude Code
+docker exec -u app -it cairn codex login         # Codex
+docker exec -u app -it cairn agy                 # Antigravity (Google)
+docker exec -u app -it cairn grok login          # Grok (or set XAI_API_KEY)
+```
+
+An agent that isn't logged in is automatically excluded from the auto-rotation (Settings shows it as
+**Installed** rather than **✓ Connected**), so a half-configured host degrades cleanly instead of
+failing requests.
+
 ---
 
 ## Local dev vs prod parity
@@ -121,7 +141,7 @@ backup (see Backups below) rather than trying to reverse the migration.
   greater, then sets `user_version` to the highest applied version.
 
 The authoritative, ordered list lives in `src/migrate.ts` (`MIGRATIONS`) — kept there rather than
-duplicated here so it can't drift. As of this writing the schema is at **user_version 30**; run
+duplicated here so it can't drift. As of this writing the schema is at **user_version 37**; run
 `npm run migrate` to print the current version and apply any pending ones.
 
 Every migration is additive and idempotent — an `ALTER TABLE … ADD COLUMN` wrapped in try/catch (so

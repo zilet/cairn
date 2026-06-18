@@ -12,7 +12,7 @@ import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, rateLimitGuard, rateLimitEnabled } from "./auth.js";
-import { setAgentRunSink, loadAgents } from "./agents.js";
+import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents.js";
 import { startLoginSession } from "./agentLogin.js";
 import * as repo from "./repo.js";
 
@@ -187,6 +187,12 @@ server.on("upgrade", (req, socket, head) => {
           } catch {}
         },
         onExit: (code) => {
+          // The login may have just written this agent's auth state — drop the
+          // cached "configured" verdict so the next /api/settings re-probes and the
+          // card flips Installed → Connected without a server restart.
+          try {
+            invalidateAgentConfigured(agent);
+          } catch {}
           try {
             ws.send(JSON.stringify({ t: "exit", code }));
           } catch {}

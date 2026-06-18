@@ -300,6 +300,11 @@ Coaching drafts, chat, and meal plans need one external agent. Choose one:
 > Only **Grok headless** reliably uses an API key. `GEMINI_API_KEY` is for generated artwork only,
 > not coaching.
 
+**The easiest path is in the app.** **Settings → Agents → Connect** opens a terminal in the browser
+and runs the sign-in for you — no `docker exec`, no `-u app` to remember (see
+[step 2](#2--add-a-coaching-agent--optional-for-chat--drafts)). The sections below are the terminal /
+Node / streaming reference, for scripting or when you prefer a shell.
+
 ### Docker: log in inside the container
 
 The container is named `cairn` whether you started it with `docker run` or compose, so the same
@@ -309,10 +314,10 @@ it across restarts and image updates. Always use `-u app` — the server runs as
 logins written as root are invisible to it.
 
 ```bash
-docker exec -u app -it cairn claude        # Claude Code — OAuth/device-code prompt
-docker exec -u app -it cairn codex login   # Codex — ChatGPT login
-docker exec -u app -it cairn agy           # Antigravity (Google) — paste the code quickly (~30s)
-docker exec -u app -it cairn grok          # Grok — interactive login (or use XAI_API_KEY, below)
+docker exec -u app -it cairn claude auth login   # Claude Code — OAuth/device-code prompt
+docker exec -u app -it cairn codex login         # Codex — ChatGPT login
+docker exec -u app -it cairn agy                 # Antigravity (Google) — paste the code quickly (~30s)
+docker exec -u app -it cairn grok login          # Grok — interactive login (or use XAI_API_KEY, below)
 ```
 
 After logging in, enable that agent in **Settings → Agents** and tap **Draft plan update** to test
