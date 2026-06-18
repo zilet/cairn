@@ -1,6 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { api } from "./api.js";
 import { handleMcpPost, methodNotAllowed } from "./mcp.js";
 import { seedIfEmpty } from "./seed.js";
@@ -11,7 +12,8 @@ import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, rateLimitGuard, rateLimitEnabled } from "./auth.js";
-import { setAgentRunSink } from "./agents.js";
+import { setAgentRunSink, loadAgents } from "./agents.js";
+import { startLoginSession } from "./agentLogin.js";
 import * as repo from "./repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -115,6 +117,142 @@ const server = app.listen(PORT, HOST, () => {
       if (queued > 0) console.log(`[art] cache warm-up: queued ${queued}, skipped ${skipped}`);
     } catch {}
   }, 5000);
+});
+
+// ---------- in-app agent login (PTY bridge over WebSocket) ----------
+// Lets the browser drive an interactive coaching-CLI login (claude / codex /
+// grok / agy) inside Cairn, rendered in an embedded terminal. The login command
+// is chosen SERVER-SIDE from the agents.json allowlist; the client supplies only
+// `agent` (validated) + keystrokes. See src/agentLogin.ts for the PTY session.
+//
+// noServer mode: we handle the HTTP upgrade ourselves and only claim our own
+// path, so Express's static/route handling and any other potential upgrade are
+// left untouched.
+const wss = new WebSocketServer({ noServer: true });
+const LOGIN_WS_PATH = "/api/agent-login/ws";
+
+// An agent is loginable if it's a known agents.json entry with a command. (The
+// presence of an interactive login flow is validated again in startLoginSession,
+// which also covers the fallback-login map for agents predating Stream B's
+// `login` field.)
+function isKnownAgent(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const def = loadAgents()[name];
+  return !!(def && def.command);
+}
+
+server.on("upgrade", (req, socket, head) => {
+  // Only claim our login path — leave every other upgrade alone (do NOT destroy
+  // sockets we don't own; another handler / the default may want them).
+  let url: URL;
+  try {
+    url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    return;
+  }
+  if (url.pathname !== LOGIN_WS_PATH) return;
+
+  // Auth: mirror the rest of the app. WebSocket can't set headers, so the token
+  // rides the query string (same pattern as the chat SSE stream). Unset env =
+  // open (loopback/trusted-network model).
+  const expected = process.env.CAIRN_AUTH_TOKEN;
+  const token = url.searchParams.get("token");
+  if (expected && token !== expected) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  const agent = url.searchParams.get("agent") || "";
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    // Invalid/disallowed agent: we upgraded, so signal cleanly over the socket
+    // then close with a policy-violation code rather than starting a session.
+    if (!isKnownAgent(agent)) {
+      try {
+        ws.send(JSON.stringify({ t: "error", message: "unknown agent" }));
+      } catch {}
+      ws.close(1008, "unknown agent");
+      return;
+    }
+
+    let session: { write(d: Buffer | string): void; resize(c: number, r: number): void; kill(): void } | null = null;
+    try {
+      session = startLoginSession({
+        agent,
+        // Raw PTY bytes → binary frames; xterm writes them verbatim.
+        onData: (buf) => {
+          try {
+            ws.send(buf, { binary: true });
+          } catch {}
+        },
+        onExit: (code) => {
+          try {
+            ws.send(JSON.stringify({ t: "exit", code }));
+          } catch {}
+          ws.close();
+        },
+        onError: (err) => {
+          try {
+            ws.send(JSON.stringify({ t: "error", message: String(err?.message || err) }));
+          } catch {}
+          ws.close();
+        },
+      });
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      // A second concurrent connect hits the single-session guard.
+      if (msg.startsWith("BUSY")) {
+        try {
+          ws.send(JSON.stringify({ t: "busy" }));
+        } catch {}
+      } else {
+        try {
+          ws.send(JSON.stringify({ t: "error", message: msg }));
+        } catch {}
+      }
+      ws.close();
+      return;
+    }
+
+    ws.on("message", (data: Buffer, isBinary: boolean) => {
+      const s = session;
+      if (!s) return;
+      // A text frame starting with "{" is a control message (resize). Anything
+      // else is keystrokes → straight to the PTY stdin.
+      if (!isBinary) {
+        const str = data.toString("utf8");
+        const trimmed = str.trimStart();
+        if (trimmed.startsWith("{")) {
+          try {
+            const msg = JSON.parse(trimmed);
+            if (msg && msg.t === "resize" && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {
+              s.resize(Number(msg.cols), Number(msg.rows));
+              return;
+            }
+          } catch {
+            /* not JSON — fall through and treat as keystrokes */
+          }
+        }
+        s.write(str);
+        return;
+      }
+      s.write(data);
+    });
+
+    // Socket closed (Cancel / navigate away / network drop) → guaranteed SIGKILL
+    // of the login subprocess (no orphan `script`/CLI process).
+    ws.on("close", () => {
+      try {
+        session?.kill();
+      } catch {}
+    });
+    ws.on("error", () => {
+      try {
+        session?.kill();
+      } catch {}
+    });
+  });
 });
 
 // ---------- graceful shutdown ----------
