@@ -12,6 +12,25 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
+// `--check` (CI): regenerate in-memory and compare to what's committed instead of
+// writing. Fails loudly if a contributor changed src/api.ts or src/mcp.ts without
+// running `npm run docs:index`, so the reference indexes can't silently drift.
+const CHECK = process.argv.includes("--check");
+const stale = [];
+function emit(relPath, content) {
+  if (CHECK) {
+    let current = "";
+    try {
+      current = readFileSync(join(root, relPath), "utf8");
+    } catch {
+      /* missing file counts as stale */
+    }
+    if (current !== content) stale.push(relPath);
+    return;
+  }
+  writeFileSync(join(root, relPath), content);
+}
+
 // ---- API routes (src/api.ts) ----
 // Line-by-line so we can attach the immediately-preceding // comment block as a
 // one-line description. Routes are `api.<method>("/path", …)`.
@@ -83,7 +102,7 @@ for (const k of sortedKeys) {
   api += `\n`;
 }
 api += `---\n\n*The MCP surface mirrors most of these operations — see [MCP-TOOLS.md](MCP-TOOLS.md).*\n`;
-writeFileSync(join(root, "docs/API.md"), api);
+emit("docs/API.md", api);
 
 // ---- MCP-TOOLS.md ----
 const tools = parseMcpTools(read("src/mcp.ts")).sort((a, b) => a.name.localeCompare(b.name));
@@ -102,7 +121,16 @@ is set, \`/mcp\` requires the token (\`Authorization: Bearer …\`).
 `;
 for (const t of tools) mcp += `| \`${t.name}\` | ${esc(t.desc)} |\n`;
 mcp += `\n---\n\n*The REST surface mirrors most of these — see [API.md](API.md).*\n`;
-writeFileSync(join(root, "docs/MCP-TOOLS.md"), mcp);
+emit("docs/MCP-TOOLS.md", mcp);
 
-console.log(`docs/API.md: ${routes.length} routes in ${sortedKeys.length} groups`);
-console.log(`docs/MCP-TOOLS.md: ${tools.length} tools`);
+if (CHECK) {
+  if (stale.length) {
+    console.error(`✗ generated docs are stale: ${stale.join(", ")}`);
+    console.error("  src/api.ts or src/mcp.ts changed — run `npm run docs:index` and commit the result.");
+    process.exit(1);
+  }
+  console.log(`✓ generated docs in sync (${routes.length} routes, ${tools.length} tools)`);
+} else {
+  console.log(`docs/API.md: ${routes.length} routes in ${sortedKeys.length} groups`);
+  console.log(`docs/MCP-TOOLS.md: ${tools.length} tools`);
+}

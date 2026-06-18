@@ -20,6 +20,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so the PWA service-worker cache-bump guard can diff a PR
+          # against its base branch.
+          fetch-depth: 0
 
       - name: Set up Node 24
         uses: actions/setup-node@v4
@@ -29,6 +33,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Guard rails that used to rely on a human remembering — now enforced.
+      - name: Generated docs in sync
+        run: npm run docs:check
+
+      - name: PWA service-worker cache bump
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-sw-cache.mjs "origin/${{ github.base_ref }}"
 
       - name: Test
         run: npm test

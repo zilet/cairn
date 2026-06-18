@@ -26,12 +26,14 @@
     "migrate": "tsx src/migrate.ts",
     "backup": "curl -fsS http://localhost:8787/api/export -o cairn-export.json && echo saved cairn-export.json",
     "docs:index": "node scripts/gen-docs.mjs",
+    "docs:check": "node scripts/gen-docs.mjs --check",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "pretest": "npm run build",
     "test": "node test/run.mjs",
     "presmoke": "npm run build",
-    "smoke": "node test/smoke.mjs"
+    "smoke": "node test/smoke.mjs",
+    "verify": "npm run docs:check && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
