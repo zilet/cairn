@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**154 routes** across 59 groups.
+**156 routes** across 59 groups.
 
 ## `/activities`
 
@@ -20,7 +20,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/agent/run` |  |
+| POST | `/api/agent/run` | Draft a plan proposal from a free-text instruction (the Coach tab's DRAFT PLAN UPDATE + the Plan → Endurance "shape your running" composer). A durable background job by default — the PWA streams the evolving caption + reconnects across reloads, exactly like session-suggest / meal-plan; when bg ops are off it runs inline and returns the legacy body unchanged. draftCoachProposal owns the agent run + proposal persistence so both paths return byte-for-byte the same body. |
 
 ## `/agent-clis`
 
@@ -49,6 +49,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/agents` |  |
+| GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open). Both return ok:false at HTTP 200 (the PWA api() helper reads the body regardless of status), mirroring the rest of the designed failure signals. |
+| GET | `/api/agents/:name/models` |  |
 
 ## `/art`
 

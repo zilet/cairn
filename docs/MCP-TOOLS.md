@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**127 tools.**
+**129 tools.**
 
 | Tool | Description |
 |---|---|
@@ -32,6 +32,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `draft_plan_update` | Run a coaching agent over recent logs to produce a DRAFT plan-update proposal. Does not change the plan; review then apply_proposal. |
 | `finish_session` | Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs). |
 | `generate_insight` | Run ONE agentic pass over the athlete's whole picture for a single genuine cross-domain connection (or a weekly read), dedupe against what's already been said, and store it. Returns ok:false when there's nothing real to say (found:false / duplicate / unusable shape). NO notification fires — the insight simply waits in-app. Informational, not medical advice. |
+| `get_agent_info` | Read-only 'what's running' for one coaching CLI: installed version and (best-effort) the model it would use. Cheap subprocess probe — no coaching/paid call, no model pinning. ok:false for an unknown agent. |
 | `get_agent_stats` | Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up). |
 | `get_art_stats` | Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size. |
 | `get_calendar` | Day-by-day training calendar/heatmap data (lifted, tonnage, activity, intensity level) for the last N days (default 84). |
@@ -75,7 +76,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_weekly_stats` | Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes. |
 | `grow_about_me` | Grow profile.about_me into a coherent person-model from typed memory + family + check-ins. Augments existing (user-authored) content, never overwrites blindly. changed:false is the common answer. |
 | `list_activities` | List recent logged activities. |
-| `list_agents` | List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, and whether any required API key is present. |
+| `list_agent_models` | List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent. |
+| `list_agents` | List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, whether the CLI binary is present, the tri-state login/connected probe (configured: true\|false\|null), installed version, and whether each declares an interactive login / a model catalog. usable rolls these up (only a KNOWN logged-out agent — configured:false — is excluded from the rotation). |
 | `list_chat_sessions` | List past (archived) coaching conversations, newest first — each is a thread a 'fresh start' archived, with its message count, time span, and a one-line preview. Browse history without deleting anything. |
 | `list_checkins` | List recent check-ins (newest first). |
 | `list_context_events` | List life-timeline events. Pass active=true for only active/upcoming (not archived and not past their end_date). |

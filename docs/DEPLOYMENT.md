@@ -157,13 +157,17 @@ Same Tailscale Serve one-liner as Shape 2. Prefer the `https://…ts.net` URL ov
 
 ### Pi coaching login
 
+Easiest is **in the app — Settings → Agents → Connect** (a terminal opens in the
+browser and signs you in). From a shell on the Pi it's one `docker compose exec`:
+
 ```bash
 ssh user@pi
 cd cairn
-docker compose exec -u app -it cairn claude
+docker compose exec -u app -it cairn claude auth login   # or: codex login · agy · grok login --device-auth
 ```
 
-Always **`-u app`** for new logins.
+Always **`-u app`** for new logins — a login written as root is invisible to the
+server process.
 
 ---
 
@@ -313,7 +317,7 @@ AGENT_CLI_CACHE_BUST=$(date +%s) docker compose build cairn && docker compose up
 | Symptom | Check |
 |---|---|
 | Health never green | `docker compose logs --tail=120 cairn` |
-| Coaching uses stub only | No CLI logged in — `docker compose exec -u app cairn claude` |
+| Coaching uses stub only | No CLI logged in — Settings → Agents → Connect, or `docker compose exec -u app -it cairn claude auth login` |
 | PWA won't install offline | Need HTTPS (Tailscale Serve) |
 | Permission denied on docker | New SSH session after `usermod -aG docker`, or use `sudo` |
 | Out of disk | `docker system prune -af` (named volumes untouched) |

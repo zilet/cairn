@@ -136,7 +136,7 @@ restore. **Treat workspace persistence as convenience, not as your backup of rec
   **won't survive a sandbox rebuild**. For a sandbox, prefer:
   - an **API-key agent** — set `GEMINI_API_KEY` or `XAI_API_KEY` (Grok) as a **sandbox/Codespaces
     secret**, never a committed file; or
-  - the built-in **`stub`** agent (Settings → Agent) — no key, fully offline, exercises the
+  - the built-in **`stub`** agent (Settings → Agents) — no key, fully offline, exercises the
     propose/apply loop so you can see the flow.
   First paint (the Brief, logging, history) works with **no agent at all**.
 - **Public URLs.** If the sandbox exposes a public forwarded URL, set **`CAIRN_AUTH_TOKEN`** (a
