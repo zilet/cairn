@@ -47,6 +47,47 @@ surfaces should stay near-mirror wrappers.
 > When you add a capability, expect to touch **all three**: `repo.ts` (the
 > logic) plus both `api.ts` and `mcp.ts` (the wrappers). Keep them in sync.
 
+### Where does my change go?
+
+`src/repo.ts` is a **barrel** that re-exports the domain modules under `src/repo/`.
+Put new data-access / domain logic in the matching module (don't grow the barrel):
+
+| Area | Module |
+|---|---|
+| Exercises, the exercise guide | `src/repo/exercises.ts` |
+| Plan editing, plan items, weekly runs | `src/repo/plan.ts` |
+| Sessions, sets, autoregulation feedback | `src/repo/sessions.ts` |
+| Profile, about-me, endurance goal, settings | `src/repo/profile.ts`, `src/repo/settings.ts` |
+| Activities, bodyweight, Garmin rows | `src/repo/activities.ts` |
+| Coach memory (self-updating store) | `src/repo/memory.ts` |
+| Meal plans, recipes, expenditure | `src/repo/nutrition.ts` |
+| Chat messages / turns history | `src/repo/chat.ts` |
+| Health docs, markers, check-ins, family, context events | `src/repo/health.ts` |
+| The connected brain (markers→directives propagation) | `src/repo/propagation.ts`, `src/repo/intelligence.ts` |
+| Researched evidence / citations | `src/repo/evidence.ts` |
+| `getCoachContext`, day-read assembly | `src/repo/coach.ts` |
+
+Cross-cutting orchestration lives at the top of `src/`, not in `repo/`:
+
+- **Prompt construction** → `src/prompt.ts` (every plan-shaping prompt; bound to the
+  `docs/VISION.md` constitution).
+- **Multi-step agentic ops both surfaces call** (session-suggest, nutrition check-in,
+  meal swap, recipe, health review, insight) → `src/coachOps.ts`. The shared
+  `runChosen(agent, prompt)` dispatch lives in `src/runChosen.ts`.
+- **Agent subprocess plumbing** (spawn, JSON extraction, streaming, fallback, the
+  in-app login bridge) → `src/agents.ts`, `src/agentLogin.ts`, `src/chatTurns.ts`.
+- **Background work** → `src/enrich.ts` (free-text/health enrichment), `src/scheduler.ts`
+  (proactive precompute), `src/garmin.ts` (sync).
+- **Schema** → `src/db.ts` (tables) + `src/migrate.ts` (column migrations).
+
+After adding a capability, regenerate the reference indexes and let the gates check
+you wired it everywhere:
+
+```bash
+npm run docs:index   # refresh docs/API.md + docs/MCP-TOOLS.md
+npm run verify       # build + test (incl. the MCP⊆REST parity check) + docs:check
+```
+
 ## Database & migrations
 
 The DB is a single shared `DatabaseSync` instance exported from `src/db.ts`; all
@@ -75,9 +116,28 @@ version). You can also run it manually with `npm run migrate`.
 > **Any change to a file under `public/` MUST bump the `CACHE` version constant
 > at the top of `public/sw.js` in the same commit.**
 
-Skip this and installed PWA clients will keep serving stale assets forever. The
-visual contract (the "Atelier" design system) lives in `docs/DESIGN.md` — read
-it before touching `styles.css` or view markup.
+Skip this and installed PWA clients will keep serving stale assets forever — so CI
+fails a PR that touches `public/` without bumping the cache (see the table above). The
+visual contract (the "Atelier" design system) lives in `docs/DESIGN.md` — read it
+before touching `styles.css` or view markup.
+
+## Before you open a PR: `npm run verify`
+
+One command runs everything CI will check on your PR:
+
+```bash
+npm run verify     # builds, runs the offline test suite, and checks generated docs are in sync
+```
+
+If it's green locally, the CI **Test** job should be green too. What CI enforces
+(`.github/workflows/ci.yml`) — these are invariants that used to rely on a human
+remembering:
+
+| Check | What it catches | Fix |
+|---|---|---|
+| `npm test` | Logic/behavior regressions (builds `dist/` first) | Fix the failing test |
+| `npm run docs:check` | `src/api.ts` / `src/mcp.ts` changed but the reference indexes weren't regenerated | `npm run docs:index` and commit `docs/API.md` + `docs/MCP-TOOLS.md` |
+| `scripts/check-sw-cache.mjs` (PRs) | A file under `public/` changed but `public/sw.js`'s `CACHE` version wasn't bumped | Bump `const CACHE = "cairn-vNN"` in `public/sw.js` |
 
 ## Testing
 
@@ -91,6 +151,17 @@ npm test
 Please make sure `npm test` passes before opening a PR. Keep this suite
 **deterministic, offline, and fast** — it must not spawn a server or reach the
 network.
+
+### Testing platform-conditional code
+
+A few code paths branch on `process.platform` (e.g. the in-app login PTY bridge in
+`src/agentLogin.ts`, which spawns differently on Linux/Docker vs macOS). **Make the
+branching logic a pure, platform-PARAMETERIZED function** (`ptyInvocationFor(platform,
+…)`) and unit-test every platform's output from any host — don't gate the assertion on
+`process.platform`. A macOS-only assertion left the Linux/Docker branch (the path that
+actually ships) untested, and a regression in it passed local `npm test` yet failed the
+Linux CI build. The pure function is the testable seam; the host-bound wrapper only adds
+the runtime guards (e.g. "is python3 present").
 
 For the agentic propose → apply coaching loop, the **`stub` agent** (defined in
 `agents.json`) is the offline smoke-test path: it needs no API key and returns a
