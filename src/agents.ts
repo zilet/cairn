@@ -270,10 +270,45 @@ export function agentInfo(name: string): { version: string | null; model_current
 // model a CLI would use on the next run without making a (possibly paid) call, so
 // this is intentionally conservative: only return something when a CLI exposes it
 // for free, else null (the UI shows "—"). Never makes a coaching/paid call.
-function agentModelCurrent(_name: string): string | null {
-  // Deferred (§10 of the build plan): no reliable free signal per CLI yet. Kept as
-  // a single seam so a future cheap probe slots in here without touching callers.
+function agentModelCurrent(name: string): string | null {
+  // The catalog listing exposes the default for free: `grok models` (and similarly
+  // `agy models`) prints a "Default model: <id>" line above the catalog. Read THAT —
+  // never a coaching/paid call. null when no such line exists ⇒ the UI shows "—".
+  return parseDefaultModel(rawModelsOutput(name));
+}
+
+// Pure: pull the "Default model: <id>" / "Current model: <id>" line out of a
+// `models` listing (grok/agy print it above the catalog). null when absent.
+export function parseDefaultModel(raw: string): string | null {
+  if (!raw) return null;
+  for (const lineRaw of raw.split(/\r?\n/)) {
+    const m = lineRaw.trim().match(/^(?:default|current)\s+model\s*[:=]?\s*(.+)$/i);
+    if (m) {
+      const v = m[1].trim().replace(/\s*\((?:current|default)\)\s*$/i, "").trim();
+      if (v && v.length <= 80) return v;
+    }
+  }
   return null;
+}
+
+// Run a CLI's `models_list` command ONCE and cache its raw stdout+stderr, so the
+// catalog (listAgentModels) and the "Default model:" read (agentModelCurrent) share
+// a single spawn. "" when the CLI has no catalog / isn't present / fails.
+const modelsRawCache = new Map<string, string>();
+
+function rawModelsOutput(name: string): string {
+  const def = loadAgents()[name];
+  if (!def || !Array.isArray(def.models_list) || !def.models_list.length) return "";
+  if (modelsRawCache.has(name)) return modelsRawCache.get(name) ?? "";
+  let raw = "";
+  if (commandPresent(def.command)) {
+    try {
+      const r = spawnSync(def.command, def.models_list, { timeout: 8000, encoding: "utf8", env: buildAgentEnv(def) });
+      if (!r.error) raw = `${r.stdout || ""}\n${r.stderr || ""}`;
+    } catch { raw = ""; }
+  }
+  modelsRawCache.set(name, raw);
+  return raw;
 }
 
 // Read a CLI's model catalog (grok/agy declare `models_list`). Returns a clean
@@ -285,13 +320,7 @@ export function listAgentModels(name: string): string[] {
   const def = loadAgents()[name];
   if (!def || !Array.isArray(def.models_list) || !def.models_list.length) return [];
   if (modelsCache.has(name)) return modelsCache.get(name) ?? [];
-  let models: string[] = [];
-  if (commandPresent(def.command)) {
-    try {
-      const r = spawnSync(def.command, def.models_list, { timeout: 8000, encoding: "utf8", env: buildAgentEnv(def) });
-      if (!r.error) models = parseModelsOutput((r.stdout || "") + "\n" + (r.stderr || ""));
-    } catch { models = []; }
-  }
+  const models = parseModelsOutput(rawModelsOutput(name));
   modelsCache.set(name, models);
   return models;
 }
@@ -301,7 +330,7 @@ export function listAgentModels(name: string): string[] {
 // status/banner line first); keep the model entries, drop empties/headers/banners.
 // Conservative + capped. Informational only — no pinning this batch — so a stray
 // banner line is cosmetic, not load-bearing.
-function parseModelsOutput(raw: string): string[] {
+export function parseModelsOutput(raw: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const lineRaw of (raw || "").split(/\r?\n/)) {

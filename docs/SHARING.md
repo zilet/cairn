@@ -105,17 +105,22 @@ Updating the image does not remove either volume.
 
 ## CLI Logins
 
-Each user logs into their own provider accounts inside the container. The container is named
-`cairn` whichever way you started it (`docker run` or compose), so `docker exec` works in both:
+Each user logs into their own provider accounts. The simplest path is **in the app**: open
+**Settings → Agents** and tap **Connect** on a provider — a terminal opens in the browser and runs that
+CLI's sign-in (the server spawns the login as itself, so the token lands where it's read; no `-u app`
+needed). The card shows **✓ Connected** when done, and an unconnected agent is automatically kept out of
+the rotation.
+
+From a terminal it's one `docker exec` (the container is named `cairn` whichever way you started it):
 
 ```bash
-docker exec -u app -it cairn claude        # Claude Code — OAuth/device-code prompt
-docker exec -u app -it cairn codex login   # Codex — ChatGPT login
-docker exec -u app -it cairn agy           # Antigravity (Google) — paste the code quickly
-docker exec -u app -it cairn grok          # Grok — interactive login (or set XAI_API_KEY)
+docker exec -u app -it cairn claude auth login   # Claude Code — OAuth/device-code prompt
+docker exec -u app -it cairn codex login         # Codex — ChatGPT login
+docker exec -u app -it cairn agy                 # Antigravity (Google) — paste the code quickly
+docker exec -u app -it cairn grok login          # Grok — device login (or set XAI_API_KEY)
 ```
 
-Pick **one** to start; the login persists in the `cairn-home` volume. Always use `-u app` — a login
+Pick **one** to start; the login persists in the `cairn-home` volume. Always use `-u app` here — a login
 written as root is invisible to the server process. The app also has an offline `stub` agent for
 smoke tests. (If you started Cairn via `docker compose`, `docker compose exec …` is equivalent.)
 

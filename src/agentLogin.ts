@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,10 +10,15 @@ import { loadAgents } from "./agents.js";
 //
 // Lets the browser drive an interactive CLI login (claude / codex / grok / agy)
 // rendered in an embedded terminal. We allocate a REAL PTY without any native
-// module (no node-pty / node-gyp — the "no native build" rule) by spawning the
-// OS `script` utility: `script -qfc "<cmd>" /dev/null` makes the child's stdout
-// a TTY over plain pipes, which is exactly what the CLIs need to render their
-// onboarding/login TUI and what xterm.js consumes on the other end.
+// module (no node-pty / node-gyp — the "no native build" rule):
+//   • Linux (the Docker path): the util-linux `script -qfc "<cmd>" /dev/null`
+//     makes the child's stdout a TTY over plain pipes — verified rendering the
+//     CLI login TUI end-to-end through this bridge.
+//   • macOS: BSD `script` can't allocate a PTY when its own stdin is a pipe (a
+//     server subprocess), so we use `python3 -c 'import pty; pty.spawn([...])'`,
+//     which does work with piped stdio and ships on macOS / most POSIX.
+// Either way the child runs under a real TTY, which is what the CLIs need to
+// render their onboarding/login TUI and what xterm.js consumes on the other end.
 //
 // The login command is chosen SERVER-SIDE from the agents.json allowlist — the
 // client only supplies `agent` (validated) and keystrokes. We never interpolate
@@ -76,7 +81,7 @@ export function loginSessionActive(): boolean {
 // Resolve the login argv for an agent from the allowlist. Throws if the agent is
 // unknown / has no command. Returns null only when the agent is known but has no
 // login capability declared anywhere (caller decides how to surface that).
-function resolveLoginArgv(agent: string): string[] {
+export function resolveLoginArgv(agent: string): string[] {
   const agents = loadAgents();
   const def = agents[agent];
   if (!def || !def.command) {
@@ -92,20 +97,41 @@ function resolveLoginArgv(agent: string): string[] {
   return [def.command, ...argv];
 }
 
-// Build the platform-specific `script` argv that wraps the login command in a PTY.
-//   linux  → script -qfc "<joined cmd>" /dev/null   (util-linux)
-//   darwin → script -q /dev/null <argv...>          (BSD `script`)
+// Build the platform-specific invocation that wraps the login command in a real
+// PTY — no native module (see the file header for why each platform differs).
 // The login argv is a fixed, server-chosen array — never client data.
-function buildScriptInvocation(loginArgv: string[]): { command: string; args: string[] } {
+export function buildPtyInvocation(loginArgv: string[]): { command: string; args: string[] } {
   if (process.platform === "win32") {
-    throw new Error("PTY login is unsupported on Windows — use `docker exec` to run the CLI login.");
+    throw new Error("In-app login is unsupported on Windows — run the CLI login in a terminal (e.g. `docker exec`).");
   }
   if (process.platform === "darwin") {
-    // BSD script: pass the command as separate argv after the typescript file.
-    return { command: "script", args: ["-q", "/dev/null", ...loginArgv] };
+    if (!python3Present()) {
+      throw new Error(
+        "In-app login on macOS needs python3 (it ships with the Xcode Command Line Tools: `xcode-select --install`), or run Cairn via Docker.",
+      );
+    }
+    // python3's pty.spawn allocates a PTY for the child even when its OWN stdio is
+    // piped — BSD `script` instead errors (tcgetattr) on a non-tty stdin. The argv
+    // is server-chosen + JSON-encoded into a Python string-list literal (safe).
+    const code = `import pty,sys; sys.exit(pty.spawn(${JSON.stringify(loginArgv)}) >> 8)`;
+    return { command: "python3", args: ["-c", code] };
   }
-  // Linux (util-linux) and other POSIX: -c takes a single command STRING.
+  // Linux (util-linux) and other POSIX with util-linux `script`: -c takes a single
+  // command STRING. This is the Docker path, verified end-to-end.
   return { command: "script", args: ["-qfc", loginArgv.join(" "), "/dev/null"] };
+}
+
+// Cached presence probe for the macOS python3 PTY path (mirrors agents.ts).
+let _python3Present: boolean | null = null;
+function python3Present(): boolean {
+  if (_python3Present !== null) return _python3Present;
+  try {
+    const r = spawnSync("python3", ["--version"], { stdio: "ignore", timeout: 4000 });
+    _python3Present = !r.error;
+  } catch {
+    _python3Present = false;
+  }
+  return _python3Present;
 }
 
 export function startLoginSession(opts: { agent: string } & LoginCallbacks): LoginSession {
@@ -117,7 +143,7 @@ export function startLoginSession(opts: { agent: string } & LoginCallbacks): Log
   // Validate + resolve the login command from the allowlist (throws on unknown
   // agent / no-login agent — before any spawn).
   const loginArgv = resolveLoginArgv(agent);
-  const { command, args } = buildScriptInvocation(loginArgv);
+  const { command, args } = buildPtyInvocation(loginArgv);
 
   // Interactive login needs to reach ~/.claude etc., so we KEEP HOME/PATH/USER
   // (and the rest of the inherited env). This is a human-driven login, not a

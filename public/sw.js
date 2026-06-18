@@ -1,10 +1,13 @@
-const CACHE = "cairn-v84";
+const CACHE = "cairn-v86";
 const ASSETS = [
   "/", "/index.html", "/styles.css",
   "/js/01-core.js", "/js/02-ui.js", "/js/03-today.js", "/js/04-capture.js",
   "/js/05-progress.js", "/js/06-coach-meals.js", "/js/07-me-health.js",
   "/js/08-me-records.js", "/js/09-plan-chat.js", "/js/10-boot.js",
   "/art.js", "/manifest.json",
+  // Vendored xterm.js for the in-app agent-login terminal (lazy-loaded by the
+  // Settings → Agents "Connect" modal; precached so it also works offline-installed).
+  "/vendor/xterm.js", "/vendor/xterm.css", "/vendor/xterm-addon-fit.js",
   "/favicon.ico",
   "/icons/icon.svg", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png",
 ];

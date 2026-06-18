@@ -128,15 +128,19 @@ local Node 24, starts Cairn, waits for health, and prints the URL. Open
 **http://localhost:8787** — you land on the Brief immediately.
 
 **First paint is real**, no agent required. For chat, coaching drafts, and meal plans, log in to
-**one** agent — the CLIs are baked into the image, and the container is named `cairn`, so it's one
-`docker exec`:
+**one** agent — the CLIs are baked into the image, so nothing to install. Easiest path: open
+**Settings → Agents** and tap **Connect** — a terminal opens in the browser and walks you through that
+provider's sign-in, no `docker exec` needed. An agent you haven't connected is automatically kept out
+of the rotation, and each card shows the CLI's version + current model.
+
+Prefer a terminal? It's one `docker exec` (the container is named `cairn`):
 
 ```bash
-docker exec -u app -it cairn claude   # or: codex login · agy · grok  (pick one; -u app is required)
+docker exec -u app -it cairn claude auth login   # or: codex login · agy · grok login  (pick one; -u app is required)
 ```
 
-Then enable it in **Settings → Agents** — or enable the built-in `stub` agent there to explore
-offline with no login. Full detail (Grok API key, local-Node logins):
+The built-in `stub` agent returns a canned demo proposal to explore the propose→apply UI offline (it's
+not a coach). Full detail (Grok API key, local-Node logins):
 [Connect your first agent](docs/QUICKSTART.md#connect-your-first-agent).
 
 ### What works out of the box vs. what needs a coaching agent
@@ -347,13 +351,20 @@ keeps each login across restarts.
 > one-shot for Codex and Antigravity.
 
 The CLIs are baked into the published image (and into a source build via the
-`INSTALL_CLAUDE/CODEX/ANTIGRAVITY/GROK` build args). The container is named `cairn` whether you
-started it with `docker run` or compose, so log in once with `docker exec` — pick **one** to start:
+`INSTALL_CLAUDE/CODEX/ANTIGRAVITY/GROK` build args). Log in **once** to **one** provider — two ways:
+
+**In the app (no terminal):** **Settings → Agents → Connect** opens a live terminal in the browser and
+runs that CLI's sign-in for you (rendered via a PTY the server spawns as itself, so the token lands
+where it's read — no `-u app` gotcha). The card flips to **✓ Connected**, and an unconnected agent is
+auto-excluded from the rotation rather than failing requests. It also shows the CLI version + current
+model (and, for grok/agy, its model catalog).
+
+**From a terminal:** the container is named `cairn` (whether you used `docker run` or compose):
 ```bash
-docker exec -u app -it cairn claude       # Claude Code — /login (URL + code)
-docker exec -u app -it cairn codex login  # Codex — ChatGPT login
-docker exec -u app -it cairn agy          # Antigravity (Google) — paste code fast, ~30s
-docker exec -u app -it cairn grok         # Grok — interactive login (or set XAI_API_KEY)
+docker exec -u app -it cairn claude auth login   # Claude Code — sign in (URL + code)
+docker exec -u app -it cairn codex login         # Codex — ChatGPT login
+docker exec -u app -it cairn agy                 # Antigravity (Google) — paste code fast, ~30s
+docker exec -u app -it cairn grok login          # Grok — device login (or set XAI_API_KEY)
 ```
 Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
 (re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent

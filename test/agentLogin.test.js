@@ -1,0 +1,72 @@
+// Agent Connect — the in-app CLI login bridge + model-listing parse helpers.
+//
+// The login bridge spawns an interactive CLI inside a real PTY and pipes it over a
+// WebSocket. The one security-critical invariant is the ALLOWLIST: the login
+// command is chosen server-side from agents.json — the client only names an agent.
+// `resolveLoginArgv` is that gate, so it MUST reject an unknown agent and an agent
+// with no declared login, and return the exact server-chosen argv otherwise.
+//
+// These are pure/offline (no CLI spawn, no network) — deterministic.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import "./_seed.js"; // ensures DATA_DIR/DB_PATH-backed db is initialized for the dist imports
+import { resolveLoginArgv, buildPtyInvocation, loginSessionActive } from "../dist/agentLogin.js";
+import { parseModelsOutput, parseDefaultModel } from "../dist/agents.js";
+
+test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
+  assert.deepEqual(resolveLoginArgv("claude"), ["claude", "auth", "login"]);
+  assert.deepEqual(resolveLoginArgv("codex"), ["codex", "login"]);
+  assert.deepEqual(resolveLoginArgv("grok"), ["grok", "login", "--device-auth"]);
+  // antigravity logs in via the bare interactive CLI (login: []).
+  assert.deepEqual(resolveLoginArgv("antigravity"), ["agy"]);
+});
+
+test("resolveLoginArgv REJECTS an unknown agent (allowlist gate)", () => {
+  assert.throws(() => resolveLoginArgv("bogus"), /Unknown agent/i);
+  assert.throws(() => resolveLoginArgv(""), /Unknown agent/i);
+  assert.throws(() => resolveLoginArgv("../../bin/sh"), /Unknown agent/i);
+});
+
+test("resolveLoginArgv REJECTS an agent with no login flow (stub)", () => {
+  // stub is the offline fixture — it declares no login, so it can never be driven
+  // through the terminal bridge.
+  assert.throws(() => resolveLoginArgv("stub"), /does not support an interactive login/i);
+});
+
+test("buildPtyInvocation wraps the login argv in a real PTY (no native module)", () => {
+  const inv = buildPtyInvocation(["claude", "auth", "login"]);
+  assert.equal(typeof inv.command, "string");
+  assert.ok(Array.isArray(inv.args) && inv.args.length > 0);
+  if (process.platform === "linux") {
+    // util-linux `script -qfc "<cmd>" /dev/null` — the Docker path.
+    assert.equal(inv.command, "script");
+    assert.deepEqual(inv.args, ["-qfc", "claude auth login", "/dev/null"]);
+  } else if (process.platform === "darwin") {
+    // python3 pty.spawn — BSD `script` can't PTY with piped stdio.
+    assert.equal(inv.command, "python3");
+    assert.equal(inv.args[0], "-c");
+    // the server-chosen argv is JSON-encoded into the python list literal
+    assert.match(inv.args[1], /pty\.spawn\(\["claude","auth","login"\]\)/);
+  }
+});
+
+test("loginSessionActive starts false (no session until one is opened)", () => {
+  assert.equal(loginSessionActive(), false);
+});
+
+test("parseDefaultModel pulls the free 'Default model' line (grok/agy) or null", () => {
+  const grok = "Default model: grok-composer-2.5-fast\n\nAvailable models:\n  grok-build\n  grok-composer-2.5-fast";
+  assert.equal(parseDefaultModel(grok), "grok-composer-2.5-fast");
+  assert.equal(parseDefaultModel("Current model = some-model-v2"), "some-model-v2");
+  assert.equal(parseDefaultModel("no default here\njust noise"), null);
+  assert.equal(parseDefaultModel(""), null);
+});
+
+test("parseModelsOutput keeps model ids and drops banners/headers", () => {
+  const grok = "Default model: grok-composer-2.5-fast\nAvailable models:\n- grok-build\n- grok-composer-2.5-fast";
+  // the "Default model:" + "Available models:" lines are banners, not entries.
+  assert.deepEqual(parseModelsOutput(grok), ["grok-build", "grok-composer-2.5-fast"]);
+  assert.deepEqual(parseModelsOutput(""), []);
+  // a prose sentence (interior spaces + trailing period) is a banner, not a model id
+  assert.deepEqual(parseModelsOutput("You are logged in as x.\nmodel-a\nmodel-b"), ["model-a", "model-b"]);
+});

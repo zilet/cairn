@@ -29,22 +29,31 @@ Prefer an editable config file over a long command line? Use the
 ## 2 · Add a coaching agent — optional, for chat & drafts
 
 Chat, coaching drafts, and meal-plan generation need one external agent. The CLIs are already baked
-into the image, and the container is named `cairn`, so logging in is one `docker exec` — pick **one**
-provider to start:
+into the image, so you never install anything — you just log into **one** provider.
+
+**Easiest — log in from the app (no terminal).** Open **Settings → Agents**, pick a provider, and tap
+**Connect**. A live terminal opens right in the browser and walks you through that CLI's sign-in
+(claude / codex / antigravity / grok); follow the prompts — if a URL and a code appear, open the URL to
+authorize. The login is written by the server process itself, so it lands in the right place
+automatically and persists across restarts/updates. Once it shows **✓ Connected**, that agent joins the
+rotation — and an agent you haven't connected is automatically kept out of it (so it never fails a
+request). Each card also shows the CLI's version and the model it's currently using.
+
+**Or from a terminal** (handy for scripting, or if you prefer): the container is named `cairn`, so it's
+one `docker exec` per provider —
 
 ```bash
-docker exec -u app -it cairn claude        # Claude Code  — OAuth/device-code prompt
-docker exec -u app -it cairn codex login   # Codex        — ChatGPT login
-docker exec -u app -it cairn agy           # Antigravity  — Google sign-in (paste the code quickly)
-docker exec -u app -it cairn grok          # Grok         — interactive login (or use XAI_API_KEY)
+docker exec -u app -it cairn claude auth login   # Claude Code  — OAuth/device-code prompt
+docker exec -u app -it cairn codex login         # Codex        — ChatGPT login
+docker exec -u app -it cairn agy                 # Antigravity  — Google sign-in (paste the code quickly)
+docker exec -u app -it cairn grok login          # Grok         — device login (or use XAI_API_KEY)
 ```
 
-The login persists in the `cairn-home` volume across restarts and updates. Always use `-u app` — the
-server runs as that user, so a login written as root is invisible to it. Then enable the agent in
-**Settings → Agents**.
+Always use `-u app` here — the server runs as that user, so a login written as root is invisible to it.
+(The in-app **Connect** flow above avoids this gotcha entirely.)
 
-- **No subscription handy?** Enable the built-in **`stub`** agent in Settings instead — it runs the
-  draft/apply loop offline with no key.
+- **No subscription handy?** The built-in **`stub`** agent returns a canned demo proposal so you can
+  click through the propose→apply UI offline — it is not a coach; connect a real agent above for that.
 - **Grok via API key** (instead of the interactive login): add `-e XAI_API_KEY=xai-…` to the
   `docker run` command and re-create the container.
 - Running on Node, or want the streaming / auth-directory detail? See
