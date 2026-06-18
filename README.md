@@ -185,8 +185,8 @@ laptop, a small home server, a VM, a Raspberry Pi, or a private Tailscale /
 WireGuard network. The same container can be started only when you need it or
 left running full-time.
 
-**Build from source (works today).** This is the recommended path right now — it builds the
-image locally, so it does not depend on any published artifact:
+**Build from source.** This always works and depends on no published artifact — it builds the
+image locally:
 
 ```bash
 git clone https://github.com/zilet/cairn.git
@@ -197,8 +197,8 @@ docker compose up -d --build
 Then open `http://localhost:8787`. The first build bakes the coaching CLIs into the image and
 takes ~3–6 minutes; later rebuilds are fast (BuildKit caches the layers).
 
-**Prebuilt release image (once the public image is published).** When the GHCR image and repo
-are public, you can skip the build entirely with the release compose file:
+**Prebuilt release image.** A multi-arch image is published to GHCR with every tagged release, so
+you can skip the build entirely with the release compose file:
 
 ```bash
 mkdir cairn
@@ -207,8 +207,9 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-> Until the repository and its GHCR package are made public, the prebuilt-image command above
-> returns `401 Unauthorized` for anyone without access — use the build-from-source path instead.
+> The prebuilt pull needs the GHCR package's visibility set to **public** (a maintainer setting on
+> the package's GHCR page). If anonymous `docker pull` returns `401`/`403`, the package is still
+> private — use the build-from-source path above.
 
 See [`docs/SHARING.md`](docs/SHARING.md) for the GHCR publishing flow and the maintainer release
 checklist.

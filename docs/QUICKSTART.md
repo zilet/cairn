@@ -68,9 +68,9 @@ Open **http://localhost:8787**.
 First build bakes the coaching CLIs into the image — expect a few minutes. Later rebuilds are fast
 (BuildKit caches the layers).
 
-### Published image — no source checkout (once the public image is published)
+### Published image — no source checkout
 
-When the GHCR image and repository are public, you can skip the local build entirely:
+A multi-arch image is published to GHCR with every release, so you can skip the local build entirely:
 
 ```bash
 mkdir cairn && cd cairn
@@ -78,9 +78,9 @@ curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.
 docker compose up -d
 ```
 
-> Until the repository and its GHCR package have been made public, this command returns
-> `401 Unauthorized`. Use the build-from-source path above (`docker compose up -d --build`)
-> instead. See [`SHARING.md`](SHARING.md) for the GHCR release flow and the maintainer
+> The prebuilt pull needs the GHCR package set to **public**. If anonymous `docker pull` returns
+> `401`/`403`, the package is still private — use the build-from-source path above
+> (`docker compose up -d --build`). See [`SHARING.md`](SHARING.md) for the GHCR release flow and the maintainer
 > release checklist.
 
 ---

@@ -38,7 +38,8 @@ private IP.
 
 ## Install From A Published Image (Once The Public Image Is Published)
 
-When the GHCR image and repository are public, you can skip the build entirely:
+A multi-arch image is published to GHCR with every tagged release, so you can skip the build
+entirely:
 
 ```bash
 mkdir cairn
@@ -50,10 +51,10 @@ docker compose up -d
 The compose file attached to a release already points at that release's GHCR
 image tag.
 
-> Until the repository and its GHCR package have been made public, this command
-> returns `401 Unauthorized` for anyone without registry access. Use the
-> build-from-source path above instead. See the **Maintainer release checklist**
-> below for what flips this on.
+> The prebuilt pull needs the GHCR package's visibility set to **public** (the package's GHCR page →
+> Package settings → Danger Zone → Change visibility). If anonymous `docker pull` returns `401`/`403`,
+> the package is still private — use the build-from-source path above instead. See the
+> **Maintainer release checklist** below.
 
 ## Ways To Run It
 
