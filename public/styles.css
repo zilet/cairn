@@ -2822,6 +2822,60 @@ body.swr-busy::after{
 .route-task{font-size:.84rem;color:var(--ink-2);flex:0 0 auto;padding-right:10px}
 .route-sel{max-width:58%}
 
+/* Settings sub-nav: the four-section switcher reuses the shared .segwrap/.seg sliding
+   thumb (segBar) — no new bar styling needed. A slice rendered under the sub-nav is
+   "flush" (its own first-child top margin comes from the lede above, not a section
+   gap) so the Agents/Sources/Automation/Data content sits tight under the band. */
+.set-group--flush{margin-top:8px}
+.set-group--flush .set-group-sub{margin-top:0}
+#setSlice{min-height:40vh} /* keep the sticky sub-nav from jumping on a short slice */
+
+/* Agent connect-cards: an inset card per agent (state chip + meta on top, the
+   order/enable controls + connect/detail actions below). Replaces the old flat
+   .agentrow; reuses agentname/agentdesc/agentctl/ordbtn/togglebtn from the agent
+   block above and the standard --card-2 inset surface. */
+.agent-card{background:var(--card-2);border:1px solid var(--line);border-radius:var(--radius);
+  padding:13px 14px;margin-bottom:10px}
+.agent-card.off{opacity:.6}
+.agent-card-top{display:flex;align-items:flex-start;gap:10px}
+.agent-card-top .agentmeta{flex:1;min-width:0}
+.agent-card-top .agentdesc{white-space:normal} /* room to breathe inside a card */
+.agent-card-ctl{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  flex-wrap:wrap;margin-top:11px}
+.agent-card-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.agent-connect-btn{padding:6px 13px;font-size:.74rem}
+.agent-detail-link{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
+  font-size:.7rem;font-weight:600;letter-spacing:.04em;cursor:pointer;padding:4px 2px;
+  text-decoration:underline;text-underline-offset:2px;text-decoration-color:var(--line-2)}
+.agent-detail-link:hover{color:var(--ink-2)}
+.agent-detail-link:disabled{opacity:.5;cursor:default;text-decoration:none}
+
+/* state chip — calm, never an alarming red. Sage = connected, terracotta-ink invite
+   = connect, neutral = installed, gold = not installed (an input is simply absent). */
+.agent-chip{flex:0 0 auto;font-family:var(--font-ui);font-size:.58rem;font-weight:700;
+  letter-spacing:.08em;text-transform:uppercase;border-radius:999px;padding:3px 9px;
+  white-space:nowrap;line-height:1.5}
+.agent-chip-ok{color:var(--sage);background:var(--sage-bg)}
+.agent-chip-connect{color:var(--accent);background:var(--accent-wash,rgba(180,85,45,.1))}
+.agent-chip-installed{color:var(--ink-2);background:var(--card);border:1px solid var(--line-2)}
+.agent-chip-absent{color:var(--muted);background:var(--card);border:1px solid var(--line-2)}
+
+/* read-only info line + lazy models disclosure (visibility only, no model picker) */
+.agent-card-note{margin-top:9px;font-size:.74rem;color:var(--muted);font-style:italic}
+.agent-info-line{margin-top:9px;padding-top:9px;border-top:1px solid var(--line);
+  font-size:.76rem;color:var(--ink-2);font-variant-numeric:lining-nums}
+.agent-upd{color:var(--gold);font-weight:600}
+.agent-models{margin:9px 0 0;padding:9px 0 0 0;border-top:1px solid var(--line);
+  list-style:none;display:grid;gap:4px}
+.agent-models li{font-size:.76rem;color:var(--ink-2);padding-left:14px;position:relative}
+.agent-models li::before{content:"·";position:absolute;left:4px;color:var(--muted)}
+.agent-models .agent-models-empty{color:var(--muted);font-style:italic}
+.agent-models .agent-models-empty::before{content:none}
+@media (max-width:380px){
+  .agent-card-ctl{flex-direction:column;align-items:stretch}
+  .agent-card-actions{justify-content:flex-end}
+}
+
 /* plan surface — the launchpad, revealed when the day calls for it. A clear gap plus
    the ruled session-head band below split the workout-logging zone off from the analysis
    (Brief + capture) above, so Today reads as two calm zones rather than one long scroll. */
