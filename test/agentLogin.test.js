@@ -38,9 +38,11 @@ test("buildPtyInvocation wraps the login argv in a real PTY (no native module)",
   assert.equal(typeof inv.command, "string");
   assert.ok(Array.isArray(inv.args) && inv.args.length > 0);
   if (process.platform === "linux") {
-    // util-linux `script -qfc "<cmd>" /dev/null` — the Docker path.
+    // util-linux `script -qfc "<cmd>" /dev/null` — the Docker path. Each token is
+    // shell-quoted (the command runs via /bin/sh -c) so a future agents.json entry
+    // with a space/metachar can't word-split or inject.
     assert.equal(inv.command, "script");
-    assert.deepEqual(inv.args, ["-qfc", "claude auth login", "/dev/null"]);
+    assert.deepEqual(inv.args, ["-qfc", "'claude' 'auth' 'login'", "/dev/null"]);
   } else if (process.platform === "darwin") {
     // python3 pty.spawn — BSD `script` can't PTY with piped stdio.
     assert.equal(inv.command, "python3");
