@@ -1249,3 +1249,260 @@ function activityLine(a) {
   ].filter(Boolean).join(" · ");
   return bits || a.raw_text || a.notes || "";
 }
+
+// ---------- in-app agent-login terminal (xterm over a WebSocket PTY) ----------
+// Some coaching CLIs (Claude Code, Codex, Grok, …) authenticate with an
+// interactive device login: they print a URL + code, you authorize in a browser,
+// they finish. This modal pipes that interactive subprocess to the device over a
+// WebSocket and renders it with xterm.js (vendored, UMD globals `Terminal` and
+// `FitAddon.FitAddon`). One login runs server-side at a time. Self-contained and
+// global so Settings can launch it: `openAgentLoginModal("claude")`.
+//
+// Styling lives in a JS-injected <style> (this module can't touch styles.css);
+// the chrome harmonizes with the Atelier palette, the terminal panel is a calm
+// dark slate. The vendored assets load lazily on first open (one cached promise).
+
+let _xtermAssets = null; // Promise<void>, resolved once xterm + fit addon are loaded
+function loadXtermAssets() {
+  if (_xtermAssets) return _xtermAssets;
+  _xtermAssets = new Promise((resolve, reject) => {
+    try {
+      if (!document.querySelector('link[data-xterm-css]')) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = "/vendor/xterm.css";
+        link.setAttribute("data-xterm-css", "1");
+        document.head.appendChild(link);
+      }
+      // Already present (e.g. a second open before the first resolved)?
+      if (window.Terminal && window.FitAddon) { resolve(); return; }
+      // the fit addon's UMD references the core, so always load core first
+      const loadScript = (src) => new Promise((res, rej) => {
+        let el = document.querySelector(`script[data-xterm-src="${src}"]`);
+        if (el) { el.addEventListener("load", () => res()); el.addEventListener("error", () => rej(new Error("load " + src))); if (el.dataset.loaded) res(); return; }
+        el = document.createElement("script");
+        el.src = src;
+        el.async = false;
+        el.setAttribute("data-xterm-src", src);
+        el.addEventListener("load", () => { el.dataset.loaded = "1"; res(); });
+        el.addEventListener("error", () => rej(new Error("load " + src)));
+        document.head.appendChild(el);
+      });
+      // core then addon, in order
+      loadScript("/vendor/xterm.js")
+        .then(() => loadScript("/vendor/xterm-addon-fit.js"))
+        .then(() => resolve())
+        .catch(reject);
+    } catch (e) { reject(e); }
+  });
+  return _xtermAssets;
+}
+
+// Inject the modal + terminal chrome once. Kept out of styles.css on purpose
+// (another stream owns that file); scoped under .agent-login-* so it's inert
+// until a modal mounts.
+function ensureAgentLoginStyles() {
+  if (document.getElementById("agent-login-styles")) return;
+  const s = document.createElement("style");
+  s.id = "agent-login-styles";
+  s.textContent = `
+.agent-login-ov{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
+  padding:max(env(safe-area-inset-top),18px) 16px max(env(safe-area-inset-bottom),18px);
+  background:rgba(33,29,23,.46);backdrop-filter:saturate(1.1) blur(2px);
+  animation:agentLoginFade .16s ease both}
+@keyframes agentLoginFade{from{opacity:0}to{opacity:1}}
+.agent-login{width:min(720px,100%);max-height:100%;display:flex;flex-direction:column;
+  background:var(--card,#fffdf8);color:var(--ink,#211d17);border:1px solid var(--line,#e7dfd2);
+  border-radius:var(--radius,18px);box-shadow:var(--shadow-lg,0 28px 64px rgba(0,0,0,.3));
+  overflow:hidden;font-family:var(--font-ui,system-ui,sans-serif)}
+.agent-login-hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e7dfd2)}
+.agent-login-hd h2{margin:0;font-family:var(--font-display,Fraunces,serif);font-size:19px;font-weight:600;flex:1;line-height:1.2}
+.agent-login-x{appearance:none;border:0;background:transparent;color:var(--muted,#746c5c);
+  font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:8px}
+.agent-login-x:hover{color:var(--ink,#211d17);background:var(--paper,#f4efe7)}
+.agent-login-bd{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;overflow:auto}
+.agent-login-term{background:#1c1b1a;border-radius:12px;padding:10px 8px 8px;
+  border:1px solid #2b2926;min-height:300px}
+.agent-login-term .xterm{padding:0}
+.agent-login-status{font-size:13px;color:var(--muted,#746c5c);min-height:18px;display:flex;align-items:center;gap:6px}
+.agent-login-status.is-ok{color:var(--sage,#6e7f5c);font-weight:600}
+.agent-login-status.is-err{color:var(--accent,#b4552d);font-weight:600}
+.agent-login-hint{font-size:12.5px;color:var(--muted,#746c5c);line-height:1.5;margin:0}
+.agent-login-hint code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  background:var(--paper,#f4efe7);padding:1px 5px;border-radius:5px;border:1px solid var(--line,#e7dfd2)}
+.agent-login-ft{display:flex;justify-content:flex-end;gap:10px;padding-top:2px}
+.agent-login-btn{appearance:none;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  padding:9px 16px;border-radius:11px;border:1px solid var(--line,#c9bfa9);
+  background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
+.agent-login-btn:hover{background:var(--card,#fffdf8)}
+@media (prefers-reduced-motion:reduce){.agent-login-ov{animation:none}}
+`;
+  document.head.appendChild(s);
+}
+
+// Tear down a mounted login modal: close the socket (kills the server session),
+// dispose the terminal, drop window listeners, remove the overlay.
+function closeAgentLoginModal(ov) {
+  if (!ov || ov.dataset.closing) return;
+  ov.dataset.closing = "1";
+  try { ov._ws && ov._ws.close(); } catch {}
+  try { ov._term && ov._term.dispose(); } catch {}
+  try { window.removeEventListener("resize", ov._onResize); } catch {}
+  try { document.removeEventListener("keydown", ov._onKey); } catch {}
+  ov.remove();
+}
+
+// Open the interactive agent-login terminal for `agentName`.
+async function openAgentLoginModal(agentName) {
+  const name = String(agentName || "").trim();
+  if (!name) return;
+  ensureAgentLoginStyles();
+
+  // Build the modal shell immediately (so a slow asset load still shows chrome).
+  const ov = document.createElement("div");
+  ov.className = "agent-login-ov";
+  const grokNote = name.toLowerCase() === "grok"
+    ? `<p class="agent-login-hint">Grok can also authenticate with an API key — set <code>XAI_API_KEY</code> in the server environment instead of this device login.</p>`
+    : "";
+  ov.innerHTML = `
+    <div class="agent-login" role="dialog" aria-modal="true" aria-label="Connect ${escAttr(name)}">
+      <div class="agent-login-hd">
+        <h2>Connect ${escHtml(name)}</h2>
+        <button class="agent-login-x" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="agent-login-bd">
+        <div class="agent-login-status" role="status">Connecting…</div>
+        <div class="agent-login-term"></div>
+        ${grokNote}
+        <p class="agent-login-hint">Follow the prompts. If a URL and a code appear, open the URL in your browser to authorize.</p>
+        <div class="agent-login-ft">
+          <button class="agent-login-btn" type="button" data-close>Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+
+  const statusEl = ov.querySelector(".agent-login-status");
+  const termHost = ov.querySelector(".agent-login-term");
+  const closeBtn = ov.querySelector(".agent-login-ft [data-close]");
+  const setStatus = (text, cls) => {
+    statusEl.textContent = text;
+    statusEl.classList.remove("is-ok", "is-err");
+    if (cls) statusEl.classList.add(cls);
+  };
+  // Esc + the × and Cancel buttons all tear down (which closes the WS session).
+  ov._onKey = (e) => { if (e.key === "Escape") closeAgentLoginModal(ov); };
+  document.addEventListener("keydown", ov._onKey);
+  ov.querySelector(".agent-login-x").addEventListener("click", () => closeAgentLoginModal(ov));
+  closeBtn.addEventListener("click", () => closeAgentLoginModal(ov));
+
+  // Load xterm + fit, then spin up the terminal and the socket.
+  let Terminal, FitAddon;
+  try {
+    await loadXtermAssets();
+    Terminal = window.Terminal;
+    FitAddon = window.FitAddon && window.FitAddon.FitAddon;
+    if (typeof Terminal !== "function" || typeof FitAddon !== "function") {
+      throw new Error("terminal library unavailable");
+    }
+  } catch {
+    setStatus("Couldn't load the terminal. Reload and try again.", "is-err");
+    return;
+  }
+  if (!ov.isConnected) return; // closed while loading
+
+  const term = new Terminal({
+    convertEol: false,
+    fontSize: 13,
+    cursorBlink: true,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    theme: {
+      background: "#1c1b1a",
+      foreground: "#ece6da",
+      cursor: "#d9b48a",
+      selectionBackground: "#3a3733",
+      black: "#1c1b1a", red: "#d2795a", green: "#9bb07e", yellow: "#d9b48a",
+      blue: "#7f9bb0", magenta: "#b08a9b", cyan: "#7fb0a8", white: "#ece6da",
+    },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(termHost);
+  try { fit.fit(); } catch {}
+  ov._term = term;
+  ov._onResize = () => { try { fit.fit(); } catch {} };
+  window.addEventListener("resize", ov._onResize);
+
+  // Build the WS URL the way the rest of the PWA reaches the API + token.
+  const token = (typeof authToken === "function" && authToken()) || "";
+  const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host +
+    "/api/agent-login/ws?agent=" + encodeURIComponent(name) +
+    (token ? "&token=" + encodeURIComponent(token) : "");
+
+  let ws;
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch {
+    setStatus("Couldn't open the connection.", "is-err");
+    return;
+  }
+  ws.binaryType = "arraybuffer";
+  ov._ws = ws;
+
+  // Server control protocol (JSON text frames). Binary frames are raw PTY bytes.
+  const handleControl = (m) => {
+    if (!m || typeof m !== "object") return;
+    switch (m.t) {
+      case "exit": {
+        const ok = m.code === 0;
+        setStatus(ok ? "✓ Connected" : "Login exited", ok ? "is-ok" : "is-err");
+        setTimeout(() => {
+          closeAgentLoginModal(ov);
+          if (typeof renderSettings === "function") renderSettings();
+        }, 1200);
+        break;
+      }
+      case "busy":
+        setStatus("Another login is in progress — try again in a moment.", "is-err");
+        break;
+      case "error":
+        setStatus(m.message ? String(m.message) : "Something went wrong.", "is-err");
+        break;
+      default:
+        break;
+    }
+  };
+
+  ws.onopen = () => {
+    setStatus("Connected — follow the prompts below.");
+    try { term.focus(); } catch {}
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      try { handleControl(JSON.parse(ev.data)); } catch {}
+    } else {
+      term.write(new Uint8Array(ev.data));
+    }
+  };
+  ws.onerror = () => { setStatus("Connection error.", "is-err"); };
+  ws.onclose = () => {
+    // Only surface if we weren't already done (exit handler closes the modal).
+    if (ov.isConnected && !ov.dataset.closing && !statusEl.classList.contains("is-ok")) {
+      setStatus("Disconnected.", "is-err");
+    }
+  };
+
+  // Keystrokes → raw frames; xterm resize → JSON resize control frame.
+  term.onData((d) => { if (ws.readyState === 1) ws.send(d); });
+  term.onResize(({ cols, rows }) => {
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ t: "resize", cols, rows })); } catch {}
+    }
+  });
+  // Push the initial geometry once connected.
+  ws.addEventListener("open", () => {
+    if (ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows })); } catch {}
+    }
+  });
+}
