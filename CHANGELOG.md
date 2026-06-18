@@ -7,6 +7,49 @@ Versioning](https://semver.org/) for tagged releases.
 
 _Nothing yet._
 
+## [0.5.0] — 2026-06-18
+
+**Connect a coaching CLI without touching a terminal.** This release makes the agent layer
+first-class and honest: sign in from inside the app, see which CLIs are connected and what model each
+runs, and trust that only working agents are used. No schema change — a drop-in upgrade.
+
+### Added
+- **In-app agent login** — open **Settings → Agents → Connect** and a real terminal opens right in
+  the browser to walk you through that CLI's sign-in (Claude Code / Codex / Antigravity / Grok). The
+  server runs the login as itself, so the credential lands where the agent reads it — no
+  `docker exec`, no `-u app` to remember. A PTY bridge over a WebSocket, with no native build step.
+- **Honest rotation** — an installed-but-not-logged-in CLI is automatically kept **out** of the
+  coaching rotation, so a half-configured host degrades cleanly instead of failing requests. Each
+  card shows a clear **✓ Connected / Connect → / Installed / Not installed** state.
+- **Version & current-model visibility** — every agent card shows the installed CLI version and the
+  model it's currently using (read for free where the CLI exposes it; codex from its config).
+  Transparency only — defaults are kept, nothing is pinned. `GET /api/agents/:name/info` + `/models`
+  (+ MCP `get_agent_info` / `list_agent_models`)
+- **Reorganized Settings** — a calm segmented sub-nav (**Agents / Sources / Automation / Data**) that
+  never drops an unsaved edit when you switch sections.
+
+### Changed
+- The **agent-health card speaks plain words** ("reliable" / "mostly clean" / "often retries")
+  instead of a percentage — no numeric scores, per the constitution.
+- A pinned per-task agent now goes through the same retry + circuit-breaker + telemetry path as the
+  auto rotation.
+- Docs lead with in-app **Connect** as the easy path (`docker exec` as the fallback); the generated
+  API/MCP reference and `SECURITY.md` cover the new surface. PWA cache `cairn-v89`.
+
+### Fixed
+- Grok now shows **✓ Connected** after an in-app device-auth login (it was stuck on "Installed").
+- The login modal keeps a failed or interrupted login readable (Close + **Try again**) instead of
+  vanishing after a second, traps focus, and fits small phone screens.
+- The Settings save bar no longer false-flags "Unsaved changes" on a fresh load.
+- The Settings sub-nav highlights the selected section correctly; off-plan exercise cards persist
+  after the first logged set.
+
+### Security
+- The in-app login bridge is gated by the same `CAIRN_AUTH_TOKEN` and optional per-IP rate limit as
+  the rest of the API, the login command is chosen server-side from an allowlist (never the browser),
+  and the login subprocess is scrubbed of Cairn's own secrets (`CAIRN_AUTH_TOKEN`, `GARMIN_PASSWORD`)
+  before it runs. An active login is also torn down cleanly on server shutdown.
+
 ## [0.4.0] — 2026-06-17
 
 The first release with **endurance & running as a first-class discipline** — Cairn now coaches
@@ -148,6 +191,7 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/zilet/cairn/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/zilet/cairn/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/zilet/cairn/releases/tag/v0.3.0
