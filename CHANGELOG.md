@@ -5,7 +5,39 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.4.0] — 2026-06-17
+
+The first release with **endurance & running as a first-class discipline** — Cairn now coaches
+lifting, running, or a hybrid of both — folded together with the open-source launch hardening that
+landed since 0.3.0.
+
 ### Added
+- **Endurance & running, first-class** — set your **primary discipline** (strength / endurance /
+  hybrid) and an **endurance goal**: a dated **race** Cairn periodizes a conservative ramp + taper
+  toward, or a **standing** readiness target with no date ("stay 10k-ready" — maintain, don't peak).
+  The Brief, the plan, the coaching read, and the meals all speak to what you're actually training
+  for (migrations **v35** / **v37**). `GET /api/endurance-goal` + MCP `get/set_endurance_goal`
+- **Plan → Endurance race-coach** — a dedicated tab with a race-countdown / standing-goal banner,
+  the current phase (base → build → sharpen → taper), and this week's run shaping
+- **Applyable run prescriptions** — the coach hands back the week's runs (easy / tempo / intervals /
+  long, each with distance, duration, and target zone) as a draft you approve; applying attaches
+  each run to its day **surgically**, leaving strength work intact (`repo.setWeeklyRuns`)
+- **The runner loop closes** — a synced Garmin run reconciles against the run that was prescribed:
+  Today shows "**N of M km this week**" compliance in plain words (never a percentage), a prescribed
+  run that already synced flips to a calm done card ("✓ Easy run — 8.2 km · synced from Garmin ·
+  mostly Z2"), and next week adapts **conservatively** to actual mileage (fell short → hold, never
+  make up missed volume). `GET /api/run-compliance`, `GET /api/cardio` (+ MCP mirrors)
+- **Day-type-aware Today** — the day reads **TODAY · A RUN**, **TODAY · LIFT + RUN**, or a lift day,
+  with cardio floated to the top on run days, plus a quiet Garmin **sync-trust** line ("synced 2h
+  ago · Sync now")
+- **Endurance progress & PRs** — Progress → Endurance shows weekly mileage, moving time, longest
+  run, time-in-zone, and pace trend, plus endurance PRs; VO2max, resting HR, and HRV join the
+  connected brain as optimal-zone markers (never a 0–100 score). `GET /api/endurance-prs` + MCP mirror
+- **Agentic "How to do it"** — tap any exercise for a generated, plain-language explanation of how
+  to perform it well, alongside its est-1RM trend and history
+- **The week ahead on Today** — a calm forward look at the next few days, so today's read sits in context
 - **Connected-brain visibility** — cached research evidence is now discoverable: a "see the evidence (N)"
   count on directives, a calm Settings toggle to enable research, and a quiet "What Cairn has noticed" card
   surfacing the durable suggestion→outcome learnings. `GET /api/evidence/summary`, `GET /api/learnings`
@@ -56,6 +88,12 @@ Versioning](https://semver.org/) for tagged releases.
   understands + applies profile/about-me/supplements/injuries/memories in one pass; no question barrage
 
 ### Changed
+- **Information architecture & desktop** — the elite-launch IA restructure plus a responsive
+  **two-column desktop layout**, so the phone-first PWA uses the wider screen on a laptop
+- **Proposals UX** — applying a training proposal now retires its sibling open drafts (server-side
+  `superseded`, distinct from a user discard), older Coach items fold behind a "Show earlier"
+  disclosure, an applied proposal shows a clear "✓ Applied to your plan" confirmation, and
+  plan-proposal drafting runs through an elite async loader instead of blocking
 - **Modular frontend & data layer** — the two largest files were split for maintainability,
   behavior-preserving: `public/app.js` (~10k lines) → ten ordered modules under `public/js/`
   (`01-core` … `10-boot`), loaded as classic scripts that share one global scope (no bundler;
@@ -110,5 +148,6 @@ Versioning](https://semver.org/) for tagged releases.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/zilet/cairn/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/zilet/cairn/releases/tag/v0.3.0

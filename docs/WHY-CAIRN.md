@@ -13,9 +13,9 @@ then get out of the way. It is a buddy, not a boss. You drive.
 
 ## The one-line version
 
-Most tools track a domain well. Cairn connects the domains — your labs, your training,
-your food, your sleep, your life — into **one reasoning brain** that you own and run
-yourself, and it speaks only when it has something useful to say.
+Most tools track a domain well. Cairn connects the domains — your labs, your training
+(lifting, running, or a hybrid), your food, your sleep, your life — into **one reasoning brain**
+that you own and run yourself, and it speaks only when it has something useful to say.
 
 ---
 
@@ -66,6 +66,11 @@ Where Cairn is different:
 - **It connects the sensor to the labs.** A persistently elevated running heart rate isn't
   just a chart in Cairn — it gets connected to the bloodwork that might explain it. That
   cross-domain link is the whole point, and a single-sensor device can't make it.
+- **It closes the loop your watch leaves open.** Garmin records the run you *did*; it doesn't
+  write the run you *should do next*. Cairn periodizes a conservative ramp and taper toward your
+  race (or holds a standing readiness goal), prescribes the week's runs, and — when the watch syncs
+  them back — adapts next week to the miles you actually ran (fell short → hold, never cram missed
+  volume). Measurement on one side, a coached plan on the other, joined.
 - **Pull, never push.** No nudges, no streaks, no "you haven't closed your rings." Cairn earns
   being opened by being useful when opened. Insights wait for you in-app; nothing pings you.
 

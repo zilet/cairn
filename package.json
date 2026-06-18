@@ -1,9 +1,9 @@
 {
   "name": "cairn",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "license": "MIT",
-  "description": "Cairn — self-hosted training, nutrition & performance tracker with an agentic coaching loop.",
+  "description": "Cairn — self-hosted, connected, day-reading wellness OS for training (lifting, running & hybrid), nutrition & longevity with an agentic coaching loop.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zilet/cairn.git"

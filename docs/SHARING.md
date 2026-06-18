@@ -135,14 +135,14 @@ The GitHub Actions workflow builds and pushes images to GitHub Container Registr
 when a `v*` tag is pushed:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 It publishes:
 
 ```text
-ghcr.io/zilet/cairn:v0.3.0
+ghcr.io/zilet/cairn:v0.4.0
 ghcr.io/zilet/cairn:latest
 ```
 

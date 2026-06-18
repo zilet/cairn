@@ -11,19 +11,28 @@ an agentic coaching loop and a memory that grows over time. It opens to a calm *
 your whole picture and *suggests* what kind of day today should be (a suggestion, never a gate),
 propagates flagged lab findings across every domain they touch, runs adaptive nutrition, learns who
 you are, captures effortlessly (frequents + voice + Apple Health), and surfaces quiet cross-domain
-insights one at a time. The product north-star lives in [`docs/VISION.md`](docs/VISION.md). One Node
-service serves:
+insights one at a time. It coaches whatever you train — **lifting, running, or a hybrid of both** —
+periodizing a conservative ramp + taper toward a dated **race** or holding a no-date **standing**
+readiness goal, and adapting next week to the miles you actually ran. The product north-star lives
+in [`docs/VISION.md`](docs/VISION.md). One Node service serves:
 
-- **PWA** (`/`) - phone app with six tabs: **Today** (the day-read **Brief** — a calm
-  rest/easy/train suggestion with override chips and a "build me a session" launchpad; effortless
-  capture via one-tap frequent foods, voice input, and an optional morning check-in; a quiet
-  insight card; post-session 1-tap autoregulation feedback; plus the weekly stats strip,
-  bodyweight quick-add, a date picker to log any past day, set-by-set logging with prefill + `N / M`
-  progress, rest timer, PR detection, "+ Add exercise", finish-workout summary, form guides),
+- **PWA** (`/`) - a phone-first app (with a responsive two-column desktop layout) and six tabs:
+  **Today** (the day-read **Brief** — a calm rest/easy/train suggestion with override chips and a
+  "build me a session" launchpad, **day-type-aware** so it reads *TODAY · A RUN*, *TODAY · LIFT + RUN*,
+  or a lift day, with a prescribed run that already synced flipping to a calm done card and a forward
+  look at the week ahead; effortless capture via one-tap frequent foods, voice input, and an optional
+  morning check-in; a quiet insight card; post-session 1-tap autoregulation feedback; plus the weekly
+  stats strip, bodyweight quick-add, a date picker to log any past day, set-by-set logging with
+  prefill + `N / M` progress, rest timer, PR detection, "+ Add exercise", finish-workout summary,
+  form guides + agentic "how to do it"),
   **Plan** (a manual plan editor — add/remove/reorder days & exercises, per-exercise notes & warmup
-  sets, plus the Coach draft/proposal/meal-plan flow with accept/discard UI), **Progress** (est-1RM
-  trend, bodyweight chart vs goal, session history, volume by muscle, calendar heatmap, and an
-  **Energy Balance** view with an adaptive nutrition check-in), **Chat** (talk to your coach: it logs
+  sets; an **Endurance** race-coach sub-tab with a race-countdown / standing-goal banner, the current
+  phase (base → build → sharpen → taper), and this week's run shaping; plus the Coach
+  draft/proposal/meal-plan flow with accept/discard UI, where the week's runs arrive as applyable
+  prescriptions), **Progress** (est-1RM trend, bodyweight chart vs goal, session history, volume by
+  muscle, calendar heatmap, an **Endurance** view with weekly mileage, time-in-zone, pace trend,
+  endurance PRs, and an "N of M km this week" compliance line, and an **Energy Balance** view with an
+  adaptive nutrition check-in), **Chat** (talk to your coach: it logs
   safe things instantly and stages plan changes as drafts), **Me** (a Profile / Memory / Health /
   Life / **Family** sub-nav: profile with a free-text **about-me**, goal feasibility check &
   bodyweight, activity & food-notes logging; a **Memory** view to curate what the coach remembers;
@@ -121,6 +130,7 @@ one up.
 | Marker extraction view & optimal-zone trends | Quiet cross-domain **insights** / weekly read |
 | Recovery view, deterministic TDEE / expenditure | Recipe generation, single-meal swaps |
 | Activities, food notes, memory, family, life context | Background enrichment of free-text logs |
+| Endurance stats, run compliance, race countdown, PRs | Weekly run **prescriptions** (drafted, then applied surgically) |
 
 A **coaching agent** means one of the supported CLIs — **Claude Code**, **Codex**,
 **Antigravity**, or **Grok** — installed on the host **and logged in** with your own account.
@@ -232,9 +242,17 @@ checklist.
 
 - **Your primary discipline:** Cairn adapts to how you train — strength/lifting,
   running/endurance, or a hybrid of both — so the Brief, the plan, and the coaching read speak to
-  what you're actually working toward.
+  what you're actually working toward. On top of the discipline sits an optional **endurance goal**:
+  a dated **race** (Cairn periodizes a conservative ramp and taper toward it) or a no-date
+  **standing** readiness target ("stay 10k-ready" — maintain, don't peak).
 - **Lifting** (precise): the 5-day plan with per-exercise targets, logged sets, est-1RM trends.
   This is the part that gets actively optimized.
+- **Running & endurance:** the coach prescribes the week's runs (easy / tempo / intervals / long,
+  each with distance, duration, and target zone) as a draft you approve; a synced Garmin run then
+  reconciles against what was prescribed, so Today shows "N of M km this week" in plain words and
+  next week adapts **conservatively** to the miles you actually ran (fell short → hold, never make up
+  missed volume). Weekly mileage, time-in-zone, pace trend, and endurance PRs live in Progress →
+  Endurance; VO2max, resting HR, and HRV join the connected brain as optimal-zone markers.
 - **Profile & goal**: a neutral example profile ships seeded — replace it with your own in the Me
   tab (or first-run onboarding). The **goal check** computes TDEE (Mifflin-St Jeor x activity
   factor) and tests feasibility against a lean-safe loss rate (<=1 %/wk). It flags aggressive goals
