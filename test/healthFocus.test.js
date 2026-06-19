@@ -6,6 +6,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { buildMealPlanPrompt, buildCoachPrompt } from "../dist/prompt.js";
 
 beforeEach(() => {
   resetTables("health_documents", "health_directives");
@@ -56,4 +57,18 @@ test("an uncertain-lever group is flagged uncertain and tends to 'track'", () =>
   const f = repo.healthFocus();
   const liver = f.priorities.find((p) => /Liver/i.test(p.group));
   if (liver) assert.ok(liver.uncertain || liver.tier === "track" || liver.tier === "act_now");
+});
+
+test("plan-shaping prompts LEAD with the prioritized focus (not a flat directive list)", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+    marker("Vitamin D 25-OH", 18, { unit: "ng/mL", flag: "low" }),
+  ]);
+  repo.deriveDirectives();
+  const meal = buildMealPlanPrompt();
+  const coach = buildCoachPrompt();
+  assert.match(meal, /PRIORITIZED HEALTH FOCUS/, "the meal plan leads with prioritized health priorities");
+  assert.match(meal, /\[ACT NOW\]/, "act-now items are tiered up front");
+  assert.match(coach, /PRIORITIZED HEALTH FOCUS/, "the coach prompt leads with them too");
 });

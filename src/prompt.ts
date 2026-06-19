@@ -245,6 +245,25 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
   const wanted = opts.domains;
   const relevant = directives.filter((d: any) => d && (!wanted || wanted.includes(d.domain)));
   const lines: string[] = [];
+
+  // LEAD with the prioritized focus (the elite-coach tiering), so the plan serves
+  // what matters MOST first — not a flat directive list. act-now items first; the
+  // move shown is the one for this prompt's domain when there is one.
+  const focus = ctx?.health_focus;
+  const fps = focus && Array.isArray(focus.priorities) ? focus.priorities : [];
+  const relFocus = fps.filter((p: any) =>
+    !wanted || p.tier === "act_now" || wanted.some((d) => p?.moves && p.moves[d])
+  );
+  if (relFocus.length) {
+    lines.push("PRIORITIZED HEALTH FOCUS (the connected brain — most important FIRST; build this domain's plan to serve these, act-now items before track):");
+    for (const p of relFocus.slice(0, 6)) {
+      const tier = p.tier === "act_now" ? "ACT NOW" : "track";
+      const move = wanted ? wanted.map((d) => p?.moves?.[d]).find(Boolean) : (p?.moves?.nutrition || p?.moves?.training || p?.moves?.watch);
+      const tags = `${p.compounding ? " · several markers together" : ""}${p.uncertain ? " · lever unsettled (softer nudge)" : ""}`;
+      lines.push(`  - [${tier}] ${p.group}${tags}: ${move ? String(move).trim() : String(p.why ?? "").trim()}`);
+    }
+  }
+
   if (relevant.length) {
     const byDomain: Record<string, string[]> = {};
     for (const d of relevant) {
@@ -444,6 +463,17 @@ function activeInjuryAreas(ctx: any): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+// A QUIET standing-health line for the Brief: the elite-coach synthesis headline +
+// the one change, offered as optional pull — the day-read may fold ONE calm clause
+// in when it naturally fits today, but usually leaves it unsaid (the Brief is about
+// today's training, not a health lecture). "" when there's no synthesis yet.
+function renderHealthLead(ctx: any): string {
+  const s = ctx?.health_synthesis;
+  if (!s || !(s.headline || s.one_change)) return "";
+  const bits = [s.headline, s.one_change ? `the one change worth holding: ${s.one_change}` : null].filter(Boolean);
+  return `\nSTANDING HEALTH FOCUS (their whole-picture read — surface at most ONE quiet clause and ONLY if it fits today, in a friend's voice, never alarming; usually leave it unsaid): ${bits.join(" — ")}\n`;
 }
 
 // The active periodization block (goal / phase / week N of M), so the coach
@@ -1506,7 +1536,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderHealthLead(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1795,8 +1825,9 @@ ${prefs}
 ${CONTEXT_GUARDRAILS}
 - TRIPS specifically: for weeks overlapping a trip, lean on portable, travel-friendly meals and
   flag that the athlete will be eating out.
-- HEALTH MARKERS specifically: e.g. low ferritin/iron → emphasize iron-rich foods; flag any
-  marker-driven food emphasis in notes. Not medical advice.
+- HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
+  the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
+  shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
 ${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to the recommended deficit and protein target.")}
 

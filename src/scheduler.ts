@@ -1,7 +1,7 @@
 import * as repo from "./repo.js";
 import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
-import { generateInsight, nutritionCheckin } from "./coachOps.js";
+import { generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
 import { precomputeDayRead, localToday } from "./dayread.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
@@ -134,6 +134,15 @@ export function startScheduler() {
           console.log(r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`);
         } catch (e: any) {
           console.error(`[proactive] weekly read failed: ${e?.message ?? e}`);
+        }
+        // Refresh the whole-picture health synthesis weekly too, so it absorbs
+        // training/recovery drift (new labs already refresh it immediately via the
+        // enrich review pass). Pull artifact — cached, never pushed.
+        try {
+          const r = await synthesizeHealth("auto");
+          console.log(r.ok ? `[proactive] refreshed the health synthesis.` : `[proactive] health synthesis steady (calm no-op).`);
+        } catch (e: any) {
+          console.error(`[proactive] health synthesis failed: ${e?.message ?? e}`);
         }
       }
       if (nutritionDue) {

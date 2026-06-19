@@ -6,6 +6,7 @@ import { db } from "./db.js";
 import * as repo from "./repo.js";
 import { runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
+import { synthesizeHealth } from "./coachOps.js";
 
 const execFileP = promisify(execFile);
 
@@ -337,6 +338,16 @@ async function processReviewJob(): Promise<void> {
   const saved = parsed && typeof parsed === "object" ? repo.addHealthReview(parsed, agent, raw) : null;
   if (!saved) {
     console.warn("[enrich] health review refresh: agent returned no usable review — previous review kept.");
+  }
+
+  // New labs landed → refresh the elite-coach whole-picture synthesis on the fresh
+  // directives + review, so the Brain view's lead reflects the new panel without a
+  // manual refresh. Pull artifact (cached); a failure keeps the previous synthesis.
+  try {
+    const r = await synthesizeHealth("auto");
+    console.log(r.ok ? "[enrich] health synthesis refreshed after new labs." : "[enrich] health synthesis: kept previous (no usable read).");
+  } catch (e: any) {
+    console.warn(`[enrich] health synthesis refresh failed: ${e?.message ?? e}`);
   }
 }
 
