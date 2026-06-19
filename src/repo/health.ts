@@ -4,6 +4,40 @@ import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { type OptimalZone, applyReviewDirectives, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
 
+// A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
+// generously so a complete transcription is never silently clipped, while still
+// bounding a runaway/garbage response. Shared by both the in-place enrich apply
+// path (enrich.ts cleanMarkers) and the derived-panel writer below.
+export const MAX_MARKERS_PER_PANEL = 250;
+
+// Coarse, provider-agnostic estimate of how many results a pasted lab panel
+// contains. Used ONLY to DETECT a grossly incomplete extraction (a model that
+// curated 111 markers down to 44) so the ingest path can re-run with a stricter
+// prompt — it is never used to build markers. Counts "value lines": a marker's
+// value sits on its own line and starts with a number/comparator, or is one of a
+// small set of qualitative results. Section headers and marker NAMES start with a
+// letter (and aren't in the qualitative set), and the "In/Above/Below Range" flag
+// lines are deliberately excluded — so this approximates one count per marker.
+// Deliberately rough (±20% is fine for "is this way short?"); never exact.
+// Deliberately excludes flag-ish words (in/above/below range, normal) so a flag
+// line is not mistaken for a value line and double-counted.
+const QUALITATIVE_RESULT =
+  /^(negative|positive|none seen|not seen|detected|not detected|reactive|non[- ]?reactive|clear|cloudy|hazy|turbid|yellow|colorless|straw|amber|trace|rh\(d\)|a|b|ab|o)\b/i;
+
+export function estimateMarkerCandidates(text: string): number {
+  if (!text || typeof text !== "string") return 0;
+  let n = 0;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // A value line: starts with a number, sign, comparator or decimal point…
+    if (/^[<>≤≥=]?\s*[+-]?(\d|\.\d)/.test(line)) { n++; continue; }
+    // …or is a short qualitative result (not a flag word, not a sentence).
+    if (line.length <= 24 && QUALITATIVE_RESULT.test(line)) { n++; continue; }
+  }
+  return n;
+}
+
 // ---------- health documents ----------
 export function hydrateHealthDoc(row: any) {
   if (!row) return row;
@@ -75,7 +109,7 @@ export function replaceHealthPanels(sourceId: number, panels: HealthPanelInput[]
     const markers = Array.isArray(p.markers)
       ? p.markers
         .filter((m: any) => m && typeof m === "object")
-        .slice(0, 100)
+        .slice(0, MAX_MARKERS_PER_PANEL)
         .map((m: any) => ({
           name: String(m.name ?? "").slice(0, 120),
           value: typeof m.value === "number" ? m.value : (m.value == null ? null : String(m.value).slice(0, 80)),

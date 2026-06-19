@@ -662,10 +662,14 @@ ACTIONS — only when the athlete clearly asks to log or change something:
 - log_activity, log_set, set_profile, set_endurance_goal, add_memory, update_memory, supersede_memory, log_food, log_health, add_context_event, log_supplement are APPLIED immediately.
 - log_food records a meal estimate (food note) — use it when the athlete reports something they
   ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.
-- log_health records lab/bloodwork/DEXA results the athlete reports in chat — pull out EVERY marker
-  with its value, unit and a low/high/normal flag vs the usual range, plus a short plain-language
-  summary. Lands straight in their Health records (Me → Health) and feeds the marker trends. Use it
-  whenever they tell you numbers or paste results; never invent a value. Informational, not medical advice.
+- log_health records lab/bloodwork/DEXA results the athlete reports in chat — transcribe EVERY
+  marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short
+  plain-language summary. Do NOT curate to "the interesting ones": an in-range/normal/boring marker
+  (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every
+  hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands
+  straight in their Health records (Me → Health) and feeds the marker trends. Never invent a value.
+  Informational, not medical advice. NOTE: for a big pasted panel (dozens of markers), the Health
+  tab's "paste results" box is the more reliable, complete path — you may mention it in passing.
 - add_context_event records a trip, injury/niggle, major life event, or family commitment onto their
   timeline (Me → Life) so the plan adapts around it — ease off an injured area, plan travel-friendly
   weeks, dial volume back during a stressful stretch, keep family days shorter/more flexible. Use
@@ -976,6 +980,7 @@ const HEALTH_INGEST_SCHEMA = `{
       "doc_date": "YYYY-MM-DD",
       "kind": "bloodwork|dexa|other",
       "summary": "<1-2 sentence plain-language read for THIS date's results>",
+      "marker_count": <integer — how many results this date's source actually lists; markers[] MUST have this many entries>,
       "markers": [
         { "name": "<e.g. 'LDL-C'>", "value": <number|string>, "unit": "<e.g. 'mg/dL'>", "flag": "low|normal|high|null" }
       ]
@@ -991,7 +996,12 @@ const HEALTH_INGEST_SCHEMA = `{
 // (a MyChart/CCDA export we unzipped): CCDA XML, HTML summaries, lab PDFs, scans.
 // The agent reads everything under the path and SPLITS it into one panel per
 // distinct test date — so a years-long history lands as properly dated records.
-export function buildHealthIngestPrompt(absPath: string, isDir: boolean, kindHint: string): string {
+export function buildHealthIngestPrompt(
+  absPath: string,
+  isDir: boolean,
+  kindHint: string,
+  opts?: { emphasizeCompleteness?: boolean; missed?: { got: number; expected: number } },
+): string {
   const profile = repo.getProfile();
   const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
   const target = isDir
@@ -1018,20 +1028,44 @@ SPLIT BY DATE: a single export often holds lipid panels, CBCs, metabolic panels,
 DEXA scans etc. from MANY different dates. Group markers by the date they were collected and emit
 ONE panel per date. Do NOT collapse different dates together. Do NOT merge unrelated dates.
 
-GUARDRAILS:
+TRANSCRIBE EVERY MARKER — THIS IS THE MOST IMPORTANT RULE:
+- For each date, capture EVERY result the source lists — a verbatim transcription, NOT a summary.
+  A modern panel (e.g. Function Health) has 100+ markers; capture all of them. Do NOT curate down
+  to "the interesting ones." An in-range, normal, or boring marker is just as required as a flagged one.
+- That explicitly INCLUDES the long tail people are tempted to drop: the full CBC differential
+  (hematocrit, hemoglobin, MCH, MCHC, MCV, MPV, RDW, RBC, platelets, every WBC type + its %),
+  electrolytes (sodium, potassium, chloride, CO2, calcium, magnesium), the complete urinalysis
+  (every "- Urine" line: color, appearance, pH, specific gravity, glucose, ketones, protein,
+  blood, nitrite, leukocyte esterase, casts, cells…), every omega/fatty-acid sub-fraction
+  (EPA, DHA, DPA, arachidonic acid, linoleic acid, ratios), every sex/thyroid hormone
+  (SHBG, FSH, LH, prolactin, estradiol, free + total PSA, DHEA-S), liver subset (albumin,
+  globulin, A/G ratio, ALP, GGT, bilirubin, total protein), blood type / Rh, and environmental
+  toxins. If it has a name and a value, it is a marker — include it.
+- A non-numeric result is still a marker: "Negative", "None Seen", "Clear", "Yellow", "O",
+  "Rh(d) Positive", "Younger -7.4 Years" etc. — store the text in "value".
+- Set "marker_count" to how many results that date's source actually lists, and make markers[]
+  contain exactly that many entries. If markers[] is shorter than marker_count, you dropped some
+  — go back and add the rest before answering. Completeness is judged on this.
+- Group/section headers (Autoimmunity, Blood, Heart, Kidney, Liver, Nutrients…) are NOT markers —
+  they organize the panel; transcribe the markers UNDER them, not the headers themselves.
+
+OTHER GUARDRAILS:
 - This is informational structuring, NOT medical diagnosis or advice. Transcribe and summarize only.
-- Never invent values. Include only markers you can actually read. Use null for a flag when no
-  reference range is shown — don't guess.
+- Never invent values. Include only markers you can actually read. Use the source's range column to
+  set "flag" (low/normal/high — "In Range" → normal, "Above Range" → high, "Below Range" → low);
+  use null only when no range is shown. Don't guess a value or a range.
 - doc_date is the specimen/collection/scan date (prefer it over a final-report date), YYYY-MM-DD.
   Drop any panel whose date you genuinely cannot determine.
 - Infer each panel's "kind" from its content (a lab panel is "bloodwork", a body-composition/bone
   scan is "dexa", else "other").
-- Prefer real, decision-useful markers (lipids, ApoB, A1c, glucose, insulin, vitamin D, ferritin,
-  thyroid, CRP, body-composition figures). Skip pure administrative/document metadata.
 - "memory" is [] unless there is a genuinely durable, notable fact (a clear out-of-range trend, a
   meaningful body-composition change). Keep items short. Do NOT repeat anything in EXISTING MEMORY.
 - It is fine to return many panels (dozens). If the source truly has only one date, return one panel.
-
+${opts?.emphasizeCompleteness ? `
+RETRY — THE PREVIOUS ATTEMPT WAS INCOMPLETE${opts.missed ? ` (it returned ${opts.missed.got} markers but the source lists about ${opts.missed.expected})` : ""}.
+Read the WHOLE source again and transcribe EVERY single result line this time — do not skip in-range,
+normal, qualitative, or "uninteresting" markers. Every named result with a value must appear.
+` : ""}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${HEALTH_INGEST_SCHEMA}
 

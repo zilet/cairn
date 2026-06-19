@@ -582,3 +582,26 @@ export function pickAgentOrder(): string[] {
   setSettings({ rr_cursor: rotated[0] });
   return rotated;
 }
+
+// Agent order for ACCURACY-CRITICAL, non-conversational extraction — health-record
+// ingestion (a pasted/uploaded lab panel). Completeness matters far more than
+// spreading load here: a weaker model curates a 111-marker panel down to "the
+// interesting ones", so we deterministically prefer the strongest faithful
+// transcriber (Claude, then Codex) first when it's usable, then fall through the
+// rest of the enabled agents as a safety net. Differences from pickAgentOrder():
+//   - NO round-robin cursor side effect (this isn't a rotated draft).
+//   - An explicit `health` route still wins (user pinned a backend on purpose).
+// Returns [] when no agent is usable (same "unconfigured" contract as the rotation).
+// `cfg` lets tests inject the usable set + route without touching the DB.
+export function pickHealthAgentOrder(
+  prefer: string[] = ["claude", "codex"],
+  cfg?: { enabled?: string[]; route?: string },
+): string[] {
+  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.usable).map((a) => a.name);
+  if (enabled.length <= 1) return enabled;
+  const routed = cfg?.route ?? getSettings().agent_routes?.health;
+  const head: string[] = [];
+  if (routed && enabled.includes(routed)) head.push(routed);
+  for (const p of prefer) if (enabled.includes(p) && !head.includes(p)) head.push(p);
+  return [...head, ...enabled.filter((n) => !head.includes(n))];
+}

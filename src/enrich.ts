@@ -157,7 +157,10 @@ async function processJob(job: Job): Promise<void> {
     markStatus(job, "skipped");
     return;
   }
-  const order = repo.pickAgentOrder();
+  // Health-record ingestion is accuracy-critical (a curated panel silently drops
+  // markers), so it deterministically prefers the strongest faithful transcriber
+  // (Claude-first) instead of the load-spreading round-robin. Other kinds rotate.
+  const order = job.kind === "health" ? repo.pickHealthAgentOrder() : repo.pickAgentOrder();
   if (!order.length) {
     // No usable agent → skip, keep the regex parse as-is.
     markStatus(job, "skipped");
@@ -172,6 +175,9 @@ async function processJob(job: Job): Promise<void> {
   // Track an unpacked archive dir so we can always remove it after the agent runs
   // — an Apple Health export is hundreds of MB and would otherwise fill a Pi's disk.
   let extractedDir: string | null = null;
+  // Carry the health source out of the branch so the completeness retry below can
+  // re-read it (text sources only) and re-prompt without re-deriving the path.
+  let healthSource: { fp: string; mime: string; kind: string; isDir: boolean } | null = null;
   if (job.kind === "health") {
     const row = repo.getHealthDocumentRaw(job.id) as any;
     const fp = (row?.file_path ?? "").toString().trim();
@@ -196,6 +202,7 @@ async function processJob(job: Job): Promise<void> {
       const dir = await unzipToFolder(fp);
       if (dir) { target = dir; isDir = true; extractedDir = dir; }
     }
+    healthSource = { fp: target, mime: (row?.mime ?? "").toString(), kind: row?.kind || "other", isDir };
     prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
     timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
   } else {
@@ -230,6 +237,35 @@ async function processJob(job: Job): Promise<void> {
   if (!parsed || typeof parsed !== "object") {
     markStatus(job, "failed");
     return;
+  }
+
+  // Completeness guard (pasted-text sources only): a weaker model can curate a
+  // 100+ marker panel down to "the interesting ones". If the source clearly lists
+  // far more results than we extracted, re-run ONCE — Claude-first, with an explicit
+  // "you missed many" nudge — and keep whichever attempt captured more markers.
+  // Restricted to text/plain so the candidate estimate isn't fooled by HTML/XML
+  // markup or read from a binary; a single-file source (not an unpacked archive).
+  if (healthSource && !healthSource.isDir && /^text\/plain/i.test(healthSource.mime)) {
+    const got = countIngestMarkers(parsed);
+    let expected = 0;
+    try { expected = repo.estimateMarkerCandidates(fs.readFileSync(healthSource.fp, "utf8")); }
+    catch { /* unreadable → no retry */ }
+    if (expected >= 40 && got < expected * 0.8) {
+      console.warn(`[enrich] health#${job.id}: extracted ${got} markers but the source lists ~${expected} — retrying Claude-first for completeness.`);
+      try {
+        const fb2 = await runAgentWithFallback(
+          repo.pickHealthAgentOrder(),
+          buildHealthIngestPrompt(healthSource.fp, false, healthSource.kind, { emphasizeCompleteness: true, missed: { got, expected } }),
+          HEALTH_INGEST_TIMEOUT_MS,
+        );
+        const parsed2 = fb2.result?.parsed ?? null;
+        const got2 = parsed2 && typeof parsed2 === "object" ? countIngestMarkers(parsed2) : 0;
+        if (got2 > got) {
+          parsed = parsed2;
+          console.log(`[enrich] health#${job.id}: retry improved extraction ${got} → ${got2} markers.`);
+        }
+      } catch { /* keep the first parse */ }
+    }
   }
 
   // Apply the structured fields the agent provided; keep regex values otherwise.
@@ -396,8 +432,9 @@ function jobRawText(job: Job): string {
 // owns the binary); every older panel becomes its own dated record linked back
 // via source_doc_id. A single-date upload yields one panel → enriched in place,
 // no extra rows. Falls back to the legacy single-doc {structured} shape.
-function applyHealthIngest(id: number, parsed: any): boolean {
-  // Normalize to a panels array.
+// Normalize an ingest result to its panels array (handles both the modern
+// {panels:[…]} shape and the legacy single-doc {structured:{markers}} shape).
+function ingestPanels(parsed: any): any[] {
   let panels: any[] = Array.isArray(parsed?.panels) ? parsed.panels : [];
   if (!panels.length && parsed?.structured && typeof parsed.structured === "object") {
     panels = [{
@@ -408,11 +445,25 @@ function applyHealthIngest(id: number, parsed: any): boolean {
       type: parsed.structured.type,
     }];
   }
+  return panels;
+}
+
+// Total markers across all panels of an ingest result — the completeness signal
+// the retry guard compares against the source's estimated marker count.
+function countIngestMarkers(parsed: any): number {
+  return ingestPanels(parsed).reduce(
+    (n, p) => n + (Array.isArray(p?.markers) ? p.markers.length : 0),
+    0,
+  );
+}
+
+function applyHealthIngest(id: number, parsed: any): boolean {
+  const panels = ingestPanels(parsed);
 
   const cleanMarkers = (raw: any): any[] =>
     (Array.isArray(raw) ? raw : [])
       .filter((m: any) => m && typeof m === "object")
-      .slice(0, 100)
+      .slice(0, repo.MAX_MARKERS_PER_PANEL)
       .map((m: any) => ({
         name: asStr(m.name) ?? "",
         value: typeof m.value === "number" ? m.value : asStr(m.value) ?? null,
