@@ -524,6 +524,12 @@ api.get("/activities", (req, res) =>
 api.get("/recent-training", (req, res) =>
   res.json(repo.recentTraining(req.query.limit ? Number(req.query.limit) : 6))
 );
+// Adaptive program state: per-lift trend + plateau/stall, volume landmarks,
+// mesocycle position, endurance trends — the deterministic read the evolve-program
+// proposal builds on. Informational (no score, no gate).
+api.get("/program-state", (req, res) =>
+  res.json(repo.getProgramState(req.query.date ? String(req.query.date) : undefined))
+);
 // Single activity row (frontend polls this to watch enrichment_status).
 api.get("/activities/:id", (req, res) => {
   const a = repo.getActivity(Number(req.params.id));

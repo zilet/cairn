@@ -1,0 +1,424 @@
+// ============================================================================
+// Program-state engine — the deterministic FLOOR under adaptive program
+// intelligence. It reads what's actually been logged and answers, per lift and
+// for the program as a whole: is this progressing, stalling, plateaued, or
+// regressing — and what's the next adaptation due (overload, deload, rotate a
+// variation, probe an alternative)? No agent on this path; this is the trusted,
+// tested signal layer the agentic plan-evolution loop (buildProgramEvolutionPrompt
+// → coachOps.evolveProgram) reads to PROPOSE plan changes through the usual
+// propose→apply flow. Mirrors the dayRead deterministic-floor pattern.
+//
+// Constitution: this surfaces trajectory and a suggested action in PLAIN words —
+// never a 0-100 score, never a gate. "Plateaued ~4 weeks" is information; the
+// athlete (and the coach proposal) drive.
+// ============================================================================
+import { db } from "../db.js";
+import { getRecoverySummary } from "./coach.js";
+import { getPrimaryDiscipline } from "./profile.js";
+import { getProgress } from "./sessions.js";
+
+export type LiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
+export type LiftAction = "overload" | "hold" | "deload" | "vary" | "technique" | "introduce" | null;
+export type MesoPhase = "accumulation" | "intensification" | "deload-due" | "deload" | null;
+
+export interface LiftState {
+  exercise: string;
+  muscle_group: string | null;
+  mode: "reps" | "timed";
+  sessions: number;            // logged sessions that included this lift (loaded)
+  est_1rm: number | null;      // latest best est-1RM (reps lifts); null for timed
+  best_seconds: number | null; // latest best hold (timed lifts); null for reps
+  trend_per_wk: number | null; // est-1RM lb/wk (or seconds/wk for timed), least-squares
+  status: LiftStatus;
+  stall_signals: string[];     // plain-language tells ("same load 4 sessions", "grinding")
+  weeks_static: number | null; // weeks the top load/hold hasn't moved
+  suggested_action: LiftAction;
+  why: string;                 // one plain sentence
+}
+
+export interface MuscleVolumeState {
+  muscle_group: string;
+  weekly_sets: number;         // avg working sets/wk over the window
+  band: "low" | "productive" | "high";
+  trend: "rising" | "falling" | "stable" | null;
+}
+
+export interface MesocycleState {
+  weeks_since_deload: number | null;
+  phase: MesoPhase;
+  acute_chronic_ratio: number | null; // tonnage ACWR (acute 7d vs chronic 28d/wk)
+  note: string;
+}
+
+export interface EnduranceState {
+  last_week_km: number | null;
+  acute_chronic_ratio: number | null; // weekly-km ACWR
+  longest_km_4wk: number | null;
+  has_quality: boolean;        // any tempo/interval/Z4+ effort in the window
+  pace_trend: "improving" | "declining" | "stable" | null; // easy-pace efficiency
+  status: "building" | "maintaining" | "detraining" | "spiking" | null;
+  suggested_action: "build" | "hold" | "add-quality" | "ease" | null;
+  why: string;
+}
+
+export interface ProgramState {
+  generated_for: string;
+  discipline: string;
+  lifts: LiftState[];
+  volume: MuscleVolumeState[];
+  mesocycle: MesocycleState;
+  endurance: EnduranceState | null;
+  headline: string;            // one plain sentence, no score
+  adaptations_due: string[];   // the plain-language "what to evolve next" list
+}
+
+// ---- small deterministic helpers ----
+function lsqSlopePerDay(pts: { x: number; y: number }[]): number | null {
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const mx = pts.reduce((s, p) => s + p.x, 0) / n;
+  const my = pts.reduce((s, p) => s + p.y, 0) / n;
+  let num = 0, den = 0;
+  for (const p of pts) { num += (p.x - mx) * (p.y - my); den += (p.x - mx) ** 2; }
+  if (den === 0) return null;
+  return num / den;
+}
+
+function dayIndex(iso: string, base: string): number {
+  return Math.round((new Date(iso + "T00:00:00Z").getTime() - new Date(base + "T00:00:00Z").getTime()) / 864e5);
+}
+
+function isoDaysAgo(d: string, n: number): string {
+  return new Date(new Date(d + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
+}
+
+// ---- per-lift progression ----
+const REPS_RECENT = 8; // analyze the most recent N sessions (state, not ancient history)
+
+function gradeRepsLift(name: string, mg: string | null): LiftState | null {
+  const prog = getProgress(name) as any;
+  const points: any[] = Array.isArray(prog.points) ? prog.points : [];
+  if (points.length < 2) {
+    return points.length
+      ? {
+          exercise: name, muscle_group: mg, mode: "reps", sessions: points.length,
+          est_1rm: Math.round(points[points.length - 1].best1rm), best_seconds: null, trend_per_wk: null,
+          status: "new", stall_signals: [], weeks_static: null, suggested_action: "hold",
+          why: "Just getting started — a couple more sessions and the trend reads clearly.",
+        }
+      : null;
+  }
+  const recent = points.slice(-REPS_RECENT);
+  const base = recent[0].date;
+  const slopeDay = lsqSlopePerDay(recent.map((p) => ({ x: dayIndex(p.date, base), y: p.best1rm })));
+  const trendWk = slopeDay == null ? null : Math.round(slopeDay * 7 * 10) / 10;
+  const latest = recent[recent.length - 1];
+  const est1rm = Math.round(latest.best1rm);
+  const spanDays = dayIndex(latest.date, base);
+
+  // Top-load stall: how many trailing sessions sit at (or below) the same top weight.
+  let staticCount = 1;
+  for (let i = recent.length - 2; i >= 0; i--) {
+    if (recent[i].topWeight >= latest.topWeight - 0.01) staticCount++;
+    else break;
+  }
+  const weeksStatic = staticCount >= 2 ? Math.max(1, Math.round(dayIndex(latest.date, recent[recent.length - staticCount].date) / 7)) : null;
+
+  // Grinding: recent top sets taken at RIR 0-1 while the load isn't moving.
+  const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
+  let grinding = false;
+  if (ex) {
+    const rirRows = db.prepare(
+      `SELECT ls.rir AS rir FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+       WHERE ls.exercise_id = ? AND ls.rir IS NOT NULL ORDER BY s.date DESC, ls.id DESC LIMIT 6`
+    ).all(ex.id) as any[];
+    const lowRir = rirRows.filter((r) => Number(r.rir) <= 1).length;
+    grinding = rirRows.length >= 3 && lowRir >= 2;
+  }
+
+  // Status — judged on the recent trend, with enough history to be fair. A lift
+  // still building its baseline makes NO stall claims (a "grinding" flag on
+  // two weeks of data would be a false alarm).
+  const enough = recent.length >= 4 && spanDays >= 14;
+  const stall_signals: string[] = [];
+  if (enough && staticCount >= 3) stall_signals.push(`same top load ${staticCount} sessions running`);
+  if (enough && grinding) stall_signals.push("top sets grinding (RIR 0–1) without the load moving");
+  let status: LiftStatus;
+  if (!enough) status = "new";
+  else if (trendWk != null && trendWk >= 0.5) status = "progressing";
+  else if (trendWk != null && trendWk <= -0.75) status = "regressing";
+  else if (staticCount >= 3 || grinding) status = "plateaued";
+  else status = "maintaining";
+
+  let suggested_action: LiftAction;
+  let why: string;
+  switch (status) {
+    case "progressing":
+      suggested_action = "overload";
+      why = `Climbing ~${trendWk} lb/wk — keep the progression going.`;
+      break;
+    case "regressing":
+      suggested_action = "deload";
+      why = "Drifting down — back the load off a touch and let it rebuild.";
+      break;
+    case "plateaued":
+      suggested_action = grinding ? "deload" : (weeksStatic && weeksStatic >= 3 ? "vary" : "technique");
+      why = grinding
+        ? "Stuck and grinding — a light deload, then a fresh run usually breaks it."
+        : weeksStatic && weeksStatic >= 3
+          ? `Flat ~${weeksStatic} wk — rotating to a close variation tends to unstick it.`
+          : "Flat lately — tighten technique / add a rep before chasing load.";
+      break;
+    case "maintaining":
+      suggested_action = "overload";
+      why = "Holding steady — a small, deliberate push is in order.";
+      break;
+    default:
+      suggested_action = "hold";
+      why = "Building a baseline — keep logging and the trend will show.";
+  }
+
+  return {
+    exercise: name, muscle_group: mg, mode: "reps", sessions: points.length,
+    est_1rm: est1rm, best_seconds: null, trend_per_wk: trendWk,
+    status, stall_signals, weeks_static: weeksStatic, suggested_action, why,
+  };
+}
+
+function gradeTimedLift(name: string, mg: string | null): LiftState | null {
+  const ex = db.prepare(`SELECT id FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
+  if (!ex) return null;
+  const rows = db.prepare(
+    `SELECT s.date AS date, MAX(ls.duration_sec) AS best FROM logged_sets ls
+     JOIN sessions s ON s.id = ls.session_id
+     WHERE ls.exercise_id = ? AND ls.duration_sec IS NOT NULL
+     GROUP BY s.date ORDER BY s.date`
+  ).all(ex.id) as any[];
+  if (!rows.length) return null;
+  const recent = rows.slice(-REPS_RECENT);
+  const base = recent[0].date;
+  const slopeDay = lsqSlopePerDay(recent.map((p) => ({ x: dayIndex(p.date, base), y: Number(p.best) })));
+  const trendWk = slopeDay == null ? null : Math.round(slopeDay * 7);
+  const latest = recent[recent.length - 1];
+  const spanDays = dayIndex(latest.date, base);
+  const enough = recent.length >= 4 && spanDays >= 14;
+  let status: LiftStatus;
+  if (!enough) status = "new";
+  else if (trendWk != null && trendWk >= 1) status = "progressing";
+  else if (trendWk != null && trendWk <= -2) status = "regressing";
+  else status = recent.length >= 4 ? "plateaued" : "maintaining";
+  const suggested_action: LiftAction =
+    status === "progressing" ? "overload" : status === "regressing" ? "deload" : status === "plateaued" ? "vary" : "hold";
+  const why =
+    status === "progressing" ? `Holds are getting longer (~${trendWk}s/wk) — keep extending.`
+    : status === "plateaued" ? "Hold time's flat — a harder variation or added load will progress it."
+    : status === "regressing" ? "Holds shortening — reset and rebuild."
+    : "Building a baseline on this hold.";
+  return {
+    exercise: name, muscle_group: mg, mode: "timed", sessions: rows.length,
+    est_1rm: null, best_seconds: Number(latest.best), trend_per_wk: trendWk,
+    status, stall_signals: [], weeks_static: null, suggested_action, why,
+  };
+}
+
+function liftStates(date: string): LiftState[] {
+  // Lifts with real logged history (a reps lift needs loaded sets; a timed lift
+  // needs duration). One row per exercise, newest activity first.
+  const exs = db.prepare(
+    `SELECT e.name AS name, e.muscle_group AS mg, e.mode AS mode,
+            MAX(s.date) AS last_date, COUNT(DISTINCT s.date) AS days
+       FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+       JOIN sessions s ON s.id = ls.session_id
+      WHERE s.date <= ?
+        AND ((e.mode = 'timed' AND ls.duration_sec IS NOT NULL)
+             OR (COALESCE(e.mode,'reps') != 'timed' AND ls.weight IS NOT NULL AND ls.reps IS NOT NULL))
+      GROUP BY e.id
+      HAVING days >= 1
+      ORDER BY last_date DESC`
+  ).all(date) as any[];
+
+  const out: LiftState[] = [];
+  for (const e of exs) {
+    const st = String(e.mode) === "timed" ? gradeTimedLift(e.name, e.mg) : gradeRepsLift(e.name, e.mg);
+    if (st) out.push(st);
+  }
+  return out;
+}
+
+// ---- volume landmarks ----
+function muscleVolume(date: string, weeks = 3): MuscleVolumeState[] {
+  const start = isoDaysAgo(date, weeks * 7 - 1);
+  const half = isoDaysAgo(date, Math.floor((weeks * 7) / 2));
+  const rows = db.prepare(
+    `SELECT COALESCE(e.muscle_group,'other') AS mg,
+            SUM(CASE WHEN s.date >= ? THEN 1 ELSE 0 END) AS recent_sets,
+            COUNT(*) AS total_sets
+       FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+       JOIN sessions s ON s.id = ls.session_id
+      WHERE s.date >= ? AND s.date <= ?
+      GROUP BY mg ORDER BY total_sets DESC`
+  ).all(half, start, date) as any[];
+  return rows.map((r) => {
+    const weekly = Math.round((Number(r.total_sets) / weeks) * 10) / 10;
+    const firstHalf = Number(r.total_sets) - Number(r.recent_sets);
+    const trend: MuscleVolumeState["trend"] =
+      Number(r.recent_sets) > firstHalf * 1.2 ? "rising" : Number(r.recent_sets) < firstHalf * 0.8 ? "falling" : "stable";
+    const band: MuscleVolumeState["band"] = weekly < 6 ? "low" : weekly > 20 ? "high" : "productive";
+    return { muscle_group: String(r.mg), weekly_sets: weekly, band, trend };
+  });
+}
+
+// ---- mesocycle / fatigue position ----
+function weeklyTonnage(date: string, weekBack: number): number {
+  const end = isoDaysAgo(date, weekBack * 7);
+  const start = isoDaysAgo(date, weekBack * 7 + 6);
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(ls.weight * ls.reps), 0) AS t FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+     WHERE ls.weight > 0 AND ls.reps > 0 AND s.date >= ? AND s.date <= ?`
+  ).get(start, end) as any;
+  return Math.round(Number(row?.t ?? 0));
+}
+
+function mesocycle(date: string, recovery?: any): MesocycleState {
+  // A "deload week" = a recent week whose tonnage fell well below the trailing
+  // base. Walk back up to 8 weeks to find the most recent one.
+  let weeksSince: number | null = null;
+  for (let w = 0; w <= 8; w++) {
+    const here = weeklyTonnage(date, w);
+    const base = [w + 1, w + 2, w + 3].map((b) => weeklyTonnage(date, b));
+    const chronic = base.reduce((a, b) => a + b, 0) / base.length;
+    if (chronic > 0 && here > 0 && here < chronic * 0.6) { weeksSince = w; break; }
+  }
+  const acute = weeklyTonnage(date, 0);
+  const chronic4 = [0, 1, 2, 3].map((b) => weeklyTonnage(date, b)).reduce((a, b) => a + b, 0) / 4;
+  const acwr = chronic4 > 0 ? Math.round((acute / chronic4) * 100) / 100 : null;
+
+  const rec = recovery ?? getRecoverySummary(14);
+  const drift = rec?.delta ?? null;
+  const recoveryDrifting = (drift?.hrv != null && drift.hrv < 0) || (drift?.rhr != null && drift.rhr > 2);
+
+  let phase: MesoPhase;
+  let note: string;
+  if (weeksSince === 0) { phase = "deload"; note = "You're in a deload week — let it absorb."; }
+  else if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
+  else if (acwr != null && acwr >= 1.4) { phase = "intensification"; note = "Load's ramped this block — hold the line, don't pile on."; }
+  else if (weeksSince == null) { phase = "accumulation"; note = "No recent deload on record — keep building, plan a reset every 4–6 weeks."; }
+  else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} into this block — building.`; }
+
+  return { weeks_since_deload: weeksSince, phase, acute_chronic_ratio: acwr, note };
+}
+
+// ---- endurance state ----
+function weeklyKm(date: string, weekBack: number): number {
+  const end = isoDaysAgo(date, weekBack * 7);
+  const start = isoDaysAgo(date, weekBack * 7 + 6);
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date <= ?`
+  ).get(start, end) as any;
+  return Math.round(Number(row?.km ?? 0) * 10) / 10;
+}
+
+function enduranceState(date: string): EnduranceState {
+  const lastWeek = weeklyKm(date, 0);
+  const chronic = [1, 2, 3, 4].map((b) => weeklyKm(date, b)).reduce((a, b) => a + b, 0) / 4;
+  const acwr = chronic > 0 ? Math.round((lastWeek / chronic) * 100) / 100 : null;
+  const start4 = isoDaysAgo(date, 27);
+
+  const longest = db.prepare(
+    `SELECT MAX(distance_km) AS km FROM activities WHERE date >= ? AND date <= ?`
+  ).get(start4, date) as any;
+
+  // Quality = a synced effort with a hard label or meaningful Z4+ time.
+  const quality = db.prepare(
+    `SELECT COUNT(*) AS n FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
+     WHERE a.date >= ? AND a.date <= ?
+       AND (UPPER(COALESCE(g.te_label,'')) IN ('TEMPO','THRESHOLD','VO2MAX','ANAEROBIC','LACTATE_THRESHOLD')
+            OR COALESCE(g.anaerobic_te,0) >= 2)`
+  ).get(start4, date) as any;
+  const hasQuality = Number(quality?.n ?? 0) > 0;
+
+  // Easy-pace efficiency: avg pace (min/km) of easy runs, recent half vs older half.
+  const paceRows = db.prepare(
+    `SELECT a.date AS date, a.duration_min AS dur, a.distance_km AS km FROM activities a
+     WHERE a.date >= ? AND a.date <= ? AND a.distance_km > 1 AND a.duration_min > 0
+       AND LOWER(COALESCE(a.type,'')) LIKE '%run%' ORDER BY a.date`
+  ).all(isoDaysAgo(date, 41), date) as any[];
+  let paceTrend: EnduranceState["pace_trend"] = null;
+  if (paceRows.length >= 4) {
+    const paces = paceRows.map((r) => ({ date: r.date, pace: Number(r.dur) / Number(r.km) }));
+    const mid = Math.floor(paces.length / 2);
+    const older = paces.slice(0, mid).reduce((a, b) => a + b.pace, 0) / mid;
+    const newer = paces.slice(mid).reduce((a, b) => a + b.pace, 0) / (paces.length - mid);
+    paceTrend = newer < older * 0.98 ? "improving" : newer > older * 1.02 ? "declining" : "stable";
+  }
+
+  // Status reads the load trajectory; the action is the single most useful nudge —
+  // decoupled so "all one pace, add a quality session" (the ceiling-raiser) isn't
+  // masked by a mild base build. Established volume = the larger of this week and
+  // the chronic average, so a quiet week doesn't hide a real base.
+  const base = Math.max(lastWeek, chronic);
+  const status: EnduranceState["status"] =
+    acwr != null && acwr >= 1.5 ? "spiking"
+    : acwr != null && acwr < 0.7 && chronic > 0 ? "detraining"
+    : acwr != null && acwr >= 1.1 ? "building"
+    : "maintaining";
+  let action: EnduranceState["suggested_action"];
+  let why: string;
+  if (status === "spiking") {
+    action = "ease"; why = "Mileage jumped this week — hold it here and let it absorb before adding more.";
+  } else if (status === "detraining") {
+    action = "build"; why = "Running's tapered off — a gentle, steady rebuild will bring the base back.";
+  } else if (!hasQuality && base >= 10) {
+    action = "add-quality"; why = "Solid easy base, but it's all one pace — one tempo or interval session a week would lift your ceiling.";
+  } else if (status === "building") {
+    action = "build"; why = "Base is building nicely — keep the weekly step conservative (~10%).";
+  } else {
+    action = "hold"; why = "Endurance is ticking over steadily.";
+  }
+
+  return {
+    last_week_km: lastWeek, acute_chronic_ratio: acwr,
+    longest_km_4wk: longest?.km != null ? Math.round(Number(longest.km) * 10) / 10 : null,
+    has_quality: hasQuality, pace_trend: paceTrend, status, suggested_action: action, why,
+  };
+}
+
+// ---- the aggregate ----
+export function getProgramState(date?: string, recovery?: any): ProgramState {
+  const d = date || new Date().toISOString().slice(0, 10);
+  const discipline = getPrimaryDiscipline();
+  const lifts = liftStates(d);
+  const volume = muscleVolume(d);
+  const meso = mesocycle(d, recovery);
+  const endurance = discipline === "endurance" || discipline === "hybrid" ? enduranceState(d) : null;
+
+  // The "what to evolve next" list — plain language, deduped, most actionable first.
+  const adaptations: string[] = [];
+  const plateaued = lifts.filter((l) => l.status === "plateaued");
+  const progressing = lifts.filter((l) => l.status === "progressing");
+  const regressing = lifts.filter((l) => l.status === "regressing");
+  for (const l of plateaued) {
+    adaptations.push(
+      l.suggested_action === "vary" ? `Rotate a variation for ${l.exercise} — it's been flat${l.weeks_static ? ` ~${l.weeks_static} wk` : ""}.`
+      : l.suggested_action === "deload" ? `Deload ${l.exercise}, then re-run — it's grinding without moving.`
+      : `Unstick ${l.exercise}: tighten technique / add a rep before chasing load.`
+    );
+  }
+  for (const l of regressing) adaptations.push(`Back off ${l.exercise} and let it rebuild.`);
+  if (meso.phase === "deload-due") adaptations.push(meso.note);
+  if (endurance && endurance.suggested_action && endurance.suggested_action !== "hold") adaptations.push(endurance.why);
+  if (progressing.length) adaptations.push(`Push the next load step on ${progressing.slice(0, 3).map((l) => l.exercise).join(", ")}.`);
+
+  // Headline — one calm sentence, no score.
+  const parts: string[] = [];
+  if (progressing.length) parts.push(`${progressing.length} lift${progressing.length === 1 ? "" : "s"} climbing`);
+  if (plateaued.length) parts.push(`${plateaued.length} stalled`);
+  if (regressing.length) parts.push(`${regressing.length} slipping`);
+  const headline = parts.length
+    ? `${parts.join(", ")}${meso.phase === "deload-due" ? "; a deload's about due" : ""}.`
+    : lifts.length
+      ? "Everything's holding steady — room for a deliberate push."
+      : "Not enough logged yet to read your program — keep training and it'll come into focus.";
+
+  return { generated_for: d, discipline, lifts, volume, mesocycle: meso, endurance, headline, adaptations_due: adaptations };
+}

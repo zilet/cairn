@@ -17,3 +17,4 @@ export * from "./repo/coach.js";
 export * from "./repo/propagation.js";
 export * from "./repo/evidence.js";
 export * from "./repo/intelligence.js";
+export * from "./repo/program-state.js";

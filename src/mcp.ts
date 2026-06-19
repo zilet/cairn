@@ -109,6 +109,13 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_program_state",
+    "Adaptive program state — the deterministic read of how the training program is evolving: per-lift est-1RM trend + plateau/stall detection, volume landmarks per muscle, mesocycle position (weeks since deload, ACWR), and endurance trends. Informational (plain words, no score); the basis for proposing plan evolutions.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.getProgramState(date))
+  );
+
+  server.tool(
     "finish_session",
     "Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs).",
     { id: z.number().int(), notes: z.string().nullable().optional() },
