@@ -1138,29 +1138,41 @@ function adaptationsHtml(adaptations, idx) {
 
 // "Evolve my plan" button — POSTs to /api/program/evolve. Degrades gracefully
 // if the endpoint 404s (not yet wired). ok:false at 200 = designed failure signal.
+// Evolve the plan — a durable background job (streams an evolving caption, survives
+// a reload), exactly like session-suggest. runOp transparently handles the stream
+// (bg on) or the inline result (bg off). The draft lands in the Plan proposals for
+// review — nothing auto-applies.
 async function triggerProgramEvolve(btn) {
-  const restore = btnBusy(btn, "Drafting…");
-  try {
-    const result = await api("/program/evolve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    restore();
-    if (result && result.ok) {
-      toast("Drafted — review it in your plan");
+  const foot = btn.closest(".prog-evolve-foot") || btn.parentElement;
+  const restore = btnBusy(btn, "Drafting your plan…");
+  // A caption line runOp animates while the coach thinks.
+  let cap = foot && foot.querySelector(".prog-evolve-cap");
+  if (foot && !cap) {
+    cap = document.createElement("div");
+    cap.className = "prog-evolve-cap job-cap lbl";
+    foot.appendChild(cap);
+  }
+  const cleanup = () => { restore(); cap?.remove(); };
+  await runOp("evolve_program", {}, {
+    path: "/program/evolve",
+    anchor: ".prog-evolve-foot",
+    caption: [
+      "reading how your lifts are trending",
+      "spotting what's stalled",
+      "drafting how your plan should evolve",
+      "checking it against your constraints",
+    ],
+    guard: () => !document.querySelector(".prog-evolve-foot")?.isConnected,
+    render: () => {
+      cleanup();
+      toast("Drafted — review it in your Plan");
       swrInvalidate("progress:program");
       swrInvalidate("plan:coach");
-      renderProgram();
-    } else {
-      const msg = (result && result.error) ? String(result.error) : "Couldn't draft right now — try again in a bit.";
-      toast(msg);
-    }
-  } catch (err) {
-    restore();
-    // 404 = endpoint not yet wired; any other network error degrades the same way.
-    toast("Couldn't draft right now — try again in a bit.");
-  }
+      swrInvalidate("plan:proposals");
+      if (state.tab === "progress") renderProgram();
+    },
+    onFail: () => { cleanup(); toast("Couldn't draft right now — try again in a bit."); },
+  });
 }
 
 // SWR over /program-state (key progress:program). Skeleton-first on cold;
@@ -1215,8 +1227,12 @@ function paintProgramBody(data) {
     html += `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>`;
   }
 
+  // Periodization block — the framing (loaded async into this slot): the active
+  // block (advance/complete) or a calm "start a block" affordance.
+  html += `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
+
   // "What to evolve next" — surfaced near the top, it's the keystone.
-  let staggerI = 2;
+  let staggerI = 3;
   if (adaptations.length) {
     html += adaptationsHtml(adaptations, staggerI);
     staggerI += 1;
@@ -1262,5 +1278,92 @@ function paintProgramBody(data) {
 
   const btn = view.querySelector("#progEvolveBtn");
   if (btn) btn.addEventListener("click", () => triggerProgramEvolve(btn));
+
+  loadProgramBlock(); // periodization block card (active) or a "start a block" affordance
+}
+
+// ---- periodization block (the mesocycle the coach periodizes toward) ----
+function blockFocusWord(f) {
+  if (f === "strength") return "Strength";
+  if (f === "hypertrophy") return "Hypertrophy";
+  if (f === "endurance-base") return "Endurance base";
+  if (f === "peak") return "Peak";
+  return f || "";
+}
+
+function activeBlockHtml(b) {
+  const meta = [blockFocusWord(b.focus), phaseWord(b.phase)].filter(Boolean).join(" · ");
+  return `<div class="pblock pblock-active">
+    <div class="pblock-head">
+      <span class="pblock-kicker lbl">Current block</span>
+      <span class="pblock-week lbl">week ${Number(b.week_index)} of ${Number(b.total_weeks)}</span>
+    </div>
+    <div class="pblock-goal">${escHtml(b.goal || "Training block")}</div>
+    ${meta ? `<div class="pblock-meta lbl">${escHtml(meta)}</div>` : ""}
+    <div class="pblock-actions">
+      <button class="pillbtn" type="button" data-blockadvance="${b.id}">Advance week</button>
+      <button class="pillbtn" type="button" data-blockcomplete="${b.id}">Complete</button>
+    </div>
+  </div>`;
+}
+
+function startBlockHtml() {
+  return `<div class="pblock">
+    <button class="linkbtn" type="button" data-blockstart>+ Start a training block</button>
+    <div class="pblock-composer" hidden>
+      <input class="pblock-goal-in" type="text" autocomplete="off" placeholder="goal — e.g. Build squat + 10k base" aria-label="Block goal">
+      <div class="pblock-composer-row">
+        <select class="pblock-focus-in" aria-label="Focus">
+          <option value="strength">Strength</option>
+          <option value="hypertrophy">Hypertrophy</option>
+          <option value="endurance-base">Endurance base</option>
+          <option value="peak">Peak</option>
+        </select>
+        <input class="pblock-weeks-in" type="number" inputmode="numeric" min="2" max="12" value="5" aria-label="Weeks">
+        <span class="lbl">weeks</span>
+        <button class="pillbtn pill-accent" type="button" data-blockcreate>Start</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadProgramBlock() {
+  const slot = view.querySelector("#progBlockSlot");
+  if (!slot) return;
+  let block = null;
+  try { block = await api("/program/blocks/active"); } catch { return; }
+  if (state.tab !== "progress" || !slot.isConnected) return;
+  slot.innerHTML = block ? activeBlockHtml(block) : startBlockHtml();
+  wireProgramBlock(slot);
+}
+
+function wireProgramBlock(slot) {
+  const refresh = () => { swrInvalidate("plan:coach"); loadProgramBlock(); };
+  const post = async (path, okMsg) => {
+    try {
+      const r = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (r && r.error) { toast("Couldn't update the block"); return; }
+      if (okMsg) toast(okMsg);
+      refresh();
+    } catch { toast("Couldn't update the block"); }
+  };
+  slot.querySelector("[data-blockstart]")?.addEventListener("click", () => {
+    const c = slot.querySelector(".pblock-composer");
+    if (c) { c.hidden = false; slot.querySelector(".pblock-goal-in")?.focus(); }
+  });
+  slot.querySelector("[data-blockcreate]")?.addEventListener("click", async () => {
+    const goal = (slot.querySelector(".pblock-goal-in")?.value || "").trim();
+    const focus = slot.querySelector(".pblock-focus-in")?.value || "strength";
+    const total_weeks = Number(slot.querySelector(".pblock-weeks-in")?.value) || 5;
+    try {
+      const r = await api("/program/blocks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal: goal || "Training block", focus, total_weeks }) });
+      if (r && r.id) { toast("Block started — the coach will periodize toward it"); refresh(); }
+      else toast("Couldn't start the block");
+    } catch { toast("Couldn't start the block"); }
+  });
+  const adv = slot.querySelector("[data-blockadvance]");
+  if (adv) adv.addEventListener("click", () => post(`/program/blocks/${adv.dataset.blockadvance}/advance`, "Moved to the next week"));
+  const comp = slot.querySelector("[data-blockcomplete]");
+  if (comp) comp.addEventListener("click", () => armDelete(comp, () => post(`/program/blocks/${comp.dataset.blockcomplete}/complete`, "Block completed")));
 }
 

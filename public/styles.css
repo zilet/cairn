@@ -3793,6 +3793,32 @@ button.hmk-row:active{background:var(--card-2)}
 }
 .prog-evolve-btn{flex-shrink:0}
 .prog-evolve-note{font-size:.72rem;color:var(--muted)}
+.prog-evolve-cap{flex-basis:100%;font-size:.78rem;color:var(--accent)}
+/* periodization block card */
+.pblock-slot:empty{display:none}
+.pblock{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:14px 16px;margin:0 0 14px;border-left:3px solid var(--sage);
+}
+.pblock-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.pblock-kicker{color:var(--muted)}
+.pblock-week{color:var(--ink-2);flex:0 0 auto}
+.pblock-goal{font-family:var(--font-display,inherit);font-size:1.05rem;color:var(--ink);margin:4px 0 2px}
+.pblock-meta{color:var(--muted);text-transform:capitalize}
+.pblock-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.pblock-composer{margin-top:10px}
+.pblock-composer[hidden]{display:none}
+.pblock-goal-in{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:10px 12px;font-size:.9rem;font-family:inherit;
+}
+.pblock-goal-in:focus{outline:none;border-color:var(--sage)}
+.pblock-composer-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px}
+.pblock-focus-in,.pblock-weeks-in{
+  background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:8px 10px;font-size:.84rem;font-family:inherit;
+}
+.pblock-weeks-in{width:64px}
 
 /* -------------------------------------------------------------------
    Tightly-packed pairs (reorder ▲▼, order arrows) sit side-by-side with a small

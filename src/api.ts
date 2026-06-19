@@ -472,6 +472,11 @@ api.post("/agent/run", async (req, res) => {
 // review — same propose→apply path as /agent/run, driven by the trend analysis.
 api.post("/program/evolve", async (req, res) => {
   const { agent, instruction } = req.body ?? {};
+  // Long agentic call → a durable background job by default (the PWA streams the
+  // evolving caption + reconnects across reloads, like session-suggest); inline
+  // when bg ops are off. evolveProgram owns the run + proposal persistence so both
+  // paths return the same body.
+  if (backgroundOp(res, "evolve_program", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
   try {
     res.json(await evolveProgram(agent, instruction));
   } catch (e: any) {

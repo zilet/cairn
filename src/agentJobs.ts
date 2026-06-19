@@ -3,6 +3,7 @@ import * as repo from "./repo.js";
 import {
   suggestSession,
   draftCoachProposal,
+  evolveProgram,
   draftMealPlan,
   swapMealAgentic,
   generateRecipe,
@@ -109,6 +110,12 @@ async function processAgentJob(id: number): Promise<void> {
       }
       case "proposal": {
         result = await draftCoachProposal(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
+        chosen = result?.agent ?? null;
+        if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
+        break;
+      }
+      case "evolve_program": {
+        result = await evolveProgram(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
         chosen = result?.agent ?? null;
         if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
         break;
