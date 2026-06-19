@@ -2,6 +2,7 @@ import { db, todayISO } from "../db.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { listContextEvents } from "./health.js";
 import { KCAL_PER_LB, getPrimaryDiscipline, getProfile, projectGoalPace } from "./profile.js";
+import { type TrainingLoad, dayLoad } from "./training-read.js";
 
 // ============================================================================
 // STUBS for the Stage-2 feature teams. Each has the FINAL signature + return
@@ -34,26 +35,31 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   const discipline = getPrimaryDiscipline();
   const countsCardio = discipline === "endurance" || discipline === "hybrid";
 
-  // Lifting-session days (a logged set).
+  // Lifting-session days (a logged set) — still used for "did they train today".
   const sessionDates = new Set(
     (db.prepare(`SELECT DISTINCT s.date AS dt FROM sessions s JOIN logged_sets l ON l.session_id = s.id`).all() as any[]).map((r) => r.dt)
   );
-  // Cardio/activity days that count as training for an endurance/hybrid athlete:
-  // a real effort (≥20 min or any logged distance), so an incidental short walk
-  // doesn't read as a hard day. Empty for a strength athlete.
-  const cardioDates = countsCardio
-    ? new Set(
-        (db.prepare(
-          `SELECT DISTINCT date AS dt FROM activities WHERE (duration_min >= 20 OR distance_km IS NOT NULL)`
-        ).all() as any[]).map((r) => r.dt)
-      )
-    : new Set<string>();
-  const trainingDay = (iso: string) => sessionDates.has(iso) || cardioDates.has(iso);
 
-  // Consecutive training days ending the day before `d`.
-  let consec = 0;
-  let t = new Date(d + "T00:00:00Z").getTime() - 864e5; // start from yesterday
-  while (trainingDay(new Date(t).toISOString().slice(0, 10))) { consec++; t -= 864e5; }
+  // Intensity-aware earned-rest count. The old rule treated ANY logged day as a
+  // hard "training day", so a 20-min mobility session (RIR 8-10, no load) or a
+  // short easy run stacked toward a forced rest exactly like a heavy lift. Now we
+  // grade each day's actual LOAD (hard/moderate/easy — see training-read.dayLoad)
+  // and count only genuinely LOADING days: a real recovery day BREAKS the streak,
+  // which is how a coach reads it. The per-day grades ride along in `signals` so
+  // the agentic layer understands the rhythm too, not just the bare count.
+  const loadAt = (iso: string): TrainingLoad | "none" => dayLoad(iso, { countsCardio });
+  const recentLoads: { date: string; load: TrainingLoad | "none" }[] = [];
+  let consec = 0; // consecutive LOADING (hard/moderate) days ending yesterday
+  let streakOpen = true;
+  for (let back = 1; back <= 10; back++) {
+    const iso = new Date(new Date(d + "T00:00:00Z").getTime() - back * 864e5).toISOString().slice(0, 10);
+    const load = loadAt(iso);
+    if (back <= 5) recentLoads.push({ date: iso, load });
+    const loading = load === "hard" || load === "moderate";
+    if (streakOpen && loading) consec++;
+    else streakOpen = false;
+    if (!streakOpen && back > 5) break;
+  }
 
   // Endurance volume spike: a weekly-mileage jump well above the prior weeks'
   // average is its own earned-rest signal (consecutive-day counting can miss a
@@ -130,7 +136,12 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     todaysActivities.find((a) => (a.duration_min != null && Number(a.duration_min) >= 20) || a.distance_km != null) || null;
 
   const signals = {
+    // Consecutive genuinely-LOADING (hard/moderate) days ending yesterday — a
+    // recovery/easy day breaks the streak (it's earned rest, not stacked fatigue).
     consecutive_training_days: consec,
+    // The last few days' actual load grade (hard/moderate/easy/none), so the read
+    // reflects intensity, not just "did something get logged".
+    recent_load: recentLoads,
     // Discipline-aware context (v35): what "training day" counts as, and the
     // endurance volume read when it applies. Strength athletes see discipline
     // 'strength' + a null volume block (today's behavior).
@@ -225,17 +236,21 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     return shape(days[idx % days.length]);
   }
 
-  if (consec >= 3 || volumeSpike || lowSleep || lowSubjective) {
+  // Earned rest comes from genuinely-loading days stacking up (intensity-aware
+  // now), or an acute recovery signal (short sleep / a run-down check-in). A
+  // weekly-mileage spike is NO LONGER a forced rest — for a hybrid athlete with a
+  // noisy chronic base it fired far too readily (and "rest" contradicted its own
+  // "an easier day" wording). It now rides as a caveat on the train read below,
+  // so the agent still sees `volume_spike` and the athlete still gets their day.
+  if (consec >= 3 || lowSleep || lowSubjective) {
     return {
       kind: "rest",
       focus: null,
       why: consec >= 3
-        ? "You've trained several days running — let it consolidate."
-        : volumeSpike
-          ? "Your mileage has jumped this week — an easier day lets it absorb."
-          : lowSleep
-            ? "Sleep's run short lately — an easier day will serve you better."
-            : "You're feeling run-down today — rest is the smart call.",
+        ? "You've trained hard several days running — let it consolidate."
+        : lowSleep
+          ? "Sleep's run short lately — an easier day will serve you better."
+          : "You're feeling run-down today — rest is the smart call.",
       est_minutes: null,
       signals,
     };
@@ -247,12 +262,23 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     const label = bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "workout";
     return { kind: "easy", focus: null, why: `You've already got a ${label} in today — nice. Keep the rest of the day easy.`, est_minutes: 20, signals };
   }
+  // A genuine mileage spike WHILE actively stacking loading days earns an easier
+  // day (not a forced rest) so the running absorbs. Gated on consec>=1: if
+  // yesterday was already a recovery/easy day, the spike has been answered — don't
+  // stack easy on easy, let them train (the spike still rides as a caveat below).
+  if (volumeSpike && consec >= 1) {
+    return { kind: "easy", focus: null, why: "Your running's ramped this week — an easy day lets it absorb.", est_minutes: 25, signals };
+  }
   const sd = suggestedPlanDay();
   if (sd) {
-    // Still a green-light to train (a suggestion, never a gate), but when fatigue
-    // is quietly building toward a reset, voice it now — a heads-up, not a brake.
-    const why = anticipateDeload
-      ? `You're good to train — though recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset.`
+    // Still a green-light to train (a suggestion, never a gate), but voice the soft
+    // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
+    // a reset, and/or running ramped this week (keep today's miles easy).
+    const caveats: string[] = [];
+    if (anticipateDeload) caveats.push("recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset");
+    if (volumeSpike) caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
+    const why = caveats.length
+      ? `You're good to train — ${caveats.join("; and ")}.`
       : "You're recovered and due — good to go.";
     return { kind: "train", focus: sd.focus, why, est_minutes: 60, signals };
   }

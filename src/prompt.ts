@@ -1284,7 +1284,7 @@ function trainingRhythmLine(allSessions: any[], date?: string): string {
     sessions.filter((s) => { const a = ageDays(s?.date); return a != null && a >= 0 && a < days; }).length;
   const last7 = within(7);
   const last28 = within(28);
-  const recentFocus = [...new Set(sessions.slice(0, 3).map((s) => s?.day_name).filter(Boolean))];
+  const recentFocus = [...new Set(sessions.slice(0, 3).map((s) => s?.title || s?.day_name).filter(Boolean))];
   const jointFlags = [...new Set(sessions.slice(0, 4).map((s) => s?.joint_pain).filter(Boolean))];
   const sore = sessions.slice(0, 3).filter((s) => s?.soreness != null && Number(s.soreness) >= 4).length;
   const bits: string[] = [];
@@ -1340,7 +1340,7 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
   const allSessions = Array.isArray(context?.recent_sessions) ? context.recent_sessions : [];
   const sessions = allSessions.slice(0, 6);
   const sessionLine = sessions.length
-    ? sessions.map((s: any) => `${s?.date ?? "?"}${s?.day_name ? ` (${s.day_name})` : ""}`).join(", ")
+    ? sessions.map((s: any) => { const nm = s?.title || s?.day_name; return `${s?.date ?? "?"}${nm ? ` (${nm})` : ""}`; }).join(", ")
     : "(no recent sessions logged)";
   const rhythmLine = trainingRhythmLine(allSessions, opts.date);
   // What's already on the board for today — a logged session and/or activities.

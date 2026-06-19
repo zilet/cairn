@@ -2,6 +2,7 @@ import { db, todayISO } from "../db.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, sessionSummary, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
+import { deriveSessionTitle } from "./training-read.js";
 
 // ---------- activities ----------
 export function parseActivity(text: string) {
@@ -98,7 +99,51 @@ export type FeedRow = {
   source: string | null; // "garmin" | activities.source | null
   meta: Record<string, any>;     // kind-specific raw bits for the renderer
   detail: Record<string, any> | null; // body-reaction blob (HR zones, temp, effort, VO2) or null
+  // Strength only: the per-exercise glance breakdown (movement + top set), so a
+  // Lately row can expand to WHAT the session actually was — not just "8 sets".
+  // Also the honesty fix for an off-plan session whose title is stale ("Full Body"
+  // for what was really mobility/core): the movements make the truth legible.
+  movements?: { name: string; sets: number; best: string }[];
 };
+
+// Glance-format a logged set for the Lately breakdown. Mirrors the PWA chip
+// vocabulary (BW / "30 assist" / a bare load) so the two never disagree.
+function _setWeightLabel(w: number | null | undefined): string {
+  if (w == null) return "BW";
+  return w < 0 ? `${-w} assist` : `${w}`;
+}
+function _durLabel(sec: number): string {
+  const v = Math.max(0, Math.round(sec || 0));
+  return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
+}
+// The session's exercises with each one's top working set — heaviest set (most
+// reps as tiebreak; a bodyweight movement therefore sorts by reps), or the
+// longest hold for a timed movement. Deterministic, null-safe, [] when no sets.
+function _sessionMovements(sessionId: number): { name: string; sets: number; best: string }[] {
+  const sets = setsForSession(sessionId) as any[];
+  const byEx = new Map<string, any[]>();
+  for (const st of sets) {
+    const k = String(st.exercise);
+    if (!byEx.has(k)) byEx.set(k, []);
+    byEx.get(k)!.push(st);
+  }
+  return [...byEx.entries()].map(([name, list]) => {
+    const timed = list.some((x) => x.duration_sec != null) || list[0]?.mode === "timed";
+    let best: string;
+    if (timed) {
+      best = _durLabel(list.reduce((m, x) => Math.max(m, Number(x.duration_sec) || 0), 0));
+    } else {
+      const top = list.reduce((a, b) => {
+        const wa = a.weight == null ? -Infinity : Number(a.weight);
+        const wb = b.weight == null ? -Infinity : Number(b.weight);
+        if (wb !== wa) return wb > wa ? b : a;
+        return (Number(b.reps) || 0) > (Number(a.reps) || 0) ? b : a;
+      });
+      best = `${_setWeightLabel(top.weight)}${top.reps != null ? ` × ${top.reps}` : ""}`;
+    }
+    return { name, sets: list.length, best };
+  });
+}
 
 // Any non-null value? Used to drop an all-empty detail blob to null.
 function _hasAny(o: Record<string, any>): boolean {
@@ -129,7 +174,7 @@ export function recentTraining(limit = 6): FeedRow[] {
 
   // --- finished strength sessions (the live/open session stays on Today, not here) ---
   const sessRows = db.prepare(
-    `SELECT s.id, s.date, s.finished_at, s.garmin_json, pd.name AS day_name
+    `SELECT s.id, s.date, s.finished_at, s.garmin_json, s.plan_day_id, pd.name AS day_name
      FROM sessions s
      LEFT JOIN plan_days pd ON pd.id = s.plan_day_id
      WHERE s.finished_at IS NOT NULL
@@ -156,12 +201,15 @@ export function recentTraining(limit = 6): FeedRow[] {
       id: s.id,
       date: s.date,
       at: s.finished_at ? String(s.finished_at).replace(" ", "T") + "Z" : null,
-      title: s.day_name || "Session",
+      // Content-true title: a session whose logged work diverged from its plan day
+      // is named from what was actually trained (not the stale plan-day label).
+      title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
       stats,
       note: g && g.summary ? String(g.summary) : null,
       source: g ? "garmin" : null,
       meta: { sets: sum.sets, tonnage: sum.tonnage, exercises: sum.exercises },
       detail: detail && _hasAny(detail) ? detail : null,
+      movements: _sessionMovements(s.id),
     };
   });
 

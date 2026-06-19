@@ -63,13 +63,30 @@ export function seedIntake(daysAgo, kcal, extra = {}) {
 
 // ---- sessions + logged sets (drives dayRead's consecutive-training count) ----
 // A "training day" for dayRead = a session date that has at least one logged set.
+// A genuinely-LOADING training day: real volume taken near failure, so the
+// intensity-aware day-read (training-read.dayLoad) grades it 'moderate'/'hard'
+// and it counts toward the earned-rest streak. (A single light set would now,
+// correctly, grade 'easy' and NOT stack — see seedRecoveryDay.)
 export function seedTrainingDay(date) {
   const ex = repo.upsertExercise({ name: "Test Squat", muscle_group: "legs" });
   const sess = repo.getOrCreateSession(date, null);
-  db.prepare(
-    `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps)
-     VALUES (?, ?, 1, 100, 5)`
-  ).run(sess.id, ex.id);
+  for (let n = 1; n <= 4; n++) {
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir)
+       VALUES (?, ?, ?, 185, 5, 2)`
+    ).run(sess.id, ex.id, n);
+  }
+  return sess;
+}
+
+// A light recovery/mobility day: bodyweight + a timed hold at high RIR — grades
+// 'easy', so it should BREAK an earned-rest streak rather than extend it.
+export function seedRecoveryDay(date) {
+  const ex = repo.upsertExercise({ name: "Dead Bug", muscle_group: "core" });
+  const plank = repo.upsertExercise({ name: "Side Plank", muscle_group: "core", mode: "timed" });
+  const sess = repo.getOrCreateSession(date, null);
+  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, reps, rir) VALUES (?, ?, 1, 10, 9)`).run(sess.id, ex.id);
+  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, duration_sec) VALUES (?, ?, 1, 30)`).run(sess.id, plank.id);
   return sess;
 }
 

@@ -207,7 +207,7 @@ function sessionCardHtml(s, i) {
   return `<div class="sess hist hist-tap reveal" data-sessid="${s.id}" role="button" tabindex="0" style="${stagger(i)}" aria-label="Edit ${escAttr(weekday)} session">
       <div class="hist-head">
         <div>
-          <div class="hist-kicker lbl">${fmtShortDate(s.date)}${s.day_name ? ` \u00b7 ${escHtml(s.day_name)}` : ""}</div>
+          <div class="hist-kicker lbl">${fmtShortDate(s.date)}${(s.title || s.day_name) ? ` \u00b7 ${escHtml(s.title || s.day_name)}` : ""}</div>
           <div class="hist-day">${escHtml(weekday)}<span class="hist-edit" aria-hidden="true">edit</span></div>
         </div>
         <div class="hist-chips">${chips}</div>
@@ -297,7 +297,7 @@ async function openSessionEdit(sess, fromEl) {
 
   openDetailFrom(fromEl, () => {
     const el = mountDetail(`
-      <h2 class="detail-title">${escHtml(sess.day_name || "Session")}</h2>
+      <h2 class="detail-title">${escHtml(sess.title || sess.day_name || "Session")}</h2>
       <div class="detail-ctx lbl">${escHtml(fmtShortDate(sess.date))} · edit logged sets</div>
       <div class="ed-sets">${groups || `<div class="detail-body" style="color:var(--muted)">No sets logged.</div>`}</div>
       <div class="detail-section"><div class="lbl">Session notes</div>

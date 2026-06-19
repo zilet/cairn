@@ -432,6 +432,15 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .lately-detail{padding:10px 13px 12px;border-top:1px solid var(--line)}
 .lately-detail .garmin-tiles{margin-bottom:6px}
 .lately-detail .gz-bar{margin-bottom:4px}
+.lately-moves{display:flex;flex-direction:column}
+.lately-moves:not(:last-child){margin-bottom:8px}
+.lately-mv{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:5px 0;border-bottom:1px solid var(--line)}
+.lately-mv:last-child{border-bottom:none}
+.lately-mv-name{font-size:.84rem;color:var(--ink);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lately-mv-best{flex:0 0 auto;font-size:.84rem;color:var(--ink-2)}
+.lately-mv-sets{color:var(--muted)}
 
 /* inline bodyweight add */
 .wt-inline{display:flex;gap:8px;align-items:center;margin:0 0 10px}

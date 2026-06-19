@@ -8,6 +8,7 @@ import { listFoodNotes, listMealPlans } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { getProfile, listWeight } from "./profile.js";
 import { getSettings } from "./settings.js";
+import { deriveSessionTitle } from "./training-read.js";
 
 // ---------- sessions ----------
 export function getOrCreateSession(date: string, planDayId?: number | null): any {
@@ -41,7 +42,14 @@ export function getRecentSessions(limit = 10) {
               LEFT JOIN plan_days pd ON pd.id = s.plan_day_id
               ORDER BY s.date DESC, s.id DESC LIMIT ?`)
     .all(limit) as any[];
-  return sessions.map((s) => ({ ...hydrateSession(s), sets: setsForSession(s.id), skips: skipsForSession(s.id) }));
+  // `title` is the content-true display name (see deriveSessionTitle); `day_name`
+  // stays the raw plan-day label so existing consumers are untouched.
+  return sessions.map((s) => ({
+    ...hydrateSession(s),
+    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    sets: setsForSession(s.id),
+    skips: skipsForSession(s.id),
+  }));
 }
 
 export function getSessionByDate(date: string) {
@@ -51,13 +59,26 @@ export function getSessionByDate(date: string) {
               WHERE s.date = ?`)
     .get(date) as any;
   if (!s) return null;
-  return { ...hydrateSession(s), sets: setsForSession(s.id), skips: skipsForSession(s.id) };
+  return {
+    ...hydrateSession(s),
+    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    sets: setsForSession(s.id),
+    skips: skipsForSession(s.id),
+  };
 }
 
 export function getSessionDetail(id: number) {
-  const s = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as any;
+  const s = db.prepare(
+    `SELECT s.*, pd.name AS day_name FROM sessions s
+     LEFT JOIN plan_days pd ON pd.id = s.plan_day_id WHERE s.id = ?`
+  ).get(id) as any;
   if (!s) return null;
-  return { ...hydrateSession(s), sets: setsForSession(id), skips: skipsForSession(id) };
+  return {
+    ...hydrateSession(s),
+    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    sets: setsForSession(id),
+    skips: skipsForSession(id),
+  };
 }
 
 export function sessionSummary(sessionId: number) {

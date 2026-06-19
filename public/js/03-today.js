@@ -1467,7 +1467,9 @@ async function renderToday(opts = {}) {
 function sessionDoneCard(session, day, { isToday }) {
   const sets = (session.sets || []).length;
   const tonnage = setsTonnage(session.sets);
-  const name = (day && day.name) || session.day_name || "Session";
+  // Prefer the session's content-true title (e.g. an off-plan "Full Body" that was
+  // really mobility/core), falling back to the matched plan day / raw day name.
+  const name = session.title || (day && day.name) || session.day_name || "Session";
   const chips = [
     `${sets} set${sets === 1 ? "" : "s"}`,
     tonnage ? `${Math.round(tonnage).toLocaleString()} lb` : null,
@@ -2276,6 +2278,21 @@ function latelyDetail(d) {
   return `<div class="lately-body">${tiles.length ? `<div class="garmin-tiles">${tiles.join("")}</div>` : ""}${bar}</div>`;
 }
 
+// The tap-to-expand movement breakdown for a strength session: each exercise and
+// its top working set. This is what makes a manually-logged session (no Garmin
+// blob) worth tapping — and makes an off-plan session legible when its title is
+// stale (e.g. a "Full Body" card that was really mobility/core). "" when empty.
+function latelyMovements(moves) {
+  if (!Array.isArray(moves) || !moves.length) return "";
+  const rows = moves.map((m) =>
+    `<div class="lately-mv">
+       <span class="lately-mv-name">${escHtml(m.name)}</span>
+       <span class="lately-mv-best numeral">${escHtml(m.best || "")}${m.sets > 1 ? `<span class="lbl lately-mv-sets"> · ${m.sets}×</span>` : ""}</span>
+     </div>`
+  ).join("");
+  return `<div class="lately-moves">${rows}</div>`;
+}
+
 // One row of the Lately feed — strength or cardio, normalized.
 function latelyRow(row) {
   const isStrength = row.kind === "strength";
@@ -2286,7 +2303,9 @@ function latelyRow(row) {
   const tile = isStrength
     ? artImg("exercise", "", "artile-sm lately-art", art("exercise", row.title))
     : artImg("activity", actArtText({ type: row.title }), "artile-sm lately-art", art("activity", row.title));
-  const detailHtml = row.detail ? latelyDetail(row.detail) : "";
+  // A strength row expands to its movement breakdown (always available) plus its
+  // Garmin physiology if synced; a cardio row keeps just the body-reaction blob.
+  const detailHtml = (isStrength ? latelyMovements(row.movements) : "") + (row.detail ? latelyDetail(row.detail) : "");
   const expandable = !!detailHtml;
   return `<div class="lately-row${isStrength ? " lately-strength" : ""}">
       <div class="lately-head"${expandable ? ' role="button" tabindex="0" aria-expanded="false"' : ""}>

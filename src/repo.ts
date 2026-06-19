@@ -4,6 +4,7 @@
 // behavior-preserving relocation — see the individual modules for the logic.
 export * from "./repo/exercises.js";
 export * from "./repo/plan.js";
+export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
 export * from "./repo/profile.js";
 export * from "./repo/activities.js";
