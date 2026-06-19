@@ -3021,6 +3021,38 @@ body.swr-busy::after{
 .hm-name,.hm-val{overflow-wrap:anywhere;word-break:break-word}
 
 /* the review card */
+/* the elite-coach whole-picture synthesis — leads the Read tab */
+.hsyn{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:18px;margin:0 0 14px;border-left:3px solid var(--terracotta)}
+.hsyn-kicker{display:block;color:var(--muted);margin-bottom:6px}
+.hsyn-headline{font-family:var(--font-display);font-weight:530;font-variation-settings:"opsz" 80;
+  font-size:1.22rem;line-height:1.28;color:var(--ink);margin:0 0 8px}
+.hsyn-story{font-size:.95rem;line-height:1.55;color:var(--ink-2);margin:0 0 12px}
+.hsyn-invite{font-size:.92rem;color:var(--ink-2);margin:0 0 12px}
+.hsyn-prios{display:flex;flex-direction:column;gap:8px;margin:0 0 12px}
+.hsyn-prio{padding:9px 11px;background:var(--card-2);border-radius:var(--radius-sm)}
+.hsyn-plabel{display:block;font-weight:600;font-size:.86rem;color:var(--ink)}
+.hsyn-pmove{display:block;font-size:.85rem;color:var(--ink-2);margin-top:2px}
+.hsyn-precheck{display:block;color:var(--muted);margin-top:3px}
+.hsyn-onechange{margin:4px 0 12px;padding:11px 13px;border-radius:var(--radius-sm);
+  background:color-mix(in srgb,var(--terracotta) 9%,var(--card));border-left:2px solid var(--terracotta)}
+.hsyn-onechange .lbl{display:block;color:var(--terracotta);margin-bottom:3px}
+.hsyn-onechange span:last-child{font-size:.9rem;color:var(--ink);line-height:1.45}
+.hsyn-focus{margin-top:4px;border-top:1px solid var(--line);padding-top:12px}
+.hsyn-tier-lbl{display:block;color:var(--muted);margin:10px 0 6px;letter-spacing:.04em}
+.hsyn-tier-lbl:first-child{margin-top:0}
+.hsyn-fp{padding:7px 0;border-bottom:1px solid var(--line)}
+.hsyn-fp:last-child{border-bottom:none}
+.hsyn-fp-head{display:flex;align-items:center;gap:7px}
+.hsyn-fp-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+.hsyn-fp-now .hsyn-fp-dot{background:var(--terracotta)}
+.hsyn-fp-group{font-weight:600;font-size:.86rem;color:var(--ink)}
+.hsyn-fp-soft{color:var(--muted)}
+.hsyn-fp-why{color:var(--muted);margin:1px 0 0 14px}
+.hsyn-fp-move{font-size:.84rem;color:var(--ink-2);margin:3px 0 0 14px}
+.hsyn-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px}
+.hsyn-cap{flex-basis:100%;color:var(--accent)}
+.hsyn-gen{margin-top:4px}
 .hpic{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:18px;margin-bottom:2px}
 .hpic-top{display:flex;justify-content:space-between;align-items:center;gap:10px}

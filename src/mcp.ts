@@ -14,6 +14,7 @@ import {
   swapMealAgentic,
   generateRecipe,
   runHealthReview,
+  synthesizeHealth,
   generateInsight,
   runResearch,
   consolidateMemory,
@@ -1092,6 +1093,27 @@ export function buildMcpServer(): McpServer {
     "Markers re-ranked by impact: distance from the OPTIMAL zone (not just the lab's normal range), most-actionable first, flagged (low/high) markers always on top, and a marker HEADING out of optimal ranked above a stably-borderline one. Each marker carries optimal/distance/in_optimal/actionable, its health group (group/group_label), a least-squares trend ({dir: rising|falling|stable, change, span_days, n, slope_per_week, projection}) and a forecast ({direction: improving|worsening|stable, eta_text, crossing}) — eta_text is a PLAIN-LANGUAGE projection vs optimal ('trending toward optimal, roughly 6 weeks out'); never a score. The top-level `groups` lists the canonical-ordered groups present. Informational, not medical advice — the internal impact_score is an ordering signal only, never a user-facing grade.",
     {},
     async () => asText(repo.prioritizeMarkers())
+  );
+
+  server.tool(
+    "get_health_focus",
+    "The deterministic TIERED health priorities (elite-coach prioritization): the flat directive flood collapsed into a handful of connected priorities — one per health group, tier (act_now/track), the markers driving it, whether they compound, and the LEAD move per domain. Plain words, no scores; the basis for the whole-picture synthesis.",
+    {},
+    async () => asText(repo.healthFocus())
+  );
+
+  server.tool(
+    "get_health_synthesis",
+    "The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering. Returns the last generated narrative (or null); regenerate with synthesize_health.",
+    {},
+    async () => asText({ synthesis: repo.getHealthSynthesis(), focus: repo.healthFocus() })
+  );
+
+  server.tool(
+    "synthesize_health",
+    "Generate (and cache) the elite-coach whole-picture synthesis: reads labs + body composition + training load + recovery + nutrition + supplements + life as ONE story and names the few things that matter most right now and the highest-leverage move. Informational, not medical advice; pull — nothing is pushed.",
+    { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
+    async ({ agent }) => asText(await synthesizeHealth(agent))
   );
 
   server.tool(

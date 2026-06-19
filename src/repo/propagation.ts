@@ -3,6 +3,7 @@ import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirec
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import { forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { getProfile } from "./profile.js";
+import { getAppState, setAppState } from "./settings.js";
 
 // ============================================================================
 // SUPPLEMENT UNDERSTANDING — say it once in plain words, the system approximates.
@@ -1166,6 +1167,127 @@ export function directivesForCoach() {
     trigger_side: d.trigger_side,
     trigger_date: d.trigger_date,
   }));
+}
+
+// ============================================================================
+// HEALTH FOCUS — the prioritization/synthesis substrate (elite-coach layer).
+// The propagation engine emits one directive per (marker × domain); on a real
+// panel that's 30+ flat items — a flood, not coaching. healthFocus() collapses
+// them into a handful of TIERED, deduped, connected priorities: each health
+// "story" (a marker group) with its tier (act now / track / maintain-ish), the
+// markers driving it, and the LEAD move per domain. Deterministic, no scores —
+// the tier is plain words, the order is the priority. This is what the Brain view
+// renders and what the agentic health-story synthesis reasons over.
+// ============================================================================
+export type FocusTier = "act_now" | "track";
+export interface FocusPriority {
+  group: string;                 // group label, e.g. "Lipids & Cardiovascular"
+  tier: FocusTier;
+  markers: string[];             // off-optimal marker names in this group, priority order
+  flagged: boolean;              // the lab itself flagged one low/high
+  compounding: boolean;          // ≥2 markers off here (or a cross-marker cluster directive)
+  worsening: boolean;            // a marker in this group is trending the wrong way
+  moves: { nutrition?: string; training?: string; watch?: string }; // the LEAD directive per domain
+  uncertain: boolean;            // the levers here are real-but-unsettled (softer nudge)
+  why: string;                   // one plain clause
+}
+export interface HealthFocus {
+  priorities: FocusPriority[];   // act_now first, then track; deduped to one per group
+  act_now: number;
+  track: number;
+  headline: string;              // deterministic plain lead ("Lipids are the priority right now")
+}
+
+export function healthFocus(): HealthFocus {
+  const { markers } = prioritizeMarkers(); // ordered: flagged-first then furthest-from-optimal
+  // Off-optimal markers, in priority order, bucketed by health group (preserving rank).
+  const groups = new Map<string, { markers: any[]; rank: number }>();
+  markers.forEach((m: any, i: number) => {
+    if (m?.in_optimal !== false) return; // only out-of-optimal concerns (null/true skipped)
+    const label = m.group_label || markerGroup(m?.name || "").label;
+    if (!groups.has(label)) groups.set(label, { markers: [], rank: i });
+    groups.get(label)!.markers.push(m);
+  });
+
+  // The active directives, bucketed to the same groups, so each priority carries
+  // the lead actionable move per domain (a non-uncertain one wins over uncertain).
+  const dirByGroup = new Map<string, any[]>();
+  for (const d of listActiveDirectives() as any[]) {
+    const label = markerGroup(String(d.marker || "")).label;
+    if (!dirByGroup.has(label)) dirByGroup.set(label, []);
+    dirByGroup.get(label)!.push(d);
+  }
+  const leadMove = (dirs: any[], domain: string): { text?: string; uncertain: boolean } => {
+    const inDomain = dirs.filter((d) => d.domain === domain);
+    if (!inDomain.length) return { uncertain: false };
+    const lead = inDomain.find((d) => !d.uncertain) || inDomain[0];
+    return { text: String(lead.directive || "").trim().slice(0, 240), uncertain: !!lead.uncertain };
+  };
+
+  const priorities: FocusPriority[] = [];
+  for (const [label, { markers: ms, rank }] of groups) {
+    const dirs = dirByGroup.get(label) || [];
+    const flagged = ms.some((m) => m?.latest?.flag === "low" || m?.latest?.flag === "high");
+    const compounding = ms.length >= 2 || dirs.some((d) => String(d.marker || "").includes("+"));
+    const worsening = ms.some((m) => m?.forecast?.direction === "worsening");
+    const maxDistance = ms.reduce((mx, m) => Math.max(mx, Number(m?.distance) || 0), 0);
+    // Tier score — flagged + compounding + how far out + worsening + near the top
+    // of the panel's priority order. ≥3 ⇒ act now; else track.
+    let score = 0;
+    if (flagged) score += 2;
+    if (compounding) score += 2;
+    if (maxDistance >= 0.4) score += 2; else if (maxDistance >= 0.2) score += 1;
+    if (worsening) score += 1;
+    if (rank < 6) score += 1; // among the panel's most-pressing markers
+    const tier: FocusTier = score >= 3 ? "act_now" : "track";
+
+    const nut = leadMove(dirs, "nutrition");
+    const trn = leadMove(dirs, "training");
+    const wch = leadMove(dirs, "watch");
+    const moves: FocusPriority["moves"] = {};
+    if (nut.text) moves.nutrition = nut.text;
+    if (trn.text) moves.training = trn.text;
+    if (wch.text) moves.watch = wch.text;
+    const anyActionable = !!(nut.text && !nut.uncertain) || !!(trn.text && !trn.uncertain);
+    const uncertain = !anyActionable && (nut.uncertain || trn.uncertain || wch.uncertain);
+
+    const why = compounding
+      ? `${ms.length} markers off together here — read them as one picture`
+      : flagged
+        ? `the lab flagged ${ms[0]?.name}`
+        : worsening
+          ? `${ms[0]?.name} is drifting the wrong way`
+          : `${ms[0]?.name} is outside its optimal band`;
+
+    priorities.push({ group: label, tier, markers: ms.map((m) => m.name), flagged, compounding, worsening, moves, uncertain, why });
+  }
+
+  // act_now first, then track; within a tier keep panel priority order (the Map
+  // preserves first-seen rank, which is the marker order).
+  priorities.sort((a, b) => (a.tier === b.tier ? 0 : a.tier === "act_now" ? -1 : 1));
+  const actNow = priorities.filter((p) => p.tier === "act_now");
+  const headline = actNow.length
+    ? actNow.length === 1
+      ? `${actNow[0].group} is the priority right now.`
+      : `${actNow[0].group} and ${actNow[1].group.toLowerCase()} are the priorities right now.`
+    : priorities.length
+      ? "Nothing urgent — a few markers worth tracking."
+      : "Your markers are reading clean.";
+
+  return { priorities, act_now: actNow.length, track: priorities.length - actNow.length, headline };
+}
+
+// The latest agentic health-story synthesis (the elite-coach whole-picture read),
+// cached in app_state so the Brain view opens instantly. coachOps.synthesizeHealth
+// writes it; it's a pull artifact, refreshed on demand / when the picture changes.
+const HEALTH_SYNTHESIS_KEY = "health_synthesis";
+export function saveHealthSynthesis(obj: any): void {
+  try { setAppState(HEALTH_SYNTHESIS_KEY, JSON.stringify(obj)); } catch { /* never block */ }
+}
+export function getHealthSynthesis(): any | null {
+  const raw = getAppState(HEALTH_SYNTHESIS_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 export function directiveFeedbackForCoach(limit = 12) {

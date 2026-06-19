@@ -1056,6 +1056,7 @@ function paintHealthReadTab() {
   if (!c) return;
   c.innerHTML = `<div class="hread-cols">
       <div class="hread-main">
+        <div id="hSynthesis"></div>
         <div id="hRecovery"></div>
         <div id="hPicture">
           <div class="hpic hpic-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div>
@@ -1070,12 +1071,104 @@ function paintHealthReadTab() {
         <div id="hbSupplements"></div>
       </aside>
     </div>`;
+  loadHealthSynthesis(pollToken);
   loadRecoverySummary(pollToken, "#hRecovery");
   loadPriorityMarkers(pollToken);
   loadDirectives(pollToken);
   loadSupplements(pollToken);
   if (_hReviewRun) { paintHealthPicture(); return; } // a run is still cooking
   loadHealthPicture(pollToken, api("/health-docs"));
+}
+
+// ---- the elite-coach synthesis: the whole picture, read as ONE prioritized story ----
+// Leads the Read tab. The agentic narrative (headline + connected story + the 2-3
+// priorities + the one change) sits above the deterministic TIERED focus (act-now /
+// track groups, deduped from the directive flood). Pull: it waits here; a refresh
+// regenerates it as a streamed job. No scores; informational, never a verdict.
+function focusTierHtml(focus) {
+  const prios = (focus && Array.isArray(focus.priorities) ? focus.priorities : []);
+  if (!prios.length) return "";
+  const row = (p) => {
+    const move = p.moves && (p.moves.nutrition || p.moves.training || p.moves.watch);
+    return `<div class="hsyn-fp${p.tier === "act_now" ? " hsyn-fp-now" : ""}">
+        <div class="hsyn-fp-head"><span class="hsyn-fp-dot" aria-hidden="true"></span><span class="hsyn-fp-group">${escHtml(p.group)}</span>${p.uncertain ? `<span class="hsyn-fp-soft lbl">worth confirming</span>` : ""}</div>
+        <div class="hsyn-fp-why lbl">${escHtml(p.why)}</div>
+        ${move ? `<div class="hsyn-fp-move">${escHtml(move)}</div>` : ""}
+      </div>`;
+  };
+  const actNow = prios.filter((p) => p.tier === "act_now");
+  const track = prios.filter((p) => p.tier !== "act_now");
+  let h = "";
+  if (actNow.length) h += `<div class="hsyn-tier-lbl lbl">Act on now</div>${actNow.map(row).join("")}`;
+  if (track.length) h += `<div class="hsyn-tier-lbl lbl">Worth tracking</div>${track.map(row).join("")}`;
+  return `<div class="hsyn-focus">${h}</div>`;
+}
+
+function renderHealthSynthesis(data, token) {
+  const wrap = $("#hSynthesis");
+  if (!wrap || !wrap.isConnected || (token != null && token !== pollToken)) return;
+  const s = data && data.synthesis;
+  const focus = (data && data.focus) || { priorities: [] };
+  const hasFocus = Array.isArray(focus.priorities) && focus.priorities.length;
+  if (!s && !hasFocus) { wrap.innerHTML = ""; return; } // nothing to synthesize yet — stay quiet
+
+  const prios = s && Array.isArray(s.priorities) ? s.priorities.filter((p) => p && (p.label || p.the_move)) : [];
+  let body;
+  if (s && s.headline) {
+    body = `
+      <h3 class="hsyn-headline">${escHtml(s.headline)}</h3>
+      ${s.story ? `<p class="hsyn-story">${escHtml(s.story)}</p>` : ""}
+      ${prios.length ? `<div class="hsyn-prios">${prios.map((p) => `
+        <div class="hsyn-prio">
+          <span class="hsyn-plabel">${escHtml(p.label || "")}</span>
+          ${p.the_move ? `<span class="hsyn-pmove">${escHtml(p.the_move)}</span>` : ""}
+          ${p.recheck ? `<span class="hsyn-precheck lbl">${escHtml(p.recheck)}</span>` : ""}
+        </div>`).join("")}</div>` : ""}
+      ${s.one_change ? `<div class="hsyn-onechange"><span class="lbl">If you change one thing</span><span>${escHtml(s.one_change)}</span></div>` : ""}
+      ${focusTierHtml(focus)}
+      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${escHtml(relTime(s.generated_at))}` : ""}</span><button class="linkbtn" id="hsynRefresh" type="button">refresh</button></div>`;
+  } else {
+    body = `
+      <p class="hsyn-invite">Your labs, training, recovery and nutrition — read as one connected, prioritized picture.</p>
+      ${focusTierHtml(focus)}
+      <button class="draftbtn hsyn-gen" id="hsynGen" type="button">Read my whole picture</button>`;
+  }
+  wrap.innerHTML = `<div class="hsyn reveal"><div class="hsyn-kicker lbl">Your health — one picture</div>${body}</div>`;
+  $("#hsynRefresh")?.addEventListener("click", triggerHealthSynthesis);
+  $("#hsynGen")?.addEventListener("click", triggerHealthSynthesis);
+}
+
+function loadHealthSynthesis(token) {
+  const wrap = $("#hSynthesis");
+  if (!wrap || !wrap.isConnected) return;
+  api("/health/synthesis")
+    .then((data) => renderHealthSynthesis(data || {}, token))
+    .catch(() => { /* leave quiet */ });
+}
+
+// Regenerate the synthesis — a streamed background job (reads the whole picture;
+// can take ~30-90s), reconnects across reloads via runOp.
+function triggerHealthSynthesis() {
+  const wrap = $("#hSynthesis");
+  if (!wrap) return;
+  const card = wrap.querySelector(".hsyn");
+  if (card && !card.querySelector(".job-cap")) {
+    const cap = document.createElement("div");
+    cap.className = "job-cap lbl hsyn-cap";
+    card.appendChild(cap);
+  }
+  runOp("health_synthesis", {}, {
+    path: "/health/synthesis",
+    anchor: "#hSynthesis .hsyn",
+    caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
+    guard: () => !$("#hSynthesis")?.isConnected,
+    render: (result) => {
+      if (result && result.synthesis) renderHealthSynthesis(result, pollToken);
+      else loadHealthSynthesis(pollToken);
+      swrInvalidate("plan:coach");
+    },
+    onFail: () => { toast("Couldn't read the picture right now — try again in a bit."); loadHealthSynthesis(pollToken); },
+  });
 }
 
 // ---- Supplements: UNDERSTANDING, not a daily log ----

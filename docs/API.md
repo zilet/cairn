@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**165 routes** across 61 groups.
+**168 routes** across 61 groups.
 
 ## `/activities`
 
@@ -224,9 +224,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/health` |  |
+| GET | `/api/health/focus` | The elite-coach synthesis layer: the deterministic TIERED focus (priorities, not a flat directive flood) + the latest cached agentic health-story narrative. Both informational, no scores. The narrative is regenerated via POST below. |
 | GET | `/api/health/markers` |  |
 | GET | `/api/health/review` | Latest review or null — a soft lookup like /sessions?date= (200 + null on absence, never 404): "no review yet" is a normal state the PWA renders. |
 | POST | `/api/health/review` | Run a fresh whole-picture health review via the shared agent rotation. Like the meal swap, ok:false at status 200 is the designed failure signal when the agent returns garbage (addHealthReview rejects the shape). |
+| GET | `/api/health/synthesis` |  |
+| POST | `/api/health/synthesis` |  |
 
 ## `/health-docs`
 

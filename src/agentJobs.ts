@@ -10,6 +10,7 @@ import {
   nutritionCheckin,
   generateInsight,
   runHealthReview,
+  synthesizeHealth,
   distillChat,
 } from "./coachOps.js";
 import { computeDayRead, localToday } from "./dayread.js";
@@ -166,6 +167,11 @@ async function processAgentJob(id: number): Promise<void> {
         result = await runHealthReview(agent, hooks);
         chosen = result?.agent ?? null;
         if (result?.review?.id) ref = { ref_table: "health_reviews", ref_id: result.review.id };
+        break;
+      }
+      case "health_synthesis": {
+        result = await synthesizeHealth(agent, hooks);
+        chosen = result?.agent ?? null;
         break;
       }
       case "day_read_override": {

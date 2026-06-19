@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**137 tools.**
+**140 tools.**
 
 | Tool | Description |
 |---|---|
@@ -56,8 +56,10 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_garmin_summary` | Compact coach-facing Garmin summary: recent endurance load and recovery metrics. Use as context, not as plan authority. |
 | `get_goal_check` | Compute TDEE and a lean-safe feasibility check for the current goal. |
 | `get_health_export` | Structured, FHIR-inspired health summary: a portable read-only slice of the athlete's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus the understood supplement regimen and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. INFORMATIONAL, not medical advice — no 0-100 scores anywhere. |
+| `get_health_focus` | The deterministic TIERED health priorities (elite-coach prioritization): the flat directive flood collapsed into a handful of connected priorities — one per health group, tier (act_now/track), the markers driving it, whether they compound, and the LEAD move per domain. Plain words, no scores; the basis for the whole-picture synthesis. |
 | `get_health_markers` | Marker history aggregated across every uploaded health document: per marker the latest value/flag, the previous reading, a numeric time series, and a trend ({dir: rising\|falling\|stable, change, span_days, n}) so you can speak to direction over time, not just the latest value. Each marker also carries its health group (group/group_label — e.g. Lipids & Cardiovascular, Metabolic & Glucose), and the top-level `groups` list gives the canonical-ordered groups present. Flagged (low/high) markers sort first. |
 | `get_health_review` | Get the latest whole-picture health review (headline, wins, watchlist, focus areas, follow-ups, training/nutrition impact) — or null when none has been run yet. |
+| `get_health_synthesis` | The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering. Returns the last generated narrative (or null); regenerate with synthesize_health. |
 | `get_injury_impacts` | For each ACTIVE injury on the life timeline, the planned exercises it loads (with where they appear in the plan + any existing constraint note) and a few safe alternative exercises to consider. Deterministic, offline. Suggestions only — it never changes the plan. |
 | `get_last_set` | Get the most recent logged set for an exercise (for prefill). |
 | `get_meal_plan` | Get one meal plan by id (hydrated: parsed days/meals/macros). |
@@ -129,6 +131,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `supersede_memory` | Mark a memory note superseded (it CONTRADICTS/REPLACES an older one). Never hard-deletes — the old fact stays in history. Optionally supply a replacement content (a new row is created) or replacement_id. |
 | `swap_meal` | Agentically swap ONE meal in a drafted meal plan for a different dish, honoring an optional free-text hint (e.g. 'let's go with fish'). Keeps kcal/protein within ±10% unless the hint asks otherwise. |
 | `sync_garmin` | Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings). |
+| `synthesize_health` | Generate (and cache) the elite-coach whole-picture synthesis: reads labs + body composition + training load + recovery + nutrition + supplements + life as ONE story and names the few things that matter most right now and the highest-leverage move. Informational, not medical advice; pull — nothing is pushed. |
 | `understand_supplements` | Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items. |
 | `unskip_exercise` | Restore a previously skipped exercise to a date's session plan. |
 | `update_block` | Update a periodization block's fields (goal/focus/phase/week_index/total_weeks/status). |

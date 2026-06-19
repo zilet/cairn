@@ -23,6 +23,7 @@ import {
   swapMealAgentic,
   generateRecipe,
   runHealthReview,
+  synthesizeHealth,
   generateInsight,
   runResearch,
   consolidateMemory,
@@ -1288,6 +1289,23 @@ api.post("/health/review", async (req, res) => {
 // Informational, not medical advice; the impact_score is an internal ordering
 // signal only and is never rendered as a user-facing grade.
 api.get("/markers/priority", (_req, res) => res.json(repo.prioritizeMarkers()));
+
+// The elite-coach synthesis layer: the deterministic TIERED focus (priorities,
+// not a flat directive flood) + the latest cached agentic health-story narrative.
+// Both informational, no scores. The narrative is regenerated via POST below.
+api.get("/health/focus", (_req, res) => res.json(repo.healthFocus()));
+api.get("/health/synthesis", (_req, res) =>
+  res.json({ synthesis: repo.getHealthSynthesis(), focus: repo.healthFocus() })
+);
+api.post("/health/synthesis", async (req, res) => {
+  const agent = req.body?.agent;
+  if (backgroundOp(res, "health_synthesis", { agent: agent ?? null }, agent)) return;
+  try {
+    res.json(await synthesizeHealth(agent));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Active cross-domain directives (?all=1 includes resolved/dismissed).
 api.get("/directives", (req, res) =>

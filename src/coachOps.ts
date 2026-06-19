@@ -26,6 +26,7 @@ import {
   buildNutritionCheckinPrompt,
   buildInsightPrompt,
   buildWeeklyReadPrompt,
+  buildHealthSynthesisPrompt,
   buildMemoryConsolidationPrompt,
   buildAboutMeGrowthPrompt,
   buildChatDistillPrompt,
@@ -598,6 +599,45 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
     : null;
   if (!review) return { ok: false as const, error: "agent returned no usable review", agent: chosen, tried };
   return { ok: true as const, review, agent: chosen, tried, grounded: !!grounding };
+}
+
+// The elite-coach WHOLE-PICTURE synthesis (pull): reads the deterministic
+// healthFocus tiering + full context and writes the prioritized, connected health
+// story — the headline, the 2-3 priorities that matter most right now and how
+// they relate, and the single highest-leverage move. Cached in app_state so the
+// Brain view opens instantly; refreshed on demand / when the picture changes.
+// Degrades calmly (no agent → keeps the last cached synthesis, never throws).
+export async function synthesizeHealth(agent: string | undefined, hooks?: OpHooks) {
+  hooks?.onPhase?.("reading your whole picture");
+  const prompt = buildHealthSynthesisPrompt();
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
+  const p: any = result.parsed;
+  let synthesis: any = null;
+  if (p && typeof p === "object" && p.found !== false && (p.headline || p.story)) {
+    const clamp = (v: any, n: number) => (v == null ? null : String(v).trim().slice(0, n) || null);
+    synthesis = {
+      headline: clamp(p.headline, 300),
+      story: clamp(p.story, 1400),
+      priorities: (Array.isArray(p.priorities) ? p.priorities : []).slice(0, 5).map((x: any) => ({
+        label: clamp(x?.label, 60),
+        why_it_matters: clamp(x?.why_it_matters, 220),
+        the_move: clamp(x?.the_move, 320),
+        recheck: clamp(x?.recheck, 160),
+      })).filter((x: any) => x.label || x.the_move),
+      one_change: clamp(p.one_change, 200),
+      agent: chosen,
+      generated_at: new Date().toISOString(),
+    };
+    repo.saveHealthSynthesis(synthesis);
+  }
+  return {
+    ok: !!synthesis,
+    synthesis: synthesis ?? repo.getHealthSynthesis(),
+    focus: repo.healthFocus(),
+    agent: chosen,
+    tried,
+    agent_status: agentStatusFor({ ok: !!synthesis, agent: chosen, tried }),
+  };
 }
 
 // Run ONE agentic pass over the whole picture for a single genuine cross-domain

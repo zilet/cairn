@@ -7,7 +7,7 @@ import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, getEnduranceGoal, getProfile } from "./profile.js";
-import { directiveFeedbackForCoach, directivesForCoach, markerSide, matchOptimalZone, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
+import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 
@@ -214,6 +214,8 @@ export function getCoachContext() {
     // Vision build (the connected brain + understanding): new keys are ADDITIVE
     // — every existing consumer keeps working untouched.
     directives: directivesForCoach(),         // cross-domain consequences of flagged findings (condensed, bounded)
+    health_focus: healthFocus(),              // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
+    health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
     directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
     recovery,                                 // unified Garmin + Apple/other recovery view
     checkins: listCheckins(7),                // optional subjective morning check-ins
