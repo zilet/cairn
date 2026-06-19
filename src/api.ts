@@ -14,6 +14,7 @@ import {
   agentStatusFor,
   suggestSession,
   draftCoachProposal,
+  evolveProgram,
   getCachedExerciseExplanation,
   explainExercise,
   weekAheadRead,
@@ -466,6 +467,60 @@ api.post("/agent/run", async (req, res) => {
   }
 });
 
+// Adaptive program evolution: read the program-state and draft a plan EVOLUTION
+// (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for
+// review — same propose→apply path as /agent/run, driven by the trend analysis.
+api.post("/program/evolve", async (req, res) => {
+  const { agent, instruction } = req.body ?? {};
+  // Long agentic call → a durable background job by default (the PWA streams the
+  // evolving caption + reconnects across reloads, like session-suggest); inline
+  // when bg ops are off. evolveProgram owns the run + proposal persistence so both
+  // paths return the same body.
+  if (backgroundOp(res, "evolve_program", { agent: agent ?? null, instruction: instruction ?? "" }, agent)) return;
+  try {
+    res.json(await evolveProgram(agent, instruction));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Periodization blocks (the mesocycle model the coach periodizes toward).
+api.get("/program/blocks", (req, res) =>
+  res.json(repo.listBlocks(req.query.limit ? Number(req.query.limit) : 20))
+);
+api.get("/program/blocks/active", (_req, res) => res.json(repo.getActiveBlock()));
+api.post("/program/blocks", (req, res) => res.json(repo.createBlock(req.body ?? {})));
+api.put("/program/blocks/:id", (req, res) => {
+  const b = repo.updateBlock(Number(req.params.id), req.body ?? {});
+  if (!b) return res.status(404).json({ error: "not found" });
+  res.json(b);
+});
+api.post("/program/blocks/:id/advance", (req, res) => {
+  const b = repo.advanceBlockWeek(Number(req.params.id));
+  if (!b) return res.status(404).json({ error: "not found" });
+  res.json(b);
+});
+api.post("/program/blocks/:id/complete", (req, res) => {
+  const b = repo.completeBlock(Number(req.params.id));
+  if (!b) return res.status(404).json({ error: "not found" });
+  res.json(b);
+});
+
+// Exercise variations / alternatives (the plateau-break + "make it interesting"
+// library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps.
+api.get("/program/variations", (req, res) => {
+  const exercise = req.query.exercise ? String(req.query.exercise) : "";
+  if (!exercise) return res.status(400).json({ error: "exercise required" });
+  if (String(req.query.mode) === "alternatives") {
+    const avoid = req.query.avoid ? String(req.query.avoid).split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+    return res.json(repo.suggestAlternatives(exercise, {
+      bodyweightOnly: req.query.bodyweight === "1",
+      avoidEquipment: avoid as any,
+    }));
+  }
+  res.json(repo.suggestVariations(exercise));
+});
+
 api.get("/proposals", (req, res) =>
   res.json(repo.listProposals(req.query.limit ? Number(req.query.limit) : 20))
 );
@@ -523,6 +578,12 @@ api.get("/activities", (req, res) =>
 // newest-first, with the real Garmin start time + body-reaction detail folded in.
 api.get("/recent-training", (req, res) =>
   res.json(repo.recentTraining(req.query.limit ? Number(req.query.limit) : 6))
+);
+// Adaptive program state: per-lift trend + plateau/stall, volume landmarks,
+// mesocycle position, endurance trends — the deterministic read the evolve-program
+// proposal builds on. Informational (no score, no gate).
+api.get("/program-state", (req, res) =>
+  res.json(repo.getProgramState(req.query.date ? String(req.query.date) : undefined))
 );
 // Single activity row (frontend polls this to watch enrichment_status).
 api.get("/activities/:id", (req, res) => {

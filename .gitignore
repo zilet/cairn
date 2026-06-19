@@ -15,6 +15,10 @@ files.zip
 # local secrets (copy of .env.example with real keys)
 .env
 
+# personal, local-only Claude Code project notes (override of CLAUDE.md) — kept on
+# disk, never published.
+CLAUDE.local.md
+
 # personal, local-only files — kept on disk, never published. One folder holds
 # everything you use privately, mirroring the repo layout:
 #   .local/scripts/   deploy-rpi.sh, rpi-bootstrap.sh, rpi-https.sh, rpi-backup.sh

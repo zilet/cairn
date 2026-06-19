@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**129 tools.**
+**137 tools.**
 
 | Tool | Description |
 |---|---|
@@ -15,8 +15,10 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `add_family` | Add a family member to the roster. relationship is e.g. son / daughter / partner / parent; color is an optional swatch; birthdate is optional YYYY-MM-DD; notes is free-text. allergies are a HARD exclusion in any shared/household meal; dietary_restrictions surface as optional kid-friendly / shared-meal mods. |
 | `add_health_record` | Record a health-document ANALYSIS without uploading a binary (e.g. after reading a lab report image in a Claude client). Stores extracted markers + summary directly; status is 'done'. |
 | `add_memory` | Add a durable note Cairn should remember (preference, constraint, insight, observation). |
+| `advance_block_week` | Advance a block to its next week — bumps week_index, transitions the phase per the deload schedule, and auto-completes past the last week. Omit id to advance the active block. |
 | `apply_proposal` | Apply a draft proposal's target changes to the plan. |
 | `consolidate_memory` | Quietly tidy the memory store: merge near-duplicates, supersede contradictions, promote recurring observations to durable traits. Marks, never hard-deletes. Returns the counts. |
+| `create_block` | Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random. |
 | `delete_context_event` | Delete a life-timeline event by id. |
 | `delete_exercise` | Delete an exercise by name. Refuses (ok:false) if it still has logged sets or is referenced in a plan — remove those first. |
 | `delete_family` | Delete a family member by id. |
@@ -30,8 +32,10 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `discard_proposal` | Discard a draft proposal without applying it. |
 | `draft_meal_plan` | Run an agent to draft a goal-aware weekly meal plan (lean-safe deficit, protein target), then a bounded self-critique verify pass against the lean-safe/longevity floors before saving. The saved plan is the verified draft; `verified:{checked,adjustments}` shows it was checked against your protein/fiber/kcal floors. Verify fails open (no agent ⇒ ships unverified). |
 | `draft_plan_update` | Run a coaching agent over recent logs to produce a DRAFT plan-update proposal. Does not change the plan; review then apply_proposal. |
+| `evolve_program` | Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize. Returns a DRAFT proposal (review then apply_proposal) plus the program-state snapshot. Does not change the plan. |
 | `finish_session` | Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs). |
 | `generate_insight` | Run ONE agentic pass over the athlete's whole picture for a single genuine cross-domain connection (or a weekly read), dedupe against what's already been said, and store it. Returns ok:false when there's nothing real to say (found:false / duplicate / unusable shape). NO notification fires — the insight simply waits in-app. Informational, not medical advice. |
+| `get_active_block` | The active periodization block (goal / focus / phase / week N of M), or null. The mesocycle the coach periodizes toward. |
 | `get_agent_info` | Read-only 'what's running' for one coaching CLI: installed version and (best-effort) the model it would use. Cheap subprocess probe — no coaching/paid call, no model pinning. ok:false for an unknown agent. |
 | `get_agent_stats` | Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up). |
 | `get_art_stats` | Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size. |
@@ -64,6 +68,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_plan_ics` | Export the training plan as an iCalendar (.ics) feed — each plan day as a weekly-recurring all-day event. Pull-not-push: subscribe in a calendar app. Day 1 maps to Monday by default; pass start_weekday (0=Sun..6=Sat) to shift. |
 | `get_priority_markers` | Markers re-ranked by impact: distance from the OPTIMAL zone (not just the lab's normal range), most-actionable first, flagged (low/high) markers always on top, and a marker HEADING out of optimal ranked above a stably-borderline one. Each marker carries optimal/distance/in_optimal/actionable, its health group (group/group_label), a least-squares trend ({dir: rising\|falling\|stable, change, span_days, n, slope_per_week, projection}) and a forecast ({direction: improving\|worsening\|stable, eta_text, crossing}) — eta_text is a PLAIN-LANGUAGE projection vs optimal ('trending toward optimal, roughly 6 weeks out'); never a score. The top-level `groups` lists the canonical-ordered groups present. Informational, not medical advice — the internal impact_score is an ordering signal only, never a user-facing grade. |
 | `get_profile` | Get the athlete's profile (age, height, weight, goal). |
+| `get_program_state` | Adaptive program state — the deterministic read of how the training program is evolving: per-lift est-1RM trend + plateau/stall detection, volume landmarks per muscle, mesocycle position (weeks since deload, ACWR), and endurance trends. Informational (plain words, no score); the basis for proposing plan evolutions. |
 | `get_progress` | Get logged history and estimated-1RM trend (Epley) for one exercise over time. |
 | `get_recent_training` | The unified 'Lately' feed: finished strength sessions and cardio activities merged newest-first, each with a real timestamp (Garmin) and body-reaction detail (HR zones, temperature, effort, VO2) when available. |
 | `get_recovery` | Unified recovery view: Garmin + Apple/other daily metrics merged into one sleep / HRV / resting-HR / steps picture over the window, plus acute training load / training readiness / fitness age when present. Also returns acute-vs-chronic baselines: recent (last 7d avg), baseline (30d avg) and delta (recent − baseline) for sleep/hrv/rhr — compare against the athlete's OWN norm, not a population. Graceful (has_data:false) when empty. Use as context, not plan authority. |
@@ -78,6 +83,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_activities` | List recent logged activities. |
 | `list_agent_models` | List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent. |
 | `list_agents` | List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, whether the CLI binary is present, the tri-state login/connected probe (configured: true\|false\|null), installed version, and whether each declares an interactive login / a model catalog. usable rolls these up (only a KNOWN logged-out agent — configured:false — is excluded from the rotation). |
+| `list_blocks` | List periodization blocks (newest first) with status (active/completed/abandoned). |
 | `list_chat_sessions` | List past (archived) coaching conversations, newest first — each is a thread a 'fresh start' archived, with its message count, time span, and a one-line preview. Browse history without deleting anything. |
 | `list_checkins` | List recent check-ins (newest first). |
 | `list_context_events` | List life-timeline events. Pass active=true for only active/upcoming (not archived and not past their end_date). |
@@ -119,11 +125,13 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `set_settings` | Update app settings (any subset). agent_strategy: round_robin\|random\|priority. agent_order / disabled_agents: arrays of agent names. agent_routes: optional per-task agent map pinning a task to one agent. coach_enabled/coach_day(0-6)/coach_hour(0-23) control the weekly auto-draft. |
 | `skip_exercise` | Mark a planned exercise consciously skipped ('not today') for a date's session — it stops counting against that day's plan. Refuses (ok:false) when the exercise already has logged sets that session. |
 | `suggest_session` | Build ONE session for today on demand, honoring constraints (time budget, equipment, focus, an injury) and the day read. Returns a SUGGESTION for review — it is NOT saved or applied as the plan. ok:false is the designed failure signal when the agent returns nothing usable. |
+| `suggest_variations` | Variation candidates for an exercise (same movement pattern, different bar path/implement) to break a plateau or keep training fresh; mode:'alternatives' returns equipment/injury-aware swaps. |
 | `supersede_memory` | Mark a memory note superseded (it CONTRADICTS/REPLACES an older one). Never hard-deletes — the old fact stays in history. Optionally supply a replacement content (a new row is created) or replacement_id. |
 | `swap_meal` | Agentically swap ONE meal in a drafted meal plan for a different dish, honoring an optional free-text hint (e.g. 'let's go with fish'). Keeps kcal/protein within ±10% unless the hint asks otherwise. |
 | `sync_garmin` | Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings). |
 | `understand_supplements` | Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items. |
 | `unskip_exercise` | Restore a previously skipped exercise to a date's session plan. |
+| `update_block` | Update a periodization block's fields (goal/focus/phase/week_index/total_weeks/status). |
 | `update_context_event` | Update a life-timeline event by id (any subset of fields). Set archived=true to retire it. |
 | `update_directive` | Flip a directive's status (the review side of propose-review-apply — nothing auto-applies). `resolved` means handled for that marker snapshot; `dismissed` suppresses equivalent future advice until the marker materially changes. Returns the updated directive, or null when the id is unknown. |
 | `update_exercise` | Update an existing exercise by name: mode (reps\|timed), muscle_group, cues, constraint_note (any subset). |

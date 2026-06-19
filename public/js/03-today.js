@@ -774,6 +774,41 @@ function reconnectSessionSuggest() {
 // #sugSlot and reconnects after a reload. Mirrors the meal-swap failure UX:
 // ok:false (or unreachable) surfaces as a gentle inline line, never a hard error.
 let sessionSuggestInFlight = false;
+// Reveal a small free-text composer so the athlete can just SAY what they want —
+// "legs sore from yesterday's run, easier on the legs", "30 min, no barbell",
+// "shoulders fried, upper pull focus". The text rides to /session-suggest as the
+// free-text `constraints`, where the coach reads it like a coach (and gets a swap
+// menu from the variation library to trade movements). Empty → a plain session.
+function revealSessionComposer() {
+  const slot = view.querySelector("#sugSlot");
+  if (!slot || sessionSuggestInFlight) return;
+  slot.innerHTML = `<div class="sug-composer settle-in">
+      <input class="sug-prompt" type="text" autocomplete="off" enterkeyhint="go"
+        aria-label="Describe the session you want"
+        placeholder="say what you want — e.g. legs sore from yesterday's run, easier on the legs">
+      <div class="sug-composer-row">
+        <div class="sug-vibes">${SESSION_VIBES.map((v) => `<button class="sug-vibe" type="button" data-vibe="${escAttr(v)}">${escHtml(v)}</button>`).join("")}</div>
+        <div class="sug-composer-actions">
+          <button class="pillbtn" type="button" data-sugcancel>Cancel</button>
+          <button class="pillbtn pill-accent" type="button" data-sugbuild>Build it</button>
+        </div>
+      </div>
+    </div>`;
+  const input = slot.querySelector(".sug-prompt");
+  if (input && !reducedMotion()) setTimeout(() => input.focus(), 60);
+  const go = () => { const t = (input?.value || "").trim(); askForSession(t ? { constraints: t } : {}); };
+  slot.querySelector("[data-sugbuild]")?.addEventListener("click", go);
+  slot.querySelector("[data-sugcancel]")?.addEventListener("click", () => { slot.innerHTML = ""; });
+  slot.querySelectorAll("[data-vibe]").forEach((b) => b.addEventListener("click", () => {
+    // A vibe chip seeds the box (append, so they can combine), then they can refine or build.
+    if (!input) return;
+    input.value = input.value.trim() ? `${input.value.trim()}, ${b.dataset.vibe}` : b.dataset.vibe;
+    input.focus();
+  }));
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+}
+const SESSION_VIBES = ["easier on the legs", "30 min", "upper body", "no barbell", "low impact", "push hard"];
+
 async function askForSession(opts = {}) {
   if (sessionSuggestInFlight) { toast("Already drafting a session…"); return; }
   const slot = view.querySelector("#sugSlot");
@@ -788,6 +823,8 @@ async function askForSession(opts = {}) {
   const body = { date: state.logDate };
   if (opts.minutes != null) body.minutes = opts.minutes;
   if (opts.focus) body.focus = opts.focus;
+  if (opts.equipment) body.equipment = opts.equipment;
+  if (opts.constraints) body.constraints = opts.constraints; // free-text vibe ("legs sore — easier on the legs")
 
   await runOp("session_suggest", body, sessionSuggestOpOpts());
 }
@@ -1467,7 +1504,9 @@ async function renderToday(opts = {}) {
 function sessionDoneCard(session, day, { isToday }) {
   const sets = (session.sets || []).length;
   const tonnage = setsTonnage(session.sets);
-  const name = (day && day.name) || session.day_name || "Session";
+  // Prefer the session's content-true title (e.g. an off-plan "Full Body" that was
+  // really mobility/core), falling back to the matched plan day / raw day name.
+  const name = session.title || (day && day.name) || session.day_name || "Session";
   const chips = [
     `${sets} set${sets === 1 ? "" : "s"}`,
     tonnage ? `${Math.round(tonnage).toLocaleString()} lb` : null,
@@ -1596,7 +1635,7 @@ function wireBrief(read, { isToday }) {
   brief.querySelectorAll("[data-redirect]").forEach((b) =>
     b.addEventListener("click", () => {
       const action = b.dataset.redirect;
-      if (action === "ask-session") { askForSession(); return; }
+      if (action === "ask-session") { revealSessionComposer(); return; }
       if (action === "start-session") {
         // the day's primary on a train day: make sure the logging surface exists,
         // then bring its first card into view so "start" lands you in the work.
@@ -2276,6 +2315,21 @@ function latelyDetail(d) {
   return `<div class="lately-body">${tiles.length ? `<div class="garmin-tiles">${tiles.join("")}</div>` : ""}${bar}</div>`;
 }
 
+// The tap-to-expand movement breakdown for a strength session: each exercise and
+// its top working set. This is what makes a manually-logged session (no Garmin
+// blob) worth tapping — and makes an off-plan session legible when its title is
+// stale (e.g. a "Full Body" card that was really mobility/core). "" when empty.
+function latelyMovements(moves) {
+  if (!Array.isArray(moves) || !moves.length) return "";
+  const rows = moves.map((m) =>
+    `<div class="lately-mv">
+       <span class="lately-mv-name">${escHtml(m.name)}</span>
+       <span class="lately-mv-best numeral">${escHtml(m.best || "")}${m.sets > 1 ? `<span class="lbl lately-mv-sets"> · ${m.sets}×</span>` : ""}</span>
+     </div>`
+  ).join("");
+  return `<div class="lately-moves">${rows}</div>`;
+}
+
 // One row of the Lately feed — strength or cardio, normalized.
 function latelyRow(row) {
   const isStrength = row.kind === "strength";
@@ -2286,7 +2340,9 @@ function latelyRow(row) {
   const tile = isStrength
     ? artImg("exercise", "", "artile-sm lately-art", art("exercise", row.title))
     : artImg("activity", actArtText({ type: row.title }), "artile-sm lately-art", art("activity", row.title));
-  const detailHtml = row.detail ? latelyDetail(row.detail) : "";
+  // A strength row expands to its movement breakdown (always available) plus its
+  // Garmin physiology if synced; a cardio row keeps just the body-reaction blob.
+  const detailHtml = (isStrength ? latelyMovements(row.movements) : "") + (row.detail ? latelyDetail(row.detail) : "");
   const expandable = !!detailHtml;
   return `<div class="lately-row${isStrength ? " lately-strength" : ""}">
       <div class="lately-head"${expandable ? ' role="button" tabindex="0" aria-expanded="false"' : ""}>

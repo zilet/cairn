@@ -432,6 +432,15 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .lately-detail{padding:10px 13px 12px;border-top:1px solid var(--line)}
 .lately-detail .garmin-tiles{margin-bottom:6px}
 .lately-detail .gz-bar{margin-bottom:4px}
+.lately-moves{display:flex;flex-direction:column}
+.lately-moves:not(:last-child){margin-bottom:8px}
+.lately-mv{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:5px 0;border-bottom:1px solid var(--line)}
+.lately-mv:last-child{border-bottom:none}
+.lately-mv-name{font-size:.84rem;color:var(--ink);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lately-mv-best{flex:0 0 auto;font-size:.84rem;color:var(--ink-2)}
+.lately-mv-sets{color:var(--muted)}
 
 /* inline bodyweight add */
 .wt-inline{display:flex;gap:8px;align-items:center;margin:0 0 10px}
@@ -2461,6 +2470,25 @@ body.sheet-open{overflow:hidden}
 
 /* the on-demand session-suggest card — a reviewable suggestion, not a plan */
 .sug-slot:empty{display:none}
+/* free-text session composer — "say what you want" */
+.sug-composer{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:14px;margin:0 0 14px;border-left:3px solid var(--terracotta);
+}
+.sug-prompt{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:11px 13px;font-size:.92rem;font-family:inherit;
+}
+.sug-prompt:focus{outline:none;border-color:var(--terracotta)}
+.sug-prompt::placeholder{color:var(--muted)}
+.sug-composer-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px}
+.sug-vibes{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.sug-vibe{
+  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);cursor:pointer;
+  border-radius:999px;padding:5px 11px;font-size:.76rem;white-space:nowrap;transition:all .15s ease;
+}
+@media (hover:hover){.sug-vibe:hover{border-color:var(--terracotta);color:var(--ink)}}
+.sug-composer-actions{display:flex;gap:8px;flex:0 0 auto}
 .sug-card{
   background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:18px 18px 16px;margin:0 0 14px;border-left:3px solid var(--sage);
@@ -3672,7 +3700,128 @@ button.hmk-row:active{background:var(--card-2)}
     border:1px solid rgba(33,29,23,.35);
   }
 }
-/* Tightly-packed pairs (reorder ▲▼, order arrows) sit side-by-side with a small
+/* -------------------------------------------------------------------
+   40 · Program view (adaptive program intelligence)
+   Calm editorial read of how the athlete's program is evolving.
+   No 0–100 scores; direction and plain words only.
+   ------------------------------------------------------------------- */
+
+/* Masthead headline — one plain-language sentence about the program. */
+.prog-headline{
+  font-family:var(--font-display);font-weight:500;font-variation-settings:"opsz" 60;
+  font-size:1.05rem;color:var(--ink-2);line-height:1.45;
+  margin:0 0 20px;padding-bottom:14px;border-bottom:1px solid var(--line);
+}
+
+/* Section label for the lifts list. */
+.prow-section-head{margin:4px 0 10px}
+
+/* Individual lift row — name / status / figure / why. */
+.prow{
+  background:var(--card);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);padding:14px 16px;margin-bottom:10px;
+  border-left:3px solid transparent;
+}
+.prow-stalled{border-left-color:var(--accent)}
+.prow-good{border-left-color:var(--sage)}
+.prow-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.prow-name{
+  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 40;
+  font-size:.97rem;color:var(--ink);min-width:0;
+}
+.prow-status{
+  font-family:var(--font-ui);font-size:.72rem;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap;flex-shrink:0;
+}
+.prow-status-warn{color:var(--accent)}
+.prow-status-ok{color:var(--sage)}
+.prow-figs{margin-top:5px;font-size:.78rem;color:var(--muted)}
+.prow-why{margin-top:6px;font-size:.86rem;color:var(--ink-2);line-height:1.45}
+
+/* Volume block — compact hairline rows per muscle. */
+.pvol-head{margin:20px 0 10px}
+.pvol-card{
+  background:var(--card);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);overflow:hidden;
+}
+.pvol-row{
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:11px 16px;border-top:1px solid var(--line);
+}
+.pvol-row:first-child{border-top:none}
+.pvol-name{font-size:.9rem;font-weight:600;color:var(--ink);min-width:0}
+.pvol-meta{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;text-align:right}
+.pvol-meta b{font-family:var(--font-display);font-variation-settings:"opsz" 60;font-weight:600;font-size:.88rem;color:var(--ink)}
+.pvol-band{display:block;font-size:.7rem;margin-top:1px}
+.pvol-ok{color:var(--sage)}
+.pvol-low{color:var(--muted)}
+.pvol-high{color:var(--accent)}
+
+/* Mesocycle block — plain-language phase note. */
+.pmeso{
+  margin:20px 0 0;padding:14px 16px;
+  background:var(--card-2);border-radius:var(--radius-sm);
+  border:1px solid var(--line);
+}
+.pmeso-phase{margin-bottom:6px}
+.pmeso-note{font-size:.9rem;color:var(--ink-2);line-height:1.5}
+
+/* Endurance block — only shown when the server provides it. */
+.pend{
+  margin:16px 0 0;padding:14px 16px;
+  background:var(--card-2);border-radius:var(--radius-sm);
+  border:1px solid var(--line);
+}
+.pend-head{margin-bottom:6px}
+.pend-status{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;font-size:.97rem;color:var(--ink);margin-bottom:4px}
+.pend-figs{margin-top:4px;font-size:.78rem;color:var(--muted)}
+.pend-why{margin-top:6px;font-size:.86rem;color:var(--ink-2);line-height:1.45}
+
+/* "What to evolve next" list — the keystone. Sage-mastheaded editorial card. */
+.padapt{
+  background:var(--sage-bg);border-radius:var(--radius);
+  padding:16px 18px;margin-bottom:20px;
+  border-left:3px solid var(--sage);
+}
+.padapt-head{margin-bottom:10px;color:var(--sage)}
+.padapt-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:7px}
+.padapt-item{font-size:.9rem;color:var(--ink-2);line-height:1.45}
+
+/* "Evolve my plan" footer — advisory, not auto-applied. */
+.prog-evolve-foot{
+  margin:24px 0 8px;display:flex;align-items:center;flex-wrap:wrap;gap:10px;
+}
+.prog-evolve-btn{flex-shrink:0}
+.prog-evolve-note{font-size:.72rem;color:var(--muted)}
+.prog-evolve-cap{flex-basis:100%;font-size:.78rem;color:var(--accent)}
+/* periodization block card */
+.pblock-slot:empty{display:none}
+.pblock{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:14px 16px;margin:0 0 14px;border-left:3px solid var(--sage);
+}
+.pblock-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.pblock-kicker{color:var(--muted)}
+.pblock-week{color:var(--ink-2);flex:0 0 auto}
+.pblock-goal{font-family:var(--font-display,inherit);font-size:1.05rem;color:var(--ink);margin:4px 0 2px}
+.pblock-meta{color:var(--muted);text-transform:capitalize}
+.pblock-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.pblock-composer{margin-top:10px}
+.pblock-composer[hidden]{display:none}
+.pblock-goal-in{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:10px 12px;font-size:.9rem;font-family:inherit;
+}
+.pblock-goal-in:focus{outline:none;border-color:var(--sage)}
+.pblock-composer-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px}
+.pblock-focus-in,.pblock-weeks-in{
+  background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:8px 10px;font-size:.84rem;font-family:inherit;
+}
+.pblock-weeks-in{width:64px}
+
+/* -------------------------------------------------------------------
+   Tightly-packed pairs (reorder ▲▼, order arrows) sit side-by-side with a small
    gap — a full 44px-wide overlay would overlap the sibling and cause mis-taps.
    Expand vertically to 44px and only a little horizontally so each stays its
    own target. */

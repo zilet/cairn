@@ -299,6 +299,27 @@ export const MIGRATIONS: Migration[] = [
     // Null = no endurance goal (today's behavior). Validated/normalized in repo.
     addColumn(db, "profile", "endurance_goal_json TEXT");
   } },
+  { version: 38, name: "program-blocks", up: (db) => {
+    // Periodization / training-block model. A mesocycle with a goal, a phase,
+    // and a week counter so progression can be structured (accumulation →
+    // intensification → deload → realization) rather than random. At most one
+    // block is active at a time (enforced at the API layer). NO scores.
+    // CREATE TABLE IF NOT EXISTS is idempotent — safe to re-run on any DB.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS program_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        goal TEXT NOT NULL DEFAULT 'Training block',
+        focus TEXT NOT NULL DEFAULT 'strength',
+        phase TEXT NOT NULL DEFAULT 'accumulation',
+        week_index INTEGER NOT NULL DEFAULT 1,
+        total_weeks INTEGER NOT NULL DEFAULT 6,
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_program_blocks_status ON program_blocks(status);
+    `);
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

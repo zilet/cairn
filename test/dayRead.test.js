@@ -22,7 +22,7 @@ test("REST on >=3 consecutive training days ending the day before", () => {
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.kind, "rest");
   assert.equal(r.signals.consecutive_training_days, 3);
-  assert.match(r.why, /trained several days/i);
+  assert.match(r.why, /several days running/i);
 });
 
 test("does NOT force rest on only 2 consecutive training days", () => {

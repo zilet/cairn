@@ -679,8 +679,8 @@ window.addEventListener("resize", () => {
 // Energy Balance (TDEE + the nutrition check-in) now lives WITH the meal plan
 // (Plan → Meals), where the read and the meal-plan loop sit together — so it's no
 // longer an orphaned Progress pill. Progress stays training-history focused.
-const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"]];
-const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory() };
+const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"], ["program", "Program"]];
+const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory(), program: () => renderProgram() };
 // The Plan sub-nav is dynamic: a runner/hybrid (or anyone with an endurance goal)
 // gets a dedicated ENDURANCE tab between Training and Meals — the home for the
 // periodized ramp, this week's prescribed runs, and shaping the running plan. A pure

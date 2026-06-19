@@ -56,9 +56,27 @@ test("recentTraining merges finished strength sessions with cardio, newest-first
   const strength = feed.find((r) => r.kind === "strength");
   assert.ok(/\bset/.test(strength.stats) && /lb/.test(strength.stats), "strength stats read 'N sets · X lb'");
   assert.ok(strength.at, "a finished session carries a real timestamp (finished_at)");
+  // The movement breakdown is what makes a manually-logged session worth tapping.
+  assert.ok(Array.isArray(strength.movements) && strength.movements.length === 1, "one movement (Test Squat)");
+  assert.equal(strength.movements[0].name, "Test Squat");
+  assert.equal(strength.movements[0].best, "225 × 5", "top set, chip-formatted");
 
   // Same date → the timestamped session sorts above the time-less manual logs.
   assert.equal(feed[0].kind, "strength", "real-timestamp row leads its day");
+});
+
+test("the movement breakdown is legible for a bodyweight/timed (off-plan) session", () => {
+  // The reported scenario: a mobility/core session whose plan-day title is stale.
+  // The breakdown must read the actual movements so the row is no longer noise.
+  repo.logSetByName({ exercise: "Dead Bug", reps: 10, date: TODAY });           // bodyweight reps
+  repo.logSetByName({ exercise: "Side Plank", duration_sec: 20, exercise_mode: "timed", date: TODAY }); // timed hold
+  const sess = repo.getSessionByDate(TODAY);
+  repo.finishSession(sess.id);
+
+  const strength = repo.recentTraining(6).find((r) => r.kind === "strength");
+  const byName = Object.fromEntries(strength.movements.map((m) => [m.name, m]));
+  assert.equal(byName["Dead Bug"].best, "BW × 10", "bodyweight reads BW × reps, never a phantom load");
+  assert.equal(byName["Side Plank"].best, "0:20", "a timed hold reads as a clock, not a load");
 });
 
 test("an open (unfinished) session does NOT appear in the feed", () => {

@@ -69,7 +69,7 @@ test("endurance athlete: 3 consecutive cardio days earns REST (cardio counts as 
   assert.equal(r.signals.discipline, "endurance");
   assert.equal(r.signals.consecutive_training_days, 3);
   assert.equal(r.kind, "rest");
-  assert.match(r.why, /trained several days/i);
+  assert.match(r.why, /several days running/i);
 });
 
 test("endurance athlete: a single short walk doesn't read as a hard training day", () => {
@@ -93,8 +93,11 @@ test("hybrid athlete: a mileage SPIKE this week earns an easier day", () => {
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.signals.endurance_volume.volume_spike, true, "mileage jump is flagged as a spike");
   assert.ok(r.signals.consecutive_training_days < 3, "spike, not the consecutive-day rule, drives this");
-  assert.equal(r.kind, "rest");
-  assert.match(r.why, /mileage|absorb/i);
+  // A genuine spike now earns an EASY day, not a forced rest — a suggestion, not a
+  // gate (and matching the read's own "an easier day lets it absorb" wording). The
+  // hard runs this week made the recent days loading, so the spike caveat applies.
+  assert.equal(r.kind, "easy");
+  assert.match(r.why, /mileage|absorb|ramped/i);
 });
 
 // ---------- A.3 endurance weekly stats ----------

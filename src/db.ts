@@ -689,6 +689,25 @@ CREATE TABLE IF NOT EXISTS evidence_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_topic ON evidence_cache(topic);
 CREATE INDEX IF NOT EXISTS idx_evidence_marker ON evidence_cache(marker);
+
+-- Periodization / training-block model (v38). A mesocycle with a goal, a
+-- phase, and a week counter so progression can be structured
+-- (accumulation → intensification → deload → realization) rather than random.
+-- At most one block should be active at a time (enforced by convention at the
+-- API layer). status: active | completed | abandoned.
+-- NO scores anywhere — goal/phase/focus are plain descriptive labels.
+CREATE TABLE IF NOT EXISTS program_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal TEXT NOT NULL DEFAULT 'Training block',  -- free text, e.g. "Build squat + base"
+  focus TEXT NOT NULL DEFAULT 'strength',       -- strength | hypertrophy | endurance-base | peak
+  phase TEXT NOT NULL DEFAULT 'accumulation',   -- accumulation | intensification | deload | realization
+  week_index INTEGER NOT NULL DEFAULT 1,        -- 1-based current week within the block
+  total_weeks INTEGER NOT NULL DEFAULT 6,       -- planned length (2–12)
+  started_at TEXT NOT NULL DEFAULT (datetime('now')), -- UTC ISO when the block started
+  status TEXT NOT NULL DEFAULT 'active',        -- active | completed | abandoned
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_program_blocks_status ON program_blocks(status);
 `);
 
 runMigrations(db);

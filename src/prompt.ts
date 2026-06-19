@@ -429,6 +429,32 @@ function renderTrainingSignals(ctx: any): string {
   return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — act on these so the plan visibly reflects what they actually did; this is the source of truth for whether a lift earned a bump):\n${lines.join("\n")}\n`;
 }
 
+// Active injury areas drawn from context_events (an injury's title/detail/meta.area
+// in plain words), so a variation/swap menu can FILTER out movements that load an
+// injured region — the concrete list the agent picks from must agree with the
+// "never load an injured area" rule, not just the prose. [] when injury-free.
+function activeInjuryAreas(ctx: any): string[] {
+  const evts = Array.isArray(ctx?.context_events) ? ctx.context_events : [];
+  const out: string[] = [];
+  for (const e of evts) {
+    if (e?.kind !== "injury" || e?.end_date) continue;
+    const txt = `${e?.title ?? ""} ${e?.detail ?? ""} ${e?.meta?.area ?? ""}`.toLowerCase();
+    for (const [tag, canon] of [["knee", "knee"], ["shoulder", "shoulder"], ["back", "lower-back"], ["lumbar", "lower-back"], ["elbow", "elbow"], ["wrist", "wrist"], ["hip", "hip"], ["ankle", "ankle"]] as const) {
+      if (txt.includes(tag)) out.push(canon);
+    }
+  }
+  return [...new Set(out)];
+}
+
+// The active periodization block (goal / phase / week N of M), so the coach
+// periodizes toward it. "" when no block is running (the program-state mesocycle
+// read still gives deload timing). A nudge, never a gate.
+function renderBlock(ctx: any): string {
+  const b = ctx?.program_block;
+  if (!b) return "";
+  return `\nACTIVE TRAINING BLOCK: "${b.goal}" — ${b.focus}, ${b.phase} phase (${b.week_of}). Periodize toward this: in an accumulation phase build volume, in intensification push load, in a deload phase propose a LIGHTER week. Don't ramp volume and intensity at once.\n`;
+}
+
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
@@ -485,8 +511,96 @@ have none — that's fine, just use what's there):
   working as designed, never a penalty.
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderBlock(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${PLAN_SCHEMA}
+
+DATA:
+${JSON.stringify(ctx)}`;
+}
+
+// ---- adaptive program evolution (propose how the PLAN itself should evolve) ----
+// Where buildCoachPrompt nudges next-week TARGETS, this drives a deeper question:
+// given how each lift is actually TRENDING (the deterministic program-state read —
+// progressing / plateaued / regressing, with a suggested action), how should the
+// PROGRAM evolve? Progress what's working, deload/rotate what's stuck, break
+// plateaus with a close variation, introduce novelty before staleness sets in,
+// add quality to a one-pace endurance base, and periodize toward the goal. Output
+// is the SAME PLAN_SCHEMA (changes/cardio/days) → a DRAFT proposal for review;
+// nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
+export function buildProgramEvolutionPrompt(userInstruction?: string, state?: any): string {
+  const ctx = repo.getCoachContext();
+  state = state ?? repo.getProgramState();
+  // Concrete variation candidates for any stalled lift, so "rotate a variation"
+  // is actionable — the agent gets real same-pattern options to choose from
+  // (it still respects constraint_notes/injuries and starts light).
+  const stalled = (Array.isArray(state.lifts) ? state.lifts : []).filter(
+    (l: any) => l.status === "plateaued" || l.suggested_action === "vary"
+  );
+  const injuryAreas = activeInjuryAreas(ctx);
+  const variationLines = stalled
+    .map((l: any) => {
+      // Injury-aware: the candidate list must not include movements that load an
+      // injured area (else it contradicts the "never load an injured area" rule).
+      const names = (repo.suggestAlternatives(l.exercise, { limit: 4, injuryAreas }) as any[]).map((v) => v.name);
+      return names.length ? `- ${l.exercise} → ${names.join(", ")}` : null;
+    })
+    .filter(Boolean);
+  const variationBlock = variationLines.length
+    ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern — rotate ONE in to break the plateau, starting light):\n${variationLines.join("\n")}\n`
+    : "";
+  const disc = disciplineOf(ctx);
+  const coachRole = disc === "endurance"
+    ? "an endurance coach (with strength as supporting work)"
+    : disc === "hybrid"
+      ? "a hybrid coach balancing endurance and strength"
+      : "a strength coach";
+  return `You are ${coachRole} EVOLVING a training program — not just tweaking next week, but
+reading how each lift has actually been trending and deciding how the plan should adapt so the
+athlete keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
+nothing is applied automatically (they drive).
+
+A deterministic PROGRAM-STATE read has already analyzed the logged history — per-lift trend +
+plateau/stall detection (with a suggested action), volume landmarks, mesocycle position, and
+endurance trends. TRUST it as your starting point, then make the nuanced call:
+${JSON.stringify(state)}
+
+HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
+- PROGRESS what's working: a lift reading "progressing" gets the next conservative load step (see
+  the step caps below). Don't fix what isn't broken.
+- BREAK plateaus: a lift reading "plateaued" should NOT just get more load (that's what stalled).
+  Pick the intervention its suggested_action points to — a light DELOAD then a fresh run, ROTATE to a
+  close variation (same movement pattern, different bar path / implement — e.g. back squat → front
+  squat, flat → incline press, barbell row → chest-supported row), or a technique/rep-scheme change.
+  Use a "days" restructure (or swap the exercise within its day) to rotate a variation; keep the rest
+  of the day intact.
+- RECOVER what's slipping: a "regressing" lift gets backed off, not pushed.
+- KEEP IT FRESH: when an accessory has been static and the program reads repetitive, introduce ONE or
+  TWO new exercises hitting the same muscle (probe an alternative they haven't tried) — small novelty
+  often beats wholesale rewrites. Every new/rotated exercise starts at a conservative load with a
+  "NEW — start light, log actual" note and MUST respect constraint_notes / injuries.
+- PERIODIZE: respect the mesocycle position — if a deload is about due (phase "deload-due"), propose a
+  lighter week rather than piling on. Don't ramp intensity and volume at once.
+- ENDURANCE: if the endurance read says "add-quality", introduce ONE structured quality session
+  (tempo or intervals) into an otherwise easy base via "cardio"/"days"; if "ease"/"spiking", hold
+  mileage; if "build", a conservative (~10%) step. Periodize toward any race goal.
+
+NON-NEGOTIABLE GUARDRAILS (same as the coach):
+- Conservative loading: upper-body +5 lb/step max, lower-body +5-10 lb/step max. Only raise when
+  recent sessions hit the TOP of the rep range on ALL sets at RIR 2-3. Thin/absent data → don't change.
+- Respect every constraint_note and active injury — never load an injured area; swap to a pain-free
+  alternative instead. Assisted movements use NEGATIVE target_weight; bodyweight null; TIMED work uses
+  target_seconds (+5-15s/step), never load.
+- Read each recent session's soreness/performance/joint_pain: high soreness / low performance / a named
+  joint → pull volume or load back there, don't progress through it. Autoregulation is a brake, not the driver.
+- Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
+  rewrite) only when frequency/recovery/plateaus clearly call for it.
+
+${variationBlock}${CONTEXT_GUARDRAILS}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderBlock(ctx)}
+TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${PLAN_SCHEMA}
@@ -1284,7 +1398,7 @@ function trainingRhythmLine(allSessions: any[], date?: string): string {
     sessions.filter((s) => { const a = ageDays(s?.date); return a != null && a >= 0 && a < days; }).length;
   const last7 = within(7);
   const last28 = within(28);
-  const recentFocus = [...new Set(sessions.slice(0, 3).map((s) => s?.day_name).filter(Boolean))];
+  const recentFocus = [...new Set(sessions.slice(0, 3).map((s) => s?.title || s?.day_name).filter(Boolean))];
   const jointFlags = [...new Set(sessions.slice(0, 4).map((s) => s?.joint_pain).filter(Boolean))];
   const sore = sessions.slice(0, 3).filter((s) => s?.soreness != null && Number(s.soreness) >= 4).length;
   const bits: string[] = [];
@@ -1340,7 +1454,7 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
   const allSessions = Array.isArray(context?.recent_sessions) ? context.recent_sessions : [];
   const sessions = allSessions.slice(0, 6);
   const sessionLine = sessions.length
-    ? sessions.map((s: any) => `${s?.date ?? "?"}${s?.day_name ? ` (${s.day_name})` : ""}`).join(", ")
+    ? sessions.map((s: any) => { const nm = s?.title || s?.day_name; return `${s?.date ?? "?"}${nm ? ` (${nm})` : ""}`; }).join(", ")
     : "(no recent sessions logged)";
   const rhythmLine = trainingRhythmLine(allSessions, opts.date);
   // What's already on the board for today — a logged session and/or activities.
@@ -1429,7 +1543,33 @@ export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipmen
   if (opts.minutes) wants.push(`TIME BUDGET: about ${Math.round(opts.minutes)} minutes — fit the whole session in that (drop accessories before compounds).`);
   if (opts.focus) wants.push(`FOCUS REQUESTED: ${opts.focus.trim()}.`);
   if (opts.equipment) wants.push(`EQUIPMENT AVAILABLE: ${opts.equipment.trim()} — only program what this allows.`);
-  if (opts.constraints) wants.push(`CONSTRAINTS: ${opts.constraints.trim()}.`);
+  if (opts.constraints) wants.push(`WHAT THEY SAID (free text — read it like a coach and adapt): "${opts.constraints.trim()}". Honor the spirit: a sore/tired area → de-load or SWAP it for a different pattern / lower-impact option (see the swap menu); "easier" → lighter loads + shorter; "no <equipment>" → only what's available.`);
+  // When the athlete asks for something specific (a sore area, a focus, an
+  // equipment limit), hand the agent a concrete SWAP MENU from the variation
+  // library so it trades a movement for a real same-pattern alternative instead of
+  // inventing one. Bounded; only when there's a request to adapt to.
+  let swapMenu = "";
+  if (opts.constraints || opts.focus) {
+    const injuryAreas = activeInjuryAreas(context);
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const day of Array.isArray(context?.plan) ? context.plan : []) {
+      for (const it of Array.isArray(day?.items) ? day.items : []) {
+        const name = it?.exercise;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        // Injury-aware swaps so "easier on the legs" with a bad knee never offers a
+        // knee-loading alternative.
+        const alts = (repo.suggestAlternatives(name, { limit: 3, injuryAreas }) as any[]).map((v) => v.name);
+        if (alts.length) lines.push(`- ${name} → ${alts.join(", ")}`);
+        if (lines.length >= 12) break;
+      }
+      if (lines.length >= 12) break;
+    }
+    if (lines.length) {
+      swapMenu = `\nSWAP MENU (same-pattern alternatives for the plan's movements — use these to honor the request: trade a sore-area or off-limits lift for a different pattern or a lower-impact option, keeping loads conservative; you may also program something not listed):\n${lines.join("\n")}\n`;
+    }
+  }
   return `You are Cairn, the athlete's strength & conditioning coach. Build ONE session for today,
 on demand, honoring their real constraints and whole picture. This is a SUGGESTION for them to
 review — nothing is applied automatically (they drive).
@@ -1448,7 +1588,7 @@ ${CONTEXT_GUARDRAILS}
 ${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
-` : ""}
+` : ""}${swapMenu}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${SESSION_SUGGEST_SCHEMA}
 
