@@ -7,6 +7,36 @@ Versioning](https://semver.org/) for tagged releases.
 
 _Nothing yet._
 
+## [0.5.1] — 2026-06-18
+
+**Pasted lab panels now capture every marker.** A comprehensive panel (e.g. a Function Health export
+with 100+ markers) was being analyzed down to ~40 — the analyzer dropped the "boring" in-range long
+tail. This release makes health-record analysis complete and faithful: it transcribes the whole
+panel, prefers the strongest model, and self-corrects a short read. No schema change — a drop-in upgrade.
+
+### Fixed
+- **Every marker is captured now.** A 100+ marker paste was curated down to the "decision-useful" ~40
+  — the full CBC differential, electrolytes, the entire urinalysis, the omega/fatty-acid
+  sub-fractions, and the sex/thyroid hormone panel were silently dropped. The analyzer now
+  transcribes the complete panel verbatim, in-range markers included. (Re-analyzing a real Function
+  Health paste went from **44 → 128** markers.)
+- A silent **100-marker cap** that would clip a comprehensive panel even on a perfect read — raised
+  to 250, comfortably clearing any real-world panel.
+
+### Changed
+- **Health-record analysis now prefers the best model.** Lab / DEXA ingestion runs **Claude-first**
+  (then Codex), instead of the load-spreading round-robin rotation — faithful transcription matters
+  more than spreading load for a one-off panel. An explicit per-task `health` agent route still wins.
+- The extraction prompt now demands a complete, verbatim transcription — no curation, every
+  in-range/normal marker included, the long-tail categories named explicitly — plus a self-reported
+  marker count per panel. (It previously said "prefer real, decision-useful markers", which was the
+  curation bug.) The same "no curation" guidance was added to the chat `log_health` path.
+
+### Added
+- **Self-correcting completeness check.** For a pasted-text panel, Cairn estimates how many results
+  the source lists and, if the extraction comes back grossly short, re-runs the analysis once
+  (Claude-first, with an explicit "you missed many" nudge) and keeps whichever read captured more.
+
 ## [0.5.0] — 2026-06-18
 
 **Connect a coaching CLI without touching a terminal.** This release makes the agent layer
