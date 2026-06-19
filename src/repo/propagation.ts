@@ -1180,10 +1180,21 @@ export function directivesForCoach() {
 // renders and what the agentic health-story synthesis reasons over.
 // ============================================================================
 export type FocusTier = "act_now" | "track";
+export interface FocusReading {
+  name: string;
+  value: number | string | null;
+  unit: string | null;
+  flag: string | null;            // lab flag (low/high) or null
+  optimal: [number, number] | null; // evidence-based optimal band
+  in_optimal: boolean | null;
+  trend: string | null;           // rising/falling/stable
+  projection: string | null;      // plain-language forecast vs optimal
+}
 export interface FocusPriority {
   group: string;                 // group label, e.g. "Lipids & Cardiovascular"
   tier: FocusTier;
   markers: string[];             // off-optimal marker names in this group, priority order
+  readings: FocusReading[];      // the QUANTITATIVE detail (value/band/trend) — so the synthesis reasons on numbers, not names
   flagged: boolean;              // the lab itself flagged one low/high
   compounding: boolean;          // ≥2 markers off here (or a cross-marker cluster directive)
   worsening: boolean;            // a marker in this group is trending the wrong way
@@ -1259,7 +1270,17 @@ export function healthFocus(): HealthFocus {
           ? `${ms[0]?.name} is drifting the wrong way`
           : `${ms[0]?.name} is outside its optimal band`;
 
-    priorities.push({ group: label, tier, markers: ms.map((m) => m.name), flagged, compounding, worsening, moves, uncertain, why });
+    const readings: FocusReading[] = ms.slice(0, 4).map((m: any) => ({
+      name: m.name,
+      value: m?.latest?.value ?? null,
+      unit: m.unit ?? null,
+      flag: m?.latest?.flag ?? null,
+      optimal: m.optimal ? [m.optimal.low, m.optimal.high] : null,
+      in_optimal: m.in_optimal ?? null,
+      trend: m?.trend?.dir ?? null,
+      projection: m?.forecast?.eta_text ?? m?.trend?.projection ?? null,
+    }));
+    priorities.push({ group: label, tier, markers: ms.map((m) => m.name), readings, flagged, compounding, worsening, moves, uncertain, why });
   }
 
   // act_now first, then track; within a tier keep panel priority order (the Map

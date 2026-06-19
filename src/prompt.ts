@@ -2128,6 +2128,34 @@ const HEALTH_SYNTHESIS_SCHEMA = `{
   "one_change": "<if you could change ONE thing this month, the single highest-leverage move, ≤160 chars>"
 }`;
 
+// Body composition + weight trajectory — powerful levers that move MANY lab
+// markers at once but carry no optimal zone, so they're invisible to the focus
+// tiering. Surface them so the synthesis connects the dots. "" when absent.
+function renderHealthDrivers(ctx: any): string {
+  const bits: string[] = [];
+  try {
+    const pm: any = repo.prioritizeMarkers();
+    const body = (Array.isArray(pm?.markers) ? pm.markers : []).filter(
+      (m: any) => m?.group === "body" || /body comp/i.test(m?.group_label || "")
+    );
+    const bc = body.slice(0, 5).map((m: any) =>
+      `${m.name} ${m?.latest?.value ?? "?"}${m.unit ? ` ${m.unit}` : ""}${m?.trend?.dir && m.trend.dir !== "stable" ? ` (${m.trend.dir})` : ""}`
+    );
+    if (bc.length) bits.push(`BODY COMPOSITION: ${bc.join("; ")}`);
+  } catch { /* best-effort */ }
+  const g: any = ctx?.goal;
+  if (g) {
+    const w = [
+      g.weight_lb != null ? `${g.weight_lb} lb now` : null,
+      g.goal_weight_lb != null ? `goal ${g.goal_weight_lb} lb` : null,
+      g.trend_lb_wk != null ? `trend ${g.trend_lb_wk} lb/wk` : null,
+    ].filter(Boolean);
+    if (w.length) bits.push(`WEIGHT: ${w.join(" · ")}`);
+  }
+  if (!bits.length) return "";
+  return `\nLIFESTYLE LEVERS (NOT lab markers — so absent from the tiering above — but each moves MANY markers at once; connect them: leaner body composition lowers ApoB + triglycerides, improves insulin sensitivity AND raises testosterone; recovery/sleep shapes inflammation + hormones):\n${bits.map((b) => `  - ${b}`).join("\n")}\n`;
+}
+
 export function buildHealthSynthesisPrompt(ctx?: any): string {
   const context = ctx ?? repo.getCoachContext();
   const focus = repo.healthFocus();
@@ -2151,10 +2179,22 @@ THE CONSTITUTION (binding):
   on what IS movable, not a thing to chase.
 - Medical findings are informational; for anything clinical, "discuss with your doctor".
 
-A deterministic prioritization has already TIERED the findings — trust it as your spine (act-now first,
-then track; one entry per health group, deduped from the raw directives):
-${JSON.stringify(focus)}
+GROUND IT (this is what makes the read elite, not generic — the priorities carry the actual readings):
+- Reason from the ACTUAL numbers: name where each marker sits vs its evidence-based OPTIMAL band and
+  which way it's trending ("ApoB 148 against an optimal nearer 80, holding steady" beats "lipids are
+  high"). Use the readings/optimal/trend/projection in the spine below.
+- Explain the MECHANISM that links the priorities — don't just list them. WHY does the lead lever help
+  (e.g. "dropping body-fat cuts hepatic VLDL output, so ApoB and triglycerides fall while insulin
+  sensitivity and testosterone improve"). The connection IS the value an elite coach adds.
+- Be concrete about MAGNITUDE + TIMELINE where it's honest (a realistic direction / rough weeks), and
+  clear about what's GENETIC/fixed (e.g. Lp(a)) vs movable — fixed markers raise the stakes on the movable ones.
+- Weight by leverage: lead with the ONE change that moves the MOST at once.
 
+A deterministic prioritization has already TIERED the findings — trust it as your spine (act-now first,
+then track; one entry per health group, deduped from the raw directives, EACH WITH its markers' actual
+readings — value, optimal band, trend, projection):
+${JSON.stringify(focus)}
+${renderHealthDrivers(context)}
 ${CONTEXT_GUARDRAILS}
 ${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.

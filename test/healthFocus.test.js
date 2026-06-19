@@ -32,6 +32,10 @@ test("a compounding lipid panel + a single low vitamin D tier correctly, deduped
   assert.ok(lipids.compounding, "≥2 lipid markers → read as one picture");
   assert.ok(lipids.markers.length >= 3, "groups the lipid markers together");
   assert.ok(lipids.moves.nutrition, "carries the lead nutrition move");
+  // Quantitative readings (value + optimal band) so the synthesis reasons on numbers.
+  assert.ok(Array.isArray(lipids.readings) && lipids.readings.length, "carries marker readings");
+  const apob = lipids.readings.find((r) => /apob/i.test(r.name));
+  assert.ok(apob && apob.value === 130 && Array.isArray(apob.optimal), "ApoB reading has its value + optimal band");
 
   const vitD = f.priorities.find((p) => /Vitamin|Minerals/i.test(p.group));
   assert.ok(vitD && vitD.tier === "act_now", "a flagged, very-low vitamin D is act-now");
