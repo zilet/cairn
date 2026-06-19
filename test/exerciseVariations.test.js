@@ -226,3 +226,19 @@ test("suggestAlternatives: does not include the input exercise itself", () => {
   const names = result.map((r) => r.name.toLowerCase());
   assert.ok(!names.includes("barbell bench press"));
 });
+
+// ─── regression: a hamstring "curl" must not read as a biceps curl ────────────
+test("classifyPattern: Leg Curl is posterior-chain (hinge), NOT a biceps curl", () => {
+  assert.equal(v.classifyPattern("Leg Curl"), "hinge");
+  assert.equal(v.classifyPattern("Lying Leg Curl"), "hinge");
+  assert.equal(v.classifyPattern("Seated Leg Curl"), "hinge");
+  // a real biceps curl still classifies as curl
+  assert.equal(v.classifyPattern("Barbell Curl"), "curl");
+  assert.equal(v.classifyPattern("Hammer Curl"), "curl");
+});
+
+test("suggestVariations(Leg Curl) returns hamstring movements, never bicep curls", () => {
+  const names = v.suggestVariations("Leg Curl").map((r) => r.name.toLowerCase());
+  assert.ok(names.length > 0, "has hamstring alternatives");
+  assert.ok(!names.some((n) => /bicep|hammer|preacher/.test(n)), "no biceps curls leak in");
+});

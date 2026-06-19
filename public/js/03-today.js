@@ -774,6 +774,41 @@ function reconnectSessionSuggest() {
 // #sugSlot and reconnects after a reload. Mirrors the meal-swap failure UX:
 // ok:false (or unreachable) surfaces as a gentle inline line, never a hard error.
 let sessionSuggestInFlight = false;
+// Reveal a small free-text composer so the athlete can just SAY what they want —
+// "legs sore from yesterday's run, easier on the legs", "30 min, no barbell",
+// "shoulders fried, upper pull focus". The text rides to /session-suggest as the
+// free-text `constraints`, where the coach reads it like a coach (and gets a swap
+// menu from the variation library to trade movements). Empty → a plain session.
+function revealSessionComposer() {
+  const slot = view.querySelector("#sugSlot");
+  if (!slot || sessionSuggestInFlight) return;
+  slot.innerHTML = `<div class="sug-composer settle-in">
+      <input class="sug-prompt" type="text" autocomplete="off" enterkeyhint="go"
+        aria-label="Describe the session you want"
+        placeholder="say what you want — e.g. legs sore from yesterday's run, easier on the legs">
+      <div class="sug-composer-row">
+        <div class="sug-vibes">${SESSION_VIBES.map((v) => `<button class="sug-vibe" type="button" data-vibe="${escAttr(v)}">${escHtml(v)}</button>`).join("")}</div>
+        <div class="sug-composer-actions">
+          <button class="pillbtn" type="button" data-sugcancel>Cancel</button>
+          <button class="pillbtn pill-accent" type="button" data-sugbuild>Build it</button>
+        </div>
+      </div>
+    </div>`;
+  const input = slot.querySelector(".sug-prompt");
+  if (input && !reducedMotion()) setTimeout(() => input.focus(), 60);
+  const go = () => { const t = (input?.value || "").trim(); askForSession(t ? { constraints: t } : {}); };
+  slot.querySelector("[data-sugbuild]")?.addEventListener("click", go);
+  slot.querySelector("[data-sugcancel]")?.addEventListener("click", () => { slot.innerHTML = ""; });
+  slot.querySelectorAll("[data-vibe]").forEach((b) => b.addEventListener("click", () => {
+    // A vibe chip seeds the box (append, so they can combine), then they can refine or build.
+    if (!input) return;
+    input.value = input.value.trim() ? `${input.value.trim()}, ${b.dataset.vibe}` : b.dataset.vibe;
+    input.focus();
+  }));
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+}
+const SESSION_VIBES = ["easier on the legs", "30 min", "upper body", "no barbell", "low impact", "push hard"];
+
 async function askForSession(opts = {}) {
   if (sessionSuggestInFlight) { toast("Already drafting a session…"); return; }
   const slot = view.querySelector("#sugSlot");
@@ -788,6 +823,8 @@ async function askForSession(opts = {}) {
   const body = { date: state.logDate };
   if (opts.minutes != null) body.minutes = opts.minutes;
   if (opts.focus) body.focus = opts.focus;
+  if (opts.equipment) body.equipment = opts.equipment;
+  if (opts.constraints) body.constraints = opts.constraints; // free-text vibe ("legs sore — easier on the legs")
 
   await runOp("session_suggest", body, sessionSuggestOpOpts());
 }
@@ -1598,7 +1635,7 @@ function wireBrief(read, { isToday }) {
   brief.querySelectorAll("[data-redirect]").forEach((b) =>
     b.addEventListener("click", () => {
       const action = b.dataset.redirect;
-      if (action === "ask-session") { askForSession(); return; }
+      if (action === "ask-session") { revealSessionComposer(); return; }
       if (action === "start-session") {
         // the day's primary on a train day: make sure the logging surface exists,
         // then bring its first card into view so "start" lands you in the work.

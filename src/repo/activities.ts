@@ -1,6 +1,6 @@
 import { db, todayISO } from "../db.js";
 import { invalidateDayRead } from "./intelligence.js";
-import { getOrCreateSession, getSessionDetail, sessionSummary, setsForSession } from "./sessions.js";
+import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { deriveSessionTitle } from "./training-read.js";
 
@@ -118,9 +118,9 @@ function _durLabel(sec: number): string {
 }
 // The session's exercises with each one's top working set — heaviest set (most
 // reps as tiebreak; a bodyweight movement therefore sorts by reps), or the
-// longest hold for a timed movement. Deterministic, null-safe, [] when no sets.
-function _sessionMovements(sessionId: number): { name: string; sets: number; best: string }[] {
-  const sets = setsForSession(sessionId) as any[];
+// longest hold for a timed movement. Takes the already-fetched sets (so the feed
+// reads each session's sets ONCE — stats + movements share the fetch). [] when empty.
+function _sessionMovements(sets: any[]): { name: string; sets: number; best: string }[] {
   const byEx = new Map<string, any[]>();
   for (const st of sets) {
     const k = String(st.exercise);
@@ -182,12 +182,17 @@ export function recentTraining(limit = 6): FeedRow[] {
   ).all(pull) as any[];
 
   const sessions: FeedRow[] = sessRows.map((s) => {
-    const sum = sessionSummary(s.id);
+    // Read this session's sets ONCE — stats, meta, and the movement breakdown all
+    // derive from the same fetch (was two identical setsForSession queries).
+    const setRows = setsForSession(s.id) as any[];
+    const setCount = setRows.length;
+    const tonnage = Math.round(setRows.reduce((t, x) => t + (Number(x.weight) > 0 && Number(x.reps) > 0 ? Number(x.weight) * Number(x.reps) : 0), 0));
+    const exCount = new Set(setRows.map((x) => x.exercise)).size;
     let g: any = null;
     try { g = s.garmin_json ? JSON.parse(s.garmin_json) : null; } catch { g = null; }
     const stats = [
-      `${sum.sets} set${sum.sets === 1 ? "" : "s"}`,
-      sum.tonnage > 0 ? `${sum.tonnage.toLocaleString()} lb` : null,
+      `${setCount} set${setCount === 1 ? "" : "s"}`,
+      tonnage > 0 ? `${tonnage.toLocaleString()} lb` : null,
     ].filter(Boolean).join(" · ");
     const detail = g ? {
       duration_min: g.duration_min ?? null,
@@ -207,9 +212,9 @@ export function recentTraining(limit = 6): FeedRow[] {
       stats,
       note: g && g.summary ? String(g.summary) : null,
       source: g ? "garmin" : null,
-      meta: { sets: sum.sets, tonnage: sum.tonnage, exercises: sum.exercises },
+      meta: { sets: setCount, tonnage, exercises: exCount },
       detail: detail && _hasAny(detail) ? detail : null,
-      movements: _sessionMovements(s.id),
+      movements: _sessionMovements(setRows),
     };
   });
 

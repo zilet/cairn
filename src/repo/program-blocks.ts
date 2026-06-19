@@ -126,10 +126,11 @@ function derivePhase(weekIndex: number, totalWeeks: number): Phase {
 // ============================================================================
 
 /**
- * Create a new training block. At most one block is active at a time — if
- * a caller wants to replace an active block, they should abandon/complete the
- * existing one first. This function does NOT enforce mutual exclusion; it's
- * the caller's (and the integrator's API endpoint) responsibility.
+ * Create a new training block. AT MOST ONE block is active at a time — starting a
+ * new one supersedes any currently-active block (marked 'completed', mirroring how
+ * accepting a meal plan retires the open draft), so getActiveBlock()/blockForCoach()
+ * are never ambiguous. To pause without starting a replacement, complete/abandon
+ * the active block directly.
  */
 export function createBlock(input: CreateBlockInput = {}): ProgramBlock {
   const goal = clampStr(input.goal, 200, "Training block");
@@ -140,6 +141,9 @@ export function createBlock(input: CreateBlockInput = {}): ProgramBlock {
   const started_at = typeof input.started_at === "string" && input.started_at
     ? input.started_at
     : new Date().toISOString();
+
+  // Supersede any active block — only one runs at a time.
+  db.prepare("UPDATE program_blocks SET status = 'completed' WHERE status = 'active'").run();
 
   const res = db.prepare(`
     INSERT INTO program_blocks (goal, focus, phase, week_index, total_weeks, started_at, status)

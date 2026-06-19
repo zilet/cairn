@@ -1523,7 +1523,30 @@ export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipmen
   if (opts.minutes) wants.push(`TIME BUDGET: about ${Math.round(opts.minutes)} minutes — fit the whole session in that (drop accessories before compounds).`);
   if (opts.focus) wants.push(`FOCUS REQUESTED: ${opts.focus.trim()}.`);
   if (opts.equipment) wants.push(`EQUIPMENT AVAILABLE: ${opts.equipment.trim()} — only program what this allows.`);
-  if (opts.constraints) wants.push(`CONSTRAINTS: ${opts.constraints.trim()}.`);
+  if (opts.constraints) wants.push(`WHAT THEY SAID (free text — read it like a coach and adapt): "${opts.constraints.trim()}". Honor the spirit: a sore/tired area → de-load or SWAP it for a different pattern / lower-impact option (see the swap menu); "easier" → lighter loads + shorter; "no <equipment>" → only what's available.`);
+  // When the athlete asks for something specific (a sore area, a focus, an
+  // equipment limit), hand the agent a concrete SWAP MENU from the variation
+  // library so it trades a movement for a real same-pattern alternative instead of
+  // inventing one. Bounded; only when there's a request to adapt to.
+  let swapMenu = "";
+  if (opts.constraints || opts.focus) {
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const day of Array.isArray(context?.plan) ? context.plan : []) {
+      for (const it of Array.isArray(day?.items) ? day.items : []) {
+        const name = it?.exercise;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        const alts = (repo.suggestVariations(name, { limit: 3 }) as any[]).map((v) => v.name);
+        if (alts.length) lines.push(`- ${name} → ${alts.join(", ")}`);
+        if (lines.length >= 12) break;
+      }
+      if (lines.length >= 12) break;
+    }
+    if (lines.length) {
+      swapMenu = `\nSWAP MENU (same-pattern alternatives for the plan's movements — use these to honor the request: trade a sore-area or off-limits lift for a different pattern or a lower-impact option, keeping loads conservative; you may also program something not listed):\n${lines.join("\n")}\n`;
+    }
+  }
   return `You are Cairn, the athlete's strength & conditioning coach. Build ONE session for today,
 on demand, honoring their real constraints and whole picture. This is a SUGGESTION for them to
 review — nothing is applied automatically (they drive).
@@ -1542,7 +1565,7 @@ ${CONTEXT_GUARDRAILS}
 ${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
-` : ""}
+` : ""}${swapMenu}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${SESSION_SUGGEST_SCHEMA}
 

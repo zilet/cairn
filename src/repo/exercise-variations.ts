@@ -181,6 +181,10 @@ const PATTERN_RULES: Array<[MovementPattern, RegExp[]]> = [
   ["lunge", [/\blunge\b/i, /bulgarian split squat/i, /split squat/i, /step.?up/i, /lateral lunge/i]],
   ["calf", [/calf raise/i, /donkey calf/i, /calf/i]],
   ["carry", [/farmer.?s walk/i, /farmer walk/i, /suitcase carry/i, /overhead carry/i, /\bcarry\b/i]],
+  // Hamstring knee-flexion (a "curl" by name) is posterior-chain, NOT a biceps
+  // curl — must be matched BEFORE the biceps rule below so "Leg Curl" doesn't
+  // get bicep-curl variations. Swaps to the hamstring/hinge family.
+  ["hinge", [/leg curl/i, /hamstring curl/i, /lying curl/i, /nordic ham/i]],
   ["curl", [/\bcurl\b/i, /preacher/i]],
   ["triceps", [/tricep/i, /skull crusher/i, /\bdips?\b/i, /close.?grip bench/i, /pushdown/i, /kickback/i]],
   ["lateral-raise", [/lateral raise/i, /upright row/i, /front raise/i]],

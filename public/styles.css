@@ -2470,6 +2470,25 @@ body.sheet-open{overflow:hidden}
 
 /* the on-demand session-suggest card — a reviewable suggestion, not a plan */
 .sug-slot:empty{display:none}
+/* free-text session composer — "say what you want" */
+.sug-composer{
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:14px;margin:0 0 14px;border-left:3px solid var(--terracotta);
+}
+.sug-prompt{
+  width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--radius-sm);padding:11px 13px;font-size:.92rem;font-family:inherit;
+}
+.sug-prompt:focus{outline:none;border-color:var(--terracotta)}
+.sug-prompt::placeholder{color:var(--muted)}
+.sug-composer-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px}
+.sug-vibes{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.sug-vibe{
+  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);cursor:pointer;
+  border-radius:999px;padding:5px 11px;font-size:.76rem;white-space:nowrap;transition:all .15s ease;
+}
+@media (hover:hover){.sug-vibe:hover{border-color:var(--terracotta);color:var(--ink)}}
+.sug-composer-actions{display:flex;gap:8px;flex:0 0 auto}
 .sug-card{
   background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:18px 18px 16px;margin:0 0 14px;border-left:3px solid var(--sage);
