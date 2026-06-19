@@ -340,11 +340,18 @@ export function suggestAlternatives(
     if (avoid.has(entry.equipment)) continue;
 
     // injury area filter — skip if this exercise is flagged for any of the
-    // provided injury areas
+    // provided injury areas. Substring match in BOTH directions so an athlete's
+    // free-text area ("right shoulder", "lower back tweak") still matches a
+    // canonical risk tag ("shoulder", "lower-back").
     if (
       injuryAreas.length > 0 &&
       entry.injuryRisk &&
-      entry.injuryRisk.some((risk) => injuryAreas.includes(risk))
+      entry.injuryRisk.some((risk) =>
+        injuryAreas.some((a) => {
+          const lo = a.toLowerCase();
+          return lo.includes(risk) || risk.includes(lo);
+        }),
+      )
     ) {
       continue;
     }

@@ -202,16 +202,20 @@ function gradeTimedLift(name: string, mg: string | null): LiftState | null {
   const latest = recent[recent.length - 1];
   const spanDays = dayIndex(latest.date, base);
   const enough = recent.length >= 4 && spanDays >= 14;
+  // A flat-but-established hold reads as 'maintaining' (keep extending), NOT a
+  // plateau — for a timed lift the first lever is more seconds, not "rotate to a
+  // harder variation". Only a clear decline is 'regressing'. (Was a dead branch
+  // that classified every steady hold as plateaued → vary.)
   let status: LiftStatus;
   if (!enough) status = "new";
   else if (trendWk != null && trendWk >= 1) status = "progressing";
   else if (trendWk != null && trendWk <= -2) status = "regressing";
-  else status = recent.length >= 4 ? "plateaued" : "maintaining";
+  else status = "maintaining";
   const suggested_action: LiftAction =
-    status === "progressing" ? "overload" : status === "regressing" ? "deload" : status === "plateaued" ? "vary" : "hold";
+    status === "progressing" ? "overload" : status === "regressing" ? "deload" : status === "maintaining" ? "overload" : "hold";
   const why =
     status === "progressing" ? `Holds are getting longer (~${trendWk}s/wk) — keep extending.`
-    : status === "plateaued" ? "Hold time's flat — a harder variation or added load will progress it."
+    : status === "maintaining" ? "Holding steady — add a few seconds when it feels solid (or a harder variation)."
     : status === "regressing" ? "Holds shortening — reset and rebuild."
     : "Building a baseline on this hold.";
   return {
@@ -280,30 +284,35 @@ function weeklyTonnage(date: string, weekBack: number): number {
 }
 
 function mesocycle(date: string, recovery?: any): MesocycleState {
-  // A "deload week" = a recent week whose tonnage fell well below the trailing
-  // base. Walk back up to 8 weeks to find the most recent one.
+  // A "deload week" = a COMPLETED week whose tonnage fell well below the trailing
+  // base. Start at w=1 (the current week is in-progress — a half-logged week early
+  // in the week would otherwise read as a deload). Walk back up to 8 weeks.
   let weeksSince: number | null = null;
-  for (let w = 0; w <= 8; w++) {
+  for (let w = 1; w <= 8; w++) {
     const here = weeklyTonnage(date, w);
     const base = [w + 1, w + 2, w + 3].map((b) => weeklyTonnage(date, b));
     const chronic = base.reduce((a, b) => a + b, 0) / base.length;
     if (chronic > 0 && here > 0 && here < chronic * 0.6) { weeksSince = w; break; }
   }
+  // ACWR: this week's load vs the chronic base of the FOUR PRIOR weeks (the chronic
+  // window must EXCLUDE the acute week, or the ratio is biased toward 1 and a real
+  // spike never crosses the threshold). Mirrors the endurance ACWR below.
   const acute = weeklyTonnage(date, 0);
-  const chronic4 = [0, 1, 2, 3].map((b) => weeklyTonnage(date, b)).reduce((a, b) => a + b, 0) / 4;
+  const chronic4 = [1, 2, 3, 4].map((b) => weeklyTonnage(date, b)).reduce((a, b) => a + b, 0) / 4;
   const acwr = chronic4 > 0 ? Math.round((acute / chronic4) * 100) / 100 : null;
 
   const rec = recovery ?? getRecoverySummary(14);
   const drift = rec?.delta ?? null;
   const recoveryDrifting = (drift?.hrv != null && drift.hrv < 0) || (drift?.rhr != null && drift.rhr > 2);
 
+  // (An athlete who is actively IN a deload this week is read from the active
+  // periodization block's phase, not from this completed-week detector.)
   let phase: MesoPhase;
   let note: string;
-  if (weeksSince === 0) { phase = "deload"; note = "You're in a deload week — let it absorb."; }
-  else if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
+  if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
   else if (acwr != null && acwr >= 1.4) { phase = "intensification"; note = "Load's ramped this block — hold the line, don't pile on."; }
   else if (weeksSince == null) { phase = "accumulation"; note = "No recent deload on record — keep building, plan a reset every 4–6 weeks."; }
-  else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} into this block — building.`; }
+  else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`; }
 
   return { weeks_since_deload: weeksSince, phase, acute_chronic_ratio: acwr, note };
 }

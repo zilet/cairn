@@ -249,13 +249,16 @@ export async function evolveProgram(
   hooks?: OpHooks
 ) {
   hooks?.onPhase?.("reading how your lifts are trending");
-  const prompt = buildProgramEvolutionPrompt(instruction);
+  // Compute the program-state ONCE and thread it into the prompt + the response
+  // (it's a few dozen DB queries — don't run it twice).
+  const state = repo.getProgramState();
+  const prompt = buildProgramEvolutionPrompt(instruction, state);
   hooks?.onPhase?.("drafting how your plan should evolve");
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
   const proposal = repo.createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
   return {
     proposal,
-    state: repo.getProgramState(),
+    state,
     ok: !!result.parsed,
     agent: chosen,
     tried,

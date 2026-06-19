@@ -43,13 +43,13 @@ test("a lift with only a couple of sessions reads 'new', never a false plateau",
   assert.equal(fs.status, "new");
 });
 
-test("a recent low-tonnage week is detected as a deload in the mesocycle position", () => {
-  // Three solid weeks, then a clearly lighter week most-recently.
-  for (const wk of [3, 2, 1]) for (const off of [0, 2]) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, date: back(wk * 7 + off) });
-  repo.logSetByName({ exercise: "Back Squat", weight: 135, reps: 5, date: back(1) }); // light week
+test("a completed low-tonnage week is detected as a deload (the in-progress week is NOT judged)", () => {
+  // Solid weeks 2-4 back, then a clearly lighter COMPLETED week 1 back. A partial
+  // current week must never be mistaken for a deliberate deload (the bug fix).
+  for (const wk of [2, 3, 4]) for (const off of [0, 2]) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, date: back(wk * 7 + off) });
+  repo.logSetByName({ exercise: "Back Squat", weight: 135, reps: 5, date: back(7) }); // light completed week (w=1)
   const meso = repo.getProgramState(REF).mesocycle;
-  assert.equal(meso.weeks_since_deload, 0, "this week reads as the deload");
-  assert.equal(meso.phase, "deload");
+  assert.equal(meso.weeks_since_deload, 1, "the light completed week one back is the deload");
 });
 
 test("a timed lift progresses on hold duration, not load", () => {
@@ -60,6 +60,16 @@ test("a timed lift progresses on hold duration, not load", () => {
   assert.equal(plank.status, "progressing");
   assert.equal(plank.best_seconds, 45);
   assert.equal(plank.est_1rm, null, "timed lifts carry no est-1RM");
+});
+
+test("a steady (flat) timed hold reads 'maintaining' → overload, NOT a false plateau/vary", () => {
+  // A plank held at a consistent 45s for 5 sessions is healthy maintenance, not a
+  // stall that needs a harder variation (the dead-branch bug classified it plateaued).
+  [28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Plank", duration_sec: 45, exercise_mode: "timed", date: back(d) }));
+  const plank = repo.getProgramState(REF).lifts.find((l) => l.exercise === "Plank");
+  assert.equal(plank.mode, "timed");
+  assert.equal(plank.status, "maintaining");
+  assert.equal(plank.suggested_action, "overload");
 });
 
 test("hybrid endurance: a one-pace base flags 'add-quality'", () => {

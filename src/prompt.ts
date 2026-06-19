@@ -429,6 +429,23 @@ function renderTrainingSignals(ctx: any): string {
   return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — act on these so the plan visibly reflects what they actually did; this is the source of truth for whether a lift earned a bump):\n${lines.join("\n")}\n`;
 }
 
+// Active injury areas drawn from context_events (an injury's title/detail/meta.area
+// in plain words), so a variation/swap menu can FILTER out movements that load an
+// injured region — the concrete list the agent picks from must agree with the
+// "never load an injured area" rule, not just the prose. [] when injury-free.
+function activeInjuryAreas(ctx: any): string[] {
+  const evts = Array.isArray(ctx?.context_events) ? ctx.context_events : [];
+  const out: string[] = [];
+  for (const e of evts) {
+    if (e?.kind !== "injury" || e?.end_date) continue;
+    const txt = `${e?.title ?? ""} ${e?.detail ?? ""} ${e?.meta?.area ?? ""}`.toLowerCase();
+    for (const [tag, canon] of [["knee", "knee"], ["shoulder", "shoulder"], ["back", "lower-back"], ["lumbar", "lower-back"], ["elbow", "elbow"], ["wrist", "wrist"], ["hip", "hip"], ["ankle", "ankle"]] as const) {
+      if (txt.includes(tag)) out.push(canon);
+    }
+  }
+  return [...new Set(out)];
+}
+
 // The active periodization block (goal / phase / week N of M), so the coach
 // periodizes toward it. "" when no block is running (the program-state mesocycle
 // read still gives deload timing). A nudge, never a gate.
@@ -513,18 +530,21 @@ ${JSON.stringify(ctx)}`;
 // add quality to a one-pace endurance base, and periodize toward the goal. Output
 // is the SAME PLAN_SCHEMA (changes/cardio/days) → a DRAFT proposal for review;
 // nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
-export function buildProgramEvolutionPrompt(userInstruction?: string): string {
+export function buildProgramEvolutionPrompt(userInstruction?: string, state?: any): string {
   const ctx = repo.getCoachContext();
-  const state = repo.getProgramState();
+  state = state ?? repo.getProgramState();
   // Concrete variation candidates for any stalled lift, so "rotate a variation"
   // is actionable — the agent gets real same-pattern options to choose from
   // (it still respects constraint_notes/injuries and starts light).
   const stalled = (Array.isArray(state.lifts) ? state.lifts : []).filter(
     (l: any) => l.status === "plateaued" || l.suggested_action === "vary"
   );
+  const injuryAreas = activeInjuryAreas(ctx);
   const variationLines = stalled
     .map((l: any) => {
-      const names = (repo.suggestVariations(l.exercise, { limit: 4 }) as any[]).map((v) => v.name);
+      // Injury-aware: the candidate list must not include movements that load an
+      // injured area (else it contradicts the "never load an injured area" rule).
+      const names = (repo.suggestAlternatives(l.exercise, { limit: 4, injuryAreas }) as any[]).map((v) => v.name);
       return names.length ? `- ${l.exercise} → ${names.join(", ")}` : null;
     })
     .filter(Boolean);
@@ -1530,6 +1550,7 @@ export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipmen
   // inventing one. Bounded; only when there's a request to adapt to.
   let swapMenu = "";
   if (opts.constraints || opts.focus) {
+    const injuryAreas = activeInjuryAreas(context);
     const seen = new Set<string>();
     const lines: string[] = [];
     for (const day of Array.isArray(context?.plan) ? context.plan : []) {
@@ -1537,7 +1558,9 @@ export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipmen
         const name = it?.exercise;
         if (!name || seen.has(name)) continue;
         seen.add(name);
-        const alts = (repo.suggestVariations(name, { limit: 3 }) as any[]).map((v) => v.name);
+        // Injury-aware swaps so "easier on the legs" with a bad knee never offers a
+        // knee-loading alternative.
+        const alts = (repo.suggestAlternatives(name, { limit: 3, injuryAreas }) as any[]).map((v) => v.name);
         if (alts.length) lines.push(`- ${name} → ${alts.join(", ")}`);
         if (lines.length >= 12) break;
       }

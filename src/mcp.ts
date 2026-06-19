@@ -412,10 +412,11 @@ export function buildMcpServer(): McpServer {
       mode: z.enum(["variations", "alternatives"]).optional(),
       bodyweight_only: z.boolean().optional(),
       avoid_equipment: z.array(z.string()).optional(),
+      injury_areas: z.array(z.string()).optional().describe("areas to keep load off (e.g. ['knee','shoulder']) — filters injury-risky swaps in 'alternatives' mode"),
     },
-    async ({ exercise, mode, bodyweight_only, avoid_equipment }) =>
+    async ({ exercise, mode, bodyweight_only, avoid_equipment, injury_areas }) =>
       asText(mode === "alternatives"
-        ? repo.suggestAlternatives(exercise, { bodyweightOnly: bodyweight_only, avoidEquipment: avoid_equipment as any })
+        ? repo.suggestAlternatives(exercise, { bodyweightOnly: bodyweight_only, avoidEquipment: avoid_equipment as any, injuryAreas: injury_areas })
         : repo.suggestVariations(exercise))
   );
 

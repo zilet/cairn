@@ -242,3 +242,11 @@ test("suggestVariations(Leg Curl) returns hamstring movements, never bicep curls
   assert.ok(names.length > 0, "has hamstring alternatives");
   assert.ok(!names.some((n) => /bicep|hammer|preacher/.test(n)), "no biceps curls leak in");
 });
+
+// ─── injury-aware swaps match free-text areas (substring, both directions) ─────
+test("suggestAlternatives filters injury-risky swaps from a free-text area", () => {
+  const all = v.suggestAlternatives("Barbell Bench Press", { limit: 10 });
+  const safe = v.suggestAlternatives("Barbell Bench Press", { injuryAreas: ["left shoulder"], limit: 10 });
+  assert.ok(safe.length < all.length, "free-text 'left shoulder' matches the 'shoulder' risk tag and removes those presses");
+  assert.ok(!safe.some((r) => /incline (db )?press|incline bench|db bench/i.test(r.name)), "shoulder-flagged presses are gone");
+});

@@ -77,9 +77,12 @@ function clampEnum<T extends string>(
   return fallback;
 }
 
-function clampWeekIndex(v: unknown): number {
+function clampWeekIndex(v: unknown, totalWeeks?: number): number {
   const n = Number(v);
-  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+  const wk = Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+  // Don't let a block start already past its last week (it'd auto-complete on the
+  // first advance). Cap at total_weeks when known.
+  return totalWeeks && Number.isFinite(totalWeeks) ? Math.min(wk, totalWeeks) : wk;
 }
 
 function clampTotalWeeks(v: unknown): number {
@@ -136,7 +139,7 @@ export function createBlock(input: CreateBlockInput = {}): ProgramBlock {
   const goal = clampStr(input.goal, 200, "Training block");
   const focus = clampEnum(input.focus, VALID_FOCUS, "strength");
   const total_weeks = clampTotalWeeks(input.total_weeks);
-  const week_index = clampWeekIndex(input.week_index);
+  const week_index = clampWeekIndex(input.week_index, total_weeks);
   const phase = clampEnum(input.phase, VALID_PHASE, derivePhase(week_index, total_weeks));
   const started_at = typeof input.started_at === "string" && input.started_at
     ? input.started_at
@@ -194,7 +197,7 @@ export function updateBlock(id: number, fields: UpdateBlockInput): ProgramBlock 
     ? clampTotalWeeks(fields.total_weeks)
     : existing.total_weeks;
   const week_index = "week_index" in fields
-    ? clampWeekIndex(fields.week_index)
+    ? clampWeekIndex(fields.week_index, total_weeks)
     : existing.week_index;
   const phase = "phase" in fields
     ? clampEnum(fields.phase, VALID_PHASE, existing.phase)
