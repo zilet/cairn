@@ -7,6 +7,7 @@ import {
   agentStatusFor,
   suggestSession,
   draftCoachProposal,
+  evolveProgram,
   weekAheadRead,
   draftMealPlan,
   nutritionCheckin,
@@ -351,6 +352,71 @@ export function buildMcpServer(): McpServer {
       const r = await draftCoachProposal(agent, instruction);
       return asText({ proposal: r.proposal, ok: r.ok, agent: r.agent, tried: r.tried });
     }
+  );
+
+  server.tool(
+    "evolve_program",
+    "Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize. Returns a DRAFT proposal (review then apply_proposal) plus the program-state snapshot. Does not change the plan.",
+    {
+      agent: z.string().optional().describe("agent name from list_agents; omit or 'auto' to use the configured rotation"),
+      instruction: z.string().optional().describe("optional extra guidance (e.g. 'focus on my bench plateau')"),
+    },
+    async ({ agent, instruction }) => {
+      const r = await evolveProgram(agent, instruction);
+      return asText({ proposal: r.proposal, state: r.state, ok: r.ok, agent: r.agent, tried: r.tried });
+    }
+  );
+
+  server.tool(
+    "get_active_block",
+    "The active periodization block (goal / focus / phase / week N of M), or null. The mesocycle the coach periodizes toward.",
+    {},
+    async () => asText(repo.getActiveBlock())
+  );
+  server.tool(
+    "list_blocks",
+    "List periodization blocks (newest first) with status (active/completed/abandoned).",
+    { limit: z.number().int().optional() },
+    async ({ limit }) => asText(repo.listBlocks(limit ?? 20))
+  );
+  server.tool(
+    "create_block",
+    "Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random.",
+    {
+      goal: z.string().optional(),
+      focus: z.string().optional().describe("strength | hypertrophy | endurance-base | peak"),
+      total_weeks: z.number().int().optional(),
+      phase: z.string().optional(),
+      week_index: z.number().int().optional(),
+    },
+    async (args) => asText(repo.createBlock(args))
+  );
+  server.tool(
+    "update_block",
+    "Update a periodization block's fields (goal/focus/phase/week_index/total_weeks/status).",
+    { id: z.number().int(), goal: z.string().optional(), focus: z.string().optional(), phase: z.string().optional(), week_index: z.number().int().optional(), total_weeks: z.number().int().optional(), status: z.string().optional() },
+    async ({ id, ...fields }) => asText(repo.updateBlock(id, fields) ?? { error: "not found", id })
+  );
+  server.tool(
+    "advance_block_week",
+    "Advance a block to its next week — bumps week_index, transitions the phase per the deload schedule, and auto-completes past the last week. Omit id to advance the active block.",
+    { id: z.number().int().optional() },
+    async ({ id }) => asText(repo.advanceBlockWeek(id) ?? { error: "no block", id: id ?? null })
+  );
+
+  server.tool(
+    "suggest_variations",
+    "Variation candidates for an exercise (same movement pattern, different bar path/implement) to break a plateau or keep training fresh; mode:'alternatives' returns equipment/injury-aware swaps.",
+    {
+      exercise: z.string(),
+      mode: z.enum(["variations", "alternatives"]).optional(),
+      bodyweight_only: z.boolean().optional(),
+      avoid_equipment: z.array(z.string()).optional(),
+    },
+    async ({ exercise, mode, bodyweight_only, avoid_equipment }) =>
+      asText(mode === "alternatives"
+        ? repo.suggestAlternatives(exercise, { bodyweightOnly: bodyweight_only, avoidEquipment: avoid_equipment as any })
+        : repo.suggestVariations(exercise))
   );
 
   server.tool(

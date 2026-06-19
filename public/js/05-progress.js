@@ -981,3 +981,275 @@ function renderCheckinProposal(out, r) {
   });
 }
 
+// ---------- Progress: Program (adaptive program intelligence) ----------
+// Renders GET /api/program-state as a calm editorial read of how the athlete's
+// program is evolving. No 0–100 scores. Constitution: calm, suggestion-not-a-gate,
+// pull-never-push. Skeleton-first paint; empty state when lifts is empty.
+
+// Map the raw status enum to calm plain-language labels. NEVER show the raw enum.
+function liftStatusWord(lift) {
+  const { status, weeks_static } = lift;
+  if (status === "progressing") return "climbing";
+  if (status === "plateaued") {
+    const w = weeks_static != null && weeks_static > 0 ? `~${weeks_static} wk` : null;
+    return w ? `stalled ${w}` : "stalled";
+  }
+  if (status === "regressing") return "trending down";
+  if (status === "maintaining") return "holding";
+  if (status === "new") return "building baseline";
+  return "";
+}
+
+// A quiet figure line like "+2 lb/wk" or "+4 sec/wk", or "" when null.
+function liftTrendFig(lift) {
+  const t = lift.trend_per_wk;
+  if (t == null) return "";
+  if (lift.mode === "timed") {
+    const secs = Math.round(Math.abs(t));
+    return secs === 0 ? "" : `${t > 0 ? "+" : "−"}${secs} sec/wk`;
+  }
+  const lb = Math.abs(Math.round(t * 10) / 10);
+  return lb === 0 ? "" : `${t > 0 ? "+" : "−"}${lb} lb/wk`;
+}
+
+// The est-1RM or best-hold as a quiet figure ("185 lb" or "1:45"), or "".
+function liftBestFig(lift) {
+  if (lift.mode === "timed" && lift.best_seconds != null) return fmtDur(lift.best_seconds);
+  if (lift.est_1rm != null) return `${Math.round(lift.est_1rm)} lb`;
+  return "";
+}
+
+// Sort order: stalled/regressing first (actionable), then progressing, then
+// maintaining/new. Within each bucket keep original order.
+function sortLifts(lifts) {
+  const rank = (l) => {
+    if (l.status === "plateaued" || l.status === "regressing") return 0;
+    if (l.status === "progressing") return 1;
+    return 2; // maintaining, new
+  };
+  return lifts.slice().sort((a, b) => rank(a) - rank(b));
+}
+
+// Volume band → calm word.
+function volBandWord(band) {
+  if (band === "low") return "below productive range";
+  if (band === "productive") return "in the productive zone";
+  if (band === "high") return "above ideal range";
+  return band || "";
+}
+
+// Volume trend arrow (tiny, not a score).
+function volTrendGlyph(trend) {
+  if (trend === "rising") return " ↑";
+  if (trend === "falling") return " ↓";
+  return "";
+}
+
+// Mesocycle phase → calm word for display.
+function phaseWord(phase) {
+  if (phase === "accumulation") return "Accumulation";
+  if (phase === "intensification") return "Intensification";
+  if (phase === "deload-due") return "Deload due";
+  if (phase === "deload") return "Deload";
+  return "";
+}
+
+// Render a single lift row. Stalled/regressing get a subtle terracotta tint; progressing get sage.
+function liftRowHtml(lift, i) {
+  const statusWord = liftStatusWord(lift);
+  const trendFig = liftTrendFig(lift);
+  const bestFig = liftBestFig(lift);
+  const isBad = lift.status === "plateaued" || lift.status === "regressing";
+  const isGood = lift.status === "progressing";
+  const modCls = isBad ? " prow-stalled" : isGood ? " prow-good" : "";
+  const figBits = [bestFig, trendFig].filter(Boolean);
+  return `<div class="prow reveal${modCls}" style="${stagger(i)}">
+    <div class="prow-head">
+      <span class="prow-name">${escHtml(lift.exercise)}</span>
+      <span class="prow-status${isBad ? " prow-status-warn" : isGood ? " prow-status-ok" : ""}">${escHtml(statusWord)}</span>
+    </div>
+    ${figBits.length ? `<div class="prow-figs lbl">${escHtml(figBits.join(" · "))}</div>` : ""}
+    ${lift.why ? `<div class="prow-why">${escHtml(lift.why)}</div>` : ""}
+  </div>`;
+}
+
+// Volume block: compact rows, one per muscle group.
+function volumeBlockHtml(volume, startIdx) {
+  if (!volume || !volume.length) return "";
+  const rows = volume.map((v, i) => {
+    const bandWord = volBandWord(v.band);
+    const glyph = volTrendGlyph(v.trend);
+    const bandCls = v.band === "high" ? " pvol-high" : v.band === "low" ? " pvol-low" : " pvol-ok";
+    return `<div class="pvol-row reveal" style="${stagger(startIdx + i)}">
+      <span class="pvol-name">${escHtml(v.muscle_group)}</span>
+      <span class="pvol-meta lbl"><b>${escHtml(String(v.weekly_sets))}</b> sets/wk<span class="pvol-band${bandCls}">${escHtml(glyph + " " + bandWord)}</span></span>
+    </div>`;
+  }).join("");
+  return `<div class="pvol-card">${rows}</div>`;
+}
+
+// Mesocycle block — the note is the keystone, phase is secondary context.
+function mesoBlockHtml(meso, idx) {
+  if (!meso) return "";
+  const ph = phaseWord(meso.phase);
+  const bits = [];
+  if (ph) bits.push(ph);
+  if (meso.weeks_since_deload != null) bits.push(`${meso.weeks_since_deload} wk since deload`);
+  return `<div class="pmeso reveal" style="${stagger(idx)}">
+    ${bits.length ? `<div class="pmeso-phase lbl">${escHtml(bits.join(" · "))}</div>` : ""}
+    <div class="pmeso-note">${escHtml(meso.note || "")}</div>
+  </div>`;
+}
+
+// Endurance block — only rendered when the server provides it.
+function enduranceBlockHtml(end, idx) {
+  if (!end) return "";
+  const figs = [];
+  if (end.last_week_km != null) figs.push(`${fmtKm(end.last_week_km)} km last week`);
+  if (end.longest_km_4wk != null) figs.push(`${fmtKm(end.longest_km_4wk)} km longest · 4wk`);
+  return `<div class="pend reveal" style="${stagger(idx)}">
+    <div class="pend-head lbl">Endurance</div>
+    ${end.status ? `<div class="pend-status">${escHtml(end.status)}</div>` : ""}
+    ${figs.length ? `<div class="pend-figs lbl">${escHtml(figs.join(" · "))}</div>` : ""}
+    ${end.why ? `<div class="pend-why">${escHtml(end.why)}</div>` : ""}
+  </div>`;
+}
+
+// "What to evolve next" list — the keystone of the whole view.
+function adaptationsHtml(adaptations, idx) {
+  if (!adaptations || !adaptations.length) return "";
+  const items = adaptations.map((a) => `<li class="padapt-item">${escHtml(a)}</li>`).join("");
+  return `<div class="padapt reveal" style="${stagger(idx)}">
+    <div class="padapt-head lbl">What to evolve next</div>
+    <ul class="padapt-list">${items}</ul>
+  </div>`;
+}
+
+// "Evolve my plan" button — POSTs to /api/program/evolve. Degrades gracefully
+// if the endpoint 404s (not yet wired). ok:false at 200 = designed failure signal.
+async function triggerProgramEvolve(btn) {
+  const restore = btnBusy(btn, "Drafting…");
+  try {
+    const result = await api("/program/evolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    restore();
+    if (result && result.ok) {
+      toast("Drafted — review it in your plan");
+      swrInvalidate("progress:program");
+      swrInvalidate("plan:coach");
+      renderProgram();
+    } else {
+      const msg = (result && result.error) ? String(result.error) : "Couldn't draft right now — try again in a bit.";
+      toast(msg);
+    }
+  } catch (err) {
+    restore();
+    // 404 = endpoint not yet wired; any other network error degrades the same way.
+    toast("Couldn't draft right now — try again in a bit.");
+  }
+}
+
+// SWR over /program-state (key progress:program). Skeleton-first on cold;
+// paints the full program read instantly on warm re-entry, then revalidates.
+async function renderProgram() {
+  headerTitle.textContent = "Progress";
+  state.progressSeg = "program";
+  const token = ++pollToken;
+  const peek = peekCached("progress:program");
+  if (!peek) view.innerHTML = segSkeleton("program", PROGRESS_SEG, 3);
+  return paintSWR({
+    key: "progress:program",
+    path: "/program-state",
+    peek,
+    token,
+    tab: "progress",
+    render: (data) => paintProgramBody(data || {}),
+  });
+}
+
+function paintProgramBody(data) {
+  const head = segBar("program", PROGRESS_SEG);
+  const lifts = data.lifts || [];
+  const volume = data.volume || [];
+  const meso = data.mesocycle || null;
+  const endurance = data.endurance || null;
+  const headline = data.headline || "";
+  const adaptations = data.adaptations_due || [];
+
+  if (!lifts.length && !volume.length && !meso && !endurance) {
+    view.innerHTML = head + progressHero("Program", []) +
+      emptyStateHtml(art("exercise", "barbell squat"),
+        "Not enough data yet — log a few sessions and your program intelligence will read here.");
+    wireSeg(PROGRESS_HANDLERS);
+    return;
+  }
+
+  const sorted = sortLifts(lifts);
+
+  // Count stalled/regressing for a quiet hero stat (no score — just a direction indicator).
+  const nStalled = sorted.filter((l) => l.status === "plateaued" || l.status === "regressing").length;
+  const nGood = sorted.filter((l) => l.status === "progressing").length;
+  const heroStats = [];
+  if (lifts.length) heroStats.push(["lifts tracked", lifts.length]);
+  if (nGood) heroStats.push(["climbing", nGood]);
+  if (nStalled) heroStats.push(["stalled", nStalled]);
+
+  let html = head + progressHero("Program", heroStats);
+
+  // Headline — the single most important sentence.
+  if (headline) {
+    html += `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>`;
+  }
+
+  // "What to evolve next" — surfaced near the top, it's the keystone.
+  let staggerI = 2;
+  if (adaptations.length) {
+    html += adaptationsHtml(adaptations, staggerI);
+    staggerI += 1;
+  }
+
+  // Lift rows.
+  if (sorted.length) {
+    html += `<div class="prow-section-head lbl reveal" style="${stagger(staggerI)}">Lifts</div>`;
+    staggerI += 1;
+    html += sorted.map((lift, i) => liftRowHtml(lift, staggerI + i)).join("");
+    staggerI += sorted.length;
+  }
+
+  // Volume block.
+  if (volume.length) {
+    html += `<div class="pvol-head lbl reveal" style="${stagger(staggerI)}">Weekly volume by muscle</div>`;
+    staggerI += 1;
+    html += volumeBlockHtml(volume, staggerI);
+    staggerI += volume.length;
+  }
+
+  // Mesocycle note.
+  if (meso) {
+    html += mesoBlockHtml(meso, staggerI);
+    staggerI += 1;
+  }
+
+  // Endurance block (only when present).
+  if (endurance) {
+    html += enduranceBlockHtml(endurance, staggerI);
+    staggerI += 1;
+  }
+
+  // "Evolve my plan" button.
+  html += `<div class="prog-evolve-foot reveal" style="${stagger(staggerI)}">
+    <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Evolve my plan</button>
+    <span class="prog-evolve-note lbl">asks the coach to draft an updated plan — you review before anything changes</span>
+  </div>`;
+
+  view.innerHTML = html;
+  wireSeg(PROGRESS_HANDLERS);
+  runCountUps(view);
+
+  const btn = view.querySelector("#progEvolveBtn");
+  if (btn) btn.addEventListener("click", () => triggerProgramEvolve(btn));
+}
+

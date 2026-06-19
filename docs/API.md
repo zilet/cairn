@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**156 routes** across 59 groups.
+**165 routes** across 61 groups.
 
 ## `/activities`
 
@@ -343,6 +343,25 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/profile` |  |
 | PUT | `/api/profile` |  |
 | POST | `/api/profile/grow-about-me` | Grow profile.about_me from typed memory + family + check-ins (augments, never overwrites blindly). changed:false is the calm, common answer. |
+
+## `/program`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/program/blocks` | Periodization blocks (the mesocycle model the coach periodizes toward). |
+| POST | `/api/program/blocks` |  |
+| PUT | `/api/program/blocks/:id` |  |
+| POST | `/api/program/blocks/:id/advance` |  |
+| POST | `/api/program/blocks/:id/complete` |  |
+| GET | `/api/program/blocks/active` |  |
+| POST | `/api/program/evolve` | Adaptive program evolution: read the program-state and draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for review — same propose→apply path as /agent/run, driven by the trend analysis. |
+| GET | `/api/program/variations` | Exercise variations / alternatives (the plateau-break + "make it interesting" library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps. |
+
+## `/program-state`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/program-state` | Adaptive program state: per-lift trend + plateau/stall, volume landmarks, mesocycle position, endurance trends — the deterministic read the evolve-program proposal builds on. Informational (no score, no gate). |
 
 ## `/progress`
 

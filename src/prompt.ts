@@ -429,6 +429,15 @@ function renderTrainingSignals(ctx: any): string {
   return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — act on these so the plan visibly reflects what they actually did; this is the source of truth for whether a lift earned a bump):\n${lines.join("\n")}\n`;
 }
 
+// The active periodization block (goal / phase / week N of M), so the coach
+// periodizes toward it. "" when no block is running (the program-state mesocycle
+// read still gives deload timing). A nudge, never a gate.
+function renderBlock(ctx: any): string {
+  const b = ctx?.program_block;
+  if (!b) return "";
+  return `\nACTIVE TRAINING BLOCK: "${b.goal}" — ${b.focus}, ${b.phase} phase (${b.week_of}). Periodize toward this: in an accumulation phase build volume, in intensification push load, in a deload phase propose a LIGHTER week. Don't ramp volume and intensity at once.\n`;
+}
+
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
@@ -485,8 +494,93 @@ have none — that's fine, just use what's there):
   working as designed, never a penalty.
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderBlock(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${PLAN_SCHEMA}
+
+DATA:
+${JSON.stringify(ctx)}`;
+}
+
+// ---- adaptive program evolution (propose how the PLAN itself should evolve) ----
+// Where buildCoachPrompt nudges next-week TARGETS, this drives a deeper question:
+// given how each lift is actually TRENDING (the deterministic program-state read —
+// progressing / plateaued / regressing, with a suggested action), how should the
+// PROGRAM evolve? Progress what's working, deload/rotate what's stuck, break
+// plateaus with a close variation, introduce novelty before staleness sets in,
+// add quality to a one-pace endurance base, and periodize toward the goal. Output
+// is the SAME PLAN_SCHEMA (changes/cardio/days) → a DRAFT proposal for review;
+// nothing auto-applies. Constitution: a suggestion, never a gate; no scores.
+export function buildProgramEvolutionPrompt(userInstruction?: string): string {
+  const ctx = repo.getCoachContext();
+  const state = repo.getProgramState();
+  // Concrete variation candidates for any stalled lift, so "rotate a variation"
+  // is actionable — the agent gets real same-pattern options to choose from
+  // (it still respects constraint_notes/injuries and starts light).
+  const stalled = (Array.isArray(state.lifts) ? state.lifts : []).filter(
+    (l: any) => l.status === "plateaued" || l.suggested_action === "vary"
+  );
+  const variationLines = stalled
+    .map((l: any) => {
+      const names = (repo.suggestVariations(l.exercise, { limit: 4 }) as any[]).map((v) => v.name);
+      return names.length ? `- ${l.exercise} → ${names.join(", ")}` : null;
+    })
+    .filter(Boolean);
+  const variationBlock = variationLines.length
+    ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern — rotate ONE in to break the plateau, starting light):\n${variationLines.join("\n")}\n`
+    : "";
+  const disc = disciplineOf(ctx);
+  const coachRole = disc === "endurance"
+    ? "an endurance coach (with strength as supporting work)"
+    : disc === "hybrid"
+      ? "a hybrid coach balancing endurance and strength"
+      : "a strength coach";
+  return `You are ${coachRole} EVOLVING a training program — not just tweaking next week, but
+reading how each lift has actually been trending and deciding how the plan should adapt so the
+athlete keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
+nothing is applied automatically (they drive).
+
+A deterministic PROGRAM-STATE read has already analyzed the logged history — per-lift trend +
+plateau/stall detection (with a suggested action), volume landmarks, mesocycle position, and
+endurance trends. TRUST it as your starting point, then make the nuanced call:
+${JSON.stringify(state)}
+
+HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
+- PROGRESS what's working: a lift reading "progressing" gets the next conservative load step (see
+  the step caps below). Don't fix what isn't broken.
+- BREAK plateaus: a lift reading "plateaued" should NOT just get more load (that's what stalled).
+  Pick the intervention its suggested_action points to — a light DELOAD then a fresh run, ROTATE to a
+  close variation (same movement pattern, different bar path / implement — e.g. back squat → front
+  squat, flat → incline press, barbell row → chest-supported row), or a technique/rep-scheme change.
+  Use a "days" restructure (or swap the exercise within its day) to rotate a variation; keep the rest
+  of the day intact.
+- RECOVER what's slipping: a "regressing" lift gets backed off, not pushed.
+- KEEP IT FRESH: when an accessory has been static and the program reads repetitive, introduce ONE or
+  TWO new exercises hitting the same muscle (probe an alternative they haven't tried) — small novelty
+  often beats wholesale rewrites. Every new/rotated exercise starts at a conservative load with a
+  "NEW — start light, log actual" note and MUST respect constraint_notes / injuries.
+- PERIODIZE: respect the mesocycle position — if a deload is about due (phase "deload-due"), propose a
+  lighter week rather than piling on. Don't ramp intensity and volume at once.
+- ENDURANCE: if the endurance read says "add-quality", introduce ONE structured quality session
+  (tempo or intervals) into an otherwise easy base via "cardio"/"days"; if "ease"/"spiking", hold
+  mileage; if "build", a conservative (~10%) step. Periodize toward any race goal.
+
+NON-NEGOTIABLE GUARDRAILS (same as the coach):
+- Conservative loading: upper-body +5 lb/step max, lower-body +5-10 lb/step max. Only raise when
+  recent sessions hit the TOP of the rep range on ALL sets at RIR 2-3. Thin/absent data → don't change.
+- Respect every constraint_note and active injury — never load an injured area; swap to a pain-free
+  alternative instead. Assisted movements use NEGATIVE target_weight; bodyweight null; TIMED work uses
+  target_seconds (+5-15s/step), never load.
+- Read each recent session's soreness/performance/joint_pain: high soreness / low performance / a named
+  joint → pull volume or load back there, don't progress through it. Autoregulation is a brake, not the driver.
+- Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
+  rewrite) only when frequency/recovery/plateaus clearly call for it.
+
+${variationBlock}${CONTEXT_GUARDRAILS}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderBlock(ctx)}
+TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${PLAN_SCHEMA}

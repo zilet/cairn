@@ -2,6 +2,7 @@ import { db, todayISO } from "../db.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
+import { blockForCoach } from "./program-blocks.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
@@ -222,6 +223,11 @@ export function getCoachContext() {
     // in plain words ("32 of 40 km this week") — so the coach can speak to run
     // adherence the way week_done/week_planned covers lifting. Never a 0-100 score.
     run_compliance: getRunCompliance(),
+    // Active periodization block (goal / phase / week N of M) so the coach
+    // periodizes against the current mesocycle instead of progressing blindly.
+    // Null when no block is running — then the deterministic mesocycle read in
+    // program-state still gives deload timing. Additive, never a gate.
+    program_block: blockForCoach(),
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.

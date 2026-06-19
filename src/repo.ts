@@ -18,3 +18,5 @@ export * from "./repo/propagation.js";
 export * from "./repo/evidence.js";
 export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
+export * from "./repo/program-blocks.js";
+export * from "./repo/exercise-variations.js";

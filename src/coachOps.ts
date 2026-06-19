@@ -13,6 +13,7 @@ import { INTERACTIVE_TIMEOUT_MS, agentInfo, listAgentModels, loadAgents } from "
 import { runChosen } from "./runChosen.js";
 import {
   buildCoachPrompt,
+  buildProgramEvolutionPrompt,
   buildMealPlanPrompt,
   buildMealSwapPrompt,
   buildRecipePrompt,
@@ -231,6 +232,33 @@ export async function draftCoachProposal(
     tried,
     // Honest degradation sidecar (mirrors today-read / session-suggest / mealplan)
     // so callers can distinguish "no agent configured" from "agent failed".
+    agent_status: agentStatusFor({ ok: !!result.parsed, agent: chosen, tried }),
+    exit_code: result.code,
+    stderr: (result.stderr || "").slice(0, 800),
+  };
+}
+
+// Adaptive program evolution: read the deterministic program-state (per-lift
+// plateau/trend) and draft a plan EVOLUTION — progress what's working, deload/
+// rotate what's stalled, introduce novelty, periodize — as a DRAFT proposal for
+// review (never auto-applied; same propose→apply path as draftCoachProposal).
+// Returns the program-state snapshot alongside so the surface can show "why this".
+export async function evolveProgram(
+  agent: string | undefined,
+  instruction: string | undefined,
+  hooks?: OpHooks
+) {
+  hooks?.onPhase?.("reading how your lifts are trending");
+  const prompt = buildProgramEvolutionPrompt(instruction);
+  hooks?.onPhase?.("drafting how your plan should evolve");
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
+  const proposal = repo.createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
+  return {
+    proposal,
+    state: repo.getProgramState(),
+    ok: !!result.parsed,
+    agent: chosen,
+    tried,
     agent_status: agentStatusFor({ ok: !!result.parsed, agent: chosen, tried }),
     exit_code: result.code,
     stderr: (result.stderr || "").slice(0, 800),
