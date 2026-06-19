@@ -1,10 +1,12 @@
-const CACHE = "cairn-v95";
-const ASSETS = [
+const CACHE = "cairn-v99";
+const CORE_ASSETS = [
   "/", "/index.html", "/styles.css",
   "/js/01-core.js", "/js/02-ui.js", "/js/03-today.js", "/js/04-capture.js",
   "/js/05-progress.js", "/js/06-coach-meals.js", "/js/07-me-health.js",
-  "/js/08-me-records.js", "/js/09-plan-chat.js", "/js/10-boot.js",
+  "/js/08-me-records.js", "/js/09-plan-chat.js", "/js/settings-routes.js", "/js/10-boot.js",
   "/art.js", "/manifest.json",
+];
+const OPTIONAL_ASSETS = [
   // Vendored xterm.js for the in-app agent-login terminal (lazy-loaded by the
   // Settings → Agents "Connect" modal; precached so it also works offline-installed).
   "/vendor/xterm.js", "/vendor/xterm.css", "/vendor/xterm-addon-fit.js",
@@ -13,7 +15,10 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
+  e.waitUntil(caches.open(CACHE).then(async (c) => {
+    await c.addAll(CORE_ASSETS);
+    await Promise.all(OPTIONAL_ASSETS.map((asset) => c.add(asset).catch(() => null)));
+  }));
   // Single-user self-hosted app: a deploy should always be live on the next open,
   // never stranded behind a manual tap (which is how a client once fell ~40 cache
   // versions behind). Activate the new worker immediately; the page reloads itself
@@ -34,7 +39,8 @@ self.addEventListener("fetch", (e) => {
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/mcp")) return;
   e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });
-// The page asks a waiting worker to take over once the user taps "refresh".
+// Legacy compatibility: the app now calls skipWaiting at install and reloads once
+// on controllerchange, but older open pages may still send this message.
 self.addEventListener("message", (e) => {
   if (e.data === "skipWaiting" || (e.data && e.data.type === "skipWaiting")) self.skipWaiting();
 });

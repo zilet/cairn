@@ -104,7 +104,7 @@ is unflagged). The Docker image bundles Node 24, so users do not need Node insta
 amd64 + arm64) — one command, no clone, no Node:
 
 ```bash
-docker run -d --name cairn -p 8787:8787 \
+docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
@@ -112,6 +112,8 @@ docker run -d --name cairn -p 8787:8787 \
 Open **http://localhost:8787** — you land on the Brief immediately. The two named volumes keep your
 data (`cairn-data`) and CLI logins (`cairn-home`) across updates; to update, `docker pull
 ghcr.io/zilet/cairn:latest` and re-run the command. Add `-e TZ=Europe/Belgrade` for your timezone.
+Only widen the bind to your LAN (for example `-p 8787:8787`) on a private network and with
+`CAIRN_AUTH_TOKEN` set.
 Prefer a compose file (env vars, loopback-safe defaults)?
 `curl -LO https://github.com/zilet/cairn/releases/latest/download/docker-compose.yml && docker compose up -d`.
 
@@ -219,10 +221,13 @@ tagged release, so you can skip the build entirely. The shortest path is one `do
 no compose file:
 
 ```bash
-docker run -d --name cairn -p 8787:8787 \
+docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
+
+This binds Cairn to loopback. Widen to your LAN (for example `-p 8787:8787`) only on a private
+network and with `CAIRN_AUTH_TOKEN` set.
 
 Or, for a compose file with the env vars and loopback-safe defaults already wired up:
 

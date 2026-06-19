@@ -198,12 +198,7 @@ async function renderSettings() {
   }
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const ROUTE_TASKS = [
-    ["chat", "Chat"], ["day_read", "Daily brief"], ["session_suggest", "Build me a session"],
-    ["meal_plan", "Meal plan"], ["meal_swap", "Meal swap"], ["recipe", "Recipe"],
-    ["nutrition_checkin", "Nutrition check-in"], ["insight", "Quiet insight"],
-    ["weekly_read", "Weekly read"], ["health_review", "Health review"],
-  ];
+  const routeTasks = typeof settingsRouteTasks === "function" ? settingsRouteTasks(data) : [];
 
   if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) state.setSeg = "agents";
 
@@ -257,15 +252,20 @@ async function renderSettings() {
   function renderAgentsSlice() {
     const stratOpt = (v, label) => `<option value="${v}" ${wm.agent_strategy === v ? "selected" : ""}>${label}</option>`;
     const enabledAgents = wm.order.map((n) => meta[n]).filter((a) => a && !wm.disabled.has(a.name));
-    const routeRowsHtml = ROUTE_TASKS.map(([task, label]) => {
-      const cur = wm.routes[task] || "";
-      const opts = `<option value="">⟳ Auto</option>` + enabledAgents.map((a) =>
-        `<option value="${escAttr(a.name)}" ${cur === a.name ? "selected" : ""}>${escHtml(a.name)}</option>`).join("");
-      return `<div class="logrow route-row">
-        <span class="route-task">${escHtml(label)}</span>
-        <select class="route-sel selflex" data-route="${escAttr(task)}" aria-label="Agent for ${escAttr(label)}">${opts}</select>
-      </div>`;
-    }).join("");
+    // Silently reconcile pins to agents/tasks that no longer exist so the selects
+    // and pinned-count render clean. This runs on every full-slice render (mount,
+    // sub-tab switch, discard) — NOT on a user edit — so it must NOT markDirty,
+    // or opening Settings would spuriously show "Unsaved changes". A genuine route
+    // edit dirties via the select's change handler below; the server also drops
+    // stale pins on save, so a benign leftover never persists past the next save.
+    if (typeof settingsPruneRoutes === "function") {
+      wm.routes = settingsPruneRoutes(wm.routes, routeTasks, enabledAgents);
+    }
+    const pinnedRouteCount = Object.keys(wm.routes || {}).length;
+    const routeSummary = `Route tasks to agents${pinnedRouteCount ? ` · ${pinnedRouteCount} pinned` : ""}`;
+    const routeRowsHtml = typeof settingsRouteRowsHtml === "function"
+      ? settingsRouteRowsHtml(routeTasks, enabledAgents, wm.routes)
+      : "";
 
     slice().innerHTML = `
       <section class="set-group set-group--flush">
@@ -289,7 +289,7 @@ async function renderSettings() {
         ${noticedHtml}
 
         <details class="route-card">
-          <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">Route tasks to agents</h1></summary>
+          <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">${escHtml(routeSummary)}</h1></summary>
           <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
           <div id="routelist" class="route-list">${routeRowsHtml}</div>
         </details>
@@ -464,22 +464,20 @@ async function renderSettings() {
 
         <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
         <div class="sess-line" style="color:var(--muted)">
-          No App Store, no account — an iOS Shortcut posts your daily metrics straight to Cairn. Steps
-          and sleep feed the day-read and the energy-balance estimate.
+          An iOS Shortcut can post daily metrics straight to Cairn. Missing fields are fine; Cairn
+          keeps working without wearable data.
         </div>
-        <div class="ah-steps">
-          <div class="ah-step"><span class="ah-num">1</span><div>Open <b>Shortcuts</b> on your iPhone → <b>+</b> → add the <b>Get Health Sample</b> actions you want (Steps, Sleep, Resting Heart Rate, Heart Rate Variability, Active Energy).</div></div>
-          <div class="ah-step"><span class="ah-num">2</span><div>Build one JSON row per day: <code>date</code> (YYYY-MM-DD) plus any of <code>steps</code>, <code>sleep_min</code>, <code>sleep_score</code>, <code>resting_hr</code>, <code>hrv_ms</code>, <code>active_calories</code>. Wrap the rows in an array — a backfill is one array with many rows.</div></div>
-          <div class="ah-step"><span class="ah-num">3</span><div>Add a <b>Get Contents of URL</b> action: method <b>POST</b>, request body <b>JSON</b> (the array), to the URL below.</div></div>
-          <div class="ah-step"><span class="ah-num">4</span><div>Set it to run on an <b>Automation</b> each morning. Posts are idempotent per source + date (source defaults to <code>apple</code>), so re-running never duplicates a day.</div></div>
+        <div class="ah-fields">
+          <span>date</span><span>steps</span><span>sleep_min</span><span>resting_hr</span><span>hrv_ms</span><span>active_calories</span>
         </div>
         <div class="field" style="margin-top:12px"><label>POST URL</label>
           <div class="ah-url"><code id="ahUrl"></code><button id="ahUrlCopy" class="ghostbtn ah-copy" type="button">Copy</button></div>
         </div>
         <div class="ah-example">
-          <span class="ah-example-lbl">Example body</span>
+          <span class="ah-example-lbl">Shortcut body</span>
           <code>[{"date":"2026-06-13","steps":8421,"resting_hr":52}]</code>
         </div>
+        <div class="sess-line" style="color:var(--muted);margin-top:8px">Full Shortcut recipe: <code>docs/APPLE_HEALTH.md</code></div>
       </section>`;
 
     $("#garminUsername").addEventListener("input", (e) => { wm.garmin_username = e.target.value; });

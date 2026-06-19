@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AGENT_ENV_DENYLIST, buildAgentSpawnOptions } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_SCRIPT = path.join(__dirname, "..", "scripts", "update-agent-clis.sh");
@@ -33,14 +34,24 @@ let state: AgentCliUpdateState = {
   stderr_tail: "",
 };
 
+function redactSecrets(text: string): string {
+  let out = text;
+  for (const key of AGENT_ENV_DENYLIST) {
+    const value = process.env[key];
+    if (!value || value.length < 4) continue;
+    out = out.split(value).join("[redacted]");
+  }
+  return out;
+}
+
 function appendTail(existing: string, chunk: Buffer): string {
-  const next = existing + chunk.toString();
+  const next = redactSecrets(existing + chunk.toString());
   return next.length > MAX_TAIL ? next.slice(next.length - MAX_TAIL) : next;
 }
 
 function updateScriptPath(): string {
   const configured = process.env.AGENT_CLI_UPDATE_SCRIPT;
-  if (configured && fs.existsSync(configured)) return configured;
+  if (configured && fs.existsSync(configured)) return path.resolve(configured);
   if (fs.existsSync(DEFAULT_SCRIPT)) return DEFAULT_SCRIPT;
   return LOCAL_SCRIPT;
 }
@@ -65,7 +76,7 @@ export function startAgentCliUpdate(reason = "manual"): AgentCliUpdateState {
   };
 
   current = new Promise((resolve) => {
-    const child = spawn(script, [], { env: process.env });
+    const child = spawn(script, [], buildAgentSpawnOptions({ kind: "update" }));
 
     child.stdout.on("data", (chunk) => { state.stdout_tail = appendTail(state.stdout_tail, chunk); });
     child.stderr.on("data", (chunk) => { state.stderr_tail = appendTail(state.stderr_tail, chunk); });

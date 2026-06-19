@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db } from "../db.js";
+import { isAgentJobKind, type AgentJobKind } from "../agentJobKinds.js";
 import { addMemory } from "./memory.js";
 
 // ---------- chat ----------
@@ -236,11 +237,12 @@ function hydrateAgentJob(row: any): any {
 }
 
 export function createAgentJob(j: {
-  kind: string;
+  kind: AgentJobKind;
   input?: any;
   agent?: string | null;
   phase?: string | null;
 }) {
+  if (!isAgentJobKind(j.kind)) throw new Error(`unknown job kind: ${j.kind}`);
   const info = db
     .prepare(`INSERT INTO agent_jobs (status, kind, phase, input_json, agent)
               VALUES ('queued', ?, ?, ?, ?)`)
@@ -467,4 +469,3 @@ export function searchChatMessages(q: string, limit = 40) {
     return { id: m.id, role: m.role, created_at: m.created_at, archived_at: m.archived_at ?? null, snippet: snippet.slice(0, 160) };
   });
 }
-

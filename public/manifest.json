@@ -1,7 +1,7 @@
 {
-  "name": "Cairn — Training & Nutrition",
+  "name": "Cairn — your whole-picture health OS",
   "short_name": "Cairn",
-  "description": "Self-hosted training, nutrition, and performance tracker with an agentic coaching loop.",
+  "description": "Self-hosted, connected health OS — reads your whole picture (training, food, labs, sleep, life) and suggests the one thing worth doing today.",
   "id": "/",
   "start_url": "/?source=pwa",
   "scope": "/",

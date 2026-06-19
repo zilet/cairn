@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import type { Request, Response } from "express";
+import { AGENT_JOB_KINDS } from "./agentJobKinds.js";
 import * as repo from "./repo.js";
 import {
   agentStatusFor,
@@ -30,6 +31,9 @@ import { computeDayRead, localToday } from "./dayread.js";
 function asText(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
 }
+
+const ROUTABLE_TASK_LIST = repo.ROUTABLE_TASKS.join(", ");
+const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
 
 export function buildMcpServer(): McpServer {
   const server = new McpServer({ name: "cairn", version: "0.1.0" });
@@ -649,17 +653,17 @@ export function buildMcpServer(): McpServer {
 
   // ---- settings: agent rotation + auto-coach schedule ----
   server.tool("get_settings",
-    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
+    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
     {},
-    async () => asText({ settings: repo.getSettings(), agents: repo.getAgentConfig() }));
+    async () => asText({ settings: repo.getSettings(), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
 
   server.tool("set_settings",
-    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes: optional per-task agent map pinning a task to one agent. coach_enabled/coach_day(0-6)/coach_hour(0-23) control the weekly auto-draft.",
+    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_enabled/coach_day(0-6)/coach_hour(0-23) control the weekly auto-draft.",
     {
       agent_strategy: z.enum(["round_robin", "random", "priority"]).optional(),
       agent_order: z.array(z.string()).optional(),
       disabled_agents: z.array(z.string()).optional(),
-      agent_routes: z.record(z.string(), z.string()).optional().describe("optional per-task agent routing: a map { task -> agent } pinning a specific agent for a task (chat, meal_plan, meal_swap, recipe, session_suggest, nutrition_checkin, health_review, insight, weekly_read, day_read). Unknown tasks or unknown/disabled agents are dropped; {} or omitted = no routing (Auto rotates as before)."),
+      agent_routes: z.record(z.string(), z.string()).optional().describe(`optional per-task agent routing: a map { task -> agent } pinning one of these tasks to a specific agent: ${ROUTABLE_TASK_LIST}. Unknown tasks or unknown/disabled agents are dropped; {} or omitted = no routing (Auto rotates as before).`),
       coach_enabled: z.boolean().optional(),
       coach_day: z.number().int().optional(),
       coach_hour: z.number().int().optional(),
@@ -673,9 +677,9 @@ export function buildMcpServer(): McpServer {
       clear_gemini_api_key: z.boolean().optional().describe("clear the saved Gemini key; env fallback still applies"),
       clear_garmin_password: z.boolean().optional().describe("clear the saved Garmin password; env fallback still applies"),
       research_enabled: z.boolean().optional().describe("host-side evidence research on/off (default OFF; off ⇒ deterministic, no network — used to ground & verify health-review citations)"),
-      bg_ops_enabled: z.boolean().optional().describe("run the heavy agentic ops (session-suggest, meal plan/swap/recipe, nutrition check-in, insight, health review) as durable background jobs (default on); off ⇒ legacy inline blocking behavior"),
+      bg_ops_enabled: z.boolean().optional().describe(`run the heavy agentic ops as durable background jobs (default on); job kinds are: ${AGENT_JOB_KIND_LIST}; off ⇒ legacy inline blocking behavior where supported`),
     },
-    async (p) => asText({ settings: repo.setSettings(p), agents: repo.getAgentConfig() }));
+    async (p) => asText({ settings: repo.setSettings(p), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
 
   server.tool("get_art_stats",
     "Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size.",

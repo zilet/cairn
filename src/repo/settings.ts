@@ -24,7 +24,7 @@ export interface Settings {
   gemini_api_key_configured: boolean;
   gemini_api_key_source: "settings" | "env" | "none";
   research_enabled: boolean;            // host-side evidence research (default OFF; off ⇒ deterministic, no network)
-  bg_ops_enabled: boolean;              // run the 7 agentic ops as durable background jobs (off ⇒ legacy inline blocking)
+  bg_ops_enabled: boolean;              // run supported agentic ops as durable background jobs (off ⇒ legacy inline blocking)
   agent_routes: Record<string, string>; // optional per-task agent routing { task -> agent }; {} = no routing (Auto = today's rotation)
   updated_at?: string;
 }
@@ -35,10 +35,28 @@ export interface Settings {
 // other key is dropped on save (forward-compatible: an unknown task just no-ops).
 export const ROUTABLE_TASKS = [
   "chat", "meal_plan", "meal_swap", "recipe", "session_suggest",
-  "nutrition_checkin", "health_review", "insight", "weekly_read", "day_read",
+  "nutrition_checkin", "health_review", "health_synthesis", "insight", "weekly_read", "day_read",
 ] as const;
 export type RoutableTask = (typeof ROUTABLE_TASKS)[number];
 const ROUTABLE_TASK_SET = new Set<string>(ROUTABLE_TASKS);
+
+export const ROUTABLE_TASK_LABELS: Record<RoutableTask, string> = {
+  chat: "Chat",
+  day_read: "Daily brief",
+  session_suggest: "Build me a session",
+  meal_plan: "Meal plan",
+  meal_swap: "Meal swap",
+  recipe: "Recipe",
+  nutrition_checkin: "Nutrition check-in",
+  insight: "Quiet insight",
+  weekly_read: "Weekly read",
+  health_review: "Health review",
+  health_synthesis: "Health synthesis",
+};
+
+export function listRoutableTasks() {
+  return ROUTABLE_TASKS.map((key) => ({ key, label: ROUTABLE_TASK_LABELS[key] }));
+}
 
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["agent_strategy", "TEXT DEFAULT 'round_robin'"],
@@ -283,209 +301,6 @@ export function getGeminiApiKey() {
   ensureSettingsSchema();
   const row = db.prepare(`SELECT gemini_api_key FROM settings WHERE id = 1`).get() as any;
   return String(row?.gemini_api_key ?? "").trim() || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
-}
-
-// ---------- generated-artwork bookkeeping (see src/art.ts) ----------
-// art_assets: what each cached PNG depicts. art_aliases: normalized query →
-// asset, so semantically-equivalent phrasings resolve to one image without
-// re-asking the model. art_usage: the spend ledger behind getArtStats().
-
-export function getArtAlias(kind: string, query: string): string | null {
-  const row = db.prepare(`SELECT asset_key FROM art_aliases WHERE kind = ? AND query = ?`).get(kind, query) as any;
-  return row?.asset_key ?? null;
-}
-
-export function setArtAlias(kind: string, query: string, assetKey: string) {
-  db.prepare(
-    `INSERT INTO art_aliases (kind, query, asset_key) VALUES (?, ?, ?)
-     ON CONFLICT(kind, query) DO UPDATE SET asset_key = excluded.asset_key`
-  ).run(kind, query, assetKey);
-}
-
-export function addArtAsset(key: string, kind: string, text: string) {
-  db.prepare(
-    `INSERT INTO art_assets (key, kind, text) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET text = excluded.text`
-  ).run(key, kind, text);
-}
-
-export function listArtAssets(kind: string, limit = 150): { key: string; text: string }[] {
-  return db.prepare(
-    `SELECT key, text FROM art_assets WHERE kind = ? ORDER BY created_at DESC, key LIMIT ?`
-  ).all(kind, limit) as any[];
-}
-
-export function recordArtUsage(u: {
-  kind: string;
-  query: string;
-  asset_key?: string | null;
-  action: "generate" | "canonicalize" | "reuse" | "fail";
-  model?: string | null;
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  est_cost_usd?: number;
-  est_saved_usd?: number;
-}) {
-  db.prepare(
-    `INSERT INTO art_usage (kind, query, asset_key, action, model, input_tokens, output_tokens, est_cost_usd, est_saved_usd)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    u.kind, String(u.query).slice(0, 200), u.asset_key ?? null, u.action, u.model ?? null,
-    u.input_tokens ?? null, u.output_tokens ?? null,
-    Number(u.est_cost_usd ?? 0) || 0, Number(u.est_saved_usd ?? 0) || 0
-  );
-}
-
-export interface ArtUsageTotals {
-  images_generated: number;
-  canonicalize_calls: number;
-  reused: number;
-  failed: number;
-  est_cost_usd: number;
-  est_saved_usd: number;
-}
-
-function artUsageTotals(since?: string | null): ArtUsageTotals {
-  const sql = `SELECT
-      COALESCE(SUM(CASE WHEN action = 'generate' THEN 1 ELSE 0 END), 0) AS images_generated,
-      COALESCE(SUM(CASE WHEN action = 'canonicalize' THEN 1 ELSE 0 END), 0) AS canonicalize_calls,
-      COALESCE(SUM(CASE WHEN action = 'reuse' THEN 1 ELSE 0 END), 0) AS reused,
-      COALESCE(SUM(CASE WHEN action = 'fail' THEN 1 ELSE 0 END), 0) AS failed,
-      COALESCE(SUM(est_cost_usd), 0) AS est_cost_usd,
-      COALESCE(SUM(est_saved_usd), 0) AS est_saved_usd
-    FROM art_usage` + (since ? ` WHERE created_at >= ?` : ``);
-  const row = (since ? db.prepare(sql).get(since) : db.prepare(sql).get()) as any;
-  return {
-    images_generated: Number(row?.images_generated ?? 0),
-    canonicalize_calls: Number(row?.canonicalize_calls ?? 0),
-    reused: Number(row?.reused ?? 0),
-    failed: Number(row?.failed ?? 0),
-    est_cost_usd: Number((Number(row?.est_cost_usd ?? 0)).toFixed(6)),
-    est_saved_usd: Number((Number(row?.est_saved_usd ?? 0)).toFixed(6)),
-  };
-}
-
-// Spend telemetry for the Settings UI / MCP: money since art was last enabled
-// (falls back to all-time when the toggle predates the telemetry column),
-// plus all-time totals and cache size. Costs are estimates from fixed rates.
-export function getArtStats() {
-  const s = getSettings();
-  const assets = db.prepare(`SELECT COUNT(*) AS n FROM art_assets`).get() as any;
-  const aliases = db.prepare(`SELECT COUNT(*) AS n FROM art_aliases`).get() as any;
-  return {
-    art_enabled: s.art_enabled,
-    gemini_configured: !!getGeminiApiKey(),
-    enabled_at: s.art_enabled_at,
-    since_enabled: artUsageTotals(s.art_enabled_at),
-    all_time: artUsageTotals(),
-    cached_assets: Number(assets?.n ?? 0),
-    aliases: Number(aliases?.n ?? 0),
-  };
-}
-
-// ---------- agent-run telemetry (see src/agents.ts) ----------
-// One row per agent ATTEMPT, written from the runChosen / runAgentWithFallback /
-// day-read paths. Makes the agentic loop observable. Mirrors the art_usage
-// telemetry shape: a cheap insert + a stats roll-up. recordAgentRun NEVER throws
-// into the coaching loop (callers wrap it in try/catch; we also guard here).
-export function recordAgentRun(r: {
-  op: string;
-  agent: string;
-  ok: boolean;
-  parsed: boolean;
-  latency_ms: number;
-  tried_json: boolean;
-}) {
-  try {
-    db.prepare(
-      `INSERT INTO agent_runs (op, agent, ok, parsed, latency_ms, tried_json)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(
-      String(r.op ?? "").slice(0, 60),
-      String(r.agent ?? "").slice(0, 60),
-      r.ok ? 1 : 0,
-      r.parsed ? 1 : 0,
-      Number.isFinite(r.latency_ms) ? Math.round(r.latency_ms) : null,
-      r.tried_json ? 1 : 0
-    );
-  } catch {
-    /* telemetry is best-effort — never break the loop on a write error */
-  }
-}
-
-// Roll-up for the Settings "agent health" card / MCP get_agent_stats. ok_rate is
-// a plain reliability fraction over the window (NOT a user-facing grade — this is
-// an operator/health view, never surfaced as a score against the athlete). p50_ms
-// is the per-agent median latency. `recent` carries the last N raw attempts.
-export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
-  const recentN = Math.min(Math.max(Number(opts.recent) || 25, 1), 200);
-  const days = Number.isFinite(opts.days) && (opts.days as number) > 0 ? (opts.days as number) : null;
-  const where = days ? `WHERE created_at >= datetime('now', ?)` : ``;
-  const bind: any[] = days ? [`-${days} days`] : [];
-
-  const totalRow = db.prepare(
-    `SELECT COUNT(*) AS runs, COALESCE(SUM(ok), 0) AS ok FROM agent_runs ${where}`
-  ).get(...bind) as any;
-  const runs = Number(totalRow?.runs ?? 0);
-  const okCount = Number(totalRow?.ok ?? 0);
-
-  const perAgent = db.prepare(
-    `SELECT agent,
-            COALESCE(SUM(ok), 0) AS ok,
-            COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) AS fail,
-            COUNT(*) AS n
-       FROM agent_runs ${where}
-      GROUP BY agent
-      ORDER BY n DESC`
-  ).all(...bind) as any[];
-
-  const by_agent = perAgent.map((a) => {
-    // Median latency for this agent over the window (SQLite has no percentile fn).
-    const lats = (db.prepare(
-      `SELECT latency_ms FROM agent_runs ${where ? where + " AND" : "WHERE"} agent = ? AND latency_ms IS NOT NULL ORDER BY latency_ms`
-    ).all(...bind, a.agent) as any[]).map((r) => Number(r.latency_ms));
-    const p50 = lats.length ? lats[Math.floor((lats.length - 1) / 2)] : null;
-    return { agent: a.agent, ok: Number(a.ok), fail: Number(a.fail), p50_ms: p50 };
-  });
-
-  const recent = db.prepare(
-    `SELECT op, agent, ok, parsed, latency_ms, tried_json, created_at
-       FROM agent_runs ${where} ORDER BY id DESC LIMIT ?`
-  ).all(...bind, recentN).map((r: any) => ({
-    op: r.op,
-    agent: r.agent,
-    ok: !!r.ok,
-    parsed: !!r.parsed,
-    latency_ms: r.latency_ms == null ? null : Number(r.latency_ms),
-    tried_json: !!r.tried_json,
-    created_at: r.created_at,
-  }));
-
-  return {
-    runs,
-    ok_rate: runs ? Number((okCount / runs).toFixed(3)) : null,
-    by_agent,
-    recent,
-  };
-}
-
-// ---------- app_state: tiny KV scratchpad for scheduler bookkeeping ----------
-// Used by the proactive scheduler to persist last-run stamps so a missed slot
-// still fires once after a restart. Best-effort; failure-safe.
-export function getAppState(key: string): string | null {
-  try {
-    const row = db.prepare(`SELECT value FROM app_state WHERE key = ?`).get(key) as any;
-    return row?.value ?? null;
-  } catch { return null; }
-}
-
-export function setAppState(key: string, value: string) {
-  try {
-    db.prepare(
-      `INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
-    ).run(key, String(value ?? ""));
-  } catch { /* best-effort */ }
 }
 
 // agents.json merged with settings: effective order + enabled/usable flags.

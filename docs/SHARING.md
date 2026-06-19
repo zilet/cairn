@@ -21,10 +21,14 @@ A multi-arch image (amd64 + arm64) is published to GHCR with every tagged releas
 never touch the source. Shortest path — one `docker run`, no compose file:
 
 ```bash
-docker run -d --name cairn -p 8787:8787 \
+docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
+
+This default binds Cairn to loopback. Widen to your LAN, for example
+`-p 8787:8787`, only behind a private network or VPN and with
+`CAIRN_AUTH_TOKEN` set.
 
 Or use the release compose file (env vars + loopback-safe port binding already wired up):
 

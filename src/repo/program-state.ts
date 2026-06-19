@@ -14,8 +14,9 @@
 // ============================================================================
 import { db } from "../db.js";
 import { getRecoverySummary } from "./coach.js";
-import { getPrimaryDiscipline } from "./profile.js";
+import { getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getProgress } from "./sessions.js";
+import { activitySportWhere, enduranceSportPatterns } from "./endurance-sports.js";
 
 export type LiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
 export type LiftAction = "overload" | "hold" | "deload" | "vary" | "technique" | "introduce" | null;
@@ -318,40 +319,47 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
 }
 
 // ---- endurance state ----
-function weeklyKm(date: string, weekBack: number): number {
+function weeklyKm(date: string, weekBack: number, patterns: string[]): number {
   const end = isoDaysAgo(date, weekBack * 7);
   const start = isoDaysAgo(date, weekBack * 7 + 6);
+  const sport = activitySportWhere("activities", patterns);
   const row = db.prepare(
-    `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date <= ?`
-  ).get(start, end) as any;
+    `SELECT COALESCE(SUM(distance_km), 0) AS km FROM activities
+      WHERE date >= ? AND date <= ? AND (${sport.sql})`
+  ).get(start, end, ...sport.params) as any;
   return Math.round(Number(row?.km ?? 0) * 10) / 10;
 }
 
 function enduranceState(date: string): EnduranceState {
-  const lastWeek = weeklyKm(date, 0);
-  const chronic = [1, 2, 3, 4].map((b) => weeklyKm(date, b)).reduce((a, b) => a + b, 0) / 4;
+  const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
+  const lastWeek = weeklyKm(date, 0, patterns);
+  const chronic = [1, 2, 3, 4].map((b) => weeklyKm(date, b, patterns)).reduce((a, b) => a + b, 0) / 4;
   const acwr = chronic > 0 ? Math.round((lastWeek / chronic) * 100) / 100 : null;
   const start4 = isoDaysAgo(date, 27);
+  const activitySport = activitySportWhere("activities", patterns);
+  const aSport = activitySportWhere("a", patterns);
 
   const longest = db.prepare(
-    `SELECT MAX(distance_km) AS km FROM activities WHERE date >= ? AND date <= ?`
-  ).get(start4, date) as any;
+    `SELECT MAX(distance_km) AS km FROM activities
+      WHERE date >= ? AND date <= ? AND (${activitySport.sql})`
+  ).get(start4, date, ...activitySport.params) as any;
 
   // Quality = a synced effort with a hard label or meaningful Z4+ time.
   const quality = db.prepare(
     `SELECT COUNT(*) AS n FROM activities a JOIN garmin_activities g ON g.activity_id = a.id
      WHERE a.date >= ? AND a.date <= ?
+       AND (${aSport.sql})
        AND (UPPER(COALESCE(g.te_label,'')) IN ('TEMPO','THRESHOLD','VO2MAX','ANAEROBIC','LACTATE_THRESHOLD')
             OR COALESCE(g.anaerobic_te,0) >= 2)`
-  ).get(start4, date) as any;
+  ).get(start4, date, ...aSport.params) as any;
   const hasQuality = Number(quality?.n ?? 0) > 0;
 
-  // Easy-pace efficiency: avg pace (min/km) of easy runs, recent half vs older half.
+  // Easy-pace efficiency: avg pace (min/km) of the chosen endurance sport, recent half vs older half.
   const paceRows = db.prepare(
     `SELECT a.date AS date, a.duration_min AS dur, a.distance_km AS km FROM activities a
      WHERE a.date >= ? AND a.date <= ? AND a.distance_km > 1 AND a.duration_min > 0
-       AND LOWER(COALESCE(a.type,'')) LIKE '%run%' ORDER BY a.date`
-  ).all(isoDaysAgo(date, 41), date) as any[];
+       AND (${aSport.sql}) ORDER BY a.date`
+  ).all(isoDaysAgo(date, 41), date, ...aSport.params) as any[];
   let paceTrend: EnduranceState["pace_trend"] = null;
   if (paceRows.length >= 4) {
     const paces = paceRows.map((r) => ({ date: r.date, pace: Number(r.dur) / Number(r.km) }));

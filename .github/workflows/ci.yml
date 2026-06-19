@@ -34,13 +34,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Guard rails that used to rely on a human remembering — now enforced.
-      - name: Generated docs in sync
-        run: npm run docs:check
+      - name: Verify
+        run: npm run verify
 
-      - name: PWA service-worker cache bump
-        if: github.event_name == 'pull_request'
-        run: node scripts/check-sw-cache.mjs "origin/${{ github.base_ref }}"
-
-      - name: Test
-        run: npm test
+      - name: Runtime smoke
+        run: npm run smoke

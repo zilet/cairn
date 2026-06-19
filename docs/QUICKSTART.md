@@ -9,12 +9,15 @@ Pull the published multi-arch image (amd64 + arm64) and run it. No source, no co
 on the host:
 
 ```bash
-docker run -d --name cairn -p 8787:8787 \
+docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
   --restart unless-stopped ghcr.io/zilet/cairn:latest
 ```
 
 Open **http://localhost:8787** — you land on the Brief. That's the whole install.
+
+This binds Cairn to this computer only. Widen to your LAN, for example
+`-p 8787:8787`, only on a private network and with `CAIRN_AUTH_TOKEN` set.
 
 - **Your data survives updates.** `cairn-data` holds the SQLite DB and `cairn-home` holds your CLI
   logins. To update: `docker pull ghcr.io/zilet/cairn:latest`, then `docker rm -f cairn` and re-run
@@ -331,7 +334,7 @@ than the `grok` login. With the bare `docker run`, pass it on the command and re
 
 ```bash
 docker rm -f cairn
-docker run -d --name cairn -p 8787:8787 \
+docker run -d --name cairn -p 127.0.0.1:8787:8787 \
   -v cairn-data:/data -v cairn-home:/home/app \
   -e XAI_API_KEY=xai-... \
   --restart unless-stopped ghcr.io/zilet/cairn:latest

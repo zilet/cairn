@@ -3,7 +3,7 @@ import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirec
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import { forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { getProfile } from "./profile.js";
-import { getAppState, setAppState } from "./settings.js";
+import { getAppState, setAppState } from "./app-state.js";
 
 // ============================================================================
 // SUPPLEMENT UNDERSTANDING — say it once in plain words, the system approximates.

@@ -33,6 +33,7 @@ import {
   buildOnboardPrompt,
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
+import { normalizeHealthSynthesis } from "./health-synthesis.js";
 
 // runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
 // re-exported here because api.ts / mcp.ts import it from coachOps as the
@@ -610,24 +611,9 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
 export async function synthesizeHealth(agent: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your whole picture");
   const prompt = buildHealthSynthesisPrompt();
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
-  const p: any = result.parsed;
-  let synthesis: any = null;
-  if (p && typeof p === "object" && p.found !== false && (p.headline || p.story)) {
-    const clamp = (v: any, n: number) => (v == null ? null : String(v).trim().slice(0, n) || null);
-    synthesis = {
-      headline: clamp(p.headline, 300),
-      story: clamp(p.story, 1400),
-      priorities: (Array.isArray(p.priorities) ? p.priorities : []).slice(0, 5).map((x: any) => ({
-        label: clamp(x?.label, 60),
-        why_it_matters: clamp(x?.why_it_matters, 220),
-        the_move: clamp(x?.the_move, 320),
-        recheck: clamp(x?.recheck, 160),
-      })).filter((x: any) => x.label || x.the_move),
-      one_change: clamp(p.one_change, 200),
-      agent: chosen,
-      generated_at: new Date().toISOString(),
-    };
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "health_synthesis", signal: hooks?.signal });
+  const synthesis = normalizeHealthSynthesis(result.parsed, { agent: chosen, generated_at: new Date().toISOString() });
+  if (synthesis) {
     repo.saveHealthSynthesis(synthesis);
   }
   return {

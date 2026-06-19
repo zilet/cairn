@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
 import * as repo from "./repo.js";
 import { todayISO } from "./db.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
@@ -37,10 +36,14 @@ import {
 import { isArtKind, cachedArtPath, requestArt, warmArt } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
 import { authEnabled } from "./auth.js";
+import type { AgentJobKind } from "./agentJobKinds.js";
+import { UPLOADS_DIR } from "./uploadPaths.js";
+import { ACCEPTED_MIME, extForMime, isAcceptedMime } from "./uploadMime.js";
+import { healthDocsRouter } from "./routes/health-docs.js";
 
 export const api = Router();
 
-// The 7 heavy agentic ops are durable BACKGROUND JOBS by default: the POST
+// Heavy agentic ops are durable BACKGROUND JOBS by default: the POST
 // handler persists an agent_jobs row, enqueues it, and returns { ok, job } at
 // once (the PWA streams progress + reconnects across reloads). The
 // settings.bg_ops_enabled toggle (default on) is a safety valve: when OFF, the
@@ -48,56 +51,12 @@ export const api = Router();
 // unchanged. backgroundOp() encapsulates that fork: when backgrounding is on it
 // creates + enqueues the job and responds { ok, job }; when off it returns false
 // so the caller runs the op inline exactly as before.
-function backgroundOp(res: Response, kind: string, input: any, agent?: string | null): boolean {
+function backgroundOp(res: Response, kind: AgentJobKind, input: any, agent?: string | null): boolean {
   if (!repo.getSettings().bg_ops_enabled) return false;
   const job = repo.createAgentJob({ kind, input, agent: agent ?? null });
   enqueueAgentJob((job as any).id);
   res.json({ ok: true, job });
   return true;
-}
-
-// Uploaded health docs live next to the DB, inside the mounted data volume, so
-// they survive container rebuilds. Mirrors db.ts's DATA_DIR resolution.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
-const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
-
-// Accepted upload types → file extension. A CONCRETE allowlist on purpose: a
-// permissive `image/*` rule would let through `image/svg+xml`, and an SVG served
-// inline executes its embedded <script>. Raster images + PDF, plus the health
-// export formats (zip / html / xml / text) which are only ever read by the
-// ingestion agent or downloaded as an attachment — never served inline.
-const ACCEPTED_MIME: Record<string, string> = {
-  "application/pdf": "pdf",
-  "image/jpeg": "jpg",
-  "image/jpg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/gif": "gif",
-  "image/heic": "heic",
-  "image/heif": "heif",
-  "text/plain": "txt",
-  "text/html": "html",
-  "application/xml": "xml",
-  "text/xml": "xml",
-  "application/zip": "zip",
-  "application/x-zip-compressed": "zip",
-};
-
-function extForMime(mime: string): string {
-  return ACCEPTED_MIME[(mime || "").toLowerCase()] || "bin";
-}
-
-function isAcceptedMime(mime: string): boolean {
-  return !!ACCEPTED_MIME[(mime || "").toLowerCase()];
-}
-
-// Only raster images + PDF are ever served INLINE (rendered in the browser).
-// Everything else in the allowlist (zip/html/xml/text) is forced to download so
-// nothing markup-bearing executes in the app's origin.
-function isInlineMime(mime: string): boolean {
-  const m = (mime || "").toLowerCase();
-  return m === "application/pdf" || (m.startsWith("image/") && isAcceptedMime(m));
 }
 
 api.get("/plan", (_req, res) => res.json(repo.getPlan()));
@@ -448,9 +407,11 @@ api.get("/agents/:name/models", (req, res) => res.json(agentModelsOp(req.params.
 api.get("/agent-clis/update", (_req, res) => res.json(getAgentCliUpdateStatus()));
 api.post("/agent-clis/update", (_req, res) => res.status(202).json(startAgentCliUpdate("manual")));
 
-// ---- settings (agent rotation + auto-coach schedule) ----
-api.get("/settings", (_req, res) => res.json({ settings: repo.getSettings(), agents: repo.getAgentConfig() }));
-api.put("/settings", (req, res) => res.json({ settings: repo.setSettings(req.body ?? {}), agents: repo.getAgentConfig() }));
+// Settings + agent metadata. route_tasks is server-owned UI metadata for the
+// Settings routing controls, so frontend task labels cannot drift from the backend
+// allowlist.
+api.get("/settings", (_req, res) => res.json({ settings: repo.getSettings(), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
+api.put("/settings", (req, res) => res.json({ settings: repo.setSettings(req.body ?? {}), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
 
 // Draft a plan proposal from a free-text instruction (the Coach tab's DRAFT PLAN
 // UPDATE + the Plan → Endurance "shape your running" composer). A durable
@@ -1139,130 +1100,7 @@ api.get("/health-export", (_req, res) => {
   res.send(JSON.stringify(data, null, 2));
 });
 
-// ---- health documents (file upload + background AI analysis) ----
-api.get("/health-docs", (req, res) =>
-  res.json(repo.listHealthDocuments(req.query.limit ? Number(req.query.limit) : 50))
-);
-
-// Single row (frontend polls this to watch enrichment_status).
-api.get("/health-docs/:id", (req, res) => {
-  const d = repo.getHealthDocument(Number(req.params.id));
-  if (!d) return res.status(404).json({ error: "not found" });
-  res.json(d);
-});
-
-// Stream the original file inline. Only ever image/* or application/pdf.
-api.get("/health-docs/:id/file", (req, res) => {
-  const row = repo.getHealthDocumentRaw(Number(req.params.id)) as any;
-  if (!row || !row.file_path || !fs.existsSync(row.file_path)) {
-    return res.status(404).json({ error: "not found" });
-  }
-  // Serve inline only for raster images / PDF; zip/html/xml/text and anything
-  // else are forced to download, and nosniff stops the browser re-interpreting bytes.
-  const inline = isInlineMime(row.mime);
-  res.setHeader("Content-Type", isAcceptedMime(row.mime) ? row.mime : "application/octet-stream");
-  res.setHeader("Content-Disposition", inline ? "inline" : "attachment");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  fs.createReadStream(row.file_path).on("error", () => {
-    if (!res.headersSent) res.status(500).json({ error: "read failed" });
-  }).pipe(res);
-});
-
-api.post("/health-docs", (req, res) => {
-  const b = req.body ?? {};
-  const pasted = (b.text ?? "").toString().trim();
-  const mime = pasted ? "text/plain" : (b.mime ?? "").toString();
-  if (!isAcceptedMime(mime)) return res.status(400).json({ error: "mime must be an image, PDF, zip, HTML, XML, or pasted text" });
-  if (!pasted && !b.data_base64) return res.status(400).json({ error: "data_base64 or text required" });
-
-  let buf: Buffer;
-  if (pasted) {
-    buf = Buffer.from(pasted.slice(0, 400000), "utf8");
-  } else {
-    try {
-      buf = Buffer.from(String(b.data_base64), "base64");
-    } catch {
-      return res.status(400).json({ error: "invalid base64" });
-    }
-  }
-  if (!buf.length) return res.status(400).json({ error: "empty file" });
-
-  try {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-    const name = `${crypto.randomUUID()}.${extForMime(mime)}`;
-    const filePath = path.join(UPLOADS_DIR, name);
-    fs.writeFileSync(filePath, buf);
-
-    const status = repo.getSettings().enrich_enabled ? "pending" : "skipped";
-    const row = repo.addHealthDocument({
-      kind: b.kind ?? "other",
-      doc_date: b.doc_date ?? null,
-      original_name: b.original_name ?? (pasted ? "Pasted results" : null),
-      mime,
-      file_path: filePath,
-      enrichment_status: status,
-    });
-
-    // Kick the background analyzer after the row exists.
-    if (status === "pending") {
-      import("./enrich.js").then((m) => m.enqueueEnrich("health", row.id)).catch(() => {});
-    }
-    res.json(row); // already stripped of file_path by repo.publicHealthDoc
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-api.put("/health-docs/:id", (req, res) => {
-  const row = repo.getHealthDocument(Number(req.params.id));
-  if (!row) return res.status(404).json({ error: "not found" });
-  const b = req.body ?? {};
-  const fields: { kind?: string | null; doc_date?: string | null } = {};
-  if (b.kind !== undefined) fields.kind = b.kind;
-  let dateChanged = false;
-  if (b.doc_date !== undefined) {
-    const d = b.doc_date == null ? null : String(b.doc_date).trim();
-    if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: "doc_date must be YYYY-MM-DD" });
-    fields.doc_date = d || null;
-    dateChanged = (d || null) !== (row.doc_date || null);
-  }
-  const updated = repo.updateHealthDocFields(Number(req.params.id), fields);
-  // A corrected date reorders the marker timeline and shifts what's "latest", so
-  // refresh the deterministic directives and whole-picture review to keep the
-  // analysis consistent.
-  if (dateChanged) {
-    try { repo.deriveDirectives(); } catch { /* keep the edit path resilient */ }
-    import("./enrich.js").then((m) => m.enqueueReviewRefresh()).catch(() => {});
-  }
-  res.json(updated);
-});
-
-// Re-run the agentic scan over a document's original file (e.g. after a bad
-// parse). Only rows that own a binary can be re-analyzed; derived dated panels
-// and client-recorded analyses have nothing to re-read.
-api.post("/health-docs/:id/reanalyze", (req, res) => {
-  const row = repo.getHealthDocumentRaw(Number(req.params.id)) as any;
-  if (!row) return res.status(404).json({ error: "not found" });
-  if (!row.file_path) return res.status(400).json({ error: "no source file to re-analyze" });
-  if (!repo.getSettings().enrich_enabled) return res.status(409).json({ error: "analysis is disabled in settings" });
-  repo.setHealthDocEnrichStatus(Number(req.params.id), "pending");
-  import("./enrich.js").then((m) => m.enqueueEnrich("health", Number(req.params.id))).catch(() => {});
-  res.json(repo.getHealthDocument(Number(req.params.id)));
-});
-
-api.delete("/health-docs/:id", (req, res) => {
-  const row = repo.getHealthDocumentRaw(Number(req.params.id)) as any;
-  // Delete the row first; only unlink the file once the row is gone, so a DB
-  // error can't strand a row pointing at a missing file. deleteHealthDocument
-  // cascades to derived dated panels (which carry no binary of their own).
-  const result = repo.deleteHealthDocument(Number(req.params.id));
-  if (row?.file_path) {
-    try { fs.rmSync(row.file_path, { force: true }); } catch { /* best-effort */ }
-    // Clean up any unpacked-archive folder left by ingestion.
-    try { fs.rmSync(`${row.file_path}-x`, { recursive: true, force: true }); } catch { /* best-effort */ }
-  }
-  res.json(result);
-});
+api.use("/health-docs", healthDocsRouter);
 
 // ---- health insights (marker history + whole-picture agentic review) ----
 api.get("/health/markers", (_req, res) => res.json(repo.getMarkerHistory()));

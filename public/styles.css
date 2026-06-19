@@ -2797,14 +2797,11 @@ body.swr-busy::after{
 .eb-why{font-size:.88rem;color:var(--ink);line-height:1.5;margin:10px 0 0;max-width:48ch}
 
 /* Apple Health setup (Settings) */
-.ah-steps{display:flex;flex-direction:column;gap:11px;margin-top:6px}
-.ah-step{display:flex;gap:11px;align-items:flex-start;font-size:.85rem;color:var(--ink-2);line-height:1.5}
-.ah-step b{color:var(--ink);font-weight:600}
-.ah-step code{background:var(--card-2);border-radius:6px;padding:1px 5px;font-size:.82em}
-.ah-num{
-  flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--card-2);
-  border:1px solid var(--line-2);color:var(--ink-2);font-size:.74rem;font-weight:600;
-  display:inline-flex;align-items:center;justify-content:center;margin-top:1px;
+.ah-fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ah-fields span{
+  display:inline-flex;align-items:center;min-height:28px;border:1px solid var(--line);
+  border-radius:999px;background:var(--card-2);padding:5px 9px;color:var(--ink-2);
+  font-size:.76rem;font-weight:600;
 }
 .ah-url{display:flex;align-items:center;gap:8px}
 .ah-url code{
@@ -2852,6 +2849,11 @@ body.swr-busy::after{
 .route-row{justify-content:space-between}
 .route-task{font-size:.84rem;color:var(--ink-2);flex:0 0 auto;padding-right:10px}
 .route-sel{max-width:58%}
+@media (max-width:480px){
+  .route-row{flex-direction:column;align-items:stretch;gap:8px}
+  .route-task{padding-right:0}
+  .route-sel{max-width:100%;width:100%}
+}
 
 /* Settings sub-nav: the four-section switcher reuses the shared .segwrap/.seg sliding
    thumb (segBar) — no new bar styling needed. A slice rendered under the sub-nav is
@@ -3685,9 +3687,9 @@ button.hmk-row:active{background:var(--card-2)}
    sheet card's top-right corner), and listing it would override that to relative,
    dropping the ✕ into normal flow at the top-left where it clips. Its ::before tap
    overlay below still anchors correctly to the absolutely-positioned button. */
-.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn{position:relative}
+.feel-dot,.iconbtn,.delbtn,.ex-skip,.togglebtn,.agent-detail-link{position:relative}
 .feel-dot::before,.iconbtn::before,.delbtn::before,
-.ex-skip::before,.togglebtn::before,.sheet-x::before{
+.ex-skip::before,.togglebtn::before,.agent-detail-link::before,.sheet-x::before{
   content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
   min-width:44px;min-height:44px;width:100%;height:100%;
 }

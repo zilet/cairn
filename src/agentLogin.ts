@@ -1,8 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { buildAgentSpawnOptions } from "./agentExecution.js";
 import { loadAgents } from "./agents.js";
 
 // ---------------------------------------------------------------------------
@@ -25,12 +23,9 @@ import { loadAgents } from "./agents.js";
 // client data into the command string.
 // ---------------------------------------------------------------------------
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Mirror src/agents.ts: the login subprocess runs with the data dir as cwd, and
-// inherits the server's HOME so tokens land in ~/.claude · ~/.codex · ~/.gemini
-// where the agent runs read them (the server already runs as the `app` user).
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
+// Mirror src/agents.ts: login subprocesses inherit the server's HOME so tokens
+// land in ~/.claude / ~/.codex / ~/.gemini / ~/.grok where later agent runs read
+// them, but they run from an isolated agent workspace instead of DATA_DIR.
 
 // Per-CLI login argv, APPENDED to the agent's `command`. Stream B adds a `login`
 // field to each agent in agents.json; we PREFER that when present and fall back
@@ -150,6 +145,10 @@ export function buildPtyInvocation(loginArgv: string[]): { command: string; args
   return ptyInvocationFor(process.platform, loginArgv);
 }
 
+export function buildLoginSpawnOptions(sourceEnv: NodeJS.ProcessEnv = process.env) {
+  return buildAgentSpawnOptions({ kind: "login", sourceEnv });
+}
+
 // Cached presence probe for the macOS python3 PTY path (mirrors agents.ts).
 let _python3Present: boolean | null = null;
 function python3Present(): boolean {
@@ -177,16 +176,9 @@ export function startLoginSession(opts: { agent: string } & LoginCallbacks): Log
   // Interactive login needs to reach ~/.claude etc., so we KEEP HOME/PATH/USER
   // (and the rest of the inherited env). The login CLIs authenticate to EXTERNAL
   // providers (Anthropic/OpenAI/xAI/Google), never to Cairn — and every byte of
-  // their PTY output is streamed to the browser. So we strip Cairn's OWN secrets,
-  // which the login flow has no use for and which must never reach the terminal.
-  const env = { ...process.env };
-  delete env.CAIRN_AUTH_TOKEN;
-  delete env.GARMIN_PASSWORD;
-
-  const child = spawn(command, args, {
-    cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,
-    env,
-  });
+  // their PTY output is streamed to the browser. So we strip the same Cairn-owned
+  // secrets/config that the headless agent runner denies to subprocesses.
+  const child = spawn(command, args, buildLoginSpawnOptions());
 
   const id = randomUUID();
 

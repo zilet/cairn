@@ -1,6 +1,6 @@
 # Cairn REST API index
 
-> Generated from `src/api.ts` by `scripts/gen-docs.mjs` — run `npm run docs:index` to refresh. Do not edit by hand.
+> Generated from `src/api.ts` and `src/routes/*` by `scripts/gen-docs.mjs` — run `npm run docs:index` to refresh. Do not edit by hand.
 
 All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH_TOKEN`
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
@@ -240,8 +240,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | DELETE | `/api/health-docs/:id` |  |
 | GET | `/api/health-docs/:id` | Single row (frontend polls this to watch enrichment_status). |
 | PUT | `/api/health-docs/:id` |  |
-| GET | `/api/health-docs/:id/file` | Stream the original file inline. Only ever image/* or application/pdf. |
-| POST | `/api/health-docs/:id/reanalyze` | Re-run the agentic scan over a document's original file (e.g. after a bad parse). Only rows that own a binary can be re-analyzed; derived dated panels and client-recorded analyses have nothing to re-read. |
+| GET | `/api/health-docs/:id/file` | Stream the original file. Only raster images / PDF are served inline. |
+| POST | `/api/health-docs/:id/reanalyze` | Re-run the agentic scan over a document's original file. |
 
 ## `/health-export`
 
@@ -436,7 +436,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/settings` |  |
+| GET | `/api/settings` | Settings + agent metadata. route_tasks is server-owned UI metadata for the Settings routing controls, so frontend task labels cannot drift from the backend allowlist. |
 | PUT | `/api/settings` |  |
 
 ## `/stats`

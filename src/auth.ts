@@ -10,7 +10,8 @@ import type { Request, Response, NextFunction } from "express";
 // When enabled, a client may present the token three ways:
 //   - Authorization: Bearer <token>   (MCP clients, API tooling)
 //   - X-Cairn-Token: <token>          (the PWA's fetch helper)
-//   - ?token=<token>                  (last-resort query fallback)
+//   - ?token=<token>                  (only for browser surfaces that cannot set headers:
+//                                      downloads, EventSource streams, and WS upgrades)
 //
 // Never gated: the PWA static shell (so it can render a token prompt) and
 // GET /api/health (so the Docker healthcheck keeps working).
@@ -35,8 +36,21 @@ function presentedToken(req: Request): string | null {
   const header = req.get("x-cairn-token");
   if (header) return header.trim();
   const q = (req.query as Record<string, unknown> | undefined)?.token;
-  if (typeof q === "string" && q) return q;
+  if (typeof q === "string" && q && queryTokenAllowedPath(req.path, req.method)) return q;
   return null;
+}
+
+export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
+  if (method.toUpperCase() !== "GET") return false;
+  if (p === "/api/plan.ics") return true;
+  if (p === "/api/export" || p === "/api/export/db" || p === "/api/health-export") return true;
+  // The PWA renders generated artwork via <img src=…?token=…>; an <img> can't set
+  // request headers, so the query token is its only auth path. (204/PNG GET only.)
+  if (p === "/api/art") return true;
+  if (/^\/api\/health-docs\/\d+\/file$/.test(p)) return true;
+  if (/^\/api\/chat\/turns\/\d+\/stream$/.test(p)) return true;
+  if (/^\/api\/agent-jobs\/\d+\/stream$/.test(p)) return true;
+  return false;
 }
 
 // A single global guard. It only enforces on /api and /mcp; the static PWA

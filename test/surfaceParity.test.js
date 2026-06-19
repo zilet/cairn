@@ -1,4 +1,4 @@
-// Surface parity — the two protocol surfaces (src/api.ts REST + src/mcp.ts MCP) are
+// Surface parity — the two protocol surfaces (REST + src/mcp.ts MCP) are
 // both thin adapters over the same src/repo.ts. The most common drift in this design
 // is adding a capability to one surface and forgetting the other.
 //
@@ -9,7 +9,7 @@
 // SSE, export, health, binary art), and pinning that would need a large, brittle
 // exceptions list. So we gate the clean direction and just REPORT the rest.
 //
-// Pure/offline: parses the two source files as text (same shapes as scripts/gen-docs.mjs).
+// Pure/offline: parses the source files as text (same shapes as scripts/gen-docs.mjs).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -30,16 +30,21 @@ function norm(s) {
 }
 
 // Every non-:param segment of every REST route, normalized — the resource vocabulary.
-function restResourceTokens() {
-  const src = read("src/api.ts");
-  const re = /\bapi\.(get|post|put|delete|patch)\(\s*["'`]([^"'`]+)["'`]/g;
-  const tokens = new Set();
+function addRouteTokens(tokens, src, receiver = "api", prefix = "") {
+  const re = new RegExp(`\\b${receiver}\\.(get|post|put|delete|patch)\\(\\s*["'\`]([^"'\`]+)["'\`]`, "g");
   let m;
   while ((m = re.exec(src))) {
-    for (const seg of m[2].split("/")) {
+    const route = `${prefix}${m[2] === "/" ? "" : m[2]}`;
+    for (const seg of route.split("/")) {
       if (seg && !seg.startsWith(":")) tokens.add(norm(seg.replace(/\.ics$/, "")));
     }
   }
+}
+
+function restResourceTokens() {
+  const tokens = new Set();
+  addRouteTokens(tokens, read("src/api.ts"));
+  addRouteTokens(tokens, read("src/routes/health-docs.ts"), "healthDocsRouter", "/health-docs");
   return tokens;
 }
 
@@ -95,7 +100,7 @@ test("every MCP tool maps to a REST resource (MCP ⊆ REST — surfaces stay in 
   assert.deepEqual(
     orphans,
     [],
-    `MCP tool(s) with no REST counterpart — wire the REST route in src/api.ts, or if the ` +
+    `MCP tool(s) with no REST counterpart — wire the REST route, or if the ` +
       `tool's resource is named differently from its route add an ALIAS in test/surfaceParity.test.js:\n  ` +
       orphans.join("\n  "),
   );

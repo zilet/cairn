@@ -82,6 +82,42 @@ test("hybrid endurance: a one-pace base flags 'add-quality'", () => {
   assert.equal(e.suggested_action, "add-quality");
 });
 
+test("hybrid runner endurance ignores bike and walk distance, spikes, and quality", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  for (const wk of [4, 3, 2, 1, 0]) {
+    repo.addActivity({ type: "run", duration_min: 60, distance_km: 10, date: back(wk * 7 + 1) });
+  }
+  const hardBike = repo.addActivity({ type: "ride", duration_min: 160, distance_km: 80, date: back(2) });
+  repo.addActivity({ type: "walking", duration_min: 150, distance_km: 12, date: back(3) });
+  const source = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'program-state-test')`).run();
+  db.prepare(
+    `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, te_label, anaerobic_te)
+     VALUES (?, 'bike-quality-1', ?, ?, 'cycling', 'VO2MAX', 3)`
+  ).run(source.lastInsertRowid, hardBike.id, hardBike.date);
+
+  const e = repo.getProgramState(REF).endurance;
+  assert.ok(e, "endurance block present for a hybrid runner");
+  assert.equal(e.last_week_km, 10, "bike/walk distance does not inflate run mileage");
+  assert.equal(e.longest_km_4wk, 10, "bike/walk distance does not become the longest run");
+  assert.equal(e.acute_chronic_ratio, 1, "bike/walk distance does not create a run ACWR spike");
+  assert.equal(e.has_quality, false, "a hard bike does not count as run quality");
+  assert.equal(e.pace_trend, "stable", "pace trend is based on the running rows");
+});
+
+test("hybrid cycling endurance matching is token-aware, not substring-only", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "cycling" });
+  for (const wk of [4, 3, 2, 1, 0]) {
+    repo.addActivity({ type: "bike", duration_min: 45, distance_km: 15, date: back(wk * 7 + 1) });
+  }
+  repo.addActivity({ type: "bikram yoga", duration_min: 90, distance_km: 50, date: back(0) });
+
+  const e = repo.getProgramState(REF).endurance;
+  assert.ok(e, "endurance block present for a hybrid cyclist");
+  assert.equal(e.last_week_km, 15, "bikram does not match the bike token");
+  assert.equal(e.longest_km_4wk, 15, "substring-only matching would have promoted the yoga row");
+  assert.equal(e.acute_chronic_ratio, 1);
+});
+
 test("a strength athlete gets no endurance block; the aggregate has a headline", () => {
   repo.setProfile({ primary_discipline: "strength" });
   [21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: "Deadlift", weight: 300 + i * 10, reps: 3, rir: 2, date: back(d) }));

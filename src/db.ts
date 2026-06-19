@@ -357,9 +357,11 @@ CREATE TABLE IF NOT EXISTS chat_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_turns_status ON chat_turns(status, id);
 
--- Durable agent-job spine — the GENERALIZATION of chat_turns for the 7 other
--- blocking agentic ops (session-suggest, meal-plan draft/swap/recipe, nutrition
--- check-in, insight/weekly-read, day-read override, chat-distill, health review).
+-- Durable agent-job spine — the GENERALIZATION of chat_turns for blocking
+-- agentic ops (session-suggest, plan proposal/evolution, meal plan/swap/recipe,
+-- nutrition check-in, insight/weekly-read, day-read override, chat-distill,
+-- health review/synthesis).
+-- Valid kind values are owned by src/agentJobKinds.ts AGENT_JOB_KINDS.
 -- POST /api/<op> persists a job here (status 'queued') and a serial in-process
 -- worker (src/agentJobs.ts, mirrors the chat-turn queue) drains it: runs the
 -- coachOp, and on done records a thin ref to the ALREADY-persisted result row
@@ -372,7 +374,7 @@ CREATE TABLE IF NOT EXISTS agent_jobs (
   started_at TEXT,                          -- stamped when the worker picks it up
   finished_at TEXT,                         -- stamped on done/error/canceled
   status TEXT NOT NULL DEFAULT 'queued',    -- queued | running | done | error | canceled
-  kind TEXT NOT NULL,                       -- session_suggest | meal_plan | meal_swap | recipe | nutrition_checkin | insight | weekly_read | day_read_override | chat_distill | health_review
+  kind TEXT NOT NULL,                       -- one of src/agentJobKinds.ts AGENT_JOB_KINDS
   phase TEXT,                               -- latest progress phase (for late SSE subscribers / poll)
   input_json TEXT,                          -- the op's typed inputs (agent + per-kind args)
   agent TEXT,                               -- requested agent ('auto'/NULL or an explicit name)
@@ -431,7 +433,7 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
   proactive_enabled INTEGER DEFAULT 1,        -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
   research_enabled INTEGER DEFAULT 0,         -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
-  bg_ops_enabled INTEGER DEFAULT 1,           -- 1 = run the 7 agentic ops as durable background jobs (off ⇒ legacy inline blocking behavior)
+  bg_ops_enabled INTEGER DEFAULT 1,           -- 1 = run supported agentic ops as durable background jobs (off ⇒ legacy inline blocking behavior)
   agent_routes TEXT DEFAULT ''                -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
 );
 

@@ -33,7 +33,9 @@
     "test": "node test/run.mjs",
     "presmoke": "npm run build",
     "smoke": "node test/smoke.mjs",
-    "verify": "npm run docs:check && npm test"
+    "launch:check": "node scripts/check-launch-safety.mjs",
+    "verify": "npm run docs:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
+    "verify:full": "npm run verify && npm run smoke"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

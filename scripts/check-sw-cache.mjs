@@ -13,15 +13,20 @@ import { execFileSync } from "node:child_process";
 const base = process.argv[2] || "origin/main";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 
-let changed;
+let changed = [];
 try {
   changed = git("diff", "--name-only", `${base}...HEAD`).split("\n").filter(Boolean);
 } catch (e) {
-  // Base ref unavailable (shallow clone, local run without the base fetched) — don't
-  // block; the guard is advisory CI tooling, not a correctness gate.
-  console.log(`• base ref ${base} unavailable (${e.message.split("\n")[0]}) — skipping sw cache check`);
-  process.exit(0);
+  // Base ref unavailable (shallow clone, local run without the base fetched) — fall
+  // through to the local working-tree check below. CI normally has the base.
+  console.log(`• base ref ${base} unavailable (${e.message.split("\n")[0]}) — checking local diff only`);
 }
+const localChanged = [
+  ...git("diff", "--name-only").split("\n").filter(Boolean),
+  ...git("diff", "--cached", "--name-only").split("\n").filter(Boolean),
+  ...git("ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean),
+];
+changed = [...new Set([...changed, ...localChanged])];
 
 const assetChanges = changed.filter((f) => f.startsWith("public/") && f !== "public/sw.js");
 if (assetChanges.length === 0) {
@@ -36,7 +41,15 @@ try {
 } catch {
   /* no diff for sw.js at all */
 }
-const cacheBumped = /^[+-]\s*const CACHE\s*=/m.test(swDiff);
+try {
+  swDiff += "\n" + git("diff", "--", "public/sw.js");
+  swDiff += "\n" + git("diff", "--cached", "--", "public/sw.js");
+} catch {
+  /* local sw diff unavailable */
+}
+const removedCache = [...swDiff.matchAll(/^-\s*const CACHE\s*=\s*["']([^"']+)["']/gm)].map((m) => m[1]);
+const addedCache = [...swDiff.matchAll(/^\+\s*const CACHE\s*=\s*["']([^"']+)["']/gm)].map((m) => m[1]);
+const cacheBumped = addedCache.some((next) => removedCache.some((prev) => prev !== next));
 
 if (!cacheBumped) {
   console.error("✗ public/ assets changed but the public/sw.js CACHE version was not bumped:");

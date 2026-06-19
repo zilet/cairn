@@ -77,6 +77,7 @@ test("agent_routes round-trips known task -> known agent; drops unknowns", () =>
     agent_routes: {
       chat: "claude",
       meal_plan: "stub",
+      health_synthesis: "claude",
       session_suggest: "bogus",   // unknown agent → dropped
       frobnicate: "claude",       // unknown task → dropped
       day_read: "",               // empty value → dropped (back to Auto)
@@ -85,6 +86,7 @@ test("agent_routes round-trips known task -> known agent; drops unknowns", () =>
   const r = repo.getSettings().agent_routes;
   assert.equal(r.chat, "claude");
   assert.equal(r.meal_plan, "stub");
+  assert.equal(r.health_synthesis, "claude");
   assert.ok(!("session_suggest" in r), "route to an unknown agent is dropped");
   assert.ok(!("frobnicate" in r), "route under an unknown task is dropped");
   assert.ok(!("day_read" in r), "an empty route value clears the pin");

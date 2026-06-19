@@ -1,4 +1,5 @@
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
+import { isAgentJobKind } from "./agentJobKinds.js";
 import * as repo from "./repo.js";
 import {
   suggestSession,
@@ -90,6 +91,8 @@ async function processAgentJob(id: number): Promise<void> {
   const agent: string | undefined = job.agent ?? input.agent ?? undefined;
 
   try {
+    if (!isAgentJobKind(job.kind)) throw new Error(`unknown job kind: ${job.kind}`);
+
     // Each kind runs the existing coachOp threading the hooks. The op's RETURN
     // VALUE is the contract body — byte-for-byte what the sync endpoint returned
     // before this change — so the client's done-handler reuses its old rendering.

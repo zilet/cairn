@@ -2,15 +2,11 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildAgentSpawnOptions } from "./agentExecution.js";
+export { AGENT_ENV_DENYLIST, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.AGENTS_CONFIG || path.join(__dirname, "..", "agents.json");
-
-// Agent CLIs run with the data dir as cwd so headless runs can read uploaded
-// files (chat photos, health docs) without a permission grant: claude -p
-// auto-denies reads outside its working directory, and in Docker uploads live
-// in /data while the app runs from /app.
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
 
 // Opt-in stderr surfacing. By default a failed/unparseable agent run is quiet —
 // the loop just falls through to the next agent — which hides the actual cause
@@ -111,7 +107,11 @@ export function commandPresent(cmd: string): boolean {
     // A quick `--version` spawn: ENOENT (no such binary) surfaces as r.error,
     // any actual launch (even a non-zero exit) means the binary exists. 4s is
     // ample for a CLI version print; a wedge just reports "not present" (safe).
-    const r = spawnSync(cmd, ["--version"], { stdio: "ignore", timeout: 4000 });
+    const r = spawnSync(cmd, ["--version"], {
+      ...buildAgentSpawnOptions({ kind: "probe" }),
+      stdio: "ignore",
+      timeout: 4000,
+    });
     if (r.error) {
       const code = (r.error as NodeJS.ErrnoException).code;
       // ENOENT = not installed. A timeout/other error → fall back to a PATH scan
@@ -192,9 +192,9 @@ function probeConfigured(name: string, def: AgentDef): boolean | null {
     if (!commandPresent(def.command)) return null;
     try {
       const r = spawnSync(def.command, def.status_check, {
+        ...buildAgentSpawnOptions({ kind: "status", restoreEnvKeys: def.env_required || [] }),
         timeout: 5000,
         encoding: "utf8",
-        env: buildAgentEnv(def),
       });
       // A spawn error (ENOENT / timeout) tells us nothing about login state.
       if (r.error) return null;
@@ -278,7 +278,11 @@ export function agentVersion(name: string): string | null {
   let version: string | null = null;
   if (commandPresent(cmd)) {
     try {
-      const r = spawnSync(cmd, ["--version"], { timeout: 5000, encoding: "utf8", env: buildAgentEnv(def) });
+      const r = spawnSync(cmd, ["--version"], {
+        ...buildAgentSpawnOptions({ kind: "version", restoreEnvKeys: def.env_required || [] }),
+        timeout: 5000,
+        encoding: "utf8",
+      });
       if (!r.error) version = cleanVersion((r.stdout || "") + (r.stderr || ""));
     } catch { version = null; }
   }
@@ -373,7 +377,11 @@ function rawModelsOutput(name: string): string {
   let raw = "";
   if (commandPresent(def.command)) {
     try {
-      const r = spawnSync(def.command, def.models_list, { timeout: 8000, encoding: "utf8", env: buildAgentEnv(def) });
+      const r = spawnSync(def.command, def.models_list, {
+        ...buildAgentSpawnOptions({ kind: "models", restoreEnvKeys: def.env_required || [] }),
+        timeout: 8000,
+        encoding: "utf8",
+      });
       if (!r.error) raw = `${r.stdout || ""}\n${r.stderr || ""}`;
     } catch { raw = ""; }
   }
@@ -662,36 +670,13 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   return runAgentImpl(name, prompt, timeoutMs, signal);
 }
 
-// ---------- subprocess env hardening (Trust build V1) ----------
+// ---------- subprocess env/workdir hardening (Trust build V1) ----------
 // The agent CLIs are full subprocesses and (for research/grounding) now have web
-// egress, so the blast radius of an exfiltrated secret is real. We pass a COPY of
-// process.env with Cairn-only secrets/config the CLIs never need REMOVED. This is
-// a DENYLIST (not an allowlist) so no agent login ever breaks: HOME/PATH/LANG/
-// USER, the CLI auth dirs (~/.claude, ~/.codex, ~/.gemini reached via HOME), and
-// every other inherited var still pass through untouched. Each agent's declared
-// env_required is force-restored after the strip, so even a future agent that
-// legitimately needs one of these still gets it.
-const AGENT_ENV_DENYLIST = [
-  "CAIRN_AUTH_TOKEN",   // the shared API/MCP gate token — never the CLI's business
-  "GARMIN_PASSWORD",    // Garmin credentials
-  "GARMIN_USERNAME",
-  "GEMINI_API_KEY",     // image/text-art keys (Cairn's own Gemini calls, not the CLI's)
-  "GOOGLE_AI_KEY",
-  "DB_PATH",            // host filesystem layout — internal config the CLI shouldn't see
-  "DATA_DIR",           // already passed to the child as cwd; not needed (or wanted) in its env
-  "GARMIN_TOKEN_DIR",
-];
-
-function buildAgentEnv(def: AgentDef): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of AGENT_ENV_DENYLIST) delete env[k];
-  // Restore anything an agent explicitly declared it needs (belt-and-suspenders;
-  // our bundled agents declare none of the denylisted vars).
-  for (const k of def.env_required || []) {
-    if (process.env[k] !== undefined) env[k] = process.env[k];
-  }
-  return env;
-}
+// egress, so the blast radius of an exfiltrated secret is real. The shared helper
+// passes a COPY of process.env with Cairn-only secrets/config removed, and runs
+// ordinary subprocesses from DATA_DIR/.agent-workspaces/<kind> instead of DATA_DIR
+// itself. Prompts that hand the CLI an absolute uploaded-file path still use
+// DATA_DIR as cwd for compatibility with CLI file-read permissions.
 
 function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: AbortSignal): Promise<AgentResult> {
   const def = loadAgents()[name];
@@ -707,10 +692,11 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
   return new Promise((resolve, reject) => {
     // Already-aborted before launch (Stop landed while queued): don't spawn.
     if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
-    const child = spawn(def.command, args, {
-      env: buildAgentEnv(def),
-      cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,
-    });
+    const child = spawn(def.command, args, buildAgentSpawnOptions({
+      kind: "agent",
+      prompt,
+      restoreEnvKeys: def.env_required || [],
+    }));
     let out = "";
     let err = "";
     const timer = setTimeout(() => {
@@ -818,10 +804,11 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error(`agent "${name}" canceled`)); return; }
-    const child = spawn(def.command, args, {
-      env: buildAgentEnv(def),
-      cwd: fs.existsSync(DATA_DIR) ? DATA_DIR : undefined,
-    });
+    const child = spawn(def.command, args, buildAgentSpawnOptions({
+      kind: "chat",
+      prompt,
+      restoreEnvKeys: def.env_required || [],
+    }));
     let text = "";  // accumulated assistant text (the model's full output)
     let err = "";
     let buf = "";   // stdout line buffer (NDJSON)

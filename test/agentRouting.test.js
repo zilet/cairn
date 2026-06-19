@@ -16,6 +16,11 @@ test('an "auto" request with a pinned, enabled agent resolves to that agent', ()
   assert.equal(r, "codex");
 });
 
+test("health synthesis routes under its own task label", () => {
+  const r = repo.resolveAgentForTask("health_synthesis", "auto", { routes: { health_synthesis: "codex" }, enabled: ENABLED });
+  assert.equal(r, "codex");
+});
+
 test("a blank/undefined request with a pinned, enabled agent resolves to it", () => {
   assert.equal(repo.resolveAgentForTask("meal_plan", undefined, { routes: { meal_plan: "grok" }, enabled: ENABLED }), "grok");
   assert.equal(repo.resolveAgentForTask("meal_plan", "", { routes: { meal_plan: "grok" }, enabled: ENABLED }), "grok");

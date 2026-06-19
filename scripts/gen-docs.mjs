@@ -3,8 +3,9 @@
 // drift. Run with `npm run docs:index`. Outputs docs/API.md and docs/MCP-TOOLS.md.
 //
 // This is a deliberately simple text scraper (no TS parser dependency): it reads
-// src/api.ts route registrations and src/mcp.ts server.tool() definitions. If a
-// route/tool stops showing up, the registration shape changed — re-check here.
+// src/api.ts / src/routes/* route registrations and src/mcp.ts server.tool()
+// definitions. If a route/tool stops showing up, the registration shape changed
+// — re-check here.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -13,7 +14,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
 // `--check` (CI): regenerate in-memory and compare to what's committed instead of
-// writing. Fails loudly if a contributor changed src/api.ts or src/mcp.ts without
+// writing. Fails loudly if a contributor changed REST or MCP source without
 // running `npm run docs:index`, so the reference indexes can't silently drift.
 const CHECK = process.argv.includes("--check");
 const stale = [];
@@ -31,12 +32,12 @@ function emit(relPath, content) {
   writeFileSync(join(root, relPath), content);
 }
 
-// ---- API routes (src/api.ts) ----
+// ---- API routes (src/api.ts + mounted route modules) ----
 // Line-by-line so we can attach the immediately-preceding // comment block as a
-// one-line description. Routes are `api.<method>("/path", …)`.
-function parseApiRoutes(src) {
+// one-line description. Routes are `<router>.<method>("/path", …)`.
+function parseApiRoutes(src, { receiver = "api", prefix = "" } = {}) {
   const lines = src.split("\n");
-  const routeRe = /\bapi\.(get|post|put|delete|patch)\(\s*["'`]([^"'`]+)["'`]/;
+  const routeRe = new RegExp(`\\b${receiver}\\.(get|post|put|delete|patch)\\(\\s*["'\`]([^"'\`]+)["'\`]`);
   const out = [];
   let comment = [];
   for (const line of lines) {
@@ -48,7 +49,7 @@ function parseApiRoutes(src) {
     }
     const m = routeRe.exec(line);
     if (m) {
-      out.push({ method: m[1].toUpperCase(), path: m[2], desc: comment.join(" ").trim() });
+      out.push({ method: m[1].toUpperCase(), path: `${prefix}${m[2] === "/" ? "" : m[2]}`, desc: comment.join(" ").trim() });
       comment = [];
       continue;
     }
@@ -74,7 +75,10 @@ function parseMcpTools(src) {
 const esc = (s) => String(s ?? "").replace(/\|/g, "\\|");
 
 // ---- API.md ----
-const routes = parseApiRoutes(read("src/api.ts"));
+const routes = [
+  ...parseApiRoutes(read("src/api.ts")),
+  ...parseApiRoutes(read("src/routes/health-docs.ts"), { receiver: "healthDocsRouter", prefix: "/health-docs" }),
+];
 const groups = new Map();
 for (const r of routes) {
   const seg = r.path.split("/").filter(Boolean)[0] || "(root)";
@@ -86,7 +90,7 @@ for (const r of routes) {
 const sortedKeys = [...groups.keys()].sort();
 let api = `# Cairn REST API index
 
-> Generated from \`src/api.ts\` by \`scripts/gen-docs.mjs\` — run \`npm run docs:index\` to refresh. Do not edit by hand.
+> Generated from \`src/api.ts\` and \`src/routes/*\` by \`scripts/gen-docs.mjs\` — run \`npm run docs:index\` to refresh. Do not edit by hand.
 
 All routes are mounted under **\`/api\`** (e.g. \`GET /api/plan\`). When \`CAIRN_AUTH_TOKEN\`
 is set, every route except \`GET /api/health\` requires the token (\`Authorization: Bearer …\`,
@@ -126,7 +130,7 @@ emit("docs/MCP-TOOLS.md", mcp);
 if (CHECK) {
   if (stale.length) {
     console.error(`✗ generated docs are stale: ${stale.join(", ")}`);
-    console.error("  src/api.ts or src/mcp.ts changed — run `npm run docs:index` and commit the result.");
+    console.error("  REST or MCP source changed — run `npm run docs:index` and commit the result.");
     process.exit(1);
   }
   console.log(`✓ generated docs in sync (${routes.length} routes, ${tools.length} tools)`);

@@ -29,6 +29,15 @@ test("createAgentJob opens a queued job and round-trips its fields", () => {
   assert.equal(repo.getAgentJob(j.id).kind, "session_suggest");
 });
 
+test("createAgentJob rejects unknown kinds before persisting", () => {
+  assert.throws(
+    () => repo.createAgentJob({ kind: "bogus_job_kind" }),
+    /unknown job kind/i,
+  );
+  const rows = db.prepare(`SELECT COUNT(*) c FROM agent_jobs`).get();
+  assert.equal(rows.c, 0);
+});
+
 test("listActiveAgentJobs returns queued+running oldest-first, excludes terminal", () => {
   const a = repo.createAgentJob({ kind: "meal_plan" });
   const b = repo.createAgentJob({ kind: "recipe" });

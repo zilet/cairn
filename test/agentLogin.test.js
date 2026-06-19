@@ -9,9 +9,21 @@
 // These are pure/offline (no CLI spawn, no network) — deterministic.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import "./_seed.js"; // ensures DATA_DIR/DB_PATH-backed db is initialized for the dist imports
-import { resolveLoginArgv, buildPtyInvocation, ptyInvocationFor, loginSessionActive } from "../dist/agentLogin.js";
-import { parseModelsOutput, parseDefaultModel, parseTomlModel, invalidateAgentConfigured, loadAgents } from "../dist/agents.js";
+import { resolveLoginArgv, buildPtyInvocation, ptyInvocationFor, loginSessionActive, buildLoginSpawnOptions } from "../dist/agentLogin.js";
+import { AGENT_WORKSPACES_DIRNAME } from "../dist/agentExecution.js";
+import {
+  AGENT_ENV_DENYLIST,
+  parseModelsOutput,
+  parseDefaultModel,
+  parseTomlModel,
+  invalidateAgentConfigured,
+  loadAgents,
+  sanitizeAgentEnv,
+} from "../dist/agents.js";
 
 test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("claude"), ["claude", "auth", "login"]);
@@ -80,6 +92,60 @@ test("buildPtyInvocation wraps the login argv in a real PTY (no native module)",
     assert.equal(inv.args[0], "-c");
     // the server-chosen argv is JSON-encoded into the python list literal
     assert.match(inv.args[1], /pty\.spawn\(\["claude","auth","login"\]\)/);
+  }
+});
+
+test("sanitizeAgentEnv strips Cairn-owned secrets while preserving login-critical env", () => {
+  const source = {
+    CAIRN_AUTH_TOKEN: "server-token",
+    GARMIN_PASSWORD: "garmin-secret",
+    GARMIN_USERNAME: "garmin-user",
+    GEMINI_API_KEY: "gemini-secret",
+    GOOGLE_AI_KEY: "google-secret",
+    DB_PATH: "/private/db.sqlite",
+    DATA_DIR: "/private/data",
+    GARMIN_TOKEN_DIR: "/private/garmin",
+    HOME: "/home/app",
+    PATH: "/usr/bin",
+    LANG: "C.UTF-8",
+    XAI_API_KEY: "agent-owned-key",
+  };
+
+  const env = sanitizeAgentEnv(source);
+  for (const key of AGENT_ENV_DENYLIST) assert.equal(env[key], undefined, `${key} should be stripped`);
+  assert.equal(env.HOME, "/home/app");
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.LANG, "C.UTF-8");
+  assert.equal(env.XAI_API_KEY, "agent-owned-key");
+
+  const restored = sanitizeAgentEnv(source, ["GEMINI_API_KEY"]);
+  assert.equal(restored.GEMINI_API_KEY, "gemini-secret");
+});
+
+test("login spawn options use sanitized env and an isolated workspace", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-login-cwd-"));
+  try {
+    const opts = buildLoginSpawnOptions({
+      ...process.env,
+      DATA_DIR: dataDir,
+      DB_PATH: path.join(dataDir, "cairn.db"),
+      CAIRN_AUTH_TOKEN: "server-token",
+      GARMIN_PASSWORD: "garmin-secret",
+      HOME: "/home/app",
+      PATH: "/usr/bin",
+    });
+
+    assert.ok(opts.cwd, "login cwd should be set");
+    assert.notEqual(fs.realpathSync(opts.cwd), fs.realpathSync(dataDir), "login should not run directly in DATA_DIR");
+    assert.equal(fs.realpathSync(opts.cwd), fs.realpathSync(path.join(dataDir, AGENT_WORKSPACES_DIRNAME, "login")));
+    assert.equal(opts.env.CAIRN_AUTH_TOKEN, undefined);
+    assert.equal(opts.env.GARMIN_PASSWORD, undefined);
+    assert.equal(opts.env.DB_PATH, undefined);
+    assert.equal(opts.env.DATA_DIR, undefined);
+    assert.equal(opts.env.HOME, "/home/app");
+    assert.equal(opts.env.PATH, "/usr/bin");
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
