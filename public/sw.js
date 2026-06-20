@@ -1,4 +1,9 @@
-const CACHE = "cairn-v100";
+const CACHE = "cairn-v101";
+// Generated artwork lives in its own cache: the images are content-keyed and
+// immutable on the server, so they stay valid across app deploys. Keeping them
+// out of the versioned CACHE (and off the activate-cleanup list) means a deploy
+// never re-downloads them — a slick, instant paint on every open.
+const ART_CACHE = "cairn-art-v1";
 const CORE_ASSETS = [
   "/", "/index.html", "/styles.css",
   "/js/01-core.js", "/js/02-ui.js", "/js/03-today.js", "/js/04-capture.js",
@@ -29,13 +34,38 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys()
-      .then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      // Drop stale app caches, but PRESERVE the art cache — its images are
+      // immutable and expensive to regenerate, so they outlive a version bump.
+      .then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== ART_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
+
+// Generated art: cache-first in the persistent ART_CACHE. The first successful
+// load is stored; every later render/reload paints instantly from Cache Storage
+// (and works offline). Only 200s are cached — a 204 (not generated yet) and any
+// retry (&r=1) stay uncached so they re-fetch and pick up the image once it lands.
+async function artCacheFirst(request) {
+  const cache = await caches.open(ART_CACHE);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  try {
+    const res = await fetch(request);
+    if (res && res.status === 200) cache.put(request, res.clone()).catch(() => {});
+    return res;
+  } catch {
+    // Offline + uncached → surface an error so the <img> onerror keeps the SVG.
+    return Response.error();
+  }
+}
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  // Never cache API or MCP — always hit network.
+  if (e.request.method === "GET" && url.pathname === "/api/art") {
+    e.respondWith(artCacheFirst(e.request));
+    return;
+  }
+  // Never cache the rest of API or MCP — always hit network.
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/mcp")) return;
   e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });

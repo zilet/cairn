@@ -206,6 +206,9 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   transition:opacity var(--dur-3) ease,transform var(--dur-3) var(--ease);
 }
 .artimg .artimg-photo.on{opacity:1;transform:scale(1)}
+/* already-generated art (known ready) paints straight over the SVG — no fade,
+   no scale — so a re-render or reload never flashes the wire placeholder */
+.artimg .artimg-photo.instant{opacity:1;transform:none;transition:none}
 
 /* -------------------------------------------------------------------
    06 · Stat strip (Today)

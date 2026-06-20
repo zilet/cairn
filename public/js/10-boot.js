@@ -913,6 +913,10 @@ const _landingTab = new URLSearchParams(location.search).get("tab");
 primeDiscipline();
 activateTab(_landingTab);
 maybeOnboard();
+// Refresh art readiness from the server's on-disk manifest so a cold client (or a
+// background-generated image) renders generated art instantly on the next render.
+// The first paint already used the localStorage-hydrated set; this is the backstop.
+primeArtManifest();
 // Re-attach any agent job that was running when the app last closed. The first
 // paint is async, so defer a tick; jobReconnect rebuilds each running job's host
 // via its registered reconnector.

@@ -275,26 +275,25 @@ function pwaQuery(q: any): string {
   return String(q ?? "").trim().slice(0, 120);
 }
 
-// Pre-generate every image the PWA is going to ask for, so tiles render
-// immediately instead of 204-then-generate on first view. Each query goes
-// through requestArt(), which already handles unavailability (no key /
-// art_enabled off / known-failed), cache hits, and in-flight dedup.
-export function warmArt(): { queued: number; skipped: number } {
-  let queued = 0;
-  let skipped = 0;
-  const seen = new Set<string>(); // dedupe within this sweep, by cache key
-  const want = (kind: ArtKind, text: string) => {
+// Every (kind, query) pair the PWA will request art for — the single source of
+// truth shared by warmArt() (queue generation) and artManifest() (report which
+// are already generated). Queries are built EXACTLY like the PWA (same truncation
+// and fallback chains) so the cache keys — and the "kind|q" tokens the client
+// computes — line up. Deduped on the raw "kind|q" token (what the client keys on).
+export function enumeratePwaArt(): { kind: ArtKind; q: string }[] {
+  const out: { kind: ArtKind; q: string }[] = [];
+  const seen = new Set<string>();
+  const push = (kind: ArtKind, text: string) => {
     const q = pwaQuery(text);
     if (!q) return;
-    const key = cacheKey(kind, q);
-    if (seen.has(key)) { skipped++; return; }
-    seen.add(key);
-    if (requestArt(kind, q)) queued++;
-    else skipped++;
+    const token = `${kind}|${q}`;
+    if (seen.has(token)) return;
+    seen.add(token);
+    out.push({ kind, q });
   };
 
   // a) exercises — the PWA uses the bare exercise name as the query.
-  for (const ex of listExercises() as any[]) want("exercise", ex?.name ?? "");
+  for (const ex of listExercises() as any[]) push("exercise", ex?.name ?? "");
 
   // b) meal plans — most recent non-discarded plan + any current draft.
   //    Query built exactly like the PWA (public/js/) mealRowHtml.
@@ -307,7 +306,7 @@ export function warmArt(): { queued: number; skipped: number } {
     for (const d of Array.isArray(plan?.parsed?.days) ? plan.parsed.days : []) {
       for (const m of Array.isArray(d?.meals) ? d.meals : []) {
         const items = Array.isArray(m?.items) ? m.items.join(", ") : (m?.items || "");
-        want("food", `${m?.name || m?.meal || ""} ${items}`.trim());
+        push("food", `${m?.name || m?.meal || ""} ${items}`.trim());
       }
     }
   }
@@ -315,13 +314,39 @@ export function warmArt(): { queued: number; skipped: number } {
   // c) food notes — same fallback chain as the PWA (public/js/) noteEntryInner.
   for (const n of listFoodNotes(30) as any[]) {
     const pj = n?.parsed;
-    want("food", n?.raw_text || n?.raw || n?.raw_output || (pj && (pj.summary || pj.items)) || "");
+    push("food", n?.raw_text || n?.raw || n?.raw_output || (pj && (pj.summary || pj.items)) || "");
   }
 
   // d) activities — distinct types, mapped through the PWA's phrase map.
-  for (const a of listActivities(50) as any[]) want("activity", actArtText(a));
+  for (const a of listActivities(50) as any[]) push("activity", actArtText(a));
 
+  return out;
+}
+
+// Pre-generate every image the PWA is going to ask for, so tiles render
+// immediately instead of 204-then-generate on first view. Each query goes
+// through requestArt(), which already handles unavailability (no key /
+// art_enabled off / known-failed), cache hits, and in-flight dedup.
+export function warmArt(): { queued: number; skipped: number } {
+  let queued = 0;
+  let skipped = 0;
+  for (const { kind, q } of enumeratePwaArt()) {
+    if (requestArt(kind, q)) queued++;
+    else skipped++;
+  }
   return { queued, skipped };
+}
+
+// Which of the PWA's art queries already have a generated image on disk, returned
+// as the exact "kind|q" tokens the client computes. The PWA primes its readiness
+// set from this so generated art renders immediately — eager, no SVG-placeholder
+// flash — on a cold client too. Cheap: an fs.existsSync (+ alias lookup) per entry.
+export function artManifest(): { ready: string[]; enabled: boolean } {
+  const ready: string[] = [];
+  for (const { kind, q } of enumeratePwaArt()) {
+    if (cachedArtPath(kind, q)) ready.push(`${kind}|${q}`);
+  }
+  return { ready, enabled: !!getSettings().art_enabled };
 }
 
 async function generate(job: Job): Promise<void> {

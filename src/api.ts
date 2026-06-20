@@ -33,7 +33,7 @@ import {
   agentInfoOp,
   agentModelsOp,
 } from "./coachOps.js";
-import { isArtKind, cachedArtPath, requestArt, warmArt } from "./art.js";
+import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
 import { authEnabled } from "./auth.js";
 import type { AgentJobKind } from "./agentJobKinds.js";
@@ -1380,6 +1380,15 @@ api.get("/art", (req, res) => {
 api.post("/art/warm", (_req, res) => {
   const { queued, skipped } = warmArt();
   res.json({ ok: true, queued, skipped });
+});
+
+// Which PWA art queries already have a cached image, as "kind|q" tokens. The PWA
+// primes its readiness set from this so generated art paints immediately (no SVG
+// placeholder flash) even on a cold client. Not cached — readiness changes as the
+// background queue produces images.
+api.get("/art/manifest", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json(artManifest());
 });
 
 // Artwork spend telemetry: estimated Gemini cost since art was last enabled,
