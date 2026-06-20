@@ -746,8 +746,29 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
 //             (no token deltas), so streaming buys nothing — codex stays one-shot.
 //   - agy     has no streaming flag at all — one-shot.
 // streamDelta maps ONE line to the assistant text it carries, or null for any non-
-// text event. It is deliberately CONSERVATIVE: an unrecognized shape yields null
-// (empty accumulation → the caller falls back to the one-shot path), never garbage.
+// text event. streamProgress maps reasoning/tool status events to a short,
+// sanitized progress label (never raw chain-of-thought). Both are deliberately
+// CONSERVATIVE: an unrecognized shape yields null (empty accumulation → the caller
+// falls back to the one-shot path), never garbage.
+export function progressLabelFromText(text: string): string | null {
+  const s = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  const lower = s.toLowerCase();
+  if (/(photo|image|plate|meal|food|dish|macros?|calorie|protein|nutrition)/.test(lower)) {
+    return "Reading the food context…";
+  }
+  if (/(sqlite|database|table|schema|query|file|directory|repo|workspace|\/app\b|\/data\b|cairn\.db|chat_messages|chat_turns|profile|plan_items)/.test(lower)) {
+    return "Checking your Cairn data…";
+  }
+  if (/(training|workout|lift|program|plan|session|run|ride|recovery|sleep|hrv|garmin)/.test(lower)) {
+    return "Reading training context…";
+  }
+  if (/(lab|marker|blood|health|ferritin|apob|apo b|vitamin|thyroid|ldl|hdl|triglyceride)/.test(lower)) {
+    return "Reading health context…";
+  }
+  return "Thinking through the context…";
+}
+
 export function streamDelta(format: string, line: string): string | null {
   const s = line.trim();
   if (!s) return null;
@@ -775,6 +796,34 @@ export function streamDelta(format: string, line: string): string | null {
   return null;
 }
 
+export function streamProgress(format: string, line: string): string | null {
+  const s = line.trim();
+  if (!s) return null;
+  let obj: any;
+  try { obj = JSON.parse(s); } catch { return null; }
+  if (format === "claude") {
+    const ev = obj?.type === "stream_event" ? obj.event : null;
+    const delta = ev?.type === "content_block_delta" ? ev.delta : null;
+    if (delta?.type === "thinking_delta" && typeof delta.thinking === "string") {
+      return progressLabelFromText(delta.thinking);
+    }
+    const block = ev?.type === "content_block_start" ? ev.content_block : null;
+    if (block?.type === "tool_use") return "Checking your Cairn data…";
+    return null;
+  }
+  if (format === "grok") {
+    if (obj?.type === "thought" && typeof obj.data === "string") return progressLabelFromText(obj.data);
+    const u = obj?.params?.update ?? obj?.update;
+    if (u && /thought|reason/i.test(String(u.sessionUpdate || ""))) {
+      const c = u.content;
+      if (typeof c === "string") return progressLabelFromText(c);
+      if (c && typeof c.text === "string") return progressLabelFromText(c.text);
+    }
+    return null;
+  }
+  return null;
+}
+
 export function agentSupportsStream(name: string): boolean {
   const def = loadAgents()[name];
   return !!(def && def.stream && Array.isArray(def.stream.args) && def.stream.args.length);
@@ -782,6 +831,7 @@ export function agentSupportsStream(name: string): boolean {
 
 export interface StreamRunOpts extends RunOpts {
   onDelta?: (text: string) => void; // called with each assistant text chunk as it arrives
+  onProgress?: (label: string) => void; // sanitized reasoning/tool progress, never raw thought
 }
 
 // Streaming sibling of runAgent for the chat path. Spawns the CLI in its headless
@@ -825,6 +875,10 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
     const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
 
     const consume = (line: string) => {
+      const progress = streamProgress(format, line);
+      if (progress) {
+        try { opts.onProgress?.(progress); } catch { /* a bad consumer must never kill the stream */ }
+      }
       const piece = streamDelta(format, line);
       if (piece == null || text.length >= MAX_OUT) return;
       text += piece;

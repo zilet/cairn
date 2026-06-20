@@ -7,7 +7,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseChatReply, CHAT_ACTION_SENTINEL, CHAT_REPLY_SENTINEL } from "../dist/prompt.js";
-import { streamDelta } from "../dist/agents.js";
+import { streamDelta, streamProgress } from "../dist/agents.js";
+import { createChatStreamFilter } from "../dist/chatStreamFilter.js";
 
 test("parseChatReply: prose before the sentinel is the reply; JSON after is the actions", () => {
   const out = `Nice work — your squat's moving. I'd hold volume steady this week.
@@ -94,6 +95,14 @@ test("streamDelta(claude): extracts text_delta chunks, ignores non-text events",
   assert.equal(streamDelta("claude", `{"type":"result","subtype":"success","result":"hello"}`), null);
 });
 
+test("streamProgress(claude): turns reasoning/tool events into sanitized progress", () => {
+  const thinking = `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"I should query the chat_turns table before replying"}}}`;
+  assert.equal(streamProgress("claude", thinking), "Checking your Cairn data…");
+  const tool = `{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Read"}}}`;
+  assert.equal(streamProgress("claude", tool), "Checking your Cairn data…");
+  assert.equal(streamProgress("claude", `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}`), null);
+});
+
 test("streamDelta(grok): extracts {type:text} chunks, ignores thought/end (verified live, 0.2.51)", () => {
   assert.equal(streamDelta("grok", `{"type":"text","data":"on pace"}`), "on pace");
   // reasoning deltas and the terminal event are not assistant text
@@ -103,9 +112,31 @@ test("streamDelta(grok): extracts {type:text} chunks, ignores thought/end (verif
   assert.equal(streamDelta("grok", `{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"hi"}}}}`), "hi");
 });
 
+test("streamProgress(grok): shows progress without leaking raw thoughts", () => {
+  const progress = streamProgress("grok", `{"type":"thought","data":"the user is asking about a private chain of reasoning"}`);
+  assert.equal(progress, "Thinking through the context…");
+  assert.ok(!progress.includes("private chain"));
+  assert.equal(streamProgress("grok", `{"type":"text","data":"on pace"}`), null);
+});
+
 test("streamDelta: junk / unknown shapes yield null, never garbage", () => {
   assert.equal(streamDelta("claude", "not json at all"), null);
   assert.equal(streamDelta("claude", ""), null);
   assert.equal(streamDelta("grok", `{"unrelated":true}`), null);
   assert.equal(streamDelta("codex", `{"type":"item.completed","item":{"type":"agent_message","text":"x"}}`), null); // codex is one-shot, not a stream format
+});
+
+test("chat stream filter holds an undecided leading narration line until classified", () => {
+  const events = [];
+  const stream = createChatStreamFilter((e) => events.push(e));
+  stream.push("I will query the chat_turns table before");
+  assert.deepEqual(events.filter((e) => e.type === "delta"), [], "partial tool narration must not flash as reply text");
+  assert.equal(events.find((e) => e.type === "progress")?.text, "Checking your Cairn data…");
+
+  stream.push(` answering.\n${CHAT_REPLY_SENTINEL}\n**Ready**\n- go`);
+  stream.finish();
+
+  const text = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(text.trim(), "**Ready**\n- go");
+  assert.doesNotMatch(text, /query the chat_turns table/);
 });

@@ -1041,7 +1041,7 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 /* a turn rendering its reply token-by-token (true headless streaming) */
 .bubble.assistant.streaming{align-self:flex-start;background:var(--card);box-shadow:var(--shadow-sm);
   border-bottom-left-radius:5px}
-.bubble.streaming .stream-text{white-space:pre-wrap}
+.bubble.streaming .stream-text{white-space:normal}
 .bubble.streaming .turn-stop{display:inline-block;margin:6px 0 0}
 /* blinking caret trailing the streamed text */
 .stream-caret{display:inline-block;width:2px;height:1.02em;margin-left:1px;border-radius:1px;

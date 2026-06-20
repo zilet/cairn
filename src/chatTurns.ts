@@ -1,7 +1,8 @@
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
-import { buildChatPrompt, parseChatReply, CHAT_ACTION_SENTINEL, CHAT_REPLY_SENTINEL } from "./prompt.js";
+import { buildChatPrompt, parseChatReply } from "./prompt.js";
 import { runAgent, runAgentStreaming, agentSupportsStream, INTERACTIVE_TIMEOUT_MS } from "./agents.js";
+import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 
 // Background, in-process chat-turn engine — the durable counterpart to the
 // enrichment queue. A chat turn is no longer a blocking request/response: the
@@ -24,8 +25,7 @@ import { runAgent, runAgentStreaming, agentSupportsStream, INTERACTIVE_TIMEOUT_M
 // for live pushes.
 export type TurnEvent =
   | { type: "phase"; turn: any }
-  | { type: "delta"; text: string }   // a live chunk of the streaming reply prose
-  | { type: "reset" }                  // streaming attempt fell back — clear the partial bubble
+  | LiveReplyEvent
   | { type: "done"; turn: any; message: any }
   | { type: "error"; turn: any; message: any }
   | { type: "canceled"; turn: any };
@@ -137,43 +137,15 @@ async function runChatCompletion(
   if (agentSupportsStream(order[0])) {
     const name = order[0];
     const started = Date.now();
-    // Emit only the prose: hold back a possible partial sentinel mid-stream, and
-    // stop the moment the ===CAIRN_ACTIONS=== block begins (that JSON is internal).
-    let acc = "";
-    let emitted = 0;
-    // Reply-marker aware: stream live from the start, but the moment the reply-start
-    // marker arrives, clear whatever tool-step narration streamed before it (a `reset`)
-    // and continue from the clean athlete-facing reply. Always holds back a forming
-    // sentinel at the tail so a half-marker never flashes. The final reply is re-parsed
-    // (and narration-stripped) on `done` regardless, so the persisted message is clean.
-    let replyAt = -1;
-    const TAIL = Math.max(CHAT_ACTION_SENTINEL.length, CHAT_REPLY_SENTINEL.length) - 1;
-    const flush = (final: boolean) => {
-      if (replyAt === -1) {
-        const r = acc.indexOf(CHAT_REPLY_SENTINEL);
-        if (r !== -1) {
-          replyAt = r + CHAT_REPLY_SENTINEL.length;
-          if (emitted > 0) emit(id, { type: "reset" }); // wipe any narration shown before the marker
-          emitted = replyAt;
-        }
-      }
-      const cut = acc.indexOf(CHAT_ACTION_SENTINEL, replyAt === -1 ? 0 : replyAt);
-      let safeEnd: number;
-      if (cut !== -1) safeEnd = cut;
-      else if (final) safeEnd = acc.length;
-      else safeEnd = Math.max(emitted, acc.length - TAIL);
-      if (safeEnd > emitted) {
-        emit(id, { type: "delta", text: acc.slice(emitted, safeEnd) });
-        emitted = safeEnd;
-      }
-    };
+    const stream = createChatStreamFilter((e) => emit(id, e));
     try {
       const res = await runAgentStreaming(name, prompt, {
         signal,
         timeoutMs: INTERACTIVE_TIMEOUT_MS,
-        onDelta: (piece) => { acc += piece; flush(false); },
+        onProgress: stream.progress,
+        onDelta: stream.push,
       });
-      flush(true);
+      stream.finish();
       const raw = (res.raw ?? "").toString();
       try { repo.recordAgentRun({ op: "chat", agent: name, ok: !!raw.trim(), parsed: !!raw.trim(), latency_ms: Date.now() - started, tried_json: false }); } catch { /* telemetry never breaks the loop */ }
       if (raw.trim()) return { agent: name, raw };
@@ -182,8 +154,10 @@ async function runChatCompletion(
       try { repo.recordAgentRun({ op: "chat", agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: false }); } catch { /* ignore */ }
       // streaming transport failed — fall through to the one-shot rotation
     }
-    // Nothing usable streamed: clear any partial bubble before the one-shot retry.
-    emit(id, { type: "reset" });
+    // Nothing usable streamed: clear any partial bubble before the one-shot retry,
+    // then caption the retry so the reset doesn't wipe the visible progress line.
+    stream.reset();
+    stream.progress("Trying another route…");
   }
 
   // ---- one-shot rotation (text-based success criterion) ----
@@ -192,6 +166,7 @@ async function runChatCompletion(
     if (signal.aborted) throw new Error("canceled");
     const started = Date.now();
     try {
+      emit(id, { type: "progress", text: "Asking the coach…" });
       const res = await runAgent(name, prompt, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
       const raw = (res.raw ?? "").toString();
       const ok = !!raw.trim();

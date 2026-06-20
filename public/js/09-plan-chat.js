@@ -1393,6 +1393,8 @@ let chatStream = null;        // the single open EventSource
 let chatStreamId = null;      // the turn id it's streaming
 const chatPendingBubbles = new Map(); // turnId -> its pending/streaming assistant bubble
 const chatStreamText = new Map();     // turnId -> accumulated streamed reply text (live tokens)
+const chatStreamRenderQueued = new Set(); // turnId -> markdown render queued for next frame
+const chatStreamRenderVersion = new Map(); // turnId -> increments whenever a reset cancels queued render work
 const chatDoneTurns = new Set();      // turn ids already finalized — keeps finalize idempotent
 
 // Honest, server-driven phase caption (NOT a faked token stream / timer).
@@ -1426,10 +1428,10 @@ function setPendingCaption(el, txt) {
   if (!reducedMotion()) { cap.style.animation = "none"; void cap.offsetWidth; cap.style.animation = ""; }
 }
 
-// First live token: convert a pending (typing-dots) bubble into a streaming text
-// bubble — a growing text node + a blinking caret + the Stop control. Built once;
-// later tokens just update the text node (cheap — markdown is rendered only at
-// finalize). Returns the bubble, or null if it's gone (navigated away).
+// First live token: convert a pending (typing-dots) bubble into a streaming
+// markdown bubble + the Stop control. Built once; later tokens schedule a single
+// markdown render for the next frame. Returns the bubble, or null if it's gone
+// (navigated away).
 function ensureStreamingBubble(id) {
   const el = chatPendingBubbles.get(id);
   if (!el || !el.isConnected) return null;
@@ -1438,11 +1440,37 @@ function ensureStreamingBubble(id) {
     el.removeAttribute("aria-busy");
     el.classList.add("streaming");
     el.innerHTML =
-      `<div class="bubble-text"><span class="stream-text"></span><span class="stream-caret" aria-hidden="true"></span></div>` +
+      `<div class="bubble-text md stream-text"></div>` +
       `<button class="turn-stop" type="button" aria-label="Stop this turn">Stop</button>`;
     el.querySelector(".turn-stop").addEventListener("click", () => cancelTurn(id));
   }
   return el;
+}
+
+function renderStreamMarkdown(id) {
+  const el = chatPendingBubbles.get(id);
+  if (!el || !el.isConnected || !el.classList.contains("streaming") || !chatStreamText.has(id)) return;
+  const body = el.querySelector(".stream-text");
+  if (!body) return;
+  const text = chatStreamText.get(id) || "";
+  body.innerHTML = mdToHtml(text);
+  const caret = document.createElement("span");
+  caret.className = "stream-caret";
+  caret.setAttribute("aria-hidden", "true");
+  const last = body.lastElementChild;
+  const inlineish = last && /^(P|H3|H4|H5|H6|LI|BLOCKQUOTE)$/i.test(last.tagName);
+  (inlineish ? last : body).appendChild(caret);
+}
+
+function scheduleStreamMarkdown(id) {
+  if (chatStreamRenderQueued.has(id)) return;
+  const version = chatStreamRenderVersion.get(id) || 0;
+  chatStreamRenderQueued.add(id);
+  requestAnimationFrame(() => {
+    chatStreamRenderQueued.delete(id);
+    if ((chatStreamRenderVersion.get(id) || 0) !== version) return;
+    renderStreamMarkdown(id);
+  });
 }
 
 function appendStreamDelta(id, text) {
@@ -1451,17 +1479,25 @@ function appendStreamDelta(id, text) {
   if (!el) return;
   const next = (chatStreamText.get(id) || "") + text;
   chatStreamText.set(id, next);
-  const span = el.querySelector(".stream-text");
-  if (span) span.textContent = next;
+  scheduleStreamMarkdown(id);
   // Keep pinned to the latest only if the reader is already near the bottom.
   const log = $("#chatlog");
   if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 200) log.scrollTop = log.scrollHeight;
+}
+
+function setTurnProgress(id, text) {
+  const el = chatPendingBubbles.get(id);
+  if (!el || !el.isConnected || el.classList.contains("streaming")) return;
+  const clean = String(text || "").trim();
+  if (clean) setPendingCaption(el, clean);
 }
 
 // A streaming attempt fell back to one-shot: drop the partial text and return the
 // bubble to its calm "Thinking…" state until the final reply lands.
 function resetStreamingBubble(id) {
   chatStreamText.delete(id);
+  chatStreamRenderQueued.delete(id);
+  chatStreamRenderVersion.set(id, (chatStreamRenderVersion.get(id) || 0) + 1);
   const el = chatPendingBubbles.get(id);
   if (!el || !el.isConnected) return;
   el.classList.remove("streaming");
@@ -1542,6 +1578,8 @@ function chatTeardownMonitor() {
   closeChatStream();
   chatPendingBubbles.clear();
   chatStreamText.clear();
+  chatStreamRenderQueued.clear();
+  chatStreamRenderVersion.clear();
   chatDoneTurns.clear();
 }
 
@@ -1580,6 +1618,7 @@ function chatOpenStream(id) {
     } else { phase(d.turn || d); }
   });
   es.addEventListener("phase", (e) => { if (guard()) return; phase(JSON.parse(e.data).turn); });
+  es.addEventListener("progress", (e) => { if (guard()) return; setTurnProgress(id, JSON.parse(e.data).text); });
   es.addEventListener("delta", (e) => { if (guard()) return; appendStreamDelta(id, JSON.parse(e.data).text); });
   es.addEventListener("reset", () => { if (guard()) return; resetStreamingBubble(id); });
   es.addEventListener("done", (e) => { if (guard()) return; const d = JSON.parse(e.data); finalizeTurn(d.turn, d.message); terminal(); });
@@ -1759,4 +1798,3 @@ function openChatHistory() {
 
   renderSessions();
 }
-
