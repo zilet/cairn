@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**168 routes** across 61 groups.
+**169 routes** across 61 groups.
 
 ## `/activities`
 
@@ -57,6 +57,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/art` | Cache hit → the PNG, immutable-cached. Miss → 204 immediately and a background generation is queued (when a Gemini key is set and art_enabled); the client simply retries later. No key / disabled / known-failed also → 204. |
+| GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. The PWA primes its readiness set from this so generated art paints immediately (no SVG placeholder flash) even on a cold client. Not cached — readiness changes as the background queue produces images. |
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. |
 | POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for (exercises, current meal plans, recent food notes/activities). Safe no-op when generation is unavailable — requestArt handles that per query. |
 

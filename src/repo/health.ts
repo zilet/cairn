@@ -1,5 +1,6 @@
 import { db, todayISO } from "../db.js";
 import { listExercises } from "./exercises.js";
+import { normalizeMarkerReading, seriesUnitsCompatible } from "./lab-units.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { type OptimalZone, applyReviewDirectives, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
@@ -33,7 +34,7 @@ export function estimateMarkerCandidates(text: string): number {
     // A value line: starts with a number, sign, comparator or decimal point…
     if (/^[<>≤≥=]?\s*[+-]?(\d|\.\d)/.test(line)) { n++; continue; }
     // …or is a short qualitative result (not a flag word, not a sentence).
-    if (line.length <= 24 && QUALITATIVE_RESULT.test(line)) { n++; continue; }
+    if (line.length <= 24 && QUALITATIVE_RESULT.test(line)) n++;
   }
   return n;
 }
@@ -333,6 +334,11 @@ export function getMarkerHistory() {
     value: number | string;
     flag: string | null;
     unit: string | null;
+    source_value?: number | string | null;
+    source_unit?: string | null;
+    unit_converted?: boolean;
+    unit_mismatch?: boolean;
+    expected_unit?: string | null;
     name: string;
     doc_id: number;
     kind: string;
@@ -348,21 +354,30 @@ export function getMarkerHistory() {
       if (!m || typeof m !== "object") continue;
       const rawName = String(m.name ?? "").replace(/\s+/g, " ").trim();
       if (!rawName) continue;
-      // A reading is usable when the value is a finite number or a non-empty
-      // string (e.g. "negative"); anything else is skipped, and a marker with
-      // no usable reading at all never appears in the output.
-      const value: number | string | null =
-        typeof m.value === "number" && Number.isFinite(m.value)
-          ? m.value
-          : m.value !== null && m.value !== undefined && String(m.value).trim()
-            ? String(m.value).trim()
-            : null;
-      if (value === null) continue;
+      // A reading is usable when the value is a finite number, a string with a
+      // parseable lab number, or a non-empty qualitative result (e.g. "negative").
+      // Recognized markers are normalized to the unit their optimal band expects
+      // here, while source_value/source_unit keep the lab transcription inspectable.
       const key = rawName.toLowerCase();
       const flag = ["low", "normal", "high"].includes(m.flag) ? m.flag : null;
-      const unit = m.unit !== null && m.unit !== undefined && String(m.unit).trim() ? String(m.unit).trim() : null;
+      const sourceUnit = m.unit !== null && m.unit !== undefined && String(m.unit).trim() ? String(m.unit).trim() : null;
+      const normalized = normalizeMarkerReading(rawName, m.value, sourceUnit, matchOptimalZone(rawName));
+      if (!normalized) continue;
       if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key)!.push({ date, value, flag, unit, name: rawName, doc_id: d.id, kind: d.kind ?? "other" });
+      byKey.get(key)!.push({
+        date,
+        value: normalized.value,
+        flag,
+        unit: normalized.unit,
+        source_value: normalized.source_value,
+        source_unit: normalized.source_unit,
+        unit_converted: normalized.unit_converted,
+        unit_mismatch: normalized.unit_mismatch,
+        expected_unit: normalized.expected_unit,
+        name: rawName,
+        doc_id: d.id,
+        kind: d.kind ?? "other",
+      });
     }
   }
 
@@ -374,17 +389,47 @@ export function getMarkerHistory() {
     for (let i = readings.length - 1; i >= 0; i--) {
       if (readings[i].unit) { unit = readings[i].unit; break; }
     }
+    const sameUnitReadings = readings.filter((r) => seriesUnitsCompatible(r.unit, unit));
+    const toPublicReading = (r: Reading, includeKind = false) => {
+      const out: any = { value: r.value, date: r.date };
+      if (includeKind) {
+        out.flag = r.flag;
+        out.doc_id = r.doc_id;
+        out.kind = r.kind;
+      }
+      if (r.unit_converted) {
+        out.source_value = r.source_value ?? null;
+        out.source_unit = r.source_unit ?? null;
+        out.unit_converted = true;
+      }
+      if (r.unit_mismatch) {
+        out.source_value = r.source_value ?? r.value;
+        out.source_unit = r.source_unit ?? r.unit ?? null;
+        out.unit_mismatch = true;
+        out.expected_unit = r.expected_unit ?? null;
+      }
+      return out;
+    };
     // Chart points carry NUMERIC values only (a "5.4" string still counts);
-    // readings are already ascending by effective date from the SQL ordering.
-    const points = readings
-      .map((r) => ({ date: r.date, value: typeof r.value === "number" ? r.value : Number(r.value), flag: r.flag, doc_id: r.doc_id }))
+    // readings are already ascending by effective date from the SQL ordering. If
+    // a marker has incompatible source units we keep only the latest unit family
+    // in the series, never mixing e.g. Lp(a) nmol/L and mg/dL in one trend.
+    const points = sameUnitReadings
+      .map((r) => ({
+        date: r.date,
+        value: typeof r.value === "number" ? r.value : Number(r.value),
+        flag: r.flag,
+        doc_id: r.doc_id,
+        ...(r.unit_converted ? { source_value: r.source_value ?? null, source_unit: r.source_unit ?? null, unit_converted: true } : {}),
+        ...(r.unit_mismatch ? { source_value: r.source_value ?? r.value, source_unit: r.source_unit ?? r.unit ?? null, unit_mismatch: true, expected_unit: r.expected_unit ?? null } : {}),
+      }))
       .filter((p) => Number.isFinite(p.value));
     // Deterministic trend over the numeric series (ascending by date). n<2 is
     // unknowable; otherwise dir is 'stable' when the net change is small vs the
     // series' own spread (so a marker that barely moved doesn't read as a trend),
     // else 'rising'/'falling'. No score — just direction + raw change + span.
     const n = points.length;
-    const zone = matchOptimalZone(last.name);
+    const zone = last.unit_mismatch ? null : matchOptimalZone(last.name);
     let trend: {
       dir: "rising" | "falling" | "stable" | null;
       change: number | null;
@@ -435,8 +480,8 @@ export function getMarkerHistory() {
       unit,
       group: grp.key,
       group_label: grp.label,
-      latest: { value: last.value, flag: last.flag, date: last.date, doc_id: last.doc_id, kind: last.kind },
-      prev: before ? { value: before.value, date: before.date } : null,
+      latest: toPublicReading(last, true),
+      prev: before && seriesUnitsCompatible(before.unit, unit) ? toPublicReading(before) : null,
       trend,
       // Forecast vs the OPTIMAL band: {direction:'improving'|'worsening'|'stable',
       // eta_text (plain language), crossing}. eta_weeks is kept INTERNAL (ordering
@@ -818,4 +863,3 @@ export function getInjuryImpacts() {
   const count = out.reduce((n, i) => n + i.affected.length, 0);
   return { injuries: out, count };
 }
-

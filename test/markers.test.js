@@ -74,6 +74,47 @@ test("prioritizeMarkers carries optimal-zone framing (in_optimal + direction), n
   assert.equal(ldl.actionable, true);
 });
 
+test("getMarkerHistory normalizes SI/EU lipid units before optimal-zone reasoning", () => {
+  seedHealthDoc("2025-12-01", [marker("LDL Cholesterol", 3.2, { unit: "mmol/L", flag: "high" })]);
+  const ldl = repo.prioritizeMarkers().markers.find((m) => m.key.includes("ldl"));
+  assert.equal(ldl.latest.value, 123.7);
+  assert.equal(ldl.unit, "mg/dL");
+  assert.equal(ldl.latest.source_value, 3.2);
+  assert.equal(ldl.latest.source_unit, "mmol/L");
+  assert.equal(ldl.latest.unit_converted, true);
+  assert.equal(ldl.in_optimal, false);
+  assert.equal(ldl.optimal.high, 100);
+});
+
+test("getMarkerHistory trends mixed US/SI units in one canonical series", () => {
+  seedHealthDoc("2025-01-01", [marker("LDL Cholesterol", 100, { unit: "mg/dL" })]);
+  seedHealthDoc("2025-12-01", [marker("LDL Cholesterol", "3,2", { unit: "mmol/L" })]);
+  const ldl = repo.getMarkerHistory().markers.find((m) => m.key.includes("ldl"));
+  assert.equal(ldl.points.length, 2);
+  assert.deepEqual(ldl.points.map((p) => p.value), [100, 123.7]);
+  assert.equal(ldl.prev.value, 100);
+  assert.equal(ldl.trend.dir, "rising");
+});
+
+test("vitamin D nmol/L is converted before the low-side guard runs", () => {
+  seedHealthDoc("2025-12-01", [marker("Vitamin D 25-OH", 50, { unit: "nmol/L" })]);
+  const vd = repo.prioritizeMarkers().markers.find((m) => m.key.includes("vitamin d"));
+  assert.equal(vd.latest.value, 20);
+  assert.equal(vd.unit, "ng/mL");
+  assert.equal(vd.in_optimal, false);
+  repo.deriveDirectives();
+  assert.ok(repo.listActiveDirectives().some((d) => /vitamin/i.test(d.marker || "") && /D3|supplement/i.test(d.directive || "")));
+});
+
+test("Lp(a) mass units are not compared to nmol/L with a fake fixed conversion", () => {
+  seedHealthDoc("2025-12-01", [marker("Lp(a)", 40, { unit: "mg/dL" })]);
+  const lpa = repo.prioritizeMarkers().markers.find((m) => m.key.includes("lp(a)"));
+  assert.equal(lpa.latest.unit_mismatch, true);
+  assert.equal(lpa.latest.expected_unit, "nmol/L");
+  assert.equal(lpa.optimal, null);
+  assert.equal(lpa.in_optimal, null);
+});
+
 // ---- GOLDEN CONSTITUTION TEST ----------------------------------------------
 // The constitution forbids surfacing a 0-100 grade ANYWHERE. impact_score is an
 // internal ordering signal; whether or not it is stripped at the surface, the

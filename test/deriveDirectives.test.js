@@ -51,6 +51,14 @@ test("a LOW vitamin D DOES emit the supplement + recheck directives", () => {
   assert.ok(vd.some((d) => /D3|supplement/i.test(d.directive)), "low vitamin D suggests supplementation");
 });
 
+test("a lab-flagged Lp(a) in mg/dL can still drive guidance without fake nmol/L conversion", () => {
+  seedHealthDoc("2025-12-01", [marker("Lp(a)", 45, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  const lpa = activeFor("Lp(a)");
+  assert.ok(lpa.length >= 1, "source high flag still propagates the Lp(a) risk context");
+  assert.ok(lpa.every((d) => d.trigger_side === "high"), "source high flag sets the side without raw unit comparison");
+});
+
 test("LOW ferritin fires the iron-deficiency story across nutrition, training, watch", () => {
   // The deterministic per-marker building block of the anemia picture: low iron
   // stores drive iron-rich nutrition, a training-volume caution, and a recheck.

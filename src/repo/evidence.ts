@@ -224,6 +224,7 @@ export function buildSafetyMarkerContext(): SafetyMarkerContext {
     for (const m of markers as any[]) {
       const z = matchOptimalZone(m?.name);
       if (!z) continue;
+      if (m?.latest?.unit_mismatch === true) continue;
       const v = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
       if (!Number.isFinite(v)) continue;
       const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
@@ -304,4 +305,3 @@ export function safetyGate(
   const annotated = `${text} ${notes.join(" ")}`.trim().slice(0, 600);
   return { directive: annotated, rationale: directive?.rationale ?? null, uncertain: true, annotated: true };
 }
-

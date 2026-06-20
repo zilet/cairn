@@ -812,6 +812,7 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every
   hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands
   straight in their Health records (Me → Health) and feeds the marker trends. Never invent a value.
+  Preserve source units exactly as reported; do not convert US/SI/EU units yourself.
   Informational, not medical advice. NOTE: for a big pasted panel (dozens of markers), the Health
   tab's "paste results" box is the more reliable, complete path — you may mention it in passing.
 - add_context_event records a trip, injury/niggle, major life event, or family commitment onto their
@@ -1098,6 +1099,8 @@ GUARDRAILS:
   or recommend treatment. Just transcribe and summarize what the document shows.
 - Never invent values. Only include markers you can actually read from the file. Use null for any
   flag you cannot determine (e.g. when no reference range is shown).
+- Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
+  units yourself; Cairn normalizes recognized marker units deterministically after import.
 - Infer top-level "kind" from the document itself. Do not rely on the upload label.
 - Infer top-level "doc_date" from the collection date, test date, exam date, scan date, or report
   date printed in the document. Prefer the specimen/scan date over a final-report date. If no
@@ -1198,6 +1201,8 @@ OTHER GUARDRAILS:
 - Never invent values. Include only markers you can actually read. Use the source's range column to
   set "flag" (low/normal/high — "In Range" → normal, "Above Range" → high, "Below Range" → low);
   use null only when no range is shown. Don't guess a value or a range.
+- Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
+  units yourself; Cairn normalizes recognized marker units deterministically after import.
 - doc_date is the specimen/collection/scan date (prefer it over a final-report date), YYYY-MM-DD.
   Drop any panel whose date you genuinely cannot determine.
 - Infer each panel's "kind" from its content (a lab panel is "bloodwork", a body-composition/bone

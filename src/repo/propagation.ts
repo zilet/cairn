@@ -479,10 +479,11 @@ export function prioritizeMarkers() {
     const z = matchOptimalZone(m?.name);
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     const hasNum = Number.isFinite(numericVal);
+    const comparable = m?.latest?.unit_mismatch !== true;
     let distance = 0;
     let in_optimal: boolean | null = null;
     let optimal: { low: number; high: number; dir: string } | null = null;
-    if (z) {
+    if (z && comparable) {
       optimal = { low: z.optimal[0], high: z.optimal[1], dir: z.dir };
       if (hasNum) {
         distance = optimalDistance(numericVal, z);
@@ -589,6 +590,10 @@ export function buildHealthExport() {
         effectiveDate: p.date,
         value: p.value,
         flag: p.flag ?? null, // the lab's own low/normal/high flag, when present
+        ...(p.unit_converted || p.unit_mismatch ? {
+          sourceValue: p.source_value ?? null,
+          sourceUnit: p.source_unit ?? null,
+        } : {}),
       }));
     const t = m.trend || {};
     return {
@@ -600,6 +605,10 @@ export function buildHealthExport() {
       // The latest reading (FHIR "valueQuantity" + "effectiveDateTime").
       value: m.latest?.value ?? null,
       unit: m.unit ?? null,
+      ...(m.latest?.unit_converted || m.latest?.unit_mismatch ? {
+        sourceValue: m.latest?.source_value ?? null,
+        sourceUnit: m.latest?.source_unit ?? null,
+      } : {}),
       effectiveDate: m.latest?.date ?? null,
       // The lab's own reference flag (low/normal/high) for the latest reading.
       labFlag: m.latest?.flag ?? null,
@@ -932,7 +941,9 @@ export function deriveDirectives() {
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     if (!Number.isFinite(numericVal)) continue;
     const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
-    if (!offOptimal(numericVal, z.label, flag)) continue;
+    const comparable = m?.latest?.unit_mismatch !== true;
+    if (!comparable && !flag) continue;
+    if (comparable && !offOptimal(numericVal, z.label, flag)) continue;
     const ctx: MarkerContext = { value: numericVal, flag, zone: z, side: markerSide(numericVal, z, flag), marker: m };
     if (!offMarkers.has(z.label)) offMarkers.set(z.label, ctx);
     const mapping = MARKER_MAPPINGS.find((x) => x.zone === z.label);

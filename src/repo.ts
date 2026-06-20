@@ -15,6 +15,7 @@ export * from "./repo/settings.js";
 export * from "./repo/art-ledger.js";
 export * from "./repo/agent-telemetry.js";
 export * from "./repo/app-state.js";
+export * from "./repo/lab-units.js";
 export * from "./repo/health.js";
 export * from "./repo/coach.js";
 export * from "./repo/propagation.js";
