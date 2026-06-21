@@ -1636,14 +1636,16 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 /* -------------------------------------------------------------------
    23b · Floating unsaved-changes save bar (docks above the tab bar)
    ------------------------------------------------------------------- */
+/* Dark stone surface so the bar reads unmistakably as a pinned action against
+   the warm-cream page — matches the toast's high-contrast voice (cream-on-ink),
+   not the old cream-on-cream pill that blended into the background. */
 .savebar{
   position:fixed;z-index:46;left:50%;
   bottom:calc(60px + max(env(safe-area-inset-bottom),6px) + var(--vvb,0px));
   width:min(440px,calc(100% - 28px));
-  background:rgba(255,253,248,.94);
-  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
-  border:1px solid var(--line-2);border-radius:999px;
-  box-shadow:var(--shadow-md);
+  background:var(--ink);
+  border:1px solid rgba(255,253,248,.1);border-radius:999px;
+  box-shadow:var(--shadow-lg);
   opacity:0;transform:translate(-50%,calc(100% + 84px)) scale(.97);
   transition:transform var(--dur-2) var(--ease),opacity var(--dur-2) var(--ease),
     background var(--dur-1) ease,border-color var(--dur-1) ease;
@@ -1656,8 +1658,8 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   animation:savedot 2.2s var(--ease) infinite}
 @keyframes savedot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.7);opacity:.55}}
 .savebar-msg{flex:1;min-width:0;font-family:var(--font-ui);font-size:.84rem;font-weight:600;
-  color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.savebar-discard{background:transparent;border:none;color:var(--muted);flex:0 0 auto;
+  color:rgba(248,243,234,.92);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.savebar-discard{background:transparent;border:none;color:rgba(248,243,234,.6);flex:0 0 auto;
   font-size:.8rem;font-weight:600;padding:8px 10px;border-radius:999px;
   transition:color var(--dur-1) ease,opacity var(--dur-1) ease}
 .savebar-save{background:var(--accent);border:none;color:#fffdf8;flex:0 0 auto;
@@ -1723,7 +1725,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   .segbtn:hover{color:var(--ink)}
   .segbtn.active:hover{color:var(--paper)}
   .rest-btn:hover{border-color:var(--ink);color:var(--ink)}
-  .savebar-discard:hover{color:var(--ink)}
+  .savebar-discard:hover{color:#fffdf8}
   .savebar-save:not(:disabled):hover{background:var(--accent-deep)}
 }
 
