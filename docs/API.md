@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**173 routes** across 63 groups.
+**179 routes** across 63 groups.
 
 ## `/activities`
 
@@ -167,6 +167,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/exercises` | Upsert by name: creates the exercise (with mode/muscle_group) or updates the provided fields on an existing one. Returns the exercise row. |
 | PUT | `/api/exercises/:id` |  |
 | DELETE | `/api/exercises/:name` | Delete an exercise by name. Returns 200 with ok:false (not an HTTP error) when it's still referenced by a plan or logged sets — a designed, recoverable state the PWA surfaces as a gentle reason, mirroring the swap/skip failure signal. |
+| POST | `/api/exercises/merge` | Merge two exercises: repoint all logged_sets and plan_items from `from` into `into`, then remove the now-empty `from` exercise. ok:false when `into` does not exist (guard; nothing is changed). |
+| POST | `/api/exercises/reconcile-groups` | Backfill / normalize muscle_group for every exercise (null → classified; legacy values like 'legs' → canonical). Idempotent. |
 
 ## `/export`
 
@@ -366,6 +368,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
+| GET | `/api/program/adjustments` | The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing-pattern gaps. Plain words, most-actionable first. |
+| GET | `/api/program/balance` | Volume balance per canonical muscle group over the last N weeks (default 2). Plain words: which groups are due, which are over, and an adherence-skew summary. No scores — band labels (low/productive/high) are the output. |
 | GET | `/api/program/blocks` | Periodization blocks (the mesocycle model the coach periodizes toward). |
 | POST | `/api/program/blocks` |  |
 | PUT | `/api/program/blocks/:id` |  |
@@ -373,6 +377,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/program/blocks/:id/complete` |  |
 | GET | `/api/program/blocks/active` |  |
 | POST | `/api/program/evolve` | Adaptive program evolution: read the program-state and draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for review — same propose→apply path as /agent/run, driven by the trend analysis. |
+| GET | `/api/program/progression` | Per-lift next-session prescription for every strength item on a plan day. ?day=N selects the day; omit to default to the plan day today's read points at (the "upcoming session" the Brief already suggests). Returns [] when the day has no strength items or does not exist. |
+| POST | `/api/program/progression/apply` | Build a DRAFT plan proposal from the current day's per-lift prescriptions, via the same propose→apply path as /agent/run and /program/evolve. Never auto- applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed-failure signal — nothing wrong at the HTTP level, just nothing to do). |
 | GET | `/api/program/variations` | Exercise variations / alternatives (the plateau-break + "make it interesting" library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps. |
 
 ## `/program-state`
