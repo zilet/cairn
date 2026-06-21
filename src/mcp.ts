@@ -427,6 +427,95 @@ export function buildMcpServer(): McpServer {
         : repo.suggestVariations(exercise))
   );
 
+  // ---- program intelligence: progression engine + balance + adjustments --------
+
+  server.tool(
+    "get_program_balance",
+    "Working-set volume per canonical muscle group over the last 2 weeks, banded against productive-range landmarks (low/productive/high) with a plain-language adherence-skew summary. Tells which groups are due and which are over — no numeric scores, no grades.",
+    {},
+    async () => asText(repo.programBalance())
+  );
+
+  server.tool(
+    "get_progression",
+    "Per-lift next-session prescription for every STRENGTH item on a plan day: the auto-progression engine reads the latest logged top set + RIR + the lift's trend and proposes the NEXT session's target (overload/hold/deload/vary/introduce) with a one-line plain-words delta and a why. Pass day to specify a day number; omit to default to the plan day today's read points at.",
+    { day: z.number().int().optional().describe("plan day number (1–N); omit to default to today's suggested day") },
+    async ({ day }) => {
+      let dayNumber = day;
+      if (dayNumber == null) {
+        const cached = repo.getCachedDayRead(new Date().toISOString().slice(0, 10));
+        const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
+        const days = repo.getPlan();
+        const strengthDays = (days as any[]).filter((d: any) =>
+          Array.isArray(d.items) && d.items.some((it: any) => it.kind !== "cardio" && it.exercise)
+        );
+        if (strengthDays.length) {
+          const matched = focus
+            ? strengthDays.find((d: any) => {
+                const f = String(d.focus || d.name || "").toLowerCase().trim();
+                return f && (f === focus || f.includes(focus) || focus.includes(f));
+              })
+            : null;
+          dayNumber = (matched ?? strengthDays[0]).day_number;
+        }
+      }
+      if (dayNumber == null) return asText([]);
+      return asText(repo.planDayProgression(dayNumber));
+    }
+  );
+
+  server.tool(
+    "get_program_adjustments",
+    "The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. Pull-never-push: the user reviews these; nothing auto-applies.",
+    {},
+    async () => asText(repo.programAdjustments())
+  );
+
+  server.tool(
+    "apply_progression",
+    "Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression) via the existing propose→apply path — never auto-applied, never a gate. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose).",
+    { day: z.number().int().describe("the plan day number to build prescriptions for") },
+    async ({ day }) => {
+      const prescriptions = repo.planDayProgression(day);
+      const changes = prescriptions
+        .filter((p: any) => p.action !== "hold" || p.plan_item_id)
+        .map((p: any) => {
+          const c: Record<string, any> = { exercise: p.exercise };
+          if (p.mode === "timed") {
+            if (p.suggested?.seconds != null) c.target_seconds = p.suggested.seconds;
+          } else {
+            if (p.suggested?.weight !== undefined) c.target_weight = p.suggested.weight;
+          }
+          return c;
+        })
+        .filter((c: any) => Object.keys(c).length > 1);
+      if (!changes.length) return asText({ ok: false, error: "nothing to propose for this day" });
+      const parsed = {
+        summary: `Auto-progression for day ${day} — ${changes.length} lift(s)`,
+        changes,
+      };
+      const proposal = repo.createProposal("auto-progression", `day ${day} progression`, "", parsed);
+      return asText({ ok: true, proposal });
+    }
+  );
+
+  server.tool(
+    "reconcile_exercise_groups",
+    "Backfill and normalize the muscle_group for every exercise: null values are auto-classified from the exercise name; legacy values (e.g. 'legs' → 'quads', 'posterior' → 'hamstrings') are mapped to the canonical taxonomy. Idempotent — safe to run repeatedly.",
+    {},
+    async () => asText(repo.reconcileExerciseGroups())
+  );
+
+  server.tool(
+    "merge_exercises",
+    "Merge two exercises: repoints all logged_sets and plan_items from `from` into `into`, then removes the now-empty `from` exercise. ok:false when `into` does not exist (guard — nothing is changed). Use after reconcile_exercise_groups reveals duplicate names ('Dead hang' / 'Dead hang timed').",
+    {
+      from: z.string().describe("the exercise name to merge away (will be deleted after merge)"),
+      into: z.string().describe("the exercise name to keep (must already exist)"),
+    },
+    async ({ from, into }) => asText(repo.mergeExercises(from, into))
+  );
+
   server.tool(
     "list_proposals",
     "List recent plan-update proposals and their status (draft/applied/discarded).",

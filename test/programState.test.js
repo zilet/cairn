@@ -127,3 +127,77 @@ test("a strength athlete gets no endurance block; the aggregate has a headline",
   assert.ok(st.headline.length > 0);
   assert.ok(!/\b\d{1,3}\/100\b/.test(st.headline), "no 0-100 score in the headline (constitution)");
 });
+
+// ===========================================================================
+// Elite-strength build: ACWR low-base guard + canonical-group volume.
+// ===========================================================================
+
+test("ACWR low-base guard: a first big week off ~0 chronic tonnage is NOT 'spiking'", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // ONLY the current week carries tonnage; the four prior weeks are empty — a
+  // returning athlete's first real week, which read as a scary spike before.
+  for (const d of [0, 1, 2]) {
+    for (let s = 1; s <= 5; s++) repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(d) });
+  }
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.acute_chronic_ratio, null, "ACWR suppressed below the chronic-base floor, not an absurd ratio");
+  assert.notEqual(meso.phase, "intensification", "a thin-base first week never reads as a load spike");
+  assert.match(meso.note.toLowerCase(), /base/, "the read is plainly 'building base'");
+});
+
+test("tonnage ACWR is computed normally once a real chronic base exists", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Four solid prior weeks (real chronic base) + a comparable current week.
+  for (const wk of [0, 1, 2, 3, 4]) {
+    for (const off of [0, 2, 4]) {
+      for (let s = 1; s <= 5; s++) repo.logSetByName({ exercise: "Back Squat", weight: 315, reps: 5, rir: 2, date: back(wk * 7 + off) });
+    }
+  }
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.ok(meso.acute_chronic_ratio != null, "ACWR is computed once the chronic base clears the floor");
+});
+
+test("endurance ACWR low-base guard: a returning runner's first week reads 'building', not 'spiking'", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  // One real run this week; nothing in the prior four weeks (rebuilding base).
+  repo.addActivity({ type: "run", duration_min: 70, distance_km: 12, date: back(1) });
+  const e = repo.getProgramState(REF).endurance;
+  assert.ok(e, "endurance block present for a hybrid athlete");
+  assert.equal(e.acute_chronic_ratio, null, "weekly-km ACWR suppressed below the base floor");
+  assert.notEqual(e.status, "spiking", "a returning runner's first week is base-building, not spiking");
+  assert.equal(e.status, "building");
+  assert.equal(e.suggested_action, "build");
+});
+
+test("muscleVolume buckets by the canonical taxonomy (legacy 'legs' folds to 'quads')", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Stored with the LEGACY group 'legs' (written RAW to bypass the canonicalizing
+  // upsert, mimicking a DB migrated up from the old schema) — muscleVolume must
+  // fold it onto the canonical 'quads' on read.
+  db.prepare(`INSERT INTO exercises (name, muscle_group, mode) VALUES ('Leg Press', 'legs', 'reps')`).run();
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
+  for (const d of [10, 7, 3]) {
+    for (let s = 1; s <= 4; s++) repo.logSetByName({ exercise: "Leg Press", weight: 360, reps: 10, rir: 2, date: back(d) });
+  }
+  repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 8, rir: 2, date: back(4) });
+
+  const groups = repo.getProgramState(REF).volume.map((v) => v.muscle_group);
+  assert.ok(groups.includes("quads"), "'legs' folded onto the canonical 'quads'");
+  assert.ok(!groups.includes("legs"), "the legacy label never surfaces");
+  assert.ok(groups.includes("chest"));
+});
+
+test("muscleVolume EXCLUDES mobility from the landmark / set-count math", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  repo.upsertExercise({ name: "90/90 Hip Switch", muscle_group: "mobility" });
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads" });
+  // Lots of mobility "sets" — they must never appear as a volume group.
+  for (const d of [9, 6, 3, 1]) {
+    for (let s = 1; s <= 6; s++) repo.logSetByName({ exercise: "90/90 Hip Switch", reps: 8, rir: 9, date: back(d) });
+  }
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(2) });
+
+  const vol = repo.getProgramState(REF).volume;
+  assert.ok(!vol.some((v) => v.muscle_group === "mobility"), "mobility never inflates the working-set bands");
+  assert.ok(vol.some((v) => v.muscle_group === "quads"), "loaded groups are still counted");
+});

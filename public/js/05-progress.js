@@ -499,9 +499,73 @@ function paintVolumeBody(data) {
       <div class="volbar"><div class="volbar-fill barfill" style="width:${Math.max(3, Math.round(((g.sets || 0) / maxSets) * 100))}%"></div></div>
     </div>`).join("");
   view.innerHTML = head + hero +
-    `<div class="vol-kicker lbl reveal" style="${stagger(1)}">Last ${data.days || 30} days · ranked by sets</div>` + rows;
+    `<div id="volBalanceSlot" class="vol-balance-slot reveal" style="${stagger(1)}"></div>` +
+    `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${data.days || 30} days · ranked by sets</div>` + rows;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
+  // The balance read settles in above the bars (best-effort, async) — the engine
+  // reads your volume per canonical muscle group, names what's DUE and what's
+  // running high, and flags the patterns (core / grip / mobility) that are absent.
+  loadVolumeBalance();
+}
+
+// ---------- Volume: the balance read (which groups are due / high / missing) ----------
+// Fed by GET /api/program/balance — working-set volume per CANONICAL group banded
+// against the volume landmarks, in PLAIN WORDS (never a 0–100 grade). Surfaces the
+// adherence skew (summary) + the due / high groups + the missing-pattern gaps the
+// new taxonomy made visible (core, forearms/grip). Best-effort + null-safe: the
+// SURFACE endpoint may not be wired yet (404) — guard like every optional fetch,
+// leaving the bars untouched if it's missing. Constitution: pull, never push.
+async function loadVolumeBalance() {
+  const slot = view.querySelector("#volBalanceSlot");
+  if (!slot) return;
+  let bal = null;
+  try { bal = await api("/program/balance"); } catch { bal = null; }
+  if (state.tab !== "progress" || state.progressSeg !== "volume" || !slot.isConnected) return;
+  const html = volBalanceHtml(bal);
+  if (!html) { slot.innerHTML = ""; return; }
+  slot.innerHTML = html;
+}
+
+// The canonical taxonomy's first-class patterns the elite-build added — used to
+// name a missing VOLUME pattern in plain words ("no core or grip work lately").
+// Mobility is intentionally excluded: it's non-volume-counting, so the balance
+// endpoint never reports it — flagging it "not programmed" would be a false signal.
+const PATTERN_WORD = { core: "core", forearms: "grip" };
+
+// Render the balance read. Returns "" when there's nothing meaningful to say.
+function volBalanceHtml(bal) {
+  if (!bal || !Array.isArray(bal.groups) || !bal.groups.length) return "";
+  const due = Array.isArray(bal.due) ? bal.due : [];
+  const over = Array.isArray(bal.over) ? bal.over : [];
+  // Missing patterns: a first-class taxonomy group with NO sets logged in the window.
+  const trained = new Set(bal.groups.map((g) => String(g.group).toLowerCase()));
+  const missing = Object.keys(PATTERN_WORD).filter((p) => !trained.has(p));
+
+  // Calm chip rows — due (terracotta-quiet), high (gold-quiet), missing (muted).
+  const chip = (label, cls) => `<span class="vbal-chip ${cls}">${escHtml(label)}</span>`;
+  const dueChips = due.map((g) => chip(capWord(g), "vbal-due")).join("");
+  const overChips = over.map((g) => chip(capWord(g), "vbal-high")).join("");
+  const missChips = missing.map((p) => chip(PATTERN_WORD[p], "vbal-miss")).join("");
+
+  const rows = [];
+  if (dueChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Due</span><span class="vbal-chips">${dueChips}</span></div>`);
+  if (overChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Running high</span><span class="vbal-chips">${overChips}</span></div>`);
+  if (missChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Not programmed</span><span class="vbal-chips">${missChips}</span></div>`);
+
+  const summary = bal.summary ? `<div class="vbal-summary">${escHtml(bal.summary)}</div>` : "";
+  if (!rows.length && !summary) return "";
+  return `<div class="vbal">
+      <div class="vbal-head lbl">Balance</div>
+      ${summary}
+      ${rows.join("")}
+    </div>`;
+}
+
+// Capitalize a single group/pattern word for display.
+function capWord(s) {
+  s = String(s || "");
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
 // ---------- Progress: Endurance (runner/cyclist-first read) ----------
@@ -1231,8 +1295,14 @@ function paintProgramBody(data) {
   // block (advance/complete) or a calm "start a block" affordance.
   html += `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
 
+  // "What changed & why" — the deterministic digest of the concrete adaptations
+  // the system has noticed (lifts to push/hold/deload, groups due, missing-pattern
+  // gaps) with a plain-words reason for EACH, so the athlete always understands what
+  // moved and why. Loaded async into this slot; renders nothing when there's nothing.
+  html += `<div id="progAdjustSlot" class="padj-slot reveal" style="${stagger(3)}"></div>`;
+
   // "What to evolve next" — surfaced near the top, it's the keystone.
-  let staggerI = 3;
+  let staggerI = 4;
   if (adaptations.length) {
     html += adaptationsHtml(adaptations, staggerI);
     staggerI += 1;
@@ -1280,6 +1350,51 @@ function paintProgramBody(data) {
   if (btn) btn.addEventListener("click", () => triggerProgramEvolve(btn));
 
   loadProgramBlock(); // periodization block card (active) or a "start a block" affordance
+  loadProgramAdjustments(); // the "what changed & why" digest
+}
+
+// ---------- "What changed & why" — the program-adjustments digest ----------
+// Fed by GET /api/program/adjustments — the handful of concrete adaptations the
+// engine has noticed, each with a plain-words reason. So the athlete always
+// understands WHAT the system did and WHY. Constitution: calm, one-at-a-time,
+// pull-never-push, NO scores. Best-effort + null-safe: an unwired endpoint (404)
+// leaves the slot empty, the rest of the view untouched.
+// Calm per-kind glyph + tint class for an adjustment.
+const PADJ_KIND = {
+  progression: { glyph: "↑", cls: "padj-prog" },
+  balance: { glyph: "◆", cls: "padj-bal" },
+  deload: { glyph: "↓", cls: "padj-deload" },
+  gap: { glyph: "○", cls: "padj-gap" },
+};
+
+async function loadProgramAdjustments() {
+  const slot = view.querySelector("#progAdjustSlot");
+  if (!slot) return;
+  let rows = null;
+  try { rows = await api("/program/adjustments"); } catch { rows = null; }
+  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
+  const html = programAdjustmentsHtml(rows);
+  if (!html) { slot.innerHTML = ""; return; }
+  slot.innerHTML = html;
+}
+
+// Render the digest. `rows` is an array of {kind,title,why,exercise?}. "" when empty.
+function programAdjustmentsHtml(rows) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const items = rows.slice(0, 6).map((a) => {
+    const meta = PADJ_KIND[a && a.kind] || PADJ_KIND.gap;
+    return `<div class="padj-item ${meta.cls}">
+        <span class="padj-glyph" aria-hidden="true">${meta.glyph}</span>
+        <div class="padj-body">
+          <div class="padj-title">${escHtml((a && a.title) || "")}</div>
+          ${a && a.why ? `<div class="padj-why">${escHtml(a.why)}</div>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+  return `<div class="padj-card">
+      <div class="padj-card-head lbl">What changed &amp; why</div>
+      ${items}
+    </div>`;
 }
 
 // ---- periodization block (the mesocycle the coach periodizes toward) ----

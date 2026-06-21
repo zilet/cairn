@@ -14,9 +14,19 @@
 // ============================================================================
 import { db } from "../db.js";
 import { getRecoverySummary } from "./coach.js";
+import { canonicalGroup, isMobility, MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getProgress } from "./sessions.js";
 import { activitySportWhere, enduranceSportPatterns } from "./endurance-sports.js";
+
+// ---- ACWR low-base guards ---------------------------------------------------
+// An acute-vs-chronic ratio is only meaningful once there's a real CHRONIC base
+// to compare against. A returning/new athlete with a near-zero chronic average
+// produces an absurd ratio (the live data shows tonnage ACWR 2.77 and endurance
+// ACWR 8.79 off essentially nothing) — that's not "spiking", it's BUILDING a
+// base. Below these floors we suppress the scary "spiking" read entirely.
+const TONNAGE_CHRONIC_FLOOR = 4000; // lb/wk of chronic tonnage before ACWR means anything
+const ENDURANCE_CHRONIC_FLOOR_KM = 8; // km/wk of chronic running before ACWR means anything
 
 export type LiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
 export type LiftAction = "overload" | "hold" | "deload" | "vary" | "technique" | "introduce" | null;
@@ -98,7 +108,12 @@ const REPS_RECENT = 8; // analyze the most recent N sessions (state, not ancient
 
 function gradeRepsLift(name: string, mg: string | null): LiftState | null {
   const prog = getProgress(name) as any;
-  const points: any[] = Array.isArray(prog.points) ? prog.points : [];
+  // getProgress can now emit points with best1rm === null (a bodyweight/weight-0
+  // set, or an assisted lift logged before bodyweight was known). Those carry no
+  // 1RM trajectory, so drop them before grading — Math.round(null)/null-as-y would
+  // otherwise read as 0 / NaN. A lift left with too few real points falls to the
+  // "new" baseline path below, exactly like a lift that's only just been logged.
+  const points: any[] = (Array.isArray(prog.points) ? prog.points : []).filter((p: any) => p.best1rm != null);
   if (points.length < 2) {
     return points.length
       ? {
@@ -251,26 +266,49 @@ function liftStates(date: string): LiftState[] {
 }
 
 // ---- volume landmarks ----
+// Working-set volume per CANONICAL muscle group, banded against the taxonomy's
+// per-group MUSCLE_LANDMARKS (RP-style). Sets are folded onto canonical groups
+// (so a bench logged with no/legacy group still counts under chest), and
+// MOBILITY work is EXCLUDED from the set-count math — it's tracked but must never
+// inflate the working-set picture. A group without a landmark falls back to the
+// old generic 6/20 band thresholds.
 function muscleVolume(date: string, weeks = 3): MuscleVolumeState[] {
   const start = isoDaysAgo(date, weeks * 7 - 1);
   const half = isoDaysAgo(date, Math.floor((weeks * 7) / 2));
   const rows = db.prepare(
-    `SELECT COALESCE(e.muscle_group,'other') AS mg,
+    `SELECT e.muscle_group AS mg, e.name AS name,
             SUM(CASE WHEN s.date >= ? THEN 1 ELSE 0 END) AS recent_sets,
             COUNT(*) AS total_sets
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
       WHERE s.date >= ? AND s.date <= ?
-      GROUP BY mg ORDER BY total_sets DESC`
+      GROUP BY e.id ORDER BY total_sets DESC`
   ).all(half, start, date) as any[];
-  return rows.map((r) => {
-    const weekly = Math.round((Number(r.total_sets) / weeks) * 10) / 10;
-    const firstHalf = Number(r.total_sets) - Number(r.recent_sets);
-    const trend: MuscleVolumeState["trend"] =
-      Number(r.recent_sets) > firstHalf * 1.2 ? "rising" : Number(r.recent_sets) < firstHalf * 0.8 ? "falling" : "stable";
-    const band: MuscleVolumeState["band"] = weekly < 6 ? "low" : weekly > 20 ? "high" : "productive";
-    return { muscle_group: String(r.mg), weekly_sets: weekly, band, trend };
-  });
+
+  // Fold the per-exercise rows onto canonical groups (mobility dropped).
+  const tally = new Map<string, { total: number; recent: number }>();
+  for (const r of rows) {
+    const g = canonicalGroup(r.mg) ?? canonicalGroup(r.name);
+    if (!g || isMobility(g)) continue; // mobility never counts toward volume
+    const cur = tally.get(g) ?? { total: 0, recent: 0 };
+    cur.total += Number(r.total_sets) || 0;
+    cur.recent += Number(r.recent_sets) || 0;
+    tally.set(g, cur);
+  }
+
+  return [...tally.entries()]
+    .map(([group, v]) => {
+      const weekly = Math.round((v.total / weeks) * 10) / 10;
+      const firstHalf = v.total - v.recent;
+      const trend: MuscleVolumeState["trend"] =
+        v.recent > firstHalf * 1.2 ? "rising" : v.recent < firstHalf * 0.8 ? "falling" : "stable";
+      const lm = MUSCLE_LANDMARKS[group];
+      const lo = lm?.low ?? 6;
+      const hi = lm?.high ?? 20;
+      const band: MuscleVolumeState["band"] = weekly < lo ? "low" : weekly > hi ? "high" : "productive";
+      return { muscle_group: group, weekly_sets: weekly, band, trend };
+    })
+    .sort((a, b) => b.weekly_sets - a.weekly_sets);
 }
 
 // ---- mesocycle / fatigue position ----
@@ -299,8 +337,19 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
   // window must EXCLUDE the acute week, or the ratio is biased toward 1 and a real
   // spike never crosses the threshold). Mirrors the endurance ACWR below.
   const acute = weeklyTonnage(date, 0);
-  const chronic4 = [1, 2, 3, 4].map((b) => weeklyTonnage(date, b)).reduce((a, b) => a + b, 0) / 4;
-  const acwr = chronic4 > 0 ? Math.round((acute / chronic4) * 100) / 100 : null;
+  const chronicWeeks = [1, 2, 3, 4].map((b) => weeklyTonnage(date, b));
+  const chronic4 = chronicWeeks.reduce((a, b) => a + b, 0) / 4;
+  // LOW-BASE GUARD: a ratio off a near-zero / barely-logged chronic base is
+  // meaningless (a returning athlete logging their first couple of weeks reads as
+  // a huge "spike"). Two gates: enough WEEKS of real history (≥3 of the prior 4
+  // weeks actually trained — otherwise the chronic average is mostly pre-logging
+  // zeros, which the absolute floor alone won't catch) AND a chronic average above
+  // the floor. Below either we don't trust an ACWR — they're BUILDING a base, not
+  // spiking. Above both the ratio is honest.
+  const chronicWeeksWithData = chronicWeeks.filter((t) => t > 0).length;
+  const hasChronicBase = chronicWeeksWithData >= 3 && chronic4 >= TONNAGE_CHRONIC_FLOOR;
+  const acwr = hasChronicBase ? Math.round((acute / chronic4) * 100) / 100 : null;
+  const buildingBase = acute > 0 && !hasChronicBase;
 
   const rec = recovery ?? getRecoverySummary(14);
   const drift = rec?.delta ?? null;
@@ -311,6 +360,7 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
   let phase: MesoPhase;
   let note: string;
   if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
+  else if (buildingBase) { phase = "accumulation"; note = "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching."; }
   else if (acwr != null && acwr >= 1.4) { phase = "intensification"; note = "Load's ramped this block — hold the line, don't pile on."; }
   else if (weeksSince == null) { phase = "accumulation"; note = "No recent deload on record — keep building, plan a reset every 4–6 weeks."; }
   else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`; }
@@ -333,8 +383,16 @@ function weeklyKm(date: string, weekBack: number, patterns: string[]): number {
 function enduranceState(date: string): EnduranceState {
   const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
   const lastWeek = weeklyKm(date, 0, patterns);
-  const chronic = [1, 2, 3, 4].map((b) => weeklyKm(date, b, patterns)).reduce((a, b) => a + b, 0) / 4;
-  const acwr = chronic > 0 ? Math.round((lastWeek / chronic) * 100) / 100 : null;
+  const chronicWeeksKm = [1, 2, 3, 4].map((b) => weeklyKm(date, b, patterns));
+  const chronic = chronicWeeksKm.reduce((a, b) => a + b, 0) / 4;
+  // LOW-BASE GUARD (mirrors the tonnage one): a weekly-km ratio off a near-zero
+  // chronic base reads as a huge spike for a returning runner logging their first
+  // real week. Below the floor we don't trust the ACWR — they're rebuilding aerobic
+  // base, not spiking dangerous mileage.
+  const chronicWeeksWithData = chronicWeeksKm.filter((k) => k > 0).length;
+  const hasEnduranceBase = chronicWeeksWithData >= 3 && chronic >= ENDURANCE_CHRONIC_FLOOR_KM;
+  const acwr = hasEnduranceBase ? Math.round((lastWeek / chronic) * 100) / 100 : null;
+  const buildingBase = lastWeek > 0 && !hasEnduranceBase;
   const start4 = isoDaysAgo(date, 27);
   const activitySport = activitySportWhere("activities", patterns);
   const aSport = activitySportWhere("a", patterns);
@@ -374,8 +432,12 @@ function enduranceState(date: string): EnduranceState {
   // masked by a mild base build. Established volume = the larger of this week and
   // the chronic average, so a quiet week doesn't hide a real base.
   const base = Math.max(lastWeek, chronic);
+  // buildingBase (returning runner, thin chronic base, ACWR suppressed) reads as
+  // "building" — NEVER "spiking" — so the action is a calm conservative build, not
+  // a scary "ease off". A real ACWR only kicks in once the base clears the floor.
   const status: EnduranceState["status"] =
-    acwr != null && acwr >= 1.5 ? "spiking"
+    buildingBase ? "building"
+    : acwr != null && acwr >= 1.5 ? "spiking"
     : acwr != null && acwr < 0.7 && chronic > 0 ? "detraining"
     : acwr != null && acwr >= 1.1 ? "building"
     : "maintaining";
@@ -385,6 +447,8 @@ function enduranceState(date: string): EnduranceState {
     action = "ease"; why = "Mileage jumped this week — hold it here and let it absorb before adding more.";
   } else if (status === "detraining") {
     action = "build"; why = "Running's tapered off — a gentle, steady rebuild will bring the base back.";
+  } else if (buildingBase) {
+    action = "build"; why = "You're rebuilding your aerobic base — keep runs easy and conservative; this is base-building, not overreaching.";
   } else if (!hasQuality && base >= 10) {
     action = "add-quality"; why = "Solid easy base, but it's all one pace — one tempo or interval session a week would lift your ceiling.";
   } else if (status === "building") {

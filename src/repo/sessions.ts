@@ -791,6 +791,12 @@ export function snapshotDbTo(filePath: string): string {
 export function getProgress(exerciseName: string) {
   const ex = findExercise(exerciseName);
   if (!ex) return { exercise: exerciseName, found: false, points: [] };
+
+  // For assisted lifts (negative weight = assist), we need the athlete's bodyweight
+  // to compute effective load = bodyweight - assist. Fetch it once.
+  const profRow = db.prepare("SELECT weight_lb FROM profile WHERE id = 1").get() as any;
+  const bodyweightLb: number | null = profRow?.weight_lb != null ? Number(profRow.weight_lb) : null;
+
   const rows = db
     .prepare(
       `SELECT s.date AS date, ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
@@ -800,12 +806,42 @@ export function getProgress(exerciseName: string) {
     )
     .all(ex.id) as any[];
 
-  const byDate = new Map<string, { topWeight: number; topReps: number; best1rm: number }>();
+  // Per-date: track the best set by its effective 1RM (or by reps for assisted
+  // sets where bodyweight is unknown). NEVER emit a negative best1rm.
+  const byDate = new Map<string, { topWeight: number; topReps: number; best1rm: number | null }>();
   for (const r of rows) {
-    const e1 = epley1RM(r.weight, r.reps);
+    const w = Number(r.weight);
+    const reps = Number(r.reps);
+    if (!Number.isFinite(w) || !Number.isFinite(reps) || reps <= 0) continue;
+
+    let best1rm: number | null;
+    if (w < 0) {
+      // Assisted movement: effective load = bodyweight − assist.
+      // If bodyweight is known, compute Epley on effective load (floor 0).
+      if (bodyweightLb != null && bodyweightLb > 0) {
+        const effectiveLoad = Math.max(0, bodyweightLb - Math.abs(w));
+        best1rm = epley1RM(effectiveLoad, reps);
+      } else {
+        // Bodyweight unknown — can't compute a meaningful 1RM; omit it.
+        best1rm = null;
+      }
+    } else if (w > 0) {
+      best1rm = epley1RM(w, reps);
+    } else {
+      // Bodyweight (weight === 0): Epley with load 0 → just reps; track as null.
+      best1rm = null;
+    }
+
     const cur = byDate.get(r.date);
-    if (!cur || e1 > cur.best1rm) {
-      byDate.set(r.date, { topWeight: r.weight, topReps: r.reps, best1rm: e1 });
+    // Rank sets: a non-null 1RM always beats a null one; among non-nulls, higher wins.
+    const betterThan = (candidate: number | null, current: typeof cur): boolean => {
+      if (!cur) return true;
+      if (candidate === null) return false;          // a null can't beat anything
+      if (cur.best1rm === null) return true;         // anything beats null
+      return candidate > cur.best1rm;
+    };
+    if (betterThan(best1rm, cur)) {
+      byDate.set(r.date, { topWeight: w, topReps: reps, best1rm });
     }
   }
   const points = [...byDate.entries()].map(([date, v]) => ({ date, ...v }));

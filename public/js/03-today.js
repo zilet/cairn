@@ -9,7 +9,89 @@ function exTimed(it, logged) {
   return (logged || []).some((s) => s.duration_sec != null);
 }
 
-function exCard(it, logged, prefill, revealIdx) {
+// ---------- Adaptive next-prescription (the loop closes here) ----------
+// On a lift card, render the NEXT session's adapted target straight from the
+// deterministic progression engine (GET /api/program/progression). It reads what
+// you actually logged + the lift's trend and proposes one calm move — overload /
+// hold / deload / rotate a variation / +seconds — with a plain-words "why". NEVER a
+// score; the server hands us finished plain words (delta_text + why), we just frame
+// them. The whole day's prescriptions become a DRAFT plan proposal via the apply
+// control in the session head — nothing auto-applies.
+
+// The verb word for a prescription action (sage for earned overload, terracotta-
+// quiet for hold/deload/vary). Used as a small caps tag on the card.
+const RX_ACTION = {
+  overload: { word: "next up", cls: "ex-rx-up" },
+  hold: { word: "hold", cls: "ex-rx-hold" },
+  deload: { word: "ease off", cls: "ex-rx-down" },
+  vary: { word: "switch it up", cls: "ex-rx-vary" },
+  introduce: { word: "new", cls: "ex-rx-up" },
+};
+
+// A compact target read for the prescription line: "55 lb · 3 × 5", "1:00 hold",
+// "BW · 3 × 8", "30 assist". Mirrors the card's own target vocabulary. Plain words.
+function rxTargetText(rx) {
+  const s = rx.suggested || {};
+  if (rx.mode === "timed") {
+    const secs = s.seconds != null ? fmtDur(Math.round(Number(s.seconds))) : "time";
+    return `${s.sets ?? "?"} × ${secs}`;
+  }
+  const lo = s.rep_low, hi = s.rep_high;
+  const reps = lo != null && hi != null ? (lo === hi ? `${lo}` : `${lo}–${hi}`) : (lo ?? hi ?? "");
+  let load;
+  if (s.weight == null) load = "BW";
+  else if (s.weight < 0) load = `${-s.weight} assist`;
+  else load = fmtWeight(s.weight);
+  return `${load}${reps ? ` · ${s.sets ?? "?"} × ${reps}` : ""}`;
+}
+
+// The per-card prescription line. `rx` is one Prescription from the progression
+// engine (or null → renders nothing). Calm, no score, one move + its why.
+function exRxLineHtml(rx) {
+  if (!rx) return "";
+  const meta = RX_ACTION[rx.action] || RX_ACTION.hold;
+  const delta = rx.delta_text ? escHtml(rx.delta_text) : "";
+  const target = escHtml(rxTargetText(rx));
+  return `<div class="ex-rx ${meta.cls}">
+      <div class="ex-rx-line">
+        <span class="ex-rx-tag lbl">${escHtml(meta.word)}</span>
+        <span class="ex-rx-target numeral">${target}</span>
+        ${delta ? `<span class="ex-rx-delta">${delta}</span>` : ""}
+      </div>
+      ${rx.why ? `<div class="ex-rx-why">${escHtml(rx.why)}</div>` : ""}
+    </div>`;
+}
+
+// How many of a day's prescriptions are an actual MOVE (not a plain hold) — drives
+// the "apply these" affordance copy + whether it shows at all.
+function rxMoveCount(rxByEx) {
+  return Object.values(rxByEx || {}).filter((rx) => rx && rx.action && rx.action !== "hold").length;
+}
+
+// "Apply these to my plan" — sends the whole day's adapted targets through the
+// propose→apply path (POST /api/program/progression/apply {day}), which lands a
+// DRAFT plan proposal for review. Nothing auto-applies; we deep-link into Plan →
+// Coach where the draft is reviewed/applied, mirroring loadDraftProposals. Calm,
+// honest degradation: an unreachable / not-yet-wired endpoint restores the button.
+async function applyDayProgression(btn, day) {
+  if (day == null) return;
+  const restore = btnBusy(btn, "Drafting…");
+  let r = null;
+  try {
+    r = await api("/program/progression/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ day }),
+    });
+  } catch { restore(); toast("Couldn't draft that — check your connection."); return; }
+  if (!r || r.ok === false) { restore(); toast("Couldn't draft that just now — try again in a bit."); return; }
+  // A fresh draft is waiting in Plan → Coach — drop the caches that surface it.
+  swrInvalidate("plan:coach");
+  swrInvalidate("plan:proposals");
+  toast("Drafted — review it in your Plan");
+  state.planJump = "coach";
+  activateTab("plan");
+}
+
+function exCard(it, logged, prefill, revealIdx, rx) {
   const offPlan = !it.fromPlan;
   const timed = exTimed(it, logged);
   const range = offPlan ? "" : (it.rep_low === it.rep_high ? `${it.rep_low}` : `${it.rep_low}–${it.rep_high}`);
@@ -56,6 +138,7 @@ function exCard(it, logged, prefill, revealIdx) {
       <div class="ex-meta">${progress}</div>
       ${it.note ? `<div class="ex-note">${escHtml(it.note)}</div>` : ""}
       ${it.constraint_note ? `<div class="ex-flag">${escHtml(it.constraint_note)}</div>` : ""}
+      ${!complete ? exRxLineHtml(rx) : ""}
       <div class="logged" data-logged>${logged.map(setChip).join("")}</div>
       ${logrow}
     </div>`;
@@ -1016,6 +1099,24 @@ async function renderToday(opts = {}) {
     try { lastSets[ex] = await cachedApi("/last-set?exercise=" + encodeURIComponent(ex), { key: lk }); } catch { lastSets[ex] = null; }
   }));
 
+  // ---- Adaptive progression: the next session's adapted target per lift ----
+  // The real-time "it follows what I logged" surface. Best-effort + null-safe: the
+  // SURFACE endpoint may not be live yet (404) — guard like every other optional
+  // fetch, so Today is unchanged if it's missing. Keyed by canonical plan day.
+  // Only paid for on a strength-bearing plan day (a pure run/rest day skips it).
+  let rxByEx = {};
+  if (state.day != null && planEx.length) {
+    try {
+      const list = await api("/program/progression?day=" + encodeURIComponent(state.day));
+      if (Array.isArray(list)) {
+        for (const rx of list) {
+          if (rx && rx.exercise) rxByEx[String(rx.exercise).toLowerCase()] = rx;
+        }
+      }
+    } catch { rxByEx = {}; }
+  }
+  const rxFor = (name) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
+
   function prefillFor(it) {
     const logged = loggedByEx[it.exercise] || [];
     if (logged.length) { const s = logged[logged.length - 1]; return { weight: s.weight, reps: s.reps, rir: s.rir, duration_sec: s.duration_sec ?? null }; }
@@ -1134,6 +1235,7 @@ async function renderToday(opts = {}) {
   // the capture row, where the week-ahead/reads naturally sat before.
   const railHtml = focus ? "" : `<aside class="today-rail">
     ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
+    ${isToday ? `<div id="adjustSlot" class="adjust-slot"></div>` : ""}
     <div id="weeklySlot" class="weekly-slot"></div>
     <div id="insightSlot" class="insight-slot"></div>
     ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
@@ -1216,6 +1318,25 @@ async function renderToday(opts = {}) {
     }
     html += `</div><div id="tableHint"></div>`;
 
+    // ---- "It followed your logs" — one calm banner + an apply control ----
+    // When the progression engine has actual MOVES for this day (anything past a
+    // plain hold), surface ONE quiet line above the cards: the day's targets have
+    // adapted to what you logged, and you can fold them into your plan. The per-lift
+    // detail lives on each card (ex-rx); this is just the at-a-glance + the apply.
+    // Pull, never push — a hold-only day shows nothing. Goes through propose→apply,
+    // so "Apply to my plan" lands a DRAFT for review, never an auto-change.
+    const rxMoves = rxMoveCount(rxByEx);
+    if (rxMoves > 0) {
+      const word = rxMoves === 1 ? "One lift has a new target" : `${rxMoves} lifts have new targets`;
+      html += `<div class="rx-banner reveal" style="${stagger(0)}">
+        <div class="rx-banner-text">
+          <span class="rx-banner-ico" aria-hidden="true">✦</span>
+          <span class="rx-banner-h">${escHtml(word)} from what you logged</span>
+        </div>
+        <button class="rx-banner-apply draftbtn" id="rxApplyBtn" type="button" data-rx-day="${escAttr(String(state.day))}">Apply to my plan</button>
+      </div>`;
+    }
+
     // Garmin "body's reaction" card — the strength session's physiology layer
     // (HR / zones / calories / training effect), reconciled from a synced watch.
     if (hasGarmin) html += garminSessionCard(session.garmin);
@@ -1241,12 +1362,12 @@ async function renderToday(opts = {}) {
         html += cardioPlanCard(it, cardIdx++, matched, line);
         continue;
       }
-      html += exCard({ ...it, fromPlan: true }, loggedByEx[it.exercise] || [], prefillFor(it), cardIdx++);
+      html += exCard({ ...it, fromPlan: true }, loggedByEx[it.exercise] || [], prefillFor(it), cardIdx++, rxFor(it.exercise));
     }
     for (const ex of offPlanEx) {
       const logged = loggedByEx[ex];
       const s = logged[logged.length - 1];
-      html += exCard({ exercise: ex, fromPlan: false }, logged, { weight: s.weight, reps: s.reps, rir: s.rir }, cardIdx++);
+      html += exCard({ exercise: ex, fromPlan: false }, logged, { weight: s.weight, reps: s.reps, rir: s.rir }, cardIdx++, rxFor(ex));
     }
     // Pending off-plan cards (added but not yet logged) — rebuilt so a re-render never
     // drops a freshly-added exercise before its first set lands. Prefill from last-set.
@@ -1255,7 +1376,7 @@ async function renderToday(opts = {}) {
       const prefill = last
         ? { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null }
         : { weight: null, reps: null, rir: null, duration_sec: null };
-      html += exCard({ exercise: p.name, fromPlan: false, mode: p.mode || null }, [], prefill, cardIdx++);
+      html += exCard({ exercise: p.name, fromPlan: false, mode: p.mode || null }, [], prefill, cardIdx++, rxFor(p.name));
     }
     html += `<div class="addex">
       <button id="addExBtn" class="ghostbtn addex-btn">+ Add exercise</button>
@@ -1366,6 +1487,13 @@ async function renderToday(opts = {}) {
   // Today so this morning's run (and its zones/pace) lands in place.
   wireCardioSync(view, () => renderToday({ soft: true }));
 
+  // "Apply to my plan" — fold the day's adapted targets into a DRAFT proposal.
+  const rxApplyBtn = view.querySelector("#rxApplyBtn");
+  if (rxApplyBtn) rxApplyBtn.addEventListener("click", () => {
+    const d = Number(rxApplyBtn.dataset.rxDay);
+    applyDayProgression(rxApplyBtn, Number.isFinite(d) ? d : state.day);
+  });
+
   wireBrief(read, { isToday });
   // If we painted a provisional (cold-cache) read, upgrade it to the agentic read
   // in place — the filament keeps running until the real read settles in.
@@ -1385,7 +1513,7 @@ async function renderToday(opts = {}) {
     loadContextBanner();
     loadHealthFocusBanner();
     loadWearable(isToday);
-    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); loadDraftProposals(); loadWeekAhead(); }
+    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); loadDraftProposals(); loadWeekAhead(); loadProgramAdjustmentsBanner(); }
     view.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
   }
 
@@ -2594,6 +2722,120 @@ async function loadWeekAhead() {
       <div class="weekahead-days">${rows}</div>
       ${r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
     </div>`;
+}
+
+// Today rail: a calm, self-explaining "what changed" card — the handful of
+// adaptations the program engine noticed (a lift to push/deload, a group that's
+// due, a missing pattern). Each row TAPS OPEN in place to reveal the plain-words
+// WHY plus concrete movements to do about it ("Try Back Squat · Walking Lunge")
+// and a "Plan it →" that hands the coach a tailored request (a DRAFT proposal,
+// never auto-applied). So the athlete sees WHAT changed, WHY, and HAS something to
+// do. The card is ACUTE-recovery aware: a group you just torched (a long ride/run
+// or a heavy session) is held back and reframed ("Quads — recovering"), never put
+// up as the next move. "+N more" expands the rest IN PLACE (no yank to a charts
+// screen); the header "My plan →" opens the actual plan. Pull, never push: it waits
+// quietly and renders NOTHING when there's nothing to say. Best-effort + null-safe.
+const ADJUST_GLYPH = { progression: "↑", balance: "◆", deload: "↓", gap: "○" };
+
+// The calm chat-prefill request behind "Plan it →" on one adjustment — phrased so
+// the coach drafts a concrete plan change (which day, which movement). Tailored per
+// kind; falls back to the title.
+function adjustPlanRequest(a) {
+  if (!a) return "Help me adjust my plan.";
+  const g = a.group || "";
+  const sugg = Array.isArray(a.suggestions) && a.suggestions.length
+    ? ` (e.g. ${a.suggestions.join(", ")})` : "";
+  // A recovering group is due on the week but freshly torched — don't ask to add it
+  // now; ask the coach to plan AROUND it and say when to come back to it.
+  if (a.recovering) {
+    return `My ${g || "those muscles"} took a beating recently and ${g ? "is" : "are"} still recovering. Plan my next session around fresher muscles instead, and tell me which day to come back to ${g || "them"}.`;
+  }
+  switch (a.kind) {
+    case "gap":
+      return `Add some ${g || "the missing"} work to my plan${sugg}. Fit it in without adding much time, and tell me which day it goes on.`;
+    case "balance":
+      if (a.title && /running high/i.test(a.title))
+        return `My ${g} volume is running high lately — rebalance some of it toward a group that's due.`;
+      return `I'm light on ${g} lately. Add a ${g} movement to my plan this week${sugg}, and tell me which day.`;
+    case "deload":
+      return a.exercise
+        ? `Ease off ${a.exercise} next session — back the load off about 10% and let it rebuild.`
+        : "A deload week looks about due — plan me a lighter week.";
+    case "progression":
+      if (a.title && /rotate/i.test(a.title))
+        return `Rotate ${a.exercise || "this lift"} to a close variation (same movement) to break the plateau.`;
+      return `Apply the earned step up for ${a.exercise || "this lift"} on my plan.`;
+    default:
+      return a.title || "Help me adjust my plan.";
+  }
+}
+
+async function loadProgramAdjustmentsBanner() {
+  const slot = view.querySelector("#adjustSlot");
+  if (!slot) return;
+  let rows = null;
+  try { rows = await api("/program/adjustments"); } catch { rows = null; }
+  if (state.tab !== "today" || !slot.isConnected) return;
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) { slot.innerHTML = ""; return; }
+  // Render EVERY row, but keep all but the first 3 collapsed behind "+N more" — which
+  // expands them IN PLACE (no yank to a charts screen). The first 3 lead.
+  const more = Math.max(0, rows.length - 3);
+  const items = rows.map((a, i) => {
+    const glyph = (a && a.recovering) ? "↻" : (ADJUST_GLYPH[a && a.kind] || "○");
+    const chips = a && Array.isArray(a.suggestions) && a.suggestions.length
+      ? `<div class="adjust-sugs"><span class="adjust-sugs-lbl lbl">Try</span>${a.suggestions
+          .map((s) => `<span class="adjust-chip">${escHtml(s)}</span>`).join("")}</div>`
+      : "";
+    const act = a && a.recovering ? "Plan around it →" : "Plan it →";
+    return `<div class="adjust-row${i >= 3 ? " adjust-extra" : ""}${a && a.recovering ? " adjust-rec" : ""}">
+        <button class="adjust-item" type="button" aria-expanded="false">
+          <span class="adjust-glyph" aria-hidden="true">${glyph}</span>
+          <span class="adjust-title">${escHtml((a && a.title) || "")}</span>
+          <span class="adjust-chev" aria-hidden="true">⌄</span>
+        </button>
+        <div class="adjust-detail" hidden>
+          ${a && a.why ? `<div class="adjust-why">${escHtml(a.why)}</div>` : ""}
+          ${chips}
+          <button class="adjust-act" type="button" data-req="${escAttr(adjustPlanRequest(a))}">${act}</button>
+        </div>
+      </div>`;
+  }).join("");
+  slot.innerHTML = `<div class="adjust-card reveal" style="--i:0">
+      <div class="adjust-head">
+        <span class="lbl">What changed</span>
+        <button class="adjust-all lbl" id="adjustAll" type="button">My plan →</button>
+      </div>
+      ${items}
+      ${more > 0 ? `<button class="adjust-more lbl" id="adjustMore" type="button" aria-expanded="false">+${more} more in your program</button>` : ""}
+    </div>`;
+  const card = slot.querySelector(".adjust-card");
+  if (!card) return;
+  card.addEventListener("click", (e) => {
+    const act = e.target.closest(".adjust-act");
+    if (act) {
+      state.chatPrefill = act.getAttribute("data-req") || "";
+      activateTab("chat");
+      return;
+    }
+    // "My plan →" opens the actual plan (where changes land), not the charts/history.
+    if (e.target.closest("#adjustAll")) { activateTab("plan"); return; }
+    // "+N more" / "Show less" reveals the rest of the adaptations IN PLACE.
+    const moreBtn = e.target.closest("#adjustMore");
+    if (moreBtn) {
+      const open = card.classList.toggle("adjust-open");
+      moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      moreBtn.textContent = open ? "Show less" : `+${more} more in your program`;
+      return;
+    }
+    const item = e.target.closest(".adjust-item");
+    if (item) {
+      const open = item.getAttribute("aria-expanded") === "true";
+      item.setAttribute("aria-expanded", open ? "false" : "true");
+      const detail = item.parentElement.querySelector(".adjust-detail");
+      if (detail) detail.hidden = open;
+    }
+  });
 }
 
 // Today: one quiet health-focus line from the latest whole-picture review (first

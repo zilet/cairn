@@ -1391,8 +1391,8 @@ function ensureAgentLoginStyles() {
   font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:8px}
 .agent-login-x:hover{color:var(--ink,#211d17);background:var(--paper,#f4efe7)}
 .agent-login-bd{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;overflow:auto}
-.agent-login-term{background:#1c1b1a;border-radius:12px;padding:10px 8px 8px;
-  border:1px solid #2b2926;min-height:180px;height:clamp(180px,42vh,340px)}
+.agent-login-term{background:var(--stone-deep,#2c2620);border-radius:12px;padding:10px 8px 8px;
+  border:1px solid var(--stone,#473f36);min-height:180px;height:clamp(180px,42vh,340px)}
 .agent-login-term .xterm{padding:0}
 .agent-login-status{font-size:13px;color:var(--muted,#746c5c);min-height:18px;display:flex;align-items:center;gap:6px}
 .agent-login-status.is-ok{color:var(--sage,#6e7f5c);font-weight:600}
@@ -1402,7 +1402,7 @@ function ensureAgentLoginStyles() {
   background:var(--paper,#f4efe7);padding:1px 5px;border-radius:5px;border:1px solid var(--line,#e7dfd2)}
 .agent-login-ft{display:flex;justify-content:flex-end;gap:10px;padding-top:2px}
 .agent-login-btn{appearance:none;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
-  padding:9px 16px;border-radius:11px;border:1px solid var(--line,#c9bfa9);
+  padding:9px 16px;border-radius:11px;border:1px solid var(--line,#e7dfd2);
   background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
 .agent-login-btn:hover{background:var(--card,#fffdf8)}
 .agent-login-btn:focus-visible,.agent-login-x:focus-visible{outline:2px solid var(--accent,#b4552d);outline-offset:2px}
@@ -1512,11 +1512,13 @@ async function openAgentLoginModal(agentName) {
     cursorBlink: true,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     theme: {
-      background: "#1c1b1a",
+      // warm near-black from the brand mark (--stone-deep) — xterm needs a
+      // literal, so this mirrors the CSS .agent-login-term surface above.
+      background: "#2c2620",
       foreground: "#ece6da",
       cursor: "#d9b48a",
       selectionBackground: "#3a3733",
-      black: "#1c1b1a", red: "#d2795a", green: "#9bb07e", yellow: "#d9b48a",
+      black: "#2c2620", red: "#d2795a", green: "#9bb07e", yellow: "#d9b48a",
       blue: "#7f9bb0", magenta: "#b08a9b", cyan: "#7fb0a8", white: "#ece6da",
     },
   });

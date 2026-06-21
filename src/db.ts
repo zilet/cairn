@@ -474,6 +474,20 @@ CREATE TABLE IF NOT EXISTS marker_aliases (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Exercise-name canonicalization (the strength brain's movement de-duplication).
+-- "Dead hang" and "Dead hang timed" are the same movement logged under two names,
+-- splitting one lift's history into parallel series. Like marker_aliases, this
+-- persists each variant→canonical decision so the dedup is resolved once. The
+-- deterministic normalizer + classifier (src/repo/exercise-canon.ts) are the offline
+-- floor; the reconciler (repo.mergeExercises) persists learned aliases here.
+CREATE TABLE IF NOT EXISTS exercise_aliases (
+  id INTEGER PRIMARY KEY,
+  alias TEXT NOT NULL UNIQUE,                 -- normalizedExerciseKey(variant name)
+  canonical TEXT NOT NULL,                    -- the exercise name to merge into
+  source TEXT,                                -- agent | manual | seed
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS art_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),

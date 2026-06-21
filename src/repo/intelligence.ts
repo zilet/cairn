@@ -2,6 +2,8 @@ import { db, todayISO } from "../db.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { listContextEvents } from "./health.js";
 import { KCAL_PER_LB, getPrimaryDiscipline, getProfile, projectGoalPace } from "./profile.js";
+import { getProgramState } from "./program-state.js";
+import { programBalance } from "./progression.js";
 import { type TrainingLoad, dayLoad } from "./training-read.js";
 
 // ============================================================================
@@ -321,10 +323,25 @@ export function weekAheadPlan(): { days: WeekAheadDay[]; summary: string } {
       label: String(d.focus || d.name || `Day ${d.day_number}`).replace(/\s+/g, " ").trim().slice(0, 60),
     };
   });
+  // Reflect PROGRAM STATE in the floor's summary (plain words, never a fabricated
+  // calendar): if a deload is about due, or muscle groups are DUE, or a lift needs
+  // a deload, say so as a forward-looking note so the look-ahead is honest about
+  // what the week could use. Defensive: program-state is a heavier read — a failure
+  // here must never break the deterministic week-ahead floor.
+  const notes: string[] = [];
+  try {
+    const st = getProgramState();
+    if (st?.mesocycle?.phase === "deload-due") notes.push("a deload week is about due — pencil in one lighter day");
+    const bal = programBalance();
+    if (Array.isArray(bal?.due) && bal.due.length) notes.push(`${bal.due.slice(0, 3).join(", ")} ${bal.due.length === 1 ? "is" : "are"} due — work ${bal.due.length === 1 ? "it" : "them"} in`);
+    const deload = (Array.isArray(st?.lifts) ? st.lifts : []).filter((l: any) => l.suggested_action === "deload").map((l: any) => l.exercise);
+    if (deload.length) notes.push(`${deload.slice(0, 2).join(", ")} could use a light deload`);
+  } catch { /* program-state unavailable — fall back to the plain summary */ }
+
+  const base = "Your training week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.";
   return {
     days,
-    summary:
-      "Your training week in order — weave easy, conversational runs between sessions for your aerobic base, and take a rest day when you need one.",
+    summary: notes.length ? `${base} This week: ${notes.join("; ")}.` : base,
   };
 }
 

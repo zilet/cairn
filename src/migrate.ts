@@ -325,6 +325,95 @@ export const MIGRATIONS: Migration[] = [
     // doctor-ready clinical report (so it's no longer a fill-in-on-paper blank).
     addColumn(db, "profile", "name TEXT");
   } },
+  { version: 40, name: "exercise-groups-canon", up: (db) => {
+    // (1) Ensure exercise_aliases exists (already in db.ts for fresh DBs; safe to
+    //     re-run via CREATE TABLE IF NOT EXISTS on older DBs).
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS exercise_aliases (
+          id INTEGER PRIMARY KEY,
+          alias TEXT NOT NULL UNIQUE,
+          canonical TEXT NOT NULL,
+          source TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+    } catch { /* already exists */ }
+
+    // (2) Backfill exercises.muscle_group:
+    //     - null → classify by name (deterministic KB)
+    //     - legacy free-form → canonical taxonomy value
+    //     Uses a minimal inline map mirroring exercise-canon.ts to avoid a
+    //     circular module dependency at migration boot time.
+    try {
+      // Inline legacy alias map (mirrors GROUP_ALIASES in exercise-canon.ts).
+      const legacyMap: Record<string, string> = {
+        legs: "quads", leg: "quads", quad: "quads", quadriceps: "quads",
+        posterior: "hamstrings", "posterior chain": "hamstrings",
+        hams: "hamstrings", hamstring: "hamstrings", hammies: "hamstrings",
+        glute: "glutes", butt: "glutes",
+        abs: "core", ab: "core", abdominals: "core", abdominal: "core",
+        trunk: "core", obliques: "core",
+        grip: "forearms", forearm: "forearms", wrist: "forearms",
+        "rear delt": "rear delts", "rear deltoid": "rear delts", "rear deltoids": "rear delts",
+        delts: "shoulders", deltoid: "shoulders", deltoids: "shoulders", shoulder: "shoulders",
+        pecs: "chest", pec: "chest",
+        lats: "back", lat: "back",
+        bicep: "biceps",
+        tricep: "triceps",
+        calf: "calves", calve: "calves",
+        stretch: "mobility", stretching: "mobility", cardio: "mobility",
+      };
+      const validGroups = new Set([
+        "chest", "shoulders", "rear delts", "triceps", "back", "biceps",
+        "forearms", "quads", "hamstrings", "glutes", "calves", "core", "mobility",
+      ]);
+
+      // Inline keyword classifier (mirrors CLASSIFY_RULES in exercise-canon.ts).
+      function norm(s: string): string {
+        return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+      }
+      const RULES: Array<[string, RegExp[]]> = [
+        ["mobility", [/\b90 90\b/, /hip switch/, /\bstretch/, /mobility/, /cat cow/, /\bcars\b/, /world s greatest/, /\bopener\b/, /\bdrill\b/, /thoracic rotation/, /\bfoam roll/]],
+        ["core", [/\bplank/, /\bcrunch/, /\bsit up/, /\bab\b/, /\babs\b/, /\bab /, /dead bug/, /hollow/, /\bpallof/, /\bl sit/, /hanging (leg|knee) raise/, /leg raise/, /knee raise/, /russian twist/, /\bwoodchop/, /\bcable rotation/, /\boblique/, /\bbird dog/, /\bbicycle\b/, /toe touch/, /\bv up/, /\brollout/, /ab wheel/, /\bsuitcase/]],
+        ["forearms", [/dead hang/, /\bhang\b/, /farmer/, /\bcarry\b/, /\bcarries\b/, /grip/, /wrist (curl|roller|extension)/, /\bplate pinch/, /\bgripper/, /finger/]],
+        ["calves", [/calf/, /\bcalves/, /\btib(ialis)?\b/, /\btoe raise/, /seated calf/, /standing calf/]],
+        ["hamstrings", [/leg curl/, /lying curl/, /seated curl/, /\bham(string)?\b/, /\brdl\b/, /romanian/, /stiff leg/, /stiff legged/, /good morning/, /nordic/, /\bdeadlift/, /\bglute ham/, /\bghr\b/]],
+        ["glutes", [/hip thrust/, /glute bridge/, /\bbridge\b/, /\bglute/, /\bkickback/, /abduction/, /\bbird dog\b/]],
+        ["quads", [/squat/, /leg press/, /leg extension/, /\blunge/, /split squat/, /\bstep up/, /\bhack\b/, /\bsissy/, /\bwall sit/, /\bquad/, /goblet/, /pistol/]],
+        ["rear delts", [/face pull/, /rear delt/, /reverse (fly|pec|flye)/, /rear fly/, /\bband pull apart/, /\bypt\b/, /\bprone y\b/, /\bprone t\b/]],
+        ["shoulders", [/overhead press/, /\bohp\b/, /shoulder press/, /military press/, /\barnold/, /lateral raise/, /side raise/, /front raise/, /\bdelt/, /\bshoulder\b/, /\bpike push/, /upright row/, /\bshrug/]],
+        ["chest", [/bench press/, /\bbench\b/, /incline (db|dumbbell|barbell|press|bench)/, /decline (press|bench)/, /chest press/, /chest fly/, /\bpec(toral)? (fly|deck)/, /\bpec deck/, /\bdip\b/, /\bpush up/, /\bpushup/, /\bcable (fly|crossover)/, /\bflye?\b/, /\bchest\b/]],
+        ["triceps", [/triceps/, /\btricep/, /pushdown/, /push down/, /skull crusher/, /\bskullcrusher/, /overhead extension/, /\bkickback/, /close grip bench/, /\bcgbp\b/, /jm press/]],
+        ["back", [/pull up/, /pullup/, /chin up/, /chinup/, /pulldown/, /pull down/, /\blat\b/, /\blats\b/, /\brow\b/, /seated row/, /cable row/, /bent over row/, /\bt bar/, /\bpullover/, /\bback extension/, /hyperextension/, /\bpull/, /\bback\b/]],
+        ["biceps", [/\bcurl\b/, /\bcurls\b/, /\bbicep/, /\bchin\b/, /\bpreacher/, /\bhammer/, /\bconcentration curl/, /\bspider curl/, /\bez bar curl/]],
+      ];
+      function classifyName(name: string): string | null {
+        const n = norm(name);
+        for (const [group, regexes] of RULES) {
+          for (const re of regexes) if (re.test(n)) return group;
+        }
+        return null;
+      }
+      function canonicalize(raw: string | null | undefined): string | null {
+        if (raw == null) return null;
+        const n = norm(raw);
+        if (!n) return null;
+        if (validGroups.has(n)) return n;
+        return legacyMap[n] ?? null;
+      }
+
+      const exercises = db.prepare("SELECT id, name, muscle_group FROM exercises").all() as Array<{ id: number; name: string; muscle_group: string | null }>;
+      for (const ex of exercises) {
+        const resolved = canonicalize(ex.muscle_group) ?? classifyName(ex.name);
+        if (resolved && resolved !== ex.muscle_group) {
+          try {
+            db.prepare("UPDATE exercises SET muscle_group = ? WHERE id = ?").run(resolved, ex.id);
+          } catch { /* skip individual failures */ }
+        }
+      }
+    } catch { /* backfill is best-effort; never block the migration */ }
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {
