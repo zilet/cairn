@@ -331,3 +331,19 @@ test("programAdjustments holds back a due group the athlete just smoked on a rid
   // Plain words only — never a 0-100 score.
   for (const a of adj) assert.doesNotMatch(`${a.title} ${a.why}`, /\b\d{1,3}\/100\b/);
 });
+
+test("multiple smoked due groups consolidate into ONE calm recovering note", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  makeExercise("Romanian Deadlift", { muscle_group: "hamstrings" });
+  logSet("Back Squat", isoDaysAgo(9), { weight: 225, reps: 5, rir: 2 });
+  logSet("Romanian Deadlift", isoDaysAgo(9), { weight: 185, reps: 8, rir: 2 });
+  logRide(isoDaysAgo(1)); // a long ride yesterday torches both quads and hamstrings
+
+  const adj = programAdjustments();
+  const rec = adj.filter((a) => a.recovering);
+  assert.equal(rec.length, 1, "the smoked groups collapse into ONE recovering line, not three rows");
+  assert.match(rec[0].title, /quad/i);
+  assert.match(rec[0].title, /hamstring/i);
+  assert.match(rec[0].why, /they're due/i, "plural phrasing for multiple groups");
+  assert.match(rec[0].why, /ride/i, "names the ride that loaded them");
+});

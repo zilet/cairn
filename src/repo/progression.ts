@@ -254,7 +254,7 @@ function repsPrescription(
   let why: string;
   let nextWeight: number | null = baseWeight;
 
-  const status = state?.status ?? (last ? "new" : "new");
+  const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
   const hitTop = repHigh != null && last?.reps != null && Number(last.reps) >= repHigh;
   // "Earned" overload = recent top set comfortably in range at RIR ≥ 2, OR the
@@ -718,22 +718,31 @@ export function programAdjustments(): ProgramAdjustment[] {
   //    them and surfaces what's actually fresh.
   const bal = programBalance();
   const recent = recentMuscleLoad(2);
-  const recovering: ProgramAdjustment[] = [];
+  const recovering: Array<{ group: string; rl: RecentLoad }> = [];
   for (const g of bal.due.slice(0, 4)) {
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
     const rl = recent.get(g as MuscleGroup);
-    if (rl?.heavy) {
-      recovering.push({
-        kind: "balance",
-        title: `${cap(g)} — recovering`,
-        why: `${cap(g)} is ${reason}, but ${loadPhrase(rl)} loaded it hard — give it a day before training it again. A fresher group is the smarter pick for your next session.`,
-        group: g,
-        recovering: true,
-      });
-    } else {
-      push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
-    }
+    if (rl?.heavy) recovering.push({ group: g, rl });
+    else push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
+  }
+  // ONE consolidated recovering note, right after the fresh due groups — so the
+  // athlete SEES why a smoked muscle isn't being recommended (the connected read)
+  // without three near-identical rows crowding the card, and it always survives the
+  // 8-item cap. Fresh, actionable work still leads above it.
+  if (recovering.length) {
+    const groups = recovering.map((r) => r.group);
+    const lead = (recovering.find((r) => r.rl.activity) ?? recovering[0]).rl;
+    const many = groups.length > 1;
+    const subj = many ? "They're" : `${cap(groups[0])} is`;
+    const it = many ? "them" : "it";
+    push({
+      kind: "balance",
+      title: `${cap(groups.join(", "))} — recovering`,
+      why: `${subj} due, but ${loadPhrase(lead)} loaded ${it} hard — give ${it} a day before training ${it} again. The fresher work above is the smarter pick for your next session.`,
+      group: groups[0],
+      recovering: true,
+    });
   }
   for (const g of bal.over.slice(0, 2)) {
     push({ kind: "balance", title: `${cap(g)} is running high`, why: `${cap(g)} volume is above its productive range — there's room to redirect some of it to a due group.`, group: g });
@@ -755,10 +764,6 @@ export function programAdjustments(): ProgramAdjustment[] {
   }
 
   overloads.slice(0, 3).forEach(push);
-  // Recovering groups last — informational, never the lead. The athlete sees WHY a
-  // due muscle isn't being recommended yet (the connected read) without it crowding
-  // out fresh work. If fresh items already fill the card, these only show on expand.
-  recovering.forEach(push);
   return out.slice(0, 8);
 }
 

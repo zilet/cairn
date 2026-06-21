@@ -2741,15 +2741,16 @@ const ADJUST_GLYPH = { progression: "↑", balance: "◆", deload: "↓", gap: "
 // the coach drafts a concrete plan change (which day, which movement). Tailored per
 // kind; falls back to the title.
 function adjustPlanRequest(a) {
-  const g = a && a.group ? a.group : "";
-  const sugg = a && Array.isArray(a.suggestions) && a.suggestions.length
+  if (!a) return "Help me adjust my plan.";
+  const g = a.group || "";
+  const sugg = Array.isArray(a.suggestions) && a.suggestions.length
     ? ` (e.g. ${a.suggestions.join(", ")})` : "";
   // A recovering group is due on the week but freshly torched — don't ask to add it
   // now; ask the coach to plan AROUND it and say when to come back to it.
-  if (a && a.recovering) {
+  if (a.recovering) {
     return `My ${g || "those muscles"} took a beating recently and ${g ? "is" : "are"} still recovering. Plan my next session around fresher muscles instead, and tell me which day to come back to ${g || "them"}.`;
   }
-  switch (a && a.kind) {
+  switch (a.kind) {
     case "gap":
       return `Add some ${g || "the missing"} work to my plan${sugg}. Fit it in without adding much time, and tell me which day it goes on.`;
     case "balance":
@@ -2765,7 +2766,7 @@ function adjustPlanRequest(a) {
         return `Rotate ${a.exercise || "this lift"} to a close variation (same movement) to break the plateau.`;
       return `Apply the earned step up for ${a.exercise || "this lift"} on my plan.`;
     default:
-      return (a && a.title) || "Help me adjust my plan.";
+      return a.title || "Help me adjust my plan.";
   }
 }
 
