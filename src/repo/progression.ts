@@ -15,6 +15,7 @@
 // ============================================================================
 import { db } from "../db.js";
 import { canonicalGroup, isMobility, MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { examplesForGroup } from "./exercise-variations.js";
 import { findExercise } from "./exercises.js";
 import { getPlan } from "./plan.js";
 import { type LiftState, getProgramState } from "./program-state.js";
@@ -518,6 +519,10 @@ export interface ProgramAdjustment {
   title: string;
   why: string;
   exercise?: string;
+  // The canonical group this is about (balance/gap items), so the UI can route a
+  // "plan it" action; and a few concrete movements to actually do about it.
+  group?: string;
+  suggestions?: string[];
 }
 
 // The handful of concrete adaptations DUE right now — lifts to push/hold/deload
@@ -564,10 +569,10 @@ export function programAdjustments(): ProgramAdjustment[] {
   for (const g of bal.due.slice(0, 4)) {
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
-    push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.` });
+    push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
   }
   for (const g of bal.over.slice(0, 2)) {
-    push({ kind: "balance", title: `${cap(g)} is running high`, why: `${cap(g)} volume is above its productive range — there's room to redirect some of it to a due group.` });
+    push({ kind: "balance", title: `${cap(g)} is running high`, why: `${cap(g)} volume is above its productive range — there's room to redirect some of it to a due group.`, group: g });
   }
 
   // 4) Missing-pattern GAPS — the elite-coach floors this athlete is missing.
@@ -575,13 +580,13 @@ export function programAdjustments(): ProgramAdjustment[] {
   //    / mobility when they're absent (they were invisible until the taxonomy
   //    added them as first-class groups).
   const planned = plannedGroups();
-  for (const [group, label, why] of [
-    ["core", "core", "No anti-extension / anti-rotation core work is programmed — add a loaded carry or a plank/pallof variation; it underpins everything else."],
-    ["forearms", "grip / forearm", "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull."],
-    ["mobility", "mobility", "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner."],
+  for (const [group, label, why, suggestions] of [
+    ["core", "core", "No anti-extension / anti-rotation core work is programmed — add a loaded carry or a plank/pallof variation; it underpins everything else.", ["Pallof Press", "Farmer's Walk", "Hanging Leg Raise"]],
+    ["forearms", "grip / forearm", "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull.", ["Farmer's Walk", "Suitcase Carry", "Dead Hang"]],
+    ["mobility", "mobility", "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner.", ["Ankle Rocker", "90/90 Hip Switch", "World's Greatest Stretch"]],
   ] as const) {
     if (!planned.has(group)) {
-      push({ kind: "gap", title: `No ${label} work programmed`, why });
+      push({ kind: "gap", title: `No ${label} work programmed`, why, group, suggestions: [...suggestions] });
     }
   }
 

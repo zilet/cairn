@@ -366,3 +366,43 @@ export function suggestAlternatives(
   }
   return results;
 }
+
+// ─── Group → concrete movements (for the "what changed" digest) ───────────────
+
+// Canonical muscle group → the movement patterns that train it, so the program
+// digest can offer concrete "things to do" for a due group. Mirrors the canonical
+// taxonomy in exercise-canon.ts. Pure + deterministic — no DB, no agent.
+const GROUP_PATTERNS: Record<string, MovementPattern[]> = {
+  chest: ["horizontal-push"],
+  shoulders: ["vertical-push", "lateral-raise"],
+  "rear delts": ["lateral-raise", "horizontal-pull"],
+  triceps: ["triceps"],
+  back: ["horizontal-pull", "vertical-pull"],
+  biceps: ["curl"],
+  forearms: ["carry"],
+  quads: ["squat", "lunge"],
+  hamstrings: ["hinge"],
+  glutes: ["hip-extension"],
+  calves: ["calf"],
+  core: ["core", "carry"],
+};
+
+// A few concrete exercise names that train `group`, drawn from the curated library
+// and round-robined across its patterns for variety (e.g. quads → Back Squat,
+// Walking Lunge, Front Squat). Returns [] for a group we don't map (e.g. mobility,
+// where the caller supplies its own curated list).
+export function examplesForGroup(group: string, n = 3): string[] {
+  const pats = GROUP_PATTERNS[(group || "").toLowerCase()];
+  if (!pats || !pats.length) return [];
+  const out: string[] = [];
+  for (let i = 0; out.length < n && i < 8; i++) {
+    for (const p of pats) {
+      const e = EXERCISE_MAP[p][i];
+      if (e && !out.includes(e.name)) {
+        out.push(e.name);
+        if (out.length >= n) break;
+      }
+    }
+  }
+  return out.slice(0, n);
+}

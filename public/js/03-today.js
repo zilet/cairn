@@ -2724,13 +2724,44 @@ async function loadWeekAhead() {
     </div>`;
 }
 
-// Today rail: a calm "what changed & why" teaser — the top couple of adaptations
-// the program engine noticed (a lift to push/deload, a group that's due, a missing
-// pattern), each with its plain-words reason, so the athlete sees WHAT the system
-// did right on the home screen. Tap → Progress → Program for the full digest. Pull,
-// never push: it waits quietly and renders NOTHING when there's nothing to say.
-// Best-effort + null-safe — an unwired endpoint (404) leaves the slot empty.
+// Today rail: a calm, self-explaining "what changed" card — the handful of
+// adaptations the program engine noticed (a lift to push/deload, a group that's
+// due, a missing pattern). Each row TAPS OPEN in place to reveal the plain-words
+// WHY plus concrete movements to do about it ("Try Back Squat · Walking Lunge")
+// and a "Plan it →" that hands the coach a tailored request (a DRAFT proposal,
+// never auto-applied). So the athlete sees WHAT changed, WHY, and HAS something to
+// do — without being yanked to a charts screen. The header "Full program →" is the
+// explicit, labelled way into the deeper read. Pull, never push: it waits quietly
+// and renders NOTHING when there's nothing to say. Best-effort + null-safe.
 const ADJUST_GLYPH = { progression: "↑", balance: "◆", deload: "↓", gap: "○" };
+
+// The calm chat-prefill request behind "Plan it →" on one adjustment — phrased so
+// the coach drafts a concrete plan change (which day, which movement). Tailored per
+// kind; falls back to the title.
+function adjustPlanRequest(a) {
+  const g = a && a.group ? a.group : "";
+  const sugg = a && Array.isArray(a.suggestions) && a.suggestions.length
+    ? ` (e.g. ${a.suggestions.join(", ")})` : "";
+  switch (a && a.kind) {
+    case "gap":
+      return `Add some ${g || "the missing"} work to my plan${sugg}. Fit it in without adding much time, and tell me which day it goes on.`;
+    case "balance":
+      if (a.title && /running high/i.test(a.title))
+        return `My ${g} volume is running high lately — rebalance some of it toward a group that's due.`;
+      return `I'm light on ${g} lately. Add a ${g} movement to my plan this week${sugg}, and tell me which day.`;
+    case "deload":
+      return a.exercise
+        ? `Ease off ${a.exercise} next session — back the load off about 10% and let it rebuild.`
+        : "A deload week looks about due — plan me a lighter week.";
+    case "progression":
+      if (a.title && /rotate/i.test(a.title))
+        return `Rotate ${a.exercise || "this lift"} to a close variation (same movement) to break the plateau.`;
+      return `Apply the earned step up for ${a.exercise || "this lift"} on my plan.`;
+    default:
+      return (a && a.title) || "Help me adjust my plan.";
+  }
+}
+
 async function loadProgramAdjustmentsBanner() {
   const slot = view.querySelector("#adjustSlot");
   if (!slot) return;
@@ -2739,23 +2770,56 @@ async function loadProgramAdjustmentsBanner() {
   if (state.tab !== "today" || !slot.isConnected) return;
   rows = Array.isArray(rows) ? rows : [];
   if (!rows.length) { slot.innerHTML = ""; return; }
-  const shown = rows.slice(0, 2);
+  const shown = rows.slice(0, 3);
   const more = rows.length - shown.length;
   const items = shown.map((a) => {
     const glyph = ADJUST_GLYPH[a && a.kind] || "○";
-    return `<div class="adjust-item">
-        <span class="adjust-glyph" aria-hidden="true">${glyph}</span>
-        <span class="adjust-title">${escHtml((a && a.title) || "")}</span>
+    const chips = a && Array.isArray(a.suggestions) && a.suggestions.length
+      ? `<div class="adjust-sugs"><span class="adjust-sugs-lbl lbl">Try</span>${a.suggestions
+          .map((s) => `<span class="adjust-chip">${escHtml(s)}</span>`).join("")}</div>`
+      : "";
+    return `<div class="adjust-row">
+        <button class="adjust-item" type="button" aria-expanded="false">
+          <span class="adjust-glyph" aria-hidden="true">${glyph}</span>
+          <span class="adjust-title">${escHtml((a && a.title) || "")}</span>
+          <span class="adjust-chev" aria-hidden="true">⌄</span>
+        </button>
+        <div class="adjust-detail" hidden>
+          ${a && a.why ? `<div class="adjust-why">${escHtml(a.why)}</div>` : ""}
+          ${chips}
+          <button class="adjust-act" type="button" data-req="${escAttr(adjustPlanRequest(a))}">Plan it →</button>
+        </div>
       </div>`;
   }).join("");
-  slot.innerHTML = `<button class="adjust-card reveal" id="adjustCard" style="--i:0" type="button">
-      <div class="adjust-head"><span class="lbl">What changed</span><span class="adjust-go" aria-hidden="true">→</span></div>
+  slot.innerHTML = `<div class="adjust-card reveal" style="--i:0">
+      <div class="adjust-head">
+        <span class="lbl">What changed</span>
+        <button class="adjust-all lbl" id="adjustAll" type="button">Full program →</button>
+      </div>
       ${items}
-      ${more > 0 ? `<div class="adjust-more lbl">+${more} more in your program</div>` : ""}
-    </button>`;
-  slot.querySelector("#adjustCard").addEventListener("click", () => {
-    state.progressSeg = "program";
-    activateTab("progress");
+      ${more > 0 ? `<button class="adjust-more lbl" id="adjustMore" type="button">+${more} more in your program</button>` : ""}
+    </div>`;
+  const card = slot.querySelector(".adjust-card");
+  if (!card) return;
+  card.addEventListener("click", (e) => {
+    const act = e.target.closest(".adjust-act");
+    if (act) {
+      state.chatPrefill = act.getAttribute("data-req") || "";
+      activateTab("chat");
+      return;
+    }
+    if (e.target.closest("#adjustAll, #adjustMore")) {
+      state.progressSeg = "program";
+      activateTab("progress");
+      return;
+    }
+    const item = e.target.closest(".adjust-item");
+    if (item) {
+      const open = item.getAttribute("aria-expanded") === "true";
+      item.setAttribute("aria-expanded", open ? "false" : "true");
+      const detail = item.parentElement.querySelector(".adjust-detail");
+      if (detail) detail.hidden = open;
+    }
   });
 }
 
