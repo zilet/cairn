@@ -464,7 +464,6 @@ function renderInsightCard(slot, ins) {
   const step = String(ins.next_step || "").trim();
   const why = String(ins.rationale || "").trim();
   const kicker = ins.kind === "weekly_read" ? "This week" : "A connection worth noting";
-  const up = ins.feedback === "up";
   // Honest uncertainty — a low-confidence / explicitly-tentative read reads soft and
   // leads with the same "Worth looking into ·" phrasing as a soft directive, so
   // tentativeness is consistent across every surface (degrades to nothing today —
@@ -477,9 +476,9 @@ function renderInsightCard(slot, ins) {
       ${step ? `<p class="insight-step"><span class="insight-step-lbl">Worth trying</span>${escHtml(step)}</p>` : ""}
       ${why ? `<p class="insight-why" hidden>${escHtml(why)}</p>` : ""}
       <div class="insight-foot">
-        <div class="insight-thumbs">
-          <button class="insight-thumb ${up ? "insight-thumb-on" : ""}" data-ifb="up" aria-label="Helpful" title="Helpful">▲</button>
-          <button class="insight-thumb" data-ifb="down" aria-label="Not useful" title="Not useful">▼</button>
+        <div class="insight-acts">
+          <button class="insight-act insight-act-go" data-ifb="up">Got it</button>
+          <button class="insight-act" data-ifb="down">Not useful</button>
         </div>
         ${why ? `<button class="insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
       </div>
@@ -503,22 +502,20 @@ function renderInsightCard(slot, ins) {
 // cardSel is the card element to collapse on dismiss — ".insight-card" by default,
 // ".weekly-card" for the weekly read.
 async function insightFeedback(slot, ins, dir, cardSel = ".insight-card") {
-  if (dir === "up") {
-    const upBtn = slot.querySelector('[data-ifb="up"]');
-    if (upBtn) upBtn.classList.add("insight-thumb-on");
-    api(`/insights/${ins.id}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ feedback: "up" }),
-    }).catch(() => {});
-    toast("Noted — I'll remember");
-    return;
-  }
-  // thumbs down → dismiss: it drops out of the list. Gentle collapse, no toast.
+  // Both actions CLEAR the card — these are momentary surfacings, not a to-do
+  // list, so the positive path needs a graceful exit too (the old up-thumb just
+  // lingered with no way to resolve it). "Got it" records the up-vote AND
+  // dismisses in one PUT (the server writes the text to memory so the brain learns
+  // this kind of connection lands); "Not useful" dismisses with no positive signal.
   const card = slot.querySelector(cardSel);
+  const body = dir === "up"
+    ? { feedback: "up", status: "dismissed" }
+    : { status: "dismissed" };
   api(`/insights/${ins.id}`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status: "dismissed" }),
+    body: JSON.stringify(body),
   }).catch(() => {});
+  if (dir === "up") toast("Noted — I'll remember");
   if (card) collapseEl(card, () => { slot.innerHTML = ""; });
   else slot.innerHTML = "";
 }
@@ -562,7 +559,6 @@ function renderWeeklyCard(slot, ins) {
   const change = String(ins.next_step || "").trim();
   const why = String(ins.rationale || "").trim();
   const range = weekRangeLabel(ins.created_at);
-  const up = ins.feedback === "up";
   slot.innerHTML = `<section class="weekly-card settle-in">
       <div class="weekly-head">
         <span class="weekly-kicker lbl">The week</span>
@@ -575,9 +571,9 @@ function renderWeeklyCard(slot, ins) {
         </div>` : ""}
       ${why ? `<p class="weekly-why" hidden>${escHtml(why)}</p>` : ""}
       <div class="weekly-foot">
-        <div class="insight-thumbs">
-          <button class="insight-thumb ${up ? "insight-thumb-on" : ""}" data-ifb="up" aria-label="This landed" title="This landed">▲</button>
-          <button class="insight-thumb" data-ifb="down" aria-label="Not useful" title="Not useful">▼</button>
+        <div class="insight-acts">
+          <button class="insight-act insight-act-go" data-ifb="up">Got it</button>
+          <button class="insight-act" data-ifb="down">Not useful</button>
         </div>
         ${why ? `<button class="insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
       </div>

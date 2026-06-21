@@ -2697,22 +2697,22 @@ body.swr-busy::after{
   text-transform:uppercase;color:var(--sage);margin-right:8px}
 .insight-why{font-size:.84rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:72ch;position:relative}
 .insight-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;position:relative}
-.insight-thumbs{display:flex;gap:6px}
 /* quiet "why this" disclosure — mirrors the Brief's "tap to see why" */
 .insight-why-more{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
   font-size:.7rem;font-weight:600;letter-spacing:.04em;text-decoration:underline;
   text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;cursor:pointer}
 .insight-why-more:hover{color:var(--ink-2)}
-.insight-thumb{
-  width:30px;height:30px;border-radius:999px;border:1px solid var(--line-2);
-  background:var(--card-2);color:var(--muted);font-size:.7rem;line-height:1;cursor:pointer;
-  display:inline-flex;align-items:center;justify-content:center;
-  transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
-    background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
-}
-.insight-thumb:hover{border-color:var(--ink-2);color:var(--ink-2)}
-.insight-thumb:active{transform:scale(.92)}
-.insight-thumb-on{background:var(--sage);border-color:var(--sage);color:#fffdf8}
+/* insight/weekly actions — quiet text links (same idiom as "why this"), replacing
+   the ambiguous ▲▼ vote arrows. "Got it" acknowledges AND clears the card (records
+   the up-vote + dismisses in one tap → the brain learns this kind of connection
+   lands); "Not useful" clears without a positive signal. A calm exit on both paths. */
+.insight-acts{display:flex;align-items:center;gap:16px}
+.insight-act{background:none;border:none;font-family:var(--font-ui);font-size:.74rem;
+  font-weight:600;letter-spacing:.02em;padding:0;cursor:pointer;color:var(--muted);
+  transition:color var(--dur-1) var(--ease)}
+.insight-act:hover{color:var(--ink-2)}
+.insight-act-go{color:var(--sage)}
+.insight-act-go:hover{color:#5a6a4a}
 
 /* the weekly read (E3) — "how the week went + the one change". Its own editorial
    card so a newer connection insight never buries it. Distinct identity from the
