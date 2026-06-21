@@ -27,6 +27,9 @@ listed here are load-bearing — change them in all three places or not at all.
 --warn:    #b3402e;  /* warnings, destructive */
 --warn-bg: #f6e8e2;
 --gold:    #c9a86a;  /* PR moments, streaks, small celebrations */
+--stone-deep:  #2c2620;  /* stone, warm neutrals from the mark — charcoal stack, dark surfaces */
+--stone:       #473f36;  /* stone — flat mark, small sizes */
+--stone-taupe: #7d6a56;  /* stone — capstone, quiet secondary */
 --shadow-sm: 0 1px 2px rgba(72,58,35,.07), 0 4px 14px rgba(72,58,35,.07);
 --shadow-md: 0 2px 4px rgba(72,58,35,.08), 0 14px 36px rgba(72,58,35,.11);
 --radius: 18px;
@@ -172,6 +175,13 @@ One easing family, three speeds — defined in `:root`, used everywhere. Nothing
 --dur-1: 200ms;   /* presses, hovers, small state flips */
 --dur-2: 320ms;   /* segmented thumbs, sheets, overlays, view transitions */
 --dur-3: 450ms;   /* list entrances, bars growing, photo fades */
+
+/* tactile press — one intentional depth scale, keyed to target size.
+   The press deepens as the target shrinks so it reads at any size. */
+--press-lg: scale(.99);   /* large surfaces — cards, rows, tap-entries */
+--press:    scale(.97);   /* standard — buttons, pills, day/seg buttons */
+--press-sm: scale(.94);   /* compact action buttons */
+--press-xs: scale(.9);    /* tiny icon buttons — ×, dots, swatches, chevrons */
 ```
 
 The motion vocabulary on top of the existing `.reveal` stagger:
@@ -197,9 +207,20 @@ The motion vocabulary on top of the existing `.reveal` stagger:
   under reduced motion). Shared-element zooms use the `detail-art` view-transition-name
   (tapped tile ↔ overlay art) and `seg-thumb` for the segmented pill.
 - **Toast** slides up + settles (`translate(-50%,14px) scale(.97)` → identity).
-- **Springy press** — buttons compress (`scale(.97)`); tappable entry cards get
-  `.tappable` (`scale(.985)` on `:active`).
-- Everything dies under `@media (prefers-reduced-motion: reduce)`; JS checks
+- **Tactile press** — every interactive surface compresses on `:active` using the
+  `--press*` scale tokens above, never an ad-hoc literal. Pick by target size:
+  `--press-lg` for cards/rows/tap-entries, `--press` for buttons/pills/day+seg
+  buttons, `--press-sm` for compact action buttons, `--press-xs` for tiny icon
+  buttons (×, dots, swatches, chevrons). This is the single load-bearing
+  micro-interaction — a finger-following 1:1 response, so it is deliberately
+  **kept under reduced motion** (it's affordance, not decoration); only the
+  decorative entrances/loops/transitions are silenced.
+- **Hover lift** (devices with `@media (hover:hover)` only) — cards and tap targets
+  raise `--shadow-sm → --shadow-md`; pills/buttons tint their accent. Never on touch,
+  where the press scale carries the feedback.
+- Everything decorative dies under `@media (prefers-reduced-motion: reduce)`
+  (`*{animation:none!important;transition:none!important}`, then a curated set of
+  slowed loading indicators + functional transitions restored); JS checks
   `reducedMotion()` before count-ups, view transitions, and parallax.
 
 ## Loading & progress — one calm "an agent is thinking" vocabulary

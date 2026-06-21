@@ -609,6 +609,10 @@ function renderTab(tab) {
   headerTitle.classList.remove("hdr-tappable"); // only Today re-arms the date control
   document.getElementById("hdrChatActions")?.remove(); // only Chat re-creates the header affordances
   document.body.classList.remove("chat-mode");
+  // Leaving Chat: drop any lingering keyboard state so a non-installed Safari tab
+  // bar isn't left un-lifted (--vvb:0). Removing a focused field doesn't reliably
+  // fire blur, so don't rely on focusout alone here. Chat re-arms it via focusin.
+  if (tab !== "chat") document.body.classList.remove("kb-open");
   document.body.dataset.tab = tab; // scopes the sticky/condensing header to Today
   updateHeaderCondense();
   if (tab === "today") return renderToday();
@@ -939,16 +943,77 @@ window.addEventListener("orientationchange", syncChatViewport);
   const vv = window.visualViewport;
   if (!vv) return;
   const root = document.documentElement;
+  // The keyboard is "open" whenever a text field is focused. This is the ONLY
+  // signal that's reliable in both a Safari tab AND an installed PWA: in the
+  // standalone PWA iOS shrinks the *layout* viewport together with the visual
+  // viewport, so innerHeight - vv.height ≈ 0 and pure geometry never detects the
+  // keyboard. Focus does. (Geometry is kept as a secondary OR for the rare
+  // keyboard-without-focus case.)
+  const TEXTY = /^(|text|search|email|url|tel|password|number)$/;
+  const kbFocused = () => {
+    const el = document.activeElement;
+    if (!el || el === document.body) return false;
+    if (el.tagName === "TEXTAREA") return true;
+    if (el.tagName === "INPUT") return TEXTY.test((el.getAttribute("type") || "").toLowerCase());
+    return el.isContentEditable === true;
+  };
+  // The tallest visual viewport seen this orientation ≈ the NO-keyboard height.
+  // Used to tell "keyboard is actually on screen" (viewport shrunk) from "keyboard
+  // is gone" (viewport back to full) — in BOTH a Safari tab and an installed PWA,
+  // since vv.height itself shrinks/grows with the keyboard even when innerHeight
+  // tracks it (so the layout-viewport `shrink` reads ~0 in a PWA). Reset on rotate.
+  let vvMax = vv.height;
+  let restoreTimer = 0;
+  const applyVvb = (kbOpen) => {
+    // Pin the fixed bottom bars to the VISUAL viewport's bottom edge:
+    //  • settled PWA → 0
+    //  • browser tab with a bottom toolbar → positive (lift the bar above it)
+    //  • after the keyboard drops in a PWA, iOS can leave the LAYOUT viewport
+    //    (innerHeight) SHORT of the restored visible area, so a plain bottom:0
+    //    bar floats above the true screen bottom — this yields a NEGATIVE value
+    //    that pushes the bar back down. The old Math.max(0,…) clamp swallowed
+    //    exactly this correction, so the gap lingered until a re-render.
+    // Keyboard open → 0 (the bar sits behind the keyboard; chat hides it anyway).
+    const vvb = kbOpen ? 0 : window.innerHeight - (vv.offsetTop + vv.height);
+    root.style.setProperty("--vvb", Math.round(vvb) + "px");
+  };
   const sync = () => {
-    const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    // A large inset is the on-screen keyboard, not browser chrome — leave the
-    // bar at the bottom (hidden behind the keyboard) rather than flinging it up.
-    root.style.setProperty("--vvb", (inset > 160 ? 0 : Math.round(inset)) + "px");
+    if (vv.height > vvMax) vvMax = vv.height;
+    const shrink = Math.max(0, window.innerHeight - vv.height);
+    const kbOpen = kbFocused() || shrink > Math.max(140, window.innerHeight * 0.18);
+    document.body.classList.toggle("kb-open", kbOpen);
+    applyVvb(kbOpen);
     syncChatViewport();
+    // iOS's on-screen "hide keyboard" button dismisses the keyboard WITHOUT blurring
+    // the field, so kbFocused() stays true and kb-open stuck — the tab bar stayed
+    // hidden with no keyboard on screen, leaving no way to navigate off Chat. When
+    // the visual viewport sits back at its full (no-keyboard) height, the keyboard is
+    // truly gone: clear kb-open even though focus is retained. The settle delay keeps
+    // it distinct from the focus→keyboard-rising moment (also briefly full-height), so
+    // instant-hide-on-focus is preserved.
+    clearTimeout(restoreTimer);
+    if (kbOpen && vv.height >= vvMax - 40) {
+      restoreTimer = setTimeout(() => {
+        if (vv.height >= vvMax - 40 && document.body.classList.contains("kb-open")) {
+          document.body.classList.remove("kb-open");
+          applyVvb(false);
+          syncChatViewport();
+        }
+      }, 350);
+    }
   };
   vv.addEventListener("resize", sync);
   vv.addEventListener("scroll", sync); // keyboard open/close shifts offsetTop
-  window.addEventListener("orientationchange", sync);
+  window.addEventListener("orientationchange", () => { vvMax = vv.height; sync(); });
+  // Focus/blur of a text field is the earliest, most reliable keyboard signal —
+  // flip kb-open the instant focus moves, then re-settle after the keyboard
+  // finishes animating (esp. on blur, when the bars slide back).
+  document.addEventListener("focusin", sync, true);
+  document.addEventListener("focusout", () => {
+    sync();
+    requestAnimationFrame(() => requestAnimationFrame(sync));
+    setTimeout(sync, 300);
+  }, true);
   // Returning to the app — tab switch back, app resume from background, or a bfcache
   // restore — can leave visualViewport metrics stale: --vvb keeps an old keyboard-inset
   // value, so the fixed tab bar sits off the bottom and swallows taps until a manual

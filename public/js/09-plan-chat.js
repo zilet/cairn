@@ -818,23 +818,14 @@ async function renderChat() {
           <button id="chatPreviewX" class="chip-x" aria-label="Remove photo">✕</button>
         </div>
         <div class="chatbar">
-          <button id="chatCam" class="attachbtn cambtn" aria-label="Take a photo of your plate">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.2l1.1-1.7A1.5 1.5 0 0 1 10.05 3.6h3.9a1.5 1.5 0 0 1 1.25.7L16.3 6h1.2A2.5 2.5 0 0 1 20 8.5V17a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17Z"/>
-              <circle cx="12" cy="12.5" r="3.4"/>
+          <button id="chatAttach" class="attachbtn" aria-label="Attach a photo — camera, library, or files">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 5.5v13M5.5 12h13"/>
             </svg>
           </button>
-          <button id="chatAttach" class="attachbtn" aria-label="Attach a photo from your library or files">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="4" y="5" width="16" height="14" rx="2.5"/>
-              <circle cx="9.2" cy="10" r="1.5"/>
-              <path d="M4 16.5l4.4-4.2 3.4 3.2 3.1-2.9L20 16.5"/>
-            </svg>
-          </button>
-          <input id="chatCamFile" type="file" accept="image/*" capture="environment" hidden>
           <input id="chatFile" type="file" accept="image/*" hidden>
-          <textarea id="chatInput" rows="1" autocomplete="off" placeholder="Ask your coach, log a ride, snap a plate…"></textarea>
-          <button id="chatSend" class="logbtn">↑</button>
+          <textarea id="chatInput" rows="1" autocomplete="off" placeholder="Ask, log, or snap a plate…"></textarea>
+          <button id="chatSend" class="logbtn" aria-label="Send">↑</button>
         </div>
         <div class="chatnote">Logs save instantly. Plan changes arrive as drafts for you to apply.</div>
       </div>
@@ -847,17 +838,15 @@ async function renderChat() {
   requestAnimationFrame(measureChatTop); // re-measure once layout/fonts settle
 
   const input = $("#chatInput"), sendBtn = $("#chatSend");
-  const fileInput = $("#chatFile"), camInput = $("#chatCamFile");
-  const attachBtn = $("#chatAttach"), camBtn = $("#chatCam"), preview = $("#chatPreview");
+  const fileInput = $("#chatFile");
+  const attachBtn = $("#chatAttach"), preview = $("#chatPreview");
   let attached = null; // { dataUrl, base64, mime }
 
   const clearAttach = () => {
     attached = null;
     fileInput.value = "";
-    camInput.value = "";
     preview.hidden = true;
     attachBtn.classList.remove("has-img");
-    camBtn.classList.remove("has-img");
   };
   const attachFile = async (f) => {
     if (!f) return;
@@ -866,18 +855,17 @@ async function renderChat() {
       preview.querySelector("img").src = attached.dataUrl;
       preview.hidden = false;
       attachBtn.classList.add("has-img");
-      camBtn.classList.add("has-img");
     } catch { toast("Couldn't read that image — try another."); clearAttach(); }
   };
+  // One "+" control. On iOS a file input with no `capture` opens the native
+  // sheet (Take Photo / Photo Library / Choose File); desktop opens the file
+  // dialog. Attaching is occasional, so this keeps the bar to input + send.
   attachBtn.addEventListener("click", () => fileInput.click());
-  camBtn.addEventListener("click", () => camInput.click());
   $("#chatPreviewX").addEventListener("click", clearAttach);
-  for (const inp of [fileInput, camInput]) {
-    inp.addEventListener("change", () => {
-      const f = inp.files && inp.files[0];
-      if (f) attachFile(f);
-    });
-  }
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (f) attachFile(f);
+  });
   // Paste-an-image support (desktop screenshots, iOS "Copy Photo"). One live
   // handler at a time: re-renders swap it out, and it bails when chat isn't
   // the active tab so it never touches a stale DOM.
@@ -924,6 +912,16 @@ async function renderChat() {
       toast("Couldn't send — check your connection");
     } finally { if (matchMedia("(hover:hover)").matches) input.focus(); }
   };
+  // Tapping send must NOT blur the textarea (that just dismisses the keyboard,
+  // and as the layout reflows the button slides out from under your finger so
+  // the first tap never sends). preventDefault on pointerdown keeps the input
+  // focused — but on iOS WebKit that ALSO suppresses the synthesized click, so
+  // we send on pointerup instead (fires on both touch and mouse). The click
+  // handler stays for keyboard activation (Enter/Space on the focused button);
+  // send()'s empty-input guard makes any second call a no-op, so pointer
+  // devices never double-send. (The "+" is left alone — it opens a file picker.)
+  sendBtn.addEventListener("pointerdown", (e) => e.preventDefault());
+  sendBtn.addEventListener("pointerup", () => send());
   sendBtn.addEventListener("click", send);
   // Desktop: Enter sends, Shift+Enter drops a newline. Touch keyboards keep
   // Enter as a newline (so multi-line capture — pasting findings, describing a
@@ -934,15 +932,18 @@ async function renderChat() {
       send();
     }
   });
-  // Re-pin the column when the keyboard opens/closes. iOS reports the new
-  // visual-viewport metrics a frame or two late, so settle with a double rAF —
-  // this is what kills the stale gap left behind after the keyboard drops.
-  for (const ev of ["focus", "blur"]) {
-    input.addEventListener(ev, () => {
-      measureChatTop();
-      requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
-    });
-  }
+  // Re-pin the column across the WHOLE keyboard slide. iOS animates the keyboard
+  // over ~300ms and reports its visual-viewport metrics in steps, so a single
+  // double-rAF (~32ms) catches a transitional offsetTop — the styled bar and the
+  // real caret desync ("typing in the gap underneath the input"). Re-measure on
+  // a few beats spanning the animation so the dock settles flush to the keyboard,
+  // and once more after it drops to clear any stale gap.
+  const settleChatViewport = () => {
+    measureChatTop();
+    requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
+    for (const d of [80, 160, 260, 380, 520]) setTimeout(() => { if (state.tab === "chat") measureChatTop(); }, d);
+  };
+  for (const ev of ["focus", "blur"]) input.addEventListener(ev, settleChatViewport);
   // Persist the unsent draft on every keystroke so it survives a tab switch /
   // reload — restored below unless a deep-link prefill takes precedence. Re-grow
   // the composer to fit what's typed/pasted.
@@ -1661,6 +1662,11 @@ function wireChatJump(log, jump) {
 function autosizeChatInput(el) {
   if (!el) return;
   const MAX = 140; // ~5 lines, mirrors the textarea's CSS max-height
+  // Empty → snap back to the natural single row. WebKit folds the placeholder
+  // into an empty textarea's scrollHeight, so measuring it would inflate the box
+  // to however many lines the placeholder wraps to (the 2-line empty box). Drop
+  // the inline height and let rows="1" + CSS define one clean line.
+  if (!el.value) { el.style.height = ""; el.style.overflowY = "hidden"; return; }
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, MAX) + "px";
   el.style.overflowY = el.scrollHeight > MAX ? "auto" : "hidden";
@@ -1690,13 +1696,16 @@ function measureChatTop() {
     root.style.setProperty("--chat-h", Math.max(220, vh - headerBottom - 18) + "px");
     return;
   }
+  // Mobile chat is bottom-anchored (CSS: top = header, bottom = tab bar / keyboard
+  // top — see the body.chat-mode block in styles.css). We only publish the three
+  // anchors: --cvt (visual-viewport pan, ~0 in an installed PWA), --chat-top (live
+  // header height), --tabbar-h (tab bar footprint, reserved below the column when
+  // the keyboard is closed). NO measured column height — the bottom edge rides the
+  // viewport natively, so the composer + caret never lag the keyboard animation.
   const headerH = header ? header.getBoundingClientRect().height : 0;
-  // The tab bar's footprint in the visible viewport — collapses to 0 once the
-  // keyboard is open (the bar sits behind it), so the column extends to the keyboard.
-  const reserve = tab ? Math.max(0, vh - (tab.getBoundingClientRect().top - offTop)) : 0;
   root.style.setProperty("--cvt", Math.round(offTop) + "px");
   root.style.setProperty("--chat-top", Math.round(headerH) + "px");
-  root.style.setProperty("--chat-h", Math.max(220, Math.round(vh - headerH - reserve)) + "px");
+  if (tab) root.style.setProperty("--tabbar-h", Math.round(tab.getBoundingClientRect().height) + "px");
 }
 
 // ---------- chat history overlay (read-only browse + search) ----------
