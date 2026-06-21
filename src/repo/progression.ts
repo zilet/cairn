@@ -14,7 +14,7 @@
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
-import { canonicalGroup, isMobility, MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { canonicalGroup, isMobility, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { examplesForGroup } from "./exercise-variations.js";
 import { findExercise } from "./exercises.js";
 import { getPlan } from "./plan.js";
@@ -513,6 +513,147 @@ function buildBalanceSummary(groups: GroupBalance[], due: string[], over: string
   return `${parts.join("; ")}.`;
 }
 
+// ---- acute recovery: what got hammered in the last day or two ---------------
+// programBalance above is a WEEKLY read — a group can be "due" on the week yet
+// torched TODAY. The "what changed" digest is read as "what should I do next", so
+// it must never put a just-smoked muscle up as the next move. Strength load is in
+// logged_sets; ENDURANCE load is NOT (a 3-hour ride is an `activities` row, not a
+// logged set), so map the activity TYPE → the prime-mover regions it fatigues.
+// This is the connected-brain read that makes the next-day suggestion actually
+// elite — legs are toast after a long ride, so it surfaces fresh work instead.
+// Conservative on purpose: only PRIME movers per modality, plain words, no score.
+// Per-modality thresholds: "ride" is the value normalizeGarminType folds cycling
+// onto, so it MUST be in the matcher (the raw "mountain_biking" etc. are matched
+// too, for free-text logs). A casual walk folds onto "hike", so hike's heavy bar is
+// deliberately high — a stroll never gates leg training; a real long hike does.
+const ENDURANCE_REGIONS: Array<{ re: RegExp; label: string; regions: MuscleGroup[]; heavyMin: number; heavyKm: number }> = [
+  { re: /\b(ride|cycl|bik|mtb|gravel|spin|peloton)/, label: "ride", regions: ["quads", "hamstrings", "glutes", "calves", "core"], heavyMin: 50, heavyKm: 20 },
+  { re: /\b(run|jog|sprint|tempo|interval)/, label: "run", regions: ["quads", "hamstrings", "glutes", "calves", "core"], heavyMin: 35, heavyKm: 6 },
+  { re: /\b(hik|walk|ruck|trek|stair|stepper|elliptical)/, label: "hike", regions: ["quads", "glutes", "calves", "hamstrings"], heavyMin: 90, heavyKm: 12 },
+  { re: /\b(row|erg|kayak|paddle)/, label: "row", regions: ["back", "hamstrings", "glutes", "core"], heavyMin: 40, heavyKm: 8 },
+  { re: /\b(swim)/, label: "swim", regions: ["back", "shoulders", "chest", "core"], heavyMin: 40, heavyKm: 2 },
+  { re: /\b(ski|skat|snowboard)/, label: "session", regions: ["quads", "glutes", "calves", "hamstrings"], heavyMin: 60, heavyKm: 10 },
+];
+
+const HEAVY_SETS = 4;   // ≥ 4 working sets on a group in a day or two is a real dose
+
+type EnduranceRegion = (typeof ENDURANCE_REGIONS)[number];
+function matchEnduranceRegion(text: string): EnduranceRegion | null {
+  const norm = String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (!norm) return null;
+  for (const m of ENDURANCE_REGIONS) if (m.re.test(norm)) return m;
+  return null;
+}
+
+function durPhrase(min: number | null, km: number | null): string {
+  if (min != null && min > 0) return min >= 90 ? `~${Math.round(min / 60)} h` : `~${Math.round(min / 5) * 5} min`;
+  if (km != null && km > 0) return `~${Math.round(km)} km`;
+  return "";
+}
+function whenWord(daysAgo: number): string {
+  return daysAgo <= 0 ? "today" : daysAgo === 1 ? "yesterday" : `${daysAgo} days ago`;
+}
+
+export interface RecentLoad {
+  group: MuscleGroup;
+  last_date: string;
+  days_ago: number;
+  heavy: boolean;
+  source: "strength" | "endurance" | "both";
+  activity: string | null;  // endurance label ("ride" / "run" / …); null when strength-only
+  detail: string;           // magnitude phrase ("~3 h", "~12 km", "")
+}
+
+// Per-canonical-group ACUTE load over the last `days` (default 2). Folds recent
+// STRENGTH sets (per group) AND recent ENDURANCE sessions (mapped to the regions
+// they fatigue) into one freshness read. `heavy` = a real dose — enough that the
+// muscle wants a day before it's the smart next pick. Best-effort + null-safe.
+export function recentMuscleLoad(days = 2): Map<MuscleGroup, RecentLoad> {
+  const out = new Map<MuscleGroup, RecentLoad>();
+  const today = new Date().toISOString().slice(0, 10);
+  const since = new Date(new Date(today + "T00:00:00Z").getTime() - (Math.max(1, days) - 1) * 864e5).toISOString().slice(0, 10);
+  const dAgo = (iso: string): number => {
+    const t = Date.parse(String(iso).slice(0, 10) + "T00:00:00Z");
+    return Number.isFinite(t) ? Math.max(0, Math.round((Date.parse(today + "T00:00:00Z") - t) / 864e5)) : 0;
+  };
+  const bump = (g: MuscleGroup, date: string, heavy: boolean, src: "strength" | "endurance", activity: string | null, detail: string) => {
+    const prev = out.get(g);
+    if (!prev) {
+      out.set(g, { group: g, last_date: date, days_ago: dAgo(date), heavy, source: src, activity, detail });
+      return;
+    }
+    const newer = date > prev.last_date;
+    out.set(g, {
+      group: g,
+      last_date: newer ? date : prev.last_date,
+      days_ago: Math.min(prev.days_ago, dAgo(date)),
+      heavy: prev.heavy || heavy,
+      source: prev.source === src ? src : "both",
+      // an endurance session is the more explanatory note ("your 3 h ride") — let it win
+      activity: src === "endurance" ? activity : prev.activity,
+      detail: src === "endurance" && detail ? detail : prev.detail,
+    });
+  };
+
+  // Strength: working sets per canonical group in the window.
+  try {
+    const sets = db.prepare(
+      `SELECT e.muscle_group AS mg, e.name AS name, s.date AS date
+         FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+         JOIN sessions s ON s.id = ls.session_id
+        WHERE s.date >= ? AND s.date <= ?`
+    ).all(since, today) as any[];
+    const tally = new Map<MuscleGroup, { sets: number; last: string }>();
+    for (const r of sets) {
+      const g = canonicalGroup(r.mg) ?? canonicalGroup(r.name);
+      if (!g || isMobility(g)) continue;
+      const cur = tally.get(g) ?? { sets: 0, last: String(r.date) };
+      cur.sets += 1;
+      if (String(r.date) > cur.last) cur.last = String(r.date);
+      tally.set(g, cur);
+    }
+    for (const [g, v] of tally) bump(g, v.last, v.sets >= HEAVY_SETS, "strength", null, "");
+  } catch { /* logged_sets/exercises absent → skip */ }
+
+  // Endurance: activities mapped to the regions they fatigue. LEFT JOIN the rich
+  // Garmin row so a SHORT but hard session (high training effect) still counts as a
+  // real dose — using every signal, not just the clock.
+  try {
+    const acts = db.prepare(
+      `SELECT a.date AS date, a.type AS type, a.raw_text AS raw_text, a.notes AS notes,
+              a.duration_min AS duration_min, a.distance_km AS distance_km,
+              ga.aerobic_te AS ate, ga.anaerobic_te AS anate
+         FROM activities a
+         LEFT JOIN garmin_activities ga ON ga.activity_id = a.id
+        WHERE a.date >= ? AND a.date <= ?`
+    ).all(since, today) as any[];
+    for (const a of acts) {
+      const m = matchEnduranceRegion(`${a.type || ""} ${a.raw_text || ""} ${a.notes || ""}`);
+      if (!m) continue;
+      const dur = a.duration_min != null ? Number(a.duration_min) : null;
+      const km = a.distance_km != null ? Number(a.distance_km) : null;
+      const ate = a.ate != null ? Number(a.ate) : null;
+      const anate = a.anate != null ? Number(a.anate) : null;
+      const heavy =
+        (dur != null && dur >= m.heavyMin) ||
+        (km != null && km >= m.heavyKm) ||
+        (ate != null && ate >= 3) ||
+        (anate != null && anate >= 2);
+      const detail = durPhrase(dur, km);
+      for (const g of m.regions) bump(g, String(a.date), heavy, "endurance", m.label, detail);
+    }
+  } catch { /* activities absent → skip */ }
+
+  return out;
+}
+
+// Plain-words "what loaded it" phrase for a recovering group's reframe.
+function loadPhrase(rl: RecentLoad): string {
+  const when = whenWord(rl.days_ago);
+  if (rl.activity) return `your ${rl.detail ? `${rl.detail} ` : ""}${rl.activity} ${when}`;
+  return `the hard ${rl.group} work you did ${when}`;
+}
+
 // ---- the "what changed & why" digest ----------------------------------------
 export interface ProgramAdjustment {
   kind: "progression" | "balance" | "deload" | "gap";
@@ -523,6 +664,10 @@ export interface ProgramAdjustment {
   // "plan it" action; and a few concrete movements to actually do about it.
   group?: string;
   suggestions?: string[];
+  // A due group that's recovering from recent acute load (a long ride/run, or a
+  // heavy session) — informational, NOT a "do it now" pick. The UI sinks + reframes
+  // it; "plan it" becomes "plan around it" rather than "add it".
+  recovering?: boolean;
 }
 
 // The handful of concrete adaptations DUE right now — lifts to push/hold/deload
@@ -564,12 +709,31 @@ export function programAdjustments(): ProgramAdjustment[] {
     }
   } catch { /* program-state unavailable → skip */ }
 
-  // 3) Balance: groups that are due (under-volume or not trained recently).
+  // 3) Balance: groups that are due (under-volume or not trained recently) —
+  //    reconciled against ACUTE recovery so a just-smoked muscle is never put up as
+  //    the next move. A group hammered in the last day or two (lifting OR a long
+  //    ride/run) is held back (sunk below fresh work + the gaps, reframed honestly);
+  //    fresh due groups lead. This is the connected read that makes the next-day
+  //    pick elite — your legs are toast after a 3 h ride, so it stops recommending
+  //    them and surfaces what's actually fresh.
   const bal = programBalance();
+  const recent = recentMuscleLoad(2);
+  const recovering: ProgramAdjustment[] = [];
   for (const g of bal.due.slice(0, 4)) {
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
-    push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
+    const rl = recent.get(g as MuscleGroup);
+    if (rl?.heavy) {
+      recovering.push({
+        kind: "balance",
+        title: `${cap(g)} — recovering`,
+        why: `${cap(g)} is ${reason}, but ${loadPhrase(rl)} loaded it hard — give it a day before training it again. A fresher group is the smarter pick for your next session.`,
+        group: g,
+        recovering: true,
+      });
+    } else {
+      push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
+    }
   }
   for (const g of bal.over.slice(0, 2)) {
     push({ kind: "balance", title: `${cap(g)} is running high`, why: `${cap(g)} volume is above its productive range — there's room to redirect some of it to a due group.`, group: g });
@@ -591,6 +755,10 @@ export function programAdjustments(): ProgramAdjustment[] {
   }
 
   overloads.slice(0, 3).forEach(push);
+  // Recovering groups last — informational, never the lead. The athlete sees WHY a
+  // due muscle isn't being recommended yet (the connected read) without it crowding
+  // out fresh work. If fresh items already fill the card, these only show on expand.
+  recovering.forEach(push);
   return out.slice(0, 8);
 }
 

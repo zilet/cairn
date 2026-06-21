@@ -502,8 +502,29 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
   // Headline — the one-sentence program read, always safe to show.
   if (st?.headline) lines.push(`PROGRAM STATE (deterministic read of the logged history — trust it as your starting point; plain words, no scores): ${st.headline}`);
 
+  // ACUTE recovery — which muscles are smoked from the last day or two (a long
+  // ride/run that never touched logged_sets, or a heavy session). The coach must
+  // plan AROUND these, never recommend them for the next session even when the
+  // weekly ledger says they're due. This is the connected read that keeps the
+  // next-day pick honest (legs are toast after a 3 h ride → train something fresh).
+  const recentLoad = Array.isArray(ctx?.recent_load) ? ctx.recent_load : [];
+  const heavy = recentLoad.filter((r: any) => r?.heavy);
+  const recoveringSet = new Set<string>(heavy.map((r: any) => String(r.group)));
+  let recoveringLine = "";
+  if (heavy.length) {
+    const groups = [...recoveringSet];
+    const lead = heavy.find((r: any) => r.activity) ?? heavy[0];
+    const ago = (d: number) => (d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`);
+    const cause = lead?.activity
+      ? `${lead.detail ? `${lead.detail} ` : ""}${lead.activity} ${ago(Number(lead.days_ago) || 0)}`
+      : `a heavy session ${ago(Number(lead?.days_ago) || 0)}`;
+    recoveringLine = `ACUTELY LOADED — RECOVERING (do NOT program these for the next session even if "due"; they're freshly torched — plan AROUND them and let them recover): ${groups.join(", ")} (${cause}).`;
+  }
+
   if (opts.brief) {
-    // Day-read: just the headline + the single most-actionable adaptation.
+    // Day-read: the headline, the acute recovery read (so today bends around smoked
+    // muscles), and the single most-actionable adaptation.
+    if (recoveringLine) lines.push(recoveringLine);
     const top = adj[0];
     if (top?.title) lines.push(`- One thing the program could use: ${top.title}${top.why ? ` — ${top.why}` : ""}`);
     return lines.length ? `\n${lines.join("\n")}\n` : "";
@@ -525,12 +546,22 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
     lines.push(`PROGRESSING (push the next conservative step here): ${climbing.slice(0, 6).map((l: any) => l.exercise).join(", ")}.`);
   }
 
-  // Volume balance — which groups are due / running high, in plain words.
+  // The full block leads its volume read with the acute recovery line (computed above).
+  if (recoveringLine) lines.push(recoveringLine);
+
+  // Volume balance — which groups are due / running high, in plain words. DUE is
+  // split by acute freshness so the coach knows which due groups are good next
+  // picks vs which are recovering and must wait.
   if (bal && (bal.summary || (Array.isArray(bal.due) && bal.due.length) || (Array.isArray(bal.over) && bal.over.length))) {
     const pieces: string[] = [];
-    if (Array.isArray(bal.due) && bal.due.length) pieces.push(`DUE (under their productive range or untrained ~1wk): ${bal.due.join(", ")}`);
+    if (Array.isArray(bal.due) && bal.due.length) {
+      const fresh = bal.due.filter((g: string) => !recoveringSet.has(g));
+      const rec = bal.due.filter((g: string) => recoveringSet.has(g));
+      if (fresh.length) pieces.push(`DUE & FRESH (good next picks): ${fresh.join(", ")}`);
+      if (rec.length) pieces.push(`DUE BUT RECOVERING (don't program next session): ${rec.join(", ")}`);
+    }
     if (Array.isArray(bal.over) && bal.over.length) pieces.push(`RUNNING HIGH (room to redirect): ${bal.over.join(", ")}`);
-    lines.push(`VOLUME BALANCE (working sets per muscle group, last 2 weeks — bring DUE groups up, don't pile onto HIGH ones; plain words, never numbers as a grade):${pieces.length ? ` ${pieces.join("; ")}.` : ` ${bal.summary}`}`);
+    lines.push(`VOLUME BALANCE (working sets per muscle group, last 2 weeks — bring DUE & FRESH groups up, don't pile onto HIGH or RECOVERING ones; plain words, never numbers as a grade):${pieces.length ? ` ${pieces.join("; ")}.` : ` ${bal.summary}`}`);
   }
 
   // Mesocycle position (deload timing) when program-state carries it.

@@ -20,11 +20,12 @@ import {
   planDayProgression,
   programBalance,
   programAdjustments,
+  recentMuscleLoad,
 } from "../dist/repo/progression.js";
 
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
-  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks"]) {
+  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
 }
@@ -268,4 +269,65 @@ test("programAdjustments surfaces a due deload + a due group, plain words", () =
     assert.doesNotMatch(`${a.title} ${a.why}`, /\b\d{1,3}\/100\b/, "never a 0-100 score");
   }
   assert.ok(adj.some((a) => a.kind === "deload"), "the sliding squat earns a deload adaptation");
+});
+
+// ---- acute recovery: never recommend a just-smoked muscle for the next session ---
+function logRide(date, { type = "ride", duration_min = 180, distance_km = 40 } = {}) {
+  db.prepare(
+    `INSERT INTO activities (date, type, raw_text, duration_min, distance_km, source) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(date, type, `${type} ride`, duration_min, distance_km, "test");
+}
+
+test("recentMuscleLoad maps a long ride to the leg + core regions it torched (heavy)", () => {
+  // "ride" is exactly what normalizeGarminType folds cycling onto — the real sync path.
+  logRide(isoDaysAgo(1)); // a 3 h ride yesterday
+  const load = recentMuscleLoad(2);
+  for (const g of ["quads", "hamstrings", "glutes", "calves", "core"]) {
+    const rl = load.get(g);
+    assert.ok(rl, `${g} is flagged as recently loaded by the ride`);
+    assert.equal(rl.heavy, true, `${g} is HEAVY (a 3 h ride is a real dose)`);
+    assert.equal(rl.source, "endurance");
+    assert.equal(rl.activity, "ride");
+  }
+  // A ride doesn't torch the chest/biceps — they stay fresh.
+  assert.ok(!load.get("chest"), "the ride doesn't flag chest");
+  assert.ok(!load.get("biceps"), "the ride doesn't flag biceps");
+  // The raw provider type ("mountain_biking") in a free-text log matches too.
+  reset();
+  logRide(isoDaysAgo(1), { type: "mountain_biking" });
+  assert.equal(recentMuscleLoad(2).get("quads")?.heavy, true, "raw mountain_biking is recognized");
+});
+
+test("recentMuscleLoad does NOT gate legs after a short casual walk", () => {
+  // A 40-min walk folds onto "hike" but is well under hike's heavy bar (90 min).
+  db.prepare(`INSERT INTO activities (date, type, raw_text, duration_min, distance_km, source) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(isoDaysAgo(1), "hike", "evening walk", 40, 3, "test");
+  const rl = recentMuscleLoad(2).get("quads");
+  if (rl) assert.equal(rl.heavy, false, "a short walk loads legs but not HEAVY — it won't hold back leg training");
+});
+
+test("programAdjustments holds back a due group the athlete just smoked on a ride", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  makeExercise("Bench Press", { muscle_group: "chest" });
+  // Both quads and chest are DUE (thin, trained > a week ago) — but only legs got
+  // hammered by yesterday's long ride.
+  logSet("Back Squat", isoDaysAgo(9), { weight: 225, reps: 5, rir: 2 });
+  logSet("Bench Press", isoDaysAgo(9), { weight: 185, reps: 8, rir: 2 });
+  logRide(isoDaysAgo(1)); // 3 h MTB ride yesterday → quads recovering
+
+  const adj = programAdjustments();
+  const quads = adj.find((a) => a.kind === "balance" && /quad/i.test(a.title));
+  const chest = adj.find((a) => a.kind === "balance" && /chest/i.test(a.title));
+  assert.ok(quads, "quads still appears (it IS due on the week)");
+  assert.equal(quads.recovering, true, "but it's reframed as RECOVERING, not a call to act");
+  assert.match(quads.title, /recovering/i);
+  assert.ok(!(quads.suggestions && quads.suggestions.length), "a recovering group offers no 'do it now' movements");
+  assert.match(quads.why, /ride/i, "the why names the ride that loaded it (the connected read)");
+  assert.ok(chest, "chest — fresh, untouched by the ride — is a normal due item");
+  assert.ok(!chest.recovering, "chest is NOT recovering");
+  assert.ok(chest.suggestions && chest.suggestions.length, "a fresh due group carries concrete movements");
+  // Fresh work leads; the recovering group is sunk below it.
+  assert.ok(adj.indexOf(chest) < adj.indexOf(quads), "fresh due group ranks above the recovering one");
+  // Plain words only — never a 0-100 score.
+  for (const a of adj) assert.doesNotMatch(`${a.title} ${a.why}`, /\b\d{1,3}\/100\b/);
 });

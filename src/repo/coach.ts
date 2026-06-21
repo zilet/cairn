@@ -4,7 +4,7 @@ import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./he
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach } from "./program-blocks.js";
 import { getProgramState } from "./program-state.js";
-import { planDayProgression, programAdjustments, programBalance } from "./progression.js";
+import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
@@ -288,6 +288,11 @@ export function getCoachContext() {
     // Volume balance per canonical muscle group over the last 2 weeks (bands +
     // which groups are DUE / running HIGH, in plain words). Mobility excluded.
     program_balance: programBalance(),
+    // ACUTE recovery: which muscle groups got hammered in the last day or two —
+    // folding ENDURANCE (a long ride/run never touches logged_sets) in with recent
+    // strength. Lets the coach plan AROUND smoked muscles instead of recommending a
+    // group the athlete just torched. Plain words, no score.
+    recent_load: [...recentMuscleLoad(2).values()],
     // The next session's auto-progression — the adapted target per strength lift
     // on the day this read points at ("+5 lb", "hold 50 — stalled", "−10%"), so
     // the plan visibly FOLLOWS what was logged. Bounded to the active day. [] when

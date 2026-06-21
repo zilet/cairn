@@ -2730,9 +2730,11 @@ async function loadWeekAhead() {
 // WHY plus concrete movements to do about it ("Try Back Squat · Walking Lunge")
 // and a "Plan it →" that hands the coach a tailored request (a DRAFT proposal,
 // never auto-applied). So the athlete sees WHAT changed, WHY, and HAS something to
-// do — without being yanked to a charts screen. The header "Full program →" is the
-// explicit, labelled way into the deeper read. Pull, never push: it waits quietly
-// and renders NOTHING when there's nothing to say. Best-effort + null-safe.
+// do. The card is ACUTE-recovery aware: a group you just torched (a long ride/run
+// or a heavy session) is held back and reframed ("Quads — recovering"), never put
+// up as the next move. "+N more" expands the rest IN PLACE (no yank to a charts
+// screen); the header "My plan →" opens the actual plan. Pull, never push: it waits
+// quietly and renders NOTHING when there's nothing to say. Best-effort + null-safe.
 const ADJUST_GLYPH = { progression: "↑", balance: "◆", deload: "↓", gap: "○" };
 
 // The calm chat-prefill request behind "Plan it →" on one adjustment — phrased so
@@ -2742,6 +2744,11 @@ function adjustPlanRequest(a) {
   const g = a && a.group ? a.group : "";
   const sugg = a && Array.isArray(a.suggestions) && a.suggestions.length
     ? ` (e.g. ${a.suggestions.join(", ")})` : "";
+  // A recovering group is due on the week but freshly torched — don't ask to add it
+  // now; ask the coach to plan AROUND it and say when to come back to it.
+  if (a && a.recovering) {
+    return `My ${g || "those muscles"} took a beating recently and ${g ? "is" : "are"} still recovering. Plan my next session around fresher muscles instead, and tell me which day to come back to ${g || "them"}.`;
+  }
   switch (a && a.kind) {
     case "gap":
       return `Add some ${g || "the missing"} work to my plan${sugg}. Fit it in without adding much time, and tell me which day it goes on.`;
@@ -2770,15 +2777,17 @@ async function loadProgramAdjustmentsBanner() {
   if (state.tab !== "today" || !slot.isConnected) return;
   rows = Array.isArray(rows) ? rows : [];
   if (!rows.length) { slot.innerHTML = ""; return; }
-  const shown = rows.slice(0, 3);
-  const more = rows.length - shown.length;
-  const items = shown.map((a) => {
-    const glyph = ADJUST_GLYPH[a && a.kind] || "○";
+  // Render EVERY row, but keep all but the first 3 collapsed behind "+N more" — which
+  // expands them IN PLACE (no yank to a charts screen). The first 3 lead.
+  const more = Math.max(0, rows.length - 3);
+  const items = rows.map((a, i) => {
+    const glyph = (a && a.recovering) ? "↻" : (ADJUST_GLYPH[a && a.kind] || "○");
     const chips = a && Array.isArray(a.suggestions) && a.suggestions.length
       ? `<div class="adjust-sugs"><span class="adjust-sugs-lbl lbl">Try</span>${a.suggestions
           .map((s) => `<span class="adjust-chip">${escHtml(s)}</span>`).join("")}</div>`
       : "";
-    return `<div class="adjust-row">
+    const act = a && a.recovering ? "Plan around it →" : "Plan it →";
+    return `<div class="adjust-row${i >= 3 ? " adjust-extra" : ""}${a && a.recovering ? " adjust-rec" : ""}">
         <button class="adjust-item" type="button" aria-expanded="false">
           <span class="adjust-glyph" aria-hidden="true">${glyph}</span>
           <span class="adjust-title">${escHtml((a && a.title) || "")}</span>
@@ -2787,17 +2796,17 @@ async function loadProgramAdjustmentsBanner() {
         <div class="adjust-detail" hidden>
           ${a && a.why ? `<div class="adjust-why">${escHtml(a.why)}</div>` : ""}
           ${chips}
-          <button class="adjust-act" type="button" data-req="${escAttr(adjustPlanRequest(a))}">Plan it →</button>
+          <button class="adjust-act" type="button" data-req="${escAttr(adjustPlanRequest(a))}">${act}</button>
         </div>
       </div>`;
   }).join("");
   slot.innerHTML = `<div class="adjust-card reveal" style="--i:0">
       <div class="adjust-head">
         <span class="lbl">What changed</span>
-        <button class="adjust-all lbl" id="adjustAll" type="button">Full program →</button>
+        <button class="adjust-all lbl" id="adjustAll" type="button">My plan →</button>
       </div>
       ${items}
-      ${more > 0 ? `<button class="adjust-more lbl" id="adjustMore" type="button">+${more} more in your program</button>` : ""}
+      ${more > 0 ? `<button class="adjust-more lbl" id="adjustMore" type="button" aria-expanded="false">+${more} more in your program</button>` : ""}
     </div>`;
   const card = slot.querySelector(".adjust-card");
   if (!card) return;
@@ -2808,9 +2817,14 @@ async function loadProgramAdjustmentsBanner() {
       activateTab("chat");
       return;
     }
-    if (e.target.closest("#adjustAll, #adjustMore")) {
-      state.progressSeg = "program";
-      activateTab("progress");
+    // "My plan →" opens the actual plan (where changes land), not the charts/history.
+    if (e.target.closest("#adjustAll")) { activateTab("plan"); return; }
+    // "+N more" / "Show less" reveals the rest of the adaptations IN PLACE.
+    const moreBtn = e.target.closest("#adjustMore");
+    if (moreBtn) {
+      const open = card.classList.toggle("adjust-open");
+      moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      moreBtn.textContent = open ? "Show less" : `+${more} more in your program`;
       return;
     }
     const item = e.target.closest(".adjust-item");
