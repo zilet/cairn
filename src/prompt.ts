@@ -485,6 +485,82 @@ function renderBlock(ctx: any): string {
   return `\nACTIVE TRAINING BLOCK: "${b.goal}" — ${b.focus}, ${b.phase} phase (${b.week_of}). Periodize toward this: in an accumulation phase build volume, in intensification push load, in a deload phase propose a LIGHTER week. Don't ramp volume and intensity at once.\n`;
 }
 
+// The elite PROGRAM-STATE read, rendered for a plan-shaping prompt. Mirrors
+// renderConnectedBrain: a compact, plain-language block from program_state +
+// program_balance + program_adjustments so EVERY strength prompt sees how each
+// lift is trending, where the volume is skewed, and the concrete adaptations due
+// — never a flat session dump, never a score. Returns "" when there's nothing to
+// say (quiet by default). `opts.brief` trims it for the day-read (one calm
+// summary line) vs the full block for the coach/session/week-ahead.
+export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): string {
+  const st = ctx?.program_state;
+  const bal = ctx?.program_balance;
+  const adj = Array.isArray(ctx?.program_adjustments) ? ctx.program_adjustments : [];
+  if (!st && !bal && !adj.length) return "";
+  const lines: string[] = [];
+
+  // Headline — the one-sentence program read, always safe to show.
+  if (st?.headline) lines.push(`PROGRAM STATE (deterministic read of the logged history — trust it as your starting point; plain words, no scores): ${st.headline}`);
+
+  if (opts.brief) {
+    // Day-read: just the headline + the single most-actionable adaptation.
+    const top = adj[0];
+    if (top?.title) lines.push(`- One thing the program could use: ${top.title}${top.why ? ` — ${top.why}` : ""}`);
+    return lines.length ? `\n${lines.join("\n")}\n` : "";
+  }
+
+  // Per-lift trajectory — lead with what needs action (stalled / slipping), so the
+  // coach's changes target the lifts that earned them.
+  const lifts = Array.isArray(st?.lifts) ? st.lifts : [];
+  const needsAction = lifts.filter((l: any) => l.status === "plateaued" || l.status === "regressing");
+  const climbing = lifts.filter((l: any) => l.status === "progressing");
+  if (needsAction.length) {
+    lines.push("LIFTS THAT NEED A CALL (act on these — the suggested_action is the deterministic read):");
+    for (const l of needsAction.slice(0, 8)) {
+      const tells = Array.isArray(l.stall_signals) && l.stall_signals.length ? ` (${l.stall_signals.join("; ")})` : "";
+      lines.push(`  - ${l.exercise} [${l.status}] → ${l.suggested_action}${tells}: ${String(l.why ?? "").trim()}`);
+    }
+  }
+  if (climbing.length) {
+    lines.push(`PROGRESSING (push the next conservative step here): ${climbing.slice(0, 6).map((l: any) => l.exercise).join(", ")}.`);
+  }
+
+  // Volume balance — which groups are due / running high, in plain words.
+  if (bal && (bal.summary || (Array.isArray(bal.due) && bal.due.length) || (Array.isArray(bal.over) && bal.over.length))) {
+    const pieces: string[] = [];
+    if (Array.isArray(bal.due) && bal.due.length) pieces.push(`DUE (under their productive range or untrained ~1wk): ${bal.due.join(", ")}`);
+    if (Array.isArray(bal.over) && bal.over.length) pieces.push(`RUNNING HIGH (room to redirect): ${bal.over.join(", ")}`);
+    lines.push(`VOLUME BALANCE (working sets per muscle group, last 2 weeks — bring DUE groups up, don't pile onto HIGH ones; plain words, never numbers as a grade):${pieces.length ? ` ${pieces.join("; ")}.` : ` ${bal.summary}`}`);
+  }
+
+  // Mesocycle position (deload timing) when program-state carries it.
+  if (st?.mesocycle?.note) lines.push(`MESOCYCLE: ${st.mesocycle.note}`);
+  // Endurance trajectory (hybrid/endurance athletes) — the conservative read.
+  if (st?.endurance?.why) lines.push(`ENDURANCE TRAJECTORY: ${st.endurance.why}`);
+
+  // The concrete adaptations digest — the "what to change & why" the coach should
+  // realize as proposed plan changes (most-actionable first, already deduped).
+  if (adj.length) {
+    lines.push("ADAPTATIONS DUE (concrete, most-actionable first — realize the relevant ones as conservative proposals; this is the source of truth for what the plan needs):");
+    for (const a of adj.slice(0, 6)) lines.push(`  - ${a.title}${a.why ? `: ${a.why}` : ""}`);
+  }
+
+  return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
+// Elite-coach + longevity guardrails for the STRENGTH prompts — the
+// programming-quality floor this athlete's history demands, in plain,
+// suggestion-framed words (no scores). Folded into the coach / session /
+// week-ahead prompts so core, grip, mobility and ankle work are treated as
+// first-class, cumulative elbow load is managed, and earned rest is protected.
+const ELITE_STRENGTH_GUARDRAILS = `ELITE PROGRAMMING GUARDRAILS (longevity-minded; a complete program, not just the big lifts — all suggestions, never gates, no scores):
+- CORE is first-class: program anti-extension / anti-rotation work (planks, pallof press, dead bugs) and LOADED CARRIES — they build trunk stability, posture and bone density. Don't leave them as an afterthought.
+- GRIP / FOREARM work is first-class too: dead hangs and loaded carries build grip and protect the elbow, and carry over to every pull. If none is programmed, work some in.
+- MOBILITY / ANKLE / calf / tibialis resilience matters here (ankle-fracture + surgery history, and a returning runner building toward a half marathon): a few minutes of ankle + hip prep and direct calf/tibialis work protect the joints under running and lifting. Mobility is tracked but never counts as working volume.
+- MANAGE CUMULATIVE GRIP + ELBOW LOAD as a SHARED BUDGET across RDLs, heavy pulls/rows, and dead hangs (the athlete has cubital-tunnel / elbow sensitivity). Don't stack a heavy pulling day, an RDL session and long hangs back-to-back; use straps on the heaviest pulls when grip is the limiter, and spread elbow-intensive work out.
+- BALANCE CHEST vs SHOULDERS: don't let lateral raises run ~2×/week while chest gets a single movement. Give horizontal pressing (the athlete prefers barbell bench) at least the volume the side delts get.
+- WEIGHT EARNED REST HARDER for this athlete: they tend to override rest and come back flat, and free-T sits low-side. When recovery is drifting or several loading days have stacked, lean toward a genuine rest/deload — frame it as the strong, earned choice, never as falling behind.`;
+
 // Training-target proposal prompt (existing coach).
 export function buildCoachPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
@@ -540,8 +616,10 @@ have none — that's fine, just use what's there):
 - This is kind, not anxious: a rough session is information, not failure. Easing off is the plan
   working as designed, never a penalty.
 
+${ELITE_STRENGTH_GUARDRAILS}
+
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderBlock(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -628,8 +706,10 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 - Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
   rewrite) only when frequency/recovery/plateaus clearly call for it.
 
+${ELITE_STRENGTH_GUARDRAILS}
+
 ${variationBlock}${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderBlock(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -1541,7 +1621,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderHealthLead(context)}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1619,8 +1699,10 @@ GUARDRAILS:
 - Honor the day read: if today reads as rest/easy (kind="${read.kind}"), keep this session light and
   short unless the athlete explicitly asked to train hard.
 
+${ELITE_STRENGTH_GUARDRAILS}
+
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
@@ -2295,7 +2377,12 @@ HOW TO SHAPE IT:
   lighter days in a 7-day week is healthy, not a gap.
 - Each day: a SHORT label and at most one short note. The summary names the week's shape and the ONE
   thing that matters most.
+- Let the PROGRAM STATE below shape the week: if a group is DUE, fit it in; if a lift needs a DELOAD or a
+  deload week is about due, make one day lighter; weave in the core / grip / mobility / ankle work the
+  guardrails call for where it fits naturally (a few minutes, not a whole session).
 
+${ELITE_STRENGTH_GUARDRAILS}
+${renderProgramState(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 ${WEEK_AHEAD_SCHEMA}
 

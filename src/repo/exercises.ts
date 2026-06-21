@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { canonicalGroup, classifyMuscleGroup, resolveGroup } from "./exercise-canon.js";
 
 // ---------- exercises ----------
 const EXERCISE_MODES = ["reps", "timed"];
@@ -22,9 +23,14 @@ export function getExercise(id: number): any {
 export function findOrCreateExercise(name: string, muscle_group?: string, constraint_note?: string, mode?: string): any {
   const existing = findExercise(name);
   if (existing) return existing;
+  // When no group is supplied, auto-classify by name. When a group IS supplied,
+  // pass it through canonicalGroup() first so legacy values fold to the taxonomy.
+  const resolvedGroup = muscle_group != null
+    ? (canonicalGroup(muscle_group) ?? muscle_group)
+    : classifyMuscleGroup(name);
   const info = db
     .prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, mode) VALUES (?, ?, ?, ?)`)
-    .run(name.trim(), muscle_group ?? null, constraint_note ?? null, validMode(mode) ?? "reps");
+    .run(name.trim(), resolvedGroup ?? null, constraint_note ?? null, validMode(mode) ?? "reps");
   return db.prepare(`SELECT * FROM exercises WHERE id = ?`).get(info.lastInsertRowid);
 }
 
@@ -35,12 +41,61 @@ export function upsertExercise(input: { name: string; muscle_group?: string | nu
   if (!name) throw new Error("name required");
   const existing = findExercise(name);
   if (existing) {
+    // Canonicalize the supplied group before passing it through.
+    const mg = input.muscle_group !== undefined
+      ? (input.muscle_group != null ? (canonicalGroup(input.muscle_group) ?? input.muscle_group) : null)
+      : undefined;
     return updateExercise(existing.id, {
-      muscle_group: input.muscle_group !== undefined ? input.muscle_group : undefined,
+      muscle_group: mg,
       mode: input.mode ?? undefined,
     });
   }
   return findOrCreateExercise(name, input.muscle_group ?? undefined, undefined, input.mode ?? undefined);
+}
+
+// Backfill / normalize muscle_group for ALL existing exercises. Idempotent:
+// exercises already on a canonical group are skipped.
+//   - null group  → classify by name via the KB
+//   - legacy value (legs, posterior, abs, grip, …) → canonical taxonomy value
+// Returns a count of changed rows + a change log (name, from, into).
+export function reconcileExerciseGroups(): {
+  updated: number;
+  changes: Array<{ name: string; from: string | null; into: string }>;
+} {
+  const rows = db.prepare("SELECT id, name, muscle_group FROM exercises").all() as Array<{
+    id: number;
+    name: string;
+    muscle_group: string | null;
+  }>;
+  const changes: Array<{ name: string; from: string | null; into: string }> = [];
+  for (const ex of rows) {
+    const resolved = resolveGroup(ex.name, ex.muscle_group);
+    if (!resolved || resolved === ex.muscle_group) continue;
+    db.prepare("UPDATE exercises SET muscle_group = ? WHERE id = ?").run(resolved, ex.id);
+    changes.push({ name: ex.name, from: ex.muscle_group, into: resolved });
+  }
+  return { updated: changes.length, changes };
+}
+
+// Merge one exercise into another: re-point all logged_sets.exercise_id and
+// plan_items.exercise_id from `fromName` to `intoName`, then delete the now-empty
+// `from` exercise. Guards: `into` must exist; `from` must exist. Idempotent —
+// if `from` is already gone, returns ok:true with 0 moves.
+export function mergeExercises(
+  fromName: string,
+  intoName: string
+): { ok: boolean; moved_sets: number; moved_plan_items: number; error?: string } {
+  const into = findExercise(intoName);
+  if (!into) return { ok: false, moved_sets: 0, moved_plan_items: 0, error: `target exercise "${intoName}" not found` };
+  const from = findExercise(fromName);
+  if (!from) return { ok: true, moved_sets: 0, moved_plan_items: 0 }; // already gone — idempotent
+  if (from.id === into.id) return { ok: true, moved_sets: 0, moved_plan_items: 0 }; // same exercise
+
+  const moved_sets = Number(db.prepare("UPDATE logged_sets SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
+  const moved_plan_items = Number(db.prepare("UPDATE plan_items SET exercise_id = ? WHERE exercise_id = ?").run(into.id, from.id).changes);
+  // Remove the now-empty exercise row (no FKs remain pointing at it).
+  db.prepare("DELETE FROM exercises WHERE id = ?").run(from.id);
+  return { ok: true, moved_sets, moved_plan_items };
 }
 
 export function updateExercise(

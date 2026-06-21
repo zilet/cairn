@@ -12,6 +12,7 @@
  */
 
 import { db } from "../db.js";
+import { getEnduranceGoal } from "./profile.js";
 
 // ---- allowed enum values ----
 const VALID_FOCUS = ["strength", "hypertrophy", "endurance-base", "peak"] as const;
@@ -165,6 +166,66 @@ export function getActiveBlock(): ProgramBlock | null {
   return hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE status = 'active' ORDER BY id DESC LIMIT 1").get()
   );
+}
+
+/**
+ * Ensure ONE active periodization block exists, auto-creating a sensible default
+ * aligned to the athlete's endurance goal when none is running. IDEMPOTENT —
+ * returns the existing active block untouched if there is one (it never resets a
+ * block the athlete is mid-way through). Does NOT auto-advance weeks (that stays
+ * manual / the scheduler's job).
+ *
+ * The default is STRENGTH-FIRST today (the athlete's primary discipline), but it
+ * biases the focus + length toward an approaching race so the program periodizes
+ * sensibly without the athlete having to set up a block by hand:
+ *  - a race in the BUILD window (~5–10 wk out) → an "endurance-base" block sized
+ *    to the time-to-race so lifting stays supportive of the running build;
+ *  - a race in the SHARPEN/TAPER window (≤4 wk) → a short "peak" block;
+ *  - otherwise (no race, or far out) → a strength accumulation block.
+ *
+ * Constitution: a suggestion the athlete drives — they can edit/abandon it any
+ * time. No scores; the block is plain descriptive periodization.
+ */
+export function ensureActiveBlock(): ProgramBlock {
+  const existing = getActiveBlock();
+  if (existing) return existing;
+
+  const goal = getEnduranceGoal();
+  let focus: Focus = "strength";
+  let total_weeks = 6;
+  let blockGoal = "Strength base — build the main lifts";
+
+  if (goal?.is_race) {
+    const phase = goal.phase ?? null;
+    const wk = goal.weeks_to_race ?? null;
+    const event = goal.event ? String(goal.event).slice(0, 80) : "your race";
+    if (phase === "taper" || phase === "sharpen" || (wk != null && wk <= 4)) {
+      // Close to the race — a short peaking block; keep lifting minimal/supportive.
+      focus = "peak";
+      total_weeks = wk != null && wk > 0 ? Math.min(4, Math.max(2, wk)) : 3;
+      blockGoal = `Sharpen for ${event} — arrive fresh`;
+    } else if (phase === "build" || (wk != null && wk <= 10)) {
+      // In the build — center the aerobic base; strength is supportive/durability.
+      focus = "endurance-base";
+      total_weeks = wk != null && wk > 0 ? Math.min(8, Math.max(4, wk - 2)) : 6;
+      blockGoal = `Build toward ${event} — aerobic base + supportive strength`;
+    } else {
+      // Race exists but far out (base phase) — strength-first, build durability.
+      focus = "strength";
+      total_weeks = 6;
+      blockGoal = `Off-season strength — base for ${event}`;
+    }
+  } else if (goal && !goal.is_race) {
+    // A standing endurance goal (no date) — strength-first, with running kept as a
+    // steady supportive base; no peak to chase.
+    focus = "strength";
+    total_weeks = 6;
+    blockGoal = "Strength base — steady running on the side";
+  }
+
+  // createBlock supersedes any active block (there's none here) and derives the
+  // phase from week 1. Always returns the row.
+  return createBlock({ goal: blockGoal, focus, total_weeks, week_index: 1 });
 }
 
 /**

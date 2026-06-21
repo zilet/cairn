@@ -3,6 +3,7 @@
 // re-exported here so those imports keep working unchanged. The split is a pure,
 // behavior-preserving relocation — see the individual modules for the logic.
 export * from "./repo/exercises.js";
+export * from "./repo/exercise-canon.js";
 export * from "./repo/plan.js";
 export * from "./repo/training-read.js";
 export * from "./repo/sessions.js";
@@ -23,5 +24,6 @@ export * from "./repo/propagation.js";
 export * from "./repo/evidence.js";
 export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
+export * from "./repo/progression.js";
 export * from "./repo/program-blocks.js";
 export * from "./repo/exercise-variations.js";

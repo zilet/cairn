@@ -3,6 +3,8 @@ import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "
 import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach } from "./program-blocks.js";
+import { getProgramState } from "./program-state.js";
+import { planDayProgression, programAdjustments, programBalance } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
@@ -168,6 +170,51 @@ export function trainingSignals(recent?: any[]): { progression: ProgressionSigna
   return { progression, autoregulation };
 }
 
+// A BOUNDED view of the deterministic program-state for the coach prompt — the
+// load-bearing signal (per-lift status/trend/action + stall tells, the volume
+// bands, the mesocycle position + endurance read + the adaptations list) without
+// the verbose internals. Keeps the prompt from exploding on a big training log.
+function programStateForCoach(recovery?: any) {
+  const st = getProgramState(undefined, recovery);
+  return {
+    headline: st.headline,
+    discipline: st.discipline,
+    lifts: (Array.isArray(st.lifts) ? st.lifts : []).slice(0, 14).map((l: any) => ({
+      exercise: l.exercise,
+      muscle_group: l.muscle_group,
+      mode: l.mode,
+      status: l.status,
+      suggested_action: l.suggested_action,
+      trend_per_wk: l.trend_per_wk,
+      weeks_static: l.weeks_static,
+      stall_signals: l.stall_signals,
+      why: l.why,
+    })),
+    volume: (Array.isArray(st.volume) ? st.volume : []).slice(0, 14),
+    mesocycle: st.mesocycle,
+    endurance: st.endurance,
+    adaptations_due: (Array.isArray(st.adaptations_due) ? st.adaptations_due : []).slice(0, 6),
+  };
+}
+
+// Resolve the plan day number that today's read points at, so the progression
+// digest reflects the NEXT/active session. Match the cached/computed day-read's
+// focus to a plan day; fall back to the first plan day. Cardio-only plan days
+// have no strength progression, so the consumer simply gets [].
+function nextPlanDayNumber(read: any): number | null {
+  const days = db.prepare(`SELECT day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
+  if (!days.length) return null;
+  const focus = read?.focus ? String(read.focus).toLowerCase().trim() : null;
+  if (focus) {
+    const hit = days.find((d) => {
+      const f = String(d.focus || d.name || "").toLowerCase().trim();
+      return f && (f === focus || f.includes(focus) || focus.includes(f));
+    });
+    if (hit) return hit.day_number;
+  }
+  return days[0].day_number;
+}
+
 export function getCoachContext() {
   // Compute the Garmin summary and the unified recovery view ONCE, then thread
   // them through the recovery + day_read keys so a single context build doesn't
@@ -176,6 +223,9 @@ export function getCoachContext() {
   const recovery = getRecoverySummary(14, garmin);
   const recentSessions = getRecentSessions(20);
   const profile = getProfile() as any;
+  // Compute the day-read ONCE so both day_read and the progression digest below
+  // reference the same read (the progression is for the day this read points at).
+  const dayReadView = getCachedDayRead(localDateISO()) ?? dayRead(undefined, recovery);
   return {
     profile,
     // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
@@ -230,11 +280,30 @@ export function getCoachContext() {
     // Null when no block is running — then the deterministic mesocycle read in
     // program-state still gives deload timing. Additive, never a gate.
     program_block: blockForCoach(),
+    // The elite program brain (deterministic floor): per-lift status/trend +
+    // stall detection, volume bands, mesocycle position, endurance trends, and
+    // the "what to evolve next" list — so EVERY plan-shaping prompt sees the
+    // program's actual trajectory, not just raw sessions. Bounded; no scores.
+    program_state: programStateForCoach(recovery),
+    // Volume balance per canonical muscle group over the last 2 weeks (bands +
+    // which groups are DUE / running HIGH, in plain words). Mobility excluded.
+    program_balance: programBalance(),
+    // The next session's auto-progression — the adapted target per strength lift
+    // on the day this read points at ("+5 lb", "hold 50 — stalled", "−10%"), so
+    // the plan visibly FOLLOWS what was logged. Bounded to the active day. [] when
+    // there's no plan day / it's a cardio day.
+    progression: (() => {
+      const dn = nextPlanDayNumber(dayReadView);
+      return dn == null ? [] : planDayProgression(dn).slice(0, 12);
+    })(),
+    // The calm "what changed & why" digest — the handful of concrete adaptations
+    // due right now (lifts to push/hold/deload, groups due, missing-pattern gaps).
+    program_adjustments: programAdjustments().slice(0, 5),
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.
     // Keyed by the server's LOCAL date to match the day_reads cache (saveDayRead).
-    day_read: getCachedDayRead(localDateISO()) ?? dayRead(undefined, recovery),
+    day_read: dayReadView,
     // Recent quiet cross-domain insights (bounded) so the chat/coach brain can
     // reference and build on connections it has already surfaced — closing the
     // "one brain" loop instead of re-deriving them each turn.
