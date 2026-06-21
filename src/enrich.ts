@@ -6,7 +6,7 @@ import { db } from "./db.js";
 import * as repo from "./repo.js";
 import { runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
-import { synthesizeHealth } from "./coachOps.js";
+import { reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 
 const execFileP = promisify(execFile);
 
@@ -306,6 +306,10 @@ async function processJob(job: Job): Promise<void> {
   // without waiting for a manual Derive, then refresh the whole-picture health
   // review as a follow-on job on this same serial queue. Never for activity/food.
   if (job.kind === "health") {
+    // First, let the agent align any new analyte synonyms this lab introduced
+    // (e.g. an abbreviation the KB never saw) so the merged series feed everything
+    // below. Fail-open: the deterministic normalizer + KB already ran at read time.
+    try { await reconcileMarkers("auto"); } catch (e: any) { console.warn(`[enrich] marker reconcile failed: ${e?.message}`); }
     try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
     enqueueReviewRefresh();
   }

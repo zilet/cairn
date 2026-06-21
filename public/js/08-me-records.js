@@ -170,12 +170,28 @@ function paintHealthMarkersTab() {
   if (!c) return;
   c.innerHTML = `<div id="hMarkers">${skelLines(4)}</div>
     <div id="hExport" hidden style="margin:18px 2px 4px">
-      <button id="hExportBtn" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Export health summary</button>
-      <div class="hpic-hero-sub" style="margin-top:7px;text-align:center">A structured JSON of your markers over time — to hand a physician or another tool.</div>
+      <button id="hReportBtn" class="logbtn" style="width:100%;text-align:center;padding:12px">Export for my doctor</button>
+      <div class="hpic-hero-sub" style="margin-top:7px;text-align:center">A clean, grouped report of your markers over time — findings to discuss up top, your progress by date, plus DEXA body comp. Opens ready to “Save as PDF” for MyChart or your PCP.</div>
+      <button id="hExportBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px">Export structured data (JSON)</button>
+      <button id="hAlignBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:9px">Align lab names</button>
+      <div class="hpic-hero-sub" style="margin-top:6px;text-align:center">Different labs name the same test differently — Cairn merges them so each trend is one line. Runs automatically on new labs.</div>
     </div>`;
+  $("#hReportBtn")?.addEventListener("click", () => {
+    window.open(withToken("/api/health-report"), "_blank");
+  });
   $("#hExportBtn")?.addEventListener("click", () => {
     downloadFile(withToken("/api/health-export"));
-    toast("Health summary downloaded");
+    toast("Structured data downloaded");
+  });
+  $("#hAlignBtn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const restore = btnBusy(btn, "aligning…");
+    let r = null;
+    try { r = await api("/markers/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { r = null; }
+    restore();
+    if (!r || r.ok === false) { toast("Couldn't align right now — try again in a bit."); return; }
+    toast(r.aligned ? `Merged ${r.aligned} duplicate marker${r.aligned === 1 ? "" : "s"}` : "Already aligned");
+    if (r.aligned) loadHealthMarkers(pollToken);
   });
   loadHealthMarkers(pollToken);
 }

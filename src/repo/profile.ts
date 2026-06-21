@@ -213,6 +213,9 @@ export function getPrimaryDiscipline(): "strength" | "endurance" | "hybrid" {
 export function setProfile(p: any) {
   const cur = getProfile() || {};
   const merged = {
+    // The athlete's name (optional). Same contract as the free-text fields: an
+    // explicit '' clears it, undefined leaves the existing value intact, capped.
+    name: p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
     sex: p.sex ?? cur.sex ?? "male",
     age: p.age ?? cur.age ?? null,
     height_cm: p.height_cm ?? cur.height_cm ?? null,
@@ -241,16 +244,17 @@ export function setProfile(p: any) {
       : (cur.endurance_goal_json ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
+       name=excluded.name,
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, weight_lb=excluded.weight_lb,
        goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
-  ).run(merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
+  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
   return getProfile();
 }
 

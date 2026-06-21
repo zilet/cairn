@@ -44,6 +44,9 @@ export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
   if (method.toUpperCase() !== "GET") return false;
   if (p === "/api/plan.ics") return true;
   if (p === "/api/export" || p === "/api/export/db" || p === "/api/health-export") return true;
+  // The clinician report opens in a new browser tab (and its .txt twin downloads),
+  // neither of which can set an auth header — the query token is their only path.
+  if (p === "/api/health-report" || p === "/api/health-report.txt") return true;
   // The PWA renders generated artwork via <img src=…?token=…>; an <img> can't set
   // request headers, so the query token is its only auth path. (204/PNG GET only.)
   if (p === "/api/art") return true;

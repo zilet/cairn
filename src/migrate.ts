@@ -320,6 +320,11 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_program_blocks_status ON program_blocks(status);
     `);
   } },
+  { version: 39, name: "profile-name", up: (db) => {
+    // The athlete's name — optional, set in Me → Profile, stamped on the
+    // doctor-ready clinical report (so it's no longer a fill-in-on-paper blank).
+    addColumn(db, "profile", "name TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

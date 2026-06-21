@@ -49,6 +49,9 @@ async function renderMeProfile() {
     </div>
     <h1 class="lbl" style="margin:24px 0 8px">Profile</h1>
     <div id="profFields">
+    <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
+      <p class="aboutme-hint">Stamped on the doctor report you export from Health → Markers. Leave empty to fill it in on paper instead.</p>
+      <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${escAttr(p.name || "")}" class="form-input"></div>
     ${num("age","Age",p.age)}
     ${num("height_cm","Height (cm)",p.height_cm,0.1)}
     ${num("weight_lb","Weight (lb)",p.weight_lb,0.1)}
@@ -150,6 +153,7 @@ async function renderMeProfile() {
   };
   const persistProfile = async () => {
     const body = {
+      name: ($("#name")?.value ?? "").trim(),
       age: +$("#age").value || null, height_cm: +$("#height_cm").value || null,
       weight_lb: +$("#weight_lb").value || null, goal_weight_lb: +$("#goal_weight_lb").value || null,
       goal_date: $("#goal_date").value || null, activity_factor: +$("#activity_factor").value || null,

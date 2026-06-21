@@ -5,6 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import * as repo from "./repo.js";
+import { buildClinicalReportData, renderClinicalReportHTML, renderClinicalReportText } from "./report.js";
 import { todayISO } from "./db.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
 import { enqueueAgentJob, cancelAgentJob, onJobEvent } from "./agentJobs.js";
@@ -28,6 +29,7 @@ import {
   consolidateMemory,
   growAboutMe,
   reconcileOutcomes,
+  reconcileMarkers,
   distillChat,
   onboardFromText,
   agentInfoOp,
@@ -1100,6 +1102,27 @@ api.get("/health-export", (_req, res) => {
   res.send(JSON.stringify(data, null, 2));
 });
 
+// Clinician-facing health report — a doctor-ready, print-to-PDF HTML document
+// (grouped panels + dated progress + a "findings to discuss" lead + DEXA body
+// comp). The PWA opens it in a new tab (?token=); the page itself has a "Save as
+// PDF" button. `?name=` stamps the patient name (also editable on the page).
+// `.txt` is the plain-text twin for pasting into a MyChart message body.
+// Optimal-zone framing, no scores — same boundary discipline as /health-export.
+api.get("/health-report", (req, res) => {
+  const name = typeof req.query.name === "string" ? req.query.name.slice(0, 120) : "";
+  const html = renderClinicalReportHTML(buildClinicalReportData(), { name });
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(html);
+});
+
+api.get("/health-report.txt", (req, res) => {
+  const name = typeof req.query.name === "string" ? req.query.name.slice(0, 120) : "";
+  const text = renderClinicalReportText(buildClinicalReportData(), { name });
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="cairn-health-summary-${todayISO()}.txt"`);
+  res.send(text);
+});
+
 api.use("/health-docs", healthDocsRouter);
 
 // ---- health insights (marker history + whole-picture agentic review) ----
@@ -1127,6 +1150,20 @@ api.post("/health/review", async (req, res) => {
 // Informational, not medical advice; the impact_score is an internal ordering
 // signal only and is never rendered as a user-facing grade.
 api.get("/markers/priority", (_req, res) => res.json(repo.prioritizeMarkers()));
+
+// Marker-name canonicalization (analyte de-duplication). GET lists the learned
+// variant→canonical aliases; POST runs the agentic reconciler over the distinct
+// marker names and persists genuine same-analyte merges (the deterministic
+// normalizer + KB are always on; this learns the long tail). Synchronous like the
+// meal swap — one agent call; ok:false at 200 is the designed failure signal.
+api.get("/markers/aliases", (_req, res) => res.json({ aliases: repo.listMarkerAliases() }));
+api.post("/markers/reconcile", async (req, res) => {
+  try {
+    res.json(await reconcileMarkers(req.body?.agent));
+  } catch (e: any) {
+    res.json({ ok: false, error: e?.message || "reconcile failed" });
+  }
+});
 
 // The elite-coach synthesis layer: the deterministic TIERED focus (priorities,
 // not a flat directive flood) + the latest cached agentic health-story narrative.

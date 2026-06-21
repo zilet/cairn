@@ -108,7 +108,9 @@ test("vitamin D nmol/L is converted before the low-side guard runs", () => {
 
 test("Lp(a) mass units are not compared to nmol/L with a fake fixed conversion", () => {
   seedHealthDoc("2025-12-01", [marker("Lp(a)", 40, { unit: "mg/dL" })]);
-  const lpa = repo.prioritizeMarkers().markers.find((m) => m.key.includes("lp(a)"));
+  // Series key is now the canonical marker key (marker-canon.ts: "lpa"); the
+  // display name stays the lab's own "Lp(a)". Find by name so this stays robust.
+  const lpa = repo.prioritizeMarkers().markers.find((m) => m.name === "Lp(a)");
   assert.equal(lpa.latest.unit_mismatch, true);
   assert.equal(lpa.latest.expected_unit, "nmol/L");
   assert.equal(lpa.optimal, null);

@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**169 routes** across 61 groups.
+**173 routes** across 63 groups.
 
 ## `/activities`
 
@@ -257,6 +257,18 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/health-metrics` | Recent metrics for a source (default all sources) over the last N days. |
 | POST | `/api/health-metrics` | The documented Apple Shortcuts automation POSTs here. The body is EITHER one row OR an array of rows (a Shortcut can batch a backfill of several days), so we normalize to a list and upsert each via UNIQUE(source,date) — fully idempotent: re-posting a day overwrites it. Each row carries an optional `source` (default 'apple') and a `date` (YYYY-MM-DD, required per row), plus any of steps/sleep_min/sleep_score/resting_hr/hrv_ms/active_calories and a free-form `raw` blob preserved verbatim for later. |
 
+## `/health-report`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/health-report` | Clinician-facing health report — a doctor-ready, print-to-PDF HTML document (grouped panels + dated progress + a "findings to discuss" lead + DEXA body comp). The PWA opens it in a new tab (?token=); the page itself has a "Save as PDF" button. `?name=` stamps the patient name (also editable on the page). `.txt` is the plain-text twin for pasting into a MyChart message body. Optimal-zone framing, no scores — same boundary discipline as /health-export. |
+
+## `/health-report.txt`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/health-report.txt` |  |
+
 ## `/injury-impacts`
 
 | Method | Path | Notes |
@@ -287,7 +299,9 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
+| GET | `/api/markers/aliases` | Marker-name canonicalization (analyte de-duplication). GET lists the learned variant→canonical aliases; POST runs the agentic reconciler over the distinct marker names and persists genuine same-analyte merges (the deterministic normalizer + KB are always on; this learns the long tail). Synchronous like the meal swap — one agent call; ok:false at 200 is the designed failure signal. |
 | GET | `/api/markers/priority` | Markers re-ranked by impact (distance from OPTIMAL, most-actionable first). Informational, not medical advice; the impact_score is an internal ordering signal only and is never rendered as a user-facing grade. |
+| POST | `/api/markers/reconcile` |  |
 
 ## `/meal-plans`
 

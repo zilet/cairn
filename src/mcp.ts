@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Request, Response } from "express";
 import { AGENT_JOB_KINDS } from "./agentJobKinds.js";
 import * as repo from "./repo.js";
+import { buildClinicalReportData, renderClinicalReportText } from "./report.js";
 import {
   agentStatusFor,
   suggestSession,
@@ -21,6 +22,7 @@ import {
   consolidateMemory,
   growAboutMe,
   reconcileOutcomes,
+  reconcileMarkers,
   distillChat,
   onboardFromText,
   agentInfoOp,
@@ -456,8 +458,9 @@ export function buildMcpServer(): McpServer {
   server.tool("get_profile", "Get the athlete's profile (age, height, weight, goal).", {},
     async () => asText(repo.getProfile()));
 
-  server.tool("set_profile", "Update profile fields (any subset). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it.",
+  server.tool("set_profile", "Update profile fields (any subset). name is the athlete's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it.",
     {
+      name: z.string().optional(),
       sex: z.string().optional(), age: z.number().optional(), height_cm: z.number().optional(),
       weight_lb: z.number().optional(), goal_weight_lb: z.number().optional(),
       goal_date: z.string().optional(), activity_factor: z.number().optional(), notes: z.string().optional(),
@@ -1128,6 +1131,13 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_health_report",
+    "Doctor-ready CLINICAL summary as plain text — the human-readable counterpart to get_health_export (which is JSON for tools). A 'findings to discuss' lead (every marker outside its lab range or optimal target, in priority order), then markers grouped into clinical panels (Lipids & Cardiovascular, Metabolic, …) with the latest value, lab flag, optimal target, and the full dated history so progress is visible, plus DEXA body composition and the supplement list. Ready to paste into a patient-portal (MyChart) message. The PWA renders the same data as a print-to-PDF page at GET /api/health-report. INFORMATIONAL, not medical advice — no 0-100 scores.",
+    { name: z.string().optional().describe("patient name to stamp on the summary") },
+    async ({ name }) => asText(renderClinicalReportText(buildClinicalReportData(), { name }))
+  );
+
+  server.tool(
     "list_directives",
     "List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default; pass all:true for the full history incl. resolved/dismissed feedback rows.",
     { all: z.boolean().optional() },
@@ -1146,6 +1156,13 @@ export function buildMcpServer(): McpServer {
     "Re-run the deterministic propagation engine over the latest markers: clears the 'markers' directive source and re-derives evidence-based nutrition/training/watch directives for every out-of-optimal marker, while honoring prior Done/Dismiss feedback. Idempotent; leaves agent-emitted 'health_review' directives untouched.",
     {},
     async () => asText(repo.deriveDirectives())
+  );
+
+  server.tool(
+    "reconcile_markers",
+    "Align differently-named lab markers that are the SAME analyte so each analyte's history merges into one trend. A deterministic normalizer + curated clinical KB always fold the obvious cases (e.g. 'Glucose (random)'='Glucose Random'; 'Vitamin D'='25-OH Vitamin D'); this AGENTIC pass learns the harder synonyms a new lab introduces (e.g. 'Estimated Glomerular Filt Rate'=eGFR) and persists them. CONSERVATIVE: it only merges unambiguous same-analyte names (never direct-vs-calculated LDL, random-vs-fasting-vs-eAG glucose, free-vs-total, serum-vs-urine) and never relabels the displayed name — only the series merge. Returns {aligned, applied}.",
+    { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
+    async ({ agent }) => asText(await reconcileMarkers(agent))
   );
 
   server.tool(

@@ -31,6 +31,7 @@ import {
   buildAboutMeGrowthPrompt,
   buildChatDistillPrompt,
   buildOnboardPrompt,
+  buildMarkerReconcilePrompt,
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
@@ -832,4 +833,34 @@ export async function growAboutMe(agent: string | undefined) {
 export function reconcileOutcomes(opts?: { maxPerPass?: number }) {
   const r = repo.reconcileSuggestions(opts);
   return { ok: true as const, ...r };
+}
+
+// ---------- agentic marker reconciliation ----------
+// Learn the harder analyte synonyms a lab introduces (the clinical-judgment layer
+// over the deterministic canonicalizer — see buildMarkerReconcilePrompt). The
+// agent clusters same-analyte names; we persist each member→canonical decision in
+// marker_aliases (source 'agent'), so getMarkerHistory merges their series from
+// then on. SAFETY: persist ONLY genuine merges (a group with ≥2 distinct keys),
+// every member must be a verbatim input name, and members whose units are clearly
+// incompatible are rejected (the agent shouldn't merge across dimensions; this is
+// the belt-and-suspenders guard). The display name is NEVER changed — only the
+// merge key — so the worst a bad agent run can do is over-merge two series, which
+// the unit guard + conservative prompt make unlikely. Fail-open: no agent / bad
+// shape → nothing persisted, the deterministic floor still stands.
+export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
+  const items = repo.distinctMarkerNames();
+  if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
+  hooks?.onPhase?.("aligning lab names");
+  const prompt = buildMarkerReconcilePrompt(items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample })));
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "marker_reconcile", signal: hooks?.signal });
+  const p: any = result?.parsed;
+  if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
+    return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+  }
+  // Validate the agent's groups into concrete alias rows (pure guards: verbatim
+  // members, ≥2 members, unit-compatible, real merge) and persist each one.
+  const merges = repo.planMarkerMerges(items.map((i) => ({ name: i.name, unit: i.unit })), p.groups);
+  for (const m of merges) repo.setMarkerAlias(m.rawNorm, m.canonicalKey, m.canonicalName, "agent");
+  const aligned = new Set(merges.map((m) => m.canonicalKey)).size;
+  return { ok: true as const, aligned, applied: merges.length, candidates: items.length, agent: chosen, tried, agent_status: "ok" as const };
 }

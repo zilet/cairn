@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS plan_proposals (
 
 CREATE TABLE IF NOT EXISTS profile (
   id INTEGER PRIMARY KEY CHECK (id = 1),
+  name TEXT,                             -- the athlete's name (stamped on the doctor report; optional)
   sex TEXT DEFAULT 'male',
   age INTEGER,
   height_cm REAL,
@@ -454,6 +455,23 @@ CREATE TABLE IF NOT EXISTS art_aliases (
   asset_key TEXT NOT NULL,                    -- -> art_assets.key
   created_at TEXT DEFAULT (datetime('now')),
   PRIMARY KEY (kind, query)
+);
+
+-- Marker-name canonicalization (the connected brain's analyte de-duplication).
+-- Different labs name the same analyte differently ("Glucose (random)" vs
+-- "Glucose Random"; "Vitamin D" vs "25-OH Vitamin D"; "eGFR" vs the long form),
+-- which would otherwise split one analyte's history into parallel series. Like
+-- art_aliases, this persists each learned variant→canonical decision so it's
+-- resolved once: a deterministic normalizer + a curated KB are the offline floor
+-- (see src/repo/marker-canon.ts), and the agentic reconciler learns the harder
+-- clinical synonyms into this table (source 'agent'/'manual'/'kb'). getMarkerHistory
+-- keys by the canonical, so every connected-brain surface merges automatically.
+CREATE TABLE IF NOT EXISTS marker_aliases (
+  raw_norm TEXT PRIMARY KEY,                  -- normalizeMarkerName(raw lab name)
+  canonical_key TEXT NOT NULL,               -- normalizeMarkerName(canonical) — the merge key
+  canonical_name TEXT NOT NULL,              -- canonical display name
+  source TEXT DEFAULT 'agent',               -- kb | agent | manual
+  created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS art_usage (

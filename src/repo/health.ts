@@ -1,6 +1,7 @@
 import { db, todayISO } from "../db.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, seriesUnitsCompatible } from "./lab-units.js";
+import { canonicalMarker } from "./marker-canon.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { type OptimalZone, applyReviewDirectives, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
@@ -358,7 +359,12 @@ export function getMarkerHistory() {
       // parseable lab number, or a non-empty qualitative result (e.g. "negative").
       // Recognized markers are normalized to the unit their optimal band expects
       // here, while source_value/source_unit keep the lab transcription inspectable.
-      const key = rawName.toLowerCase();
+      // The series KEY is the CANONICAL marker key (marker-canon.ts): different labs'
+      // names for the same analyte ("Glucose (random)"/"Glucose Random"; "Vitamin D"/
+      // "25-OH Vitamin D"; "eGFR"/the long form) collapse onto one series. The display
+      // NAME stays the lab's own (last.name below), so canonicalization only MERGES —
+      // it never relabels what the athlete (or a directive) sees.
+      const key = canonicalMarker(rawName).key || rawName.toLowerCase();
       const flag = ["low", "normal", "high"].includes(m.flag) ? m.flag : null;
       const sourceUnit = m.unit !== null && m.unit !== undefined && String(m.unit).trim() ? String(m.unit).trim() : null;
       const normalized = normalizeMarkerReading(rawName, m.value, sourceUnit, matchOptimalZone(rawName));

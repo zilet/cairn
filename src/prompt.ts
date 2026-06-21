@@ -2034,6 +2034,52 @@ const INSIGHT_SCHEMA = `{
 // It runs on demand / periodically and the result waits in-app; NOTHING is
 // pushed. Honors the constitution: at most one real thing, plainly, kindly, or
 // nothing at all. recent[] are insights already surfaced — do NOT repeat them.
+// Agentic marker reconciliation — the clinical-judgment layer over the
+// deterministic canonicalizer (src/repo/marker-canon.ts). Different labs name the
+// same analyte differently; the normalizer + curated KB fold the obvious cases
+// offline, but the long tail (an abbreviation the KB never saw, e.g. "Estimated
+// Glomerular Filt Rate" ⇄ eGFR; deciding whether a bare "Glucose" is the same as
+// "Glucose, Random") needs a model that knows clinical naming AND can read the
+// units. It clusters ONLY same-analyte names; it must NOT merge clinically-distinct
+// measures. The result only MERGES series (via the canonical key) — it never
+// relabels what the athlete sees — so a conservative miss is harmless, an
+// over-merge is the only real risk. Hence: when unsure, keep separate.
+export function buildMarkerReconcilePrompt(
+  items: Array<{ name: string; unit: string | null; sample: unknown }>
+): string {
+  const list = items
+    .map((it) => `  - "${it.name}"${it.unit ? ` [${it.unit}]` : " [no unit]"}${it.sample != null && it.sample !== "" ? ` e.g. ${JSON.stringify(it.sample)}` : ""}`)
+    .join("\n");
+  return `You are a clinical lab-data librarian. Below is a list of lab/biomarker NAMES extracted from
+one person's lab reports over several years, from different labs and panels. Different labs name the
+SAME analyte differently. Your job: group names that are the SAME analyte so the app can merge each
+analyte's history into one trend.
+
+RULES (a wrong merge corrupts a clinical trend — be CONSERVATIVE):
+- Group two names ONLY if they are unambiguously the SAME measurement. Use the units + sample values
+  to confirm (the same analyte has compatible units; if units clearly differ in dimension, do NOT merge).
+- NEVER merge clinically-distinct measures, even when the names look similar:
+    • calculated vs direct LDL ("LDL-Cholesterol" ≠ "LDL-C (direct)")
+    • random vs fasting vs ESTIMATED-AVERAGE glucose ("Glucose, Random" ≠ "Estimated Average Glucose" ≠ "Fasting Glucose")
+    • free vs total ("Testosterone, Free" ≠ "Testosterone, Total")
+    • serum vs URINE ("Albumin" ≠ "Albumin, Urine"), whole-blood sub-fractions, particle-number vs concentration
+    • a ratio or a pattern/qualitative result vs a concentration
+- Examples of CORRECT merges: "Vitamin D" = "25-OH Vitamin D" = "Vitamin D, 25-Hydroxy"; "eGFR" =
+  "Estimated Glomerular Filt Rate" = "Creatinine-Based Estimated Glomerular Filtration Rate (eGFR)";
+  "Glucose (random)" = "Glucose Random"; "ALT" = "SGPT".
+- A name that has no same-analyte twin in the list is simply left out (do not emit a singleton group).
+- "canonical" = the clearest standard clinical name for the group (short; the most precise member is fine).
+- "members" = the EXACT names from the list (verbatim) that belong to the group. Every member must be a
+  string copied from the list below.
+
+OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
+{"groups": [{"canonical": "<name>", "unit": "<unit or null>", "members": ["<verbatim name>", "<verbatim name>", ...]}]}
+If nothing should be merged, return {"groups": []}.
+
+MARKER NAMES (${items.length}):
+${list}`;
+}
+
 export function buildInsightPrompt(ctx?: any, recent: string[] = []): string {
   const context = ctx ?? repo.getCoachContext();
   const recentBlock = recent.length
