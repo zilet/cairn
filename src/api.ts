@@ -470,6 +470,94 @@ api.post("/program/blocks/:id/complete", (req, res) => {
   res.json(b);
 });
 
+// ---- program intelligence (progression engine + balance + adjustments) --------
+// Volume balance per canonical muscle group over the last N weeks (default 2).
+// Plain words: which groups are due, which are over, and an adherence-skew
+// summary. No scores — band labels (low/productive/high) are the output.
+api.get("/program/balance", (_req, res) => res.json(repo.programBalance()));
+
+// Per-lift next-session prescription for every strength item on a plan day.
+// ?day=N selects the day; omit to default to the plan day today's read points
+// at (the "upcoming session" the Brief already suggests). Returns [] when the
+// day has no strength items or does not exist.
+api.get("/program/progression", (req, res) => {
+  let dayNumber: number | undefined;
+  if (req.query.day !== undefined) {
+    dayNumber = Number(req.query.day);
+  } else {
+    // Default: the plan day the day-read is pointing at today. Mirrors the
+    // nextPlanDayNumber logic in coach.ts — match the cached day-read's focus
+    // to a plan day; fall back to the first plan day with strength items.
+    const cached = repo.getCachedDayRead(new Date().toISOString().slice(0, 10));
+    const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
+    const days = repo.getPlan();
+    const strengthDays = days.filter((d: any) =>
+      Array.isArray(d.items) && d.items.some((it: any) => it.kind !== "cardio" && it.exercise)
+    );
+    if (strengthDays.length) {
+      const matched = focus
+        ? strengthDays.find((d: any) => {
+            const f = String(d.focus || d.name || "").toLowerCase().trim();
+            return f && (f === focus || f.includes(focus) || focus.includes(f));
+          })
+        : null;
+      dayNumber = (matched ?? strengthDays[0]).day_number;
+    }
+  }
+  if (dayNumber == null || !Number.isFinite(dayNumber)) return res.json([]);
+  res.json(repo.planDayProgression(dayNumber));
+});
+
+// The handful of concrete adaptations due right now — lifts to push/hold/deload,
+// groups that are due, missing-pattern gaps. Plain words, most-actionable first.
+api.get("/program/adjustments", (_req, res) => res.json(repo.programAdjustments()));
+
+// Build a DRAFT plan proposal from the current day's per-lift prescriptions, via
+// the same propose→apply path as /agent/run and /program/evolve. Never auto-
+// applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the
+// designed-failure signal — nothing wrong at the HTTP level, just nothing to do).
+api.post("/program/progression/apply", (req, res) => {
+  const day = Number((req.body ?? {}).day);
+  if (!Number.isFinite(day)) return res.json({ ok: false, error: "day required" });
+  const prescriptions = repo.planDayProgression(day);
+  const changes = prescriptions
+    .filter((p) => p.action !== "hold" || p.plan_item_id)
+    .map((p) => {
+      const c: Record<string, any> = { exercise: p.exercise };
+      if (p.mode === "timed") {
+        if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
+      } else {
+        if (p.suggested.weight !== undefined) c.target_weight = p.suggested.weight;
+      }
+      return c;
+    })
+    .filter((c) => Object.keys(c).length > 1); // must have at least one target field
+  if (!changes.length) return res.json({ ok: false, error: "nothing to propose for this day" });
+  const parsed = {
+    summary: `Auto-progression for day ${day} — ${changes.length} lift(s)`,
+    changes,
+  };
+  const proposal = repo.createProposal("auto-progression", `day ${day} progression`, "", parsed);
+  res.json({ ok: true, proposal });
+});
+
+// Backfill / normalize muscle_group for every exercise (null → classified;
+// legacy values like 'legs' → canonical). Idempotent.
+api.post("/exercises/reconcile-groups", (_req, res) =>
+  res.json(repo.reconcileExerciseGroups())
+);
+
+// Merge two exercises: repoint all logged_sets and plan_items from `from` into
+// `into`, then remove the now-empty `from` exercise. ok:false when `into` does
+// not exist (guard; nothing is changed).
+api.post("/exercises/merge", (req, res) => {
+  const b = req.body ?? {};
+  const from = String(b.from ?? "").trim();
+  const into = String(b.into ?? "").trim();
+  if (!from || !into) return res.status(400).json({ error: "from and into required" });
+  res.json(repo.mergeExercises(from, into));
+});
+
 // Exercise variations / alternatives (the plateau-break + "make it interesting"
 // library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps.
 api.get("/program/variations", (req, res) => {
