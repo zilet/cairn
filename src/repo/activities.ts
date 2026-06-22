@@ -59,6 +59,28 @@ export function addActivity(input: any) {
   const status = input.enrichment_status !== undefined
     ? input.enrichment_status
     : fromText && !source ? (getSettings().enrich_enabled ? "pending" : "skipped") : null;
+
+  // Soft-dedup: a manually-logged cardio effort (source null) and the SAME effort
+  // later synced from Garmin (source 'garmin' + external_id) would otherwise be two
+  // rows — double-counting acute load + weekly mileage. When inserting a Garmin
+  // endurance activity, retire any manual same-date, same-modality, no-external-id
+  // row (the Garmin row is richer: physiology blob, HR zones, real start time). Only
+  // an OBVIOUS same-date same-modality endurance overlap qualifies — never an "other"
+  // type, never across different modalities, never another sourced row.
+  if (source === "garmin" && externalId) {
+    const modality = normalizeGarminType(type);
+    if (["run", "ride", "swim", "hike"].includes(modality)) {
+      const candidates = db.prepare(
+        `SELECT id, type FROM activities WHERE date = ? AND source IS NULL AND external_id IS NULL`
+      ).all(date) as any[];
+      for (const c of candidates) {
+        if (normalizeGarminType(c.type) === modality) {
+          db.prepare(`DELETE FROM activities WHERE id = ?`).run(c.id);
+        }
+      }
+    }
+  }
+
   const info = db.prepare(
     `INSERT INTO activities (date, type, raw_text, duration_min, distance_km, pace, rpe, notes, source, external_id, enrichment_status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -461,13 +483,23 @@ function cleanGarminMode(mode: any): "unofficial" | "official" | "manual" {
   return ["unofficial", "official", "manual"].includes(mode) ? mode : "unofficial";
 }
 
+// Fold an activity type to a coarse modality (run/ride/swim/hike/other). Used both
+// for the Garmin sync (upsert + run-compliance) AND the manual↔Garmin soft-dedup in
+// addActivity. We match on a SEPARATOR-NORMALIZED copy (underscores/hyphens → spaces)
+// with a LEADING word-boundary: a closing `\b` wrongly failed on "cycling", and `\b`
+// never fires next to an underscore (it's a word char), so Garmin's real typeKeys
+// ("indoor_cycling", "lap_swimming", "treadmill_running", "walking") silently stayed
+// unfolded. Unknown types fall through to the lowercased original so they NEVER
+// cross-match. The strength/cardio→"other" line stays AFTER the endurance checks so a
+// strength activity never reads as a run/ride.
 function normalizeGarminType(t: any): string {
   const s = String(t ?? "").toLowerCase();
-  if (/\b(run|running|trail_running|treadmill)\b/.test(s)) return "run";
-  if (/\b(cycl|bike|biking|mountain|mtb|gravel|road_biking)\b/.test(s)) return "ride";
-  if (/\b(swim|swimming)\b/.test(s)) return "swim";
-  if (/\b(walk|hike|hiking)\b/.test(s)) return "hike";
-  if (/\b(strength|cardio|training|fitness_equipment)\b/.test(s)) return "other";
+  const m = s.replace(/[_-]+/g, " "); // separators → spaces so \b anchors correctly
+  if (/\b(run|running|jog|trail running|treadmill|tempo|interval)/.test(m)) return "run";
+  if (/\b(cycl|bike|biking|biked|mountain|mtb|gravel|ride|rode|road biking)/.test(m)) return "ride";
+  if (/\b(swim|swimming|swam)/.test(m)) return "swim";
+  if (/\b(walk|walked|hike|hiked|hiking|ruck|fell)/.test(m)) return "hike";
+  if (/\b(strength|cardio|training|fitness equipment)/.test(m)) return "other";
   return s || "other";
 }
 
@@ -663,12 +695,79 @@ export function listUnreconciledGarminStrength(days = 30): any[] {
     .map((r) => hydrateGarminActivity(r));
 }
 
+// Sum two HR-zone arrays ([{zone,secs,low_hr?}]) by zone — the day's combined
+// time-in-zone when more than one strength activity contributed. Null-safe; missing
+// secs read as 0, low_hr kept from whichever side has it. Returns null only when
+// BOTH sides are empty (so an absent zone breakdown never overwrites a real one).
+function mergeHrZones(a: any, b: any): any {
+  const av = Array.isArray(a) ? a : [];
+  const bv = Array.isArray(b) ? b : [];
+  if (!av.length && !bv.length) return null;
+  const byZone = new Map<number, any>();
+  for (const z of [...av, ...bv]) {
+    const zone = Number(z?.zone);
+    if (!Number.isFinite(zone)) continue;
+    const prev = byZone.get(zone) || { zone, secs: 0, low_hr: null };
+    prev.secs += Number(z?.secs) || 0;
+    if (prev.low_hr == null && z?.low_hr != null) prev.low_hr = z.low_hr;
+    byZone.set(zone, prev);
+  }
+  const out = [...byZone.values()].sort((x, y) => x.zone - y.zone);
+  return out.length ? out : null;
+}
+
+// Combine two same-day strength physiology contributions conservatively: summable
+// fields (calories, time-in-zone) ADD; the HR picture (avg/max HR, training-effect)
+// takes the MAX — neither activity's load is dropped just because it was shorter.
+function mergePhysiology(a: any, b: any) {
+  const sum = (x: any, y: any) => (x == null && y == null ? null : (Number(x) || 0) + (Number(y) || 0));
+  const max = (x: any, y: any) => (x == null && y == null ? null : Math.max(Number(x) || 0, Number(y) || 0));
+  return {
+    avg_hr: max(a.avg_hr, b.avg_hr),
+    max_hr: max(a.max_hr, b.max_hr),
+    calories: sum(a.calories, b.calories),
+    training_effect: max(a.training_effect, b.training_effect),
+    aerobic_te: max(a.aerobic_te, b.aerobic_te),
+    anaerobic_te: max(a.anaerobic_te, b.anaerobic_te),
+    hr_zones: mergeHrZones(a.hr_zones, b.hr_zones),
+  };
+}
+
+// The bare physiology contribution of one garmin_activities row (HR/zones/calories/TE).
+function physiologyOf(row: any) {
+  let hr_zones: any = null;
+  try { hr_zones = row.hr_zones_json ? JSON.parse(row.hr_zones_json) : null; } catch { hr_zones = null; }
+  return {
+    external_id: row.external_id ?? null,
+    type: row.type ?? "strength_training",
+    name: row.name ?? null,
+    duration_min: row.duration_min ?? row.moving_min ?? null,
+    avg_hr: row.avg_hr ?? null,
+    max_hr: row.max_hr ?? null,
+    calories: row.calories ?? null,
+    training_effect: row.training_effect ?? null,
+    aerobic_te: row.aerobic_te ?? null,
+    anaerobic_te: row.anaerobic_te ?? null,
+    hr_zones,
+  };
+}
+
 // Deterministic merge of a Garmin strength activity into the day's Cairn session:
 // attach the physiology layer (HR/zones/calories/TE) to sessions.garmin_json, link
 // garmin_activities.session_id, and drop any stale duplicate generic activity row.
 // Runs during sync regardless of agent availability; the agentic layer (enrich.ts)
 // adds the narrative summary + extrapolated exercises on top. Returns null if the
 // row isn't a strength activity. Idempotent (safe to re-run on every sync).
+//
+// MULTI-ACTIVITY DAYS: when two (or more) strength activities land on the SAME day
+// they map to ONE session, so a single blob has to represent the whole day's load.
+// The longest activity is the PRIMARY (its name/duration + any agentic narrative
+// front the blob), but the physiology of EVERY contributing activity is MERGED in —
+// calories + time-in-zone SUM, the HR/effort picture takes the MAX — so the shorter
+// activity's load is never silently discarded. The merge is REBUILT from scratch
+// from all linked same-day rows on every reconcile (not accumulated), so re-syncs
+// stay perfectly idempotent (no double-counting). A single-activity day collapses to
+// exactly the prior behaviour (the merge of a row with itself = that row).
 export function reconcileGarminStrength(garminActivityId: number) {
   const row = db.prepare(`SELECT * FROM garmin_activities WHERE id = ?`).get(garminActivityId) as any;
   if (!row || !isStrengthGarminType(row.type)) return null;
@@ -682,45 +781,64 @@ export function reconcileGarminStrength(garminActivityId: number) {
 
   const session = getOrCreateSession(date) as any;
 
-  let hr_zones: any = null;
-  try { hr_zones = row.hr_zones_json ? JSON.parse(row.hr_zones_json) : null; } catch { hr_zones = null; }
-  const durationMin = row.duration_min ?? row.moving_min ?? null;
+  // Link this row first, so the "all contributing rows" query below sees it (the
+  // merge then reads every strength row attached to this session — including any
+  // that linked on an earlier sync — and the one we're reconciling now).
+  db.prepare(`UPDATE garmin_activities SET session_id = ? WHERE id = ?`).run(session.id, garminActivityId);
 
-  // A day with two strength activities keeps the longer one as the session's
-  // primary blob, but always refreshes the link. When re-reconciling the SAME
-  // activity, preserve any narrative/extrapolation a prior agentic pass wrote.
+  // Preserve any narrative/extrapolation a prior agentic pass wrote.
   let existing: any = null;
   try { existing = session.garmin_json ? JSON.parse(session.garmin_json) : null; } catch { existing = null; }
-  const sameActivity = existing && existing.external_id === row.external_id;
-  const isPrimary = !existing || sameActivity || (durationMin ?? 0) >= (existing.duration_min ?? -1);
 
-  if (isPrimary) {
-    const blob = {
-      external_id: row.external_id ?? null,
-      type: row.type ?? "strength_training",
-      name: row.name ?? null,
-      duration_min: durationMin,
-      avg_hr: row.avg_hr ?? null,
-      max_hr: row.max_hr ?? null,
-      calories: row.calories ?? null,
-      training_effect: row.training_effect ?? null,
-      aerobic_te: row.aerobic_te ?? null,
-      anaerobic_te: row.anaerobic_te ?? null,
-      hr_zones,
-      summary: sameActivity ? existing.summary ?? null : null,
-      intensity: sameActivity ? existing.intensity ?? null : null,
-      extrapolated: sameActivity ? !!existing.extrapolated : false,
-      reconciled_at: new Date().toISOString(),
-      agent: sameActivity ? existing.agent ?? null : null,
-    };
-    db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), session.id);
-  }
-  db.prepare(`UPDATE garmin_activities SET session_id = ? WHERE id = ?`).run(session.id, garminActivityId);
+  // Every strength activity that contributes to this day's session. Idempotent by
+  // construction: we recompute the merged physiology from the full set each time
+  // rather than folding the new row into a running total (a re-sync would otherwise
+  // double-count). Longest-duration row is the PRIMARY (fronts name/duration).
+  const contributors = (db.prepare(
+    `SELECT * FROM garmin_activities WHERE session_id = ? ORDER BY id`
+  ).all(session.id) as any[]).filter((r) => isStrengthGarminType(r.type));
+  // Should always include `row` (just linked), but fall back to it if a read race lost it.
+  const rows = contributors.length ? contributors : [row];
+
+  const phys = rows.map(physiologyOf);
+  const primary = phys.reduce((a, b) => ((b.duration_min ?? -1) > (a.duration_min ?? -1) ? b : a), phys[0]);
+  const merged = phys.reduce((acc, p) => mergePhysiology(acc, p), {
+    avg_hr: null, max_hr: null, calories: null, training_effect: null,
+    aerobic_te: null, anaerobic_te: null, hr_zones: null,
+  } as any);
+
+  const blob = {
+    // Identity fronted by the primary (longest) activity — preserves single-activity output.
+    external_id: primary.external_id,
+    type: primary.type,
+    name: primary.name,
+    duration_min: primary.duration_min,
+    // Merged physiology across ALL contributing same-day activities.
+    avg_hr: merged.avg_hr,
+    max_hr: merged.max_hr,
+    calories: merged.calories,
+    training_effect: merged.training_effect,
+    aerobic_te: merged.aerobic_te,
+    anaerobic_te: merged.anaerobic_te,
+    hr_zones: merged.hr_zones,
+    // Plain count so the surface can note "2 activities merged" when >1 (1 = the
+    // normal single-activity case). Never a score; just provenance.
+    activity_count: rows.length,
+    // Carry the agentic narrative forward whenever the day already had one.
+    summary: existing ? existing.summary ?? null : null,
+    intensity: existing ? existing.intensity ?? null : null,
+    extrapolated: existing ? !!existing.extrapolated : false,
+    reconciled_at: new Date().toISOString(),
+    agent: existing ? existing.agent ?? null : null,
+  };
+  db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), session.id);
   invalidateDayRead(date);
 
   let exercise_sets: any = null;
   try { exercise_sets = row.exercise_sets_json ? JSON.parse(row.exercise_sets_json) : null; } catch { exercise_sets = null; }
   const sets = setsForSession(session.id) as any[];
+  // is_primary reflects whether THIS reconciled row is the day's primary (longest).
+  const isPrimary = primary.external_id === (row.external_id ?? null);
   return { session: getSessionDetail(session.id), has_manual_sets: sets.length > 0, exercise_sets, is_primary: isPrimary };
 }
 

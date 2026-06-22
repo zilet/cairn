@@ -6,7 +6,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import * as repo from "./repo.js";
 import { buildClinicalReportData, renderClinicalReportHTML, renderClinicalReportText } from "./report.js";
-import { todayISO } from "./db.js";
+import { db, todayISO } from "./db.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
 import { enqueueAgentJob, cancelAgentJob, onJobEvent } from "./agentJobs.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
@@ -30,6 +30,7 @@ import {
   growAboutMe,
   reconcileOutcomes,
   reconcileMarkers,
+  reconcileExercises,
   distillChat,
   onboardFromText,
   agentInfoOp,
@@ -59,6 +60,36 @@ function backgroundOp(res: Response, kind: AgentJobKind, input: any, agent?: str
   enqueueAgentJob((job as any).id);
   res.json({ ok: true, job });
   return true;
+}
+
+// Record the day_read suggestion for outcome learning, idempotent per CALENDAR DAY.
+// Why this exists: the canonical (no-override) Brief is precomputed nightly and served
+// CACHED every morning, so the typical open returns before any fresh compute — without
+// this, the cache-hit path never records a suggestion and reconcileOutcomes has almost
+// no day_read rows to learn from. We record on the cache hit too, deduping by
+// (kind='day_read', date) so repeated opens in the same day don't pile up duplicate
+// rows. An OVERRIDE read is transient (a reshaped steer, not the canonical read) and
+// must always be recorded — it carries a distinct payload — so it bypasses the dedupe.
+// Best-effort throughout: a failed insert/check never blocks the response.
+function recordDayReadSuggestion(date: string, read: any, override: string | null | undefined): void {
+  try {
+    if (!override) {
+      // A canonical recording serializes override as `"override":null`; an override
+      // read serializes a string value. Match the canonical marker so we dedupe only
+      // canonical-against-canonical (an override row for the same date is fine to keep).
+      const existing = db
+        .prepare(`SELECT 1 FROM suggestions WHERE kind = 'day_read' AND date = ? AND payload_json LIKE '%"override":null%' LIMIT 1`)
+        .get(date);
+      // A canonical (no-override) row already recorded for this date — don't duplicate.
+      if (existing) return;
+    }
+    repo.recordSuggestion("day_read", date, {
+      kind: read?.kind ?? null,
+      focus: read?.focus ?? null,
+      est_minutes: read?.est_minutes ?? null,
+      override: override ?? null,
+    });
+  } catch { /* outcome recording is never allowed to break the read */ }
 }
 
 api.get("/plan", (_req, res) => res.json(repo.getPlan()));
@@ -238,21 +269,30 @@ api.get("/today-read", async (req, res) => {
   // canonical read — the un-steer escape hatch, so the athlete is never trapped in
   // an override they changed their mind about (mirrors the cache-invalidation path).
   const reset = req.query.reset === "1" || req.query.reset === "true";
+  const readDate = date || localToday();
   try {
     if (reset) {
-      repo.invalidateDayRead(date || localToday());
+      repo.invalidateDayRead(readDate);
       const r: any = await computeDayRead({ date, agent: agentParam });
+      recordDayReadSuggestion(readDate, r, null);
       return res.json({ ...r, agent_status: agentStatusFor(r) });
     }
     if (!override) {
-      const cached = repo.getCachedDayRead(date || localToday());
-      if (cached) return res.json({ ...cached, cached: true, agent_status: agentStatusFor(cached) });
+      const cached = repo.getCachedDayRead(readDate);
+      if (cached) {
+        // Outcome learning on the FAST path too: the canonical read is precomputed
+        // nightly and served cached every morning, so without recording here the
+        // typical open never lands a day_read suggestion for reconcileOutcomes to learn
+        // from. Idempotent per (kind, date) so repeated opens don't duplicate the row.
+        recordDayReadSuggestion(readDate, cached, null);
+        return res.json({ ...cached, cached: true, agent_status: agentStatusFor(cached) });
+      }
     }
     const read: any = await computeDayRead({ date, override, agent: agentParam });
-    // Outcome learning: record what the Brief proposed for this date (once per
-    // fresh compute — the cached path above short-circuits repeats) so a later
-    // reconciliation pass can compare it to what the athlete actually did.
-    try { repo.recordSuggestion("day_read", date || localToday(), { kind: read?.kind ?? null, focus: read?.focus ?? null, est_minutes: read?.est_minutes ?? null, override: override ?? null }); } catch {}
+    // Outcome learning: record what the Brief proposed for this date so a later
+    // reconciliation pass can compare it to what the athlete actually did. Deduped
+    // per (kind, date) for the canonical read; an override read always records.
+    recordDayReadSuggestion(readDate, read, override ?? null);
     return res.json({ ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {
     // Last-resort floor — computeDayRead already swallows agent failures, so this
@@ -283,7 +323,7 @@ api.post("/today-read/reshape", async (req, res) => {
   // Legacy inline path (bg_ops off) — same body the GET override branch returns.
   try {
     const read: any = await computeDayRead({ date, override, agent: agentParam });
-    try { repo.recordSuggestion("day_read", date || localToday(), { kind: read?.kind ?? null, focus: read?.focus ?? null, est_minutes: read?.est_minutes ?? null, override: override ?? null }); } catch {}
+    recordDayReadSuggestion(date || localToday(), read, override ?? null);
     return res.json({ ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {
     const f = repo.dayRead(date);
@@ -556,6 +596,23 @@ api.post("/exercises/merge", (req, res) => {
   const into = String(b.into ?? "").trim();
   if (!from || !into) return res.status(400).json({ error: "from and into required" });
   res.json(repo.mergeExercises(from, into));
+});
+
+// Exercise-name reconciliation (movement de-duplication) — the canon counterpart
+// to /markers/reconcile. GET lists the learned variant→canonical aliases; POST
+// runs the agentic reconciler over the distinct exercise names, tidying
+// descriptive/duplicate titles ("DB bench"/"Dumbbell bench press") into clean
+// reusable canonical names and profiling muscle groups. The deterministic
+// exercise-canon normalizer is always on; this learns the long tail. Synchronous
+// like the marker reconcile — ok:false at 200 is the designed failure signal.
+// Never changes logged numbers — only the series merge.
+api.get("/exercises/aliases", (_req, res) => res.json(repo.listExerciseAliases()));
+api.post("/exercises/reconcile-names", async (req, res) => {
+  try {
+    res.json(await reconcileExercises(req.body?.agent));
+  } catch (e: any) {
+    res.json({ ok: false, error: e?.message || "reconcile failed" });
+  }
 });
 
 // Exercise variations / alternatives (the plateau-break + "make it interesting"
@@ -1247,7 +1304,8 @@ api.get("/markers/priority", (_req, res) => res.json(repo.prioritizeMarkers()));
 api.get("/markers/aliases", (_req, res) => res.json({ aliases: repo.listMarkerAliases() }));
 api.post("/markers/reconcile", async (req, res) => {
   try {
-    res.json(await reconcileMarkers(req.body?.agent));
+    const out = await reconcileMarkers(req.body?.agent); // busts the cached Brief itself when it realigns
+    res.json(out);
   } catch (e: any) {
     res.json({ ok: false, error: e?.message || "reconcile failed" });
   }
@@ -1257,9 +1315,12 @@ api.post("/markers/reconcile", async (req, res) => {
 // not a flat directive flood) + the latest cached agentic health-story narrative.
 // Both informational, no scores. The narrative is regenerated via POST below.
 api.get("/health/focus", (_req, res) => res.json(repo.healthFocus()));
-api.get("/health/synthesis", (_req, res) =>
-  res.json({ synthesis: repo.getHealthSynthesis(), focus: repo.healthFocus() })
-);
+// The cached synthesis carries a `stale` flag so the PWA can offer a calm
+// "refresh this read" affordance when newer labs/training have drifted past it.
+api.get("/health/synthesis", (_req, res) => {
+  const view = repo.getHealthSynthesisView();
+  res.json({ synthesis: view.synthesis, focus: repo.healthFocus(), stale: view.stale });
+});
 api.post("/health/synthesis", async (req, res) => {
   const agent = req.body?.agent;
   if (backgroundOp(res, "health_synthesis", { agent: agent ?? null }, agent)) return;
@@ -1291,7 +1352,7 @@ api.put("/directives/:id", (req, res) => {
 
 // Re-run the deterministic propagation engine over the latest markers.
 api.post("/directives/derive", (_req, res) => {
-  const out = repo.deriveDirectives();
+  const out = repo.deriveDirectives(); // busts today's cached Brief itself
   res.json({ ok: true, derived: out.derived, directives: out.directives });
 });
 

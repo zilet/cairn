@@ -298,3 +298,79 @@ test("getProgress: regular positive-weight lift still computes a valid best1rm",
   // Epley(135, 8) = 135 * (1 + 8/30) = 135 * 1.267 ≈ 171.
   assert.ok((prog.points[0].best1rm ?? 0) > 0, "positive best1rm for a regular loaded set");
 });
+
+// ---- NEW: agentic exercise understanding (clean names + reuse + profiling) ----
+
+test("cleanExerciseName tidies a messy descriptive title", () => {
+  const { cleanExerciseName } = repo;
+  assert.equal(cleanExerciseName("incline db press lol 3x10"), "Incline DB Press");
+  assert.equal(cleanExerciseName("romanian deadlift"), "Romanian Deadlift");
+  assert.equal(cleanExerciseName("  single  arm   row  "), "Single Arm Row");
+});
+
+test("cleanExerciseName PRESERVES an already well-cased name (never mangles deliberate casing)", () => {
+  const { cleanExerciseName } = repo;
+  assert.equal(cleanExerciseName("Barbell Bench Press"), "Barbell Bench Press");
+  assert.equal(cleanExerciseName("DB Shoulder Press"), "DB Shoulder Press");
+  // but it still strips trailing set/rep noise off an otherwise-clean name
+  assert.equal(cleanExerciseName("Barbell Bench Press 3x5"), "Barbell Bench Press");
+});
+
+test("detectExerciseMode flags holds as timed, loaded work as reps", () => {
+  const { detectExerciseMode } = repo;
+  assert.equal(detectExerciseMode("Plank"), "timed");
+  assert.equal(detectExerciseMode("Dead Hang"), "timed");
+  assert.equal(detectExerciseMode("Wall Sit"), "timed");
+  assert.equal(detectExerciseMode("Barbell Bench Press"), "reps");
+  assert.equal(detectExerciseMode("Romanian Deadlift"), "reps");
+});
+
+test("findOrCreateExercise REUSES by normalized name instead of duplicating (and writes an alias)", () => {
+  const a = repo.findOrCreateExercise("Incline DB Press");
+  const b = repo.findOrCreateExercise("incline db press"); // casing variant
+  const c = repo.findOrCreateExercise("Incline DB Press 3x10"); // notation variant
+  assert.equal(b.id, a.id, "a casing variant reuses the same exercise");
+  assert.equal(c.id, a.id, "a notation variant reuses the same exercise");
+  // exactly one row exists for this movement
+  const rows = repo.listExercises().filter((e) => /incline db press/i.test(e.name));
+  assert.equal(rows.length, 1, "no duplicate exercise was created");
+  // the raw variant self-aligns next time via a persisted alias
+  const aliases = repo.listExerciseAliases().map((x) => x.alias);
+  assert.ok(aliases.some((al) => /incline db press/.test(al)), "an alias was recorded for reuse");
+});
+
+test("findOrCreateExercise stores a CLEANED display name + auto group/mode on create", () => {
+  const ex = repo.findOrCreateExercise("dead hang for time");
+  assert.equal(ex.name, "Dead Hang", "stored a clean canonical display name");
+  assert.equal(ex.mode, "timed", "a hold auto-detects timed mode");
+  assert.equal(ex.muscle_group, "forearms", "auto-classified to a group");
+});
+
+test("planExerciseAliases (pure validator) folds messy variants onto a clean canonical", () => {
+  const items = [{ name: "incline db press lol" }, { name: "Incline DB Press" }];
+  const groups = [
+    { members: ["incline db press lol", "Incline DB Press"], canonical: "Incline DB Press", group: "chest", mode: "reps" },
+  ];
+  const aliases = repo.planExerciseAliases(items, groups);
+  assert.ok(aliases.length >= 1, "produces at least one alias row");
+  for (const a of aliases) {
+    assert.equal(a.canonical, "Incline DB Press");
+    assert.notEqual(a.rawNorm, "incline db press"); // never self-aliases the canonical
+  }
+  // a member that isn't a verbatim input is rejected (conservative)
+  const bad = repo.planExerciseAliases(items, [
+    { members: ["totally made up name"], canonical: "Made Up", group: "chest" },
+  ]);
+  assert.equal(bad.length, 0, "non-verbatim members are dropped");
+});
+
+test("distinctExerciseNames returns logged/planned movements with group + set count", () => {
+  const ex = repo.findOrCreateExercise("Barbell Bench Press", "chest");
+  const today = new Date().toISOString().slice(0, 10);
+  const sess = repo.getOrCreateSession(today);
+  db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 8)").run(sess.id, ex.id);
+  const names = repo.distinctExerciseNames();
+  const bench = names.find((n) => /bench press/i.test(n.name));
+  assert.ok(bench, "the logged movement appears");
+  assert.ok(bench.sets >= 1, "carries a logged-set count");
+});

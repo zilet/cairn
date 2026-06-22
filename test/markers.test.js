@@ -5,7 +5,7 @@
 // grade leaks out of the priority ranking.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { db, repo, resetTables, seedHealthDoc, marker, isoDaysAgo } from "./_seed.js";
 
 beforeEach(() => {
   resetTables("health_documents", "health_directives");
@@ -115,6 +115,74 @@ test("Lp(a) mass units are not compared to nmol/L with a fake fixed conversion",
   assert.equal(lpa.latest.expected_unit, "nmol/L");
   assert.equal(lpa.optimal, null);
   assert.equal(lpa.in_optimal, null);
+});
+
+// A random / post-prandial / non-fasting glucose must NOT be held to the FASTING
+// glucose optimal band (70–90) — that band only applies to a fasting draw. The
+// guard suppresses the fasting zone for an explicitly non-fasting name, while
+// fasting glucose, bare "Glucose", eAG and HbA1c stay matched as before.
+test("matchOptimalZone: a non-fasting glucose is NOT held to the fasting band", () => {
+  for (const n of ["Glucose (random)", "Glucose, random", "non-fasting glucose", "Glucose - PP", "2hr postprandial glucose"]) {
+    assert.equal(repo.matchOptimalZone(n), null, `${n} must not match the fasting band`);
+  }
+  // Untouched: genuinely fasting / bare / eAG keep their band; HbA1c keeps its own.
+  assert.equal(repo.matchOptimalZone("Glucose, Fasting")?.label, "Fasting glucose");
+  assert.equal(repo.matchOptimalZone("Glucose")?.label, "Fasting glucose");
+  assert.equal(repo.matchOptimalZone("Estimated Average Glucose")?.label, "Fasting glucose");
+  assert.equal(repo.matchOptimalZone("HbA1c")?.label, "HbA1c");
+  // Word-boundary safety: "pp" inside a word must not trip the non-fasting guard.
+  assert.equal(repo.matchOptimalZone("Supplemental glucose")?.label, "Fasting glucose");
+});
+
+test("a random glucose does NOT prioritize as out-of-optimal against a fasting target", () => {
+  // 130 is a normal post-meal value but would be 'high' against the fasting band.
+  seedHealthDoc("2025-12-01", [marker("Glucose (random)", 130, { unit: "mg/dL" })]);
+  const g = repo.prioritizeMarkers().markers.find((m) => /glucose/i.test(m.name));
+  assert.ok(g, "the random-glucose series is still tracked");
+  assert.equal(g.optimal, null, "no fasting optimal band is applied");
+  assert.equal(g.in_optimal, null, "so it can't read out-of-optimal against a fasting target");
+});
+
+test("getMarkerHistory flags dropped readings on an incompatible-unit split (no silent truncation)", () => {
+  // Lp(a) measured mg/dL twice, then nmol/L — incompatible families. The trend
+  // keeps only the latest (nmol/L) unit; the older mg/dL readings are surfaced as
+  // a count, never silently discarded.
+  seedHealthDoc("2024-01-01", [marker("Lp(a)", 30, { unit: "mg/dL" })]);
+  seedHealthDoc("2024-06-01", [marker("Lp(a)", 35, { unit: "mg/dL" })]);
+  seedHealthDoc("2025-01-01", [marker("Lp(a)", 90, { unit: "nmol/L" })]);
+  const lpa = repo.getMarkerHistory().markers.find((m) => m.name === "Lp(a)");
+  assert.equal(lpa.points.length, 1, "trend holds only the latest unit family");
+  assert.equal(lpa.unit, "nmol/L");
+  assert.equal(lpa.dropped_other_units, 2, "the two mg/dL readings are surfaced as a count");
+});
+
+test("getMarkerHistory: a clean single-unit series reports dropped_other_units = 0", () => {
+  seedHealthDoc("2025-01-01", [marker("ApoB", 80, { unit: "mg/dL" })]);
+  seedHealthDoc("2025-06-01", [marker("ApoB", 90, { unit: "mg/dL" })]);
+  const apob = repo.getMarkerHistory().markers.find((m) => m.key === "apob");
+  assert.equal(apob.dropped_other_units, 0);
+});
+
+test("prioritizeMarkers: a lab VO2max and a wearable VO2max collapse to one (no duplicate)", () => {
+  db.prepare("DELETE FROM garmin_daily_metrics").run();
+  db.prepare("DELETE FROM garmin_sources").run();
+  const sid = Number(db.prepare("INSERT INTO garmin_sources (provider) VALUES ('garmin')").run().lastInsertRowid);
+  // A lab "VO2 Max" canonicalizes to key "vo2 max" while the wearable spec emits
+  // "vo2max" — keying the fold on the raw key let BOTH through. Dedup on the zone
+  // label ("VO2max") must collapse them, with the lab reading winning.
+  seedHealthDoc("2025-06-01", [marker("VO2 Max", 48, { unit: "mL/kg/min" })]);
+  for (let i = 0; i < 4; i++) {
+    db.prepare("INSERT INTO garmin_daily_metrics (source_id, date, vo2max) VALUES (?, ?, ?)").run(sid, isoDaysAgo(i), 50);
+  }
+  const vo2 = repo.prioritizeMarkers().markers.filter((m) => /vo2/i.test(String(m.name)));
+  assert.equal(vo2.length, 1, "lab + wearable VO2max collapse to one entry");
+  assert.notEqual(vo2[0].source, "wearable", "the lab reading wins over the device estimate");
+
+  // With NO lab present the wearable VO2max still surfaces (the fold isn't broken).
+  db.prepare("DELETE FROM health_documents").run();
+  const wearableOnly = repo.prioritizeMarkers().markers.filter((m) => /vo2/i.test(String(m.name)));
+  assert.equal(wearableOnly.length, 1);
+  assert.equal(wearableOnly[0].source, "wearable");
 });
 
 // ---- GOLDEN CONSTITUTION TEST ----------------------------------------------

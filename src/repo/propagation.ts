@@ -1,7 +1,8 @@
 import { db } from "../db.js";
 import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirectiveKey, hydrateDirective, listActiveDirectives, normalizeDirectiveKey } from "./coach.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
-import { forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
+import { forecastMarker, getMarkerHistory, lsqSlopePerDay, newestHealthDocDate } from "./health.js";
+import { invalidateDayRead } from "./intelligence.js";
 import { getProfile } from "./profile.js";
 import { getAppState, setAppState } from "./app-state.js";
 
@@ -74,6 +75,26 @@ const SUPPLEMENT_KB: Array<{
     category: "performance", markers: [], note: "Performance/alertness; keep it away from sleep." },
   { keys: ["nmn", "nicotinamide riboside", "nr "], name: "NAD+ precursor (NMN/NR)", dose: null, frequency: "daily",
     category: "longevity", markers: [], note: "NAD+ support; evidence still emerging." },
+  // ---- common long-tail, conservative marker links (only well-established ones) ----
+  { keys: ["folate", "folic acid", "methylfolate", "l-methylfolate"], name: "Folate", dose: "400–800 mcg", frequency: "daily",
+    category: "vitamin", markers: ["Folate", "Homocysteine"], note: "Red-cell formation and methylation; check B12 alongside it." },
+  { keys: ["vitamin k2", "vit k2", "vitamin-k2", "mk-7", "mk7", "menaquinone", "vitamin k"], name: "Vitamin K2 (MK-7)",
+    dose: "90–180 mcg", frequency: "daily", category: "vitamin", markers: [],
+    note: "Directs calcium to bone; commonly paired with vitamin D3." },
+  { keys: ["red yeast rice", "monacolin"], name: "Red yeast rice", dose: null, frequency: "daily", category: "cardiovascular",
+    markers: ["LDL-C", "ApoB"], note: "Contains a natural statin (monacolin K) — treat like a lipid medication and tell your doctor." },
+  { keys: ["plant sterol", "phytosterol", "stanol", "beta-sitosterol", "beta sitosterol"], name: "Plant sterols/stanols",
+    dose: "2 g", frequency: "daily", category: "cardiovascular", markers: ["LDL-C"], note: "Blunt cholesterol absorption; modest LDL lever." },
+  { keys: ["selenium"], name: "Selenium", dose: "100–200 mcg", frequency: "daily", category: "mineral", markers: [],
+    note: "Thyroid and antioxidant cofactor; narrow safe range — don't megadose." },
+  { keys: ["l-theanine", "l theanine", "theanine"], name: "L-theanine", dose: "100–200 mg", frequency: "as needed",
+    category: "calm", markers: [], note: "Calm focus; smooths caffeine and can aid sleep." },
+  { keys: ["glucosamine", "chondroitin"], name: "Glucosamine / chondroitin", dose: null, frequency: "daily", category: "joint",
+    markers: [], note: "Joint comfort; evidence is mixed but it's well tolerated." },
+  { keys: ["vitamin a", "retinol", "beta-carotene", "beta carotene"], name: "Vitamin A", dose: null, frequency: "daily",
+    category: "vitamin", markers: [], note: "Vision and immune; fat-soluble, so don't stack high doses." },
+  { keys: ["vitamin e", "tocopherol"], name: "Vitamin E", dose: null, frequency: "daily", category: "vitamin", markers: [],
+    note: "Antioxidant; food-first, avoid high-dose isolated supplements." },
 ];
 
 function matchSupplementKB(low: string) {
@@ -347,6 +368,25 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["hrv", "heart rate variability", "rmssd"], unit: "ms", optimal: [50, 120], dir: "low", actionable: true, label: "HRV" },
 ];
 
+// A random / post-prandial / non-fasting glucose must NOT be held to the FASTING
+// glucose optimal band (70–90 mg/dL) — that band only applies to a fasting draw,
+// so a perfectly normal post-meal 130 would read "out of optimal" against a
+// target it was never measured against (and on a doctor-facing report that's a
+// visible error). This mirrors report.ts's `optimalTrustworthy` name-based
+// suppression. Deliberately narrow: only the "glucose" key (the bare Fasting
+// glucose zone) is suppressed, and ONLY for an explicitly non-fasting context —
+// HbA1c, fasting glucose, and eAG / estimated-average-glucose are untouched.
+// Word-bounded so "pp" never matches inside another word (e.g. "supplement").
+const NON_FASTING_GLUCOSE = /\b(random|non[-\s]?fasting|post[-\s]?prandial|pp|2\s?-?\s?hr|2\s?-?\s?hour)\b/;
+function suppressFastingGlucoseZone(name: string, z: OptimalZone | null): boolean {
+  if (!z || z.label !== "Fasting glucose") return false;
+  const n = String(name ?? "").toLowerCase();
+  if (!n.includes("glucose")) return false;          // only the bare-glucose match
+  if (n.includes("fasting") && !n.includes("non")) return false; // genuinely fasting
+  if (n.includes("estimated average") || n.includes("eag")) return false; // eAG kept
+  return NON_FASTING_GLUCOSE.test(n);
+}
+
 export function matchOptimalZone(name: string): OptimalZone | null {
   const n = String(name ?? "").toLowerCase();
   // Prefer the most specific (longest key) match so "non-hdl" doesn't read as "hdl".
@@ -357,6 +397,9 @@ export function matchOptimalZone(name: string): OptimalZone | null {
       if (n.includes(k) && k.length > bestLen) { best = z; bestLen = k.length; }
     }
   }
+  // A non-fasting glucose substring-matched the FASTING band — don't hold it to a
+  // fasting target it shouldn't be judged against (protects the physician report).
+  if (suppressFastingGlucoseZone(n, best)) return null;
   return best;
 }
 
@@ -465,12 +508,24 @@ function wearableFitnessMarkers(days = 120): any[] {
   return out;
 }
 
+// Identity for the wearable/lab fold: the CANONICAL optimal-zone label, not the
+// literal marker key. A lab "VO2 Max" canonicalizes to key "vo2 max" while the
+// wearable spec emits "vo2max" — keying the dedup on the raw key let BOTH through
+// and propagated two "VO2max below optimal" directives. Collapsing on the zone
+// label ("VO2max") makes a lab + wearable reading of the same analyte one marker.
+// Falls back to the lowercased key when there's no optimal zone to anchor on.
+function foldIdentity(m: any): string {
+  const z = matchOptimalZone(m?.name);
+  return (z ? z.label : String(m?.key ?? m?.name ?? "")).toLowerCase();
+}
+
 export function prioritizeMarkers() {
   const { markers: labMarkers } = getMarkerHistory();
   // Fold in wearable fitness markers (VO2max/RHR/HRV) — a LAB reading of the same
-  // marker always wins (a blood/test draw supersedes a device estimate).
-  const haveKey = new Set(labMarkers.map((m: any) => String(m?.key ?? "").toLowerCase()));
-  const wearable = wearableFitnessMarkers().filter((m) => !haveKey.has(m.key));
+  // marker always wins (a blood/test draw supersedes a device estimate). Dedup on
+  // the canonical zone label so a lab + wearable VO2max don't BOTH come through.
+  const haveKey = new Set(labMarkers.map((m: any) => foldIdentity(m)));
+  const wearable = wearableFitnessMarkers().filter((m) => !haveKey.has(foldIdentity(m)));
   const markers = [...labMarkers, ...wearable];
   let flagged_count = 0;
   const enriched = markers.map((m: any) => {
@@ -980,6 +1035,11 @@ export function deriveDirectives() {
   // reasons across markers instead of repeating itself. Still INFORMATIONAL.
   saved += deriveMarkerClusters(SOURCE, offMarkers, seen);
 
+  // Directives just changed → today's cached Brief is stale. Invalidate HERE (the one
+  // place every directive change flows through) rather than at each caller — so every
+  // path that re-derives (lab ingest, /directives/derive, chat log_health, a doc-date
+  // edit, MCP add_health_record) refreshes the read with no per-caller bookkeeping.
+  try { invalidateDayRead(); } catch { /* cache bust is best-effort, never block */ }
   return { source: SOURCE, derived: saved, directives: listActiveDirectives() };
 }
 
@@ -1124,6 +1184,12 @@ export function applyReviewDirectives(directives: any[]) {
   // Loop-invariant: the safety context is a full marker snapshot (scans + parses
   // every health-doc blob). Build it ONCE, not once per directive.
   const safetyCtx = buildSafetyMarkerContext();
+  // Resurface guard, mirroring the deterministic 'markers' path. A finding the
+  // athlete dismissed/resolved at an earlier value should NOT stay suppressed
+  // forever if the marker has since gotten MATERIALLY worse (dismiss ApoB at 95,
+  // it must come back at 140). We resolve the current value/side for each named
+  // marker ONCE from the live priority snapshot, then reuse markerMateriallyWorse.
+  const markerCtxByName = buildReviewMarkerContexts();
   let count = 0;
   for (const d of list) {
     if (!d || typeof d !== "object") continue;
@@ -1132,7 +1198,13 @@ export function applyReviewDirectives(directives: any[]) {
     const directive = d.directive == null ? null : String(d.directive).trim().slice(0, 600) || null;
     const directive_key = defaultDirectiveKey(marker, domain, directive);
     const feedback = lastDirectiveFeedback("health_review", marker, domain, directive_key);
-    if (feedback) continue;
+    // Current context for THIS marker (null when we can't resolve a numeric value
+    // or there's no optimal band to judge against — e.g. a watch-only marker).
+    const ctx = marker ? markerCtxByName.get(marker.toLowerCase()) ?? null : null;
+    // Keep suppressing prior feedback UNLESS the marker is now clearly worse than
+    // it was when last handled. Conservative: with no resolvable context we can't
+    // prove a worsening, so we honor the prior dismiss/resolve (skip).
+    if (feedback && !(ctx && markerMateriallyWorse(feedback, ctx))) continue;
     // Citation verification (Stream 4 — grounding): a medical system must not
     // surface an unverified citation. An agent-emitted citation is accepted only
     // when it matches a recognized guideline body OR a cached evidence_cache row;
@@ -1154,11 +1226,42 @@ export function applyReviewDirectives(directives: any[]) {
       rationale: safe.rationale,
       citation: verified.citation,
       uncertain: verified.uncertain || safe.uncertain,
+      // Stamp the current trigger snapshot (when resolvable) so a future review
+      // has a baseline to judge a worsening against — same machinery the
+      // 'markers' path uses. When this directive RESURFACED a prior dismiss/
+      // resolve, link back to it (resurfaced_from_id) for the same audit trail.
+      ...(ctx ? { trigger_value: ctx.value, trigger_side: ctx.side, trigger_date: ctx.marker?.latest?.date ?? null } : {}),
+      resurfaced_from_id: feedback?.id ?? null,
       status: "active",
     });
     if (row) count++;
   }
   return count;
+}
+
+// Build a name→MarkerContext map from the live priority snapshot, so the review
+// path can judge whether a previously-handled finding is now materially worse
+// (mirrors the deterministic markers path). Keyed by lowercased marker name AND
+// by the marker's optimal-zone label, so a review directive that names either the
+// lab's own term or the canonical zone ("ApoB") resolves. Only markers with a
+// numeric value and an optimal band are included (nothing to compare otherwise).
+function buildReviewMarkerContexts(): Map<string, MarkerContext> {
+  const out = new Map<string, MarkerContext>();
+  let markers: any[] = [];
+  try { markers = prioritizeMarkers().markers; } catch { return out; }
+  for (const m of markers) {
+    const z = matchOptimalZone(m?.name);
+    if (!z) continue;
+    const value = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
+    if (!Number.isFinite(value)) continue;
+    const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
+    const ctx: MarkerContext = { value, flag, zone: z, side: markerSide(value, z, flag), marker: m };
+    const nameKey = String(m?.name ?? "").trim().toLowerCase();
+    if (nameKey && !out.has(nameKey)) out.set(nameKey, ctx);
+    const labelKey = z.label.toLowerCase();
+    if (!out.has(labelKey)) out.set(labelKey, ctx); // canonical-name fallback
+  }
+  return out;
 }
 
 // Active health directives condensed for the coach: domain + plain-language
@@ -1225,7 +1328,14 @@ export function healthFocus(): HealthFocus {
   // Off-optimal markers, in priority order, bucketed by health group (preserving rank).
   const groups = new Map<string, { markers: any[]; rank: number }>();
   markers.forEach((m: any, i: number) => {
-    if (m?.in_optimal !== false) return; // only out-of-optimal concerns (null/true skipped)
+    // Admit a marker when it sits OUT of its optimal band (in_optimal === false) OR
+    // the lab itself flagged it low/high. A lab-flagged marker with NO optimal zone
+    // (in_optimal === null) was previously dropped here — a flagged finding that
+    // never reached the Brain. Only skip a clean in-optimal marker, or an
+    // unflagged one we have no optimal band for (nothing to say).
+    const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
+    if (m?.in_optimal === true) return;                 // clearly in optimal — clean
+    if (m?.in_optimal == null && !flagged) return;      // no band + not flagged — nothing to say
     const label = m.group_label || markerGroup(m?.name || "").label;
     if (!groups.has(label)) groups.set(label, { markers: [], rank: i });
     groups.get(label)!.markers.push(m);
@@ -1254,9 +1364,13 @@ export function healthFocus(): HealthFocus {
     const worsening = ms.some((m) => m?.forecast?.direction === "worsening");
     const maxDistance = ms.reduce((mx, m) => Math.max(mx, Number(m?.distance) || 0), 0);
     // Tier score — flagged + compounding + how far out + worsening + near the top
-    // of the panel's priority order. ≥3 ⇒ act now; else track.
+    // of the panel's priority order. ≥3 ⇒ act now; else track. A lab flag gets a
+    // STRONG floor (≥3 on its own): the lab calling a value low/high is itself an
+    // act-now signal even when we have no optimal band to measure distance/forecast
+    // against (e.g. a flagged marker outside OPTIMAL_ZONES). No score is surfaced —
+    // this only decides the plain-words tier.
     let score = 0;
-    if (flagged) score += 2;
+    if (flagged) score += 3;
     if (compounding) score += 2;
     if (maxDistance >= 0.4) score += 2; else if (maxDistance >= 0.2) score += 1;
     if (worsening) score += 1;
@@ -1320,6 +1434,28 @@ export function getHealthSynthesis(): any | null {
   const raw = getAppState(HEALTH_SYNTHESIS_KEY);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
+}
+
+// The cached synthesis plus a FRESHNESS verdict for the PWA. `stale` is true when a
+// health document exists whose effective date is NEWER than the synthesis was last
+// written against (source_doc_at, falling back to generated_at) — i.e. new labs have
+// landed since the story was told, so the Brain view can offer "re-read your picture".
+// false when there's no synthesis or nothing newer. Reads the health_documents table
+// directly (same db.prepare pattern as the rest of this file). Never throws.
+export function getHealthSynthesisView(): { synthesis: any | null; stale: boolean } {
+  const synthesis = getHealthSynthesis();
+  if (!synthesis) return { synthesis: null, stale: false };
+  // Same source of truth the synthesis was stamped against (see coachOps), so the
+  // stale comparison can't drift from how source_doc_at was derived.
+  const newestDoc = newestHealthDocDate();
+  if (!newestDoc) return { synthesis, stale: false };
+  // Compare on the day string. source_doc_at is a date (YYYY-MM-DD); generated_at is
+  // an ISO timestamp — slice it to a day so a same-day generate doesn't read stale.
+  const against = (typeof synthesis.source_doc_at === "string" && synthesis.source_doc_at.trim())
+    ? synthesis.source_doc_at.trim().slice(0, 10)
+    : String(synthesis.generated_at ?? "").slice(0, 10);
+  const stale = !!against && newestDoc > against;
+  return { synthesis, stale };
 }
 
 export function directiveFeedbackForCoach(limit = 12) {

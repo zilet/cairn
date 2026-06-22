@@ -44,6 +44,20 @@ test("a compounding lipid panel + a single low vitamin D tier correctly, deduped
   assert.ok(!/\b\d{1,3}\s*\/\s*100\b/.test(JSON.stringify(f)), "no 0-100 score anywhere (constitution)");
 });
 
+test("a LAB-FLAGGED marker with no optimal-zone still surfaces as a priority (not silently dropped)", () => {
+  // WBC has no OPTIMAL_ZONE → in_optimal is null. A lab flag of high/low must still
+  // reach the prioritized read (and thus the synthesis), not vanish on the null gate.
+  seedHealthDoc("2025-12-01", [
+    marker("WBC", 14.2, { unit: "10^3/uL", flag: "high" }),
+    marker("ApoB", 70, { unit: "mg/dL" }), // clean — should NOT surface
+  ]);
+  repo.deriveDirectives();
+  const f = repo.healthFocus();
+  assert.ok(JSON.stringify(f).toLowerCase().includes("wbc"), "the lab-flagged WBC reaches the prioritized read");
+  assert.ok(f.priorities.length >= 1, "a flagged no-zone marker produces a priority");
+  assert.ok(!/\b\d{1,3}\s*\/\s*100\b/.test(JSON.stringify(f)), "no 0-100 score (constitution)");
+});
+
 test("clean markers → no priorities, calm headline", () => {
   seedHealthDoc("2025-12-01", [marker("ApoB", 70, { unit: "mg/dL" })]); // in optimal, unflagged
   repo.deriveDirectives();

@@ -246,6 +246,14 @@ export function startScheduler() {
         const g = await growAboutMe("auto");
         if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
       } catch (e: any) { console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`); }
+      // 3. Agentic exercise-name tidy — best-effort, pull-never-push. Messy /
+      //    duplicate movement titles self-align over time so the volume +
+      //    progression read stays clean (never touches logged numbers).
+      try {
+        const { reconcileExercises } = await import("./coachOps.js");
+        const x: any = await reconcileExercises("auto");
+        if (x.ok && x.applied) console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
+      } catch (e: any) { console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`); }
     } finally {
       memoryBusy = false;
     }

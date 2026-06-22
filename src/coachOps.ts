@@ -32,6 +32,7 @@ import {
   buildChatDistillPrompt,
   buildOnboardPrompt,
   buildMarkerReconcilePrompt,
+  buildExerciseReconcilePrompt,
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
@@ -615,7 +616,10 @@ export async function synthesizeHealth(agent: string | undefined, hooks?: OpHook
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "health_synthesis", signal: hooks?.signal });
   const synthesis = normalizeHealthSynthesis(result.parsed, { agent: chosen, generated_at: new Date().toISOString() });
   if (synthesis) {
-    repo.saveHealthSynthesis(synthesis);
+    // Stamp the newest health-document date this synthesis was written against, so a
+    // later doc upload can mark the cached synthesis STALE. The SAME helper feeds
+    // propagation.getHealthSynthesisView's read, so the two can't drift.
+    repo.saveHealthSynthesis({ ...synthesis, source_doc_at: repo.newestHealthDocDate() });
   }
   return {
     ok: !!synthesis,
@@ -861,6 +865,59 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
   // members, ≥2 members, unit-compatible, real merge) and persist each one.
   const merges = repo.planMarkerMerges(items.map((i) => ({ name: i.name, unit: i.unit })), p.groups);
   for (const m of merges) repo.setMarkerAlias(m.rawNorm, m.canonicalKey, m.canonicalName, "agent");
+  // Realigned analyte series shift the connected-brain read → bust today's cached
+  // Brief HERE so BOTH surfaces (REST /markers/reconcile, MCP reconcile_markers) stay
+  // consistent, instead of only the REST route remembering to.
+  if (merges.length) { try { repo.invalidateDayRead(); } catch { /* best-effort */ } }
   const aligned = new Set(merges.map((m) => m.canonicalKey)).size;
   return { ok: true as const, aligned, applied: merges.length, candidates: items.length, agent: chosen, tried, agent_status: "ok" as const };
+}
+
+// ---------- agentic exercise reconciliation ----------
+// The movement-name counterpart to reconcileMarkers: different logging passes name
+// the same lift differently ("Dead hang"/"Dead hang timed", "DB bench"/"Dumbbell
+// bench press"), splitting one movement's history into parallel series and muddying
+// the volume/progression read. The deterministic canonicalizer (exercise-canon) is
+// the offline FLOOR; this learns the harder synonyms a human would catch. The agent
+// clusters same-movement names; repo.planExerciseAliases validates each member→
+// canonical decision (pure guards) and we persist them as exercise_aliases rows
+// (source 'agent'), so findOrCreateExercise / the canon resolve them from then on.
+// Conservatively, when a cluster's canonical movement has a missing/"other" group
+// and the agent gave a confident group, we IMPROVE it (never overwrite a real one).
+// Fail-open: no agent / bad shape → nothing persisted, the deterministic floor stands.
+export async function reconcileExercises(agent?: string, hooks?: OpHooks) {
+  const items = repo.distinctExerciseNames();
+  if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
+  hooks?.onPhase?.("tidying exercise names");
+  const prompt = buildExerciseReconcilePrompt(items.map((i) => ({ name: i.name, group: i.group, sets: i.sets })));
+  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "exercise_reconcile", signal: hooks?.signal });
+  const p: any = result?.parsed;
+  if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {
+    return { ok: false as const, error: "no usable reconciliation", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+  }
+  // Validate the agent's clusters into concrete alias rows (pure guards: verbatim
+  // members, ≥2 distinct names, a real merge) and persist each one.
+  const aliases = repo.planExerciseAliases(items.map((i) => ({ name: i.name })), p.groups);
+  for (const a of aliases) repo.setExerciseAlias(a.rawNorm, a.canonical, "agent");
+
+  // Conservatively IMPROVE a canonical movement's muscle group only when it's
+  // currently null/"other" AND the agent supplied a confident group for the cluster.
+  // Never overwrite a good group; never throw on a bad row.
+  const validGroups = (() => { try { return new Set<string>([...repo.MUSCLE_GROUPS]); } catch { return null; } })();
+  for (const g of p.groups) {
+    const canonical = String(g?.canonical ?? "").replace(/\s+/g, " ").trim();
+    const suggested = String(g?.group ?? g?.muscle_group ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!canonical || !suggested || suggested === "other") continue;
+    if (validGroups && !validGroups.has(suggested)) continue; // only a recognized canonical group
+    try {
+      const ex: any = repo.findExercise(canonical);
+      const cur = String(ex?.muscle_group ?? "").trim().toLowerCase();
+      if (ex && (!cur || cur === "other") && cur !== suggested) {
+        repo.updateExercise(Number(ex.id), { muscle_group: suggested });
+      }
+    } catch { /* skip a bad row, keep going */ }
+  }
+
+  const aligned = new Set(aliases.map((a) => a.canonical)).size;
+  return { ok: true as const, aligned, applied: aliases.length, candidates: items.length, agent: chosen, tried, agent_status: "ok" as const };
 }

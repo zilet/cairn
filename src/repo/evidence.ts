@@ -150,6 +150,20 @@ const GUIDELINE_ALLOWLIST = [
   "kidney disease improving global outcomes", "american thyroid association",
 ];
 
+// Match one allowlist entry against a citation. A SHORT entry (≤4 chars) is an
+// acronym (WHO, NIH, ADA, NICE) — it must appear as the UPPERCASE token on a word
+// boundary in the ORIGINAL citation, so a guideline body ("WHO 2023…") verifies but
+// the everyday lowercase word ("a study of who responds…", "nice diet", "Canada")
+// does NOT — and a substring ("who" in "Whoop") never matches either. A longer /
+// multiword entry stays a case-insensitive substring (specific enough not to collide).
+function allowlistMatches(entry: string, low: string, raw: string): boolean {
+  if (entry.length <= 4) {
+    const re = new RegExp(`\\b${entry.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+    return re.test(raw);
+  }
+  return low.includes(entry);
+}
+
 export interface CitationVerdict {
   citation: string | null;   // the kept citation string (null when stripped)
   uncertain: boolean;        // true when the citation could not be verified
@@ -164,8 +178,12 @@ export function verifyCitation(citation: string | null | undefined, sourceUrl?: 
   const raw = citation == null ? "" : String(citation).trim();
   if (!raw) return { citation: null, uncertain: true, verified: false };
   const low = raw.toLowerCase();
-  // 1) A recognized guideline body named anywhere in the citation.
-  if (GUIDELINE_ALLOWLIST.some((g) => low.includes(g))) {
+  // 1) A recognized guideline body named anywhere in the citation. SHORT acronyms
+  // (≤4 chars: who, nih, ata, …) require a WORD-BOUNDARY match — a bare `includes`
+  // false-accepts them inside unrelated words ("who" in "Whoop"/"who responds",
+  // "ada" in "Canada", "acr" in "across"). Longer / multiword entries stay
+  // substring (they're specific enough not to collide).
+  if (GUIDELINE_ALLOWLIST.some((g) => allowlistMatches(g, low, raw))) {
     return { citation: raw.slice(0, 600), uncertain: false, verified: true };
   }
   // 2) A cached evidence row whose title or url corroborates it.
@@ -236,18 +254,66 @@ export function buildSafetyMarkerContext(): SafetyMarkerContext {
   return { byLabel };
 }
 
+// What the gate reads to decide a rule applies. The directive TEXT is the primary
+// signal, but a contraindicated supplement can be phrased WITHOUT the obvious words
+// ("boost your stores with a daily ferrous bisglycinate" never says "iron"; "keep
+// taking your usual creatine scoop" never says "supplement"/"add"). So each rule is
+// ALSO keyed off (a) the directive's structured `marker` field and (b) a small
+// supplement-name lexicon detected in the text — caught via `matchesSubject` below.
+interface SafetyMatch {
+  text: string;     // lowercased directive text
+  marker: string;   // lowercased directive.marker (may be "")
+}
+
 interface SafetyRule {
-  // true when the directive text suggests this supplement
-  matches: (text: string) => boolean;
+  // true when the directive suggests this supplement (by text, marker, or a
+  // supplement-name in the text — see matchesSubject).
+  matches: (m: SafetyMatch) => boolean;
   // returns an informational note when the marker context contraindicates it, else null
   check: (ctx: SafetyMarkerContext) => string | null;
+}
+
+// Small supplement-name lexicon per subject: catch a contraindicated combo even when
+// the prose avoids the obvious trigger words. Each name implies a SUPPLEMENT intent on
+// its own (you don't say "ferrous bisglycinate" / "cholecalciferol" / "creatine
+// monohydrate" except about supplementing), so a name match needs no separate verb.
+const SUPPLEMENT_LEXICON = {
+  iron: /\bferrous\b|\bferric\b|bisglycinate|fumarate|gluconate|\bheme iron\b|carbonyl iron/,
+  vitaminD: /cholecalciferol|ergocalciferol|\bvitamin d3?\b|\bd3\b|25-oh/,
+  creatine: /\bcreatine\b|monohydrate/, // \b excludes "creatinine" (the kidney marker)
+} as const;
+
+// A rule's subject (a supplement INTENT, not merely a mention of the analyte) is
+// present when ANY of:
+//   • a supplement-name from the lexicon appears in the text — implies intent on its
+//     own ("ferrous bisglycinate", "cholecalciferol", "creatine scoop"); no verb needed;
+//   • the obvious word + a supplement/dose verb appear in the text ("add iron", "take D3");
+//   • the structured `marker` field names the analyte AND a supplement/dose verb appears
+//     in the text — the marker broadens the subject word, but a verb is still required so
+//     a directive merely ABOUT the analyte ("ferritin is low, eat red meat") doesn't trip.
+// Conservative by construction: an unrelated directive never trips a rule, and a
+// directive that discusses a marker without suggesting a supplement doesn't either.
+function matchesSubject(
+  m: SafetyMatch,
+  opts: { markerRe: RegExp; wordRe: RegExp; verbRe: RegExp; lexicon: RegExp }
+): boolean {
+  if (opts.lexicon.test(m.text)) return true;                          // a named supplement implies intent
+  const hasVerb = opts.verbRe.test(m.text);
+  if (opts.wordRe.test(m.text) && hasVerb) return true;                // obvious word + a dose/add verb
+  if (m.marker && opts.markerRe.test(m.marker) && hasVerb) return true; // marker field broadens the word, verb still required
+  return false;
 }
 
 const SAFETY_RULES: SafetyRule[] = [
   {
     // Iron / ferritin: supplementing iron is contraindicated when ferritin is
     // already normal/high (iron overload risk). Only low ferritin warrants it.
-    matches: (t) => /\biron\b|ferritin/.test(t) && /(supplement|tablet|capsule|take\b|add\b)/.test(t),
+    matches: (m) => matchesSubject(m, {
+      markerRe: /\biron\b|ferritin|transferrin|\btsat\b/,
+      wordRe: /\biron\b|ferritin/,
+      verbRe: /(supplement|tablet|capsule|take\b|add\b|boost\b|raise\b|increase\b)/,
+      lexicon: SUPPLEMENT_LEXICON.iron,
+    }),
     check: (ctx) => {
       const f = ctx.byLabel.Ferritin;
       if (f && (f.side === "high" || (f.side === "normal" && f.inOptimal !== false))) {
@@ -258,7 +324,12 @@ const SAFETY_RULES: SafetyRule[] = [
   },
   {
     // High-dose vitamin D3 when 25-OH D is already replete (in/above optimal).
-    matches: (t) => /(vitamin d|d3|25-oh|cholecalciferol)/.test(t) && /(supplement|high-dose|high dose|\biu\b|take\b|add\b)/.test(t),
+    matches: (m) => matchesSubject(m, {
+      markerRe: /vitamin d|25-oh|cholecalciferol/,
+      wordRe: /(vitamin d|d3|25-oh|cholecalciferol)/,
+      verbRe: /(supplement|high-dose|high dose|\biu\b|take\b|add\b|boost\b)/,
+      lexicon: SUPPLEMENT_LEXICON.vitaminD,
+    }),
     check: (ctx) => {
       const d = ctx.byLabel["Vitamin D"];
       if (d && (d.side === "high" || (d.side === "normal" && d.inOptimal === true))) {
@@ -269,7 +340,14 @@ const SAFETY_RULES: SafetyRule[] = [
   },
   {
     // Creatine when kidney function is reduced (low eGFR / high creatinine).
-    matches: (t) => /creatine/.test(t) && /(supplement|take\b|add\b|\bg\/day|grams?\b|loading)/.test(t),
+    // Match "creatine" but NOT "creatinine" (the kidney MARKER, not the supplement) —
+    // \bcreatine\b excludes the longer word so a Creatinine directive can't self-trip.
+    matches: (m) => matchesSubject(m, {
+      markerRe: /\bcreatine\b/,
+      wordRe: /\bcreatine\b/,
+      verbRe: /(supplement|take\b|add\b|\bg\/day|grams?\b|loading|scoop\b|keep\b|daily\b)/,
+      lexicon: SUPPLEMENT_LEXICON.creatine,
+    }),
     check: (ctx) => {
       const egfr = ctx.byLabel.eGFR;
       const creat = ctx.byLabel.Creatinine;
@@ -293,11 +371,15 @@ export function safetyGate(
 ): SafetyResult {
   const text = String(directive?.directive ?? "");
   const base: SafetyResult = { directive: directive?.directive ?? null, rationale: directive?.rationale ?? null, uncertain: false, annotated: false };
+  // Every rule requires a dose/add verb IN THE TEXT (the marker field only broadens
+  // which analyte word counts), so an empty directive can't trip the gate.
   if (!text.trim()) return base;
+  const marker = String(directive?.marker ?? "").toLowerCase().trim();
   const low = text.toLowerCase();
+  const subject: SafetyMatch = { text: low, marker };
   const notes: string[] = [];
   for (const rule of SAFETY_RULES) {
-    if (!rule.matches(low)) continue;
+    if (!rule.matches(subject)) continue;
     const note = rule.check(ctx);
     if (note) notes.push(note);
   }

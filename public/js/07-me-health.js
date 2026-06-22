@@ -1115,6 +1115,10 @@ function renderHealthSynthesis(data, token) {
   const focus = (data && data.focus) || { priorities: [] };
   const hasFocus = Array.isArray(focus.priorities) && focus.priorities.length;
   if (!s && !hasFocus) { wrap.innerHTML = ""; return; } // nothing to synthesize yet — stay quiet
+  // Newer labs landed since this read was written? Warn calmly, the same way the
+  // review card does — so the narrative never silently contradicts the fresh focus
+  // tiers below it. Read defensively for both response shapes (spread or nested).
+  const stale = (data && data.stale) ?? (s && s.stale) ?? false;
 
   const prios = s && Array.isArray(s.priorities) ? s.priorities.filter((p) => p && (p.label || p.the_move)) : [];
   let body;
@@ -1130,7 +1134,9 @@ function renderHealthSynthesis(data, token) {
         </div>`).join("")}</div>` : ""}
       ${s.one_change ? `<div class="hsyn-onechange"><span class="lbl">If you change one thing</span><span>${escHtml(s.one_change)}</span></div>` : ""}
       ${focusTierHtml(focus)}
-      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${escHtml(relTime(s.generated_at))}` : ""}</span><button class="linkbtn" id="hsynRefresh" type="button">refresh</button></div>`;
+      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${escHtml(relTime(s.generated_at))}` : ""}</span>${stale
+        ? `<button id="hsynRefresh" class="hpic-refresh hpic-refresh-stale" type="button" title="New results since this read"><span class="hdot hdot-warn"></span>New results — refresh</button>`
+        : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}</div>`;
   } else {
     body = `
       <p class="hsyn-invite">Your labs, training, recovery and nutrition — read as one connected, prioritized picture.</p>

@@ -111,6 +111,19 @@ function statusBadge(status) {
 // card that was just applied (the clamp detail isn't persisted on the row).
 const lastApplyClamp = {};
 
+// Map a /proposals/:id/apply response → the toast to show. Shared by the Coach-list
+// applier (below) and the chat draft-apply handler (09) so the failure guard + the
+// success wording stay identical. failed:true ⇒ never claim "Applied" (a 400 {error},
+// ok:false = nothing changed, or a transport drop).
+function applyResultMessage(r) {
+  if (!r || r.ok === false || r.error) return { failed: true, message: (r && r.error) || "Couldn't apply — try again" };
+  if (Array.isArray(r.clamped) && r.clamped.length) return { failed: false, message: "Applied · adjusted to a safe step" };
+  const addedN = Array.isArray(r.added) ? r.added.length : 0;
+  if (addedN) return { failed: false, message: addedN > 1 ? `Added ${addedN} movements to your plan` : "Added to your plan" };
+  if (r.restructured) return { failed: false, message: "Plan restructured" };
+  return { failed: false, message: "Applied" };
+}
+
 // Apply one proposal by id — the single apply path shared by the Coach list and the
 // Plan → Endurance "shape your running" composer. Flips the draft to 'applied'
 // server-side (surgical for run prescriptions), remembers any safe-step clamp so the
@@ -120,12 +133,11 @@ async function applyProposalById(id, btn) {
   if (btn) btnBusy(btn, "Applying…");
   let r = null;
   try { r = await api(`/proposals/${id}/apply`, { method: "POST" }); } catch { r = null; }
-  // Honest failure: the apply endpoint returns {error} (400) or drops on transport —
-  // never claim "Applied" then. The caller re-renders, so the draft stays actionable.
-  if (!r || r.error) { toast("Couldn't apply — try again"); return r; }
-  const clamped = Array.isArray(r.clamped) && r.clamped.length;
-  if (clamped) lastApplyClamp[id] = r.clamped;
-  toast(clamped ? "Applied · adjusted to a safe step" : "Applied");
+  // Honest failure: the caller re-renders, so the draft stays actionable.
+  const m = applyResultMessage(r);
+  if (m.failed) { toast(m.message); return r; }
+  if (Array.isArray(r.clamped) && r.clamped.length) lastApplyClamp[id] = r.clamped;
+  toast(m.message);
   state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
   return r;
 }

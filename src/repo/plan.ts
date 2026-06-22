@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise } from "./exercises.js";
 
 // ---------- plan ----------
@@ -256,6 +257,99 @@ export function updateTarget(
   };
 }
 
+// The ONE place that knows the plan_items column shape. Every insert — savePlanDay's
+// cardio + strength branches and applyPlanChange's ADD — goes through it, so a schema
+// column change is a single edit instead of three parallel 15-column statements.
+// Omitted columns default to NULL (kind defaults to 'strength').
+function insertPlanItem(row: {
+  plan_day_id: number; position: number; exercise_id: number | null;
+  sets?: number | null; rep_low?: number | null; rep_high?: number | null;
+  target_weight?: number | null; note?: string | null; warmup_sets?: number | null;
+  target_seconds?: number | null; kind?: string;
+  target_distance_km?: number | null; target_duration_min?: number | null;
+  target_zone?: string | null; interval_json?: string | null;
+}) {
+  return db.prepare(
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    row.plan_day_id, row.position, row.exercise_id ?? null,
+    row.sets ?? null, row.rep_low ?? null, row.rep_high ?? null, row.target_weight ?? null,
+    row.note ?? null, row.warmup_sets ?? null, row.target_seconds ?? null,
+    row.kind ?? "strength", row.target_distance_km ?? null, row.target_duration_min ?? null,
+    row.target_zone ?? null, row.interval_json ?? null
+  );
+}
+
+// Apply ONE coach proposal change to the plan — an UPSERT, unlike updateTarget
+// (edit-only). It updates the matching prescription's target when the movement is
+// already on that day, and ADDS the movement to the day when it isn't yet. That
+// "add a back movement" intent is the coach's most natural plan edit, and it used
+// to vanish silently: applyProposal looped updateTarget, whose UPDATE matched zero
+// rows for an absent exercise (or threw "No exercise") — yet the proposal still
+// flipped to "applied" and the UI claimed "✓ Applied". Returns the action taken so
+// applyProposal can report honestly. clamp:true runs the apply-path safety clamp on
+// an UPDATE (an ADD starts at the coach's conservative target as-is).
+export interface PlanChange {
+  day_number: number;
+  exercise: string;
+  target_weight?: number | null;
+  target_seconds?: number | null;
+  sets?: number | null;
+  rep_low?: number | null;
+  rep_high?: number | null;
+  reason?: string | null;
+  note?: string | null;
+  mode?: string | null;
+}
+export function applyPlanChange(
+  c: PlanChange,
+  opts: { clamp?: boolean } = {}
+): { action: "updated" | "added"; day: number; exercise: string; updated?: number; clamped?: ClampAdjustment[] } {
+  const dayNumber = Number(c.day_number);
+  const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
+  if (!day) throw new Error(`No plan day ${dayNumber}`);
+  const name = String(c.exercise ?? "").trim();
+  if (!name) throw new Error("exercise required");
+
+  // Find the matching strength item already on this day — exact name first, then a
+  // normalized-key drift match (so a tweak phrased "DB Row" updates an existing
+  // "Single-Arm DB Row" instead of adding a near-duplicate). Only when NOTHING on
+  // the day matches is this treated as an ADD.
+  const dayItems = db.prepare(
+    `SELECT e.name AS ex_name
+       FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+      WHERE pi.plan_day_id = ? AND (pi.kind IS NULL OR pi.kind != 'cardio')`
+  ).all(day.id) as any[];
+  const norm = normalizeExerciseName(name);
+  const key = normalizedExerciseKey(name);
+  const match =
+    dayItems.find((r) => normalizeExerciseName(r.ex_name) === norm) ??
+    dayItems.find((r) => normalizedExerciseKey(r.ex_name) === key);
+
+  const tw = c.target_weight !== undefined && c.target_weight !== null ? Number(c.target_weight) : undefined;
+  const ts = c.target_seconds !== undefined && c.target_seconds !== null ? Number(c.target_seconds) : undefined;
+
+  if (match) {
+    const r = updateTarget(dayNumber, match.ex_name, tw, ts, opts) as any;
+    return { action: "updated", day: dayNumber, exercise: match.ex_name, updated: r.updated, ...(r.clamped ? { clamped: r.clamped } : {}) };
+  }
+
+  // ADD: the movement isn't on this day yet. Create the exercise if needed (its
+  // group auto-classifies), then append it with the change's prescription + sensible
+  // defaults, carrying the coach's reason as the note so the "why" survives.
+  const timed = ts !== undefined && tw === undefined;
+  const ex = findOrCreateExercise(name, undefined, undefined, c.mode ?? (timed ? "timed" : "reps"));
+  const pos = (db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS p FROM plan_items WHERE plan_day_id = ?`).get(day.id) as any).p;
+  const sets = Number.isFinite(Number(c.sets)) && Number(c.sets) > 0 ? Math.trunc(Number(c.sets)) : 3;
+  const repLow = c.rep_low != null && Number.isFinite(Number(c.rep_low)) ? Math.trunc(Number(c.rep_low)) : timed ? null : 8;
+  const repHigh = c.rep_high != null && Number.isFinite(Number(c.rep_high)) ? Math.trunc(Number(c.rep_high)) : timed ? null : 12;
+  const noteSrc = c.note ?? c.reason;
+  const note = noteSrc != null && String(noteSrc).trim() ? String(noteSrc).trim().slice(0, 500) : null;
+  insertPlanItem({ plan_day_id: day.id, position: pos, exercise_id: ex.id, sets, rep_low: repLow, rep_high: repHigh, target_weight: tw ?? null, note, target_seconds: ts ?? null, kind: "strength" });
+  return { action: "added", day: dayNumber, exercise: ex.name };
+}
+
 // ---------- plan editing (manual + restructure) ----------
 export interface PlanItemInput {
   exercise?: string;            // optional for a cardio item (its label can live in `note`)
@@ -309,10 +403,6 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
       db.prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (?, ?, ?)`).run(day_number, name, focus ?? null).lastInsertRowid
     );
   }
-  const ins = db.prepare(
-    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
   (items || []).forEach((it, i) => {
     const isCardio = String(it.kind ?? "").toLowerCase() === "cardio";
     if (isCardio) {
@@ -320,19 +410,22 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
       // folded into the note so the column stays NULL). Endurance prescription only.
       const label = String(it.exercise ?? "").trim();
       const note = it.note != null && String(it.note).trim() ? String(it.note).trim() : (label || null);
-      ins.run(
-        dayId, i, null, it.sets ?? 1, null, null, null,
-        note ? note.slice(0, 500) : null, null, null,
-        "cardio", numOrNull(it.target_distance_km), numOrNull(it.target_duration_min),
-        it.target_zone != null && String(it.target_zone).trim() ? String(it.target_zone).trim().slice(0, 40) : null,
-        intervalJson(it)
-      );
+      insertPlanItem({
+        plan_day_id: dayId, position: i, exercise_id: null, sets: it.sets ?? 1,
+        note: note ? note.slice(0, 500) : null, kind: "cardio",
+        target_distance_km: numOrNull(it.target_distance_km), target_duration_min: numOrNull(it.target_duration_min),
+        target_zone: it.target_zone != null && String(it.target_zone).trim() ? String(it.target_zone).trim().slice(0, 40) : null,
+        interval_json: intervalJson(it),
+      });
       return;
     }
     if (!it.exercise || !String(it.exercise).trim()) return;
     const ex = findOrCreateExercise(String(it.exercise), undefined, undefined, it.mode ?? undefined);
-    ins.run(dayId, i, ex.id, it.sets ?? 3, it.rep_low ?? null, it.rep_high ?? null, it.target_weight ?? null, it.note ?? null, it.warmup_sets ?? null, it.target_seconds ?? null,
-      "strength", null, null, null, null);
+    insertPlanItem({
+      plan_day_id: dayId, position: i, exercise_id: ex.id, sets: it.sets ?? 3,
+      rep_low: it.rep_low ?? null, rep_high: it.rep_high ?? null, target_weight: it.target_weight ?? null,
+      note: it.note ?? null, warmup_sets: it.warmup_sets ?? null, target_seconds: it.target_seconds ?? null, kind: "strength",
+    });
   });
   return getPlanDay(day_number);
 }

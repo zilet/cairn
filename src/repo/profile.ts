@@ -1,8 +1,9 @@
 import { db, todayISO } from "../db.js";
 import { findExercise } from "./exercises.js";
 import { lsqSlopePerDay } from "./health.js";
-import { type ClampAdjustment, type RunPrescription, replacePlan, setWeeklyRuns, updateTarget } from "./plan.js";
+import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getProgress } from "./sessions.js";
+import { LB_PER_KG } from "./shared.js";
 
 // ---------- exercise guide ----------
 export function getExerciseDetail(name: string) {
@@ -124,6 +125,7 @@ export function applyProposal(id: number) {
     const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition);
     setProposalStatus(id, "applied");
     return {
+      ok: true,
       id, applied: [], nutrition,
       note: "advisory nutrition target — no plan changes to apply",
       ...(clamped.length ? { clamped } : {}),
@@ -134,7 +136,7 @@ export function applyProposal(id: number) {
     replacePlan(p.parsed.days);
     setProposalStatus(id, "applied");
     supersedeSiblingTrainingDrafts(id);
-    return { id, restructured: true, days: p.parsed.days.length };
+    return { ok: true, id, restructured: true, days: p.parsed.days.length };
   }
   // A proposal may carry strength `changes`, a week of run prescriptions (`cardio`),
   // or both. (A full split/frequency rewrite uses `days` → replacePlan above.)
@@ -143,7 +145,8 @@ export function applyProposal(id: number) {
   if (!hasChanges && !hasCardio) {
     throw new Error("Proposal has no valid changes, cardio, or days");
   }
-  const applied: any[] = [];
+  const applied: any[] = [];   // target tweaks to existing prescriptions
+  const added: any[] = [];     // movements ADDED to a day (the "add a back movement" intent)
   const skipped: any[] = [];
   const clamped: ClampAdjustment[] = [];
   const cardioRuns: any[] = [];
@@ -155,14 +158,15 @@ export function applyProposal(id: number) {
         cardioRuns.push(c);
         continue;
       }
-      // A change carries target_weight (reps exercises) and/or target_seconds (timed).
-      const tw = c.target_weight !== undefined && c.target_weight !== null ? Number(c.target_weight) : undefined;
-      const ts = c.target_seconds !== undefined && c.target_seconds !== null ? Number(c.target_seconds) : undefined;
       // clamp:true — this is the auto/reviewed APPLY path, so the deterministic
-      // safety clamp applies (a manual edit stays unclamped). Adjustments bubble up.
-      const r = updateTarget(Number(c.day_number), String(c.exercise), tw, ts, { clamp: true });
-      if (Array.isArray((r as any).clamped)) clamped.push(...(r as any).clamped);
-      applied.push({ ...c, updated: r.updated });
+      // safety clamp applies to a target tweak (a manual edit stays unclamped).
+      // applyPlanChange UPSERTS: it updates the matching prescription, or ADDS the
+      // movement when it isn't on that day yet (an UPDATE that matched zero rows used
+      // to be silently reported as "applied" — that lie is fixed here + below).
+      const r = applyPlanChange(c, { clamp: true });
+      if (Array.isArray(r.clamped)) clamped.push(...r.clamped);
+      if (r.action === "added") added.push({ ...c, exercise: r.exercise });
+      else applied.push({ ...c, exercise: r.exercise, updated: r.updated });
     } catch (e: any) {
       skipped.push({ ...c, error: e.message });
     }
@@ -176,9 +180,25 @@ export function applyProposal(id: number) {
       skipped.push({ kind: "cardio", error: e.message });
     }
   }
+  // Truthful apply: did anything CONCRETELY change? A target tweak that matched zero
+  // rows (updated:0) is not a change — it used to flip the proposal to "applied" and
+  // the UI claimed "✓ Applied" over a no-op. Only commit when something really
+  // changed; otherwise leave the proposal a live draft and report ok:false so the
+  // surface says so honestly instead of lying.
+  const changedAny = applied.some((a) => Number(a.updated) > 0) || added.length > 0 || (runs?.applied.length ?? 0) > 0;
+  if (!changedAny) {
+    return {
+      ok: false,
+      id, applied, added, skipped,
+      error: skipped.length
+        ? "Couldn't apply these changes — the movement may need to be added through a plan restructure."
+        : "Nothing to change — your plan already matches this.",
+      ...(clamped.length ? { clamped } : {}),
+    };
+  }
   setProposalStatus(id, "applied");
   supersedeSiblingTrainingDrafts(id);
-  return { id, applied, skipped, ...(runs ? { runs: runs.applied } : {}), ...(clamped.length ? { clamped } : {}) };
+  return { ok: true, id, applied, added, skipped, ...(runs ? { runs: runs.applied } : {}), ...(clamped.length ? { clamped } : {}) };
 }
 
 // Map a coach-emitted cardio entry (from parsed.cardio, or a kind:'cardio' change)
@@ -369,7 +389,6 @@ export function listWeight(limit = 60) {
 }
 
 // ---------- goal feasibility check ----------
-const LB_PER_KG = 2.2046226218;
 export const KCAL_PER_LB = 3500;
 
 export function computeGoalCheck() {

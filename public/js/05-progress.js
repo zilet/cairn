@@ -544,12 +544,18 @@ function volBalanceHtml(bal) {
 
   // Calm chip rows — due (terracotta-quiet), high (gold-quiet), missing (muted).
   const chip = (label, cls) => `<span class="vbal-chip ${cls}">${escHtml(label)}</span>`;
-  const dueChips = due.map((g) => chip(capWord(g), "vbal-due")).join("");
+  // Broad-low (most groups due at once) → the summary already says "volume's light
+  // across the board", so cap the Due row to the few that matter + a quiet "+N more"
+  // instead of a wall of terracotta chips. Otherwise show them all.
+  const dueShown = bal.broad_low ? due.slice(0, 4) : due;
+  const dueMore = due.length - dueShown.length;
+  const dueChips = dueShown.map((g) => chip(capWord(g), "vbal-due")).join("")
+    + (dueMore > 0 ? chip(`+${dueMore} more`, "vbal-miss") : "");
   const overChips = over.map((g) => chip(capWord(g), "vbal-high")).join("");
   const missChips = missing.map((p) => chip(PATTERN_WORD[p], "vbal-miss")).join("");
 
   const rows = [];
-  if (dueChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Due</span><span class="vbal-chips">${dueChips}</span></div>`);
+  if (dueShown.length) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Due</span><span class="vbal-chips">${dueChips}</span></div>`);
   if (overChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Running high</span><span class="vbal-chips">${overChips}</span></div>`);
   if (missChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Not programmed</span><span class="vbal-chips">${missChips}</span></div>`);
 
@@ -1340,6 +1346,8 @@ function paintProgramBody(data) {
   html += `<div class="prog-evolve-foot reveal" style="${stagger(staggerI)}">
     <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Evolve my plan</button>
     <span class="prog-evolve-note lbl">asks the coach to draft an updated plan — you review before anything changes</span>
+    <button id="progTidyBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px" type="button">Tidy exercise names</button>
+    <span class="prog-evolve-note lbl">Different logs name the same lift differently — Cairn merges duplicates so each one tracks as one line. Runs automatically as you log.</span>
   </div>`;
 
   view.innerHTML = html;
@@ -1349,8 +1357,26 @@ function paintProgramBody(data) {
   const btn = view.querySelector("#progEvolveBtn");
   if (btn) btn.addEventListener("click", () => triggerProgramEvolve(btn));
 
+  const tidyBtn = view.querySelector("#progTidyBtn");
+  if (tidyBtn) tidyBtn.addEventListener("click", () => tidyExerciseNames(tidyBtn));
+
   loadProgramBlock(); // periodization block card (active) or a "start a block" affordance
   loadProgramAdjustments(); // the "what changed & why" digest
+}
+
+// "Tidy exercise names" — the exercise-canon analogue to Health's "Align lab names".
+// Merges duplicate movements (e.g. "Dead hang" / "Dead hang timed") so each lift
+// tracks as one line. Calm, low-friction; degrades calmly on failure. Refreshes the
+// program read on success so the merged history shows immediately.
+async function tidyExerciseNames(btn) {
+  const restore = btnBusy(btn, "tidying…");
+  let r = null;
+  try { r = await api("/exercises/reconcile-names", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { r = null; }
+  restore();
+  if (!r || r.ok === false) { toast("Couldn't tidy names — try again."); return; }
+  const n = Number(r.aligned ?? r.applied) || 0;
+  toast(n ? `Tidied ${n} exercise name${n === 1 ? "" : "s"}` : "Names already tidy");
+  if (n) { swrInvalidate("progress:program"); renderProgram(); }
 }
 
 // ---------- "What changed & why" — the program-adjustments digest ----------

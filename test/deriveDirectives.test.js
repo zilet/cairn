@@ -115,3 +115,46 @@ test("an in-optimal, unflagged marker yields no directives at all", () => {
   assert.equal(res.derived, 0);
   assert.equal(repo.listActiveDirectives().length, 0);
 });
+
+// ---- review-directive resurface (applyReviewDirectives) ---------------------
+// The 'health_review' path used to HARD-skip on ANY prior resolved/dismissed
+// feedback — so a finding dismissed at ApoB 95 never came back at ApoB 140. It now
+// mirrors the markers path: keep suppressing UNLESS the marker is materially worse.
+const reviewWithApoB = (value, date) => {
+  seedHealthDoc(date, [marker("ApoB", value, { unit: "mg/dL" })]);
+  return repo.addHealthReview(
+    {
+      headline: "Whole-picture read",
+      directives: [{
+        domain: "nutrition",
+        marker: "ApoB",
+        directive: "Lower saturated fat and add soluble fiber to bring ApoB toward optimal.",
+        rationale: "ApoB is the atherogenic-particle lever.",
+        citation: "AHA/ACC 2018 Cholesterol Guideline",
+      }],
+    },
+    "stub"
+  );
+};
+const activeReviewApoB = () =>
+  repo.listActiveDirectives().filter((d) => d.source === "health_review" && (d.marker || "") === "ApoB");
+
+test("a dismissed review finding STAYS suppressed when the marker hasn't worsened", () => {
+  reviewWithApoB(95, "2025-01-01");
+  const dir = activeReviewApoB()[0];
+  assert.ok(dir, "first review emits the ApoB directive");
+  repo.updateDirective(dir.id, { status: "dismissed" }); // stamps trigger from ApoB=95
+  reviewWithApoB(96, "2025-03-01"); // not materially worse
+  assert.equal(activeReviewApoB().length, 0, "stays suppressed at a near-identical value");
+});
+
+test("a dismissed review finding RESURFACES when the marker is materially worse", () => {
+  reviewWithApoB(95, "2025-01-01");
+  const dir = activeReviewApoB()[0];
+  repo.updateDirective(dir.id, { status: "dismissed" });
+  reviewWithApoB(140, "2025-06-01"); // clearly worse
+  const back = activeReviewApoB();
+  assert.equal(back.length, 1, "resurfaces on a clear worsening");
+  assert.equal(back[0].resurfaced_from_id, dir.id, "links back to the dismissed directive");
+  assert.equal(back[0].trigger_value, 140, "stamps the new (worse) trigger value");
+});

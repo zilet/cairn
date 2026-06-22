@@ -1124,10 +1124,15 @@ function appendMsg(m, noScroll, parent, opts = {}) {
   if (before) host.insertBefore(el, before); else host.appendChild(el);
   el.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", async () => {
     b.disabled = true;
-    const r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" });
-    const clamped = r && Array.isArray(r.clamped) && r.clamped.length;
-    if (clamped) toast("Applied · adjusted to a safe step");
-    else toast(r.restructured ? "Plan restructured" : "Applied");
+    let r = null;
+    try { r = await api(`/proposals/${b.dataset.apply}/apply`, { method: "POST" }); } catch { r = null; }
+    // Honest failure (shared with the Coach list via applyResultMessage): a transport
+    // drop, a 400 {error}, or ok:false must NOT read as "Applied". Re-enable the button
+    // so the draft stays actionable instead of settling into a false "done" note.
+    const m = applyResultMessage(r);
+    if (m.failed) { b.disabled = false; toast(m.message); return; }
+    const clamped = Array.isArray(r.clamped) && r.clamped.length;
+    toast(m.message);
     state.plan = []; swrInvalidate("plan"); // a chat-applied plan change makes the cache stale
     // Settle into the same calm "done" note the message renders on reload, so a
     // just-applied draft and a long-applied one look identical.

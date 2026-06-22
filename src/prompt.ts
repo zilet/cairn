@@ -309,7 +309,11 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     if (rec.avg_respiration != null) bits.push(`respiration ~${rec.avg_respiration}/min`);
     if (rec.avg_spo2 != null) bits.push(`SpO2 ~${rec.avg_spo2}%`);
     if (rec.skin_temp_dev_c != null) bits.push(`skin-temp dev ${rec.skin_temp_dev_c > 0 ? "+" : ""}${rec.skin_temp_dev_c}°C`);
-    if (rec.avg_training_readiness != null) bits.push(`training readiness ~${Math.round(rec.avg_training_readiness)}/100`);
+    if (rec.avg_training_readiness != null) {
+      const tr = Math.round(rec.avg_training_readiness);
+      const word = tr < 40 ? "low" : tr <= 65 ? "moderate" : "high";
+      bits.push(`${word} training readiness`);
+    }
     if (rec.acute_load != null) bits.push(`acute training load ~${Math.round(rec.acute_load)}`);
     if (rec.vo2max != null) bits.push(`VO2max ${rec.vo2max}`);
     if (rec.fitness_age != null) bits.push(`fitness age ~${Math.round(rec.fitness_age)}`);
@@ -841,7 +845,10 @@ const CHAT_ACTIONS_SCHEMA = `[
       "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null> },
     { "type": "plan_update", "summary": "...", "changes": [
       { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
-      { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" } ] },
+      { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
+      // ADD a movement: a change whose exercise isn't on that day yet is ADDED to it.
+      // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
+      { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] },
     { "type": "plan_restructure", "summary": "move to 5 days", "days": [
       { "day_number": 1, "name": "Lower A", "focus": "Quad", "items": [
         { "exercise": "Back Squat", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 190, "note": "" },
@@ -915,6 +922,9 @@ ${CONTEXT_GUARDRAILS}
 
 ACTIONS — only when the athlete clearly asks to log or change something:
 - log_activity, log_set, set_profile, set_endurance_goal, add_memory, update_memory, supersede_memory, log_food, log_health, add_context_event, log_supplement are APPLIED immediately.
+- When you log_set or otherwise name an exercise, use a CLEAN canonical name (e.g. "Incline DB Press",
+  "Romanian Deadlift") — not a descriptive/throwaway phrase ("incline db press 3x10 lol") — and reuse
+  an existing KNOWN-EXERCISE name when it matches, so the same movement stays one entry.
 - log_food records a meal estimate (food note) — use it when the athlete reports something they
   ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.
 - log_health records lab/bloodwork/DEXA results the athlete reports in chat — transcribe EVERY
@@ -935,10 +945,13 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't
   know. If the exact date matters (e.g. a race they're training for), record the event with null
   dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.
-- plan_update (target tweaks) and plan_restructure (changing the split or days-per-week) are saved as a
-  DRAFT for the athlete to review and apply — never assume they're live. When they ask for "5 days a
-  week" etc., propose a full plan_restructure with sensible exercises that honor their constraints,
-  carrying over weights where it makes sense.
+- plan_update (target tweaks AND adding/swapping a movement on an existing day) and plan_restructure
+  (changing the split or days-per-week) are saved as a DRAFT for the athlete to review and apply —
+  never assume they're live. A plan_update change whose exercise is already on that day TWEAKS it; a
+  change whose exercise is NOT on that day yet ADDS it (include sets + rep_low/rep_high so it lands
+  complete). Use plan_update to add ONE or a few movements to days that exist; use plan_restructure
+  only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible
+  exercises that honor their constraints and carrying over weights where it makes sense.
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.
 ${renderTrainingSignals(ctx)}
 Keep the reply short and human; confirm what you logged or drafted. When the athlete says a lift
@@ -1838,8 +1851,8 @@ export function buildGarminStrengthPrompt(garminActivity: any): string {
 
   return `You reconcile a Garmin-recorded STRENGTH workout into the athlete's training log. The
 workout already happened; your job is (a) a one-line read of how the body responded, and (b) the
-exercises Garmin detected, cleaned up and converted to the athlete's units — but ONLY the ones the
-athlete did not already log by hand.
+exercises Garmin detected, cleaned up (naming + mode only) — but ONLY the ones the athlete did not
+already log by hand.
 
 THE CONSTITUTION (binding):
 - This is informational RECONSTRUCTION of a past session, not coaching and not a plan change.
@@ -1854,9 +1867,9 @@ GUARDRAILS:
 - Map each Garmin category (e.g. "BENCH_PRESS", "BARBELL_DEADLIFT") to an exact KNOWN EXERCISE or
   PLAN exercise name when it clearly matches; otherwise use a clean, human exercise name derived from
   the category (Title Case, e.g. "Barbell Bench Press"). Prefer reusing existing names.
-- Weights in exercise_sets are in KG (weight_kg). Convert to POUNDS and round to a plausible gym
-  increment (2.5 / 5 lb). weight = null means bodyweight (push-ups, pull-ups, dips); use a NEGATIVE
-  weight only for assisted movements.
+- The set weights are ALREADY in the athlete's own units (pounds) — do NOT convert, re-scale, or
+  invent weights. Copy the detected weight through as-is. weight = null means bodyweight (push-ups,
+  pull-ups, dips); a NEGATIVE weight means an assisted movement (leave that sign intact).
 - Timed holds (plank, dead hang, wall sit) → set "duration_sec" + "mode":"timed" with weight null;
   everything else → "mode":"reps" with reps (and weight when loaded).
 - Group consecutive identical detected sets faithfully — one entry per working set, in order.
@@ -2190,6 +2203,59 @@ OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdow
 If nothing should be merged, return {"groups": []}.
 
 MARKER NAMES (${items.length}):
+${list}`;
+}
+
+// Agentic exercise reconciliation — the clean-naming layer over the deterministic
+// canonicalizer (src/repo/exercise-canon.ts). Athletes (and chat/import) name the
+// same movement many ways and leave messy, descriptive titles ("incline db press
+// lol 3x10"); the offline normalizer folds the obvious cases, but the long tail
+// (a duplicate worded differently, a throwaway phrase that needs cleaning) is
+// where a model helps. It clusters ONLY same-MOVEMENT names and profiles each to a
+// clean canonical + muscle group + mode. This only tidies NAMES and tags groups
+// for reuse — it NEVER touches the athlete's logged numbers — so a conservative
+// miss is harmless; an over-merge (folding two different movements together) is
+// the only real risk. Hence: when unsure, do NOT merge.
+export function buildExerciseReconcilePrompt(
+  items: Array<{ name: string; group: string | null; sets: number }>
+): string {
+  const list = items
+    .map((it) => `  - "${it.name}" [${it.group ? it.group : "no group"}, ${it.sets} logged set${it.sets === 1 ? "" : "s"}]`)
+    .join("\n");
+  return `You are a strength-training data librarian. Below is a list of EXERCISE NAMES from one
+athlete's training log — many are messy, descriptive, or the same movement worded different ways.
+Your job: cluster names that are the SAME MOVEMENT to a clean canonical title and profile each (muscle
+group + mode), so the app can reuse one tidy entry per movement.
+
+RULES (a wrong merge folds two different movements together — be CONSERVATIVE):
+- Group two names ONLY if they are unambiguously the SAME MOVEMENT. A different IMPLEMENT or ANGLE is a
+  DIFFERENT exercise — do NOT merge across them:
+    • barbell vs dumbbell ("Barbell Bench Press" ≠ "Dumbbell Bench Press")
+    • incline vs flat vs decline ("Incline DB Press" ≠ "Flat DB Press")
+    • machine vs free-weight, cable vs barbell, smith vs barbell
+- CORRECT merges are the SAME movement reworded: "incline db press" = "incline dumbbell press" =
+  "Incline DB Press". When unsure, do NOT merge — keep them separate.
+- A single messy/descriptive title with NO duplicate is STILL a valid group IF it needs cleaning —
+  emit it alone with a cleaned canonical (e.g. "incline db press lol 3x10" → canonical "Incline DB
+  Press", members: ["incline db press lol 3x10"]). Skip a name that is already clean and unique.
+- "members" = the EXACT names from the list (verbatim) that belong to the group. Every member must be a
+  string copied from the list below.
+- "canonical" = the cleanest real form of the movement, Title Case, no rep schemes / no junk words
+  (e.g. "Romanian Deadlift", "Incline DB Press") — the cleanest existing member is fine.
+- "group" = the muscle group this movement primarily trains, ONE of: chest, back, shoulders, biceps,
+  triceps, quads, hamstrings, glutes, calves, core, forearms, rear delts, mobility — or null if truly
+  unclear. Use "mobility" for stretches/mobility drills, "core" for ab/anti-rotation work.
+- "mode" = "timed" for held positions measured in seconds (plank, dead hang, wall sit, a stretch);
+  "reps" for everything counted in reps.
+
+This ONLY tidies names and tags muscle groups for reuse — it NEVER changes the athlete's logged numbers
+(weights, reps, dates). Plain words, no scores.
+
+OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
+{"groups": [{"members": ["<verbatim name>", "<verbatim name>", ...], "canonical": "<clean Title-Case name>", "group": "<one group above or null>", "mode": "reps|timed"}]}
+If nothing should be tidied or merged, return {"groups": []}.
+
+EXERCISE NAMES (${items.length}):
 ${list}`;
 }
 

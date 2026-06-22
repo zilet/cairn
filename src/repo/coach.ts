@@ -1,4 +1,5 @@
 import { db, todayISO } from "../db.js";
+import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
@@ -9,7 +10,7 @@ import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, getEnduranceGoal, getProfile } from "./profile.js";
-import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
+import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO } from "./shared.js";
 
@@ -20,9 +21,37 @@ function healthForCoach() {
   const docs = db.prepare(`SELECT * FROM health_documents ORDER BY id DESC LIMIT 5`).all() as any[];
   return docs.map((d) => {
     const h = hydrateHealthDoc(d);
-    const markers = Array.isArray(h.parsed?.markers) ? h.parsed.markers.slice(0, 30) : undefined;
+    // A modern panel lists 100+ markers; a flat slice(0,30) in parse order can drop
+    // the flagged/off-optimal long tail (the markers that actually matter) just
+    // because the lab printed the normal CBC first. Rank flagged (low/high) and
+    // out-of-optimal markers ahead of the in-range ones, THEN cap — so the coach
+    // always sees the concerning ones. Stable for ties (preserves parse order).
+    const markers = Array.isArray(h.parsed?.markers)
+      ? rankDocMarkers(h.parsed.markers).slice(0, 30)
+      : undefined;
     return { kind: h.kind, doc_date: h.doc_date, summary: h.summary, type: h.parsed?.type, markers };
   });
+}
+
+// Flagged-first / furthest-from-optimal-first ordering for a doc's raw markers, so
+// the bounded coach view never drops a concerning marker in favor of a normal one.
+// Cheap + null-safe: a lab flag (low/high) is the strongest signal, then distance
+// from the optimal band (when we have one), then parse order as the stable tiebreak.
+function rankDocMarkers(markers: any[]): any[] {
+  const score = (m: any): number => {
+    const flag = m?.flag;
+    if (flag === "low" || flag === "high") return 1000; // lab-flagged outranks everything
+    const z = matchOptimalZone(m?.name);
+    if (!z) return 0;
+    const v = typeof m?.value === "number" ? m.value : Number(m?.value);
+    if (!Number.isFinite(v)) return 0;
+    // 0..1 distance from optimal → 0..100, so off-optimal sorts above in-range.
+    return optimalDistance(v, z) * 100;
+  };
+  return markers
+    .map((m, i) => ({ m, i, s: score(m) }))
+    .sort((a, b) => (b.s !== a.s ? b.s - a.s : a.i - b.i)) // stable on ties (parse order)
+    .map((x) => x.m);
 }
 
 // The latest whole-picture health review, condensed for the coach: just the
@@ -226,6 +255,10 @@ export function getCoachContext() {
   // Compute the day-read ONCE so both day_read and the progression digest below
   // reference the same read (the progression is for the day this read points at).
   const dayReadView = getCachedDayRead(localDateISO()) ?? dayRead(undefined, recovery);
+  // Compute the volume balance + acute load ONCE and thread them into
+  // programAdjustments — which would otherwise recompute both from scratch.
+  const programBal = programBalance();
+  const recentLoad = recentMuscleLoad(2);
   return {
     profile,
     // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
@@ -287,12 +320,12 @@ export function getCoachContext() {
     program_state: programStateForCoach(recovery),
     // Volume balance per canonical muscle group over the last 2 weeks (bands +
     // which groups are DUE / running HIGH, in plain words). Mobility excluded.
-    program_balance: programBalance(),
+    program_balance: programBal,
     // ACUTE recovery: which muscle groups got hammered in the last day or two —
     // folding ENDURANCE (a long ride/run never touches logged_sets) in with recent
     // strength. Lets the coach plan AROUND smoked muscles instead of recommending a
     // group the athlete just torched. Plain words, no score.
-    recent_load: [...recentMuscleLoad(2).values()],
+    recent_load: [...recentLoad.values()],
     // The next session's auto-progression — the adapted target per strength lift
     // on the day this read points at ("+5 lb", "hold 50 — stalled", "−10%"), so
     // the plan visibly FOLLOWS what was logged. Bounded to the active day. [] when
@@ -303,7 +336,7 @@ export function getCoachContext() {
     })(),
     // The calm "what changed & why" digest — the handful of concrete adaptations
     // due right now (lifts to push/hold/deload, groups due, missing-pattern gaps).
-    program_adjustments: programAdjustments().slice(0, 5),
+    program_adjustments: programAdjustments(programBal, recentLoad).slice(0, 5),
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.
@@ -558,6 +591,26 @@ function directiveTextKey(d: any): string {
   return String(d?.directive || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+// A stable (canonical marker, domain) key — same analyte under different lab names
+// ("Glucose Random"/"Glucose (random)") folds to one, so a 'markers' directive and a
+// 'health_review' one for the same marker+domain are recognized as the same concern.
+// Empty marker → "" (no cross-marker collapse for marker-less directives).
+function directiveMarkerDomainKey(d: any): string {
+  const raw = String(d?.marker || "").trim();
+  const canon = raw ? canonicalMarker(raw).key : "";
+  return `${canon}|${String(d?.domain || "watch").toLowerCase()}`;
+}
+
+// Prefer the deterministic 'markers' source over the agent 'health_review' one, and
+// within a source prefer the non-uncertain (settled-lever) directive.
+function directivePreferred(a: any, b: any): any {
+  const srcRank = (d: any) => (String(d?.source || "") === "markers" ? 0 : 1);
+  if (srcRank(a) !== srcRank(b)) return srcRank(a) < srcRank(b) ? a : b;
+  const unc = (d: any) => (d?.uncertain ? 1 : 0);
+  if (unc(a) !== unc(b)) return unc(a) < unc(b) ? a : b;
+  return a; // same source + certainty → keep the first-seen (the input order is id-DESC)
+}
+
 function dedupeActiveDirectives(rows: any[]) {
   const seenMarkerDomain = new Set<string>();
   const seenText = new Set<string>();
@@ -570,7 +623,28 @@ function dedupeActiveDirectives(rows: any[]) {
     if (txtKey) seenText.add(txtKey);
     out.push(row);
   }
-  return out;
+  // Cross-source collapse on (canonical marker, domain): when 'markers' and
+  // 'health_review' both kept a directive for the SAME marker+domain (different
+  // directive_key, so they survived the dedup above), they can read as contradictory.
+  // Keep ONE — the deterministic source, else the non-uncertain one. Conservative:
+  // only collapses when both marker AND domain match; marker-less rows are untouched.
+  const byMd = new Map<string, any>();
+  const collapsed: any[] = [];
+  for (const row of out) {
+    const raw = String(row?.marker || "").trim();
+    if (!raw) { collapsed.push(row); continue; } // no marker → never cross-collapse
+    const key = directiveMarkerDomainKey(row);
+    const prior = byMd.get(key);
+    if (!prior) { byMd.set(key, row); collapsed.push(row); continue; }
+    // Replace the kept row in-place with the preferred of the two.
+    const winner = directivePreferred(prior, row);
+    if (winner !== prior) {
+      const idx = collapsed.indexOf(prior);
+      if (idx >= 0) collapsed[idx] = winner;
+      byMd.set(key, winner);
+    }
+  }
+  return collapsed;
 }
 
 export function updateDirective(id: number, fields: DirectiveInput) {
@@ -686,13 +760,32 @@ export function updateInsight(id: number, fields: InsightInput) {
   return getInsight(id);
 }
 
+// How long a CONNECTION insight stays in the live visible set. The Today card
+// shows the latest non-weekly insight, and the producer is gated ~once/20h and
+// often returns nothing new — so without a window a long-resolved connection
+// ("sleep dropped when mileage ramped") keeps reading as today's connection for
+// weeks. A conservative recency window ages a stale connection OUT of the visible
+// set; it's a VISIBILITY filter only (the row is never deleted — it stays in the
+// DB and exports, just hidden from the live card). The keystone weekly_read is
+// EXEMPT: a weekly read legitimately persists for the week (the scheduler refreshes
+// it on its own cadence), and the Today weekly card relies on it being visible.
+export const INSIGHT_VISIBLE_WINDOW_DAYS = 14;
+
 // The Brief surfaces ONE insight at a time, in-app, when opened — so the public
 // read is the live set only: new + seen, most recent first (dismissed stays in
-// the DB and exports but is hidden). Quiet by default.
+// the DB and exports but is hidden). Quiet by default. Connection insights older
+// than INSIGHT_VISIBLE_WINDOW_DAYS age out so a stale read never lingers as
+// "today's"; weekly_read is exempt (it persists for the week on its own cadence).
 export function listVisibleInsights(limit = 20) {
+  const cutoff = new Date(Date.now() - INSIGHT_VISIBLE_WINDOW_DAYS * 864e5).toISOString().slice(0, 10);
   return db
-    .prepare(`SELECT * FROM insights WHERE status IN ('new', 'seen') ORDER BY id DESC LIMIT ?`)
-    .all(limit);
+    .prepare(
+      `SELECT * FROM insights
+        WHERE status IN ('new', 'seen')
+          AND (kind = 'weekly_read' OR substr(created_at, 1, 10) >= ?)
+        ORDER BY id DESC LIMIT ?`
+    )
+    .all(cutoff, limit);
 }
 
 // A compact, bounded list of recent insight TEXTS (any status) so the generator
@@ -773,6 +866,23 @@ export function getDailyMetrics(source?: string | null, days = 30) {
   return rows.map((r) => hydrateJson(r));
 }
 
+// daily_metrics has UNIQUE(source, date), so an athlete who pipes BOTH Apple
+// Health AND Oura (or Whoop) into /api/health-metrics gets one ROW PER SOURCE per
+// night — and a naive AVG(...) over the window would then count each night ONCE
+// PER SOURCE, over-doubling the 7d-vs-30d acute/chronic averages on possibly
+// conflicting rows. This SELECTs ONE row per date (the most-recently-updated
+// source, id-tiebroken) so a night is counted once. A correlated NOT EXISTS keeps
+// it portable (no window functions); the single-source case is a no-op (one row
+// per date either way), so its aggregates stay byte-identical.
+const DAILY_METRICS_ONE_PER_DATE = `
+  SELECT dm.* FROM daily_metrics dm
+  WHERE NOT EXISTS (
+    SELECT 1 FROM daily_metrics dm2
+    WHERE dm2.date = dm.date
+      AND (dm2.updated_at > dm.updated_at
+        OR (dm2.updated_at = dm.updated_at AND dm2.id > dm.id))
+  )`;
+
 // ---------- unified recovery summary (Phase 5D) ----------
 // Generalize getGarminCoachSummary into a SOURCE-AGNOSTIC recovery view by
 // merging garmin_daily_metrics with daily_metrics. Garmin is preferred for
@@ -790,7 +900,8 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
   // Garmin recovery aggregates (may be all-null when there's no Garmin source).
   const g = (garmin?.recovery ?? {}) as any;
 
-  // Non-Garmin daily_metrics aggregates over the same window.
+  // Non-Garmin daily_metrics aggregates over the same window — averaged over ONE
+  // row per date (most-recent source), so a multi-source night isn't double-counted.
   const other = db.prepare(
     `SELECT
        ROUND(AVG(sleep_min), 1) AS avg_sleep_min,
@@ -800,7 +911,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
        ROUND(AVG(active_calories), 1) AS avg_active_calories,
        ROUND(AVG(steps), 0) AS avg_steps,
        MAX(date) AS last_date
-     FROM daily_metrics
+     FROM (${DAILY_METRICS_ONE_PER_DATE})
      WHERE date >= ?`
   ).get(since) as any;
 
@@ -858,7 +969,7 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     ).get(s) as any;
     const ow = db.prepare(
       `SELECT ROUND(AVG(sleep_min),1) AS sleep, ROUND(AVG(hrv_ms),1) AS hrv, ROUND(AVG(resting_hr),1) AS rhr
-       FROM daily_metrics WHERE date >= ?`
+       FROM (${DAILY_METRICS_ONE_PER_DATE}) WHERE date >= ?`
     ).get(s) as any;
     return {
       sleep: pick(gw?.sleep, ow?.sleep),

@@ -163,6 +163,25 @@ export function listHealthDocuments(limit = 50) {
     .all(limit) as any[]).map(publicHealthDoc);
 }
 
+// The single source of truth for "newest health document date" — the effective
+// result date (doc_date, falling back to the upload day), as a YYYY-MM-DD string or
+// null when there are no docs. Used to STAMP the health synthesis (source_doc_at) and
+// to READ whether it's gone stale, so both sides derive the date the same way.
+export function newestHealthDocDate(): string | null {
+  try {
+    const row = db.prepare(
+      `SELECT COALESCE(doc_date, substr(created_at, 1, 10)) AS d
+         FROM health_documents
+        ORDER BY COALESCE(doc_date, substr(created_at, 1, 10)) DESC, id DESC
+        LIMIT 1`
+    ).get() as any;
+    const d = row?.d ? String(row.d).trim().slice(0, 10) : "";
+    return d || null;
+  } catch {
+    return null; // table absent / no docs
+  }
+}
+
 export function updateHealthDocFields(id: number, fields: { parsed_json?: any; summary?: string | null; kind?: string | null; doc_date?: string | null }) {
   const sets: string[] = [];
   const vals: any[] = [];
@@ -396,6 +415,12 @@ export function getMarkerHistory() {
       if (readings[i].unit) { unit = readings[i].unit; break; }
     }
     const sameUnitReadings = readings.filter((r) => seriesUnitsCompatible(r.unit, unit));
+    // Readings in an INCOMPATIBLE unit family are kept out of the trend (we never
+    // guess a conversion across units we can't safely convert — e.g. Lp(a) in
+    // mg/dL vs nmol/L). But dropping them silently truncates the series with no
+    // signal, so surface a small non-destructive count: how many older readings
+    // sit on a different unit and aren't in the trend below. 0 in the normal case.
+    const dropped_other_units = readings.length - sameUnitReadings.length;
     const toPublicReading = (r: Reading, includeKind = false) => {
       const out: any = { value: r.value, date: r.date };
       if (includeKind) {
@@ -493,6 +518,10 @@ export function getMarkerHistory() {
       // eta_text (plain language), crossing}. eta_weeks is kept INTERNAL (ordering
       // only) and never surfaced as a grade. Null fields when there's nothing to say.
       forecast: { direction: forecast.direction, eta_text: forecast.eta_text, crossing: forecast.crossing },
+      // How many older readings were left OUT of the trend because they sit on an
+      // incompatible unit (no safe conversion). 0 when nothing was dropped — so the
+      // series is never silently truncated without a signal a consumer can show.
+      dropped_other_units,
       points,
     };
   });

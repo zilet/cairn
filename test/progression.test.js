@@ -226,6 +226,26 @@ test("programBalance bands by the canonical taxonomy and flags DUE groups", () =
   assert.doesNotMatch(bal.summary, /\b\d{2,3}%/);
 });
 
+test("programBalance collapses to a calm broad-low read when MOST groups are due", () => {
+  // An endurance-led week: thin strength logs across many groups → most read 'due'.
+  // The honest signal is "volume's light across the board", not a 10-item to-do list.
+  const groups = [
+    ["Bench Press", "chest"], ["Barbell Row", "back"], ["Back Squat", "quads"],
+    ["Romanian Deadlift", "hamstrings"], ["Overhead Press", "shoulders"],
+    ["Barbell Curl", "biceps"], ["Triceps Pushdown", "triceps"],
+  ];
+  for (const [name, mg] of groups) {
+    makeExercise(name, { muscle_group: mg });
+    logSet(name, isoDaysAgo(10), { weight: 100, reps: 8, rir: 2 }); // one thin set, > a week ago
+  }
+  const bal = programBalance(2);
+  assert.equal(bal.broad_low, true, "most groups due → broad-low");
+  assert.match(bal.summary, /light across most groups/i, "one calm line, not a per-group list");
+  assert.match(bal.summary, /running is the priority/i, "frames it as expected, not a failure");
+  assert.doesNotMatch(bal.summary, /chest, back, quads/i, "no wall of group names");
+  assert.doesNotMatch(bal.summary, /\b\d{2,3}%/, "plain words — no numeric grade");
+});
+
 test("programBalance EXCLUDES mobility from the set-count math", () => {
   makeExercise("90/90 Hip Switch", { muscle_group: "mobility" });
   makeExercise("Bench Press", { muscle_group: "chest" });
@@ -269,6 +289,32 @@ test("programAdjustments surfaces a due deload + a due group, plain words", () =
     assert.doesNotMatch(`${a.title} ${a.why}`, /\b\d{1,3}\/100\b/, "never a 0-100 score");
   }
   assert.ok(adj.some((a) => a.kind === "deload"), "the sliding squat earns a deload adaptation");
+});
+
+test("programAdjustments reframes a due group ALREADY in the plan — train it, don't add more", () => {
+  // Back is programmed (a Pull day) but its logged volume is thin → due. The honest
+  // read is "get those sessions in", NOT "add a back movement you already have".
+  makeExercise("Barbell Row", { muscle_group: "back" });
+  makeExercise("Lat Pulldown", { muscle_group: "back" });
+  repo.savePlanDay(3, "Pull", "Back", [
+    { exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 135 },
+    { exercise: "Lat Pulldown", sets: 3, rep_low: 10, rep_high: 12, target_weight: 120 },
+  ]);
+  // A little logged back work over a week ago keeps it DUE (thin volume), not absent.
+  logSet("Barbell Row", isoDaysAgo(9), { weight: 135, reps: 8, rir: 2 });
+
+  const adj = programAdjustments();
+  const back = adj.find((a) => a.kind === "balance" && /back is due/i.test(a.title));
+  assert.ok(back, "back surfaces as due");
+  assert.equal(back.programmed, true, "flagged programmed — it's already in the plan");
+  assert.match(back.why, /already in your plan/i, "the why says it's already programmed");
+  assert.match(back.why, /Day 3/i, "names the day it's on");
+  assert.match(back.why, /logged volume/i, "frames the gap as logged volume, not a missing movement");
+  // Its suggestions are the movements you ALREADY have, never generic 'add X'.
+  assert.ok(
+    back.suggestions.some((s) => /Barbell Row|Lat Pulldown/.test(s)),
+    "suggestions list the programmed movements, not new ones to add"
+  );
 });
 
 // ---- acute recovery: never recommend a just-smoked muscle for the next session ---

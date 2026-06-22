@@ -2100,6 +2100,70 @@ function wireSkips() {
   }
 }
 
+// ---- Keep the adapted prescription in step with the sets being logged ----
+// The per-lift "next up / hold / ease off" line (exRxLineHtml) is the visible proof
+// the plan FOLLOWS what you logged — so it must not stay frozen at render-time after
+// the first set. A full renderToday() only fires on the FIRST set of a previously-
+// empty day; for every later set we instead REFRESH the prescription cheaply, in
+// place. Debounced (rapid taps coalesce into one fetch) + best-effort: a failed fetch
+// leaves the last paint, exactly like the initial progression load.
+let _rxRefreshTimer = null;
+function scheduleRxRefresh() {
+  if (state.day == null) return; // a pure run/rest day has no per-lift progression
+  clearTimeout(_rxRefreshTimer);
+  _rxRefreshTimer = setTimeout(() => { refreshAdaptedRx(); }, 600);
+}
+async function refreshAdaptedRx() {
+  if (state.tab !== "today" || state.day == null) return;
+  const day = state.day, date = state.logDate;
+  let list = null;
+  try { list = await api("/program/progression?day=" + encodeURIComponent(day)); }
+  catch { return; } // calm: leave the last-painted prescription as-is
+  // Bail if the surface moved out from under the in-flight fetch (tab/day/date change).
+  if (state.tab !== "today" || state.day !== day || state.logDate !== date) return;
+  if (!Array.isArray(list)) return;
+  const rxByEx = {};
+  for (const rx of list) { if (rx && rx.exercise) rxByEx[String(rx.exercise).toLowerCase()] = rx; }
+  // Re-render each lift card's prescription line in place. A now-complete card drops
+  // its line (mirrors exCard's `!complete ? exRxLineHtml(rx)`); an active one shows the
+  // freshly-adapted move.
+  view.querySelectorAll(".ex[data-card]").forEach((card) => {
+    const name = (card.dataset.card || "").toLowerCase();
+    const rx = name ? rxByEx[name] || null : null;
+    const complete = card.classList.contains("ex-complete");
+    const existing = card.querySelector(".ex-rx");
+    const html = complete ? "" : exRxLineHtml(rx);
+    if (existing) {
+      if (!html) { existing.remove(); return; }
+      const tpl = document.createElement("template");
+      tpl.innerHTML = html.trim();
+      existing.replaceWith(tpl.content.firstChild);
+    } else if (html) {
+      // No line yet (e.g. it was complete and a set was deleted, or the engine had
+      // nothing earlier) — insert it where exCard places it: before the logged chips.
+      const tpl = document.createElement("template");
+      tpl.innerHTML = html.trim();
+      const loggedWrap = card.querySelector("[data-logged]");
+      if (loggedWrap) card.insertBefore(tpl.content.firstChild, loggedWrap);
+    }
+  });
+  // Keep the at-a-glance "N lifts have new targets" banner honest: update its count or
+  // hide it when nothing's left to apply. (We don't synthesize a missing banner mid-
+  // session — that's a rare transition the first-set renderToday already covers.)
+  const banner = view.querySelector(".rx-banner");
+  if (banner) {
+    const moves = rxMoveCount(rxByEx);
+    if (moves === 0) banner.remove();
+    else {
+      const h = banner.querySelector(".rx-banner-h");
+      if (h) h.textContent = `${moves === 1 ? "One lift has a new target" : `${moves} lifts have new targets`} from what you logged`;
+    }
+  }
+  // The "what changed" digest reads the same engine — refresh it cheaply (its own
+  // loader is null-safe + scoped to #adjustSlot, and degrades on its own).
+  loadProgramAdjustmentsBanner();
+}
+
 // Log one set from a card's logrow; update the card inline without a full re-render.
 function wireLogRow(row) {
   row.querySelector(".logbtn").addEventListener("click", async () => {
@@ -2157,7 +2221,11 @@ function wireLogRow(row) {
     if (res.pr) { toast("🏆 New PR!"); if (navigator.vibrate) navigator.vibrate([60, 40, 120]); }
     else toast("Set logged");
     startRest();
-    refreshFinishStat();
+    // refreshFinishStat returns true when it fired a full re-render (first set of an
+    // empty date) — that path already re-fetches progression + repaints every card, so
+    // we only schedule the standalone, debounced prescription refresh otherwise. This
+    // is what keeps the adapted "next up / hold / ease off" line in step with the sets.
+    if (!refreshFinishStat()) scheduleRxRefresh();
   });
 }
 
@@ -2173,16 +2241,19 @@ function bumpProgress(card) {
   card.classList.toggle("ex-complete", !!complete);
 }
 
+// Returns true iff it triggered a FULL re-render (first set of an empty date) — the
+// caller skips the standalone prescription refresh in that case (renderToday already
+// re-fetches progression and repaints every card, so a second fetch would be wasteful).
 function refreshFinishStat() {
   const chips = view.querySelectorAll(".ex [data-logged] .chip");
-  if (!chips.length) return;
+  if (!chips.length) return false;
   const stat = view.querySelector("[data-finishstat]");
   if (!stat) {
     // first set on a previously empty date — re-render to bring in the FINISH block.
     // This is also where focus mode auto-engages (hasLoggedSets just flipped true),
     // so morph through a view transition: Today gently collapses into the focus view.
     withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
-    return;
+    return true;
   }
   let sets = 0, tonnage = 0;
   chips.forEach((c) => {
@@ -2192,6 +2263,7 @@ function refreshFinishStat() {
   });
   const isToday = state.logDate === localISO();
   stat.textContent = `${sets} sets · ${Math.round(tonnage).toLocaleString()} lb ${isToday ? "logged today" : "on " + state.logDate}`;
+  return false;
 }
 
 async function setupAddExercise() {
@@ -2756,6 +2828,10 @@ function adjustPlanRequest(a) {
     case "balance":
       if (a.title && /running high/i.test(a.title))
         return `My ${g} volume is running high lately — rebalance some of it toward a group that's due.`;
+      // Already programmed → the gap is logged volume, not a missing movement. Ask the
+      // coach to help fit those sessions in, never to add MORE work you already have.
+      if (a.programmed)
+        return `I'm light on logged ${g} volume this week, but ${g} is already in my plan${sugg ? ` (${a.suggestions.join(", ")})` : ""}. Help me actually get those sessions in this week — don't add more ${g} work.`;
       return `I'm light on ${g} lately. Add a ${g} movement to my plan this week${sugg}, and tell me which day.`;
     case "deload":
       return a.exercise
@@ -2783,11 +2859,14 @@ async function loadProgramAdjustmentsBanner() {
   const more = Math.max(0, rows.length - 3);
   const items = rows.map((a, i) => {
     const glyph = (a && a.recovering) ? "↻" : (ADJUST_GLYPH[a && a.kind] || "○");
+    // "Try" suggests NEW movements to add; an already-programmed due group instead
+    // lists what's in the plan, so label it "In your plan" — never "Try".
+    const sugLbl = a && a.programmed ? "In your plan" : "Try";
     const chips = a && Array.isArray(a.suggestions) && a.suggestions.length
-      ? `<div class="adjust-sugs"><span class="adjust-sugs-lbl lbl">Try</span>${a.suggestions
+      ? `<div class="adjust-sugs"><span class="adjust-sugs-lbl lbl">${sugLbl}</span>${a.suggestions
           .map((s) => `<span class="adjust-chip">${escHtml(s)}</span>`).join("")}</div>`
       : "";
-    const act = a && a.recovering ? "Plan around it →" : "Plan it →";
+    const act = a && a.recovering ? "Plan around it →" : a && a.programmed ? "Help me fit it in →" : "Plan it →";
     return `<div class="adjust-row${i >= 3 ? " adjust-extra" : ""}${a && a.recovering ? " adjust-rec" : ""}">
         <button class="adjust-item" type="button" aria-expanded="false">
           <span class="adjust-glyph" aria-hidden="true">${glyph}</span>

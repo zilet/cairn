@@ -37,6 +37,41 @@ test("dose overrides are picked up; unknown supplements are kept (not dropped)",
   assert.equal(r.frequency, "daily");
 });
 
+test("common long-tail supplements carry their established marker links (not 'other'/[])", () => {
+  // Previously these fell into category 'other' with related_markers:[] so the
+  // connected brain couldn't tie them to the markers they touch.
+  const by = Object.fromEntries(
+    repo.parseSupplements(
+      "folate, vitamin K2, red yeast rice, plant sterols, selenium, l-theanine, glucosamine"
+    ).map((i) => [i.name, i])
+  );
+
+  assert.ok(by.Folate, "folate understood");
+  assert.ok(by.Folate.related_markers.includes("Folate"), "folate ↔ Folate marker");
+  assert.ok(by.Folate.related_markers.includes("Homocysteine"), "folate ↔ Homocysteine");
+
+  assert.ok(by["Vitamin K2 (MK-7)"], "vitamin K2 understood (pairs with D3)");
+  assert.notEqual(by["Vitamin K2 (MK-7)"].category, "other");
+
+  assert.ok(by["Red yeast rice"], "red yeast rice understood");
+  assert.ok(by["Red yeast rice"].related_markers.includes("LDL-C"), "red yeast rice ↔ LDL-C (monacolin K)");
+
+  assert.ok(by["Plant sterols/stanols"], "plant sterols understood");
+  assert.ok(by["Plant sterols/stanols"].related_markers.includes("LDL-C"), "plant sterols ↔ LDL-C");
+
+  // Confidently categorized but no fabricated marker link (kept conservative).
+  assert.equal(by.Selenium.category, "mineral");
+  assert.deepEqual(by.Selenium.related_markers, []);
+  assert.equal(by["Glucosamine / chondroitin"].category, "joint");
+});
+
+test("the vitamin-D bare-token fallback still wins over the new vitamin entries", () => {
+  // Adding vitamin A/E/K entries must not break the "some D" disambiguation.
+  const items = repo.parseSupplements("some D, vitamin K2");
+  assert.ok(items.find((i) => i.name === "Vitamin D3"), "'some D' still understood as Vitamin D3");
+  assert.ok(items.find((i) => i.name === "Vitamin K2 (MK-7)"), "K2 understood alongside it");
+});
+
 test("understandSupplements stores + dedups by canonical name; update/delete work", () => {
   repo.understandSupplements("creatine daily, omega-3");
   assert.equal(repo.listSupplements().length, 2);

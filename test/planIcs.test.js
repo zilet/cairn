@@ -7,6 +7,10 @@ import { db, repo } from "./_seed.js";
 beforeEach(() => {
   db.prepare("DELETE FROM plan_items").run();
   db.prepare("DELETE FROM plan_days").run();
+  // Exercises now self-dedup by normalized name (a comma/casing variant folds onto an
+  // existing movement), so isolate them too — else one test's "Bench Press" would
+  // absorb another's "Bench, Press" and defeat its fixture.
+  db.prepare("DELETE FROM exercises").run();
 });
 
 // Parse the first DTSTART back to a JS weekday so assertions don't hardcode which

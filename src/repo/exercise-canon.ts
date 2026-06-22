@@ -229,6 +229,245 @@ export function listExerciseAliases(): Array<{ alias: string; canonical: string;
   }
 }
 
+// ---- agentic exercise understanding (messy input → canonical name + profile) -
+// When a user types a descriptive/messy exercise title ("incline db bench 3x10 lol")
+// it must normalize to a clean, reusable display name AND profile its muscle group +
+// mode, so the next time a variant of the same input arrives it self-aligns. Mirrors
+// the marker-canon flow (a deterministic FLOOR + a PURE validator for the agentic
+// reconciliation). Constitution: no scores; this only ever cleans a label and
+// resolves a canonical GROUP.
+
+// Known acronyms / implement abbreviations that should NOT be Title-Cased into
+// "Db"/"Bb". Keyed by normalized (lowercase) token → the canonical casing.
+const ACRONYM_CASING: Record<string, string> = {
+  db: "DB",
+  bb: "BB",
+  kb: "KB",
+  rdl: "RDL",
+  ohp: "OHP",
+  cgbp: "CGBP",
+  ez: "EZ",
+  ghr: "GHR",
+  ghd: "GHD",
+  jm: "JM",
+  ttb: "TTB",
+  bw: "BW",
+  amrap: "AMRAP",
+};
+
+// Filler / noise tokens to strip from a messy title before cleaning.
+const FILLER_TOKENS = new Set([
+  "lol",
+  "thingy",
+  "thing",
+  "ish",
+  "heavyish",
+  "lightish",
+  "easyish",
+  "hardish",
+  "kinda",
+  "sorta",
+  "idk",
+  "today",
+  "again",
+  "stuff",
+]);
+
+// Trailing set/rep/load notation to strip: "3x10", "3×10", "x12", "@ 55",
+// "for time", "for reps", "amrap", a bare trailing "@55". CONSERVATIVE — only
+// strips at the END of the string, so an in-name token is left alone.
+function stripSetRepNotation(s: string): string {
+  let out = s;
+  // Run a few passes so chained trailing notation ("3x10 @ 55") all comes off.
+  for (let i = 0; i < 4; i++) {
+    const before = out;
+    out = out
+      .replace(/\s+for\s+(time|reps|distance)\s*$/i, "")
+      .replace(/\s+amrap\s*$/i, "")
+      // sets x reps:  3x10, 3 x 10, 4×8, 5x5
+      .replace(/\s+\d+\s*[x×]\s*\d+\s*$/i, "")
+      // bare rep count with x:  x12, ×8
+      .replace(/\s+[x×]\s*\d+\s*$/i, "")
+      // load:  @ 55, @55, @ 55lb, @135 lbs
+      .replace(/\s+@\s*\d+(\.\d+)?\s*(lb|lbs|kg|kgs)?\s*$/i, "")
+      // a trailing bare set count:  "3 sets", "for 3 sets"
+      .replace(/\s+(for\s+)?\d+\s*sets?\s*$/i, "")
+      .trim();
+    if (out === before) break;
+  }
+  return out;
+}
+
+// Strip emoji and other symbol pictographs (kept ASCII-conservative — we already
+// fold to spaces via normalizeExerciseName for matching, but cleanExerciseName
+// preserves casing so it does its own light scrub).
+function stripEmoji(s: string): string {
+  // Remove anything outside the basic printable Latin/symbol range we care about.
+  // This drops emoji + pictographs without touching letters, digits, common punctuation.
+  return s
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, "")
+    // Variation selector (FE0F) + zero-width joiner (200D) stripped separately — a
+    // combining/format char inside the range class above trips a lint rule.
+    .replace(/\u{FE0F}/gu, "")
+    .replace(/\u{200D}/gu, "");
+}
+
+// Produce a clean, reusable canonical DISPLAY name from a messy raw title.
+// Never returns empty — falls back to a trimmed version of the raw input.
+export function cleanExerciseName(raw: string): string {
+  const original = String(raw ?? "");
+  let s = stripEmoji(original).replace(/\s+/g, " ").trim();
+  s = stripSetRepNotation(s);
+  // Drop filler tokens (case-insensitive). NB: we do NOT blanket-strip a trailing
+  // "ish" — that mangled real movements ("Finish"/"Spanish"/"Swish"); the few
+  // intensity-ish words ("heavyish") are listed in FILLER_TOKENS instead.
+  const tokens = s
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((t) => !FILLER_TOKENS.has(t.toLowerCase()))
+    .filter(Boolean);
+  // CONSERVATIVE: if the title (after stripping notation/filler) is ALREADY
+  // well-cased — it has both upper- and lower-case letters and no snake_case — it
+  // was named deliberately ("Barbell Bench Press", "ZTest Knee Ext", "DB Press").
+  // Preserve it verbatim; only re-case the genuinely-messy forms (all-lowercase,
+  // ALL-CAPS, snake_case). The point is to tidy messy input, never mangle clean names.
+  const joined = tokens.join(" ").trim();
+  if (joined && /[a-z]/.test(joined) && /[A-Z]/.test(joined) && !/_/.test(joined)) {
+    return joined.length > 80 ? joined.slice(0, 80).trim() : joined;
+  }
+  // Title-Case each word, but keep known acronyms/implements sensible.
+  const cased = tokens.map((t) => {
+    const lower = t.toLowerCase();
+    if (ACRONYM_CASING[lower]) return ACRONYM_CASING[lower];
+    // hyphenated word: case each segment ("t-bar" → "T-Bar")
+    if (t.includes("-")) {
+      return t
+        .split("-")
+        .map((seg) => {
+          const segLower = seg.toLowerCase();
+          if (ACRONYM_CASING[segLower]) return ACRONYM_CASING[segLower];
+          return seg ? seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase() : seg;
+        })
+        .join("-");
+    }
+    return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  });
+  let clean = cased.join(" ").trim();
+  if (clean.length > 80) clean = clean.slice(0, 80).trim();
+  // Never empty — fall back to a trimmed raw (also length-capped, emoji-scrubbed).
+  if (!clean) {
+    clean = stripEmoji(original).replace(/\s+/g, " ").trim().slice(0, 80).trim();
+  }
+  return clean || original.trim().slice(0, 80);
+}
+
+// Movements whose name implies a HOLD / duration → log time, not reps.
+const TIMED_PATTERNS: RegExp[] = [
+  /\bplank/,
+  /side plank/,
+  /dead hang/,
+  /\bhang\b/,
+  /wall sit/,
+  /hollow (hold|body)/,
+  /\bl sit/,
+  /\bl-sit/,
+  /\bhold\b/,
+  /isometric/,
+  /farmer.*(carry|carries|walk)/,
+  /\bcarry\b/,
+  /\bcarries\b/,
+  /loaded carry/,
+  /for time/,
+];
+
+// Detect whether an exercise should be logged as a timed hold or as reps.
+export function detectExerciseMode(name: string): "reps" | "timed" {
+  const norm = normalizeExerciseName(name);
+  if (!norm) return "reps";
+  for (const re of TIMED_PATTERNS) if (re.test(norm)) return "timed";
+  return "reps";
+}
+
+// PURE validator of an agent's exercise reconciliation — mirrors planMarkerMerges /
+// planExerciseMerges so the safety guards are unit-testable without an agent and no
+// DB write is implied here. Each group folds 1+ messy/variant inputs onto ONE clean
+// canonical. Guards, in order:
+//   - every member must be a VERBATIM input name (matched by normalized name);
+//   - the canonical must be a real member OR a cleanExerciseName of one;
+//   - a group is accepted when it folds ≥2 variants onto one canonical OR cleans a
+//     single messy member (canonical ≠ member's raw display);
+//   - resolve group via canonicalGroup(g.group) ?? classifyMuscleGroup(canonical);
+//   - resolve mode via (g.mode==='timed' ? 'timed' : detectExerciseMode(canonical)).
+// Returns one alias row per NON-canonical member ({rawNorm → canonical}); a member
+// whose norm equals the canonical's norm is skipped (no self-alias). Conservative:
+// groups with no valid members are dropped.
+export function planExerciseAliases(
+  items: Array<{ name: string }>,
+  groups: Array<{ members: string[]; canonical: string; group?: string | null; mode?: string | null }>
+): Array<{ rawNorm: string; canonical: string; group: MuscleGroup | null; mode: "reps" | "timed" }> {
+  const validItems = Array.isArray(items) ? items.filter((i) => i && String(i.name ?? "").trim()) : [];
+  // normalized name → the verbatim display name the user actually used.
+  const byNorm = new Map<string, string>();
+  for (const i of validItems) {
+    const display = String(i.name).replace(/\s+/g, " ").trim();
+    const norm = normalizeExerciseName(display);
+    if (norm && !byNorm.has(norm)) byNorm.set(norm, display);
+  }
+
+  const out: Array<{ rawNorm: string; canonical: string; group: MuscleGroup | null; mode: "reps" | "timed" }> = [];
+  const seen = new Set<string>(); // dedupe rawNorm across groups (first valid wins)
+
+  for (const g of Array.isArray(groups) ? groups : []) {
+    const rawMembers: string[] = Array.isArray((g as any)?.members)
+      ? (g as any).members.map((x: any) => String(x ?? "").replace(/\s+/g, " ").trim()).filter(Boolean)
+      : [];
+    // Keep only members that are VERBATIM inputs (by normalized match).
+    const members: string[] = rawMembers
+      .map((m) => byNorm.get(normalizeExerciseName(m)))
+      .filter((m): m is string => !!m);
+    // Dedupe member displays.
+    const distinctMembers: string[] = [...new Set(members)];
+    if (distinctMembers.length === 0) continue;
+
+    // Resolve the canonical: prefer the agent's canonical when it's a real member or
+    // a clean version of one; else clean the first member.
+    const rawCanonical = String((g as any)?.canonical ?? "").replace(/\s+/g, " ").trim();
+    const rawCanonNorm = normalizeExerciseName(rawCanonical);
+    let canonical: string;
+    if (rawCanonNorm && byNorm.has(rawCanonNorm)) {
+      // canonical names an actual member verbatim — clean it for display.
+      canonical = cleanExerciseName(byNorm.get(rawCanonNorm)!);
+    } else if (rawCanonical && distinctMembers.some((m) => normalizeExerciseName(cleanExerciseName(m)) === rawCanonNorm)) {
+      // canonical equals the cleaned form of a member — accept it.
+      canonical = rawCanonical;
+    } else if (rawCanonical) {
+      // canonical is foreign to the members — reject (be conservative), fall back to
+      // cleaning the first member instead.
+      canonical = cleanExerciseName(distinctMembers[0]);
+    } else {
+      canonical = cleanExerciseName(distinctMembers[0]);
+    }
+    if (!canonical) continue;
+    const canonNorm = normalizeExerciseName(canonical);
+
+    // Accept only a REAL fold: ≥2 variants, OR a single messy member being cleaned
+    // (its raw differs from the canonical).
+    const nonCanonMembers = distinctMembers.filter((m) => normalizeExerciseName(m) !== canonNorm);
+    if (nonCanonMembers.length === 0) continue; // nothing to alias (all already canonical)
+
+    const group = canonicalGroup((g as any)?.group ?? null) ?? classifyMuscleGroup(canonical);
+    const mode: "reps" | "timed" = (g as any)?.mode === "timed" ? "timed" : detectExerciseMode(canonical);
+
+    for (const m of nonCanonMembers) {
+      const rawNorm = normalizeExerciseName(m);
+      if (!rawNorm || rawNorm === canonNorm || seen.has(rawNorm)) continue;
+      seen.add(rawNorm);
+      out.push({ rawNorm, canonical, group, mode });
+    }
+  }
+  return out;
+}
+
 // PURE merge planner: cluster the given exercise names by normalizedExerciseKey and,
 // for any cluster with ≥2 distinct names, propose merging the others INTO the
 // "primary" (the name with the most logged sets when counts are provided, else the

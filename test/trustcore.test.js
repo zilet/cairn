@@ -5,7 +5,7 @@
 // pieces the harness couldn't reach when it was first written on a stale base.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { db, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 
 beforeEach(() => {
   resetTables("plan_items", "plan_days", "memory", "evidence_cache", "health_documents", "health_directives");
@@ -101,6 +101,61 @@ test("applying a proposal's cardio prescriptions adds runs without disturbing st
   assert.equal(d6cardio[0].target_distance_km, 16);
 });
 
+// Applying a proposal whose change references a movement NOT yet on that day ADDS it
+// — the coach's most natural plan edit ("add a back movement"). This used to vanish:
+// applyProposal looped updateTarget, whose UPDATE matched zero rows, yet the proposal
+// still flipped to 'applied' and the UI claimed "✓ Applied" over a no-op.
+test("applying a proposal ADDS a movement that isn't on the day yet (not a silent no-op)", () => {
+  resetTables("plan_proposals", "plan_items", "plan_days");
+  repo.savePlanDay(1, "Lower A", "legs", [{ exercise: "ZAddSquat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
+  const p = repo.createProposal("stub", "", "{}", {
+    summary: "add a back movement",
+    changes: [{ day_number: 1, exercise: "ZSingleArmRow", target_weight: 55, reason: "raise back volume conservatively" }],
+  });
+
+  const r = repo.applyProposal(p.id);
+  assert.equal(r.ok, true, "the apply concretely succeeded");
+  assert.equal(r.added.length, 1, "the movement was ADDED, not skipped");
+
+  const d1 = repo.getPlanDay(1);
+  const names = d1.items.map((i) => i.exercise);
+  assert.ok(names.includes("ZSingleArmRow"), "the new movement is on the plan day");
+  assert.ok(names.includes("ZAddSquat"), "the existing work is preserved");
+  const row = d1.items.find((i) => i.exercise === "ZSingleArmRow");
+  assert.equal(row.target_weight, 55, "carries the proposed target");
+  assert.match(row.note || "", /back volume/i, "carries the coach's reason as the note");
+  assert.equal(repo.getProposal(p.id).status, "applied", "marked applied because it really applied");
+});
+
+// The honest-feedback guard: when NOTHING can apply, the proposal must NOT lie
+// "applied" — it stays a live draft and reports ok:false so the surface can say so.
+test("applyProposal reports ok:false (no false 'applied') when a change can't apply", () => {
+  resetTables("plan_proposals", "plan_items", "plan_days");
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "ZNoopSquat", sets: 3, target_weight: 185 }]);
+  const p = repo.createProposal("stub", "", "{}", {
+    summary: "tweak a day that doesn't exist",
+    changes: [{ day_number: 99, exercise: "ZNoopSquat", target_weight: 190, reason: "x" }],
+  });
+
+  const r = repo.applyProposal(p.id);
+  assert.equal(r.ok, false, "honest: nothing changed");
+  assert.ok(r.skipped.length >= 1, "the impossible change is reported as skipped");
+  assert.equal(repo.getProposal(p.id).status, "draft", "the proposal stays a live draft — not falsely applied");
+});
+
+// A target tweak phrased with light name drift updates the EXISTING prescription
+// (normalized-key match) instead of adding a near-duplicate movement.
+test("applyPlanChange updates an existing item via a normalized-key match (no duplicate)", () => {
+  resetTables("plan_proposals", "plan_items", "plan_days");
+  repo.savePlanDay(1, "Pull", "back", [{ exercise: "Dead Hang Timed", sets: 3, target_seconds: 30 }]);
+  // "Dead Hang" normalizes to the same key as "Dead Hang Timed" → update, not add.
+  const r = repo.applyPlanChange({ day_number: 1, exercise: "Dead Hang", target_seconds: 45 }, {});
+  assert.equal(r.action, "updated", "matched the existing movement by normalized key");
+  const items = repo.getPlanDay(1).items;
+  assert.equal(items.length, 1, "no duplicate movement was created");
+  assert.equal(items[0].target_seconds, 45, "the existing prescription was updated");
+});
+
 // ---------- evidence cache + citation verification + safety gate (grounding) ----------
 
 test("getEvidenceForMarker is empty until research caches a row, then round-trips", () => {
@@ -126,6 +181,18 @@ test("verifyCitation accepts a guideline body and strips an unverifiable claim",
   assert.equal(bad.citation, null); // stripped, but the directive survives (uncertain)
 });
 
+test("verifyCitation matches short acronyms on word boundaries (no 'who' inside 'Whoop')", () => {
+  // The short-acronym allowlist must not false-accept a substring: "Whoop" contains
+  // "who", "across" contains "acr", "Canada" contains "ada" — none are guideline bodies.
+  for (const fake of ["Whoop-derived cohort, 2024", "a study of who responds to statins", "data from across the cohort"]) {
+    const r = repo.verifyCitation(fake);
+    assert.equal(r.verified, false, `"${fake}" must NOT verify as a guideline body`);
+  }
+  // A genuine short-acronym body on a word boundary still verifies.
+  assert.equal(repo.verifyCitation("WHO 2023 physical activity guidelines").verified, true);
+  assert.equal(repo.verifyCitation("NIH Office of Dietary Supplements").verified, true);
+});
+
 test("isPlausibleSourceUrl rejects internal/non-http URLs (SSRF-shaped), accepts a real https source", () => {
   assert.equal(repo.isPlausibleSourceUrl("https://www.nih.gov/health"), true);
   assert.equal(repo.isPlausibleSourceUrl("http://localhost/admin"), false);
@@ -143,6 +210,109 @@ test("safetyGate annotates a contradictory iron suggestion when ferritin is alre
   );
   assert.equal(res.annotated, true);
   assert.equal(res.uncertain, true); // a contradicted supplement is a softer nudge, never silently applied
+});
+
+// The text-only blind spot: a contraindicated supplement phrased WITHOUT the obvious
+// trigger words ("iron"/"supplement"/"add") used to slip past the gate. Now a
+// supplement-name from the lexicon (ferrous bisglycinate) catches it on its own.
+test("safetyGate catches a contraindicated iron combo phrased without 'iron'/'supplement'", () => {
+  seedHealthDoc("2025-12-01", [marker("Ferritin", 350, { unit: "ng/mL", flag: "high" })]);
+  const ctx = repo.buildSafetyMarkerContext();
+  const res = repo.safetyGate(
+    { domain: "nutrition", marker: "Ferritin", directive: "Boost your stores with a daily ferrous bisglycinate." },
+    ctx
+  );
+  assert.equal(res.annotated, true, "the supplement-name lexicon caught it without the word 'iron'");
+  assert.equal(res.uncertain, true);
+});
+
+// "keep taking your usual creatine scoop" — no "supplement"/"add" verb, but the
+// supplement name 'creatine' implies intent on its own. Caught when eGFR is low.
+test("safetyGate catches a verb-less creatine combo when kidney markers are off-optimal", () => {
+  seedHealthDoc("2025-12-01", [marker("eGFR", 55, { unit: "mL/min", flag: "low" })]);
+  const ctx = repo.buildSafetyMarkerContext();
+  const res = repo.safetyGate(
+    { domain: "nutrition", marker: "Creatine", directive: "Keep taking your usual creatine scoop." },
+    ctx
+  );
+  assert.equal(res.annotated, true);
+  assert.equal(res.uncertain, true);
+});
+
+// Marker-field keying broadens the analyte word, but a verb is STILL required — a
+// directive merely ABOUT a marker (no supplement intent) must not trip the gate.
+test("safetyGate fires off the structured marker field + a verb (text avoids the obvious word)", () => {
+  seedHealthDoc("2025-12-01", [marker("Vitamin D", 70, { unit: "ng/mL", flag: "high" })]);
+  const ctx = repo.buildSafetyMarkerContext();
+  const res = repo.safetyGate(
+    // text says "take a high dose" but never "vitamin D"/"D3" — the marker field carries it
+    { domain: "nutrition", marker: "Vitamin D", directive: "You could take a high dose to push it higher." },
+    ctx
+  );
+  assert.equal(res.annotated, true, "the marker field + 'take'/'high dose' verb tripped the D rule");
+  assert.equal(res.uncertain, true);
+});
+
+// Conservative: a directive that only DISCUSSES a marker (no supplement/dose verb)
+// is left untouched — no false alarm on an unrelated/observational directive.
+test("safetyGate does NOT fire on a marker-only directive with no supplement intent", () => {
+  seedHealthDoc("2025-12-01", [marker("Ferritin", 350, { unit: "ng/mL", flag: "high" })]);
+  const ctx = repo.buildSafetyMarkerContext();
+  const res = repo.safetyGate(
+    { domain: "watch", marker: "Ferritin", directive: "Your ferritin is on the higher side — worth rechecking at your next panel." },
+    ctx
+  );
+  assert.equal(res.annotated, false, "no supplement/dose verb → no annotation");
+  assert.equal(res.uncertain, false);
+});
+
+// The kidney MARKER "Creatinine" must never self-trip the creatine SUPPLEMENT rule
+// (\bcreatine\b excludes the longer word) — a directive about creatinine isn't a
+// creatine-supplement suggestion.
+test("safetyGate does NOT confuse the creatinine marker for creatine supplementation", () => {
+  seedHealthDoc("2025-12-01", [marker("eGFR", 55, { unit: "mL/min", flag: "low" })]);
+  const ctx = repo.buildSafetyMarkerContext();
+  const res = repo.safetyGate(
+    { domain: "watch", marker: "Creatinine", directive: "Take your creatinine reading with a grain of salt — it tracks muscle mass." },
+    ctx
+  );
+  assert.equal(res.annotated, false, "'creatinine' is the marker, not the supplement — no false alarm");
+});
+
+// ---------- day_read outcome learning: idempotent per (kind, date) ----------
+// The /today-read handler records a day_read suggestion for outcome learning even on
+// the cache HIT (the canonical read is precomputed nightly + served cached every
+// morning, so otherwise reconcileOutcomes would have almost no day_read rows). It
+// dedupes the CANONICAL read per (kind, date) — repeated opens don't pile up — while
+// an OVERRIDE read (a transient steer with its own payload) always records. These
+// guard the dedup CONTRACT the handler's recordDayReadSuggestion helper relies on.
+const CANONICAL_DAY_READ_EXISTS =
+  `SELECT 1 FROM suggestions WHERE kind='day_read' AND date=? AND payload_json LIKE '%"override":null%' LIMIT 1`;
+const countDayReads = (date) =>
+  db.prepare(`SELECT COUNT(*) AS n FROM suggestions WHERE kind='day_read' AND date=?`).get(date).n;
+
+test("canonical day_read suggestion is detectable + deduped per (kind, date); override is distinct", () => {
+  resetTables("suggestions");
+  const date = "2026-06-22";
+  assert.equal(!!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date), false, "nothing recorded yet");
+
+  // First canonical open records.
+  repo.recordSuggestion("day_read", date, { kind: "train", focus: "legs", est_minutes: 60, override: null });
+  assert.equal(!!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date), true, "canonical row is detectable");
+  assert.equal(countDayReads(date), 1);
+
+  // A repeat canonical open is deduped (the handler's guard short-circuits) — count
+  // stays 1 because the existence check found the prior canonical row.
+  if (!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date)) {
+    repo.recordSuggestion("day_read", date, { kind: "train", focus: "legs", est_minutes: 60, override: null });
+  }
+  assert.equal(countDayReads(date), 1, "repeated canonical open does NOT duplicate the row");
+
+  // An OVERRIDE read is a distinct payload and always records (its row never matches
+  // the canonical existence check, so it can't be mistaken for the canonical one).
+  repo.recordSuggestion("day_read", date, { kind: "easy", focus: null, est_minutes: 30, override: "rough night" });
+  assert.equal(!!db.prepare(CANONICAL_DAY_READ_EXISTS).get(date), true, "override row didn't satisfy the canonical check");
+  assert.equal(countDayReads(date), 2, "override recorded as its own row");
 });
 
 // ---------- marker forecasting (predictive, plain-language, no score) ----------

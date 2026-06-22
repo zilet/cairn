@@ -387,3 +387,36 @@ test("getCardioForDate: returns the day's cardio with distance; excludes strengt
   // A day with no cardio is an empty array, never a throw.
   assert.deepEqual(repo.getCardioForDate("2026-02-11"), []);
 });
+
+// ---- NEW: a Garmin-synced run dedups a hand-logged same-day run (no double-count) ----
+test("addActivity: a Garmin run retires a manual same-day same-modality run (no double count)", () => {
+  resetTables("activities");
+  // Athlete logs the run by hand in the morning (no source/external_id).
+  repo.addActivity({ date: "2026-03-15", type: "run", distance_km: 8, source: null });
+  // Garmin later syncs the SAME run (source 'garmin' + external_id, richer row).
+  repo.addActivity({ date: "2026-03-15", type: "running", distance_km: 8.2, source: "garmin", external_id: "g-123" });
+
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-15'`).all();
+  assert.equal(rows.length, 1, "the manual duplicate was retired — only one run remains");
+  assert.equal(rows[0].source, "garmin", "the richer Garmin row is the one kept");
+  assert.equal(rows[0].external_id, "g-123");
+});
+
+test("addActivity: a Garmin run does NOT touch a different-modality same-day activity", () => {
+  resetTables("activities");
+  repo.addActivity({ date: "2026-03-16", type: "ride", distance_km: 30, source: null }); // a manual RIDE
+  repo.addActivity({ date: "2026-03-16", type: "running", distance_km: 8, source: "garmin", external_id: "g-456" }); // a Garmin RUN
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-16'`).all();
+  assert.equal(rows.length, 2, "a different-modality activity on the same day is preserved");
+});
+
+// The modality fold uses a LEADING word-boundary: "cycling"/"indoor_cycling" must
+// fold to "ride" (a closing \b wrongly failed on them, so a cycling dup never merged).
+test("addActivity: Garmin 'indoor_cycling' dedups a manual 'cycling' (leading-boundary fold)", () => {
+  resetTables("activities");
+  repo.addActivity({ date: "2026-03-17", type: "cycling", distance_km: 30, source: null });
+  repo.addActivity({ date: "2026-03-17", type: "indoor_cycling", distance_km: 31, source: "garmin", external_id: "g-789" });
+  const rows = db.prepare(`SELECT * FROM activities WHERE date = '2026-03-17'`).all();
+  assert.equal(rows.length, 1, "cycling variants fold to one ride — the manual dup was retired");
+  assert.equal(rows[0].source, "garmin");
+});

@@ -1,5 +1,15 @@
 import { db } from "../db.js";
-import { canonicalGroup, classifyMuscleGroup, resolveGroup } from "./exercise-canon.js";
+import {
+  canonicalGroup,
+  classifyMuscleGroup,
+  cleanExerciseName,
+  detectExerciseMode,
+  getExerciseAlias,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+  resolveGroup,
+  setExerciseAlias,
+} from "./exercise-canon.js";
 
 // ---------- exercises ----------
 const EXERCISE_MODES = ["reps", "timed"];
@@ -21,16 +31,51 @@ export function getExercise(id: number): any {
 }
 
 export function findOrCreateExercise(name: string, muscle_group?: string, constraint_note?: string, mode?: string): any {
+  // Exact name already exists — reuse it.
   const existing = findExercise(name);
   if (existing) return existing;
-  // When no group is supplied, auto-classify by name. When a group IS supplied,
-  // pass it through canonicalGroup() first so legacy values fold to the taxonomy.
+
+  // (a) A persisted alias for this (raw) input maps it to a canonical exercise that
+  //     already exists — reuse that instead of creating a duplicate variant.
+  const norm = normalizeExerciseName(name);
+  const alias = norm ? getExerciseAlias(norm) : null;
+  if (alias?.canonical) {
+    const aliased = findExercise(alias.canonical);
+    if (aliased) return aliased;
+  }
+
+  // (b) No alias, but an existing exercise keys the same way (same movement logged
+  //     under a messier name) — self-align: record the alias so the raw variant
+  //     resolves directly next time, and reuse the existing exercise.
+  const key = normalizedExerciseKey(name);
+  if (key) {
+    const all = db.prepare(`SELECT name FROM exercises`).all() as Array<{ name: string }>;
+    const sameKey = all.find((e) => normalizedExerciseKey(e.name) === key);
+    if (sameKey) {
+      if (normalizeExerciseName(sameKey.name) !== norm) setExerciseAlias(norm, sameKey.name);
+      return findExercise(sameKey.name);
+    }
+  }
+
+  // (c) Genuinely new — store a CLEAN display name. Explicit muscle_group/mode still
+  //     win; otherwise auto-profile from the cleaned name. A supplied group passes
+  //     through canonicalGroup() first so legacy values fold to the taxonomy.
+  const cleanName = cleanExerciseName(name);
+  // Cleaning can collapse a messy raw onto an EXISTING clean name that the raw didn't
+  // match by alias/key (e.g. "Incline DB Press 3x10" → "Incline DB Press"). Reuse it
+  // (and self-align the raw) instead of an INSERT that would hit the UNIQUE(name).
+  const cleanDupe = findExercise(cleanName);
+  if (cleanDupe) {
+    if (norm && normalizeExerciseName(cleanName) !== norm) setExerciseAlias(norm, cleanDupe.name);
+    return cleanDupe;
+  }
   const resolvedGroup = muscle_group != null
     ? (canonicalGroup(muscle_group) ?? muscle_group)
-    : classifyMuscleGroup(name);
+    : classifyMuscleGroup(cleanName);
+  const resolvedMode = validMode(mode) ?? detectExerciseMode(cleanName);
   const info = db
     .prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, mode) VALUES (?, ?, ?, ?)`)
-    .run(name.trim(), resolvedGroup ?? null, constraint_note ?? null, validMode(mode) ?? "reps");
+    .run(cleanName, resolvedGroup ?? null, constraint_note ?? null, resolvedMode);
   return db.prepare(`SELECT * FROM exercises WHERE id = ?`).get(info.lastInsertRowid);
 }
 
@@ -75,6 +120,35 @@ export function reconcileExerciseGroups(): {
     changes.push({ name: ex.name, from: ex.muscle_group, into: resolved });
   }
   return { updated: changes.length, changes };
+}
+
+// Distinct exercise names that carry signal — those with logged sets OR that sit in
+// a plan — with their muscle_group and a logged-set count. The input the agentic
+// exercise reconciler clusters (mirrors repo.distinctMarkerNames' shape). Null-safe.
+export function distinctExerciseNames(): Array<{ name: string; group: string | null; sets: number }> {
+  try {
+    return (
+      db
+        .prepare(
+          `SELECT e.name AS name,
+                  e.muscle_group AS group_,
+                  COUNT(ls.id) AS sets
+             FROM exercises e
+             LEFT JOIN logged_sets ls ON ls.exercise_id = e.id
+            WHERE EXISTS (SELECT 1 FROM logged_sets s WHERE s.exercise_id = e.id)
+               OR EXISTS (SELECT 1 FROM plan_items p WHERE p.exercise_id = e.id)
+            GROUP BY e.id
+            ORDER BY e.name`
+        )
+        .all() as any[]
+    ).map((r) => ({
+      name: String(r.name),
+      group: r.group_ != null ? String(r.group_) : null,
+      sets: Number(r.sets) || 0,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 // Merge one exercise into another: re-point all logged_sets.exercise_id and

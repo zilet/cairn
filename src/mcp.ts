@@ -23,6 +23,7 @@ import {
   growAboutMe,
   reconcileOutcomes,
   reconcileMarkers,
+  reconcileExercises,
   distillChat,
   onboardFromText,
   agentInfoOp,
@@ -514,6 +515,20 @@ export function buildMcpServer(): McpServer {
       into: z.string().describe("the exercise name to keep (must already exist)"),
     },
     async ({ from, into }) => asText(repo.mergeExercises(from, into))
+  );
+
+  server.tool(
+    "list_exercise_aliases",
+    "List the learned exercise-name aliases (variant → canonical movement) — the de-duplication map behind the volume/progression read. Each row is { alias, canonical, source }. The deterministic exercise-canon normalizer is always on; these are the harder synonyms learned by reconcile_exercise_names.",
+    {},
+    async () => asText(repo.listExerciseAliases())
+  );
+
+  server.tool(
+    "reconcile_exercise_names",
+    "Tidy descriptive / duplicate exercise titles into clean, reusable CANONICAL movement names so each lift's history merges into one trend (e.g. 'DB bench'/'Dumbbell bench press' → one movement, 'Dead hang'/'Dead hang timed' folded together) and profiles each movement's muscle group. A deterministic canonicalizer (exercise-canon) always folds the obvious cases; this AGENTIC pass learns the harder synonyms a human would catch and persists them as exercise_aliases, so future logging resolves them automatically. CONSERVATIVE — only merges unambiguous same-movement names, and NEVER changes any logged numbers (only the series merge). Returns {aligned, applied}. The mirror of reconcile_markers for movements.",
+    { agent: z.string().optional().describe("agent name from list_agents; omit/'auto' for the rotation") },
+    async ({ agent }) => asText(await reconcileExercises(agent))
   );
 
   server.tool(
@@ -1142,16 +1157,20 @@ export function buildMcpServer(): McpServer {
       summary: z.string().describe("plain-language summary, 1-3 sentences"),
       parsed: z.any().optional().describe("structured markers, e.g. { markers: [{name,value,unit,flag}], type }"),
     },
-    async (a) =>
-      asText(
-        repo.addHealthDocument({
-          kind: a.kind,
-          doc_date: a.doc_date ?? null,
-          summary: a.summary,
-          parsed_json: a.parsed ?? null,
-          enrichment_status: "done",
-        })
-      )
+    async (a) => {
+      const doc = repo.addHealthDocument({
+        kind: a.kind,
+        doc_date: a.doc_date ?? null,
+        summary: a.summary,
+        parsed_json: a.parsed ?? null,
+        enrichment_status: "done",
+      });
+      // New markers via a Claude client → propagate them through the connected brain
+      // (idempotent; deriveDirectives busts today's cached Brief itself), mirroring the
+      // chat log_health path so a lab added here shapes coaching just like an upload.
+      try { repo.deriveDirectives(); } catch { /* never fail the record */ }
+      return asText(doc);
+    }
   );
 
   server.tool(

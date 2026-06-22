@@ -19,6 +19,7 @@ import { examplesForGroup } from "./exercise-variations.js";
 import { findExercise } from "./exercises.js";
 import { getPlan } from "./plan.js";
 import { type LiftState, getProgramState } from "./program-state.js";
+import { round2_5 } from "./shared.js";
 
 // ---- progression-step caps (mirrors applyProposal's clamp intent, tighter) ---
 // A per-session step is a SMALL earned nudge, never a jump. The cap is the
@@ -65,9 +66,6 @@ export interface Prescription {
 // ---- small helpers ----
 function round5(n: number): number {
   return Math.round(n / 5) * 5;
-}
-function round2_5(n: number): number {
-  return Math.round(n / 2.5) * 2.5;
 }
 
 // The step ceiling for a lift, by group (compound vs isolation).
@@ -447,6 +445,11 @@ export interface ProgramBalance {
   due: string[];
   over: string[];
   summary: string;
+  // True when MOST groups read "due" at once — the honest signal then isn't a
+  // 10-item to-do list, it's "overall strength volume is low right now" (expected
+  // during an endurance-led block). Surfaces collapse to one calm line instead of a
+  // wall of due chips. See buildBalanceSummary.
+  broad_low: boolean;
 }
 
 // Working-set volume per CANONICAL group over the window (default 2 wk), banded
@@ -499,13 +502,33 @@ export function programBalance(weeks = 2): ProgramBalance {
   const due = groups.filter((g) => g.status === "due").map((g) => g.group);
   const over = groups.filter((g) => g.status === "high").map((g) => g.group);
 
+  // Broad-low: when MOST groups are due at once, the signal is "overall strength
+  // volume is low", not a per-group to-do list — common when running is the focus.
+  const broad_low = groups.length >= 5 && due.length >= Math.ceil(groups.length * 0.6);
+
   // Plain-words adherence-skew summary (no numbers as a grade).
-  const summary = buildBalanceSummary(groups, due, over);
-  return { groups, due, over, summary };
+  const summary = buildBalanceSummary(groups, due, over, broad_low);
+  return { groups, due, over, summary, broad_low };
 }
 
-function buildBalanceSummary(groups: GroupBalance[], due: string[], over: string[]): string {
+function buildBalanceSummary(groups: GroupBalance[], due: string[], over: string[], broadLow: boolean): string {
   if (!groups.length) return "Not enough logged yet to read your volume balance — keep training and it'll come into focus.";
+  // Broad-low → one calm line instead of listing every group. Name the 1-2 groups
+  // that have gone LONGEST without work (the genuinely-neglected standouts) so it
+  // stays actionable, never a wall of "everything's behind".
+  if (broadLow) {
+    const overPart = over.length ? ` ${over.join(", ")} running a touch high.` : "";
+    const stale = due
+      .map((g) => groups.find((x) => x.group === g))
+      .filter((g): g is GroupBalance => !!g)
+      .sort((a, b) => (a.last_trained ?? "").localeCompare(b.last_trained ?? ""))
+      .slice(0, 2)
+      .map((g) => g.group);
+    const lead = stale.length
+      ? ` No need to chase every group — ${stale.join(" and ")} ${stale.length > 1 ? "have" : "has"} gone longest without work, so start there.`
+      : "";
+    return `Strength volume is light across most groups right now — expected if running is the priority, not a problem.${overPart}${lead}`;
+  }
   const parts: string[] = [];
   if (over.length) parts.push(`${over.join(", ")} running high`);
   if (due.length) parts.push(`${due.join(", ")} due`);
@@ -668,6 +691,10 @@ export interface ProgramAdjustment {
   // heavy session) — informational, NOT a "do it now" pick. The UI sinks + reframes
   // it; "plan it" becomes "plan around it" rather than "add it".
   recovering?: boolean;
+  // A due group that is ALREADY programmed in the plan — the gap is logged volume,
+  // not a missing movement. The UI reframes "add a movement" → "train what's there"
+  // so it never tells you to add work you already have scheduled.
+  programmed?: boolean;
 }
 
 // The handful of concrete adaptations DUE right now — lifts to push/hold/deload
@@ -675,7 +702,7 @@ export interface ProgramAdjustment {
 // and missing-pattern GAPS (no core / grip / mobility programmed). Plain words,
 // most-actionable first, deduped. This is the calm "what the system noticed"
 // surface — pull, never push.
-export function programAdjustments(): ProgramAdjustment[] {
+export function programAdjustments(balArg?: ProgramBalance, recentArg?: Map<MuscleGroup, RecentLoad>): ProgramAdjustment[] {
   const out: ProgramAdjustment[] = [];
   const seen = new Set<string>();
   const push = (a: ProgramAdjustment) => {
@@ -716,15 +743,37 @@ export function programAdjustments(): ProgramAdjustment[] {
   //    fresh due groups lead. This is the connected read that makes the next-day
   //    pick elite — your legs are toast after a 3 h ride, so it stops recommending
   //    them and surfaces what's actually fresh.
-  const bal = programBalance();
-  const recent = recentMuscleLoad(2);
+  // Reuse the balance + acute-load reads getCoachContext already computed (the hot
+  // path), falling back to a fresh compute when called standalone.
+  const bal = balArg ?? programBalance();
+  const recent = recentArg ?? recentMuscleLoad(2);
+  // Plan-aware reframe: a due group that's ALREADY programmed doesn't need a NEW
+  // movement — the gap is logged volume (you scheduled it; train it). So we never
+  // tell you to "add a back movement" when your plan already has rows, lat pulldowns
+  // and pull-ups. ONE plan query feeds both the per-group moves and the GAPS below.
+  const plannedMoves = plannedMovesByGroup();
+  const planned = new Set(plannedMoves.keys());
   const recovering: Array<{ group: string; rl: RecentLoad }> = [];
   for (const g of bal.due.slice(0, 4)) {
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
     const rl = recent.get(g as MuscleGroup);
-    if (rl?.heavy) recovering.push({ group: g, rl });
-    else push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
+    if (rl?.heavy) { recovering.push({ group: g, rl }); continue; }
+    if (planned.has(g)) {
+      // Already in the plan — honest read: get those sessions in, don't add more.
+      const moves = plannedMoves.get(g) ?? [];
+      const where = plannedDaysPhrase(moves);
+      push({
+        kind: "balance",
+        title: `${cap(g)} is due`,
+        why: `${cap(g)} is ${reason}, but it's already in your plan${where ? ` (${where})` : ""} — the gap is logged volume, so get those sessions in this week rather than adding more.`,
+        group: g,
+        suggestions: moves.slice(0, 3).map((m) => m.exercise),
+        programmed: true,
+      });
+    } else {
+      push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
+    }
   }
   // ONE consolidated recovering note, right after the fresh due groups — so the
   // athlete SEES why a smoked muscle isn't being recommended (the connected read)
@@ -751,8 +800,7 @@ export function programAdjustments(): ProgramAdjustment[] {
   // 4) Missing-pattern GAPS — the elite-coach floors this athlete is missing.
   //    Read what groups appear ANYWHERE in the plan; flag core / forearms (grip)
   //    / mobility when they're absent (they were invisible until the taxonomy
-  //    added them as first-class groups).
-  const planned = plannedGroups();
+  //    added them as first-class groups). Reuses `planned` from the balance step.
   for (const [group, label, why, suggestions] of [
     ["core", "core", "No anti-extension / anti-rotation core work is programmed — add a loaded carry or a plank/pallof variation; it underpins everything else.", ["Pallof Press", "Farmer's Walk", "Hanging Leg Raise"]],
     ["forearms", "grip / forearm", "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull.", ["Farmer's Walk", "Suitcase Carry", "Dead Hang"]],
@@ -767,18 +815,40 @@ export function programAdjustments(): ProgramAdjustment[] {
   return out.slice(0, 8);
 }
 
-// The set of canonical groups that appear anywhere in the current plan.
-function plannedGroups(): Set<string> {
+// The strength movements programmed in the plan, grouped by canonical muscle group
+// (with the day each sits on) — so a due-but-programmed group can say "you have these,
+// on these days" instead of suggesting movements you already train. ONE query feeds
+// both the per-group moves and the plan's programmed-group set (its keys).
+type PlannedMove = { exercise: string; day: number; day_name: string | null };
+function plannedMovesByGroup(): Map<string, PlannedMove[]> {
   const rows = db.prepare(
-    `SELECT DISTINCT e.muscle_group AS mg, e.name AS name
-       FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id`
+    `SELECT DISTINCT e.name AS name, e.muscle_group AS mg, pd.day_number AS day, pd.name AS day_name
+       FROM plan_items pi
+       JOIN exercises e ON e.id = pi.exercise_id
+       JOIN plan_days pd ON pd.id = pi.plan_day_id
+      WHERE (pi.kind IS NULL OR pi.kind != 'cardio')
+      ORDER BY pd.day_number, pi.position`
   ).all() as any[];
-  const out = new Set<string>();
+  const map = new Map<string, PlannedMove[]>();
   for (const r of rows) {
     const g = canonicalGroup(r.mg) ?? canonicalGroup(r.name);
-    if (g) out.add(g);
+    if (!g) continue;
+    (map.get(g) ?? map.set(g, []).get(g)!).push({ exercise: r.name, day: r.day, day_name: r.day_name ?? null });
   }
-  return out;
+  return map;
+}
+
+// Plain-words "Day 3 (Pull), Day 5" phrase over a group's programmed movements.
+function plannedDaysPhrase(moves: Array<{ day: number; day_name: string | null }>): string {
+  const seen = new Set<number>();
+  const parts: string[] = [];
+  for (const m of moves) {
+    if (seen.has(m.day)) continue;
+    seen.add(m.day);
+    parts.push(`Day ${m.day}${m.day_name ? ` (${m.day_name})` : ""}`);
+    if (parts.length >= 3) break;
+  }
+  return parts.join(", ");
 }
 
 function cap(s: string): string {

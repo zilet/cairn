@@ -7,6 +7,7 @@ import * as repo from "./repo.js";
 import { runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
 import { reconcileMarkers, synthesizeHealth } from "./coachOps.js";
+import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 
 const execFileP = promisify(execFile);
 
@@ -104,6 +105,75 @@ const asStr = (v: any): string | undefined => {
   const s = String(v).trim();
   return s ? s.slice(0, 1000) : undefined;
 };
+
+// ---- Garmin strength: deterministic kg→lb + naming ----------------------------
+// Garmin records detected-set weight in KG (exercise_sets[].weight_kg). Converting
+// it lives HERE, in code — not delegated to the LLM, where a dropped "× 2.2" silently
+// corrupts every load. The agent only adds the one-line narrative + better naming.
+
+// kg → lb, rounded to the nearest 2.5 lb plate (shared LB_PER_KG + round2_5).
+// null/0 kg → null (bodyweight); we never invent a negative (assist) weight from a
+// Garmin set — only a hand log / the agent can mark an assist.
+function kgToLb(weightKg: number | null | undefined): number | null {
+  const kg = typeof weightKg === "number" ? weightKg : Number(weightKg);
+  if (!Number.isFinite(kg) || kg <= 0) return null; // null/0/junk → bodyweight
+  return round2_5(kg * LB_PER_KG);
+}
+
+// A label from Garmin's UPPER_SNAKE category (or its name field), e.g.
+// "BENCH_PRESS" → "bench press". We only de-snake here; findOrCreateExercise →
+// cleanExerciseName does the canonical Title-Case (with the DB/BB/RDL acronym table)
+// and folds it onto an existing movement — so we must NOT case it ourselves (a naive
+// pass would render "DB_PRESS" as "Db Press", disagreeing with the canon).
+function garminExerciseName(set: any): string | null {
+  const raw = (set?.name ?? set?.category ?? "").toString().trim();
+  if (!raw) return null;
+  return raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || null;
+}
+
+// A Garmin detected set looks like a timed hold when it carries a duration but no
+// rep count (plank / dead hang / wall sit) — mirrors the agent prompt's rule.
+function garminSetIsTimed(set: any): boolean {
+  const reps = asNum(set?.reps);
+  const dur = asNum(set?.duration_sec);
+  return (reps == null || reps === 0) && dur != null && dur > 0;
+}
+
+// Deterministically log Garmin's detected exercise sets into the day's session,
+// converting kg→lb in CODE. Skips any exercise already logged (the `already` guard
+// is shared with the agentic pass below so neither double-logs). Returns the count
+// logged. Runs EVEN WITH NO AGENT — the sets are facts, not a coaching opinion.
+function logGarminDetectedSets(ga: any, already: Set<string>): number {
+  const sets = Array.isArray(ga?.exercise_sets) ? ga.exercise_sets : [];
+  if (!sets.length) return 0;
+  let logged = 0;
+  for (const set of sets) {
+    const name = garminExerciseName(set);
+    if (!name || already.has(name.toLowerCase())) continue;
+    const timed = garminSetIsTimed(set);
+    const reps = asNum(set?.reps);
+    const duration = asNum(set?.duration_sec);
+    const weight = timed ? null : kgToLb(set?.weight_kg);
+    // Must carry something loggable for its mode (reps OR a converted load for a
+    // reps set; a duration for a timed hold). Otherwise skip — never log an empty set.
+    if (timed ? duration == null : reps == null && weight == null) continue;
+    try {
+      repo.logSetByName({
+        exercise: name,
+        weight: timed ? null : weight,
+        reps: timed ? null : reps ?? null,
+        duration_sec: timed ? duration ?? null : null,
+        exercise_mode: timed ? "timed" : "reps",
+        date: ga.date,
+      });
+      already.add(name.toLowerCase()); // never duplicate within this pass
+      logged++;
+    } catch {
+      /* one bad set shouldn't fail the job */
+    }
+  }
+  return logged;
+}
 
 // Push a job and start the drain loop if it isn't already running.
 export function enqueueEnrich(kind: Kind, id: number): void {
@@ -240,19 +310,34 @@ async function processJob(job: Job): Promise<void> {
     return;
   }
 
-  // Completeness guard (pasted-text sources only): a weaker model can curate a
-  // 100+ marker panel down to "the interesting ones". If the source clearly lists
-  // far more results than we extracted, re-run ONCE — Claude-first, with an explicit
-  // "you missed many" nudge — and keep whichever attempt captured more markers.
-  // Restricted to text/plain so the candidate estimate isn't fooled by HTML/XML
-  // markup or read from a binary; a single-file source (not an unpacked archive).
-  if (healthSource && !healthSource.isDir && /^text\/plain/i.test(healthSource.mime)) {
+  // Completeness guard: a weaker model can curate a 100+ marker panel down to "the
+  // interesting ones". When the extraction looks grossly short for the source, re-run
+  // ONCE — Claude-first, with an explicit "you missed many" nudge — and keep whichever
+  // attempt captured more markers. Two thresholds feed the SAME single-file retry:
+  //   • text/plain — we can estimate the source's own marker count (repo.estimateMarkerCandidates),
+  //     so the trigger is precise: extracted < 80% of an estimate of ≥40.
+  //   • PDF / image — we can't count candidates on a binary, so the trigger is a
+  //     conservative absolute FLOOR: a comprehensive panel (bloodwork) that came back
+  //     with very few markers is suspiciously thin; a genuinely small panel (or a DEXA /
+  //     other doc, which legitimately carries few rows) is left alone so we don't waste
+  //     a re-run. An unpacked archive (isDir) is never retried — too many source files
+  //     to attribute a single count to.
+  if (healthSource && !healthSource.isDir) {
     const got = countIngestMarkers(parsed);
+    const isText = /^text\/plain/i.test(healthSource.mime);
+    let shouldRetry = false;
     let expected = 0;
-    try { expected = repo.estimateMarkerCandidates(fs.readFileSync(healthSource.fp, "utf8")); }
-    catch { /* unreadable → no retry */ }
-    if (expected >= 40 && got < expected * 0.8) {
-      console.warn(`[enrich] health#${job.id}: extracted ${got} markers but the source lists ~${expected} — retrying Claude-first for completeness.`);
+    if (isText) {
+      try { expected = repo.estimateMarkerCandidates(fs.readFileSync(healthSource.fp, "utf8")); }
+      catch { /* unreadable → no estimate, no text-path retry */ }
+      shouldRetry = expected >= 40 && got < expected * 0.8;
+    } else if (looksThinForBinaryHealthDoc(healthSource.kind, got)) {
+      // No countable source → conservative absolute floor for a comprehensive panel.
+      shouldRetry = true;
+    }
+    if (shouldRetry) {
+      const why = isText ? `the source lists ~${expected}` : `a comprehensive panel should carry far more`;
+      console.warn(`[enrich] health#${job.id}: extracted ${got} markers but ${why} — retrying Claude-first for completeness.`);
       try {
         const fb2 = await runAgentWithFallback(
           repo.pickHealthAgentOrder(),
@@ -295,6 +380,16 @@ async function processJob(job: Job): Promise<void> {
   // fields and no memory — the regex parse stands. Surface it rather than letting
   // a silent no-op masquerade as a successful enrichment.
   if (!appliedFields && !addedMemory) {
+    // For a HEALTH doc this is not a benign no-op: the doc has no regex fallback
+    // (the markers are the whole point), so a wrong-shape response that wrote
+    // nothing must NOT read as 'done' — that would make a doc with dropped markers
+    // look ingested. Mark it 'failed' so the surface shows it didn't take and a
+    // re-trigger can retry. activity/food keep their regex parse, so 'done' is fine.
+    if (job.kind === "health") {
+      console.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — marking failed (nothing ingested).`);
+      markStatus(job, "failed");
+      return;
+    }
     console.warn(`[enrich] ${job.kind}#${job.id}: agent returned parseable JSON but nothing usable (wrong shape?) — kept regex parse.`);
   }
 
@@ -311,6 +406,7 @@ async function processJob(job: Job): Promise<void> {
     // below. Fail-open: the deterministic normalizer + KB already ran at read time.
     try { await reconcileMarkers("auto"); } catch (e: any) { console.warn(`[enrich] marker reconcile failed: ${e?.message}`); }
     try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+    // deriveDirectives() busts today's cached Brief itself (a lab reshapes the read).
     enqueueReviewRefresh();
   }
 }
@@ -371,10 +467,39 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
   }
   if (!ga?.session_id) return; // not a strength activity, or no session to attach to
 
+  // Which exercises already have logged sets this session — never duplicate them.
+  // This code-level guard is the real protection; the prompt instruction is a hint.
+  // The deterministic and agentic passes SHARE this set, so they can't double-log.
+  const session = repo.getSessionDetail(ga.session_id) as any;
+  const already = new Set<string>(
+    (Array.isArray(session?.sets) ? session.sets : []).map((s: any) => String(s.exercise || "").toLowerCase())
+  );
+
+  // DETERMINISTIC FLOOR: log Garmin's detected sets with the kg→lb conversion done
+  // in CODE. This runs FIRST and ALWAYS — even when enrichment is off or no agent is
+  // reachable — because the sets (and their weights) are facts, not a coaching opinion.
+  // Delegating the conversion to the LLM risks a silent ~2.2× corruption of every load.
+  const hadDetectedSets = Array.isArray(ga?.exercise_sets) && ga.exercise_sets.length > 0;
+  let logged = logGarminDetectedSets(ga, already);
+
   const settings = repo.getSettings();
-  if (!settings.enrich_enabled) return; // physiology already merged; skip the narrative layer
+  if (!settings.enrich_enabled) {
+    // Sets are logged; the physiology already merged during sync. Mark the session's
+    // blob extrapolated if we added any, but skip the (agentic) narrative layer.
+    if (logged) {
+      repo.updateSessionGarminNarrative(ga.session_id, { extrapolated: true });
+      console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no narrative — enrichment off).`);
+    }
+    return;
+  }
   const order = repo.pickAgentOrder();
-  if (!order.length) return;
+  if (!order.length) {
+    if (logged) {
+      repo.updateSessionGarminNarrative(ga.session_id, { extrapolated: true });
+      console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) deterministically (no agent for narrative).`);
+    }
+    return;
+  }
 
   let parsed: any = null;
   let agent: string | null = null;
@@ -385,22 +510,24 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
   } catch {
     parsed = null;
   }
-  if (!parsed || typeof parsed !== "object") return; // deterministic merge stands
+  if (!parsed || typeof parsed !== "object") {
+    // Deterministic sets + physiology stand; just no one-line narrative this run.
+    if (logged) repo.updateSessionGarminNarrative(ga.session_id, { extrapolated: true });
+    return;
+  }
 
-  // Which exercises already have logged sets this session — never duplicate them.
-  // This code-level guard is the real protection; the prompt instruction is a hint.
-  const session = repo.getSessionDetail(ga.session_id) as any;
-  const already = new Set(
-    (Array.isArray(session?.sets) ? session.sets : []).map((s: any) => String(s.exercise || "").toLowerCase())
-  );
-
-  let logged = 0;
-  if (Array.isArray(parsed.sets)) {
+  // The agent's set list is the FALLBACK path only: when Garmin gave us no detected
+  // exercise_sets, the deterministic floor logged nothing, so the agent's reconstruction
+  // is all we have. When the floor DID log from exercise_sets, we do NOT re-log the
+  // agent's sets — its names may differ from the floor's ("Bench Press" vs "Barbell
+  // Bench Press") and slip past the `already` guard, double-logging the same physical
+  // work. In that case the agent only contributes the one-line narrative below.
+  if (!hadDetectedSets && Array.isArray(parsed.sets)) {
     for (const raw of parsed.sets) {
       const name = asStr(raw?.exercise);
       if (!name || already.has(name.toLowerCase())) continue;
       const mode = raw?.mode === "timed" ? "timed" : "reps";
-      const weight = asNum(raw?.weight);
+      const weight = asNum(raw?.weight); // agent value is already lb per the prompt
       const reps = asNum(raw?.reps);
       const duration = asNum(raw?.duration_sec);
       // Must carry something loggable for its mode.
@@ -428,7 +555,7 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
     extrapolated: !!parsed.extrapolated || logged > 0,
     agent,
   });
-  if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} extrapolated set(s) into session ${ga.session_id}.`);
+  if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
 }
 
 function jobRawText(job: Job): string {
@@ -470,6 +597,23 @@ function countIngestMarkers(parsed: any): number {
     (n, p) => n + (Array.isArray(p?.markers) ? p.markers.length : 0),
     0,
   );
+}
+
+// A binary (PDF/image) health doc has no countable source text, so the completeness
+// guard can't compute an expected marker count for it. This is the CONSERVATIVE
+// absolute-floor fallback: only a comprehensive BLOODWORK panel — which realistically
+// reports dozens of analytes (a CBC differential + a metabolic panel alone clears 25)
+// — is suspicious when it comes back with a handful of markers. A DEXA, an "other"
+// doc, or a genuinely small panel legitimately carries few rows, so we never re-run
+// those. The floor (12) sits well under any real comprehensive panel, so a small but
+// honest blood draw (e.g. a lipid + A1c follow-up) isn't needlessly re-run either.
+const COMPREHENSIVE_PANEL_FLOOR = 12;
+function looksThinForBinaryHealthDoc(kind: string | null | undefined, got: number): boolean {
+  // got can be 0 (a curated-to-nothing or transcription-missed bloodwork) — the
+  // strongest signal of a miss, and a retry that recovers markers also rescues the
+  // doc from the wrong-shape 'failed' path below. Either way we keep whichever
+  // attempt captured MORE, so the retry can never make the result worse.
+  return (kind || "").toLowerCase() === "bloodwork" && got < COMPREHENSIVE_PANEL_FLOOR;
 }
 
 function applyHealthIngest(id: number, parsed: any): boolean {
