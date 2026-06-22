@@ -46,6 +46,37 @@ Cairn stores personal data, so an exposed instance is a real privacy risk:
 
 Treat both volumes as sensitive. Back them up privately and never commit them.
 
+## Reaching it from your phone — privately vs publicly
+
+There are two very different ways to put Cairn on your phone, and they have very
+different security properties:
+
+- **Tailscale Serve (recommended) — private.** HTTPS on your tailnet's MagicDNS
+  name. Nothing touches the public internet; only your own signed-in devices can
+  reach it. Your phone needs Tailscale installed and signed in. This is the
+  supported, low-risk path (see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)).
+- **Tailscale Funnel / any public reverse proxy — public.** Reachable from any
+  browser with no client install, which is convenient — but it places a personal
+  **health** app on the public internet. **Do not do this without a token.** If
+  you choose this path, `CAIRN_AUTH_TOKEN` is **mandatory**, not optional, and you
+  should set `CAIRN_REQUIRE_AUTH=1` (below) so the instance cannot boot without one.
+
+## Before you expose Cairn beyond localhost — checklist
+
+If anything other than your own machine can reach the port (a LAN, a tailnet, a
+public proxy, a "public" cloud-sandbox port), do all of these:
+
+1. **Set a strong token.** `CAIRN_AUTH_TOKEN=$(openssl rand -hex 32)`.
+2. **Fail closed.** Set `CAIRN_REQUIRE_AUTH=1` so Cairn refuses to start without a
+   token — it can't silently come up unauthenticated after a config slip.
+3. **Keep the rate limit on** (it activates automatically when a token is set;
+   leave `CAIRN_RATE_LIMIT` at its default to blunt token-guessing).
+4. **Serve HTTPS** (Tailscale Serve or a private reverse proxy) — never plain HTTP
+   over an untrusted network.
+5. **Prefer private reach** (tailnet / VPN / SSH tunnel) over a public URL whenever
+   you can. Bind the published port to loopback (`127.0.0.1:8787:8787`) and let the
+   tunnel terminate TLS.
+
 ## Supported versions
 
 Only the **latest released image** is supported. Fixes land on the newest

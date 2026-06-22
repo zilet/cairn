@@ -71,8 +71,21 @@ print_success_banner() {
   printf "  ${CYAN}The Brief, logging, and the plan work with no agent at all.\n"
   printf "  Chat, coaching drafts, and meal plans need one agent.${RESET}\n"
   printf "\n"
+  print_phone_access_instructions
   printf "  Full walkthrough: docs/QUICKSTART.md\n"
   printf "\n"
+}
+
+print_phone_access_instructions() {
+  printf "\n"
+  printf "${BOLD}Use it on your phone (private, via Tailscale Serve)${RESET}\n"
+  printf "  One step sets up a private HTTPS URL and prints your exact phone link:\n"
+  printf "       ${CYAN}PORT=${PORT} ./scripts/setup-phone.sh${RESET}\n"
+  printf "  It uses Tailscale Serve — tailnet-only, nothing on the public internet —\n"
+  printf "  then it's Share → Add to Home Screen on your phone.\n"
+  printf "  Manual steps + exposure caveats: docs/DEPLOYMENT.md, SECURITY.md.\n"
+  printf "\n"
+  printf "  ${CYAN}The Brief, logging, and plan work immediately — no phone setup or agent required.${RESET}\n"
 }
 
 setup_env() {

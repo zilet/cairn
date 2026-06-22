@@ -4038,3 +4038,30 @@ button.hmk-row:active{background:var(--card-2)}
   font-size:.94rem;color:var(--ink);line-height:1.35;
 }
 .padj-why{margin-top:4px;font-size:.85rem;line-height:1.45;color:var(--ink-2)}
+
+/* ── Phone & PWA access: Settings card + the "add to home screen" coach on Today.
+   Calm, copy-first; pull-not-push. Tokens only — no new palette. ───────────────── */
+.phone-access{margin:8px 0 16px}
+.phone-access .cmd-line{
+  margin:10px 0 0;font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-size:.86rem;line-height:1.4;color:var(--ink-2);
+  background:var(--card-2);padding:7px 9px;border-radius:8px;
+  overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;
+}
+.phone-access .phone-access-then{margin-top:6px}
+.phone-access .phone-access-token{margin-top:10px}
+.phone-access .phone-token{
+  margin-left:8px;font-family:var(--font-mono,ui-monospace,monospace);
+  font-size:.82rem;color:var(--ink-2);word-break:break-all;
+}
+.phone-access .phone-token-set{color:var(--sage)}
+.phone-access .phone-cmd-inline{
+  font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-size:.85em;background:var(--card-2);padding:1px 5px;border-radius:5px;
+  white-space:nowrap;
+}
+.phone-access .small-note{margin-top:8px;color:var(--muted);font-size:.8rem;line-height:1.45}
+
+.phone-coach{margin:14px 0 4px}
+.phone-coach .phone-coach-sub{margin-top:4px;color:var(--muted)}
+.phone-coach .phone-coach-dismiss{margin-top:8px;padding:4px 12px;font-size:.85em}

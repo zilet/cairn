@@ -6,6 +6,16 @@
   <sub>The Brief → the whole-picture analysis → the connected brain → progress → recipes → coach chat &middot; made with fictional demo data</sub>
 </p>
 
+<p align="center">
+  <a href="https://codespaces.new/zilet/cairn"><img src="https://github.com/codespaces/badge.svg" height="30" alt="Open in GitHub Codespaces"></a>
+</p>
+
+> **Just want to see it — no install, no terminal?** Click the button above. One click runs a
+> real Cairn (preloaded with fictional demo data) in your browser — nothing to set up, nothing on
+> your machine. Explore the Brief, the plan, and the connected brain, then close the tab. When
+> you're ready to use it for real on your phone, **self-host it** (below) — it's yours, your data
+> stays with you. More one-click cloud options (Gitpod, Daytona) are in [`docs/SANDBOX.md`](docs/SANDBOX.md).
+
 A self-hosted, connected, **day-reading wellness OS** for **training, nutrition & longevity** with
 an agentic coaching loop and a memory that grows over time. It opens to a calm **Brief** that reads
 your whole picture and *suggests* what kind of day today should be (a suggestion, never a gate),
@@ -179,8 +189,10 @@ real one.
 | Run it on a cheap VM | Docker + Tailscale; see [`docs/QUICKSTART.md#small-vm-private-online-box`](docs/QUICKSTART.md#small-vm-private-online-box) |
 | Try it on demand in the cloud | [`docs/SANDBOX.md`](docs/SANDBOX.md) for Daytona / Codespaces / Gitpod |
 
-For Raspberry Pi: `./scripts/quickstart-rpi.sh` handles Docker install, arm64 checks, low-memory
-notes, and prints the Tailscale Serve command for an installable phone PWA.
+For Raspberry Pi: `./scripts/quickstart-rpi.sh` handles Docker install, arm64 checks, and low-memory
+notes. To put Cairn on your phone, run **`./scripts/setup-phone.sh`** — it detects your exact
+private `https://…ts.net` URL via Tailscale Serve (tailnet-only) and prints the Add-to-Home-Screen
+steps for an installable, offline-capable PWA.
 
 For a throwaway **cloud sandbox** (Daytona / GitHub Codespaces / Gitpod) with persistent storage —
 spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](docs/SANDBOX.md). A

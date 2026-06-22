@@ -1463,6 +1463,17 @@ async function renderToday(opts = {}) {
   view.innerHTML = focus
     ? `<div class="today-wrap today-focus">${html}</div>`
     : `<div class="today-wrap"><div class="today-main">${html}</div>${railHtml}</div>`;
+
+  // Calm, dismissible "add to home screen" coach — appended to the primary column AFTER
+  // the wholesale innerHTML write above (mounting before it would be silently wiped).
+  // Pull, not push: it waits below the Brief, hidden in standalone mode and after dismissal.
+  if (!focus) {
+    try {
+      const main = view.querySelector(".today-main");
+      if (main && typeof renderPhoneCoachBanner === "function") renderPhoneCoachBanner(main);
+    } catch {}
+  }
+
   updateHeaderCondense(); // re-render may reset scroll → recompute the pinned-header state
   // On a warm SWR re-render (a background revalidate found new data) snap the
   // numerals to their final value — never re-count an already-shown number from 0.

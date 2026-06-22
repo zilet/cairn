@@ -11,7 +11,7 @@ import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
-import { authGuard, authEnabled, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
+import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
 import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents.js";
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
 import * as repo from "./repo.js";
@@ -104,6 +104,14 @@ app.use(
     },
   }),
 );
+
+// Fail closed before binding: if the operator demanded auth (CAIRN_REQUIRE_AUTH)
+// but no token is set, refuse to start rather than serve an open instance.
+const startupAuthError = authStartupError({ requireAuth, authEnabled });
+if (startupAuthError) {
+  console.error(`\n  SECURITY: ${startupAuthError}\n`);
+  process.exit(1);
+}
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Cairn running:`);

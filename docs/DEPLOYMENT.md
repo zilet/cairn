@@ -13,11 +13,17 @@ running in ~30 seconds. For Raspberry Pi, use `./scripts/quickstart-rpi.sh` inst
 
 | Layer | Recommendation |
 |---|---|
-| **Network** | Tailscale tailnet, home LAN, or localhost — not a public IP |
-| **Port** | `8787` published only to trusted interfaces |
-| **Auth** | `CAIRN_AUTH_TOKEN` when any device beyond loopback can reach the port |
+| **Network** | Tailscale **Serve** (tailnet-only), home LAN, or localhost — not a public IP, not Funnel |
+| **Port** | `8787` published only to trusted interfaces (`127.0.0.1:8787:8787`) |
+| **Auth** | `CAIRN_AUTH_TOKEN` when any device beyond loopback can reach the port — **mandatory** for any public path (Funnel / public proxy) |
+| **Fail closed** | `CAIRN_REQUIRE_AUTH=1` on any exposed deployment — refuses to boot without a token |
 | **HTTPS** | Tailscale Serve or a private reverse proxy — required for installable/offline PWA |
 | **Backups** | `cairn-data` + `cairn-home` volumes regularly |
+
+> **Serve, not Funnel.** Tailscale **Serve** keeps Cairn tailnet-only (private to
+> your signed-in devices). Tailscale **Funnel** publishes it to the open internet —
+> only use that with `CAIRN_AUTH_TOKEN` set and `CAIRN_REQUIRE_AUTH=1`, and prefer
+> not to. See [`SECURITY.md`](../SECURITY.md).
 
 ---
 
@@ -57,7 +63,17 @@ for basic HTTP use.
 
 Browsers only register the service worker on secure origins. **Tailscale Serve** terminates
 HTTPS on the node's MagicDNS name — **tailnet-only** (not Funnel; nothing hits the public
-internet):
+internet).
+
+**One step (recommended).** From the cloned repo on the host:
+
+```bash
+./scripts/setup-phone.sh          # detects your exact phone URL, enables Serve (with consent),
+                                  # and prints the Add-to-Home-Screen steps. Use --print to only show.
+```
+
+It degrades gracefully — if Tailscale isn't installed or signed in, it tells you exactly what to
+do by hand. **By hand** (e.g. on a `docker run` host with no repo checkout):
 
 ```bash
 # On the host (once; admin may need to enable Serve in the tailnet console first)

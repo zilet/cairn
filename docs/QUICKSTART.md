@@ -3,6 +3,12 @@
 Cairn ships as one published Docker image. **Start at the top — it's a single command.** Read on
 only if you want to configure it, build from source, or run it somewhere other than this machine.
 
+> **No install at all?** Open Cairn in a free cloud sandbox right from your browser —
+> [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/zilet/cairn)
+> — it boots a real Cairn with demo data, nothing on your machine. Great for a first look; see
+> [`docs/SANDBOX.md`](SANDBOX.md) for Gitpod / Daytona and how to keep data. Self-host (below) when
+> you want it on your phone for daily use.
+
 ## 1 · Run it — 30 seconds, no clone
 
 Pull the published multi-arch image (amd64 + arm64) and run it. No source, no compose file, no Node
@@ -136,25 +142,35 @@ Open **http://localhost:8787** (the DB lands at `./data/cairn.db`). For a produc
 
 ## Where to run it
 
-The fastest try is right here on your computer (step 1). For an always-on setup you reach from your
-phone, run the **same image** on a private host:
+Most people start by running Cairn on their **own computer** (laptop or desktop).  
+Later they often move the same container to a small always-on machine:
 
-| Goal | Best path | Why |
-|---|---|---|
-| Try Cairn right now on this computer | [Run it](#1--run-it--30-seconds-no-clone) | Lowest friction — one `docker run` |
-| Run it every day from your phone | [Raspberry Pi](#raspberry-pi-always-on-home-box) | Cheap, quiet, always-on, private on your tailnet |
-| Keep it online away from home | [Small VM](#small-vm-private-online-box) | Works from anywhere when joined to Tailscale/WireGuard |
-| Evaluate without a server | [`SANDBOX.md`](SANDBOX.md) | Daytona / Codespaces / Gitpod, stop when idle |
+- Raspberry Pi or mini-PC at home
+- Cheap cloud VM (kept private)
+- NAS, old desktop, etc.
 
-The recommended daily-driver shape is **Docker on a private host** plus **Tailscale/MagicDNS**. Do
-not publish raw port `8787` to the public internet — see [Security reminder](#security-reminder).
+| Goal | Start here |
+|------|------------|
+| Try it right now on this computer | [Run it](#1--run-it--30-seconds-no-clone) (one `docker run`) |
+| Daily use from your phone | Same image + Tailscale (works on laptop first, then Pi/VM) |
+| Always-on private box | Raspberry Pi section below or Small VM |
+| Quick evaluation (no long-term host) | [`SANDBOX.md`](SANDBOX.md) |
+
+**Tailscale is the winner** for reaching your phone cleanly with a proper installable PWA (HTTPS, works from anywhere on your tailnet, no port forwarding).
+
+See the phone instructions that are printed after `quickstart.sh` or the release compose starts. The same steps apply whether you are running on your laptop today or a Pi/VM later.
 
 ---
 
-## Raspberry Pi (always-on home box)
+## Moving to an always-on host (Pi, mini-PC, or small VM)
 
-Use the dedicated setup script (arm64 note, Docker install with consent prompt,
-low-memory/swap guidance, persistent data volume reminder):
+The fastest start is on whatever computer you're using right now. When you want Cairn
+running 24/7 so your phone can reach it easily, move the exact same image to a small
+always-on box.
+
+### Raspberry Pi / similar
+
+Use the helper script:
 
 ```bash
 git clone https://github.com/zilet/cairn.git
@@ -162,39 +178,27 @@ cd cairn
 ./scripts/quickstart-rpi.sh
 ```
 
-The script starts Cairn on the Pi and prints two URLs:
+It handles Docker install (with your consent), arm64 notes, and swap guidance.
 
-- `http://localhost:8787` on the Pi itself
-- `http://<pi-ip>:8787` from another device on the same LAN
+The phone path is the same as on a laptop: install Tailscale on the host and your phone,
+run the `tailscale serve` line that the script prints, and add the HTTPS MagicDNS URL
+to your home screen.
 
-> **arm64 / Pi note.** The first build takes a while on a Pi, and the beta `agy` (Antigravity) and
-> `grok` installers can fail on arm64 — that is fine, `claude` and `codex` still work. To skip the
-> beta CLIs and speed up the build, set `INSTALL_ANTIGRAVITY: "0"` and `INSTALL_GROK: "0"` in
-> `docker-compose.yml` before building (you can re-enable them later).
+See the printed instructions after startup (or the "Phone & PWA access" card in Settings)
+for the exact current command. The same Tailscale recipe works for a Pi, a mini-PC,
+or a cheap cloud VM.
 
-For a phone-friendly private URL, install Tailscale on the Pi and your phone/laptop, then run:
-
-```bash
-sudo tailscale serve --bg --https=443 http://127.0.0.1:8787
-```
-
-Open `https://<pi-name>.<tailnet>.ts.net/` from a signed-in device. On iOS, Share -> Add to Home
-Screen gives you the installable/offline PWA.
-
-Recommended `.env` edits on the Pi:
+Recommended first `.env` edits for any always-on host:
 
 ```env
 TZ=Europe/London
-CAIRN_AUTH_TOKEN=use-a-long-random-string-if-anyone-else-can-reach-this-host
+CAIRN_AUTH_TOKEN=long-random-string-if-other-devices-can-reach-it
 ```
 
-After changing `.env`, restart:
+Then `docker compose up -d`.
 
-```bash
-docker compose up -d
-```
-
-Backups and restore are covered in [`DEPLOYMENT.md`](DEPLOYMENT.md#backups).
+Backups, updates, and restore live in [`DEPLOYMENT.md`](DEPLOYMENT.md) and
+[`OPERATIONS.md`](OPERATIONS.md).
 
 ---
 
@@ -263,16 +267,25 @@ Then open `http://localhost:8787` on your laptop.
 
 ## Open the Brief
 
-Once Cairn is running:
+Once Cairn is running (on your laptop, a Pi, or a VM):
 
-1. Open **http://localhost:8787** — you land on the **Today** tab and the Brief reads your day
-   immediately. It's deterministic on first boot (no wearable data yet), but it's real: a calm
-   rest/easy/train suggestion based on your plan and profile.
-2. Tap an override chip ("rough night", "give me an easy day") to reshape it.
-3. Log a set: pick any exercise from your plan, enter weight + reps, tap Log.
-4. **Me → Profile** — replace the seeded example profile with your own weight and goal.
+1. Open **http://localhost:8787** (or the host's address) — you land on the **Today** tab and
+   the Brief reads your day immediately. It is a real, calm suggestion (rest / easy / train)
+   based on what it knows so far.
+2. To put it on your phone, run **`./scripts/setup-phone.sh`** — it detects your exact private
+   `https://…ts.net` URL via Tailscale Serve, enables it (with your consent), and prints the
+   Add-to-Home-Screen steps. Settings → "Phone & PWA access" also shows the command and can
+   generate a token.
+3. Tap an override chip ("rough night", "give me an easy day") if you want to steer the Brief.
+4. Log something (a set or bodyweight) so the charts start filling in with your data.
+5. **Me → Profile** — replace the demo profile with your real weight, goal, etc.
 
-The plan, logging, bodyweight chart, and history work fully with no agent.
+**Phone / home screen app:** Tailscale **Serve** + "Add to Home Screen" is the supported path —
+tailnet-only, a real offline-capable PWA, nothing on the public internet. The Brief and logging
+work the moment Cairn is running; phone setup and agents are completely optional at first.
+
+The plan editor, history, PRs, and connected brain (markers, recovery, directives) all work with
+no agent. Chat and draft proposals need one.
 
 ### First 10 minutes
 

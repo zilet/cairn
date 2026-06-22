@@ -693,6 +693,39 @@ function planSeg() {
 const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), meals: () => renderMeals(), coach: () => renderCoach() };
 
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+// PWA / phone coach helpers (loaded early; used by Today + Settings)
+function isStandalonePWA() {
+  try {
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+    if (navigator.standalone) return true;
+  } catch {}
+  return false;
+}
+function renderPhoneCoachBanner(container) {
+  if (!container || isStandalonePWA()) return;
+  if (localStorage.getItem("cairn_phone_coach_dismissed") === "1") return;
+  if (container.querySelector(".phone-coach")) return; // idempotent across warm re-renders
+  const el = document.createElement("div");
+  el.className = "sess phone-coach";
+  // Honest about what a home-screen install actually does: it's a real app shell that
+  // opens instantly — but Cairn's data lives on the server, so logging and a fresh Brief
+  // still need it reachable (the constitution forbids a fake offline brain).
+  el.innerHTML = `
+    <div class="sess-line"><b>Add Cairn to your home screen</b> — it opens like a real app, instantly.</div>
+    <div class="sess-line phone-coach-sub">
+      From your phone on the same private network: open the URL → Share / menu → <b>Add to Home Screen</b>.
+      HTTPS (Tailscale Serve) works best on iOS. Logging and a fresh Brief still need your Cairn server reachable.
+    </div>
+    <button class="ghostbtn phone-coach-dismiss" type="button">Got it</button>
+  `;
+  const btn = el.querySelector("button");
+  btn.addEventListener("click", () => {
+    try { localStorage.setItem("cairn_phone_coach_dismissed", "1"); } catch {}
+    el.remove();
+  });
+  container.append(el);
+}
 function escAttr(s) { return escHtml(s).replace(/"/g, "&quot;"); }
 
 // ---------- markdown (chat bubbles) ----------

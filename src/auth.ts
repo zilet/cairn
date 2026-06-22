@@ -20,6 +20,33 @@ const TOKEN = (process.env.CAIRN_AUTH_TOKEN || "").trim();
 
 export const authEnabled = TOKEN.length > 0;
 
+// Fail-closed enforcement for any deployment reachable beyond loopback (a public
+// reverse proxy, Tailscale Funnel, a port-forward, a "public" cloud-sandbox port).
+// CAIRN_REQUIRE_AUTH=1 turns the "set a token when exposed" CONVENTION into a hard
+// boot check: the server refuses to start without a token instead of silently
+// serving an open instance. Default off ⇒ the trusted-network/localhost behaviour
+// is unchanged. Bake CAIRN_REQUIRE_AUTH=1 into any compose/template that exposes
+// the port so it can never boot insecurely.
+export const requireAuth = /^(1|true|yes|on)$/i.test(
+  (process.env.CAIRN_REQUIRE_AUTH || "").trim()
+);
+
+// Pure + unit-testable: the message to abort boot with, or null if boot may
+// proceed. server.ts calls this before listen() and exits non-zero on a message.
+export function authStartupError(opts: {
+  requireAuth: boolean;
+  authEnabled: boolean;
+}): string | null {
+  if (opts.requireAuth && !opts.authEnabled) {
+    return (
+      "CAIRN_REQUIRE_AUTH is set but CAIRN_AUTH_TOKEN is empty — refusing to start " +
+      "an unauthenticated instance. Set a long random CAIRN_AUTH_TOKEN, or unset " +
+      "CAIRN_REQUIRE_AUTH for trusted-network / localhost use."
+    );
+  }
+  return null;
+}
+
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
