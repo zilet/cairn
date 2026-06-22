@@ -86,7 +86,24 @@ app.get("/mcp", methodNotAllowed);
 app.delete("/mcp", methodNotAllowed);
 
 // PWA (static)
-app.use(express.static(path.join(__dirname, "..", "public")));
+app.use(
+  express.static(path.join(__dirname, "..", "public"), {
+    setHeaders(res, filePath) {
+      const base = path.basename(filePath);
+      if (base === "manifest.json") {
+        // Always revalidate: an install-capable browser (Chrome/Android/desktop)
+        // re-reads the manifest to refresh the home-screen icon, so a bumped icon
+        // set must never be served stale from an HTTP cache.
+        res.setHeader("Cache-Control", "no-cache");
+      } else if (filePath.includes(`${path.sep}icons${path.sep}`) && /\.v\d+\./.test(base)) {
+        // Versioned icon urls (…v2.*) are immutable — the filename changes when the
+        // bytes do — so they can be cached hard. A future icon change ships under a
+        // new url and is fetched fresh regardless.
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  }),
+);
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Cairn running:`);

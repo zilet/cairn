@@ -19,15 +19,17 @@
 
 <!-- Windows tile -->
 <meta name="msapplication-TileColor" content="#f4efe7">
-<meta name="msapplication-TileImage" content="/icons/icon-192.png">
+<meta name="msapplication-TileImage" content="/icons/icon-192.v2.png">
 
-<!-- Icons -->
+<!-- Icons. Filenames carry a version suffix (…v2) so a byte change ships under a
+     NEW url — defeating the browser/OS install-layer icon cache (esp. iOS WebKit's
+     apple-touch-icon cache, which keys on url). Bump the suffix when icons change. -->
 <link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
-<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
-<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<link rel="mask-icon" href="/icons/mask-icon.svg" color="#b4552d">
+<link rel="icon" type="image/svg+xml" href="/icons/icon.v2.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.v2.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.v2.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.v2.png">
+<link rel="mask-icon" href="/icons/mask-icon.v2.svg" color="#b4552d">
 <link rel="manifest" href="/manifest.json">
 
 <!-- Social preview -->
@@ -35,7 +37,7 @@
 <meta property="og:site_name" content="Cairn">
 <meta property="og:title" content="Cairn — your whole-picture health OS">
 <meta property="og:description" content="Self-hosted, connected health OS — reads your whole picture (training, food, labs, sleep, life) and suggests the one thing worth doing today.">
-<meta property="og:image" content="/icons/og.png">
+<meta property="og:image" content="/icons/og.v2.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -43,7 +45,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Cairn — your whole-picture health OS">
 <meta name="twitter:description" content="Self-hosted, connected health OS — reads your whole picture (training, food, labs, sleep, life) and suggests the one thing worth doing today.">
-<meta name="twitter:image" content="/icons/og.png">
+<meta name="twitter:image" content="/icons/og.v2.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -60,7 +62,7 @@
 
   <nav class="tabbar">
     <a class="brand" href="/" aria-label="Cairn — home">
-      <img class="brand-mark" src="/icons/icon.svg" alt="" width="36" height="36">
+      <img class="brand-mark" src="/icons/icon.v2.svg" alt="" width="36" height="36">
       <span class="brand-text"><b>Cairn</b><small>Whole-picture health</small></span>
     </a>
 

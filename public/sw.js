@@ -1,4 +1,4 @@
-const CACHE = "cairn-v116";
+const CACHE = "cairn-v117";
 // Generated artwork lives in its own cache: the images are content-keyed and
 // immutable on the server, so they stay valid across app deploys. Keeping them
 // out of the versioned CACHE (and off the activate-cleanup list) means a deploy
@@ -16,7 +16,13 @@ const OPTIONAL_ASSETS = [
   // Settings → Agents "Connect" modal; precached so it also works offline-installed).
   "/vendor/xterm.js", "/vendor/xterm.css", "/vendor/xterm-addon-fit.js",
   "/favicon.ico",
-  "/icons/icon.svg", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png",
+  // Versioned icon set (…v2): bump the suffix in manifest.json + index.html + here
+  // together whenever an icon's bytes change, so the new url busts every cache layer.
+  "/icons/icon.v2.svg", "/icons/apple-touch-icon.v2.png", "/icons/mask-icon.v2.svg",
+  "/icons/favicon-16.v2.png", "/icons/favicon-32.v2.png",
+  "/icons/icon-192.v2.png", "/icons/icon-512.v2.png",
+  "/icons/icon-192-maskable.v2.png", "/icons/icon-512-maskable.v2.png",
+  "/icons/og.v2.png",
 ];
 
 self.addEventListener("install", (e) => {
