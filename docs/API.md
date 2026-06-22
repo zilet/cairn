@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**179 routes** across 63 groups.
+**181 routes** across 63 groups.
 
 ## `/activities`
 
@@ -167,8 +167,10 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/exercises` | Upsert by name: creates the exercise (with mode/muscle_group) or updates the provided fields on an existing one. Returns the exercise row. |
 | PUT | `/api/exercises/:id` |  |
 | DELETE | `/api/exercises/:name` | Delete an exercise by name. Returns 200 with ok:false (not an HTTP error) when it's still referenced by a plan or logged sets — a designed, recoverable state the PWA surfaces as a gentle reason, mirroring the swap/skip failure signal. |
+| GET | `/api/exercises/aliases` | Exercise-name reconciliation (movement de-duplication) — the canon counterpart to /markers/reconcile. GET lists the learned variant→canonical aliases; POST runs the agentic reconciler over the distinct exercise names, tidying descriptive/duplicate titles ("DB bench"/"Dumbbell bench press") into clean reusable canonical names and profiling muscle groups. The deterministic exercise-canon normalizer is always on; this learns the long tail. Synchronous like the marker reconcile — ok:false at 200 is the designed failure signal. Never changes logged numbers — only the series merge. |
 | POST | `/api/exercises/merge` | Merge two exercises: repoint all logged_sets and plan_items from `from` into `into`, then remove the now-empty `from` exercise. ok:false when `into` does not exist (guard; nothing is changed). |
 | POST | `/api/exercises/reconcile-groups` | Backfill / normalize muscle_group for every exercise (null → classified; legacy values like 'legs' → canonical). Idempotent. |
+| POST | `/api/exercises/reconcile-names` |  |
 
 ## `/export`
 
@@ -231,7 +233,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/health/markers` |  |
 | GET | `/api/health/review` | Latest review or null — a soft lookup like /sessions?date= (200 + null on absence, never 404): "no review yet" is a normal state the PWA renders. |
 | POST | `/api/health/review` | Run a fresh whole-picture health review via the shared agent rotation. Like the meal swap, ok:false at status 200 is the designed failure signal when the agent returns garbage (addHealthReview rejects the shape). |
-| GET | `/api/health/synthesis` |  |
+| GET | `/api/health/synthesis` | The cached synthesis carries a `stale` flag so the PWA can offer a calm "refresh this read" affordance when newer labs/training have drifted past it. |
 | POST | `/api/health/synthesis` |  |
 
 ## `/health-docs`
