@@ -632,7 +632,12 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   transition:transform .3s cubic-bezier(.22,1,.36,1);overflow:hidden;pointer-events:none;
 }
 .rest.show{transform:translateY(0);pointer-events:auto}
-.rest-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(180,85,45,.13);transition:width 1s linear}
+/* Countdown progress as a slim line along the bottom edge — a full-height tint
+   left a hard vertical seam at the fill's edge that read as the bar background
+   only covering part of the width. The bar bg now stays one uniform full-width
+   tone; this line drains left-anchored as the rest winds down. */
+.rest-fill{position:absolute;left:0;bottom:0;height:3px;background:rgba(180,85,45,.5);
+  border-top-right-radius:2px;border-bottom-right-radius:2px;transition:width 1s linear}
 .rest-row{position:relative;display:flex;align-items:center;gap:10px;justify-content:center;
   padding:10px 14px;max-width:680px;margin:0 auto}
 .rest-time{
