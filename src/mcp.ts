@@ -1219,9 +1219,12 @@ export function buildMcpServer(): McpServer {
 
   server.tool(
     "get_health_synthesis",
-    "The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering. Returns the last generated narrative (or null); regenerate with synthesize_health.",
+    "The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering and a `stale` flag (true when newer labs landed than the synthesis was written against). Returns the last generated narrative (or null); regenerate with synthesize_health.",
     {},
-    async () => asText({ synthesis: repo.getHealthSynthesis(), focus: repo.healthFocus() })
+    async () => {
+      const view = repo.getHealthSynthesisView();
+      return asText({ synthesis: view.synthesis, focus: repo.healthFocus(), stale: view.stale });
+    }
   );
 
   server.tool(

@@ -1051,9 +1051,12 @@ export function latestSleep(): {
   if (!row) return null;
 
   // 30-day HRV baseline (same source family) up to — not including — last night.
+  // For the non-Garmin family, dedup to ONE row per date (same guard getRecoverySummary
+  // uses) so two wearables feeding the same nights don't double-weight the average.
   const since30 = new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10);
+  const baseTable = source === "garmin" ? "garmin_daily_metrics" : `(${DAILY_METRICS_ONE_PER_DATE})`;
   const hb = db.prepare(
-    `SELECT ROUND(AVG(hrv_ms),1) AS h FROM ${source === "garmin" ? "garmin_daily_metrics" : "daily_metrics"}
+    `SELECT ROUND(AVG(hrv_ms),1) AS h FROM ${baseTable}
       WHERE date >= ? AND date < ? AND hrv_ms IS NOT NULL`
   ).get(since30, row.date) as any;
   const baselineHrv = hb?.h ?? null;
