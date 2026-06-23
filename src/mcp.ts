@@ -955,17 +955,21 @@ export function buildMcpServer(): McpServer {
       // Mirror the REST fast path: serve the cached canonical read on a hit
       // (filled nightly by the scheduler), else compute + cache via the shared
       // dayread layer. Overrides always recompute and are never cached.
+      const readDate = date || localToday();
+      // Mirror /today-read's withForward: attach the day-ahead `forward` line on every
+      // read (deterministic, current; null on a done day) so MCP and REST never diverge.
+      const withForward = (r: any) => ({ ...r, forward: r?.kind === "done" ? null : (repo.forwardLook(readDate).text || null) });
       try {
         if (!override) {
-          const cached = repo.getCachedDayRead(date || localToday());
-          if (cached) return asText({ ...cached, cached: true, agent_status: agentStatusFor(cached) });
+          const cached = repo.getCachedDayRead(readDate);
+          if (cached) return asText(withForward({ ...cached, cached: true, agent_status: agentStatusFor(cached) }));
         }
         const r: any = await computeDayRead({ date, override, agent });
-        return asText({ ...r, agent_status: agentStatusFor(r) });
+        return asText(withForward({ ...r, agent_status: agentStatusFor(r) }));
       } catch (e: any) {
         const b = repo.dayRead(date);
-        const headline = b.kind === "rest" ? "Rest today." : b.kind === "easy" ? "Take it easy." : b.focus ? `${b.focus}.` : "Good to train.";
-        return asText({ ...b, headline, source: "deterministic", error: e.message });
+        const headline = b.kind === "done" ? "You're done for today." : b.kind === "rest" ? "Rest today." : b.kind === "easy" ? "Take it easy." : b.focus ? `${b.focus}.` : "Good to train.";
+        return asText(withForward({ ...b, headline, source: "deterministic", error: e.message }));
       }
     }
   );
