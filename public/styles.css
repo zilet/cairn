@@ -2348,6 +2348,20 @@ body.sheet-open{overflow:hidden}
 }
 .brief-why{font-size:.92rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:46ch}
 
+/* the day-ahead heads-up — the Program intelligence woven onto the Brief. Quiet,
+   one tap to the week; a hairline rule sets it apart from the read without a card. */
+.brief-forward{
+  display:inline-flex;align-items:baseline;gap:8px;margin-top:13px;padding:0;
+  background:none;border:none;cursor:pointer;text-align:left;
+  font-family:var(--font-ui);font-size:.84rem;color:var(--muted);line-height:1.4;
+  transition:color var(--dur-1) ease;
+}
+.brief-forward-arrow{color:var(--sage);font-size:.8rem;transform:translateY(1px)}
+.brief-forward-txt{text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px}
+.brief-forward:hover{color:var(--ink-2)}
+.brief-forward:hover .brief-forward-txt{text-decoration-color:var(--sage)}
+.brief-forward:active{transform:var(--press-xs)}
+
 /* the optional "tap to see why" detail — plain language, never a number */
 .brief-why-more{
   background:none;border:none;color:var(--muted);font-family:var(--font-ui);

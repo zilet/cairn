@@ -54,6 +54,7 @@ export async function computeDayRead(
         focus: p.focus == null ? null : String(p.focus).trim() || null,
         est_minutes: Number.isFinite(Number(p.est_minutes)) ? Number(p.est_minutes) : baseline.est_minutes,
         signals: baseline.signals,
+        forward: typeof p.forward === "string" && p.forward.trim() ? p.forward.trim() : null,
         source: "agent",
         agent: chosen,
         tried,
@@ -69,6 +70,14 @@ export async function computeDayRead(
   // it (warm acknowledgement + recovery framing) but must never downgrade it to a
   // bare easy/rest/train read (which is what mislabeled a hard session as "EASY DAY").
   if (baseline.kind === "done") out.kind = "done";
+  // The day-ahead heads-up (the Program-tab intelligence on the Brief): the agent's
+  // warm clause when it produced one, else the deterministic forward look. Suppressed
+  // on a done day — the debrief's `why` already voices what's next.
+  if (out.kind === "done") {
+    out.forward = null;
+  } else if (!out.forward) {
+    try { out.forward = repo.forwardLook(date).text || null; } catch { out.forward = null; }
+  }
   // Record the athlete's steer on the read and ALWAYS persist it (the no-clobber
   // guard in saveDayRead protects a stored steer from a later canonical recompute).
   // Persisting the steer is what makes it survive a reload and reach the coach context.

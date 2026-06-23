@@ -1619,7 +1619,8 @@ const DAY_READ_SCHEMA = `{
   "headline": "<2-4 word plain-language state, e.g. 'Lower body.', 'Long run.', or 'Rest today.'>",
   "why": "<one warm, plain sentence — what you saw and why; NO numbers, NO scores>",
   "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE athlete it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
-  "est_minutes": <rough minutes for the suggestion, or null>
+  "est_minutes": <rough minutes for the suggestion, or null>,
+  "forward": "<a short day-ahead heads-up from the FORWARD LOOK — what the NEXT session leans toward and/or what's due, e.g. 'Tomorrow leans lower-body — legs are due'; null when there's nothing to say or it's a done-day debrief>"
 }`;
 
 // A compact, deterministic read of the training history so the agent grasps the
@@ -1718,22 +1719,14 @@ function debriefFacts(date: string): string {
       lines.push(`SESSION TODAY${sess.title ? ` — ${sess.title}` : ""}${vol}: ${lifts.join("; ")}.`);
     }
   } catch { /* no session detail → skip */ }
-  // 2) Forward — what the NEXT session leans toward + what's due this week.
+  // 2) Forward — the day-ahead (the SAME forwardLook the Brief's forward line uses).
   try {
-    const plan: any[] = repo.getPlan() || [];
-    const sess: any = repo.getSessionByDate(date);
-    if (plan.length && sess?.plan_day_id) {
-      const idx = plan.findIndex((d: any) => d.id === sess.plan_day_id);
-      if (idx >= 0) {
-        const nd = plan[(idx + 1) % plan.length];
-        const nf = String(nd?.focus || nd?.name || "").trim();
-        if (nf) lines.push(`NEXT SESSION leans toward: ${nf}.`);
-      }
+    const fwd: any = repo.forwardLook(date);
+    if (fwd?.next_focus) lines.push(`NEXT SESSION leans toward: ${fwd.next_focus}.`);
+    if (Array.isArray(fwd?.due) && fwd.due.length) {
+      lines.push(`DUE THIS WEEK (under its productive range — a good forward focus): ${fwd.due.join(", ")}.`);
     }
-    const bal: any = repo.programBalance?.();
-    const due = Array.isArray(bal?.due) ? bal.due.slice(0, 3) : [];
-    if (due.length) lines.push(`DUE THIS WEEK (under its productive range — a good forward focus): ${due.join(", ")}.`);
-  } catch { /* no plan/balance → skip the forward look */ }
+  } catch { /* no forward look → skip */ }
   // 3) Fuel — only a real protein gap (or a clean "in") is worth a word; never a score.
   try {
     const intake: any = repo.getDayIntake(date);
@@ -1797,6 +1790,13 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || new Date().toISOString().slice(0, 10))}`
     : "";
+  // The day-ahead heads-up — the Program-tab intelligence woven into the Brief so the
+  // athlete never opens a separate tab to know what's coming (voiced warmly in `forward`).
+  // Skipped on a done day — the debrief's `why` already carries the forward focus.
+  const fwd = repo.forwardLook(opts.date || new Date().toISOString().slice(0, 10));
+  const forwardLine = baseline.kind !== "done" && fwd.text
+    ? `\nFORWARD LOOK (the day-ahead — set "forward" to a calm 'what's next' clause from this, so the Program tab is never required reading): ${fwd.text}.`
+    : "";
   return `You are Cairn, the athlete's calm health & training buddy. Read their WHOLE picture and
 judge what kind of day today should be: a real session, easy movement, or rest. This opens their
 app — it is the first and often only thing they see.
@@ -1822,7 +1822,7 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${forwardLine}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
 ${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

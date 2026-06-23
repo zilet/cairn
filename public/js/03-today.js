@@ -628,6 +628,10 @@ function briefHtml(read, { showPlan, isToday }) {
   // Headline leads; on a train day the focus IS the headline-adjacent line.
   const headline = escHtml(read.headline || meta.lead);
   const why = read.why ? escHtml(read.why) : "";
+  // The day-ahead heads-up — the Program-tab intelligence woven onto the Brief so the
+  // athlete never opens a separate tab to know what's next. Quiet, one tap to the week.
+  // Suppressed on a done day (the debrief's why already voices what's coming).
+  const forward = read.forward && kind !== "done" ? escHtml(read.forward) : "";
 
   // ---- Actions: ONE clear thing to do. The accent primary is reserved for a
   // train day ("start the session"); easy/rest stay calm with NO accent CTA, so
@@ -682,6 +686,7 @@ function briefHtml(read, { showPlan, isToday }) {
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
+      ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
       <div id="briefProvenance" class="prov-slot"></div>
       ${actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : ""}
       ${steer}
@@ -1996,6 +2001,7 @@ function wireBrief(read, { isToday }) {
     b.addEventListener("click", () => {
       const action = b.dataset.redirect;
       if (action === "ask-session") { revealSessionComposer(); return; }
+      if (action === "view-week") { activateTab("plan"); return; } // the day-ahead → the full plan/week
       if (action === "start-session") {
         // the day's primary on a train day: make sure the logging surface exists,
         // then bring its first card into view so "start" lands you in the work.

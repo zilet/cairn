@@ -95,6 +95,25 @@ test("EASY (not DONE) when today's logged work was only light", () => {
   assert.equal(r.kind, "easy");
 });
 
+test("forwardLook points to the NEXT session's focus (the day-ahead heads-up)", () => {
+  repo.savePlanDay(1, "Push", "Chest & shoulders", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 135 }]);
+  repo.savePlanDay(2, "Lower", "Lower body", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8, target_weight: 225 }]);
+  // Trained Push (plan day 1) the day before REF → the forward look is plan day 2.
+  const ex = repo.upsertExercise({ name: "Bench Press", muscle_group: "chest" });
+  const day1Id = repo.getPlanDay(1).id; // the real plan_days row id (autoincrement varies in the shared DB)
+  const sess = repo.getOrCreateSession(dayBefore(REF, 1), day1Id);
+  db.prepare(`INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, 1, 135, 6, 2)`).run(sess.id, ex.id);
+  const fl = repo.forwardLook(REF);
+  assert.equal(fl.next_focus, "Lower body");
+  assert.match(fl.text, /Lower body/);
+});
+
+test("forwardLook is null-safe with no plan (degrades, never throws)", () => {
+  const fl = repo.forwardLook(REF);
+  assert.equal(fl.next_focus, null);
+  assert.equal(fl.text, null);
+});
+
 test("absent signals never throw and never force rest (graceful degradation)", () => {
   // No recovery, no check-in, no sessions, no plan — must return a calm 'easy'.
   const r = repo.dayRead(isoDaysAgo(0));

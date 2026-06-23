@@ -296,6 +296,52 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   return { kind: "easy", focus: null, why: "Nothing programmed — some easy movement is plenty today.", est_minutes: 20, signals };
 }
 
+// ---------- the forward look (day-ahead heads-up) ----------
+// The Program-tab intelligence, woven onto the Brief so the athlete never has to
+// visit a separate tab to know their focus: what the NEXT session leans toward (the
+// plan day AFTER the one anchoring today) + which muscle groups are DUE this week
+// (under their productive range). Deterministic + null-safe — the agent voices it
+// warmly when available, this is the floor (and the structured truth the PWA renders).
+export interface ForwardLook {
+  next_focus: string | null;   // the next session's character ("Lower body")
+  due: string[];               // groups under their productive range this week
+  text: string | null;         // a single plain-words line, or null when there's nothing to say
+}
+export function forwardLook(date?: string): ForwardLook {
+  const d = date || todayISO();
+  let next_focus: string | null = null;
+  try {
+    const days = db.prepare(`SELECT id, day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
+    if (days.length) {
+      // The day anchoring "today": a session logged today wins; else the most recent
+      // trained plan day. The forward look is the plan day AFTER that (rotation).
+      const todaySess = db.prepare(`SELECT plan_day_id FROM sessions WHERE date = ? AND plan_day_id IS NOT NULL`).get(d) as any;
+      let anchorId: number | null = todaySess?.plan_day_id ?? null;
+      if (anchorId == null) {
+        const recent = db.prepare(
+          `SELECT s.plan_day_id FROM sessions s
+            WHERE s.date < ? AND s.plan_day_id IS NOT NULL
+              AND EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id)
+            ORDER BY s.date DESC, s.id DESC LIMIT 1`
+        ).get(d) as any;
+        anchorId = recent?.plan_day_id ?? null;
+      }
+      const anchorIdx = anchorId != null ? days.findIndex((x) => x.id === anchorId) : -1;
+      const nd = days[anchorIdx >= 0 ? (anchorIdx + 1) % days.length : 0];
+      next_focus = String(nd?.focus || nd?.name || "").trim() || null;
+    }
+  } catch { /* no plan → no next focus */ }
+  let due: string[] = [];
+  try {
+    const bal: any = programBalance();
+    due = Array.isArray(bal?.due) ? bal.due.slice(0, 2) : [];
+  } catch { /* no balance → no due groups */ }
+  const parts: string[] = [];
+  if (next_focus) parts.push(`Next: ${next_focus}`);
+  if (due.length) parts.push(`${due.join(" & ")} due this week`);
+  return { next_focus, due, text: parts.length ? parts.join(" · ") : null };
+}
+
 // ---------- the week ahead (deterministic floor) ----------
 // The forward-look's safety net (coachOps.weekAheadRead layers the agentic day-by-
 // day shape on top). Honest + simple: the lifting split as the week's sessions, in
