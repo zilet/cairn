@@ -17,6 +17,7 @@
 // morning open shows agent-quality prose without an agent running.
 import { db } from "./db.js";
 import { seed } from "./seed.js";
+import { installSeedArt } from "./art.js";
 import * as repo from "./repo.js";
 
 const DAY = 86_400_000;
@@ -608,7 +609,10 @@ function brief() {
   });
 }
 
-function main() {
+// Rebuild the whole demo picture on the target DB. Exported (and free of any art
+// install) so the seed-art builder can drive it in-process against a throwaway DB
+// without copying a stale pack over the images it's about to generate.
+export function seedDemo() {
   wipe();
   seed(); // exercises + plan_days + plan_items (+ a baseline session/profile we replace)
   // clear seed's baseline session + example profile leftovers, keep plan/exercises
@@ -659,4 +663,16 @@ function main() {
   console.log("Demo data seeded:", JSON.stringify(counts));
 }
 
-main();
+// CLI entry: `npm run seed:demo` (against a THROWAWAY DB — see the header).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  seedDemo();
+  // Drop in the pre-baked studio photos for the demo's foods/exercises/activities
+  // so the populated experience renders real art with no Gemini key. No-op without
+  // the seed-art/ pack.
+  try {
+    const r = installSeedArt();
+    if (r.installed) console.log(`Installed ${r.installed}/${r.matched} cached art images from the pack.`);
+  } catch {
+    /* cosmetic only */
+  }
+}

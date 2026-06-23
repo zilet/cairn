@@ -1,4 +1,5 @@
 import { db } from "./db.js";
+import { installSeedArt } from "./art.js";
 
 // [name, muscle_group, constraint_note, form_cues]
 const exercises: [string, string, string | null, string][] = [
@@ -135,6 +136,14 @@ export function seedIfEmpty(): boolean {
   const exs = db.prepare(`SELECT COUNT(*) AS c FROM exercises`).get() as any;
   if (days.c > 0 || exs.c > 0) return false;
   seed();
+  // Drop in any pre-baked studio photos that match the seeded exercises, so a
+  // fresh install renders real art (not just SVGs) with no Gemini key. Offline,
+  // idempotent, and a no-op when the seed-art/ pack isn't present.
+  try {
+    installSeedArt();
+  } catch {
+    /* art is purely cosmetic — never let it block seeding */
+  }
   return true;
 }
 

@@ -20,6 +20,11 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
 const ART_DIR = path.join(DATA_DIR, "art");
+// Pre-baked, downscaled images shipped in the repo (seed-art/) so a fresh seed or
+// the demo renders real studio photos with NO Gemini key at runtime. installSeedArt()
+// copies the ones that match the seeded content into ART_DIR. Built (rarely) by
+// `npm run seed:art:build` (src/buildSeedArt.ts). Absent in a slim checkout → no-op.
+const SEED_ART_DIR = path.join(__dirname, "..", "seed-art");
 
 // Model names are env-overridable so a rename doesn't need a code change. The
 // text model runs the cheap "would this render the same image?" check before
@@ -347,6 +352,54 @@ export function artManifest(): { ready: string[]; enabled: boolean } {
     if (cachedArtPath(kind, q)) ready.push(`${kind}|${q}`);
   }
   return { ready, enabled: !!getSettings().art_enabled };
+}
+
+// ---- pre-baked seed-art pack (offline, no key) ----
+
+// Copy any pre-baked images that match THIS database's art queries into the live
+// cache, so a fresh seed/demo renders real photos immediately with no Gemini key.
+// Offline, idempotent (skips files already present), and a quiet no-op when the
+// pack is absent (a slim checkout) or empty. Returns what it did, for logging.
+export function installSeedArt(): { installed: number; available: number; matched: number } {
+  let available = 0;
+  let matched = 0;
+  let installed = 0;
+  if (!fs.existsSync(SEED_ART_DIR)) return { installed, available, matched };
+  try {
+    available = fs.readdirSync(SEED_ART_DIR).filter((f) => f.endsWith(".png")).length;
+  } catch {
+    return { installed, available, matched };
+  }
+  if (!available) return { installed, available, matched };
+  fs.mkdirSync(ART_DIR, { recursive: true });
+  for (const { kind, q } of enumeratePwaArt()) {
+    const key = cacheKey(kind, q);
+    const src = path.join(SEED_ART_DIR, `${key}.png`);
+    if (!fs.existsSync(src)) continue;
+    matched++;
+    const dst = fileForKey(key);
+    if (fs.existsSync(dst)) continue; // never clobber a real (or already-installed) image
+    try {
+      fs.copyFileSync(src, dst);
+      installed++;
+    } catch {
+      /* best-effort */
+    }
+  }
+  return { installed, available, matched };
+}
+
+// Generate the image for a single (kind, text) DIRECTLY under its own cache key,
+// bypassing the semantic-dedup canonicalization — so the seed-art builder bakes a
+// deterministic, alias-free pack (each query → its own file, no art_aliases rows to
+// ship). Returns the absolute file path; throws on failure. `force` regenerates even
+// when the file already exists. NOT used by the runtime serve/warm path.
+export async function pregenerate(kind: ArtKind, text: string, opts: { force?: boolean } = {}): Promise<string> {
+  const key = cacheKey(kind, text);
+  const file = fileForKey(key);
+  if (!opts.force && fs.existsSync(file)) return file;
+  await generate({ key, kind, text });
+  return file;
 }
 
 async function generate(job: Job): Promise<void> {
