@@ -4131,6 +4131,13 @@ button.hmk-row:active{background:var(--card-2)}
 /* ── Era 2 — generic Today-agenda cards (since-last / goal-checkin) + the one
    quiet "N more" disclosure the salience arbiter collapses lower-ranked cards into.
    Pull, never push: calm rail cards, a dismissible ✕, no badge. ── */
+/* The rail masthead — one quiet identity over the coach's ranked "also" reads, so
+   they read as a continued voice beneath the Brief, not loose floating features. */
+.rail-mast{display:flex;align-items:center;gap:7px;margin:2px 0 11px;padding-bottom:9px;
+  border-bottom:1px solid var(--line)}
+.rail-mast-mark{color:var(--sage);font-size:.66rem;line-height:1}
+.rail-mast-lbl{color:var(--muted)}
+
 .agenda-card{position:relative;background:var(--card);border:none;border-left:3px solid var(--sage);
   border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);padding:13px 15px;margin-bottom:10px;
   font-family:var(--font-ui);color:var(--ink)}

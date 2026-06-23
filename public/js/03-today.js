@@ -1072,7 +1072,14 @@ function buildAgendaRailHtml(agenda, genericPending) {
       </details>`
     : "";
   if (!primaryHtml && !moreHtml) return ""; // quiet day — no rail, no empty chrome
-  return `<aside class="today-rail">${primaryHtml}${moreHtml}</aside>`;
+  // One calm masthead gives the rail a single identity: these are the coach's other
+  // reads, ranked, beneath the Brief (the day's lead). Without it the cards read as
+  // loose, disconnected features; with it they read as one continued voice. Shown
+  // only when there's a primary card to head (a lone "N more" stands on its own).
+  const mast = primaryHtml
+    ? `<div class="rail-mast"><span class="rail-mast-mark" aria-hidden="true">✦</span><span class="rail-mast-lbl lbl">Also worth a look</span></div>`
+    : "";
+  return `<aside class="today-rail">${mast}${primaryHtml}${moreHtml}</aside>`;
 }
 
 // Run the rail loaders for every surfaced existing client_card (primary + more) and
