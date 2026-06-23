@@ -6,7 +6,7 @@ import { invalidateDayRead } from "./intelligence.js";
 import { listMemory, listSuggestions } from "./memory.js";
 import { listFoodNotes, listMealPlans } from "./nutrition.js";
 import { getPlan } from "./plan.js";
-import { getProfile, listWeight } from "./profile.js";
+import { effectiveGoalMode, getProfile, leanGainRate, listWeight } from "./profile.js";
 import { getSettings } from "./settings.js";
 import { deriveSessionTitle } from "./training-read.js";
 
@@ -484,28 +484,52 @@ export function getWeeklyStats() {
     }
   }
 
-  const prof = db.prepare(`SELECT weight_lb, goal_weight_lb, goal_date FROM profile WHERE id = 1`).get() as any;
+  const prof = db.prepare(`SELECT weight_lb, goal_weight_lb, goal_date, goal_mode FROM profile WHERE id = 1`).get() as any;
   const currentW = wpts.length ? Number(wpts[wpts.length - 1].weight_lb) : (prof?.weight_lb ?? null);
+  const goalMode = effectiveGoalMode(prof);
+
+  // Pace verdict, in the LANGUAGE of the goal mode — never "behind" when you're
+  // just maintaining (the constitution: kind, never anxious). Plain words, no score:
+  //   lose     → on / behind / fast (fast = losing >~1%/wk, the lean-safe ceiling)
+  //   maintain → holding / drifting_up / drifting_down (a calm dead-band, no pressure)
+  //   gain     → on / behind / fast (fast = gaining >~1%/wk, i.e. fat-biased)
   let needed: number | null = null;
-  if (prof?.goal_weight_lb != null && prof?.goal_date && currentW != null) {
-    const weeksLeft = Math.max((Date.parse(prof.goal_date) - Date.parse(today)) / (7 * 864e5), 0.5);
-    needed = Math.round(((prof.goal_weight_lb - currentW) / weeksLeft) * 10) / 10;
-  }
-  // Pace verdict. "fast" = losing more than ~1% bodyweight/week — the lean-safe
-  // ceiling the coaching guardrails enforce — and matters as much as "behind".
-  let pace: "on" | "behind" | "fast" | null = null;
-  if (trend != null && needed != null && currentW != null) {
-    const maxSafe = currentW * 0.01;
-    if (needed < 0 && trend < -maxSafe) pace = "fast";
-    else if (needed < 0 ? trend <= needed + 0.25 : trend >= needed - 0.25) pace = "on";
-    else pace = "behind";
+  let pace: "on" | "behind" | "fast" | "holding" | "drifting_up" | "drifting_down" | null = null;
+  if (goalMode === "maintain") {
+    needed = 0;
+    if (trend != null) {
+      const band = 0.3; // lb/wk — within this you're holding steady
+      pace = trend > band ? "drifting_up" : trend < -band ? "drifting_down" : "holding";
+    }
+  } else if (goalMode === "gain") {
+    // Conservative lean-gain rate — shared with computeGoalCheck (single source).
+    const gainRate = currentW != null ? leanGainRate(currentW) : 0.25;
+    needed = gainRate;
+    if (trend != null && currentW != null) {
+      const tooFast = currentW * 0.01; // >1% bodyweight/wk gain is fat-biased
+      if (trend > tooFast) pace = "fast";
+      else if (trend >= gainRate - 0.15) pace = "on"; // building at/above the lean rate
+      else pace = "behind"; // not building yet
+    }
+  } else {
+    // lose
+    if (prof?.goal_weight_lb != null && prof?.goal_date && currentW != null) {
+      const weeksLeft = Math.max((Date.parse(prof.goal_date) - Date.parse(today)) / (7 * 864e5), 0.5);
+      needed = Math.round(((prof.goal_weight_lb - currentW) / weeksLeft) * 10) / 10;
+    }
+    if (trend != null && needed != null && currentW != null) {
+      const maxSafe = currentW * 0.01;
+      if (needed < 0 && trend < -maxSafe) pace = "fast";
+      else if (needed < 0 ? trend <= needed + 0.25 : trend >= needed - 0.25) pace = "on";
+      else pace = "behind";
+    }
   }
 
   return {
     week_sessions: weekSess.length, week_tonnage: Math.round(ton.t || 0), week_sets: Number(weekSets?.c ?? 0), streak,
     week_done: Number(weekDone?.c ?? 0), week_planned: Number(weekPlanned?.c ?? 0),
     week_cardio: Number(weekCardio?.c ?? 0), week_cardio_km: Math.round(Number(weekCardio?.km ?? 0) * 10) / 10,
-    trend_lb_wk: trend, needed_lb_wk: needed, pace_status: pace,
+    trend_lb_wk: trend, needed_lb_wk: needed, pace_status: pace, goal_mode: goalMode,
     weight_lb: currentW, goal_weight_lb: prof?.goal_weight_lb ?? null, goal_date: prof?.goal_date ?? null,
     // Endurance/runner-first weekly read (v35) — additive; existing consumers ignore.
     endurance,
@@ -834,13 +858,13 @@ export function getProgress(exerciseName: string) {
 
     const cur = byDate.get(r.date);
     // Rank sets: a non-null 1RM always beats a null one; among non-nulls, higher wins.
-    const betterThan = (candidate: number | null, current: typeof cur): boolean => {
+    const betterThan = (candidate: number | null): boolean => {
       if (!cur) return true;
       if (candidate === null) return false;          // a null can't beat anything
       if (cur.best1rm === null) return true;         // anything beats null
       return candidate > cur.best1rm;
     };
-    if (betterThan(best1rm, cur)) {
+    if (betterThan(best1rm)) {
       byDate.set(r.date, { topWeight: w, topReps: reps, best1rm });
     }
   }

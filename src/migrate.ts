@@ -414,6 +414,13 @@ export const MIGRATIONS: Migration[] = [
       }
     } catch { /* backfill is best-effort; never block the migration */ }
   } },
+  { version: 41, name: "profile-goal-mode", up: (db) => {
+    // The journey's SHAPE, orthogonal to the goal weight: lose | maintain | gain.
+    // NULL (the default for existing rows) means "derive it" — lose when a goal
+    // weight below current is set, else maintain — so existing deployments behave
+    // exactly as before until the athlete picks a mode in Me → Profile.
+    addColumn(db, "profile", "goal_mode TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS profile (
   weight_lb REAL,
   goal_weight_lb REAL,
   goal_date TEXT,
+  goal_mode TEXT,                        -- lose | maintain | gain — the journey's shape (v41). NULL = derived from goal_weight (back-compat)
   activity_factor REAL DEFAULT 1.5,
   notes TEXT,
   about_me TEXT,                         -- rich free-text understanding (history, work, food likes/dislikes, what "better" means)

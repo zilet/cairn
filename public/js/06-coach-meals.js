@@ -1073,6 +1073,7 @@ function paintMealsBody(plans, mealPrefs) {
   // ids (#energyHero / #energyCard / #checkinResult) match the shared renderers in
   // 05-progress.js (paintEnergyBody / runNutritionCheckin), reused verbatim.
   const energyBlock = `<section class="meal-energy" id="mealEnergy">
+      <div id="dayFuelSlot" class="dayfuel-slot"></div>
       <div id="energyHero"></div>
       <div id="energyCard">${loadingState("Reading your trend…")}</div>
       <div id="checkinResult" class="checkin-result"></div>
@@ -1085,6 +1086,7 @@ function paintMealsBody(plans, mealPrefs) {
   wireSeg(PLAN_HANDLERS);
   runCountUps(view);
   loadMealsEnergy(pollToken);
+  loadDayFuel(pollToken);
 
   renderMealPlans(plans, "#mealHist", () => renderMeals());
   wireMealPrefs();
@@ -1129,6 +1131,131 @@ function loadMealsEnergy(token) {
     key: "progress:energy",
     onUpgrade: (exp, { changed }) => { if (peek && !peek.fresh) markRefreshing(false); if (changed || !peek) paint(exp); },
   }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
+}
+
+// ---------- Today's fuel: review + quick-edit of what's logged today ----------
+// Co-located with the meal plan + Energy Balance — all nutrition in one place. A calm
+// list of today's logged food with the running totals and, ONLY when a real target
+// exists, a gentle "remaining" ("remaining", never "consumed"; never red). Each row
+// taps open to correct a macro / rename / change the meal slot, or delete. Capture
+// stays in Chat — this is review + correction, never a logging form. Pull, never push.
+const MEAL_LABEL = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", snack: "Snack", meal: "Meal" };
+
+function dayFuelHtml(d) {
+  const t = d.totals || {};
+  const count = Number(d.count) || 0;
+  const kcal = Math.round(Number(t.kcal) || 0);
+  const protein = Math.round(Number(t.protein_g) || 0);
+  const head = `<div class="dayfuel-head"><span class="lbl">Today's fuel</span>${count ? `<span class="dayfuel-count">${count} item${count === 1 ? "" : "s"}</span>` : ""}</div>`;
+  if (!count) {
+    return `<div class="dayfuel reveal" style="--i:0">${head}
+        <div class="dayfuel-empty">Nothing logged yet today — log a meal in <button class="linklike" id="dayFuelAsk" type="button">Chat</button>; describe it in plain words and the macros are handled for you.</div>
+      </div>`;
+  }
+  let remLine = "";
+  if (d.remaining && d.target) {
+    const left = Math.round(Number(d.remaining.kcal));
+    const pleft = Math.round(Number(d.remaining.protein_g));
+    remLine = left > 0
+      ? `<div class="dayfuel-rem"><span class="numeral" data-cu="${left}">0</span> kcal left${pleft > 0 ? ` · ${pleft} g protein to go` : ""}</div>`
+      : `<div class="dayfuel-rem dayfuel-rem-done">Fuel's in for today.</div>`;
+  }
+  const rows = (d.entries || []).map((e) => {
+    const k = Math.round(Number(e.kcal) || 0);
+    const p = Math.round(Number(e.protein_g) || 0);
+    const ml = MEAL_LABEL[String(e.meal || "").toLowerCase()] || (e.meal ? escHtml(e.meal) : "");
+    const pending = e.enrichment_status === "pending" || e.enrichment_status === "in_progress";
+    return `<button class="dayfuel-row" data-fooditem="${e.id}" type="button">
+        <span class="dayfuel-art">${art("food", e.summary)}</span>
+        <span class="dayfuel-main">
+          <span class="dayfuel-name">${escHtml(e.summary)}${pending ? ` <span class="dayfuel-pending">· estimating…</span>` : ""}</span>
+          ${ml ? `<span class="dayfuel-meal lbl">${ml}</span>` : ""}
+        </span>
+        <span class="dayfuel-macros">${e.kcal != null ? `<span class="numeral">${k}</span> kcal` : "—"}${e.protein_g != null ? ` · ${p}g P` : ""}</span>
+        <span class="dayfuel-edit" aria-hidden="true">✎</span>
+      </button>`;
+  }).join("");
+  return `<div class="dayfuel reveal" style="--i:0">${head}
+      <div class="dayfuel-totals">
+        <span class="numeral numeral-lg" data-cu="${kcal}">0</span><span class="dayfuel-unit">kcal</span>
+        <span class="dayfuel-dot" aria-hidden="true">·</span>
+        <span class="numeral numeral-lg" data-cu="${protein}">0</span><span class="dayfuel-unit">g protein</span>
+      </div>
+      ${remLine}
+      <div class="dayfuel-list">${rows}</div>
+      <div class="dayfuel-foot lbl">Tap an item to fix it · log more in Chat</div>
+    </div>`;
+}
+
+async function loadDayFuel(token) {
+  const slot = view.querySelector("#dayFuelSlot");
+  if (!slot) return;
+  let d = null;
+  try { d = await api("/nutrition/day"); } catch { slot.innerHTML = ""; return; }
+  if (token !== pollToken || !view.querySelector("#dayFuelSlot")) return;
+  if (!d || typeof d !== "object") { slot.innerHTML = ""; return; }
+  state._dayFuel = d;
+  slot.innerHTML = dayFuelHtml(d);
+  runCountUps(slot);
+  slot.querySelectorAll("[data-fooditem]").forEach((row) =>
+    row.addEventListener("click", () => openFoodEdit(Number(row.dataset.fooditem), row))
+  );
+  const ask = slot.querySelector("#dayFuelAsk");
+  if (ask) ask.addEventListener("click", () => gotoChatWith("How's my eating shaping up today, and does it fit my goal?"));
+}
+
+// Correct one logged food note — fix a macro, rename it, change the meal slot, or
+// remove it. Reuses the shared detail-sheet (openDetailFrom/mountDetail) + armDelete
+// + numOrNull from the session-edit flow, so the affordance feels native. The PUT
+// stamps the note's enrichment terminal server-side, so the correction sticks.
+function openFoodEdit(id, fromEl) {
+  const d = state._dayFuel;
+  const e = d && Array.isArray(d.entries) ? d.entries.find((x) => x.id === id) : null;
+  if (!e) return;
+  openDetailFrom(fromEl, () => {
+    const el = mountDetail(`
+      <h2 class="detail-title">Edit this meal</h2>
+      <div class="detail-ctx lbl">correct what was logged · macros are rough — fix anything off</div>
+      <div class="field"><label>Description</label>
+        <input id="fedSummary" type="text" value="${escAttr(e.summary || "")}" maxlength="200"></div>
+      <div class="field"><label>Meal</label>
+        <select id="fedMeal">${["breakfast", "lunch", "dinner", "snack", "meal"].map((m) => `<option value="${m}" ${String(e.meal || "").toLowerCase() === m ? "selected" : ""}>${MEAL_LABEL[m]}</option>`).join("")}</select></div>
+      <div class="fed-macros">
+        <div class="field"><label>kcal</label><input id="fedKcal" type="number" inputmode="numeric" value="${e.kcal ?? ""}"></div>
+        <div class="field"><label>protein (g)</label><input id="fedProtein" type="number" inputmode="numeric" value="${e.protein_g ?? ""}"></div>
+        <div class="field"><label>carbs (g)</label><input id="fedCarbs" type="number" inputmode="numeric" value="${e.carbs_g ?? ""}"></div>
+        <div class="field"><label>fat (g)</label><input id="fedFat" type="number" inputmode="numeric" value="${e.fat_g ?? ""}"></div>
+      </div>
+      <div class="detail-actions">
+        <button class="pillbtn pill-accent" id="fedSave">Save</button>
+        <button class="pillbtn" data-close>Close</button>
+        <button class="pillbtn" id="fedDel">Delete</button>
+      </div>`);
+    wireDetailCommon();
+    el.querySelector("#fedSave").addEventListener("click", async () => {
+      const body = {
+        summary: el.querySelector("#fedSummary").value.trim(),
+        meal: el.querySelector("#fedMeal").value,
+        kcal: numOrNull(el.querySelector("#fedKcal").value),
+        protein_g: numOrNull(el.querySelector("#fedProtein").value),
+        carbs_g: numOrNull(el.querySelector("#fedCarbs").value),
+        fat_g: numOrNull(el.querySelector("#fedFat").value),
+      };
+      try { await api(`/food-notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast("Updated"); }
+      catch { toast("Couldn't save"); return; }
+      swrInvalidate("progress:energy"); // intake changed — Energy Balance reads it
+      closeDetail(true);
+      renderMeals();
+    });
+    const del = el.querySelector("#fedDel");
+    if (del) del.addEventListener("click", () => armDelete(del, async () => {
+      try { await api(`/food-notes/${id}`, { method: "DELETE" }); toast("Removed"); }
+      catch { toast("Couldn't remove"); return; }
+      swrInvalidate("progress:energy");
+      closeDetail(true);
+      renderMeals();
+    }));
+  });
 }
 
 // Draft a fresh weekly meal plan from the journal view. Runs as a durable

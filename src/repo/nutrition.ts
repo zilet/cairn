@@ -1,4 +1,5 @@
 import { db, todayISO } from "../db.js";
+import { computeGoalCheck } from "./profile.js";
 import { getSettings } from "./settings.js";
 
 // ---------- meal plans ----------
@@ -196,6 +197,101 @@ export function updateFoodNoteParsed(id: number, parsed: any) {
 
 export function setFoodNoteEnrichStatus(id: number, status: string) {
   db.prepare(`UPDATE food_notes SET enrichment_status = ? WHERE id = ?`).run(status, id);
+  return getFoodNote(id);
+}
+
+// ---------- daily intake review (v41) ----------
+// A calm review of ONE day's logged food: the entries (each editable/deletable),
+// the running totals, and — only when a real target exists (a loss/gain goal, or
+// the maintenance anchor) — a gentle "remaining". Never a score; "remaining",
+// never "consumed". The day boundary is the UTC calendar day, matching
+// estimateExpenditure's convention (a known boundary near local midnight).
+export function getDayIntake(date?: string) {
+  const d = date || todayISO();
+  const rows = (db.prepare(
+    `SELECT * FROM food_notes WHERE substr(created_at,1,10) = ? ORDER BY id ASC`
+  ).all(d) as any[]).map(hydrate);
+
+  const totals = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
+  const num = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const entries = rows.map((r) => {
+    const p = r.parsed || {};
+    totals.kcal += num(p.kcal);
+    totals.protein_g += num(p.protein_g);
+    totals.carbs_g += num(p.carbs_g);
+    totals.fat_g += num(p.fat_g);
+    totals.fiber_g += num(p.fiber_g);
+    return {
+      id: r.id,
+      meal: r.meal,
+      summary: String(p.summary ?? r.raw_output ?? "").trim() || "Food",
+      kcal: p.kcal ?? null,
+      protein_g: p.protein_g ?? null,
+      carbs_g: p.carbs_g ?? null,
+      fat_g: p.fat_g ?? null,
+      fiber_g: p.fiber_g ?? null,
+      enrichment_status: r.enrichment_status ?? null,
+      created_at: r.created_at,
+    };
+  });
+  for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] = Math.round(totals[k]);
+
+  // Target framing: a gentle target/remaining ONLY when the profile is complete
+  // enough to derive one. Incomplete profile → descriptive-only (target null).
+  let target: { kcal: number; protein_g: number; mode: string } | null = null;
+  let remaining: { kcal: number; protein_g: number } | null = null;
+  try {
+    const goal: any = computeGoalCheck();
+    const tk = Number(goal?.recommended?.target_intake_kcal);
+    if (goal?.ok && Number.isFinite(tk)) {
+      target = {
+        kcal: Math.round(tk),
+        protein_g: Math.round(Number(goal.recommended?.protein_g) || 0),
+        mode: String(goal.goal_mode || "maintain"),
+      };
+      remaining = { kcal: target.kcal - totals.kcal, protein_g: target.protein_g - totals.protein_g };
+    }
+  } catch { /* profile incomplete → descriptive-only */ }
+
+  return { date: d, totals, entries, count: entries.length, target, remaining };
+}
+
+// Manual correction of a logged food note (fix a macro, rename it, change the meal
+// slot, or just "I changed my mind"). Coerced/clamped at the trust boundary like
+// coerceMeal, merged over the existing parsed blob. STAMPS enrichment_status
+// terminal ('done') so a still-queued background enricher can't later clobber the
+// correction — a manual edit is authoritative (mirrors updateTarget's manual path).
+// Returns the hydrated row, or null on unknown id.
+export function updateFoodNote(id: number, fields: any) {
+  const row = getFoodNote(id);
+  if (!row) return null;
+  const f = fields && typeof fields === "object" ? fields : {};
+  const parsed: any = { ...(row.parsed && typeof row.parsed === "object" ? row.parsed : {}) };
+
+  const numField = (key: string, max: number) => {
+    if (f[key] === undefined) return;
+    if (f[key] === null || f[key] === "") { parsed[key] = null; return; }
+    const n = Number(f[key]);
+    parsed[key] = Number.isFinite(n) ? Math.min(max, Math.max(0, Math.round(n))) : null;
+  };
+  if (f.summary !== undefined) parsed.summary = capStr(f.summary, 200);
+  if (f.items !== undefined) {
+    parsed.items = Array.isArray(f.items)
+      ? f.items.slice(0, 30).map((s: any) => capStr(s, 80)).filter(Boolean)
+      : capStr(f.items, 300);
+  }
+  if (f.notes !== undefined) parsed.notes = f.notes == null ? null : capStr(f.notes, 500);
+  numField("kcal", 5000);
+  numField("protein_g", 500);
+  numField("carbs_g", 1000);
+  numField("fat_g", 500);
+  numField("fiber_g", 200);
+
+  db.prepare(`UPDATE food_notes SET parsed_json = ?, enrichment_status = 'done' WHERE id = ?`)
+    .run(JSON.stringify(parsed), id);
+  if (f.meal !== undefined && f.meal !== null && String(f.meal).trim()) {
+    db.prepare(`UPDATE food_notes SET meal = ? WHERE id = ?`).run(String(f.meal).trim().slice(0, 40), id);
+  }
   return getFoodNote(id);
 }
 

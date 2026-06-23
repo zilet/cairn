@@ -93,19 +93,23 @@ function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampA
   try { goal = computeGoalCheck(); } catch { /* profile incomplete → only the absolute floors apply */ }
   const recIntake = goal?.ok ? Number(goal.recommended?.target_intake_kcal) : NaN;
   const recProtein = goal?.ok ? Number(goal.recommended?.protein_g) : NaN;
-  // kcal floor: the lean-safe recommended intake, never below the absolute floor.
+  // Mode-aware wording: the same floor protects against a crash deficit (lose),
+  // an accidental shortfall below maintenance, or eating below the lean-gain anchor.
+  const goalMode: string | null = goal?.ok ? goal.goal_mode : null;
+  const floorLabel = goalMode === "gain" ? "lean-gain anchor" : goalMode === "maintain" ? "maintenance anchor" : "lean-safe floor";
+  // kcal floor: the mode's recommended intake, never below the absolute floor.
   const kcalFloor = Math.max(KCAL_ABSOLUTE_FLOOR, Number.isFinite(recIntake) ? recIntake : 0);
   const reqKcal = Number(out.target_kcal);
   if (Number.isFinite(reqKcal) && reqKcal < kcalFloor) {
     clamped.push({ exercise: "nutrition target", field: "target_kcal", requested: Math.round(reqKcal), applied: Math.round(kcalFloor),
-      reason: `kcal raised to the lean-safe floor (≥${Math.round(kcalFloor)} kcal) — never a crash deficit` });
+      reason: `kcal raised to your ${floorLabel} (≥${Math.round(kcalFloor)} kcal)${goalMode === "lose" || goalMode == null ? " — never a crash deficit" : ""}` });
     out.target_kcal = Math.round(kcalFloor);
   }
   // protein floor: hold/raise, never below the recommended protein target.
   const reqProtein = Number(out.protein_g);
   if (Number.isFinite(recProtein) && recProtein > 0 && Number.isFinite(reqProtein) && reqProtein < recProtein) {
     clamped.push({ exercise: "nutrition target", field: "protein_g", requested: Math.round(reqProtein), applied: Math.round(recProtein),
-      reason: `protein held at the recommended floor (≥${Math.round(recProtein)} g) — protein is protected under a deficit` });
+      reason: `protein held at the recommended floor (≥${Math.round(recProtein)} g) — protein stays protected` });
     out.protein_g = Math.round(recProtein);
   }
   return { nutrition: out, clamped };
@@ -242,6 +246,10 @@ export function setProfile(p: any) {
     weight_lb: p.weight_lb ?? cur.weight_lb ?? null,
     goal_weight_lb: p.goal_weight_lb ?? cur.goal_weight_lb ?? null,
     goal_date: p.goal_date ?? cur.goal_date ?? null,
+    // The journey's shape (v41). Same nullable contract as the free-text fields:
+    // explicit null/'' clears it (→ derived), undefined leaves intact, a valid
+    // value sets it, an unrecognized value keeps the current one.
+    goal_mode: p.goal_mode !== undefined ? normalizeGoalMode(p.goal_mode, cur.goal_mode) : (cur.goal_mode ?? null),
     activity_factor: p.activity_factor ?? cur.activity_factor ?? 1.5,
     notes: p.notes ?? cur.notes ?? null,
     // Rich free-text understanding (Phase 2A). Trimmed/capped; explicit empty
@@ -264,17 +272,17 @@ export function setProfile(p: any) {
       : (cur.endurance_goal_json ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, weight_lb=excluded.weight_lb,
-       goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date,
+       goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date, goal_mode=excluded.goal_mode,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
-  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
+  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
   return getProfile();
 }
 
@@ -289,6 +297,48 @@ export function normalizeDiscipline(v: any, current?: any): "strength" | "endura
   }
   const cur = current != null ? String(current).trim().toLowerCase() : "";
   return (DISCIPLINES.has(cur) ? cur : "strength") as "strength" | "endurance" | "hybrid";
+}
+
+// ---------- goal mode (v41) ----------
+// The journey's SHAPE, orthogonal to the goal weight number:
+//   lose     → today's lean-safe deficit toward a lower weight
+//   maintain → anchor to real expenditure; hold steady, no deficit pressure
+//   gain     → a conservative lean-gain surplus (never a dirty bulk)
+// The stored column is nullable: NULL means "derive it" for back-compat.
+export type GoalMode = "lose" | "maintain" | "gain";
+const GOAL_MODES = new Set<GoalMode>(["lose", "maintain", "gain"]);
+
+// Coerce an incoming goal_mode at the trust boundary. An explicit null/'' CLEARS
+// it (→ derived); a recognized value sets it; an unrecognized non-empty value
+// leaves the current value intact (mirrors normalizeDiscipline, but nullable).
+export function normalizeGoalMode(v: any, current?: any): GoalMode | null {
+  if (v === null || v === "") return null; // explicit clear → derive from goal weight
+  const s = String(v ?? "").trim().toLowerCase();
+  if (GOAL_MODES.has(s as GoalMode)) return s as GoalMode;
+  const cur = current != null ? String(current).trim().toLowerCase() : "";
+  return GOAL_MODES.has(cur as GoalMode) ? (cur as GoalMode) : null;
+}
+
+// The EFFECTIVE goal mode used by the math/prompts/UI. An explicit profile
+// goal_mode wins; otherwise derive for back-compat — 'lose' when a goal weight
+// meaningfully below current is set, else 'maintain'. Never returns null.
+export function effectiveGoalMode(p?: any): GoalMode {
+  const prof = p ?? getProfile();
+  const explicit = prof?.goal_mode && GOAL_MODES.has(String(prof.goal_mode).toLowerCase() as GoalMode)
+    ? (String(prof.goal_mode).toLowerCase() as GoalMode)
+    : null;
+  if (explicit) return explicit;
+  const w = Number(prof?.weight_lb);
+  const gw = Number(prof?.goal_weight_lb);
+  if (Number.isFinite(w) && Number.isFinite(gw) && gw > 0 && gw < w - 0.5) return "lose";
+  return "maintain";
+}
+
+// Conservative lean-gain pace: ~0.25% bodyweight/week, capped at 0.5 lb/wk — slow
+// enough to bias muscle over fat (never a dirty bulk). Single source of truth for
+// both the goal math (computeGoalCheck) and the weekly pace verdict (getWeeklyStats).
+export function leanGainRate(weightLb: number): number {
+  return Math.min(0.5, +(0.0025 * (weightLb || 0)).toFixed(2));
 }
 
 // ---------- endurance goal (v37) ----------
@@ -391,8 +441,8 @@ export function listWeight(limit = 60) {
 // ---------- goal feasibility check ----------
 export const KCAL_PER_LB = 3500;
 
-export function computeGoalCheck() {
-  const p = getProfile();
+export function computeGoalCheck(prof?: any) {
+  const p = prof ?? getProfile();
   if (!p || !p.weight_lb || !p.height_cm || !p.age) {
     return { ok: false, message: "Profile incomplete (need age, height, weight)." };
   }
@@ -401,6 +451,7 @@ export function computeGoalCheck() {
   const bmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
   const tdee = Math.round(bmr * (p.activity_factor || 1.5));
 
+  const mode = effectiveGoalMode(p);
   const lbsToLose = p.goal_weight_lb != null ? Math.max(0, p.weight_lb - p.goal_weight_lb) : 0;
 
   // lean-safe loss: ~0.5-1% bodyweight/week; >1%/wk risks lean mass.
@@ -408,37 +459,68 @@ export function computeGoalCheck() {
   const leanIdealRate = +(0.0075 * p.weight_lb).toFixed(2); // recommended (lb/wk)
 
   let requested: any = null;
-  if (p.goal_date && lbsToLose > 0) {
-    const weeks = Math.max(0.1, (new Date(p.goal_date).getTime() - Date.now()) / (7 * 864e5));
-    const rate = +(lbsToLose / weeks).toFixed(2);
-    const dailyDeficit = Math.round((rate * KCAL_PER_LB) / 7);
-    requested = {
-      weeks: +weeks.toFixed(1),
-      weekly_rate_lb: rate,
-      daily_deficit_kcal: dailyDeficit,
-      target_intake_kcal: Math.max(0, tdee - dailyDeficit),
-      aggressive: rate > safeMaxRate,
-    };
-  }
-
-  const recDailyDeficit = Math.round((leanIdealRate * KCAL_PER_LB) / 7);
-  const recommended = {
-    weekly_rate_lb: leanIdealRate,
-    daily_deficit_kcal: recDailyDeficit,
-    target_intake_kcal: tdee - recDailyDeficit,
-    weeks_to_goal: lbsToLose > 0 ? Math.ceil(lbsToLose / leanIdealRate) : 0,
-    protein_g: Math.round((p.weight_lb || 0) * 1.0),
+  let recommended: {
+    weekly_rate_lb: number; daily_deficit_kcal: number; target_intake_kcal: number;
+    weeks_to_goal: number; protein_g: number;
   };
-
   let message: string;
-  if (lbsToLose <= 0) {
-    message = "At or below goal weight — maintain and keep training for lean mass.";
-  } else if (requested?.aggressive) {
-    message = `Goal of ${lbsToLose} lb by ${p.goal_date} needs ~${requested.weekly_rate_lb} lb/wk (~${requested.daily_deficit_kcal} kcal/day deficit). That's above the lean-safe ceiling of ~${safeMaxRate} lb/wk and will likely cost muscle. Recommended: ~${recommended.weekly_rate_lb} lb/wk → about ${recommended.weeks_to_goal} weeks, eating ~${recommended.target_intake_kcal} kcal with ~${recommended.protein_g} g protein.`;
-  } else if (requested) {
-    message = `On track: ~${requested.weekly_rate_lb} lb/wk is within the lean-safe range. Eat ~${requested.target_intake_kcal} kcal, ~${recommended.protein_g} g protein.`;
+
+  if (mode === "maintain") {
+    // Anchor to real expenditure. No deficit, no surplus — hold steady. We only
+    // ever nudge later if the measured weight trend genuinely drifts.
+    recommended = {
+      weekly_rate_lb: 0,
+      daily_deficit_kcal: 0,
+      target_intake_kcal: tdee,
+      weeks_to_goal: 0,
+      protein_g: Math.round((p.weight_lb || 0) * 0.9),
+    };
+    message = `Maintaining — anchor to ~${tdee} kcal with ~${recommended.protein_g} g protein. Hold steady; we only nudge if your weight genuinely drifts.`;
+  } else if (mode === "gain") {
+    // Conservative lean gain: ~0.25% bodyweight/week (capped at 0.5 lb/wk) — slow
+    // enough to bias muscle over fat. NEVER a dirty bulk; lab quality (e.g. ApoB)
+    // still gates WHAT the surplus is made of via the connected brain.
+    const gainRate = leanGainRate(p.weight_lb);
+    const dailySurplus = Math.round((gainRate * KCAL_PER_LB) / 7);
+    recommended = {
+      weekly_rate_lb: gainRate,
+      daily_deficit_kcal: -dailySurplus,   // negative = a surplus (field name kept for back-compat)
+      target_intake_kcal: tdee + dailySurplus,
+      weeks_to_goal: 0,
+      protein_g: Math.round((p.weight_lb || 0) * 1.0),
+    };
+    message = `Lean gain — eat ~${recommended.target_intake_kcal} kcal (about +${dailySurplus}/day over maintenance) with ~${recommended.protein_g} g protein. Slow and steady builds muscle, not fat.`;
   } else {
-    message = `No target date set. Lean-safe pace ~${recommended.weekly_rate_lb} lb/wk → ${recommended.weeks_to_goal} weeks to lose ${lbsToLose} lb, eating ~${recommended.target_intake_kcal} kcal, ~${recommended.protein_g} g protein.`;
+    // lose (explicit, or derived from a goal weight below current).
+    if (p.goal_date && lbsToLose > 0) {
+      const weeks = Math.max(0.1, (new Date(p.goal_date).getTime() - Date.now()) / (7 * 864e5));
+      const rate = +(lbsToLose / weeks).toFixed(2);
+      const dailyDeficit = Math.round((rate * KCAL_PER_LB) / 7);
+      requested = {
+        weeks: +weeks.toFixed(1),
+        weekly_rate_lb: rate,
+        daily_deficit_kcal: dailyDeficit,
+        target_intake_kcal: Math.max(0, tdee - dailyDeficit),
+        aggressive: rate > safeMaxRate,
+      };
+    }
+    const recDailyDeficit = Math.round((leanIdealRate * KCAL_PER_LB) / 7);
+    recommended = {
+      weekly_rate_lb: leanIdealRate,
+      daily_deficit_kcal: recDailyDeficit,
+      target_intake_kcal: tdee - recDailyDeficit,
+      weeks_to_goal: lbsToLose > 0 ? Math.ceil(lbsToLose / leanIdealRate) : 0,
+      protein_g: Math.round((p.weight_lb || 0) * 1.0),
+    };
+    if (lbsToLose <= 0) {
+      message = "At or below goal weight — maintain and keep training for lean mass.";
+    } else if (requested?.aggressive) {
+      message = `Goal of ${lbsToLose} lb by ${p.goal_date} needs ~${requested.weekly_rate_lb} lb/wk (~${requested.daily_deficit_kcal} kcal/day deficit). That's above the lean-safe ceiling of ~${safeMaxRate} lb/wk and will likely cost muscle. Recommended: ~${recommended.weekly_rate_lb} lb/wk → about ${recommended.weeks_to_goal} weeks, eating ~${recommended.target_intake_kcal} kcal with ~${recommended.protein_g} g protein.`;
+    } else if (requested) {
+      message = `On track: ~${requested.weekly_rate_lb} lb/wk is within the lean-safe range. Eat ~${requested.target_intake_kcal} kcal, ~${recommended.protein_g} g protein.`;
+    } else {
+      message = `No target date set. Lean-safe pace ~${recommended.weekly_rate_lb} lb/wk → ${recommended.weeks_to_goal} weeks to lose ${lbsToLose} lb, eating ~${recommended.target_intake_kcal} kcal, ~${recommended.protein_g} g protein.`;
+    }
   }
 
   // ---- goal-pace projection (from the ACTUAL weigh-in trend, not the plan) ----
@@ -449,6 +531,9 @@ export function computeGoalCheck() {
 
   return {
     ok: true, bmr: Math.round(bmr), tdee, lbs_to_lose: lbsToLose,
+    // The effective journey shape (v41) — drives the day-intake target framing,
+    // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
+    goal_mode: mode,
     safe_max_rate_lb: safeMaxRate, requested, recommended, message,
     // Additive (older consumers ignore): the measured-trend forecast.
     trend_lb_wk: goalPace.trend_lb_wk,
