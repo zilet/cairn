@@ -188,6 +188,28 @@ function verifiedBadgeHtml(verified) {
     </div>`;
 }
 
+// One strength change line in a proposal card — robust to partial payloads. Shows the
+// day only when present (no more "Dundefined"), the target (loaded weight or a timed
+// hold), the rep range when known, and the coach's plain-words reason on its own muted
+// line (never empty parens). Used for both auto-progression and coach `changes[]`.
+function strengthChangeHtml(c) {
+  if (!c) return "";
+  const dayTag = c.day_number != null
+    ? `<span class="lbl" style="margin-right:7px;opacity:.7">Day ${escHtml(c.day_number)}</span>`
+    : "";
+  const tgt = c.target_seconds != null
+    ? `${escHtml(c.target_seconds)}s`
+    : (c.target_weight != null ? escHtml(fmtWeight(c.target_weight)) : "—");
+  const reps = (c.rep_low != null)
+    ? ` <span style="color:var(--muted)">× ${escHtml(c.rep_low)}${c.rep_high != null && c.rep_high !== c.rep_low ? "–" + escHtml(c.rep_high) : ""}</span>`
+    : "";
+  const reason = c.reason || c.note;
+  const why = reason
+    ? `<div class="sess-why" style="color:var(--muted);font-size:.82rem;margin:0 0 5px">${escHtml(reason)}</div>`
+    : "";
+  return `<div class="sess-line">${dayTag}<b>${escHtml(c.exercise || "")}</b> → <span class="numeral">${tgt}</span>${reps}</div>${why}`;
+}
+
 // A run prescription's target in plain words — "8 km · Z2", "45 min · easy".
 function runTargetText(c) {
   const bits = [];
@@ -221,7 +243,7 @@ function renderProposals(proposals) {
     ).join("");
     const body = parsed
       ? `<div class="sess-line">${escHtml(parsed.summary || "")}</div>` +
-        changes.map((c) => `<div class="sess-line"><b>D${c.day_number} ${escHtml(c.exercise)}</b> \u2192 <span class="numeral">${escHtml(c.target_weight)}</span> <span style="color:var(--muted)">(${escHtml(c.reason || "")})</span></div>`).join("") +
+        changes.map(strengthChangeHtml).join("") +
         cardioHtml +
         (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "")
       : `<div class="sess-line" style="color:var(--warn)">Unparseable output</div><div class="sess-line" style="color:var(--muted);font-size:.78rem">${escHtml((p.raw_output || "").slice(0, 200))}\u2026</div>`;

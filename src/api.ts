@@ -561,10 +561,22 @@ api.post("/program/progression/apply", (req, res) => {
   const day = Number((req.body ?? {}).day);
   if (!Number.isFinite(day)) return res.json({ ok: false, error: "day required" });
   const prescriptions = repo.planDayProgression(day);
+  // Only lifts whose target actually MOVES (overload/deload/vary) become a change —
+  // a "hold" is by definition no change, so it would apply as a confusing no-op and
+  // inflate the count. Each change carries the full apply payload: day_number (so
+  // applyPlanChange can locate the lift — its absence was the "No plan day NaN" /
+  // "Couldn't apply" bug), the sets/reps for context, and a plain-words `reason`.
   const changes = prescriptions
-    .filter((p) => p.action !== "hold" || p.plan_item_id)
+    .filter((p) => p.action !== "hold")
     .map((p) => {
-      const c: Record<string, any> = { exercise: p.exercise };
+      const c: Record<string, any> = {
+        day_number: day,
+        exercise: p.exercise,
+        sets: p.suggested?.sets ?? null,
+        rep_low: p.suggested?.rep_low ?? null,
+        rep_high: p.suggested?.rep_high ?? null,
+        reason: p.why || p.delta_text || null,
+      };
       if (p.mode === "timed") {
         if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
       } else {
@@ -572,12 +584,15 @@ api.post("/program/progression/apply", (req, res) => {
       }
       return c;
     })
-    .filter((c) => Object.keys(c).length > 1); // must have at least one target field
+    .filter((c) => c.target_weight !== undefined || c.target_seconds !== undefined);
   if (!changes.length) return res.json({ ok: false, error: "nothing to propose for this day" });
   const parsed = {
-    summary: `Auto-progression for day ${day} — ${changes.length} lift(s)`,
+    summary: `Auto-progression for day ${day} — ${changes.length} lift${changes.length === 1 ? "" : "s"}`,
     changes,
   };
+  // Retire any prior un-applied auto-progression draft for THIS day so repeated taps
+  // never stack duplicates in the Coach list (the fresh draft reflects the latest logs).
+  repo.supersedeAutoProgressionDrafts(day);
   const proposal = repo.createProposal("auto-progression", `day ${day} progression`, "", parsed);
   res.json({ ok: true, proposal });
 });

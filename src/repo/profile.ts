@@ -78,6 +78,31 @@ function supersedeSiblingTrainingDrafts(appliedId: number) {
   }
 }
 
+// A fresh auto-progression draft for a day RETIRES any prior un-applied one for the
+// SAME day, so tapping "apply to my plan" on Today repeatedly never piles up duplicate
+// drafts in the Coach list (each new draft reflects the latest logged sets; the stale
+// one is system-retired as 'superseded', not a user 'discarded'). Other days' drafts —
+// and any other agent's drafts — are untouched. Returns how many were retired.
+export function supersedeAutoProgressionDrafts(dayNumber: number) {
+  const drafts = db
+    .prepare(`SELECT id, parsed_json FROM plan_proposals WHERE status = 'draft' AND agent = 'auto-progression'`)
+    .all() as any[];
+  let retired = 0;
+  for (const d of drafts) {
+    let dn = Number.NaN;
+    try {
+      const parsed = d.parsed_json ? JSON.parse(d.parsed_json) : null;
+      const first = parsed && Array.isArray(parsed.changes) ? parsed.changes[0] : null;
+      dn = first ? Number(first.day_number) : Number.NaN;
+    } catch { /* keep NaN — an unparseable draft is left alone */ }
+    if (dn === Number(dayNumber)) {
+      db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+      retired++;
+    }
+  }
+  return retired;
+}
+
 // Clamp an advisory nutrition target to the lean-safe kcal/protein floors before
 // it's acknowledged. The nutrition check-in already proposes only conservative
 // ±100-250 kcal nudges, but this is the code-enforced backstop: a deficit target
