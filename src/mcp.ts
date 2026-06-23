@@ -572,6 +572,7 @@ export function buildMcpServer(): McpServer {
       allergies: z.string().optional(), dietary_restrictions: z.string().optional(),
       primary_discipline: z.enum(["strength", "endurance", "hybrid"]).optional(),
       endurance_sport: z.string().optional(),
+      goal_mode: z.enum(["lose", "maintain", "gain"]).optional().describe("the journey's shape: 'lose' (lean-safe deficit), 'maintain' (anchor to real expenditure — no deficit), 'gain' (conservative lean surplus). Omit to leave it deriving from the goal weight."),
     },
     async (p) => asText(repo.setProfile(p)));
 
@@ -758,6 +759,11 @@ export function buildMcpServer(): McpServer {
     { agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"), window: z.number().int().optional().describe("days to derive expenditure over (default 21)") },
     async ({ agent, window }) => asText(await nutritionCheckin(agent, window)));
 
+  server.tool("get_day_intake",
+    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to today (UTC calendar day).",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(repo.getDayIntake(date)));
+
   // ---- settings: agent rotation + auto-coach schedule ----
   server.tool("get_settings",
     "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
@@ -861,6 +867,22 @@ export function buildMcpServer(): McpServer {
   server.tool("list_food_notes", "List recent logged food notes (meal type, description, parsed macros, enrichment status).",
     { limit: z.number().int().optional() },
     async ({ limit }) => asText(repo.listFoodNotes(limit ?? 20)));
+
+  server.tool("update_food_note",
+    "Correct a logged food note (fix a macro, rename it, change the meal slot, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown.",
+    {
+      id: z.number().int(),
+      meal: z.string().optional(),
+      summary: z.string().optional(),
+      kcal: z.number().optional(),
+      protein_g: z.number().optional(),
+      carbs_g: z.number().optional(),
+      fat_g: z.number().optional(),
+      fiber_g: z.number().optional(),
+      notes: z.string().optional(),
+      items: z.array(z.string()).optional(),
+    },
+    async ({ id, ...fields }) => asText(repo.updateFoodNote(id, fields) ?? { error: "not found", id }));
 
   server.tool("delete_food_note", "Delete a logged food note by id.",
     { id: z.number().int() },
@@ -1307,6 +1329,42 @@ export function buildMcpServer(): McpServer {
     "The quiet 'What Cairn has noticed' read: durable, plain-language learnings drawn from suggestion → actual reconciliation (e.g. 'tolerates higher training frequency than the read assumed'). Returns { learnings:[{id, content, noticed_at}] }, newest-first. These season the coach's defaults — never a score, never a gate; pull-never-push.",
     { limit: z.number().int().optional() },
     async ({ limit }) => asText(repo.getOutcomeLearnings(limit))
+  );
+
+  // ---- Era 2: the calm daily driver (docs/VISION.md §12) ----
+  server.tool(
+    "get_today_agenda",
+    "The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today).",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.todayAgenda(date))
+  );
+
+  server.tool(
+    "get_learned_timeline",
+    "A calm, pull-only read of what Cairn has understood about you and the changes it's made — load-bearing memories, outcome learnings, connected-brain directives, and applied plan changes. Newest-first, bounded. Explains, never grades; no scores.",
+    { limit: z.number().int().positive().max(200).optional() },
+    async ({ limit }) => asText(repo.learnedTimeline({ limit }))
+  );
+
+  server.tool(
+    "get_guidelines",
+    "Trusted clinical-guideline statements (offline, recognized bodies — AHA/ACC, Endocrine Society, KDIGO…) for a marker/topic, or the whole pack. Grounds the connected brain's directive notes with a citation even with research disabled. INFORMATIONAL, not medical advice.",
+    { marker: z.string().optional() },
+    async ({ marker }) => asText(marker && marker.trim() ? { marker, guideline: repo.guidelineFor(marker) } : { guidelines: repo.allGuidelines() })
+  );
+
+  server.tool(
+    "confirm_goal_checkin",
+    "Restart the gentle 'is this still your goal?' clock (Era 2): records that the athlete confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else.",
+    {},
+    async () => { repo.confirmGoalCheckin(); return asText({ ok: true }); }
+  );
+
+  server.tool(
+    "dismiss_goal_checkin",
+    "Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence; pull-never-push.",
+    {},
+    async () => { repo.dismissGoalCheckin(); return asText({ ok: true }); }
   );
 
   // ---- T5: effortless capture (frequents, optional check-in, Apple Health) ----

@@ -240,6 +240,17 @@ function renderRunCompliance(ctx: any, focus: "training" | "day" | "weekly"): st
 // already shape meals & training. Filterable by domain so the meal prompt sees
 // nutrition directives first and the coach prompt sees training/watch first.
 // Returns "" when there is nothing to say — graceful, quiet by default.
+// A directive shows its VERIFIED citation when it has one; otherwise we attach an
+// OFFLINE trusted-guideline citation (the bundled guidelines pack — Era 2, §12 item
+// 2) as a FLOOR, so the connected brain's notes can cite a recognized body even with
+// host-side research disabled. Verified citation always wins. INFORMATIONAL, never a
+// hard rule; returns "" when neither is available (quiet by default).
+function directiveCitationTag(d: any): string {
+  if (d?.citation) return ` [${String(d.citation).trim()}]`;
+  const g = d?.marker ? repo.guidelineFor(String(d.marker)) : null;
+  return g ? ` [general guidance · ${g.source}]` : "";
+}
+
 function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "training" | "watch")[] } = {}): string {
   const directives = Array.isArray(ctx?.directives) ? ctx.directives : [];
   const wanted = opts.domains;
@@ -269,7 +280,7 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     for (const d of relevant) {
       const dom = String(d.domain ?? "watch");
       (byDomain[dom] ||= []).push(
-        `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${d.citation ? ` [${String(d.citation).trim()}]` : ""}`
+        `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveCitationTag(d)}`
       );
     }
     lines.push("DERIVED HEALTH DIRECTIVES (the connected brain — your labs propagated into this domain; honor these):");
@@ -891,7 +902,9 @@ You can SEE all their data (DATA section) and can ACT by emitting actions.
 
 GUARDRAILS:
 - Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.
-- For weight loss, follow the lean-safe goal math (goal.recommended); never endorse a crash deficit.
+- Fuel guidance follows the athlete's GOAL MODE (DATA: goal_mode) and goal.recommended: a lean-safe
+  deficit when LOSING, maintenance calories when MAINTAINING (don't push a deficit), a conservative
+  surplus when GAINING — never a crash deficit and never a dirty bulk.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the source
   of truth for strength progression. Adapt recommendations to the athlete's stated focus: strength-first
   means Garmin runs/rides mainly influence recovery and conditioning; runner/cyclist-first means
@@ -1262,6 +1275,57 @@ const HEALTH_INGEST_SCHEMA = `{
     { "content": "<durable notable fact, e.g. 'LDL-C trending up since 2022, 207 mg/dL in 2026'>", "kind": "observation|injury|milestone" }
   ]
 }`;
+
+// ---- food photo → macros (vision) ----------------------------------------------
+// A plate photo the athlete attached in Chat. The agent CLIs (Claude Code / Codex)
+// can open local files, so we hand the agent the ABSOLUTE image path (same trick as
+// the health-doc ingest) and ask it to LOOK at the plate and estimate its foods +
+// macros. Output is FLAT top-level macros (NOT the {structured} wrapper the text
+// enricher uses) — enrich.ts applyFoodPhoto reads it directly. Rough is fine;
+// honest > precise. Constitution: never moralize the food, never a score.
+export function buildFoodPhotoPrompt(absPath: string, hint?: string): string {
+  const profile = repo.getProfile();
+  const goal = repo.computeGoalCheck();
+  return `You estimate the nutrition of a meal from a PHOTO of the plate, for an athlete's food log.
+The photo is a local image file saved on this machine.
+
+LOOK AT THE IMAGE FILE AT THIS ABSOLUTE PATH:
+${absPath}
+Open and view that image directly before answering.${hint ? `
+The athlete's note for this meal: "${hint}" — use it to disambiguate, but trust what you SEE.` : ""}
+
+YOUR JOB:
+- Identify the dish(es) on the plate and the visible foods/components.
+- Estimate portion sizes from ordinary servings and what the plate/utensils imply about scale.
+- Estimate TOTAL macros for the whole plate: calories, protein, carbs, fat, fiber.
+
+GUARDRAILS:
+- Rough is fine — never invent precision. A photo can't show oil, butter, or hidden sugar, so
+  estimate sensibly and lean to an honest middle, not a flattering low.
+- NEVER moralize the food. No "treat", "cheat", "indulgent", "guilty", "bad/good" — just describe and
+  estimate. This is a calm log, not a judgement.
+- If you genuinely cannot tell what something is, say so in "summary" and give your best rough total;
+  use null for any single macro you truly can't estimate rather than guessing wildly.
+- "confidence" is a COARSE band, not a number: "high" (clear, familiar plate), "medium" (reasonable
+  guess), "low" (hard to read — portions unclear, packaging only, dim photo).
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+{
+  "summary": "<clean dish name / short description of the plate>",
+  "items": [<string>],
+  "kcal": <number|null>,
+  "protein_g": <number|null>,
+  "carbs_g": <number|null>,
+  "fat_g": <number|null>,
+  "fiber_g": <number|null>,
+  "notes": <string|null>,
+  "confidence": "low|medium|high"
+}
+
+CONTEXT (for portion realism only — do NOT let the goal bias the estimate up or down):
+profile: ${JSON.stringify(profile)}
+goal: ${JSON.stringify(goal)}`;
+}
 
 // Multi-record ingestion. The source can be a single file OR a folder of files
 // (a MyChart/CCDA export we unzipped): CCDA XML, HTML summaries, lab PDFs, scans.
@@ -1888,14 +1952,34 @@ ${GARMIN_STRENGTH_SCHEMA}`;
 }
 
 // Longevity + lean guardrails shared by the weekly meal-plan and meal-swap prompts.
-// Framing: super-healthy, getting-lean, longevity coach — not just a macro calculator.
-const LONGEVITY_GUARDRAILS = `LONGEVITY & LEAN GUARDRAILS:
+// The journey's SHAPE (v41) → a plain-language fueling instruction that CONDITIONS
+// the deficit / "getting-lean" framing on the actual goal mode, so a maintaining or
+// lean-building athlete is never pushed into a cut. Reads ctx.goal_mode (always set
+// by getCoachContext) and falls back to ctx.goal.goal_mode. Calm, no scores.
+function renderGoalMode(ctx: any): string {
+  const mode = String(ctx?.goal_mode || ctx?.goal?.goal_mode || "maintain");
+  const goal = ctx?.goal && ctx.goal.ok ? ctx.goal : null;
+  const tgt = goal?.recommended?.target_intake_kcal;
+  const protein = goal?.recommended?.protein_g;
+  const anchor = tgt ? ` Anchor daily calories near ~${tgt} kcal with ~${protein} g protein (goal.recommended).` : "";
+  if (mode === "maintain") {
+    return `\nGOAL MODE: MAINTAIN — the athlete is holding steady, NOT losing weight. Do NOT prescribe a deficit or frame food as "getting lean"; fuel to maintenance — enough to support training and recovery, protein-forward, whole-food quality. Only flag intake if the measured weight trend genuinely drifts.${anchor}\n`;
+  }
+  if (mode === "gain") {
+    return `\nGOAL MODE: LEAN GAIN — the athlete is building, so eat in a CONSERVATIVE surplus (slow, muscle-biased — never a dirty bulk). Keep protein high and food quality high; the connected brain's lab directives still gate WHAT the surplus is made of (e.g. cap saturated fat if ApoB is up).${anchor}\n`;
+  }
+  return `\nGOAL MODE: LOSE — a lean-safe deficit toward the goal weight, protein protected, never a crash cut.${anchor}\n`;
+}
+
+// Framing: super-healthy, goal-aware, longevity coach — not just a macro calculator.
+const LONGEVITY_GUARDRAILS = `LONGEVITY GUARDRAILS:
 - Anchor EVERY meal on protein; total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g).
 - 30g+ fiber per day: vegetables, legumes, fruit, whole grains.
 - Build meals from mostly whole, single-ingredient foods; minimize ultra-processed food, added
   sugar, and alcohol.
 - Oily fish 2-3x/week (salmon, sardines, mackerel) or another omega-3 source.
-- Lean-safe deficit ONLY (respect goal.recommended) — never a crash deficit.
+- Calorie target follows goal.recommended for the active GOAL MODE (a lean-safe deficit, maintenance,
+  or a conservative surplus) — never a crash deficit and never an aggressive bulk.
 - Keep the last meal of the day moderate, not enormous or very late.`;
 
 // Meal slots are flexible — the plan must bend around the athlete's real training schedule,
@@ -1930,15 +2014,16 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
   const fatigue = ctx?.training_signals?.autoregulation?.note
     ? `\nRECOVERY DEBT (recent training feedback): ${ctx.training_signals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
     : "";
-  return `You are a super-healthy, getting-lean, longevity-focused nutrition coach building a 7-day
-meal plan to support body recomposition (lose fat, preserve lean mass, eat for healthspan). The
-athlete's profile, goal check (with computed TDEE and a lean-safe recommended intake), training
+  return `You are a super-healthy, goal-aware, longevity-focused nutrition coach building a 7-day
+meal plan that fuels the athlete's CURRENT goal (see GOAL MODE below) while eating for healthspan. The
+athlete's profile, goal check (with computed TDEE and a mode-correct recommended intake), training
 plan, recent activities, and food preferences in memory are in the DATA section.
-
+${renderGoalMode(ctx)}
 HARD RULES:
-- Use the RECOMMENDED intake from goal.recommended (lean-safe), NOT an aggressive crash deficit,
-  even if the athlete's requested timeline implies a bigger deficit. If their goal is aggressive,
-  build the lean-safe plan and say so in notes.
+- Anchor daily_kcal to goal.recommended (the mode-correct target — a lean-safe deficit, maintenance,
+  or a conservative surplus per GOAL MODE), NOT an aggressive crash deficit or a dirty bulk, even if
+  the athlete's requested timeline implies more. If their goal is aggressive, build the sustainable
+  plan and say so in notes.
 - Hit the protein target (goal.recommended.protein_g). Protein is the lever that protects muscle.
 - Never propose intake below ~1500 kcal for this athlete regardless of math.
 - Favor whole foods; respect any preferences/constraints in memory.
@@ -1960,7 +2045,7 @@ ${CONTEXT_GUARDRAILS}
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
 ${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
-TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to the recommended deficit and protein target.")}
+TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${MEAL_SCHEMA}
@@ -2005,7 +2090,7 @@ export function buildNutritionCheckinPrompt(ctx?: any, opts: { windowDays?: numb
     ? (goal.requested?.target_intake_kcal ?? goal.recommended?.target_intake_kcal ?? null)
     : null;
   const proteinTarget = goal?.ok ? (goal.recommended?.protein_g ?? null) : null;
-  return `You are Cairn, the athlete's calm, getting-lean, longevity-focused nutrition buddy running a
+  return `You are Cairn, the athlete's calm, goal-aware, longevity-focused nutrition buddy running a
 quiet adaptive-nutrition check-in (MacroFactor-style). Their REAL energy expenditure has been derived
 from logged intake and the bodyweight trend, adherence-neutral — it does NOT care whether they "were
 good." Decide whether their calorie/macro target should change, and if so propose ONE calm adjustment
@@ -2023,16 +2108,21 @@ DERIVED EXPENDITURE (real TDEE from intake − weighted weight trend):
 ${JSON.stringify(exp)}
 
 CURRENT TARGET: ${currentTarget != null ? `~${currentTarget} kcal/day` : "(none set)"}, protein ~${proteinTarget != null ? `${proteinTarget} g/day` : "(unset)"}.
-GOAL CHECK (lean-safe recommendation): ${JSON.stringify(goal)}
-
+GOAL CHECK (mode-correct recommendation): ${JSON.stringify(goal)}
+${renderGoalMode(context)}
 WHEN TO PROPOSE A CHANGE (else change:false):
 - Confidence must be at least "medium" AND the trend must have drifted meaningfully off the goal pace
-  (e.g. weight flat or rising while the goal is to lose, or losing far faster than the lean-safe
-  ceiling so a small calorie RAISE keeps it sustainable).
-- Keep any change SMALL and lean-safe: nudge calories by roughly ±100-250 kcal toward the goal pace,
-  never a crash cut. Respect goal.recommended (lean-safe) as the floor — never below ~1500 kcal.
-- MACRO FLOORS under a deficit: protect PROTEIN first (hold or raise — protein_g >= the current
-  protein target), then fat to a healthy minimum, and let CARBS take the adjustment.
+  FOR THIS GOAL MODE — see below. Otherwise set change:false and stay quiet (the common, correct answer).
+- LOSE: weight flat or rising while the goal is to lose, or losing far faster than the lean-safe ceiling
+  (then a small calorie RAISE keeps it sustainable).
+- MAINTAIN: only when the weight trend has consistently drifted up OR down off steady — nudge back toward
+  maintenance (~the derived TDEE). Never propose a deficit by default; holding steady is success.
+- LEAN GAIN: flag if the trend shows NO gain over time (suggest a small RAISE) or gaining too fast /
+  fat-biased (suggest easing the surplus). Never cut below maintenance.
+- Keep any change SMALL: nudge calories by roughly ±100-250 kcal toward the right pace, never a crash cut.
+  Respect goal.recommended as the floor — never below ~1500 kcal.
+- MACRO FLOORS: protect PROTEIN first (hold or raise — protein_g >= the current protein target), then fat
+  to a healthy minimum, and let CARBS take the adjustment.
 - If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.${disciplineOf(context) !== "strength" ? `
 - ENDURANCE/HYBRID athlete: do NOT propose a deficit unless fat loss is an EXPLICIT goal — the default is
   to FUEL the training (anchor to maintenance). Protect CARBOHYDRATE; if anything, a sustained calorie
@@ -2070,7 +2160,7 @@ export function buildMealSwapPrompt(args: { plan: any; day: string; mealIndex: n
   const dayMeals = meals
     .map((m: any, i: number) => `${i === mealIndex ? ">>> SWAP THIS ONE >>> " : ""}[${i}] ${m?.name ?? "?"} — ${m?.items ?? ""} (${m?.kcal ?? "?"} kcal, ${m?.protein_g ?? "?"}g protein, ${m?.carbs_g ?? "?"}g carbs, ${m?.fat_g ?? "?"}g fat)`)
     .join("\n");
-  return `You are a super-healthy, getting-lean, longevity-focused nutrition coach. The athlete wants
+  return `You are a super-healthy, goal-aware, longevity-focused nutrition coach. The athlete wants
 to SWAP one meal in their drafted meal plan for a different dish. Propose exactly ONE replacement.
 
 THE DAY (${dayObj?.day ?? day}) — its meals, with the one to replace marked:
@@ -2084,7 +2174,7 @@ REPLACEMENT RULES:
 - It must fit the rest of the day (don't duplicate another meal's main protein/dish).
 
 ${LONGEVITY_GUARDRAILS}
-${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
+${renderGoalMode(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
 ${prefs ? `
 USER SCHEDULE & MEAL PREFERENCES (follow these):
 ${prefs}
@@ -2098,7 +2188,7 @@ OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdow
 ${SWAP_SCHEMA}`;
 }
 
-const RECIPE_SCHEMA = `{ "summary": "<1-2 sentences: how this meal serves the getting-lean / longevity goal>",
+const RECIPE_SCHEMA = `{ "summary": "<1-2 sentences: how this meal serves the athlete's goal & longevity>",
   "time_min": <total prep+cook minutes, number>,
   "servings": <number>,
   "ingredients": [{"item": "<ingredient>", "qty": "<amount>"}],
@@ -2118,7 +2208,7 @@ export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: num
   const profile = repo.getProfile();
   const goal = repo.computeGoalCheck();
   const prefs = (repo.getSettings().meal_prefs || "").trim();
-  return `You are a super-healthy, getting-lean, longevity-focused nutrition coach. Write a practical,
+  return `You are a super-healthy, goal-aware, longevity-focused nutrition coach. Write a practical,
 home-cook recipe for ONE meal from the athlete's drafted meal plan.
 
 THE MEAL (${dayObj?.day ?? day}, meal [${mealIndex}]):

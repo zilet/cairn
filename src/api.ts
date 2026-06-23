@@ -39,6 +39,7 @@ import {
 import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
 import { authEnabled } from "./auth.js";
+import { researchAutoEligible } from "./research.js";
 import type { AgentJobKind } from "./agentJobKinds.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
 import { ACCEPTED_MIME, extForMime, isAcceptedMime } from "./uploadMime.js";
@@ -452,7 +453,7 @@ api.post("/agent-clis/update", (_req, res) => res.status(202).json(startAgentCli
 // Settings + agent metadata. route_tasks is server-owned UI metadata for the
 // Settings routing controls, so frontend task labels cannot drift from the backend
 // allowlist.
-api.get("/settings", (_req, res) => res.json({ settings: repo.getSettings(), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
+api.get("/settings", (_req, res) => res.json({ settings: repo.getSettings(), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks(), research_auto_eligible: researchAutoEligible() }));
 api.put("/settings", (req, res) => res.json({ settings: repo.setSettings(req.body ?? {}), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
 
 // Draft a plan proposal from a free-text instruction (the Coach tab's DRAFT PLAN
@@ -648,7 +649,16 @@ api.post("/proposals/:id/discard", (req, res) =>
 
 // ---- profile & goal ----
 api.get("/profile", (_req, res) => res.json(repo.getProfile()));
-api.put("/profile", (req, res) => res.json(repo.setProfile(req.body ?? {})));
+api.put("/profile", (req, res) => {
+  const body = req.body ?? {};
+  // A real goal change IS a confirmation — restart the gentle "is this still your
+  // goal?" clock (Era 2, §12 item 5) so the check-in doesn't resurface right after
+  // you just set it.
+  if ("goal_mode" in body || "goal_weight_lb" in body || "goal_date" in body) {
+    try { repo.confirmGoalCheckin(); } catch { /* best-effort */ }
+  }
+  res.json(repo.setProfile(body));
+});
 api.get("/goal", (_req, res) => res.json(repo.computeGoalCheck()));
 
 // ---- bodyweight log ----
@@ -891,6 +901,14 @@ api.get("/nutrition/expenditure", (req, res) => {
   res.json(repo.estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21));
 });
 
+// A calm review of ONE day's logged food (v41): the entries (each editable),
+// the running totals, and — only when a real target exists (a loss/gain goal, or
+// the maintenance anchor) — a gentle "remaining". ?date=YYYY-MM-DD overrides today.
+api.get("/nutrition/day", (req, res) => {
+  const date = typeof req.query.date === "string" ? req.query.date : undefined;
+  res.json(repo.getDayIntake(date));
+});
+
 // Quiet adaptive-nutrition check-in: when the derived expenditure has drifted
 // meaningfully off the goal, the agent drafts a calorie/macro target CHANGE as a
 // DRAFT proposal to review — never auto-applied. Most weeks nothing has moved
@@ -977,6 +995,14 @@ api.get("/food-notes/:id", (req, res) => {
 api.post("/food-notes", (req, res) => {
   const b = req.body ?? {};
   res.json(repo.addFoodNote(b.meal, b.raw ?? b.text ?? "", b.parsed ?? null, b.image_path));
+});
+// Manual correction of a logged food note (fix a macro, rename it, change the meal
+// slot, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered.
+// 404 on unknown id.
+api.put("/food-notes/:id", (req, res) => {
+  const updated = repo.updateFoodNote(Number(req.params.id), req.body ?? {});
+  if (!updated) return res.status(404).json({ error: "not found" });
+  res.json(updated);
 });
 api.delete("/food-notes/:id", (req, res) => res.json(repo.deleteFoodNote(Number(req.params.id))));
 
@@ -1442,6 +1468,35 @@ api.get("/learnings", (req, res) => {
   const limit = req.query.limit ? Number(req.query.limit) : undefined;
   res.json(repo.getOutcomeLearnings(Number.isFinite(limit as number) ? (limit as number) : undefined));
 });
+
+// ---- Era 2 (the calm daily driver, docs/VISION.md §12) ----
+// The Today salience arbiter: ONE ranking + budget pass over the whole Today
+// surface, so only the 1-2 things that matter most today render inline and the
+// rest collapse behind a quiet "more". Marking "seen" at the end (debounced)
+// powers the "since you last looked" continuity line.
+api.get("/today-agenda", (req, res) => {
+  const date = typeof req.query.date === "string" ? req.query.date : undefined;
+  const agenda = repo.todayAgenda(date);
+  try { repo.markTodaySeen(); } catch { /* best-effort */ }
+  res.json(agenda);
+});
+// The legible "what Cairn has learned about you" timeline (pull-only; no scores).
+api.get("/learned-timeline", (req, res) => {
+  const limit = Number.parseInt(String(req.query.limit ?? ""), 10);
+  res.json(repo.learnedTimeline({ limit: Number.isFinite(limit) ? limit : undefined }));
+});
+// Trusted clinical-guideline statements (offline pack) for a marker, or the whole set.
+api.get("/guidelines", (req, res) => {
+  const marker = typeof req.query.marker === "string" ? req.query.marker : "";
+  if (marker.trim()) return res.json({ marker, guideline: repo.guidelineFor(marker) });
+  res.json({ guidelines: repo.allGuidelines() });
+});
+// The "since you last looked" continuity line standalone (or null).
+api.get("/since-last", (_req, res) => res.json(repo.sinceLastLookedCandidate() ?? null));
+// Gentle goal check-in (you-drive): confirm restarts the ~3-month stable clock;
+// dismiss starts the cooldown. Neither changes the goal — that's the profile flow.
+api.post("/goal-checkin/confirm", (_req, res) => { repo.confirmGoalCheckin(); res.json({ ok: true }); });
+api.post("/goal-checkin/dismiss", (_req, res) => { repo.dismissGoalCheckin(); res.json({ ok: true }); });
 
 // ---- context events (life timeline: trips / injuries / life events) ----
 api.get("/context-events", (req, res) =>
