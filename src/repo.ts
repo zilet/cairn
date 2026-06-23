@@ -27,3 +27,9 @@ export * from "./repo/program-state.js";
 export * from "./repo/progression.js";
 export * from "./repo/program-blocks.js";
 export * from "./repo/exercise-variations.js";
+// Era 2 (the calm daily driver, docs/VISION.md §12):
+export * from "./repo/today-agenda.js"; // the Today salience arbiter
+export * from "./repo/since-last.js"; // honest "since you last looked" continuity
+export * from "./repo/goal-checkin.js"; // gentle periodic "is this still your goal?"
+export * from "./repo/learned-timeline.js"; // legible "what Cairn has learned about you"
+export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.js"; // offline trusted-guidelines pack

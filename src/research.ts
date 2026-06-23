@@ -16,6 +16,7 @@
 import * as repo from "./repo.js";
 import { runChosen } from "./runChosen.js";
 import { buildResearchPrompt } from "./prompt.js";
+import { loadAgents } from "./agents.js";
 
 export interface ResearchResult {
   ok: boolean;
@@ -37,6 +38,46 @@ export function researchEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+export interface ResearchAutoEligibility {
+  eligible: boolean;       // a usable, web-capable agent is connected — safe to suggest enabling
+  reason:
+    | "web_agent_connected" // a usable agent declares web_access in agents.json
+    | "agent_connected"     // a usable agent exists but none DECLARES web access (best-effort)
+    | "no_agent";           // no usable coaching CLI — never suggest turning research on
+}
+
+// Should the PWA suggest enabling LIVE evidence research?
+//
+// Live research forces real network calls through a web-capable agent CLI, so we
+// only auto-SUGGEST it when one is actually connected — never silently flip it on,
+// and never nag a user who has no coaching agent installed.
+//
+// Web-capability signal: agents.json carries a per-agent `web_access: true` flag
+// (claude). It is the only declared web signal today, so:
+//   • a usable agent that declares web_access  → eligible, "web_agent_connected"
+//   • a usable agent but none declares web      → eligible (best-effort), "agent_connected"
+//   • no usable agent at all                    → NOT eligible, "no_agent"
+// LIMITATION: `web_access` is a coarse, static config flag — it doesn't prove a
+// given login can actually browse right now. It's a hint to surface the toggle, not
+// a guarantee; the researchEvidence firewall (URL validation, sourceless-claim
+// discard) is what actually protects against a non-browsing agent.
+export function researchAutoEligible(): ResearchAutoEligibility {
+  let usable: string[] = [];
+  try {
+    // The usable set = enabled + binary present + env ok + not known-logged-out.
+    usable = repo.getAgentConfig().filter((a: any) => a.usable).map((a: any) => a.name);
+  } catch {
+    usable = [];
+  }
+  if (!usable.length) return { eligible: false, reason: "no_agent" };
+  let defs: Record<string, any> = {};
+  try { defs = loadAgents() as any; } catch { defs = {}; }
+  const hasWebAgent = usable.some((n) => defs[n]?.web_access === true);
+  return hasWebAgent
+    ? { eligible: true, reason: "web_agent_connected" }
+    : { eligible: true, reason: "agent_connected" };
 }
 
 // Validate + filter a single claim's sources to plausible http(s) URLs. Returns
