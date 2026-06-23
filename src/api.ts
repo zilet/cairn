@@ -271,12 +271,17 @@ api.get("/today-read", async (req, res) => {
   // an override they changed their mind about (mirrors the cache-invalidation path).
   const reset = req.query.reset === "1" || req.query.reset === "true";
   const readDate = date || localToday();
+  // The day-ahead forward line is attached deterministically on EVERY read: it must
+  // reflect the CURRENT plan/balance (the day_reads cache columns don't carry it, and
+  // a persisted snapshot would go stale as the week fills in). null on a done day —
+  // the debrief's `why` already voices what's next. forwardLook is null-safe.
+  const withForward = (r: any) => ({ ...r, forward: r?.kind === "done" ? null : (repo.forwardLook(readDate).text || null) });
   try {
     if (reset) {
       repo.invalidateDayRead(readDate);
       const r: any = await computeDayRead({ date, agent: agentParam });
       recordDayReadSuggestion(readDate, r, null);
-      return res.json({ ...r, agent_status: agentStatusFor(r) });
+      return res.json(withForward({ ...r, agent_status: agentStatusFor(r) }));
     }
     if (!override) {
       const cached = repo.getCachedDayRead(readDate);
@@ -286,7 +291,7 @@ api.get("/today-read", async (req, res) => {
         // typical open never lands a day_read suggestion for reconcileOutcomes to learn
         // from. Idempotent per (kind, date) so repeated opens don't duplicate the row.
         recordDayReadSuggestion(readDate, cached, null);
-        return res.json({ ...cached, cached: true, agent_status: agentStatusFor(cached) });
+        return res.json(withForward({ ...cached, cached: true, agent_status: agentStatusFor(cached) }));
       }
     }
     const read: any = await computeDayRead({ date, override, agent: agentParam });
@@ -294,13 +299,13 @@ api.get("/today-read", async (req, res) => {
     // reconciliation pass can compare it to what the athlete actually did. Deduped
     // per (kind, date) for the canonical read; an override read always records.
     recordDayReadSuggestion(readDate, read, override ?? null);
-    return res.json({ ...read, agent_status: agentStatusFor(read) });
+    return res.json(withForward({ ...read, agent_status: agentStatusFor(read) }));
   } catch (e: any) {
     // Last-resort floor — computeDayRead already swallows agent failures, so this
     // only fires on an unexpected repo error. Still return a real read, never 500.
     const b = repo.dayRead(date);
-    const headline = b.kind === "rest" ? "Rest today." : b.kind === "easy" ? "Take it easy." : b.focus ? `${b.focus}.` : "Good to train.";
-    return res.json({ ...b, headline, source: "deterministic", error: e.message });
+    const headline = b.kind === "done" ? "You're done for today." : b.kind === "rest" ? "Rest today." : b.kind === "easy" ? "Take it easy." : b.focus ? `${b.focus}.` : "Good to train.";
+    return res.json(withForward({ ...b, headline, source: "deterministic", error: e.message }));
   }
 });
 
