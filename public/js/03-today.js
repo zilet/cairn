@@ -1087,7 +1087,7 @@ function buildAgendaRailHtml(agenda, genericPending) {
 // other Today wiring. De-duped so two candidates that share a loader (weekly-read +
 // connection-insight both call loadTodayReads, which fills both slots in one fetch)
 // fire it once.
-function runAgendaRail(agenda, genericPending, isToday) {
+function runAgendaRail(agenda, genericPending) {
   const called = new Set();
   for (const c of [...agenda.primary, ...agenda.more]) {
     if (!c.client_card) continue;
@@ -1750,7 +1750,7 @@ async function renderToday(opts = {}) {
     // ranked order, primary + more), plus wire any generic Era-2 cards. When the
     // agenda is unavailable we fall back to the fixed-rail loaders exactly as before.
     if (agenda) {
-      runAgendaRail(agenda, agendaGeneric, isToday);
+      runAgendaRail(agenda, agendaGeneric);
     } else {
       // Fallback (agenda route unavailable): the other rail cards still load. Fuel is
       // intentionally NOT loaded here — it has no slot in fixedRailHtml and surfaces
