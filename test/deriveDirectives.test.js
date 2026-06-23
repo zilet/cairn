@@ -14,6 +14,21 @@ beforeEach(() => {
 const activeFor = (markerLabel) =>
   repo.listActiveDirectives().filter((d) => (d.marker || "") === markerLabel);
 
+test("directiveFreshness: acute markers decay, chronic markers never do", () => {
+  const today = "2026-06-23";
+  const ago = (n) => new Date(Date.parse(today) - n * 864e5).toISOString().slice(0, 10);
+  // hs-CRP is acute (point-in-time) → stale once clearly old; fresh while recent.
+  assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: ago(30) }, today).stale, true);
+  assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: ago(5) }, today).stale, false);
+  assert.equal(repo.directiveFreshness({ marker: "C-Reactive Protein", trigger_date: ago(40) }, today).acute, true);
+  // ApoB is chronic/structural → NEVER stale, however old the reading.
+  const apob = repo.directiveFreshness({ marker: "ApoB", trigger_date: ago(400) }, today);
+  assert.equal(apob.acute, false);
+  assert.equal(apob.stale, false);
+  // No trigger_date → can't be stale (age unknown), never silently dropped.
+  assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: null }, today).stale, false);
+});
+
 test("a flagged ApoB produces nutrition + watch directives", () => {
   seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);
   const res = repo.deriveDirectives();

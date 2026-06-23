@@ -1268,6 +1268,34 @@ function buildReviewMarkerContexts(): Map<string, MarkerContext> {
 // guidance (with its marker, citation and uncertain flag). INFORMATIONAL, not
 // medical advice — the coach folds nutrition/training directives into plans and
 // surfaces 'watch' items, never treats them as orders. Bounded.
+// ---------- acute-marker staleness (Brief recency) ----------
+// Some markers are ACUTE-PHASE / point-in-time: a single reading reflects the moment
+// (a cold, a hard session, a poor night), not a stable trait. An OLD elevated acute
+// reading must NOT drive today's training/nutrition as if it were current — it ages
+// into a quiet "worth a recheck" note instead of a daily cap. Chronic/structural
+// markers (ApoB, Lp(a), LDL, HbA1c, …) carry NO such decay — they stay relevant.
+const ACUTE_MARKER_RE = /\b(hs-?crp|c-?reactive|\bcrp\b|esr|sed(imentation)? rate|wbc|white blood|neutrophil|creatine kinase|\bck\b)\b/i;
+export function isAcuteMarker(name?: string | null): boolean {
+  return !!name && ACUTE_MARKER_RE.test(String(name));
+}
+// After this many days an acute marker-derived directive is STALE for daily surfaces.
+export const ACUTE_DIRECTIVE_STALE_DAYS = 21;
+// Pure, testable freshness read for a directive. `acute` = its marker is acute-phase;
+// `ageDays` = days since the triggering reading; `stale` = acute AND clearly old.
+export function directiveFreshness(
+  d: any,
+  today?: string
+): { acute: boolean; ageDays: number | null; stale: boolean } {
+  const acute = isAcuteMarker(d?.marker);
+  let ageDays: number | null = null;
+  const td = d?.trigger_date ? Date.parse(String(d.trigger_date)) : Number.NaN;
+  if (Number.isFinite(td)) {
+    const now = today ? Date.parse(today) : Date.now();
+    if (Number.isFinite(now)) ageDays = Math.floor((now - td) / 864e5);
+  }
+  return { acute, ageDays, stale: acute && ageDays != null && ageDays > ACUTE_DIRECTIVE_STALE_DAYS };
+}
+
 export function directivesForCoach() {
   return listActiveDirectives().slice(0, 24).map((d: any) => ({
     domain: d.domain,

@@ -276,16 +276,34 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
   }
 
   if (relevant.length) {
-    const byDomain: Record<string, string[]> = {};
-    for (const d of relevant) {
-      const dom = String(d.domain ?? "watch");
-      (byDomain[dom] ||= []).push(
-        `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveCitationTag(d)}`
-      );
+    // Acute-phase findings (hs-CRP, ESR, …) are point-in-time: a stale one must NOT be
+    // honored as a current daily cap (the bug — a 2-week-old hs-CRP capping today's
+    // intervals every morning). Split fresh (honor) from aging-acute (a soft, clearly
+    // dated "recheck" note the agent must NOT turn into a daily cap).
+    const fresh: any[] = [];
+    const agingAcute: any[] = [];
+    for (const d of relevant) (repo.directiveFreshness(d).stale ? agingAcute : fresh).push(d);
+    if (fresh.length) {
+      const byDomain: Record<string, string[]> = {};
+      for (const d of fresh) {
+        const dom = String(d.domain ?? "watch");
+        (byDomain[dom] ||= []).push(
+          `  - ${String(d.directive ?? "").trim()}${d.rationale ? ` (why: ${String(d.rationale).trim()})` : ""}${directiveCitationTag(d)}`
+        );
+      }
+      lines.push("DERIVED HEALTH DIRECTIVES (the connected brain — your labs propagated into this domain; honor these):");
+      for (const dom of ["nutrition", "training", "watch"]) {
+        if (byDomain[dom]?.length) lines.push(` ${dom.toUpperCase()}:`, ...byDomain[dom]);
+      }
     }
-    lines.push("DERIVED HEALTH DIRECTIVES (the connected brain — your labs propagated into this domain; honor these):");
-    for (const dom of ["nutrition", "training", "watch"]) {
-      if (byDomain[dom]?.length) lines.push(` ${dom.toUpperCase()}:`, ...byDomain[dom]);
+    if (agingAcute.length) {
+      lines.push("AGING LAB FINDINGS (acute, point-in-time markers from a while ago — INFORMATIONAL ONLY: do NOT cap today's training or meals on these; at most a gentle 'worth a recheck' if it naturally fits):");
+      for (const d of agingAcute) {
+        const f = repo.directiveFreshness(d);
+        const wks = f.ageDays != null ? Math.max(1, Math.round(f.ageDays / 7)) : null;
+        const age = wks != null ? `~${wks} week${wks === 1 ? "" : "s"} ago` : "a while ago";
+        lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()} (reading ${age} — point-in-time; recheck before it shapes anything)`);
+      }
     }
   }
   const feedback = Array.isArray(ctx?.directive_feedback) ? ctx.directive_feedback : [];
