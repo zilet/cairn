@@ -725,6 +725,10 @@ export function programAdjustments(balArg?: ProgramBalance, recentArg?: Map<Musc
       else if (p.action === "overload") overloads.push({ kind: "progression", title: `${p.exercise} — ${p.delta_text}`, why: p.why, exercise: p.exercise });
     }
   }
+  // Lead with the WINS — an earned step-up is the most motivating, actionable thing a
+  // coach can surface ("your work paid off, here's the load"). They used to be pushed
+  // dead-last and cut by the 8-item cap, buried under "No X programmed" gap-nags.
+  overloads.slice(0, 3).forEach(push);
   deloads.forEach(push);
   varies.forEach(push);
 
@@ -801,17 +805,19 @@ export function programAdjustments(balArg?: ProgramBalance, recentArg?: Map<Musc
   //    Read what groups appear ANYWHERE in the plan; flag core / forearms (grip)
   //    / mobility when they're absent (they were invisible until the taxonomy
   //    added them as first-class groups). Reuses `planned` from the balance step.
-  for (const [group, label, why, suggestions] of [
-    ["core", "core", "No anti-extension / anti-rotation core work is programmed — add a loaded carry or a plank/pallof variation; it underpins everything else.", ["Pallof Press", "Farmer's Walk", "Hanging Leg Raise"]],
-    ["forearms", "grip / forearm", "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull.", ["Farmer's Walk", "Suitcase Carry", "Dead Hang"]],
-    ["mobility", "mobility", "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner.", ["Ankle Rocker", "90/90 Hip Switch", "World's Greatest Stretch"]],
+  // Gap titles are ADDITIVE and calm ("Add a little core"), never a "No X programmed"
+  // nag-wall — these are gentle floors worth rounding the program out with, not failures
+  // (constitution: calm, never shaming). They sit BELOW the earned wins + due focus above.
+  for (const [group, title, why, suggestions] of [
+    ["core", "Add a little core", "No anti-extension / anti-rotation core work is programmed — a loaded carry or a plank/pallof variation underpins everything else.", ["Pallof Press", "Farmer's Walk", "Hanging Leg Raise"]],
+    ["forearms", "Work in some grip", "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull.", ["Farmer's Walk", "Suitcase Carry", "Dead Hang"]],
+    ["mobility", "A little mobility prep", "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner.", ["Ankle Rocker", "90/90 Hip Switch", "World's Greatest Stretch"]],
   ] as const) {
     if (!planned.has(group)) {
-      push({ kind: "gap", title: `No ${label} work programmed`, why, group, suggestions: [...suggestions] });
+      push({ kind: "gap", title, why, group, suggestions: [...suggestions] });
     }
   }
 
-  overloads.slice(0, 3).forEach(push);
   return out.slice(0, 8);
 }
 
