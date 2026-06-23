@@ -92,7 +92,21 @@ async function processChatTurn(id: number): Promise<void> {
     repo.setChatTurnPhase(id, "applying");
     emit(id, { type: "phase", turn: repo.getChatTurn(id) });
 
-    const { applied, drafts } = applyChatActions({ actions }, { agent, imagePath: turn.image_path, message: turn.message });
+    // A photo attached this turn becomes a food note WITH its image_path set — the
+    // entry saves instantly, then a background VISION enrichment estimates the
+    // plate's macros and upgrades it in place (the food-note poll/upgrade the PWA
+    // already runs). This is the dedicated photo→macros capture path, decoupled
+    // from whether the *chat* agent is itself vision-capable / streamed the reply.
+    // When the chat agent DID see the photo and produced a log_food estimate, we
+    // seed that note with it (so the instant entry already carries a first pass)
+    // and skip the normal log_food application so the photo never double-logs.
+    const photoFood = turn.image_path ? logPhotoFood(actions, turn) : null;
+
+    const { applied, drafts } = applyChatActions(
+      { actions },
+      { agent, imagePath: turn.image_path, message: turn.message, skipLogFood: !!photoFood },
+    );
+    if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
     const meta = {
       applied,
       drafts: drafts.map((d) => ({ id: d.id, kind: d.parsed?.days ? "restructure" : "plan_update", summary: d.parsed?.summary })),
@@ -110,6 +124,54 @@ async function processChatTurn(id: number): Promise<void> {
   } finally {
     controllers.delete(id);
   }
+}
+
+// Create a food note for a photo turn, with image_path set, and enqueue the
+// background VISION enrichment that estimates the plate's macros. The note saves
+// INSTANTLY (the PWA shows it at once); the enrichment refines it in place. When
+// the chat agent itself saw the photo and produced a log_food action, its estimate
+// seeds the note's parsed blob so the instant entry already carries a first pass
+// (the vision enrichment then confirms/refines and stamps from_photo). Returns the
+// created note, or null if nothing was created (no image_path on the turn).
+//
+// Lazy import of enrich.js mirrors repo.addFoodNote: enrich.ts imports chatTurns
+// is not a cycle today, but the lazy import keeps the queue trigger uniform with
+// the rest of the loop and side-steps any future ordering surprise.
+function logPhotoFood(actions: any[], turn: any) {
+  if (!turn.image_path) return null;
+  // Pull out any log_food the agent emitted (it saw the photo) to seed the note.
+  const lf = (Array.isArray(actions) ? actions : []).find((a) => a?.type === "log_food");
+  const message = (turn.message ?? "").toString();
+  const parsedNote: Record<string, any> = {
+    summary: (lf?.summary ?? lf?.name ?? (message.trim() || "meal")).toString(),
+    items: Array.isArray(lf?.items) ? lf.items : undefined,
+    kcal: lf?.kcal ?? null,
+    protein_g: lf?.protein_g ?? null,
+    carbs_g: lf?.carbs_g ?? null,
+    fat_g: lf?.fat_g ?? null,
+    fiber_g: lf?.fiber_g ?? null,
+    notes: lf?.notes ?? null,
+  };
+  // raw="" so addFoodNote does NOT queue the TEXT enricher (that would overwrite the
+  // vision estimate). We enqueue the dedicated food_photo job explicitly below.
+  const meal = (lf?.meal ?? "meal").toString();
+  let note: any = null;
+  try {
+    note = repo.addFoodNote(meal, "", parsedNote, turn.image_path);
+  } catch (e: any) {
+    console.error(`[chat] turn#${turn.id}: failed to create photo food note: ${e?.message ?? e}`);
+    return null;
+  }
+  // Mark the note pending + enqueue the vision job — unless enrichment is off, in
+  // which case the as-logged note (with the chat agent's first-pass estimate, if
+  // any) simply stands, no background refine.
+  try {
+    if (repo.getSettings().enrich_enabled) {
+      repo.setFoodNoteEnrichStatus(note.id, "pending");
+      import("./enrich.js").then((m) => m.enqueueEnrich("food_photo", note.id)).catch(() => {});
+    }
+  } catch { /* settings unreadable → leave the note as-is */ }
+  return note;
 }
 
 // Produce the raw assistant text for a turn, streaming when possible.
@@ -222,7 +284,7 @@ export function recoverChatTurns(): { requeued: number; interrupted: number } {
 // rest still apply.
 export function applyChatActions(
   parsed: any,
-  ctx: { agent: string; imagePath?: string | null; message?: string | null },
+  ctx: { agent: string; imagePath?: string | null; message?: string | null; skipLogFood?: boolean },
 ): { applied: any[]; drafts: any[] } {
   const applied: any[] = [];
   const drafts: any[] = [];
@@ -260,6 +322,11 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.supersedeMemory(Number(a.id), { content: a.replacement, reason: a.reason }) ?? { error: "not found", id: a.id } });
           break;
         case "log_food": {
+          // A photo turn already created the food note via logPhotoFood (with the
+          // image_path + a background vision enrichment), and seeded it from THIS
+          // same log_food estimate — applying it again here would double-log the
+          // plate, so skip it. A text-only log_food (no photo) applies as before.
+          if (ctx.skipLogFood) break;
           // The chat agent already produced the structured estimate (it saw the
           // photo), so store it directly with raw="" — a non-empty raw would queue
           // text-only background enrichment that overwrites this parse.

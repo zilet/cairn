@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { db } from "./db.js";
 import * as repo from "./repo.js";
 import { runAgentWithFallback } from "./agents.js";
-import { buildEnrichPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
+import { buildEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
 import { reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 
@@ -25,7 +25,11 @@ const execFileP = promisify(execFile);
 // same serial queue. id is unused for review jobs.
 // 'garmin_strength' reconciles a synced Garmin strength activity into the day's
 // Cairn session — id is the garmin_activities row id (no status column of its own).
-type Kind = "activity" | "food" | "health" | "review" | "garmin_strength";
+// 'food_photo' is a 'food' note that carries an attached plate photo (image_path):
+// instead of re-parsing free text it hands a VISION agent the absolute image path
+// (same trick as the 'health' kind) to estimate the plate's macros. id is the
+// food_notes row id; it shares food_notes' enrichment_status machine.
+type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_strength";
 interface Job {
   kind: Kind;
   id: number;
@@ -208,7 +212,8 @@ async function drain(): Promise<void> {
 function markStatus(job: Job, status: string): void {
   if (job.kind === "review" || job.kind === "garmin_strength") return; // no row status of their own
   if (job.kind === "activity") repo.setActivityEnrichStatus(job.id, status);
-  else if (job.kind === "food") repo.setFoodNoteEnrichStatus(job.id, status);
+  // food_photo shares the food_notes row + its status column with food.
+  else if (job.kind === "food" || job.kind === "food_photo") repo.setFoodNoteEnrichStatus(job.id, status);
   else repo.setHealthDocEnrichStatus(job.id, status);
 }
 
@@ -219,6 +224,7 @@ function markFailed(job: Job): void {
 async function processJob(job: Job): Promise<void> {
   if (job.kind === "review") return processReviewJob();
   if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
+  if (job.kind === "food_photo") return processFoodPhotoJob(job.id);
 
   // Check enablement BEFORE picking an agent: pickAgentOrder() advances the
   // round-robin cursor as a side effect, so calling it for a job we then skip
@@ -558,6 +564,126 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
   if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
 }
 
+// ---- food photo → macros (vision) ----------------------------------------------
+// A food note that carries an attached plate photo. Instead of re-parsing free
+// text, hand a VISION-capable agent the ABSOLUTE image path (same trick as the
+// 'health' kind — the Claude/Codex CLIs open local files) and ask it to estimate
+// the plate's foods + per-item and total macros. The estimate is coerced/clamped
+// (shared discipline with the food enricher) and merged over the note's existing
+// parsed blob, upgrading the as-logged entry IN PLACE. The 'confidence' band is
+// carried through so the surface can render an honest "rough estimate" hint.
+//
+// Degrades cleanly end-to-end: enrichment off / no agent / a non-absolute path /
+// an unreadable image / a wrong-shape reply → 'skipped' or 'failed', and the
+// as-logged note (its instant summary, any macros the chat agent already filled)
+// stands untouched. Idempotent: a re-run (recovery / re-enqueue) just re-estimates
+// and overwrites with the latest parse — it never appends a second note.
+// Exported so the offline test can verify the graceful-degradation refusals
+// (no image_path / a non-absolute path / no usable agent all end terminal,
+// before any agent is reached).
+export async function processFoodPhotoJob(id: number): Promise<void> {
+  const settings = repo.getSettings();
+  if (!settings.enrich_enabled) {
+    repo.setFoodNoteEnrichStatus(id, "skipped");
+    return;
+  }
+  const row = repo.getFoodNote(id) as any;
+  if (!row) return; // deleted while queued — nothing to enrich, no status to set
+  const fp = (row.image_path ?? "").toString().trim();
+  if (!fp) {
+    // No photo on the note (e.g. enqueued for the wrong kind) — fall back to the
+    // text enricher is not our job here; just treat as not-applicable.
+    repo.setFoodNoteEnrichStatus(id, "skipped");
+    return;
+  }
+  // The image is always stored as an absolute path under UPLOADS_DIR. Refuse
+  // anything else rather than resolving relative to cwd — same guard as 'health',
+  // and the only thing constraining the agent's file read to uploaded images.
+  if (!path.isAbsolute(fp)) {
+    repo.setFoodNoteEnrichStatus(id, "skipped");
+    return;
+  }
+  // A vision read hands the agent a local file to look at — prefer the strongest
+  // file-reading transcriber (Claude-first), the same ordering the 'health' kind
+  // uses, rather than the load-spreading round-robin.
+  const order = repo.pickHealthAgentOrder();
+  if (!order.length) {
+    repo.setFoodNoteEnrichStatus(id, "skipped");
+    return;
+  }
+
+  // Mark in-progress BEFORE the first await so a crash leaves a recoverable marker
+  // (recoverPendingEnrich re-enqueues 'in_progress' too) instead of a stuck row.
+  repo.setFoodNoteEnrichStatus(id, "in_progress");
+
+  const hint = (row.parsed?.summary ?? row.raw_output ?? row.meal ?? "").toString().trim();
+  let parsed: any = null;
+  try {
+    const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), ENRICH_TIMEOUT_MS);
+    parsed = fb.result?.parsed ?? null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    // Vision read failed / wrong shape: keep the as-logged note (its instant
+    // summary stands), just no macro estimate this run. A re-trigger can retry.
+    repo.setFoodNoteEnrichStatus(id, "failed");
+    return;
+  }
+
+  const wrote = applyFoodPhoto(id, parsed);
+  if (!wrote) {
+    // Parseable JSON but nothing usable (e.g. a coach-proposal response) — the
+    // as-logged note stands; surface it as failed so a re-trigger can retry.
+    console.warn(`[enrich] food_photo#${id}: agent returned parseable JSON but no usable macros (wrong shape?) — kept as-logged note.`);
+    repo.setFoodNoteEnrichStatus(id, "failed");
+    return;
+  }
+  repo.setFoodNoteEnrichStatus(id, "done");
+}
+
+// Coerce/clamp a vision agent's macro payload and merge it over the food note's
+// existing parsed blob, mirroring applyStructured's food path (a manual edit or a
+// chat-agent estimate already on the note is overwritten only by fields the agent
+// actually returned). Returns true if it wrote anything usable. Exported so the
+// offline test can exercise the coerce/clamp + merge discipline directly (the
+// agent never runs in the harness).
+export function applyFoodPhoto(id: number, parsed: any): boolean {
+  const cur = (repo.getFoodNote(id) as any)?.parsed ?? {};
+  const merged: Record<string, any> = { ...cur };
+  let changed = false;
+
+  const summary = asStr(parsed.summary);
+  if (summary !== undefined) { merged.summary = summary; changed = true; }
+  if (Array.isArray(parsed.items)) {
+    merged.items = parsed.items.map((x: any) => String(x).slice(0, 200)).slice(0, 50);
+    changed = true;
+  }
+  const kcal = asNum(parsed.kcal); if (kcal !== undefined) { merged.kcal = clampMacro(kcal, 5000); changed = true; }
+  const protein = asNum(parsed.protein_g); if (protein !== undefined) { merged.protein_g = clampMacro(protein, 500); changed = true; }
+  const carbs = asNum(parsed.carbs_g); if (carbs !== undefined) { merged.carbs_g = clampMacro(carbs, 1000); changed = true; }
+  const fat = asNum(parsed.fat_g); if (fat !== undefined) { merged.fat_g = clampMacro(fat, 500); changed = true; }
+  const fiber = asNum(parsed.fiber_g); if (fiber !== undefined) { merged.fiber_g = clampMacro(fiber, 200); changed = true; }
+  const notes = asStr(parsed.notes); if (notes !== undefined) { merged.notes = notes; changed = true; }
+
+  // A coarse confidence band (low|medium|high) the surface can show as an honest
+  // "rough estimate" hint — never a score, never a percentage. Anything else → drop.
+  const conf = String(parsed.confidence ?? "").toLowerCase();
+  if (["low", "medium", "high"].includes(conf)) { merged.confidence = conf; changed = true; }
+  // The estimate came from the plate photo — mark provenance so the surface can say
+  // "estimated from your photo" rather than implying a precise hand-entered log.
+  if (changed) { merged.from_photo = true; }
+
+  if (changed) repo.updateFoodNoteParsed(id, merged);
+  return changed;
+}
+
+// Clamp a macro value to a non-negative integer under a sane ceiling.
+function clampMacro(n: number, max: number): number {
+  return Math.min(max, Math.max(0, Math.round(n)));
+}
+
 function jobRawText(job: Job): string {
   if (job.kind === "activity") {
     const row = repo.getActivity(job.id) as any;
@@ -750,14 +876,17 @@ export function recoverPendingEnrich(): { activities: number; food: number; heal
   const acts = db
     .prepare(`SELECT id FROM activities WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
+  // A food note with an attached photo is a vision job ('food_photo'); a text-only
+  // one is the regular 'food' enricher. Carry image_path so recovery re-enqueues
+  // each interrupted note onto the SAME path it was originally queued for.
   const foods = db
-    .prepare(`SELECT id FROM food_notes WHERE enrichment_status IN ('pending','in_progress')`)
+    .prepare(`SELECT id, image_path FROM food_notes WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
   const health = db
     .prepare(`SELECT id FROM health_documents WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
   for (const a of acts) enqueueEnrich("activity", a.id);
-  for (const f of foods) enqueueEnrich("food", f.id);
+  for (const f of foods) enqueueEnrich(f.image_path ? "food_photo" : "food", f.id);
   for (const h of health) enqueueEnrich("health", h.id);
   if (acts.length || foods.length || health.length) {
     console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health pending job(s).`);
