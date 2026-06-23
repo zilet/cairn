@@ -1683,6 +1683,72 @@ ATHLETE'S INTRO:
 // score. repo.dayRead computes deterministic signals first; this builder asks
 // the agent to make the nuanced call and write the human sentence. opts let the
 // caller pass an escape-hatch override ("rough night" / "short on time").
+// The deterministic facts behind a post-session DEBRIEF (the "done" read): what was
+// trained today (top set per lift), how it fits the week, what the next session leans
+// toward + what's due, and where fuel sits. Plain facts only — the agent turns them
+// into a warm debrief. Every read is its own try/catch so a missing surface degrades
+// to fewer facts, never throws. Returns "" when there's nothing concrete to say.
+function debriefFacts(date: string): string {
+  const lines: string[] = [];
+  // 1) Today's session — the top set per lift + the volume done.
+  try {
+    const sess: any = repo.getSessionByDate(date);
+    const sets: any[] = Array.isArray(sess?.sets) ? sess.sets : [];
+    if (sets.length) {
+      const top = new Map<string, any>();
+      for (const s of sets) {
+        const score = s.mode === "timed" ? (Number(s.duration_sec) || 0) : (Number(s.weight) || 0) * 1000 + (Number(s.reps) || 0);
+        const cur = top.get(s.exercise);
+        if (!cur || score > cur._score) top.set(s.exercise, { ...s, _score: score });
+      }
+      const fmtSet = (s: any): string => {
+        if (s.mode === "timed" && s.duration_sec != null) return `${s.duration_sec}s`;
+        if (s.weight == null && s.reps != null) return `${s.reps} reps (bodyweight)`;
+        if (s.weight != null && s.reps != null) {
+          const w = Number(s.weight);
+          const load = w < 0 ? `bw−${-w} lb` : w === 0 ? "bodyweight" : `${w} lb`;
+          const rir = s.rir != null ? ` @RIR${s.rir}` : "";
+          return `${load} × ${s.reps}${rir}`;
+        }
+        return "logged";
+      };
+      const lifts = [...top.entries()].slice(0, 8).map(([name, s]) => `${name} ${fmtSet(s)}`);
+      const sum: any = repo.sessionSummary?.(sess.id) ?? null;
+      const vol = sum && sum.tonnage > 0 ? ` (${sum.sets} sets · ${Math.round(sum.tonnage).toLocaleString()} lb)` : sum ? ` (${sum.sets} sets)` : "";
+      lines.push(`SESSION TODAY${sess.title ? ` — ${sess.title}` : ""}${vol}: ${lifts.join("; ")}.`);
+    }
+  } catch { /* no session detail → skip */ }
+  // 2) Forward — what the NEXT session leans toward + what's due this week.
+  try {
+    const plan: any[] = repo.getPlan() || [];
+    const sess: any = repo.getSessionByDate(date);
+    if (plan.length && sess?.plan_day_id) {
+      const idx = plan.findIndex((d: any) => d.id === sess.plan_day_id);
+      if (idx >= 0) {
+        const nd = plan[(idx + 1) % plan.length];
+        const nf = String(nd?.focus || nd?.name || "").trim();
+        if (nf) lines.push(`NEXT SESSION leans toward: ${nf}.`);
+      }
+    }
+    const bal: any = repo.programBalance?.();
+    const due = Array.isArray(bal?.due) ? bal.due.slice(0, 3) : [];
+    if (due.length) lines.push(`DUE THIS WEEK (under its productive range — a good forward focus): ${due.join(", ")}.`);
+  } catch { /* no plan/balance → skip the forward look */ }
+  // 3) Fuel — only a real protein gap (or a clean "in") is worth a word; never a score.
+  try {
+    const intake: any = repo.getDayIntake(date);
+    if (intake?.target && intake?.remaining) {
+      const pr = Math.round(Number(intake.remaining.protein_g));
+      if (Number.isFinite(pr)) {
+        if (pr >= 25) lines.push(`FUEL: protein is ~${pr} g short of today's target so far — a brief refuel nudge fits.`);
+        else if (pr <= -10) lines.push(`FUEL: protein target comfortably met today — no nudge needed.`);
+        else lines.push(`FUEL: protein is on track today — no nudge needed.`);
+      }
+    }
+  } catch { /* no nutrition target → no fuel line */ }
+  return lines.length ? `\nDEBRIEF FACTS (deterministic — weave only what's true, drop the rest):\n${lines.map((l) => `- ${l}`).join("\n")}` : "";
+}
+
 export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: string } = {}): string {
   const context = ctx ?? repo.getCoachContext();
   const baseline = repo.dayRead(opts.date);
@@ -1721,11 +1787,15 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
     ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
     : "";
   // The athlete has ALREADY completed a real, loading session today (a deterministic
-  // fact). Frame the read as DONE — celebrate the work, point the rest of the day at
-  // recovery/refuel, and don't push more training. The headline should land like a
-  // friend noticing what they pulled off, not a fresh to-do.
+  // fact). This becomes a post-session DEBRIEF, not a fresh suggestion: acknowledge the
+  // specific work, place it in the week, give ONE forward focus, and nudge refuel only
+  // if there's a real gap. The facts below are deterministic; the agent writes the prose.
   const doneBlock = baseline.kind === "done"
-    ? `\nALREADY DONE TODAY: the athlete has finished a real, loading session today. Frame today as DONE — open with genuine, specific acknowledgement of what they did (name the session/effort), then point the rest of the day at recovery and refueling. Do NOT suggest more training unless they ask. Warm and brief.`
+    ? `\nDEBRIEF MODE (a real, loading session is already logged today — this is a post-session debrief, NOT a fresh suggestion):
+- Do NOT propose more training unless they ask. The day's work is in.
+- "headline": acknowledge the WORK specifically — name the session and a standout lift from SESSION TODAY (a friend who watched you train, e.g. "Strong push session.").
+- "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
+- Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || new Date().toISOString().slice(0, 10))}`
     : "";
   return `You are Cairn, the athlete's calm health & training buddy. Read their WHOLE picture and
 judge what kind of day today should be: a real session, easy movement, or rest. This opens their
