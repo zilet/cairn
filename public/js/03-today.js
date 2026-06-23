@@ -167,11 +167,15 @@ function cardioPlanCard(it, revealIdx, done, syncline) {
   // the whole "your watch will log it · synced Xh ago · Sync now" story — so "Log this
   // run →" reads as the fallback without a second, redundant "or it'll sync" hint
   // stacked above it (a non-Garmin user shows neither — syncline is "").
+  // A planned run is skippable for the day exactly like a planned lift ("not today")
+  // — keyed by its display label, since a cardio item carries no loaded exercise. A
+  // matched/synced run shows the done card instead (no skip — the run already happened).
   return `<div class="ex ex-cardio${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
       <div class="ex-top">
         ${tile}
         <span class="ex-name ex-name-static"><span class="cardio-name-txt">${escHtml(label)}</span> <span class="cardio-tag lbl">cardio</span></span>
         ${pres ? `<span class="ex-sets ex-cardio-pres">${escHtml(pres)}</span>` : ""}
+        <button class="ex-skip" data-skip="${encodeURIComponent(label)}" title="Not today" aria-label="Skip ${escAttr(label)} today">✕</button>
       </div>
       ${desc ? `<div class="ex-note">${escHtml(desc)}</div>` : ""}
       <div class="cardio-logrow">
@@ -1172,15 +1176,9 @@ async function renderToday(opts = {}) {
     : (state.plan.find((d) => d.day_number === state.day) || state.plan[0] || { items: [] });
   // Cardio plan items (kind:'cardio') carry NO loaded exercise — they're a prescription
   // logged through the free-text capture, not the set logger. Keep them out of the
-  // name/skip/prefill plumbing (all keyed on a strength exercise name).
+  // name/prefill plumbing (all keyed on a strength exercise name); skips DO cover cardio,
+  // keyed by the display label instead (see isSkipped below).
   const planNames = new Set((day.items || []).filter((it) => !isCardioItem(it) && it.exercise).map((it) => it.exercise));
-
-  // "Not today" skips for this session. A skip only holds while the exercise
-  // has no logged sets — if sets exist (e.g. logged via chat/MCP), the card wins.
-  const skippedSet = new Set(((session && session.skips) || []).map((n) => String(n).toLowerCase()));
-  const isSkipped = (it) => !isCardioItem(it) && it.exercise && skippedSet.has(it.exercise.toLowerCase()) && !(loggedByEx[it.exercise] || []).length;
-  const activeItems = (day.items || []).filter((it) => !isSkipped(it));
-  const skippedItems = (day.items || []).filter(isSkipped);
 
   // ---- Runner loop: synced cardio + sync freshness ----
   // Pull the day's logged cardio efforts ONCE (GET /api/cardio?date=) so each
@@ -1190,9 +1188,14 @@ async function renderToday(opts = {}) {
   // cardio, OR (it's today and the plan day has no strength to log, a likely run /
   // rest day where a synced run IS the day's training). A pure lifting day pays
   // nothing. These are a per-render read (always-fresh), not SWR-cached.
-  const cardioItems = activeItems.filter(isCardioItem);
+  //
+  // Matched BEFORE the skip filter, over EVERY cardio item (skipped or not), so a run
+  // that synced from the watch still claims its prescription even if it had been marked
+  // "not today" — the done card then wins over a stale skip, mirroring how a logged
+  // strength set overrides a skip below.
+  const allCardio = (day.items || []).filter(isCardioItem);
   const strengthPlanned = (day.items || []).some((it) => !isCardioItem(it) && it.exercise);
-  const couldHaveRun = cardioItems.length > 0 || (isToday && !strengthPlanned);
+  const couldHaveRun = allCardio.length > 0 || (isToday && !strengthPlanned);
   let cardioEfforts = [];
   let todaySettings = null;
   if (couldHaveRun) {
@@ -1205,13 +1208,27 @@ async function renderToday(opts = {}) {
   // Match each prescription to a synced effort (presence of a compatible run is
   // enough). One effort satisfies at most one prescription (consume as matched).
   const matchedCardio = new Map(); // plan item ref → CardioEffort
-  if (cardioItems.length && cardioEfforts.length) {
+  if (allCardio.length && cardioEfforts.length) {
     const pool = [...cardioEfforts];
-    for (const it of cardioItems) {
+    for (const it of allCardio) {
       const i = pool.findIndex((eff) => cardioEffortMatches(it, eff));
       if (i >= 0) matchedCardio.set(it, pool.splice(i, 1)[0]);
     }
   }
+
+  // "Not today" skips for this session. A skip only holds while the work has no result
+  // yet: a strength exercise wins once a set is logged (e.g. via chat/MCP), and a cardio
+  // prescription wins once a synced run satisfies it (the done card returns). A cardio
+  // item carries no loaded exercise, so its skip is keyed by its display label — the same
+  // string the skip line shows and POSTs back to restore.
+  const skippedSet = new Set(((session && session.skips) || []).map((n) => String(n).toLowerCase()));
+  const isSkipped = (it) =>
+    isCardioItem(it)
+      ? skippedSet.has(cardioLabel(it).toLowerCase()) && !matchedCardio.has(it)
+      : !!it.exercise && skippedSet.has(it.exercise.toLowerCase()) && !(loggedByEx[it.exercise] || []).length;
+  const activeItems = (day.items || []).filter((it) => !isSkipped(it));
+  const skippedItems = (day.items || []).filter(isSkipped);
+  const cardioItems = activeItems.filter(isCardioItem);
 
   // prefill: for plan exercises with no set yet this session, fetch most-recent-ever
   // once. Cache-first per exercise so a warm Today never waits on these either; cold
@@ -1588,7 +1605,7 @@ async function renderToday(opts = {}) {
     }
     // Skipped exercises live on as one slim, muted line at the very bottom —
     // recoverable later in the day (tap a name to restore), never buried.
-    html += skipLineHtml(skippedItems.map((it) => it.exercise));
+    html += skipLineHtml(skippedItems.map((it) => (isCardioItem(it) ? cardioLabel(it) : it.exercise)));
     html += `</div>`; // .plansurface
   }
 
