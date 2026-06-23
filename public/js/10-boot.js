@@ -593,7 +593,8 @@ async function renderSettings() {
         <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
         <label class="toggle"><input type="checkbox" id="researchEnabled" ${wm.research_enabled ? "checked" : ""}>
           <span>Let Cairn research your findings and cite real sources</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">When on, a web-capable agent grounds your lab findings against current clinical guidance and attaches the sources behind each directive — open them under “see the evidence” in <b>Me → Brain</b>. Off by default; everything stays deterministic and offline when off. Informational, never medical advice.</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” in <b>Me → Brain</b>. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
+        ${(!wm.research_enabled && data.research_auto_eligible && data.research_auto_eligible.eligible) ? `<div class="sess-line" id="researchSuggest" style="margin-top:6px">✦ ${data.research_auto_eligible.reason === "web_agent_connected" ? "Your coach agent can browse — turn this on for live, cited research." : "An agent is connected — you can try live evidence research."}</div>` : ""}
       </section>`;
 
     $("#enrichEnabled").addEventListener("change", (e) => { wm.enrich_enabled = e.target.checked; });
@@ -1002,14 +1003,24 @@ window.addEventListener("orientationchange", syncChatViewport);
   const vv = window.visualViewport;
   if (!vv) return;
   const root = document.documentElement;
-  // The keyboard is "open" whenever a text field is focused. This is the ONLY
-  // signal that's reliable in both a Safari tab AND an installed PWA: in the
-  // standalone PWA iOS shrinks the *layout* viewport together with the visual
-  // viewport, so innerHeight - vv.height ≈ 0 and pure geometry never detects the
-  // keyboard. Focus does. (Geometry is kept as a secondary OR for the rare
-  // keyboard-without-focus case.)
+  // On a TOUCH device a focused text field implies the on-screen keyboard. This
+  // is the ONLY signal that's reliable in both a Safari tab AND an installed PWA:
+  // in the standalone PWA iOS shrinks the *layout* viewport together with the
+  // visual viewport, so innerHeight - vv.height ≈ 0 and pure geometry never
+  // detects the keyboard. Focus does. (Geometry is kept as a secondary OR for
+  // the rare keyboard-without-focus case.)
+  // But on a POINTER device (mouse/trackpad) focusing a field opens NO keyboard,
+  // so focus must NOT count as "keyboard open" — otherwise the chat composer's
+  // desktop auto-focus (it focuses on `(hover:hover)`) flips kb-open the instant
+  // Chat opens, sliding the bottom bar out, and the restore timer slides it back
+  // ~350ms later: the visible "bar hides then reappears" flicker. Gate the focus
+  // signal on the same `(hover:hover)` test the auto-focus uses, so the two agree.
+  // Geometry still drives kb-open on the rare pointer device whose keyboard shrinks
+  // the viewport (a touchscreen laptop), since that path is untouched.
   const TEXTY = /^(|text|search|email|url|tel|password|number)$/;
+  const softKeyboard = () => !matchMedia("(hover:hover)").matches;
   const kbFocused = () => {
+    if (!softKeyboard()) return false;
     const el = document.activeElement;
     if (!el || el === document.body) return false;
     if (el.tagName === "TEXTAREA") return true;

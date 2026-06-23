@@ -33,6 +33,10 @@ async function renderMeProfile() {
   let egCur = {};
   try { egCur = p.endurance_goal_json ? JSON.parse(p.endurance_goal_json) : {}; } catch { egCur = {}; }
   const egMode = egCur && egCur.mode ? egCur.mode : "none";
+  // The journey's SHAPE (v41) — lose | maintain | gain. Prefer the server's effective
+  // mode (goal.goal_mode); fall back to the stored column, then derive for back-compat.
+  const goalMode = (goal && goal.goal_mode) || p.goal_mode
+    || ((p.goal_weight_lb != null && p.weight_lb != null && p.goal_weight_lb < p.weight_lb - 0.5) ? "lose" : "maintain");
   const num = (id, label, val, step) =>
     `<div class="field" style="margin-bottom:9px"><label>${label}</label>
      <input id="${id}" type="number" step="${step||1}" value="${val ?? ""}" class="form-input"></div>`;
@@ -45,7 +49,7 @@ async function renderMeProfile() {
     <div class="sess">
       <div class="sess-head"><span class="sess-date">Goal check</span><span class="sess-day">${goal?.tdee ? goal.tdee + " kcal TDEE" : ""}</span></div>
       ${reqWarn}
-      ${goal?.recommended ? `<div class="sess-line" style="margin-top:6px"><b>Lean-safe target:</b> ${goal.recommended.target_intake_kcal} kcal \u00b7 ${goal.recommended.protein_g} g protein \u00b7 ${goal.recommended.weekly_rate_lb} lb/wk</div>` : ""}
+      ${goal?.recommended ? `<div class="sess-line" style="margin-top:6px"><b>${goal.goal_mode === "maintain" ? "Maintenance target" : goal.goal_mode === "gain" ? "Lean-gain target" : "Lean-safe target"}:</b> ${goal.recommended.target_intake_kcal} kcal \u00b7 ${goal.recommended.protein_g} g protein${goal.recommended.weekly_rate_lb ? ` \u00b7 ${goal.recommended.weekly_rate_lb} lb/wk` : ""}</div>` : ""}
     </div>
     <h1 class="lbl" style="margin:24px 0 8px">Profile</h1>
     <div id="profFields">
@@ -55,9 +59,21 @@ async function renderMeProfile() {
     ${num("age","Age",p.age)}
     ${num("height_cm","Height (cm)",p.height_cm,0.1)}
     ${num("weight_lb","Weight (lb)",p.weight_lb,0.1)}
-    ${num("goal_weight_lb","Goal weight (lb)",p.goal_weight_lb,0.1)}
-    <div class="field" style="margin-bottom:9px"><label>Goal date</label>
-      <input id="goal_date" type="date" value="${p.goal_date || ""}" class="form-input"></div>
+    <div class="field" style="margin-bottom:9px">
+      <label>Your goal</label>
+      <p class="aboutme-hint">Losing weight, holding steady, or a slow lean gain. Cairn fuels and frames everything around this \u2014 maintaining is a real goal, not "no goal". Change it anytime.</p>
+      <div class="seg goalmode-seg" id="goalModeSeg" role="group" aria-label="Goal mode">
+        <button type="button" class="segbtn${goalMode === "lose" ? " active" : ""}" data-goalmode="lose">Lose</button>
+        <button type="button" class="segbtn${goalMode === "maintain" ? " active" : ""}" data-goalmode="maintain">Maintain</button>
+        <button type="button" class="segbtn${goalMode === "gain" ? " active" : ""}" data-goalmode="gain">Gain</button>
+      </div>
+    </div>
+    <div id="goalTargetFields" style="${goalMode === "maintain" ? "display:none" : ""}">
+      ${num("goal_weight_lb","Goal weight (lb)",p.goal_weight_lb,0.1)}
+      <div class="field" style="margin-bottom:9px"><label>Goal date <span class="ob-opt">\u2014 optional</span></label>
+        <input id="goal_date" type="date" value="${p.goal_date || ""}" class="form-input"></div>
+    </div>
+    <p class="aboutme-hint" id="goalMaintainNote" style="margin:-2px 0 9px${goalMode === "maintain" ? "" : ";display:none"}">We anchor to your real expenditure \u2014 no goal weight needed. Cairn stays quiet unless your weight genuinely drifts.</p>
     ${num("activity_factor","Activity factor (1.3\u20131.8)",p.activity_factor,0.05)}
 
     <div class="field" style="margin-bottom:9px">
@@ -133,6 +149,7 @@ async function renderMeProfile() {
   // save bar listens for, so we mark dirty + persist it explicitly).
   let pickedDisc = disc;
   let pickedEgMode = egMode;
+  let pickedGoalMode = goalMode;
   // Assemble the endurance goal from the active mode's fields (none → null clears it).
   const egPayload = () => {
     const dist = +$("#eg_distance")?.value || null;
@@ -157,6 +174,7 @@ async function renderMeProfile() {
       age: +$("#age").value || null, height_cm: +$("#height_cm").value || null,
       weight_lb: +$("#weight_lb").value || null, goal_weight_lb: +$("#goal_weight_lb").value || null,
       goal_date: $("#goal_date").value || null, activity_factor: +$("#activity_factor").value || null,
+      goal_mode: pickedGoalMode,
       primary_discipline: pickedDisc,
       endurance_sport: pickedDisc === "strength" ? "" : (($("#endurance_sport")?.value ?? "").trim()),
       endurance_goal: egPayload(),
@@ -209,6 +227,18 @@ async function renderMeProfile() {
       if (race) race.style.display = pickedEgMode === "race" ? "" : "none";
       if (standing) standing.style.display = pickedEgMode === "standing" ? "" : "none";
       if (shared) shared.style.display = pickedEgMode === "none" ? "none" : "";
+      profBar.markDirty();
+    })
+  );
+  // Goal mode: Lose / Maintain / Gain — swap active state, show/hide the goal-weight
+  // target (maintenance anchors to real expenditure, no target needed), mark dirty.
+  $("#goalModeSeg")?.querySelectorAll("[data-goalmode]").forEach((b) =>
+    b.addEventListener("click", () => {
+      pickedGoalMode = b.dataset.goalmode;
+      $("#goalModeSeg").querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
+      const tgt = $("#goalTargetFields"), note = $("#goalMaintainNote");
+      if (tgt) tgt.style.display = pickedGoalMode === "maintain" ? "none" : "";
+      if (note) note.style.display = pickedGoalMode === "maintain" ? "" : "none";
       profBar.markDirty();
     })
   );
@@ -844,13 +874,94 @@ function markerChartSvg(m) {
     const flagged = f === "low" || f === "high" || f === "abnormal" || f === "critical";
     return `<circle class="hchart-dot" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${i === P.length - 1 ? 4 : 2.8}" fill="${flagged ? "#b3402e" : "#6e7f5c"}"/>`;
   }).join("");
-  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+  // Per-point scrub data (value+date strings, pre-formatted) for wireMarkerChart.
+  // JSON-in-attribute, escAttr'd — round-trips cleanly back via JSON.parse(dataset.pts).
+  const tipData = raw.map((p, i) => ({
+    x: Number(P[i][0].toFixed(1)),
+    y: Number(P[i][1].toFixed(1)),
+    t: `${fmtMkNum(p.value)}${m.unit ? " " + m.unit : ""} · ${sparkDateLabel(p.date)}`,
+  }));
+  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" data-pts="${escAttr(JSON.stringify(tipData))}" aria-hidden="true">
       ${band}
       <path class="hchart-line" d="${d}" fill="none" stroke="#211d17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       ${dots}
       <text class="hchart-txt" x="${L}" y="${H - 7}" text-anchor="start">${escHtml(sparkDateLabel(raw[0].date))}</text>
       <text class="hchart-txt" x="${W - R}" y="${H - 7}" text-anchor="end">${escHtml(sparkDateLabel(raw[raw.length - 1].date))}</text>
+      <line class="hchart-guide" x1="0" y1="${T}" x2="0" y2="${H - B}"/>
+      <circle class="hchart-cursor" cx="0" cy="0" r="4.2"/>
+      <g class="hchart-tip" transform="translate(0,0)"><rect rx="9" x="0" y="0" width="0" height="18"/><text x="8" y="13"></text></g>
     </svg>`;
+}
+
+// Wire pointer scrubbing onto a marker chart SVG: hover (mouse) or drag (touch)
+// glides a dashed guide + highlighted dot + a value·date pill to the nearest reading,
+// so every past lab value is legible — not just the latest. The cursor eases between
+// points (rAF lerp) and the dot springs as it lands; first touch snaps (no fly-in)
+// and reduced-motion snaps throughout. Values are real readings, never interpolated.
+// Idempotent per element.
+function wireMarkerChart(svg) {
+  if (!svg || svg._scrubWired) return;
+  let pts;
+  try { pts = JSON.parse(svg.dataset.pts || "[]"); } catch { pts = []; }
+  if (!Array.isArray(pts) || pts.length < 2) return;
+  svg._scrubWired = true;
+  const VB = 300; // viewBox width — matches markerChartSvg's W
+  const guide = svg.querySelector(".hchart-guide");
+  const cursor = svg.querySelector(".hchart-cursor");
+  const tip = svg.querySelector(".hchart-tip");
+  const tipRect = tip && tip.querySelector("rect");
+  const tipText = tip && tip.querySelector("text");
+  const last = pts[pts.length - 1];
+  const cur = { x: last.x, y: last.y, pop: 0 };
+  const tgt = { x: last.x, y: last.y, idx: pts.length - 1 };
+  let touchActive = false, raf = null, tipW = 0;
+
+  const apply = () => {
+    if (guide) { guide.setAttribute("x1", cur.x.toFixed(1)); guide.setAttribute("x2", cur.x.toFixed(1)); }
+    if (cursor) { cursor.setAttribute("cx", cur.x.toFixed(1)); cursor.setAttribute("cy", cur.y.toFixed(1)); cursor.setAttribute("r", (4.2 + 1.8 * cur.pop).toFixed(2)); }
+    if (tip) {
+      const tx = Math.max(2, Math.min(cur.x - tipW / 2, VB - tipW - 2)); // clamp the pill on-screen
+      const ty = cur.y - 26 < 0 ? cur.y + 8 : cur.y - 26;
+      tip.setAttribute("transform", `translate(${tx.toFixed(1)},${ty.toFixed(1)})`);
+    }
+  };
+  const tick = () => {
+    cur.x += (tgt.x - cur.x) * 0.34; cur.y += (tgt.y - cur.y) * 0.34; cur.pop *= 0.8;
+    const settled = Math.abs(cur.x - tgt.x) < 0.3 && Math.abs(cur.y - tgt.y) < 0.3 && cur.pop < 0.02;
+    if (settled) { cur.x = tgt.x; cur.y = tgt.y; cur.pop = 0; }
+    apply();
+    raf = settled ? null : requestAnimationFrame(tick);
+  };
+  const setIdx = (i, snap) => {
+    if ((i !== tgt.idx || snap) && tipText && tipRect) {
+      tipText.textContent = pts[i].t;
+      tipW = (tipText.getComputedTextLength ? tipText.getComputedTextLength() : pts[i].t.length * 5.2) + 16;
+      tipRect.setAttribute("width", tipW.toFixed(1));
+      if (i !== tgt.idx && !snap) cur.pop = 1; // spring only when landing on a new reading
+    }
+    tgt.x = pts[i].x; tgt.y = pts[i].y; tgt.idx = i;
+    if (snap || reducedMotion()) { cur.x = tgt.x; cur.y = tgt.y; cur.pop = 0; apply(); return; }
+    if (!raf) raf = requestAnimationFrame(tick);
+  };
+  const show = (e) => {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    const vx = ((e.clientX - rect.left) / rect.width) * VB; // client px → viewBox units
+    let idx = 0, best = Infinity;
+    for (let i = 0; i < pts.length; i++) { const dd = Math.abs(pts[i].x - vx); if (dd < best) { best = dd; idx = i; } }
+    const firstTouch = !svg.classList.contains("scrubbing");
+    svg.classList.add("scrubbing");
+    setIdx(idx, firstTouch);
+  };
+  const rest = () => svg.classList.remove("scrubbing");
+  svg.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "mouse") { touchActive = true; try { svg.setPointerCapture(e.pointerId); } catch {} }
+    show(e);
+  });
+  svg.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || touchActive) show(e); });
+  svg.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") { touchActive = false; rest(); } });
+  svg.addEventListener("pointercancel", () => { touchActive = false; rest(); });
+  svg.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") rest(); });
 }
 
 // The full expanded panel: the chart, an optimal-band caption + trend words, and the
@@ -961,6 +1072,7 @@ function loadHealthMarkers(token) {
         const open = item.classList.toggle("open");
         b.setAttribute("aria-expanded", open ? "true" : "false");
       }));
+    wrap.querySelectorAll("svg.hchart").forEach(wireMarkerChart);
   };
   const peek = peekCached("markers:priority");
   if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
@@ -979,7 +1091,7 @@ function loadHealthMarkers(token) {
 //               "this week's focus" directives, what-matters-now priority, supplements.
 //   • markers — "Markers": the rich trends catalog (the ONE detailed markers home).
 //   • records — "Records": upload + the document list.
-const HEALTH_SEG = [["read", "Read"], ["markers", "Markers"], ["records", "Records"]];
+const HEALTH_SEG = [["read", "Read"], ["markers", "Markers"], ["records", "Records"], ["learned", "Learned"]];
 
 // Back-compat: an older persisted state.healthSeg ("analysis"/"brain") maps onto
 // the new "read" home so a returning client never lands on a dead inner tab.
@@ -1046,6 +1158,7 @@ function paintHealthTab() {
   pollToken++;
   if (state.healthSeg === "markers") return paintHealthMarkersTab();
   if (state.healthSeg === "records") return paintHealthRecordsTab();
+  if (state.healthSeg === "learned") return paintHealthLearnedTab();
   return paintHealthReadTab();
 }
 

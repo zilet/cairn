@@ -161,6 +161,7 @@ function cardioPlanCard(it, revealIdx, done, syncline) {
   const tile = artImg("activity", cardioArtPhrase(it), "artile-sm ex-art", art("activity", cardioArtPhrase(it)));
   const pres = cardioPrescription(it);
   const label = cardioLabel(it);
+  const desc = cardioDescription(it); // the coach's guidance prose, when it overflowed the head
   const verb = cardioVerb(label);
   // When Garmin is configured, the single freshness line below (cardioSyncLine) carries
   // the whole "your watch will log it · synced Xh ago · Sync now" story — so "Log this
@@ -169,10 +170,10 @@ function cardioPlanCard(it, revealIdx, done, syncline) {
   return `<div class="ex ex-cardio${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
       <div class="ex-top">
         ${tile}
-        <span class="ex-name ex-name-static">${escHtml(label)} <span class="cardio-tag lbl">cardio</span></span>
+        <span class="ex-name ex-name-static"><span class="cardio-name-txt">${escHtml(label)}</span> <span class="cardio-tag lbl">cardio</span></span>
         ${pres ? `<span class="ex-sets ex-cardio-pres">${escHtml(pres)}</span>` : ""}
       </div>
-      ${it.interval_note || cardioIntervalNote(it.interval) ? `<div class="ex-note">${escHtml(cardioIntervalNote(it.interval) || it.interval_note)}</div>` : ""}
+      ${desc ? `<div class="ex-note">${escHtml(desc)}</div>` : ""}
       <div class="cardio-logrow">
         <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(cardioLogPhrase(it))}">Log this ${escHtml(verb)} →</button>
       </div>
@@ -240,8 +241,10 @@ function cardioDominantZone(zones) {
 // recognizable verb (so a generic activity still flips a generic cardio prescription).
 function cardioEffortMatches(it, eff) {
   if (!eff) return false;
-  const want = cardioVerb(cardioLabel(it));          // run / ride / swim / row / effort
-  const got = cardioVerb(eff.type || eff.name || ""); // map the effort's type the same way
+  // Read the RAW note (not the now-derived label) so a prose prescription with no sport
+  // keyword stays "effort" → presence is enough, exactly as before the label split.
+  const want = cardioVerb(it.note || cardioLabel(it)); // run / ride / swim / row / effort
+  const got = cardioVerb(eff.type || eff.name || "");  // map the effort's type the same way
   if (want === "effort" || got === "effort") return true; // unrecognized either side → presence is enough
   return want === got;
 }
@@ -962,6 +965,144 @@ function revealPlanThen(after, opts = {}) {
   Promise.resolve(renderToday()).then(() => { after && after(); });
 }
 
+// ---------- The Today salience arbiter (Era 2, §12 item 1) ----------
+// Today's rail cards each decide independently whether to render, so a busy day
+// can stack into a dashboard — exactly the calm-by-default pressure Era 2 relieves.
+// GET /api/today-agenda runs ONE deterministic ranking + budget pass server-side
+// (src/repo/today-agenda.ts), returning { hero, primary[], more[], total }. The
+// arbiter changes PLACEMENT, never the cards: the top 1–2 surfaces render inline,
+// the rest collapse behind one quiet "more". The rich existing cards are reused
+// verbatim — we just order their stable slots by the agenda and tuck the lower-
+// ranked ones into a disclosure. Pull, never push; it can only ever REDUCE.
+//
+// Which existing rail client_card maps to which loader fn (the loader binds to the
+// slot id; we only move where the slot lives). Generic Era-2 candidates (no
+// client_card — since-last / goal-checkin) render a calm card from their own text.
+const TODAY_RAIL_LOADERS = {
+  fuel: () => loadFuelToday(state.logDate),
+  "week-ahead": () => loadWeekAhead(),
+  "program-adjustments": () => loadProgramAdjustmentsBanner(),
+  "weekly-read": () => loadTodayReads(),
+  "connection-insight": () => loadTodayReads(),
+  "garmin-reconcile": () => loadGarminReconcile(),
+  lately: () => loadRecentActivities(),
+};
+// The slot markup for each rail client_card (stable ids the loaders bind to). A
+// candidate naming a card not in here is a forward card the client can't yet draw
+// (a sibling shipped server-side but not in this build) — it's skipped gracefully.
+const TODAY_RAIL_SLOTS = {
+  fuel: `<div id="fuelSlot" class="fuel-slot"></div>`,
+  "week-ahead": `<div id="weekAheadSlot" class="weekahead-slot"></div>`,
+  "program-adjustments": `<div id="adjustSlot" class="adjust-slot"></div>`,
+  "weekly-read": `<div id="weeklySlot" class="weekly-slot"></div>`,
+  "connection-insight": `<div id="insightSlot" class="insight-slot"></div>`,
+  "garmin-reconcile": `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>`,
+  lately: `<div id="qlRecent" class="ql-recent lately-slot"></div>`,
+};
+
+// Fetch the agenda for a date. Best-effort + null-safe: a 404 during dev (route not
+// wired yet) or any failure returns null, and the caller falls back to the CURRENT
+// fixed rail so Today never breaks while the arbiter is half-integrated.
+async function fetchTodayAgenda(date) {
+  try {
+    const a = await api("/today-agenda?date=" + encodeURIComponent(date || state.logDate));
+    if (!a || !Array.isArray(a.primary) || !Array.isArray(a.more)) return null;
+    return a;
+  } catch { return null; }
+}
+
+// A calm generic Today card for an Era-2 candidate with no client_card (e.g.
+// since-last / goal-checkin). All text through escHtml/escAttr; Atelier classes;
+// reduced-motion safe (the .reveal entrance is gated globally). Pull, never push:
+// a dismissible card carries a quiet ✕. The optional action deep-links (chat / a
+// tab) via its kind — handled in wireGenericAgendaCards.
+function genericAgendaCardHtml(c, revealIdx) {
+  const kicker = c.kicker ? `<div class="agenda-kicker lbl">${escHtml(c.kicker)}</div>` : "";
+  const title = c.title ? `<div class="agenda-title">${escHtml(c.title)}</div>` : "";
+  const body = c.body ? `<div class="agenda-body">${escHtml(c.body)}</div>` : "";
+  const act = c.action && c.action.label
+    ? `<button class="agenda-act" type="button" data-agenda-act="${escAttr(c.action.kind || "")}" data-agenda-id="${escAttr(c.id || "")}">${escHtml(c.action.label)}</button>`
+    : "";
+  const dismiss = c.dismissible
+    ? `<button class="agenda-x" type="button" data-agenda-dismiss="${escAttr(c.id || "")}" aria-label="Dismiss">✕</button>`
+    : "";
+  return `<div class="agenda-card reveal" data-agenda-card="${escAttr(c.id || "")}" data-agenda-kind="${escAttr(c.kind || "")}" style="${stagger(revealIdx || 0)}">
+      ${dismiss}
+      ${kicker}${title}${body}
+      ${act ? `<div class="agenda-foot">${act}</div>` : ""}
+    </div>`;
+}
+
+// Build the rail HTML from the agenda. Each surfaced candidate is either an EXISTING
+// client card (its slot, ordered) or a generic Era-2 card (rendered inline). The
+// `primary` items lead; the `more` items live inside ONE quiet, collapsed disclosure
+// ("N more" — calm, not a badge). Returns "" when nothing is surfaced (quiet day →
+// just the Brief). `genericPending` collects the generic candidates we drew so the
+// caller can wire them after the innerHTML write.
+function buildAgendaRailHtml(agenda, genericPending) {
+  const cardHtml = (c) => {
+    if (c.client_card) return TODAY_RAIL_SLOTS[c.client_card] || ""; // existing card slot
+    // generic Era-2 card — index doesn't matter much; stagger by collection order.
+    genericPending.push(c);
+    return genericAgendaCardHtml(c, genericPending.length - 1);
+  };
+  const primaryHtml = agenda.primary.map(cardHtml).filter(Boolean).join("");
+  const moreCards = agenda.more.map(cardHtml).filter(Boolean).join("");
+  const n = agenda.more.length;
+  const moreHtml = (n > 0 && moreCards)
+    ? `<details class="today-more" id="todayMore">
+        <summary class="today-more-sum"><span class="today-more-lbl">${n === 1 ? "1 more" : `${n} more`}</span><span class="today-more-chev" aria-hidden="true">▾</span></summary>
+        <div class="today-more-body">${moreCards}</div>
+      </details>`
+    : "";
+  if (!primaryHtml && !moreHtml) return ""; // quiet day — no rail, no empty chrome
+  return `<aside class="today-rail">${primaryHtml}${moreHtml}</aside>`;
+}
+
+// Run the rail loaders for every surfaced existing client_card (primary + more) and
+// wire any generic Era-2 cards. Called after the wholesale innerHTML write, like the
+// other Today wiring. De-duped so two candidates that share a loader (weekly-read +
+// connection-insight both call loadTodayReads, which fills both slots in one fetch)
+// fire it once.
+function runAgendaRail(agenda, genericPending, isToday) {
+  const called = new Set();
+  for (const c of [...agenda.primary, ...agenda.more]) {
+    if (!c.client_card) continue;
+    const loader = TODAY_RAIL_LOADERS[c.client_card];
+    if (!loader || called.has(loader)) continue;
+    called.add(loader);
+    try { loader(); } catch {}
+  }
+  wireGenericAgendaCards(genericPending);
+}
+
+// Wire the generic Era-2 cards' action + dismiss controls. The action's `kind`
+// names where it goes (chat:<prefill> → Chat with the prefill; tab:<name> → that
+// tab); a dismiss flips the card away (the producer owns the server-side stamp via
+// its own action, if any — here we just collapse it for this view). Best-effort.
+function wireGenericAgendaCards(pending) {
+  if (!pending || !pending.length) return;
+  view.querySelectorAll("[data-agenda-act]").forEach((b) => {
+    if (b._wired) return; b._wired = true;
+    b.addEventListener("click", () => {
+      const kind = b.getAttribute("data-agenda-act") || "";
+      const id = b.getAttribute("data-agenda-id") || "";
+      const c = pending.find((x) => x.id === id);
+      const payload = c && c.action ? c.action.payload : null;
+      if (kind.startsWith("chat")) { gotoChatWith(typeof payload === "string" ? payload : (c && c.title) || ""); return; }
+      if (kind.startsWith("tab:")) { activateTab(kind.slice(4)); return; }
+      // an unrecognized action kind: a calm no-op rather than a broken link.
+    });
+  });
+  view.querySelectorAll("[data-agenda-dismiss]").forEach((b) => {
+    if (b._wired) return; b._wired = true;
+    b.addEventListener("click", () => {
+      const card = b.closest(".agenda-card");
+      if (card) collapseEl(card, () => card.remove()); else b.remove();
+    });
+  });
+}
+
 async function renderToday(opts = {}) {
   // `soft:true` marks a warm SWR re-render (a background revalidate found new data):
   // numerals snap to their final value instead of re-counting from zero. Passed
@@ -1143,35 +1284,59 @@ async function renderToday(opts = {}) {
     ? `<div class="stat-dots">${Array.from({ length: planned }, (_, i) => `<span class="stat-dot${i < done ? " on" : ""}"></span>`).join("")}</div>`
     : "";
   const fmtPace = (v) => (v > 0 ? "+" : "") + (Math.round(v * 10) / 10);
-  const PACE_WORD = { on: "on pace", behind: "behind", fast: "too fast" };
+  // Pace verdict reads in the LANGUAGE of the goal mode — never "behind" when you're
+  // just maintaining (the constitution: kind, never anxious). Plain words, no score.
+  const goalMode = stats.goal_mode || "lose";
+  const PACE_WORDS = {
+    lose: { on: "on pace", behind: "behind", fast: "too fast" },
+    gain: { on: "building", behind: "not building yet", fast: "building fast" },
+    maintain: { holding: "holding steady", drifting_up: "drifting up", drifting_down: "easing down" },
+  };
+  const paceWord = (PACE_WORDS[goalMode] || PACE_WORDS.lose)[stats.pace_status] || "";
   let paceTile;
   if (stats.trend_lb_wk == null) {
     paceTile = `<div class="stat stat-pace"><div class="stat-n numeral stat-dim">—</div><div class="stat-l lbl">pace · log weigh-ins</div></div>`;
   } else if (stats.needed_lb_wk == null) {
     paceTile = `<div class="stat stat-pace"><div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div><div class="stat-l lbl">lb/wk · set a goal</div></div>`;
   } else {
-    paceTile = `<div class="stat stat-pace pace-${stats.pace_status || "on"}" title="Trend ${fmtPace(stats.trend_lb_wk)} lb/wk over recent weigh-ins · need ${fmtPace(stats.needed_lb_wk)} to reach ${stats.goal_weight_lb} lb by ${stats.goal_date}">
+    // maintain → just the plain-words state (no "need", no pressure); lose/gain → state + needed pace.
+    const sub = goalMode === "maintain"
+      ? paceWord
+      : `${paceWord}${stats.needed_lb_wk ? ` · need ${fmtPace(stats.needed_lb_wk)}` : ""}`;
+    const title = goalMode === "maintain"
+      ? `Weight trend ${fmtPace(stats.trend_lb_wk)} lb/wk — ${paceWord || "holding steady"}`
+      : `Trend ${fmtPace(stats.trend_lb_wk)} lb/wk over recent weigh-ins${stats.goal_weight_lb != null ? ` · need ${fmtPace(stats.needed_lb_wk)} ${goalMode === "gain" ? "to build toward" : "to reach"} ${stats.goal_weight_lb} lb${stats.goal_date ? ` by ${stats.goal_date}` : ""}` : ""}`;
+    paceTile = `<div class="stat stat-pace pace-${stats.pace_status || "on"}" title="${escAttr(title)}">
         <div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div>
-        <div class="stat-sub">${PACE_WORD[stats.pace_status] || ""} · need ${fmtPace(stats.needed_lb_wk)}</div>
+        <div class="stat-sub">${escHtml(sub)}</div>
         <div class="stat-l lbl">lb / week</div>
       </div>`;
   }
-  // Pace offer: when the weight-trend pace deviates, one calm OPTIONAL line that
-  // drops the athlete into Chat with the question already written — the coach
-  // agent sees the full context and can draft the fix (kcal, plan, both). Only
-  // appears on a real deviation; a low signal is information, never a verdict, so
-  // it reads as an offer to look together — not a warning or a goal-compliance score.
+  // Pace offer: a calm OPTIONAL line into Chat when the trend genuinely deviates —
+  // a low signal is information, never a verdict. SUPPRESSED entirely in MAINTAIN
+  // mode (holding steady is success — no nudge). Gain offers fuel-up / ease-surplus.
   const maxSafe = curW != null ? Math.round(curW * 0.01 * 10) / 10 : null;
-  const PACE_OFFER = {
-    fast: {
-      line: "Trending a bit fast — want to look at your pace together?",
-      ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but the lean-safe ceiling for me is about -${maxSafe} lb/wk (needed pace ${fmtPace(stats.needed_lb_wk ?? 0)}). Should we add calories or adjust the plan to protect lean mass?`,
-    },
-    behind: {
-      line: "A little behind your goal pace — want to look together?",
-      ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I need ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk to hit ${stats.goal_weight_lb} lb by ${stats.goal_date}. What should we tighten — meals, cardio, or the timeline?`,
-    },
-  };
+  const PACE_OFFER = goalMode === "maintain" ? {}
+    : goalMode === "gain" ? {
+        behind: {
+          line: "Not building yet — want to look at fueling together?",
+          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I'm aiming for a lean gain of about ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk. Should we add some calories to build lean mass?`,
+        },
+        fast: {
+          line: "Building a little fast — want to ease the surplus?",
+          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk, faster than my lean-gain pace (~${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk). Should we trim calories so it stays muscle, not fat?`,
+        },
+      }
+    : {
+        fast: {
+          line: "Trending a bit fast — want to look at your pace together?",
+          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but the lean-safe ceiling for me is about -${maxSafe} lb/wk (needed pace ${fmtPace(stats.needed_lb_wk ?? 0)}). Should we add calories or adjust the plan to protect lean mass?`,
+        },
+        behind: {
+          line: "A little behind your goal pace — want to look together?",
+          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I need ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk to hit ${stats.goal_weight_lb} lb by ${stats.goal_date}. What should we tighten — meals, cardio, or the timeline?`,
+        },
+      };
   const paceOffer = isToday && PACE_OFFER[stats.pace_status]
     ? `<button class="pace-offer pace-offer-${stats.pace_status}" id="paceOffer">${escHtml(PACE_OFFER[stats.pace_status].line)} · <span class="pace-offer-cta">ask the coach →</span></button>`
     : "";
@@ -1233,7 +1398,19 @@ async function renderToday(opts = {}) {
   // loadRecentActivities, loadGarminReconcile) binds to them exactly as before. On
   // mobile/tablet the two wrappers stack (single column): the rail flows right after
   // the capture row, where the week-ahead/reads naturally sat before.
-  const railHtml = focus ? "" : `<aside class="today-rail">
+  //
+  // Era 2 — the SALIENCE ARBITER governs the rail. GET /api/today-agenda runs one
+  // deterministic ranking + budget pass and tells us which 1–2 surfaces matter most
+  // today (primary, inline) vs which collapse behind one quiet "more". We build the
+  // rail from that, reusing the rich existing cards verbatim (their slots, ordered).
+  // Best-effort: a null agenda (route not wired / offline) falls back to the CURRENT
+  // fixed rail so Today is never broken while the arbiter is half-integrated. The
+  // agenda is per-render (it reflects today's data), not SWR-cached.
+  // NOTE: the fallback rail deliberately has NO #fuelSlot — fuel surfaces ONLY
+  // through the agenda (which omits it when nothing's logged), so there is no path,
+  // even on a 404/offline fallback, that can render the old "Nothing logged yet"
+  // capture nudge. The other rail cards keep a fallback for graceful degradation.
+  const fixedRailHtml = `<aside class="today-rail">
     ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
     ${isToday ? `<div id="adjustSlot" class="adjust-slot"></div>` : ""}
     <div id="weeklySlot" class="weekly-slot"></div>
@@ -1241,6 +1418,12 @@ async function renderToday(opts = {}) {
     ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
     <div id="qlRecent" class="ql-recent lately-slot"></div>
   </aside>`;
+  let agenda = null;
+  const agendaGeneric = []; // generic Era-2 cards we drew (wired after the write)
+  if (!focus) agenda = await fetchTodayAgenda(state.logDate);
+  const railHtml = focus
+    ? ""
+    : (agenda ? buildAgendaRailHtml(agenda, agendaGeneric) : fixedRailHtml);
 
   let html = focus
     ? focusBarHtml(read, day, { exDone, exTotal, isToday })
@@ -1520,11 +1703,25 @@ async function renderToday(opts = {}) {
     setupWeightChip();
     setupVoiceCapture();
     loadFrequentFoods();
-    loadRecentActivities();
+    // The Brief-adjacent context surfaces (events / health focus / wearable strip /
+    // morning check-in / a waiting draft) live in .today-main, not the arbitrated
+    // rail, so they load unconditionally as before.
     loadContextBanner();
     loadHealthFocusBanner();
     loadWearable(isToday);
-    if (isToday) { loadTodayReads(); loadCheckin(); loadGarminReconcile(); loadDraftProposals(); loadWeekAhead(); loadProgramAdjustmentsBanner(); }
+    if (isToday) { loadCheckin(); loadDraftProposals(); }
+    // The RAIL is arbiter-governed: run only the surfaces the agenda surfaced (in its
+    // ranked order, primary + more), plus wire any generic Era-2 cards. When the
+    // agenda is unavailable we fall back to the fixed-rail loaders exactly as before.
+    if (agenda) {
+      runAgendaRail(agenda, agendaGeneric, isToday);
+    } else {
+      // Fallback (agenda route unavailable): the other rail cards still load. Fuel is
+      // intentionally NOT loaded here — it has no slot in fixedRailHtml and surfaces
+      // only via the agenda, so the evaluation-only fuel glance is never a capture nudge.
+      loadRecentActivities();
+      if (isToday) { loadTodayReads(); loadGarminReconcile(); loadWeekAhead(); loadProgramAdjustmentsBanner(); }
+    }
     view.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
   }
 
@@ -2737,6 +2934,9 @@ async function loadContextBanner() {
 // future goal date, and never on a past-date view.
 function goalLineHtml(stats, curW, isToday) {
   if (!isToday || !stats) return "";
+  // Maintain: no "toward X lb" destination line — holding steady isn't somewhere
+  // you're heading. The compass + fuel card carry the picture; keep Today calm.
+  if ((stats.goal_mode || "lose") === "maintain") return "";
   const gw = stats.goal_weight_lb != null ? Number(stats.goal_weight_lb) : null;
   const gd = stats.goal_date || null;
   if (gw == null || !gd) return "";
@@ -2744,9 +2944,10 @@ function goalLineHtml(stats, curW, isToday) {
   if (days == null || days < 0) return ""; // goal date passed → don't nag
   const when = days <= 7 ? "this week" : days <= 112 ? `~${Math.round(days / 7)} wk` : `~${Math.round(days / 30)} mo`;
   const from = curW != null && Number(curW) !== gw ? ` <span class="goalline-from">from ${escHtml(String(curW))}</span>` : "";
+  const verb = (stats.goal_mode || "lose") === "gain" ? "Building toward" : "Toward";
   return `<button class="goalline reveal" id="goalLine" style="--i:0" type="button">
       <span class="goalline-ico" aria-hidden="true">◎</span>
-      <span class="goalline-txt">Toward <b>${gw} lb</b>${from} · ${escHtml(when)}</span>
+      <span class="goalline-txt">${verb} <b>${gw} lb</b>${from} · ${escHtml(when)}</span>
       <span class="goalline-go" aria-hidden="true">→</span>
     </button>`;
 }
@@ -2775,6 +2976,62 @@ async function loadDraftProposals() {
       <span class="draft-go" aria-hidden="true">→</span>
     </button>`;
   slot.querySelector("#draftCard").addEventListener("click", () => { state.planJump = "coach"; activateTab("plan"); });
+}
+
+// Today rail: a calm "today's fuel" glance — what's logged today + (only when a
+// real target exists) a gentle "remaining". Never a score, "remaining" not
+// "consumed", never red. Capture stays in Chat — this card is purely a REVIEW that
+// taps through to the full editable day (Plan → Meals, where Energy Balance lives).
+//
+// The fuel surface is an EVALUATION glance, NEVER a "log something" prompt: over
+// time people log food less and just evaluate occasionally as the habit builds, so
+// an empty day surfaces NOTHING here (the salience arbiter already omits the `fuel`
+// candidate when count <= 0). This function is only ever called with logged food;
+// it returns "" defensively if handed an empty day so no capture nudge can render.
+function fuelCardHtml(d) {
+  const t = d.totals || {};
+  const kcal = Math.round(Number(t.kcal) || 0);
+  const protein = Math.round(Number(t.protein_g) || 0);
+  const count = Number(d.count) || 0;
+  if (!count) return ""; // nothing logged → no card at all (never a "log something" prompt)
+  // "remaining", never "consumed"; never red. Over the target reads as a calm "in".
+  let remLine = "";
+  if (d.remaining && d.target) {
+    const left = Math.round(Number(d.remaining.kcal));
+    remLine = left > 0
+      ? `<span class="fuel-rem">~${left} left</span>`
+      : `<span class="fuel-rem fuel-rem-done">fuel's in for today</span>`;
+  }
+  const word = count === 1 ? "item" : "items";
+  return `<button class="fuel-card reveal" id="fuelCard" style="--i:0" type="button" title="Review &amp; edit today's food">
+      <span class="fuel-ico" aria-hidden="true">◷</span>
+      <span class="fuel-body">
+        <span class="fuel-h lbl">Today's fuel · ${count} ${word}</span>
+        <span class="fuel-stats">
+          <span class="numeral" data-cu="${kcal}">0</span><span class="fuel-unit">kcal</span>
+          <span class="fuel-dot" aria-hidden="true">·</span>
+          <span class="numeral" data-cu="${protein}">0</span><span class="fuel-unit">g protein</span>
+          ${remLine}
+        </span>
+      </span>
+      <span class="fuel-go" aria-hidden="true">→</span>
+    </button>`;
+}
+
+async function loadFuelToday(date) {
+  const slot = view.querySelector("#fuelSlot");
+  if (!slot) return;
+  let d = null;
+  try { d = await api(`/nutrition/day?date=${encodeURIComponent(date || state.logDate)}`); } catch { return; }
+  if (state.tab !== "today" || !slot.isConnected) return;
+  // Empty / nothing logged → render nothing (no capture prompt — capture is Chat-only).
+  if (!d || typeof d !== "object" || !(Number(d.count) > 0)) { slot.innerHTML = ""; return; }
+  slot.innerHTML = fuelCardHtml(d);
+  const card = slot.querySelector("#fuelCard");
+  // The card only renders with logged food now, so it always taps through to the
+  // editable day review (Plan → Meals) — never into a "log something" chat prompt.
+  if (card) card.addEventListener("click", () => { state.planJump = "meals"; activateTab("plan"); });
+  runCountUps(slot);
 }
 
 // Today: a calm "week ahead" sketch — lift / run / mixed / rest across the next few
