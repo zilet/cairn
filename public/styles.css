@@ -2327,12 +2327,15 @@ body.sheet-open{overflow:hidden}
 .brief-easy{border-left-color:var(--gold)}
 .brief-easy::before{background:radial-gradient(120% 80% at 0% 0%, rgba(201,168,106,.08), transparent 62%)}
 .brief-train{border-left-color:var(--accent)}
+.brief-done{border-left-color:var(--sage)}
+.brief-done::before{background:radial-gradient(120% 80% at 0% 0%, rgba(110,127,92,.08), transparent 62%)}
 
 .brief-kicker{display:flex;align-items:center;gap:7px;color:var(--muted);margin-bottom:9px}
 .brief-glyph{font-size:.72rem;line-height:1}
 .brief-rest .brief-glyph{color:var(--sage)}
 .brief-easy .brief-glyph{color:var(--gold)}
 .brief-train .brief-glyph{color:var(--accent)}
+.brief-done .brief-glyph{color:var(--sage)}
 
 .brief-headline{
   font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 100;

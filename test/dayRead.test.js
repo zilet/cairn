@@ -5,7 +5,7 @@
 // low-sleep branch without coupling to wall-clock "now".
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedTrainingDay, isoDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, seedTrainingDay, seedRecoveryDay, isoDaysAgo } from "./_seed.js";
 
 // A reference date well clear of the recovery window so an empty recovery fetch
 // can't accidentally flip the read.
@@ -75,6 +75,24 @@ test("EASY after a real activity is already logged today", () => {
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.kind, "easy");
   assert.match(r.why, /already/i);
+});
+
+test("DONE (not EASY) when a real loading session is already logged today", () => {
+  // A hard session today is a FACT — the read must acknowledge it as DONE, never
+  // mislabel it "easy". (This is the bug: a hard push session read "EASY DAY".)
+  seedTrainingDay(REF);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "done");
+  assert.match(r.why, /recovery/i);
+  assert.equal(r.signals.trained_today, true);
+});
+
+test("EASY (not DONE) when today's logged work was only light", () => {
+  // A short mobility/recovery session graded 'easy' is NOT a completed training
+  // day — keep it 'easy' (they may still want their real work), never 'done'.
+  seedRecoveryDay(REF);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "easy");
 });
 
 test("absent signals never throw and never force rest (graceful degradation)", () => {

@@ -15,7 +15,7 @@ import { type TrainingLoad, dayLoad } from "./training-read.js";
 
 // ---------- T1: day intelligence ----------
 export interface DayRead {
-  kind: "train" | "easy" | "rest";
+  kind: "train" | "easy" | "rest" | "done";  // 'done' = a real, loading session is already logged today
   focus: string | null;          // e.g. "Lower body" on a train day
   why: string;                   // one plain-language sentence
   est_minutes: number | null;
@@ -257,12 +257,21 @@ export function dayRead(date?: string, recovery?: any): DayRead {
       signals,
     };
   }
-  if (trainedToday) {
-    return { kind: "easy", focus: null, why: "You've already trained today — keep the rest of it easy.", est_minutes: 20, signals };
+  // Already trained today is a FACT, not a suggestion. If today's logged work
+  // genuinely LOADED something (a hard/moderate session — see dayLoad), the day is
+  // DONE: acknowledge the work and frame the rest as recovery. This is what stops a
+  // hard push session from being mislabeled an "EASY DAY". A light/none-load log (a
+  // short mobility flush, or an easy spin a lifter doesn't count) stays "easy" — they
+  // may still want their real work. The grade + fact ride in `signals` for the agent.
+  const todayLoad = dayLoad(d, { countsCardio });
+  (signals as any).trained_today = trainedToday || !!bigActivity;
+  (signals as any).today_load = todayLoad;
+  if ((trainedToday || bigActivity) && (todayLoad === "hard" || todayLoad === "moderate")) {
+    const label = bigActivity && bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "session";
+    return { kind: "done", focus: null, why: `You already got a solid ${label} in today — the rest of the day is for recovery.`, est_minutes: null, signals };
   }
-  if (bigActivity) {
-    const label = bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "workout";
-    return { kind: "easy", focus: null, why: `You've already got a ${label} in today — nice. Keep the rest of the day easy.`, est_minutes: 20, signals };
+  if (trainedToday || bigActivity) {
+    return { kind: "easy", focus: null, why: "You've already moved today — keep the rest of it easy.", est_minutes: 20, signals };
   }
   // A genuine mileage spike WHILE actively stacking loading days earns an easier
   // day (not a forced rest) so the running absorbs. Gated on consec>=1: if

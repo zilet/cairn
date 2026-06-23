@@ -1702,6 +1702,13 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
   const lastNightLine = ln && ln.text
     ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
     : "";
+  // The athlete has ALREADY completed a real, loading session today (a deterministic
+  // fact). Frame the read as DONE — celebrate the work, point the rest of the day at
+  // recovery/refuel, and don't push more training. The headline should land like a
+  // friend noticing what they pulled off, not a fresh to-do.
+  const doneBlock = baseline.kind === "done"
+    ? `\nALREADY DONE TODAY: the athlete has finished a real, loading session today. Frame today as DONE — open with genuine, specific acknowledgement of what they did (name the session/effort), then point the rest of the day at recovery and refueling. Do NOT suggest more training unless they ask. Warm and brief.`
+    : "";
   return `You are Cairn, the athlete's calm health & training buddy. Read their WHOLE picture and
 judge what kind of day today should be: a real session, easy movement, or rest. This opens their
 app — it is the first and often only thing they see.
@@ -1727,7 +1734,7 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${lastNightLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
 ${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:

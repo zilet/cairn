@@ -18,7 +18,10 @@ export function localToday(d: Date = new Date()): string {
 }
 
 function deterministicHeadline(r: { kind: string; focus?: string | null }): string {
-  return r.kind === "rest" ? "Rest today." : r.kind === "easy" ? "Take it easy." : r.focus ? `${r.focus}.` : "Good to train.";
+  return r.kind === "done" ? "You're done for today."
+    : r.kind === "rest" ? "Rest today."
+    : r.kind === "easy" ? "Take it easy."
+    : r.focus ? `${r.focus}.` : "Good to train.";
 }
 
 // Compute the agentic day-read with the deterministic floor as fallback. The
@@ -62,6 +65,10 @@ export async function computeDayRead(
   } catch (e: any) {
     out = { ...baseline, headline: deterministicHeadline(baseline), source: "deterministic", error: e?.message };
   }
+  // "Already trained a real session today" is a deterministic FACT — the agent voices
+  // it (warm acknowledgement + recovery framing) but must never downgrade it to a
+  // bare easy/rest/train read (which is what mislabeled a hard session as "EASY DAY").
+  if (baseline.kind === "done") out.kind = "done";
   // Record the athlete's steer on the read and ALWAYS persist it (the no-clobber
   // guard in saveDayRead protects a stored steer from a later canonical recompute).
   // Persisting the steer is what makes it survive a reload and reach the coach context.

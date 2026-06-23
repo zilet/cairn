@@ -427,6 +427,9 @@ const BRIEF_KIND = {
   rest: { word: "Rest", glyph: "◐", lead: "A quiet day" },
   easy: { word: "Easy", glyph: "◑", lead: "Keep it light" },
   train: { word: "Train", glyph: "◆", lead: "Good to go" },
+  // 'done' = a real session is already logged today. The kicker reflects that fact
+  // ("TRAINED TODAY", never "EASY DAY"); a sage ✓ signals completion, not a to-do.
+  done: { word: "Done", glyph: "✓", lead: "You're done for today", kicker: "Trained today" },
 };
 // Escape-hatch chips — each reshapes the read via ?override=. They open, never scold.
 // "Train anyway" intentionally lives only in the launchpad (an instant plan-reveal),
@@ -632,11 +635,13 @@ function briefHtml(read, { showPlan, isToday }) {
   const actions = [];
   if (kind === "train") {
     actions.push(briefRedirect("start-session", "Start session", true));
-  } else if (!showPlan) {
+  } else if (kind !== "done" && !showPlan) {
     // easy / rest — a quiet way into the plan if they want it, never shouted
     actions.push(briefRedirect("reveal-plan", "Train anyway", false));
   }
-  actions.push(briefRedirect("ask-session", "Ask for a session", false));
+  // 'done' offers no CTA — the day's work is in. The session done-card below carries
+  // "Log more" for the rare second session; the Brief just acknowledges and rests.
+  if (kind !== "done") actions.push(briefRedirect("ask-session", "Ask for a session", false));
 
   // ---- Steer line: visually subordinate to the actions. Only meaningful for
   // today (a live read to reshape). When a steer is already active, the label
@@ -645,7 +650,9 @@ function briefHtml(read, { showPlan, isToday }) {
   const steered = !!activeOverride;
   const opts = visibleBriefOverrides({ kind, estMinutes, activeOverride });
   let steer = "";
-  if (isToday && (opts.length || steered)) {
+  // No steer chips once the day is DONE — reshaping "rough night / short on time"
+  // is meaningless after a real session is already in. The day stands on its own.
+  if (isToday && kind !== "done" && (opts.length || steered)) {
     const optBtns = opts.map((o) =>
       `<button class="brief-steer-opt" data-override="${escAttr(o.intent)}">${escHtml(o.label)}</button>`
     ).join(`<span class="brief-steer-dot" aria-hidden="true">·</span>`);
@@ -671,12 +678,12 @@ function briefHtml(read, { showPlan, isToday }) {
   const offline = read._provisional ? "" : agentOfflineNoticeHtml(read.agent_status);
   return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
       ${offline}
-      <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${meta.word.toUpperCase()} DAY${est ? ` · ${escHtml(est)}` : ""}</div>
+      <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est ? ` · ${escHtml(est)}` : ""}</div>
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
       <div id="briefProvenance" class="prov-slot"></div>
-      <div class="brief-launch">${actions.join("")}</div>
+      ${actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : ""}
       ${steer}
       <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
     </section>`;
