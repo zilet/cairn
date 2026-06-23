@@ -359,7 +359,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 /* The week ahead — a calm forward sketch (lift / run / mixed / rest). A suggestion
    to reshape, never a schedule; each kind a quiet colored glyph. */
 .weekahead-slot:empty{display:none}
-.weekahead{background:var(--card);border:none;box-shadow:var(--shadow-sm);
+.weekahead{background:var(--card);border-left:3px solid var(--sage);box-shadow:var(--shadow-sm);
   border-radius:var(--radius-sm);padding:13px 15px;margin:2px 0 14px}
 .weekahead-h{margin-bottom:9px}
 .weekahead-days{display:flex;flex-direction:column}
@@ -2723,7 +2723,7 @@ body.swr-busy::after{
 .insight-slot{margin:0}
 .insight-slot:empty{display:none}
 .insight-card{
-  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius-sm);
   padding:16px 18px 13px;margin:0 0 14px;border-left:3px solid var(--gold);
   position:relative;overflow:hidden;
 }
@@ -2768,14 +2768,14 @@ body.swr-busy::after{
 .weekly-slot{margin:0}
 .weekly-slot:empty{display:none}
 .weekly-card{
-  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
-  padding:18px 20px 14px;margin:0 0 14px;border-top:3px solid var(--sage);
+  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius-sm);
+  padding:18px 20px 14px;margin:0 0 14px;border-left:3px solid var(--sage);
   position:relative;overflow:hidden;
 }
 .weekly-card::before{content:"";position:absolute;inset:0;pointer-events:none;
-  background:radial-gradient(130% 90% at 100% 0%, rgba(110,127,92,.10), transparent 60%)}
+  background:radial-gradient(130% 90% at 0% 0%, rgba(110,127,92,.10), transparent 60%)}
 .weekly-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;position:relative}
-.weekly-kicker{color:var(--sage)}
+.weekly-kicker{color:var(--muted)}
 .weekly-range{font-family:var(--font-ui);font-size:.66rem;letter-spacing:.04em;color:var(--muted)}
 .weekly-text{font-family:var(--font-display);font-weight:460;font-variation-settings:"opsz" 60;
   font-size:1.28rem;line-height:1.36;color:var(--ink);margin:0;max-width:60ch;position:relative}
@@ -3975,8 +3975,8 @@ button.hmk-row:active{background:var(--card-2)}
 /* ---- Today rail: the "what changed" card (expand-in-place) ---- */
 .adjust-slot:empty{display:none}
 .adjust-card{
-  background:var(--card);box-shadow:var(--shadow-sm);border:none;border-radius:var(--radius);
-  padding:6px 16px 4px;margin:2px 0 14px;
+  background:var(--card);box-shadow:var(--shadow-sm);border-left:3px solid var(--sage);border-radius:var(--radius-sm);
+  padding:8px 16px 6px;margin:2px 0 14px;
 }
 .adjust-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0 4px}
 .adjust-head .lbl{color:var(--muted)}
