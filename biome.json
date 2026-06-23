@@ -18,7 +18,8 @@
       "!node_modules",
       "!data",
       "!public/sw.js",
-      "!public/art.js"
+      "!public/art.js",
+      "!public/vendor/**"
     ]
   },
   "formatter": {

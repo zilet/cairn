@@ -11,7 +11,7 @@
 // Producers are imported via the repo barrel (integrator wires the export).
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
+import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 
 const KEY = "today_last_seen_at";
 

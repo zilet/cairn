@@ -3,7 +3,7 @@
 // auto-complete past total_weeks), clamping/validation, blockForCoach shape.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, resetTables } from "./_seed.js";
+import { resetTables } from "./_seed.js";
 import * as blocks from "../dist/repo/program-blocks.js";
 
 beforeEach(() => {
