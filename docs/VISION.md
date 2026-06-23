@@ -106,7 +106,9 @@ a feature conflict, the principle wins.
     a high running heart rate is connected to the labs that explain it. And it is **grounded in current
     clinical evidence** — when a finding matters or the right move is uncertain, the brain researches
     deeper, recalculates everything it affects, and writes a clear, cited note on what changed and why, for
-    you to review. (See *The connected brain*, §5.)
+    you to review. (See *The connected brain*, §5.) *The propagation and prioritization are always-on and
+    deterministic; the **cited-evidence** grounding is an opt-in layer that ships off by default — making
+    it reachable is Era-2 work, §12 item 2.*
 
 12. **Capture is effortless — even by voice.** Logging must feel optimal and almost frictionless: a photo, a
     tap on a time-of-day regular, a typed phrase, or — **just saying it out loud** ("logged a 40-minute
@@ -127,9 +129,24 @@ a feature conflict, the principle wins.
 
 ## 3. Where Cairn stands today (honest assessment)
 
-Cairn is top-decile on **craft and architecture**. The gap is not capability — it's that the
-quiet-intelligence layer hasn't been built. We have world-class plumbing and a world-class design
-system wrapped around a logging app that doesn't yet read your day.
+> **Updated 2026-06-23.** The original assessment below ("the quiet-intelligence layer hasn't been
+> built") is now *historical* — it described the pre-build state. The six-phase plan in §6 shipped
+> end-to-end and the product has grown well past it (§11, §12). What follows is the current read.
+
+**Era 1 is done.** The quiet-intelligence layer is built: Today opens to a day-reading Brief, the
+connected brain propagates findings across domains, capture is effortless (voice + frequents + Apple
+Health + Garmin), nutrition adapts adherence-neutrally, and the buddy meets you in your sport
+(strength / endurance / hybrid). The constitution held the whole way — **no scores, zero push, fully
+pull-based, nothing auto-applies.** Cairn is no longer "a logging app that doesn't read your day"; it
+reads the day and points.
+
+**The new gap is subtler: staying calm as it got smarter.** Era 1's question was *"does it read my
+day?"* (yes). Era 2's question is *"does it stay a calm daily driver now that it knows so much?"* The
+surface has legitimately grown — Today's rail can stack several cards, Progress has many sub-views — and
+while every card degrades to nothing when empty and nothing nags, **no single arbiter decides the
+*total*.** Calm-by-default (§2.2) and restraint-over-features (§2.4) are now the principles under the
+most pressure. Era 2 (§12) is about defending them deliberately. *The historical strengths and
+core-gap notes below are kept for the record.*
 
 ### Genuine strengths (do not rebuild these)
 
@@ -155,9 +172,13 @@ system wrapped around a logging app that doesn't yet read your day.
   battery, stress, steps; `getGarminCoachSummary()` already summarizes it. **Reading your day is a
   synthesis problem, not a data-collection problem** — the highest-leverage unlock in the codebase.
 
-### The core gap
+### The core gap (Era 1) — ✅ closed
 
-**Today opens into a ledger, not a buddy.** The Today screen leads with last week's adherence and pace,
+> *Historical, for the record — this is the gap Era 1 was written to close, and did.* Today no longer
+> opens into a ledger; it opens to the day-intelligence Brief (Phase 1, shipped). The text below is the
+> *before*.
+
+**Today used to open into a ledger, not a buddy.** The Today screen led with last week's adherence and pace,
 a wearable strip, a quick-log box, a day switcher, then exercise cards — and it silently assumes every
 day is a lifting day (it just picks a plausible plan day). It's a lovely place to *record* and *check
 trajectory*, but it never reads your situation and says "today's a rest day," or "you're good — lower
@@ -267,10 +288,15 @@ The flow, concretely:
 Architecturally this is a **derived-directives layer**: findings → (optional research) → structured
 cross-domain directives that `getCoachContext()` carries into the meal, training, and day-read prompts,
 plus a human-readable cited note. It extends the existing `health_review` → coach/meal path into an
-explicit, evidence-grounded propagation engine. *Runtime web research depends on the configured agent CLI
-having web access; absent that, it falls back to the model's own knowledge and lowers its confidence in the
-note.* This is the difference between a tracker that *stores* a lab result and an intelligence that **acts
-on it across your whole life.**
+explicit, evidence-grounded propagation engine. *Honest status: the propagation, prioritization, and
+cross-domain directives are **always-on and deterministic** — a flagged lab already reshapes meals and
+training on every install. The **cited-evidence grounding** (`research.ts` / `verifyCitation` /
+`safetyGate`), however, ships **off by default** (`settings.research_enabled = 0`) and depends on a
+web-capable agent CLI; absent that, the brain falls back to the model's own knowledge and lowers its
+confidence in the note. So today the boldest promise — a live, cited literature pass — is the part most
+users won't experience. **Era 2 (§12 item 2) makes grounding reachable** (a bundled guidelines pack +
+a one-tap toggle that auto-enables with a web-capable agent).* This is the difference between a tracker
+that *stores* a lab result and an intelligence that **acts on it across your whole life.**
 
 ### What comes first: the Today redesign
 
@@ -328,6 +354,10 @@ Ordered by the new philosophy (intelligence and understanding first; capture and
 Each phase splits into **parallel tracks** that meet at typed contracts (`repo.ts` signatures +
 REST/MCP shapes) so independent agent teams can run them. Every phase honors §8's contracts and carries
 a **restraint note** — what we deliberately *don't* surface.
+
+> **✅ All six phases below shipped (2026-06-13; §11).** They are kept here as the executed plan of
+> record. The one deferred track is **5A — Photo → macros** (infrastructure ready, agent call not yet
+> wired); it is picked up as Era-2 item 3 in §12. Era 2 (§12) is the active frontier.
 
 ---
 
@@ -657,6 +687,92 @@ _Updated as stages land._
 **Build complete (2026-06-13).** The full vision is implemented end-to-end across PWA + REST + MCP + scheduler, build-green, smoke-verified, reviewed twice with all findings fixed, and merged to `main`.
 
 **Integration note (for the record):** the Stage-2 worktrees were created off the pre-foundation commit `1062054`, not the foundation `b91b63b`. T1/T3/T5/T6 self-corrected (`git reset --hard b91b63b`); T2/T4 built on the stale base, so they were re-applied onto the integrated tip rather than merged (T4's richer directives engine — 16 cited markers + `marker`/`uncertain` columns via migration v21 — superseded the foundation's basic version in place, preserving `listActiveDirectives`/`renderConnectedBrain`).
+
+### Post-vision-build era (2026-06-13 → 2026-06-23) — beyond the original six phases
+
+The six-phase vision shipped on 2026-06-13; the product then grew well past it. Major rounds since
+(see `CLAUDE.md` for the dense changelog): first-class **endurance / runner + hybrid** discipline and
+the runner loop (schema v35–v37); **adaptive program intelligence** — the plan evolves, periodizes,
+and breaks plateaus through propose→apply (v38); **elite strength** — exercise canonicalization, the
+auto-progression engine, and a program-balance read closing the logged-lifts→plan loop (v40);
+**connected-brain synthesis** — `healthFocus` tiering + an agentic whole-picture story; a **doctor-ready
+clinical report** + marker canonicalization; the **Agent Connect** round (in-app CLI login, honest
+rotation, version/model visibility) and its quality hardening; **calm nutrition** — first-class goal
+modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **v41**; `sw.js`
+**cairn-v126**. Throughout, the constitution held: no scores, no push, pull-only, nothing auto-applies.
+
+### Era 2 — the calm daily driver (active; §12)
+
+- [x] Item 1 — Today salience arbiter (`src/repo/today-agenda.ts` + agenda-driven `03-today.js`; the fuel card now surfaces only when there's food to evaluate — no capture nudge)
+- [x] Item 2 — cited-evidence reachable: offline `src/guidelines.ts` pack + `directiveCitationTag` + `researchAutoEligible` Settings auto-suggest (research stays opt-in)
+- [x] Item 3 — photo → macros (Phase 5A): `food_photo` enrich kind + `buildFoodPhotoPrompt`, vision draft upgrades in place
+- [x] Item 4 — "since you last looked" (`src/repo/since-last.ts`): one calm line, never a streak, silent on first open
+- [x] Item 5 — gentle "is this still your goal?" (`src/repo/goal-checkin.ts`): ~90-day-stable, dismissible, never nags a new user
+- [x] Item 6 — the learned timeline (`src/repo/learned-timeline.ts`): pull-only Me→Health→Learned, explains never grades
+
+**Era 2 build complete (2026-06-23).** All six frontier features shipped across PWA + REST + MCP, built by parallel agent teams with seam integration owned centrally; schema unchanged (v41, state in `app_state`), `sw.js` `cairn-v129`, build-green, full test suite green (incl. 6 new suites), lint clean, route/tool docs regenerated. The constitution held: no scores, pull-never-push, you-drive, nothing auto-applies.
+
+---
+
+## 12. Era 2 — the calm daily driver (the active frontier)
+
+> Era 1 (§6) made Cairn *read your day*. It worked — and the product grew far past the original plan
+> (§11). Era 2 is the deliberate response to what that growth cost: it defends **calm-by-default**
+> (§2.2) and **restraint-over-features** (§2.4) as first-class engineering, turns the boldest promise
+> (one evidence-grounded brain, §2.11 / §5) from *capable-but-dark* into *reachable*, and closes the
+> last capture gap. Every item is bound to the constitution: pull-never-push, no scores, you-drive,
+> nothing auto-applies. Ranked by leverage.
+
+1. **A Today salience arbiter — calm becomes a guarantee, not a hope.** Today's cards each decide
+   independently whether to appear; nothing arbitrates the *total*, so a full day stacks a dashboard.
+   A single pass — a deterministic floor, optionally re-ranked by the agent — scores *every* candidate
+   surface (the Brief, fuel, week-ahead, adjustments, weekly read, insight, reconcile, the new Era-2
+   cards) and surfaces only **the one or two that matter most today**, collapsing the rest behind one
+   quiet "more." This is the same prioritize-don't-dump discipline the connected brain already applies
+   to *markers* (`prioritizeMarkers` / `healthFocus`), now applied to the whole Today surface.
+   *Restraint note:* the arbiter can only ever *reduce* what's shown; on a quiet day it's still three
+   lines and a button. It never invents a card to fill space.
+
+2. **The connected brain's cited-evidence layer, reachable by default.** The propagation and
+   prioritization are always-on, but the *cited-evidence grounding* (`research.ts` / `verifyCitation` /
+   `safetyGate`) ships **off** (`settings.research_enabled = 0`) and needs a web-capable agent — so the
+   boldest promise in §2.11 / §5 is the least likely to be experienced. Make grounding reachable: ship a
+   bundled, periodically-refreshed **trusted-guidelines pack** so citations work offline (no web CLI
+   required), and/or make the toggle a calm, clearly-explained one-tap in Settings that auto-enables
+   when a web-capable agent is connected. *Restraint note:* still informational, never medical advice;
+   an uncited finding stays a softer nudge, exactly as today.
+
+3. **Close the capture loop: photo → macros (Phase 5A, the one unbuilt track).** The infrastructure
+   has been ready since the vision build (`food_notes.image_path` + the enrichment queue); only
+   `buildFoodPhotoPrompt` + the agent call are missing. Snap a plate → instant entry → background agent
+   returns an **editable, confidence-banded** macro draft that upgrades in place and lands in the new
+   editable day-fuel review. *Restraint note:* offered, never pushed; capture stays in Chat; the draft
+   is always editable and never red.
+
+4. **A calm "since you last looked" line — honest continuity, not a streak.** An elite daily driver
+   rewards opening *without* a chain to break. One pull-based line on open — a lab merged, a PR set, a
+   directive resolved, a plan applied since your last visit — assembled from data that already exists
+   (insights, PRs, directives, applied proposals), surfaced *through the arbiter* (item 1). *Restraint
+   note:* one line, never a feed; no counter, no badge, no "you've been away N days"; silent when
+   nothing genuine changed.
+
+5. **A periodic, gentle "is this still your goal?"** Goals drift, and goal modes (lose / maintain /
+   gain) made that explicit. Rarely — and only as a quiet, pull-based card — the buddy checks in
+   ("you've been maintaining ~3 months; still the plan, or shifting?"). It honors §2.7 (*understands
+   you, keeps understanding*) without nagging. State rides in `app_state` (a last-asked stamp); surfaced
+   through the arbiter. *Restraint note:* months apart, never blocking, one tap to confirm or change,
+   dismissible to silence.
+
+6. **A legible "what Cairn has learned about you" timeline.** For a decade-long buddy, *showing its
+   working* compounds trust: a quiet, browsable read of what it has understood and changed — memory,
+   applied proposals and their outcomes, resolved directives, the learnings it distilled
+   (`evidenceSummary` / `getOutcomeLearnings` exist but are thin). Lives in **Me**, pull-only.
+   *Restraint note:* a calm history you visit, never a notification; it explains, it doesn't grade.
+
+**How Era 2 honors the constitution.** Items 1, 4, and 5 all route *through* the salience arbiter, so
+adding intelligence cannot add noise — every new surface competes for the same scarce, ranked attention
+budget rather than claiming its own card. Item 2 makes a built capability honest and reachable. Item 3
+finishes a planned track. Nothing here pushes, scores, gamifies, or auto-applies.
 
 ---
 

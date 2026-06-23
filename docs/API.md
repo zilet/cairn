@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**181 routes** across 63 groups.
+**189 routes** across 68 groups.
 
 ## `/activities`
 
@@ -196,6 +196,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/food-notes` |  |
 | DELETE | `/api/food-notes/:id` |  |
 | GET | `/api/food-notes/:id` | Single food note row, hydrated (frontend polls this to watch enrichment_status). |
+| PUT | `/api/food-notes/:id` | Manual correction of a logged food note (fix a macro, rename it, change the meal slot, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered. 404 on unknown id. |
 
 ## `/frequent-foods`
 
@@ -223,6 +224,19 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/goal` |  |
+
+## `/goal-checkin`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/goal-checkin/confirm` | Gentle goal check-in (you-drive): confirm restarts the ~3-month stable clock; dismiss starts the cooldown. Neither changes the goal — that's the profile flow. |
+| POST | `/api/goal-checkin/dismiss` |  |
+
+## `/guidelines`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/guidelines` | Trusted clinical-guideline statements (offline pack) for a marker, or the whole set. |
 
 ## `/health`
 
@@ -293,6 +307,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/last-set` |  |
 
+## `/learned-timeline`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/learned-timeline` | The legible "what Cairn has learned about you" timeline (pull-only; no scores). |
+
 ## `/learnings`
 
 | Method | Path | Notes |
@@ -338,6 +358,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/nutrition/checkin` | Quiet adaptive-nutrition check-in: when the derived expenditure has drifted meaningfully off the goal, the agent drafts a calorie/macro target CHANGE as a DRAFT proposal to review — never auto-applied. Most weeks nothing has moved (change:false) and no proposal is created. ok:false (status 200) is the designed failure signal, mirroring the swap/recipe endpoints. |
+| GET | `/api/nutrition/day` | A calm review of ONE day's logged food (v41): the entries (each editable), the running totals, and — only when a real target exists (a loss/gain goal, or the maintenance anchor) — a gentle "remaining". ?date=YYYY-MM-DD overrides today. |
 | GET | `/api/nutrition/expenditure` | Derived real expenditure (MacroFactor-style), adherence-neutral. Read-only; powers the calm "Energy Balance" view. ?window= overrides the 21-day window. |
 
 ## `/onboard`
@@ -462,6 +483,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/settings` | Settings + agent metadata. route_tasks is server-owned UI metadata for the Settings routing controls, so frontend task labels cannot drift from the backend allowlist. |
 | PUT | `/api/settings` |  |
 
+## `/since-last`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/since-last` | The "since you last looked" continuity line standalone (or null). |
+
 ## `/stats`
 
 | Method | Path | Notes |
@@ -484,6 +511,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | DELETE | `/api/supplements/:id` |  |
 | PUT | `/api/supplements/:id` |  |
 | POST | `/api/supplements/understand` | The headline: free text -> understood + approximated + stored. Returns the items. |
+
+## `/today-agenda`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/today-agenda` | The Today salience arbiter: ONE ranking + budget pass over the whole Today surface, so only the 1-2 things that matter most today render inline and the rest collapse behind a quiet "more". Marking "seen" at the end (debounced) powers the "since you last looked" continuity line. |
 
 ## `/today-read`
 

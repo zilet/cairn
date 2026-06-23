@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**150 tools.**
+**157 tools.**
 
 | Tool | Description |
 |---|---|
@@ -18,6 +18,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `advance_block_week` | Advance a block to its next week — bumps week_index, transitions the phase per the deload schedule, and auto-completes past the last week. Omit id to advance the active block. |
 | `apply_progression` | Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression) via the existing propose→apply path — never auto-applied, never a gate. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose). |
 | `apply_proposal` | Apply a draft proposal's target changes to the plan. |
+| `confirm_goal_checkin` | Restart the gentle 'is this still your goal?' clock (Era 2): records that the athlete confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else. |
 | `consolidate_memory` | Quietly tidy the memory store: merge near-duplicates, supersede contradictions, promote recurring observations to durable traits. Marks, never hard-deletes. Returns the counts. |
 | `create_block` | Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random. |
 | `delete_context_event` | Delete a life-timeline event by id. |
@@ -31,6 +32,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `delete_supplement` | Remove one supplement from the regimen by id. |
 | `derive_directives` | Re-run the deterministic propagation engine over the latest markers: clears the 'markers' directive source and re-derives evidence-based nutrition/training/watch directives for every out-of-optimal marker, while honoring prior Done/Dismiss feedback. Idempotent; leaves agent-emitted 'health_review' directives untouched. |
 | `discard_proposal` | Discard a draft proposal without applying it. |
+| `dismiss_goal_checkin` | Wave off the gentle goal check-in (Era 2): starts a long cooldown so it stays quiet. Dismissible to silence; pull-never-push. |
 | `draft_meal_plan` | Run an agent to draft a goal-aware weekly meal plan (lean-safe deficit, protein target), then a bounded self-critique verify pass against the lean-safe/longevity floors before saving. The saved plan is the verified draft; `verified:{checked,adjustments}` shows it was checked against your protein/fiber/kcal floors. Verify fails open (no agent ⇒ ships unverified). |
 | `draft_plan_update` | Run a coaching agent over recent logs to produce a DRAFT plan-update proposal. Does not change the plan; review then apply_proposal. |
 | `evolve_program` | Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize. Returns a DRAFT proposal (review then apply_proposal) plus the program-state snapshot. Does not change the plan. |
@@ -46,6 +48,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_chat_session` | Read one archived conversation in full (chronological), keyed by its archived_at timestamp from list_chat_sessions. |
 | `get_checkin` | Get the latest check-in for a date (or null if none). |
 | `get_daily_metrics` | Recent daily metric rows for a source (default all sources) over the last N days (default 30). |
+| `get_day_intake` | A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to today (UTC calendar day). |
 | `get_day_read` | Read what KIND of day today should be — train, easy, or rest — as a calm SUGGESTION (never a verdict, never a score). Synthesizes recent training, recovery, check-ins and life context. The agentic read writes the human sentence; if no agent is reachable it falls back to a deterministic floor. override reshapes the read ('rough night' / 'short on time' / 'I want to train anyway'). |
 | `get_endurance_goal` | The athlete's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }. |
 | `get_endurance_prs` | Endurance PRs from logged cardio: the longest single distance + duration and the fastest pace (min/km) at standard distances (1/5/10k, half, full). Optional type filter (e.g. 'run'\|'ride'). Plain numbers, never a score — the endurance analogue of the strength est-1RM. |
@@ -56,6 +59,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_frequent_foods` | The foods most often logged near a time of day (±2h), most-frequent first (max 8), with macros carried from the latest occurrence when known. Powers one-tap re-log of the usual foods for this time. Pass `hour` (0-23) to target a specific time; omit to use the server clock. |
 | `get_garmin_summary` | Compact coach-facing Garmin summary: recent endurance load and recovery metrics. Use as context, not as plan authority. |
 | `get_goal_check` | Compute TDEE and a lean-safe feasibility check for the current goal. |
+| `get_guidelines` | Trusted clinical-guideline statements (offline, recognized bodies — AHA/ACC, Endocrine Society, KDIGO…) for a marker/topic, or the whole pack. Grounds the connected brain's directive notes with a citation even with research disabled. INFORMATIONAL, not medical advice. |
 | `get_health_export` | Structured, FHIR-inspired health summary: a portable read-only slice of the athlete's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus the understood supplement regimen and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. INFORMATIONAL, not medical advice — no 0-100 scores anywhere. |
 | `get_health_focus` | The deterministic TIERED health priorities (elite-coach prioritization): the flat directive flood collapsed into a handful of connected priorities — one per health group, tier (act_now/track), the markers driving it, whether they compound, and the LEAD move per domain. Plain words, no scores; the basis for the whole-picture synthesis. |
 | `get_health_markers` | Marker history aggregated across every uploaded health document: per marker the latest value/flag, the previous reading, a numeric time series, and a trend ({dir: rising\|falling\|stable, change, span_days, n}) so you can speak to direction over time, not just the latest value. Each marker also carries its health group (group/group_label — e.g. Lipids & Cardiovascular, Metabolic & Glucose), and the top-level `groups` list gives the canonical-ordered groups present. Flagged (low/high) markers sort first. |
@@ -64,6 +68,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_health_synthesis` | The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering and a `stale` flag (true when newer labs landed than the synthesis was written against). Returns the last generated narrative (or null); regenerate with synthesize_health. |
 | `get_injury_impacts` | For each ACTIVE injury on the life timeline, the planned exercises it loads (with where they appear in the plan + any existing constraint note) and a few safe alternative exercises to consider. Deterministic, offline. Suggestions only — it never changes the plan. |
 | `get_last_set` | Get the most recent logged set for an exercise (for prefill). |
+| `get_learned_timeline` | A calm, pull-only read of what Cairn has understood about you and the changes it's made — load-bearing memories, outcome learnings, connected-brain directives, and applied plan changes. Newest-first, bounded. Explains, never grades; no scores. |
 | `get_meal_plan` | Get one meal plan by id (hydrated: parsed days/meals/macros). |
 | `get_meal_recipe` | Get the recipe for one planned meal — returns the cached recipe if the meal already has one, otherwise runs an agent to write it and caches it on the meal inside the plan. |
 | `get_outcome_learnings` | The quiet 'What Cairn has noticed' read: durable, plain-language learnings drawn from suggestion → actual reconciliation (e.g. 'tolerates higher training frequency than the read assumed'). Returns { learnings:[{id, content, noticed_at}] }, newest-first. These season the coach's defaults — never a score, never a gate; pull-never-push. |
@@ -83,6 +88,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_session` | Get the logged session for a specific date (YYYY-MM-DD), with its sets and any skipped exercises. |
 | `get_session_detail` | Get one logged session by its id, with all its sets. |
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list. |
+| `get_today_agenda` | The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today). |
 | `get_volume` | Training volume (tonnage) broken down by muscle group over the last N days (default 30). |
 | `get_week_ahead` | Sketch the SHAPE of the next several days — lift / run / mixed / rest — as a calm SUGGESTION to reshape, never a fixed schedule. Balances the lifting split with easy aerobic base work, honoring injuries, recovery and training health-directives. Agentic with a deterministic plan-rotation floor, so it always returns a usable shape; cached per day+plan+goal. |
 | `get_weekly_stats` | Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes. |
@@ -149,6 +155,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `update_directive` | Flip a directive's status (the review side of propose-review-apply — nothing auto-applies). `resolved` means handled for that marker snapshot; `dismissed` suppresses equivalent future advice until the marker materially changes. Returns the updated directive, or null when the id is unknown. |
 | `update_exercise` | Update an existing exercise by name: mode (reps\|timed), muscle_group, cues, constraint_note (any subset). |
 | `update_family` | Update a family member by id (any subset of fields). allergies are a HARD exclusion in shared meals; dietary_restrictions surface as optional household mods. |
+| `update_food_note` | Correct a logged food note (fix a macro, rename it, change the meal slot, 'I changed my mind'). Pass the id + any subset of { meal, summary, kcal, protein_g, carbs_g, fat_g, fiber_g, notes, items }. Coerced/clamped; marks the note's enrichment terminal so a background enricher can't later overwrite the correction. Returns the updated row, or an error when the id is unknown. |
 | `update_insight` | Mark an insight seen/dismissed and/or record thumbs feedback (up\|down) by id. On feedback:'up' the insight text is ALSO written to memory so the relationship learns which connections land. |
 | `update_meal_plan_days` | Replace a meal plan's days array (manual meal reorder/edit). Preserves every other parsed key (daily_kcal, shopping, notes). |
 | `update_memory` | Edit an existing memory note's content/kind/confidence by id. Use when a remembered fact CHANGED and should be corrected in place. |
