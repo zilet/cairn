@@ -24,10 +24,18 @@ function handleUnauthorized() {
   if (t && t.trim()) { try { localStorage.setItem("cairn_token", t.trim()); } catch {} }
   location.reload();
 }
+// The device's live IANA timezone (e.g. "America/New_York", "Asia/Tokyo"). Sent
+// on every call so the server frames "today"/now/log-times where the owner ACTUALLY
+// is — so traveling across zones just works (logs stay UTC instants server-side).
+const deviceTimeZone = () => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+};
 const api = (p, opts = {}) => {
   const t = authToken();
   const headers = { ...(opts.headers || {}) };
   if (t) headers["X-Cairn-Token"] = t;
+  const tz = deviceTimeZone();
+  if (tz) headers["X-Cairn-TZ"] = tz;
   return fetch("/api" + p, { ...opts, headers }).then((r) => {
     if (r.status === 401) { handleUnauthorized(); return new Promise(() => {}); }
     setOffline(false); // a real response landed — Cairn is reachable

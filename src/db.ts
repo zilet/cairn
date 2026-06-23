@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS meal_plans (
 CREATE TABLE IF NOT EXISTS food_notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
+  date TEXT,                          -- LOCAL calendar day the meal belongs to (stamped at insert, device-zone aware); created_at stays the UTC instant
   meal TEXT,
   raw_output TEXT,
   parsed_json TEXT,
@@ -355,6 +356,7 @@ CREATE TABLE IF NOT EXISTS chat_turns (
   reply TEXT,                               -- the assistant reply text once done
   assistant_message_id INTEGER,             -- the chat_messages row for the assistant turn
   meta TEXT,                                -- JSON { applied, drafts }
+  tz TEXT,                                  -- the device IANA zone captured at enqueue (X-Cairn-TZ); the worker re-frames "now"/day-keys in it
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_turns_status ON chat_turns(status, id);

@@ -8,13 +8,17 @@ import * as repo from "./repo.js";
 import { buildDayReadPrompt } from "./prompt.js";
 import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
 import { runChosen } from "./runChosen.js";
+import { localDateISO } from "./repo/shared.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
 // to line up (a home server shares the owner's timezone). A timezone mismatch
 // only ever costs a cache miss → one compute on open, never a wrong answer.
 export function localToday(d: Date = new Date()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // Delegate to the zone-aware shared helper so the day_reads cache key matches
+  // the row getCoachContext reads (both follow the active device zone, else the
+  // server's). Kept as a named export for its existing callers (api/scheduler).
+  return localDateISO(d);
 }
 
 function deterministicHeadline(r: { kind: string; focus?: string | null }): string {

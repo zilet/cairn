@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { db } from "../db.js";
 import { isAgentJobKind, type AgentJobKind } from "../agentJobKinds.js";
 import { addMemory } from "./memory.js";
+import { activeTimeZone } from "../tz.js";
 
 // ---------- chat ----------
 function hydrateChat(row: any) {
@@ -110,10 +111,14 @@ export function createChatTurn(t: {
   agent?: string | null;
   user_message_id?: number | null;
 }) {
+  // Capture the device timezone NOW, while we're still inside the request (the
+  // X-Cairn-TZ middleware set it). The worker drains later, with no request in
+  // scope, so it re-establishes this zone from the row to frame "now"/day-keys.
+  const tz = activeTimeZone() ?? null;
   const info = db
-    .prepare(`INSERT INTO chat_turns (status, phase, message, image_path, image_url, agent, user_message_id)
-              VALUES ('queued', 'queued', ?, ?, ?, ?, ?)`)
-    .run(t.message ?? null, t.image_path ?? null, t.image_url ?? null, t.agent ?? null, t.user_message_id ?? null);
+    .prepare(`INSERT INTO chat_turns (status, phase, message, image_path, image_url, agent, user_message_id, tz)
+              VALUES ('queued', 'queued', ?, ?, ?, ?, ?, ?)`)
+    .run(t.message ?? null, t.image_path ?? null, t.image_url ?? null, t.agent ?? null, t.user_message_id ?? null, tz);
   return getChatTurn(Number(info.lastInsertRowid));
 }
 

@@ -13,6 +13,7 @@
 // athlete (and the coach proposal) drive.
 // ============================================================================
 import { db } from "../db.js";
+import { localDateISO } from "./shared.js";
 import { getRecoverySummary } from "./coach.js";
 import { canonicalGroup, isMobility, MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { getPrimaryDiscipline, getProfile } from "./profile.js";
@@ -466,7 +467,7 @@ function enduranceState(date: string): EnduranceState {
 
 // ---- the aggregate ----
 export function getProgramState(date?: string, recovery?: any): ProgramState {
-  const d = date || new Date().toISOString().slice(0, 10);
+  const d = date || localDateISO();
   const discipline = getPrimaryDiscipline();
   const lifts = liftStates(d);
   const volume = muscleVolume(d);

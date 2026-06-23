@@ -27,6 +27,7 @@
 // barrel ../repo.js) — repo modules do this to avoid a circular import, since the
 // barrel re-exports this very file.
 import { getDayIntake } from "./nutrition.js";
+import { localDateISO } from "./shared.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
 import { programAdjustments } from "./progression.js";
 import { getRunCompliance, getWeeklyStats } from "./sessions.js";
@@ -283,7 +284,7 @@ function latelyCandidate(): TodayAgendaCandidate | null {
 // todayAgenda — the single ranking + budget pass.
 // ============================================================================
 export function todayAgenda(date?: string): TodayAgenda {
-  const d = String(date || new Date().toISOString().slice(0, 10));
+  const d = String(date || localDateISO());
   const hero = briefHero();
 
   // Build every candidate, each isolated so one failing source never breaks the

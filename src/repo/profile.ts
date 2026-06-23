@@ -1,9 +1,9 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
 import { findExercise } from "./exercises.js";
 import { lsqSlopePerDay } from "./health.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getProgress } from "./sessions.js";
-import { LB_PER_KG } from "./shared.js";
+import { LB_PER_KG, localDateISO } from "./shared.js";
 
 // ---------- exercise guide ----------
 export function getExerciseDetail(name: string) {
@@ -436,7 +436,7 @@ export function getEnduranceGoal(today?: string): (EnduranceGoal & {
   const g = normalizeEnduranceGoal(p?.endurance_goal_json);
   if (!g) return null;
   if (g.mode !== "race" || !g.date) return { ...g, is_race: false };
-  const days = daysBetweenISO(today || todayISO(), g.date);
+  const days = daysBetweenISO(today || localDateISO(), g.date);
   if (!Number.isFinite(days)) return { ...g, is_race: true, days_to_race: null, weeks_to_race: null, phase: null };
   const weeks = Math.ceil(days / 7);
   // Coarse phase hint from time-to-race (the coach refines against actual base):
@@ -447,7 +447,7 @@ export function getEnduranceGoal(today?: string): (EnduranceGoal & {
 
 // ---------- bodyweight log ----------
 export function logWeight(weight_lb: number, date?: string, note?: string) {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   const info = db
     .prepare(`INSERT INTO bodyweight_log (date, weight_lb, note) VALUES (?, ?, ?)`)
     .run(d, weight_lb, note ?? null);

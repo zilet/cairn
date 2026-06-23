@@ -1,4 +1,4 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
@@ -12,7 +12,7 @@ import { getPlan } from "./plan.js";
 import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, nowContext } from "./shared.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -260,6 +260,11 @@ export function getCoachContext() {
   const programBal = programBalance();
   const recentLoad = recentMuscleLoad(2);
   return {
+    // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
+    // EVERY plan-shaping prompt knows the time of day — without it the agent is
+    // temporally blind (it would ask about "last night's dinner" at 5 PM). The
+    // chat/day-read prompts also surface it as an explicit "RIGHT NOW" line.
+    now: nowContext(),
     profile,
     // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
     // framing without digging into profile. Defaults to 'strength' (today's
@@ -379,7 +384,7 @@ function clampScale15(v: any): number | null {
 
 // One check-in per save (a date can have several; the latest wins for reads).
 export function addCheckin(date: string, fields: CheckinInput = {}) {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   const info = db
     .prepare(`INSERT INTO checkins (date, mood, energy, sleep_feel, soreness, note) VALUES (?, ?, ?, ?, ?, ?)`)
     .run(

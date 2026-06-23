@@ -444,7 +444,7 @@ export function buildMcpServer(): McpServer {
     async ({ day }) => {
       let dayNumber = day;
       if (dayNumber == null) {
-        const cached = repo.getCachedDayRead(new Date().toISOString().slice(0, 10));
+        const cached = repo.getCachedDayRead(localToday());
         const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
         const days = repo.getPlan();
         const strengthDays = (days as any[]).filter((d: any) =>

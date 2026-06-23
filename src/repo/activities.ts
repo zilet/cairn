@@ -3,6 +3,7 @@ import { invalidateDayRead } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { deriveSessionTitle } from "./training-read.js";
+import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
 
 // ---------- activities ----------
 export function parseActivity(text: string) {
@@ -37,7 +38,10 @@ export function parseActivity(text: string) {
 }
 
 export function addActivity(input: any) {
-  const date = input.date || todayISO();
+  // Default to the LOCAL day (device-zone aware) — an evening session belongs to
+  // today, not tomorrow's UTC date. An explicit input.date (e.g. a Garmin sync or
+  // the PWA's picked date) still wins.
+  const date = input.date || localDateISO();
   const source = input.source ? String(input.source).trim() : null;
   const externalId = input.external_id ? String(input.external_id).trim() : null;
   if (source && externalId) {
@@ -96,7 +100,10 @@ export function addActivity(input: any) {
 }
 
 export function listActivities(limit = 20) {
-  return db.prepare(`SELECT * FROM activities ORDER BY date DESC, id DESC LIMIT ?`).all(limit);
+  return (db.prepare(`SELECT * FROM activities ORDER BY date DESC, id DESC LIMIT ?`).all(limit) as any[])
+    // logged_at: a local "1:15 PM" / "yesterday 9:40 PM" so the coach can reference
+    // WHEN it happened, not just that it did. created_at stays the UTC instant.
+    .map((r) => ({ ...r, logged_at: chatHistoryTimeLabel(r.created_at) }));
 }
 
 // ---------- Today: the unified "Lately" feed ----------
@@ -318,7 +325,7 @@ export interface CardioEffort {
 }
 
 export function getCardioForDate(date: string): CardioEffort[] {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   const rows = db.prepare(
     `SELECT a.id, a.type, a.raw_text, a.distance_km, a.duration_min, a.pace, a.source,
             g.avg_hr AS g_avg_hr, g.start_time AS g_start, g.hr_zones_json AS g_zones

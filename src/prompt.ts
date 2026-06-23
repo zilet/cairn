@@ -96,6 +96,16 @@ function enduranceSportOf(ctx: any): string | null {
 // `focus` tailors the line to the consuming prompt: 'training' for the coach/session,
 // 'nutrition' for meals, 'day' for the Brief. Returns "" for a strength athlete in
 // the training/day case (no behavior change) so the existing prompts read identically.
+// The current local clock, stated plainly so the agent anchors every
+// time-relative word ("today", "tonight", "this morning", "last night") to
+// reality instead of the stale conversation thread. ctx.now is set by
+// getCoachContext(); "" when it's somehow absent so callers can append blindly.
+function renderNow(ctx: any): string {
+  const n = ctx?.now;
+  if (!n?.time) return "";
+  return `\nRIGHT NOW: ${n.weekday}, ${n.time} (${n.part_of_day}). Anchor every time-relative word to this clock — "today", "tonight", "this morning", "yesterday", "last night" must match it. Don't ask about something that hasn't happened yet (at 5 PM dinner is still ahead — ask how the day's going, not how dinner landed), and don't re-ask about a meal or moment already covered earlier in this conversation.\n`;
+}
+
 function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "day"): string {
   const disc = disciplineOf(ctx);
   const sport = enduranceSportOf(ctx);
@@ -900,10 +910,13 @@ const CHAT_ACTIONS_SCHEMA = `[
 // Conversational coach. Sees all data; may emit actions the server applies/drafts.
 // imagePath: absolute path of a photo the athlete attached this turn — the agent
 // CLIs (Claude Code / Codex) can open local files, same trick as health docs.
-export function buildChatPrompt(history: { role: string; content: string }[], message: string, imagePath?: string): string {
+export function buildChatPrompt(history: { role: string; content: string; at?: string }[], message: string, imagePath?: string): string {
   const ctx = repo.getCoachContext();
+  // Prefix each turn with its relative time (when known) so the agent sees the
+  // conversation's RHYTHM — what's from this morning vs minutes ago — not a flat,
+  // timeless wall of text it would mistake for one continuous moment.
   const convo = (history || [])
-    .map((m) => `${m.role === "user" ? "Athlete" : "Coach"}: ${m.content}`)
+    .map((m) => `${m.at ? `[${m.at}] ` : ""}${m.role === "user" ? "Athlete" : "Coach"}: ${m.content}`)
     .join("\n");
   const photoBlock = imagePath ? `
 ATTACHED PHOTO — the athlete attached a photo with this message, saved locally at this ABSOLUTE path:
@@ -917,7 +930,7 @@ Open and LOOK at that image file directly before answering.
 ` : "";
   return `You are Cairn, the athlete's personal strength & nutrition coach, chatting inside their app.
 You can SEE all their data (DATA section) and can ACT by emitting actions.
-
+${renderNow(ctx)}
 GUARDRAILS:
 - Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.
 - Fuel guidance follows the athlete's GOAL MODE (DATA: goal_mode) and goal.recommended: a lean-safe
@@ -1787,12 +1800,12 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
 - Do NOT propose more training unless they ask. The day's work is in.
 - "headline": acknowledge the WORK specifically — name the session and a standout lift from SESSION TODAY (a friend who watched you train, e.g. "Strong push session.").
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
-- Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || new Date().toISOString().slice(0, 10))}`
+- Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
     : "";
   return `You are Cairn, the athlete's calm health & training buddy. Read their WHOLE picture and
 judge what kind of day today should be: a real session, easy movement, or rest. This opens their
 app — it is the first and often only thing they see.
-
+${renderNow(context)}
 THE CONSTITUTION (binding):
 - It is a SUGGESTION you offer, never a verdict you impose. The athlete drives; you navigate.
 - Be KIND and never anxious. Rest is wisdom, not failure. A low signal is information, never a
@@ -1883,7 +1896,7 @@ export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipmen
   return `You are Cairn, the athlete's strength & conditioning coach. Build ONE session for today,
 on demand, honoring their real constraints and whole picture. This is a SUGGESTION for them to
 review — nothing is applied automatically (they drive).
-
+${renderNow(context)}
 GUARDRAILS:
 - Conservative loading; respect every exercise constraint_note (e.g. injury limits)
   and any active injury in context_events — never program loaded movement through an injured area.

@@ -14,6 +14,7 @@ import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
 import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents.js";
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
+import { runWithTimeZone } from "./tz.js";
 import * as repo from "./repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -76,6 +77,14 @@ app.use(authGuard);
 // other endpoint shrinks the unauthenticated-DoS surface.
 app.use("/api/health-docs", express.json({ limit: "25mb" }));
 app.use(express.json({ limit: "1mb" }));
+
+// "One local clock that follows the device": the PWA sends its live IANA zone as
+// X-Cairn-TZ, and the rest of the request runs inside it so every "local" framing
+// (the Brief's RIGHT NOW, the day a meal/activity is keyed to, log timestamps)
+// follows the traveling owner WITHOUT touching the server's own TZ. Invalid /
+// absent header → no override (server-local), exactly as before. Covers /api and
+// /mcp (both mounted below). Logs stay UTC instants; only the framing moves.
+app.use((req, _res, next) => runWithTimeZone(req.get("X-Cairn-TZ"), () => next()));
 
 // REST API
 app.use("/api", api);

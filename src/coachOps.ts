@@ -8,7 +8,7 @@
 // response and never an MCP wrapper.
 
 import * as repo from "./repo.js";
-import { todayISO } from "./db.js";
+import { localDateISO } from "./repo/shared.js";
 import { INTERACTIVE_TIMEOUT_MS, agentInfo, listAgentModels, loadAgents } from "./agents.js";
 import { runChosen } from "./runChosen.js";
 import {
@@ -190,7 +190,7 @@ export async function suggestSession(
 // a coarse day-context stamp (the calendar date + the suggested plan day) so a
 // new day or a re-plan busts the cache while an identical same-day repeat hits it.
 function sessionSuggestCacheKey(opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string }): string {
-  const date = opts.date || todayISO();
+  const date = opts.date || localDateISO();
   let dayContext = "";
   try {
     const dr = repo.dayRead(date);
@@ -526,7 +526,10 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
   // pass can check whether the bodyweight trend actually followed. Best-effort.
   const targetKcal = Number(p.nutrition.target_kcal);
   const tdee = Number((expenditure as any)?.tdee);
-  repo.recordSuggestion("nutrition_checkin", todayISO(), {
+  // Local day so the date matches reconcileSuggestions' local "today" cutoff
+  // (date < today) — a UTC stamp could record tomorrow's date in an evening
+  // western zone and never reconcile on time.
+  repo.recordSuggestion("nutrition_checkin", localDateISO(), {
     target_kcal: Number.isFinite(targetKcal) ? targetKcal : null,
     tdee: Number.isFinite(tdee) ? tdee : null,
     direction: Number.isFinite(targetKcal) && Number.isFinite(tdee) ? (targetKcal < tdee ? "down" : targetKcal > tdee ? "up" : "hold") : null,

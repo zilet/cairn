@@ -1,4 +1,5 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
+import { localDateISO } from "./shared.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { listContextEvents } from "./health.js";
 import { KCAL_PER_LB, getPrimaryDiscipline, getProfile, projectGoalPace } from "./profile.js";
@@ -26,7 +27,7 @@ export interface DayRead {
 // top). Rules: rest if >=3 consecutive training days OR recovery clearly low;
 // else train the suggested plan day; else easy. Never throws on missing data.
 export function dayRead(date?: string, recovery?: any): DayRead {
-  const d = date || todayISO();
+  const d = date || localDateISO();
 
   // Discipline shapes what "a training day" means for the consecutive-days +
   // earned-rest rules. For a strength athlete a logged lifting session counts;
@@ -308,7 +309,7 @@ export interface ForwardLook {
   text: string | null;         // a single plain-words line, or null when there's nothing to say
 }
 export function forwardLook(date?: string): ForwardLook {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   let next_focus: string | null = null;
   try {
     const days = db.prepare(`SELECT id, day_number, name, focus FROM plan_days ORDER BY day_number`).all() as any[];
@@ -460,7 +461,7 @@ export function saveDayRead(date: string, read: any): void {
 }
 
 export function invalidateDayRead(date?: string): void {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   try { db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d); } catch {}
 }
 
@@ -571,7 +572,7 @@ export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
 // right now: any trip overlapping today, or a life_event whose text reads as
 // illness/sick. Used to lower expenditure confidence (never to scold).
 function expenditureDisruptedNow(): boolean {
-  const today = todayISO();
+  const today = localDateISO();
   const events = listContextEvents({ activeOnly: true }) as any[];
   const ILLNESS = /\b(ill|illness|sick|sickness|flu|fever|cold|covid|infection|food ?poison|stomach|gastro|bug|virus|unwell)\b/i;
   for (const e of events) {

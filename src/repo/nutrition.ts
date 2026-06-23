@@ -1,6 +1,7 @@
 import { db, todayISO } from "../db.js";
 import { computeGoalCheck } from "./profile.js";
 import { getSettings } from "./settings.js";
+import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
 
 // ---------- meal plans ----------
 export function createMealPlan(agent: string, raw: string, parsed: any) {
@@ -160,9 +161,11 @@ export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: 
   // only when enabled, else recorded 'skipped' directly (see addActivity).
   const fromText = !!(raw && String(raw).trim());
   const status = fromText ? (getSettings().enrich_enabled ? "pending" : "skipped") : null;
+  // Stamp the LOCAL calendar day (device-zone aware) the meal belongs to, so an
+  // evening log counts toward the right day; created_at stays the UTC instant.
   const info = db.prepare(
-    `INSERT INTO food_notes (meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?)`
-  ).run(meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
   const row = hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
   // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
   if (status === "pending") {
@@ -207,9 +210,11 @@ export function setFoodNoteEnrichStatus(id: number, status: string) {
 // never "consumed". The day boundary is the UTC calendar day, matching
 // estimateExpenditure's convention (a known boundary near local midnight).
 export function getDayIntake(date?: string) {
-  const d = date || todayISO();
+  const d = date || localDateISO();
+  // Key by the stamped LOCAL day; COALESCE to the legacy UTC-date-of-created_at
+  // guards any pre-migration row that somehow lacks a stamped date.
   const rows = (db.prepare(
-    `SELECT * FROM food_notes WHERE substr(created_at,1,10) = ? ORDER BY id ASC`
+    `SELECT * FROM food_notes WHERE COALESCE(date, substr(created_at,1,10)) = ? ORDER BY id ASC`
   ).all(d) as any[]).map(hydrate);
 
   const totals = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
@@ -232,6 +237,7 @@ export function getDayIntake(date?: string) {
       fiber_g: p.fiber_g ?? null,
       enrichment_status: r.enrichment_status ?? null,
       created_at: r.created_at,
+      logged_at: chatHistoryTimeLabel(r.created_at), // local "1:15 PM" so the coach can reference WHEN it was eaten
     };
   });
   for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] = Math.round(totals[k]);

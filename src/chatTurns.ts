@@ -1,6 +1,8 @@
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { buildChatPrompt, parseChatReply } from "./prompt.js";
+import { chatHistoryTimeLabel } from "./repo/shared.js";
+import { runWithTimeZone } from "./tz.js";
 import { runAgent, runAgentStreaming, agentSupportsStream, INTERACTIVE_TIMEOUT_MS } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 
@@ -63,7 +65,14 @@ export function enqueueChatTurn(id: number): void {
 async function processChatTurn(id: number): Promise<void> {
   const turn = repo.getChatTurn(id) as any;
   if (!turn || turn.status !== "queued") return; // canceled while queued, or already handled
+  // Re-establish the device timezone captured at enqueue — the worker drains
+  // AFTER the request returned, so X-Cairn-TZ is no longer in scope. With it,
+  // "now", the chat-history time labels, and any day-keyed log this turn writes
+  // (log_food / log_activity) all frame in the athlete's actual zone.
+  await runWithTimeZone(turn.tz, () => processChatTurnInner(id, turn));
+}
 
+async function processChatTurnInner(id: number, turn: any): Promise<void> {
   repo.markChatTurnRunning(id);
   emit(id, { type: "phase", turn: repo.getChatTurn(id) });
 
@@ -71,9 +80,14 @@ async function processChatTurn(id: number): Promise<void> {
   // queued earlier in this same drain can't leak forward into an earlier turn's
   // prompt. buildChatPrompt slots turn.message into its own ATHLETE'S MESSAGE line.
   const beforeId = turn.user_message_id ?? Number.MAX_SAFE_INTEGER;
+  // Stamp each prior turn with a short relative time label ("this morning" reads
+  // as "8:12 AM", a past day as "yesterday 9:40 PM") so the agent can tell a stale
+  // thread from a fresh one — otherwise the history is timestamp-less and it
+  // re-asks about things already covered hours ago.
   const history = repo.listChatMessagesBefore(beforeId, 20).map((m: any) => ({
     role: m.role,
     content: m.content + (m.meta?.image ? " [photo attached]" : ""),
+    at: chatHistoryTimeLabel(m.created_at),
   }));
   const prompt = buildChatPrompt(
     history,

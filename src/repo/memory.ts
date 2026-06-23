@@ -1,4 +1,5 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
+import { localDateISO } from "./shared.js";
 import { getSessionByDate, getWeeklyStats, sessionSummary } from "./sessions.js";
 
 // ---------- memory (self-updating) ----------
@@ -236,7 +237,7 @@ export function getOutcomeLearnings(limit = 12): { learnings: OutcomeLearning[] 
 // write ONE durable 'learning' memory. Deterministic & calm — no agent needed, no
 // numeric scores surfaced, never a gate. Bounded per pass.
 export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): { reconciled: number; learnings: number } {
-  const today = todayISO();
+  const today = localDateISO();
   const max = Math.max(1, Math.min(40, opts.maxPerPass ?? 20));
   // Only reconcile suggestions whose target date is strictly in the past (so the
   // day's logging is settled) — never today's open suggestion.

@@ -421,6 +421,24 @@ export const MIGRATIONS: Migration[] = [
     // exactly as before until the athlete picks a mode in Me → Profile.
     addColumn(db, "profile", "goal_mode TEXT");
   } },
+  { version: 42, name: "food-notes-local-date", up: (db) => {
+    // The LOCAL calendar day a meal belongs to. Day-intake used to GROUP food by
+    // substr(created_at,1,10) = the UTC date, so a meal logged after ~8 PM ET
+    // counted toward TOMORROW. New rows stamp this column with the device-local
+    // day; backfill existing rows using SQLite's 'localtime' (the container's TZ),
+    // which retroactively moves those late-evening logs onto the right day.
+    addColumn(db, "food_notes", "date TEXT");
+    try {
+      db.exec(`UPDATE food_notes SET date = substr(datetime(created_at, 'localtime'), 1, 10) WHERE date IS NULL`);
+    } catch { /* best-effort backfill; new inserts stamp it directly */ }
+  } },
+  { version: 43, name: "chat-turns-tz", up: (db) => {
+    // The device IANA timezone captured at enqueue (X-Cairn-TZ). The chat worker
+    // runs AFTER the request returns, so it can't read the header itself — it
+    // re-establishes this zone to frame "now" and any day-keyed log it writes.
+    // NULL (existing/at-home turns) → the worker falls back to the server's TZ.
+    addColumn(db, "chat_turns", "tz TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

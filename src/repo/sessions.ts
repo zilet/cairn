@@ -1,4 +1,5 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
+import { localDateISO } from "./shared.js";
 import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
 import { listContextEvents, listHealthDocuments, listHealthReviews } from "./health.js";
@@ -138,7 +139,7 @@ export function setSessionFeedback(
   date: string,
   fields: { soreness?: number | null; performance?: number | null; joint_pain?: string | null }
 ) {
-  const session = getOrCreateSession(date || todayISO());
+  const session = getOrCreateSession(date || localDateISO());
   const clamp15 = (v: any): number | null => {
     const n = Number(v);
     if (!Number.isFinite(n)) return null;
@@ -179,7 +180,7 @@ function skipsForSession(sessionId: number): string[] {
 }
 
 export function skipExercise(exercise: string, date?: string) {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   const ex = findExercise(exercise);
   const name = (ex?.name as string) || exercise.trim();
   if (!name) throw new Error("exercise required");
@@ -202,7 +203,7 @@ export function skipExercise(exercise: string, date?: string) {
 }
 
 export function unskipExercise(exercise: string, date?: string) {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   const name = exercise.trim();
   const s = db.prepare(`SELECT id FROM sessions WHERE date = ?`).get(d) as any;
   if (!s) return { ok: true as const, date: d, exercise: name, removed: 0, skips: [] as string[] };
@@ -225,7 +226,7 @@ export interface LogSetInput {
 }
 
 export function logSetByName(input: LogSetInput) {
-  const date = input.date || todayISO();
+  const date = input.date || localDateISO();
   const ex = findOrCreateExercise(input.exercise, undefined, undefined, input.exercise_mode);
   // An explicitly-passed mode also updates an existing exercise (e.g. converting
   // "Plank" to timed on the first timed log).
@@ -411,9 +412,13 @@ export function getEndurancePRs(type?: string | null): EndurancePRs {
 // Compact dashboard: training days + tonnage over the last 7 days, plus a
 // consistency streak (consecutive days with a logged session or activity).
 export function getWeeklyStats() {
-  const today = todayISO();
-  const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
-  const sixtyAgo = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+  const today = localDateISO();
+  // Anchor the rolling windows to LOCAL today (the same anchor the streak/Monday
+  // math below uses), not the UTC instant — sessions are keyed by local date, so a
+  // UTC-anchored cutoff could clip the trailing day in an evening western zone.
+  const asOf = new Date(today + "T00:00:00Z").getTime();
+  const weekAgo = new Date(asOf - 6 * 864e5).toISOString().slice(0, 10);
+  const sixtyAgo = new Date(asOf - 60 * 864e5).toISOString().slice(0, 10);
 
   const weekSess = db
     .prepare(`SELECT DISTINCT s.date FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ?`)
@@ -467,7 +472,7 @@ export function getWeeklyStats() {
 
   // Weight trend: least-squares slope over the last 21 days of weigh-ins,
   // in lb/week. Needs ≥2 points spanning ≥3 days to mean anything.
-  const since21 = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
+  const since21 = new Date(asOf - 21 * 864e5).toISOString().slice(0, 10);
   const wpts = db
     .prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? ORDER BY date, id`)
     .all(since21) as any[];
@@ -649,7 +654,7 @@ export interface RunCompliance {
 export function getRunCompliance(weekStartISO?: string): RunCompliance {
   // Monday-anchored week start (mirror computeEnduranceWeekly / getWeeklyStats).
   const monday = weekStartISO || (() => {
-    const d = new Date(todayISO() + "T00:00:00Z");
+    const d = new Date(localDateISO() + "T00:00:00Z");
     d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return d.toISOString().slice(0, 10);
   })();

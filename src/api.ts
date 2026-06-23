@@ -534,7 +534,7 @@ api.get("/program/progression", (req, res) => {
     // Default: the plan day the day-read is pointing at today. Mirrors the
     // nextPlanDayNumber logic in coach.ts — match the cached day-read's focus
     // to a plan day; fall back to the first plan day with strength items.
-    const cached = repo.getCachedDayRead(new Date().toISOString().slice(0, 10));
+    const cached = repo.getCachedDayRead(localToday());
     const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
     const days = repo.getPlan();
     const strengthDays = days.filter((d: any) =>
@@ -1254,7 +1254,7 @@ api.get("/run-compliance", (_req, res) => res.json(repo.getRunCompliance()));
 
 // The day's logged cardio efforts (hydrated with Garmin zones/pace). [] when none.
 api.get("/cardio", (req, res) =>
-  res.json(repo.getCardioForDate(req.query.date != null ? String(req.query.date) : todayISO())));
+  res.json(repo.getCardioForDate(req.query.date != null ? String(req.query.date) : localToday())));
 
 // The endurance OBJECTIVE (v37), computed (race timing/phase derived). null = unset.
 // SET it via PUT /api/profile { endurance_goal: {…} } (or null to clear).

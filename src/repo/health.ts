@@ -1,4 +1,5 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
+import { localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker } from "./marker-canon.js";
@@ -660,7 +661,7 @@ export function listContextEvents(opts: { activeOnly?: boolean } = {}) {
   let rows: any[];
   if (opts.activeOnly) {
     // Active/upcoming = not archived AND (no end_date OR end_date >= today).
-    const today = todayISO();
+    const today = localDateISO();
     rows = db
       .prepare(
         `SELECT * FROM context_events
