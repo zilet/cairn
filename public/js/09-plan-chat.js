@@ -100,11 +100,12 @@ async function renderPlanEditor() {
       if (isCardioItem(it)) {
         const t = artImg("activity", cardioArtPhrase(it), "artile-sm", art("activity", cardioArtPhrase(it)));
         const pres = cardioPrescription(it);
+        const desc = cardioDescription(it); // coach prose, displaced from the short label
         return `<div class="prog-row prog-row-cardio">
             ${t}
             <div class="prog-row-main">
               <span class="prog-row-name prog-row-name-static">${escHtml(cardioLabel(it))}</span>
-              <div class="prog-row-hint"><span class="cardio-tag lbl">cardio</span></div>
+              <div class="prog-row-hint"><span class="cardio-tag lbl">cardio</span>${desc ? ` ${escHtml(desc)}` : ""}</div>
             </div>
             <div class="prog-row-nums"><span class="numeral prog-row-cardio-pres">${escHtml(pres || "—")}</span></div>
           </div>`;

@@ -695,6 +695,24 @@ const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderP
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
 // PWA / phone coach helpers (loaded early; used by Today + Settings)
+// We capture Chromium's beforeinstallprompt the moment it fires so the Today coach
+// can offer a REAL one-tap install on platforms that support it (desktop Chrome/Edge,
+// Android), and fall back to honest, platform-correct manual steps everywhere else —
+// never iOS "Share → Add to Home Screen" copy on a desktop browser that can't do that.
+let deferredInstallPrompt = null;
+try {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();          // suppress the browser's own mini-infobar; we drive the prompt
+    deferredInstallPrompt = e;
+    refreshPhoneCoach();         // upgrade an already-shown banner to the one-tap Install path
+  });
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    try { localStorage.setItem("cairn_phone_coach_dismissed", "1"); } catch {}
+    document.querySelectorAll(".phone-coach").forEach((el) => el.remove());
+  });
+} catch {}
+
 function isStandalonePWA() {
   try {
     if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
@@ -702,29 +720,120 @@ function isStandalonePWA() {
   } catch {}
   return false;
 }
+
+// Detect what THIS device/browser can actually do about installing, so the coach
+// shows the right steps (or stays quiet). Returns a mode, or null when there's no
+// actionable install path here (e.g. desktop Firefox).
+function getInstallGuidance() {
+  if (isStandalonePWA()) return null;                   // already installed
+  if (deferredInstallPrompt) return { mode: "prompt" }; // Chromium desktop/Android: real one-tap install
+  const ua = navigator.userAgent || "";
+  const maxTouch = navigator.maxTouchPoints || 0;
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && maxTouch > 1); // iPadOS poses as Mac
+  const isAndroid = /Android/.test(ua);
+  const isChromium = /\b(Chrome|Chromium|CriOS|Edg|EdgA|OPR|SamsungBrowser)\b/.test(ua);
+  const isMacSafari = /Macintosh/.test(ua) && maxTouch === 0 && /Version\/.+Safari/.test(ua) && !isChromium;
+  if (isIOS) return { mode: "ios" };                    // iOS/iPadOS Safari (or Chrome-on-iOS — same WebKit)
+  if (isMacSafari) return { mode: "safari-desktop" };   // macOS Safari 17+: File → Add to Dock
+  if (isChromium) return { mode: "chromium-menu" };     // Chromium, prompt not (yet) available → menu/address bar
+  if (isAndroid) return { mode: "menu-generic" };       // e.g. Firefox Android → browser menu
+  return null;                                          // desktop Firefox & friends: no install path → stay quiet
+}
+
+// Per-mode markup. Honest about what an install does — a faster shell; data still lives
+// on the Cairn server (the constitution forbids a fake offline brain).
+function phoneCoachContent(mode) {
+  const dismiss = `<button class="ghostbtn phone-coach-dismiss" type="button">Got it</button>`;
+  if (mode === "prompt") {
+    return `
+      <div class="sess-line"><b>Install Cairn as an app</b> — it opens in its own window, instantly.</div>
+      <div class="sess-line phone-coach-sub">Your training data still lives on your Cairn server; the app is just a faster shell.</div>
+      <div class="phone-coach-actions">
+        <button class="phone-coach-install" type="button">Install Cairn</button>
+        ${dismiss}
+      </div>`;
+  }
+  if (mode === "ios") {
+    return `
+      <div class="sess-line"><b>Add Cairn to your home screen</b> — it opens like a real app, instantly.</div>
+      <div class="sess-line phone-coach-sub">
+        Tap <b>Share</b> → <b>Add to Home Screen</b>. HTTPS (Tailscale Serve) works best on iOS.
+        Logging and a fresh Brief still need your Cairn server reachable.
+      </div>
+      <div class="phone-coach-actions">${dismiss}</div>`;
+  }
+  if (mode === "safari-desktop") {
+    return `
+      <div class="sess-line"><b>Add Cairn to your Dock</b> — it opens in its own window.</div>
+      <div class="sess-line phone-coach-sub">In Safari: <b>File</b> → <b>Add to Dock</b>.</div>
+      <div class="phone-coach-actions">${dismiss}</div>`;
+  }
+  if (mode === "menu-generic") {
+    return `
+      <div class="sess-line"><b>Add Cairn to your home screen</b> — it opens like a real app.</div>
+      <div class="sess-line phone-coach-sub">
+        Open your browser menu → <b>Install</b> / <b>Add to Home Screen</b>.
+        Logging and a fresh Brief still need your Cairn server reachable.
+      </div>
+      <div class="phone-coach-actions">${dismiss}</div>`;
+  }
+  // chromium-menu
+  return `
+    <div class="sess-line"><b>Install Cairn as an app</b> — it opens in its own window.</div>
+    <div class="sess-line phone-coach-sub">Click the install icon in the address bar, or your browser menu → <b>Install Cairn</b>.</div>
+    <div class="phone-coach-actions">${dismiss}</div>`;
+}
+
+// Wire the dismiss-forever button + the one-tap Install (where the prompt is available).
+function wirePhoneCoach(el) {
+  const dismissBtn = el.querySelector(".phone-coach-dismiss");
+  if (dismissBtn) dismissBtn.addEventListener("click", () => {
+    try { localStorage.setItem("cairn_phone_coach_dismissed", "1"); } catch {}
+    el.remove();
+  });
+  const installBtn = el.querySelector(".phone-coach-install");
+  if (installBtn) installBtn.addEventListener("click", async () => {
+    const prompt = deferredInstallPrompt;
+    if (!prompt) { refreshPhoneCoach(); return; }       // raced away → re-render with manual steps
+    installBtn.disabled = true;
+    try {
+      prompt.prompt();
+      await prompt.userChoice;                           // { outcome: 'accepted' | 'dismissed' }
+    } catch {}
+    deferredInstallPrompt = null;                        // a deferred prompt can only be used once
+    // Accepted → appinstalled removes the banner. Dismissed → fall back to manual steps.
+    if (document.body.contains(el)) refreshPhoneCoach();
+  });
+}
+
 function renderPhoneCoachBanner(container) {
   if (!container || isStandalonePWA()) return;
   if (localStorage.getItem("cairn_phone_coach_dismissed") === "1") return;
   if (container.querySelector(".phone-coach")) return; // idempotent across warm re-renders
+  const guidance = getInstallGuidance();
+  if (!guidance) return;                                // nothing actionable on this platform → stay quiet
   const el = document.createElement("div");
   el.className = "sess phone-coach";
-  // Honest about what a home-screen install actually does: it's a real app shell that
-  // opens instantly — but Cairn's data lives on the server, so logging and a fresh Brief
-  // still need it reachable (the constitution forbids a fake offline brain).
-  el.innerHTML = `
-    <div class="sess-line"><b>Add Cairn to your home screen</b> — it opens like a real app, instantly.</div>
-    <div class="sess-line phone-coach-sub">
-      From your phone on the same private network: open the URL → Share / menu → <b>Add to Home Screen</b>.
-      HTTPS (Tailscale Serve) works best on iOS. Logging and a fresh Brief still need your Cairn server reachable.
-    </div>
-    <button class="ghostbtn phone-coach-dismiss" type="button">Got it</button>
-  `;
-  const btn = el.querySelector("button");
-  btn.addEventListener("click", () => {
-    try { localStorage.setItem("cairn_phone_coach_dismissed", "1"); } catch {}
-    el.remove();
-  });
+  el.dataset.coachMode = guidance.mode;
+  el.innerHTML = phoneCoachContent(guidance.mode);
+  wirePhoneCoach(el);
   container.append(el);
+}
+
+// beforeinstallprompt often arrives AFTER Today first paints (the common race), and a
+// used/declined prompt changes the right copy too — so re-fill any visible banner to match.
+function refreshPhoneCoach() {
+  try {
+    document.querySelectorAll(".phone-coach").forEach((el) => {
+      if (isStandalonePWA() || localStorage.getItem("cairn_phone_coach_dismissed") === "1") { el.remove(); return; }
+      const guidance = getInstallGuidance();
+      if (!guidance) { el.remove(); return; }
+      if (el.dataset.coachMode === guidance.mode) return; // already correct
+      el.dataset.coachMode = guidance.mode;
+      el.innerHTML = phoneCoachContent(guidance.mode);
+      wirePhoneCoach(el);
+    });
+  } catch {}
 }
 function escAttr(s) { return escHtml(s).replace(/"/g, "&quot;"); }
 
@@ -1104,12 +1213,61 @@ function cardioArtPhrase(it) {
   const label = (it.note || "").trim();
   return label || "run";
 }
-// The label for a cardio item — its note text, falling back to a sport-ish default.
+// A cardio item's `note` is MEANT to be a short title ("Long run", "Easy ride") — but
+// a coach sometimes writes a whole guidance sentence into it ("Nasal-breathing pace.
+// Watch the ~3rd-km dip…"). That prose belongs in the card's description, never crammed
+// into the head. This draws the line: long, many-worded, or sentence-punctuated reads
+// as prose, not a title. (The `[.!?]\s` guard needs a space after the stop, so a decimal
+// like "3.5 km" never counts as a sentence.)
+function cardioNoteIsDescriptive(note) {
+  const n = String(note || "").trim();
+  if (!n) return false;
+  return n.length > 38 || n.split(/\s+/).length > 7 || /[.!?]\s/.test(n);
+}
+// The sport behind a cardio item, sniffed from its note/interval text — run / ride /
+// swim / row, defaulting to "run" (endurance plans are predominantly running). Only used
+// to build a clean derived label; matching + log copy stay lenient via cardioVerb.
+function cardioSport(it) {
+  const text = `${it.note || ""} ${cardioIntervalNote(it.interval) || it.interval_note || ""}`.toLowerCase();
+  if (/ride|bike|cycl|spin/.test(text)) return "ride";
+  if (/swim/.test(text)) return "swim";
+  if (/\brow|erg\b/.test(text)) return "row";
+  return "run";
+}
+// A short, scannable label derived from the prescription when the note can't serve as a
+// title — intensity (zone first, else a note/distance cue) + sport: "Easy run", "Tempo
+// ride", "Long run", "Run intervals".
+function derivedCardioLabel(it) {
+  const sport = cardioSport(it);
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const ivl = (cardioIntervalNote(it.interval) || it.interval_note || "").toLowerCase();
+  const zone = String(it.target_zone || "").toLowerCase();
+  const blob = `${it.note || ""} ${zone}`.toLowerCase();
+  if (/interval|fartlek|\d\s*[×x]\s*\d/.test(`${ivl} ${blob}`)) return `${cap(sport)} intervals`;
+  const km = it.target_distance_km != null ? Number(it.target_distance_km) : null;
+  let mood = "";
+  if (/tempo|threshold|z3|z4|z5/.test(zone)) mood = "Tempo";
+  else if (/easy|recovery|z1|z2/.test(zone)) mood = "Easy";
+  else if (/tempo|threshold|hard|fast/.test(blob)) mood = "Tempo";
+  else if (/easy|relaxed|nasal|recovery|shakeout/.test(blob)) mood = "Easy";
+  else if (km != null && km >= 12) mood = "Long";
+  return mood ? `${mood} ${sport}` : cap(sport);
+}
+// The label (card head) for a cardio item: its note when that reads as a short title,
+// otherwise a clean derived label — the prose note then rides in cardioDescription.
 function cardioLabel(it) {
   const note = (it.note || "").trim();
-  if (note) return note;
+  if (note && !cardioNoteIsDescriptive(note)) return note;
+  if (note) return derivedCardioLabel(it);
   if (it.target_distance_km != null && Number(it.target_distance_km) >= 12) return "Long run";
   return "Cardio";
+}
+// The descriptive subtext for a cardio item — the coach's guidance sentence, surfaced
+// only when it was displaced from the head (a long prose note). "" for a titley note, so
+// the head label already says everything (no duplicate line under it).
+function cardioDescription(it) {
+  const note = (it.note || "").trim();
+  return cardioNoteIsDescriptive(note) ? note : "";
 }
 // The prescription line: "12 km · Z2", "45 min · Z3", "8 km · Z2 · 6×400m". Distance
 // preferred; duration when no distance; zone + interval note appended when present.

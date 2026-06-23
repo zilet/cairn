@@ -60,14 +60,13 @@ function chartColors() {
 // Shared premium line chart: monotone-cubic curve, soft gradient area fill, light
 // gridlines with y labels, first/last date x labels, emphasized final point with
 // an ink value badge, optional sage dashed goal line and \u25b2 at the all-time peak.
+// Interactive: hover (mouse) or drag (touch) scrubs across the points \u2014 a dashed
+// guide + highlighted dot + a "value \u00b7 date" badge follow the nearest reading, so
+// every past value is legible, not just the final one. `paint(null)` is the calm
+// default (final point emphasized); a point index shows that reading.
 function drawLineChart(canvas, pts, opts = {}) {
   if (!canvas) return;
   const C = chartColors();
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth, H = canvas.clientHeight;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const c = canvas.getContext("2d"); c.scale(dpr, dpr);
-  c.clearRect(0, 0, W, H);
   const n = pts.length;
   if (!n) return;
   const vals = pts.map((p) => p.v);
@@ -77,35 +76,19 @@ function drawLineChart(canvas, pts, opts = {}) {
   const spread = max - min;
   min -= spread * 0.14; max += spread * 0.2;
   const padL = 36, padR = 16, padT = 30, padB = 28;
-  const x = (i) => n === 1 ? (padL + W - padR) / 2 : padL + (i * (W - padL - padR)) / (n - 1);
-  const y = (v) => H - padB - ((v - min) / (max - min)) * (H - padT - padB);
   const fmtVal = opts.fmt || ((v) => String(Math.round(v)));
 
-  // gridlines + y labels
-  c.font = "10px 'Schibsted Grotesk', sans-serif";
-  for (let g = 0; g <= 3; g++) {
-    const v = min + ((max - min) * g) / 3;
-    const yy = y(v);
-    c.strokeStyle = withAlpha(C.line2, 0.55); c.lineWidth = 1;
-    c.beginPath(); c.moveTo(padL, yy); c.lineTo(W - padR, yy); c.stroke();
-    c.fillStyle = C.label;
-    c.textAlign = "right";
-    c.fillText(String(Math.round(v)), padL - 7, yy + 3);
-  }
-  c.textAlign = "left";
-
-  // goal reference line (sage, dashed)
-  if (opts.goal != null) {
-    const gy = y(opts.goal);
-    c.save();
-    c.strokeStyle = C.sage; c.setLineDash([5, 5]); c.lineWidth = 1.5;
-    c.beginPath(); c.moveTo(padL, gy); c.lineTo(W - padR, gy); c.stroke();
-    c.restore();
-    c.fillStyle = C.sage; c.font = "600 9px 'Schibsted Grotesk', sans-serif";
-    c.fillText(`GOAL ${opts.goal}`, padL + 3, gy - 5);
-  }
-
+  // Size + DPR transform are set once per draw (handles a resize/re-render), then
+  // the geometry is computed once and reused by every animation frame \u2014 the canvas
+  // box is layout-stable across a scrub, so x()/y() never need recomputing mid-loop.
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const c = canvas.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const x = (i) => n === 1 ? (padL + W - padR) / 2 : padL + (i * (W - padL - padR)) / (n - 1);
+  const y = (v) => H - padB - ((v - min) / (max - min)) * (H - padT - padB);
   const xs = vals.map((_, i) => x(i)), ys = vals.map((v) => y(v));
+  canvas._chartXs = xs; // hit-test target for the pointer handlers (CSS px)
 
   // monotone-cubic tangents (Fritsch\u2013Carlson) so the smooth curve never overshoots
   const ms = new Array(n).fill(0);
@@ -120,63 +103,135 @@ function drawLineChart(canvas, pts, opts = {}) {
       if (h > 3) { ms[i] = (3 * a / h) * d[i]; ms[i + 1] = (3 * b / h) * d[i]; }
     }
   }
-  const tracePath = () => {
-    c.beginPath();
-    c.moveTo(xs[0], ys[0]);
-    for (let i = 0; i < n - 1; i++) {
-      const dx = (xs[i + 1] - xs[i]) / 3;
-      c.bezierCurveTo(xs[i] + dx, ys[i] + ms[i] * dx, xs[i + 1] - dx, ys[i + 1] - ms[i + 1] * dx, xs[i + 1], ys[i + 1]);
+
+  // The static layer: gridlines, goal line, area fill, curve, quiet dots, peak \u25b2,
+  // and the first/last date axis labels. Re-rendered each frame under the highlight.
+  const drawBase = () => {
+    c.clearRect(0, 0, W, H);
+    c.font = "10px 'Schibsted Grotesk', sans-serif";
+    for (let g = 0; g <= 3; g++) {
+      const v = min + ((max - min) * g) / 3, yy = y(v);
+      c.strokeStyle = withAlpha(C.line2, 0.55); c.lineWidth = 1;
+      c.beginPath(); c.moveTo(padL, yy); c.lineTo(W - padR, yy); c.stroke();
+      c.fillStyle = C.label; c.textAlign = "right";
+      c.fillText(String(Math.round(v)), padL - 7, yy + 3);
     }
+    c.textAlign = "left";
+    if (opts.goal != null) {
+      const gy = y(opts.goal);
+      c.save(); c.strokeStyle = C.sage; c.setLineDash([5, 5]); c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(padL, gy); c.lineTo(W - padR, gy); c.stroke(); c.restore();
+      c.fillStyle = C.sage; c.font = "600 9px 'Schibsted Grotesk', sans-serif";
+      c.fillText(`GOAL ${opts.goal}`, padL + 3, gy - 5);
+    }
+    const tracePath = () => {
+      c.beginPath(); c.moveTo(xs[0], ys[0]);
+      for (let i = 0; i < n - 1; i++) {
+        const dx = (xs[i + 1] - xs[i]) / 3;
+        c.bezierCurveTo(xs[i] + dx, ys[i] + ms[i] * dx, xs[i + 1] - dx, ys[i + 1] - ms[i + 1] * dx, xs[i + 1], ys[i + 1]);
+      }
+    };
+    if (n > 1) {
+      tracePath();
+      c.lineTo(xs[n - 1], H - padB); c.lineTo(xs[0], H - padB); c.closePath();
+      const grad = c.createLinearGradient(0, padT, 0, H - padB);
+      grad.addColorStop(0, withAlpha(C.accent, 0.16)); grad.addColorStop(1, withAlpha(C.accent, 0));
+      c.fillStyle = grad; c.fill();
+      tracePath();
+      c.strokeStyle = C.accent; c.lineWidth = 2.25; c.lineJoin = "round"; c.lineCap = "round"; c.stroke();
+      c.fillStyle = C.accent;
+      for (let i = 0; i < n - 1; i++) { c.beginPath(); c.arc(xs[i], ys[i], 2, 0, 7); c.fill(); }
+    }
+    if (opts.peak && n > 1) {
+      let pi = 0; vals.forEach((v, i) => { if (v > vals[pi]) pi = i; });
+      if (pi !== n - 1) {
+        c.fillStyle = C.gold; c.font = "10px 'Schibsted Grotesk', sans-serif"; c.textAlign = "center";
+        c.fillText("\u25b2", xs[pi], ys[pi] - 9); c.textAlign = "left";
+      }
+    }
+    c.fillStyle = C.label; c.font = "10px 'Schibsted Grotesk', sans-serif";
+    c.textAlign = "left"; c.fillText(fmtShortDate(pts[0].date), padL, H - 8);
+    if (n > 1) { c.textAlign = "right"; c.fillText(fmtShortDate(pts[n - 1].date), W - padR, H - 8); }
+    c.textAlign = "left";
   };
 
-  if (n > 1) {
-    // soft terracotta area fill fading to nothing
-    tracePath();
-    c.lineTo(xs[n - 1], H - padB); c.lineTo(xs[0], H - padB); c.closePath();
-    const grad = c.createLinearGradient(0, padT, 0, H - padB);
-    grad.addColorStop(0, withAlpha(C.accent, 0.16));
-    grad.addColorStop(1, withAlpha(C.accent, 0));
-    c.fillStyle = grad; c.fill();
-    // the line itself
-    tracePath();
-    c.strokeStyle = C.accent; c.lineWidth = 2.25; c.lineJoin = "round"; c.lineCap = "round";
-    c.stroke();
-    // quiet intermediate points
-    c.fillStyle = C.accent;
-    for (let i = 0; i < n - 1; i++) { c.beginPath(); c.arc(xs[i], ys[i], 2, 0, 7); c.fill(); }
-  }
-
-  // \u25b2 at the all-time peak (when it isn't the final point)
-  if (opts.peak && n > 1) {
-    let pi = 0; vals.forEach((v, i) => { if (v > vals[pi]) pi = i; });
-    if (pi !== n - 1) {
-      c.fillStyle = C.gold; c.font = "10px 'Schibsted Grotesk', sans-serif"; c.textAlign = "center";
-      c.fillText("\u25b2", xs[pi], ys[pi] - 9);
-      c.textAlign = "left";
+  // The highlight overlay at an animated (hx,hy): `idx` selects the real value/date
+  // (never interpolated \u2014 we don't invent readings), `pop` (0\u21921, decaying) springs
+  // the dot's radius as it lands, `withDate` adds the date + guide while scrubbing.
+  const drawHighlight = (hx, hy, idx, pop, withDate) => {
+    if (withDate && n > 1) {
+      c.save(); c.strokeStyle = withAlpha(C.ink, 0.22); c.lineWidth = 1; c.setLineDash([3, 3]);
+      c.beginPath(); c.moveTo(hx, padT - 6); c.lineTo(hx, H - padB); c.stroke(); c.restore();
     }
+    const r = 4.5 + 2.2 * pop;
+    c.beginPath(); c.arc(hx, hy, r + 3.5, 0, 7); c.fillStyle = withAlpha(C.accent, 0.16); c.fill();
+    c.beginPath(); c.arc(hx, hy, r, 0, 7); c.fillStyle = C.accent; c.fill();
+    c.beginPath(); c.arc(hx, hy, r, 0, 7); c.strokeStyle = C.card; c.lineWidth = 1.6; c.stroke();
+    const badgeTxt = withDate ? `${fmtVal(vals[idx])} \u00b7 ${fmtShortDate(pts[idx].date)}` : fmtVal(vals[idx]);
+    c.font = "600 11px 'Schibsted Grotesk', sans-serif";
+    const tw = c.measureText(badgeTxt).width;
+    const bx = Math.min(Math.max(hx - tw / 2 - 8, padL), W - padR - tw - 16);
+    let by = hy - 32; if (by < 4) by = hy + 14;
+    c.fillStyle = C.ink;
+    if (c.roundRect) { c.beginPath(); c.roundRect(bx, by, tw + 16, 20, 10); c.fill(); }
+    else c.fillRect(bx, by, tw + 16, 20);
+    c.fillStyle = C.paper; c.fillText(badgeTxt, bx + 8, by + 14);
+  };
+
+  // Animation state lives on the element so a re-render cleanly cancels the prior
+  // loop and re-homes the highlight to the final point (data may have changed).
+  if (canvas._raf) { cancelAnimationFrame(canvas._raf); canvas._raf = null; }
+  const finalIdx = n - 1;
+  const hl = { x: xs[finalIdx], y: ys[finalIdx], pop: 0 };
+  const target = { x: xs[finalIdx], y: ys[finalIdx], idx: finalIdx, scrubbing: false };
+  canvas._hl = hl;
+  const render = () => { drawBase(); drawHighlight(hl.x, hl.y, target.idx, hl.pop, target.scrubbing); };
+  const tick = () => {
+    hl.x += (target.x - hl.x) * 0.32;
+    hl.y += (target.y - hl.y) * 0.32;
+    hl.pop *= 0.8;
+    const settled = Math.abs(hl.x - target.x) < 0.4 && Math.abs(hl.y - target.y) < 0.4 && hl.pop < 0.02;
+    if (settled) { hl.x = target.x; hl.y = target.y; hl.pop = 0; }
+    render();
+    canvas._raf = settled ? null : requestAnimationFrame(tick);
+  };
+  // Move the highlight (eased) to point `idx`; null rests it at the final point.
+  // The dot only "pops" when it lands on a genuinely different reading.
+  canvas._setTarget = (idx, scrubbing) => {
+    const i = idx == null ? finalIdx : Math.max(0, Math.min(n - 1, idx));
+    if (i !== target.idx) hl.pop = 1;
+    target.x = xs[i]; target.y = ys[i]; target.idx = i; target.scrubbing = !!scrubbing;
+    if (reducedMotion()) { hl.x = target.x; hl.y = target.y; hl.pop = 0; render(); return; }
+    if (!canvas._raf) canvas._raf = requestAnimationFrame(tick);
+  };
+
+  // Pointer handlers wired ONCE per canvas (drawProgress re-draws the same element
+  // on dropdown change; re-attaching would stack listeners). They read the latest
+  // geometry + _setTarget, both refreshed above on every draw.
+  if (!canvas._scrubWired) {
+    canvas._scrubWired = true;
+    let touchActive = false;
+    const idxFromEvent = (e) => {
+      const ax = canvas._chartXs; if (!ax || !ax.length) return null;
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      let idx = 0, best = Infinity;
+      for (let i = 0; i < ax.length; i++) { const dd = Math.abs(ax[i] - px); if (dd < best) { best = dd; idx = i; } }
+      return idx;
+    };
+    const show = (e) => { const i = idxFromEvent(e); if (i != null) canvas._setTarget(i, true); };
+    const rest = () => { if (canvas._setTarget) canvas._setTarget(null, false); };
+    canvas.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "mouse") { touchActive = true; try { canvas.setPointerCapture(e.pointerId); } catch {} }
+      show(e);
+    });
+    canvas.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || touchActive) show(e); });
+    canvas.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") { touchActive = false; rest(); } });
+    canvas.addEventListener("pointercancel", () => { touchActive = false; rest(); });
+    canvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") rest(); });
   }
 
-  // emphasized final point + ink value badge
-  const lx = xs[n - 1], ly = ys[n - 1];
-  c.beginPath(); c.arc(lx, ly, 8, 0, 7); c.fillStyle = withAlpha(C.accent, 0.16); c.fill();
-  c.beginPath(); c.arc(lx, ly, 4.5, 0, 7); c.fillStyle = C.accent; c.fill();
-  c.beginPath(); c.arc(lx, ly, 4.5, 0, 7); c.strokeStyle = C.card; c.lineWidth = 1.6; c.stroke();
-  const lastTxt = fmtVal(vals[n - 1]);
-  c.font = "600 11px 'Schibsted Grotesk', sans-serif";
-  const tw = c.measureText(lastTxt).width;
-  const bx = Math.min(Math.max(lx - tw / 2 - 8, padL), W - padR - tw - 16);
-  let by = ly - 32; if (by < 4) by = ly + 14;
-  c.fillStyle = C.ink;
-  if (c.roundRect) { c.beginPath(); c.roundRect(bx, by, tw + 16, 20, 10); c.fill(); }
-  else c.fillRect(bx, by, tw + 16, 20);
-  c.fillStyle = C.paper;
-  c.fillText(lastTxt, bx + 8, by + 14);
-
-  // first / last date labels
-  c.fillStyle = C.label; c.font = "10px 'Schibsted Grotesk', sans-serif";
-  c.textAlign = "left"; c.fillText(fmtShortDate(pts[0].date), padL, H - 8);
-  if (n > 1) { c.textAlign = "right"; c.fillText(fmtShortDate(pts[n - 1].date), W - padR, H - 8); }
-  c.textAlign = "left";
+  render();
 }
 
 // ---------- Progress: History ----------
