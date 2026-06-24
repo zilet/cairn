@@ -632,6 +632,10 @@ function briefHtml(read, { showPlan, isToday }) {
   // athlete never opens a separate tab to know what's next. Quiet, one tap to the week.
   // Suppressed on a done day (the debrief's why already voices what's coming).
   const forward = read.forward && kind !== "done" ? escHtml(read.forward) : "";
+  // The goal ARC — where today sits on the path to the goals (one quiet clause, taps to
+  // the Program view). Pull, never push; null when there's no goal/block/race. Shown on
+  // a done day too (the arc is forward-looking, not a "what's next today").
+  const arc = read.arc ? escHtml(read.arc) : "";
 
   // ---- Actions: ONE clear thing to do. The accent primary is reserved for a
   // train day ("start the session"); easy/rest stay calm with NO accent CTA, so
@@ -687,6 +691,7 @@ function briefHtml(read, { showPlan, isToday }) {
       ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
       ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
+      ${arc ? `<button class="brief-forward brief-arc" data-redirect="view-program" title="See your plan's arc"><span class="brief-forward-arrow" aria-hidden="true">◷</span><span class="brief-forward-txt">${arc}</span></button>` : ""}
       <div id="briefProvenance" class="prov-slot"></div>
       ${actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : ""}
       ${steer}
@@ -2009,6 +2014,7 @@ function wireBrief(read, { isToday }) {
       const action = b.dataset.redirect;
       if (action === "ask-session") { revealSessionComposer(); return; }
       if (action === "view-week") { activateTab("plan"); return; } // the day-ahead → the full plan/week
+      if (action === "view-program") { state.progressSeg = "program"; activateTab("progress"); return; } // the arc → the program/periodization view
       if (action === "start-session") {
         // the day's primary on a train day: make sure the logging surface exists,
         // then bring its first card into view so "start" lands you in the work.
@@ -3228,21 +3234,30 @@ async function loadProgramAdjustmentsBanner() {
 async function loadHealthFocusBanner() {
   const wrap = view.querySelector("#ctxHealth");
   if (!wrap) return;
-  let review = null;
-  try { review = await api("/health/review"); } catch { review = null; }
+  // ONE coach voice on Today: lead with the whole-picture synthesis's single lever (the
+  // most holistic, connected line — "trimming body fat lifts lipids, glucose & T at once"),
+  // else the prioritized focus LEAD (freshness-aware + capped server-side, so a stale CRP
+  // or an empty bucket never leads). Both are pull artifacts; /health/synthesis carries
+  // BOTH in one call. Taps through to Me → Health → Read where the full picture lives.
+  let data = null;
+  try { data = await api("/health/synthesis"); } catch { data = null; }
   if (state.tab !== "today" || !wrap.isConnected) return;
-  if (review && !review.error) state.healthReview = review;
-  let parsed = review && review.parsed;
-  if (typeof parsed === "string") { try { parsed = JSON.parse(parsed); } catch { parsed = null; } }
-  const f = parsed && Array.isArray(parsed.focus) ? parsed.focus.find((x) => x && x.title) : null;
-  if (!f) { wrap.innerHTML = ""; return; }
+  const s = data && data.synthesis;
+  const lead = data && data.focus && data.focus.lead;
+  let line = "";
+  if (s && (s.one_change || s.headline)) line = String(s.one_change || s.headline);
+  else if (lead) {
+    const mv = lead.moves && (lead.moves.nutrition || lead.moves.training || lead.moves.watch);
+    line = mv ? `${lead.group}: ${mv}` : (lead.why || lead.group);
+  }
+  if (!line) { wrap.innerHTML = ""; return; }
   wrap.innerHTML = `<button class="ctxbanner ctxbanner-health" id="ctxHealthGo">
-      <span class="ctxbanner-health-line">✦ ${escHtml(f.title)}${f.action ? ` — ${escHtml(f.action)}` : ""}</span>
+      <span class="ctxbanner-health-line">✦ ${escHtml(line)}</span>
       <span class="ctxbanner-go" aria-hidden="true">→</span>
     </button>`;
   wrap.querySelector("#ctxHealthGo").addEventListener("click", () => {
     state.meSeg = "health";
-    state.healthSeg = "analysis"; // the focus line comes from the review
+    state.healthSeg = "read"; // the synthesis + the connected-brain focus live on Read
     activateTab("me");
   });
 }

@@ -55,8 +55,11 @@ async function loadTrainingProvenance(_isToday) {
   if (!slot) return;
   const rows = await activeDirectives();
   if (state.tab !== "today" || !slot.isConnected) return;
-  // training first (it's what shapes the session), then a watch item
-  const d = rows.find((x) => (x.domain || "watch") === "training") || rows.find((x) => (x.domain || "watch") === "watch");
+  // training first (it's what shapes the session), then a watch item. Skip STALE acute
+  // findings (e.g. a 2-week-old hs-CRP) — they no longer represent today, so they must
+  // not pose as the line shaping the session (the server flags them `stale`).
+  const d = rows.find((x) => (x.domain || "watch") === "training" && !x.stale)
+    || rows.find((x) => (x.domain || "watch") === "watch" && !x.stale);
   const html = provenanceLineHtml(d, "Training shaped by your labs");
   if (!html) { slot.innerHTML = ""; return; }
   slot.innerHTML = html;
@@ -69,7 +72,7 @@ async function loadMealProvenance() {
   if (!slot) return;
   const rows = await activeDirectives();
   if (state.tab !== "plan" || !slot.isConnected) return;
-  const d = rows.find((x) => (x.domain || "watch") === "nutrition");
+  const d = rows.find((x) => (x.domain || "watch") === "nutrition" && !x.stale);
   const html = provenanceLineHtml(d, "Meals shaped by your labs");
   if (!html) { slot.innerHTML = ""; return; }
   slot.innerHTML = html;

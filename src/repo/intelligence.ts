@@ -95,6 +95,17 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   // already has it (getCoachContext) can pass it in to avoid a redundant fetch.
   const rec = recovery ?? getRecoverySummary(14);
   const checkin = getCheckinByDate(d) as any;
+  // "Last night" must actually be RECENT. A wearable can stop syncing sleep for weeks
+  // (a 25-day-old night is not last night), and feeding a stale night to the Brief is
+  // what made it assert "you slept fine" off month-old data. Treat an old night as
+  // ABSENT so the read never claims how they slept from data it doesn't have.
+  const SLEEP_FRESH_DAYS = 2;
+  const lsRaw = latestSleep();
+  let lastNight = lsRaw;
+  if (lsRaw?.date) {
+    const ageDays = Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(lsRaw.date + "T00:00:00Z")) / 864e5);
+    if (!(ageDays >= 0 && ageDays <= SLEEP_FRESH_DAYS)) lastNight = null;
+  }
   const avgSleepMin = rec?.recovery?.avg_sleep_min ?? null;
   const lowSleep = avgSleepMin != null && avgSleepMin > 0 && avgSleepMin < 360; // <6h average
   const lowSubjective = checkin && ((checkin.energy != null && checkin.energy <= 2) || (checkin.sleep_feel != null && checkin.sleep_feel <= 2));
@@ -156,7 +167,8 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     has_recovery_data: !!rec?.has_data,
     // Last night's single-night sleep architecture + HRV (plain numbers + a calm
     // one-line `text`), so the Brief can speak to LAST NIGHT, not just the window.
-    last_night: latestSleep(),
+    // null when the most recent night is too old to be "last night" (see above).
+    last_night: lastNight,
     logged_today: {
       sets: todaysSetCount,
       activities: todaysActivities.map((a) => ({ type: a.type, duration_min: a.duration_min, distance_km: a.distance_km })),
@@ -239,6 +251,25 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     return shape(days[idx % days.length]);
   }
 
+  // Already trained today is a FACT, not a suggestion — and it takes PRECEDENCE over
+  // the earned-rest rule. If today's logged work genuinely LOADED something (a hard/
+  // moderate session OR a real run/ride — see dayLoad), the day is DONE: acknowledge the
+  // work and frame the rest as recovery. Checking this FIRST is what stops two bugs:
+  // (1) a hard push session mislabeled "EASY DAY", and (2) this morning's run being
+  // shadowed by a "3 hard days → REST" call while a full session still sits below (the
+  // "Rest today" vs planned-Pull contradiction). A light/none-load log (a short mobility
+  // flush, or an easy spin a lifter doesn't count) stays soft and is handled lower down.
+  // The grade + fact ride in `signals` for the agent regardless of which branch wins.
+  const todayLoad = dayLoad(d, { countsCardio });
+  (signals as any).trained_today = trainedToday || !!bigActivity;
+  (signals as any).today_load = todayLoad;
+  if ((trainedToday || bigActivity) && (todayLoad === "hard" || todayLoad === "moderate")) {
+    // Name the work for the deterministic `why` (the floor when the agent's offline).
+    // A logged lifting session reads as "session"; otherwise name the activity (run/
+    // ride). When BOTH happened, "session" wins so the lift isn't erased by the run.
+    const label = trainedToday ? "session" : (bigActivity && bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "session");
+    return { kind: "done", focus: null, why: `You already got a solid ${label} in today — the rest of the day is for recovery.`, est_minutes: null, signals };
+  }
   // Earned rest comes from genuinely-loading days stacking up (intensity-aware
   // now), or an acute recovery signal (short sleep / a run-down check-in). A
   // weekly-mileage spike is NO LONGER a forced rest — for a hybrid athlete with a
@@ -258,19 +289,8 @@ export function dayRead(date?: string, recovery?: any): DayRead {
       signals,
     };
   }
-  // Already trained today is a FACT, not a suggestion. If today's logged work
-  // genuinely LOADED something (a hard/moderate session — see dayLoad), the day is
-  // DONE: acknowledge the work and frame the rest as recovery. This is what stops a
-  // hard push session from being mislabeled an "EASY DAY". A light/none-load log (a
-  // short mobility flush, or an easy spin a lifter doesn't count) stays "easy" — they
-  // may still want their real work. The grade + fact ride in `signals` for the agent.
-  const todayLoad = dayLoad(d, { countsCardio });
-  (signals as any).trained_today = trainedToday || !!bigActivity;
-  (signals as any).today_load = todayLoad;
-  if ((trainedToday || bigActivity) && (todayLoad === "hard" || todayLoad === "moderate")) {
-    const label = bigActivity && bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "session";
-    return { kind: "done", focus: null, why: `You already got a solid ${label} in today — the rest of the day is for recovery.`, est_minutes: null, signals };
-  }
+  // An easy/light effort already done today (a short walk, a recovery spin a lifter
+  // doesn't count as their real work) — acknowledge it without telling them to rest.
   if (trainedToday || bigActivity) {
     return { kind: "easy", focus: null, why: "You've already moved today — keep the rest of it easy.", est_minutes: 20, signals };
   }

@@ -14,9 +14,9 @@
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
-import { canonicalGroup, isMobility, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
-import { examplesForGroup } from "./exercise-variations.js";
-import { findExercise } from "./exercises.js";
+import { canonicalGroup, classifyConstraint, isMobility, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { examplesForGroup, suggestAlternatives } from "./exercise-variations.js";
+import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { getPlan } from "./plan.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { round2_5 } from "./shared.js";
@@ -60,6 +60,8 @@ export interface Prescription {
   current: PrescriptionTarget | null;  // from the plan item, when planned
   delta_text: string;                  // plain words: "+5 lb", "hold 50", "−10%", "+5s"
   why: string;
+  reground?: boolean;                  // the plan target was behind logged reality — applying re-grounds it
+  vary_to?: string;                    // a concrete same-pattern variation to rotate in (action "vary")
   plan_item_id?: number;               // set by planDayProgression for the apply path
 }
 
@@ -211,7 +213,11 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   const ex = findExercise(exerciseName);
   const mode: "reps" | "timed" = ex?.mode === "timed" ? "timed" : "reps";
   const group: string | null = ex?.muscle_group ?? null;
-  const constrained = !!(ex?.constraint_note && String(ex.constraint_note).trim());
+  // Only a LOAD-limiting constraint (pain/strain under load) freezes load. A form/
+  // grip/ROM cue ("neutral grip only, no supinated curls") does NOT — the athlete
+  // manages it technically and still earns load. classifyConstraint draws the line so
+  // a grip note no longer strands a lift at a stale weight (the cubital-tunnel bug).
+  const loadConstrained = classifyConstraint(ex?.constraint_note) === "load";
   const plan = planItemFor(exerciseName);
   // Cardio plan items aren't progressed here (the runner loop owns those).
   if (plan && plan.kind === "cardio") return null;
@@ -222,25 +228,34 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   // Nothing logged and nothing planned → genuinely nothing to read.
   if (!last && !plan) return null;
 
-  if (mode === "timed") return timedPrescription(exerciseName, group, constrained, plan, cur, last, state);
-  return repsPrescription(exerciseName, group, constrained, plan, cur, last, state);
+  if (mode === "timed") return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state);
+  return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state);
 }
 
 function repsPrescription(
   name: string,
   group: string | null,
-  constrained: boolean,
+  loadConstrained: boolean,
   plan: ReturnType<typeof planItemFor>,
   cur: PrescriptionTarget | null,
   last: ReturnType<typeof latestTopSet>,
   state: LiftState | null
 ): Prescription {
-  // The load to progress FROM: the plan's prescribed target if set, else the
-  // last logged top-set weight (so an off-plan lift still gets a sane read).
-  const baseWeight: number | null =
-    plan?.weight != null ? plan.weight
-    : last?.weight != null ? Number(last.weight)
-    : null;
+  // Ground in REALITY. The load to progress FROM is the HARDER of the plan target and
+  // the athlete's actual recent working weight — so a stale plan target (e.g. 27 lb)
+  // can't strand a lift the athlete is genuinely driving (45–50 lb every week). Falls
+  // back cleanly when one side is absent (off-plan → logged; nothing logged → plan).
+  // Encoding preserved: assist is negative and the larger signed value is the harder/
+  // realer load, so Math.max picks the right "from" in both regimes.
+  const planWeight = plan?.weight ?? null;
+  const recentWorking = recentWorkingWeight(name);
+  let baseWeight: number | null;
+  if (planWeight != null && recentWorking != null) baseWeight = Math.max(planWeight, recentWorking);
+  else baseWeight = planWeight != null ? planWeight : (recentWorking != null ? recentWorking : (last?.weight != null ? Number(last.weight) : null));
+  // The plan target is BEHIND what they're actually lifting → the prescription also
+  // RE-GROUNDS the plan: the displayed "current" reflects reality, and applying lands
+  // the plan target on what they truly handle ("gradually adjust the plan from logs").
+  const planBehind = planWeight != null && recentWorking != null && recentWorking > planWeight + 0.1;
 
   const repLow = plan?.rep_low ?? (cur?.rep_low ?? undefined);
   const repHigh = plan?.rep_high ?? (cur?.rep_high ?? undefined);
@@ -251,6 +266,7 @@ function repsPrescription(
   let action: ProgressionAction;
   let why: string;
   let nextWeight: number | null = baseWeight;
+  let varyTo: string | undefined;
 
   const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
@@ -259,10 +275,10 @@ function repsPrescription(
   // program-state trend reads progressing. RIR ≤ 1 means it was a grind — hold.
   const earned = (lastRir != null && lastRir >= 2 && (hitTop || repHigh == null)) || status === "progressing";
 
-  if (constrained) {
+  if (loadConstrained) {
     action = "hold";
     nextWeight = baseWeight;
-    why = "This lift has an injury note — hold the load, don't add. Earn range and clean reps first.";
+    why = "This lift has a load-limiting note — hold the weight where you're working and earn clean reps and range first.";
   } else if (status === "regressing") {
     action = "deload";
     nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
@@ -278,7 +294,12 @@ function repsPrescription(
     } else if (flatLong) {
       action = "vary";
       nextWeight = baseWeight;
-      why = `Flat about ${state?.weeks_static} weeks — rotating to a close variation (same pattern) tends to unstick it.`;
+      // Carry a concrete same-pattern candidate so "switch it up" is actionable (Today
+      // shows the real alternative; the evolution/apply path can rotate it in).
+      varyTo = (suggestAlternatives(name, { limit: 1 }) as any[])[0]?.name;
+      why = varyTo
+        ? `Flat about ${state?.weeks_static} weeks — rotate to ${varyTo} (same movement pattern) to unstick it; keep the rest of the day.`
+        : `Flat about ${state?.weeks_static} weeks — rotating to a close variation (same pattern) tends to unstick it.`;
     } else {
       action = "hold";
       nextWeight = baseWeight;
@@ -315,6 +336,15 @@ function repsPrescription(
       : "Hold here for now — a couple of logged sessions and the next step reads clearly.";
   }
 
+  // Catch-up framing: when the plan target was BEHIND the real working weight, say so
+  // plainly — the step is "from where you actually are", and even a hold re-grounds the
+  // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
+  if (planBehind && baseWeight != null) {
+    const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
+    if (action === "overload") why = `Your plan was behind what you're actually lifting — stepping up from your real working weight (${lbl}).`;
+    else if (action === "hold" && !loadConstrained) why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
+  }
+
   const suggested: PrescriptionTarget = {
     sets,
     rep_low: repLow ?? undefined,
@@ -322,22 +352,29 @@ function repsPrescription(
     weight: nextWeight,
   };
   const delta_text = loadedDeltaText(baseWeight, nextWeight);
+  // The displayed "current" reflects REALITY when the plan was behind, so the card
+  // reads "50 → 52.5", never "27 → …" off a number the athlete left behind weeks ago.
+  const displayCurrent: PrescriptionTarget | null = cur
+    ? (planBehind ? { ...cur, weight: baseWeight } : cur)
+    : (baseWeight != null ? { sets, rep_low: repLow ?? undefined, rep_high: repHigh ?? undefined, weight: baseWeight } : null);
 
   return {
     exercise: ex_name(name),
     mode: "reps",
     action,
     suggested,
-    current: cur,
+    current: displayCurrent,
     delta_text,
     why,
+    reground: planBehind || undefined,
+    vary_to: varyTo,
   };
 }
 
 function timedPrescription(
   name: string,
   _group: string | null,
-  constrained: boolean,
+  loadConstrained: boolean,
   plan: ReturnType<typeof planItemFor>,
   cur: PrescriptionTarget | null,
   last: ReturnType<typeof latestTopSet>,
@@ -359,10 +396,10 @@ function timedPrescription(
   const held = last?.duration_sec != null ? Math.round(Number(last.duration_sec)) : null;
   const solid = held != null && target > 0 && held >= target;
 
-  if (constrained) {
+  if (loadConstrained) {
     action = "hold";
     nextSeconds = baseSeconds;
-    why = "This hold has an injury note — keep it where it is, don't extend.";
+    why = "This hold has a load-limiting note — keep it where it is, don't extend.";
   } else if (status === "regressing") {
     action = "deload";
     nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;

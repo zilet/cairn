@@ -33,3 +33,9 @@ export * from "./repo/since-last.js"; // honest "since you last looked" continui
 export * from "./repo/goal-checkin.js"; // gentle periodic "is this still your goal?"
 export * from "./repo/learned-timeline.js"; // legible "what Cairn has learned about you"
 export { guidelineFor, allGuidelines, type GuidelineEntry } from "./guidelines.js"; // offline trusted-guidelines pack
+// The "knows-me" layer (docs/VISION.md — the personal coaching team):
+export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (the personalization foundation)
+export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
+// context-effect: explicit re-export — its local isAcuteMarker would clash with propagation's `export *`
+export { activeContextEffect, markerInTransientWindow, type ActiveContextItem, type ContextEffect } from "./repo/context-effect.js";
+export * from "./repo/next-step.js"; // the one cross-domain next-best-step

@@ -1203,7 +1203,11 @@ function paintHealthReadTab() {
 // track groups, deduped from the directive flood). Pull: it waits here; a refresh
 // regenerates it as a streamed job. No scores; informational, never a verdict.
 function focusTierHtml(focus) {
-  const prios = (focus && Array.isArray(focus.priorities) ? focus.priorities : []);
+  // Show the CAPPED `surfaced` set (≤3 act-now + ≤2 track) when the server provides it,
+  // so the picture reads as the few things that matter — never a 9-item flood. Falls
+  // back to the full priorities list for older payloads.
+  const prios = (focus && Array.isArray(focus.surfaced) && focus.surfaced.length ? focus.surfaced
+    : focus && Array.isArray(focus.priorities) ? focus.priorities : []);
   if (!prios.length) return "";
   const row = (p) => {
     const move = p.moves && (p.moves.nutrition || p.moves.training || p.moves.watch);

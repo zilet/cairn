@@ -313,7 +313,9 @@ function muscleVolume(date: string, weeks = 3): MuscleVolumeState[] {
 }
 
 // ---- mesocycle / fatigue position ----
-function weeklyTonnage(date: string, weekBack: number): number {
+// Exported for the reaction-model + next-step engines (they correlate prior-week
+// training load against acute markers / leverage). weekBack=0 is the trailing 7 days.
+export function weeklyTonnage(date: string, weekBack: number): number {
   const end = isoDaysAgo(date, weekBack * 7);
   const start = isoDaysAgo(date, weekBack * 7 + 6);
   const row = db.prepare(
@@ -370,7 +372,8 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
 }
 
 // ---- endurance state ----
-function weeklyKm(date: string, weekBack: number, patterns: string[]): number {
+// Exported for the reaction-model + next-step engines (prior-week endurance load).
+export function weeklyKm(date: string, weekBack: number, patterns: string[]): number {
   const end = isoDaysAgo(date, weekBack * 7);
   const start = isoDaysAgo(date, weekBack * 7 + 6);
   const sport = activitySportWhere("activities", patterns);

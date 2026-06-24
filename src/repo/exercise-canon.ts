@@ -513,3 +513,41 @@ export function planExerciseMerges(
   }
   return out;
 }
+
+// ---------- constraint taxonomy (grip/form ≠ load) ---------------------------
+// An exercise's `constraint_note` (from an injury or a coach cue) used to be a
+// single boolean that FROZE load progression for ANY note — so a GRIP cue ("neutral
+// grip only, no supinated curls", cubital tunnel) stranded a lift the athlete was
+// crushing at a heavy working weight. A real coach distinguishes:
+//   - "load"  → the note LIMITS load (pain/strain under load, "keep it light", "no
+//               heavy", "reduce the weight"). Load must be held/capped — safety.
+//   - "form"  → a technique/grip/range/equipment cue the athlete WORKS AROUND while
+//               still earning load (neutral grip, no supination, partial ROM, tempo,
+//               cable/machine only). Load may progress normally; the cue stays visible.
+//   - "none"  → no constraint.
+// Conservative on purpose: a note with ANY pain/load language — or one with no clear
+// form cue at all — is treated as "load" (cap), so a genuine injury note is never
+// wrongly un-capped. Only a clear form/grip/ROM cue WITHOUT load language frees load.
+export type ConstraintKind = "load" | "form" | "none";
+
+const CONSTRAINT_FORM_RE =
+  /\b(grip|supinat|pronat|neutral|underhand|overhand|hammer|tempo|slow|pause|partial|range of motion|\brom\b|form|technique|stance|posture|alignment|cable|machine|smith|specific bar|ez[- ]?bar|footing|angle)\b/i;
+const CONSTRAINT_LOAD_RE =
+  /\b(no heav|keep (it )?light|lighten|reduce (the )?(load|weight)|cap (the )?(load|weight)|don'?t add|do not add|avoid load|unload|too heavy|pain|hurts?|sharp|flare|aggravat|tendin|strain|sprain|tweak|sore|ache|injur|impinge|herniat|limit (the )?(load|weight)|go easy|ease off)\b/i;
+
+export function classifyConstraint(note?: string | null): ConstraintKind {
+  const s = String(note ?? "").trim();
+  if (!s) return "none";
+  const load = CONSTRAINT_LOAD_RE.test(s);
+  const form = CONSTRAINT_FORM_RE.test(s);
+  // A clear form/grip/ROM cue with NO load/pain language → manage technically, keep
+  // progressing load. Anything else (pain/load language, or ambiguous) → cap (safe).
+  if (form && !load) return "form";
+  return "load";
+}
+
+// True when the constraint should HOLD/cap load (a load-limiting note). A form/grip
+// cue returns false — load progresses while the cue is respected technically.
+export function constraintLimitsLoad(note?: string | null): boolean {
+  return classifyConstraint(note) === "load";
+}

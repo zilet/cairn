@@ -1,7 +1,7 @@
 import * as repo from "./repo.js";
 import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
-import { generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
+import { evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
 import { precomputeDayRead, localToday } from "./dayread.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
@@ -112,8 +112,14 @@ export function startScheduler() {
     //     Drafts a nutrition_target proposal ONLY on meaningful drift; the calm,
     //     common answer is change:false (no draft).
     const nutritionDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "nutrition_checkin_last_slot");
+    // (d) Weekly plan EVOLUTION — the continuous-coach cadence (miss-tolerant). Drafts
+    //     a plan-evolution proposal (progress what's working, deload/rotate what's
+    //     stalled, ground targets in logged reality, rebalance toward weak points) and
+    //     leaves it WAITING for review — pull, never push. Only when there's a plan to
+    //     evolve; a fresh weekly draft retires the prior unreviewed auto one (no pile-up).
+    const evolutionDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "program_evolution_last_slot");
 
-    if (!insightDue && !weeklyDue && !nutritionDue) return;
+    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue) return;
     proactiveBusy = true;
     try {
       if (insightDue) {
@@ -155,6 +161,22 @@ export function startScheduler() {
           );
         } catch (e: any) {
           console.error(`[proactive] nutrition check-in failed: ${e?.message ?? e}`);
+        }
+      }
+      if (evolutionDue) {
+        try {
+          // Nothing to evolve for a brand-new user with no plan — skip the agent call.
+          const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+          if (!hasPlan) {
+            console.log(`[proactive] no plan to evolve yet (calm no-op).`);
+          } else {
+            const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION);
+            // A successful fresh draft retires the prior unreviewed auto one (no pile-up).
+            if (r.ok && r.proposal?.id) repo.supersedeAutoEvolutionDrafts(r.proposal.id);
+            console.log(r.ok ? `[proactive] drafted a plan evolution (waiting for review).` : `[proactive] plan evolution unavailable (calm no-op).`);
+          }
+        } catch (e: any) {
+          console.error(`[proactive] plan evolution failed: ${e?.message ?? e}`);
         }
       }
     } finally {
@@ -238,6 +260,12 @@ export function startScheduler() {
         const rec = repo.reconcileSuggestions();
         if (rec.learnings > 0) console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
       } catch (e: any) { console.error(`[memory] reconcile failed: ${e?.message ?? e}`); }
+      // 1b. Rebuild the PERSONAL-RESPONSE model (deterministic) from the freshly
+      //     reconciled history + latest logs — cache it + promote the load-bearing
+      //     patterns into memory so the coach voice personalizes. Pull, never push.
+      try {
+        repo.saveReactionModel();
+      } catch (e: any) { console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`); }
       // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
       try {
         const { consolidateMemory, growAboutMe } = await import("./coachOps.js");

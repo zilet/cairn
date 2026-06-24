@@ -14,19 +14,35 @@ beforeEach(() => {
 const activeFor = (markerLabel) =>
   repo.listActiveDirectives().filter((d) => (d.marker || "") === markerLabel);
 
-test("directiveFreshness: acute markers decay, chronic markers never do", () => {
+test("directiveFreshness: acute markers decay (fast), chronic markers never do", () => {
   const today = "2026-06-23";
   const ago = (n) => new Date(Date.parse(today) - n * 864e5).toISOString().slice(0, 10);
-  // hs-CRP is acute (point-in-time) → stale once clearly old; fresh while recent.
+  // hs-CRP is acute (point-in-time) → stale once clearly old; fresh while recent. The
+  // window is short (~10d): an acute reactant reflects the last several days, so a
+  // 2-week-old reading must NOT keep capping training every morning.
   assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: ago(30) }, today).stale, true);
+  assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: ago(12) }, today).stale, true);
   assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: ago(5) }, today).stale, false);
   assert.equal(repo.directiveFreshness({ marker: "C-Reactive Protein", trigger_date: ago(40) }, today).acute, true);
   // ApoB is chronic/structural → NEVER stale, however old the reading.
   const apob = repo.directiveFreshness({ marker: "ApoB", trigger_date: ago(400) }, today);
   assert.equal(apob.acute, false);
   assert.equal(apob.stale, false);
-  // No trigger_date → can't be stale (age unknown), never silently dropped.
+  // A composite/cluster name dominated by chronic markers (it merely MENTIONS hs-CRP) is
+  // NOT acute — its durable lipid advice must never age out.
+  const cluster = repo.directiveFreshness({ marker: "ApoB+LDL-C+Lp(a)+hs-CRP+Triglycerides", trigger_date: ago(400) }, today);
+  assert.equal(cluster.acute, false);
+  assert.equal(cluster.stale, false);
+  // Lp(a) is chronic even paired with an acute marker (the guard must match the
+  // paren-ending token, not silently fall through and class the pair as acute).
+  assert.equal(repo.directiveFreshness({ marker: "Lp(a) + hs-CRP", trigger_date: ago(400) }, today).acute, false);
+  // No anchor at all (no trigger_date, no created_at) → age unknown → never silently stale.
   assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: null }, today).stale, false);
+  // created_at is the fallback anchor, so a health_review directive that never stamped a
+  // trigger_date can still age out (the original "stale CRP caps forever" bug).
+  assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: null, created_at: ago(20) }, today).stale, true);
+  // An explicit reading-date anchor (the real LAB date, resolved from marker history) wins.
+  assert.equal(repo.directiveFreshness({ marker: "hs-CRP", trigger_date: null }, today, ago(20)).stale, true);
 });
 
 test("a flagged ApoB produces nutrition + watch directives", () => {

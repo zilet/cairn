@@ -78,6 +78,24 @@ function supersedeSiblingTrainingDrafts(appliedId: number) {
   }
 }
 
+// The scheduler's weekly plan-evolution draft is tagged with this instruction so the
+// continuous cadence never PILES UP unreviewed drafts: a fresh weekly draft retires the
+// prior auto-evolution one (system 'superseded', not a user 'discarded'). Manual
+// "Evolve my plan" drafts use a different instruction and are never touched here.
+export const AUTO_EVOLUTION_INSTRUCTION = "weekly auto-evolution";
+export function supersedeAutoEvolutionDrafts(exceptId?: number) {
+  const drafts = db
+    .prepare(`SELECT id FROM plan_proposals WHERE status = 'draft' AND instruction = ?`)
+    .all(AUTO_EVOLUTION_INSTRUCTION) as any[];
+  let retired = 0;
+  for (const d of drafts) {
+    if (exceptId != null && Number(d.id) === Number(exceptId)) continue;
+    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+    retired++;
+  }
+  return retired;
+}
+
 // A fresh auto-progression draft for a day RETIRES any prior un-applied one for the
 // SAME day, so tapping "apply to my plan" on Today repeatedly never piles up duplicate
 // drafts in the Coach list (each new draft reflects the latest logged sets; the stale

@@ -149,7 +149,32 @@ test("injury constraint HOLDS load even when reps were earned", () => {
   const p = nextPrescription("Barbell Row");
   assert.equal(p.action, "hold");
   assert.equal(p.suggested.weight, 135, "constraint holds the load, never bumps it");
-  assert.match(p.why.toLowerCase(), /injury/);
+  assert.match(p.why.toLowerCase(), /load-limiting|hold the (weight|load)/);
+});
+
+test("a GRIP/form constraint progresses load — it is NOT a load cap", () => {
+  // Cubital tunnel = a grip cue (neutral grip), not a load limit. The athlete manages it
+  // technically and still EARNS load — it must never freeze the lift at a stale weight
+  // (the exact bug: logging 45-50 lb every week, still prescribed "hold 27").
+  makeExercise("Hammer Curl", { muscle_group: "biceps", constraint_note: "Cubital tunnel: neutral grip only, no supinated curls." });
+  planWith(1, { exercise: "Hammer Curl", sets: 3, rep_low: 12, rep_high: 12, target_weight: 27, focus: "Pull" });
+  logSet("Hammer Curl", isoDaysAgo(18), { weight: 45, reps: 12, rir: 2 });
+  logSet("Hammer Curl", isoDaysAgo(8), { weight: 50, reps: 12, rir: 2 });
+  const p = nextPrescription("Hammer Curl");
+  assert.equal(p.action, "overload", "a grip cue must not hold load when the lift is earned");
+  assert.ok((p.suggested.weight ?? 0) >= 50, "the step is grounded in the real working weight (~50), not the stale plan 27");
+});
+
+test("progression GROUNDS in logged reality — a stale plan target never strands a lift", () => {
+  makeExercise("Dumbbell Curl", { muscle_group: "biceps" });
+  planWith(1, { exercise: "Dumbbell Curl", sets: 3, rep_low: 12, rep_high: 12, target_weight: 27, focus: "Pull" });
+  // Logged heavy for weeks — the plan target (27) is far behind reality (45-50).
+  logSet("Dumbbell Curl", isoDaysAgo(16), { weight: 45, reps: 12, rir: 1 });
+  logSet("Dumbbell Curl", isoDaysAgo(7), { weight: 50, reps: 12, rir: 2 });
+  const p = nextPrescription("Dumbbell Curl");
+  assert.equal(p.reground, true, "the plan was behind logged reality → re-ground flag set");
+  assert.ok((p.current?.weight ?? 0) >= 45, "the displayed current reflects reality, not the stale 27");
+  assert.ok((p.suggested.weight ?? 0) >= 50, "the next step builds from ~50, never crawls up from 27");
 });
 
 test("timed lifts progress in SECONDS, never load", () => {

@@ -958,7 +958,11 @@ export function buildMcpServer(): McpServer {
       const readDate = date || localToday();
       // Mirror /today-read's withForward: attach the day-ahead `forward` line on every
       // read (deterministic, current; null on a done day) so MCP and REST never diverge.
-      const withForward = (r: any) => ({ ...r, forward: r?.kind === "done" ? null : (repo.forwardLook(readDate).text || null) });
+      const withForward = (r: any) => {
+        let arc: string | null = null;
+        try { arc = repo.getTrajectory(readDate)?.line ?? null; } catch { arc = null; }
+        return { ...r, forward: r?.kind === "done" ? null : (repo.forwardLook(readDate).text || null), arc };
+      };
       try {
         if (!override) {
           const cached = repo.getCachedDayRead(readDate);
@@ -1243,6 +1247,42 @@ export function buildMcpServer(): McpServer {
     async () => asText(repo.healthFocus())
   );
 
+  // ---- the "knows-me" layer (the personal coaching team) — read-only, no scores ----
+  server.tool(
+    "get_reaction_model",
+    "How THIS athlete actually reacts, learned from their own logged history: a handful of plain-language patterns (e.g. how a deficit moves their weight, whether hs-CRP tracks training load, what late events cost their sleep, which plan days land vs get skipped, whether recovery signal is even available) each with a confidence WORD (tentative/observed/strong) — never a number. The personalization spine.",
+    {},
+    async () => asText(repo.reactionModelForCoach())
+  );
+  server.tool(
+    "get_trajectory",
+    "The athlete's forward ARC: a periodized horizon (weeks/phase) toward their goals (body-comp, longevity markers, any race), the milestones along it, and today framed as the next step on the path. Plain words, no completion %; null line when there's no goal/block/race.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.getTrajectory(date))
+  );
+  server.tool(
+    "get_context_effect",
+    "The active life-context effect: events the athlete mentioned once (a late concert, travel, illness, a hard week) that should shape today — expect worse sleep / a transient inflammation bump (don't alarm) / ease the load / disrupted fueling — each with a fade date. Plain words; empty when nothing's active.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.activeContextEffect(date))
+  );
+  server.tool(
+    "get_next_step",
+    "The single highest-leverage next action across ALL domains (train/fuel/recover/recheck/life) right now — one calm thing, or null on a quiet day. A suggestion the athlete drives, never a to-do wall.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.nextBestStep(date) ?? { next_step: null })
+  );
+  server.tool(
+    "mark_next_step",
+    "Record the athlete's response to a next-step: action 'done' (did it) or 'snooze' (not today) by step_key — so a handled/skipped step doesn't return tomorrow. Pull, never push.",
+    { step_key: z.string(), action: z.enum(["done", "snooze"]) },
+    async ({ step_key, action }) => {
+      if (action === "done") repo.nextStepDone(step_key);
+      else repo.snoozeNextStep(step_key);
+      return asText({ ok: true, step_key, action });
+    }
+  );
+
   server.tool(
     "get_health_synthesis",
     "The cached elite-coach whole-picture health story (the headline, the 2-3 connected priorities + their concrete moves, the single highest-leverage change), plus the deterministic focus tiering and a `stale` flag (true when newer labs landed than the synthesis was written against). Returns the last generated narrative (or null); regenerate with synthesize_health.",
@@ -1278,7 +1318,7 @@ export function buildMcpServer(): McpServer {
     "list_directives",
     "List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default; pass all:true for the full history incl. resolved/dismissed feedback rows.",
     { all: z.boolean().optional() },
-    async ({ all }) => asText(repo.listDirectives({ all: !!all }))
+    async ({ all }) => asText(repo.annotateDirectiveFreshness(repo.listDirectives({ all: !!all })))
   );
 
   server.tool(

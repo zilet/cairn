@@ -290,9 +290,12 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     // honored as a current daily cap (the bug — a 2-week-old hs-CRP capping today's
     // intervals every morning). Split fresh (honor) from aging-acute (a soft, clearly
     // dated "recheck" note the agent must NOT turn into a daily cap).
-    const fresh: any[] = [];
-    const agingAcute: any[] = [];
-    for (const d of relevant) (repo.directiveFreshness(d).stale ? agingAcute : fresh).push(d);
+    // annotateDirectiveFreshness anchors each acute finding to its actual LAB reading
+    // date (not when the review ran), so a 2-week-old hs-CRP ages out instead of capping
+    // training every morning. Chronic markers (ApoB/LDL/Lp(a)) never decay → stay fresh.
+    const annotated = repo.annotateDirectiveFreshness(relevant);
+    const fresh = annotated.filter((d: any) => !d.stale);
+    const agingAcute = annotated.filter((d: any) => d.stale);
     if (fresh.length) {
       const byDomain: Record<string, string[]> = {};
       for (const d of fresh) {
@@ -309,8 +312,7 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     if (agingAcute.length) {
       lines.push("AGING LAB FINDINGS (acute, point-in-time markers from a while ago — INFORMATIONAL ONLY: do NOT cap today's training or meals on these; at most a gentle 'worth a recheck' if it naturally fits):");
       for (const d of agingAcute) {
-        const f = repo.directiveFreshness(d);
-        const wks = f.ageDays != null ? Math.max(1, Math.round(f.ageDays / 7)) : null;
+        const wks = d.age_days != null ? Math.max(1, Math.round(d.age_days / 7)) : null;
         const age = wks != null ? `~${wks} week${wks === 1 ? "" : "s"} ago` : "a while ago";
         lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()} (reading ${age} — point-in-time; recheck before it shapes anything)`);
       }
@@ -519,6 +521,52 @@ function renderHealthLead(ctx: any): string {
   return `\nSTANDING HEALTH FOCUS (their whole-picture read — surface at most ONE quiet clause and ONLY if it fits today, in a friend's voice, never alarming; usually leave it unsaid): ${bits.join(" — ")}\n`;
 }
 
+// ---- the "knows-me" layer: render the personal coaching team into the one voice ----
+// All four return "" when there's nothing to say (calm by default), surface plain words
+// + a confidence WORD only (never a number/score), and are suggestions never gates.
+
+// HOW THIS ATHLETE RESPONDS — the personalization spine. Carries the standing principle
+// that prevents the engine's hard-won fixes from regressing in the agent's own prose.
+function renderReactionModel(ctx: any): string {
+  const rm = ctx?.reaction_model;
+  const pats = rm && Array.isArray(rm.patterns) ? rm.patterns : [];
+  const lines = pats.slice(0, 5)
+    .map((p: any) => `  - [${p.confidence}] ${String(p.statement || "").trim()}`)
+    .filter((l: string) => l.trim().length > 10);
+  if (!lines.length) return "";
+  const narr = rm.narrative ? `\n${String(rm.narrative).trim()}` : "";
+  return `\nHOW THIS ATHLETE RESPONDS (learned from their OWN logged history — personalize your defaults to this; a suggestion, never a gate. Trust their LOGGED loads over any stale plan number, and read a grip/form note as a technique cue, not a load cap):${narr}\n${lines.join("\n")}\n`;
+}
+
+// THE ARC — where today sits on the path to their goals. One clause, never a date wall.
+function renderTrajectory(ctx: any): string {
+  const t = ctx?.trajectory;
+  if (!t || !t.line) return "";
+  return `\nTHE ARC (where today sits on the path to their goals — voice at most ONE natural clause when it fits, never a milestone list-dump or a date wall): ${String(t.line).trim()}\n`;
+}
+
+// LIFE CONTEXT — a one-mention event shaping today, then fading. Never a forced rest.
+function renderActiveContext(ctx: any): string {
+  const c = ctx?.context_today;
+  if (!c || !c.any) return "";
+  const items = Array.isArray(c.active) ? c.active : [];
+  const bits = items.slice(0, 3).map((a: any) => String(a.reason || a.title || "").trim()).filter(Boolean);
+  const flags: string[] = [];
+  if (c.expect_worse_sleep) flags.push("their sleep likely ran short");
+  if (c.transient_inflammation) flags.push("a transient inflammation bump is likely — do NOT alarm on an acute marker or cap training for it");
+  if (c.reduce_load) flags.push("ease the load a touch");
+  if (c.fueling_disrupted) flags.push("fueling/scale may be disrupted — lean conservative, don't re-target on noise");
+  if (!bits.length && !flags.length) return "";
+  return `\nLIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.\n`;
+}
+
+// THE ONE NEXT STEP — the single highest-leverage action across all domains.
+function renderNextStep(ctx: any): string {
+  const n = ctx?.next_step;
+  if (!n || !n.title) return "";
+  return `\nTHE ONE NEXT STEP (the single highest-leverage thing across all domains right now — lead with THIS if they ask what to do, but they drive; never a to-do wall): ${String(n.title).trim()}${n.why ? ` — ${String(n.why).trim()}` : ""}\n`;
+}
+
 // The active periodization block (goal / phase / week N of M), so the coach
 // periodizes toward it. "" when no block is running (the program-state mesocycle
 // read still gives deload timing). A nudge, never a gate.
@@ -693,7 +741,7 @@ have none — that's fine, just use what's there):
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -733,6 +781,23 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
   const variationBlock = variationLines.length
     ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern — rotate ONE in to break the plateau, starting light):\n${variationLines.join("\n")}\n`
     : "";
+  // Weak-point read: which canonical groups are chronically UNDER their productive
+  // volume range (or untrained lately) vs running high — so the evolution rebalances
+  // toward the lagging groups instead of piling more onto what's already well-trained.
+  let weakBlock = "";
+  try {
+    // Reuse the balance getCoachContext already computed (program_balance); only
+    // recompute as a fallback if it's absent.
+    const bal: any = ctx?.program_balance ?? repo.programBalance();
+    const due: string[] = Array.isArray(bal?.due) ? bal.due : [];
+    const over: string[] = Array.isArray(bal?.over) ? bal.over : [];
+    if (due.length || over.length) {
+      const ex = (g: string) => (repo.examplesForGroup(g, 2) as string[]).join(", ");
+      weakBlock = `\nVOLUME BALANCE — REBALANCE toward weak points (this is how a real coach builds a body, not by repeating the same lifts):\n${
+        due.length ? `- LAGGING (under their productive set range or untrained lately): ${due.slice(0, 6).join(", ")}. Bias any added/rotated movement to a lagging group — e.g. ${due.slice(0, 2).map((g) => `${g} (${ex(g)})`).join("; ")}.\n` : ""
+      }${over.length ? `- WELL-SERVED (running high): ${over.join(", ")} — you may redirect a set or two from here to a lagging group rather than adding net volume.\n` : ""}`;
+    }
+  } catch { /* balance unavailable → no weak-point block */ }
   const disc = disciplineOf(ctx);
   const coachRole = disc === "endurance"
     ? "an endurance coach (with strength as supporting work)"
@@ -759,6 +824,13 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   Use a "days" restructure (or swap the exercise within its day) to rotate a variation; keep the rest
   of the day intact.
 - RECOVER what's slipping: a "regressing" lift gets backed off, not pushed.
+- GROUND IN REALITY: prescribe from what the athlete ACTUALLY logs, never a stale plan number. If a
+  lift's recent working weight has outpaced its plan target (e.g. the plan says 27 lb but they log 45-50
+  every week), set the target to their real working load, then progress conservatively from THERE —
+  never crawl up from an old number they left behind weeks ago.
+- REBALANCE toward weak points: read the VOLUME BALANCE block — bias added/rotated work to the LAGGING
+  groups (don't keep feeding the groups that are already well-trained). Building a balanced body, and
+  bringing up weak points, is the job — not repeating the same favorite lifts.
 - KEEP IT FRESH: when an accessory has been static and the program reads repetitive, introduce ONE or
   TWO new exercises hitting the same muscle (probe an alternative they haven't tried) — small novelty
   often beats wholesale rewrites. Every new/rotated exercise starts at a conservative load with a
@@ -782,8 +854,8 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 
 ${ELITE_STRENGTH_GUARDRAILS}
 
-${variationBlock}${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}
+${variationBlock}${weakBlock}${CONTEXT_GUARDRAILS}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -997,7 +1069,7 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible
   exercises that honor their constraints and carrying over weights where it makes sense.
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.
-${renderTrainingSignals(ctx)}
+${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderNextStep(ctx)}
 Keep the reply short and human; confirm what you logged or drafted. When the athlete says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
 bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.
@@ -1731,6 +1803,22 @@ function debriefFacts(date: string): string {
       lines.push(`SESSION TODAY${sess.title ? ` — ${sess.title}` : ""}${vol}: ${lifts.join("; ")}.`);
     }
   } catch { /* no session detail → skip */ }
+  // 1b) Today's CARDIO — a synced/logged run or ride, with the physiology that's
+  // actually there (distance · moving time · avg HR · pace), so the agent debriefs the
+  // REAL effort instead of guessing ("an easy run" when it was a hard one). Plain
+  // numbers, never a score; skip silently when nothing endurance was logged today.
+  try {
+    const cardio: any[] = repo.getCardioForDate?.(date) ?? [];
+    for (const c of cardio.slice(0, 2)) {
+      const bits: string[] = [];
+      if (c?.distance_km != null) bits.push(`${Math.round(Number(c.distance_km) * 10) / 10} km`);
+      if (c?.duration_min != null) bits.push(`${Math.round(Number(c.duration_min))} min`);
+      if (c?.avg_hr != null) bits.push(`avg HR ${Math.round(Number(c.avg_hr))}`);
+      if (c?.pace) bits.push(String(c.pace));
+      const label = c?.type && c.type !== "other" ? String(c.type) : "cardio";
+      if (bits.length) lines.push(`CARDIO TODAY — ${label}: ${bits.join(" · ")}${c?.source === "garmin" ? " (synced)" : ""}.`);
+    }
+  } catch { /* no cardio → skip */ }
   // 2) Forward — the day-ahead (the SAME forwardLook the Brief's forward line uses).
   try {
     const fwd: any = repo.forwardLook(date);
@@ -1790,7 +1878,7 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
   const ln: any = baseline.signals && (baseline.signals as any).last_night;
   const lastNightLine = ln && ln.text
     ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
-    : "";
+    : `\nSLEEP/RECOVERY: no recent sleep or HRV data has synced. Do NOT claim or imply how they slept ("you slept fine", "well-rested", etc.) — you have no sleep signal for last night. Speak only to what the data actually shows (training, recovery trend, the day ahead).`;
   // The athlete has ALREADY completed a real, loading session today (a deterministic
   // fact). This becomes a post-session DEBRIEF, not a fresh suggestion: acknowledge the
   // specific work, place it in the week, give ONE forward focus, and nudge refuel only
@@ -1798,7 +1886,7 @@ export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: 
   const doneBlock = baseline.kind === "done"
     ? `\nDEBRIEF MODE (a real, loading session is already logged today — this is a post-session debrief, NOT a fresh suggestion):
 - Do NOT propose more training unless they ask. The day's work is in.
-- "headline": acknowledge the WORK specifically — name the session and a standout lift from SESSION TODAY (a friend who watched you train, e.g. "Strong push session.").
+- "headline": acknowledge the WORK specifically — name what they actually did (a standout lift from SESSION TODAY, or the run/ride from CARDIO TODAY with its real effort) like a friend who watched you train, e.g. "Strong push session." / "Solid 6 km — you pushed that one.". If CARDIO TODAY shows a hard effort (high avg HR), don't call it "easy".
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
     : "";
@@ -1829,7 +1917,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1910,7 +1998,7 @@ GUARDRAILS:
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderReactionModel(context)}${renderActiveContext(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
@@ -2616,7 +2704,7 @@ readings — value, optimal band, trend, projection):
 ${JSON.stringify(focus)}
 ${renderHealthDrivers(context)}
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}
+${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}${renderReactionModel(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 If there's genuinely not enough health data yet: {"found": false}
 Otherwise:

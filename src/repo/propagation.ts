@@ -3,6 +3,7 @@ import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirec
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import { forecastMarker, getMarkerHistory, lsqSlopePerDay, newestHealthDocDate } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
+import { canonicalMarker } from "./marker-canon.js";
 import { getProfile } from "./profile.js";
 import { getAppState, setAppState } from "./app-state.js";
 
@@ -1275,25 +1276,77 @@ function buildReviewMarkerContexts(): Map<string, MarkerContext> {
 // into a quiet "worth a recheck" note instead of a daily cap. Chronic/structural
 // markers (ApoB, Lp(a), LDL, HbA1c, …) carry NO such decay — they stay relevant.
 const ACUTE_MARKER_RE = /\b(hs-?crp|c-?reactive|\bcrp\b|esr|sed(imentation)? rate|wbc|white blood|neutrophil|creatine kinase|\bck\b)\b/i;
+// A composite/cluster name dominated by chronic/structural markers (e.g. the lipid+
+// inflammation cluster "ApoB+LDL-C+Lp(a)+hs-CRP+Triglycerides") is NOT a point-in-time
+// acute reading — it carries durable lipid advice that must never age out just because
+// the name happens to mention CRP. Such names are kept OUT of the acute (decaying) class.
+// Word-ending tokens keep \b…\b; the paren-ending Lp(a)/lipoprotein(a) are matched
+// without a trailing \b (a ")" is already a non-word char, so \b after it never holds).
+const CHRONIC_GUARD_RE = /\b(?:apo\s?b|apolipoprotein|ldl|hdl|hba1c|a1c|triglyceride|cholesterol|glucose)\b|lp\s?\(a\)|lipoprotein\s?\(a\)/i;
 export function isAcuteMarker(name?: string | null): boolean {
-  return !!name && ACUTE_MARKER_RE.test(String(name));
+  if (!name) return false;
+  const s = String(name);
+  if (CHRONIC_GUARD_RE.test(s)) return false;
+  return ACUTE_MARKER_RE.test(s);
 }
 // After this many days an acute marker-derived directive is STALE for daily surfaces.
-export const ACUTE_DIRECTIVE_STALE_DAYS = 21;
+// Acute-phase reactants (hs-CRP, CK, ESR, WBC) reflect the last several days — a hard
+// week of training, an infection, an injury — not a stable trait, and they normalize
+// within ~1-2 weeks. So an acute reading older than this must NOT keep capping today's
+// training/meals every morning; it ages into a quiet "worth a recheck" note instead.
+export const ACUTE_DIRECTIVE_STALE_DAYS = 10;
 // Pure, testable freshness read for a directive. `acute` = its marker is acute-phase;
-// `ageDays` = days since the triggering reading; `stale` = acute AND clearly old.
+// `ageDays` = days since the data behind it; `stale` = acute AND clearly old. The age
+// anchor prefers an explicit reading date (the actual LAB date, passed by callers that
+// resolve marker history) → the directive's own trigger_date → its created_at — so even
+// a health_review directive that never stamped a trigger_date can still age out (without
+// an anchor a stale acute cap would otherwise nag forever — the original bug).
 export function directiveFreshness(
   d: any,
-  today?: string
+  today?: string,
+  anchorDate?: string | null
 ): { acute: boolean; ageDays: number | null; stale: boolean } {
   const acute = isAcuteMarker(d?.marker);
+  const anchor = anchorDate || d?.trigger_date || d?.created_at || null;
   let ageDays: number | null = null;
-  const td = d?.trigger_date ? Date.parse(String(d.trigger_date)) : Number.NaN;
+  const td = anchor ? Date.parse(String(anchor)) : Number.NaN;
   if (Number.isFinite(td)) {
     const now = today ? Date.parse(today) : Date.now();
     if (Number.isFinite(now)) ageDays = Math.floor((now - td) / 864e5);
   }
   return { acute, ageDays, stale: acute && ageDays != null && ageDays > ACUTE_DIRECTIVE_STALE_DAYS };
+}
+
+// Acute-marker reading-date map (canonical key → latest LAB date), so an acute
+// directive's freshness anchors to the analyte's actual most-recent reading rather
+// than when the directive was written. One getMarkerHistory pass; degrades to {} with
+// no docs — only acute markers are mapped (chronic markers never decay, so no anchor).
+export function acuteReadingDateMap(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    const { markers } = getMarkerHistory();
+    for (const m of (Array.isArray(markers) ? markers : [])) {
+      if (m?.key && m?.latest?.date && isAcuteMarker(m?.name)) out[String(m.key)] = String(m.latest.date);
+    }
+  } catch { /* no docs / parse failure → no anchors */ }
+  return out;
+}
+
+// Annotate directive rows with their freshness verdict (acute / age_days / stale),
+// anchoring acute markers to the real reading date. Every surface that must agree on
+// whether an acute finding is still current uses this: the Brief provenance line, the
+// connected-brain prompt block, and the API/MCP directive lists. One marker-history pass.
+export function annotateDirectiveFreshness(directives: any[], today?: string): any[] {
+  const rows = Array.isArray(directives) ? directives : [];
+  const map = rows.some((d) => isAcuteMarker(d?.marker)) ? acuteReadingDateMap() : {};
+  return rows.map((d) => {
+    let anchor: string | undefined;
+    if (isAcuteMarker(d?.marker)) {
+      try { anchor = map[canonicalMarker(String(d?.marker ?? "")).key]; } catch { /* unresolved → directiveFreshness falls back */ }
+    }
+    const f = directiveFreshness(d, today, anchor);
+    return { ...d, acute: f.acute, age_days: f.ageDays, stale: f.stale };
+  });
 }
 
 export function directivesForCoach() {
@@ -1308,6 +1361,7 @@ export function directivesForCoach() {
     trigger_value: d.trigger_value,
     trigger_side: d.trigger_side,
     trigger_date: d.trigger_date,
+    created_at: d.created_at,
   }));
 }
 
@@ -1345,7 +1399,9 @@ export interface FocusPriority {
   why: string;                   // one plain clause
 }
 export interface HealthFocus {
-  priorities: FocusPriority[];   // act_now first, then track; deduped to one per group
+  priorities: FocusPriority[];   // act_now first, then track; deduped to one per group (the FULL set, for the Brain view)
+  surfaced: FocusPriority[];     // the CAPPED daily set (≤3 act-now + ≤2 track) — what every daily surface shows, so it's never a flood
+  lead: FocusPriority | null;    // the single most important priority — the spine of the one coach voice everywhere
   act_now: number;
   track: number;
   headline: string;              // deterministic plain lead ("Lipids are the priority right now")
@@ -1372,7 +1428,8 @@ export function healthFocus(): HealthFocus {
   // The active directives, bucketed to the same groups, so each priority carries
   // the lead actionable move per domain (a non-uncertain one wins over uncertain).
   const dirByGroup = new Map<string, any[]>();
-  for (const d of listActiveDirectives() as any[]) {
+  for (const d of annotateDirectiveFreshness(listActiveDirectives() as any[])) {
+    if (d.stale) continue; // a stale acute directive (e.g. an old hs-CRP) no longer drives a move/tier
     const label = markerGroup(String(d.marker || "")).label;
     if (!dirByGroup.has(label)) dirByGroup.set(label, []);
     dirByGroup.get(label)!.push(d);
@@ -1391,20 +1448,9 @@ export function healthFocus(): HealthFocus {
     const compounding = ms.length >= 2 || dirs.some((d) => String(d.marker || "").includes("+"));
     const worsening = ms.some((m) => m?.forecast?.direction === "worsening");
     const maxDistance = ms.reduce((mx, m) => Math.max(mx, Number(m?.distance) || 0), 0);
-    // Tier score — flagged + compounding + how far out + worsening + near the top
-    // of the panel's priority order. ≥3 ⇒ act now; else track. A lab flag gets a
-    // STRONG floor (≥3 on its own): the lab calling a value low/high is itself an
-    // act-now signal even when we have no optimal band to measure distance/forecast
-    // against (e.g. a flagged marker outside OPTIMAL_ZONES). No score is surfaced —
-    // this only decides the plain-words tier.
-    let score = 0;
-    if (flagged) score += 3;
-    if (compounding) score += 2;
-    if (maxDistance >= 0.4) score += 2; else if (maxDistance >= 0.2) score += 1;
-    if (worsening) score += 1;
-    if (rank < 6) score += 1; // among the panel's most-pressing markers
-    const tier: FocusTier = score >= 3 ? "act_now" : "track";
 
+    // The LEAD actionable move per domain (a non-uncertain directive wins). Computed
+    // BEFORE the tier so an act-now requires real substance to act on (the gate below).
     const nut = leadMove(dirs, "nutrition");
     const trn = leadMove(dirs, "training");
     const wch = leadMove(dirs, "watch");
@@ -1415,13 +1461,41 @@ export function healthFocus(): HealthFocus {
     const anyActionable = !!(nut.text && !nut.uncertain) || !!(trn.text && !trn.uncertain);
     const uncertain = !anyActionable && (nut.uncertain || trn.uncertain || wch.uncertain);
 
-    const why = compounding
-      ? `${ms.length} markers off together here — read them as one picture`
-      : flagged
-        ? `the lab flagged ${ms[0]?.name}`
-        : worsening
-          ? `${ms[0]?.name} is drifting the wrong way`
-          : `${ms[0]?.name} is outside its optimal band`;
+    // AGING ACUTE: a group whose off-optimal markers are ALL acute-phase (hs-CRP, ESR…)
+    // AND old is a point-in-time reading, not a current priority — it never leads act-now
+    // (mirrors the connected-brain "aging lab findings" treatment); it stays a quiet track.
+    const allAcuteStale = ms.length > 0 && ms.every((m) => {
+      if (!isAcuteMarker(m?.name)) return false;
+      const dt = m?.latest?.date ? Date.parse(String(m.latest.date)) : Number.NaN;
+      return Number.isFinite(dt) && (Date.now() - dt) / 864e5 > ACUTE_DIRECTIVE_STALE_DAYS;
+    });
+
+    // Tier score — flagged + compounding + how far out + worsening + near the top of the
+    // panel's priority order. ≥3 ⇒ act now; else track. A lab flag is a STRONG floor (the
+    // lab calling a value low/high is itself an act-now signal). No score is surfaced —
+    // this only decides the plain-words tier.
+    let score = 0;
+    if (flagged) score += 3;
+    if (compounding) score += 2;
+    if (maxDistance >= 0.4) score += 2; else if (maxDistance >= 0.2) score += 1;
+    if (worsening) score += 1;
+    if (rank < 6) score += 1; // among the panel's most-pressing markers
+    let tier: FocusTier = score >= 3 ? "act_now" : "track";
+    // SUBSTANCE GATE: don't surface an ACT-NOW the athlete can't actually act on — a
+    // compounding-but-moveless, unflagged, not-worsening group (e.g. an "Other Markers"
+    // bucket) is a quiet track item, not a loud priority. Aging-acute is always track.
+    if (tier === "act_now" && !flagged && !anyActionable && !worsening) tier = "track";
+    if (allAcuteStale) tier = "track";
+
+    const why = allAcuteStale
+      ? `${ms[0]?.name} reads off, but it's a point-in-time marker from a while ago — worth a recheck before it shapes anything`
+      : compounding
+        ? `${ms.length} markers off together here — read them as one picture`
+        : flagged
+          ? `the lab flagged ${ms[0]?.name}`
+          : worsening
+            ? `${ms[0]?.name} is drifting the wrong way`
+            : `${ms[0]?.name} is outside its optimal band`;
 
     const readings: FocusReading[] = ms.slice(0, 4).map((m: any) => ({
       name: m.name,
@@ -1448,7 +1522,11 @@ export function healthFocus(): HealthFocus {
       ? "Nothing urgent — a few markers worth tracking."
       : "Your markers are reading clean.";
 
-  return { priorities, act_now: actNow.length, track: priorities.length - actNow.length, headline };
+  // The CAPPED daily set: at most 3 act-now + 2 track, so every daily surface shows the
+  // few things that matter, never a 9-item wall. The full set stays in `priorities` for
+  // the deep Brain view; `lead` is the single most-important priority (the one voice).
+  const surfaced = [...actNow.slice(0, 3), ...priorities.filter((p) => p.tier === "track").slice(0, 2)];
+  return { priorities, surfaced, lead: priorities[0] ?? null, act_now: actNow.length, track: priorities.length - actNow.length, headline };
 }
 
 // The latest agentic health-story synthesis (the elite-coach whole-picture read),

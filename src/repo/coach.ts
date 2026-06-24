@@ -13,6 +13,12 @@ import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } fro
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
+// The "knows-me" layer — additive context keys (function-level cycle, same shape as
+// the existing coach↔intelligence import; resolved at call time, never at module init).
+import { reactionModelForCoach } from "./reaction-model.js";
+import { getTrajectory } from "./trajectory.js";
+import { activeContextEffect } from "./context-effect.js";
+import { nextBestStep } from "./next-step.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -356,6 +362,19 @@ export function getCoachContext() {
     // reference and build on connections it has already surfaced — closing the
     // "one brain" loop instead of re-deriving them each turn.
     insights: listVisibleInsights(5).map((i: any) => ({ text: i.text, kind: i.kind, rationale: i.rationale, next_step: i.next_step })),
+    // ---- the "knows-me" layer (the personal coaching team) — all additive, null-safe ----
+    // How THIS athlete actually reacts, learned from their own logged history (deficit→
+    // weight rate, hs-CRP↔training-load, late-event→sleep, adherence, a data-gap signal so
+    // the coach never fabricates recovery). The personalization spine every brain reads.
+    reaction_model: reactionModelForCoach(),
+    // One periodized arc to the goals, with today framed as the next step on it (null line
+    // when there's no goal/block/race). So coaching is forward-looking, not just "today".
+    trajectory: getTrajectory(),
+    // Active life-context effect (a late concert / travel / illness mentioned once) →
+    // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
+    context_today: activeContextEffect(),
+    // The single highest-leverage next action across all domains (or null on a quiet day).
+    next_step: nextBestStep(),
   };
 }
 

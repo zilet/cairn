@@ -857,8 +857,12 @@ export function getProgress(exerciseName: string) {
     } else if (w > 0) {
       best1rm = epley1RM(w, reps);
     } else {
-      // Bodyweight (weight === 0): Epley with load 0 → just reps; track as null.
-      best1rm = null;
+      // Bodyweight (weight === 0): the effective load IS the athlete's bodyweight, so a
+      // bodyweight movement DOES have a real est-1RM (and therefore a trend/status) when
+      // bodyweight is known — more reps at bodyweight is genuinely getting stronger.
+      // Unknown bodyweight → null (can't compute a meaningful number). This stops a
+      // pure-bodyweight lift from silently defaulting to "new"/null trend forever.
+      best1rm = bodyweightLb != null && bodyweightLb > 0 ? epley1RM(bodyweightLb, reps) : null;
     }
 
     const cur = byDate.get(r.date);

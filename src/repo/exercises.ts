@@ -217,3 +217,41 @@ export function deleteExercise(name: string) {
   return { ok: changes > 0, deleted: changes, exercise: name };
 }
 
+// The athlete's actual recent WORKING weight for a lift — the hardest top-set load
+// they've handled across the last few sessions (top set per session by est-1RM, then
+// the heaviest of those). This is "what you're really lifting", which the progression
+// engine grounds in so a stale plan target can't strand a lift below reality (the bug:
+// plan says 27 lb, you log 45–50 every week, the engine kept prescribing 27). Robust to
+// a single light day (it reads the hardest of several sessions). null when no loaded
+// history. Encoding preserved: negative = assist (closer to 0 = harder), 0/bodyweight
+// is excluded (load progression doesn't apply). sessionsBack defaults to 3.
+export function recentWorkingWeight(name: string, sessionsBack = 3): number | null {
+  const ex = findExercise(name);
+  if (!ex) return null;
+  const dates = (db.prepare(
+    `SELECT DISTINCT s.date AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+      WHERE ls.exercise_id = ? AND ls.weight IS NOT NULL AND ls.weight != 0
+      ORDER BY s.date DESC LIMIT ?`
+  ).all(ex.id, sessionsBack) as any[]).map((r) => r.d);
+  if (!dates.length) return null;
+  let best: number | null = null;
+  for (const d of dates) {
+    const sets = db.prepare(
+      `SELECT ls.weight AS weight, ls.reps AS reps FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id = ? AND s.date = ? AND ls.weight IS NOT NULL AND ls.weight != 0`
+    ).all(ex.id, d) as any[];
+    // The session's top set by est-1RM (weight × (1 + reps/30)); keep its raw weight.
+    let topW: number | null = null;
+    let bestScore = -Infinity;
+    for (const s of sets) {
+      const w = Number(s.weight);
+      const score = w * (1 + (Number(s.reps) || 0) / 30);
+      if (score > bestScore) { bestScore = score; topW = w; }
+    }
+    // "Harder" is the larger signed value in both regimes (loaded + and assist −),
+    // so a plain max picks the hardest working load they've actually handled.
+    if (topW != null && (best == null || topW > best)) best = topW;
+  }
+  return best;
+}
+

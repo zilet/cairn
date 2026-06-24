@@ -384,6 +384,11 @@ export function applyChatActions(
             kind: a.kind, title: a.title, detail: a.detail,
             start_date: a.start_date, end_date: a.end_date, meta: a.meta,
           }) });
+          // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
+          // the active-context effect — bust the cached Brief so the next open reflects
+          // it (expect-worse-sleep / don't-alarm-on-CRP / ease the load) instead of a
+          // stale read written before the athlete said anything.
+          try { repo.invalidateDayRead(); } catch { /* best-effort */ }
           break;
         case "log_supplement": {
           // Supplement UNDERSTANDING (not a daily log): the athlete mentioned what

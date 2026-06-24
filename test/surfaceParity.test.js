@@ -82,7 +82,10 @@ function toolCandidates(tool) {
 }
 
 // The only MCP noun that legitimately differs from its REST route segment.
-const ALIAS = { weight: "bodyweight" }; // log_weight / list_weight ↔ /bodyweight
+const ALIAS = {
+  weight: "bodyweight",     // log_weight / list_weight ↔ /bodyweight
+  marknextstep: "next-step", // mark_next_step ↔ POST /next-step/done|snooze (verb 'mark' + a {done|snooze} action)
+};
 
 test("every MCP tool maps to a REST resource (MCP ⊆ REST — surfaces stay in sync)", () => {
   const routeTokens = restResourceTokens();

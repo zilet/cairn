@@ -374,3 +374,17 @@ test("distinctExerciseNames returns logged/planned movements with group + set co
   assert.ok(bench, "the logged movement appears");
   assert.ok(bench.sets >= 1, "carries a logged-set count");
 });
+
+test("classifyConstraint: grip/form cue progresses load; pain/load cue caps", () => {
+  // The distinction that unfroze the curls: a GRIP/form/ROM cue is managed technically
+  // (load still progresses); a pain/load-limiting note caps load; ambiguous → conservative.
+  assert.equal(repo.classifyConstraint("Cubital tunnel: neutral grip only, no supinated curls."), "form");
+  assert.equal(repo.classifyConstraint("Use a neutral grip, slow tempo"), "form");
+  assert.equal(repo.classifyConstraint("left elbow — keep light, no heavy pulls"), "load");
+  assert.equal(repo.classifyConstraint("knee pain under load"), "load");
+  assert.equal(repo.classifyConstraint("rotator cuff issue"), "load"); // ambiguous injury → conservative cap
+  assert.equal(repo.classifyConstraint(""), "none");
+  assert.equal(repo.classifyConstraint(null), "none");
+  assert.equal(repo.constraintLimitsLoad("neutral grip only"), false);
+  assert.equal(repo.constraintLimitsLoad("painful under load"), true);
+});

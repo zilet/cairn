@@ -1,6 +1,6 @@
 import { db } from "../db.js";
-import { normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
-import { findExercise, findOrCreateExercise } from "./exercises.js";
+import { constraintLimitsLoad, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
+import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exercises.js";
 
 // ---------- plan ----------
 // LEFT JOIN on exercises (v35): a cardio plan item (kind='cardio') has no
@@ -223,18 +223,28 @@ export function updateTarget(
   // Apply-path safety clamp (off by default → manual edits pass through verbatim).
   const clamps: ClampAdjustment[] = [];
   if (opts.clamp) {
-    const constrained = !!(ex.constraint_note && String(ex.constraint_note).trim());
+    // Only a LOAD-limiting constraint blocks a load increase; a grip/form cue does not
+    // (mirrors the progression engine — see classifyConstraint). A grip note no longer
+    // freezes a lift the athlete is driving heavy.
+    const loadConstrained = constraintLimitsLoad(ex.constraint_note);
     // Read the CURRENT prescribed targets to clamp the step against.
     const cur = db
       .prepare(`SELECT target_weight, target_seconds FROM plan_items WHERE plan_day_id = ? AND exercise_id = ?`)
       .get(day.id, ex.id) as any;
     if (target_weight !== undefined && target_weight !== null && Number.isFinite(Number(target_weight))) {
-      const r = clampStep("target_weight", ex.name, cur?.target_weight ?? null, Number(target_weight), CLAMP_WEIGHT_FLOOR_LB, constrained);
+      // Reality-aware baseline: clamp against the HARDER of the stored plan target and
+      // the athlete's real recent working weight, so RE-GROUNDING a stale target onto
+      // what they actually lift (plan 27 → reality 50) reads as catch-up, not a +85%
+      // leap. The per-session step cap still applies ABOVE that grounded baseline.
+      const rw = recentWorkingWeight(ex.name);
+      const stored = cur?.target_weight ?? null;
+      const grounded = stored != null && rw != null ? Math.max(stored, rw) : (stored != null ? stored : rw);
+      const r = clampStep("target_weight", ex.name, grounded, Number(target_weight), CLAMP_WEIGHT_FLOOR_LB, loadConstrained);
       target_weight = r.applied;
       if (r.adjustment) clamps.push(r.adjustment);
     }
     if (target_seconds !== undefined && target_seconds !== null && Number.isFinite(Number(target_seconds))) {
-      const r = clampStep("target_seconds", ex.name, cur?.target_seconds ?? null, Number(target_seconds), CLAMP_SECONDS_FLOOR, constrained);
+      const r = clampStep("target_seconds", ex.name, cur?.target_seconds ?? null, Number(target_seconds), CLAMP_SECONDS_FLOOR, loadConstrained);
       target_seconds = r.applied;
       if (r.adjustment) clamps.push(r.adjustment);
     }

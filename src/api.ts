@@ -275,7 +275,15 @@ api.get("/today-read", async (req, res) => {
   // reflect the CURRENT plan/balance (the day_reads cache columns don't carry it, and
   // a persisted snapshot would go stale as the week fills in). null on a done day —
   // the debrief's `why` already voices what's next. forwardLook is null-safe.
-  const withForward = (r: any) => ({ ...r, forward: r?.kind === "done" ? null : (repo.forwardLook(readDate).text || null) });
+  // Attach the day-ahead forward line AND the goal ARC line (where today sits on the
+  // path to the goals) on EVERY read — both reflect the CURRENT plan/goals, never a
+  // stale snapshot. forwardLook is null on a done day (the debrief voices what's next);
+  // the arc is null when there's no goal/block/race. Both null-safe.
+  const withForward = (r: any) => {
+    let arc: string | null = null;
+    try { arc = repo.getTrajectory(readDate)?.line ?? null; } catch { arc = null; }
+    return { ...r, forward: r?.kind === "done" ? null : (repo.forwardLook(readDate).text || null), arc };
+  };
   try {
     if (reset) {
       repo.invalidateDayRead(readDate);
@@ -1357,6 +1365,27 @@ api.post("/markers/reconcile", async (req, res) => {
   }
 });
 
+// ---- the "knows-me" layer: personal model · trajectory · life-context · next-step ----
+// All read-only, plain words, no scores — the personal coaching team, surfaced for the PWA.
+api.get("/reaction-model", (_req, res) => res.json(repo.reactionModelForCoach()));
+api.get("/trajectory", (req, res) => res.json(repo.getTrajectory(typeof req.query.date === "string" ? req.query.date : undefined)));
+api.get("/context-effect", (req, res) => res.json(repo.activeContextEffect(typeof req.query.date === "string" ? req.query.date : undefined)));
+api.get("/next-step", (req, res) => res.json(repo.nextBestStep(typeof req.query.date === "string" ? req.query.date : undefined) ?? null));
+// done / snooze are the calm "did it" / "not today" feedback — a skipped step doesn't
+// return tomorrow (constitution: pull, never push; the athlete drives).
+api.post("/next-step/done", (req, res) => {
+  const k = String(req.body?.step_key ?? "").trim();
+  if (!k) return res.status(400).json({ ok: false, error: "step_key required" });
+  repo.nextStepDone(k);
+  res.json({ ok: true });
+});
+api.post("/next-step/snooze", (req, res) => {
+  const k = String(req.body?.step_key ?? "").trim();
+  if (!k) return res.status(400).json({ ok: false, error: "step_key required" });
+  repo.snoozeNextStep(k);
+  res.json({ ok: true });
+});
+
 // The elite-coach synthesis layer: the deterministic TIERED focus (priorities,
 // not a flat directive flood) + the latest cached agentic health-story narrative.
 // Both informational, no scores. The narrative is regenerated via POST below.
@@ -1377,9 +1406,12 @@ api.post("/health/synthesis", async (req, res) => {
   }
 });
 
-// Active cross-domain directives (?all=1 includes resolved/dismissed).
+// Active cross-domain directives (?all=1 includes resolved/dismissed). Each row carries
+// a freshness verdict (acute / age_days / stale) anchored to the marker's real reading
+// date, so the PWA can stop surfacing a stale acute finding (e.g. a 2-week-old hs-CRP)
+// as a current training/nutrition shaper while chronic findings stay put.
 api.get("/directives", (req, res) =>
-  res.json({ directives: repo.listDirectives({ all: req.query.all === "1" || req.query.all === "true" }) })
+  res.json({ directives: repo.annotateDirectiveFreshness(repo.listDirectives({ all: req.query.all === "1" || req.query.all === "true" })) })
 );
 
 // User-controlled status flip (the review side of propose-review-apply). This

@@ -87,6 +87,43 @@ test("DONE (not EASY) when a real loading session is already logged today", () =
   assert.equal(r.signals.trained_today, true);
 });
 
+test("DONE preempts REST: a hard session today wins over 3 prior hard days", () => {
+  // The user's exact case — trained hard for days AND already trained again today. A
+  // "Rest today" read would contradict the work already in (and the session sitting
+  // below it). The day must read DONE (debrief), never tell them to rest after they've
+  // already loaded. This is the done-before-earned-rest ordering.
+  for (let i = 1; i <= 3; i++) seedTrainingDay(dayBefore(REF, i));
+  seedTrainingDay(REF);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.signals.consecutive_training_days, 3);
+  assert.equal(r.kind, "done");
+  assert.equal(r.signals.trained_today, true);
+});
+
+test("DONE 'why' names the session (not the run) when both land today", () => {
+  // A lift + a run on the same day must not let the run's label erase the strength work
+  // in the deterministic floor's why-line.
+  seedTrainingDay(REF);
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'run', 40, 6)`).run(REF);
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "done");
+  assert.match(r.why, /solid session/i);
+});
+
+test("stale sleep is NOT treated as last night (no fabricated sleep read)", () => {
+  // A wearable can stop syncing sleep for weeks; a ~month-old night is NOT last night.
+  // dayRead must surface it as ABSENT so the Brief never asserts "you slept fine".
+  resetTables("daily_metrics", "garmin_daily_metrics");
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 440)`).run(dayBefore(REF, 25));
+  const stale = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(stale.signals.last_night, null);
+  // A recent night (yesterday) IS surfaced as last night.
+  resetTables("daily_metrics", "garmin_daily_metrics");
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 440)`).run(dayBefore(REF, 1));
+  const fresh = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.ok(fresh.signals.last_night && fresh.signals.last_night.total_min === 440);
+});
+
 test("EASY (not DONE) when today's logged work was only light", () => {
   // A short mobility/recovery session graded 'easy' is NOT a completed training
   // day — keep it 'easy' (they may still want their real work), never 'done'.
