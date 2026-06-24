@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**189 routes** across 68 groups.
+**195 routes** across 72 groups.
 
 ## `/activities`
 
@@ -115,6 +115,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | POST | `/api/coach/mealplan` | Draft a goal-aware weekly meal plan, then run a bounded self-critique verify pass against the lean-safe / longevity floors before persisting (see coachOps.draftMealPlan). The persisted plan is the verified draft; `verified` carries the "checked against your floors" signal. Verify fails open. |
 
+## `/context-effect`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/context-effect` |  |
+
 ## `/context-events`
 
 | Method | Path | Notes |
@@ -128,7 +134,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/directives` | Active cross-domain directives (?all=1 includes resolved/dismissed). |
+| GET | `/api/directives` | Active cross-domain directives (?all=1 includes resolved/dismissed). Each row carries a freshness verdict (acute / age_days / stale) anchored to the marker's real reading date, so the PWA can stop surfacing a stale acute finding (e.g. a 2-week-old hs-CRP) as a current training/nutrition shaper while chronic findings stay put. |
 | PUT | `/api/directives/:id` | User-controlled status flip (the review side of propose-review-apply). This is feedback memory, not just a hide: resolved/dismissed directives suppress equivalent future advice until the relevant marker changes enough. Nothing auto-applies. 400 on a bad status, 404 on an unknown id. |
 | POST | `/api/directives/derive` | Re-run the deterministic propagation engine over the latest markers. |
 
@@ -353,6 +359,14 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/memory/:id/supersede` | Supersede (mark, never hard-delete): optionally provide a replacement content (a new row is created) or replacement_id (point at an existing row). |
 | POST | `/api/memory/consolidate` | Quiet memory consolidation: merge near-duplicates, supersede contradictions, promote recurring observations. Marks, never hard-deletes. On demand here; also scheduled nightly. Designed ok:false at 200 when the agent returns nothing usable. |
 
+## `/next-step`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/next-step` |  |
+| POST | `/api/next-step/done` | done / snooze are the calm "did it" / "not today" feedback — a skipped step doesn't return tomorrow (constitution: pull, never push; the athlete drives). |
+| POST | `/api/next-step/snooze` |  |
+
 ## `/nutrition`
 
 | Method | Path | Notes |
@@ -423,6 +437,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/proposals` |  |
 | POST | `/api/proposals/:id/apply` |  |
 | POST | `/api/proposals/:id/discard` |  |
+
+## `/reaction-model`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/reaction-model` | All read-only, plain words, no scores — the personal coaching team, surfaced for the PWA. |
 
 ## `/recent-training`
 
@@ -524,6 +544,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/today-read` | The day intelligence read — the soul of the product. Judges what KIND of day today should be (train / easy / rest) as a calm SUGGESTION, never a gate. ALWAYS 200: the agentic read writes the human sentence, and if no agent is reachable (or it returns garbage) it falls back to the deterministic floor so the Brief always has something true to say. ?override= lets the launchpad chips reshape the read ("rough night" / "short on time" / "train anyway").  Fast path: the canonical (no-override) read is cached per day — written nightly by the scheduler and on any miss — so the morning open is instant and never waits on an agent subprocess. Overrides always recompute (they're transient). |
 | POST | `/api/today-read/reshape` | Background the Brief OVERRIDE reshape ("rough night" / "short on time" / "train anyway") as a durable job, so a steer survives a tab switch / reload / restart like the other 7 ops. The canonical GET /api/today-read (and ?reset=1) stays synchronous (cached + deterministic floor); this POST is ONLY for the agentic override reshape. The job's `done` result is byte-for-byte what GET /api/today-read?override= returns, so the PWA reuses its Brief render. When bg_ops is OFF this computes inline and returns the legacy read body. |
+
+## `/trajectory`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/trajectory` |  |
 
 ## `/volume`
 
