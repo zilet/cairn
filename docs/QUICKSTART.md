@@ -6,7 +6,7 @@ only if you want to configure it, build from source, or run it somewhere other t
 > **No install at all?** Open Cairn in a free cloud sandbox right from your browser —
 > [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/zilet/cairn)
 > — it boots a real Cairn with demo data, nothing on your machine. Great for a first look; see
-> [`docs/SANDBOX.md`](SANDBOX.md) for Gitpod / Daytona and how to keep data. Self-host (below) when
+> [`docs/SANDBOX.md`](SANDBOX.md) for Daytona / Codespaces and how to keep data. Self-host (below) when
 > you want it on your phone for daily use.
 
 ## 1 · Run it — 30 seconds, no clone

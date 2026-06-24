@@ -14,17 +14,21 @@
 > real Cairn (preloaded with fictional demo data) in your browser — nothing to set up, nothing on
 > your machine. Explore the Brief, the plan, and the connected brain, then close the tab. When
 > you're ready to use it for real on your phone, **self-host it** (below) — it's yours, your data
-> stays with you. More one-click cloud options (Gitpod, Daytona) are in [`docs/SANDBOX.md`](docs/SANDBOX.md).
+> stays with you. More one-click cloud options (Daytona, devcontainer hosts) are in [`docs/SANDBOX.md`](docs/SANDBOX.md).
 
 A self-hosted, connected, **day-reading wellness OS** for **training, nutrition & longevity** with
 an agentic coaching loop and a memory that grows over time. It opens to a calm **Brief** that reads
 your whole picture and *suggests* what kind of day today should be (a suggestion, never a gate),
-propagates flagged lab findings across every domain they touch, runs adaptive nutrition, learns who
-you are, captures effortlessly (frequents + voice + Apple Health), and surfaces quiet cross-domain
-insights one at a time. It coaches whatever you train — **lifting, running, or a hybrid of both** —
-periodizing a conservative ramp + taper toward a dated **race** or holding a no-date **standing**
-readiness goal, and adapting next week to the miles you actually ran. The product north-star lives
-in [`docs/VISION.md`](docs/VISION.md). One Node service serves:
+propagates flagged lab findings across every domain they touch, runs adaptive nutrition toward your
+actual goal — **losing, holding, or building** — learns who you are and grounds every coaching call
+in it, captures effortlessly (a plate photo, time-of-day frequents, voice, or Apple Health), and
+surfaces quiet cross-domain insights one at a time. It coaches whatever you train — **lifting,
+running, or a hybrid of both** — periodizing a conservative ramp + taper toward a dated **race** or
+holding a no-date **standing** readiness goal, and adapting next week to the miles you actually ran.
+Its strength plan **evolves** as you progress (earned overloads, deloads where you've stalled), and
+the whole app runs on your **device's local clock**, so an evening log lands on the right day at home
+*and* while traveling. The product north-star lives in [`docs/VISION.md`](docs/VISION.md). One Node
+service serves:
 
 - **PWA** (`/`) - a phone-first app (with a responsive two-column desktop layout) and six tabs:
   **Today** (the day-read **Brief** — a calm rest/easy/train suggestion with override chips and a
@@ -187,14 +191,14 @@ real one.
 | Build from source / develop | `./quickstart.sh` |
 | Keep it always-on at home | `./scripts/quickstart-rpi.sh` on a Raspberry Pi or small home box |
 | Run it on a cheap VM | Docker + Tailscale; see [`docs/QUICKSTART.md#small-vm-private-online-box`](docs/QUICKSTART.md#small-vm-private-online-box) |
-| Try it on demand in the cloud | [`docs/SANDBOX.md`](docs/SANDBOX.md) for Daytona / Codespaces / Gitpod |
+| Try it on demand in the cloud | [`docs/SANDBOX.md`](docs/SANDBOX.md) for Daytona / Codespaces |
 
 For Raspberry Pi: `./scripts/quickstart-rpi.sh` handles Docker install, arm64 checks, and low-memory
 notes. To put Cairn on your phone, run **`./scripts/setup-phone.sh`** — it detects your exact
 private `https://…ts.net` URL via Tailscale Serve (tailnet-only) and prints the Add-to-Home-Screen
 steps for an installable, offline-capable PWA.
 
-For a throwaway **cloud sandbox** (Daytona / GitHub Codespaces / Gitpod) with persistent storage —
+For a throwaway **cloud sandbox** (Daytona / GitHub Codespaces) with persistent storage —
 spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](docs/SANDBOX.md). A
 `.devcontainer/` is included, so "open in cloud" works out of the box.
 
@@ -203,7 +207,7 @@ spin it up on demand, stop it when idle to cut cost — see [`docs/SANDBOX.md`](
 | Doc | What it covers |
 |---|---|
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 30-second start, Raspberry Pi, VM, Docker, Node, agent setup |
-| [`docs/SANDBOX.md`](docs/SANDBOX.md) | Run on Daytona / Codespaces / Gitpod (on-demand, persistent) |
+| [`docs/SANDBOX.md`](docs/SANDBOX.md) | Run on Daytona / Codespaces (on-demand, persistent) |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Tailscale, HTTPS PWA, Pi/VM, backups |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Updates, migrations, restore |
 | [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) | iOS Shortcut → `/api/health-metrics` (Apple Health / Oura / Whoop) |
@@ -309,11 +313,12 @@ checklist.
   missed volume). Weekly mileage, time-in-zone, pace trend, and endurance PRs live in Progress →
   Endurance; VO2max, resting HR, and HRV join the connected brain as optimal-zone markers.
 - **Profile & goal**: a neutral example profile ships seeded — replace it with your own in the Me
-  tab (or first-run onboarding). The **goal check** computes TDEE (Mifflin-St Jeor x activity
-  factor) and tests feasibility against a lean-safe loss rate (<=1 %/wk). It flags aggressive goals
-  and recommends a realistic intake/timeline — e.g. a 20 lb-in-10-weeks target (~2 lb/wk) is
-  flagged, with a recommended pace of ~1.35 lb/wk over ~15 weeks at the matching intake and protein
-  floor.
+  tab (or first-run onboarding). Pick a **goal mode** — **lose / maintain / gain** — and the math
+  follows it: maintaining anchors to your real TDEE (no forced deficit), building is a conservative
+  lean surplus, and losing tests feasibility against a lean-safe rate (<=1 %/wk). The **goal check**
+  computes TDEE (Mifflin-St Jeor x activity factor), flags aggressive targets, and recommends a
+  realistic intake/timeline — e.g. a 20 lb-in-10-weeks target (~2 lb/wk) is flagged, with a
+  recommended pace of ~1.35 lb/wk over ~15 weeks at the matching intake and protein floor.
 - **Activities** (plain text): log a run or ride in natural language - "ran 50 min @ 5:30/km" or
   "MTB through the fells for 2 hours". Cairn parses type / duration / distance / pace **instantly**
   (offline), then — if enrichment is on — a background agent refines the entry and distills any
@@ -327,9 +332,12 @@ checklist.
 - **Food notes** (optional, no daily logging): see below.
 - **Health records**: upload bloodwork / DEXA / other docs (PDF or photo) in Me → Health; an agent
   reads the file in the background, extracts structured markers + a plain-language summary, and
-  distills notable flags into memory. Markers feed coaching (e.g. low ferritin → caution on
+  distills notable flags into memory. Different labs that name the same analyte differently are
+  merged into one series automatically. Markers feed coaching (e.g. low ferritin → caution on
   endurance volume) through feedback-aware directives: Done means handled for that result, Dismiss
-  suppresses that advice family until the marker materially changes. Informational, not medical
+  suppresses that advice family until the marker materially changes. When you want a second opinion,
+  **"Export for my doctor"** prints a self-contained clinical report (findings to discuss, panels
+  with optimal targets + full dated history, a "Copy for MyChart" twin). Informational, not medical
   advice.
 - **Life context**: trips, injuries, and life events (Me → Life) with dates the coach plans
   **around** — travel-friendly/deload weeks over a trip, de-loading an injured area, easing volume
@@ -442,7 +450,7 @@ TZ=Europe/Belgrade
 ```bash
 claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
-Cairn registers ~100 MCP tools spanning the whole app — plan & sessions, exercises, progress &
+Cairn registers 162 MCP tools spanning the whole app — plan & sessions, exercises, progress &
 volume, the propose/apply coach loop, profile & goal, bodyweight & activities, memory, meal plans &
 recipes, food notes, health records & markers, the connected-brain directives & insights, the
 day-read Brief & on-demand session suggestions, recovery & adaptive nutrition, check-ins & daily
@@ -467,35 +475,25 @@ for the full update/backup/restore/rollback playbook and how to add a new migrat
 
 ## API
 
-All routes are under `/api` (112 in total; see `src/api.ts` for the authoritative set). Grouped:
+All app logic is reachable over REST under `/api` — **195 routes across 72 groups**. The full,
+always-current reference is generated straight from the source: [`docs/API.md`](docs/API.md) (run
+`npm run docs:index` to refresh; never edited by hand, so it can't drift). A representative slice:
 
 ```
-Training & plan   GET /plan[/:day]  PUT /plan  PUT|DELETE /plan/:day  PUT /plan/:day/target
-                  GET|POST /exercises  PUT /exercises/:id  GET /exercise/:name
-                  POST /sets  DELETE /sets/:id  GET /sessions[?date=]  GET /sessions/:id
-                  POST /sessions/:id/finish  POST /sessions/:date/feedback  POST|DELETE /sessions/skip
-                  GET /progress/:exercise  GET /volume  GET /calendar  GET /stats  GET /last-set
-Brief             GET /today-read  POST /session-suggest
-Profile & goal    GET|PUT /profile  GET /goal  GET|POST /bodyweight
-Logging & memory  GET|POST /activities  GET /activities/:id  GET|POST|DELETE /food-notes[/:id]
-                  GET|POST /memory  PUT|DELETE /memory/:id
-Nutrition & meals GET /nutrition/expenditure  POST /nutrition/checkin  GET /frequent-foods
-                  POST /coach/mealplan  GET /mealplans  POST /mealplans/:id/:status
-                  POST /meal-plans/:id/swap  POST /meal-plans/:id/recipe  PUT /meal-plans/:id/days
-Recovery & metrics GET /recovery  GET|POST /checkins  GET|POST /health-metrics
-Connected brain   GET|POST /health-docs  GET /health-docs/:id[/file]  POST /health-docs/:id/reanalyze
-                  PUT|DELETE /health-docs/:id  GET /health/markers  GET /markers/priority
-                  GET|POST /health/review  GET /directives  PUT /directives/:id  POST /directives/derive
-                  GET /insights  POST /insights/generate  PUT /insights/:id
-Life & family     GET|POST /context-events  PUT|DELETE /context-events/:id
-                  GET|POST /family  PUT|DELETE /family/:id
-Coach & chat      GET /agents  POST /agent/run  GET /proposals  POST /proposals/:id/(apply|discard)
-                  GET|POST|DELETE /chat  POST /chat/reset  GET /chat/search  GET /chat/sessions[/:archivedAt]
-Garmin (exp.)     GET|POST /garmin/sources  POST /garmin/sync  GET|POST /garmin/daily
-                  GET|POST /garmin/activities  POST /garmin/reconcile  GET /garmin/summary
-Art, settings, ops GET /art  POST /art/warm  GET /art/stats  GET|PUT /settings
-                  GET|POST /agent-clis/update  GET /export  GET /export/db  GET /health
+Brief & today      GET /today-read  GET /today-agenda  POST /session-suggest  GET /learned-timeline
+Training & plan    GET /plan  PUT /plan/:day/target  POST /sets  GET /progress/:exercise
+                   GET /program/balance  GET /program/progression  POST /program/evolve
+Nutrition & meals  GET /nutrition/expenditure  GET /nutrition/day  POST /coach/mealplan
+                   POST /meal-plans/:id/swap  POST /meal-plans/:id/recipe
+Connected brain    GET|POST /health-docs  GET /markers/priority  GET /directives  GET /guidelines
+                   GET /health/focus  GET /health/synthesis  GET /health-report
+Coach & chat       GET /proposals  POST /proposals/:id/apply  POST /chat  GET /chat/turns/:id/stream
+Recovery & life    GET /recovery  GET|POST /checkins  GET|POST /context-events  GET|POST /family
+Ops                GET /settings  GET /export  GET /health
 ```
+
+See [`docs/API.md`](docs/API.md) for the authoritative grouped list and
+[`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) for the parallel MCP surface (162 tools).
 
 ## Notes
 - Assisted lifts: negative weight. Bodyweight: null. Est-1RM = Epley on best set/day.

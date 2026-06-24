@@ -6,8 +6,8 @@ This is a nice fit for trying Cairn without provisioning a server, or for keepin
 personal instance that costs almost nothing while it's idle.
 
 The repo ships a standard [`.devcontainer/`](../.devcontainer/devcontainer.json), so the
-same setup works on **[Daytona](https://www.daytona.io)**, **GitHub Codespaces**, and
-**Gitpod** — no vendor lock-in.
+same setup works on **[Daytona](https://www.daytona.io)** and **GitHub Codespaces** — and on
+any other host that understands a devcontainer, so there's no vendor lock-in.
 
 > **The honest version:** a sandbox is great for trying Cairn and for a private,
 > stop-when-idle instance. It is *not* a substitute for the calm always-on home-server
@@ -16,7 +16,7 @@ same setup works on **[Daytona](https://www.daytona.io)**, **GitHub Codespaces**
 
 The public-ready posture is:
 
-- **Trial / occasional use:** Daytona, Codespaces, or Gitpod with port `8787` previewed.
+- **Trial / occasional use:** Daytona or Codespaces with port `8787` previewed.
 - **Personal daily driver:** Raspberry Pi, home server, or small VM on Tailscale/MagicDNS.
 - **Never:** raw port `8787` exposed to the public internet without your own auth layer.
 
@@ -88,17 +88,12 @@ file — see [caveats](#caveats-read-these).
 
 ---
 
-## Gitpod
+## Other devcontainer hosts
 
-Gitpod understands `.devcontainer/` too. Prefix any repo URL:
-
-```
-https://gitpod.io/#https://github.com/zilet/cairn
-```
-
-Gitpod workspaces stop on inactivity and persist `/workspace` (which includes `data/`) for a
-retention window — good for short-lived trials. For anything you want to keep long-term, take a
-backup (below) rather than relying on workspace retention.
+Any platform that reads a standard `.devcontainer/` can run Cairn the same way — it boots Node 24,
+seeds the demo, and forwards port `8787`. Treat the workspace's persistence window as convenience,
+not a backup of record: for anything you want to keep, take an export (below) rather than relying on
+workspace retention.
 
 ---
 
@@ -141,7 +136,7 @@ restore. **Treat workspace persistence as convenience, not as your backup of rec
   First paint (the Brief, logging, history) works with **no agent at all**.
 - **Public URLs.** If the sandbox exposes a public forwarded URL, set **`CAIRN_AUTH_TOKEN`** (a
   secret) so `/api` and `/mcp` require a bearer token. On a private/tunneled URL it's optional.
-- **Secrets hygiene.** Use the platform's secret store (Daytona/Codespaces/Gitpod), not `.env`
+- **Secrets hygiene.** Use the platform's secret store (Daytona/Codespaces), not `.env`
   in the repo. The agent subprocess env is already denylist-scrubbed of Cairn's own secrets.
 - **Garmin sync** expects credentials and a long-lived process; it's a poor fit for a
   stop-start sandbox. Leave it off unless you're running always-on (see [`GARMIN.md`](GARMIN.md)).

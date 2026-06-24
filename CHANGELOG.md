@@ -7,6 +7,136 @@ Versioning](https://semver.org/) for tagged releases.
 
 _Nothing yet._
 
+## [0.6.0] — 2026-06-24
+
+The biggest release since the open-source launch: Cairn stops feeling like a set of tabs you
+operate and becomes **one invisible coach that speaks through Today**. It reads your whole day,
+knows who you are, follows your own device's clock, evolves your training plan over time, and
+connects every lab finding to the meals and the training it should change. A run of schema
+migrations (**v38–v43**) and dozens of new surfaces — all holding the constitution: calm, no
+scores, pull-never-push, you-drive, nothing auto-applies. No manual upgrade step; migrations run
+on boot. PWA cache `cairn-v140`.
+
+### Added
+
+**The unified coach — Today as one voice**
+- **Honest "done" day-read** — a day you genuinely trained reads *TRAINED TODAY*, never "EASY DAY";
+  the agent voices it as a fact it can't downgrade.
+- **Post-session debrief** — after you train, the Brief reads you back: today's top set, the next
+  session, a real protein gap — woven into a warm read-back, not a form.
+- **Day-ahead forward line** — a quiet "↗ Next: …" under the Brief shows tomorrow's focus and muscle
+  groups, attached on every read (survives caching), so the Program tab is never required reading.
+- **One coach voice on the Today rail** — a single "✦ Also worth a look" masthead and one shared card
+  frame (accent spine + radius), so the arbitrated cards read as one continued voice, not loose features.
+- **The adjustments digest reads like a coach** — leads with earned overloads and frames missing-pattern
+  gaps gently ("add a little core", never "no X programmed").
+
+**Goal beyond weight loss (migration v41)**
+- **Goal modes — lose / maintain / gain** — the goal is first-class: a maintaining athlete anchors to
+  real TDEE (no forced deficit), a building athlete gets a conservative lean surplus, and the
+  getting-lean/deficit framing is conditioned out of every plan / meal / chat prompt so you're never
+  pushed into a cut you didn't ask for. Lose/Maintain/Gain selector in Me → Profile.
+- **Daily fuel review + edit** — a calm "today's fuel" glance on Today taps through to an editable day
+  review in Plan → Meals (correct a macro, rename, fix a meal slot). Capture stays in Chat; the review
+  is never a logging form.
+
+**Era 2 — the calm daily driver**
+- **The Today salience arbiter** — one deterministic ranking pass over the whole Today surface: the
+  Brief is always the hero, the top couple of cards render inline, the rest collapse behind one quiet
+  "N more". An empty-data card self-omits — a quiet day is just the Brief. (The fuel card surfaces only
+  when there's food to *evaluate*, so Today never nudges you to log.)
+- **Reachable cited evidence** — a curated, offline trusted-guidelines pack (AHA/ACC, Endocrine Society,
+  KDIGO…) keyed to the connected-brain markers, so the brain can cite its directives with no web access.
+  `GET /api/guidelines` + MCP `get_guidelines`.
+- **Photo → macros** — a plate photo in Chat creates an instant food note, then a vision agent estimates
+  editable, confidence-banded macros that upgrade it in place. Degrades cleanly with no vision agent.
+- **"Since you last looked"** — one calm line for the single most notable change (a merged lab, a resolved
+  directive, a PR, an applied plan) since you last opened Today. Never a streak or counter; silent on a
+  first open.
+- **Gentle "is this still your goal?"** — a rare (~90-day), dismissible check-in card; confirm or change
+  restarts the clock, and a new user is never nagged.
+- **The learned timeline** — a pull-only Me → Health → Learned read that projects your load-bearing
+  memories, outcome learnings, and connected-brain directives. Explains, never grades.
+  `GET /api/learned-timeline` + MCP mirror.
+
+**A device-following clock (migrations v42 / v43)**
+- **Time-of-day-aware coaching** — Cairn's whole clock now follows your *device* instead of the
+  server/UTC, via an IANA zone the PWA sends and the chat worker re-establishes. An evening log lands on
+  the right day at home *and* while traveling, and the agentic brain knows whether it's your morning or
+  your night ("RIGHT NOW: …" in the prompts). Logs stay UTC instants — only the framing moves.
+
+**The knows-me coach**
+- **Grounded, personalized "knows-me" coaching** — responses are grounded in who you actually are
+  (memory, about-me, history), so the coach reads less like a generic model and more like someone who's
+  been coaching you for months.
+
+**Elite strength planning (migration v40)**
+- **Exercise canonicalization** — a 13-group canonical muscle taxonomy that adds first-class core /
+  forearms / mobility, deterministic classification, duplicate-movement dedup, and per-group weekly-set
+  bands (plain words, never a score).
+- **Auto-progression engine** — reads your last logged top set + RIR and proposes the next session's
+  target (overload / hold / deload / vary — conservatively clamped, injury-aware), surfaced on Today's
+  lift card with "apply to my plan".
+- **The logged-lifts → plan loop closes** — program state (per-lift trend, plateau/stall, volume
+  landmarks, mesocycle) feeds the coach; a "what changed & why" digest surfaces on Today and Progress →
+  Program.
+
+**Adaptive program intelligence (migration v38)**
+- **The plan evolves** — a deterministic program-state engine under an agentic plan-evolution loop that
+  progresses what's working, deloads/rotates what's stalled, and periodizes toward an active mesocycle
+  block, plus a movement-variation library for plateau breaks. Drafted through propose → apply, never
+  auto-applied. `POST /api/program/evolve` + MCP mirror.
+- **Intensity-aware Brief** — only genuinely-loading days count toward earned rest; a recovery day breaks
+  the streak; off-plan sessions get content-true titles; the Lately feed expands strength rows to their
+  movement breakdown.
+
+**The connected brain goes deeper**
+- **Whole-picture synthesis** — a prioritization layer collapses the directive flood into a handful of
+  tiered, connected priorities, and an agentic pass writes the whole-picture story (the headline, the 2–3
+  priorities and how they connect, the single highest-leverage move). `GET /api/health/focus`,
+  `GET /api/health/synthesis` + MCP mirrors.
+- **Marker canonicalization** — different labs name the same analyte differently ("Vitamin D" /
+  "25-OH Vitamin D"), splitting one series in two; a deterministic KB plus an agentic reconciler now merge
+  them (never conflating clinically-distinct measures), so every connected-brain surface aligns
+  automatically.
+- **Stale acute-marker decay** — an aging hs-CRP/ESR-class finding drops out of the daily "honor these"
+  block to an informational "recheck" note instead of capping training every morning (chronic markers like
+  ApoB never decay).
+
+**Doctor-ready export (migration v39)**
+- **Clinical report** — a self-contained, print-to-PDF clinical document: findings to discuss, markers
+  grouped into panels with the latest value + lab flag + optimal target + full dated history, a DEXA
+  section, supplements, and a "Copy for MyChart" plain-text twin. Stamped with your name (`profile.name`,
+  migration v39). `GET /api/health-report(.txt)` + MCP `get_health_report`, surfaced as "Export for my
+  doctor".
+
+**Distribution & onboarding**
+- **Secure self-host phone path** — `scripts/setup-phone.sh` auto-detects your private `https://…ts.net`
+  URL via Tailscale Serve; a fail-closed `CAIRN_REQUIRE_AUTH` boot guard refuses to start an exposed
+  instance without a token; a one-click "Open in GitHub Codespaces" front door; a "Phone & PWA access"
+  Settings card.
+- **Offline seed-art pack** — pre-baked studio illustrations ship in the repo so a fresh seed and the demo
+  render real photos with no Gemini key (`npm run seed:art:build` to rebuild).
+
+### Changed
+- **Today is agenda-driven** — the rail is produced by the salience arbiter, reusing the rich existing
+  cards and falling back to the fixed rail if the route is absent. Plus interactive progress charts,
+  cardio-prose labels, and an "add to home screen" install coach.
+- **Generated reference indexes regenerated** for the new surfaces: `docs/API.md` (**195 routes**) and
+  `docs/MCP-TOOLS.md` (**162 tools**).
+
+### Fixed
+- **Auto-progression "apply to my plan" now applies** — the change carries `day_number`/reps/reason (the
+  missing `day_number` was the "No plan day NaN" / "Couldn't apply" failure) and dedups drafts per day.
+- A planned **run is skippable** on Today exactly like a lift ("not today"); a synced run overrides a stale
+  skip.
+- `latestSleep`'s 30-day HRV baseline dedups to one row per date, so two wearables feeding the same nights
+  no longer double-weight the recovery norm.
+
+### Notes
+- The schema spans migrations **v38–v43**; they run automatically on boot. Back up before deploying schema
+  changes — down-migrations are not supported (see `docs/OPERATIONS.md`).
+
 ## [0.5.1] — 2026-06-18
 
 **Pasted lab panels now capture every marker.** A comprehensive panel (e.g. a Function Health export
@@ -221,7 +351,9 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/zilet/cairn/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/zilet/cairn/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/zilet/cairn/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/zilet/cairn/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/zilet/cairn/releases/tag/v0.3.0
