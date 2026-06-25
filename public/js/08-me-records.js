@@ -168,32 +168,77 @@ async function deriveDirectives() {
 function paintHealthMarkersTab() {
   const c = $("#hContent");
   if (!c) return;
-  c.innerHTML = `<div id="hMarkers">${skelLines(4)}</div>
-    <div id="hExport" hidden style="margin:18px 2px 4px">
-      <button id="hReportBtn" class="logbtn" style="width:100%;text-align:center;padding:12px">Export for my doctor</button>
-      <div class="hpic-hero-sub" style="margin-top:7px;text-align:center">A clean, grouped report of your markers over time — findings to discuss up top, your progress by date, plus DEXA body comp. Opens ready to “Save as PDF” for MyChart or your PCP.</div>
-      <button id="hExportBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px">Export structured data (JSON)</button>
-      <button id="hAlignBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:9px">Align lab names</button>
-      <div class="hpic-hero-sub" style="margin-top:6px;text-align:center">Different labs name the same test differently — Cairn merges them so each trend is one line. Runs automatically on new labs.</div>
-    </div>`;
-  $("#hReportBtn")?.addEventListener("click", () => {
-    window.open(withToken("/api/health-report"), "_blank");
-  });
-  $("#hExportBtn")?.addEventListener("click", () => {
-    downloadFile(withToken("/api/health-export"));
-    toast("Structured data downloaded");
-  });
-  $("#hAlignBtn")?.addEventListener("click", async (e) => {
-    const btn = e.currentTarget;
-    const restore = btnBusy(btn, "aligning…");
-    let r = null;
-    try { r = await api("/markers/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { r = null; }
-    restore();
-    if (!r || r.ok === false) { toast("Couldn't align right now — try again in a bit."); return; }
-    toast(r.aligned ? `Merged ${r.aligned} duplicate marker${r.aligned === 1 ? "" : "s"}` : "Already aligned");
-    if (r.aligned) loadHealthMarkers(pollToken);
-  });
+  c.innerHTML = `<div id="hMarkers">${skelLines(4)}</div>`;
   loadHealthMarkers(pollToken);
+}
+
+// ---- Share tab: clinician report + data portability ----
+function paintHealthShareTab() {
+  const c = $("#hContent");
+  if (!c) return;
+  const render = (res) => {
+    const markers = res && Array.isArray(res.markers) ? res.markers : [];
+    const groups = res && Array.isArray(res.groups) ? res.groups : [];
+    const count = markers.length;
+    if (!count) {
+      c.innerHTML = `<div class="empty-state reveal" style="${stagger(0)}">
+        <div class="empty-state-line">Nothing to share yet</div>
+        <div class="hpic-hero-sub">Add a lab report or DEXA scan first. The report will stay grouped by clinical panel once markers exist.</div>
+        <button id="hShareToRecords" class="logbtn hpic-cta-btn">ADD A DOCUMENT</button>
+      </div>`;
+      $("#hShareToRecords")?.addEventListener("click", () => switchHealthSeg("records", { openPicker: true }));
+      return;
+    }
+    c.innerHTML = `<div class="hshare">
+      <section class="hshare-card hshare-card-main reveal" style="${stagger(0)}">
+        <div>
+          <div class="lbl hshare-kicker">For your doctor</div>
+          <h2 class="hshare-title">Clinical marker report</h2>
+          <p class="hshare-copy">Grouped by clinical panel, with findings first, dated history, DEXA body composition when available, and a MyChart-ready copy view.</p>
+          <div class="hshare-meta">${count} marker${count === 1 ? "" : "s"} · ${groups.length || 1} panel${(groups.length || 1) === 1 ? "" : "s"}</div>
+        </div>
+        <div class="hshare-actions">
+          <button id="hReportBtn" class="logbtn">Open doctor report</button>
+        </div>
+      </section>
+      <div class="hshare-grid">
+        <section class="hshare-card reveal" style="${stagger(1)}">
+          <div class="lbl hshare-kicker">Portable data</div>
+          <h3 class="hshare-subtitle">Structured health export</h3>
+          <p class="hshare-copy">A JSON snapshot for another tool: marker observations, history, supplements, and active connected-brain directives.</p>
+          <button id="hExportBtn" class="ghostbtn">Download JSON</button>
+        </section>
+        <section class="hshare-card reveal" style="${stagger(2)}">
+          <div class="lbl hshare-kicker">Data hygiene</div>
+          <h3 class="hshare-subtitle">Align lab names</h3>
+          <p class="hshare-copy">Merge obvious duplicate marker names from different labs so each trend stays one line.</p>
+          <button id="hAlignBtn" class="ghostbtn">Align lab names</button>
+        </section>
+      </div>
+    </div>`;
+    $("#hReportBtn")?.addEventListener("click", () => window.open(withToken("/api/health-report"), "_blank"));
+    $("#hExportBtn")?.addEventListener("click", () => {
+      downloadFile(withToken("/api/health-export"));
+      toast("Structured data downloaded");
+    });
+    $("#hAlignBtn")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const restore = btnBusy(btn, "aligning…");
+      let r = null;
+      try { r = await api("/markers/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { r = null; }
+      restore();
+      if (!r || r.ok === false) { toast("Couldn't align right now — try again in a bit."); return; }
+      toast(r.aligned ? `Merged ${r.aligned} duplicate marker${r.aligned === 1 ? "" : "s"}` : "Already aligned");
+      if (r.aligned) swrInvalidate("markers:priority");
+    });
+  };
+  const peek = peekCached("markers:priority");
+  if (peek) render(peek.data);
+  else c.innerHTML = `<div class="hshare">${skelLines(4)}</div>`;
+  cachedApi("/markers/priority", {
+    key: "markers:priority",
+    onUpgrade: (data, { changed }) => { if (changed || !peek) render(data); },
+  }).catch(() => { if (!peek) render(null); });
 }
 
 function healthMarkersEmptyHtml() {
@@ -1133,4 +1178,3 @@ function startFamilyDelete(btn) {
       .catch(() => toast("Couldn't remove that — try again."));
   });
 }
-

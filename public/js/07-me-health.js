@@ -54,7 +54,7 @@ async function renderMeProfile() {
     <h1 class="lbl" style="margin:24px 0 8px">Profile</h1>
     <div id="profFields">
     <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">Stamped on the doctor report you export from Health → Markers. Leave empty to fill it in on paper instead.</p>
+      <p class="aboutme-hint">Stamped on the doctor report you export from Health → Share. Leave empty to fill it in on paper instead.</p>
       <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${escAttr(p.name || "")}" class="form-input"></div>
     ${num("age","Age",p.age)}
     ${num("height_cm","Height (cm)",p.height_cm,0.1)}
@@ -1015,6 +1015,74 @@ function hmkRowHtml(m, i) {
   </div>`;
 }
 
+// The Read tab is priority-led. The detailed Markers catalog should be scan-led:
+// most panels keep the server's importance order, but lipids use a clinician-style
+// order/subgrouping so standard LDL-C, direct LDL-C, particle details, and ApoB/Lp(a)
+// don't read like one mixed pile.
+function isDirectLdlMarker(name) {
+  const n = String(name || "").toLowerCase();
+  return /\bldl\b/.test(n) && /\bdirect\b/.test(n);
+}
+function isStandardLdlMarker(name) {
+  const n = String(name || "").toLowerCase();
+  if (!/\bldl\b/.test(n)) return false;
+  if (isDirectLdlMarker(n)) return false;
+  if (/\bnon[-\s]?hdl\b/.test(n)) return false;
+  if (/\b(particle|small|medium|peak|pattern|large)\b/.test(n)) return false;
+  return /\bcholesterol\b|\bc\b/.test(n);
+}
+const HEALTH_LIPID_ORDER = [
+  [10, /^total cholesterol$/i],
+  [20, /^ldl[-\s]?cholesterol$/i],
+  [22, /\bldl\b.*\bdirect\b|\bdirect\b.*\bldl\b/i],
+  [30, /^hdl[-\s]?cholesterol$|^hdl[-\s]?c$/i],
+  [40, /^non[-\s]?hdl/i],
+  [50, /^triglycerides?$/i],
+  [60, /total cholesterol.*hdl.*ratio|cholesterol.*hdl.*ratio/i],
+  [70, /apolipoprotein b|\bapo\s?b\b/i],
+  [80, /lipoprotein\s*\(?a\)?|\blp\s*\(?a\)?/i],
+  [100, /ldl particle|ldl[-\s]?p\b/i],
+  [110, /ldl small/i],
+  [120, /ldl medium/i],
+  [130, /ldl peak/i],
+  [140, /hdl large/i],
+  [150, /ldl pattern/i],
+];
+function healthLipidRank(name) {
+  const n = String(name || "");
+  for (const [rank, re] of HEALTH_LIPID_ORDER) if (re.test(n)) return rank;
+  return 900;
+}
+function healthLipidSubgroup(name) {
+  const rank = healthLipidRank(name);
+  if (rank < 70) return "Standard lipid panel";
+  if (rank < 100) return "Atherogenic particle risk";
+  if (rank < 900) return "Advanced lipoprotein detail";
+  return null;
+}
+function orderHealthMarkersForDisplay(groupKey, list) {
+  const rows = Array.isArray(list) ? list : [];
+  if (groupKey !== "lipids") return rows;
+  return rows
+    .map((m, index) => ({ m, index }))
+    .sort((a, b) => {
+      const ar = healthLipidRank(a.m?.name || a.m?.key || "");
+      const br = healthLipidRank(b.m?.name || b.m?.key || "");
+      if (ar !== br) return ar - br;
+      return a.index - b.index;
+    })
+    .map((x) => x.m);
+}
+function lipidGroupNoteHtml(list) {
+  const rows = Array.isArray(list) ? list : [];
+  const standard = rows.find((m) => isStandardLdlMarker(m?.name || m?.key || ""));
+  const direct = rows.find((m) => isDirectLdlMarker(m?.name || m?.key || ""));
+  if (!standard || !direct) return "";
+  const sDate = standard.latest?.date ? ` · ${relAge(standard.latest.date)}` : "";
+  const dDate = direct.latest?.date ? ` · ${relAge(direct.latest.date)}` : "";
+  return `<div class="hmk-groupnote">LDL-C is separated by assay: ${escHtml(standard.name || "standard LDL-C")}${escHtml(sDate)} and ${escHtml(direct.name || "direct LDL-C")}${escHtml(dDate)} are not merged.</div>`;
+}
+
 // SWR over /markers/priority (key shared with the Brain tab's priority view): a
 // warm re-entry paints the grouped marker list instantly, then revalidates and
 // re-paints only if the payload changed. The render is unchanged — SWR only
@@ -1027,9 +1095,6 @@ function loadHealthMarkers(token) {
   const paint = (res) => {
     if (token !== pollToken || !wrap.isConnected) return;
     const markers = res && Array.isArray(res.markers) ? res.markers : [];
-    // The export affordance only makes sense once there's at least one marker.
-    const exportWrap = $("#hExport");
-    if (exportWrap) exportWrap.hidden = !markers.length;
     if (!markers.length) {
       wrap.innerHTML = healthMarkersEmptyHtml();
       const b = wrap.querySelector("#hMkToRecords");
@@ -1037,7 +1102,8 @@ function loadHealthMarkers(token) {
       return;
     }
     // Server `groups` is the canonical ordered list of groups that hold ≥1 marker; render
-    // headers in that order, preserving each group's server order (flagged/impact-first).
+    // headers in that order. Most groups preserve server priority order; lipids get a
+    // clinician-style scan order so LDL variants and particle markers don't read as one pile.
     // Degrade gracefully if the backend hasn't shipped grouping yet: derive an ordered list
     // from the markers themselves, falling everything ungrouped into a single "Markers" bucket.
     let groups = res && Array.isArray(res.groups) ? res.groups.filter((g) => g && g.key) : [];
@@ -1056,14 +1122,29 @@ function loadHealthMarkers(token) {
     }
     let i = 0;
     const sections = groups.map((g) => {
-      const list = byGroup.get(g.key) || [];
+      const list = (typeof orderHealthMarkersForDisplay === "function")
+        ? orderHealthMarkersForDisplay(g.key, byGroup.get(g.key) || [])
+        : (byGroup.get(g.key) || []);
       if (!list.length) return "";
-      const rows = list.map((m) => hmkRowHtml(m, i++)).join("");
+      let lastSub = "";
+      const rows = list.map((m) => {
+        const subgroup = g.key === "lipids" && typeof healthLipidSubgroup === "function"
+          ? healthLipidSubgroup(m && (m.name || m.key || ""))
+          : "";
+        const subhead = subgroup && subgroup !== lastSub
+          ? `<div class="hmk-subhead">${escHtml(subgroup)}</div>`
+          : "";
+        if (subgroup) lastSub = subgroup;
+        return subhead + hmkRowHtml(m, i++);
+      }).join("");
       // single-group view (e.g. ungrouped fallback) skips the header — no value labelling one bucket
       const head = groups.length > 1
         ? `<div class="hmk-grouphead lbl reveal" style="${stagger(i)}">${escHtml(g.label || g.key)}</div>`
         : "";
-      return `${head}<div class="hmk-card">${rows}</div>`;
+      const note = g.key === "lipids" && typeof lipidGroupNoteHtml === "function"
+        ? lipidGroupNoteHtml(list)
+        : "";
+      return `${head}${note}<div class="hmk-card">${rows}</div>`;
     }).join("");
     wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
     wrap.querySelectorAll(".hmk-x .hmk-row").forEach((b) =>
@@ -1091,7 +1172,8 @@ function loadHealthMarkers(token) {
 //               "this week's focus" directives, what-matters-now priority, supplements.
 //   • markers — "Markers": the rich trends catalog (the ONE detailed markers home).
 //   • records — "Records": upload + the document list.
-const HEALTH_SEG = [["read", "Read"], ["markers", "Markers"], ["records", "Records"], ["learned", "Learned"]];
+//   • share   — "Share": doctor report, structured export, and data-alignment actions.
+const HEALTH_SEG = [["read", "Read"], ["markers", "Markers"], ["records", "Records"], ["share", "Share"], ["learned", "Learned"]];
 
 // Back-compat: an older persisted state.healthSeg ("analysis"/"brain") maps onto
 // the new "read" home so a returning client never lands on a dead inner tab.
@@ -1101,7 +1183,7 @@ function normalizeHealthSeg(seg) {
 }
 
 // Health is a one-level inner view: the Me seg picks "Health", then a single inner
-// seg picks Read / Markers / Records. Splitting these bounds each view's scroll and
+// seg picks Read / Markers / Records / Share. Splitting these bounds each view's scroll and
 // keeps it focused — and the connected brain now lives on the default Read view, so
 // it's reachable in one nav step (Me → Health) instead of buried behind a second seg.
 async function renderHealth() {
@@ -1158,6 +1240,7 @@ function paintHealthTab() {
   pollToken++;
   if (state.healthSeg === "markers") return paintHealthMarkersTab();
   if (state.healthSeg === "records") return paintHealthRecordsTab();
+  if (state.healthSeg === "share") return paintHealthShareTab();
   if (state.healthSeg === "learned") return paintHealthLearnedTab();
   return paintHealthReadTab();
 }
@@ -1628,4 +1711,3 @@ function directiveHtml(d, i = 0, evMap = null) {
     </div>
   </div>`;
 }
-

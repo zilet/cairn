@@ -3225,8 +3225,13 @@ body.swr-busy::after{
 .hmk-groups{display:grid;gap:18px}
 /* a calm catalog section heading per health group ("Lipids & Cardiovascular") */
 .hmk-grouphead{margin:0 0 6px 2px;color:var(--ink-2)}
+.hmk-groupnote{margin:-1px 2px 8px;color:var(--muted);font-size:.76rem;line-height:1.45}
 .hmk-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:4px 0;overflow:hidden}
+.hmk-subhead{padding:10px 16px 7px;border-top:1px solid var(--line);color:var(--muted);
+  font-size:.66rem;font-weight:650;letter-spacing:.08em;text-transform:uppercase}
+.hmk-subhead:first-child{border-top:none}
+.hmk-subhead+.hmk{border-top:none}
 .hmk{border-top:1px solid var(--line)}
 .hmk:first-child{border-top:none}
 .hmk-row{display:flex;align-items:center;gap:10px;width:100%;padding:13px 16px;
@@ -3265,6 +3270,22 @@ button.hmk-row:active{background:var(--card-2)}
 .hchart-tip rect{fill:var(--ink)}
 .hchart-tip text{fill:var(--paper);font-family:var(--font-ui);font-size:10px;font-weight:600;letter-spacing:.01em}
 .hchart.scrubbing .hchart-guide,.hchart.scrubbing .hchart-cursor,.hchart.scrubbing .hchart-tip{opacity:1}
+
+/* share — report/export utilities separated from the marker catalog */
+.hshare{display:grid;gap:14px}
+.hshare-grid{display:grid;gap:14px}
+.hshare-card{background:var(--card);box-shadow:var(--shadow-sm);border:1px solid var(--line);
+  border-radius:var(--radius);padding:18px;min-width:0}
+.hshare-card-main{display:grid;gap:16px}
+.hshare-kicker{margin:0 0 6px;color:var(--ink-2)}
+.hshare-title,.hshare-subtitle{font-family:var(--font-display);font-style:italic;
+  font-variation-settings:"opsz" 60;color:var(--ink);letter-spacing:0}
+.hshare-title{margin:0;font-weight:540;font-size:1.28rem;line-height:1.12}
+.hshare-subtitle{margin:0;font-weight:530;font-size:1.02rem;line-height:1.2}
+.hshare-copy{margin:8px 0 0;color:var(--muted);font-size:.86rem;line-height:1.5}
+.hshare-meta{margin-top:12px;color:var(--ink-2);font-size:.74rem;letter-spacing:.04em;text-transform:uppercase}
+.hshare-actions{display:flex;align-items:center}
+.hshare-card .logbtn,.hshare-card .ghostbtn{width:100%;min-height:42px}
 @media (prefers-reduced-motion: no-preference){
   .hchart-line{stroke-dasharray:680;stroke-dashoffset:680}
   .hmk.open .hchart-line{animation:sparkdraw .8s var(--ease) .1s forwards}
@@ -3529,6 +3550,12 @@ button.hmk-row:active{background:var(--card-2)}
   .hmk-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
     gap:18px 22px;align-items:start}
   .hmk-groups>.hmk-grouphead{grid-column:1/-1}
+  .hmk-groups>.hmk-groupnote{grid-column:1/-1}
+
+  /* ME → Health → Share — one lead report card, then secondary utilities */
+  .hshare-card-main{grid-template-columns:minmax(0,1fr) auto;align-items:center}
+  .hshare-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hshare-card .logbtn,.hshare-card .ghostbtn{width:auto;min-width:178px}
 
   /* ME → Profile — the lean identity form would stretch single inputs across the
      full wide column and read unfinished. Cap it and flow the short fields two-up,

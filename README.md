@@ -335,8 +335,8 @@ checklist.
   distills notable flags into memory. Different labs that name the same analyte differently are
   merged into one series automatically. Markers feed coaching (e.g. low ferritin → caution on
   endurance volume) through feedback-aware directives: Done means handled for that result, Dismiss
-  suppresses that advice family until the marker materially changes. When you want a second opinion,
-  **"Export for my doctor"** prints a self-contained clinical report (findings to discuss, panels
+  suppresses that advice family until the marker materially changes. From Health → Share, **"Open
+  doctor report"** prints a self-contained clinical report (findings to discuss, panels
   with optimal targets + full dated history, a "Copy for MyChart" twin). Informational, not medical
   advice.
 - **Life context**: trips, injuries, and life events (Me → Life) with dates the coach plans

@@ -367,13 +367,21 @@ Lab markers read as a grouped catalog, fed by `GET /api/markers/priority` (the s
 carries optimal bands + group + trend on top of the flat marker shape). Each marker carries
 `group`/`group_label`; the response's `groups` array is the canonical, ordered list of health
 groups present, and headers render in that order. Markers within a group keep server order
-(flagged / impact-first). **Never a numeric grade/score anywhere** — the constitution bans 0–100
-grades; markers speak in position-vs-optimal and direction only.
+(flagged / impact-first) except the lipid group, which deliberately uses a clinician-style scan
+order: standard lipid panel first, ApoB/Lp(a) next, advanced lipoprotein details last. LDL-C and
+direct LDL-C remain separate rows with a local note when both are present. **Never a numeric
+grade/score anywhere** — the constitution bans 0–100 grades; markers speak in position-vs-optimal
+and direction only.
 
 - `.hmk-groups` — vertical stack (gap 18px) of health-group sections.
 - `.hmk-grouphead` — `.lbl` caps section heading per group ("Lipids & Cardiovascular", "Metabolic
   & Glucose", "Iron & Red Blood", …) in `--ink-2`. **Suppressed when there's only one group** (a
   lone bucket needs no label).
+- `.hmk-groupnote` — a short muted panel note, used sparingly. The lipid group uses it to explain
+  why standard LDL-C and direct LDL-C are shown as separate assays rather than merged.
+- `.hmk-subhead` — uppercase inline row divider inside a ledger card. Only used where it improves
+  scan speed, currently lipids ("Standard lipid panel", "Atherogenic particle risk", "Advanced
+  lipoprotein detail").
 - `.hmk-card` — one ledger card per group, holding `.hmk` rows. `.hmk-row` is a `<button>`
   (`aria-expanded`) when the marker has ≥2 numeric readings, else a static row. `.hmk-id` stacks
   `.hmk-name` over `.hmk-when` (relAge recency, `title=absDate`); `.hmk-right` carries the delta
@@ -390,6 +398,19 @@ grades; markers speak in position-vs-optimal and direction only.
     plain words ("optimal 40–80 mg/dL · rising over ~14 mo") from the server `trend` (`markerTrendWord`).
 - The Brain tab's "what matters now" list (`.hb-mk`) keeps the compact generic `sparklineSvg()`;
   the richer `.hchart` is the detailed Markers-tab view. The two are intentionally distinct surfaces.
+
+## Health sharing (Me → Health → Share)
+
+Share is the utility shelf for moving data out of Cairn or cleaning the imported corpus. Keep it
+separate from Markers so the detailed lab-history catalog stays scan-led.
+
+- Lead with the doctor-facing clinical marker report (`GET /api/health-report`) because it is the
+  human artifact: grouped clinical panels, findings first, dated history, DEXA when present, and a
+  MyChart-ready text copy.
+- Keep structured JSON export (`GET /api/health-export`) secondary. It is for tools/imports, not the
+  default physician handoff.
+- Keep data-maintenance actions here too, currently "Align lab names" (`POST /api/markers/reconcile`).
+  It affects how future marker trends group, but it is not part of reading today's health picture.
 
 ## Chat tab
 
