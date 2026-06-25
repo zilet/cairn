@@ -1,6 +1,6 @@
 {
   "name": "cairn",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "license": "MIT",
   "description": "Cairn — self-hosted, connected, day-reading wellness OS for training (lifting, running & hybrid), nutrition & longevity with an agentic coaching loop.",
