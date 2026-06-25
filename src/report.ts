@@ -83,6 +83,7 @@ export interface ReportMarker {
   latestDate: string | null;
   trendDir: string | null;
   trendText: string | null;
+  methodNote: string | null;
   history: Array<{ value: unknown; date: string; flag: string | null }>;
 }
 
@@ -121,6 +122,26 @@ function optimalTrustworthy(name: string, value: unknown): boolean {
   return true;
 }
 
+function isDirectLdlName(name: string): boolean {
+  const n = name.toLowerCase();
+  return /\bldl\b/.test(n) && /\bdirect\b/.test(n);
+}
+
+function isStandardLdlName(name: string): boolean {
+  const n = name.toLowerCase();
+  if (!/\bldl\b/.test(n)) return false;
+  if (isDirectLdlName(n)) return false;
+  if (/\bnon[-\s]?hdl\b/.test(n)) return false;
+  if (/\b(particle|small|medium|peak|pattern|large)\b/.test(n)) return false;
+  return /\bcholesterol\b|\bc\b/.test(n);
+}
+
+function methodNote(name: string): string | null {
+  if (isDirectLdlName(name)) return "Direct LDL-C assay; tracked separately from standard lipid-panel LDL-C.";
+  if (isStandardLdlName(name)) return "Standard lipid-panel LDL-C; tracked separately from direct LDL-C assays.";
+  return null;
+}
+
 function toMarkerView(m: any): ReportMarker {
   const flag = m?.latest?.flag === "high" || m?.latest?.flag === "low" ? m.latest.flag : null;
   const trusted = optimalTrustworthy(String(m?.name ?? ""), m?.latest?.value);
@@ -152,8 +173,64 @@ function toMarkerView(m: any): ReportMarker {
     latestDate: m?.latest?.date ?? null,
     trendDir: t.dir ?? null,
     trendText,
+    methodNote: methodNote(String(m?.name ?? "")),
     history: points.map((p: any) => ({ value: p.value, date: p.date, flag: p.flag ?? null })),
   };
+}
+
+const LIPID_ORDER: Array<{ rank: number; re: RegExp }> = [
+  { rank: 10, re: /^total cholesterol$/i },
+  { rank: 20, re: /^ldl[-\s]?cholesterol$/i },
+  { rank: 22, re: /\bldl\b.*\bdirect\b|\bdirect\b.*\bldl\b/i },
+  { rank: 30, re: /^hdl[-\s]?cholesterol$|^hdl[-\s]?c$/i },
+  { rank: 40, re: /^non[-\s]?hdl/i },
+  { rank: 50, re: /^triglycerides?$/i },
+  { rank: 60, re: /total cholesterol.*hdl.*ratio|cholesterol.*hdl.*ratio/i },
+  { rank: 70, re: /apolipoprotein b|\bapo\s?b\b/i },
+  { rank: 80, re: /lipoprotein\s*\(?a\)?|\blp\s*\(?a\)?/i },
+  { rank: 100, re: /ldl particle|ldl[-\s]?p\b/i },
+  { rank: 110, re: /ldl small/i },
+  { rank: 120, re: /ldl medium/i },
+  { rank: 130, re: /ldl peak/i },
+  { rank: 140, re: /hdl large/i },
+  { rank: 150, re: /ldl pattern/i },
+];
+
+function lipidRank(name: string): number {
+  for (const entry of LIPID_ORDER) {
+    if (entry.re.test(name)) return entry.rank;
+  }
+  return 900;
+}
+
+function lipidSubgroup(name: string): string | null {
+  const r = lipidRank(name);
+  if (r < 70) return "Standard lipid panel";
+  if (r < 100) return "Atherogenic particle risk";
+  if (r < 900) return "Advanced lipoprotein detail";
+  return null;
+}
+
+function markerSubgroup(groupKey: string, name: string): string | null {
+  if (groupKey === "lipids") return lipidSubgroup(name);
+  return null;
+}
+
+function reportMarkerRank(groupKey: string, name: string): number {
+  if (groupKey === "lipids") return lipidRank(name);
+  return 900;
+}
+
+function sortReportMarkers(groupKey: string, markers: ReportMarker[]): ReportMarker[] {
+  return markers
+    .map((marker, index) => ({ marker, index }))
+    .sort((a, b) => {
+      const ar = reportMarkerRank(groupKey, a.marker.name);
+      const br = reportMarkerRank(groupKey, b.marker.name);
+      if (ar !== br) return ar - br;
+      return a.index - b.index;
+    })
+    .map((x) => x.marker);
 }
 
 export function buildClinicalReportData(): ClinicalReportData {
@@ -162,8 +239,8 @@ export function buildClinicalReportData(): ClinicalReportData {
 
   const views: ReportMarker[] = (Array.isArray(markers) ? markers : []).map(toMarkerView);
 
-  // Findings to discuss: the abnormal subset, kept in prioritizeMarkers' priority
-  // order (lab-flagged first, then furthest-from-optimal / worst trajectory).
+  // Findings to discuss: the abnormal subset. The rendered report groups these
+  // by clinical panel so a PCP can scan familiar sections quickly.
   const findings = views.filter((v) => v.abnormal);
 
   // Group in canonical order (groups[] from prioritizeMarkers is already ordered).
@@ -181,13 +258,13 @@ export function buildClinicalReportData(): ClinicalReportData {
   for (const g of order) {
     const list = byGroup.get(g.key);
     if (list && list.length) {
-      grouped.push({ key: g.key, label: g.label || groupLabel.get(g.key) || g.key, markers: list });
+      grouped.push({ key: g.key, label: g.label || groupLabel.get(g.key) || g.key, markers: sortReportMarkers(g.key, list) });
       seen.add(g.key);
     }
   }
   // Any group present in the data but not in the canonical order (defensive).
   for (const [k, list] of byGroup) {
-    if (!seen.has(k) && list.length) grouped.push({ key: k, label: groupLabel.get(k) || k, markers: list });
+    if (!seen.has(k) && list.length) grouped.push({ key: k, label: groupLabel.get(k) || k, markers: sortReportMarkers(k, list) });
   }
 
   // Whole date span covered by every reading.
@@ -281,7 +358,8 @@ function optimalNote(m: ReportMarker): string {
 function resultCell(m: ReportMarker): string {
   // Out-of-range values are HIGHLIGHTED (calm amber), not painted red.
   const cls = m.abnormal ? "res hl" : "res";
-  return `<span class="${cls}">${esc(fmtVal(m.value))}${m.unit ? ` <span class="u">${esc(m.unit)}</span>` : ""}</span> ${flagChip(m.flag)}${optimalNote(m)}`;
+  const date = m.latestDate ? `<div class="res-date">as of ${esc(fmtShort(m.latestDate))}</div>` : "";
+  return `<div class="resline"><span class="${cls}">${esc(fmtVal(m.value))}${m.unit ? ` <span class="u">${esc(m.unit)}</span>` : ""}</span> ${flagChip(m.flag)}${optimalNote(m)}</div>${date}`;
 }
 
 function historyCell(m: ReportMarker): string {
@@ -289,7 +367,7 @@ function historyCell(m: ReportMarker): string {
   // "previous value" or a trend (there is nothing to trend off one point).
   if (m.history.length <= 1) {
     const only = m.history[0]?.date || m.latestDate;
-    return only ? `<span class="dt">${esc(fmtShort(only))}</span>` : "—";
+    return only ? `<span class="hist-one">single reading</span> <span class="dt">${esc(fmtShort(only))}</span>` : "—";
   }
   const seq = m.history
     .slice(-6)
@@ -304,44 +382,77 @@ function historyCell(m: ReportMarker): string {
   return `${trend}${seq}`;
 }
 
+function lipidGroupNote(markers: ReportMarker[]): string {
+  const standard = markers.find((m) => isStandardLdlName(m.name));
+  const direct = markers.find((m) => isDirectLdlName(m.name));
+  if (!standard || !direct) return "";
+  const sDate = standard.latestDate ? ` (${fmtShort(standard.latestDate)})` : "";
+  const dDate = direct.latestDate ? ` (${fmtShort(direct.latestDate)})` : "";
+  return `<p class="group-note">LDL-C rows are separated by assay/source method: ${esc(standard.name)}${esc(sDate)} and ${esc(direct.name)}${esc(dDate)} are not merged, so each history only covers comparable draws.</p>`;
+}
+
 function groupTable(g: ReportGroup): string {
-  const rows = g.markers
-    .map(
-      (m) => `<tr class="${m.abnormal ? "row-abn" : ""}">
-      <td class="m-name">${esc(m.name)}</td>
+  const rows: string[] = [];
+  let lastSubgroup = "";
+  for (const m of g.markers) {
+    const subgroup = markerSubgroup(g.key, m.name);
+    if (subgroup && subgroup !== lastSubgroup) {
+      rows.push(`<tr class="subrow"><th colspan="4">${esc(subgroup)}</th></tr>`);
+      lastSubgroup = subgroup;
+    }
+    rows.push(`<tr class="${m.abnormal ? "row-abn" : ""}">
+      <td class="m-name">${esc(m.name)}${m.methodNote ? `<div class="m-note">${esc(m.methodNote)}</div>` : ""}</td>
       <td class="m-res">${resultCell(m)}</td>
       <td class="m-tgt">${m.optimalText ? esc(m.optimalText) : "—"}</td>
       <td class="m-hist">${historyCell(m)}</td>
-    </tr>`
-    )
-    .join("\n");
+    </tr>`);
+  }
   return `<section class="group">
     <h2>${esc(g.label)}</h2>
+    ${g.key === "lipids" ? lipidGroupNote(g.markers) : ""}
     <table class="markers">
       <thead><tr><th>Marker</th><th>Result</th><th>Optimal target<span class="th-note">†</span></th><th>History</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows.join("\n")}</tbody>
     </table>
   </section>`;
 }
 
-function findingsBox(findings: ReportMarker[]): string {
-  if (!findings.length) {
+function abnormalGroups(groups: ReportGroup[]): ReportGroup[] {
+  return groups
+    .map((g) => ({ ...g, markers: g.markers.filter((m) => m.abnormal) }))
+    .filter((g) => g.markers.length);
+}
+
+function findingsBox(groups: ReportGroup[]): string {
+  const grouped = abnormalGroups(groups);
+  if (!grouped.length) {
     return `<section class="findings none"><h2>Findings</h2><p>No markers fall outside their lab reference range or optimal target.</p></section>`;
   }
   const CAP = 24;
-  const shown = findings.slice(0, CAP);
-  const items = shown
-    .map((m) => {
+  let shown = 0;
+  const blocks = grouped
+    .map((g) => {
+      const items = g.markers
+        .map((m) => {
+          if (shown >= CAP) return "";
+          shown++;
       const status = m.flag === "high" ? "High" : m.flag === "low" ? "Low" : m.inOptimal === false ? optimalSide(m) : "";
       const tgt = m.optimalText ? ` <span class="f-tgt">optimal ${esc(m.optimalText)}</span>` : "";
       const tr = m.trendText ? ` <span class="f-tr">${esc(m.trendText)}</span>` : "";
       return `<li><span class="f-name">${esc(m.name)}</span> <span class="f-val">${esc(fmtVal(m.value))}${m.unit ? ` ${esc(m.unit)}` : ""}</span> <span class="f-flag ${m.flag || "off"}">${esc(status)}</span>${tgt}${tr}</li>`;
     })
+        .filter(Boolean)
     .join("\n");
-  const more = findings.length > CAP ? `<li class="f-more">+ ${findings.length - CAP} more outside range — see panels below</li>` : "";
+      if (!items) return "";
+      return `<div class="fg"><h3>${esc(g.label)} <span>${g.markers.length}</span></h3><ul class="f-list">${items}</ul></div>`;
+    })
+    .filter(Boolean)
+    .join("\n");
+  const total = grouped.reduce((sum, g) => sum + g.markers.length, 0);
+  const more = total > CAP ? `<p class="f-more">+ ${total - CAP} more outside range — see panels below</p>` : "";
   return `<section class="findings">
-    <h2>Findings to discuss</h2>
-    <ul class="f-list">${items}${more}</ul>
+    <h2>Findings by panel</h2>
+    <div class="f-groups">${blocks}</div>${more}
   </section>`;
 }
 
@@ -361,24 +472,45 @@ export function renderClinicalReportText(data: ClinicalReportData, opts: { name?
   if (data.dateRange) L.push(`Readings ${fmtDate(data.dateRange.from)} – ${fmtDate(data.dateRange.to)}`);
   L.push("");
 
-  if (data.findings.length) {
+  const groupedFindings = abnormalGroups(data.groups);
+  if (groupedFindings.length) {
     L.push("FINDINGS TO DISCUSS");
-    for (const m of data.findings) {
-      const status = m.flag === "high" ? "High" : m.flag === "low" ? "Low" : optimalSide(m);
-      const tgt = m.optimalText ? ` · optimal ${m.optimalText}` : "";
-      const tr = m.trendText ? ` · ${m.trendText}` : "";
-      L.push(`  • ${m.name} — ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""} (${status})${tgt}${tr}`);
+    for (const g of groupedFindings) {
+      L.push(`  ${g.label}:`);
+      for (const m of g.markers) {
+        const status = m.flag === "high" ? "High" : m.flag === "low" ? "Low" : optimalSide(m);
+        const when = m.latestDate ? `, ${fmtShort(m.latestDate)}` : "";
+        const tgt = m.optimalText ? ` · optimal ${m.optimalText}` : "";
+        const tr = m.trendText ? ` · ${m.trendText}` : "";
+        L.push(`    • ${m.name} — ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""}${when} (${status})${tgt}${tr}`);
+      }
     }
     L.push("");
   }
 
   for (const g of data.groups) {
     L.push(g.label.toUpperCase());
+    if (g.key === "lipids") {
+      const standard = g.markers.find((m) => isStandardLdlName(m.name));
+      const direct = g.markers.find((m) => isDirectLdlName(m.name));
+      if (standard && direct) {
+        const sDate = standard.latestDate ? ` (${fmtShort(standard.latestDate)})` : "";
+        const dDate = direct.latestDate ? ` (${fmtShort(direct.latestDate)})` : "";
+        L.push(`  Note: LDL-C rows are separated by assay/source method: ${standard.name}${sDate} and ${direct.name}${dDate} are not merged.`);
+      }
+    }
+    let lastSubgroup = "";
     for (const m of g.markers) {
+      const subgroup = markerSubgroup(g.key, m.name);
+      if (subgroup && subgroup !== lastSubgroup) {
+        L.push(`  ${subgroup}:`);
+        lastSubgroup = subgroup;
+      }
       const flag = m.flag === "high" ? " [High]" : m.flag === "low" ? " [Low]" : m.inOptimal === false ? ` [${optimalSide(m)}]` : "";
       const hist = m.history.length > 1 ? `   {${m.history.slice(-6).map((h) => `${fmtVal(h.value)} ${fmtShort(h.date)}`).join(" · ")}}` : "";
       const tgt = m.optimalText ? `  (optimal ${m.optimalText})` : "";
-      L.push(`  ${m.name}: ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""}${flag}${tgt}${hist}`);
+      const when = m.latestDate ? `, ${fmtShort(m.latestDate)}` : "";
+      L.push(`  ${m.name}: ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""}${when}${flag}${tgt}${m.methodNote ? ` — ${m.methodNote}` : ""}${hist}`);
     }
     L.push("");
   }
@@ -446,7 +578,12 @@ h1{font-size:25px;margin:0 0 3px}
 .findings.none{background:var(--sage-bg);border-color:#d7e2cf}
 .findings h2{font-size:16px;margin:0 0 10px;color:var(--amber)}
 .findings.none h2{color:var(--sage)}
-.f-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:5px 22px}
+.f-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 22px}
+.fg{break-inside:avoid}
+.fg h3{margin:0 0 4px;font:700 10.5px/1.3 'Schibsted Grotesk',sans-serif;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--amber)}
+.fg h3 span{color:var(--soft);font-weight:600}
+.f-list{list-style:none;margin:0;padding:0}
 .f-list li{font-size:12px;line-height:1.45;padding:2px 0;border-bottom:1px solid rgba(180,83,58,.12)}
 .f-name{font-weight:600}
 .f-val{font-variant-numeric:tabular-nums}
@@ -454,25 +591,31 @@ h1{font-size:25px;margin:0 0 3px}
 .f-flag.low{color:var(--amber)}
 .f-flag.off{color:var(--soft)}
 .f-tgt,.f-tr{color:var(--soft);font-size:11px}
-.f-more{grid-column:1 / -1;color:var(--soft);font-style:italic;border:0}
+.f-more{margin:9px 0 0;color:var(--soft);font-style:italic;border:0;font-size:12px}
 
 /* group tables */
 .group{margin:0 0 18px}
 .group h2{font-size:14px;margin:0 0 6px;color:var(--ink);break-after:avoid;
   border-bottom:1px solid var(--line);padding-bottom:4px}
+.group-note{margin:-1px 0 7px;color:var(--soft);font-size:11.5px;line-height:1.45}
 table.markers{width:100%;border-collapse:collapse;font-size:12px}
 table.markers thead th{text-align:left;font-weight:600;color:var(--soft);font-size:10.5px;
   text-transform:uppercase;letter-spacing:.04em;padding:4px 8px;border-bottom:1px solid var(--line)}
 .th-note{color:var(--faint);font-weight:400}
 table.markers td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+table.markers .subrow th{padding:7px 8px 3px;border-bottom:1px solid var(--line);color:var(--soft);
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;text-align:left;background:rgba(95,115,85,.055)}
 table.markers tr{break-inside:avoid}
 .row-abn{background:rgba(154,106,28,.05)}
 .m-name{font-weight:600;width:30%}
+.m-note{margin-top:2px;color:var(--soft);font-weight:400;font-size:10.5px;line-height:1.35}
 .m-res{width:23%;font-variant-numeric:tabular-nums}
 .m-tgt{width:14%;color:var(--soft);font-variant-numeric:tabular-nums}
 .m-hist{width:33%;color:var(--soft);font-size:11px}
+.resline{white-space:nowrap}
 .res{font-weight:600}
 .res.hl{background:var(--amber-bg);border-radius:4px;padding:1px 5px}
+.res-date,.hist-one{color:var(--faint);font-size:10.5px;margin-top:2px}
 .res .u{color:var(--faint);font-weight:400;font-size:11px}
 .flag{display:inline-block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
   padding:1px 5px;border-radius:5px;vertical-align:1px}
@@ -562,7 +705,7 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
     </div>
   </div>
 
-  ${findingsBox(data.findings)}
+  ${findingsBox(data.groups)}
   ${bodyComp}
   ${data.groups.map(groupTable).join("\n")}
   ${supps}

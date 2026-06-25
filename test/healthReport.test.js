@@ -97,6 +97,53 @@ test("plain-text twin carries findings + a copy-ready structure", () => {
   assert.ok(/Lipoprotein \(a\).*130.*High/.test(text), "the flagged marker is listed in findings");
 });
 
+test("lipid report reads in clinician order and keeps direct LDL clearly separate", () => {
+  seedHealthDoc("2024-04-17", [
+    marker("LDL-C (direct)", 175, { unit: "mg/dL", flag: "normal" }),
+    marker("Total Cholesterol", 251, { unit: "mg/dL", flag: "high" }),
+    marker("HDL-Cholesterol", 49, { unit: "mg/dL", flag: "normal" }),
+    marker("Triglycerides", 229, { unit: "mg/dL", flag: "high" }),
+  ]);
+  seedHealthDoc("2026-06-11", [
+    marker("Apolipoprotein B (ApoB)", 148, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-Cholesterol", 207, { unit: "mg/dL", flag: "high" }),
+    marker("Non-HDL Cholesterol", 234, { unit: "mg/dL", flag: "high" }),
+    marker("Lipoprotein (a)", 127, { unit: "nmol/L", flag: "high" }),
+    marker("LDL Particle Number", 2136, { unit: "nmol/L", flag: "high" }),
+    marker("LDL Peak Size", 217.9, { unit: "Angstrom", flag: "low" }),
+    marker("LDL Small", 573, { unit: "nmol/L", flag: "high" }),
+  ]);
+
+  const data = buildClinicalReportData();
+  const lipids = data.groups.find((g) => g.key === "lipids");
+  assert.ok(lipids, "lipid panel present");
+  const names = lipids.markers.map((m) => m.name);
+  assert.deepEqual(names.slice(0, 7), [
+    "Total Cholesterol",
+    "LDL-Cholesterol",
+    "LDL-C (direct)",
+    "HDL-Cholesterol",
+    "Non-HDL Cholesterol",
+    "Triglycerides",
+    "Apolipoprotein B (ApoB)",
+  ]);
+  assert.ok(names.indexOf("LDL Particle Number") < names.indexOf("LDL Small"), "LDL-P comes before subfractions");
+  assert.ok(names.indexOf("LDL Small") < names.indexOf("LDL Peak Size"), "subfractions come before peak-size detail");
+
+  const standard = lipids.markers.find((m) => m.name === "LDL-Cholesterol");
+  const direct = lipids.markers.find((m) => m.name === "LDL-C (direct)");
+  assert.match(standard.methodNote, /standard lipid-panel LDL-C/i);
+  assert.match(direct.methodNote, /Direct LDL-C assay/i);
+
+  const html = renderClinicalReportHTML(data, {});
+  const text = renderClinicalReportText(data, {});
+  assert.ok(html.includes("Findings by panel"), "HTML groups the top findings by panel");
+  assert.ok(html.includes("Standard lipid panel"), "lipid rows are subheaded like a familiar panel");
+  assert.ok(html.includes("LDL-C rows are separated by assay/source method"), "HTML explains the two LDL rows");
+  assert.ok(html.includes("as of Jun '26") && html.includes("as of Apr '24"), "latest dates sit next to the result values");
+  assert.ok(text.includes("Note: LDL-C rows are separated by assay/source method"), "text twin carries the same LDL note");
+});
+
 test("the profile name is stamped on the report; an explicit name overrides it", () => {
   repo.setProfile({ name: "Sam Carter" });
   seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);
