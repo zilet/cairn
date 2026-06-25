@@ -14,10 +14,10 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import { applyChatActions } from "../dist/chatTurns.js";
+import { applyChatActions, shouldCreatePhotoFoodPlaceholder } from "../dist/chatTurns.js";
 
 beforeEach(() => {
-  for (const t of ["chat_turns", "chat_messages", "memory", "plan_proposals"]) {
+  for (const t of ["chat_turns", "chat_messages", "memory", "plan_proposals", "food_notes"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
 });
@@ -126,4 +126,27 @@ test("applyChatActions ignores unknown action types without throwing", () => {
   const { applied, drafts } = applyChatActions({ actions: [{ type: "nonsense" }, "not-an-object"] }, { agent: "stub" });
   assert.deepEqual(applied, []);
   assert.deepEqual(drafts, []);
+});
+
+test("applyChatActions can correct an existing food note instead of duplicating it", () => {
+  const row = repo.addFoodNote("breakfast", "", { summary: "Turkey toast", kcal: 310, protein_g: 28 });
+  const { applied } = applyChatActions({
+    actions: [
+      { type: "update_food_note", id: row.id, summary: "Turkey sourdough plate", kcal: 400, protein_g: 52, meal: "breakfast" },
+    ],
+  }, { agent: "stub" });
+
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].type, "update_food_note");
+  const rows = repo.listFoodNotes(10);
+  assert.equal(rows.length, 1, "the correction updated the existing row; it did not log a second breakfast");
+  assert.equal(rows[0].parsed.summary, "Turkey sourdough plate");
+  assert.equal(rows[0].parsed.kcal, 400);
+  assert.equal(rows[0].parsed.protein_g, 52);
+});
+
+test("photo food placeholder is created only for food-intent photo turns", () => {
+  assert.equal(shouldCreatePhotoFoodPlaceholder(""), true, "photo-only keeps the plate-capture path");
+  assert.equal(shouldCreatePhotoFoodPlaceholder("Lunch plate for today"), true);
+  assert.equal(shouldCreatePhotoFoodPlaceholder("look at the physique check-in"), false, "non-food images do not become food notes");
 });

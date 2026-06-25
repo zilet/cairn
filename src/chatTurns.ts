@@ -151,13 +151,25 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
 // Lazy import of enrich.js mirrors repo.addFoodNote: enrich.ts imports chatTurns
 // is not a cycle today, but the lazy import keeps the queue trigger uniform with
 // the rest of the loop and side-steps any future ordering surprise.
+const PHOTO_FOOD_HINT_RE = /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|weigh(?:ed)?|grams?|oz|serving|portion|recipe|restaurant|label|packag(?:e|ing)|menu)\b/i;
+const PHOTO_NON_FOOD_HINT_RE = /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
+
+export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefined): boolean {
+  const s = (message ?? "").toString().trim();
+  if (!s) return true; // photo-only in Chat means "estimate/log this plate" by default
+  if (PHOTO_FOOD_HINT_RE.test(s)) return true;
+  if (PHOTO_NON_FOOD_HINT_RE.test(s)) return false;
+  return false;
+}
+
 function logPhotoFood(actions: any[], turn: any) {
   if (!turn.image_path) return null;
   // Pull out any log_food the agent emitted (it saw the photo) to seed the note.
   const lf = (Array.isArray(actions) ? actions : []).find((a) => a?.type === "log_food");
   const message = (turn.message ?? "").toString();
+  if (!lf && !shouldCreatePhotoFoodPlaceholder(message)) return null;
   const parsedNote: Record<string, any> = {
-    summary: (lf?.summary ?? lf?.name ?? (message.trim() || "meal")).toString(),
+    summary: (lf?.summary ?? lf?.name ?? (message.trim() || "Photo meal")).toString(),
     items: Array.isArray(lf?.items) ? lf.items : undefined,
     kcal: lf?.kcal ?? null,
     protein_g: lf?.protein_g ?? null,
@@ -356,6 +368,21 @@ export function applyChatActions(
             notes: a.notes ?? null,
           };
           applied.push({ type: a.type, result: repo.addFoodNote(a.meal || "meal", "", parsedNote, ctx.imagePath ?? undefined) });
+          break;
+        }
+        case "update_food_note": {
+          const result = repo.updateFoodNote(Number(a.id), {
+            meal: a.meal,
+            summary: a.summary,
+            items: a.items,
+            notes: a.notes,
+            kcal: a.kcal,
+            protein_g: a.protein_g,
+            carbs_g: a.carbs_g,
+            fat_g: a.fat_g,
+            fiber_g: a.fiber_g,
+          });
+          applied.push({ type: a.type, result: result ?? { error: "not found", id: a.id } });
           break;
         }
         case "log_health": {

@@ -560,6 +560,64 @@ function renderActiveContext(ctx: any): string {
   return `\nLIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.\n`;
 }
 
+function renderTodayFuel(ctx: any): string {
+  const intake = ctx?.day_intake;
+  const entries = Array.isArray(intake?.entries) ? intake.entries : [];
+  const count = Number(intake?.count ?? entries.length);
+  if (!intake || !entries.length || !Number.isFinite(count) || count <= 0) return "";
+
+  const num = (v: any) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
+  const macroBits = (src: any) => {
+    const bits: string[] = [];
+    const kcal = num(src?.kcal);
+    const protein = num(src?.protein_g);
+    const carbs = num(src?.carbs_g);
+    const fat = num(src?.fat_g);
+    if (kcal && kcal > 0) bits.push(`~${kcal} kcal`);
+    if (protein && protein > 0) bits.push(`${protein}g protein`);
+    if (carbs && carbs > 0) bits.push(`${carbs}g carbs`);
+    if (fat && fat > 0) bits.push(`${fat}g fat`);
+    return bits;
+  };
+  const total = macroBits(intake.totals);
+  const lines = [
+    `TODAY'S FUEL (persisted food log for ${intake.date || "today"} in the athlete's LOCAL day — survives chat resets; use it as current context, never as a capture nudge):`,
+    `- TOTAL SO FAR: ${entries.length} item${entries.length === 1 ? "" : "s"}${total.length ? ` · ${total.join(" · ")}` : " · macros not estimated yet"}.`,
+  ];
+
+  const rem = intake.remaining || null;
+  if (intake.target && rem) {
+    const remBits: string[] = [];
+    const kcal = num(rem.kcal);
+    const protein = num(rem.protein_g);
+    if (kcal != null) {
+      if (kcal > 100) remBits.push(`~${kcal} kcal remaining`);
+      else if (kcal < -100) remBits.push(`~${Math.abs(kcal)} kcal over target`);
+      else remBits.push("near calorie target");
+    }
+    if (protein != null) {
+      if (protein > 5) remBits.push(`~${protein}g protein remaining`);
+      else if (protein < -5) remBits.push("protein target met");
+      else remBits.push("near protein target");
+    }
+    if (remBits.length) lines.push(`- TARGET CONTEXT: ${remBits.join(" · ")} (${intake.target.mode || "goal"} mode).`);
+  }
+
+  lines.push("- LOGGED ENTRIES (ids are editable rows; do not duplicate these):");
+  for (const e of entries.slice(0, 6)) {
+    const entryBits = macroBits(e);
+    const status = e?.enrichment_status === "pending"
+      ? " · estimate still pending"
+      : e?.enrichment_status === "error"
+        ? " · estimate uncertain"
+        : "";
+    lines.push(`  - id ${e.id}: ${e.meal || "meal"} — ${String(e.summary || "Food").trim()}${entryBits.length ? ` (${entryBits.join(" · ")})` : ""}${e.logged_at ? ` at ${e.logged_at}` : ""}${status}`);
+  }
+  if (entries.length > 6) lines.push(`  - plus ${entries.length - 6} more item${entries.length - 6 === 1 ? "" : "s"} in DATA.day_intake.entries.`);
+  lines.push("FOOD USE: reference this when answering about today, fuel, recovery, or training readiness. In chat, if the athlete corrects one of these rows, use update_food_note with the existing id; if they mention the same meal again, do not log a duplicate. Treat this as a single-day snapshot, not a weekly retarget signal by itself.");
+  return `\n${lines.join("\n")}\n`;
+}
+
 // THE ONE NEXT STEP — the single highest-leverage action across all domains.
 function renderNextStep(ctx: any): string {
   const n = ctx?.next_step;
@@ -954,6 +1012,9 @@ const CHAT_ACTIONS_SCHEMA = `[
       "items": ["<component>"], "ingredients": [
         { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
       "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null> },
+    { "type": "update_food_note", "id": <existing id from DATA.day_intake.entries>,
+      "meal": "breakfast|lunch|dinner|snack|meal", "summary": "<corrected dish name>",
+      "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null>, "fiber_g": <number|null>, "notes": <string|null> },
     { "type": "plan_update", "summary": "...", "changes": [
       { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
       { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
@@ -1037,12 +1098,15 @@ GUARDRAILS:
 ${CONTEXT_GUARDRAILS}
 
 ACTIONS — only when the athlete clearly asks to log or change something:
-- log_activity, log_set, set_profile, set_endurance_goal, add_memory, update_memory, supersede_memory, log_food, log_health, add_context_event, log_supplement are APPLIED immediately.
+- log_activity, log_set, set_profile, set_endurance_goal, add_memory, update_memory, supersede_memory, log_food, update_food_note, log_health, add_context_event, log_supplement are APPLIED immediately.
 - When you log_set or otherwise name an exercise, use a CLEAN canonical name (e.g. "Incline DB Press",
   "Romanian Deadlift") — not a descriptive/throwaway phrase ("incline db press 3x10 lol") — and reuse
   an existing KNOWN-EXERCISE name when it matches, so the same movement stays one entry.
 - log_food records a meal estimate (food note) — use it when the athlete reports something they
   ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.
+  BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today,
+  reference it instead of logging a duplicate. If the athlete is correcting that row, emit
+  update_food_note with the existing id.
 - log_health records lab/bloodwork/DEXA results the athlete reports in chat — transcribe EVERY
   marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short
   plain-language summary. Do NOT curate to "the interesting ones": an in-range/normal/boring marker
@@ -1069,7 +1133,7 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible
   exercises that honor their constraints and carrying over weights where it makes sense.
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.
-${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderNextStep(ctx)}
+${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}${renderNextStep(ctx)}
 Keep the reply short and human; confirm what you logged or drafted. When the athlete says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
 bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.
@@ -1917,7 +1981,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -1998,7 +2062,7 @@ GUARDRAILS:
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderReactionModel(context)}${renderActiveContext(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
@@ -2318,7 +2382,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   adjustment lever to cut here.` : ""}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}
+${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTodayFuel(context)}
 ATHLETE: profile: ${JSON.stringify(profile)}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -2564,6 +2628,7 @@ THE CONSTITUTION (binding):
   No grocery-list of evidence; one plain reason is enough.
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
 ${recentBlock}
+${renderTodayFuel(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 When there's nothing real to say: {"found": false}
 When there is exactly one genuine connection:
@@ -2606,6 +2671,7 @@ THE CONSTITUTION (binding):
   fields. The one change, if any, goes in next_step.
 - Grounded in their ACTUAL recent data only (training, recovery, nutrition, life context below).
 ${renderRunCompliance(context, "weekly")}
+${renderTodayFuel(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 Nothing worth saying: {"found": false}
 Otherwise:

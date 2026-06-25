@@ -7,7 +7,7 @@ import { blockForCoach } from "./program-blocks.js";
 import { getProgramState } from "./program-state.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
-import { capStr } from "./nutrition.js";
+import { capStr, getDayIntake } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
@@ -73,6 +73,30 @@ function healthReviewForCoach() {
     focus: (Array.isArray(p.focus) ? p.focus : []).map((f: any) => ({ title: f?.title, action: f?.action })),
     watchlist: (Array.isArray(p.watchlist) ? p.watchlist : []).map((w: any) => ({ marker: w?.marker, status: w?.status, action: w?.action })),
     followups: Array.isArray(p.followups) ? p.followups : [],
+  };
+}
+
+function dayIntakeForCoach(date = localDateISO()) {
+  const d: any = getDayIntake(date);
+  const entries = (Array.isArray(d?.entries) ? d.entries : []).slice(0, 12).map((e: any) => ({
+    id: e.id,
+    meal: e.meal ?? null,
+    summary: capStr(e.summary ?? "Food", 160),
+    kcal: e.kcal ?? null,
+    protein_g: e.protein_g ?? null,
+    carbs_g: e.carbs_g ?? null,
+    fat_g: e.fat_g ?? null,
+    fiber_g: e.fiber_g ?? null,
+    logged_at: e.logged_at ?? null,
+    enrichment_status: e.enrichment_status ?? null,
+  }));
+  return {
+    date: d?.date ?? date,
+    count: Number(d?.count) || 0,
+    totals: d?.totals ?? { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
+    target: d?.target ?? null,
+    remaining: d?.remaining ?? null,
+    entries,
   };
 }
 
@@ -290,6 +314,9 @@ export function getCoachContext() {
     // the framing: a deficit for 'lose', anchor-to-TDEE for 'maintain', a lean
     // surplus for 'gain'. Drives renderGoalMode and the fuel-card target.
     goal_mode: effectiveGoalMode(profile),
+    // Today's persisted food log. This is independent of the live chat thread, so
+    // a breakfast logged before "Fresh start" still shapes the next nutrition turn.
+    day_intake: dayIntakeForCoach(),
     plan: getPlan(),
     recent_sessions: recentSessions,
     recent_activities: listActivities(15),
@@ -1122,4 +1149,3 @@ export function latestSleep(): {
     text: parts.join(" · "),
   };
 }
-

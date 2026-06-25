@@ -207,8 +207,8 @@ export function setFoodNoteEnrichStatus(id: number, status: string) {
 // A calm review of ONE day's logged food: the entries (each editable/deletable),
 // the running totals, and — only when a real target exists (a loss/gain goal, or
 // the maintenance anchor) — a gentle "remaining". Never a score; "remaining",
-// never "consumed". The day boundary is the UTC calendar day, matching
-// estimateExpenditure's convention (a known boundary near local midnight).
+// never "consumed". The day boundary is the stamped LOCAL calendar day; the
+// created_at fallback only keeps legacy rows readable.
 export function getDayIntake(date?: string) {
   const d = date || localDateISO();
   // Key by the stamped LOCAL day; COALESCE to the legacy UTC-date-of-created_at
@@ -307,4 +307,3 @@ export function hydrate(row: any) {
   try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
   return { ...row, parsed };
 }
-

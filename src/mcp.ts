@@ -760,7 +760,7 @@ export function buildMcpServer(): McpServer {
     async ({ agent, window }) => asText(await nutritionCheckin(agent, window)));
 
   server.tool("get_day_intake",
-    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to today (UTC calendar day).",
+    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to the athlete's local today.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     async ({ date }) => asText(repo.getDayIntake(date)));
 

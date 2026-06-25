@@ -128,9 +128,11 @@ function produceTrain(read: ReturnType<typeof dayRead>): Candidate | null {
 // surfaces when there's food logged AND the day is materially short on protein
 // (so it evaluates, never nudges capture). Adherence-neutral wording.
 function produceFuel(date: string): Candidate | null {
-  // Today's logged food (this era keys the day off created_at's date prefix).
+  // Today's logged food, keyed by the stamped LOCAL day. The created_at fallback
+  // keeps old pre-v42 rows readable without pulling evening travel logs into UTC
+  // tomorrow.
   const rows = db.prepare(
-    `SELECT parsed_json FROM food_notes WHERE substr(created_at, 1, 10) = ?`
+    `SELECT parsed_json FROM food_notes WHERE COALESCE(date, substr(created_at, 1, 10)) = ?`
   ).all(date) as any[];
   if (!rows.length) return null; // nothing logged → never nudge
 

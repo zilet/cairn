@@ -54,12 +54,19 @@ function seedProfile() {
   });
 }
 
-// A food note logged TODAY (this era keys the day off created_at's date prefix).
+// A food note logged TODAY. date is omitted so legacy fallback still gets tested.
 function seedFoodToday(parsed) {
   db.prepare(
     `INSERT INTO food_notes (meal, raw_output, parsed_json, enrichment_status, created_at)
      VALUES ('meal', '', ?, NULL, ?)`
   ).run(JSON.stringify(parsed), new Date().toISOString().slice(0, 19).replace("T", " "));
+}
+
+function seedFoodStampedFor(localDate, utcCreatedAt, parsed) {
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+     VALUES (?, 'meal', '', ?, NULL, ?)`
+  ).run(localDate, JSON.stringify(parsed), utcCreatedAt);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +161,18 @@ test("fuel: a real protein gap on a logged day surfaces (and step_key is stable)
   // Stable key across calls.
   const again = nextBestStep(TODAY);
   assert.equal(again.step_key, "fuel:protein-gap");
+});
+
+test("fuel keys logged food by the stamped local date, not UTC created_at", () => {
+  seedProfile();
+  seedFoodStampedFor("2026-06-23", "2026-06-24 00:30:00", { summary: "late dinner", kcal: 650, protein_g: 30 });
+
+  const localDay = nextBestStep("2026-06-23");
+  assert.ok(localDay, "the local day sees the logged dinner");
+  assert.equal(localDay.domain, "fuel");
+
+  const utcDay = nextBestStep("2026-06-24");
+  assert.equal(utcDay, null, "the UTC-created_at day does not steal the local dinner");
 });
 
 test("fuel never nudges capture: no food logged → no fuel step", () => {
