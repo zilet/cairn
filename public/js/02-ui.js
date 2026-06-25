@@ -153,6 +153,7 @@ function ensureSaveBar() {
   bar = document.createElement("div");
   bar.className = "savebar";
   bar.setAttribute("role", "status");
+  bar.setAttribute("aria-hidden", "true");
   bar.innerHTML = `
     <div class="savebar-row">
       <span class="savebar-dot" aria-hidden="true"></span>
@@ -180,6 +181,7 @@ function hideSaveBar() {
   const bar = document.querySelector(".savebar");
   if (bar) {
     bar.classList.remove("show", "busy", "saved");
+    bar.setAttribute("aria-hidden", "true");
     const btn = bar.querySelector(".savebar-save");
     btn.disabled = false; btn.textContent = "Save";
   }
@@ -192,6 +194,7 @@ function setSaveDirty() {
   saveCtx.dirty = true;
   clearTimeout(saveBarHideTimer);
   const bar = ensureSaveBar();
+  bar.removeAttribute("aria-hidden");
   bar.classList.remove("saved", "busy");
   const btn = bar.querySelector(".savebar-save");
   btn.disabled = false; btn.textContent = "Save";
@@ -225,6 +228,7 @@ async function saveBarCommit() {
   clearTimeout(saveBarHideTimer);
   saveBarHideTimer = setTimeout(() => {
     bar.classList.remove("show", "saved");
+    bar.setAttribute("aria-hidden", "true");
     document.body.classList.remove("savebar-open");
   }, reducedMotion() ? 700 : 1300);
 }
@@ -676,21 +680,21 @@ window.addEventListener("resize", () => {
   cancelAnimationFrame(_segFitRaf);
   _segFitRaf = requestAnimationFrame(() => view.querySelectorAll(".seg").forEach(fitSeg));
 });
-// Energy Balance (TDEE + the nutrition check-in) now lives WITH the meal plan
-// (Plan → Meals), where the read and the meal-plan loop sit together — so it's no
-// longer an orphaned Progress pill. Progress stays training-history focused.
+// Energy Balance (TDEE + the nutrition check-in) lives in Plan → Food with the
+// logged-day journal, so it is no longer an orphaned Progress pill. Progress stays
+// training-history focused.
 const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"], ["program", "Program"]];
 const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory(), program: () => renderProgram() };
 // The Plan sub-nav is dynamic: a runner/hybrid (or anyone with an endurance goal)
-// gets a dedicated ENDURANCE tab between Training and Meals — the home for the
-// periodized ramp, this week's prescribed runs, and shaping the running plan. A pure
-// strength athlete with no running goal never sees it (calm, no empty surface).
+// gets a dedicated ENDURANCE tab — the home for the periodized ramp, this week's
+// prescribed runs, and shaping the running plan. A pure strength athlete with no
+// running goal never sees it (calm, no empty surface).
 function planSeg() {
   return showEnduranceTab()
-    ? [["edit", "Training"], ["endurance", "Endurance"], ["meals", "Meals"], ["coach", "Coach"]]
-    : [["edit", "Training"], ["meals", "Meals"], ["coach", "Coach"]];
+    ? [["edit", "Training"], ["endurance", "Endurance"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]]
+    : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]];
 }
-const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), meals: () => renderMeals(), coach: () => renderCoach() };
+const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), food: () => renderFoodJournal(), meals: () => renderMeals(), coach: () => renderCoach() };
 
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 

@@ -6,6 +6,7 @@
 // editor) so an in-flight edit is never clobbered by a background refresh.
 async function renderPlanEditor() {
   headerTitle.textContent = "Plan";
+  const token = ++pollToken;
   const peek = peekCached("plan");
   if (!peek) view.innerHTML = segSkeleton("edit", planSeg(), 3); // cold: skeleton-first
   // Background revalidate populates the shared `plan` key for both surfaces; on a
@@ -16,7 +17,7 @@ async function renderPlanEditor() {
     onUpgrade: (_data, { changed }) => {
       if (peek && !peek.fresh) markRefreshing(false);
       if (!changed || !peek) return; // cold load already rendered; no-op revalidate stays quiet
-      if (state.tab !== "plan" || state.planJump === "meals") return; // moved on
+      if (state.tab !== "plan" || token !== pollToken || !view.querySelector("#planedit")) return; // moved on
       if (view.querySelector(".pday") || document.querySelector(".savebar.show")) return; // mid-edit — don't clobber
       renderPlanEditor();
     },
@@ -24,6 +25,7 @@ async function renderPlanEditor() {
   // Cold: wait on the revalidate's data (one fetch). Warm: paint from the peek now,
   // and let the background revalidate above upgrade in place.
   const plan = peek ? peek.data : await revalidate.catch(() => []);
+  if (token !== pollToken || state.tab !== "plan") return;
   if (peek && !peek.fresh) markRefreshing(true);
   // Pull-not-push calendar: subscribe to the plan as a weekly iCal feed. webcal://
   // hands most OSes straight to "add to calendar"; the (.ics) link is the fallback.
@@ -591,6 +593,7 @@ function renderEnduranceDraftResult(p) {
 // ---------- Chat ----------
 // Document-level paste listener for the chat view; swapped on every renderChat.
 let chatPasteHandler = null;
+let chatFuelContext = [];
 // Downscale + re-encode a picked photo to JPEG before upload: phone camera
 // shots are 3-12MB HEIC/JPEG; ~1280px @ q0.82 is plenty for a plate estimate
 // (and Safari decodes HEIC natively, so re-encoding also normalizes the type).
@@ -645,6 +648,50 @@ function drawChatChips(log) {
     const send = $("#chatSend");
     if (send) send.click();
   }));
+}
+
+// Chat gets the logged-food glance only when the active thread is already about
+// food capture or today's fuel. The durable food log still feeds the coach prompt
+// everywhere; this UI guard keeps broad health/nutrition chats from carrying a
+// persistent food banner.
+const CHAT_FOOD_RE = /\b(food|meal|meals|breakfast|lunch|dinner|snack|plate|bowl|ate|eaten|eating|calor(?:y|ies)|kcal|macro|macros|protein|carb|carbs|fiber|fuel|refuel|grams?|ounces?|oz|serving|portion|recipe|restaurant|menu|label|logged?|logging)\b/i;
+const CHAT_NON_FOOD_PHOTO_RE = /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
+const CHAT_FOOD_ACTION_TYPES = new Set(["log_food", "update_food_note"]);
+
+function chatMessageHasFoodAction(m) {
+  if (!m) return false;
+  const meta = m.meta || {};
+  return Array.isArray(meta.applied) && meta.applied.some((a) => CHAT_FOOD_ACTION_TYPES.has(String(a?.type || "")));
+}
+
+function chatUserMessageSuggestsFood(m) {
+  if (!m || String(m.role || "") !== "user") return false;
+  const content = String(m.content || "");
+  const meta = m.meta || {};
+  if (CHAT_FOOD_RE.test(content)) return true;
+  if (meta.image && (!content || content === "(photo)" || !CHAT_NON_FOOD_PHOTO_RE.test(content))) return true;
+  return false;
+}
+
+function chatWantsFuelSurface(messages = chatFuelContext) {
+  const today = localISO();
+  const recentToday = (Array.isArray(messages) ? messages : [])
+    .filter((m) => !m?.created_at || chatDayISO(m.created_at) === today)
+    .slice(-12);
+  let latestUserIdx = -1;
+  for (let i = recentToday.length - 1; i >= 0; i--) {
+    if (String(recentToday[i]?.role || "") === "user") { latestUserIdx = i; break; }
+  }
+  if (latestUserIdx < 0) return false;
+  const latestUser = recentToday[latestUserIdx];
+  const sinceLatestUser = recentToday.slice(latestUserIdx);
+  return chatUserMessageSuggestsFood(latestUser) || sinceLatestUser.some(chatMessageHasFoodAction);
+}
+
+function rememberChatFuelContext(...msgs) {
+  const next = [...chatFuelContext, ...msgs.filter(Boolean)];
+  chatFuelContext = next.slice(-24);
+  return chatFuelContext;
 }
 
 // Expand the collapsed history block at the top of the chat log: smooth
@@ -755,7 +802,10 @@ async function chatFreshStart() {
   const fresh = document.getElementById("hdrFresh");
   if (fresh) fresh.hidden = true; // the thread is empty now
   // Optimistic clear — empty state + chips, composer stays fully enabled & focused.
+  chatFuelContext = [];
   drawChat([]);
+  const fuelSlot = $("#chatFuelSlot");
+  if (fuelSlot) fuelSlot.innerHTML = "";
   const input = $("#chatInput");
   if (input && matchMedia("(hover:hover)").matches) input.focus();
   let r = null;
@@ -795,12 +845,46 @@ function settleFreshPill(distilled, token) {
   setTimeout(() => { pill.classList.remove("fresh-pill-in"); setTimeout(() => pill.remove(), 360); }, 2600);
 }
 
+function chatFuelHtml(d) {
+  const count = Number(d?.count) || 0;
+  if (!count) return "";
+  const totals = d.totals || {};
+  const kcal = Math.round(Number(totals.kcal) || 0);
+  const protein = Math.round(Number(totals.protein_g) || 0);
+  let rem = "";
+  if (d.remaining && d.target) {
+    const left = Math.round(Number(d.remaining.kcal));
+    rem = left > 0 ? ` · ~${left.toLocaleString()} left` : " · fuel's in";
+  }
+  return `<button id="chatFuelCard" class="chatfuel-card" type="button" title="Review &amp; edit today's food">
+      <span class="chatfuel-mark" aria-hidden="true">◷</span>
+      <span class="chatfuel-main">
+        <span class="chatfuel-label lbl">Today's fuel · ${count} item${count === 1 ? "" : "s"}</span>
+        <span class="chatfuel-stats">${kcal.toLocaleString()} kcal · ${protein.toLocaleString()}g protein${escHtml(rem)}</span>
+      </span>
+      <span class="chatfuel-go" aria-hidden="true">→</span>
+    </button>`;
+}
+
+async function loadChatFuel(token, messages = chatFuelContext) {
+  const slot = $("#chatFuelSlot");
+  if (!slot) return;
+  if (!chatWantsFuelSurface(messages)) { slot.innerHTML = ""; return; }
+  let d = null;
+  try { d = await api("/nutrition/day"); } catch { slot.innerHTML = ""; return; }
+  if (token !== pollToken || state.tab !== "chat" || !slot.isConnected) return;
+  slot.innerHTML = chatFuelHtml(d);
+  const card = slot.querySelector("#chatFuelCard");
+  if (card) card.addEventListener("click", () => { state.planJump = "food"; activateTab("plan"); });
+}
+
 async function renderChat() {
   headerTitle.textContent = "Chat";
   document.body.classList.add("chat-mode"); // the chat column owns the viewport; drop body's tab-bar padding
   chatTeardownMonitor(); // the log is about to be rebuilt — drop the old stream + bubble map
   const token = ++pollToken; // bump so the async hydrate below can detect a stale tab
   const { freshBtn } = ensureChatHeaderBtns();
+  chatFuelContext = [];
   // Paint the shell FIRST so the composer is usable instantly; the log hydrates
   // in the background. The flex viewport column keeps the composer pinned above
   // the tab bar no matter how the OS zooms (height is re-measured, not magic).
@@ -813,6 +897,7 @@ async function renderChat() {
         </button>
       </div>
       <div class="chatdock">
+        <div id="chatFuelSlot" class="chatfuel-slot"></div>
         <div id="chatPreview" class="chat-preview" hidden>
           <img alt="">
           <span class="chat-preview-hint">Photo attached — I'll estimate &amp; log it</span>
@@ -898,7 +983,10 @@ async function renderChat() {
     clearAttach();
     // Optimistic user bubble lands instantly (the server persists it too; a full
     // re-render later draws from server truth, so no duplicate).
-    const userBubble = appendMsg({ role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null });
+    const userMsg = { role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null };
+    const userBubble = appendMsg(userMsg);
+    rememberChatFuelContext(userMsg);
+    loadChatFuel(token);
     try {
       const body = { message: text };
       if (img) { body.image_base64 = img.base64; body.image_mime = img.mime; }
@@ -962,7 +1050,9 @@ async function renderChat() {
   try { msgs = await api("/chat?limit=200"); } catch { msgs = []; }
   if (token !== pollToken || !log.isConnected) return; // navigated away / re-rendered
   freshBtn.hidden = !msgs.length;
+  chatFuelContext = msgs.slice(-24);
   drawChat(msgs);
+  loadChatFuel(token);
   // Rebuild any in-flight + queued turns from the server and resume streaming.
   chatReconnect();
   requestAnimationFrame(measureChatTop);
@@ -1546,8 +1636,10 @@ function finalizeTurn(turn, message) {
     id: turn && turn.assistant_message_id,
   };
   appendMsg(m, false, null, { before: el });
+  rememberChatFuelContext(m);
   if (el && el.isConnected) el.remove();
   if (turn && (turn.meta?.drafts || []).length) { state.plan = []; toast("Draft ready — Apply below"); }
+  if (state.tab === "chat") loadChatFuel(pollToken);
 }
 
 // A stopped turn settles into a quiet "Stopped" note in place.

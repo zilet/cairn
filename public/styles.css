@@ -1178,6 +1178,19 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .chat-preview-hint{flex:1;font-size:.78rem;color:var(--ink-2);min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+.chatfuel-slot:empty{display:none}
+.chatfuel-card{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  margin-top:8px;padding:9px 12px;background:var(--card);border:1px solid var(--line);
+  border-left:3px solid var(--sage);border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
+  color:var(--ink);font-family:var(--font-ui);cursor:pointer}
+.chatfuel-card:active{transform:var(--press)}
+.chatfuel-mark{flex:0 0 auto;color:var(--sage);font-size:.82rem}
+.chatfuel-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.chatfuel-label{color:var(--muted)}
+.chatfuel-stats{font-size:.84rem;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chatfuel-go{flex:0 0 auto;color:var(--sage);font-weight:700}
+@media (hover:hover){.chatfuel-card:hover{background:var(--card-2)}}
+
 .chatbar{display:flex;gap:8px;align-items:flex-end;margin-top:8px}
 /* Single "+" attach control — opens the OS chooser (camera / library / files).
    Attaching is occasional, so it stays compact and hands the width to the input. */
@@ -1992,9 +2005,10 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .shop-chip{cursor:pointer;border:1px solid var(--line-2);transition:opacity var(--dur-1) ease}
 .shop-chip.chip-done{text-decoration:line-through;opacity:.45}
 
-/* Energy Balance — co-located with the meal plan (TDEE read + nutrition check-in).
-   A divided section so it reads as part of the meal-plan loop, not a stray card. */
+/* Energy Balance — the Food tab uses it flush under the journal; other nutrition
+   placements can use the divided section treatment. */
 .meal-energy{margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+.food-journal{margin-top:0;padding-top:0;border-top:0}
 
 /* collapsed history of past plans */
 .mp-history{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}

@@ -3024,7 +3024,7 @@ async function loadDraftProposals() {
 // Today rail: a calm "today's fuel" glance — what's logged today + (only when a
 // real target exists) a gentle "remaining". Never a score, "remaining" not
 // "consumed", never red. Capture stays in Chat — this card is purely a REVIEW that
-// taps through to the full editable day (Plan → Meals, where Energy Balance lives).
+// taps through to the full editable day (Plan → Food).
 //
 // The fuel surface is an EVALUATION glance, NEVER a "log something" prompt: over
 // time people log food less and just evaluate occasionally as the habit builds, so
@@ -3072,8 +3072,8 @@ async function loadFuelToday(date) {
   slot.innerHTML = fuelCardHtml(d);
   const card = slot.querySelector("#fuelCard");
   // The card only renders with logged food now, so it always taps through to the
-  // editable day review (Plan → Meals) — never into a "log something" chat prompt.
-  if (card) card.addEventListener("click", () => { state.planJump = "meals"; activateTab("plan"); });
+  // editable day review (Plan → Food) — never into a "log something" chat prompt.
+  if (card) card.addEventListener("click", () => { state.planJump = "food"; activateTab("plan"); });
   runCountUps(slot);
 }
 

@@ -678,7 +678,7 @@ function renderTab(tab) {
   if (tab === "today") return renderToday();
   if (tab === "plan") {
     const jump = state.planJump; state.planJump = null;
-    return jump === "meals" ? renderMeals() : jump === "coach" ? renderCoach() : renderPlanEditor();
+    return jump === "food" ? renderFoodJournal() : jump === "meals" ? renderMeals() : jump === "coach" ? renderCoach() : renderPlanEditor();
   }
   // Endurance athletes land on the Endurance read first (gentle emphasis, not a
   // different app — History/1RM/Volume are all still one tap away). A user who has
@@ -696,7 +696,7 @@ function renderTab(tab) {
 function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
   if (tab === "progress") return defaultProgressSeg() === "endurance" ? segSkeleton("endurance", PROGRESS_SEG, 2) : segSkeleton("sessions", PROGRESS_SEG, 3);
-  if (tab === "plan") return segSkeleton(state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", planSeg(), 3);
+  if (tab === "plan") return segSkeleton(state.planJump === "food" ? "food" : state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", planSeg(), 3);
   if (tab === "me") {
     const seg = state.meSeg || "profile";
     return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
@@ -709,13 +709,13 @@ function tabSkeleton(tab) {
 // from the peek immediately — so switchTab/activateTab skip the skeleton on a warm
 // re-entry (the render then SWR-paints in place). Returns null for tabs that own
 // their own paint (chat) or have no single primary surface (me/settings keep their
-// skeleton). The plan tab lands on History/Training/Meals per state.planJump.
+// skeleton). The plan tab lands on Training/Food/Meals/Coach per state.planJump.
 function primaryKeyFor(tab) {
   if (tab === "today") return "plan"; // Today's first input; warm => render paints from cache
   // The endurance default reads /stats live (no SWR peek) — keep its skeleton; the
   // History default warms off history:sessions exactly as before.
   if (tab === "progress") return defaultProgressSeg() === "endurance" ? null : "history:sessions";
-  if (tab === "plan") return state.planJump === "coach" ? null : state.planJump === "meals" ? MEALS_KEY : "plan";
+  if (tab === "plan") return state.planJump === "coach" || state.planJump === "food" ? null : state.planJump === "meals" ? MEALS_KEY : "plan";
   return null;
 }
 
@@ -832,6 +832,7 @@ function openOnboarding() {
     ["plan", "profile", "stats", "progress:weight", "progress:energy", "supplements", "memory"].forEach(swrInvalidate);
     swrInvalidate("today:session:");
     m.remove();
+    hideSaveBar();
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
     const t = document.querySelector('.tab[data-tab="today"]'); if (t) t.classList.add("active");
     state.tab = "today";

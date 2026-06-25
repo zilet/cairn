@@ -278,7 +278,7 @@ async function relogFrequent(summary, chip) {
   if (chip) chip.classList.remove("freq-chip-busy");
   if (!f || f.error) { toast("Couldn't log that — try again."); return; }
   toast("Logged · " + meal);
-  // poll the enrichment upgrade quietly (no visible row on Today; the meal lives in Plan → Meals)
+  // poll the enrichment upgrade quietly (no visible row on Today; the meal lives in Plan → Food)
   if (f.id && enrichmentActive(f.enrichment_status)) {
     pollEnrichment("/food-notes", f.id, { tab: state.tab, token: pollToken });
   }
@@ -624,4 +624,3 @@ function maybeGenerateWeekly() {
     onFail: (err) => { if (err) burnGate(); },
   });
 }
-

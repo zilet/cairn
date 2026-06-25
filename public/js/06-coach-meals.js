@@ -1000,8 +1000,32 @@ function reconnectRecipe(job) {
   };
 }
 
-// The meals journal paints instantly from a warm peek and upgrades on change. The
-// plans list (the surface that actually changes) is the SWR-keyed surface; meal
+// ---------- Plan → Food (daily logged-food journal + target context) ----------
+// Capture mostly happens in Chat. This tab is the quick review/correction surface:
+// what's logged today, where it sits against the current target, and the adaptive
+// energy-balance check-in. It is intentionally separate from weekly meal plans so
+// the daily log is always one header tap away.
+function renderFoodJournal() {
+  headerTitle.textContent = "Plan";
+  const token = ++pollToken;
+  view.innerHTML = segBar("food", planSeg()) + `<section class="meal-energy food-journal" id="mealEnergy">
+      <div id="dayFuelSlot" class="dayfuel-slot">${loadingState("Reading today's food…")}</div>
+      <div id="energyHero"></div>
+      <div id="energyCard">${loadingState("Reading your trend…")}</div>
+      <div id="checkinResult" class="checkin-result"></div>
+    </section>`;
+  wireSeg(PLAN_HANDLERS);
+  loadDayFuel(token);
+  loadMealsEnergy(token);
+}
+
+function rerenderFoodSurface() {
+  if (view.querySelector(".food-journal")) renderFoodJournal();
+  else renderMeals();
+}
+
+// The meal-plan journal paints instantly from a warm peek and upgrades on change.
+// The plans list (the surface that actually changes) is the SWR-keyed surface; meal
 // prefs ride along from /settings (peeked, revalidated, but a prefs-only change is
 // rare enough that we just reuse whatever the peek/last fetch gave us per paint).
 async function renderMeals() {
@@ -1090,25 +1114,13 @@ function paintMealsBody(plans, mealPrefs) {
       </div>`;
   }
 
-  // Energy Balance (TDEE) + the nutrition check-in are co-located here, with the
-  // meal plan — the expenditure read and the meal-plan loop in one place. The slot
-  // ids (#energyHero / #energyCard / #checkinResult) match the shared renderers in
-  // 05-progress.js (paintEnergyBody / runNutritionCheckin), reused verbatim.
-  const energyBlock = `<section class="meal-energy" id="mealEnergy">
-      <div id="dayFuelSlot" class="dayfuel-slot"></div>
-      <div id="energyHero"></div>
-      <div id="energyCard">${loadingState("Reading your trend…")}</div>
-      <div id="checkinResult" class="checkin-result"></div>
-    </section>`;
-  view.innerHTML = segBar("meals", planSeg()) + body + energyBlock + `
+  view.innerHTML = segBar("meals", planSeg()) + body + `
     <details class="mp-history">
       <summary class="lbl">Past meal plans</summary>
       <div id="mealHist" style="margin-top:10px"></div>
     </details>`;
   wireSeg(PLAN_HANDLERS);
   runCountUps(view);
-  loadMealsEnergy(pollToken);
-  loadDayFuel(pollToken);
 
   renderMealPlans(plans, "#mealHist", () => renderMeals());
   wireMealPrefs();
@@ -1139,8 +1151,8 @@ function paintMealsBody(plans, mealPrefs) {
 }
 
 // SWR over the derived expenditure (key shared with the old Energy view), painted
-// into the Meals view's #energyHero/#energyCard via the shared paintEnergyBody. A
-// warm re-entry paints instantly, then revalidates. Bails if the slot's gone.
+// into whichever nutrition surface owns #energyHero/#energyCard. A warm re-entry
+// paints instantly, then revalidates. Bails if the slot's gone.
 function loadMealsEnergy(token) {
   if (!view.querySelector("#energyCard")) return;
   const peek = peekCached("progress:energy");
@@ -1156,11 +1168,10 @@ function loadMealsEnergy(token) {
 }
 
 // ---------- Today's fuel: review + quick-edit of what's logged today ----------
-// Co-located with the meal plan + Energy Balance — all nutrition in one place. A calm
-// list of today's logged food with the running totals and, ONLY when a real target
-// exists, a gentle "remaining" ("remaining", never "consumed"; never red). Each row
-// taps open to correct a macro / rename / change the meal slot, or delete. Capture
-// stays in Chat — this is review + correction, never a logging form. Pull, never push.
+// A calm list of today's logged food with the running totals and, ONLY when a real
+// target exists, a gentle "remaining" ("remaining", never "consumed"; never red).
+// Each row taps open to correct a macro / rename / change the meal slot, or delete.
+// Capture stays in Chat — this is review + correction, never a logging form.
 const MEAL_LABEL = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", snack: "Snack", meal: "Meal" };
 
 function dayFuelHtml(d) {
@@ -1267,7 +1278,7 @@ function openFoodEdit(id, fromEl) {
       catch { toast("Couldn't save"); return; }
       swrInvalidate("progress:energy"); // intake changed — Energy Balance reads it
       closeDetail(true);
-      renderMeals();
+      rerenderFoodSurface();
     });
     const del = el.querySelector("#fedDel");
     if (del) del.addEventListener("click", () => armDelete(del, async () => {
@@ -1275,7 +1286,7 @@ function openFoodEdit(id, fromEl) {
       catch { toast("Couldn't remove"); return; }
       swrInvalidate("progress:energy");
       closeDetail(true);
-      renderMeals();
+      rerenderFoodSurface();
     }));
   });
 }
