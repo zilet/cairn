@@ -57,9 +57,16 @@ COPY agents.json ./
 RUN mkdir -p /data \
  && chown -R app:app /app /data /home/app /usr/local/lib/node_modules /usr/local/bin
 
+# The exact release version, passed from the git tag by the release workflow so
+# the in-app update check is precise even on the rolling :latest tag. Empty on a
+# local/source build — version.ts then falls back to package.json. A non-version
+# value (e.g. a branch name on a dispatch build) is ignored by version.ts.
+ARG CAIRN_VERSION=""
+
 ENV NODE_ENV=production \
     PORT=8787 \
     DATA_DIR=/data \
+    CAIRN_VERSION=${CAIRN_VERSION} \
     AGENT_CLI_UPDATE_SCRIPT=/usr/local/bin/cairn-update-agent-clis \
     PATH="/usr/local/bin:${PATH}"
 

@@ -10,6 +10,8 @@ import { db, todayISO } from "./db.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "./chatTurns.js";
 import { enqueueAgentJob, cancelAgentJob, onJobEvent } from "./agentJobs.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "./agentCliUpdates.js";
+import { getUpdateStatus, checkForUpdate } from "./updateCheck.js";
+import { getVersion } from "./version.js";
 import {
   agentStatusFor,
   suggestSession,
@@ -1745,7 +1747,21 @@ api.get("/agent-stats", (req, res) => {
   res.json(repo.getAgentStats({ recent, days }));
 });
 
-api.get("/health", (_req, res) => res.json({ ok: true, auth_required: authEnabled }));
+api.get("/health", (_req, res) => res.json({ ok: true, auth_required: authEnabled, version: getVersion() }));
+
+// ---- Self-hosted update detection (pull-never-push) -------------------------
+// The running version, and whether a newer Cairn release exists. The status is
+// served from the app_state cache (no network on this path); the quiet daily
+// background check (scheduler) keeps it fresh. POST forces an immediate check.
+api.get("/version", (_req, res) => res.json({ version: getVersion() }));
+
+api.get("/update-status", (_req, res) => res.json(getUpdateStatus()));
+
+api.post("/update-check", async (_req, res) => {
+  // Explicit operator pull — reaches GitHub now and returns the fresh status.
+  // checkForUpdate never throws (errors fold into status.error).
+  res.json(await checkForUpdate());
+});
 
 // Global JSON error handler — registered LAST so any uncaught route error
 // returns JSON, not Express's default HTML error page (the PWA's api() helper

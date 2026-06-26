@@ -3,6 +3,7 @@ import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
 import { evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
 import { precomputeDayRead, localToday } from "./dayread.js";
+import { checkForUpdate } from "./updateCheck.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -287,6 +288,33 @@ export function startScheduler() {
     }
   };
 
+  // ---- Self-hosted update check (pull-never-push). Once per day at most, gated
+  //      on settings.update_check_enabled. Reaches the GitHub Releases API and
+  //      STORES the result in app_state; nothing notifies — the Settings → Data
+  //      card reads it. Stamp-first so a persistent-offline box checks at most
+  //      once/day instead of hammering every minute; a transient failure just
+  //      waits for tomorrow (the manual "Check now" button covers an immediate
+  //      retry, and getUpdateStatus still serves the last good cache). ----
+  let updateCheckBusy = false;
+  const updateCheckTick = async () => {
+    if (updateCheckBusy) return;
+    if (!repo.getSettings().update_check_enabled) return;
+    const today = localToday();
+    if (repo.getAppState("update_check_last_date") === today) return; // already checked today
+    updateCheckBusy = true;
+    repo.setAppState("update_check_last_date", today); // stamp first → at most one check/day
+    try {
+      const r = await checkForUpdate();
+      if (r.error) console.log(`[update] check unavailable (calm no-op): ${r.error}`);
+      else if (r.update_available) console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
+      else console.log(`[update] up to date (${r.current}).`);
+    } catch (e: any) {
+      console.error(`[update] check error: ${e?.message ?? e}`);
+    } finally {
+      updateCheckBusy = false;
+    }
+  };
+
   const s = repo.getSettings(); // also lazily creates the row (seeding env defaults)
   console.log(
     s.coach_enabled
@@ -299,7 +327,9 @@ export function startScheduler() {
   setInterval(garminTick, 60_000);
   setInterval(precomputeTick, 60_000);
   setInterval(memoryTick, 60_000); // Stream 2: nightly memory maintenance
+  setInterval(updateCheckTick, 60_000); // self-hosted update check (≤ once/day)
   setTimeout(garminTick, 45_000); // the boot-time pass; later passes ride the minute tick
+  setTimeout(updateCheckTick, 30_000); // first update check shortly after boot (then daily)
 
   // Boot warm: if today's read isn't cached yet (e.g. a mid-day restart), compute
   // it in the background so the very next open is instant too. Safe no-op when an

@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**201 routes** across 75 groups.
+**204 routes** across 78 groups.
 
 ## `/activities`
 
@@ -571,6 +571,24 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/trajectory` |  |
+
+## `/update-check`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/update-check` |  |
+
+## `/update-status`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/update-status` |  |
+
+## `/version`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/version` | The running version, and whether a newer Cairn release exists. The status is served from the app_state cache (no network on this path); the quiet daily background check (scheduler) keeps it fresh. POST forces an immediate check. |
 
 ## `/volume`
 

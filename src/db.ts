@@ -475,7 +475,8 @@ CREATE TABLE IF NOT EXISTS settings (
   proactive_enabled INTEGER DEFAULT 1,        -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
   research_enabled INTEGER DEFAULT 0,         -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
   bg_ops_enabled INTEGER DEFAULT 1,           -- 1 = run supported agentic ops as durable background jobs (off ⇒ legacy inline blocking behavior)
-  agent_routes TEXT DEFAULT ''                -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
+  agent_routes TEXT DEFAULT '',               -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
+  update_check_enabled INTEGER DEFAULT 1      -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each

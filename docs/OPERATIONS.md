@@ -76,6 +76,26 @@ configured day and hour. For Belgrade, use `TZ=Europe/Belgrade`.
 
 ---
 
+## Knowing when to update
+
+Cairn tells you when a newer release exists — you never have to watch the repo. A quiet
+daily background check (in the scheduler) asks the public **GitHub Releases API** for the
+latest tag, compares it to the running version, and caches the result. It is **pull, never
+push**: nothing notifies you; the answer waits in **Settings → Data → Cairn version**, which
+shows the running version, "up to date" or "vX.Y.Z is available", a **What's new** link, and
+the copy-paste **How to update** commands. A **Check now** button forces an immediate check.
+
+The check is on by default and is one toggle to disable ("Check for new Cairn releases").
+It sends nothing but an anonymous request — no instance id, no telemetry — and when off,
+Cairn makes no outbound update request at all. The running version is also exposed at
+`GET /api/health` and `GET /api/version`, and the full status at `GET /api/update-status`
+(MCP `get_update_status` / `check_for_update`). Knobs:
+
+- `CAIRN_VERSION` — the release workflow bakes the exact tag into the image so the check is
+  precise even on the `:latest` tag; on a source build it falls back to `package.json`.
+- `CAIRN_UPDATE_REPO` — `owner/repo` to check against (defaults to the upstream repo); set
+  this on a fork that cuts its own releases.
+
 ## The Update / Deploy Flow
 
 From a source checkout:

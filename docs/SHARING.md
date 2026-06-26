@@ -128,6 +128,26 @@ Pick **one** to start; the login persists in the `cairn-home` volume. Always use
 written as root is invisible to the server process. The app also has an offline `stub` agent for
 smoke tests. (If you started Cairn via `docker compose`, `docker compose exec …` is equivalent.)
 
+## Updating Cairn
+
+Cairn checks for new releases for you. A quiet daily background check compares your running
+version against the latest published release and surfaces the result under **Settings → Data
+→ Cairn version** — "up to date" or "vX.Y.Z is available" with a *What's new* link and the
+exact update commands. It is pull, never push: nothing notifies you, and it sends only an
+anonymous request (no data leaves your instance). One toggle ("Check for new Cairn releases")
+disables it entirely.
+
+When an update is available, back up first (Settings → Data → **Download SQLite snapshot**),
+then pull the new image and restart — your data lives in Docker volumes, so updating never
+touches it, and schema migrations run automatically on boot:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Started with the one-line `docker run`? Pull `ghcr.io/zilet/cairn:latest` and recreate the
+container. Building from source? `git pull && docker compose up -d --build`.
+
 ## Updating CLI Tools
 
 The image installs the latest supported CLIs when it is built. On a long-running

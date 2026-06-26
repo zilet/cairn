@@ -72,6 +72,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bake the exact tag into the image so the in-app update check reports a
+          # precise running version even on the :latest tag. Non-tag dispatch
+          # builds pass a branch name, which version.ts ignores (→ package.json).
+          build-args: |
+            CAIRN_VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

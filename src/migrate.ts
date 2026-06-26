@@ -480,6 +480,11 @@ export const MIGRATIONS: Migration[] = [
       "avg_vertical_osc_cm REAL", "avg_vertical_ratio REAL",
     ]) addColumn(db, "garmin_activities", col);
   } },
+  { version: 47, name: "settings-update-check-enabled", up: (db) =>
+    // Self-hosted update detection: a quiet daily check against the GitHub
+    // Releases API surfaces "a newer Cairn is available" in Settings → Data
+    // (pull, never push). Default ON; one toggle disables the outbound check.
+    addColumn(db, "settings", "update_check_enabled INTEGER DEFAULT 1") },
 ];
 
 export function runMigrations(db: DatabaseSync) {

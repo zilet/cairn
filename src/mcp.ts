@@ -30,6 +30,7 @@ import {
   agentModelsOp,
 } from "./coachOps.js";
 import { computeDayRead, localToday } from "./dayread.js";
+import { getUpdateStatus, checkForUpdate } from "./updateCheck.js";
 
 function asText(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -844,6 +845,16 @@ export function buildMcpServer(): McpServer {
     "Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up).",
     { recent: z.number().int().optional(), days: z.number().int().optional() },
     async ({ recent, days }) => asText(repo.getAgentStats({ recent, days })));
+
+  server.tool("get_update_status",
+    "Get the running Cairn version and whether a newer release is available (current, latest, update_available, html_url, notes, checked_at, enabled). Served from the cached daily check — no network on this call. Pull-never-push: nothing notifies; the result just waits in Settings → Data.",
+    {},
+    async () => asText(getUpdateStatus()));
+
+  server.tool("check_for_update",
+    "Force an immediate check against the GitHub Releases API for a newer Cairn version, then return the fresh status. Use when you want to refresh now rather than wait for the daily background check. Never throws — a network/rate-limit failure is reported in the status `error` field.",
+    {},
+    async () => asText(await checkForUpdate()));
 
   server.tool("list_meal_plans", "List recent meal plans.", { limit: z.number().int().optional() },
     async ({ limit }) => asText(repo.listMealPlans(limit ?? 10)));

@@ -26,6 +26,7 @@ export interface Settings {
   research_enabled: boolean;            // host-side evidence research (default OFF; off ⇒ deterministic, no network)
   bg_ops_enabled: boolean;              // run supported agentic ops as durable background jobs (off ⇒ legacy inline blocking)
   agent_routes: Record<string, string>; // optional per-task agent routing { task -> agent }; {} = no routing (Auto = today's rotation)
+  update_check_enabled: boolean;        // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
   updated_at?: string;
 }
 
@@ -81,6 +82,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["research_enabled", "INTEGER DEFAULT 0"],
   ["bg_ops_enabled", "INTEGER DEFAULT 1"],
   ["agent_routes", "TEXT DEFAULT ''"],
+  ["update_check_enabled", "INTEGER DEFAULT 1"],
 ];
 let settingsSchemaChecked = false;
 
@@ -119,6 +121,7 @@ function defaultSettings(): Settings {
     research_enabled: false, // host-side research off by default — opt-in, deterministic when off
     bg_ops_enabled: true, // durable background jobs on by default (the calm, fast path)
     agent_routes: {}, // no per-task routing by default — "auto" rotates as before
+    update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
   };
 }
 
@@ -192,6 +195,8 @@ function rowToSettings(row: any): Settings {
     bg_ops_enabled: row.bg_ops_enabled == null ? true : !!row.bg_ops_enabled,
     // NULL/'' on old rows (column added by migration v34) parses to {} — no routing.
     agent_routes: parseRoutes(row.agent_routes),
+    // NULL on old rows (column added by migration v47) defaults to ON.
+    update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
     updated_at: row.updated_at,
   };
 }
@@ -254,6 +259,7 @@ export function setSettings(patch: any): Settings {
     bg_ops_enabled: patch.bg_ops_enabled !== undefined ? !!patch.bg_ops_enabled : cur.bg_ops_enabled,
     // Per-task routing: validated below (known task + known agent only).
     agent_routes: patch.agent_routes !== undefined ? parseRoutes(patch.agent_routes) : cur.agent_routes,
+    update_check_enabled: patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
   };
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
   // Drop any route pointing at an agent that doesn't exist (agents.json is the
@@ -268,12 +274,12 @@ export function setSettings(patch: any): Settings {
   db.prepare(
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
-       garmin_username=?, garmin_password=?, gemini_api_key=?, research_enabled=?, bg_ops_enabled=?, agent_routes=?, updated_at=datetime('now') WHERE id = 1`
+       garmin_username=?, garmin_password=?, gemini_api_key=?, research_enabled=?, bg_ops_enabled=?, agent_routes=?, update_check_enabled=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy, JSON.stringify(merged.agent_order), JSON.stringify(merged.disabled_agents),
     merged.rr_cursor, merged.coach_enabled ? 1 : 0, merged.coach_day, merged.coach_hour,
     merged.onboarded ? 1 : 0, merged.enrich_enabled ? 1 : 0, merged.proactive_enabled ? 1 : 0, merged.art_enabled ? 1 : 0, merged.art_enabled_at ?? "", merged.meal_prefs,
-    merged.garmin_username, garminPassword, geminiApiKey, merged.research_enabled ? 1 : 0, merged.bg_ops_enabled ? 1 : 0, JSON.stringify(merged.agent_routes)
+    merged.garmin_username, garminPassword, geminiApiKey, merged.research_enabled ? 1 : 0, merged.bg_ops_enabled ? 1 : 0, JSON.stringify(merged.agent_routes), merged.update_check_enabled ? 1 : 0
   );
   return getSettings();
 }

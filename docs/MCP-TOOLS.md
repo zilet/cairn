@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**167 tools.**
+**169 tools.**
 
 | Tool | Description |
 |---|---|
@@ -18,6 +18,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `advance_block_week` | Advance a block to its next week — bumps week_index, transitions the phase per the deload schedule, and auto-completes past the last week. Omit id to advance the active block. |
 | `apply_progression` | Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression) via the existing propose→apply path — never auto-applied, never a gate. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose). |
 | `apply_proposal` | Apply a draft proposal's target changes to the plan. |
+| `check_for_update` | Force an immediate check against the GitHub Releases API for a newer Cairn version, then return the fresh status. Use when you want to refresh now rather than wait for the daily background check. Never throws — a network/rate-limit failure is reported in the status `error` field. |
 | `confirm_goal_checkin` | Restart the gentle 'is this still your goal?' clock (Era 2): records that the athlete confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else. |
 | `consolidate_memory` | Quietly tidy the memory store: merge near-duplicates, supersede contradictions, promote recurring observations to durable traits. Marks, never hard-deletes. Returns the counts. |
 | `create_block` | Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random. |
@@ -96,6 +97,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_symptom_links` | Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs. |
 | `get_today_agenda` | The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today). |
 | `get_trajectory` | The athlete's forward ARC: a periodized horizon (weeks/phase) toward their goals (body-comp, longevity markers, any race), the milestones along it, and today framed as the next step on the path. Plain words, no completion %; null line when there's no goal/block/race. |
+| `get_update_status` | Get the running Cairn version and whether a newer release is available (current, latest, update_available, html_url, notes, checked_at, enabled). Served from the cached daily check — no network on this call. Pull-never-push: nothing notifies; the result just waits in Settings → Data. |
 | `get_volume` | Training volume (tonnage) broken down by muscle group over the last N days (default 30). |
 | `get_week_ahead` | Sketch the SHAPE of the next several days — lift / run / mixed / rest — as a calm SUGGESTION to reshape, never a fixed schedule. Balances the lifting split with easy aerobic base work, honoring injuries, recovery and training health-directives. Agentic with a deterministic plan-rotation floor, so it always returns a usable shape; cached per day+plan+goal. |
 | `get_weekly_stats` | Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes. |

@@ -18,6 +18,7 @@ test("getSettings lazily creates the singleton with sane defaults", () => {
   assert.equal(s.enrich_enabled, true);
   assert.equal(s.art_enabled, true);
   assert.equal(s.meal_prefs, "");
+  assert.equal(s.update_check_enabled, true); // quiet update check on by default
 });
 
 test("setSettings -> getSettings persists the coach schedule + toggles", () => {
@@ -38,6 +39,17 @@ test("setSettings -> getSettings persists the coach schedule + toggles", () => {
   assert.equal(s.onboarded, true);
   assert.equal(s.enrich_enabled, false);
   assert.equal(s.art_enabled, false);
+});
+
+test("update_check_enabled round-trips and defaults ON for old NULL rows", () => {
+  // Explicit off, then back on.
+  repo.setSettings({ update_check_enabled: false });
+  assert.equal(repo.getSettings().update_check_enabled, false);
+  repo.setSettings({ update_check_enabled: true });
+  assert.equal(repo.getSettings().update_check_enabled, true);
+  // A pre-v47 row (column NULL) reads as ON (the migration default + rowToSettings guard).
+  db.prepare("UPDATE settings SET update_check_enabled = NULL WHERE id = 1").run();
+  assert.equal(repo.getSettings().update_check_enabled, true);
 });
 
 test("meal_prefs round-trips (trimmed, capped at 2000 chars)", () => {
