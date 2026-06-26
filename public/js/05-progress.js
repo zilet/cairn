@@ -727,6 +727,38 @@ function runComplianceLine(c) {
     </div>`;
 }
 
+// The bests for ONE sport, as scannable rows — pace at standard distances for foot
+// sports (run/walk), distance/duration/speed for everything else. A cyclist's best
+// is read in km/h, never as a min/km "pace" (the whole point of the sport split).
+function enduranceBestRows(g) {
+  const rows = [];
+  if (g.longest_km) rows.push({ label: "Longest distance", val: `${fmtKm(g.longest_km.value)} km`, date: g.longest_km.date, type: g.longest_km.type });
+  if (g.longest_min) rows.push({ label: "Longest duration", val: `${Math.round(g.longest_min.value)} min`, date: g.longest_min.date, type: g.longest_min.type });
+  if (g.paced) {
+    for (const bp of (g.best_pace || [])) rows.push({ label: `Best ${prDistLabel(bp.distance_km)} pace`, val: `${fmtPaceKm(bp.min_per_km)}/km`, date: bp.date, type: bp.type });
+  } else if (g.best_speed_kmh) {
+    rows.push({ label: "Best speed", val: `${fmtSpeedKmh(g.best_speed_kmh.value)} km/h`, date: g.best_speed_kmh.date, type: g.best_speed_kmh.type });
+  }
+  return rows;
+}
+
+// One sport's bests as a labelled card (sport name + the rows). `idx` seeds the
+// reveal stagger so groups cascade in order.
+function enduranceSportCardHtml(g, idx) {
+  const rows = enduranceBestRows(g);
+  if (!rows.length) return "";
+  const body = rows.map((r, i) => `
+    <div class="end-pr reveal" style="${stagger(idx + i)}">
+      <div class="end-pr-id">
+        <span class="end-pr-label">${escHtml(r.label)}</span>
+        ${r.date ? `<span class="end-pr-when lbl" title="${escAttr(absDate(r.date))}">${escHtml(relAge(r.date))}${r.type ? ` · ${escHtml(r.type)}` : ""}</span>` : ""}
+      </div>
+      <span class="end-pr-val numeral">${escHtml(r.val)}</span>
+    </div>`).join("");
+  const head = g.label ? `<div class="end-pr-sport reveal" style="${stagger(idx)}">${escHtml(g.label)}</div>` : "";
+  return `${head}<div class="end-pr-card">${body}</div>`;
+}
+
 function paintEnduranceBody(end, prs, goal, compliance, settings) {
   const body = view.querySelector("#endBody");
   if (!body) return;
@@ -736,7 +768,7 @@ function paintEnduranceBody(end, prs, goal, compliance, settings) {
   // configured (cardioSyncLine returns "" otherwise). Shared with Today's run card.
   const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(settings, {}) : "";
   const hasWeek = end && (end.week_km > 0 || end.week_moving_min > 0 || end.longest_km != null || end.longest_min != null);
-  const hasPRs = prs && (prs.longest_km || prs.longest_min || (prs.best_pace || []).length);
+  const hasPRs = prs && ((prs.sports || []).length || prs.longest_km || prs.longest_min || (prs.best_pace || []).length);
   if (!hasWeek && !hasPRs) {
     body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + syncHtml +
       emptyStateHtml(art("activity", "run"),
@@ -779,27 +811,37 @@ function paintEnduranceBody(end, prs, goal, compliance, settings) {
   // Time-in-zone bar.
   html += zoneBarHtml(end && end.time_in_zone);
 
-  // Endurance PRs — the endurance analogue of the est-1RM view. Longest distance +
-  // best pace at each standard distance, each a plain number with its date.
+  // Endurance PRs — the endurance analogue of the est-1RM view, GROUPED BY SPORT so
+  // a best is read in its own modality: running pace leads (the athlete's sport),
+  // cross-training (cycling/MTB/swim) sits in a quiet disclosure with distance /
+  // duration / speed — never a min/km "pace", which only makes sense on foot.
   if (hasPRs) {
-    const prRows = [];
-    if (prs.longest_km) prRows.push({ label: "Longest distance", val: `${fmtKm(prs.longest_km.value)} km`, date: prs.longest_km.date, type: prs.longest_km.type });
-    if (prs.longest_min) prRows.push({ label: "Longest duration", val: `${Math.round(prs.longest_min.value)} min`, date: prs.longest_min.date, type: prs.longest_min.type });
-    for (const bp of (prs.best_pace || [])) {
-      prRows.push({ label: `Best ${prDistLabel(bp.distance_km)} pace`, val: `${fmtPaceKm(bp.min_per_km)}/km`, date: bp.date, type: bp.type });
+    // Prefer the server's per-sport grouping; fall back to a single synthesized group
+    // from the flat fields for an older API response.
+    let groups = (prs.sports || []).map((g) => ({ ...g })).filter((g) => enduranceBestRows(g).length);
+    if (!groups.length) {
+      groups = [{
+        sport: prs.primary_sport || "run", label: "", paced: true,
+        longest_km: prs.longest_km, longest_min: prs.longest_min, best_pace: prs.best_pace || [], best_speed_kmh: null,
+      }].filter((g) => enduranceBestRows(g).length);
     }
-    const rows = prRows.map((r, i) => `
-      <div class="end-pr reveal" style="${stagger(i + 4)}">
-        <div class="end-pr-id">
-          <span class="end-pr-label">${escHtml(r.label)}</span>
-          ${r.date ? `<span class="end-pr-when lbl" title="${escAttr(absDate(r.date))}">${escHtml(relAge(r.date))}${r.type ? ` · ${escHtml(r.type)}` : ""}</span>` : ""}
-        </div>
-        <span class="end-pr-val numeral">${escHtml(r.val)}</span>
-      </div>`).join("");
-    html += `<div class="end-prs">
-        <div class="lbl end-prs-head reveal" style="${stagger(3)}">Personal bests</div>
-        <div class="end-pr-card">${rows}</div>
-      </div>`;
+    if (groups.length) {
+      // With a single sport, the bests are unambiguous — drop the redundant label.
+      if (groups.length === 1) groups[0] = { ...groups[0], label: "" };
+      const lead = groups[0];
+      const others = groups.slice(1);
+      const otherHtml = others.length
+        ? `<details class="end-pr-more">
+            <summary>Cross-training bests</summary>
+            <div class="end-pr-more-body">${others.map((g, gi) => enduranceSportCardHtml(g, 5 + gi)).join("")}</div>
+          </details>`
+        : "";
+      html += `<div class="end-prs">
+          <div class="lbl end-prs-head reveal" style="${stagger(3)}">Personal bests</div>
+          ${enduranceSportCardHtml(lead, 4)}
+          ${otherHtml}
+        </div>`;
+    }
   }
 
   body.innerHTML = html;
@@ -1352,6 +1394,12 @@ function paintProgramBody(data) {
     html += `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>`;
   }
 
+  // Performance standing — the "where you stand" CAPACITY read (benchmarked vs
+  // sex/age strength standards + VO2max norms): the hero of the Program view. Loaded
+  // async into this slot from GET /api/performance; renders nothing until there's
+  // something benchmarked. Sits above the trajectory detail (it's the orientation).
+  html += `<div id="progPerfSlot" class="pperf-slot reveal" style="${stagger(2)}"></div>`;
+
   // Periodization block — the framing (loaded async into this slot): the active
   // block (advance/complete) or a calm "start a block" affordance.
   html += `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
@@ -1415,8 +1463,106 @@ function paintProgramBody(data) {
   const tidyBtn = view.querySelector("#progTidyBtn");
   if (tidyBtn) tidyBtn.addEventListener("click", () => tidyExerciseNames(tidyBtn));
 
+  loadPerformance(); // the "where you stand" capacity benchmark hero
   loadProgramBlock(); // periodization block card (active) or a "start a block" affordance
   loadProgramAdjustments(); // the "what changed & why" digest
+}
+
+// ---------- Performance standing — the "where you stand" capacity read ----------
+// Fed by GET /api/performance: where each benchmark lift sits as a sex/age
+// percentile/level against proven strength standards, VO2max-for-age, the strength
+// imbalances, the single lever, lifts worth re-testing, a variety nudge, and a
+// holistic balance line. The athletic counterpart to the health Standing — the
+// motivational, scientific "where am I, really" the athlete asked for. No scores:
+// percentile + the recognized level ladder (beginner→elite) are reference reads.
+async function loadPerformance() {
+  const slot = view.querySelector("#progPerfSlot");
+  if (!slot) return;
+  let p = null;
+  try { p = await api("/performance"); } catch { p = null; }
+  if (!p || (!(p.capacities || []).length && !p.endurance && !p.lever)) { slot.innerHTML = ""; return; }
+  slot.innerHTML = performanceHtml(p);
+}
+
+function pctClamp(n) { const x = Number(n); return Number.isFinite(x) ? Math.max(2, Math.min(99, Math.round(x))) : 0; }
+
+function capacityRowHtml(c) {
+  const tone = c.tone === "strong" ? "strong" : c.tone === "watch" ? "watch" : "steady";
+  const pct = pctClamp(c.percentile);
+  const sub = [];
+  if (c.exercise) sub.push(escHtml(c.exercise));
+  if (c.est_1rm) sub.push(`~${escHtml(String(c.est_1rm))} lb 1RM`);
+  sub.push(`${pct}th pct for your ${escHtml(c.age_band || "age")}`);
+  if (c.to_next) sub.push(`+${escHtml(String(c.to_next.lb))} lb → ${escHtml(c.to_next.level)}`);
+  return `<div class="pcap">
+    <div class="pcap-top"><span class="pcap-label">${escHtml(c.label)}</span><span class="pcap-level pcap-${tone}">${escHtml(c.level)}</span></div>
+    <div class="pcap-bar"><span class="pcap-fill pcap-fill-${tone}" style="width:${pct}%"></span><span class="pcap-mark" style="left:${pct}%"></span></div>
+    <div class="pcap-sub lbl">${sub.join(" · ")}</div>
+  </div>`;
+}
+
+function performanceHtml(p) {
+  const caps = p.capacities || [];
+  const chips = (p.momentum && p.momentum.chips) || [];
+  let h = `<section class="pperf">`;
+
+  // Hero — the one-line "where you are".
+  if (p.hero && p.hero.headline) {
+    h += `<div class="pperf-hero">
+      <div class="pperf-hero-mast lbl">Where you stand</div>
+      <div class="pperf-hero-head">${escHtml(p.hero.headline)}</div>
+      ${p.hero.sub ? `<div class="pperf-hero-sub">${escHtml(p.hero.sub)}</div>` : ""}
+      ${chips.length ? `<div class="pperf-chips">${chips.map((c) => `<span class="pperf-chip pperf-chip-${c.dir === "good" ? "good" : "neutral"}">${escHtml(c.text)}</span>`).join("")}</div>` : ""}
+    </div>`;
+  }
+
+  // Capacity rows — the benchmarked "level for your age" per movement.
+  if (caps.length) {
+    h += `<div class="pperf-caps">${caps.map(capacityRowHtml).join("")}</div>`;
+  }
+
+  // Aerobic capacity (endurance/hybrid).
+  if (p.endurance && p.endurance.headline && p.endurance.vo2max != null) {
+    const tone = p.endurance.tone === "strong" ? "strong" : p.endurance.tone === "watch" ? "watch" : "steady";
+    h += `<div class="pperf-aero pperf-aero-${tone}">${escHtml(p.endurance.headline)}</div>`;
+  }
+
+  // The one lever — terracotta well, the single biggest focus.
+  if (p.lever && p.lever.headline) {
+    h += `<div class="pperf-lever">
+      <div class="pperf-lever-lbl lbl">The lever</div>
+      <div class="pperf-lever-head">${escHtml(p.lever.headline)}</div>
+      ${p.lever.why ? `<div class="pperf-lever-why">${escHtml(p.lever.why)}</div>` : ""}
+      ${p.lever.target ? `<div class="pperf-lever-target">${escHtml(p.lever.target)}</div>` : ""}
+    </div>`;
+  }
+
+  // Imbalances to address.
+  if ((p.imbalances || []).length) {
+    h += `<div class="pperf-block"><div class="pperf-block-lbl lbl">Balance &amp; symmetry</div>${p.imbalances
+      .map((i) => `<div class="pperf-imb pperf-imb-${i.severity === "watch" ? "watch" : "note"}"><div class="pperf-imb-title">${escHtml(i.title)}</div><div class="pperf-imb-why">${escHtml(i.why)}</div></div>`)
+      .join("")}</div>`;
+  }
+
+  // Worth re-testing.
+  if ((p.tests_due || []).length) {
+    h += `<div class="pperf-block"><div class="pperf-block-lbl lbl">Worth re-testing</div>${p.tests_due
+      .map((t) => `<div class="pperf-test"><span class="pperf-test-ex">${escHtml(t.exercise)}</span><span class="pperf-test-why">${escHtml(t.why)}</span></div>`)
+      .join("")}</div>`;
+  }
+
+  // Variety nudge.
+  if (p.variety && p.variety.note) {
+    h += `<div class="pperf-variety"><div class="pperf-block-lbl lbl">A little variety</div><div class="pperf-variety-note">${escHtml(p.variety.note)}</div>${
+      (p.variety.suggestions || []).length ? `<div class="pperf-variety-opts">${p.variety.suggestions.map((s) => `<span class="pperf-opt">${escHtml(s)}</span>`).join("")}</div>` : ""
+    }</div>`;
+  }
+
+  // Holistic balance & life line.
+  if (p.balance_note) h += `<div class="pperf-balance">${escHtml(p.balance_note)}</div>`;
+
+  h += `</section>`;
+  return h;
 }
 
 // "Tidy exercise names" — the exercise-canon analogue to Health's "Align lab names".

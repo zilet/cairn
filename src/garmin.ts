@@ -16,6 +16,11 @@ const HR_ZONE_LIMIT = Math.max(0, Math.min(60, Number(process.env.GARMIN_HR_ZONE
 // extra call each), bounded the same way.
 const STRENGTH_LIMIT = Math.max(0, Math.min(60, Number(process.env.GARMIN_STRENGTH_LIMIT ?? 20)));
 
+// How many recent activities to enrich with the per-activity detail call (one
+// extra call each) for training load + running dynamics (ground contact, vertical
+// oscillation/ratio). Bounded like the others.
+const DETAIL_LIMIT = Math.max(0, Math.min(60, Number(process.env.GARMIN_DETAIL_LIMIT ?? 20)));
+
 function isoDaysAgo(days: number): string {
   return new Date(Date.now() - Math.max(0, days - 1) * 864e5).toISOString().slice(0, 10);
 }
@@ -46,6 +51,144 @@ function pickStr(obj: any, keys: string[]): string | null {
   return null;
 }
 
+function normKey(k: string): string {
+  return String(k).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function objectNodes(root: any, path: string[] = [], depth = 0): { obj: any; path: string[] }[] {
+  if (!root || typeof root !== "object" || depth > 5) return [];
+  const here = !Array.isArray(root) ? [{ obj: root, path }] : [];
+  const kids = Object.entries(root).flatMap(([k, v]) => objectNodes(v, [...path, k], depth + 1));
+  return [...here, ...kids];
+}
+
+// Like pickNum but searches the whole object TREE (root-first) for the first node
+// carrying one of the candidate keys. Garmin's undocumented metric payloads wrap the
+// score we want at varying depths (e.g. endurance/hill score sometimes nest under a
+// DTO; training load lives under acuteTrainingLoadDTO) — a flat top-level pickNum
+// misses those. Root is visited before its children, so a top-level summary value
+// still wins over a nested per-sample one. Best-effort / null-safe.
+function pickNumDeep(root: any, keys: string[]): number | null {
+  for (const node of objectNodes(root)) {
+    const v = pickNum(node.obj, keys);
+    if (v != null) return v;
+  }
+  return null;
+}
+
+function contextText(node: { obj: any; path: string[] }): string {
+  const obj = node.obj ?? {};
+  return [
+    ...node.path,
+    obj.sport,
+    obj.sportType,
+    obj.activityType,
+    obj.activityTypeKey,
+    obj.type,
+    obj.label,
+    obj.name,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function normalizeVo2Value(value: number, key: string): number | null {
+  const k = normKey(key);
+  const v = Number(value);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  // Some Garmin maxmet payloads report METs instead of mL/kg/min.
+  const vo2 = k.includes("maxmet") && v > 3 && v < 25 ? v * 3.5 : v;
+  return vo2 >= 10 && vo2 <= 100 ? round1(vo2) : null;
+}
+
+function vo2FromObject(obj: any, mode: "generic" | "cycling", trustedContainer = false): number | null {
+  const hits: { score: number; value: number }[] = [];
+  for (const [key, raw] of Object.entries(obj ?? {})) {
+    const n = asNum(raw);
+    if (n == null) continue;
+    const k = normKey(key);
+    const isCyclingKey = /cycl|bik/.test(k);
+    const hasVo2Key = k.includes("vo2") && k.includes("max");
+    const hasMaxMetKey = k.includes("maxmet");
+    const isValueKey = trustedContainer && (k === "value" || k === "precisevalue");
+    if (mode === "generic" && isCyclingKey) continue;
+    if (mode === "cycling" && !isCyclingKey && !trustedContainer) continue;
+    if (!hasVo2Key && !hasMaxMetKey && !isValueKey) continue;
+    const value = normalizeVo2Value(n, key);
+    if (value == null) continue;
+    const precise = k.includes("precise") ? 0 : 1;
+    const modeFit = mode === "cycling" ? (isCyclingKey ? 0 : 2) : /generic|run|walk/.test(k) ? 0 : 1;
+    const shape = hasVo2Key ? 0 : hasMaxMetKey ? 2 : 4;
+    hits.push({ score: precise + modeFit + shape, value });
+  }
+  hits.sort((a, b) => a.score - b.score);
+  return hits[0]?.value ?? null;
+}
+
+function fitnessAgeFromObject(obj: any): number | null {
+  for (const [key, raw] of Object.entries(obj ?? {})) {
+    if (!normKey(key).includes("fitnessage")) continue;
+    const n = asNum(raw);
+    if (n != null && n >= 10 && n <= 100) return Math.round(n);
+  }
+  return null;
+}
+
+// The /metrics-service/metrics/trainingstatus/aggregated/{date} payload is a
+// COMPOSITE — it carries the latest training status AND the monthly training-load
+// balance in one response. (There is no standalone /trainingloadbalance endpoint;
+// reaching for `/metrics/trainingloadbalance/latest/{name}` 404s — the data only
+// ever ships inside this aggregate.) Both sit under a device-id-keyed map, so we
+// take the first device's row. Pure + null-safe so it can be unit-tested offline.
+export function extractTrainingStatus(status: any): {
+  training_status: string | null;
+  acute_load: number | null;
+  training_load_balance: string | null;
+} {
+  const recent = status?.mostRecentTrainingStatus?.latestTrainingStatusData;
+  const statusDev = recent && typeof recent === "object" ? (Object.values(recent)[0] as any) : null;
+  const lbMap = status?.mostRecentTrainingLoadBalance?.metricsTrainingLoadBalanceDTOMap;
+  const lbDev = lbMap && typeof lbMap === "object" ? (Object.values(lbMap)[0] as any) : null;
+  return {
+    training_status: pickStr(statusDev, ["trainingStatusFeedbackPhrase", "trainingStatus"]),
+    // acuteTrainingLoad nests under acuteTrainingLoadDTO on most devices — search deep.
+    acute_load: pickNumDeep(statusDev, ["acuteTrainingLoad", "dailyTrainingLoadAcute"]),
+    training_load_balance: pickStr(lbDev, [
+      "trainingBalanceFeedbackPhrase", "monthlyLoadBalanceFeedbackPhrase", "feedbackPhrase",
+    ]),
+  };
+}
+
+export function extractGarminActivityVo2(activity: any): number | null {
+  return vo2FromObject(activity, "generic");
+}
+
+export function extractGarminFitnessMetrics(maxmet: any): {
+  vo2max: number | null;
+  vo2max_cycling: number | null;
+  fitness_age: number | null;
+} {
+  const nodes = objectNodes(maxmet);
+  const genericNodes = nodes.filter((node) => !/cycl|bik/.test(contextText(node)));
+  const cyclingNodes = nodes.filter((node) => /cycl|bik/.test(contextText(node)));
+  const namedGeneric = genericNodes.filter((node) => /generic|run|running|walk/.test(contextText(node)));
+
+  const firstVo2 = (list: { obj: any; path: string[] }[], mode: "generic" | "cycling") => {
+    for (const node of list) {
+      const v = vo2FromObject(node.obj, mode, /generic|run|running|walk|cycl|bik|maxmet/.test(contextText(node)));
+      if (v != null) return v;
+    }
+    return null;
+  };
+
+  const vo2max = firstVo2(namedGeneric, "generic") ?? firstVo2(genericNodes, "generic");
+  const vo2max_cycling = firstVo2(cyclingNodes, "cycling");
+  let fitness_age: number | null = null;
+  for (const node of [...namedGeneric, ...genericNodes, ...nodes]) {
+    fitness_age = fitnessAgeFromObject(node.obj);
+    if (fitness_age != null) break;
+  }
+  return { vo2max, vo2max_cycling, fitness_age };
+}
+
 const secToMin = (s: any): number | null => {
   const n = asNum(s);
   return n == null ? null : Math.round((n / 60) * 10) / 10;
@@ -73,6 +216,39 @@ function maxCadence(a: any): number | null {
   ]);
 }
 
+export function extractGarminActivityHrZones(activity: any): any[] | null {
+  const zones = [1, 2, 3, 4, 5]
+    .map((zone) => ({ zone, secs: asNum(activity?.[`hrTimeInZone_${zone}`]), low_hr: null }))
+    .filter((z) => z.secs != null && z.secs > 0);
+  return zones.length ? zones : null;
+}
+
+export function extractGarminActivityTeLabel(activity: any): string | null {
+  const explicit = pickStr(activity, ["trainingEffectLabel", "trainingEffect"]);
+  if (explicit) return explicit.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  const text = [
+    activity?.aerobicTrainingEffectMessage,
+    activity?.anaerobicTrainingEffectMessage,
+  ].filter(Boolean).join(" ").toUpperCase();
+  if (!text) return null;
+  if (text.includes("VO2_MAX") || text.includes("VO2MAX")) return "VO2MAX";
+  if (text.includes("LACTATE_THRESHOLD") || text.includes("THRESHOLD")) return "LACTATE_THRESHOLD";
+  if (text.includes("ANAEROBIC") && !text.includes("NO_ANAEROBIC")) return "ANAEROBIC";
+  if (text.includes("TEMPO")) return "TEMPO";
+  if (text.includes("AEROBIC_BASE")) return "AEROBIC_BASE";
+  if (text.includes("AEROBIC_FITNESS")) return "AEROBIC_FITNESS";
+  if (text.includes("RECOVERY")) return "RECOVERY";
+  return null;
+}
+
+export function extractGarminActivityTemp(activity: any): number | null {
+  const direct = pickNum(activity, ["averageTemperature", "avgTemperature"]);
+  if (direct != null) return direct;
+  const lo = pickNum(activity, ["minTemperature"]);
+  const hi = pickNum(activity, ["maxTemperature"]);
+  return lo != null && hi != null ? round1((lo + hi) / 2) : null;
+}
+
 function activityToInput(a: any): repo.GarminActivityInput {
   const durationSec = asNum(a?.movingDuration) ?? asNum(a?.duration);
   const meters = asNum(a?.distance);
@@ -95,7 +271,7 @@ function activityToInput(a: any): repo.GarminActivityInput {
     elevation_loss_m: asNum(a.elevationLoss),
     aerobic_te: asNum(a.aerobicTrainingEffect),
     anaerobic_te: asNum(a.anaerobicTrainingEffect),
-    te_label: pickStr(a, ["trainingEffectLabel"]),
+    te_label: extractGarminActivityTeLabel(a),
     avg_cadence: avgCadence(a),
     max_cadence: maxCadence(a),
     avg_power: pickNum(a, ["avgPower", "averagePower"]),
@@ -103,8 +279,17 @@ function activityToInput(a: any): repo.GarminActivityInput {
     norm_power: pickNum(a, ["normPower", "normalizedPower"]),
     avg_speed: asNum(a.averageSpeed),
     max_speed: asNum(a.maxSpeed),
-    avg_temp: pickNum(a, ["averageTemperature", "avgTemperature"]),
-    vo2max: pickNum(a, ["vO2MaxValue", "vo2MaxValue"]),
+    avg_temp: extractGarminActivityTemp(a),
+    vo2max: extractGarminActivityVo2(a),
+    hr_zones: extractGarminActivityHrZones(a),
+    // list-payload richness (present but previously uncaptured). Running dynamics
+    // (ground contact, vertical oscillation/ratio) come from the detail call in
+    // syncGarmin — they aren't in the list payload.
+    steps: asNum(a.steps),
+    avg_stride_len: pickNum(a, ["avgStrideLength", "averageStrideLength"]),
+    min_elevation_m: pickNum(a, ["minElevation"]),
+    max_elevation_m: pickNum(a, ["maxElevation"]),
+    lap_count: pickNum(a, ["lapCount"]),
     raw: a,
   };
 }
@@ -117,17 +302,28 @@ export function isGarminConfigured(): boolean {
     && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"));
 }
 
+export function garminClientCredentials(username: string, password: string, hasTokenFiles: boolean) {
+  if (username && password) return { username, password };
+  // garmin-connect requires a credentials object even when OAuth tokens are
+  // loaded immediately afterward; these placeholders are never sent to Garmin.
+  if (hasTokenFiles) return { username: "token", password: "token" };
+  return null;
+}
+
 async function makeClient() {
   const mod = await import("garmin-connect");
   const GarminConnect = (mod as any).GarminConnect || (mod as any).default;
   const { username, password } = repo.getGarminCredentials();
-  const client = new GarminConnect(username && password ? { username, password } : undefined);
-  if (fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json")) && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"))) {
+  const hasTokenFiles = fs.existsSync(path.join(TOKEN_DIR, "oauth1_token.json"))
+    && fs.existsSync(path.join(TOKEN_DIR, "oauth2_token.json"));
+  const credentials = garminClientCredentials(username, password, hasTokenFiles);
+  if (!credentials) {
+    throw new Error("GARMIN_USERNAME/GARMIN_PASSWORD or GARMIN_TOKEN_DIR tokens are required");
+  }
+  const client = new GarminConnect(credentials);
+  if (hasTokenFiles) {
     client.loadTokenByFile(TOKEN_DIR);
     return client;
-  }
-  if (!username || !password) {
-    throw new Error("GARMIN_USERNAME/GARMIN_PASSWORD or GARMIN_TOKEN_DIR tokens are required");
   }
   await client.login();
   fs.mkdirSync(TOKEN_DIR, { recursive: true });
@@ -139,20 +335,72 @@ async function makeClient() {
 // The connector's internal endpoints are undocumented and device-dependent, so
 // every caller treats a null as "not available on this account" and degrades.
 async function rawGet(client: any, url: string): Promise<any> {
+  // The package's get() reaches axios with NO baseURL, so a RELATIVE service path
+  // throws "Invalid URL" — the connectapi host must be prepended. This was the real
+  // root cause behind the all-null rich fields (the instrumentation below exposed it
+  // on the first live sync: every rawGet failed "Invalid URL"). Every internal service
+  // endpoint lives under GC_API (https://connectapi.garmin.com), exactly how the
+  // library's own methods build their absolute URLs (UrlClass.GC_API + "/<service>…").
+  const base = client?.url?.GC_API || "https://connectapi.garmin.com";
+  const full = /^https?:\/\//i.test(url) ? url : `${base}${url.startsWith("/") ? "" : "/"}${url}`;
   try {
-    return await client.get(url);
-  } catch {
+    return await client.get(full);
+  } catch (e: any) {
+    // These endpoints are undocumented and device-dependent — a null is normal.
+    // But the failures used to be INVISIBLE, which masked the displayName bug
+    // (a null displayName silently skipped the whole daily-summary block) and
+    // made wrong-vs-unavailable endpoints indistinguishable. Log + degrade.
+    console.warn(`[garmin] GET ${full} failed: ${e?.message ?? e}`);
     return null;
   }
 }
 
-async function getDisplayName(client: any): Promise<string | null> {
+// The displayName the /usersummary + several /metrics endpoints key on is the
+// account's GUID-style profile id. When the package's getUserProfile() returned
+// null (it throws on some accounts), the ENTIRE daily-summary fetch was skipped —
+// losing stress, body battery, calories, HR extremes, SpO2, respiration, intensity
+// minutes, floors, distance. Fall back hard so a single null never blanks the day.
+async function getDisplayName(client: any, activities: any[] = []): Promise<string | null> {
+  // 1. The package's profile call — the canonical GUID displayName.
   try {
     const profile = await client.getUserProfile();
-    return pickStr(profile, ["displayName", "profileId"]);
-  } catch {
-    return null;
+    const name = pickStr(profile, ["displayName", "profileId"]);
+    if (name) return name;
+  } catch (e: any) {
+    console.warn(`[garmin] getUserProfile failed: ${e?.message ?? e}`);
   }
+  // 2. The social-profile endpoint carries the same GUID-style displayName.
+  const social = await rawGet(client, "/userprofile-service/socialProfile");
+  const socialName = pickStr(social, ["displayName", "profileId"]);
+  if (socialName) return socialName;
+  // 3. Last resort: the activity payloads carry ownerDisplayName / ownerId. Not
+  //    always the GUID the usersummary endpoint wants, but far better than skipping
+  //    the whole block — and rawGet now logs if the resulting URL 404s.
+  for (const a of activities) {
+    const name = pickStr(a, ["ownerDisplayName", "ownerId", "ownerProfilePk"]);
+    if (name) return name;
+  }
+  return null;
+}
+
+// Per-activity detail (one bounded call each): the list payload omits the training
+// load and running dynamics. /activity-service/activity/{id} carries both in
+// summaryDTO. Best-effort / null-safe like every other endpoint.
+async function fetchActivityDetail(client: any, activityId: string | number): Promise<{
+  training_load: number | null;
+  avg_ground_contact_ms: number | null;
+  avg_vertical_osc_cm: number | null;
+  avg_vertical_ratio: number | null;
+} | null> {
+  const data = await rawGet(client, `/activity-service/activity/${activityId}`);
+  const s = data?.summaryDTO ?? data ?? null;
+  if (!s) return null;
+  return {
+    training_load: pickNum(s, ["activityTrainingLoad", "trainingLoad"]),
+    avg_ground_contact_ms: pickNum(s, ["avgGroundContactTime", "averageGroundContactTime"]),
+    avg_vertical_osc_cm: pickNum(s, ["avgVerticalOscillation", "averageVerticalOscillation"]),
+    avg_vertical_ratio: pickNum(s, ["avgVerticalRatio", "averageVerticalRatio"]),
+  };
 }
 
 // ---- per-day field assemblers (each folds one source into the metric) ----
@@ -184,6 +432,23 @@ function foldSleep(sleep: any, m: repo.GarminDailyMetricInput) {
   m.restless_count = asNum(sleep?.restlessMomentsCount);
   const bbChange = asNum(sleep?.bodyBatteryChange);
   if (bbChange != null && bbChange > 0) m.body_battery_charged = bbChange;
+}
+
+// The package's getSleepData returns a REDUCED DTO on some accounts/devices, so
+// sleep_score / avg_sleep_stress / restless_count come back null. The richer
+// wellness endpoint fills those gaps. This is a GAP-FILLER (only sets a field that's
+// still null) — it must never null out a value foldSleep already captured.
+function foldSleepDetail(sleep: any, m: repo.GarminDailyMetricInput) {
+  const d = sleep?.dailySleepDTO ?? sleep;
+  if (!d) return;
+  m.sleep_score = m.sleep_score ?? asNum(d.sleepScores?.overall?.value ?? d.sleepScore ?? d.overallSleepScore);
+  m.avg_sleep_stress = m.avg_sleep_stress ?? asNum(d.avgSleepStress);
+  m.restless_count = m.restless_count ?? asNum(d.restlessMomentsCount ?? sleep?.restlessMomentsCount);
+  m.sleep_min = m.sleep_min ?? secToMin(d.sleepTimeSeconds);
+  m.deep_sleep_min = m.deep_sleep_min ?? secToMin(d.deepSleepSeconds);
+  m.light_sleep_min = m.light_sleep_min ?? secToMin(d.lightSleepSeconds);
+  m.rem_sleep_min = m.rem_sleep_min ?? secToMin(d.remSleepSeconds);
+  m.awake_min = m.awake_min ?? secToMin(d.awakeSleepSeconds);
 }
 
 function foldDailySummary(s: any, m: repo.GarminDailyMetricInput) {
@@ -279,9 +544,29 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     if (tr) { foldReadiness(tr, metric); metric.raw = { ...(metric.raw as any || {}), trainingReadiness: tr }; }
 
     // Sleep skin-temperature deviation (Fenix/Venu/Epix-class only); best-effort.
-    const skin = await rawGet(client, `/wellness-service/wellness/daily/skinTemperature/${iso}`);
+    // FIX: the old path appended the date as a SEGMENT (`…/skinTemperature/${iso}`)
+    // and 404'd on every sync. The wellness skin-temp endpoint takes startDate/endDate
+    // QUERY params (same convention as python-garminconnect's get_skin_temp_data) — a
+    // single day is start==end. Field shape varies by device, so we search the tree
+    // for a deviation value (root-first, so a daily avg wins over a per-sample one).
+    // NOTE: the exact deviation field name still wants live verification on a watch
+    // that reports it; the path + param shape follow the documented convention.
+    const skin = await rawGet(
+      client,
+      `/wellness-service/wellness/daily/skinTemperature?startDate=${iso}&endDate=${iso}`,
+    );
     if (skin) {
-      metric.skin_temp_dev_c = pickNum(skin, ["deviation", "avgDeviation", "sleepTemperatureDeviation"]);
+      metric.skin_temp_dev_c = pickNumDeep(skin, [
+        "avgDeviation", "deviation", "sleepTemperatureDeviation", "temperatureDeviation", "avgDeviationSleep",
+      ]);
+    }
+
+    // Richer sleep DTO — fills sleep_score / avg_sleep_stress / restless_count when
+    // the package's getSleepData returned a reduced shape. Only when something's
+    // actually missing, and only if we resolved a displayName.
+    if (displayName && (metric.sleep_score == null || metric.avg_sleep_stress == null || metric.restless_count == null)) {
+      const fullSleep = await rawGet(client, `/wellness-service/wellness/dailySleepData/${displayName}?date=${iso}&nonSleepBufferMinutes=60`);
+      if (fullSleep) { foldSleepDetail(fullSleep, metric); metric.raw = { ...(metric.raw as any || {}), fullSleep }; }
     }
 
     try {
@@ -297,19 +582,55 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
   if (rows.length) {
     const latest = rows[rows.length - 1];
     const maxmet = await rawGet(client, `/metrics-service/metrics/maxmet/latest/${latest.iso}`);
-    const mm = Array.isArray(maxmet) ? maxmet[0] : maxmet;
-    if (mm) {
-      latest.metric.vo2max = pickNum(mm?.generic, ["vo2MaxPreciseValue", "vo2MaxValue"]);
-      latest.metric.vo2max_cycling = pickNum(mm?.cycling, ["vo2MaxPreciseValue", "vo2MaxValue"]);
-      latest.metric.fitness_age = pickNum(mm?.generic, ["fitnessAge"]) ?? pickNum(mm, ["fitnessAge"]);
+    if (maxmet) {
+      const fit = extractGarminFitnessMetrics(maxmet);
+      latest.metric.vo2max = fit.vo2max;
+      latest.metric.vo2max_cycling = fit.vo2max_cycling;
+      latest.metric.fitness_age = fit.fitness_age; // maxmet rarely carries this — overridden below
     }
+    // Fitness age has its OWN endpoint; the maxmet payload only carries VO2max, so
+    // the old maxmet read returned null almost always. Prefer the dedicated source.
+    const fa = await rawGet(client, `/fitnessage-service/fitnessage/${latest.iso}`);
+    if (fa) {
+      const v = pickNum(fa, ["biologicalAge", "fitnessAge", "achievableFitnessAge"]);
+      if (v != null && v >= 10 && v <= 100) latest.metric.fitness_age = Math.round(v);
+    }
+    // Training status + monthly training-LOAD-BALANCE come from ONE aggregate. The
+    // old code made a SECOND call to `/metrics/trainingloadbalance/latest/{name}` for
+    // the balance phrase, which 404'd every sync — that endpoint doesn't exist; the
+    // balance ships inside this same trainingstatus aggregate (see extractTrainingStatus).
     const status = await rawGet(client, `/metrics-service/metrics/trainingstatus/aggregated/${latest.iso}`);
     if (status) {
-      const recent = status?.mostRecentTrainingStatus?.latestTrainingStatusData;
-      const dev = recent && typeof recent === "object" ? Object.values(recent)[0] as any : null;
-      latest.metric.training_status = pickStr(dev, ["trainingStatusFeedbackPhrase", "trainingStatus"]);
-      latest.metric.acute_load = pickNum(dev, ["acuteTrainingLoad"]);
+      const ts = extractTrainingStatus(status);
+      latest.metric.training_status = ts.training_status;
+      latest.metric.acute_load = ts.acute_load;
+      latest.metric.training_load_balance = ts.training_load_balance;
     }
+
+    // Runner performance signals (half-marathon prep). Race predictions key on the
+    // displayName; endurance/hill score key on the account via a calendarDate query.
+    // All best-effort — rawGet logs a wrong-path/unavailable endpoint, every field
+    // degrades to null.
+    if (displayName) {
+      // `/racepredictions/latest/{displayName}` returns a single latest object (or, on
+      // some accounts, a one-element list). Field names match python-garminconnect.
+      const racePred = await rawGet(client, `/metrics-service/metrics/racepredictions/latest/${displayName}`);
+      if (racePred) {
+        const rp = Array.isArray(racePred) ? racePred[racePred.length - 1] : racePred;
+        latest.metric.race_predict_5k_sec = pickNumDeep(rp, ["time5K", "raceTime5K", "fiveK"]);
+        latest.metric.race_predict_10k_sec = pickNumDeep(rp, ["time10K", "raceTime10K", "tenK"]);
+        latest.metric.race_predict_half_sec = pickNumDeep(rp, ["timeHalfMarathon", "raceTimeHalfMarathon", "halfMarathon"]);
+        latest.metric.race_predict_marathon_sec = pickNumDeep(rp, ["timeMarathon", "raceTimeMarathon", "marathon"]);
+      }
+    }
+    // FIX: endurance & hill score require a `calendarDate` QUERY param (same shape as
+    // python-garminconnect's get_endurance_score / get_hill_score single-day form).
+    // The old paramless calls returned nothing. Scores can nest under a DTO, so search
+    // the tree (overallScore is the headline value, ahead of any sub-component).
+    const endur = await rawGet(client, `/metrics-service/metrics/endurancescore?calendarDate=${latest.iso}`);
+    if (endur) latest.metric.endurance_score = pickNumDeep(endur, ["overallScore", "enduranceScore", "score", "avg"]);
+    const hill = await rawGet(client, `/metrics-service/metrics/hillscore?calendarDate=${latest.iso}`);
+    if (hill) latest.metric.hill_score = pickNumDeep(hill, ["overallScore", "hillScore", "score", "strengthScore"]);
   }
 
   for (const { metric } of rows) {
@@ -372,11 +693,24 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
     let activities = 0;
     let zoneFetches = 0;
     let strengthFetches = 0;
+    let detailFetches = 0;
     const strengthIds: number[] = [];
     for (const row of rows || []) {
       const input = activityToInput(row);
       if (input.date && input.date < since) continue;
       const strength = repo.isStrengthGarminType(sourceType(row));
+      // Per-activity detail (bounded): training load + running dynamics. The list
+      // payload omits both; activityTrainingLoad lives in the detail's summaryDTO.
+      if (detailFetches < DETAIL_LIMIT) {
+        const detail = await fetchActivityDetail(client, input.external_id);
+        if (detail) {
+          if (detail.training_load != null) input.training_load = detail.training_load;
+          input.avg_ground_contact_ms = detail.avg_ground_contact_ms;
+          input.avg_vertical_osc_cm = detail.avg_vertical_osc_cm;
+          input.avg_vertical_ratio = detail.avg_vertical_ratio;
+        }
+        detailFetches++;
+      }
       // Enrich the most recent activities with HR-time-in-zone (bounded calls).
       if (zoneFetches < HR_ZONE_LIMIT) {
         const zones = await fetchHrZones(client, input.external_id);
@@ -405,7 +739,7 @@ export async function syncGarmin(options: { days?: number; limit?: number; daily
         .then((m) => { for (const id of strengthIds) m.enqueueEnrich("garmin_strength", id); })
         .catch(() => {});
     }
-    const displayName = options.daily === false ? null : await getDisplayName(client);
+    const displayName = options.daily === false ? null : await getDisplayName(client, rows || []);
     const daily = options.daily === false ? 0 : await syncDailyMetrics(client, source.id, Math.min(days, 14), displayName);
     repo.upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "connected", last_sync_at: new Date().toISOString() });
     repo.setGarminSyncStatus(`ok: ${activities} activit${activities === 1 ? "y" : "ies"} · ${daily} daily`);

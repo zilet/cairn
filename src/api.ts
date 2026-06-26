@@ -697,6 +697,31 @@ api.post("/bodyweight", (req, res) => {
   res.json(repo.logWeight(Number(b.weight_lb), b.date, b.note));
 });
 
+// ---- blood pressure log ----
+// A BP reading is point-in-time, not a profile field: home cuffs, MyChart vitals
+// and clinic readings all land as dated observations that also project into the
+// marker history as Systolic BP / Diastolic BP / Pulse.
+api.get("/blood-pressure", (req, res) => res.json(repo.listBloodPressureReadings(req.query.limit ? Number(req.query.limit) : 60)));
+api.post("/blood-pressure", (req, res) => {
+  const b = req.body ?? {};
+  try {
+    const row = repo.addBloodPressureReading({
+      measured_at: b.measured_at ?? b.measuredAt ?? null,
+      systolic: b.systolic,
+      diastolic: b.diastolic,
+      pulse: b.pulse == null || b.pulse === "" ? null : b.pulse,
+      source: b.source ?? "manual",
+      position: b.position ?? null,
+      note: b.note ?? null,
+    });
+    try { repo.deriveDirectives(); } catch { /* never fail the vital log */ }
+    res.json(row);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "could not log blood pressure" });
+  }
+});
+api.delete("/blood-pressure/:id", (req, res) => res.json(repo.deleteBloodPressureReading(Number(req.params.id))));
+
 // ---- optional morning check-in (T5C: a day-read signal, offered never required) ----
 // All fields optional; mood/energy/sleep_feel/soreness are clamped to 1-5 in the
 // repo. GET /checkins?date= returns the latest for that date (or null);
@@ -731,6 +756,14 @@ api.get("/recent-training", (req, res) =>
 // proposal builds on. Informational (no score, no gate).
 api.get("/program-state", (req, res) =>
   res.json(repo.getProgramState(req.query.date ? String(req.query.date) : undefined))
+);
+// The TRAINING-INTELLIGENCE / performance read — the athletic counterpart to
+// /api/health/standing. Benchmarks where the athlete actually STANDS (each lift's
+// capacity vs sex/age strength standards + VO2max norms), the strength imbalances,
+// the single biggest lever, lifts worth re-testing, a variety nudge, and a holistic
+// balance line. Derived live each call; percentile/level reference reads, no scores.
+api.get("/performance", (req, res) =>
+  res.json(repo.performanceStanding(req.query.date ? String(req.query.date) : undefined))
 );
 // Single activity row (frontend polls this to watch enrichment_status).
 api.get("/activities/:id", (req, res) => {
@@ -1292,8 +1325,8 @@ api.get("/export/db", async (_req, res) => {
 });
 
 // Structured, FHIR-inspired health summary (markers/observations over time +
-// supplements + active directives) — a portable read-only slice to hand a
-// physician or another tool. Optimal-zone framing, no scores.
+// non-marker clinical facts + supplements + active directives) — a portable
+// read-only slice to hand a physician or another tool. Optimal-zone framing, no scores.
 api.get("/health-export", (_req, res) => {
   const data = repo.buildHealthExport();
   res.setHeader("Content-Type", "application/json");
@@ -1326,6 +1359,15 @@ api.use("/health-docs", healthDocsRouter);
 
 // ---- health insights (marker history + whole-picture agentic review) ----
 api.get("/health/markers", (_req, res) => res.json(repo.getMarkerHistory()));
+
+// Pull-based health standing: a descriptive, visual-friendly orientation read.
+// Percentiles are real reference comparisons where a trustworthy curve exists
+// (e.g. VO2max / body composition), and the "signal age" is a plain-language
+// synthesis, not a 0-100 score or medical diagnosis.
+api.get("/health/standing", (req, res) => {
+  const referenceAge = req.query.reference_age != null ? Number(req.query.reference_age) : undefined;
+  res.json(repo.healthStanding({ referenceAge }));
+});
 
 // Latest review or null — a soft lookup like /sessions?date= (200 + null on
 // absence, never 404): "no review yet" is a normal state the PWA renders.
@@ -1413,6 +1455,12 @@ api.post("/health/synthesis", async (req, res) => {
 api.get("/directives", (req, res) =>
   res.json({ directives: repo.annotateDirectiveFreshness(repo.listDirectives({ all: req.query.all === "1" || req.query.all === "true" })) })
 );
+
+// Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a
+// check-in note) co-occurring with a genuinely out-of-optimal marker — a quiet
+// "worth mentioning to your clinician" read. Informational, never diagnostic; [] when
+// nothing co-occurs. The connected brain reaching ACROSS the logs.
+api.get("/symptom-links", (_req, res) => res.json({ links: repo.symptomMarkerLinks() }));
 
 // User-controlled status flip (the review side of propose-review-apply). This
 // is feedback memory, not just a hide: resolved/dismissed directives suppress

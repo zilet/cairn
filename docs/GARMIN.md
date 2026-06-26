@@ -49,13 +49,22 @@ adapter can replace it later without changing the coach model.
 - `activities.source/external_id`: mirrored Garmin activity row so existing calendar,
   streak, and cardio-load behavior keeps working.
 
-### Full dataset (migrations v22–v23)
+### Full dataset (migrations v22–v23, v45–v46)
 
 The sync mines the rich response Garmin already returns plus a handful of the
 connector's internal endpoints. **Every field is best-effort and null-safe** —
 each lives in its own `try/catch`, so a missing endpoint (or a device that doesn't
 record a metric) degrades that field to `null` rather than failing the sync. The
 full provider payloads are still preserved in `raw_json` for re-derivation.
+
+The internal endpoints key on the account's GUID-style **displayName**. The sync
+resolves it from the package's profile call, falling back to the social-profile
+endpoint and then the activity payloads' `ownerDisplayName`/`ownerId` — a null
+displayName no longer silently skips the entire daily-summary block (the bug that
+left stress, body battery, calories, HR extremes, SpO₂, respiration, intensity
+minutes, floors, and distance all null). Every internal `client.get(...)` now
+**logs a warning** on failure (URL + message) so a wrong-path vs device-doesn't-
+report endpoint is diagnosable rather than invisibly degrading.
 
 `garmin_daily_metrics` now captures, where the device/account reports it:
 
@@ -69,19 +78,34 @@ full provider payloads are still preserved in `raw_json` for re-derivation.
 - **Energy & movement**: steps, distance, floors, active/total/BMR calories,
   moderate + vigorous intensity minutes.
 - **Fitness**: VO₂max (running + cycling), training readiness, training status,
-  acute load, fitness age. (`/metrics-service`)
+  acute load, fitness age. (`/metrics-service`; fitness age from the dedicated
+  `/fitnessage-service/fitnessage/{date}` endpoint — the maxmet payload only
+  carries VO₂max.)
+- **Runner performance** (migration v45): race-time predictions (5K / 10K / half /
+  marathon, in seconds), endurance score, hill score, and a training-load-balance
+  feedback phrase. (`/metrics-service/metrics/{racepredictions,endurancescore,hillscore,trainingloadbalance}`)
 - **Body composition**: weight, body-fat %, muscle mass, body water %, bone mass,
   BMI, visceral fat. (from `getDailyWeightData`)
+- **Richer sleep**: when the package's `getSleepData` returns a reduced DTO,
+  `sleep_score` / `avg_sleep_stress` / `restless_count` are gap-filled from
+  `/wellness-service/wellness/dailySleepData/{displayName}`.
 
 `garmin_activities` now also captures per-workout body reaction: moving time,
 elevation loss, aerobic + anaerobic training effect (and label), cadence, power
 (avg/max/normalized), speed, ambient temperature, activity-level VO₂max, and the
 **HR time-in-zone breakdown** (`hr_zones_json`, one bounded detail call per recent
-activity — see `GARMIN_HR_ZONE_LIMIT`, default 20).
+activity — see `GARMIN_HR_ZONE_LIMIT`, default 20). Migration v46 adds list-payload
+richness (`steps`, `avg_stride_len`, `min/max_elevation_m`, `lap_count`) plus
+**running dynamics** (`avg_ground_contact_ms`, `avg_vertical_osc_cm`,
+`avg_vertical_ratio`) and the per-activity **training load** — the last three come
+from one bounded `/activity-service/activity/{id}` detail call per recent activity
+(`summaryDTO`), since the list payload omits them.
 
 Tunables: `GARMIN_SYNC_DAYS` (activity lookback, default 30), `GARMIN_SYNC_LIMIT`
 (activity count, default 100), `GARMIN_HR_ZONE_LIMIT` (per-activity HR-zone fetches,
-default 20). Daily wellness is fetched for the most recent `min(days, 14)` days.
+default 20), `GARMIN_DETAIL_LIMIT` (per-activity detail fetches for training load +
+running dynamics, default 20). Daily wellness is fetched for the most recent
+`min(days, 14)` days.
 
 The coach receives a compact summary (it never sees the raw rows):
 
@@ -89,6 +113,8 @@ The coach receives a compact summary (it never sees the raw rows):
 - sleep (with deep/REM), resting HR, HRV + status, stress, Body Battery, respiration,
   SpO₂, skin-temp deviation, training readiness, VO₂max + training status, and body
   composition where available
+- runner performance: race-time predictions, endurance score, hill score, and the
+  training-load-balance phrase (latest non-null) where available
 - source status and last sync
 
 ## Official Garmin API Request

@@ -1190,6 +1190,13 @@ function fmtKm(km) {
   if (!Number.isFinite(v)) return "—";
   return Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : (Math.round(v * 10) / 10).toFixed(1);
 }
+// Speed in km/h (the metric riders read, the counterpart to a runner's min/km).
+// Null-safe, one decimal. Never a score.
+function fmtSpeedKmh(kmh) {
+  const v = Number(kmh);
+  if (!Number.isFinite(v) || v <= 0) return "—";
+  return Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : (Math.round(v * 10) / 10).toFixed(1);
+}
 // Human label for a standard PR distance (1/5/10/half/full + anything else).
 function prDistLabel(km) {
   const v = Number(km);

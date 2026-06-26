@@ -12,6 +12,37 @@ export function enduranceSportPatterns(sportInput: unknown = "running"): string[
   return ["run", "running", "jog", "jogging"];
 }
 
+// Fold a raw activity type into a canonical endurance sport bucket, with whether
+// PACE (min/km) is the metric that actually matters for it. Pace is a foot-sport
+// idea: a cyclist's "3:53/km" is just speed inverted and reads as nonsense next to a
+// runner's pace, so ride/swim/row are `paced:false` (distance/duration/speed instead).
+// Shared + deterministic so the PR grouping and its test agree on the buckets.
+export interface CanonicalSport {
+  key: string;   // "run" | "walk" | "ride" | "swim" | "row" | "other"
+  label: string; // display name
+  paced: boolean; // pace (min/km) is the meaningful best metric
+}
+export function canonicalEnduranceSport(type: unknown): CanonicalSport {
+  const m = normalizeSportText(type); // separators → spaces, lowercased
+  const has = (...tokens: string[]) => tokens.some((t) => ` ${m} `.includes(` ${t} `));
+  // Order matters: "trail running" must read run before "trail" reads anything else,
+  // and "mountain biking" must read ride, not walk on "mountain".
+  if (has("run", "running", "jog", "jogging", "treadmill", "tempo", "interval", "intervals", "parkrun", "5k", "10k")) {
+    return { key: "run", label: "Running", paced: true };
+  }
+  if (has("cycl", "cycling", "cycle", "bike", "biking", "biked", "mtb", "gravel", "cyclocross", "ride", "riding", "rode")) {
+    return { key: "ride", label: "Cycling", paced: false };
+  }
+  if (has("swim", "swimming", "swam")) return { key: "swim", label: "Swimming", paced: false };
+  if (has("row", "rowing", "erg")) return { key: "row", label: "Rowing", paced: false };
+  if (has("walk", "walking", "hike", "hiking", "hiked", "ruck", "rucking", "fell")) {
+    return { key: "walk", label: "Walking & Hiking", paced: true };
+  }
+  // Unknown: a Title Case version of the raw type, treated as a distance sport.
+  const pretty = m ? m.split(" ").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "Other";
+  return { key: m || "other", label: pretty || "Other", paced: false };
+}
+
 export function activitySportWhere(alias: string, patterns: string[]): { sql: string; params: string[] } {
   const params = patterns.map(sportTokenParam).filter((p): p is string => !!p);
   if (!params.length) return { sql: "0", params: [] };

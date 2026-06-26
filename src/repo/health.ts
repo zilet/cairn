@@ -1,7 +1,8 @@
 import { db } from "../db.js";
+import { activeTimeZone } from "../tz.js";
 import { localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
-import { normalizeMarkerReading, seriesUnitsCompatible } from "./lab-units.js";
+import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
@@ -12,6 +13,50 @@ import { type OptimalZone, applyReviewDirectives, markerGroup, matchOptimalZone,
 // bounding a runaway/garbage response. Shared by both the in-place enrich apply
 // path (enrich.ts cleanMarkers) and the derived-panel writer below.
 export const MAX_MARKERS_PER_PANEL = 250;
+export const MAX_CLINICAL_FACTS_PER_DOC = 200;
+
+const CLINICAL_FACT_KINDS = new Set([
+  "condition",
+  "medication",
+  "allergy",
+  "procedure",
+  "immunization",
+  "encounter",
+  "family_history",
+  "social_history",
+  "care_team",
+  "other",
+]);
+
+export function cleanClinicalFacts(raw: any, max = MAX_CLINICAL_FACTS_PER_DOC): any[] {
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const f of Array.isArray(raw) ? raw : []) {
+    if (!f || typeof f !== "object") continue;
+    const kindRaw = String(f.kind ?? "").trim();
+    const kind = CLINICAL_FACT_KINDS.has(kindRaw) ? kindRaw : "other";
+    const name = capStr(f.name, 180);
+    if (!name) continue;
+    const dateRaw = String(f.date ?? "").trim();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : null;
+    const status = capStr(f.status, 80);
+    const detail = capStr(f.detail, 500);
+    const source = capStr(f.source, 160);
+    const key = [kind, date ?? "", name.toLowerCase(), (status ?? "").toLowerCase(), (detail ?? "").toLowerCase()].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      kind,
+      date,
+      name,
+      status: status ?? null,
+      detail: detail ?? null,
+      source: source ?? null,
+    });
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 // Coarse, provider-agnostic estimate of how many results a pasted lab panel
 // contains. Used ONLY to DETECT a grossly incomplete extraction (a model that
@@ -39,6 +84,298 @@ export function estimateMarkerCandidates(text: string): number {
     if (line.length <= 24 && QUALITATIVE_RESULT.test(line)) n++;
   }
   return n;
+}
+
+function clampInt(value: any, min: number, max: number): number | null {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n >= min && n <= max ? n : null;
+}
+
+// ---------- numeric plausibility / unit guard at lab ingest (defensive) ----------
+// A transcription typo (glucose 5000 mg/dL) or a unit mix-up (cholesterol entered in
+// mmol/L against a mg/dL band) would otherwise propagate a clinically-WRONG directive
+// through the connected brain. This is a CONSERVATIVE last-line guard: it flags ONLY
+// clear physiologic impossibilities — a negative, or a value an order of magnitude
+// beyond anything a real lab reports — using GENEROUS per-analyte ceilings that sit
+// well past the worst real disease value, so a merely-unusual-but-real reading is never
+// rejected. Unit-aware: when a recognized marker carries a CONVERTIBLE unit, the value
+// is converted to the band's expected unit FIRST (so a "200 mmol/L" LDL is judged as the
+// ~7700 mg/dL it really is, and caught). Markers with no known family are left untouched —
+// we never reject what we don't understand. It NEVER mutates a value; the caller simply
+// SKIPS an implausible reading so it can't reach getMarkerHistory / deriveDirectives.
+//
+// Bounds are [floor, ceiling] in the analyte's optimal-zone unit. Floors are mostly 0,
+// so the floor's real job is rejecting an impossible NEGATIVE; ceilings sit far beyond
+// the worst real value, so only a typo / unit error trips them.
+const MARKER_PLAUSIBILITY: Record<string, [number, number]> = {
+  "ApoB": [0, 400],
+  "LDL-C": [0, 600],
+  "Non-HDL-C": [0, 700],
+  "Triglycerides": [0, 15000],
+  "HDL-C": [0, 250],
+  "Total cholesterol": [0, 900],
+  "hs-CRP": [0, 600],
+  "Homocysteine": [0, 300],
+  "HbA1c": [0, 25],
+  "Fasting glucose": [0, 3000],
+  "Fasting insulin": [0, 2000],
+  "Ferritin": [0, 100000],
+  "Vitamin D": [0, 400],
+  "eGFR": [0, 250],
+  "Creatinine": [0, 50],
+  "ALT": [0, 20000],
+  "AST": [0, 20000],
+  "GGT": [0, 20000],
+  "TSH": [0, 500],
+  "Free T3": [0, 60],
+  "Free T4": [0, 30],
+  "Vitamin B12": [0, 50000],
+  "Folate": [0, 200],
+  "Magnesium": [0, 20],
+  "Testosterone": [0, 5000],
+  "Estradiol": [0, 10000],
+  "Lp(a)": [0, 2000],
+  "Uric acid": [0, 50],
+  "Body fat": [0, 80],
+  "Mercury": [0, 1000],
+  "Systolic BP": [30, 350],
+  "Diastolic BP": [15, 250],
+  "VO2max": [0, 120],
+  "Resting HR": [10, 300],
+  "HRV": [0, 600],
+};
+
+export interface MarkerPlausibility {
+  plausible: boolean;
+  reason: string | null;
+  value: number | null; // the parsed number, for the caller's convenience (null = non-numeric)
+}
+
+function roundForMsg(n: number): number {
+  const a = Math.abs(n);
+  return a >= 100 ? Math.round(n) : Math.round(n * 100) / 100;
+}
+
+// Conservative physiologic-plausibility check for ONE marker reading. Returns
+// plausible:true for anything qualitative (non-numeric, e.g. "Negative") or any analyte
+// family we don't recognize — we only ever REJECT a clear impossibility. Unit-aware when
+// the marker is recognized + the unit is convertible.
+export function plausibleMarkerValue(name: string, value: unknown, unit?: string | null): MarkerPlausibility {
+  const num = parseLabNumber(value);
+  if (num === null) return { plausible: true, reason: null, value: null }; // qualitative / empty — not judged
+  if (!Number.isFinite(num)) return { plausible: false, reason: "value is not a finite number", value: null };
+  const zone = matchOptimalZone(name);
+  const bounds = zone ? MARKER_PLAUSIBILITY[zone.label] : null;
+  // Unknown analyte family → no defensible bounds, so accept (never reject what we don't
+  // understand). A non-finite was already caught above.
+  if (!zone || !bounds) return { plausible: true, reason: null, value: num };
+
+  // Convert to the band's expected unit when the unit is recognized + convertible, so a
+  // unit mix-up surfaces as the absurd magnitude it really is. When the unit can't be
+  // safely converted (an incompatible family, e.g. Lp(a) mg/dL vs nmol/L) we judge sign
+  // only — never magnitude — so we can't false-reject an un-convertible-but-real value.
+  let v = num;
+  let comparable = true;
+  if (unit != null && String(unit).trim()) {
+    const norm = normalizeMarkerReading(name, value, String(unit), zone);
+    if (norm && typeof norm.value === "number") {
+      if (norm.unit_mismatch) comparable = false; // couldn't safely convert → don't magnitude-judge
+      else v = norm.value;                         // expected-unit value (possibly converted)
+    }
+  }
+
+  const [floor, ceil] = bounds;
+  // Sign is universally meaningful across every family here (all are non-negative).
+  if (num < 0 || v < 0) return { plausible: false, reason: `${zone.label} can't be negative (${num})`, value: num };
+  if (!comparable) return { plausible: true, reason: null, value: num };
+  if (v < floor) return { plausible: false, reason: `${zone.label} ${roundForMsg(v)} sits below any physiologic value`, value: num };
+  if (v > ceil) return { plausible: false, reason: `${zone.label} ${roundForMsg(v)} exceeds any physiologic value — likely a unit or transcription error`, value: num };
+  return { plausible: true, reason: null, value: num };
+}
+
+function localTimeHMS(d: Date): string {
+  const tz = activeTimeZone();
+  if (!tz) return d.toTimeString().slice(0, 8);
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(d);
+    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "00";
+    return `${part("hour")}:${part("minute")}:${part("second")}`;
+  } catch {
+    return d.toTimeString().slice(0, 8);
+  }
+}
+
+function normalizeBpInput(input: {
+  measured_at?: string | null;
+  systolic: number;
+  diastolic: number;
+  pulse?: number | string | null;
+  source?: string | null;
+  position?: string | null;
+  note?: string | null;
+}) {
+  const systolic = clampInt(input?.systolic, 60, 260);
+  const diastolic = clampInt(input?.diastolic, 35, 160);
+  if (systolic == null || diastolic == null) throw new Error("systolic and diastolic BP required");
+  if (diastolic >= systolic) throw new Error("diastolic must be below systolic");
+  const pulse = input.pulse == null || input.pulse === "" ? null : clampInt(input.pulse, 25, 240);
+  const source = capStr(String(input.source ?? "manual").trim() || "manual", 40) ?? "manual";
+  const position = capStr(input.position, 40);
+  const note = capStr(input.note, 240);
+  const measured_at = normalizeBpMeasuredAt(input.measured_at);
+  return { measured_at, systolic, diastolic, pulse, source, position, note };
+}
+
+export function normalizeBpMeasuredAt(input?: string | null, now = new Date()): string {
+  const raw = String(input ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw} 12:00:00`;
+  const dt = raw.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::(\d{2}))?/);
+  if (dt) return `${dt[1]} ${dt[2]}:${dt[3] ?? "00"}`;
+  return `${localDateISO(now)} ${localTimeHMS(now)}`;
+}
+
+export function addBloodPressureReading(input: {
+  measured_at?: string | null;
+  systolic: number;
+  diastolic: number;
+  pulse?: number | string | null;
+  source?: string | null;
+  position?: string | null;
+  note?: string | null;
+}) {
+  const row = normalizeBpInput(input);
+  const info = db.prepare(
+    `INSERT INTO blood_pressure_readings (measured_at, systolic, diastolic, pulse, source, position, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(row.measured_at, row.systolic, row.diastolic, row.pulse, row.source, row.position, row.note);
+  return db.prepare(`SELECT * FROM blood_pressure_readings WHERE id = ?`).get(info.lastInsertRowid);
+}
+
+export function upsertBloodPressureReading(input: {
+  measured_at?: string | null;
+  systolic: number;
+  diastolic: number;
+  pulse?: number | string | null;
+  source?: string | null;
+  position?: string | null;
+  note?: string | null;
+}): { row: any; created: boolean } {
+  const row = normalizeBpInput(input);
+  const existing = db
+    .prepare(
+      `SELECT * FROM blood_pressure_readings
+        WHERE measured_at = ?
+          AND systolic = ?
+          AND diastolic = ?
+          AND COALESCE(pulse, -1) = COALESCE(?, -1)
+          AND source = ?
+        ORDER BY id ASC
+        LIMIT 1`
+    )
+    .get(row.measured_at, row.systolic, row.diastolic, row.pulse, row.source);
+  if (existing) return { row: existing, created: false };
+  const inserted = addBloodPressureReading(row);
+  return { row: inserted, created: true };
+}
+
+export function listBloodPressureReadings(limit = 60) {
+  return db
+    .prepare(`SELECT * FROM blood_pressure_readings ORDER BY measured_at DESC, id DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(500, Math.round(Number(limit) || 60)))) as any[];
+}
+
+export function deleteBloodPressureReading(id: number) {
+  return { ok: db.prepare(`DELETE FROM blood_pressure_readings WHERE id = ?`).run(id).changes > 0 };
+}
+
+// A plain-language read of blood pressure: where the latest reading sits against the
+// calm home target, and which way the trend has moved. Optimal-zone framing, no score —
+// answers the "is this a good one?" question the bare number never does, and surfaces an
+// improving trend (e.g. 144→113) as the real win it is. `rows` come newest-first.
+export type BpCategory = "optimal" | "elevated" | "high" | "low";
+export function bpRead(rows: any[]): {
+  latest: any | null;
+  category: BpCategory | null;
+  label: string;
+  tone: "strong" | "steady" | "watch";
+  trajectory: { from: { systolic: number; diastolic: number; at: string | null }; to: { systolic: number; diastolic: number; at: string | null }; dir: "improving" | "rising" | "holding" } | null;
+  read: string;
+} {
+  const list = Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(Number(r.systolic)) && Number.isFinite(Number(r.diastolic))) : [];
+  const latest = list[0] ?? null;
+  if (!latest) return { latest: null, category: null, label: "No readings yet", tone: "watch", trajectory: null, read: "Log a couple of resting home readings and Cairn can read the pattern." };
+  const sys = Number(latest.systolic);
+  const dia = Number(latest.diastolic);
+  const category: BpCategory =
+    sys < 90 || dia < 60 ? "low" : sys >= 130 || dia >= 80 ? "high" : sys >= 120 ? "elevated" : "optimal";
+  const label =
+    category === "optimal" ? "in a calm, optimal home range" :
+    category === "elevated" ? "a touch above the optimal target" :
+    category === "high" ? "above the calm home target" :
+    "running on the low side";
+  const tone: "strong" | "steady" | "watch" = category === "optimal" ? "strong" : category === "elevated" ? "steady" : "watch";
+
+  // Trajectory: the most striking honest move — the highest prior systolic vs the latest.
+  let trajectory: any = null;
+  const prior = list.slice(1);
+  if (prior.length) {
+    const priorMax = prior.reduce((a, b) => (Number(b.systolic) > Number(a.systolic) ? b : a));
+    const priorMin = prior.reduce((a, b) => (Number(b.systolic) < Number(a.systolic) ? b : a));
+    const at = (r: any) => (r?.measured_at ? String(r.measured_at).replace(" ", "T") : null);
+    if (sys <= Number(priorMax.systolic) - 10) {
+      trajectory = { from: { systolic: Number(priorMax.systolic), diastolic: Number(priorMax.diastolic), at: at(priorMax) }, to: { systolic: sys, diastolic: dia, at: at(latest) }, dir: "improving" };
+    } else if (sys >= Number(priorMin.systolic) + 10) {
+      trajectory = { from: { systolic: Number(priorMin.systolic), diastolic: Number(priorMin.diastolic), at: at(priorMin) }, to: { systolic: sys, diastolic: dia, at: at(latest) }, dir: "rising" };
+    } else {
+      trajectory = { from: { systolic: Number(priorMax.systolic), diastolic: Number(priorMax.diastolic), at: at(priorMax) }, to: { systolic: sys, diastolic: dia, at: at(latest) }, dir: "holding" };
+    }
+  }
+
+  const read =
+    trajectory?.dir === "improving"
+      ? `${sys}/${dia} ${label} — down from ${trajectory.from.systolic}/${trajectory.from.diastolic}. That's a real win.`
+      : category === "optimal"
+        ? `${sys}/${dia} — ${label}. Nice and steady.`
+        : category === "elevated"
+          ? `${sys}/${dia} — ${label}. Worth a few more resting readings to confirm the pattern.`
+          : category === "high"
+            ? `${sys}/${dia} — ${label}. Repeated home readings here are worth a conversation with your doctor.`
+            : `${sys}/${dia} — ${label}.`;
+  return { latest, category, label, tone, trajectory, read };
+}
+
+function bpFlag(name: "systolic" | "diastolic" | "pulse", value: number): string | null {
+  if (name === "systolic") {
+    if (value >= 130) return "high";
+    if (value < 90) return "low";
+    return "normal";
+  }
+  if (name === "diastolic") {
+    if (value >= 80) return "high";
+    if (value < 60) return "low";
+    return "normal";
+  }
+  if (value > 100) return "high";
+  if (value < 50) return "low";
+  return null;
+}
+
+function expandBloodPressureMarker(rawName: string, marker: any): any[] {
+  const value = marker?.value;
+  const unit = marker?.unit ?? "mmHg";
+  const text = String(value ?? "").trim();
+  const bp = text.match(/\b(\d{2,3})\s*\/\s*(\d{2,3})\b/);
+  if (!bp || !/\b(bp|blood pressure)\b/i.test(rawName)) return [{ ...marker, name: rawName }];
+  return [
+    { name: "Systolic BP", value: Number(bp[1]), unit, flag: marker.flag ?? null },
+    { name: "Diastolic BP", value: Number(bp[2]), unit, flag: marker.flag ?? null },
+  ];
 }
 
 // ---------- health documents ----------
@@ -98,6 +435,7 @@ export interface HealthPanelInput {
   summary?: string | null;
   markers?: any[];
   type?: string | null;
+  clinical_facts?: any[];
 }
 
 // Replace the derived panels of a source upload with a fresh set (used by
@@ -106,6 +444,10 @@ export interface HealthPanelInput {
 // the rows created. `original_name` is carried through for provenance.
 export function replaceHealthPanels(sourceId: number, panels: HealthPanelInput[], originalName?: string | null) {
   deleteDerivedHealthDocs(sourceId);
+  return insertHealthPanels(sourceId, panels, originalName);
+}
+
+function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], originalName?: string | null) {
   const created: any[] = [];
   for (const p of Array.isArray(panels) ? panels : []) {
     if (!p || typeof p !== "object") continue;
@@ -119,13 +461,18 @@ export function replaceHealthPanels(sourceId: number, panels: HealthPanelInput[]
           unit: m.unit == null ? null : String(m.unit).slice(0, 40),
           flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
         }))
-        .filter((m: any) => m.name)
+        // Drop a physiologically-impossible numeric reading (a transcription typo / unit
+        // error) so it can't poison the connected brain's directives. Conservative — only
+        // CLEAR impossibilities are skipped; qualitative + unknown-family values pass.
+        .filter((m: any) => m.name && plausibleMarkerValue(m.name, m.value, m.unit).plausible)
       : [];
     const date = typeof p.doc_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.doc_date) ? p.doc_date : null;
     const summary = p.summary == null ? null : String(p.summary).slice(0, 1000);
-    if (!markers.length && !summary) continue; // an empty panel is noise
+    const clinicalFacts = cleanClinicalFacts((p as any).clinical_facts, 80);
+    if (!markers.length && !summary && !clinicalFacts.length) continue; // an empty panel is noise
     const parsed: Record<string, any> = { markers };
     if (p.type) parsed.type = String(p.type).slice(0, 80);
+    if (clinicalFacts.length) parsed.clinical_facts = clinicalFacts;
     const row = addHealthDocument({
       kind: p.kind && ["bloodwork", "dexa", "other"].includes(p.kind) ? p.kind : "other",
       doc_date: date,
@@ -143,6 +490,29 @@ export function replaceHealthPanels(sourceId: number, panels: HealthPanelInput[]
 
 function deleteDerivedHealthDocs(sourceId: number) {
   return db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ?`).run(sourceId).changes;
+}
+
+function deleteDerivedHealthDocsByType(sourceId: number, type: string) {
+  const rows = db
+    .prepare(`SELECT id, parsed_json FROM health_documents WHERE source_doc_id = ?`)
+    .all(sourceId) as any[];
+  let deleted = 0;
+  for (const row of rows) {
+    let parsed: any = null;
+    try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+    if (String(parsed?.type ?? "") !== type) continue;
+    deleted += Number(db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(row.id).changes);
+  }
+  return deleted;
+}
+
+// Refresh one deterministic derived stream without disturbing the agent-split
+// lab timeline. Used for CCDA vitals, which are facts adjacent to a MyChart
+// export rather than a replacement for its dated lab panels.
+export function replaceHealthPanelsByType(sourceId: number, type: string, panels: HealthPanelInput[], originalName?: string | null) {
+  deleteDerivedHealthDocsByType(sourceId, type);
+  const typed = (Array.isArray(panels) ? panels : []).map((p) => ({ ...p, type }));
+  return insertHealthPanels(sourceId, typed, originalName);
 }
 
 // Raw row incl. file_path — for internal use (enrichment, file streaming, delete).
@@ -361,7 +731,7 @@ export function getMarkerHistory() {
     unit_mismatch?: boolean;
     expected_unit?: string | null;
     name: string;
-    doc_id: number;
+    doc_id: number | null;
     kind: string;
   }
   const byKey = new Map<string, Reading[]>();
@@ -375,36 +745,63 @@ export function getMarkerHistory() {
       if (!m || typeof m !== "object") continue;
       const rawName = String(m.name ?? "").replace(/\s+/g, " ").trim();
       if (!rawName) continue;
-      // A reading is usable when the value is a finite number, a string with a
-      // parseable lab number, or a non-empty qualitative result (e.g. "negative").
-      // Recognized markers are normalized to the unit their optimal band expects
-      // here, while source_value/source_unit keep the lab transcription inspectable.
-      // The series KEY is the CANONICAL marker key (marker-canon.ts): different labs'
-      // names for the same analyte ("Glucose (random)"/"Glucose Random"; "Vitamin D"/
-      // "25-OH Vitamin D"; "eGFR"/the long form) collapse onto one series. The display
-      // NAME stays the lab's own (last.name below), so canonicalization only MERGES —
-      // it never relabels what the athlete (or a directive) sees.
-      const key = canonicalMarker(rawName).key || rawName.toLowerCase();
-      const flag = ["low", "normal", "high"].includes(m.flag) ? m.flag : null;
-      const sourceUnit = m.unit !== null && m.unit !== undefined && String(m.unit).trim() ? String(m.unit).trim() : null;
-      const normalized = normalizeMarkerReading(rawName, m.value, sourceUnit, matchOptimalZone(rawName));
-      if (!normalized) continue;
-      if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key)!.push({
-        date,
-        value: normalized.value,
-        flag,
-        unit: normalized.unit,
-        source_value: normalized.source_value,
-        source_unit: normalized.source_unit,
-        unit_converted: normalized.unit_converted,
-        unit_mismatch: normalized.unit_mismatch,
-        expected_unit: normalized.expected_unit,
-        name: rawName,
-        doc_id: d.id,
-        kind: d.kind ?? "other",
-      });
+      const expanded = expandBloodPressureMarker(rawName, m);
+      for (const em of expanded) {
+        const name = String(em.name ?? rawName).replace(/\s+/g, " ").trim();
+        if (!name) continue;
+        // A reading is usable when the value is a finite number, a string with a
+        // parseable lab number, or a non-empty qualitative result (e.g. "negative").
+        // Recognized markers are normalized to the unit their optimal band expects
+        // here, while source_value/source_unit keep the lab transcription inspectable.
+        // The series KEY is the CANONICAL marker key (marker-canon.ts): different labs'
+        // names for the same analyte ("Glucose (random)"/"Glucose Random"; "Vitamin D"/
+        // "25-OH Vitamin D"; "eGFR"/the long form) collapse onto one series. The display
+        // NAME stays the lab's own (last.name below), so canonicalization only MERGES —
+        // it never relabels what the athlete (or a directive) sees.
+        const key = canonicalMarker(name).key || name.toLowerCase();
+        const flag = ["low", "normal", "high"].includes(em.flag) ? em.flag : null;
+        const sourceUnit = em.unit !== null && em.unit !== undefined && String(em.unit).trim() ? String(em.unit).trim() : null;
+        const normalized = normalizeMarkerReading(name, em.value, sourceUnit, matchOptimalZone(name));
+        if (!normalized) continue;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key)!.push({
+          date,
+          value: normalized.value,
+          flag,
+          unit: normalized.unit,
+          source_value: normalized.source_value,
+          source_unit: normalized.source_unit,
+          unit_converted: normalized.unit_converted,
+          unit_mismatch: normalized.unit_mismatch,
+          expected_unit: normalized.expected_unit,
+          name,
+          doc_id: d.id,
+          kind: d.kind ?? "other",
+        });
+      }
     }
+  }
+
+  const bpRows = db
+    .prepare(`SELECT * FROM blood_pressure_readings ORDER BY measured_at ASC, id ASC LIMIT 1000`)
+    .all() as any[];
+  const addBpMarker = (name: "Systolic BP" | "Diastolic BP" | "Pulse", value: any, unit: string, flag: string | null, row: any) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return;
+    const key = canonicalMarker(name).key || name.toLowerCase();
+    const date = String(row.measured_at || "").slice(0, 10);
+    if (!byKey.has(key)) byKey.set(key, []);
+    const arr = byKey.get(key)!;
+    // De-dupe by date: the same vital lives in blood_pressure_readings AND — for
+    // MyChart-style imports — as a health-doc marker, so without this the series
+    // double-counts (doubling the least-squares forecast weight). One point per date.
+    if (arr.some((r) => r.date === date)) return;
+    arr.push({ date, value: numeric, flag, unit, name, doc_id: null, kind: "vitals" });
+  };
+  for (const row of bpRows) {
+    addBpMarker("Systolic BP", row.systolic, "mmHg", bpFlag("systolic", Number(row.systolic)), row);
+    addBpMarker("Diastolic BP", row.diastolic, "mmHg", bpFlag("diastolic", Number(row.diastolic)), row);
+    if (row.pulse != null) addBpMarker("Pulse", row.pulse, "bpm", bpFlag("pulse", Number(row.pulse)), row);
   }
 
   const markers = [...byKey.entries()].map(([key, readings]) => {

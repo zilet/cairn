@@ -125,6 +125,13 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_performance",
+    "The TRAINING-INTELLIGENCE / performance read — where the athlete actually STANDS, benchmarked like a coach would: each benchmark lift's CAPACITY as a sex- and age-adjusted percentile/level (beginner→elite) against proven strength standards, VO2max-for-age, the strength IMBALANCES (press vs pull, lower vs upper) to address, the single highest-leverage LEVER, lifts worth RE-TESTING (a heavy low-rep test to re-measure true capacity), a VARIETY nudge (don't run the identical rotation forever), motivational momentum, and a holistic balance line. Percentile/level are recognized reference reads, never a 0-100 score. The athletic counterpart to get_health_standing.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.performanceStanding(date))
+  );
+
+  server.tool(
     "finish_session",
     "Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs).",
     { id: z.number().int(), notes: z.string().nullable().optional() },
@@ -283,7 +290,7 @@ export function buildMcpServer(): McpServer {
 
   server.tool(
     "get_endurance_prs",
-    "Endurance PRs from logged cardio: the longest single distance + duration and the fastest pace (min/km) at standard distances (1/5/10k, half, full). Optional type filter (e.g. 'run'|'ride'). Plain numbers, never a score — the endurance analogue of the strength est-1RM.",
+    "Endurance PRs from logged cardio, GROUPED BY SPORT (a best is only meaningful within its modality): each sport's longest distance + duration, plus fastest pace (min/km at 1/5/10k/half/full) for foot sports (run/walk) or best speed (km/h) for cycling/swim/row. `sports[]` leads with the athlete's primary endurance sport (profile endurance_sport, default running); flat top-level fields mirror that lead sport for back-compat. Optional `type` filter. Plain numbers, never a score — the endurance analogue of the strength est-1RM.",
     { type: z.string().optional().describe("filter to one activity type, e.g. 'run' | 'ride'") },
     async ({ type }) => asText(repo.getEndurancePRs(type))
   );
@@ -586,6 +593,40 @@ export function buildMcpServer(): McpServer {
 
   server.tool("list_weight", "List bodyweight history (chronological).", { limit: z.number().int().optional() },
     async ({ limit }) => asText(repo.listWeight(limit ?? 60)));
+
+  server.tool(
+    "log_blood_pressure",
+    "Record a point-in-time blood pressure reading. Use measured_at for the actual cuff/clinic time (YYYY-MM-DD or YYYY-MM-DDTHH:mm). The reading also appears in marker history as Systolic BP, Diastolic BP, and Pulse when present.",
+    {
+      systolic: z.number(),
+      diastolic: z.number(),
+      pulse: z.number().optional(),
+      measured_at: z.string().optional(),
+      source: z.string().optional(),
+      position: z.string().optional(),
+      note: z.string().optional(),
+    },
+    async (a) => {
+      const row = repo.addBloodPressureReading({
+        measured_at: a.measured_at ?? null,
+        systolic: a.systolic,
+        diastolic: a.diastolic,
+        pulse: a.pulse ?? null,
+        source: a.source ?? "manual",
+        position: a.position ?? null,
+        note: a.note ?? null,
+      });
+      try { repo.deriveDirectives(); } catch { /* never fail the vital log */ }
+      return asText(row);
+    }
+  );
+
+  server.tool(
+    "list_blood_pressure",
+    "List blood pressure readings newest-first. BP is point-in-time, so trends come from repeated readings rather than a single profile value.",
+    { limit: z.number().int().optional() },
+    async ({ limit }) => asText(repo.listBloodPressureReadings(limit ?? 60))
+  );
 
   server.tool("log_activity",
     "Log a cardio/other session. Pass free text (e.g. 'ran 50 min @5:30/km') and/or structured fields.",
@@ -1219,6 +1260,13 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_health_standing",
+    "A pull-based health standing read: actual-age vs selectable reference-age percentiles for markers with real reference curves (VO2max/body composition), plus BP, labs, activity, Garmin/recovery signals, and a plain signal_age synthesis. Motivational orientation only — no 0-100 score and not medical advice.",
+    { reference_age: z.number().optional().describe("Compare against this decade; e.g. 20 for 20s, 30 for 30s. Defaults to 20s.") },
+    async ({ reference_age }) => asText(repo.healthStanding({ referenceAge: reference_age }))
+  );
+
+  server.tool(
     "get_health_review",
     "Get the latest whole-picture health review (headline, wins, watchlist, focus areas, follow-ups, training/nutrition impact) — or null when none has been run yet.",
     {},
@@ -1302,7 +1350,7 @@ export function buildMcpServer(): McpServer {
 
   server.tool(
     "get_health_export",
-    "Structured, FHIR-inspired health summary: a portable read-only slice of the athlete's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus the understood supplement regimen and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. INFORMATIONAL, not medical advice — no 0-100 scores anywhere.",
+    "Structured, FHIR-inspired health summary: a portable read-only slice of the athlete's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus non-marker MyChart clinicalFacts such as medications/allergies/procedures, the understood supplement regimen, and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. INFORMATIONAL, not medical advice — no 0-100 scores anywhere.",
     {},
     async () => asText(repo.buildHealthExport())
   );
@@ -1319,6 +1367,13 @@ export function buildMcpServer(): McpServer {
     "List the connected-brain cross-domain health directives (a flagged finding propagated into nutrition/training/watch, with rationale, an evidence citation where well-established, and an `uncertain` flag where the lever is real but unsettled). Active by default; pass all:true for the full history incl. resolved/dismissed feedback rows.",
     { all: z.boolean().optional() },
     async ({ all }) => asText(repo.annotateDirectiveFreshness(repo.listDirectives({ all: !!all })))
+  );
+
+  server.tool(
+    "get_symptom_links",
+    "Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs.",
+    {},
+    async () => asText(repo.symptomMarkerLinks())
   );
 
   server.tool(

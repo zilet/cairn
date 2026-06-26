@@ -4,13 +4,15 @@ import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "
 import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach } from "./program-blocks.js";
-import { getProgramState } from "./program-state.js";
+import { getProgramState, type ProgramState } from "./program-state.js";
+import { performanceStanding } from "./performance.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
+import { symptomMarkerLinks } from "./symptom-links.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
@@ -233,8 +235,7 @@ export function trainingSignals(recent?: any[]): { progression: ProgressionSigna
 // load-bearing signal (per-lift status/trend/action + stall tells, the volume
 // bands, the mesocycle position + endurance read + the adaptations list) without
 // the verbose internals. Keeps the prompt from exploding on a big training log.
-function programStateForCoach(recovery?: any) {
-  const st = getProgramState(undefined, recovery);
+function programStateForCoach(st: ProgramState) {
   return {
     headline: st.headline,
     discipline: st.discipline,
@@ -289,6 +290,10 @@ export function getCoachContext() {
   // programAdjustments — which would otherwise recompute both from scratch.
   const programBal = programBalance();
   const recentLoad = recentMuscleLoad(2);
+  // Compute the deterministic program-state ONCE and share it: the bounded coach
+  // view AND the performance/capacity read both read from the same snapshot (and
+  // the same recovery), so a single context build never computes program-state twice.
+  const fullProgramState = getProgramState(undefined, recovery);
   return {
     // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
     // EVERY plan-shaping prompt knows the time of day — without it the agent is
@@ -341,6 +346,8 @@ export function getCoachContext() {
     // — every existing consumer keeps working untouched.
     directives: directivesForCoach(),         // cross-domain consequences of flagged findings (condensed, bounded)
     health_focus: healthFocus(),              // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
+    symptom_links: (() => { try { return symptomMarkerLinks(); } catch { return []; } })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
+
     health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
     directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
     recovery,                                 // unified Garmin + Apple/other recovery view
@@ -360,7 +367,15 @@ export function getCoachContext() {
     // stall detection, volume bands, mesocycle position, endurance trends, and
     // the "what to evolve next" list — so EVERY plan-shaping prompt sees the
     // program's actual trajectory, not just raw sessions. Bounded; no scores.
-    program_state: programStateForCoach(recovery),
+    program_state: programStateForCoach(fullProgramState),
+    // The TRAINING-INTELLIGENCE read (capacity, not just trajectory): where each
+    // benchmark lift sits as a sex/age percentile against proven strength standards,
+    // VO2max-for-age, the strength IMBALANCES, the single biggest lever, lifts worth
+    // re-TESTING, and a variety nudge. So the coach measures WHERE THE ATHLETE STANDS
+    // and balances development — not just whether last week went up. Reuses the same
+    // program-state + recovery + balance computed above. Percentile/level framing
+    // (the recognized reference reads the athlete asked to keep), never a 0-100 score.
+    performance: performanceStanding(localDateISO(), { programState: fullProgramState, recovery, balance: programBal }),
     // Volume balance per canonical muscle group over the last 2 weeks (bands +
     // which groups are DUE / running HIGH, in plain words). Mobility excluded.
     program_balance: programBal,
@@ -1008,6 +1023,14 @@ export function getRecoverySummary(days = 14, garminSummary?: any) {
     weight_kg: g.weight_kg ?? null,
     body_fat_pct: g.body_fat_pct ?? null,
     muscle_mass_kg: g.muscle_mass_kg ?? null,
+    // Runner performance signals (null when no Garmin source / device doesn't report).
+    endurance_score: g.endurance_score ?? null,
+    hill_score: g.hill_score ?? null,
+    race_predict_5k_sec: g.race_predict_5k_sec ?? null,
+    race_predict_10k_sec: g.race_predict_10k_sec ?? null,
+    race_predict_half_sec: g.race_predict_half_sec ?? null,
+    race_predict_marathon_sec: g.race_predict_marathon_sec ?? null,
+    training_load_balance: g.training_load_balance ?? null,
     last_date: g.last_date || other?.last_date || null,
   };
 

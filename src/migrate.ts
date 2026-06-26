@@ -439,6 +439,47 @@ export const MIGRATIONS: Migration[] = [
     // NULL (existing/at-home turns) → the worker falls back to the server's TZ.
     addColumn(db, "chat_turns", "tz TEXT");
   } },
+  { version: 44, name: "blood-pressure-readings", up: (db) => {
+    // Point-in-time home/clinic BP readings. These are not health documents, but
+    // they project into marker history as Systolic BP / Diastolic BP for the
+    // connected brain and health-standing read.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS blood_pressure_readings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        measured_at TEXT NOT NULL,
+        systolic INTEGER NOT NULL,
+        diastolic INTEGER NOT NULL,
+        pulse INTEGER,
+        source TEXT DEFAULT 'manual',
+        position TEXT,
+        note TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_bp_measured ON blood_pressure_readings(measured_at);
+    `);
+  } },
+  { version: 45, name: "garmin-daily-runner-metrics", up: (db) => {
+    // Runner performance signals from the /metrics-service runner endpoints
+    // (race predictions, endurance score, hill score, training-load balance) —
+    // high value for half-marathon prep. Nullable / best-effort: a device or
+    // account that doesn't report a metric leaves it null.
+    for (const col of [
+      "endurance_score REAL", "hill_score REAL",
+      "race_predict_5k_sec INTEGER", "race_predict_10k_sec INTEGER",
+      "race_predict_half_sec INTEGER", "race_predict_marathon_sec INTEGER",
+      "training_load_balance TEXT",
+    ]) addColumn(db, "garmin_daily_metrics", col);
+  } },
+  { version: 46, name: "garmin-activity-richness", up: (db) => {
+    // Per-activity richness: list-payload fields (steps, stride, min/max elevation,
+    // lap count) that were present but uncaptured, plus running dynamics (ground
+    // contact, vertical oscillation/ratio) from the per-activity detail endpoint.
+    for (const col of [
+      "steps INTEGER", "avg_stride_len REAL", "min_elevation_m REAL",
+      "max_elevation_m REAL", "lap_count INTEGER", "avg_ground_contact_ms REAL",
+      "avg_vertical_osc_cm REAL", "avg_vertical_ratio REAL",
+    ]) addColumn(db, "garmin_activities", col);
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

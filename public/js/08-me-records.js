@@ -287,7 +287,7 @@ function paintHealthRecordsTab() {
 // no judgment. A quiet editorial read, grouped by kind under plain-language
 // kickers, newest-first within each group. Reads GET /api/learned-timeline only.
 const LEARNED_GROUPS = [
-  ["memory", "Understood about you", "Constraints, preferences and goals it carries — the durable picture of who you are. Curate these in the Memory tab."],
+  ["memory", "Understood about you", "Constraints, preferences and goals it carries — the durable picture of who you are."],
   ["learning", "What we tried, and how it went", "Quiet observations from comparing a suggestion to what actually happened. Never a verdict — just what it noticed."],
   ["directive", "Connections it made", "When a finding in your labs quietly shaped your meals, training, or what to watch. Informational, never medical advice."],
   ["applied", "Plan changes you accepted", "Adjustments Cairn proposed that you chose to apply. Nothing here changed on its own."],
@@ -331,13 +331,20 @@ function renderLearnedTimeline(data, token) {
   for (const [kind, label, blurb] of LEARNED_GROUPS) {
     const group = items.filter((it) => it.kind === kind);
     if (!group.length) continue;
+    // The "Understood about you" group is the curate-able coach memory; offer a quiet
+    // path to the Memory sub-view (a Me-seg sibling, not a Health-seg) to edit it.
+    const foot = kind === "memory"
+      ? `<button class="linkbtn" id="learnedToMemory" style="margin-top:8px">Curate these in Memory →</button>`
+      : "";
     body += `<section style="margin-top:22px">
         <h2 class="lbl" style="margin:0 0 4px">${escHtml(label)}</h2>
         <p class="hpic-hero-sub" style="margin:0 0 10px;text-align:left">${escHtml(blurb)}</p>
         ${group.map((it) => learnedItemHtml(it, idx++)).join("")}
+        ${foot}
       </section>`;
   }
   c.innerHTML = intro + (body || `<div class="empty-state reveal" style="${stagger(0)}"><div class="empty-state-line">Nothing learned yet</div></div>`);
+  $("#learnedToMemory")?.addEventListener("click", () => withViewTransition(() => renderMemory().then(viewEnter)));
 }
 
 function paintHealthLearnedTab() {
@@ -619,8 +626,12 @@ function pollHealthDoc(id) {
 async function loadHealthDocs() {
   const wrap = $("#hlist");
   if (!wrap) return [];
-  let docs = [];
-  try { docs = await api("/health-docs"); } catch { docs = []; }
+  let docs = [], fetched = false;
+  try { docs = await api("/health-docs"); fetched = true; } catch { docs = []; }
+  // Keep the persisted doc count fresh (drives the new-user Records default) so an
+  // upload here is reflected even before Standing reloads — see healthDocsKnownEmpty.
+  // Only on a real fetch: a transient offline [] must never cache a false zero.
+  if (fetched && Array.isArray(docs)) { try { localStorage.setItem("cairn:healthDocCount", String(docs.length)); } catch {} }
   if (state.tab !== "me" || state.meSeg !== "health" || !wrap.isConnected) return docs || [];
   if (!docs || !docs.length) { wrap.innerHTML = `<div class="empty">No documents yet.</div>`; return []; }
   wrap.innerHTML = docs.map((d, i) => healthDocHtml(d, i)).join("");

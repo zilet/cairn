@@ -736,7 +736,7 @@ function reviewHtml(review, stale, err) {
 // bails unless the Health sub-view is live.
 function paintHealthPicture() {
   const wrap = $("#hPicture");
-  if (!wrap || state.tab !== "me" || state.meSeg !== "health" || state.healthSeg !== "read" || !wrap.isConnected) return;
+  if (!wrap || state.tab !== "me" || state.meSeg !== "health" || state.healthSeg !== "standing" || !wrap.isConnected) return;
   if (_hReviewRun) { wrap.innerHTML = reviewBusyHtml(); return; }
   const pic = _hPic || {};
   const err = _hReviewErr ? `<div class="hpic-err">${escHtml(_hReviewErr)}</div>` : "";
@@ -783,14 +783,18 @@ async function runHealthReview() {
 }
 
 async function loadHealthPicture(token, docsP) {
-  let review = null, docs = [];
+  let review = null, docs = [], docsOk = false;
   try { review = await api("/health/review"); } catch { review = null; }
-  try { docs = (await docsP) || []; } catch { docs = []; }
+  try { docs = (await docsP) || []; docsOk = true; } catch { docs = []; }
   if (review && review.error) review = null;
   if (review) state.healthReview = review;
   if (token !== pollToken) return; // navigated away / re-rendered
   const newest = docs.reduce((m, d) => (d.created_at && (!m || d.created_at > m) ? d.created_at : m), null);
   _hPic = { review, docCount: docs.length, newestDocAt: newest };
+  // Persist the count so a returning new-user (a fresh page load resets _hPic) still
+  // opens Health on Records until they've added a document — see healthDocsKnownEmpty.
+  // Only on a real fetch: a transient offline [] must never cache a false zero.
+  if (docsOk) { try { localStorage.setItem("cairn:healthDocCount", String(docs.length)); } catch {} }
   paintHealthPicture();
 }
 
@@ -1261,7 +1265,11 @@ function loadHealthMarkers(token) {
         : "";
       return `<section class="hmk-section">${head}${note}<div class="hmk-card">${rows}</div></section>`;
     }).join("");
-    wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
+    // The marker catalog is the natural "send this to my doctor" moment — offer a
+    // quiet path to the Share shelf (the clinical report lives there).
+    wrap.innerHTML = `<div class="hmk-groups">${sections}</div>
+      <div class="hmk-share-foot"><button class="linkbtn" id="hMkToShare">Share with your doctor →</button></div>`;
+    wrap.querySelector("#hMkToShare")?.addEventListener("click", () => switchHealthSeg("share"));
     wrap.querySelectorAll(".hmk-x .hmk-row").forEach((b) =>
       b.addEventListener("click", () => {
         const item = b.closest(".hmk");
@@ -1285,16 +1293,31 @@ function loadHealthMarkers(token) {
 //   • read    — "Read": the whole-picture narrative review (the crown jewel) PLUS
 //               the connected brain reachable in one step — recovery (its ONE home),
 //               "this week's focus" directives, what-matters-now priority, supplements.
+//   • standing — "Standing": age/reference percentiles + signal-age orientation.
 //   • markers — "Markers": the rich trends catalog (the ONE detailed markers home).
 //   • records — "Records": upload + the document list.
 //   • share   — "Share": doctor report, structured export, and data-alignment actions.
-const HEALTH_SEG = [["read", "Read"], ["markers", "Markers"], ["records", "Records"], ["share", "Share"], ["learned", "Learned"]];
+const HEALTH_SEG = [["standing", "Standing"], ["markers", "Markers"], ["records", "Records"], ["share", "Share"], ["learned", "Learned"]];
 
-// Back-compat: an older persisted state.healthSeg ("analysis"/"brain") maps onto
-// the new "read" home so a returning client never lands on a dead inner tab.
+// Back-compat: "Read" merged into "Standing" — one interpretation home (momentum +
+// the one lever lead, the whole-picture narrative + connected brain fold in below).
+// Map every legacy key onto it so a returning client never lands on a dead inner tab.
 function normalizeHealthSeg(seg) {
-  if (seg === "analysis" || seg === "brain") return "read";
-  return HEALTH_SEG.some(([k]) => k === seg) ? seg : "read";
+  if (seg === "analysis" || seg === "brain" || seg === "read") return "standing";
+  return HEALTH_SEG.some(([k]) => k === seg) ? seg : "standing";
+}
+
+// True when we positively know there are zero health documents — from this session's
+// last load (_hPic.docCount) or this device's last visit (persisted). Used to open a
+// brand-new user on Records (where they upload) instead of an empty Standing read.
+// Returns false when the count is unknown, so we only override on a confident zero.
+function healthDocsKnownEmpty() {
+  if (_hPic && Number.isFinite(_hPic.docCount)) return _hPic.docCount === 0;
+  try {
+    const cached = localStorage.getItem("cairn:healthDocCount");
+    if (cached != null) return Number(cached) === 0;
+  } catch {}
+  return false;
 }
 
 // Health is a one-level inner view: the Me seg picks "Health", then a single inner
@@ -1305,6 +1328,12 @@ async function renderHealth() {
   headerTitle.textContent = "Me";
   state.meSeg = "health";
   state.healthSeg = normalizeHealthSeg(state.healthSeg);
+  // New user with nothing uploaded yet → open on Records (where you add a document),
+  // not the Standing read that can only say "this will sharpen". Respect any explicit
+  // tab choice made this session, and only override on a confident zero doc count.
+  if (!state.healthSegPicked && state.healthSeg === "standing" && healthDocsKnownEmpty()) {
+    state.healthSeg = "records";
+  }
   pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
   const idx = Math.max(0, HEALTH_SEG.findIndex(([k]) => k === state.healthSeg));
   view.innerHTML = segBar("health", ME_SEG)
@@ -1326,6 +1355,7 @@ async function renderHealth() {
 // Slide the inner seg thumb + flip the active button to `seg` (no repaint).
 function setHealthSegActive(seg) {
   state.healthSeg = seg;
+  state.healthSegPicked = true; // a deliberate tab choice — don't auto-default to Records again
   const hseg = view.querySelector(".hseg");
   if (!hseg) return;
   const btns = [...hseg.querySelectorAll(".segbtn")];
@@ -1357,19 +1387,302 @@ function paintHealthTab() {
   if (state.healthSeg === "records") return paintHealthRecordsTab();
   if (state.healthSeg === "share") return paintHealthShareTab();
   if (state.healthSeg === "learned") return paintHealthLearnedTab();
-  return paintHealthReadTab();
+  return paintHealthStandingTab();
 }
 
-// ---- Read tab: the whole-picture agentic review + the connected brain ----
-// The crown-jewel narrative review leads, with the connected brain reachable in
-// the same step (recovery — its ONE home — then "this week's focus" directives,
-// what-matters-now priority, and what-you're-taking supplements). The desktop
-// two-column layout splits this: the narrative review + recovery as the primary
-// column, the brain (directives / priority / supplements) as the right rail.
-function paintHealthReadTab() {
+// ---- Standing tab: percentiles, signal age, and point-in-time BP ----
+function hstandDecade(age) {
+  const n = Number(age);
+  if (!isFinite(n)) return 40;
+  return Math.max(20, Math.min(70, Math.floor(n / 10) * 10));
+}
+
+function hstandPct(n) {
+  const v = Math.round(Number(n));
+  return isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+}
+
+function localDateTimeInputValue(d = new Date()) {
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function hstandTone(t) {
+  return ["strong", "steady", "watch", "missing"].includes(t) ? t : "missing";
+}
+
+function hstandMeasureHtml(m) {
+  if (!m) return "";
+  const value = m.value == null || m.value === "" ? "—" : fmtMkNum(m.value);
+  return `<span class="hstand-measure"><span class="lbl">${escHtml(m.label || "")}</span><b>${escHtml(value)}</b>${m.unit ? `<em>${escHtml(m.unit)}</em>` : ""}</span>`;
+}
+
+function hstandCompHtml(c) {
+  const p = hstandPct(c.percentile);
+  const rp = hstandPct(c.reference_percentile);
+  const val = c.value == null ? "—" : fmtMkNum(c.value);
+  const peerLabel = c.actual_age_band || "your age";
+  const refLabel = c.reference_age_band || "reference";
+  return `<div class="hstand-comp">
+      <div class="hstand-comp-head">
+        <span><b>${escHtml(c.label || c.key || "")}</b> <span class="lbl">${escHtml(val)}${c.unit ? ` ${escHtml(c.unit)}` : ""}</span></span>
+        ${c.estimated ? `<span class="hstand-eq hstand-eq-est">est. now</span>` : c.equivalent_age ? `<span class="hstand-eq">moves like age ${escHtml(String(c.equivalent_age))}</span>` : ""}
+      </div>
+      <div class="hstand-barrow">
+        <span class="hstand-barlabel">${escHtml(peerLabel)}</span>
+        <span class="hstand-track"><span class="hstand-fill" style="width:${p ?? 0}%"></span></span>
+        <span class="hstand-pct">${p == null ? "—" : `${p}th`}</span>
+      </div>
+      <div class="hstand-barrow hstand-barrow-ref">
+        <span class="hstand-barlabel">${escHtml(refLabel)}</span>
+        <span class="hstand-track"><span class="hstand-fill" style="width:${rp ?? 0}%"></span></span>
+        <span class="hstand-pct">${rp == null ? "—" : `${rp}th`}</span>
+      </div>
+      ${c.source ? `<div class="hstand-source lbl">${escHtml(c.source)}</div>` : ""}
+    </div>`;
+}
+
+function hstandDimensionHtml(d, i) {
+  const measures = Array.isArray(d.measures) && d.measures.length
+    ? `<div class="hstand-measures">${d.measures.map(hstandMeasureHtml).join("")}</div>`
+    : "";
+  return `<div class="hstand-dim hstand-${hstandTone(d.tone)} reveal" style="${stagger(i)}">
+      <div class="hstand-dim-top"><span class="lbl">${escHtml(d.label || "")}</span><span class="hstand-tone-dot" aria-hidden="true"></span></div>
+      <h3>${escHtml(d.headline || "")}</h3>
+      ${d.body ? `<p>${escHtml(d.body)}</p>` : ""}
+      ${measures}
+    </div>`;
+}
+
+function hstandBpRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return `<div class="bp-empty">No readings yet.</div>`;
+  return rows.slice(0, 8).map((r) => {
+    const bp = `${escHtml(String(r.systolic ?? "—"))}/${escHtml(String(r.diastolic ?? "—"))}`;
+    const pulse = r.pulse != null ? `<span>${escHtml(String(r.pulse))} bpm</span>` : "";
+    const when = r.measured_at ? relTime(String(r.measured_at).replace(" ", "T")) : "";
+    const meta = [when, r.position, r.source && r.source !== "manual" ? r.source : ""].filter(Boolean).map((x) => `<span>${escHtml(String(x))}</span>`).join("");
+    return `<div class="bp-row">
+        <b>${bp}</b>
+        <div>${pulse}${meta}</div>
+      </div>`;
+  }).join("");
+}
+
+// Body composition, read LIVE: the DEXA is the anchor, but as weight comes off with
+// lean held, today's body fat is lower than the scan says — so this shows progress, an
+// honest estimate, not a stale snapshot that reads "age 75" mid-cut.
+function hstandBodyCompHtml(bc) {
+  if (!bc) {
+    return `<div class="hstand-panel hstand-bodycomp">
+      <div class="hstand-panel-head"><span class="lbl">Body composition</span></div>
+      <div class="hstand-empty">A DEXA or a compatible scale anchors this — then it tracks live as your weight moves.</div>
+    </div>`;
+  }
+  const est = bc.estimated;
+  const measured = bc.measured || {};
+  const fat = bc.fat_mass;
+  const lost = fat && fat.delta_lbs != null && fat.delta_lbs < 0 ? Math.abs(Math.round(fat.delta_lbs)) : null;
+  const big = est ? `~${est.value}` : (measured.value != null ? `${measured.value}` : "—");
+  return `<div class="hstand-panel hstand-bodycomp">
+    <div class="hstand-panel-head"><span class="lbl">Body composition</span>${est ? `<span class="lbl">live estimate</span>` : ""}</div>
+    <div class="hstand-bc-big"><b>${escHtml(String(big))}</b><span class="hstand-bc-unit">% body fat${est ? " · est. now" : ""}</span></div>
+    ${est && measured.value != null ? `<div class="hstand-bc-from">from <b>${escHtml(String(measured.value))}%</b> at your DEXA${measured.date ? ` · <span title="${escAttr(absDate(measured.date))}">${escHtml(relAge(measured.date))}</span>` : ""}</div>` : ""}
+    ${lost != null ? `<div class="hstand-bc-win">≈ ${lost} lb of fat off since the scan</div>` : ""}
+    ${bc.trunk_fat_pct != null ? `<div class="hstand-bc-note">Trunk fat ${escHtml(String(bc.trunk_fat_pct))}% — the metabolic one, and what a cut trims first.</div>` : ""}
+    ${bc.note ? `<div class="hstand-source lbl">${escHtml(bc.note)}</div>` : ""}
+  </div>`;
+}
+
+// Blood pressure that READS — where the latest sits against the calm home target, and the
+// trend (an improving 144→113 is a real win, not a buried number). Capture lives behind a
+// "+ Log a reading" tap (a sheet), so the analysis surface never carries a data-entry form.
+function hstandBpCardHtml(bp) {
+  bp = bp || {};
+  const recent = bp.recent || [];
+  const cat = bp.category;
+  const catLabel = cat === "optimal" ? "Optimal" : cat === "elevated" ? "Elevated" : cat === "high" ? "Above target" : cat === "low" ? "Low" : "No trend yet";
+  const traj = bp.trajectory;
+  return `<div class="hstand-panel hstand-bp">
+    <div class="hstand-panel-head"><span class="lbl">Blood pressure</span>${bp.latest ? `<span class="hstand-bp-cat hstand-${hstandTone(bp.tone)}">${escHtml(catLabel)}</span>` : ""}</div>
+    ${bp.read ? `<div class="hstand-bp-read">${escHtml(bp.read)}</div>` : `<div class="hstand-empty">Log a couple of resting home readings and Cairn can read the pattern.</div>`}
+    ${traj && traj.dir === "improving" ? `<div class="hstand-bp-traj"><span class="hstand-bp-was">${escHtml(String(traj.from.systolic))}/${escHtml(String(traj.from.diastolic))}</span><span class="hstand-bp-arrow">→</span><span class="hstand-bp-now">${escHtml(String(traj.to.systolic))}/${escHtml(String(traj.to.diastolic))}</span></div>` : ""}
+    <div class="bp-recent">${hstandBpRows(recent)}</div>
+    <button class="ghostbtn hstand-bp-log" type="button" id="bpLogOpen">+ Log a reading</button>
+    ${bp.note ? `<div class="hstand-source lbl">${escHtml(bp.note)}</div>` : ""}
+  </div>`;
+}
+
+function renderHealthStanding(data) {
+  const wrap = $("#hStanding");
+  if (!wrap) return;
+  const d = data || {};
+  const subj = d.subject || {};
+  const hero = d.hero || {};
+  const ageNum = Number(subj.age);
+  const hasAge = Number.isFinite(ageNum);
+  const actualDecade = hasAge ? hstandDecade(ageNum) : null;
+  const refAge = Number(subj.reference_age || state.healthStandingRef || actualDecade || 20);
+  const refAges = [...new Set([...(actualDecade ? [actualDecade] : []), 20, 30, 40, 50, 60, 70])];
+  const refBtns = refAges.map((a) => {
+    const label = actualDecade != null && a === actualDecade ? "Age peers" : `${a}s`;
+    return `<button type="button" class="hstand-refbtn${a === refAge ? " active" : ""}" data-refage="${a}">${escHtml(label)}</button>`;
+  }).join("");
+
+  // The hero: one coherent age read — lab biological age preferred — framed by direction.
+  const cal = hero.calendar_age != null ? escHtml(String(hero.calendar_age)) : (subj.age != null ? escHtml(String(subj.age)) : "—");
+  const bioVal = hero.biological_age != null ? escHtml(String(hero.biological_age)) : "—";
+  const bioSrc = hero.biological_age_source === "lab" ? "biological age" : "Cairn read";
+  const dir = hero.direction || "unknown";
+  const arrow = dir === "younger" ? "↓" : dir === "older" ? "↑" : "≈";
+  const dirWord = dir === "younger" ? "younger" : dir === "older" ? "older" : "in line";
+  const delta = hero.biological_age_delta;
+  const dRound = delta != null ? Math.abs(Math.round(delta)) : null;
+  const deltaChip = (delta != null && dRound >= 1)
+    ? `<span class="hstand-deltachip ${delta < 0 ? "is-younger" : "is-older"}">${delta < 0 ? "−" : "+"}${dRound} yr${dRound === 1 ? "" : "s"}</span>`
+    : "";
+  const conf = d.confidence ? `<span class="hstand-conf">${escHtml(d.confidence)} confidence</span>` : "";
+
+  const mo = d.momentum || {};
+  const momentumHtml = mo.has_momentum && Array.isArray(mo.chips) && mo.chips.length
+    ? `<section class="hstand-momentum reveal" style="${stagger(0)}">
+        <span class="lbl">This quarter — moving the right way</span>
+        <div class="hstand-chips">${mo.chips.map((c) => `<span class="hstand-chip hstand-chip-${c.dir === "good" ? "good" : "n"}">${escHtml(c.text)}</span>`).join("")}</div>
+      </section>`
+    : "";
+
+  const lv = d.lead_lever;
+  const leverHtml = lv
+    ? `<section class="hstand-lever reveal" style="${stagger(1)}">
+        <span class="lbl">The one lever${lv.uncertain ? " · worth confirming" : ""}</span>
+        <h3>${escHtml(lv.group || "")}</h3>
+        <p>${escHtml(lv.why || "")}</p>
+        ${lv.move ? `<p class="hstand-lever-move"><span class="lbl">The move</span>${escHtml(lv.move)}</p>` : ""}
+        <button class="linkbtn" type="button" data-lever-go>See the markers →</button>
+      </section>`
+    : "";
+
+  const comparisons = Array.isArray(d.comparisons) && d.comparisons.length
+    ? d.comparisons.map(hstandCompHtml).join("")
+    : `<div class="hstand-empty">VO2max or a DEXA/body-fat anchor unlocks real age-band percentiles.</div>`;
+  // BP + body comp have their own rich cards above — keep the strip to the rest of the picture.
+  const dims = Array.isArray(d.dimensions) ? d.dimensions.filter((x) => x.id !== "bp" && x.id !== "body") : [];
+  const dimensions = dims.map(hstandDimensionHtml).join("");
+  const balanceHtml = d.balance ? `<section class="hstand-balance reveal"><span class="lbl">Living well</span><p>${escHtml(d.balance)}</p></section>` : "";
+
+  wrap.innerHTML = `<div class="hstand">
+      <section class="hstand-hero hstand-hero-${dir}">
+        <div class="hstand-hero-main">
+          <span class="lbl">Health standing</span>
+          <h2>${escHtml(hero.headline || d.headline || "Your standing read will sharpen as data lands.")}</h2>
+          <div class="hstand-ages">
+            <span class="hstand-age"><b>${cal}</b><em>calendar</em></span>
+            <span class="hstand-age-mid"><span class="hstand-age-arrow">${arrow}</span><em>${dirWord}</em></span>
+            <span class="hstand-age hstand-age-bio"><b>${bioVal}</b><em>${escHtml(bioSrc)}</em>${deltaChip}</span>
+          </div>
+          ${conf}
+        </div>
+        <div class="hstand-ref">
+          <span class="lbl">Compare against</span>
+          <div class="hstand-refgrid">${refBtns}</div>
+        </div>
+      </section>
+      ${momentumHtml}
+      ${leverHtml}
+      <section class="hstand-grid">
+        ${hstandBodyCompHtml(d.body_comp)}
+        ${hstandBpCardHtml(d.blood_pressure)}
+      </section>
+      <section class="hstand-panel">
+        <div class="hstand-panel-head"><span class="lbl">Where you stand</span><span class="lbl">your age · vs your 20s</span></div>
+        ${comparisons}
+      </section>
+      ${dimensions ? `<section class="hstand-dims">${dimensions}</section>` : ""}
+      ${balanceHtml}
+    </div>`;
+
+  wrap.querySelectorAll("[data-refage]").forEach((b) => b.addEventListener("click", () => {
+    state.healthStandingRef = Number(b.dataset.refage || 20);
+    loadHealthStanding(pollToken, state.healthStandingRef);
+  }));
+  wrap.querySelector("[data-lever-go]")?.addEventListener("click", () => switchHealthSeg("markers"));
+  $("#bpLogOpen")?.addEventListener("click", () => openBpSheet());
+}
+
+// The relocated BP capture: a compact sheet behind a tap, so the Standing read stays a
+// reading surface (the user's "why am I entering BP in the analysis view?"). Reuses the
+// same POST /blood-pressure wiring as before.
+function openBpSheet() {
+  if (document.getElementById("bpSheetOv")) return;
+  const ov = document.createElement("div");
+  ov.id = "bpSheetOv";
+  ov.className = "bpsheet-ov";
+  ov.innerHTML = `<div class="bpsheet" role="dialog" aria-modal="true" aria-label="Log blood pressure">
+      <div class="bpsheet-hd"><h3>Log a reading</h3><button class="bpsheet-x" type="button" aria-label="Close">✕</button></div>
+      <form id="bpSheetForm" class="bpsheet-form">
+        <div class="bpsheet-row">
+          <label>Systolic<input id="bpSys" class="form-input" type="number" inputmode="numeric" min="60" max="260" placeholder="120" required></label>
+          <label>Diastolic<input id="bpDia" class="form-input" type="number" inputmode="numeric" min="35" max="160" placeholder="80" required></label>
+          <label>Pulse<input id="bpPulse" class="form-input" type="number" inputmode="numeric" min="25" max="240" placeholder="60"></label>
+        </div>
+        <label class="bpsheet-when">When<input id="bpAt" class="form-input" type="datetime-local" value="${escAttr(localDateTimeInputValue())}"></label>
+        <div class="bpsheet-row">
+          <label>Position<input id="bpPosition" class="form-input" type="text" maxlength="40" placeholder="Seated"></label>
+          <label>Note<input id="bpNote" class="form-input" type="text" maxlength="240" placeholder="Optional"></label>
+        </div>
+        <div class="bpsheet-ft"><button class="ghostbtn" type="button" data-close>Cancel</button><button class="logbtn" type="submit">Save</button></div>
+      </form>
+    </div>`;
+  document.body.appendChild(ov);
+  const teardown = () => { document.removeEventListener("keydown", ov._onKey); ov.remove(); };
+  ov._onKey = (e) => { if (e.key === "Escape") teardown(); };
+  document.addEventListener("keydown", ov._onKey);
+  ov.querySelector(".bpsheet-x")?.addEventListener("click", teardown);
+  ov.querySelector("[data-close]")?.addEventListener("click", teardown);
+  ov.addEventListener("click", (e) => { if (e.target === ov) teardown(); });
+  $("#bpSheetForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const submit = e.currentTarget?.querySelector("button[type='submit']");
+    if (submit) submit.disabled = true;
+    const payload = {
+      systolic: $("#bpSys")?.value, diastolic: $("#bpDia")?.value, pulse: $("#bpPulse")?.value,
+      measured_at: $("#bpAt")?.value, position: $("#bpPosition")?.value, note: $("#bpNote")?.value, source: "manual",
+    };
+    try {
+      const res = await api("/blood-pressure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res || res.error) { toast(res?.error || "Couldn't log BP"); if (submit) submit.disabled = false; return; }
+      toast("BP logged");
+      swrInvalidate("markers:");
+      teardown();
+      loadHealthStanding(pollToken, state.healthStandingRef || 20);
+    } catch {
+      toast("Couldn't log BP");
+      if (submit) submit.disabled = false;
+    }
+  });
+  setTimeout(() => $("#bpSys")?.focus(), 30);
+}
+
+function loadHealthStanding(token, refAge) {
+  const ref = Number(refAge || state.healthStandingRef || 20);
+  state.healthStandingRef = ref;
+  api(`/health/standing?reference_age=${encodeURIComponent(String(ref))}`)
+    .then((data) => { if (token === pollToken) renderHealthStanding(data || {}); })
+    .catch(() => {
+      if (token !== pollToken) return;
+      const wrap = $("#hStanding");
+      if (wrap) wrap.innerHTML = `<div class="hstand hstand-panel"><div class="empty">Couldn't load health standing right now.</div></div>`;
+    });
+}
+
+// The Standing tab is the ONE interpretation home (Read merged in): the momentum-led
+// structured read leads (#hStanding — hero, momentum, the one lever, live body comp,
+// BP read, percentiles, balance), then the whole-picture agentic narrative + the
+// connected brain fold in below as the depth (synthesis, recovery, picture, brain rail).
+function paintHealthStandingTab() {
   const c = $("#hContent");
   if (!c) return;
-  c.innerHTML = `<div class="hread-cols">
+  c.innerHTML = `<div id="hStanding"><div class="hstand hstand-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div></div>
+    <div class="hread-cols hstand-depth">
       <div class="hread-main">
         <div id="hSynthesis"></div>
         <div id="hRecovery"></div>
@@ -1382,17 +1695,47 @@ function paintHealthReadTab() {
           One brain across your whole picture. A finding in your labs can quietly shape your meals, your training, and what to keep an eye on. It's here to inform — never medical advice — and nothing changes your plan on its own.
         </div></div>
         <div id="hbDirectives"><div class="hb-load">Gathering directives…</div></div>
+        <div id="hbSymptomLinks"></div>
         <div id="hbMarkers"><div class="hb-load">Reading what matters most…</div></div>
         <div id="hbSupplements"></div>
       </aside>
     </div>`;
+  loadHealthStanding(pollToken, state.healthStandingRef || 20);
   loadHealthSynthesis(pollToken);
   loadRecoverySummary(pollToken, "#hRecovery");
   loadPriorityMarkers(pollToken);
   loadDirectives(pollToken);
+  loadSymptomLinks(pollToken);
   loadSupplements(pollToken);
+  // A provenance "why" deep-link can ask to land on the referenced directive rather
+  // than the top of Standing. The directives rail hydrates async, so wait for it to
+  // render, then scroll it into view. Consumed once; a normal entry never scrolls.
+  if (state.pendingHealthScroll === "hbDirectives") {
+    state.pendingHealthScroll = null;
+    scrollHealthRailIntoView("#hbDirectives");
+  }
   if (_hReviewRun) { paintHealthPicture(); return; } // a run is still cooking
   loadHealthPicture(pollToken, api("/health-docs"));
+}
+
+// Bring a Standing-tab connected-brain rail target into view once it has real content
+// (the rail loads async, so wait for its "Gathering…" placeholder to be replaced
+// before scrolling). pollToken-guarded so switching sub-views cancels it cleanly.
+function scrollHealthRailIntoView(sel) {
+  const token = pollToken;
+  let tries = 0;
+  const tick = () => {
+    if (token !== pollToken || state.tab !== "me" || state.meSeg !== "health" || state.healthSeg !== "standing") return;
+    const el = view.querySelector(sel);
+    const ready = el && !el.querySelector(".hb-load"); // directives rendered (placeholder gone)
+    if (ready || tries > 20) {
+      if (el) el.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+      return;
+    }
+    tries++;
+    setTimeout(tick, 80);
+  };
+  setTimeout(tick, 80);
 }
 
 // ---- the elite-coach synthesis: the whole picture, read as ONE prioritized story ----
@@ -1500,6 +1843,34 @@ function triggerHealthSynthesis() {
 // Say it once in plain words ("creatine daily, omega-3, some D, whey occasionally")
 // → the system approximates each into name · dose · cadence and folds it into the
 // connected brain. No rows-per-day, no check-offs — just what you're taking.
+// Symptom ↔ marker connections — a quiet "worth mentioning to your doctor" read when
+// something the athlete logged (a life event, a check-in note) lines up with an
+// out-of-range marker. Pull-only, informational, never diagnostic. Renders nothing
+// when there's no genuine co-occurrence (the common, calm case).
+async function loadSymptomLinks(token) {
+  const wrap = $("#hbSymptomLinks");
+  if (!wrap || !wrap.isConnected) return;
+  let r = null;
+  try { r = await api("/symptom-links"); } catch { r = null; }
+  if ((token != null && token !== pollToken) || !wrap.isConnected) return;
+  const links = r && Array.isArray(r.links) ? r.links : [];
+  if (!links.length) { wrap.innerHTML = ""; return; }
+  const cards = links.slice(0, 3).map((l) => {
+    const mk = Array.isArray(l.markers)
+      ? l.markers.map((m) => `${escHtml(m.name)}${m.value != null ? ` ${escHtml(String(m.value))}` : ""}${m.unit ? ` ${escHtml(m.unit)}` : ""}`).join(", ")
+      : "";
+    return `<div class="symlink">
+        <div class="symlink-note">${escHtml(l.note || "")}</div>
+        ${mk ? `<div class="symlink-mk lbl">${mk}</div>` : ""}
+      </div>`;
+  }).join("");
+  wrap.innerHTML = `<div class="hb-section symlink-card reveal">
+      <span class="lbl">Worth mentioning to your doctor</span>
+      <p class="symlink-sub">Something you noted lines up with one of your lab markers. Informational only — a question for your clinician, never a diagnosis.</p>
+      ${cards}
+    </div>`;
+}
+
 function loadSupplements(token) {
   const wrap = $("#hbSupplements");
   if (!wrap || !wrap.isConnected) return;

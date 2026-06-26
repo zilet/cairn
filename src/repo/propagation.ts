@@ -1,7 +1,8 @@
 import { db } from "../db.js";
+import { type ContextEffect, activeContextEffect, markerInTransientWindow } from "./context-effect.js";
 import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirectiveKey, hydrateDirective, listActiveDirectives, normalizeDirectiveKey } from "./coach.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
-import { forecastMarker, getMarkerHistory, lsqSlopePerDay, newestHealthDocDate } from "./health.js";
+import { cleanClinicalFacts, forecastMarker, getMarkerHistory, lsqSlopePerDay, newestHealthDocDate } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getProfile } from "./profile.js";
@@ -283,7 +284,7 @@ const MARKER_GROUPS: MarkerGroup[] = [
   { key: "thyroid", label: "Thyroid", keys: ["tsh", "free t3", "free t4", "thyroxine", "triiodo", "thyroid"] },
   { key: "hormones", label: "Hormones", keys: ["testosterone", "estradiol", "estrogen", "cortisol", "dhea", "shbg", "progesterone", "prolactin", "igf", "lh", "fsh"] },
   { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "magnesium", "zinc", "calcium", "potassium", "sodium", "selenium", "omega"] },
-  { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "heart rate"] },
+  { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "heart rate", "pulse"] },
   { key: "body", label: "Body Composition", keys: ["body fat", "fat mass", "lean mass", "bone density", "bmd", "t-score", "z-score", "visceral", "bmi"] },
   { key: "other", label: "Other Markers", keys: [] },
 ];
@@ -336,6 +337,8 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["non-hdl", "non hdl"], unit: "mg/dL", optimal: [50, 130], dir: "high", actionable: true, label: "Non-HDL-C" },
   { keys: ["triglyceride"], unit: "mg/dL", optimal: [40, 100], dir: "high", actionable: true, label: "Triglycerides" },
   { keys: ["hdl"], unit: "mg/dL", optimal: [50, 90], dir: "low", actionable: true, label: "HDL-C" },
+  { keys: ["total cholesterol"], unit: "mg/dL", optimal: [125, 200], dir: "high", actionable: true, label: "Total cholesterol" },
+  { keys: ["omega-3 index", "omega 3 index", "omegacheck"], unit: "%", optimal: [8, 12], dir: "low", actionable: true, label: "Omega-3 index" },
   { keys: ["hs-crp", "hscrp", "c-reactive", "c reactive", "crp"], unit: "mg/L", optimal: [0, 1], dir: "high", actionable: true, label: "hs-CRP" },
   { keys: ["homocysteine"], unit: "umol/L", optimal: [4, 9], dir: "high", actionable: true, label: "Homocysteine" },
   { keys: ["hba1c", "a1c", "hemoglobin a1c"], unit: "%", optimal: [4.5, 5.4], dir: "high", actionable: true, label: "HbA1c" },
@@ -343,7 +346,10 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["fasting insulin", "insulin"], unit: "uIU/mL", optimal: [2, 6], dir: "high", actionable: true, label: "Fasting insulin" },
   { keys: ["ferritin"], unit: "ng/mL", optimal: [50, 150], dir: "band", actionable: true, label: "Ferritin" },
   { keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)d", "25-hydroxy"], unit: "ng/mL", optimal: [40, 60], dir: "low", actionable: true, label: "Vitamin D" },
-  { keys: ["egfr"], unit: "mL/min", optimal: [90, 130], dir: "low", actionable: false, label: "eGFR" },
+  // eGFR: keyed on the full analyte phrase so the common lab name
+  // "Creatinine-Based Estimated Glomerular Filtration Rate" matches HERE (longest key
+  // wins) instead of being mis-routed to the serum Creatinine band by its "creatinine" token.
+  { keys: ["egfr", "glomerular filtration", "estimated gfr", "gfr"], unit: "mL/min", optimal: [90, 130], dir: "low", actionable: true, label: "eGFR" },
   { keys: ["creatinine"], unit: "mg/dL", optimal: [0.7, 1.1], dir: "band", actionable: false, label: "Creatinine" },
   { keys: ["alt", "sgpt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "ALT" },
   { keys: ["ast", "sgot"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "AST" },
@@ -358,7 +364,14 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["estradiol", "e2"], unit: "pg/mL", optimal: [10, 40], dir: "band", actionable: false, label: "Estradiol" },
   { keys: ["lp(a)", "lipoprotein(a)", "lipoprotein (a)"], unit: "nmol/L", optimal: [0, 75], dir: "high", actionable: false, label: "Lp(a)" },
   { keys: ["uric acid"], unit: "mg/dL", optimal: [3, 6], dir: "high", actionable: true, label: "Uric acid" },
+  // Body composition — a broad population "elevated body fat" band (NOT sex-specific; the
+  // Standing tab carries the precise sex/age percentile read). Keyed to the TOTAL body-fat
+  // marker only, so the regional DEXA rows ("Body Fat - Trunk") don't each fire a directive.
+  { keys: ["body fat %", "body fat percent", "percent body fat", "total body fat"], unit: "%", optimal: [10, 25], dir: "high", actionable: true, label: "Body fat" },
+  { keys: ["mercury"], unit: "ug/L", optimal: [0, 10], dir: "high", actionable: true, label: "Mercury" },
+  { keys: ["rheumatoid factor"], unit: "IU/mL", optimal: [0, 14], dir: "high", actionable: false, label: "Rheumatoid factor" },
   { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP" },
+  { keys: ["diastolic", "bp diastolic"], unit: "mmHg", optimal: [60, 80], dir: "high", actionable: true, label: "Diastolic BP" },
   // Endurance / cardiorespiratory fitness markers (v35). These come from wearables
   // (injected into prioritizeMarkers from the recovery summary) but also match a lab
   // VO2max test. Optimal-ZONE framing only — higher VO2max is better, lower resting
@@ -388,8 +401,30 @@ function suppressFastingGlucoseZone(name: string, z: OptimalZone | null): boolea
   return NON_FASTING_GLUCOSE.test(n);
 }
 
+// Specimen/analyte-type guard — mirrors report.ts's `optimalTrustworthy`, but ported
+// into the brain's chokepoint so a serum concentration band is NEVER claimed by a name
+// that isn't that serum analyte. Without it, naive substring matching emits clinically
+// BACKWARDS directives on real data: "Total Cholesterol / HDL Ratio" (5.2) matches the
+// HDL-C band → "raise your low HDL" (a high ratio is high risk, not low HDL); "Albumin,
+// Random Urine without Creatinine" (0.2) matches the serum Creatinine band → a spurious
+// "low creatinine"; "Testosterone, Free" matches the total-T band → a false "low
+// testosterone". Suppresses ratios, qualitative patterns, urine specimens, free-T, and
+// advanced lipoprotein subfractions (particle count/size — different units than the band).
+function zoneNameTrustworthy(name: string): boolean {
+  const n = String(name ?? "").toLowerCase();
+  if (/\bratio\b|\bpattern\b|\burine\b/.test(n)) return false;
+  if (n.includes("/")) return false;                                  // composite "x / y" names
+  if (n.includes("free") && n.includes("testosterone")) return false; // no free-T optimal band
+  if (/\b(ldl|hdl)\b/.test(n) && /\b(particle|small|medium|large|peak|number|size)\b/.test(n)) return false;
+  return true;
+}
+
 export function matchOptimalZone(name: string): OptimalZone | null {
   const n = String(name ?? "").toLowerCase();
+  // A ratio / urine / pattern / free-T / lipoprotein-subfraction name must not be held
+  // to a serum concentration band it was never measured against (the clinically-wrong
+  // directive guard). Checked first so nothing downstream sees a mis-routed zone.
+  if (!zoneNameTrustworthy(n)) return null;
   // Prefer the most specific (longest key) match so "non-hdl" doesn't read as "hdl".
   let best: OptimalZone | null = null;
   let bestLen = 0;
@@ -454,6 +489,19 @@ function wearableFitnessMarkers(days = 120): any[] {
     for (const r of g) {
       const v = Number(r.v);
       if (Number.isFinite(v) && v >= spec.lo && v <= spec.hi) byDate.set(String(r.date), v);
+    }
+    if (spec.label === "VO2max") {
+      const activityRows = db.prepare(
+        `SELECT date, vo2max AS v FROM garmin_activities
+         WHERE date >= ? AND vo2max IS NOT NULL
+         ORDER BY date, id`
+      ).all(since) as any[];
+      for (const r of activityRows) {
+        const date = String(r.date);
+        if (byDate.has(date)) continue;
+        const v = Number(r.v);
+        if (Number.isFinite(v) && v >= spec.lo && v <= spec.hi) byDate.set(date, v);
+      }
     }
     if (spec.oCol) {
       const o = db.prepare(
@@ -601,7 +649,7 @@ export function prioritizeMarkers() {
 // which direction is worse), and the deterministic trend. CONSTITUTION: no 0-100
 // score anywhere — `status` is optimal-zone framing, never a grade; the internal
 // impact_score never crosses this boundary (prioritizeMarkers already strips it).
-export const HEALTH_EXPORT_VERSION = 1;
+export const HEALTH_EXPORT_VERSION = 2;
 
 // Optimal-zone status for one marker, in plain FHIR-ish words. `interpretation`
 // mirrors FHIR's interpretation concept loosely: "within-optimal" or, when out,
@@ -630,6 +678,47 @@ function exportOptimalStatus(m: any): {
   }
   // Zone exists but value wasn't numeric → can't place it.
   return { interpretation: "indeterminate", inOptimal: null, worseDirection: o.dir ?? null };
+}
+
+function healthExportClinicalFacts() {
+  const rows = db
+    .prepare(
+      `SELECT id, doc_date, created_at, original_name, parsed_json
+         FROM health_documents
+        ORDER BY COALESCE(doc_date, substr(created_at, 1, 10)) ASC, id ASC`
+    )
+    .all() as any[];
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    let parsed: any = null;
+    try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+    const facts = cleanClinicalFacts(parsed?.clinical_facts, 500);
+    const recordDate = (row.doc_date && String(row.doc_date).slice(0, 10)) || String(row.created_at ?? "").slice(0, 10) || null;
+    for (const f of facts) {
+      const key = [
+        f.kind,
+        f.date ?? "",
+        f.name.toLowerCase(),
+        (f.status ?? "").toLowerCase(),
+        (f.detail ?? "").toLowerCase(),
+      ].join("|");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        kind: f.kind,
+        date: f.date ?? null,
+        name: f.name,
+        status: f.status ?? null,
+        detail: f.detail ?? null,
+        source: f.source ?? row.original_name ?? null,
+        sourceDocId: row.id,
+        recordDate,
+      });
+      if (out.length >= 500) return out;
+    }
+  }
+  return out;
 }
 
 export function buildHealthExport() {
@@ -713,6 +802,7 @@ export function buildHealthExport() {
   const bodyComposition = observations
     .filter((o: any) => o.category === "body")
     .map((o: any) => ({ name: o.name, value: o.value, unit: o.unit, effectiveDate: o.effectiveDate, trend: o.trend.direction }));
+  const clinicalFacts = healthExportClinicalFacts();
 
   return {
     // Self-describing metadata header (FHIR-ish Bundle-meta, hand-rolled).
@@ -734,9 +824,11 @@ export function buildHealthExport() {
     summary: {
       markerCount: observations.length,
       flaggedCount: flagged_count, // markers the lab flagged low/high (count, not a grade)
+      clinicalFactCount: clinicalFacts.length,
       categories: Array.isArray(groups) ? groups : [],
     },
     observations,
+    clinicalFacts,
     bodyComposition,
     supplements,
     directives,
@@ -886,6 +978,11 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
     { domain: "training", directive: "Keep regular aerobic exercise in the week — it reliably lowers resting blood pressure.", rationale: "Aerobic training produces a consistent, dose-responsive reduction in resting BP.", citation: "ACC/AHA 2017 Hypertension Guideline" },
     { domain: "watch", directive: "Confirm with repeated home readings (a single clinic value can be elevated); discuss a sustained high reading with your doctor.", rationale: "Single BP readings overstate risk; home averaging is the standard for confirmation.", citation: "ACC/AHA 2017 Hypertension Guideline" },
   ] },
+  { zone: "Diastolic BP", derive: () => [
+    { domain: "nutrition", directive: "Lean toward a DASH-style pattern: more vegetables, fruit and potassium, less sodium and alcohol, to support a healthier blood pressure.", rationale: "DASH and sodium reduction are first-line, evidence-backed dietary levers for blood pressure.", citation: "ACC/AHA 2017 Hypertension Guideline" },
+    { domain: "training", directive: "Keep regular aerobic exercise in the week — it reliably lowers resting blood pressure.", rationale: "Aerobic training produces a consistent, dose-responsive reduction in resting BP.", citation: "ACC/AHA 2017 Hypertension Guideline" },
+    { domain: "watch", directive: "Confirm with repeated home readings (a single clinic value can be elevated); discuss a sustained high reading with your doctor.", rationale: "Single BP readings overstate risk; home averaging is the standard for confirmation.", citation: "ACC/AHA 2017 Hypertension Guideline" },
+  ] },
   { zone: "Uric acid", derive: () => [
     { domain: "nutrition", directive: "Cut back on alcohol (especially beer), sugary drinks and very high-purine foods to lower elevated uric acid.", rationale: "Uric acid responds to fructose, alcohol and purine intake; reduction lowers gout risk.", citation: "ACR 2020 Gout Management Guideline", uncertain: true },
     { domain: "watch", directive: "Discuss persistently high uric acid with your doctor, especially with any joint pain history.", rationale: "Hyperuricemia is clinically actionable when symptomatic; otherwise it's a watch item.", citation: "ACR 2020 Gout Management Guideline" },
@@ -967,6 +1064,24 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
   { zone: "HRV", derive: (ctx) => ctx.side === "low" ? [
     { domain: "training", directive: "Your HRV is running below your optimal range — favor easy aerobic work, protect sleep, and don't stack hard days while it's suppressed; HRV is a recovery/readiness signal, read it as a trend, not a single night.", rationale: "Low HRV often reflects accumulated training or life stress and under-recovery; backing off intensity tends to restore it.", citation: "Heart-rate-variability training-readiness literature", uncertain: true },
   ] : [] },
+  // ---- body composition: the connected lever that moves lipids, glucose, BP & hormones together ----
+  { zone: "Body fat", derive: () => [
+    { domain: "nutrition", directive: "Body fat is above optimal — the highest-leverage move is a modest, LEAN-SAFE deficit (~300-500 kcal) with high protein (~0.7-1 g/lb), not a crash diet; losing fat while holding lean improves lipids, glucose, BP and testosterone at once.", rationale: "Excess adiposity (especially visceral) raises hepatic VLDL, blood pressure, insulin resistance and aromatization — so fat loss is the single change that moves the most markers together.", citation: "AHA/ACC obesity & cardiovascular-risk literature" },
+    { domain: "training", directive: "Keep resistance training central while leaning out — it's what protects the lean mass that keeps the loss healthy and the metabolism up; pair it with your aerobic base.", rationale: "Resistance training during a deficit preserves fat-free mass, so the weight that comes off is fat rather than muscle.", citation: "ACSM resistance-training-during-weight-loss literature" },
+    { domain: "watch", directive: "Re-measure body composition (DEXA or a consistent method) every ~8-12 weeks rather than chasing the scale daily — body recomposition shows up in the trend, not day to day.", rationale: "Body-fat change is slow and noisy day to day; periodic composition measurement reads the real trajectory.", citation: null, uncertain: true },
+  ] },
+  { zone: "Total cholesterol", derive: () => [
+    { domain: "nutrition", directive: "Total cholesterol is above optimal — the same lipid levers apply: cut saturated fat, add ~10g/day soluble fiber, favor unsaturated fats and oily fish. Read it alongside ApoB/LDL, which matter more for risk.", rationale: "Total cholesterol responds to the standard lipid-lowering diet, though ApoB/LDL are the better risk targets.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
+    { domain: "watch", directive: "Retest a full lipid panel (with ApoB) in ~12 weeks and discuss a persistently high total cholesterol with your doctor.", rationale: "A 12-week retest captures dietary response and frames total cholesterol within the fuller lipid picture.", citation: "AHA/ACC 2018 Cholesterol Guideline" },
+  ] },
+  { zone: "Omega-3 index", derive: (ctx) => ctx.side === "low" ? [
+    { domain: "nutrition", directive: "Your omega-3 index is below the protective range — eat oily fish 2-3×/week (favor smaller, lower-mercury species: salmon, sardines, trout, herring) or add an EPA+DHA supplement; it supports triglycerides, inflammation and heart rhythm.", rationale: "A low omega-3 index tracks with higher cardiovascular risk and responds reliably to EPA/DHA intake.", citation: "AHA 2017 Omega-3 Science Advisory" },
+    { domain: "watch", directive: "Recheck the omega-3 index in ~3-4 months after raising intake — red-cell omega-3 turns over slowly.", rationale: "The omega-3 index reflects months of intake, so a retest is meaningful only after a sustained change.", citation: "AHA 2017 Omega-3 Science Advisory", uncertain: true },
+  ] : [] },
+  { zone: "Mercury", derive: () => [
+    { domain: "nutrition", directive: "Blood mercury is on the high side — keep getting your omega-3s, but shift away from large predatory fish (tuna, swordfish, king mackerel) toward smaller species (salmon, sardines, trout); this lowers mercury while protecting omega-3 intake.", rationale: "Mercury accumulates from large, long-lived predatory fish; smaller oily fish deliver omega-3 with far less mercury.", citation: "EPA/FDA fish-consumption advice" },
+    { domain: "watch", directive: "Recheck mercury after a few months of lower-mercury fish choices; discuss a persistently elevated level with your doctor.", rationale: "Blood mercury falls over months once high-mercury intake drops.", citation: "EPA/FDA fish-consumption advice", uncertain: true },
+  ] },
 ];
 
 // THE PROPAGATION ENGINE. A flagged/sub-optimal biomarker propagates into every
@@ -1336,16 +1451,44 @@ export function acuteReadingDateMap(): Record<string, string> {
 // anchoring acute markers to the real reading date. Every surface that must agree on
 // whether an acute finding is still current uses this: the Brief provenance line, the
 // connected-brain prompt block, and the API/MCP directive lists. One marker-history pass.
-export function annotateDirectiveFreshness(directives: any[], today?: string): any[] {
+export function annotateDirectiveFreshness(directives: any[], today?: string, eff?: ContextEffect): any[] {
   const rows = Array.isArray(directives) ? directives : [];
-  const map = rows.some((d) => isAcuteMarker(d?.marker)) ? acuteReadingDateMap() : {};
+  const anyAcute = rows.some((d) => isAcuteMarker(d?.marker));
+  const map = anyAcute ? acuteReadingDateMap() : {};
+  // The active life-context effect (a recent illness / injury / late night / hard block)
+  // raises a transient-inflammation window. We only need it when there's an acute
+  // directive to test, and we compute it ONCE. A caller may inject `eff` (testing, or a
+  // surface that already has it) to skip the DB read; else derive it for `today`.
+  // Best-effort — never throws (a missing/erroring effect simply yields no transient flag).
+  let effect: ContextEffect | undefined = eff;
+  if (anyAcute && !effect) {
+    try { effect = activeContextEffect(today); } catch { effect = undefined; }
+  }
   return rows.map((d) => {
     let anchor: string | undefined;
     if (isAcuteMarker(d?.marker)) {
       try { anchor = map[canonicalMarker(String(d?.marker ?? "")).key]; } catch { /* unresolved → directiveFreshness falls back */ }
     }
     const f = directiveFreshness(d, today, anchor);
-    return { ...d, acute: f.acute, age_days: f.ageDays, stale: f.stale };
+    // TRANSIENT-FLARE verdict (additive — leaves acute/age_days/stale intact): a FRESH
+    // acute reading (hs-CRP, ESR, CK, …) drawn while a transient-inflammation context
+    // window is active is the flare talking, not a stable finding. So it reads
+    // INFORMATIONAL ("drawn during a flare, recheck once it settles") rather than capping
+    // training every morning. Gated on FRESH (not stale): an OLD acute reading stays in
+    // the existing stale path, and a long-ago reading can never false-positive here.
+    let transient = false;
+    let transient_reason: string | null = null;
+    if (f.acute && !f.stale && effect?.transient_inflammation) {
+      const rawDate = anchor || d?.trigger_date || null;
+      const readingDate = rawDate ? String(rawDate).slice(0, 10) : null;
+      if (readingDate && markerInTransientWindow(readingDate, effect)) {
+        const item = effect.active.find((a) => a.transient_inflammation && (!a.decays_on || readingDate <= a.decays_on));
+        const flare = item?.title ? `"${String(item.title).trim()}"` : "a recent flare (illness / injury / a hard block)";
+        transient = true;
+        transient_reason = `${String(d?.marker ?? "this acute marker").trim()} was likely drawn during ${flare} — informational; worth a recheck once it settles before it shapes training.`;
+      }
+    }
+    return { ...d, acute: f.acute, age_days: f.ageDays, stale: f.stale, transient, transient_reason };
   });
 }
 
@@ -1490,12 +1633,12 @@ export function healthFocus(): HealthFocus {
     const why = allAcuteStale
       ? `${ms[0]?.name} reads off, but it's a point-in-time marker from a while ago — worth a recheck before it shapes anything`
       : compounding
-        ? `${ms.length} markers off together here — read them as one picture`
+        ? `${ms[0]?.name}${ms[1] ? ` and ${ms[1]?.name}` : ""} sit off together — they move as one picture, so the same change shifts several at once`
         : flagged
           ? `the lab flagged ${ms[0]?.name}`
           : worsening
-            ? `${ms[0]?.name} is drifting the wrong way`
-            : `${ms[0]?.name} is outside its optimal band`;
+            ? `${ms[0]?.name} has been drifting the wrong way`
+            : `${ms[0]?.name} is sitting outside its optimal range`;
 
     const readings: FocusReading[] = ms.slice(0, 4).map((m: any) => ({
       name: m.name,

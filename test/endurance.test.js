@@ -23,7 +23,8 @@ function seedActivity(date, { type = "run", duration_min = null, distance_km = n
 beforeEach(() => {
   resetTables(
     "logged_sets", "sessions", "session_skips", "plan_items", "plan_days",
-    "checkins", "daily_metrics", "garmin_daily_metrics", "activities", "health_documents", "health_directives"
+    "checkins", "daily_metrics", "garmin_daily_metrics", "garmin_activities", "garmin_sources",
+    "activities", "health_documents", "health_directives"
   );
   // Reset the profile discipline + endurance goal to defaults so cases don't bleed.
   repo.setProfile({ primary_discipline: "strength", endurance_sport: "", endurance_goal: null });
@@ -232,6 +233,49 @@ test("getEndurancePRs is null-safe with no cardio logged", () => {
   assert.equal(prs.longest_km, null);
   assert.equal(prs.longest_min, null);
   assert.deepEqual(prs.best_pace, []);
+  assert.deepEqual(prs.sports, []);
+});
+
+// The bug: a fast bike "pace" out-ranks every run, so a runner's pace bests read as
+// cycling. Bests are now grouped by sport — pace stays running-only, cycling reads in
+// distance/duration/speed.
+test("getEndurancePRs splits sports so cycling never pollutes running pace bests", () => {
+  seedActivity("2026-01-01", { type: "run", duration_min: 50, distance_km: 10 });   // 5.0 min/km
+  seedActivity("2026-02-01", { type: "run", duration_min: 44, distance_km: 10 });   // 4.4 min/km (fastest run)
+  seedActivity("2026-03-01", { type: "mountain_biking", duration_min: 150, distance_km: 29.9 }); // longest ride
+  seedActivity("2026-03-05", { type: "cycling", duration_min: 30, distance_km: 10 });            // 3.0 min/km bike "pace", 20 km/h
+
+  const prs = repo.getEndurancePRs();
+  assert.equal(prs.primary_sport, "run");
+  assert.equal(prs.sports[0].sport, "run", "the athlete's running leads");
+
+  const run = prs.sports.find((s) => s.sport === "run");
+  assert.ok(run && run.paced, "running is a paced sport");
+  const tenK = run.best_pace.find((p) => p.distance_km === 10);
+  assert.equal(tenK.min_per_km, 4.4, "fastest 10k is the run, not the 3.0 bike");
+  assert.ok(run.best_pace.every((p) => p.min_per_km >= 4.4), "no sub-4 'pace' leaked from cycling");
+
+  const ride = prs.sports.find((s) => s.sport === "ride");
+  assert.ok(ride && !ride.paced, "cycling is not a paced sport");
+  assert.deepEqual(ride.best_pace, [], "cycling has no min/km pace bests");
+  assert.equal(ride.longest_km.value, 29.9, "the 29.9 km MTB is a cycling best, not a running one");
+  assert.ok(ride.best_speed_kmh, "cycling gets a speed best instead");
+  assert.equal(ride.best_speed_kmh.value, 20, "best ride speed = 20 km/h (10 km / 30 min)");
+
+  // Flat back-compat fields mirror the running lead.
+  assert.equal(prs.longest_km.type, "run");
+  assert.equal(prs.best_pace.find((p) => p.distance_km === 10).min_per_km, 4.4);
+});
+
+test("getEndurancePRs leads with the configured endurance sport", () => {
+  repo.setProfile({ endurance_sport: "cycling" });
+  seedActivity("2026-01-01", { type: "run", duration_min: 50, distance_km: 10 });
+  seedActivity("2026-02-01", { type: "cycling", duration_min: 30, distance_km: 10 });
+  const prs = repo.getEndurancePRs();
+  assert.equal(prs.primary_sport, "ride");
+  assert.equal(prs.sports[0].sport, "ride", "cycling leads when it's the athlete's sport");
+  assert.deepEqual(prs.best_pace, [], "a speed-sport lead exposes no min/km pace bests");
+  assert.equal(prs.longest_km.type, "cycling");
 });
 
 // ---------- C.8 connected-brain endurance markers ----------
@@ -263,6 +307,22 @@ test("a lab VO2max reading wins over the wearable estimate (no double-counting)"
   const vo2 = repo.prioritizeMarkers().markers.filter((m) => m.key === "vo2max");
   assert.equal(vo2.length, 1, "exactly one VO2max marker (no wearable + lab duplicate)");
   assert.equal(vo2[0].latest.value, 52, "the lab reading wins");
+});
+
+test("Garmin activity-level VO2max feeds recovery markers when daily maxmet is absent", () => {
+  const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','activity-vo2')`).run();
+  db.prepare(
+    `INSERT INTO garmin_activities (source_id, external_id, date, type, name, vo2max)
+     VALUES (?, 'run-vo2-1', '2026-03-10', 'run', 'Tempo run', 42)`
+  ).run(src.lastInsertRowid);
+
+  const { markers } = repo.prioritizeMarkers();
+  const vo2 = markers.find((m) => m.key === "vo2max");
+  assert.ok(vo2, "activity-level Garmin VO2max becomes the wearable VO2 marker");
+  assert.equal(vo2.latest.value, 42);
+
+  const recovery = repo.getRecoverySummary(120);
+  assert.equal(recovery.recovery.vo2max, 42, "recovery summary also exposes activity-level VO2max");
 });
 
 // ---------- GOLDEN: endurance markers never leak a 0-100 grade / impact_score ----------

@@ -19,14 +19,18 @@ export * from "./repo/app-state.js";
 export * from "./repo/lab-units.js";
 export * from "./repo/marker-canon.js";
 export * from "./repo/health.js";
+export * from "./repo/ccda.js";
+export * from "./repo/standing.js";
 export * from "./repo/coach.js";
 export * from "./repo/propagation.js";
+export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning
 export * from "./repo/evidence.js";
 export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
 export * from "./repo/progression.js";
 export * from "./repo/program-blocks.js";
 export * from "./repo/exercise-variations.js";
+export * from "./repo/performance.js"; // training-intelligence: capacity benchmark + imbalance + the lever
 // Era 2 (the calm daily driver, docs/VISION.md §12):
 export * from "./repo/today-agenda.js"; // the Today salience arbiter
 export * from "./repo/since-last.js"; // honest "since you last looked" continuity

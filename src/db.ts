@@ -188,6 +188,16 @@ CREATE TABLE IF NOT EXISTS garmin_activities (
   vo2max REAL,                -- activity-level VO2max estimate
   hr_zones_json TEXT,         -- [{zone,secs,low_hr}] time-in-HR-zone breakdown
   exercise_sets_json TEXT,    -- [{category,name,reps,weight_kg,duration_sec,set_type}] detected strength sets (migration v24)
+  -- per-activity richness (migration v46): list-payload fields + running dynamics
+  -- pulled from the per-activity detail endpoint.
+  steps INTEGER,              -- step count for the activity (run/walk)
+  avg_stride_len REAL,        -- average stride length (Garmin raw units)
+  min_elevation_m REAL,
+  max_elevation_m REAL,
+  lap_count INTEGER,
+  avg_ground_contact_ms REAL, -- running dynamics (detail endpoint)
+  avg_vertical_osc_cm REAL,   -- vertical oscillation
+  avg_vertical_ratio REAL,    -- vertical ratio (%)
   session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL, -- reconciled Cairn session (strength activities)
   raw_json TEXT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -249,6 +259,15 @@ CREATE TABLE IF NOT EXISTS garmin_daily_metrics (
   bone_mass_kg REAL,
   bmi REAL,
   visceral_fat REAL,
+  -- runner performance metrics (migration v45) — half-marathon-prep signals from
+  -- the /metrics-service runner endpoints. All current point-in-time values.
+  endurance_score REAL,
+  hill_score REAL,
+  race_predict_5k_sec INTEGER,
+  race_predict_10k_sec INTEGER,
+  race_predict_half_sec INTEGER,
+  race_predict_marathon_sec INTEGER,
+  training_load_balance TEXT,  -- load-balance feedback phrase (e.g. "BALANCED")
   raw_json TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
@@ -319,6 +338,24 @@ CREATE TABLE IF NOT EXISTS bodyweight_log (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bw_date ON bodyweight_log(date);
+
+-- Home / clinic blood-pressure readings. Unlike labs, these are point-in-time
+-- measurements; the exact timestamp matters for repeated home averages and for
+-- separating "morning at rest" from a clinic/vitals reading. They are also
+-- projected into marker history as Systolic BP / Diastolic BP so the connected
+-- brain can correlate them with labs, body composition, recovery and training.
+CREATE TABLE IF NOT EXISTS blood_pressure_readings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  measured_at TEXT NOT NULL,                 -- local/known timestamp, "YYYY-MM-DD HH:MM:SS"
+  systolic INTEGER NOT NULL,
+  diastolic INTEGER NOT NULL,
+  pulse INTEGER,
+  source TEXT DEFAULT 'manual',              -- manual | mychart | garmin | other
+  position TEXT,                             -- seated | standing | lying | unknown/free text
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bp_measured ON blood_pressure_readings(measured_at);
 
 -- In-app chat with the coaching agent. Each turn is one row; assistant rows
 -- carry which agent answered and a JSON meta of applied actions / draft ids.

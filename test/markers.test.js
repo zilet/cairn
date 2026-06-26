@@ -11,6 +11,25 @@ beforeEach(() => {
   resetTables("health_documents", "health_directives");
 });
 
+test("matchOptimalZone suppresses mis-routed analyte names (the clinically-wrong-directive guard)", () => {
+  // Ratios, urine specimens, free-T, and lipoprotein subfractions must NOT claim a serum band.
+  assert.equal(repo.matchOptimalZone("Total Cholesterol / HDL Ratio"), null);
+  assert.equal(repo.matchOptimalZone("Albumin, Random Urine without Creatinine"), null);
+  assert.equal(repo.matchOptimalZone("Testosterone, Free"), null);
+  assert.equal(repo.matchOptimalZone("LDL Particle Number"), null);
+  assert.equal(repo.matchOptimalZone("HDL Large"), null);
+  // eGFR's full lab name matches the eGFR band, not the serum Creatinine band.
+  assert.equal(repo.matchOptimalZone("Creatinine-Based Estimated Glomerular Filtration Rate")?.label, "eGFR");
+  // The real serum analytes still match.
+  assert.equal(repo.matchOptimalZone("HDL-Cholesterol")?.label, "HDL-C");
+  assert.equal(repo.matchOptimalZone("Creatinine")?.label, "Creatinine");
+  assert.equal(repo.matchOptimalZone("Testosterone, Total")?.label, "Testosterone");
+  // New coverage zones.
+  assert.equal(repo.matchOptimalZone("Body Fat %")?.label, "Body fat");
+  assert.equal(repo.matchOptimalZone("Omega-3 Index")?.label, "Omega-3 index");
+  assert.equal(repo.matchOptimalZone("Total Cholesterol")?.label, "Total cholesterol");
+});
+
 test("getMarkerHistory builds a per-marker series and a deterministic RISING trend", () => {
   seedHealthDoc("2025-01-01", [marker("ApoB", 80, { unit: "mg/dL" })]);
   seedHealthDoc("2025-06-01", [marker("ApoB", 95, { unit: "mg/dL" })]);

@@ -40,11 +40,16 @@ function provenanceLineHtml(d, label) {
     </button>`;
 }
 
-// Wire any rendered provenance line to deep-link into Me → Health → Brain.
+// Wire any rendered provenance line to deep-link into Me → Health → Standing,
+// landing on the connected-brain directives rail (the old "Brain" view was merged
+// into Standing). We stash a scroll target so Standing brings the referenced
+// directive into view instead of opening at the top (the bio-age hero).
 function wireProvenance(scope) {
   (scope || view).querySelectorAll("[data-prov]").forEach((b) => b.addEventListener("click", () => {
     state.meSeg = "health";
-    state.healthSeg = "brain"; // the directives live in the Brain view
+    state.healthSeg = "standing"; // directives now live in Standing's connected-brain rail
+    state.healthSegPicked = true; // an explicit destination — never bounce to the new-user Records default
+    state.pendingHealthScroll = "hbDirectives"; // scroll the rail into view once it has rendered
     activateTab("me");
   }));
 }

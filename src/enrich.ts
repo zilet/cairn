@@ -231,6 +231,16 @@ async function processJob(job: Job): Promise<void> {
   // would burn rotation state against a phantom invocation.
   const settings = repo.getSettings();
   if (!settings.enrich_enabled) {
+    if (job.kind === "health") {
+      const backfill = repo.backfillCcdaHealthDocument(job.id);
+      if (backfill.wrote) {
+        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
+        markStatus(job, "done");
+        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        enqueueReviewRefresh();
+        return;
+      }
+    }
     markStatus(job, "skipped");
     return;
   }
@@ -239,6 +249,16 @@ async function processJob(job: Job): Promise<void> {
   // (Claude-first) instead of the load-spreading round-robin. Other kinds rotate.
   const order = job.kind === "health" ? repo.pickHealthAgentOrder() : repo.pickAgentOrder();
   if (!order.length) {
+    if (job.kind === "health") {
+      const backfill = repo.backfillCcdaHealthDocument(job.id);
+      if (backfill.wrote) {
+        console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
+        markStatus(job, "done");
+        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        enqueueReviewRefresh();
+        return;
+      }
+    }
     // No usable agent → skip, keep the regex parse as-is.
     markStatus(job, "skipped");
     return;
@@ -255,6 +275,7 @@ async function processJob(job: Job): Promise<void> {
   // Carry the health source out of the branch so the completeness retry below can
   // re-read it (text sources only) and re-prompt without re-deriving the path.
   let healthSource: { fp: string; mime: string; kind: string; isDir: boolean } | null = null;
+  let ccdaExtraction: ReturnType<typeof repo.extractCcdaHealthData> | null = null;
   if (job.kind === "health") {
     const row = repo.getHealthDocumentRaw(job.id) as any;
     const fp = (row?.file_path ?? "").toString().trim();
@@ -280,6 +301,15 @@ async function processJob(job: Job): Promise<void> {
       if (dir) { target = dir; isDir = true; extractedDir = dir; }
     }
     healthSource = { fp: target, mime: (row?.mime ?? "").toString(), kind: row?.kind || "other", isDir };
+    try {
+      ccdaExtraction = repo.extractCcdaHealthData(target);
+      if (ccdaExtraction.files && (ccdaExtraction.clinical_facts.length || ccdaExtraction.vitals_panels.length)) {
+        console.log(`[enrich] health#${job.id}: deterministic CCDA found ${ccdaExtraction.clinical_facts.length} fact(s), ${ccdaExtraction.vitals_panels.length} vitals panel(s), ${ccdaExtraction.blood_pressure_readings.length} BP reading(s).`);
+      }
+    } catch (e: any) {
+      console.warn(`[enrich] health#${job.id}: deterministic CCDA extraction skipped (${e?.message ?? e}).`);
+      ccdaExtraction = null;
+    }
     prompt = buildHealthIngestPrompt(target, isDir, row?.kind || "other");
     timeoutMs = HEALTH_INGEST_TIMEOUT_MS;
   } else {
@@ -312,6 +342,16 @@ async function processJob(job: Job): Promise<void> {
   }
 
   if (!parsed || typeof parsed !== "object") {
+    if (job.kind === "health" && ccdaExtraction) {
+      const backfill = repo.applyCcdaHealthBackfill(job.id, ccdaExtraction);
+      if (backfill.wrote) {
+        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
+        markStatus(job, "done");
+        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        enqueueReviewRefresh();
+        return;
+      }
+    }
     markStatus(job, "failed");
     return;
   }
@@ -365,6 +405,11 @@ async function processJob(job: Job): Promise<void> {
   // a dedicated apply path.
   const appliedFields =
     job.kind === "health" ? applyHealthIngest(job.id, parsed) : applyStructured(job, parsed.structured);
+  const ccdaBackfill =
+    job.kind === "health" && ccdaExtraction ? repo.applyCcdaHealthBackfill(job.id, ccdaExtraction) : null;
+  if (ccdaBackfill?.wrote) {
+    console.log(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${ccdaBackfill.clinicalFacts} fact(s), ${ccdaBackfill.vitalMarkers} vital marker(s), ${ccdaBackfill.bpReadings}/${ccdaBackfill.extractedBpReadings} BP row(s).`);
+  }
 
   // Add each genuinely-new memory item (the prompt instructs the agent to skip
   // anything already on record; addMemory also dedupes exact repeats).
@@ -385,7 +430,7 @@ async function processJob(job: Job): Promise<void> {
   // Parseable JSON of the wrong shape (e.g. a coach-proposal response) yields no
   // fields and no memory — the regex parse stands. Surface it rather than letting
   // a silent no-op masquerade as a successful enrichment.
-  if (!appliedFields && !addedMemory) {
+  if (!appliedFields && !addedMemory && !ccdaBackfill?.wrote) {
     // For a HEALTH doc this is not a benign no-op: the doc has no regex fallback
     // (the markers are the whole point), so a wrong-shape response that wrote
     // nothing must NOT read as 'done' — that would make a doc with dropped markers
@@ -744,6 +789,11 @@ function looksThinForBinaryHealthDoc(kind: string | null | undefined, got: numbe
 
 function applyHealthIngest(id: number, parsed: any): boolean {
   const panels = ingestPanels(parsed);
+  const panelFacts = panels.flatMap((p: any) => Array.isArray(p?.clinical_facts) ? p.clinical_facts : []);
+  const clinicalFacts = repo.cleanClinicalFacts([
+    ...(Array.isArray(parsed?.clinical_facts) ? parsed.clinical_facts : []),
+    ...panelFacts,
+  ]);
 
   const cleanMarkers = (raw: any): any[] =>
     (Array.isArray(raw) ? raw : [])
@@ -755,7 +805,21 @@ function applyHealthIngest(id: number, parsed: any): boolean {
         unit: asStr(m.unit) ?? null,
         flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
       }))
-      .filter((m: any) => m.name);
+      .filter((m: any) => m.name)
+      // Numeric plausibility / unit-error guard (mirrors insertHealthPanels): the
+      // primary-panel ingest path writes via updateHealthDocFields, so it must run
+      // the same defensive check or a transcription typo / unit mix-up would poison
+      // the connected brain's directives. Conservative — only CLEAR impossibilities.
+      .filter((m: any) => {
+        try {
+          const v = repo.plausibleMarkerValue(m.name, m.value, m.unit);
+          if (!v.plausible) {
+            console.warn(`[enrich] dropped implausible marker "${m.name}" = ${m.value}${m.unit ? ` ${m.unit}` : ""}: ${v.reason ?? "out of physiologic range"}`);
+            return false;
+          }
+        } catch { /* guard unavailable → keep the marker (fail-open) */ }
+        return true;
+      });
 
   const cleaned = panels
     .filter((p: any) => p && typeof p === "object")
@@ -773,7 +837,24 @@ function applyHealthIngest(id: number, parsed: any): boolean {
     })
     .filter((p) => p.markers.length || p.summary);
 
-  if (!cleaned.length) return false;
+  const row = repo.getHealthDocumentRaw(id) as any;
+  const markerCount = cleaned.reduce((n, p) => n + p.markers.length, 0);
+  // A health-document result with only prose is not an ingest. This catches agent
+  // sandbox/file-access failures like "I could not read the upload" before they
+  // overwrite a previously valid marker panel with {"markers":[]}.
+  if (!markerCount && !clinicalFacts.length) return false;
+  if (!cleaned.length) {
+    const summary = asStr(parsed?.summary) ?? null;
+    const out: Record<string, any> = { markers: [] };
+    if (clinicalFacts.length) out.clinical_facts = clinicalFacts;
+    repo.updateHealthDocFields(id, {
+      parsed_json: out,
+      kind: row?.kind || "other",
+      summary,
+    });
+    repo.replaceHealthPanels(id, [], row?.original_name ?? null);
+    return true;
+  }
 
   // Newest first (date-bearing panels ahead of date-less ones).
   cleaned.sort((a, b) => {
@@ -783,13 +864,13 @@ function applyHealthIngest(id: number, parsed: any): boolean {
     return 0;
   });
 
-  const row = repo.getHealthDocumentRaw(id) as any;
   const primary = cleaned[0];
   const rest = cleaned.slice(1);
 
   // Write the newest panel onto the source row.
   const out: Record<string, any> = { markers: primary.markers };
   if (primary.type) out.type = primary.type;
+  if (clinicalFacts.length) out.clinical_facts = clinicalFacts;
   const fields: { parsed_json?: any; summary?: string | null; kind?: string | null; doc_date?: string | null } = {
     parsed_json: out,
     kind: primary.kind,

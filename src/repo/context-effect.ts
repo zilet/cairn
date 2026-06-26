@@ -37,6 +37,8 @@ const STRESS_RE = /\b(stress(ed|ful)?|burn(ed|t)? ?out|overwhelmed|anxious|anxie
 const ILLNESS_RE = /\b(ill|illness|sick|sickness|flu|fever|cold|covid|infection|food ?poison|stomach|gastro|bug|virus|unwell|under the weather|run[- ]?down|sore throat|cough|congest(ed|ion)|sinus|migraine)\b/i;
 // Travel / a trip → fueling is disrupted (restaurants, schedule, no scale).
 const TRAVEL_RE = /\b(travel(l)?(ing|ed)?|trip|flight|flying|abroad|vacation|holiday|away|on the road|hotel|conference|business trip)\b/i;
+const INJURY_RE = /\b(injur|strain(ed)?|sprain(ed)?|tweak(ed)?|pulled a|pulled my|tendin|tendon|fracture|broken|torn|niggle|hobbl|blister)\b/i;
+const DECAY_INJURY_DAYS = 21;
 
 export interface ActiveContextItem {
   title: string;
@@ -91,7 +93,14 @@ function classifyEvent(ev: any): ActiveContextItem | null {
   // A trip context_event always disrupts fueling (kind alone is enough), and its
   // text may also name illness/late-nights while travelling.
   const isTripKind = ev?.kind === "trip";
+  // A structured injury event (kind alone is enough) eases/works around load — even when
+  // the title names no recognized injury word (e.g. "Foot sole cuts from beach shells").
+  const isInjuryKind = ev?.kind === "injury";
 
+  if (isInjuryKind || INJURY_RE.test(text)) {
+    reduce_load = true;
+    reasons.push("an active injury is worth easing or working around");
+  }
   if (LATE_NIGHT_RE.test(text)) {
     expect_worse_sleep = true;
     transient_inflammation = true;
@@ -131,6 +140,7 @@ function classifyEvent(ev: any): ActiveContextItem | null {
     if (LATE_NIGHT_RE.test(text)) days = Math.max(days, DECAY_LATE_NIGHT_DAYS);
     if (STRESS_RE.test(text)) days = Math.max(days, DECAY_STRESS_DAYS);
     if (reduce_load) days = Math.max(days, DECAY_ILLNESS_DAYS);
+    if (isInjuryKind) days = Math.max(days, DECAY_INJURY_DAYS); // injuries linger longer than a cold
     if (transient_inflammation) days = Math.max(days, DECAY_TRANSIENT_INFLAMMATION_DAYS);
     decays_on = days > 0 ? addDaysISO(start, days) : null;
   }

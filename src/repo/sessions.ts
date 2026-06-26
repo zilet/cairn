@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
+import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } from "./endurance-sports.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
 import { listContextEvents, listHealthDocuments, listHealthReviews } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
@@ -347,20 +348,81 @@ function epley1RM(weight: number, reps: number): number {
   return Math.round(weight * (1 + reps / 30) * 10) / 10;
 }
 
-// ---------- endurance PRs (v35) ----------
+// ---------- endurance PRs (v35; sport-aware) ----------
 // The endurance analogue to the Epley est-1RM: best efforts from the logged cardio
-// (the `activities` table). Deterministic, null-safe — no agent. Returns the
-// fastest pace at or above standard distances (a longer effort counts toward a
-// shorter PR), the single longest distance, and the longest duration, each over an
-// optional `type` filter (e.g. 'run' / 'ride'). PLAIN numbers, never a score.
-export interface EndurancePRs {
-  type: string | null;
+// (the `activities` table). Deterministic, null-safe — no agent. PLAIN numbers,
+// never a score.
+//
+// Bests are grouped BY SPORT, because a best is only meaningful within its modality:
+// a cyclist's "3:53/km" is just speed inverted and reads as a nonsense running PR
+// next to an actual run. So PACE bests (min/km at standard distances) are computed
+// only for foot sports (run/walk); cycling/swim/row get SPEED (km/h) + the longest
+// distance/duration instead. `sports` is ordered with the athlete's primary
+// endurance sport first (profile `endurance_sport`, default running), then by how
+// much they've logged. The flat top-level fields mirror that lead sport for
+// back-compat with older callers.
+export interface SportBests {
+  sport: string;  // canonical key: "run" | "walk" | "ride" | "swim" | "row" | <raw>
+  label: string;  // display label, e.g. "Running" / "Cycling"
+  count: number;  // # of logged efforts with distance or duration (relevance/ordering)
+  paced: boolean; // pace (min/km) is the meaningful metric for this sport
   longest_km: { value: number; date: string; type: string } | null;
   longest_min: { value: number; date: string; type: string } | null;
-  best_pace: { distance_km: number; min_per_km: number; date: string; type: string }[]; // one per standard distance hit
+  best_pace: { distance_km: number; min_per_km: number; date: string; type: string }[]; // paced sports only
+  best_speed_kmh: { value: number; date: string; type: string } | null;                 // non-paced sports only
+}
+export interface EndurancePRs {
+  type: string | null;
+  primary_sport: string | null;
+  sports: SportBests[];
+  // Back-compat flat fields = the lead sport's bests (nulls/[] when nothing logged).
+  longest_km: SportBests["longest_km"];
+  longest_min: SportBests["longest_min"];
+  best_pace: SportBests["best_pace"];
 }
 
 const PR_DISTANCES_KM = [1, 5, 10, 21.0975, 42.195];
+
+function computeSportBests(key: string, label: string, paced: boolean, rows: any[]): SportBests {
+  let longest_km: SportBests["longest_km"] = null;
+  let longest_min: SportBests["longest_min"] = null;
+  let best_speed: SportBests["best_speed_kmh"] = null;
+  // Best pace (min/km) achieved at or beyond each standard distance — a longer effort
+  // counts toward a shorter PR distance (you covered it en route).
+  const bestPace = new Map<number, { min_per_km: number; date: string; type: string }>();
+  let count = 0;
+
+  for (const r of rows) {
+    const km = Number(r.distance_km);
+    const min = Number(r.duration_min);
+    const rowType = String(r.type ?? "activity");
+    const hasKm = Number.isFinite(km) && km > 0;
+    const hasMin = Number.isFinite(min) && min > 0;
+    if (hasKm || hasMin) count++;
+    if (hasKm && (!longest_km || km > longest_km.value)) longest_km = { value: Math.round(km * 100) / 100, date: r.date, type: rowType };
+    if (hasMin && (!longest_min || min > longest_min.value)) longest_min = { value: Math.round(min), date: r.date, type: rowType };
+    // A pace/speed PR needs BOTH distance and duration.
+    if (hasKm && hasMin) {
+      if (paced) {
+        const pace = min / km; // min/km (lower is faster)
+        for (const dist of PR_DISTANCES_KM) {
+          if (km + 1e-9 < dist) continue; // effort didn't reach this distance
+          const cur = bestPace.get(dist);
+          if (!cur || pace < cur.min_per_km) bestPace.set(dist, { min_per_km: Math.round(pace * 100) / 100, date: r.date, type: rowType });
+        }
+      } else {
+        const kmh = (km / min) * 60; // km/h (higher is faster) — the metric riders read
+        if (!best_speed || kmh > best_speed.value) best_speed = { value: Math.round(kmh * 10) / 10, date: r.date, type: rowType };
+      }
+    }
+  }
+
+  const best_pace = [...bestPace.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([distance_km, v]) => ({ distance_km, min_per_km: v.min_per_km, date: v.date, type: v.type }));
+
+  return { sport: key, label, count, paced, longest_km, longest_min, best_pace, best_speed_kmh: paced ? null : best_speed };
+}
 
 export function getEndurancePRs(type?: string | null): EndurancePRs {
   const t = type != null && String(type).trim() ? String(type).trim().toLowerCase() : null;
@@ -375,38 +437,38 @@ export function getEndurancePRs(type?: string | null): EndurancePRs {
          WHERE (distance_km IS NOT NULL OR duration_min IS NOT NULL) ORDER BY date`
       ).all()) as any[];
 
-  let longest_km: EndurancePRs["longest_km"] = null;
-  let longest_min: EndurancePRs["longest_min"] = null;
-  // Best pace (min/km) achieved at or beyond each standard distance — a longer run
-  // counts toward a shorter PR distance (you covered it en route).
-  const bestPace = new Map<number, { min_per_km: number; date: string; type: string }>();
-
+  // Bucket every effort into its canonical sport, then compute that sport's own bests.
+  const groups = new Map<string, { label: string; paced: boolean; rows: any[] }>();
   for (const r of rows) {
-    const km = Number(r.distance_km);
-    const min = Number(r.duration_min);
-    const rowType = String(r.type ?? "activity");
-    if (Number.isFinite(km) && km > 0) {
-      if (!longest_km || km > longest_km.value) longest_km = { value: Math.round(km * 100) / 100, date: r.date, type: rowType };
-    }
-    if (Number.isFinite(min) && min > 0) {
-      if (!longest_min || min > longest_min.value) longest_min = { value: Math.round(min), date: r.date, type: rowType };
-    }
-    // A pace PR needs BOTH distance and duration.
-    if (Number.isFinite(km) && km > 0 && Number.isFinite(min) && min > 0) {
-      const pace = min / km; // min/km (lower is faster)
-      for (const dist of PR_DISTANCES_KM) {
-        if (km + 1e-9 < dist) continue; // effort didn't reach this distance
-        const cur = bestPace.get(dist);
-        if (!cur || pace < cur.min_per_km) bestPace.set(dist, { min_per_km: Math.round(pace * 100) / 100, date: r.date, type: rowType });
-      }
-    }
+    const sp = canonicalEnduranceSport(r.type);
+    let g = groups.get(sp.key);
+    if (!g) { g = { label: sp.label, paced: sp.paced, rows: [] }; groups.set(sp.key, g); }
+    g.rows.push(r);
   }
 
-  const best_pace = [...bestPace.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([distance_km, v]) => ({ distance_km, min_per_km: v.min_per_km, date: v.date, type: v.type }));
+  // Lead with the athlete's primary endurance sport (so a runner sees running first),
+  // then the most-logged remaining sports.
+  const primaryKey = canonicalEnduranceSport(getProfile()?.endurance_sport || "running").key;
+  const sports = [...groups.entries()]
+    .map(([key, g]) => computeSportBests(key, g.label, g.paced, g.rows))
+    .filter((s) => s.count > 0)
+    .sort((a, b) => {
+      const ap = a.sport === primaryKey ? 1 : 0;
+      const bp = b.sport === primaryKey ? 1 : 0;
+      if (ap !== bp) return bp - ap; // primary sport first
+      if (b.count !== a.count) return b.count - a.count; // then most-logged
+      return a.label.localeCompare(b.label);
+    });
 
-  return { type: t, longest_km, longest_min, best_pace };
+  const lead = sports[0] ?? null;
+  return {
+    type: t,
+    primary_sport: primaryKey,
+    sports,
+    longest_km: lead?.longest_km ?? null,
+    longest_min: lead?.longest_min ?? null,
+    best_pace: lead?.best_pace ?? [],
+  };
 }
 
 // Compact dashboard: training days + tonnage over the last 7 days, plus a
@@ -595,6 +657,9 @@ function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
 
   // Pace trend: avg pace (min/km) this week vs the prior week, from activities that
   // carry BOTH distance and duration. Lower min/km = faster. Plain direction word.
+  // SCOPED to the athlete's endurance sport (default running) — a bike ride's speed
+  // mixed into a "min/km" average reads as a nonsense running pace.
+  const sport = activitySportWhere("activities", enduranceSportPatterns(getProfile()?.endurance_sport));
   const avgPace = (startIso: string, endIso?: string): number | null => {
     const rows = end(startIso, endIso);
     let km = 0, min = 0;
@@ -606,8 +671,8 @@ function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
   };
   function end(startIso: string, endIso?: string): any[] {
     return endIso
-      ? (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`).all(startIso, endIso) as any[])
-      : (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ?`).all(startIso) as any[]);
+      ? (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ? AND (${sport.sql})`).all(startIso, endIso, ...sport.params) as any[])
+      : (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND (${sport.sql})`).all(startIso, ...sport.params) as any[]);
   }
   const this_min_per_km = avgPace(mondayISO);
   const prev_min_per_km = avgPace(prevMonday, mondayISO);

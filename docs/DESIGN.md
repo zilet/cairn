@@ -135,6 +135,20 @@ New/changed components (CSS must implement, app.js must emit):
 - Buttons: `.logbtn` terracotta ink-on-cream → solid terracotta circle/pill, cream glyph;
   `.ghostbtn` hairline pill; `.draftbtn` hairline terracotta text pill.
 - Chat `.bubble.user` = ink on `--ink` (cream text); `.bubble.assistant` = card.
+- Health **Standing** (Me→Health, the hero read): `.hstand*` — the momentum-led capacity read
+  (three-age strip, `.hstand-bc-*` live body-composition, `.hstand-lever` terracotta well = the one
+  health lever, momentum chips, percentile comparisons). Blood-pressure **capture** lives in a sheet
+  (`.bpsheet*`), never inline in the read. Connected-brain rail: `.hb-section` cards (directives,
+  `.supp-*` supplements, and `.symlink-card` symptom↔marker connections — gold left-spine, `.symlink` /
+  `.symlink-note` / `.symlink-mk`; a quiet "worth mentioning to your doctor" read, hidden when empty).
+- **Performance** read (Progress→Program, the athletic counterpart to Standing): `.pperf*` — the
+  "where you stand" capacity benchmark. `.pperf-hero` (sage left-spine, headline + sub + `.pperf-chip`
+  momentum chips); `.pperf-caps` of `.pcap` rows (movement label + `.pcap-level` chip + a `.pcap-bar`
+  with a `.pcap-mark` percentile dot + the plain "Nth pct for your 40s" sub); `.pperf-lever` terracotta
+  well = the one training lever; `.pperf-block` for imbalances / re-tests; `.pperf-variety`;
+  `.pperf-aero` aerobic line; `.pperf-balance` italic holistic note. Tone classes `-strong` (sage) /
+  `-watch` (terracotta) / `-steady` (gold). Percentile + the beginner→elite level ladder are reference
+  reads, NEVER a 0-100 score (constitution).
 - Keep ALL other existing class names working (`.sess`, `.modal*`, `.heat*`, `.vol*`, `.mem*`,
   `.hdoc*`, `.life*`, `.enr*`, `.seg*`, `.daybtn`, `.logrow`, `.field`, `.toast`, `.rest*`,
   `.ob-*`, `.agentrow` family) — restyled to the Atelier language, same selectors.

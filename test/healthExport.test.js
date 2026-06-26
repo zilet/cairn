@@ -102,11 +102,49 @@ test("buildHealthExport includes the active supplement regimen + active directiv
   }
 });
 
+test("buildHealthExport includes non-marker clinical facts from MyChart-style records", () => {
+  repo.addHealthDocument({
+    kind: "other",
+    doc_date: "2026-04-02",
+    parsed_json: {
+      markers: [],
+      clinical_facts: [
+        {
+          kind: "allergy",
+          date: null,
+          name: "Penicillin",
+          status: "active",
+          detail: "Rash",
+          source: "Allergies",
+        },
+        {
+          kind: "medication",
+          date: "2026-01-01",
+          name: "Atorvastatin",
+          status: "active",
+          detail: "10 mg daily",
+          source: "Medications",
+        },
+      ],
+    },
+    enrichment_status: "done",
+  });
+  const exp = repo.buildHealthExport();
+  assert.equal(exp.summary.clinicalFactCount, 2);
+  assert.deepEqual(exp.clinicalFacts.map((f) => [f.kind, f.name, f.status, f.detail]), [
+    ["allergy", "Penicillin", "active", "Rash"],
+    ["medication", "Atorvastatin", "active", "10 mg daily"],
+  ]);
+  assert.equal(exp.clinicalFacts[0].recordDate, "2026-04-02");
+});
+
 test("buildHealthExport is empty-safe with no markers", () => {
   const exp = repo.buildHealthExport();
   assert.deepEqual(exp.observations, []);
+  assert.deepEqual(exp.clinicalFacts, []);
   assert.deepEqual(exp.bodyComposition, []);
   assert.equal(exp.summary.markerCount, 0);
+  assert.equal(exp.summary.clinicalFactCount, 0);
   assert.equal(exp.summary.flaggedCount, 0);
   assert.ok(exp.meta && exp.meta.exportVersion === repo.HEALTH_EXPORT_VERSION);
 });

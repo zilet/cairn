@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables } from "./_seed.js";
+import { buildHealthIngestPrompt } from "../dist/prompt.js";
 
 // A trimmed Function-Health-style paste: name / range-flag / value triples, plus
 // the no-range markers (percentages, hormones, blood type) and qualitative urine
@@ -108,4 +109,50 @@ test("replaceHealthPanels keeps a full 111-marker panel but caps a runaway one",
   assert.equal(byDate["2026-06-11"], 111, "a real comprehensive panel is preserved whole");
   assert.equal(byDate["2026-01-01"], repo.MAX_MARKERS_PER_PANEL, "a runaway list is capped at the panel max");
   assert.ok(repo.MAX_MARKERS_PER_PANEL >= 111, "the cap must clear a comprehensive panel");
+});
+
+test("buildHealthIngestPrompt preserves non-marker MyChart facts separately", () => {
+  const prompt = buildHealthIngestPrompt("/tmp/mychart-export", true, "other");
+  assert.match(prompt, /clinical_facts/);
+  assert.match(prompt, /medications/i);
+  assert.match(prompt, /allergies/i);
+  assert.match(prompt, /procedures\/surgeries/i);
+  assert.match(prompt, /encounters\/visits/i);
+  assert.match(prompt, /Do NOT force non-measurement sections into markers/);
+});
+
+test("replaceHealthPanels preserves bounded clinical facts on derived records", () => {
+  resetTables("health_documents");
+  const source = repo.addHealthDocument({ kind: "other", doc_date: "2026-06-11", enrichment_status: "done" });
+
+  const created = repo.replaceHealthPanels(source.id, [
+    {
+      doc_date: "2026-04-02",
+      kind: "other",
+      summary: "Visit summary",
+      markers: [],
+      clinical_facts: [
+        {
+          kind: "procedure",
+          date: "2026-04-02",
+          name: "Right knee MRI",
+          status: "completed",
+          detail: "Sports medicine encounter",
+          source: "Procedures",
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].parsed.clinical_facts, [
+    {
+      kind: "procedure",
+      date: "2026-04-02",
+      name: "Right knee MRI",
+      status: "completed",
+      detail: "Sports medicine encounter",
+      source: "Procedures",
+    },
+  ]);
 });

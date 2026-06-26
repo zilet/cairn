@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
+import { activeContextEffect } from "./context-effect.js";
 import { listContextEvents } from "./health.js";
 import { KCAL_PER_LB, getPrimaryDiscipline, getProfile, projectGoalPace } from "./profile.js";
 import { getProgramState } from "./program-state.js";
@@ -149,7 +150,23 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   const bigActivity =
     todaysActivities.find((a) => (a.duration_min != null && Number(a.duration_min) >= 20) || a.distance_km != null) || null;
 
+  // Active lifestyle/context (injury, illness, travel, a late night) as of `d`. The
+  // deterministic floor now READS it — an active injury isn't just prompt prose, it
+  // biases the read (a caveat on the train branch, never a forced rest — you can
+  // usually train around it). Null-safe; absent context changes nothing.
+  const ctx = (() => { try { return activeContextEffect(d); } catch { return null; } })();
+  const reduceItem = ctx?.active?.find((a) => a.reduce_load) ?? null;
+
   const signals = {
+    // Active context the brain is accounting for (injury/illness/travel), or null.
+    context: ctx?.any
+      ? {
+          reduce_load: !!ctx.reduce_load,
+          expect_worse_sleep: !!ctx.expect_worse_sleep,
+          transient_inflammation: !!ctx.transient_inflammation,
+          active: ctx.active.map((a) => ({ title: a.title, kind: a.kind, reason: a.reason })).slice(0, 3),
+        }
+      : null,
     // Consecutive genuinely-LOADING (hard/moderate) days ending yesterday — a
     // recovery/easy day breaks the streak (it's earned rest, not stacked fatigue).
     consecutive_training_days: consec,
@@ -307,6 +324,11 @@ export function dayRead(date?: string, recovery?: any): DayRead {
     // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
     // a reset, and/or running ramped this week (keep today's miles easy).
     const caveats: string[] = [];
+    if (reduceItem) caveats.push(
+      reduceItem.kind === "injury"
+        ? `you've got ${String(reduceItem.title || "an injury").toLowerCase()} to work around — train around it and skip anything that aggravates it`
+        : "there's something to ease around right now, so keep the load conservative",
+    );
     if (anticipateDeload) caveats.push("recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset");
     if (volumeSpike) caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
     const why = caveats.length

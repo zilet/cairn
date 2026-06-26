@@ -7,6 +7,11 @@ import { db, repo } from "./_seed.js";
 beforeEach(() => {
   db.prepare("DELETE FROM plan_items").run();
   db.prepare("DELETE FROM plan_days").run();
+  // Clear logged_sets + sessions BEFORE exercises — a prior test file may have left
+  // logged sets that reference exercises, and DELETE FROM exercises would otherwise
+  // fail the foreign key. Order matters (children first).
+  db.prepare("DELETE FROM logged_sets").run();
+  db.prepare("DELETE FROM sessions").run();
   // Exercises now self-dedup by normalized name (a comma/casing variant folds onto an
   // existing movement), so isolate them too — else one test's "Bench Press" would
   // absorb another's "Bench, Press" and defeat its fixture.

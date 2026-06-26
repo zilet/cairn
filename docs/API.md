@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**195 routes** across 72 groups.
+**201 routes** across 75 groups.
 
 ## `/activities`
 
@@ -60,6 +60,14 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. The PWA primes its readiness set from this so generated art paints immediately (no SVG placeholder flash) even on a cold client. Not cached — readiness changes as the background queue produces images. |
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. |
 | POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for (exercises, current meal plans, recent food notes/activities). Safe no-op when generation is unavailable — requestArt handles that per query. |
+
+## `/blood-pressure`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/blood-pressure` | A BP reading is point-in-time, not a profile field: home cuffs, MyChart vitals and clinic readings all land as dated observations that also project into the marker history as Systolic BP / Diastolic BP / Pulse. |
+| POST | `/api/blood-pressure` |  |
+| DELETE | `/api/blood-pressure/:id` |  |
 
 ## `/bodyweight`
 
@@ -253,6 +261,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/health/markers` |  |
 | GET | `/api/health/review` | Latest review or null — a soft lookup like /sessions?date= (200 + null on absence, never 404): "no review yet" is a normal state the PWA renders. |
 | POST | `/api/health/review` | Run a fresh whole-picture health review via the shared agent rotation. Like the meal swap, ok:false at status 200 is the designed failure signal when the agent returns garbage (addHealthReview rejects the shape). |
+| GET | `/api/health/standing` | Pull-based health standing: a descriptive, visual-friendly orientation read. Percentiles are real reference comparisons where a trustworthy curve exists (e.g. VO2max / body composition), and the "signal age" is a plain-language synthesis, not a 0-100 score or medical diagnosis. |
 | GET | `/api/health/synthesis` | The cached synthesis carries a `stale` flag so the PWA can offer a calm "refresh this read" affordance when newer labs/training have drifted past it. |
 | POST | `/api/health/synthesis` |  |
 
@@ -272,7 +281,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/health-export` | Structured, FHIR-inspired health summary (markers/observations over time + supplements + active directives) — a portable read-only slice to hand a physician or another tool. Optimal-zone framing, no scores. |
+| GET | `/api/health-export` | Structured, FHIR-inspired health summary (markers/observations over time + non-marker clinical facts + supplements + active directives) — a portable read-only slice to hand a physician or another tool. Optimal-zone framing, no scores. |
 
 ## `/health-metrics`
 
@@ -380,6 +389,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/onboard` | One free-text intro → understood + applied, then onboarded. Never bug-to-death: an empty text just marks onboarded. Always returns ok:true; degrades to the deterministic base (about_me + KB supplements) when no agent is reachable. |
+
+## `/performance`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/performance` | The TRAINING-INTELLIGENCE / performance read — the athletic counterpart to /api/health/standing. Benchmarks where the athlete actually STANDS (each lift's capacity vs sex/age strength standards + VO2max norms), the strength imbalances, the single biggest lever, lifts worth re-testing, a variety nudge, and a holistic balance line. Derived live each call; percentile/level reference reads, no scores. |
 
 ## `/plan`
 
@@ -531,6 +546,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | DELETE | `/api/supplements/:id` |  |
 | PUT | `/api/supplements/:id` |  |
 | POST | `/api/supplements/understand` | The headline: free text -> understood + approximated + stored. Returns the items. |
+
+## `/symptom-links`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/symptom-links` | Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker — a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
 
 ## `/today-agenda`
 

@@ -33,6 +33,9 @@ import { programAdjustments } from "./progression.js";
 import { getRunCompliance, getWeeklyStats } from "./sessions.js";
 import { listUnreconciledGarminStrength } from "./activities.js";
 import { healthFocus } from "./propagation.js";
+// The health-standing momentum read — the SAME wins-in-motion the Me→Health→Standing
+// view shows, surfaced here as a quiet pull-only "you're trending the right way" card.
+import { standingMomentum } from "./standing.js";
 // The waiting-draft proposals card reads the same proposals the client's
 // loadDraftProposals does — used for the 'plan' candidate.
 import { listProposals } from "./profile.js";
@@ -164,6 +167,29 @@ function healthCandidate(): TodayAgendaCandidate | null {
     tier: actNow > 0 ? "primary" : "more",
     priority: actNow > 0 ? 80 : 46,
     client_card: "health-focus",
+  };
+}
+
+// ---- standing momentum: a genuine win in motion (fat off since a DEXA, blood
+// pressure trending down, a steady weight slope) — the SAME momentum the
+// Me→Health→Standing read shows. Pull, never push: it rides in "more" most days
+// (moderate priority), the arbiter may surface it on a quiet day, and it OMITS
+// itself when there's no real win (`has_momentum` false). No scores — just the
+// trajectory in plain words. Reads standingMomentum (deterministic, null-safe). ----
+function standingMomentumCandidate(_date: string): TodayAgendaCandidate | null {
+  let m: any = null;
+  try { m = standingMomentum(); } catch { m = null; }
+  if (!m || !m.has_momentum || !m.summary) return null;
+  return {
+    id: "standing-momentum",
+    kind: "health",
+    tier: "more",
+    priority: 22,
+    kicker: "YOUR TRAJECTORY",
+    title: m.summary,
+    body: "You're trending the right way — open your health standing for the full read.",
+    action: { label: "See your standing", kind: "me-health-standing" },
+    dismissible: true,
   };
 }
 
@@ -308,6 +334,7 @@ export function todayAgenda(date?: string): TodayAgenda {
   // and a priority<=0 producer self-omits.
   add(safe(() => sinceLastLookedCandidate(d)));
   add(safe(() => goalCheckinCandidate()));
+  add(safe(() => standingMomentumCandidate(d)));
 
   // Stable sort by priority desc. Array.prototype.sort is stable in modern V8, but
   // tie-break on insertion order explicitly so the budget split is deterministic.

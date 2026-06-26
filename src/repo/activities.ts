@@ -416,6 +416,15 @@ export interface GarminActivityInput {
   vo2max?: number | null;
   hr_zones?: any;            // [{zone,secs,low_hr}] — serialized to hr_zones_json
   exercise_sets?: any;       // [{category,name,reps,weight_kg,duration_sec,set_type}] — serialized to exercise_sets_json
+  // per-activity richness (migration v46)
+  steps?: number | null;
+  avg_stride_len?: number | null;
+  min_elevation_m?: number | null;
+  max_elevation_m?: number | null;
+  lap_count?: number | null;
+  avg_ground_contact_ms?: number | null;
+  avg_vertical_osc_cm?: number | null;
+  avg_vertical_ratio?: number | null;
   raw?: any;
 }
 
@@ -471,6 +480,14 @@ export interface GarminDailyMetricInput {
   bone_mass_kg?: number | null;
   bmi?: number | null;
   visceral_fat?: number | null;
+  // runner performance metrics (migration v45)
+  endurance_score?: number | null;
+  hill_score?: number | null;
+  race_predict_5k_sec?: number | null;
+  race_predict_10k_sec?: number | null;
+  race_predict_half_sec?: number | null;
+  race_predict_marathon_sec?: number | null;
+  training_load_balance?: string | null;
   raw?: any;
 }
 
@@ -561,12 +578,20 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
   if (!source) throw new Error("Garmin source not found");
   const start = input.start_time ?? null;
   const date = input.date || (start ? String(start).slice(0, 10) : todayISO());
-  const type = normalizeGarminType(input.type);
-  const name = input.name || `Garmin ${type}`;
   // Strength activities become enriched Cairn *sessions* (see reconcileGarminStrength),
   // so they never get a generic `activities` row that would duplicate the workout in
   // Today's RECENT list. Cardio (run/walk/ride) still surfaces as an activity.
   const strength = isStrengthGarminType(input.type);
+  // Preserve a strength label on the STORED row. normalizeGarminType folds
+  // strength_training → "other", and every later strength path filters on
+  // isStrengthGarminType(stored.type) — so a folded "other" made reconciliation +
+  // the unreconciled-lift card structurally blind to a synced lift. Keep the raw
+  // provider type for strength (still matches isStrengthGarminType); normalize the
+  // rest to the coarse modality as before.
+  const type = strength
+    ? (String(input.type ?? "").trim() || "strength_training")
+    : normalizeGarminType(input.type);
+  const name = input.name || `Garmin ${type}`;
   const activity = strength ? null : (addActivity({
     date, type, duration_min: input.duration_min ?? null, distance_km: input.distance_km ?? null,
     pace: paceFrom(input.duration_min, input.distance_km, type), text: name,
@@ -583,8 +608,9 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
         calories, avg_hr, max_hr, ascent_m, training_load, training_effect,
         moving_min, elevation_loss_m, aerobic_te, anaerobic_te, te_label, avg_cadence, max_cadence,
         avg_power, max_power, norm_power, avg_speed, max_speed, avg_temp, vo2max, hr_zones_json,
-        exercise_sets_json, raw_json, synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        exercise_sets_json, steps, avg_stride_len, min_elevation_m, max_elevation_m, lap_count,
+        avg_ground_contact_ms, avg_vertical_osc_cm, avg_vertical_ratio, raw_json, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(source_id, external_id) DO UPDATE SET
        activity_id = COALESCE(excluded.activity_id, garmin_activities.activity_id),
        date = excluded.date, start_time = excluded.start_time, type = excluded.type, name = excluded.name,
@@ -599,6 +625,14 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
        vo2max = excluded.vo2max,
        hr_zones_json = COALESCE(excluded.hr_zones_json, garmin_activities.hr_zones_json),
        exercise_sets_json = COALESCE(excluded.exercise_sets_json, garmin_activities.exercise_sets_json),
+       steps = COALESCE(excluded.steps, garmin_activities.steps),
+       avg_stride_len = COALESCE(excluded.avg_stride_len, garmin_activities.avg_stride_len),
+       min_elevation_m = COALESCE(excluded.min_elevation_m, garmin_activities.min_elevation_m),
+       max_elevation_m = COALESCE(excluded.max_elevation_m, garmin_activities.max_elevation_m),
+       lap_count = COALESCE(excluded.lap_count, garmin_activities.lap_count),
+       avg_ground_contact_ms = COALESCE(excluded.avg_ground_contact_ms, garmin_activities.avg_ground_contact_ms),
+       avg_vertical_osc_cm = COALESCE(excluded.avg_vertical_osc_cm, garmin_activities.avg_vertical_osc_cm),
+       avg_vertical_ratio = COALESCE(excluded.avg_vertical_ratio, garmin_activities.avg_vertical_ratio),
        raw_json = excluded.raw_json, synced_at = datetime('now')`
   ).run(
     source.id, String(input.external_id), activity?.id ?? null, date, start, type, name,
@@ -609,7 +643,11 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
     input.anaerobic_te ?? null, input.te_label ?? null, input.avg_cadence ?? null, input.max_cadence ?? null,
     input.avg_power ?? null, input.max_power ?? null, input.norm_power ?? null,
     input.avg_speed ?? null, input.max_speed ?? null, input.avg_temp ?? null, input.vo2max ?? null,
-    jsonOrNull(input.hr_zones), jsonOrNull(input.exercise_sets), jsonOrNull(input.raw)
+    jsonOrNull(input.hr_zones), jsonOrNull(input.exercise_sets),
+    input.steps ?? null, input.avg_stride_len ?? null, input.min_elevation_m ?? null,
+    input.max_elevation_m ?? null, input.lap_count ?? null, input.avg_ground_contact_ms ?? null,
+    input.avg_vertical_osc_cm ?? null, input.avg_vertical_ratio ?? null,
+    jsonOrNull(input.raw)
   );
   return hydrateJson(db.prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`).get(source.id, String(input.external_id)));
 }
@@ -630,6 +668,9 @@ const GARMIN_DAILY_COLS = [
   "vo2max_cycling", "training_readiness", "training_status", "acute_load", "fitness_age",
   "weight_kg", "body_fat_pct", "muscle_mass_kg", "body_water_pct", "bone_mass_kg",
   "bmi", "visceral_fat",
+  // runner performance metrics (migration v45)
+  "endurance_score", "hill_score", "race_predict_5k_sec", "race_predict_10k_sec",
+  "race_predict_half_sec", "race_predict_marathon_sec", "training_load_balance",
 ] as const;
 
 export function upsertGarminDailyMetric(input: GarminDailyMetricInput, sourceId?: number | null) {
@@ -939,9 +980,33 @@ export function getGarminCoachSummary(days = 14) {
       return r?.v != null && Number.isFinite(Number(r.v)) ? Number(r.v) : null;
     } catch { return null; }
   };
+  const latestActivityVo2 = (() => {
+    try {
+      const r = db.prepare(
+        `SELECT vo2max AS v FROM garmin_activities
+         WHERE date >= ? AND vo2max IS NOT NULL
+         ORDER BY date DESC, id DESC LIMIT 1`
+      ).get(since) as any;
+      return r?.v != null && Number.isFinite(Number(r.v)) ? Number(r.v) : null;
+    } catch { return null; }
+  })();
+  daily.vo2max = latestOf("vo2max") ?? latestActivityVo2;
   daily.acute_load = latestOf("acute_load");
   daily.fitness_age = latestOf("fitness_age");
   daily.training_readiness = latestOf("training_readiness"); // latest readiness, alongside the window avg
+  // Runner performance signals — current point-in-time values (latest non-null).
+  daily.endurance_score = latestOf("endurance_score");
+  daily.hill_score = latestOf("hill_score");
+  daily.race_predict_5k_sec = latestOf("race_predict_5k_sec");
+  daily.race_predict_10k_sec = latestOf("race_predict_10k_sec");
+  daily.race_predict_half_sec = latestOf("race_predict_half_sec");
+  daily.race_predict_marathon_sec = latestOf("race_predict_marathon_sec");
+  try {
+    const r = db.prepare(
+      `SELECT training_load_balance AS v FROM garmin_daily_metrics
+       WHERE date >= ? AND training_load_balance IS NOT NULL ORDER BY date DESC LIMIT 1`
+    ).get(since) as any;
+    daily.training_load_balance = r?.v ?? null;
+  } catch { daily.training_load_balance = null; }
   return { days, since, source, activities, hard_sessions: hard, recovery: daily };
 }
-

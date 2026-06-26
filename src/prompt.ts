@@ -294,8 +294,12 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     // date (not when the review ran), so a 2-week-old hs-CRP ages out instead of capping
     // training every morning. Chronic markers (ApoB/LDL/Lp(a)) never decay → stay fresh.
     const annotated = repo.annotateDirectiveFreshness(relevant);
-    const fresh = annotated.filter((d: any) => !d.stale);
-    const agingAcute = annotated.filter((d: any) => d.stale);
+    // A TRANSIENT acute finding (a fresh hs-CRP/ESR drawn during an active illness/
+    // injury/hard-block window) is informational the same way an aging one is — it
+    // must NOT cap today's training. Split it out of "honor these" alongside stale.
+    const fresh = annotated.filter((d: any) => !d.stale && !d.transient);
+    const agingAcute = annotated.filter((d: any) => d.stale && !d.transient);
+    const transient = annotated.filter((d: any) => d.transient && !d.stale);
     if (fresh.length) {
       const byDomain: Record<string, string[]> = {};
       for (const d of fresh) {
@@ -316,6 +320,24 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
         const age = wks != null ? `~${wks} week${wks === 1 ? "" : "s"} ago` : "a while ago";
         lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()} (reading ${age} — point-in-time; recheck before it shapes anything)`);
       }
+    }
+    if (transient.length) {
+      lines.push("DRAWN DURING A FLARE (an acute marker likely bumped by a recent illness / injury / hard training block — INFORMATIONAL ONLY: do NOT cap today's training or meals on it; recheck once things settle):");
+      for (const d of transient) {
+        lines.push(`  - ${String(d.marker ?? "a marker").trim()}: ${String(d.directive ?? "").trim()}${d.transient_reason ? ` (${String(d.transient_reason).trim()})` : ""}`);
+      }
+    }
+  }
+
+  // SYMPTOM ↔ MARKER connections (the connected brain reaching across logs): a
+  // symptom the athlete mentioned co-occurring with a genuinely off-marker. Purely
+  // informational — a "worth raising with your clinician" nudge, NEVER a diagnosis.
+  const symLinks = Array.isArray(ctx?.symptom_links) ? ctx.symptom_links : [];
+  if (symLinks.length && (!wanted || wanted.includes("watch") || wanted.includes("training"))) {
+    lines.push("SYMPTOM ↔ LAB CONNECTIONS (something the athlete noted lines up with an out-of-range marker — mention it gently as worth raising with their doctor; informational, never a diagnosis, never alarmist):");
+    for (const s of symLinks.slice(0, 3)) {
+      const mk = Array.isArray(s.markers) ? s.markers.map((m: any) => `${m.name} ${m.value ?? ""} (${m.side})`.trim()).join(", ") : "";
+      lines.push(`  - ${String(s.note ?? `${s.symptom} alongside ${mk}`).trim()}`);
     }
   }
   const feedback = Array.isArray(ctx?.directive_feedback) ? ctx.directive_feedback : [];
@@ -728,6 +750,67 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
+// renderPerformance: the TRAINING-INTELLIGENCE read — where the athlete actually
+// STANDS (capacity), not just whether last week trended up. Benchmarked against
+// sex/age strength standards + VO2max norms, the strength imbalances, the single
+// biggest lever, the lifts worth re-TESTING, and a variety nudge. Folded into every
+// strength prompt so the coach LEADS with where the athlete is and balances their
+// development — bring laggards up, fix imbalances, re-measure stale lifts, rotate a
+// movement. Plain words / percentile-level reference reads, never a 0-100 score.
+// Returns "" when there's nothing benchmarked yet (quiet by default).
+export function renderPerformance(ctx: any, opts: { brief?: boolean } = {}): string {
+  const p = ctx?.performance;
+  if (!p) return "";
+  const caps = Array.isArray(p.capacities) ? p.capacities : [];
+  const imb = Array.isArray(p.imbalances) ? p.imbalances : [];
+  const tests = Array.isArray(p.tests_due) ? p.tests_due : [];
+  const lever = p.lever;
+  if (!caps.length && !p.endurance && !lever) return "";
+
+  if (opts.brief) {
+    // Day-read: the hero + the single lever, one calm line (no per-lift dump).
+    const bits: string[] = [];
+    if (p.hero?.headline) bits.push(p.hero.headline);
+    if (lever?.headline) bits.push(`today's lever: ${String(lever.headline).toLowerCase()}`);
+    return bits.length
+      ? `\nWHERE YOU STAND (capacity benchmarked against proven sex/age standards — a reference read, never a grade): ${bits.join("; ")}.\n`
+      : "";
+  }
+
+  const lines: string[] = [];
+  if (p.hero?.headline) {
+    lines.push(
+      `PERFORMANCE STANDING (the deterministic CAPACITY read — where the athlete genuinely stands vs proven sex/age strength standards + VO2max norms; percentile/level are recognized reference reads, NEVER a score; lead with this, it is trustworthy): ${p.hero.headline}.`,
+    );
+  }
+  if (caps.length) {
+    lines.push("CAPACITY BY MOVEMENT (level for THEIR age — program to bring the laggards up, don't only push what's already strong):");
+    for (const c of caps.slice(0, 6)) {
+      const nxt = c.to_next ? ` (~+${c.to_next.lb} lb → ${c.to_next.level})` : "";
+      lines.push(`  - ${c.label}: ${c.level} for their ${c.age_band} — ${c.exercise} est 1RM ~${c.est_1rm} lb${nxt}.`);
+    }
+  }
+  if (imb.length) {
+    lines.push("IMBALANCES TO ADDRESS (program the under-developed side UP — structural balance + injury prevention is a first-class coaching job here, not an afterthought):");
+    for (const i of imb) lines.push(`  - ${i.title}: ${i.why}`);
+  }
+  if (lever?.headline) {
+    lines.push(`THE ONE LEVER (single highest-leverage training focus right now): ${lever.headline}${lever.why ? ` — ${lever.why}` : ""}${lever.target ? ` (${lever.target})` : ""}.`);
+  }
+  if (tests.length) {
+    lines.push("WORTH RE-TESTING (occasionally program a heavy low-rep test or a max hold to RE-MEASURE true capacity — variety and honest re-measurement beat the same submax work every week):");
+    for (const t of tests) lines.push(`  - ${t.exercise} (${t.kind}): ${t.why}`);
+  }
+  if (p.variety?.note) {
+    lines.push(`VARIETY (training shouldn't be the identical rotation forever): ${p.variety.note}${Array.isArray(p.variety.suggestions) && p.variety.suggestions.length ? ` Options: ${p.variety.suggestions.join(", ")}.` : ""}`);
+  }
+  if (p.endurance?.headline && (p.discipline === "endurance" || p.discipline === "hybrid")) {
+    lines.push(`AEROBIC CAPACITY: ${p.endurance.headline}`);
+  }
+  if (p.balance_note) lines.push(`BALANCE & LIFE (honor recovery and the life around training — never push past what's sustainable): ${p.balance_note}`);
+  return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
 // Elite-coach + longevity guardrails for the STRENGTH prompts — the
 // programming-quality floor this athlete's history demands, in plain,
 // suggestion-framed words (no scores). Folded into the coach / session /
@@ -799,7 +882,7 @@ have none — that's fine, just use what's there):
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderPerformance(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -913,7 +996,7 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${variationBlock}${weakBlock}${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderPerformance(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -1405,6 +1488,9 @@ GUARDRAILS:
   flag you cannot determine (e.g. when no reference range is shown).
 - Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
   units yourself; Cairn normalizes recognized marker units deterministically after import.
+- Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
+  height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
+  and Diastolic BP 78 mmHg.
 - Infer top-level "kind" from the document itself. Do not rely on the upload label.
 - Infer top-level "doc_date" from the collection date, test date, exam date, scan date, or report
   date printed in the document. Prefer the specimen/scan date over a final-report date. If no
@@ -1435,6 +1521,16 @@ const HEALTH_INGEST_SCHEMA = `{
       "markers": [
         { "name": "<e.g. 'LDL-C'>", "value": <number|string>, "unit": "<e.g. 'mg/dL'>", "flag": "low|normal|high|null" }
       ]
+    }
+  ],
+  "clinical_facts": [
+    {
+      "kind": "condition|medication|allergy|procedure|immunization|encounter|family_history|social_history|care_team|other",
+      "date": "YYYY-MM-DD|null",
+      "name": "<verbatim fact name, e.g. 'Atorvastatin', 'Penicillin allergy', 'ACL reconstruction'>",
+      "status": "<active|resolved|historical|completed|unknown|null>",
+      "detail": "<short source-grounded detail, dose, reaction, encounter reason, or family relation; null if none>",
+      "source": "<source section/file, e.g. 'Medications', 'Allergies', 'Problems'>"
     }
   ],
   "summary": "<1-3 sentence read across the WHOLE import: span of dates, what stands out>",
@@ -1545,11 +1641,25 @@ TRANSCRIBE EVERY MARKER — THIS IS THE MOST IMPORTANT RULE:
   toxins. If it has a name and a value, it is a marker — include it.
 - A non-numeric result is still a marker: "Negative", "None Seen", "Clear", "Yellow", "O",
   "Rh(d) Positive", "Younger -7.4 Years" etc. — store the text in "value".
+- Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
+  height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
+  and Diastolic BP 78 mmHg.
 - Set "marker_count" to how many results that date's source actually lists, and make markers[]
   contain exactly that many entries. If markers[] is shorter than marker_count, you dropped some
   — go back and add the rest before answering. Completeness is judged on this.
 - Group/section headers (Autoimmunity, Blood, Heart, Kidney, Liver, Nutrients…) are NOT markers —
   they organize the panel; transcribe the markers UNDER them, not the headers themselves.
+
+PRESERVE NON-MARKER MYCHART / CCDA FACTS TOO:
+- Do NOT force non-measurement sections into markers. Instead, put them in top-level
+  "clinical_facts": active/past problems or diagnoses, medications, allergies/adverse reactions,
+  procedures/surgeries, immunizations, encounters/visits, care team/provider facts, family history,
+  and social history that the source explicitly lists.
+- Use the source's exact name where possible. Use "date" only when a start date, procedure date,
+  administered date, encounter date, or recorded date is visible; otherwise null.
+- Deduplicate repeated facts across CCDA/XML/HTML/PDF views of the same export.
+- Keep facts source-grounded and compact. Do not infer diagnoses, medication intent, or allergy
+  severity unless the source states it.
 
 OTHER GUARDRAILS:
 - This is informational structuring, NOT medical diagnosis or advice. Transcribe and summarize only.
@@ -1563,7 +1673,10 @@ OTHER GUARDRAILS:
 - Infer each panel's "kind" from its content (a lab panel is "bloodwork", a body-composition/bone
   scan is "dexa", else "other").
 - "memory" is [] unless there is a genuinely durable, notable fact (a clear out-of-range trend, a
-  meaningful body-composition change). Keep items short. Do NOT repeat anything in EXISTING MEMORY.
+  meaningful body-composition change, an active medication/allergy/condition/procedure/injury or
+  family/social-history fact that should shape training, nutrition, safety, or coaching). Do NOT
+  create memory for every routine encounter or immunization. Keep items short. Do NOT repeat
+  anything in EXISTING MEMORY.
 - It is fine to return many panels (dozens). If the source truly has only one date, return one panel.
 ${opts?.emphasizeCompleteness ? `
 RETRY — THE PREVIOUS ATTEMPT WAS INCOMPLETE${opts.missed ? ` (it returned ${opts.missed.got} markers but the source lists about ${opts.missed.expected})` : ""}.
@@ -1981,7 +2094,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
+${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderPerformance(context, { brief: true })}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -2062,7 +2175,7 @@ GUARDRAILS:
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderPerformance(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
@@ -2752,6 +2865,10 @@ THE CONSTITUTION (binding):
   framed as such — "confirm/recheck", not "fix". Genetic-and-fixed markers are a REASON to be stricter
   on what IS movable, not a thing to chase.
 - Medical findings are informational; for anything clinical, "discuss with your doctor".
+- HOLISTIC & HUMAN. Health is the long game inside a whole life. Emotional and social well-being count:
+  time with family, nights out with friends, the occasional off-plan meal are PART of doing this well,
+  not failures. Celebrate momentum (a dropping weight, an improving BP) as the real wins they are.
+  Give permission to live — aim for the direction of travel, never a perfect week. Never nag, never guilt.
 
 GROUND IT (this is what makes the read elite, not generic — the priorities carry the actual readings):
 - Reason from the ACTUAL numbers: name where each marker sits vs its evidence-based OPTIMAL band and
@@ -2823,7 +2940,7 @@ HOW TO SHAPE IT:
   guardrails call for where it fits naturally (a few minutes, not a whole session).
 
 ${ELITE_STRENGTH_GUARDRAILS}
-${renderProgramState(context)}
+${renderProgramState(context)}${renderPerformance(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 ${WEEK_AHEAD_SCHEMA}
 
