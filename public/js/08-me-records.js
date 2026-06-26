@@ -173,6 +173,17 @@ function paintHealthMarkersTab() {
 }
 
 // ---- Share tab: clinician report + data portability ----
+function openDoctorReportTab() {
+  const url = withToken("/api/health-report");
+  const tab = window.open("about:blank", "_blank");
+  if (!tab) {
+    toast("Allow pop-ups to open the doctor report in a new tab");
+    return;
+  }
+  try { tab.opener = null; } catch {}
+  tab.location.href = url;
+}
+
 function paintHealthShareTab() {
   const c = $("#hContent");
   if (!c) return;
@@ -216,7 +227,7 @@ function paintHealthShareTab() {
         </section>
       </div>
     </div>`;
-    $("#hReportBtn")?.addEventListener("click", () => window.open(withToken("/api/health-report"), "_blank"));
+    $("#hReportBtn")?.addEventListener("click", openDoctorReportTab);
     $("#hExportBtn")?.addEventListener("click", () => {
       downloadFile(withToken("/api/health-export"));
       toast("Structured data downloaded");

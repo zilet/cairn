@@ -144,6 +144,48 @@ test("lipid report reads in clinician order and keeps direct LDL clearly separat
   assert.ok(text.includes("Note: LDL-C rows are separated by assay/source method"), "text twin carries the same LDL note");
 });
 
+test("non-lipid report panels read in clinician scan order", () => {
+  seedHealthDoc("2026-06-11", [
+    marker("Hemoglobin A1c", 5.6, { unit: "%", flag: "normal" }),
+    marker("Estimated Average Glucose", 114, { unit: "mg/dL", flag: "normal" }),
+    marker("Glucose", 92, { unit: "mg/dL", flag: "normal" }),
+    marker("ALT", 24, { unit: "U/L", flag: "normal" }),
+    marker("Albumin", 4.7, { unit: "g/dL", flag: "normal" }),
+    marker("AST", 23, { unit: "U/L", flag: "normal" }),
+    marker("GGT", 15, { unit: "U/L", flag: "normal" }),
+    marker("Alkaline Phosphatase", 54, { unit: "U/L", flag: "normal" }),
+    marker("Total Bilirubin", 0.8, { unit: "mg/dL", flag: "normal" }),
+    marker("Total Protein", 7.1, { unit: "g/dL", flag: "normal" }),
+    marker("eGFR", 92, { unit: "mL/min/1.73m2", flag: "normal" }),
+    marker("Albumin, Random Urine", 0.4, { unit: "mg/dL", flag: "normal" }),
+    marker("Creatinine", 0.98, { unit: "mg/dL", flag: "normal" }),
+    marker("BUN", 14, { unit: "mg/dL", flag: "normal" }),
+  ]);
+
+  const data = buildClinicalReportData();
+  const metabolic = data.groups.find((g) => g.key === "metabolic");
+  const liver = data.groups.find((g) => g.key === "liver");
+  const kidney = data.groups.find((g) => g.key === "kidney");
+  assert.ok(metabolic, "metabolic panel present");
+  assert.ok(liver, "liver panel present");
+  assert.ok(kidney, "kidney panel present");
+  assert.deepEqual(metabolic.markers.map((m) => m.name), ["Glucose", "Hemoglobin A1c", "Estimated Average Glucose"]);
+  assert.deepEqual(liver.markers.map((m) => m.name), [
+    "Albumin",
+    "Total Protein",
+    "Total Bilirubin",
+    "Alkaline Phosphatase",
+    "AST",
+    "ALT",
+    "GGT",
+  ]);
+  assert.deepEqual(kidney.markers.map((m) => m.name), ["BUN", "Creatinine", "eGFR", "Albumin, Random Urine"]);
+
+  const html = renderClinicalReportHTML(data, {});
+  assert.ok(html.indexOf("Glucose") < html.indexOf("Hemoglobin A1c"), "HTML follows metabolic order");
+  assert.ok(html.indexOf("Albumin") < html.indexOf("Alkaline Phosphatase"), "HTML follows liver order");
+});
+
 test("the profile name is stamped on the report; an explicit name overrides it", () => {
   repo.setProfile({ name: "Sam Carter" });
   seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);

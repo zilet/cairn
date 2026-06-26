@@ -5,12 +5,16 @@
 // shared process the node:test runner gives us.
 import { db } from "../dist/db.js";
 import * as repo from "../dist/repo.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
 export { db, repo };
 
-// ---- date helpers (UTC, YYYY-MM-DD) ----
+// ---- date helpers (YYYY-MM-DD) ----
 export function isoDaysAgo(n) {
   return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+}
+export function localDaysAgo(n) {
+  return localDateISO(new Date(Date.now() - n * 864e5));
 }
 export function tsDaysAgo(n) {
   // SQLite-style "YYYY-MM-DD HH:MM:SS" timestamp n days ago (for created_at).
@@ -55,10 +59,10 @@ export function seedIntake(daysAgo, kcal, extra = {}) {
   const parsed = { kcal, ...extra };
   return db
     .prepare(
-      `INSERT INTO food_notes (meal, raw_output, parsed_json, enrichment_status, created_at)
-       VALUES ('meal', '', ?, NULL, ?)`
+      `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+       VALUES (?, 'meal', '', ?, NULL, ?)`
     )
-    .run(JSON.stringify(parsed), tsDaysAgo(daysAgo));
+    .run(localDaysAgo(daysAgo), JSON.stringify(parsed), tsDaysAgo(daysAgo));
 }
 
 // ---- sessions + logged sets (drives dayRead's consecutive-training count) ----

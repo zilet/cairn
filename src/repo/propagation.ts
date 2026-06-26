@@ -274,12 +274,12 @@ export function supplementsForCoach() {
 interface MarkerGroup { key: string; label: string; keys: string[]; }
 const MARKER_GROUPS: MarkerGroup[] = [
   { key: "lipids", label: "Lipids & Cardiovascular", keys: ["apob", "apolipoprotein", "apo b", "non-hdl", "non hdl", "ldl", "hdl", "cholesterol", "triglyceride", "lp(a)", "lipoprotein"] },
-  { key: "metabolic", label: "Metabolic & Glucose", keys: ["hba1c", "a1c", "glucose", "insulin", "homa", "c-peptide", "fructosamine"] },
+  { key: "metabolic", label: "Metabolic & Glucose", keys: ["hemoglobin a1c", "hb a1c", "hba1c", "a1c", "glucose", "insulin", "homa", "c-peptide", "fructosamine"] },
   { key: "inflammation", label: "Inflammation", keys: ["crp", "c-reactive", "c reactive", "homocysteine", "esr", "sed rate", "fibrinogen"] },
   { key: "iron", label: "Iron & Red Blood", keys: ["ferritin", "transferrin", "tibc", "iron", "hemoglobin", "hgb", "hematocrit", "hct", "rbc", "mcv", "mch", "rdw"] },
   { key: "blood", label: "White Cells & Platelets", keys: ["wbc", "white blood", "platelet", "neutrophil", "lymphocyte", "monocyte", "eosinophil", "basophil"] },
   { key: "liver", label: "Liver", keys: ["alt", "sgpt", "ast", "sgot", "ggt", "alp", "alkaline phosphatase", "bilirubin", "albumin", "total protein"] },
-  { key: "kidney", label: "Kidney", keys: ["egfr", "creatinine", "bun", "urea", "uric acid", "cystatin"] },
+  { key: "kidney", label: "Kidney", keys: ["albumin, random urine", "albumin random urine", "microalbumin", "urine albumin", "albumin/creatinine", "albumin creatinine", "egfr", "creatinine", "bun", "urea", "uric acid", "cystatin"] },
   { key: "thyroid", label: "Thyroid", keys: ["tsh", "free t3", "free t4", "thyroxine", "triiodo", "thyroid"] },
   { key: "hormones", label: "Hormones", keys: ["testosterone", "estradiol", "estrogen", "cortisol", "dhea", "shbg", "progesterone", "prolactin", "igf", "lh", "fsh"] },
   { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "magnesium", "zinc", "calcium", "potassium", "sodium", "selenium", "omega"] },

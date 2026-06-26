@@ -178,33 +178,149 @@ function toMarkerView(m: any): ReportMarker {
   };
 }
 
-const LIPID_ORDER: Array<{ rank: number; re: RegExp }> = [
-  { rank: 10, re: /^total cholesterol$/i },
-  { rank: 20, re: /^ldl[-\s]?cholesterol$/i },
-  { rank: 22, re: /\bldl\b.*\bdirect\b|\bdirect\b.*\bldl\b/i },
-  { rank: 30, re: /^hdl[-\s]?cholesterol$|^hdl[-\s]?c$/i },
-  { rank: 40, re: /^non[-\s]?hdl/i },
-  { rank: 50, re: /^triglycerides?$/i },
-  { rank: 60, re: /total cholesterol.*hdl.*ratio|cholesterol.*hdl.*ratio/i },
-  { rank: 70, re: /apolipoprotein b|\bapo\s?b\b/i },
-  { rank: 80, re: /lipoprotein\s*\(?a\)?|\blp\s*\(?a\)?/i },
-  { rank: 100, re: /ldl particle|ldl[-\s]?p\b/i },
-  { rank: 110, re: /ldl small/i },
-  { rank: 120, re: /ldl medium/i },
-  { rank: 130, re: /ldl peak/i },
-  { rank: 140, re: /hdl large/i },
-  { rank: 150, re: /ldl pattern/i },
-];
+type MarkerRankRule = { rank: number; re: RegExp };
 
-function lipidRank(name: string): number {
-  for (const entry of LIPID_ORDER) {
+const MARKER_ORDER: Record<string, MarkerRankRule[]> = {
+  lipids: [
+    { rank: 10, re: /^total cholesterol$/i },
+    { rank: 20, re: /^(?!.*\bdirect\b)ldl\s*-?\s*(?:c|chol?esterol)\b/i },
+    { rank: 22, re: /\bldl\b.*\bdirect\b|\bdirect\b.*\bldl\b/i },
+    { rank: 30, re: /^hdl\s*-?\s*(?:c|cholesterol)$/i },
+    { rank: 40, re: /^non[-\s]?hdl/i },
+    { rank: 50, re: /^triglycerides?$/i },
+    { rank: 60, re: /total cholesterol.*hdl.*ratio|cholesterol.*hdl.*ratio/i },
+    { rank: 70, re: /apolipoprotein b|\bapo\s?b\b/i },
+    { rank: 80, re: /lipoprotein\s*\(?a\)?|\blp\s*\(?a\)?/i },
+    { rank: 100, re: /ldl particle|ldl[-\s]?p\b/i },
+    { rank: 110, re: /ldl small/i },
+    { rank: 120, re: /ldl medium/i },
+    { rank: 130, re: /ldl peak/i },
+    { rank: 140, re: /hdl large/i },
+    { rank: 150, re: /ldl pattern/i },
+  ],
+  metabolic: [
+    { rank: 10, re: /^(?!.*\burine\b)(?!.*estimated average).*\bglucose\b/i },
+    { rank: 20, re: /hemoglobin\s*a1c|\bhb\s?a1c\b|\ba1c\b/i },
+    { rank: 30, re: /estimated average glucose|\beag\b/i },
+    { rank: 40, re: /\binsulin\b/i },
+    { rank: 50, re: /\bhoma\b/i },
+    { rank: 60, re: /c[-\s]?peptide/i },
+    { rank: 70, re: /fructosamine/i },
+    { rank: 90, re: /\burine\b.*\bglucose\b|\bglucose\b.*\burine\b/i },
+  ],
+  inflammation: [
+    { rank: 10, re: /high[-\s]?sensitivity.*c[-\s]?reactive|hs[-\s]?crp/i },
+    { rank: 20, re: /\bc[-\s]?reactive protein\b|\bcrp\b/i },
+    { rank: 30, re: /erythrocyte sedimentation|sedimentation rate|\besr\b|\bsed rate\b/i },
+    { rank: 40, re: /fibrinogen/i },
+    { rank: 50, re: /homocysteine/i },
+    { rank: 60, re: /rheumatoid factor/i },
+  ],
+  iron: [
+    { rank: 10, re: /\brbc\b|red blood cell/i },
+    { rank: 20, re: /hemoglobin|\bhgb\b/i },
+    { rank: 30, re: /hematocrit|\bhct\b/i },
+    { rank: 40, re: /\bmcv\b|mean corpuscular volume/i },
+    { rank: 50, re: /\bmch\b|mean corpuscular hemoglobin/i },
+    { rank: 60, re: /\bmchc\b/i },
+    { rank: 70, re: /\brdw\b|red cell distribution/i },
+    { rank: 90, re: /ferritin/i },
+    { rank: 100, re: /transferrin saturation|% saturation|iron saturation/i },
+    { rank: 110, re: /serum iron|^iron\b/i },
+    { rank: 120, re: /\btibc\b|total iron binding/i },
+    { rank: 130, re: /transferrin/i },
+  ],
+  blood: [
+    { rank: 10, re: /\bwbc\b|white blood cell|leukocyte/i },
+    { rank: 20, re: /neutrophil/i },
+    { rank: 30, re: /lymphocyte/i },
+    { rank: 40, re: /monocyte/i },
+    { rank: 50, re: /eosinophil/i },
+    { rank: 60, re: /basophil/i },
+    { rank: 70, re: /platelet|\bplt\b/i },
+    { rank: 80, re: /mpv|mean platelet/i },
+  ],
+  liver: [
+    { rank: 10, re: /^albumin\b(?!.*urine)/i },
+    { rank: 20, re: /total protein/i },
+    { rank: 30, re: /bilirubin.*total|total bilirubin/i },
+    { rank: 40, re: /bilirubin.*direct|direct bilirubin/i },
+    { rank: 50, re: /alkaline phosphatase|\balp\b/i },
+    { rank: 60, re: /\bast\b|aspartate aminotransferase/i },
+    { rank: 70, re: /\balt\b|alanine aminotransferase/i },
+    { rank: 80, re: /\bggt\b|gamma[-\s]?glutamyl/i },
+  ],
+  kidney: [
+    { rank: 10, re: /\bbun\b|blood urea nitrogen|urea nitrogen/i },
+    { rank: 20, re: /creatinine(?!.*urine)/i },
+    { rank: 30, re: /\begfr\b|glomerular filtration/i },
+    { rank: 40, re: /cystatin c/i },
+    { rank: 50, re: /uric acid|urate/i },
+    { rank: 70, re: /microalbumin|albumin.*urine|urine.*albumin/i },
+    { rank: 80, re: /albumin.?creatinine|acr\b/i },
+  ],
+  thyroid: [
+    { rank: 10, re: /\btsh\b|thyroid stimulating/i },
+    { rank: 20, re: /free t4|\bft4\b|thyroxine.*free/i },
+    { rank: 30, re: /total t4|thyroxine/i },
+    { rank: 40, re: /free t3|\bft3\b|triiodothyronine.*free/i },
+    { rank: 50, re: /total t3|triiodothyronine/i },
+    { rank: 60, re: /tpo|thyroid peroxidase/i },
+    { rank: 70, re: /thyroglobulin.*antibody|tgab/i },
+  ],
+  hormones: [
+    { rank: 10, re: /total testosterone|testosterone,\s*total/i },
+    { rank: 20, re: /free testosterone|testosterone,\s*free/i },
+    { rank: 30, re: /\bshbg\b|sex hormone binding/i },
+    { rank: 40, re: /estradiol|estrogen/i },
+    { rank: 50, re: /luteinizing hormone|\blh\b/i },
+    { rank: 60, re: /follicle stimulating hormone|\bfsh\b/i },
+    { rank: 70, re: /prolactin/i },
+    { rank: 80, re: /cortisol/i },
+    { rank: 90, re: /\bdhea\b/i },
+    { rank: 100, re: /\bigf\b|insulin-like growth/i },
+  ],
+  vitamins: [
+    { rank: 10, re: /25[-\s]?oh vitamin d|vitamin d|25[-\s]?hydroxy/i },
+    { rank: 20, re: /vitamin b12|cobalamin|\bb12\b/i },
+    { rank: 30, re: /folate|folic acid/i },
+    { rank: 40, re: /sodium/i },
+    { rank: 50, re: /potassium/i },
+    { rank: 60, re: /calcium/i },
+    { rank: 70, re: /magnesium/i },
+    { rank: 80, re: /zinc/i },
+    { rank: 90, re: /omega/i },
+  ],
+  vitals: [
+    { rank: 10, re: /systolic/i },
+    { rank: 20, re: /diastolic/i },
+    { rank: 30, re: /resting heart rate|resting hr|\brhr\b/i },
+    { rank: 40, re: /\bhrv\b|heart rate variability/i },
+  ],
+  body: [
+    { rank: 10, re: /body fat|fat percentage|fat %/i },
+    { rank: 20, re: /fat mass/i },
+    { rank: 30, re: /lean mass|lean tissue/i },
+    { rank: 40, re: /visceral/i },
+    { rank: 50, re: /android.*gynoid|gynoid.*android/i },
+    { rank: 60, re: /bone mineral density|\bbmd\b/i },
+    { rank: 70, re: /t[-\s]?score/i },
+    { rank: 80, re: /z[-\s]?score/i },
+    { rank: 90, re: /\bbmi\b|body mass index/i },
+    { rank: 100, re: /\brmr\b|resting metabolic/i },
+  ],
+};
+
+function markerRank(groupKey: string, name: string): number {
+  const rules = MARKER_ORDER[groupKey] || [];
+  for (const entry of rules) {
     if (entry.re.test(name)) return entry.rank;
   }
   return 900;
 }
 
 function lipidSubgroup(name: string): string | null {
-  const r = lipidRank(name);
+  const r = markerRank("lipids", name);
   if (r < 70) return "Standard lipid panel";
   if (r < 100) return "Atherogenic particle risk";
   if (r < 900) return "Advanced lipoprotein detail";
@@ -217,8 +333,7 @@ function markerSubgroup(groupKey: string, name: string): string | null {
 }
 
 function reportMarkerRank(groupKey: string, name: string): number {
-  if (groupKey === "lipids") return lipidRank(name);
-  return 900;
+  return markerRank(groupKey, name);
 }
 
 function sortReportMarkers(groupKey: string, markers: ReportMarker[]): ReportMarker[] {
@@ -238,10 +353,6 @@ export function buildClinicalReportData(): ClinicalReportData {
   const { markers, groups } = repo.prioritizeMarkers() as any;
 
   const views: ReportMarker[] = (Array.isArray(markers) ? markers : []).map(toMarkerView);
-
-  // Findings to discuss: the abnormal subset. The rendered report groups these
-  // by clinical panel so a PCP can scan familiar sections quickly.
-  const findings = views.filter((v) => v.abnormal);
 
   // Group in canonical order (groups[] from prioritizeMarkers is already ordered).
   const order: Array<{ key: string; label: string }> = Array.isArray(groups) ? groups : [];
@@ -266,6 +377,8 @@ export function buildClinicalReportData(): ClinicalReportData {
   for (const [k, list] of byGroup) {
     if (!seen.has(k) && list.length) grouped.push({ key: k, label: groupLabel.get(k) || k, markers: sortReportMarkers(k, list) });
   }
+  // Findings to discuss follow the same clinical panel/order as the report body.
+  const findings = grouped.flatMap((g) => g.markers.filter((v) => v.abnormal));
 
   // Whole date span covered by every reading.
   let from: string | null = null;

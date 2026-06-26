@@ -366,17 +366,18 @@ count up on render via `data-cu`.
 Lab markers read as a grouped catalog, fed by `GET /api/markers/priority` (the superset that
 carries optimal bands + group + trend on top of the flat marker shape). Each marker carries
 `group`/`group_label`; the response's `groups` array is the canonical, ordered list of health
-groups present, and headers render in that order. Markers within a group keep server order
-(flagged / impact-first) except the lipid group, which deliberately uses a clinician-style scan
-order: standard lipid panel first, ApoB/Lp(a) next, advanced lipoprotein details last. LDL-C and
-direct LDL-C remain separate rows with a local note when both are present. **Never a numeric
-grade/score anywhere** — the constitution bans 0–100 grades; markers speak in position-vs-optimal
-and direction only.
+groups present, and headers render in that order. Markers within every group use a clinician-style
+scan order first (CBC-like rows together, CMP-like liver/kidney rows together, standard lipid panel
+before ApoB/Lp(a) and advanced lipoprotein details), then fall back to server order for unknown
+markers. LDL-C and direct LDL-C remain separate rows with a local note when both are present.
+**Never a numeric grade/score anywhere** — the constitution bans 0–100 grades; markers speak in
+position-vs-optimal and direction only.
 
-- `.hmk-groups` — vertical stack (gap 18px) of health-group sections.
+- `.hmk-groups` — vertical stack (gap 18px) of `.hmk-section` health-group sections; desktop flows
+  those sections into two columns.
 - `.hmk-grouphead` — `.lbl` caps section heading per group ("Lipids & Cardiovascular", "Metabolic
-  & Glucose", "Iron & Red Blood", …) in `--ink-2`. **Suppressed when there's only one group** (a
-  lone bucket needs no label).
+  & Glucose", "Iron & Red Blood", …) in `--ink-2`. It is sticky below the Health segmented controls
+  so a long scroll always keeps the current clinical panel visible.
 - `.hmk-groupnote` — a short muted panel note, used sparingly. The lipid group uses it to explain
   why standard LDL-C and direct LDL-C are shown as separate assays rather than merged.
 - `.hmk-subhead` — uppercase inline row divider inside a ledger card. Only used where it improves
@@ -406,7 +407,8 @@ separate from Markers so the detailed lab-history catalog stays scan-led.
 
 - Lead with the doctor-facing clinical marker report (`GET /api/health-report`) because it is the
   human artifact: grouped clinical panels, findings first, dated history, DEXA when present, and a
-  MyChart-ready text copy.
+  MyChart-ready text copy. The report opens from an about:blank new tab so the PWA stays in place,
+  then the new tab navigates to the printable HTML/PDF surface.
 - Keep structured JSON export (`GET /api/health-export`) secondary. It is for tools/imports, not the
   default physician handoff.
 - Keep data-maintenance actions here too, currently "Align lab names" (`POST /api/markers/reconcile`).

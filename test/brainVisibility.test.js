@@ -7,7 +7,7 @@
 // Both are deterministic, offline, no agent/network — exactly what npm test covers.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { localDaysAgo, repo, resetTables } from "./_seed.js";
 
 beforeEach(() => {
   resetTables("evidence_cache", "memory", "settings");
@@ -105,7 +105,7 @@ test("getOutcomeLearnings clamps the limit to a bounded window", () => {
 // the athlete trained through produces a durable, surfaced learning.
 test("reconcileSuggestions writes a learning that getOutcomeLearnings then surfaces", () => {
   resetTables("suggestions", "sessions", "logged_sets", "exercises");
-  const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  const yesterday = localDaysAgo(1);
   repo.recordSuggestion("day_read", yesterday, { kind: "rest" });
   // The athlete trained that day anyway (a logged set on the date) — logSetByName
   // resolves/creates the session for that date itself.
