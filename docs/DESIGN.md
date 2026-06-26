@@ -408,7 +408,9 @@ separate from Markers so the detailed lab-history catalog stays scan-led.
 - Lead with the doctor-facing clinical marker report (`GET /api/health-report`) because it is the
   human artifact: grouped clinical panels, findings first, dated history, DEXA when present, and a
   MyChart-ready text copy. The report opens from an about:blank new tab so the PWA stays in place,
-  then the new tab navigates to the printable HTML/PDF surface.
+  then the new tab navigates to the printable HTML/PDF surface. In that report, the text-copy and
+  PDF actions live in a fixed bottom action bar (`.actionbar`, `.no-print`) so they remain reachable
+  after a long marker scroll but never appear in the printed/PDF document.
 - Keep structured JSON export (`GET /api/health-export`) secondary. It is for tools/imports, not the
   default physician handoff.
 - Keep data-maintenance actions here too, currently "Align lab names" (`POST /api/markers/reconcile`).

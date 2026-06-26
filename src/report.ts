@@ -661,7 +661,7 @@ html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 body{margin:0;background:var(--paper);color:var(--ink);
   font-family:'Schibsted Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   font-size:13px;line-height:1.5}
-.wrap{max-width:880px;margin:0 auto;padding:22px 26px 60px}
+.wrap{max-width:880px;margin:0 auto;padding:22px 26px 112px}
 h1,h2,.brand{font-family:'Fraunces',Georgia,'Times New Roman',serif;font-weight:600;letter-spacing:-.01em}
 a{color:var(--terra)}
 
@@ -674,6 +674,14 @@ a{color:var(--terra)}
 .btn.primary{background:var(--terra);border-color:var(--terra);color:#fff}
 .btn.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
 .copied{color:var(--sage);font-size:12px;font-weight:600;display:none}
+.actionbar{position:fixed;left:0;right:0;bottom:0;z-index:7;background:rgba(251,248,243,.96);
+  border-top:1px solid var(--line);box-shadow:0 -10px 24px rgba(43,39,36,.08);
+  backdrop-filter:blur(12px) saturate(1.06);-webkit-backdrop-filter:blur(12px) saturate(1.06);
+  padding:10px 18px calc(10px + env(safe-area-inset-bottom,0px))}
+.actionbar-in{max-width:880px;margin:0 auto;display:flex;gap:10px;align-items:center;justify-content:flex-end}
+.actionbar .btn{min-height:39px}
+.actionbar .btn.primary{min-width:190px}
+.actionbar .copied{margin-right:auto}
 
 /* header */
 .head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;
@@ -753,12 +761,19 @@ table.markers tr{break-inside:avoid}
 .foot b{color:var(--soft);font-weight:600}
 
 @media print{
-  .toolbar,.no-print{display:none!important}
+  .toolbar,.actionbar,.no-print{display:none!important}
   .wrap{max-width:none;padding:0}
   @page{size:letter;margin:13mm}
   body{font-size:11px;background:#fff}
   .findings{background:#f6ecd9!important}
   thead{display:table-header-group}
+}
+@media (max-width:640px){
+  .toolbar{align-items:flex-start}
+  .toolbar .hint{flex-basis:100%;min-width:0}
+  .actionbar-in{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .actionbar .btn,.actionbar .btn.primary{width:100%;min-width:0}
+  .actionbar .copied{grid-column:1/-1;order:-1;margin:0;text-align:center}
 }
 .body.findings-only .group,.body.findings-only .bodycomp,.body.findings-only .suppwrap{display:none}
 `;
@@ -799,11 +814,8 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
 </head>
 <body>
 <div class="toolbar no-print">
-  <button class="btn primary" onclick="window.print()">⬇ Save as PDF</button>
-  <button class="btn" id="copyBtn">⧉ Copy for MyChart</button>
   <button class="btn" id="toggleBtn">Findings only</button>
-  <span class="copied" id="copied">Copied ✓</span>
-  <span class="hint">Tap <b>Save as PDF</b>, then choose “Save as PDF” in the print dialog. On iPhone: Share → Print → pinch the preview → Share → Save to Files.</span>
+  <span class="hint">Use the bottom bar to copy the MyChart text or save the full report as PDF. Findings-only keeps the discussion list in view.</span>
 </div>
 <div class="wrap body" id="body">
   <div class="head">
@@ -825,6 +837,13 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
 
   <div class="foot">
     <b>†&nbsp;Optimal target</b> bands are evidence-anchored preventive / longevity references — DISTINCT from a lab's population reference interval (a value can read “in range” yet sit outside an optimal target). This summary is informational and is not medical advice. No 0–100 scores are used.
+  </div>
+</div>
+<div class="actionbar no-print" role="region" aria-label="Report export actions">
+  <div class="actionbar-in">
+    <span class="copied" id="copied">Copied</span>
+    <button class="btn primary" id="copyBtn">Copy text for MyChart</button>
+    <button class="btn" onclick="window.print()">Save PDF</button>
   </div>
 </div>
 <textarea id="plain" style="position:absolute;left:-9999px;top:-9999px" readonly>${esc(plain)}</textarea>

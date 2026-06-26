@@ -87,6 +87,8 @@ test("renders no 0-100 score and escapes document-sourced strings (HTML)", () =>
   // The optimal-target footnote framing is present and clearly preventive (not a lab range).
   assert.ok(/optimal target/i.test(html), "the report labels the optimal-target column");
   assert.ok(/not medical advice/i.test(html) && /not medical advice/i.test(text), "disclaimer present on both renders");
+  assert.ok(html.includes('class="actionbar no-print"'), "text/PDF export actions live in a sticky bottom action bar");
+  assert.ok(html.includes("Copy text for MyChart"), "plain-text doctor copy is directly reachable");
 });
 
 test("plain-text twin carries findings + a copy-ready structure", () => {
