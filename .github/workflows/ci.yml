@@ -39,6 +39,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify pinned action tags
+        run: npm run actions:check -- --remote
+
       - name: Verify
         run: npm run verify
 

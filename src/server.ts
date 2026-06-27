@@ -1,5 +1,4 @@
 import express from "express";
-import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
@@ -46,16 +45,8 @@ if (seedIfEmpty()) console.log("Database was empty — seeded with the default p
 const app = express();
 app.disable("x-powered-by");
 
-function cspSha256(source: string): string {
-  return `'sha256-${crypto.createHash("sha256").update(source).digest("base64")}'`;
-}
-
-// The app shell has a few fixed inline image handlers emitted by JS templates.
-// Allow only those exact handlers instead of enabling every inline script.
-const INLINE_HANDLER_SCRIPT_HASHES = ["_artOk(this)", "_artErr(this)", "this.remove()"].map(cspSha256);
-
 function contentSecurityPolicy(pathname: string): string {
-  const scriptSources = ["'self'", "'unsafe-hashes'", ...INLINE_HANDLER_SCRIPT_HASHES];
+  const scriptSources = ["'self'"];
   if (pathname === "/api/health-report") scriptSources.push(reportScriptCspHash());
 
   return (

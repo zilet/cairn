@@ -1516,11 +1516,11 @@ async function primeArtManifest() {
   } catch {}
 }
 
-window._artOk = (img) => {
+function artPhotoLoaded(img) {
   img.classList.add("on");
   markArtReady(img.dataset.artkey); // remember for instant render next time
-};
-window._artErr = (img) => {
+}
+function artPhotoFailed(img) {
   // Drop BOTH reveal classes — `.instant` also forces opacity:1, so leaving it on
   // would keep a failed image visible instead of falling back to the SVG beneath.
   img.classList.remove("on", "instant");
@@ -1535,7 +1535,18 @@ window._artErr = (img) => {
     if (token !== pollToken || !img.isConnected) return; // stale tab / re-render — bail
     img.src = img.src.includes("&r=") ? img.src : img.src + "&r=1";
   }, 20000);
-};
+}
+
+document.addEventListener("load", (e) => {
+  const img = e.target instanceof HTMLImageElement ? e.target : null;
+  if (img && img.dataset.artPhoto === "1") artPhotoLoaded(img);
+}, true);
+document.addEventListener("error", (e) => {
+  const img = e.target instanceof HTMLImageElement ? e.target : null;
+  if (!img) return;
+  if (img.dataset.artPhoto === "1") { artPhotoFailed(img); return; }
+  if (img.dataset.removeOnError === "1") img.remove();
+}, true);
 
 // Art tile that renders the generated studio photo over a CairnArt SVG. `svg` may
 // be passed (exercise art needs muscleGroup); defaults to art(kind, q). Falls back
@@ -1553,7 +1564,7 @@ function artImg(kind, q, cls = "artile-md", svg = null) {
   const ready = artReady.has(token);
   const imgCls = ready ? "artimg-photo on instant" : "artimg-photo";
   const load = ready ? "eager" : "lazy";
-  return `<div class="artile artimg ${cls}">${s}<img class="${imgCls}" alt="${escAttr(query)}" loading="${load}" decoding="async" data-artkey="${escAttr(token)}" src="${escAttr(src)}" onload="_artOk(this)" onerror="_artErr(this)"></div>`;
+  return `<div class="artile artimg ${cls}">${s}<img class="${imgCls}" alt="${escAttr(query)}" loading="${load}" decoding="async" data-art-photo="1" data-artkey="${escAttr(token)}" src="${escAttr(src)}"></div>`;
 }
 
 // tiny inline sparkline (numbers only — safe for innerHTML)
@@ -1619,7 +1630,7 @@ document.addEventListener("keydown", (e) => {
 function mountDetail(inner, photoSrc) {
   const d = document.createElement("div");
   d.className = "detail";
-  d.innerHTML = `<div class="detail-bg">${photoSrc ? `<img alt="" src="${escAttr(photoSrc)}" onerror="this.remove()">` : ""}</div>
+  d.innerHTML = `<div class="detail-bg">${photoSrc ? `<img alt="" src="${escAttr(photoSrc)}" data-remove-on-error="1">` : ""}</div>
     <button class="detail-x" aria-label="Close">✕</button>
     <div class="detail-scroll">${inner}</div>`;
   document.body.appendChild(d);

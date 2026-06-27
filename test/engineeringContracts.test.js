@@ -77,14 +77,16 @@ test("app shell privacy contract avoids remote fonts and blanket inline scripts"
   const styles = read("public/styles.css");
   const server = read("src/server.ts");
   const design = read("docs/DESIGN.md");
+  const publicJs = ["public/js/02-ui.js", "public/js/09-plan-chat.js"].map(read).join("\n");
   const scriptSources = server.match(/const scriptSources = \[([^\]]+)\]/)?.[1] || "";
 
   assert.doesNotMatch(`${index}\n${server}`, /fonts\.(?:googleapis|gstatic)\.com/);
   assert.doesNotMatch(index, /\sonload\s*=/i, "app shell must not need an inline font-loader handler");
+  assert.doesNotMatch(publicJs, /\son(?:load|error)\s*=/i, "dynamic image templates must use delegated listeners");
   assert.doesNotMatch(styles, /Fraunces|Schibsted Grotesk/, "main CSS must not depend on Google font family names");
   assert.match(design, /does not load third-party fonts/i);
   assert.match(server, /"font-src 'self'; "/);
-  assert.match(server, /'unsafe-hashes'/, "fixed inline handlers should be hash-gated");
+  assert.doesNotMatch(server, /unsafe-hashes/, "app shell should not need inline handler hashes");
   assert.doesNotMatch(scriptSources, /unsafe-inline/, "script-src sources must not allow every inline script");
   assert.match(server, /reportScriptCspHash\(\)/, "report inline script must be allowed by its exact hash");
 });
@@ -110,7 +112,12 @@ test("public docker run quickstarts bind loopback by default", () => {
 });
 
 test("GitHub Actions workflows pin external actions to commit SHAs", () => {
+  const pkg = JSON.parse(read("package.json"));
+  const checker = read("scripts/check-action-pins.mjs");
+  assert.match(pkg.scripts.verify, /npm run actions:check/);
+  assert.match(checker, /--remote/);
   for (const file of [".github/workflows/ci.yml", ".github/workflows/release-image.yml"]) {
+    assert.match(read(file), /npm run actions:check -- --remote/, `${file} must verify action tag drift in CI`);
     const refs = [...read(file).matchAll(/uses:\s+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@([^\s#]+)/g)];
     assert.ok(refs.length > 0, `${file} should use at least one external action`);
     for (const [, action, ref] of refs) {

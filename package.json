@@ -28,6 +28,7 @@
     "backup": "curl -fsS http://localhost:8787/api/export -o cairn-export.json && echo saved cairn-export.json",
     "docs:index": "node scripts/gen-docs.mjs",
     "docs:check": "node scripts/gen-docs.mjs --check",
+    "actions:check": "node scripts/check-action-pins.mjs",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "pretest": "npm run build",
@@ -35,7 +36,7 @@
     "presmoke": "npm run build",
     "smoke": "node test/smoke.mjs",
     "launch:check": "node scripts/check-launch-safety.mjs",
-    "verify": "npm run docs:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
+    "verify": "npm run docs:check && npm run actions:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
     "verify:full": "npm run verify && npm run smoke"
   },
   "dependencies": {
