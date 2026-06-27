@@ -5,13 +5,90 @@
 // `const CACHE = "cairn-vNN"` constant at the top of public/sw.js MUST move in the
 // same diff — otherwise already-installed PWA clients keep serving the STALE bundle
 // forever (a client once silently fell ~40 versions behind). See CONTRIBUTING.md
-// "The PWA cache version". Pure git plumbing, no deps.
+// "The PWA cache version". Also validates that the classic app-shell script
+// graph and service-worker precache list stay aligned. Pure git plumbing, no deps.
 //
 // Usage: node scripts/check-sw-cache.mjs [baseRef]   (baseRef defaults to origin/main)
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const base = process.argv[2] || "origin/main";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function readRepo(file) {
+  return readFileSync(path.join(root, file), "utf8");
+}
+
+function quotedArrayValues(src, name) {
+  const match = new RegExp(`const\\s+${name}\\s*=\\s*\\[([\\s\\S]*?)\\];`).exec(src);
+  if (!match) throw new Error(`public/sw.js is missing ${name}`);
+  const body = match[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  return [...body.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+}
+
+function duplicates(values) {
+  const seen = new Set();
+  const dupes = new Set();
+  for (const value of values) {
+    if (seen.has(value)) dupes.add(value);
+    seen.add(value);
+  }
+  return [...dupes];
+}
+
+function assertPublicAssetContract() {
+  const index = readRepo("public/index.html");
+  const sw = readRepo("public/sw.js");
+  const scripts = [...index.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)].map((m) => m[1]);
+  const core = quotedArrayValues(sw, "CORE_ASSETS");
+  const optional = quotedArrayValues(sw, "OPTIONAL_ASSETS");
+  const allCached = [...core, ...optional];
+  const errors = [];
+
+  for (const [name, values] of [
+    ["CORE_ASSETS", core],
+    ["OPTIONAL_ASSETS", optional],
+  ]) {
+    const dupes = duplicates(values);
+    if (dupes.length) errors.push(`${name} contains duplicate entr${dupes.length === 1 ? "y" : "ies"}: ${dupes.join(", ")}`);
+  }
+  for (const asset of ["/", "/index.html", "/styles.css", "/manifest.json"]) {
+    if (!core.includes(asset)) errors.push(`CORE_ASSETS must include ${asset}`);
+  }
+
+  const missingScripts = scripts.filter((src) => !core.includes(src));
+  if (missingScripts.length) {
+    errors.push(`app-shell script${missingScripts.length === 1 ? "" : "s"} missing from CORE_ASSETS: ${missingScripts.join(", ")}`);
+  }
+
+  if (scripts[0] !== "/art.js") errors.push("public/index.html must load /art.js before feature scripts");
+  const settingsRoutesIndex = scripts.indexOf("/js/settings-routes.js");
+  const bootIndex = scripts.indexOf("/js/10-boot.js");
+  if (bootIndex !== scripts.length - 1) errors.push("public/index.html must load /js/10-boot.js last");
+  if (settingsRoutesIndex === -1 || bootIndex === -1 || settingsRoutesIndex > bootIndex) {
+    errors.push("public/index.html must load /js/settings-routes.js before /js/10-boot.js");
+  }
+
+  const missingFiles = allCached
+    .filter((asset) => asset.startsWith("/"))
+    .map((asset) => ({ asset, file: asset === "/" ? "public/index.html" : `public${asset}` }))
+    .filter(({ file }) => !existsSync(path.join(root, file)));
+  if (missingFiles.length) {
+    errors.push(`cached asset${missingFiles.length === 1 ? "" : "s"} missing on disk: ${missingFiles.map((r) => `${r.asset} -> ${r.file}`).join(", ")}`);
+  }
+
+  if (errors.length) {
+    console.error("✗ public app-shell cache contract failed:");
+    for (const error of errors) console.error(`    ${error}`);
+    process.exit(1);
+  }
+  console.log(`✓ public app-shell cache contract is aligned (${scripts.length} boot script(s), ${core.length} core asset(s))`);
+}
+
+assertPublicAssetContract();
 
 let changed = [];
 try {
