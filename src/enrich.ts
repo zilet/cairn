@@ -492,7 +492,7 @@ async function processReviewJob(): Promise<void> {
   }
 
   // New labs landed → refresh the elite-coach whole-picture synthesis on the fresh
-  // directives + review, so the Brain view's lead reflects the new panel without a
+  // directives + review, so the Health → Read view's lead reflects the new panel without a
   // manual refresh. Pull artifact (cached); a failure keeps the previous synthesis.
   try {
     const r = await synthesizeHealth("auto");

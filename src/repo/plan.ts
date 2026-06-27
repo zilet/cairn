@@ -451,6 +451,7 @@ export interface RunPrescription {
   note?: string | null;
   day_name?: string | null;             // used only when CREATING a new day for this run
   focus?: string | null;
+  interval?: any;                       // structured interval reps (e.g. [{reps,on,off,zone}]) — persisted as interval_json
 }
 
 // Apply a week of run prescriptions onto the plan WITHOUT touching strength work: for
@@ -485,6 +486,9 @@ export function setWeeklyRuns(runs: RunPrescription[]) {
       target_duration_min: numOrNull(r.target_duration_min),
       target_zone: r.target_zone ?? null,
       note: r.note ?? null,
+      // Persist interval STRUCTURE for an interval/quality session (the column
+      // already exists; intervalJson() coerces it to a bounded JSON string).
+      interval_json: r.interval != null ? JSON.stringify(r.interval) : null,
     }));
     const name = existing?.name ?? (dayRuns[0]?.day_name || "Run");
     const focus = existing?.focus ?? (dayRuns[0]?.focus || "Endurance");

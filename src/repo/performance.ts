@@ -27,6 +27,12 @@ import { getProfile, listWeight } from "./profile.js";
 import { type LiftState, getProgramState, type ProgramState } from "./program-state.js";
 import { type ProgramBalance, programBalance } from "./progression.js";
 import { localDateISO } from "./shared.js";
+// Running re-tests + the cadenced strength test week + the DEXA lever. Imported for
+// types + a lazy compute (called only inside performanceStanding/performanceLever,
+// never at module init, so the run-progression → coach → performance cycle resolves
+// at call time). All degrade null-safe / [].
+import { enduranceTestsDue } from "./run-progression.js";
+import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
 import {
   bandForPercentile,
   compareCurve,
@@ -244,7 +250,7 @@ export interface Imbalance {
 
 export interface PerfTestDue {
   exercise: string;
-  kind: "strength" | "core" | "grip" | "benchmark";
+  kind: "strength" | "core" | "grip" | "benchmark" | "endurance" | "test";
   why: string;
 }
 
@@ -645,11 +651,23 @@ function performanceLever(
   caps: LiftCapacity[],
   imbalances: Imbalance[],
   balance: ProgramBalance,
-  endurance: EnduranceCapacity | null
+  endurance: EnduranceCapacity | null,
+  dexa?: DexaTargeting | null
 ): PerfLever | null {
   // If endurance is clearly the weakest link AND it's a discipline that matters,
   // VO2max work is usually the biggest longevity+performance lever.
   const weakest = caps[caps.length - 1];
+  // A strong DEXA signal — an informational low-BMD region, or low-ALMI lean —
+  // outranks an ordinary strength laggard: it's the more consequential focus and a
+  // recognized reference read (never a score). Bone/visceral stay clinician-framed.
+  const dexaLead = dexa?.available ? dexa.lead : null;
+  if (dexaLead && dexaLead.domain === "training" && (dexaLead.informational || dexaLead.area === "lean mass")) {
+    return {
+      headline: `From your DEXA — ${dexaLead.bias}`,
+      why: dexaLead.signal,
+      target: dexaLead.path,
+    };
+  }
   // A named, injury-relevant imbalance is the most coach-like lever when present.
   const watch = imbalances.find((i) => i.severity === "watch");
   if (watch) {
@@ -749,7 +767,10 @@ export function performanceStanding(
   const capacities = liftCapacities(lifts, bodyweight, sex, age);
   const endurance = enduranceCapacity(programState, recovery, sex, age);
   const imbalances = strengthImbalances(capacities);
-  const lever = performanceLever(capacities, imbalances, balance, endurance);
+  // A strong DEXA signal (low BMD, low-ALMI lean) can be the highest-leverage focus
+  // — let the lever consider it. Null-safe; falls back to the strength laggard.
+  const dexa = (() => { try { return dexaTargeting({ profile }); } catch { return null; } })();
+  const lever = performanceLever(capacities, imbalances, balance, endurance, dexa);
   const tests_due = testsDue(capacities, lifts, d);
   // Add "log a true X" benchmark prompts for patterns trained only through a
   // non-standard variation (so capacity can't be read honestly) — capped so they
@@ -762,6 +783,14 @@ export function performanceStanding(
       why: `You train ${u.label.toLowerCase()} as ${u.via}, but that can't be benchmarked against the strength standards — logging ${u.standard} now and then would let Cairn read where your ${u.label.toLowerCase()} truly stands.`,
     });
   }
+  // Running re-tests (no hard effort in ~4 weeks → a time-trial; a stale VO2max
+  // reading → a max-effort run) — shaped to drop straight in (open kind enum).
+  try {
+    for (const t of enduranceTestsDue(d)) {
+      if (tests_due.length >= 6) break;
+      tests_due.push(t);
+    }
+  } catch { /* endurance tests unavailable → skip */ }
   const variety = varietyRead(d);
   const momentum = { chips: performanceMomentum(programState, capacities, endurance) };
   const balance_note = balanceNote(recovery, programState);

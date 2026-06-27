@@ -58,6 +58,13 @@ function weeklySlotDue(now: Date, day: number, hour: number, stateKey: string): 
   return true;
 }
 
+// Whole-day gap between two YYYY-MM-DD stamps (both produced by localToday). Used
+// to enforce a calm minimum spacing between data-triggered evolution drafts.
+function daysBetweenStamps(a: string, b: string): number {
+  const ms = Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`);
+  return Number.isFinite(ms) ? Math.round(ms / DAY_MS) : Number.POSITIVE_INFINITY;
+}
+
 export function startScheduler() {
   // Wire agent-run telemetry: agents.ts can't import repo.ts (circular), so it
   // emits through a registered sink. recordAgentRun is itself failure-safe.
@@ -119,8 +126,14 @@ export function startScheduler() {
     //     leaves it WAITING for review — pull, never push. Only when there's a plan to
     //     evolve; a fresh weekly draft retires the prior unreviewed auto one (no pile-up).
     const evolutionDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "program_evolution_last_slot");
+    // (e) Data-TRIGGERED plan evolution — the reactive half of "both". Checked at
+    //     most once/day (cheap deterministic read); skipped on a tick where the
+    //     weekly slot is already drafting (that path owns this evolution). The
+    //     firing decision (signature changed + cooldown) is made inside the block.
+    const triggerCheckDue =
+      !evolutionDue && repo.getAppState("program_evolution_trigger_date") !== localToday(now);
 
-    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue) return;
+    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue && !triggerCheckDue) return;
     proactiveBusy = true;
     try {
       if (insightDue) {
@@ -173,11 +186,57 @@ export function startScheduler() {
           } else {
             const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION);
             // A successful fresh draft retires the prior unreviewed auto one (no pile-up).
-            if (r.ok && r.proposal?.id) repo.supersedeAutoEvolutionDrafts(r.proposal.id);
+            if (r.ok && r.proposal?.id) {
+              repo.supersedeAutoEvolutionDrafts(r.proposal.id);
+              // Coordinate with the data-triggered path: the weekly draft has just
+              // addressed whatever the data currently says, so reset the trigger's
+              // cooldown + remember the condition it covered (the trigger only fires
+              // again on a NEW shift, never a day after this for the same one).
+              try {
+                const trig = repo.programEvolutionTrigger();
+                repo.setAppState("program_evolution_last_draft_date", localToday(now));
+                repo.setAppState("program_evolution_trigger_sig", trig.signature);
+              } catch { /* trigger read unavailable → leave stamps as-is */ }
+            }
             console.log(r.ok ? `[proactive] drafted a plan evolution (waiting for review).` : `[proactive] plan evolution unavailable (calm no-op).`);
           }
         } catch (e: any) {
           console.error(`[proactive] plan evolution failed: ${e?.message ?? e}`);
+        }
+      }
+      if (triggerCheckDue) {
+        // Stamp the daily check first (cheap deterministic read; runs ≤1×/day even
+        // if no draft results) so it can't re-run every 60s tick.
+        repo.setAppState("program_evolution_trigger_date", localToday(now));
+        try {
+          const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+          const trig = hasPlan
+            ? repo.programEvolutionTrigger()
+            : { due: false, reasons: [] as string[], signature: "" };
+          // Fire ONLY on a genuine shift: the condition signature changed since the
+          // last auto-evolution draft (a standing weak point drafts once, not daily)
+          // AND a calm minimum spacing has elapsed (never two drafts within 5 days).
+          const MIN_GAP_DAYS = 5;
+          const lastSig = repo.getAppState("program_evolution_trigger_sig");
+          const lastDraft = repo.getAppState("program_evolution_last_draft_date");
+          const gapOk = !lastDraft || daysBetweenStamps(lastDraft, localToday(now)) >= MIN_GAP_DAYS;
+          const sigChanged = !!trig.signature && trig.signature !== lastSig;
+          if (trig.due && sigChanged && gapOk) {
+            const task = `The athlete's logged training data has materially shifted: ${trig.reasons.join(" ")} Evolve the plan to address this NOW — rotate a close variation into what has stalled (don't just add load), build toward the under-trained groups (core / grip / a lagging pattern), and keep it fresh. Prefer 1-3 focused, well-justified changes. Explain each in plain words.`;
+            const r: any = await evolveProgram("auto", repo.AUTO_EVOLUTION_INSTRUCTION, undefined, { task });
+            if (r.ok && r.proposal?.id) {
+              // Shares the weekly draft's single-slot dedup AND records the condition
+              // it covered + resets the cooldown clock.
+              repo.supersedeAutoEvolutionDrafts(r.proposal.id);
+              repo.setAppState("program_evolution_trigger_sig", trig.signature);
+              repo.setAppState("program_evolution_last_draft_date", localToday(now));
+            }
+            console.log(r.ok ? `[proactive] data-triggered plan evolution drafted (${trig.reasons.length} reason(s), waiting for review).` : `[proactive] data-triggered evolution unavailable (calm no-op).`);
+          } else if (trig.due) {
+            console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
+          }
+        } catch (e: any) {
+          console.error(`[proactive] evolution trigger failed: ${e?.message ?? e}`);
         }
       }
     } finally {

@@ -96,6 +96,21 @@ export function supersedeAutoEvolutionDrafts(exceptId?: number) {
   return retired;
 }
 
+// A fresh weekly run-plan draft retires any prior un-applied one (agent
+// 'auto-run-plan'), so re-running the run-plan apply never stacks duplicates in the
+// Coach list — system 'superseded', not a user 'discarded'. Returns how many retired.
+export function supersedeAutoRunPlanDrafts() {
+  const drafts = db
+    .prepare(`SELECT id FROM plan_proposals WHERE status = 'draft' AND agent = 'auto-run-plan'`)
+    .all() as any[];
+  let retired = 0;
+  for (const d of drafts) {
+    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+    retired++;
+  }
+  return retired;
+}
+
 // A fresh auto-progression draft for a day RETIRES any prior un-applied one for the
 // SAME day, so tapping "apply to my plan" on Today repeatedly never piles up duplicate
 // drafts in the Coach list (each new draft reflects the latest logged sets; the stale
@@ -262,6 +277,7 @@ function toRunPrescription(c: any): RunPrescription | null {
     note: c?.note ?? null,
     day_name: c?.day_name ?? null,
     focus: c?.focus ?? null,
+    interval: c?.interval ?? null,
   };
 }
 

@@ -276,7 +276,7 @@ function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | "traini
     !wanted || p.tier === "act_now" || wanted.some((d) => p?.moves && p.moves[d])
   );
   if (relFocus.length) {
-    lines.push("PRIORITIZED HEALTH FOCUS (the connected brain — most important FIRST; build this domain's plan to serve these, act-now items before track):");
+    lines.push("PRIORITIZED HEALTH FOCUS (the connected brain — evidence for the block focus above; act-now items before track):");
     for (const p of relFocus.slice(0, 6)) {
       const tier = p.tier === "act_now" ? "ACT NOW" : "track";
       const move = wanted ? wanted.map((d) => p?.moves?.[d]).find(Boolean) : (p?.moves?.nutrition || p?.moves?.training || p?.moves?.watch);
@@ -512,7 +512,7 @@ function renderTrainingSignals(ctx: any): string {
   }
   if (ts.autoregulation?.note) lines.push(`AUTOREGULATION (recent 1-tap body feedback): ${ts.autoregulation.note}`);
   if (!lines.length) return "";
-  return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — act on these so the plan visibly reflects what they actually did; this is the source of truth for whether a lift earned a bump):\n${lines.join("\n")}\n`;
+  return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — evidence for whether a lift earned a bump, so the plan visibly reflects what they actually did):\n${lines.join("\n")}\n`;
 }
 
 // Active injury areas drawn from context_events (an injury's title/detail/meta.area
@@ -663,6 +663,39 @@ function renderBlock(ctx: any): string {
 // — never a flat session dump, never a score. Returns "" when there's nothing to
 // say (quiet by default). `opts.brief` trims it for the day-read (one calm
 // summary line) vs the full block for the coach/session/week-ahead.
+// The COACHING STANCE — the conductor's instruction. Lifted from the health-synthesis
+// constitution that already makes the day-read and synthesis read like one human coach,
+// and applied to the PLAN prompts (coach/session/evolution/week-ahead), which had ~14
+// self-asserting blocks and no instruction to prioritize, sequence, or speak as one voice.
+export const COACHING_STANCE = `COACH LIKE ONE PERSON, NOT A DASHBOARD:
+- Lead with the SINGLE highest-leverage change in the focus above. Build the plan to SERVE it.
+- Change 1-3 things, never everything. The domain blocks below are your EVIDENCE — read them, don't recite them.
+- SEQUENCE: act on the lead + the parallel levers; name what's deferred ("we'll re-test the squat in a few weeks"), don't pile it on now.
+- CONNECT the domains in plain words (a lab shapes food AND training; recovery shapes today's intensity; aerobic work is fitness AND longevity).
+- Speak in ONE warm, direct voice — no metric walls, no checklists, no scores.`;
+
+// renderCoachingFocus — the conductor block. Rendered FIRST in every plan prompt, above
+// all the domain reads, so the agent leads with ONE sequenced focus (lead + parallel +
+// later + connections + the batched retest) instead of a flood of co-equal blocks. The
+// `brief` form (for the day-read) shows only the lead line. Returns "" when there's no
+// focus (a thin athlete) so it degrades exactly like the other render* helpers.
+export function renderCoachingFocus(ctx: any, opts: { brief?: boolean } = {}): string {
+  const cf = ctx?.coaching_focus;
+  if (!cf || !cf.available || !cf.lead) return "";
+  const lead = cf.lead;
+  if (opts.brief) {
+    return `THIS BLOCK'S ONE FOCUS: ${lead.title} — ${lead.why}${lead.move ? ` (${lead.move})` : ""}\n`;
+  }
+  const lines: string[] = [];
+  lines.push("THIS BLOCK — THE FOCUS (the conductor; LEAD with this — everything below it is evidence, not a checklist):");
+  lines.push(`  ▸ LEAD: ${lead.title} — ${lead.why}${lead.move ? ` ${lead.move}` : ""}`);
+  for (const p of cf.parallel || []) lines.push(`  ▸ ALONGSIDE (${p.domain}, handled via a different lever): ${p.title} — ${p.why}${p.move ? ` ${p.move}` : ""}`);
+  if ((cf.later || []).length) lines.push(`  ▸ LATER (say it's deferred — do NOT act on it yet): ${cf.later.map((l: any) => l.title).join("; ")}`);
+  for (const c of cf.connections || []) lines.push(`  ▸ CONNECT: ${c}`);
+  if (cf.retest) lines.push(`  ▸ NEXT CHECK-IN${cf.retest.in_weeks === 0 ? " (due now)" : ""}: re-test ${cf.retest.focus.join(", ")} — ${cf.retest.why}`);
+  return `${lines.join("\n")}\n\n`;
+}
+
 export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): string {
   const st = ctx?.program_state;
   const bal = ctx?.program_balance;
@@ -671,7 +704,7 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
   const lines: string[] = [];
 
   // Headline — the one-sentence program read, always safe to show.
-  if (st?.headline) lines.push(`PROGRAM STATE (deterministic read of the logged history — trust it as your starting point; plain words, no scores): ${st.headline}`);
+  if (st?.headline) lines.push(`PROGRAM STATE (deterministic read of the logged history — evidence for the block focus above; plain words, no scores): ${st.headline}`);
 
   // ACUTE recovery — which muscles are smoked from the last day or two (a long
   // ride/run that never touched logged_sets, or a heavy session). The coach must
@@ -743,7 +776,7 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
   // The concrete adaptations digest — the "what to change & why" the coach should
   // realize as proposed plan changes (most-actionable first, already deduped).
   if (adj.length) {
-    lines.push("ADAPTATIONS DUE (concrete, most-actionable first — realize the relevant ones as conservative proposals; this is the source of truth for what the plan needs):");
+    lines.push("ADAPTATIONS DUE (concrete, most-actionable first — evidence supporting the focus above; realize the relevant ones as conservative proposals):");
     for (const a of adj.slice(0, 6)) lines.push(`  - ${a.title}${a.why ? `: ${a.why}` : ""}`);
   }
 
@@ -780,7 +813,7 @@ export function renderPerformance(ctx: any, opts: { brief?: boolean } = {}): str
   const lines: string[] = [];
   if (p.hero?.headline) {
     lines.push(
-      `PERFORMANCE STANDING (the deterministic CAPACITY read — where the athlete genuinely stands vs proven sex/age strength standards + VO2max norms; percentile/level are recognized reference reads, NEVER a score; lead with this, it is trustworthy): ${p.hero.headline}.`,
+      `PERFORMANCE STANDING (the deterministic CAPACITY read — where the athlete genuinely stands vs proven sex/age strength standards + VO2max norms; percentile/level are recognized reference reads, NEVER a score; evidence for the focus above): ${p.hero.headline}.`,
     );
   }
   if (caps.length) {
@@ -809,6 +842,111 @@ export function renderPerformance(ctx: any, opts: { brief?: boolean } = {}): str
   }
   if (p.balance_note) lines.push(`BALANCE & LIFE (honor recovery and the life around training — never push past what's sustainable): ${p.balance_note}`);
   return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
+// renderRunZones: the athlete's Z1–Z5 bpm bands grounded in real physiology
+// (max-HR + resting HR), so the agent prescribes runs to an actual pulse instead
+// of a vague "easy". Quiet by default — "" when no zones are available (no age +
+// no Garmin HR). Plain words + concrete bpm, never a score.
+export function renderRunZones(ctx: any): string {
+  const z = ctx?.run_zones;
+  if (!z || !z.available || !Array.isArray(z.zones) || !z.zones.length) return "";
+  const bands = z.zones
+    .map((b: any) => `${b.zone} ${b.label} ${b.low_bpm}–${b.high_bpm} bpm (${b.feel})`)
+    .join("; ");
+  return `\nRUN HR ZONES (the athlete's real bpm bands — prescribe runs to these, not a vague effort): ${bands}.${z.note ? ` ${z.note}` : ""}\n`;
+}
+
+// renderRunPlan: this week's PERIODIZED run mix from the deterministic engine —
+// the FLOOR the agent REFINES, never reinvents (exactly as renderProgramState
+// floors the strength evolution). Folds the mix summary, the quality focus, the
+// long run, and any interval structure into the running prompts, plus the two
+// sibling running reads (mono-stimulus VARIETY nudge + a due endurance RE-TEST)
+// so they reach every running prompt, not just the conductor's terse deferral.
+// Quiet by default — "" when there's nothing running to say.
+export function renderRunPlan(ctx: any): string {
+  const rp = ctx?.run_plan;
+  const variety = ctx?.run_variety;
+  const tests = Array.isArray(ctx?.endurance_tests) ? ctx.endurance_tests : [];
+  const lines: string[] = [];
+  if (rp?.available && Array.isArray(rp.runs) && rp.runs.length) {
+    lines.push(
+      `THIS WEEK'S RUN PLAN (deterministic, periodized FLOOR — trust it as the starting structure and REFINE it, never reinvent; ${rp.why}):`,
+    );
+    if (rp.mix_summary) lines.push(`  Mix: ${rp.mix_summary}${rp.quality_focus ? ` · quality focus: ${rp.quality_focus}` : ""}.`);
+    for (const r of rp.runs) {
+      const dist = r.target_distance_km != null ? `${r.target_distance_km} km` : (r.target_duration_min != null ? `${r.target_duration_min} min` : "");
+      const zone = r.target_zone ? ` @ ${r.target_zone}` : "";
+      let ivl = "";
+      if (Array.isArray(r.interval) && r.interval.length) {
+        ivl = ` — ${r.interval.map((iv: any) => `${iv.reps} × ${iv.on}${iv.zone ? ` @ ${iv.zone}` : ""}, ${iv.off} recovery`).join("; ")}`;
+      }
+      lines.push(`  - Day ${r.day_number}: ${r.label || "Run"}${dist ? ` ${dist}` : ""}${zone}${ivl}.`);
+    }
+    if (Array.isArray(rp.rationale) && rp.rationale.length) {
+      lines.push(`  Why this week: ${rp.rationale.join(" ")}`);
+    }
+    lines.push("  Keep lifting supportive so it doesn't compromise the key runs. Apply via the run-plan apply path (a draft, never auto-applied).");
+  }
+  // Mono-stimulus running → a gentle variety nudge (only fires with enough history).
+  if (variety?.note) {
+    const sugg = Array.isArray(variety.suggestions) && variety.suggestions.length ? ` Options: ${variety.suggestions.join(", ")}.` : "";
+    lines.push(`RUN VARIETY (a nudge, never a rule): ${variety.note}${sugg}`);
+  }
+  // A cadenced endurance benchmark is due — invite it, never force it.
+  if (tests.length) {
+    lines.push(`ENDURANCE RE-TEST (a benchmark is due — invite it, never force it): ${tests.map((t: any) => `${t.exercise} (${t.why})`).join("; ")}.`);
+  }
+  return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
+// renderMuscleGroups: the per-canonical-group ADVANCING vs STALLING read (the
+// athlete's own mental model), plus — when a group is stalling — the MENU of
+// same-pattern variations to rotate in. Optionally a short TEST WEEK line when a
+// cadenced re-test is due. Quiet by default — "" when nothing's logged to read.
+export function renderMuscleGroups(ctx: any): string {
+  const gt = ctx?.groups_trajectory;
+  const tw = ctx?.test_week;
+  const lines: string[] = [];
+  if (gt?.available && Array.isArray(gt.groups) && gt.groups.length) {
+    lines.push(`MUSCLE GROUPS — ADVANCING vs STALLING (the athlete thinks in groups; plain words, no scores): ${gt.headline}`);
+    for (const g of gt.groups) {
+      let line = `  - ${g.label} [${g.verdict}]${g.lead_lift ? ` — ${g.lead_lift}` : ""}: ${g.note}`;
+      if (g.verdict === "stalling" && Array.isArray(g.vary_options) && g.vary_options.length) {
+        line += ` Rotate one in: ${g.vary_options.map((v: any) => v.name).join(", ")}.`;
+      }
+      lines.push(line);
+    }
+  }
+  if (tw?.due && Array.isArray(tw.key_lifts) && tw.key_lifts.length) {
+    lines.push(`TEST WEEK (a cadenced re-test is due — invite it, never force it): ${tw.why} Key lifts to re-test: ${tw.key_lifts.join(", ")}.`);
+  }
+  return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
+// renderDexaTargeting: the "FROM YOUR DEXA" block — maps the body scan's regional
+// read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete
+// training (and one nutrition) targets, each with a plain "path to the next scan".
+// `focus` routes the right targets to the right prompt: 'training' folds the
+// training targets into the strength prompts; 'nutrition' folds the visceral/central
+// fat target into the meal prompts. BMD/visceral stay INFORMATIONAL (clinician-
+// framed), never a score. Quiet by default — "" with no DEXA / no relevant target.
+export function renderDexaTargeting(ctx: any, focus: "training" | "nutrition"): string {
+  const dt = ctx?.dexa_targeting;
+  if (!dt || !dt.available || !Array.isArray(dt.targets) || !dt.targets.length) return "";
+  const want = dt.targets.filter((t: any) => t.domain === focus);
+  if (!want.length) return "";
+  const lines: string[] = [];
+  lines.push(
+    focus === "training"
+      ? "FROM YOUR DEXA (the body scan's regional read → where to point the volume; T/Z-scores + ALMI are recognized reference reads, never a score; BMD targets are informational — worth raising with the clinician):"
+      : "FROM YOUR DEXA (body-composition read → a nutrition nudge, worth keeping an eye on, never a hard rule):",
+  );
+  for (const t of want) {
+    const moves = Array.isArray(t.moves) && t.moves.length ? ` Moves: ${t.moves.join(", ")}.` : "";
+    lines.push(`  - ${t.area}: ${t.signal} → ${t.bias}.${moves} Path: ${t.path}`);
+  }
+  return `\n${lines.join("\n")}\n`;
 }
 
 // Elite-coach + longevity guardrails for the STRENGTH prompts — the
@@ -882,7 +1020,9 @@ have none — that's fine, just use what's there):
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderPerformance(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderCoachingFocus(ctx)}${COACHING_STANCE}
+
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Review recent training and propose conservative target adjustments for next week."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -996,7 +1136,9 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${variationBlock}${weakBlock}${CONTEXT_GUARDRAILS}
-${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderPerformance(ctx)}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
+${renderCoachingFocus(ctx)}${COACHING_STANCE}
+
+${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}
 TASK: ${userInstruction?.trim() || "Evolve the program: progress what's working, break what's stalled, keep it fresh, and periodize sensibly. Explain each change in plain words."}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -2094,7 +2236,7 @@ You MAY disagree with the baseline when the whole picture warrants it — it is 
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${doneBlock}${lastNightLine}
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderPerformance(context, { brief: true })}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
+${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${overrideBlock}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 ${DAY_READ_SCHEMA}
 
@@ -2175,7 +2317,9 @@ GUARDRAILS:
 ${ELITE_STRENGTH_GUARDRAILS}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderPerformance(context)}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
+${renderCoachingFocus(context)}${COACHING_STANCE}
+
+${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
 WHAT THE ATHLETE ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
@@ -2409,7 +2553,7 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
+${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderDexaTargeting(ctx, "nutrition")}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -2495,7 +2639,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   adjustment lever to cut here.` : ""}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTodayFuel(context)}
+${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderDexaTargeting(context, "nutrition")}${renderTodayFuel(context)}
 ATHLETE: profile: ${JSON.stringify(profile)}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -2801,7 +2945,7 @@ ${JSON.stringify(context)}`;
 // labs + body composition + training load + recovery + nutrition + life — with
 // the single highest-leverage move named. Built ON TOP of the deterministic
 // healthFocus tiering (so the priorities are grounded, not invented). Pull: it
-// waits in the Brain view; never pushed; informational, never medical advice.
+// waits in the Health → Read view; never pushed; informational, never medical advice.
 const HEALTH_SYNTHESIS_SCHEMA = `{
   "found": true,
   "headline": "<the ONE thing that matters most right now, one plain sentence — NO score, NO grade>",
@@ -2940,7 +3084,9 @@ HOW TO SHAPE IT:
   guardrails call for where it fits naturally (a few minutes, not a whole session).
 
 ${ELITE_STRENGTH_GUARDRAILS}
-${renderProgramState(context)}${renderPerformance(context)}
+${renderCoachingFocus(context)}${COACHING_STANCE}
+
+${renderEnduranceGoal(context, "training")}${renderRunCompliance(context, "weekly")}${renderRunZones(context)}${renderRunPlan(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 ${WEEK_AHEAD_SCHEMA}
 

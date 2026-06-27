@@ -250,6 +250,13 @@ const MARKER_ORDER: Record<string, MarkerRankRule[]> = {
     { rank: 70, re: /\balt\b|alanine aminotransferase/i },
     { rank: 80, re: /\bggt\b|gamma[-\s]?glutamyl/i },
   ],
+  electrolytes: [
+    { rank: 10, re: /sodium|\bna\b/i },
+    { rank: 20, re: /potassium|\bk\b/i },
+    { rank: 30, re: /chloride|\bcl\b/i },
+    { rank: 40, re: /carbon dioxide|bicarbonate|\bco2\b|\btco2\b/i },
+    { rank: 50, re: /anion gap/i },
+  ],
   kidney: [
     { rank: 10, re: /\bbun\b|blood urea nitrogen|urea nitrogen/i },
     { rank: 20, re: /creatinine(?!.*urine)/i },

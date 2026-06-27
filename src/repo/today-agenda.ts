@@ -33,7 +33,7 @@ import { programAdjustments } from "./progression.js";
 import { getRunCompliance, getWeeklyStats } from "./sessions.js";
 import { listUnreconciledGarminStrength } from "./activities.js";
 import { healthFocus } from "./propagation.js";
-// The health-standing momentum read — the SAME wins-in-motion the Me→Health→Standing
+// The health-standing momentum read — the SAME wins-in-motion the top-level Me→Standing
 // view shows, surfaced here as a quiet pull-only "you're trending the right way" card.
 import { standingMomentum } from "./standing.js";
 // The waiting-draft proposals card reads the same proposals the client's
@@ -172,7 +172,7 @@ function healthCandidate(): TodayAgendaCandidate | null {
 
 // ---- standing momentum: a genuine win in motion (fat off since a DEXA, blood
 // pressure trending down, a steady weight slope) — the SAME momentum the
-// Me→Health→Standing read shows. Pull, never push: it rides in "more" most days
+// top-level Me→Standing read shows. Pull, never push: it rides in "more" most days
 // (moderate priority), the arbiter may surface it on a quiet day, and it OMITS
 // itself when there's no real win (`has_momentum` false). No scores — just the
 // trajectory in plain words. Reads standingMomentum (deterministic, null-safe). ----

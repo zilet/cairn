@@ -31,6 +31,10 @@ export * from "./repo/progression.js";
 export * from "./repo/program-blocks.js";
 export * from "./repo/exercise-variations.js";
 export * from "./repo/performance.js"; // training-intelligence: capacity benchmark + imbalance + the lever
+export * from "./repo/run-progression.js"; // the deterministic RUNNING program engine (zones / weekly mix / variety / tests)
+export * from "./repo/dexa-targeting.js"; // DEXA regional read → training + nutrition targets
+export * from "./repo/muscle-trajectory.js"; // per-muscle-group advance/stall + strength test-week cadence
+export * from "./repo/coaching-focus.js"; // THE CONDUCTOR — one sequenced whole-athlete focus across all domains
 // Era 2 (the calm daily driver, docs/VISION.md §12):
 export * from "./repo/today-agenda.js"; // the Today salience arbiter
 export * from "./repo/since-last.js"; // honest "since you last looked" continuity

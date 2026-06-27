@@ -342,7 +342,7 @@ function markers() {
 // ---------- the agentic whole-picture health review (Me → Health → Analysis) ----------
 // Seeded directly (no agent needed) in the exact addHealthReview contract. We omit
 // the `directives` field on purpose so the connected-brain directives stay sourced
-// from the deterministic engine alone (no double-listing in the Brain view).
+// from the deterministic engine alone (no double-listing in the Health → Read view).
 function healthReview() {
   repo.addHealthReview({
     headline: "A strong year of work — your lipid picture is moving the right way; iron is the one thing to stay ahead of.",
@@ -505,7 +505,7 @@ function quietLayer() {
 }
 
 // ---------- cached evidence (F1) — cited sources behind the flagged markers ----------
-// So the Brain view's "see the evidence (N)" disclosure has real, openable sources
+// So the Health → Read view's "see the evidence (N)" disclosure has real, openable sources
 // to show (not just the citation string). These mirror what the research pass would
 // cache: a guideline body, a verifiable URL, a plain-language claim. Marker names
 // match the directive markers (deriveDirectives / MARKER_MAPPINGS) case-insensitively.

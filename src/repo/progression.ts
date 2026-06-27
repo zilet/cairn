@@ -20,6 +20,13 @@ import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { getPlan } from "./plan.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { round2_5 } from "./shared.js";
+// Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
+// compute when programAdjustments is called standalone (Today/Progress). The module
+// cycle (progression → run-progression → coach → progression) is resolved at call
+// time — these are only invoked inside programAdjustments, never at module init.
+import { weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
+import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
+import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 
 // ---- progression-step caps (mirrors applyProposal's clamp intent, tighter) ---
 // A per-session step is a SMALL earned nudge, never a jump. The cap is the
@@ -62,6 +69,7 @@ export interface Prescription {
   why: string;
   reground?: boolean;                  // the plan target was behind logged reality — applying re-grounds it
   vary_to?: string;                    // a concrete same-pattern variation to rotate in (action "vary")
+  vary_options?: { name: string; why: string }[]; // a MENU of same-pattern swaps (action "vary"); vary_to is the lead
   plan_item_id?: number;               // set by planDayProgression for the apply path
 }
 
@@ -267,6 +275,7 @@ function repsPrescription(
   let why: string;
   let nextWeight: number | null = baseWeight;
   let varyTo: string | undefined;
+  let varyOptions: { name: string; why: string }[] | undefined;
 
   const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
@@ -296,7 +305,11 @@ function repsPrescription(
       nextWeight = baseWeight;
       // Carry a concrete same-pattern candidate so "switch it up" is actionable (Today
       // shows the real alternative; the evolution/apply path can rotate it in).
-      varyTo = (suggestAlternatives(name, { limit: 1 }) as any[])[0]?.name;
+      // A MENU of same-pattern candidates (not just one forced swap) so the athlete
+      // chooses; vary_to stays the lead candidate for back-compat.
+      varyOptions = (suggestAlternatives(name, { limit: 3 }) as any[])
+        .map((v) => ({ name: v.name, why: v.why }));
+      varyTo = varyOptions[0]?.name;
       why = varyTo
         ? `Flat about ${state?.weeks_static} weeks — rotate to ${varyTo} (same movement pattern) to unstick it; keep the rest of the day.`
         : `Flat about ${state?.weeks_static} weeks — rotating to a close variation (same pattern) tends to unstick it.`;
@@ -368,6 +381,7 @@ function repsPrescription(
     why,
     reground: planBehind || undefined,
     vary_to: varyTo,
+    vary_options: varyOptions,
   };
 }
 
@@ -716,7 +730,7 @@ function loadPhrase(rl: RecentLoad): string {
 
 // ---- the "what changed & why" digest ----------------------------------------
 export interface ProgramAdjustment {
-  kind: "progression" | "balance" | "deload" | "gap";
+  kind: "progression" | "balance" | "deload" | "gap" | "cardio" | "dexa" | "test";
   title: string;
   why: string;
   exercise?: string;
@@ -739,7 +753,11 @@ export interface ProgramAdjustment {
 // and missing-pattern GAPS (no core / grip / mobility programmed). Plain words,
 // most-actionable first, deduped. This is the calm "what the system noticed"
 // surface — pull, never push.
-export function programAdjustments(balArg?: ProgramBalance, recentArg?: Map<MuscleGroup, RecentLoad>): ProgramAdjustment[] {
+export function programAdjustments(
+  balArg?: ProgramBalance,
+  recentArg?: Map<MuscleGroup, RecentLoad>,
+  opts?: { runPlan?: WeeklyRunPlan | null; dexa?: DexaTargeting | null; testWeek?: TestWeekDue | null },
+): ProgramAdjustment[] {
   const out: ProgramAdjustment[] = [];
   const seen = new Set<string>();
   const push = (a: ProgramAdjustment) => {
@@ -855,6 +873,50 @@ export function programAdjustments(balArg?: ProgramBalance, recentArg?: Map<Musc
     }
   }
 
+  // 5) RUNNING — this week's periodized run mix as a single calm digest item, so
+  //    the "what changed & why" surface spans running, not just lifting. Reuse the
+  //    pre-computed plan from getCoachContext when threaded; else compute it lazily.
+  try {
+    const rp = opts && "runPlan" in opts ? opts.runPlan : weeklyRunPlan();
+    if (rp?.available && rp.mix_summary) {
+      push({
+        kind: "cardio",
+        title: `This week's runs: ${rp.mix_summary}`,
+        why: rp.why || (Array.isArray(rp.rationale) ? rp.rationale.join(" ") : ""),
+      });
+    }
+  } catch { /* run plan unavailable → skip */ }
+
+  // 6) DEXA — the body scan's training targets as gentle "From your DEXA" items
+  //    (bias + concrete moves). Nutrition targets stay in the nutrition prompts.
+  try {
+    const dx = opts && "dexa" in opts ? opts.dexa : dexaTargeting();
+    if (dx?.available && Array.isArray(dx.targets)) {
+      for (const t of dx.targets.filter((x) => x.domain === "training").slice(0, 2)) {
+        push({
+          kind: "dexa",
+          title: `From your DEXA: ${t.bias}`,
+          why: `${t.signal}${Array.isArray(t.moves) && t.moves.length ? ` Moves: ${t.moves.join(", ")}.` : ""}`,
+          group: Array.isArray(t.groups) && t.groups.length ? t.groups[0] : undefined,
+          suggestions: Array.isArray(t.moves) ? t.moves.slice(0, 3) : undefined,
+        });
+      }
+    }
+  } catch { /* dexa unavailable → skip */ }
+
+  // 7) TEST WEEK — a cadenced re-test invitation (block realization / ~7-week
+  //    cadence), naming the benchmark lifts to re-anchor true capacity.
+  try {
+    const tw = opts && "testWeek" in opts ? opts.testWeek : testWeekDue();
+    if (tw?.due && Array.isArray(tw.key_lifts) && tw.key_lifts.length) {
+      push({
+        kind: "test",
+        title: "A test week is about due",
+        why: `${tw.why} Worth re-testing: ${tw.key_lifts.join(", ")}.`,
+      });
+    }
+  } catch { /* test-week unavailable → skip */ }
+
   return out.slice(0, 8);
 }
 
@@ -896,4 +958,94 @@ function plannedDaysPhrase(moves: Array<{ day: number; day_name: string | null }
 
 function cap(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// ---------------------------------------------------------------------------
+// programEvolutionTrigger — the DATA-TRIGGERED half of the continuous-coach
+// cadence. The scheduler's WEEKLY auto-evolution fires on the calendar; this
+// answers "has the athlete's own logged data shifted enough that the plan should
+// adapt SOONER than next Sunday?" — a lift truly plateaued and wanting a
+// variation (more load isn't the answer), a muscle group running UNDER its
+// productive volume range (a weak point to build — core / grip / a lagging
+// pattern), or a cadenced re-test come due. Deterministic, no agent, no scores.
+//
+// The scheduler reads `due` + the stable `signature` (so a STANDING condition
+// drafts ONCE, not every day) and, on a genuine shift, drafts the same one-tap
+// evolution proposal early — still pull-never-push, still deduped so it never
+// piles up. Materiality guard: a weak-point group only triggers for an athlete
+// who is ACTUALLY training (≥4 logged sessions on some lift), so a brand-new
+// plan — which reads every group as "under-trained" — is a calm no-op, not a
+// flood. Injectable opts mirror testWeekDue/programAdjustments for pure testing.
+// ---------------------------------------------------------------------------
+export interface ProgramEvolutionTrigger {
+  due: boolean;
+  reasons: string[]; // plain-language, surfaced as the draft's "why now"
+  signature: string; // stable key of the conditions, for once-per-shift dedup
+}
+
+export function programEvolutionTrigger(
+  date?: string,
+  opts: { programState?: any; balance?: ProgramBalance; testWeek?: TestWeekDue } = {},
+): ProgramEvolutionTrigger {
+  const reasons: string[] = [];
+  const sigParts: string[] = [];
+
+  let ps = opts.programState;
+  if (ps === undefined) {
+    try { ps = getProgramState(date); } catch { ps = { lifts: [] }; }
+  }
+  const lifts = Array.isArray(ps?.lifts) ? ps.lifts : [];
+  // Enough logged history to read a real trajectory (plateau/vary already imply
+  // ≥3 sessions; this gate is for the weak-point signal, which would otherwise
+  // light up on a never-trained group of a fresh plan).
+  const hasHistory = lifts.some((l: any) => (l?.sessions ?? 0) >= 4);
+
+  // (1) A lift that has truly plateaued and wants a variation, or is regressing —
+  //     the strongest "the plan should change" signal (load isn't the lever).
+  const wantsVary = lifts
+    .filter((l: any) => l?.suggested_action === "vary" || l?.status === "regressing")
+    .map((l: any) => l?.exercise)
+    .filter(Boolean)
+    .map((s: any) => String(s))
+    .sort();
+  if (wantsVary.length) {
+    reasons.push(
+      wantsVary.length === 1
+        ? `${wantsVary[0]} has stalled — time to rotate a variation in.`
+        : `${wantsVary.slice(0, 3).join(", ")} have stalled — time to rotate variations in.`,
+    );
+    sigParts.push(`vary:${wantsVary.join(",")}`);
+  }
+
+  // (3) A cadenced re-test come due — re-measure true capacity before the next
+  //     block (an honest checkpoint, never a forced max). Computed before the
+  //     weak-point clause so it can also satisfy the "actively training" gate.
+  let tw = opts.testWeek;
+  if (tw === undefined) {
+    try { tw = testWeekDue(date, { programState: ps }); } catch { tw = undefined; }
+  }
+  const twDue = !!tw?.due;
+
+  // (2) A muscle group running UNDER its productive volume range (or untrained
+  //     lately) — a weak point worth building toward. Only fires for an athlete
+  //     with real training history (else a blank new plan reads everything "due").
+  let bal = opts.balance;
+  if (bal === undefined) {
+    try { bal = programBalance(); } catch { bal = undefined; }
+  }
+  const dueGroups = [...(Array.isArray(bal?.due) ? bal!.due : [])].sort();
+  if (dueGroups.length && (hasHistory || wantsVary.length || twDue)) {
+    reasons.push(
+      `${dueGroups.slice(0, 3).join(", ")} ${dueGroups.length === 1 ? "is" : "are"} under-trained — worth building up.`,
+    );
+    sigParts.push(`due:${dueGroups.join(",")}`);
+  }
+
+  if (twDue) {
+    const keys = Array.isArray(tw?.key_lifts) ? tw!.key_lifts.slice(0, 2) : [];
+    reasons.push(`A re-test is due${keys.length ? ` (${keys.join(", ")})` : ""}.`);
+    sigParts.push("test:1");
+  }
+
+  return { due: reasons.length > 0, reasons, signature: sigParts.join("|") };
 }

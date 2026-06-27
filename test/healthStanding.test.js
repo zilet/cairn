@@ -53,6 +53,19 @@ test("healthStanding compares actual age against a selectable reference decade",
   assert.equal(typeof vo2.percentile, "number");
   assert.equal(typeof vo2.reference_percentile, "number");
   assert.ok(vo2.percentile > vo2.reference_percentile, "same VO2 ranks higher against age peers than 20s");
+  // Plain-language framing: a verb (higher = better) + a "where to head" next rung.
+  assert.equal(vo2.verb, "fitter than");
+  assert.ok(vo2.next && vo2.next.target_pct > vo2.percentile, "VO2 next-rung target is above current");
+  assert.equal(vo2.next.direction, "up", "raising VO2max is the improvement direction");
+  assert.ok(vo2.next.delta > 0, "a positive improvement delta");
+  assert.ok(Number.isFinite(vo2.next.equivalent_age), "next rung carries a younger equivalent age");
+  // Provenance: VO2max names its source (Garmin estimate vs lab) so staleness is visible.
+  assert.ok(vo2.reading && typeof vo2.reading.source === "string", "VO2 reading provenance present");
+
+  const bf = standing.comparisons.find((c) => c.key === "body_fat_pct");
+  assert.ok(bf, "body-fat comparison present");
+  assert.equal(bf.verb, "leaner than", "lower-is-better metric reads as 'leaner than'");
+  if (bf.next) assert.equal(bf.next.direction, "down", "body fat improves by going down");
 
   const body = standing.comparisons.find((c) => c.key === "body_fat_pct");
   assert.ok(body, "body composition comparison is present");
@@ -137,6 +150,41 @@ test("healthStanding reads an absolute lab biological age (not as a huge delta) 
   assert.equal(s.biological_age.value, 23, "absolute bio-age 23 read as 23, not 26+23");
   assert.equal(s.biological_age.delta, -3);
   assert.equal(s.hero.direction, "younger");
+});
+
+test("healthStanding reads the full regional DEXA, not just one body-fat number", () => {
+  repo.setProfile({ age: 44, sex: "male", height_cm: 178, weight_lb: 180 });
+  seedHealthDoc(isoDaysAgo(10), [
+    marker("Body Fat %", 22, { unit: "%" }),
+    marker("Lean Mass (Total)", 120, { unit: "lbs" }),
+    marker("Visceral Fat", 1.13, { unit: "lbs" }),
+    marker("ALMI", 8.6, { unit: "kg/m²" }),
+    marker("FFMI", 18.6, { unit: "kg/m²" }),
+    marker("T-Score", 1.4),
+    marker("Z-Score", 1.2),
+    marker("Body Fat - Trunk", 39.6, { unit: "%" }),
+    marker("Body Fat - Arms", 33.9, { unit: "%" }),
+    marker("Body Fat - Legs", 33.5, { unit: "%" }),
+    marker("Lean Mass - Trunk", 50, { unit: "lbs" }),
+    marker("Lean Mass - Arms", 15.3, { unit: "lbs" }),
+    marker("Lean Mass - Legs", 40, { unit: "lbs" }),
+  ], "dexa");
+
+  const s = repo.healthStanding({ referenceAge: 20 });
+  const reg = s.body_comp && s.body_comp.regional;
+  assert.ok(reg, "regional DEXA read present");
+  assert.equal(reg.visceral_fat_lbs, 1.13, "visceral fat captured");
+  assert.equal(reg.almi, 8.6, "ALMI captured");
+  assert.equal(reg.t_score, 1.4, "bone T-score captured");
+  assert.equal(reg.fat.trunk, 39.6, "regional trunk fat captured");
+  assert.equal(reg.lean.legs, 40, "regional leg lean captured");
+  // It speaks the scan in plain words: a low-visceral, healthy-bone, trunk-fat read.
+  assert.ok(Array.isArray(reg.notes) && reg.notes.length >= 3, "plain-language regional notes");
+  assert.ok(reg.notes.some((n) => n.kind === "visceral" && n.tone === "strong"), "low visceral fat reads strong");
+  assert.ok(reg.notes.some((n) => n.kind === "bone"), "bone density read present");
+  assert.ok(reg.notes.some((n) => n.kind === "distribution" && /trunk/i.test(n.text)), "trunk-fat distribution read");
+  // Constitution: never a 0-100 score, even with the richer regional detail.
+  assert.ok(!/"score":/i.test(JSON.stringify(s)), "no bare score field (t_score/z_score are named keys, not a grade)");
 });
 
 test("healthStanding stays descriptive with thin data", () => {

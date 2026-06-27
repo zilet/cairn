@@ -509,6 +509,48 @@ export function buildMcpServer(): McpServer {
   );
 
   server.tool(
+    "get_run_plan",
+    "The RUNNING brain — this week's deterministic, periodized run mix (N easy Z2 + 1 long Z2 + 1 rotated quality session: tempo/threshold/VO2/hills), each with a bpm-bearing zone, distance/duration, and (for interval sessions) the interval structure. Conservative ~10%/wk build, down weeks, recovery-aware, race-week taper. The endurance counterpart to get_performance and the FLOOR the coach refines. {available:false} for a non-runner.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.weeklyRunPlan(date))
+  );
+
+  server.tool(
+    "get_run_zones",
+    "The athlete's HR-zone bpm bands (Z1–Z5), grounded in real physiology — max-HR (explicit → age-estimated → Garmin-observed → Garmin's own zone boundaries) and resting HR (Karvonen %HRR when known). Plain words + concrete bpm, never a score. {available:false} with no age and no Garmin HR.",
+    {},
+    async () => asText(repo.runZones())
+  );
+
+  server.tool(
+    "apply_run_plan",
+    "Build a DRAFT plan proposal from this week's deterministic run mix (weeklyRunPlan) via the existing propose→apply path — applied through setWeeklyRuns, which keeps strength work intact and carries the interval structure. Never auto-applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's no run plan).",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.buildRunPlanProposal(date))
+  );
+
+  server.tool(
+    "get_muscle_trajectory",
+    "Per-canonical-muscle-group ADVANCING vs STALLING read (the athlete's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. Plain words, no scores. {available:false} when nothing's logged.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.muscleGroupTrajectory(date))
+  );
+
+  server.tool(
+    "get_test_week",
+    "The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new athlete (never nags).",
+    { date: z.string().optional() },
+    async ({ date }) => asText(repo.testWeekDue(date))
+  );
+
+  server.tool(
+    "get_dexa_targeting",
+    "DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads (never a score); BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA.",
+    {},
+    async () => asText(repo.dexaTargeting())
+  );
+
+  server.tool(
     "reconcile_exercise_groups",
     "Backfill and normalize the muscle_group for every exercise: null values are auto-classified from the exercise name; legacy values (e.g. 'legs' → 'quads', 'posterior' → 'hamstrings') are mapped to the canonical taxonomy. Idempotent — safe to run repeatedly.",
     {},
@@ -1304,6 +1346,13 @@ export function buildMcpServer(): McpServer {
     "The deterministic TIERED health priorities (elite-coach prioritization): the flat directive flood collapsed into a handful of connected priorities — one per health group, tier (act_now/track), the markers driving it, whether they compound, and the LEAD move per domain. Plain words, no scores; the basis for the whole-picture synthesis.",
     {},
     async () => asText(repo.healthFocus())
+  );
+
+  server.tool(
+    "get_coaching_focus",
+    "THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus, the cross-domain analog of get_health_focus. Arbitrates training, running, DEXA body-comp, labs, nutrition and recovery into ONE lead lever for this block + 1-2 things handled alongside (usually via a different lever) + an explicit 'later' (what's deferred) + the cross-domain connections + ONE batched ~6-8wk retest checkpoint. How an elite coach prioritizes + sequences: act on a few things, name what waits, connect the domains. Plain words, no scores.",
+    {},
+    async () => asText(repo.getCoachingFocus())
   );
 
   // ---- the "knows-me" layer (the personal coaching team) — read-only, no scores ----

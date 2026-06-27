@@ -250,13 +250,17 @@ export async function draftCoachProposal(
 export async function evolveProgram(
   agent: string | undefined,
   instruction: string | undefined,
-  hooks?: OpHooks
+  hooks?: OpHooks,
+  opts?: { task?: string }
 ) {
   hooks?.onPhase?.("reading how your lifts are trending");
   // Compute the program-state ONCE and thread it into the prompt + the response
   // (it's a few dozen DB queries — don't run it twice).
   const state = repo.getProgramState();
-  const prompt = buildProgramEvolutionPrompt(instruction, state);
+  // opts.task lets a caller focus the agent on a specific trigger ("your bench has
+  // stalled + core is under-trained") WITHOUT changing the stored `instruction`
+  // (the dedup key the scheduler uses to retire prior auto-evolution drafts).
+  const prompt = buildProgramEvolutionPrompt(opts?.task ?? instruction, state);
   hooks?.onPhase?.("drafting how your plan should evolve");
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
   const proposal = repo.createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
@@ -611,7 +615,7 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
 // healthFocus tiering + full context and writes the prioritized, connected health
 // story — the headline, the 2-3 priorities that matter most right now and how
 // they relate, and the single highest-leverage move. Cached in app_state so the
-// Brain view opens instantly; refreshed on demand / when the picture changes.
+// Health → Read view opens instantly; refreshed on demand / when the picture changes.
 // Degrades calmly (no agent → keeps the last cached synthesis, never throws).
 export async function synthesizeHealth(agent: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your whole picture");

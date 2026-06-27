@@ -6,7 +6,7 @@ import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from ".
 import { canonicalMarker } from "./marker-canon.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
-import { type OptimalZone, applyReviewDirectives, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
+import { type OptimalZone, applyReviewDirectives, isNonClinicalMarker, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
 // generously so a complete transcription is never silently clipped, while still
@@ -749,6 +749,9 @@ export function getMarkerHistory() {
       for (const em of expanded) {
         const name = String(em.name ?? rawName).replace(/\s+/g, " ").trim();
         if (!name) continue;
+        // Drop non-clinical extractions (e.g. an eyeglass Rx pulled from an eye-exam
+        // doc) so they never form a marker series — non-destructive, the doc stays.
+        if (isNonClinicalMarker(name)) continue;
         // A reading is usable when the value is a finite number, a string with a
         // parseable lab number, or a non-empty qualitative result (e.g. "negative").
         // Recognized markers are normalized to the unit their optimal band expects

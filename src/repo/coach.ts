@@ -3,9 +3,13 @@ import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
 import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
-import { blockForCoach } from "./program-blocks.js";
+import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { performanceStanding } from "./performance.js";
+import { enduranceTestsDue, runVarietyRead, runZones, weeklyRunPlan } from "./run-progression.js";
+import { dexaTargeting } from "./dexa-targeting.js";
+import { muscleGroupTrajectory, testWeekDue } from "./muscle-trajectory.js";
+import { coachingFocus } from "./coaching-focus.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake } from "./nutrition.js";
@@ -294,6 +298,56 @@ export function getCoachContext() {
   // view AND the performance/capacity read both read from the same snapshot (and
   // the same recovery), so a single context build never computes program-state twice.
   const fullProgramState = getProgramState(undefined, recovery);
+  // The active periodization block, computed ONCE and threaded into the run plan +
+  // the test-week cadence so neither re-reads it.
+  const activeBlock = getActiveBlock();
+  // Running brain (the endurance counterpart to program_state/performance): real
+  // HR-zone bpm bands + this week's deterministic periodized run mix, both computed
+  // ONCE from the recovery/programState/block already built above so nothing recomputes.
+  const runZonesView = (() => { try { return runZones({ profile, recovery }); } catch { return null; } })();
+  // Compute the run plan / DEXA targeting / test-week ONCE here, so both the context
+  // keys below AND the programAdjustments digest reuse them (no double compute —
+  // dexaTargeting reads healthStanding(), the heaviest of the three).
+  const runPlanView = (() => { try { return weeklyRunPlan(localDateISO(), { programState: fullProgramState, recovery, block: activeBlock, zones: runZonesView ?? undefined }); } catch { return null; } })();
+  const dexaTargetingView = (() => { try { return dexaTargeting({ profile }); } catch { return { available: false, targets: [], lead: null, next_dexa_focus: null }; } })();
+  const testWeekView = (() => { try { return testWeekDue(localDateISO(), { programState: fullProgramState, block: activeBlock }); } catch { return null; } })();
+  // Hoist the domain reads the CONDUCTOR arbitrates so they're computed ONCE here and
+  // shared by both the context keys below and coachingFocus() (no double compute).
+  const healthFocusView = healthFocus();
+  const performanceView = performanceStanding(localDateISO(), { programState: fullProgramState, recovery, balance: programBal });
+  const programAdjustmentsView = programAdjustments(programBal, recentLoad, { runPlan: runPlanView, dexa: dexaTargetingView, testWeek: testWeekView }).slice(0, 6);
+  const groupsTrajectoryView = (() => { try { return muscleGroupTrajectory(localDateISO(), { programState: fullProgramState }); } catch { return null; } })();
+  const runVarietyView = (() => { try { return runVarietyRead(localDateISO()); } catch { return null; } })();
+  const enduranceTestsView = (() => { try { return enduranceTestsDue(localDateISO()); } catch { return []; } })();
+  const trajectoryView = getTrajectory();
+  // THE CONDUCTOR (the whole-athlete analog of healthFocus): arbitrate every domain
+  // read into ONE sequenced focus — a single lead lever, 1-2 parallel levers, an
+  // explicit "later", the cross-domain connections, and one batched retest — so the
+  // brain AND the interface lead with the same priority instead of a flood of co-equal
+  // blocks. Pure, null-safe; degrades to {available:false} on a thin athlete.
+  const coachingFocusView = (() => {
+    try {
+      return coachingFocus({
+        discipline: { primary: (profile?.primary_discipline as string) || "strength", endurance_sport: profile?.endurance_sport ?? null },
+        enduranceGoal: getEnduranceGoal(),
+        goalMode: effectiveGoalMode(profile),
+        programState: fullProgramState,
+        recovery,
+        healthFocus: healthFocusView,
+        performance: performanceView,
+        programAdjustments: programAdjustmentsView,
+        runPlan: runPlanView,
+        runVariety: runVarietyView,
+        dexa: dexaTargetingView,
+        groupsTrajectory: groupsTrajectoryView,
+        trajectory: trajectoryView,
+        testWeek: testWeekView,
+        enduranceTests: enduranceTestsView,
+      });
+    } catch {
+      return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null };
+    }
+  })();
   return {
     // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
     // EVERY plan-shaping prompt knows the time of day — without it the agent is
@@ -345,7 +399,12 @@ export function getCoachContext() {
     // Vision build (the connected brain + understanding): new keys are ADDITIVE
     // — every existing consumer keeps working untouched.
     directives: directivesForCoach(),         // cross-domain consequences of flagged findings (condensed, bounded)
-    health_focus: healthFocus(),              // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
+    health_focus: healthFocusView,            // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
+    // THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus (lead + parallel +
+    // later + connections + one batched retest) arbitrated across training, running,
+    // DEXA, health, nutrition and recovery. The brain leads with this; the rest is
+    // evidence, not a checklist.
+    coaching_focus: coachingFocusView,
     symptom_links: (() => { try { return symptomMarkerLinks(); } catch { return []; } })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
 
     health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
@@ -375,7 +434,7 @@ export function getCoachContext() {
     // and balances development — not just whether last week went up. Reuses the same
     // program-state + recovery + balance computed above. Percentile/level framing
     // (the recognized reference reads the athlete asked to keep), never a 0-100 score.
-    performance: performanceStanding(localDateISO(), { programState: fullProgramState, recovery, balance: programBal }),
+    performance: performanceView,
     // Volume balance per canonical muscle group over the last 2 weeks (bands +
     // which groups are DUE / running HIGH, in plain words). Mobility excluded.
     program_balance: programBal,
@@ -394,7 +453,36 @@ export function getCoachContext() {
     })(),
     // The calm "what changed & why" digest — the handful of concrete adaptations
     // due right now (lifts to push/hold/deload, groups due, missing-pattern gaps).
-    program_adjustments: programAdjustments(programBal, recentLoad).slice(0, 5),
+    program_adjustments: programAdjustmentsView,
+    // ---- the RUNNING brain (deterministic floor the agent refines) ----
+    // The athlete's real HR-zone bpm bands (max-HR + resting HR) so runs are
+    // prescribed to an actual pulse, not a vague effort. {available:false} with no
+    // age AND no Garmin HR.
+    run_zones: runZonesView,
+    // This week's periodized run mix (N easy Z2 + 1 long + 1 rotated quality), each
+    // with a bpm-bearing zone + interval structure. Reuses the recovery/programState/
+    // block/zones already computed so nothing recomputes. {available:false} for a
+    // pure strength athlete with no running.
+    run_plan: runPlanView,
+    // Mono-stimulus running flag (all-easy / one-distance-on-repeat) → the missing
+    // stimulus. null when there's not enough running to read variety honestly.
+    run_variety: runVarietyView,
+    // Running re-tests (no hard effort in ~4 weeks → a time-trial; a stale VO2max
+    // reading → a max-effort run). [] for a non-runner.
+    endurance_tests: enduranceTestsView,
+    // ---- per-muscle-group advance/stall + cadenced strength test week ----
+    // The athlete's own mental model: which canonical groups are advancing vs
+    // stalling, with a vary-options menu for the stalled ones. Reuses program_state.
+    groups_trajectory: groupsTrajectoryView,
+    // Is a cadenced strength test week due (block realization phase / ~7-week
+    // cadence)? Names the benchmark lifts to re-test. due:false for a new athlete.
+    test_week: testWeekView,
+    // ---- DEXA-driven targeting (the body scan → training + nutrition targets) ----
+    // Maps the regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral fat)
+    // to concrete muscle-group biases + moves + a "path to the next scan", and one
+    // nutrition target (visceral/central fat → Z2 + lean-safe deficit). {available:false}
+    // with no DEXA. healthStanding() is read lazily inside (computed once).
+    dexa_targeting: dexaTargetingView,
     // The persisted read carries the agentic sentence AND the athlete's steer
     // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
     // actually looking at; the deterministic floor backs it when nothing's cached.
@@ -411,13 +499,24 @@ export function getCoachContext() {
     reaction_model: reactionModelForCoach(),
     // One periodized arc to the goals, with today framed as the next step on it (null line
     // when there's no goal/block/race). So coaching is forward-looking, not just "today".
-    trajectory: getTrajectory(),
+    trajectory: trajectoryView,
     // Active life-context effect (a late concert / travel / illness mentioned once) →
     // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
     context_today: activeContextEffect(),
     // The single highest-leverage next action across all domains (or null on a quiet day).
     next_step: nextBestStep(),
   };
+}
+
+// The CONDUCTOR as a standalone pull read (for the PWA + MCP): one sequenced
+// whole-athlete focus. Reuses the canonical getCoachContext assembly so it can never
+// drift from what the prompts see. On-demand only; degrades to {available:false}.
+export function getCoachingFocus() {
+  try {
+    return getCoachContext().coaching_focus;
+  } catch {
+    return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null };
+  }
 }
 
 // ============================================================================

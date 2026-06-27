@@ -266,35 +266,75 @@ export function supplementsForCoach() {
 // THE CONNECTED BRAIN — marker prioritization + the propagation engine (T4).
 // ============================================================================
 
-// A meaningful, clinically-prioritized grouping for blood/health markers, so a
-// long panel reads as a handful of health stories rather than an alphabet soup.
-// Matching mirrors matchOptimalZone: lowercased substring against the marker
-// name, LONGEST-MATCH-WINS (so "non-hdl" beats "hdl"). Order is intentional
-// (most clinically prioritized first) and is the canonical display order. The
-// "other" fallback has empty keys and only catches what nothing else claims.
+// A meaningful, clinical grouping for blood/health markers, so a long panel reads
+// as a handful of health stories rather than an alphabet soup. Matching mirrors
+// matchOptimalZone: lowercased substring against the marker name, LONGEST-MATCH-WINS
+// (so "non-hdl" beats "hdl"; on the rare exact-length tie the earlier-listed group
+// wins). The key sets are disjoint enough that a real analyte resolves to one group
+// regardless of array order, so the array ORDER is effectively just the sequence the
+// panels are DISPLAYED in.
+//
+// That display sequence is the CONVENTIONAL CLINICAL LAB-REVIEW ORDER a physician
+// expects to scan, NOT a longevity-impact ranking: CBC (red line + iron studies,
+// then white cells/platelets) → CMP (metabolic/glucose, electrolytes, kidney,
+// liver) → lipids → inflammation → endocrine (thyroid, hormones) → vitamins →
+// the less-common specialty panels (cardiac, autoimmune, cancer screening, heavy
+// metals) → urinalysis → the non-blood functional reads (vitals, fitness/metabolic
+// rate, body composition) → the "other" catch-all (empty keys, claims only what
+// nothing else does — always LAST). Doctors are bad at finding a value that sits
+// where they don't expect it, so both the doctor export (report.ts) and the
+// internal Markers catalog render panels in THIS order. The motivational
+// impact/priority ranking is a SEPARATE concern — it lives in prioritizeMarkers's
+// per-marker sort and healthFocus(), and is unaffected by this group sequence.
 interface MarkerGroup { key: string; label: string; keys: string[]; }
 const MARKER_GROUPS: MarkerGroup[] = [
-  { key: "lipids", label: "Lipids & Cardiovascular", keys: ["apob", "apolipoprotein", "apo b", "non-hdl", "non hdl", "ldl", "hdl", "cholesterol", "triglyceride", "lp(a)", "lipoprotein"] },
+  { key: "iron", label: "Iron & Red Blood", keys: ["ferritin", "transferrin", "tibc", "iron", "hemoglobin", "hgb", "hematocrit", "hct", "rbc", "red blood cell", "red cell distribution", "mcv", "mch", "rdw", "abo group", "rhesus", "rh factor", "blood type"] },
+  { key: "blood", label: "White Cells & Platelets", keys: ["wbc", "white blood", "platelet", "neutrophil", "absolute neut", "lymphocyte", "absolute lymph", "monocyte", "absolute mono", "eosinophil", "absolute eos", "basophil", "absolute baso", "granulocyte", "immature gran", "imm gran"] },
   { key: "metabolic", label: "Metabolic & Glucose", keys: ["hemoglobin a1c", "hb a1c", "hba1c", "a1c", "glucose", "insulin", "homa", "c-peptide", "fructosamine"] },
-  { key: "inflammation", label: "Inflammation", keys: ["crp", "c-reactive", "c reactive", "homocysteine", "esr", "sed rate", "fibrinogen"] },
-  { key: "iron", label: "Iron & Red Blood", keys: ["ferritin", "transferrin", "tibc", "iron", "hemoglobin", "hgb", "hematocrit", "hct", "rbc", "mcv", "mch", "rdw"] },
-  { key: "blood", label: "White Cells & Platelets", keys: ["wbc", "white blood", "platelet", "neutrophil", "lymphocyte", "monocyte", "eosinophil", "basophil"] },
-  { key: "liver", label: "Liver", keys: ["alt", "sgpt", "ast", "sgot", "ggt", "alp", "alkaline phosphatase", "bilirubin", "albumin", "total protein"] },
+  { key: "electrolytes", label: "Electrolytes", keys: ["sodium", "potassium", "chloride", "carbon dioxide", "bicarbonate", "anion gap"] },
   { key: "kidney", label: "Kidney", keys: ["albumin, random urine", "albumin random urine", "microalbumin", "urine albumin", "albumin/creatinine", "albumin creatinine", "egfr", "creatinine", "bun", "urea", "uric acid", "cystatin"] },
-  { key: "thyroid", label: "Thyroid", keys: ["tsh", "free t3", "free t4", "thyroxine", "triiodo", "thyroid"] },
-  { key: "hormones", label: "Hormones", keys: ["testosterone", "estradiol", "estrogen", "cortisol", "dhea", "shbg", "progesterone", "prolactin", "igf", "lh", "fsh"] },
-  { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "magnesium", "zinc", "calcium", "potassium", "sodium", "selenium", "omega"] },
-  { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "heart rate", "pulse"] },
-  { key: "body", label: "Body Composition", keys: ["body fat", "fat mass", "lean mass", "bone density", "bmd", "t-score", "z-score", "visceral", "bmi"] },
+  { key: "liver", label: "Liver & Pancreas", keys: ["alt", "sgpt", "ast", "sgot", "ggt", "alp", "alkaline phosphatase", "bilirubin", "albumin", "total protein", "globulin", "amylase", "lipase"] },
+  { key: "lipids", label: "Lipids & Cardiovascular", keys: ["apob", "apolipoprotein", "apo b", "non-hdl", "non hdl", "ldl", "hdl", "cholesterol", "triglyceride", "lp(a)", "lipoprotein"] },
+  { key: "inflammation", label: "Inflammation", keys: ["crp", "c-reactive", "c reactive", "homocysteine", "esr", "sed rate", "fibrinogen"] },
+  { key: "thyroid", label: "Thyroid", keys: ["tsh", "free t3", "free t4", "thyroxine", "triiodo", "thyroid", "thyroglobulin", "thyroid peroxidase", "tpo antibod", "thyroid antibod", "thyroxine binding globulin"] },
+  { key: "hormones", label: "Hormones", keys: ["testosterone", "estradiol", "estrogen", "cortisol", "dhea", "shbg", "sex hormone binding globulin", "progesterone", "prolactin", "igf", "lh", "fsh", "leptin"] },
+  { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "methylmalonic", "magnesium", "zinc", "calcium", "selenium", "copper", "omega", "arachidonic"] },
+  { key: "cardiac", label: "Cardiac", keys: ["troponin", "nt-probnp", "nt probnp", "pro-bnp", "probnp", "bnp"] },
+  { key: "autoimmune", label: "Autoimmune & Antibodies", keys: ["antinuclear", "ana screen", "rheumatoid", "anti-ccp", "ccp antibod", "anti-dsdna", "dsdna"] },
+  { key: "screening", label: "Cancer Screening", keys: ["prostate specific antigen", "psa", "cea", "alpha-fetoprotein", "ca-125", "ca 125", "ca 19-9", "ca19-9"] },
+  { key: "metals", label: "Heavy Metals", keys: ["lead", "mercury", "arsenic", "cadmium", "aluminum", "aluminium"] },
+  { key: "urinalysis", label: "Urinalysis", keys: ["urinalysis", "urine", "specific gravity", "leukocyte esterase", "urobilinogen", "epithelial cells", "hyaline cast", "urine cast"] },
+  { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "resting hr", "heart rate", "pulse", "respiratory rate", "respiration", "oxygen saturation", "spo2", "o2 sat", "temperature", "body temp"] },
+  { key: "fitness", label: "Fitness & Metabolic Rate", keys: ["vo2max", "vo2 max", "vo₂max", "resting metabolic rate", "predicted rmr", "rmr", "respiratory exchange", "fat utilization", "carbohydrate utilization", "fuel utilization", "metabolic age", "fitness age", "hrv", "heart rate variability"] },
+  { key: "body", label: "Body Composition", keys: ["body fat", "fat mass", "fat-free mass", "fat free mass", "lean mass", "appendicular", "almi", "ffmi", "android/gynoid", "android gynoid", "gynoid", "bone density", "bone mineral content", "bmd", "t-score", "z-score", "visceral", "total mass", "bmi"] },
   { key: "other", label: "Other Markers", keys: [] },
 ];
 const OTHER_GROUP: MarkerGroup = MARKER_GROUPS[MARKER_GROUPS.length - 1];
+
+// Some "markers" extracted from uploaded documents aren't clinical lab analytes
+// at all — an eyeglass prescription (sphere/cylinder/lens type) ingested from an
+// eye-exam doc is the canonical example. They carry no optimal zone, generate no
+// directive, and only clutter the marker list, so they're dropped at read time
+// (non-destructively — the source doc + its parsed_json are left intact). Matched
+// like markerGroup: lowercased substring against the marker name.
+const NON_CLINICAL_MARKER_KEYS = ["sphere", "cylinder", "lens type", "pupillary distance", "visual acuity"];
+export function isNonClinicalMarker(name: string): boolean {
+  const n = String(name ?? "").toLowerCase();
+  return NON_CLINICAL_MARKER_KEYS.some((k) => n.includes(k));
+}
 
 // Best group for a marker name — longest-match-wins over substrings (so
 // "non-hdl" outranks "hdl", "alkaline phosphatase" outranks "alp"). Falls back
 // to the "other" group when nothing matches.
 export function markerGroup(name: string): { key: string; label: string } {
   const n = String(name ?? "").toLowerCase();
+  // A "<analyte> - Urine" name is a urinalysis dipstick/microscopy component
+  // (urine glucose / bilirubin / RBC / WBC), NOT the serum analyte — but the
+  // serum key ("glucose", "bilirubin", "red blood cell") is longer than "urine"
+  // and would win the substring race. The dash-suffix is the definitive signal:
+  // quantitative urine labs read "Random Urine" / "24-Hour Urine" (no dash), so
+  // this only claims the dipstick panel. Checked before longest-match-wins.
+  if (/[-–]\s*urine\b/.test(n)) return { key: "urinalysis", label: "Urinalysis" };
   let best: MarkerGroup | null = null;
   let bestLen = 0;
   for (const g of MARKER_GROUPS) {
@@ -1515,7 +1555,7 @@ export function directivesForCoach() {
 // them into a handful of TIERED, deduped, connected priorities: each health
 // "story" (a marker group) with its tier (act now / track / maintain-ish), the
 // markers driving it, and the LEAD move per domain. Deterministic, no scores —
-// the tier is plain words, the order is the priority. This is what the Brain view
+// the tier is plain words, the order is the priority. This is what the Health → Read view
 // renders and what the agentic health-story synthesis reasons over.
 // ============================================================================
 export type FocusTier = "act_now" | "track";
@@ -1542,7 +1582,7 @@ export interface FocusPriority {
   why: string;                   // one plain clause
 }
 export interface HealthFocus {
-  priorities: FocusPriority[];   // act_now first, then track; deduped to one per group (the FULL set, for the Brain view)
+  priorities: FocusPriority[];   // act_now first, then track; deduped to one per group (the FULL set, for the Health → Read view)
   surfaced: FocusPriority[];     // the CAPPED daily set (≤3 act-now + ≤2 track) — what every daily surface shows, so it's never a flood
   lead: FocusPriority | null;    // the single most important priority — the spine of the one coach voice everywhere
   act_now: number;
@@ -1667,13 +1707,13 @@ export function healthFocus(): HealthFocus {
 
   // The CAPPED daily set: at most 3 act-now + 2 track, so every daily surface shows the
   // few things that matter, never a 9-item wall. The full set stays in `priorities` for
-  // the deep Brain view; `lead` is the single most-important priority (the one voice).
+  // the deep Health → Read view; `lead` is the single most-important priority (the one voice).
   const surfaced = [...actNow.slice(0, 3), ...priorities.filter((p) => p.tier === "track").slice(0, 2)];
   return { priorities, surfaced, lead: priorities[0] ?? null, act_now: actNow.length, track: priorities.length - actNow.length, headline };
 }
 
 // The latest agentic health-story synthesis (the elite-coach whole-picture read),
-// cached in app_state so the Brain view opens instantly. coachOps.synthesizeHealth
+// cached in app_state so the Health → Read view opens instantly. coachOps.synthesizeHealth
 // writes it; it's a pull artifact, refreshed on demand / when the picture changes.
 const HEALTH_SYNTHESIS_KEY = "health_synthesis";
 export function saveHealthSynthesis(obj: any): void {
@@ -1688,7 +1728,7 @@ export function getHealthSynthesis(): any | null {
 // The cached synthesis plus a FRESHNESS verdict for the PWA. `stale` is true when a
 // health document exists whose effective date is NEWER than the synthesis was last
 // written against (source_doc_at, falling back to generated_at) — i.e. new labs have
-// landed since the story was told, so the Brain view can offer "re-read your picture".
+// landed since the story was told, so the Health → Read view can offer "re-read your picture".
 // false when there's no synthesis or nothing newer. Reads the health_documents table
 // directly (same db.prepare pattern as the rest of this file). Never throws.
 export function getHealthSynthesisView(): { synthesis: any | null; stale: boolean } {

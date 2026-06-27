@@ -767,6 +767,33 @@ api.get("/program-state", (req, res) =>
 api.get("/performance", (req, res) =>
   res.json(repo.performanceStanding(req.query.date ? String(req.query.date) : undefined))
 );
+// The RUNNING brain: this week's deterministic periodized run mix (N easy Z2 + 1
+// long + 1 rotated quality, each with a bpm-bearing zone + interval structure) and
+// the athlete's real HR-zone bpm bands. The endurance counterpart to /performance.
+// Both degrade to {available:false} for a non-runner / no zones.
+api.get("/run-plan", (req, res) =>
+  res.json(repo.weeklyRunPlan(req.query.date ? String(req.query.date) : undefined))
+);
+api.get("/run-zones", (_req, res) => res.json(repo.runZones()));
+// Per-canonical-muscle-group advance/stall trajectory + the cadenced strength
+// test-week read. Plain words, no scores; quiet to {available:false}/{due:false}.
+api.get("/muscle-trajectory", (req, res) =>
+  res.json(repo.muscleGroupTrajectory(req.query.date ? String(req.query.date) : undefined))
+);
+api.get("/test-week", (req, res) =>
+  res.json(repo.testWeekDue(req.query.date ? String(req.query.date) : undefined))
+);
+// DEXA-driven targeting: the body scan's regional read → concrete training +
+// nutrition targets, each with a "path to your next scan". {available:false} w/o DEXA.
+api.get("/dexa-targeting", (_req, res) => res.json(repo.dexaTargeting()));
+// Build a DRAFT plan proposal from this week's deterministic run mix, via the same
+// propose→apply path as /program/progression/apply. Maps weeklyRunPlan(date).runs →
+// parsed.cardio[] (applyProposal → setWeeklyRuns, keeping strength intact + carrying
+// interval structure). Never auto-applied. Returns the designed ok:false at 200.
+api.post("/program/run-plan/apply", (req, res) => {
+  const date = (req.body ?? {}).date ? String((req.body as any).date) : undefined;
+  res.json(repo.buildRunPlanProposal(date));
+});
 // Single activity row (frontend polls this to watch enrichment_status).
 api.get("/activities/:id", (req, res) => {
   const a = repo.getActivity(Number(req.params.id));
@@ -1434,6 +1461,10 @@ api.post("/next-step/snooze", (req, res) => {
 // not a flat directive flood) + the latest cached agentic health-story narrative.
 // Both informational, no scores. The narrative is regenerated via POST below.
 api.get("/health/focus", (_req, res) => res.json(repo.healthFocus()));
+// THE CONDUCTOR — one sequenced whole-athlete focus (lead + parallel + later +
+// connections + a batched retest) across training, running, DEXA, health, nutrition
+// and recovery. Pull/on-demand; the surface leads with this instead of a card flood.
+api.get("/coaching-focus", (_req, res) => res.json(repo.getCoachingFocus()));
 // The cached synthesis carries a `stale` flag so the PWA can offer a calm
 // "refresh this read" affordance when newer labs/training have drifted past it.
 api.get("/health/synthesis", (_req, res) => {

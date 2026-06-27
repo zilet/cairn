@@ -18,6 +18,9 @@ export interface ReferenceCurve {
   unit: string;
   direction: CurveDirection;
   source: string;
+  // The warm, plain-language verb for the percentile read ("fitter than 72% of men
+  // your age"). Always reads higher = better (the percentile is direction-normalized).
+  compare_verb?: string;
   bands: Record<Sex, Record<number, PercentilePoint[]>>;
 }
 
@@ -31,6 +34,7 @@ export const VO2_CURVE: ReferenceCurve = {
   label: "VO2max",
   unit: "mL/kg/min",
   direction: "higher",
+  compare_verb: "fitter than",
   source: "FRIEND registry CPET treadmill reference standards",
   bands: {
     male: {
@@ -57,6 +61,7 @@ const BODY_FAT_CURVE: ReferenceCurve = {
   label: "Body fat",
   unit: "%",
   direction: "lower",
+  compare_verb: "leaner than",
   source: "NHANES DXA body-composition orientation bands",
   bands: {
     male: {
@@ -114,6 +119,45 @@ function rawPercentile(points: PercentilePoint[], value: number): number {
   return sorted[sorted.length - 1].p;
 }
 
+// The next motivational rung for an orientation curve: how much improvement reaches
+// the next percentile tier (the top half / quartile / 10%) for THIS age band, and the
+// younger equivalent-age it unlocks. This is the "where to head" line — a target the
+// athlete is heading toward, never a gate. Returns null when already near the top.
+const STANDING_RUNGS: { pct: number; label: string }[] = [
+  { pct: 50, label: "the top half" },
+  { pct: 75, label: "the top quartile" },
+  { pct: 90, label: "the top 10%" },
+];
+export interface WhereToHead {
+  target_pct: number;
+  target_value: number;
+  delta: number; // improvement needed in the curve's own unit (always > 0)
+  direction: "up" | "down"; // raise the number, or lower it
+  label: string; // the rung being aimed at
+  equivalent_age: number; // the age that value reads like
+}
+export function whereToHead(curve: ReferenceCurve, value: number, sex: Sex, age: number, currentPct: number): WhereToHead | null {
+  const band = decade(age);
+  const points = curve.bands[sex][band] ?? curve.bands[sex][40];
+  // The first rung meaningfully above where you sit (≥3 percentile points of headroom).
+  const rung = STANDING_RUNGS.find((r) => r.pct >= Math.round(currentPct) + 3);
+  if (!rung) return null; // already at/near the top of the band — affirm, don't chase
+  // Percentile is direction-normalized (higher = better); for a "lower is better" curve
+  // the raw value-rank we need is the mirror.
+  const rawTarget = curve.direction === "lower" ? 100 - rung.pct : rung.pct;
+  const targetValue = valueAt(points, rawTarget);
+  const delta = curve.direction === "lower" ? value - targetValue : targetValue - value;
+  if (!(delta > 0.05)) return null;
+  return {
+    target_pct: rung.pct,
+    target_value: Math.round(targetValue * 10) / 10,
+    delta: Math.round(delta * 10) / 10,
+    direction: curve.direction === "lower" ? "down" : "up",
+    label: rung.label,
+    equivalent_age: equivalentAge(curve, targetValue, sex),
+  };
+}
+
 export function compareCurve(curve: ReferenceCurve, value: number, sex: Sex, age: number, referenceAge: number) {
   const actualBand = decade(age);
   const refBand = decade(referenceAge);
@@ -139,6 +183,9 @@ export function compareCurve(curve: ReferenceCurve, value: number, sex: Sex, age
     reference_median: Math.round(refMedian * 10) / 10,
     equivalent_age: equivalent,
     direction: curve.direction,
+    // The plain-language read ("fitter than 72% of men your age") + where-to-head target.
+    verb: curve.compare_verb ?? "ahead of",
+    next: whereToHead(curve, value, sex, age, actualPct),
     source: curve.source,
   };
 }
@@ -211,6 +258,78 @@ function weightedAge(inputs: { age: number | null; weight: number }[], fallback:
 // mass to the DEXA (measured lean + bone) and project it onto the current weight — so
 // the read shows PROGRESS, clearly labeled as an estimate, instead of freezing a stale
 // number that reads "age 75" while the athlete is actively leaning out.
+// ---- regional DEXA read ------------------------------------------------------
+// A modern DEXA reports far more than one body-fat number: regional fat % and lean
+// mass (trunk / arms / legs), visceral fat, ALMI/FFMI, and bone density by region with
+// T/Z-scores. This reads that detail into plain-language, tone-tagged notes so the
+// standing read USES the whole scan — and so the coach can target the right work (where
+// fat sits, where lean is light, how bone is loading). Informational, never a grade.
+function dexaRegional(markers: any[]) {
+  const num = (re: RegExp, min: number, max: number) => plausibleNumber(latestNumber(findMarker(markers, re)), min, max);
+  const visceral_fat_lbs = num(/visceral fat/i, 0, 25);
+  const almi = num(/\balmi\b|appendicular lean mass index/i, 3, 20);
+  const ffmi = num(/\bffmi\b|fat[\s-]?free mass index/i, 10, 40);
+  const bmd_total = num(/bmd[\s-]*total body|total body bmd/i, 0.4, 2.5);
+  const t_score = plausibleNumber(latestNumber(findMarker(markers, /^t[\s-]?score\b/i)), -6, 6);
+  const z_score = plausibleNumber(latestNumber(findMarker(markers, /^z[\s-]?score\b/i)), -6, 6);
+  const android_gynoid = num(/android\/gynoid|a\/g ratio/i, 0.3, 2.5);
+  const fat = {
+    trunk: num(/body fat[\s-]*trunk/i, 3, 70),
+    arms: num(/body fat[\s-]*arms/i, 3, 70),
+    legs: num(/body fat[\s-]*legs/i, 3, 70),
+  };
+  const lean = {
+    trunk: num(/lean mass[\s-]*trunk/i, 5, 160),
+    arms: num(/lean mass[\s-]*arms/i, 2, 90),
+    legs: num(/lean mass[\s-]*legs/i, 5, 160),
+  };
+  const present = [visceral_fat_lbs, almi, ffmi, bmd_total, t_score, z_score, android_gynoid, fat.trunk, lean.legs].some((x) => x != null);
+  if (!present) return null;
+
+  const fmt = (n: number) => (Math.round(n * 10) / 10).toString();
+  const notes: { kind: string; tone: Tone; text: string }[] = [];
+  if (visceral_fat_lbs != null) {
+    notes.push({
+      kind: "visceral",
+      tone: visceral_fat_lbs <= 2 ? "strong" : visceral_fat_lbs <= 4 ? "steady" : "watch",
+      text: visceral_fat_lbs <= 2
+        ? `Visceral fat is low (${fmt(visceral_fat_lbs)} lb) — the metabolically risky kind is well controlled.`
+        : `Visceral fat ${fmt(visceral_fat_lbs)} lb — the metabolic kind; zone-2 cardio and a modest deficit move it first.`,
+    });
+  }
+  if (t_score != null) {
+    notes.push({
+      kind: "bone",
+      tone: t_score >= -1 ? "strong" : t_score >= -2.5 ? "steady" : "watch",
+      text: t_score >= 1
+        ? `Bone density is above average (T-score +${fmt(t_score)}) — heavy loading is paying off; keep lifting and add impact.`
+        : t_score >= -1
+          ? `Bone density is healthy (T-score ${t_score >= 0 ? "+" : ""}${fmt(t_score)}) — progressive lifting holds it there.`
+          : `Bone density is below average (T-score ${fmt(t_score)}) — loaded carries, impact and progressive lifting protect it.`,
+    });
+  }
+  if (almi != null) {
+    notes.push({
+      kind: "lean",
+      tone: almi >= 8 ? "strong" : almi >= 7 ? "steady" : "watch",
+      text: almi >= 7.5
+        ? `Lean-mass index is healthy (ALMI ${fmt(almi)}) — comfortably above the age-related loss line.`
+        : `Lean-mass index ALMI ${fmt(almi)} — protein at ~0.8 g/lb and progressive lifting build the buffer.`,
+    });
+  }
+  if (fat.trunk != null && fat.arms != null && fat.legs != null) {
+    const top = Math.max(fat.trunk, fat.arms, fat.legs);
+    if (top === fat.trunk && fat.trunk - Math.min(fat.arms, fat.legs) >= 2) {
+      notes.push({
+        kind: "distribution",
+        tone: "steady",
+        text: `Fat sits in the trunk (${fmt(fat.trunk)}% vs ${fmt(fat.legs)}% legs, ${fmt(fat.arms)}% arms) — the metabolic pattern, and the first to move with a cut and zone-2 work.`,
+      });
+    }
+  }
+  return { visceral_fat_lbs, almi, ffmi, bmd_total, t_score, z_score, android_gynoid, fat, lean, notes };
+}
+
 function bodyComposition(markers: any[], currentWeightLb: number | null, nowISO: string) {
   const bfMarker = findMarker(markers, /^body fat\b|body fat %|fat percentage/i);
   const measuredBf = plausibleNumber(latestNumber(bfMarker), 3, 70);
@@ -263,6 +382,9 @@ function bodyComposition(markers: any[], currentWeightLb: number | null, nowISO:
     weight: { current: w, at_scan: scanWeight },
     trend,
     note,
+    // The regional DEXA detail — visceral fat, ALMI/FFMI, bone density, and where fat &
+    // lean sit — so the whole scan is read, not just one body-fat number.
+    regional: dexaRegional(markers),
     // the value the rest of the read should USE: live when we can project, else measured.
     effective: estimated ? estimated.value : measuredBf,
   };
@@ -385,13 +507,21 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
   const comparisons: any[] = [];
   const ageInputs: { age: number | null; weight: number }[] = [];
   if (vo2 != null) {
-    const c = compareCurve(VO2_CURVE, vo2, sex, actualAge, referenceAge);
+    const c = compareCurve(VO2_CURVE, vo2, sex, actualAge, referenceAge) as any;
+    // Provenance: VO2max is most often a Garmin estimate (only refreshed on hard runs),
+    // so naming the source + recency lets the athlete weigh how current it is.
+    const vo2FromMarker = plausibleNumber(latestNumber(vo2Marker), 10, 100) != null;
+    const vo2Kind = String(vo2Marker?.latest?.kind ?? "").toLowerCase();
+    c.reading = vo2FromMarker
+      ? { source: /garmin|watch|wearable/.test(vo2Kind) ? "Garmin estimate" : vo2Kind === "lab" || vo2Kind === "" ? "lab measure" : vo2Marker.latest.kind, date: vo2Marker?.latest?.date ?? null }
+      : { source: "Garmin estimate", date: null };
     comparisons.push(c);
     ageInputs.push({ age: c.equivalent_age, weight: 1.4 });
   }
   if (bodyFat != null) {
     const c = compareCurve(BODY_FAT_CURVE, bodyFat, sex, actualAge, referenceAge) as any;
     if (bodyComp?.estimated) { c.estimated = true; c.measured_value = bodyComp.measured.value; c.as_of = bodyComp.estimated.as_of; }
+    c.reading = { source: "DEXA", date: bodyComp?.measured?.date ?? null };
     comparisons.push(c);
     // Body comp is a lever that's MOVING, not an age anchor — lighter weight, so it never
     // alone drags the read old while the athlete is actively leaning out.
