@@ -78,6 +78,7 @@ const esc = (s) => String(s ?? "").replace(/\|/g, "\\|");
 const routes = [
   ...parseApiRoutes(read("src/api.ts")),
   ...parseApiRoutes(read("src/routes/health-docs.ts"), { receiver: "healthDocsRouter", prefix: "/health-docs" }),
+  ...parseApiRoutes(read("src/routes/today.ts"), { receiver: "todayRouter", prefix: "" }),
 ];
 const groups = new Map();
 for (const r of routes) {

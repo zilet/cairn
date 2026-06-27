@@ -54,8 +54,11 @@ test("generated API docs include mounted route modules", () => {
   const genDocs = read("scripts/gen-docs.mjs");
   const api = read("src/api.ts");
   assert.match(api, /api\.use\("\/health-docs",\s*healthDocsRouter\)/);
+  assert.match(api, /api\.use\("\/",\s*todayRouter\)/);
   assert.match(genDocs, /src\/routes\/health-docs\.ts/);
   assert.match(genDocs, /receiver:\s*"healthDocsRouter",\s*prefix:\s*"\/health-docs"/);
+  assert.match(genDocs, /src\/routes\/today\.ts/);
+  assert.match(genDocs, /receiver:\s*"todayRouter",\s*prefix:\s*""/);
 });
 
 test("Settings route helper exposes stale-route pruning", () => {

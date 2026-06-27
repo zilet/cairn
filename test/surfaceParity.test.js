@@ -45,6 +45,7 @@ function restResourceTokens() {
   const tokens = new Set();
   addRouteTokens(tokens, read("src/api.ts"));
   addRouteTokens(tokens, read("src/routes/health-docs.ts"), "healthDocsRouter", "/health-docs");
+  addRouteTokens(tokens, read("src/routes/today.ts"), "todayRouter");
   return tokens;
 }
 

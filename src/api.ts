@@ -40,15 +40,17 @@ import {
 } from "./coachOps.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
-import { localDateISO } from "./repo/shared.js";
 import { authEnabled } from "./auth.js";
 import { researchAutoEligible } from "./research.js";
 import type { AgentJobKind } from "./agentJobKinds.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
 import { ACCEPTED_MIME, extForMime, isAcceptedMime } from "./uploadMime.js";
 import { healthDocsRouter } from "./routes/health-docs.js";
+import { todayRouter } from "./routes/today.js";
 
 export const api = Router();
+
+api.use("/", todayRouter);
 
 const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -1605,39 +1607,6 @@ api.get("/learnings", (req, res) => {
   const limit = req.query.limit ? Number(req.query.limit) : undefined;
   res.json(repo.getOutcomeLearnings(Number.isFinite(limit as number) ? (limit as number) : undefined));
 });
-
-// ---- Era 2 (the calm daily driver, docs/VISION.md §12) ----
-// The Today salience arbiter: ONE ranking + budget pass over the whole Today
-// surface, so only the 1-2 things that matter most today render inline and the
-// rest collapse behind a quiet "more". Marking "seen" at the end (debounced)
-// powers the "since you last looked" continuity line.
-api.get("/today-agenda", (req, res) => {
-  const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
-    ? req.query.date
-    : undefined;
-  const agenda = repo.todayAgenda(date);
-  try {
-    if (repo.shouldMarkTodayAgendaSeen(date, localDateISO())) repo.markTodaySeen();
-  } catch { /* best-effort */ }
-  res.json(agenda);
-});
-// The legible "what Cairn has learned about you" timeline (pull-only; no scores).
-api.get("/learned-timeline", (req, res) => {
-  const limit = Number.parseInt(String(req.query.limit ?? ""), 10);
-  res.json(repo.learnedTimeline({ limit: Number.isFinite(limit) ? limit : undefined }));
-});
-// Trusted clinical-guideline statements (offline pack) for a marker, or the whole set.
-api.get("/guidelines", (req, res) => {
-  const marker = typeof req.query.marker === "string" ? req.query.marker : "";
-  if (marker.trim()) return res.json({ marker, guideline: repo.guidelineFor(marker) });
-  res.json({ guidelines: repo.allGuidelines() });
-});
-// The "since you last looked" continuity line standalone (or null).
-api.get("/since-last", (_req, res) => res.json(repo.sinceLastLookedCandidate() ?? null));
-// Gentle goal check-in (you-drive): confirm restarts the ~3-month stable clock;
-// dismiss starts the cooldown. Neither changes the goal — that's the profile flow.
-api.post("/goal-checkin/confirm", (_req, res) => { repo.confirmGoalCheckin(); res.json({ ok: true }); });
-api.post("/goal-checkin/dismiss", (_req, res) => { repo.dismissGoalCheckin(); res.json({ ok: true }); });
 
 // ---- context events (life timeline: trips / injuries / life events) ----
 api.get("/context-events", (req, res) =>
