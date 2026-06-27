@@ -7,6 +7,88 @@ Versioning](https://semver.org/) for tagged releases.
 
 _Nothing yet._
 
+## [0.7.0] — 2026-06-27
+
+Cairn's coaching brain now has a **conductor**: one sequenced, whole-athlete focus that
+arbitrates training, running, DEXA, labs, nutrition and recovery instead of flooding the
+app and prompts with competing cards. This release also adds the deterministic running
+engine, richer DEXA and muscle-group reads, stronger HealthOS validation, in-app update
+detection, and the first data-triggered plan-evolution cadence. Migrations **v44-v47** run
+automatically on boot. PWA cache `cairn-v166`.
+
+### Added
+
+- **Whole-athlete coaching focus** — new `GET /api/coaching-focus` + MCP
+  `get_coaching_focus` return one lead lever, 1-2 parallel levers, explicit deferrals,
+  cross-domain connections, and one batched re-test checkpoint. The same read is rendered
+  first in plan prompts and surfaced as the lead card/thread in the PWA.
+- **Running brain** — new run zones, weekly periodized run plan, run variety read,
+  endurance re-test prompts, and a draft-only apply path:
+  `GET /api/run-plan`, `/run-zones`, `POST /api/program/run-plan/apply`, plus MCP
+  mirrors. Prescriptions carry real bpm zone bands and structured intervals.
+- **DEXA targeting** — DEXA regional data now drives concrete training/nutrition targets
+  with a plain "path to your next scan"; low BMD and visceral-fat signals stay
+  clinician-framed and informational.
+- **Muscle-group trajectory + test week** — per-canonical-group advancing/stalling reads,
+  plateau variation menus, and a cadenced strength test-week invitation with benchmark
+  lifts to re-test.
+- **HealthOS hardening** — blood-pressure capture/read, symptom-to-marker connections,
+  transient-marker handling, numeric plausibility clamps, non-clinical marker filtering,
+  and conventional clinical marker ordering for the app and doctor report.
+- **Training-intelligence standing** — Progress now benchmarks strength capacity against
+  sex/age standards, reads VO2max for age, flags imbalances, names the lever, and folds
+  DEXA/endurance re-tests into the performance read.
+- **Garmin richness** — daily and activity sync populate more runner metrics, stress,
+  body-battery-style fields where the device provides them, race predictions, training
+  load balance, HR extremes, and richer activity detail.
+- **Self-hosted update detection** — Settings → Data now shows the running Cairn version,
+  latest release status, a What's-new link, and copy-paste update commands. The Docker
+  image bakes `CAIRN_VERSION` from the release tag.
+- **Data-triggered plan evolution** — the scheduler can draft an early plan evolution
+  when logged data materially shifts (stalled lift, under-trained weak point, test week
+  due), with cooldown/signature dedupe so it drafts once per real shift.
+
+### Changed
+
+- **Me opens to Standing** — the review-first Me surface now leads with "Where to focus",
+  then the where-you-stand health read. Health is the lab-data home with Read / Markers /
+  Records / Share / Learned; the old Brain view is folded into Health → Read.
+- **Progress and Endurance are quieter** — conductor-led views keep the main action visible
+  and collapse deeper benchmark detail behind a single "The full read" disclosure.
+- **Today speaks with fewer competing banners** — the conductor thread subsumes the old
+  health lever/goal-line pile when it has a trustworthy lead.
+- **Doctor-facing marker review is easier to scan** — clinical panels now follow a
+  conventional lab-review order, electrolyte ordering is explicit, and doctor export
+  actions stay reachable.
+- **Release workflow** — the tag-driven image workflow now bakes the exact tag into the
+  image so update checks report the running version correctly.
+
+### Fixed
+
+- Run-plan proposals now persist structured interval prescriptions through the normal
+  plan apply path without touching strength work.
+- Plateau variation menus render real exercise names instead of leaking `[object Object]`.
+- Urine dipstick markers group as urinalysis instead of being mis-filed under serum
+  glucose/bilirubin/blood-cell groups.
+- Eyeglass-prescription fields extracted from eye documents no longer show up as lab
+  markers.
+- The standalone health/performance lever is suppressed when the conductor already owns
+  the focus, so the same advice does not repeat in three places.
+
+### Notes
+
+- Schema migrations **v44-v47** are additive and run automatically. Back up before
+  deploying schema changes; down-migrations are not supported.
+
+## [0.6.1] — 2026-06-24
+
+Maintenance release for the early clinician/export follow-up after 0.6.0.
+
+### Changed
+
+- Improved the Health panel information architecture and clinician report readability.
+- Clinically ordered health markers and kept report export actions sticky.
+
 ## [0.6.0] — 2026-06-24
 
 The biggest release since the open-source launch: Cairn stops feeling like a set of tabs you
@@ -351,7 +433,9 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/zilet/cairn/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/zilet/cairn/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/zilet/cairn/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/zilet/cairn/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/zilet/cairn/compare/v0.4.0...v0.5.0

@@ -161,7 +161,7 @@ backup (see Backups below) rather than trying to reverse the migration.
   greater, then sets `user_version` to the highest applied version.
 
 The authoritative, ordered list lives in `src/migrate.ts` (`MIGRATIONS`) — kept there rather than
-duplicated here so it can't drift. As of this writing the schema is at **user_version 43**; run
+duplicated here so it can't drift. As of this writing the schema is at **user_version 47**; run
 `npm run migrate` to print the current version and apply any pending ones.
 
 Every migration is additive and idempotent — an `ALTER TABLE … ADD COLUMN` wrapped in try/catch (so

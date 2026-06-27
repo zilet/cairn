@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**204 routes** across 78 groups.
+**211 routes** across 84 groups.
 
 ## `/activities`
 
@@ -123,6 +123,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | POST | `/api/coach/mealplan` | Draft a goal-aware weekly meal plan, then run a bounded self-critique verify pass against the lean-safe / longevity floors before persisting (see coachOps.draftMealPlan). The persisted plan is the verified draft; `verified` carries the "checked against your floors" signal. Verify fails open. |
 
+## `/coaching-focus`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/coaching-focus` | THE CONDUCTOR — one sequenced whole-athlete focus (lead + parallel + later + connections + a batched retest) across training, running, DEXA, health, nutrition and recovery. Pull/on-demand; the surface leads with this instead of a card flood. |
+
 ## `/context-effect`
 
 | Method | Path | Notes |
@@ -137,6 +143,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/context-events` |  |
 | DELETE | `/api/context-events/:id` |  |
 | PUT | `/api/context-events/:id` |  |
+
+## `/dexa-targeting`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/dexa-targeting` | DEXA-driven targeting: the body scan's regional read → concrete training + nutrition targets, each with a "path to your next scan". {available:false} w/o DEXA. |
 
 ## `/directives`
 
@@ -368,6 +380,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/memory/:id/supersede` | Supersede (mark, never hard-delete): optionally provide a replacement content (a new row is created) or replacement_id (point at an existing row). |
 | POST | `/api/memory/consolidate` | Quiet memory consolidation: merge near-duplicates, supersede contradictions, promote recurring observations. Marks, never hard-deletes. On demand here; also scheduled nightly. Designed ok:false at 200 when the agent returns nothing usable. |
 
+## `/muscle-trajectory`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/muscle-trajectory` | Per-canonical-muscle-group advance/stall trajectory + the cadenced strength test-week read. Plain words, no scores; quiet to {available:false}/{due:false}. |
+
 ## `/next-step`
 
 | Method | Path | Notes |
@@ -431,6 +449,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/program/evolve` | Adaptive program evolution: read the program-state and draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for review — same propose→apply path as /agent/run, driven by the trend analysis. |
 | GET | `/api/program/progression` | Per-lift next-session prescription for every strength item on a plan day. ?day=N selects the day; omit to default to the plan day today's read points at (the "upcoming session" the Brief already suggests). Returns [] when the day has no strength items or does not exist. |
 | POST | `/api/program/progression/apply` | Build a DRAFT plan proposal from the current day's per-lift prescriptions, via the same propose→apply path as /agent/run and /program/evolve. Never auto- applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed-failure signal — nothing wrong at the HTTP level, just nothing to do). |
+| POST | `/api/program/run-plan/apply` | Build a DRAFT plan proposal from this week's deterministic run mix, via the same propose→apply path as /program/progression/apply. Maps weeklyRunPlan(date).runs → parsed.cardio[] (applyProposal → setWeeklyRuns, keeping strength intact + carrying interval structure). Never auto-applied. Returns the designed ok:false at 200. |
 | GET | `/api/program/variations` | Exercise variations / alternatives (the plateau-break + "make it interesting" library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps. |
 
 ## `/program-state`
@@ -483,6 +502,18 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/run-compliance` | Run compliance (closing the runner loop): prescribed plan cardio vs this week's logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score. |
+
+## `/run-plan`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/run-plan` | The RUNNING brain: this week's deterministic periodized run mix (N easy Z2 + 1 long + 1 rotated quality, each with a bpm-bearing zone + interval structure) and the athlete's real HR-zone bpm bands. The endurance counterpart to /performance. Both degrade to {available:false} for a non-runner / no zones. |
+
+## `/run-zones`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/run-zones` |  |
 
 ## `/session-suggest`
 
@@ -552,6 +583,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/symptom-links` | Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker — a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
+
+## `/test-week`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/test-week` |  |
 
 ## `/today-agenda`
 

@@ -47,12 +47,14 @@ service serves:
   muscle, calendar heatmap, an **Endurance** view with weekly mileage, time-in-zone, pace trend,
   endurance PRs, and an "N of M km this week" compliance line, and an **Energy Balance** view with an
   adaptive nutrition check-in), **Chat** (talk to your coach: it logs
-  safe things instantly and stages plan changes as drafts), **Me** (a Profile / Memory / Health /
-  Life / **Family** sub-nav: profile with a free-text **about-me**, goal feasibility check &
-  bodyweight, activity & food-notes logging; a **Memory** view to curate what the coach remembers;
-  **Health** — upload bloodwork/DEXA/other as PDF or photo for marker extraction, plus a **Brain**
-  view with recovery, optimal-zone priority markers, and the cross-domain directives propagated from
-  your labs. Done/Dismiss on those directives becomes feedback memory: handled advice stays quiet
+  safe things instantly and stages plan changes as drafts), **Me** (a Standing / Profile / Health /
+  Life / Family / Memory sub-nav, **Standing first**: a where-you-stand review leading with your
+  coaching focus + how you compare for your age; profile with a free-text **about-me**, goal
+  feasibility check & bodyweight; a **Memory** view to curate what the coach remembers;
+  **Health** (lab data) — upload bloodwork/DEXA/other as PDF or photo for marker extraction, with a
+  **Read** view holding recovery, optimal-zone priority markers, and the cross-domain directives
+  propagated from your labs, plus Markers / Records / Share / Learned sub-tabs. Done/Dismiss on those
+  directives becomes feedback memory: handled advice stays quiet
   for the same result, dismissed advice is not repeated unless the marker materially changes;
   **Life** — a timeline of trips, injuries & life events the coach plans around;
   **Family** — the roster the coach plans around), and **Settings** (agent rotation + weekly
@@ -450,7 +452,7 @@ TZ=Europe/Belgrade
 ```bash
 claude mcp add --transport http cairn http://localhost:8787/mcp
 ```
-Cairn registers 162 MCP tools spanning the whole app — plan & sessions, exercises, progress &
+Cairn registers 176 MCP tools spanning the whole app — plan & sessions, exercises, progress &
 volume, the propose/apply coach loop, profile & goal, bodyweight & activities, memory, meal plans &
 recipes, food notes, health records & markers, the connected-brain directives & insights, the
 day-read Brief & on-demand session suggestions, recovery & adaptive nutrition, check-ins & daily
@@ -460,8 +462,9 @@ metrics, family, chat, Garmin sync, life-context events, and settings. A represe
 `generate_insight`, `log_activity`, `log_food_note`, `set_profile`, `sync_garmin`. Use your MCP
 client's tool listing for the full, current set (defined in `src/mcp.ts`).
 
-There's also a packaged Claude Code skill at `.claude/skills/cairn/` that maps everyday phrases
-("log my ride", "update my plan", "how am I tracking") to these tools.
+There are also packaged Claude Code and Codex skills at `.claude/skills/cairn/` and
+`.agents/skills/cairn/` that map everyday phrases ("log my ride", "update my plan",
+"how am I tracking") to these tools.
 
 ## Updating & migrations
 
@@ -475,7 +478,7 @@ for the full update/backup/restore/rollback playbook and how to add a new migrat
 
 ## API
 
-All app logic is reachable over REST under `/api` — **195 routes across 72 groups**. The full,
+All app logic is reachable over REST under `/api` — **211 routes across 84 groups**. The full,
 always-current reference is generated straight from the source: [`docs/API.md`](docs/API.md) (run
 `npm run docs:index` to refresh; never edited by hand, so it can't drift). A representative slice:
 

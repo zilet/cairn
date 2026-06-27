@@ -411,7 +411,7 @@ position-vs-optimal and direction only.
   - `.hchart-latest` — the latest value + relAge recency callout above the chart.
   - `.hchart-cap` — sentence-case caption (NOT `.lbl`) under the chart: optimal band + the trend in
     plain words ("optimal 40–80 mg/dL · rising over ~14 mo") from the server `trend` (`markerTrendWord`).
-- The Brain tab's "what matters now" list (`.hb-mk`) keeps the compact generic `sparklineSvg()`;
+- The Health → Read view's "what matters now" list (`.hb-mk`) keeps the compact generic `sparklineSvg()`;
   the richer `.hchart` is the detailed Markers-tab view. The two are intentionally distinct surfaces.
 
 ## Health sharing (Me → Health → Share)
