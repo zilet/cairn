@@ -698,6 +698,149 @@ const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderP
 
 function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
+// ─── The conductor: one sequenced whole-athlete focus card ──────────────────
+// Shared renderer for GET /api/coaching-focus — the cross-domain analog of the
+// health focus. It speaks as ONE coach: a headline through-line, the single
+// highest-leverage LEAD (sage-spined hero), the few things handled alongside,
+// what's explicitly deferred, the plain cross-domain ties, and ONE batched
+// re-test. Constitution: a coach's note, never a metrics wall — no scores.
+// Returns "" when there's nothing trustworthy to lead with, so any surface can
+// inject it unconditionally and degrade to its existing content.
+// Domains: training | running | nutrition | health | recovery | body.
+const CFOCUS_DOMAIN_LABEL = {
+  training: "Training", running: "Running", nutrition: "Nutrition",
+  health: "Health", recovery: "Recovery", body: "Body",
+};
+function cfocusDomainTag(domain) {
+  const label = CFOCUS_DOMAIN_LABEL[domain] || "";
+  return label ? `<span class="cfocus-dom lbl">${escHtml(label)}</span>` : "";
+}
+function coachingFocusCardHtml(focus) {
+  if (!focus || !focus.available || !focus.lead) return "";
+  const lead = focus.lead;
+  const parallel = Array.isArray(focus.parallel) ? focus.parallel.filter(Boolean) : [];
+  const later = Array.isArray(focus.later) ? focus.later.filter((l) => l && l.title) : [];
+  const connections = Array.isArray(focus.connections) ? focus.connections.filter(Boolean) : [];
+  const retest = focus.retest;
+
+  let h = `<div class="cfocus settle-in">`;
+  h += `<span class="cfocus-mast lbl">Where to focus</span>`;
+  if (focus.headline) h += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
+
+  // The lead — the single highest-leverage lever, the hero line. Tappable: it
+  // routes to where the work actually happens (training → Program, running →
+  // Endurance, …) so the read is a launchpad into the plan, not a dead overview.
+  h += `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
+  h += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
+  if (lead.why) h += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
+  if (lead.move) h += `<p class="cfocus-lead-move"><span class="lbl">Move</span>${escHtml(lead.move)}</p>`;
+  h += `</div>`;
+
+  // Alongside — the parallel levers, compact lines tagged with their domain, each
+  // tapping through to its own surface.
+  if (parallel.length) {
+    h += `<div class="cfocus-along"><span class="cfocus-sec-lbl lbl">Alongside</span>`;
+    for (const p of parallel) {
+      h += `<div class="cfocus-along-row cfocus-go" data-cfocus-go="${escAttr(p.domain || "")}" role="link" tabindex="0">${cfocusDomainTag(p.domain)}`;
+      h += `<span class="cfocus-along-title">${escHtml(p.title || "")}</span>`;
+      h += `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`;
+      if (p.why) h += `<span class="cfocus-along-why">${escHtml(p.why)}</span>`;
+      if (p.move) h += `<span class="cfocus-along-move">${escHtml(p.move)}</span>`;
+      h += `</div>`;
+    }
+    h += `</div>`;
+  }
+
+  // Later — the deferred sequence, one calm line.
+  if (later.length) {
+    h += `<p class="cfocus-later"><span class="cfocus-later-lbl">Next:</span> ${later.map((l) => escHtml(l.title)).join(" · ")}</p>`;
+  }
+
+  // The cross-domain ties — plain italic.
+  for (const c of connections) {
+    h += `<p class="cfocus-conn">${escHtml(c)}</p>`;
+  }
+
+  // One batched re-test — the single check-in, not four nag feeds.
+  if (retest && Array.isArray(retest.focus) && retest.focus.length) {
+    const when = (typeof retest.in_weeks === "number" && retest.in_weeks > 0)
+      ? `~${retest.in_weeks} week${retest.in_weeks === 1 ? "" : "s"}`
+      : "due now";
+    h += `<div class="cfocus-retest cfocus-go" data-cfocus-go="program" role="link" tabindex="0"><span class="cfocus-retest-lbl lbl">Next check-in</span>`;
+    h += `<span class="cfocus-retest-body">${escHtml(retest.focus.join(" · "))} <span class="cfocus-retest-when">${escHtml(when)}</span></span>`;
+    if (retest.why) h += `<span class="cfocus-retest-why">${escHtml(retest.why)}</span>`;
+    h += `</div>`;
+  }
+
+  h += `</div>`;
+  return h;
+}
+
+// Fetch + inject the conductor into a slot. Mirrors the other Today loaders:
+// its own try/catch, clears the slot when unavailable, never throws. The slot
+// is found via querySelector (defaults to the document, but pass `root` to scope
+// to a freshly-rendered view). Safe to call unconditionally on any surface.
+async function loadCoachingFocus(slotSelector, root) {
+  const scope = root || view || document;
+  const slot = scope.querySelector ? scope.querySelector(slotSelector) : null;
+  if (!slot) return;
+  let focus = null;
+  try { focus = await api("/coaching-focus"); } catch { focus = null; }
+  if (!slot.isConnected) return;
+  const html = coachingFocusCardHtml(focus);
+  slot.innerHTML = html; // "" cleanly clears the slot when unavailable
+  // On the Standing review, the conductor IS the lead — drop the health "one lever"
+  // section so the two don't compete (loadHealthStanding does the mirror suppression
+  // when it paints after this; this handles the conductor-lands-second order).
+  if (html && slot.id === "cfocusStandingSlot") (scope.querySelector ? scope : document).querySelector(".hstand-lever")?.remove();
+}
+
+// The Today form of the conductor: ONE calm line, not the full analytics card.
+// Today answers "what do I do now"; the multi-week focus is a review that lives
+// on Me → Standing, so here we surface only the lead as a tappable thread that
+// opens the full card. Returns "" when there's nothing to lead with.
+function coachingFocusThreadHtml(focus) {
+  if (!focus || !focus.available || !focus.lead) return "";
+  const title = focus.lead.title || "";
+  if (!title) return "";
+  return `<button class="cfocus-thread" type="button" data-cfocus-go="me-standing">
+    <span class="cfocus-thread-arrow" aria-hidden="true">↳</span>
+    <span class="cfocus-thread-lbl lbl">Focus now</span>
+    <span class="cfocus-thread-txt">${escHtml(title)}</span>
+    <span class="cfocus-thread-go" aria-hidden="true">→</span>
+  </button>`;
+}
+
+// Route a focus-card tap to where that work actually happens. A bare domain
+// token maps to its planning surface; explicit tokens ("me-standing","program")
+// are honored verbatim. Globals (state, activateTab) resolve at call time.
+function cfocusRoute(go) {
+  switch (go) {
+    case "me-standing": state.meSeg = "standing"; activateTab("me"); break;
+    case "running": case "endurance":
+      state.progressSeg = "endurance"; activateTab("progress"); break;
+    case "nutrition": case "meals": case "body":
+      state.planJump = "meals"; activateTab("plan"); break;
+    case "health": case "markers":
+      state.meSeg = "health"; state.healthSeg = "markers"; state.healthSegPicked = true; activateTab("me"); break;
+    // training | recovery | program | anything else → the Program / periodization view
+    default:
+      state.progressSeg = "program"; activateTab("progress"); break;
+  }
+}
+// ONE delegated listener for every [data-cfocus-go] across the focus card +
+// thread, wherever they're injected — no per-render wiring. Enter/Space mirror
+// the click for the role="link" rows.
+document.addEventListener("click", (e) => {
+  const el = e.target.closest && e.target.closest("[data-cfocus-go]");
+  if (el) cfocusRoute(el.dataset.cfocusGo);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const el = e.target.closest && e.target.closest('[data-cfocus-go][role="link"]');
+  if (el) { e.preventDefault(); cfocusRoute(el.dataset.cfocusGo); }
+});
+
 // PWA / phone coach helpers (loaded early; used by Today + Settings)
 // We capture Chromium's beforeinstallprompt the moment it fires so the Today coach
 // can offer a REAL one-tap install on platforms that support it (desktop Chrome/Edge,
@@ -1210,13 +1353,47 @@ function prDistLabel(km) {
 // label rides in `note`; the structured interval is JSON server-side. These helpers
 // are shared by the Plan view, the Plan editor, and Today's session surface.
 const isCardioItem = (it) => it && it.kind === "cardio";
-// Pull a plain-text interval note out of the structured interval blob (we store it
-// as {note} but tolerate a bare string or anything stringly).
+// Pull a plain-text interval note out of the structured interval blob. The run
+// engine now emits a STRUCTURED array — [{reps,on,off,zone}] — so we collapse that
+// to a compact "6 × 800m" note for the label/sport sniffers; we still tolerate the
+// legacy {note} object or a bare string.
 function cardioIntervalNote(interval) {
   if (interval == null) return "";
   if (typeof interval === "string") return interval.trim();
+  if (Array.isArray(interval)) {
+    return interval
+      .map((s) => (s && s.reps != null && s.on ? `${Number(s.reps)} × ${String(s.on).trim()}` : (s && s.on ? String(s.on).trim() : "")))
+      .filter(Boolean)
+      .join(", ");
+  }
   if (typeof interval === "object" && typeof interval.note === "string") return interval.note.trim();
   return "";
+}
+// Render a STRUCTURED interval block as a plain prescription:
+//   [{reps:6, on:"800m", off:"90s", zone:"Z5"}] → "6 × 800m @ Z5 (165–175 bpm), 90s jog"
+// The per-segment zone is upgraded to the bpm-bearing band when `target_zone` names
+// the same zone (e.g. "Z5 (165-175 bpm)"), so the runner sees the pulse target right
+// on the rep line. A bare `off` like "90s" reads as "90s jog" (the easy recovery).
+// "" for a non-array / empty interval. Never a score — a concrete prescription.
+function cardioIntervalStructure(interval, targetZone) {
+  if (!Array.isArray(interval) || !interval.length) return "";
+  const tz = String(targetZone || "").trim();
+  const tzZone = (tz.match(/^\s*(Z[1-5])\b/i) || [])[1];
+  const tzBand = tzZone ? tz : ""; // the full bpm-bearing string when it leads with one zone
+  const segs = interval.map((seg) => {
+    if (!seg || typeof seg !== "object") return "";
+    const on = String(seg.on || "").trim();
+    if (!on) return "";
+    const reps = seg.reps != null ? Number(seg.reps) : null;
+    let zone = String(seg.zone || "").trim().toUpperCase();
+    if (zone && tzZone && zone === String(tzZone).toUpperCase() && tzBand) zone = tzBand; // upgrade to bpm band
+    const head = reps != null && reps > 0 ? `${reps} × ${on}` : on;
+    let s = zone ? `${head} @ ${zone}` : head;
+    const off = String(seg.off || "").trim();
+    if (off) s += `, ${/^\d+\s*(s|sec|secs|m|min|mins)?$/i.test(off) ? `${off} jog` : off}`;
+    return s;
+  }).filter(Boolean);
+  return segs.join("; ");
 }
 // A phrase to feed CairnArt.activity / artImg for a cardio item — its label text
 // (which keyword-maps to run/ride/swim/row in art.js), falling back to "run".
@@ -1280,15 +1457,22 @@ function cardioDescription(it) {
   const note = (it.note || "").trim();
   return cardioNoteIsDescriptive(note) ? note : "";
 }
-// The prescription line: "12 km · Z2", "45 min · Z3", "8 km · Z2 · 6×400m". Distance
-// preferred; duration when no distance; zone + interval note appended when present.
+// The prescription line: "12 km · Z2 (120–135 bpm)", "45 min · Z3", "8 km · 6 × 800m
+// @ Z5 (165–175 bpm), 90s jog". Distance preferred; duration when no distance. When a
+// structured interval is present it carries the zone+bpm itself (so we don't also
+// append the bare zone); otherwise the bpm-bearing `target_zone` + any legacy note.
 function cardioPrescription(it) {
   const bits = [];
   if (it.target_distance_km != null) bits.push(`${fmtKm(it.target_distance_km)} km`);
   else if (it.target_duration_min != null) bits.push(`${Math.round(Number(it.target_duration_min))} min`);
-  if (it.target_zone) bits.push(String(it.target_zone));
-  const ivl = cardioIntervalNote(it.interval) || it.interval_note;
-  if (ivl) bits.push(ivl);
+  const structure = cardioIntervalStructure(it.interval, it.target_zone);
+  if (structure) {
+    bits.push(structure);
+  } else {
+    if (it.target_zone) bits.push(String(it.target_zone));
+    const ivl = cardioIntervalNote(it.interval) || it.interval_note;
+    if (ivl) bits.push(ivl);
+  }
   return bits.join(" · ");
 }
 

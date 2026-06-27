@@ -596,7 +596,7 @@ async function renderSettings() {
         <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
         <label class="toggle"><input type="checkbox" id="researchEnabled" ${wm.research_enabled ? "checked" : ""}>
           <span>Let Cairn research your findings and cite real sources</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” in <b>Me → Brain</b>. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” in <b>Me → Health → Read</b>. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
         ${(!wm.research_enabled && data.research_auto_eligible && data.research_auto_eligible.eligible) ? `<div class="sess-line" id="researchSuggest" style="margin-top:6px">✦ ${data.research_auto_eligible.reason === "web_agent_connected" ? "Your coach agent can browse — turn this on for live, cited research." : "An agent is connected — you can try live evidence research."}</div>` : ""}
       </section>`;
 
@@ -749,7 +749,10 @@ function renderTab(tab) {
   // Endurance athletes land on the Endurance read first (gentle emphasis, not a
   // different app — History/1RM/Volume are all still one tap away). A user who has
   // navigated to another Progress seg this session keeps it.
-  if (tab === "progress") return defaultProgressSeg() === "endurance" ? renderEndurance() : renderHistory();
+  // Dispatch through the seg→render map so a programmatic seg (e.g. the conductor's
+  // "Training"/retest lead setting progressSeg="program") reaches its real view, not
+  // just endurance-or-history. Unknown seg → History.
+  if (tab === "progress") return (PROGRESS_HANDLERS[defaultProgressSeg()] || renderHistory)();
   if (tab === "chat") return renderChat();
   if (tab === "me") return renderMe();
   return renderSettings();
@@ -761,11 +764,12 @@ function renderTab(tab) {
 // shell-first paint, so we don't pre-skeleton it.
 function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
-  if (tab === "progress") return defaultProgressSeg() === "endurance" ? segSkeleton("endurance", PROGRESS_SEG, 2) : segSkeleton("sessions", PROGRESS_SEG, 3);
+  if (tab === "progress") { const seg = defaultProgressSeg(); return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3); }
   if (tab === "plan") return segSkeleton(state.planJump === "food" ? "food" : state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", planSeg(), 3);
   if (tab === "me") {
-    const seg = state.meSeg || "profile";
-    return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
+    // Me opens to the Standing review (renderMe defaults meSeg → "standing").
+    const seg = state.meSeg || "standing";
+    return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("standing", ME_SEG, 2);
   }
   if (tab === "settings") return skelLines(2) + skelLines(3);
   return "";
@@ -778,9 +782,10 @@ function tabSkeleton(tab) {
 // skeleton). The plan tab lands on Training/Food/Meals/Coach per state.planJump.
 function primaryKeyFor(tab) {
   if (tab === "today") return "plan"; // Today's first input; warm => render paints from cache
-  // The endurance default reads /stats live (no SWR peek) — keep its skeleton; the
-  // History default warms off history:sessions exactly as before.
-  if (tab === "progress") return defaultProgressSeg() === "endurance" ? null : "history:sessions";
+  // Only the History (sessions) default warms off a peek; every other seg
+  // (endurance/program/trend/volume/…) reads live — keep its skeleton, never a
+  // wrong warm paint from the history cache.
+  if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
   if (tab === "plan") return state.planJump === "coach" || state.planJump === "food" ? null : state.planJump === "meals" ? MEALS_KEY : "plan";
   return null;
 }

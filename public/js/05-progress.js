@@ -675,18 +675,67 @@ async function renderEndurance() {
   // Reads in parallel: the weekly endurance block (off /stats), the PRs, the endurance
   // goal (race countdown / standing target), the run compliance ("32 of 40 km this
   // week"), and /settings for Garmin sync freshness.
-  let stats = null, prs = null, goal = null, compliance = null, settings = null;
+  let stats = null, prs = null, goal = null, compliance = null, settings = null, runPlan = null;
   try {
-    [stats, prs, goal, compliance, settings] = await Promise.all([
+    [stats, prs, goal, compliance, settings, runPlan] = await Promise.all([
       api("/stats"),
       api("/endurance-prs").catch(() => null),
       api("/endurance-goal").catch(() => null),
       api("/run-compliance").catch(() => null),
       api("/settings").then((r) => (r && r.settings) || null).catch(() => null),
+      api("/run-plan").catch(() => null),
     ]);
   } catch { stats = null; }
   if (token !== pollToken || !view.querySelector("#endBody")) return;
-  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal, compliance, settings);
+  paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal, compliance, settings, runPlan);
+}
+
+// The periodized "This week's runs" card — the deterministic weekly run mix from
+// GET /api/run-plan (easy / quality / long, each with a bpm-bearing zone + the one
+// quality focus + a plain "why this week looks like this"). Endurance analogue of the
+// program-state read. {available:false} for a non-runner → "". No scores; a calm plan.
+function runKindClass(k) {
+  if (k === "quality") return "wrun-quality"; // the one hard session — gold (steady, earned)
+  if (k === "long") return "wrun-long";       // the long run — sage
+  return "wrun-easy";                          // easy Z2 — sage, the bread-and-butter
+}
+function runKindLabel(k) {
+  if (k === "quality") return "Quality";
+  if (k === "long") return "Long";
+  return "Easy";
+}
+function weeklyRunPlanCard(plan) {
+  if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length) return "";
+  const runs = plan.runs.map((r) => {
+    const pres = cardioPrescription({
+      target_distance_km: r.target_distance_km,
+      target_duration_min: r.target_duration_min,
+      target_zone: r.target_zone,
+      interval: r.interval,
+      note: r.note,
+    });
+    const kind = runKindClass(r.kind_label);
+    const label = r.label || (r.kind_label ? `${runKindLabel(r.kind_label)} run` : "Run");
+    return `<div class="wrun-row ${kind}">
+        <div class="wrun-row-head">
+          <span class="wrun-kind">${escHtml(runKindLabel(r.kind_label))}</span>
+          <span class="wrun-label">${escHtml(label)}</span>
+        </div>
+        ${pres ? `<div class="wrun-pres numeral">${escHtml(pres)}</div>` : ""}
+        ${r.note && r.note !== label ? `<div class="wrun-note">${escHtml(r.note)}</div>` : ""}
+      </div>`;
+  }).join("");
+  const rationale = Array.isArray(plan.rationale) ? plan.rationale.filter(Boolean) : [];
+  const whyBits = [plan.why, ...rationale].filter(Boolean);
+  return `<div class="wrun-card reveal" style="${stagger(0)}">
+      <div class="wrun-head">
+        <span class="lbl">This week's runs</span>
+        ${plan.mix_summary ? `<span class="wrun-mix">${escHtml(plan.mix_summary)}</span>` : ""}
+      </div>
+      ${plan.quality_focus ? `<div class="wrun-focus"><span class="lbl">Quality focus</span> ${escHtml(plan.quality_focus)}</div>` : ""}
+      <div class="wrun-rows">${runs}</div>
+      ${whyBits.length ? `<div class="wrun-why"><span class="lbl">Why this week looks like this</span>${whyBits.map((w) => `<p>${escHtml(w)}</p>`).join("")}</div>` : ""}
+    </div>`;
 }
 
 // Race countdown / standing-readiness banner — the persistent home for the endurance
@@ -759,18 +808,40 @@ function enduranceSportCardHtml(g, idx) {
   return `${head}<div class="end-pr-card">${body}</div>`;
 }
 
-function paintEnduranceBody(end, prs, goal, compliance, settings) {
+// The Endurance lead — ONE calm coach sentence derived from this week's run plan: the
+// long run is the session that matters, else the quality day, else "keep easy easy".
+// Reuses .prog-headline (the lead-sentence style); "" for a non-runner / no plan, so
+// the view degrades to its stacked sections. The full plan still renders below in the
+// weekly run-plan card (Endurance is its home; Today shows just today's run).
+function enduranceCoachLine(plan) {
+  if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length) return "";
+  const long = plan.runs.find((r) => r.kind_label === "long");
+  const quality = plan.runs.find((r) => r.kind_label === "quality");
+  let s;
+  if (long) {
+    const dist = long.target_distance_km ? `${fmtKm(long.target_distance_km)} km ` : "";
+    s = `This week, your ${dist}long run is the one that matters.`;
+  } else if (quality) {
+    s = `This week, your quality session is the one that matters.`;
+  } else {
+    s = `This week, keep your easy runs genuinely easy — that's the work.`;
+  }
+  return `<div class="prog-headline reveal" style="${stagger(0)}">${escHtml(s)}</div>`;
+}
+
+function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
   const body = view.querySelector("#endBody");
   if (!body) return;
   const goalHtml = enduranceGoalCard(goal);
   const complianceHtml = runComplianceLine(compliance);
+  const runPlanHtml = weeklyRunPlanCard(runPlan);
   // Sync trust: a quiet "synced 2h ago · Sync now" line, only when Garmin is
   // configured (cardioSyncLine returns "" otherwise). Shared with Today's run card.
   const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(settings, {}) : "";
   const hasWeek = end && (end.week_km > 0 || end.week_moving_min > 0 || end.longest_km != null || end.longest_min != null);
   const hasPRs = prs && ((prs.sports || []).length || prs.longest_km || prs.longest_min || (prs.best_pace || []).length);
   if (!hasWeek && !hasPRs) {
-    body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + syncHtml +
+    body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + runPlanHtml + syncHtml +
       emptyStateHtml(art("activity", "run"),
         goalHtml
           ? "No runs logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your weekly runs build toward this."
@@ -787,21 +858,30 @@ function paintEnduranceBody(end, prs, goal, compliance, settings) {
     if (end.longest_km != null) heroStats.push(["longest · km", end.longest_km, { text: true }]);
     else if (end.longest_min != null) heroStats.push(["longest · min", Math.round(end.longest_min), { text: true }]);
   }
-  let html = progressHero("Endurance", heroStats) + goalHtml + complianceHtml + syncHtml;
 
-  // Longest effort line (when we have one and it didn't already lead the hero).
+  // Lead: hero + the coach's one line + the persistent goal/compliance anchors + the
+  // week's run plan (Endurance is its home). The deep stats collapse below.
+  const coachLineHtml = enduranceCoachLine(runPlan);
+  const leadHtml = progressHero("Endurance", heroStats) + coachLineHtml + goalHtml + complianceHtml + runPlanHtml;
+  const hasLead = !!(runPlanHtml || goalHtml || coachLineHtml);
+
+  // Deep read — longest effort, pace trend, time-in-zone, personal bests, and the
+  // Garmin sync line. Collapses behind one "The full read" disclosure when there's a
+  // lead; otherwise stacks beneath the hero (graceful degradation).
+  let deep = "";
+
   if (end && (end.longest_km != null || end.longest_min != null)) {
     const lbits = [];
     if (end.longest_km != null) lbits.push(`${fmtKm(end.longest_km)} km`);
     if (end.longest_min != null) lbits.push(`${Math.round(end.longest_min)} min`);
     const tlabel = end.longest_type ? `${escHtml(end.longest_type)} · ` : "";
-    html += `<div class="end-line reveal" style="${stagger(1)}"><span class="lbl">Longest this week</span><span class="end-line-v">${tlabel}${lbits.join(" · ")}</span></div>`;
+    deep += `<div class="end-line reveal" style="${stagger(1)}"><span class="lbl">Longest this week</span><span class="end-line-v">${tlabel}${lbits.join(" · ")}</span></div>`;
   }
 
   // Pace trend, in plain words (never a grade).
   const word = paceTrendWord(end && end.pace_trend);
   if (word) {
-    html += `<div class="end-pace reveal" style="${stagger(2)}">
+    deep += `<div class="end-pace reveal" style="${stagger(2)}">
         <span class="lbl">Pace</span>
         <span class="end-pace-read">${escHtml(word.charAt(0).toUpperCase() + word.slice(1))}.</span>
         ${end.pace_trend.this_min_per_km != null ? `<span class="end-pace-num numeral">${fmtPaceKm(end.pace_trend.this_min_per_km)}<span class="end-pace-unit">/km</span></span>` : ""}
@@ -809,7 +889,7 @@ function paintEnduranceBody(end, prs, goal, compliance, settings) {
   }
 
   // Time-in-zone bar.
-  html += zoneBarHtml(end && end.time_in_zone);
+  deep += zoneBarHtml(end && end.time_in_zone);
 
   // Endurance PRs — the endurance analogue of the est-1RM view, GROUPED BY SPORT so
   // a best is read in its own modality: running pace leads (the athlete's sport),
@@ -836,12 +916,27 @@ function paintEnduranceBody(end, prs, goal, compliance, settings) {
             <div class="end-pr-more-body">${others.map((g, gi) => enduranceSportCardHtml(g, 5 + gi)).join("")}</div>
           </details>`
         : "";
-      html += `<div class="end-prs">
+      deep += `<div class="end-prs">
           <div class="lbl end-prs-head reveal" style="${stagger(3)}">Personal bests</div>
           ${enduranceSportCardHtml(lead, 4)}
           ${otherHtml}
         </div>`;
     }
+  }
+
+  // The Garmin sync-trust line lives at the foot of the deep read.
+  deep += syncHtml;
+
+  let html;
+  if (hasLead && deep.trim()) {
+    html = leadHtml +
+      `<details class="full-read reveal" style="${stagger(3)}">
+        <summary>The full read</summary>
+        <div class="full-read-body">${deep}</div>
+      </details>`;
+  } else {
+    // No lead (non-runner, no plan/goal) — keep the stats stacked beneath the hero.
+    html = leadHtml + deep;
   }
 
   body.innerHTML = html;
@@ -1344,12 +1439,33 @@ async function triggerProgramEvolve(btn) {
 
 // SWR over /program-state (key progress:program). Skeleton-first on cold;
 // paints the full program read instantly on warm re-entry, then revalidates.
+// The conductor lead for Progress→Program — the cross-domain "one block focus" card
+// (GET /api/coaching-focus → coachingFocusCardHtml). Cached as a rendered HTML string
+// ("" when unavailable) so paintProgramBody can branch its layout: present → lead with
+// it and collapse the deep sections behind "The full read"; absent → the existing
+// stacked sections, untouched (graceful degradation).
+let _progFocusCard;
+
 async function renderProgram() {
   headerTitle.textContent = "Progress";
   state.progressSeg = "program";
   const token = ++pollToken;
   const peek = peekCached("progress:program");
   if (!peek) view.innerHTML = segSkeleton("program", PROGRESS_SEG, 3);
+  // Fetch the conductor in parallel (own try/catch → never throws). When it lands or
+  // its presence changes, re-paint from the cached program-state so the layout can
+  // collapse the pile. Never blocks the warm paint below.
+  api("/coaching-focus").then((f) => {
+    const card = (typeof coachingFocusCardHtml === "function") ? coachingFocusCardHtml(f) : "";
+    const prev = _progFocusCard;
+    _progFocusCard = card;
+    if (card === prev) return;
+    if (!card && (prev === undefined || prev === "")) return; // stayed flat — no re-paint
+    if (token === pollToken && state.tab === "progress" && state.progressSeg === "program") {
+      const cached = peekCached("progress:program");
+      if (cached) paintProgramBody(cached.data || {});
+    }
+  }).catch(() => {});
   return paintSWR({
     key: "progress:program",
     path: "/program-state",
@@ -1387,71 +1503,66 @@ function paintProgramBody(data) {
   if (nGood) heroStats.push(["climbing", nGood]);
   if (nStalled) heroStats.push(["stalled", nStalled]);
 
-  let html = head + progressHero("Program", heroStats);
+  const conductor = (typeof _progFocusCard === "string") ? _progFocusCard : "";
+  const hasConductor = !!conductor;
 
-  // Headline — the single most important sentence.
-  if (headline) {
-    html += `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>`;
-  }
+  // The deterministic headline — the single most important program sentence. When the
+  // conductor leads it's redundant (the conductor states the through-line), so it tucks
+  // into the disclosure with the rest of the deep read.
+  const headlineHtml = headline ? `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>` : "";
 
-  // Performance standing — the "where you stand" CAPACITY read (benchmarked vs
-  // sex/age strength standards + VO2max norms): the hero of the Program view. Loaded
-  // async into this slot from GET /api/performance; renders nothing until there's
-  // something benchmarked. Sits above the trajectory detail (it's the orientation).
-  html += `<div id="progPerfSlot" class="pperf-slot reveal" style="${stagger(2)}"></div>`;
+  // The async slots (loaded after paint): a "test week due" banner, the capacity
+  // benchmark, the periodization block, the "what changed & why" digest, the muscle
+  // advance/stall strip, and DEXA targeting. Each renders nothing until it has data.
+  const testSlot = `<div id="progTestSlot" class="ptest-slot reveal" style="${stagger(1)}"></div>`;
+  const perfSlot = `<div id="progPerfSlot" class="pperf-slot reveal" style="${stagger(2)}"></div>`;
+  const blockSlot = `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
+  const adjustSlot = `<div id="progAdjustSlot" class="padj-slot reveal" style="${stagger(3)}"></div>`;
+  const muscleSlot = `<div id="progMuscleSlot" class="pmus-slot reveal" style="${stagger(3)}"></div>`;
+  const dexaSlot = `<div id="progDexaSlot" class="pdexa-slot reveal" style="${stagger(3)}"></div>`;
+  const adaptHtml = adaptations.length ? adaptationsHtml(adaptations, 4) : "";
 
-  // Periodization block — the framing (loaded async into this slot): the active
-  // block (advance/complete) or a calm "start a block" affordance.
-  html += `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
-
-  // "What changed & why" — the deterministic digest of the concrete adaptations
-  // the system has noticed (lifts to push/hold/deload, groups due, missing-pattern
-  // gaps) with a plain-words reason for EACH, so the athlete always understands what
-  // moved and why. Loaded async into this slot; renders nothing when there's nothing.
-  html += `<div id="progAdjustSlot" class="padj-slot reveal" style="${stagger(3)}"></div>`;
-
-  // "What to evolve next" — surfaced near the top, it's the keystone.
-  let staggerI = 4;
-  if (adaptations.length) {
-    html += adaptationsHtml(adaptations, staggerI);
-    staggerI += 1;
-  }
-
-  // Lift rows.
+  // Lift rows — the per-lift trajectory, kept visible beneath the lead.
+  let liftsHtml = "";
   if (sorted.length) {
-    html += `<div class="prow-section-head lbl reveal" style="${stagger(staggerI)}">Lifts</div>`;
-    staggerI += 1;
-    html += sorted.map((lift, i) => liftRowHtml(lift, staggerI + i)).join("");
-    staggerI += sorted.length;
+    liftsHtml += `<div class="prow-section-head lbl reveal" style="${stagger(5)}">Lifts</div>`;
+    liftsHtml += sorted.map((lift, i) => liftRowHtml(lift, 6 + i)).join("");
   }
 
-  // Volume block.
-  if (volume.length) {
-    html += `<div class="pvol-head lbl reveal" style="${stagger(staggerI)}">Weekly volume by muscle</div>`;
-    staggerI += 1;
-    html += volumeBlockHtml(volume, staggerI);
-    staggerI += volume.length;
-  }
+  const volumeHtml = volume.length
+    ? `<div class="pvol-head lbl reveal" style="${stagger(2)}">Weekly volume by muscle</div>` + volumeBlockHtml(volume, 3)
+    : "";
+  const mesoHtml = meso ? mesoBlockHtml(meso, 4) : "";
+  const endHtml = endurance ? enduranceBlockHtml(endurance, 5) : "";
 
-  // Mesocycle note.
-  if (meso) {
-    html += mesoBlockHtml(meso, staggerI);
-    staggerI += 1;
-  }
-
-  // Endurance block (only when present).
-  if (endurance) {
-    html += enduranceBlockHtml(endurance, staggerI);
-    staggerI += 1;
-  }
-
-  // "Evolve my plan" button.
-  html += `<div class="prog-evolve-foot reveal" style="${stagger(staggerI)}">
+  const evolveFoot = `<div class="prog-evolve-foot reveal" style="${stagger(7)}">
     <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Evolve my plan</button>
     <span class="prog-evolve-note lbl">asks the coach to draft an updated plan — you review before anything changes</span>
     <button id="progTidyBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px" type="button">Tidy exercise names</button>
     <span class="prog-evolve-note lbl">Different logs name the same lift differently — Cairn merges duplicates so each one tracks as one line. Runs automatically as you log.</span>
   </div>`;
+
+  let html;
+  if (hasConductor) {
+    // Conductor leads. Lift rows stay visible beneath it; the rest of the deep read —
+    // the deterministic headline, capacity benchmark, DEXA targeting, muscle strip,
+    // weekly volume, mesocycle, and the adaptations digest — collapses behind ONE "The
+    // full read" disclosure. The lever is de-triplicated: the conductor is the one lever
+    // now (performance's standalone .pperf-lever is suppressed in loadPerformance).
+    html = head + progressHero("Program", heroStats) + conductor + liftsHtml +
+      `<details class="full-read reveal" style="${stagger(6)}">
+        <summary>The full read</summary>
+        <div class="full-read-body">${
+          headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
+          adaptHtml + volumeHtml + mesoHtml + endHtml
+        }</div>
+      </details>` + evolveFoot;
+  } else {
+    // No conductor — the existing stacked layout, untouched (graceful degradation).
+    html = head + progressHero("Program", heroStats) +
+      headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
+      adaptHtml + liftsHtml + volumeHtml + mesoHtml + endHtml + evolveFoot;
+  }
 
   view.innerHTML = html;
   wireSeg(PROGRESS_HANDLERS);
@@ -1466,6 +1577,9 @@ function paintProgramBody(data) {
   loadPerformance(); // the "where you stand" capacity benchmark hero
   loadProgramBlock(); // periodization block card (active) or a "start a block" affordance
   loadProgramAdjustments(); // the "what changed & why" digest
+  loadTestWeek(); // the "a test week is about due" banner
+  loadMuscleTrajectory(); // per-muscle-group advancing/stalling strip
+  loadDexaTargeting("progDexaSlot"); // "from your DEXA, what to focus on next"
 }
 
 // ---------- Performance standing — the "where you stand" capacity read ----------
@@ -1481,18 +1595,20 @@ async function loadPerformance() {
   let p = null;
   try { p = await api("/performance"); } catch { p = null; }
   if (!p || (!(p.capacities || []).length && !p.endurance && !p.lever)) { slot.innerHTML = ""; return; }
-  slot.innerHTML = performanceHtml(p);
+  // When the conductor leads Program, IT is the one lever — drop performance's
+  // standalone lever well so the lever isn't triplicated (conductor + here + adaptations).
+  slot.innerHTML = performanceHtml(p, { suppressLever: !!_progFocusCard });
 }
 
 function pctClamp(n) { const x = Number(n); return Number.isFinite(x) ? Math.max(2, Math.min(99, Math.round(x))) : 0; }
 
-function capacityRowHtml(c) {
+function capacityRowHtml(c, sexWord) {
   const tone = c.tone === "strong" ? "strong" : c.tone === "watch" ? "watch" : "steady";
   const pct = pctClamp(c.percentile);
   const sub = [];
   if (c.exercise) sub.push(escHtml(c.exercise));
   if (c.est_1rm) sub.push(`~${escHtml(String(c.est_1rm))} lb 1RM`);
-  sub.push(`${pct}th pct for your ${escHtml(c.age_band || "age")}`);
+  sub.push(`stronger than ${pct}% of ${escHtml(sexWord || "people")} your age`);
   if (c.to_next) sub.push(`+${escHtml(String(c.to_next.lb))} lb → ${escHtml(c.to_next.level)}`);
   return `<div class="pcap">
     <div class="pcap-top"><span class="pcap-label">${escHtml(c.label)}</span><span class="pcap-level pcap-${tone}">${escHtml(c.level)}</span></div>
@@ -1501,7 +1617,8 @@ function capacityRowHtml(c) {
   </div>`;
 }
 
-function performanceHtml(p) {
+function performanceHtml(p, opts) {
+  const suppressLever = !!(opts && opts.suppressLever);
   const caps = p.capacities || [];
   const chips = (p.momentum && p.momentum.chips) || [];
   let h = `<section class="pperf">`;
@@ -1518,7 +1635,8 @@ function performanceHtml(p) {
 
   // Capacity rows — the benchmarked "level for your age" per movement.
   if (caps.length) {
-    h += `<div class="pperf-caps">${caps.map(capacityRowHtml).join("")}</div>`;
+    const sexWord = p.sex === "female" ? "women" : "men";
+    h += `<div class="pperf-caps">${caps.map((c) => capacityRowHtml(c, sexWord)).join("")}</div>`;
   }
 
   // Aerobic capacity (endurance/hybrid).
@@ -1527,8 +1645,9 @@ function performanceHtml(p) {
     h += `<div class="pperf-aero pperf-aero-${tone}">${escHtml(p.endurance.headline)}</div>`;
   }
 
-  // The one lever — terracotta well, the single biggest focus.
-  if (p.lever && p.lever.headline) {
+  // The one lever — terracotta well, the single biggest focus. Suppressed when the
+  // conductor already leads with the lever (de-triplication).
+  if (!suppressLever && p.lever && p.lever.headline) {
     h += `<div class="pperf-lever">
       <div class="pperf-lever-lbl lbl">The lever</div>
       <div class="pperf-lever-head">${escHtml(p.lever.headline)}</div>
@@ -1592,6 +1711,9 @@ const PADJ_KIND = {
   balance: { glyph: "◆", cls: "padj-bal" },
   deload: { glyph: "↓", cls: "padj-deload" },
   gap: { glyph: "○", cls: "padj-gap" },
+  cardio: { glyph: "↗", cls: "padj-cardio" }, // this week's run mix
+  dexa: { glyph: "◇", cls: "padj-dexa" },     // a DEXA-driven focus
+  test: { glyph: "✦", cls: "padj-test" },     // a test week is about due
 };
 
 async function loadProgramAdjustments() {
@@ -1621,6 +1743,139 @@ function programAdjustmentsHtml(rows) {
   return `<div class="padj-card">
       <div class="padj-card-head lbl">What changed &amp; why</div>
       ${items}
+    </div>`;
+}
+
+// ---------- a "test week is about due" banner ----------
+// Fed by GET /api/test-week — {due, why, key_lifts, cadence_weeks, last_test_week}.
+// Renders only when due: a calm invitation to re-measure true capacity (the cadenced
+// counterpart to the reactive "Worth re-testing" rows). Pull-never-push, no score.
+async function loadTestWeek() {
+  const slot = view.querySelector("#progTestSlot");
+  if (!slot) return;
+  let t = null;
+  try { t = await api("/test-week"); } catch { t = null; }
+  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
+  if (!t || !t.due) { slot.innerHTML = ""; return; }
+  slot.innerHTML = testWeekBannerHtml(t);
+}
+function testWeekBannerHtml(t) {
+  const lifts = Array.isArray(t.key_lifts) ? t.key_lifts.filter(Boolean) : [];
+  return `<div class="ptest-banner">
+      <div class="ptest-head"><span class="ptest-glyph" aria-hidden="true">✦</span><span class="ptest-title">A test week is about due</span></div>
+      ${t.why ? `<div class="ptest-why">${escHtml(t.why)}</div>` : ""}
+      ${lifts.length ? `<div class="ptest-lifts">${lifts.map((l) => `<span class="ptest-lift">${escHtml(l)}</span>`).join("")}</div>` : ""}
+    </div>`;
+}
+
+// ---------- per-muscle-group advancing/stalling strip ----------
+// Fed by GET /api/muscle-trajectory — {available, headline, groups:[{group,label,
+// verdict,lead_lift,stalled_signal,vary_options,volume_band,trend,note}]}. The owner's
+// "which groups advance, which stall" framing; a stalling group exposes its
+// vary_options as a "rotate one in" menu. Monotonic tone: sage = advancing, gold =
+// building/maintaining, warn ONLY for a genuine stall. No scores.
+async function loadMuscleTrajectory() {
+  const slot = view.querySelector("#progMuscleSlot");
+  if (!slot) return;
+  let m = null;
+  try { m = await api("/muscle-trajectory"); } catch { m = null; }
+  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
+  const html = muscleTrajectoryHtml(m);
+  slot.innerHTML = html || "";
+}
+function muscleVerdictTone(v) {
+  if (v === "advancing") return "strong";   // sage
+  if (v === "stalling") return "watch";      // warn — the only genuinely below-par read
+  return "steady";                            // building / maintaining — gold
+}
+function muscleVerdictWord(v) {
+  if (v === "advancing") return "Advancing";
+  if (v === "stalling") return "Stalling";
+  if (v === "building") return "Building";
+  if (v === "maintaining") return "Holding";
+  return "";
+}
+function muscleTrendGlyph(t) {
+  if (t === "rising") return "↑";
+  if (t === "falling") return "↓";
+  if (t === "stable") return "→";
+  return "";
+}
+function muscleGroupRowHtml(g) {
+  const tone = muscleVerdictTone(g.verdict);
+  const word = muscleVerdictWord(g.verdict);
+  const figs = [];
+  if (g.lead_lift) figs.push(escHtml(g.lead_lift));
+  if (g.volume_band) figs.push(`${escHtml(g.volume_band)} volume`);
+  const trendG = muscleTrendGlyph(g.trend);
+  if (trendG) figs.push(`${trendG} ${escHtml(g.trend)}`);
+  const opts = Array.isArray(g.vary_options) ? g.vary_options.filter((o) => o && o.name) : [];
+  const varyHtml = (g.verdict === "stalling" && opts.length)
+    ? `<div class="pmus-vary"><span class="pmus-vary-lbl lbl">rotate one in</span><div class="pmus-opts">${
+        opts.slice(0, 3).map((o) => `<span class="pmus-opt"${o.why ? ` title="${escAttr(o.why)}"` : ""}>${escHtml(o.name)}</span>`).join("")
+      }</div></div>`
+    : "";
+  return `<div class="pmus-row pmus-${tone}">
+      <div class="pmus-row-head">
+        <span class="pmus-name">${escHtml(g.label || g.group || "")}</span>
+        ${word ? `<span class="pmus-verdict pmus-v-${tone}">${escHtml(word)}</span>` : ""}
+      </div>
+      ${figs.length ? `<div class="pmus-figs lbl">${figs.join(" · ")}</div>` : ""}
+      ${g.stalled_signal ? `<div class="pmus-signal">${escHtml(g.stalled_signal)}</div>` : ""}
+      ${g.note ? `<div class="pmus-note">${escHtml(g.note)}</div>` : ""}
+      ${varyHtml}
+    </div>`;
+}
+function muscleTrajectoryHtml(m) {
+  if (!m || m.available === false || !Array.isArray(m.groups) || !m.groups.length) return "";
+  return `<div class="pmus-card">
+      <div class="pmus-card-head lbl">Muscle groups — advancing vs stalling</div>
+      ${m.headline ? `<div class="pmus-headline">${escHtml(m.headline)}</div>` : ""}
+      <div class="pmus-rows">${m.groups.map(muscleGroupRowHtml).join("")}</div>
+    </div>`;
+}
+
+// ---------- DEXA-driven exercise targeting ----------
+// Fed by GET /api/dexa-targeting — {available, targets:[{area,signal,bias,moves,
+// domain,path,groups,informational}], lead, next_dexa_focus}. Maps regional DEXA
+// signals → what to focus on before the next scan. Shared by Progress→Program and
+// the top-level Me→Standing review (co-located with the regional read). {available:false} → "".
+// informational:true targets (e.g. low BMD) are clinician-framed, never a directive.
+async function loadDexaTargeting(slotId) {
+  const slot = document.getElementById(slotId);
+  if (!slot) return;
+  let d = null;
+  try { d = await api("/dexa-targeting"); } catch { d = null; }
+  if (!slot.isConnected) return;
+  slot.innerHTML = dexaTargetingHtml(d) || "";
+}
+function dexaTargetToneCls(t) {
+  if (t.informational) return "pdexa-info"; // clinician-framed (e.g. BMD) — neutral/steady
+  if (t.domain === "nutrition") return "pdexa-nut";
+  return "pdexa-train";
+}
+function dexaTargetHtml(t) {
+  const moves = Array.isArray(t.moves) ? t.moves.filter(Boolean) : [];
+  return `<div class="pdexa-target ${dexaTargetToneCls(t)}">
+      <div class="pdexa-target-head">
+        <span class="pdexa-area">${escHtml(t.area || "")}</span>
+        ${t.informational ? `<span class="pdexa-tag lbl">worth discussing with your clinician</span>` : ""}
+      </div>
+      ${t.signal ? `<div class="pdexa-signal">${escHtml(t.signal)}</div>` : ""}
+      ${t.bias ? `<div class="pdexa-bias">${escHtml(t.bias)}</div>` : ""}
+      ${moves.length ? `<div class="pdexa-moves">${moves.map((m) => `<span class="pdexa-move">${escHtml(m)}</span>`).join("")}</div>` : ""}
+      ${t.path ? `<div class="pdexa-path"><span class="lbl">Path to your next scan</span>${escHtml(t.path)}</div>` : ""}
+    </div>`;
+}
+function dexaTargetingHtml(d) {
+  if (!d || d.available === false || !Array.isArray(d.targets) || !d.targets.length) return "";
+  const heading = (d.lead && d.lead.next_dexa_focus) || d.next_dexa_focus || "From your DEXA — what to focus on next";
+  return `<div class="pdexa-card">
+      <div class="pdexa-card-head">
+        <span class="lbl">From your DEXA</span>
+        <div class="pdexa-focus">${escHtml(heading)}</div>
+      </div>
+      <div class="pdexa-targets">${d.targets.map(dexaTargetHtml).join("")}</div>
     </div>`;
 }
 

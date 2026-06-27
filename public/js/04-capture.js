@@ -4,7 +4,7 @@
 // FELT at the point of consumption. When a flagged lab marker shaped a meal
 // plan or the day's training (via a cross-domain directive), surface ONE quiet
 // causal line right where the consequence lands ("tilted toward fish — ApoB
-// came back high · why"), deep-linking to Me → Health → Brain. Informational,
+// came back high · why"), deep-linking to Me → Health → Read. Informational,
 // never a verdict; soft/uncertain directives read tentative.
 // ====================================================================
 
@@ -32,7 +32,7 @@ function provenanceLineHtml(d, label) {
   const soft = d.uncertain && !d.citation;
   const because = d.marker ? `<span class="prov-marker">${escHtml(String(d.marker))}</span>` : "";
   const lead = soft ? `<span class="prov-soft">Worth looking into · </span>` : "";
-  // The whole line is the deep-link to Me → Health → Brain (where the directive lives).
+  // The whole line is the deep-link to Me → Health → Read (where the directive lives).
   return `<button class="prov-line" data-prov aria-label="${escAttr(label + ": " + consequence)}">
       <span class="prov-glyph" aria-hidden="true">✦</span>
       <span class="prov-text">${lead}${escHtml(consequence)}${because ? ` — ${because}` : ""}</span>
@@ -40,16 +40,16 @@ function provenanceLineHtml(d, label) {
     </button>`;
 }
 
-// Wire any rendered provenance line to deep-link into Me → Health → Standing,
-// landing on the connected-brain directives rail (the old "Brain" view was merged
-// into Standing). We stash a scroll target so Standing brings the referenced
-// directive into view instead of opening at the top (the bio-age hero).
+// Wire any rendered provenance line to deep-link into Me → Health → Read, landing on
+// the connected-brain directives list (the whole-picture depth now lives on the Read
+// sub-tab). We stash a scroll target so it brings the referenced directive into view
+// instead of opening at the top.
 function wireProvenance(scope) {
   (scope || view).querySelectorAll("[data-prov]").forEach((b) => b.addEventListener("click", () => {
     state.meSeg = "health";
-    state.healthSeg = "standing"; // directives now live in Standing's connected-brain rail
-    state.healthSegPicked = true; // an explicit destination — never bounce to the new-user Records default
-    state.pendingHealthScroll = "hbDirectives"; // scroll the rail into view once it has rendered
+    state.healthSeg = "read"; // the connected-brain directives live on Health → Read
+    state.healthSegPicked = true;
+    state.pendingHealthScroll = "hbDirectives"; // scroll the list into view once it has rendered
     activateTab("me");
   }));
 }

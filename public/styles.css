@@ -3075,11 +3075,47 @@ body.swr-busy::after{
 #hPicture{margin-top:2px}
 #hContent{min-width:0}
 
-/* Read view: narrative review + recovery (primary) over the connected brain
-   (directives / what-matters-now / supplements). Single column on mobile; the
-   desktop two-column rail split is layered on in section 36. */
-.hread-cols{display:block}
-.hread-main,.hread-rail{min-width:0}
+
+/* ME → Health → Read — the whole-picture depth as ONE editorial column. It used to be
+   inlined under Standing as a 1.4fr/1fr two-column read, which left a tall empty gutter
+   whenever the directives list ran far longer than the narrative (the "breaks"). A
+   single column removes the gutter entirely and reads calmly on phone and desktop. */
+.hread{display:flex;flex-direction:column;gap:16px;min-width:0}
+.hread>*{min-width:0}
+/* a jump must land BELOW the sticky Health seg + jump nav, not hidden under them */
+.hread>[id]{scroll-margin-top:calc(env(safe-area-inset-top,0px) + 104px)}
+/* the in-page jump nav — chips that scroll to a section. STICKY so it stays reachable
+   through the long read (scrolling out and back to it was the complaint): pinned just
+   under the single Health seg (the Me seg yields its sticky slot on the Health sub-view
+   — see .segwrap:has(+ .hsegwrap)), the same +56px offset the Markers group headers use,
+   with the same cream blur so content scrolls cleanly under it. It scrolls horizontally
+   on a narrow phone so it stays ONE row tall instead of wrapping and eating the view. */
+.hread-nav{position:sticky;top:calc(env(safe-area-inset-top,0px) + 56px);z-index:20;
+  display:flex;gap:7px;align-items:center;margin:0 -4px 4px;padding:8px 4px;
+  overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+  background:rgba(252,250,244,.94);backdrop-filter:blur(8px) saturate(1.05);
+  -webkit-backdrop-filter:blur(8px) saturate(1.05)}
+.hread-nav::-webkit-scrollbar{display:none}
+.hread-chip{flex:0 0 auto;white-space:nowrap;border:1px solid var(--line-2);
+  background:var(--card);color:var(--ink-2);border-radius:999px;padding:7px 13px;
+  font-family:var(--font-ui);font-size:.76rem;font-weight:650;letter-spacing:.01em;
+  cursor:pointer;transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.hread-chip:hover{border-color:var(--ink-2);color:var(--ink)}
+.hread-chip.active{background:var(--ink);border-color:var(--ink);color:var(--card)}
+.hread-chip:active{transform:var(--press)}
+
+/* Standing → the jump-off into the relocated full health read (Health → Read) */
+.hread-jump{display:flex;align-items:center;gap:14px;width:100%;text-align:left;
+  margin-top:16px;padding:15px 18px;background:var(--card);border:1px solid var(--line);
+  border-left:3px solid var(--sage);border-radius:var(--radius);box-shadow:var(--shadow-sm);
+  cursor:pointer;transition:box-shadow var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.hread-jump:hover{box-shadow:var(--shadow-md)}
+.hread-jump:active{transform:var(--press)}
+.hread-jump-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 auto}
+.hread-jump-title{font-family:var(--font-display);font-variation-settings:"opsz" 40;
+  font-weight:560;font-size:1.06rem;line-height:1.2;color:var(--ink)}
+.hread-jump-sub{font-size:.84rem;color:var(--muted);line-height:1.42}
+.hread-jump-arrow{flex:0 0 auto;font-size:1.2rem;color:var(--sage);font-weight:700}
 /* the "see every trend →" link out of the what-matters-now list to the Markers home */
 .hb-mk-allbtn{margin-top:12px;background:none;border:none;padding:4px 0;cursor:pointer;
   font-family:var(--font-ui);font-size:.78rem;font-weight:600;letter-spacing:.01em;
@@ -3154,6 +3190,17 @@ body.swr-busy::after{
   letter-spacing:.02em;cursor:pointer}
 .hstand-refbtn.active{background:var(--ink);border-color:var(--ink);color:var(--card)}
 .hstand-refbtn:active{transform:var(--press)}
+/* the visible read of the selected "compare against" group — lives in the always-on hero */
+.hstand-refsum{margin-top:14px;display:grid;gap:9px;max-width:440px}
+.hstand-refsum-head{display:block;color:var(--muted)}
+.hstand-refsum-empty{margin-top:13px;line-height:1.5}
+.hstand-refsum-row{display:grid;grid-template-columns:minmax(64px,auto) 1fr auto;align-items:center;gap:11px}
+.hstand-refsum-metric{font-size:.82rem;color:var(--ink-2);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.hstand-refsum-bar{min-width:0}
+.hstand-refsum-read{font-size:.82rem;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.hstand-refsum-read b{font-family:var(--font-display);font-variation-settings:"opsz" 32;font-weight:600;
+  color:var(--ink)}
 .hstand-grid{display:grid;gap:14px}
 .hstand-panel{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:16px 18px;min-width:0}
@@ -3165,26 +3212,37 @@ body.swr-busy::after{
   margin-bottom:9px;min-width:0}
 .hstand-comp-head b{font-size:.92rem;color:var(--ink)}
 .hstand-eq{flex:0 0 auto;font-size:.72rem;color:var(--muted)}
-.hstand-barrow{display:grid;grid-template-columns:86px minmax(0,1fr) 42px;align-items:center;gap:9px;margin-top:7px}
-.hstand-barlabel{font-size:.72rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hstand-comp-bar{margin:9px 0 8px}
 .hstand-track{position:relative;height:8px;background:var(--card-2);border-radius:999px;overflow:hidden}
-.hstand-fill{position:absolute;inset:0 auto 0 0;border-radius:999px;background:var(--sage)}
-.hstand-barrow-ref .hstand-fill{background:var(--accent)}
-.hstand-pct{font-family:var(--font-display);font-variation-settings:"opsz" 32;font-size:.86rem;
-  font-weight:560;color:var(--ink);text-align:right}
+.hstand-fill{position:absolute;inset:0 auto 0 0;border-radius:999px;background:var(--sage);
+  transition:width var(--dur-2) var(--ease)}
+/* semantic, monotonic: a strong reading is never painted alarm-red */
+.hstand-fill-strong{background:var(--sage)}
+.hstand-fill-steady{background:var(--gold)}
+.hstand-fill-watch{background:var(--warn)}
+.hstand-comp-read{font-size:.86rem;color:var(--ink-2);line-height:1.4}
+.hstand-comp-read b{font-family:var(--font-display);font-variation-settings:"opsz" 32;font-weight:600;color:var(--ink)}
+.hstand-where{margin-top:7px;font-size:.8rem;color:var(--muted);line-height:1.45;
+  display:flex;flex-wrap:wrap;gap:5px;align-items:baseline}
+.hstand-where b{color:var(--ink-2);font-weight:680;font-variant-numeric:tabular-nums}
+.hstand-where .lbl{color:var(--muted)}
+.hstand-where-arrow{color:var(--sage);font-weight:700}
+.hstand-where-top{color:var(--sage)}
+.hstand-where-top .hstand-where-arrow{color:var(--gold)}
+.hstand-comp-ref{margin-top:6px;font-size:.74rem;color:var(--muted)}
 .hstand-source{margin-top:8px;color:var(--muted)}
 .hstand-empty,.bp-empty{font-size:.85rem;color:var(--muted);line-height:1.5;padding:8px 0}
 .hstand-dims{display:grid;grid-template-columns:1fr;gap:12px}
 .hstand-dim{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:15px 17px;min-width:0;border-left:3px solid var(--line-2)}
 .hstand-dim.hstand-strong{border-left-color:var(--sage)}
-.hstand-dim.hstand-steady{border-left-color:var(--accent)}
-.hstand-dim.hstand-watch{border-left-color:var(--gold)}
+.hstand-dim.hstand-steady{border-left-color:var(--gold)}
+.hstand-dim.hstand-watch{border-left-color:var(--warn)}
 .hstand-dim-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}
 .hstand-tone-dot{width:8px;height:8px;border-radius:50%;background:var(--line-2);flex:0 0 auto}
 .hstand-strong .hstand-tone-dot{background:var(--sage)}
-.hstand-steady .hstand-tone-dot{background:var(--accent)}
-.hstand-watch .hstand-tone-dot{background:var(--gold)}
+.hstand-steady .hstand-tone-dot{background:var(--gold)}
+.hstand-watch .hstand-tone-dot{background:var(--warn)}
 .hstand-dim h3{font-size:.98rem;line-height:1.25;margin:0 0 6px;color:var(--ink);overflow-wrap:anywhere}
 .hstand-dim p{font-size:.84rem;line-height:1.48;color:var(--muted);margin:0}
 .hstand-measures{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
@@ -3248,6 +3306,13 @@ body.swr-busy::after{
 .hstand-bc-win{display:inline-block;margin-top:10px;font-size:.82rem;font-weight:700;color:var(--sage);
   background:var(--sage-bg);border-radius:999px;padding:5px 12px}
 .hstand-bc-note{font-size:.8rem;line-height:1.45;color:var(--ink-2);margin-top:11px}
+/* the regional DEXA read — visceral fat, bone density, lean index, fat distribution */
+.hstand-bc-regional{margin-top:13px;display:grid;gap:9px;padding-top:12px;border-top:1px solid var(--line)}
+.hstand-bc-rnote{display:flex;gap:9px;align-items:flex-start;font-size:.82rem;line-height:1.45;color:var(--ink-2)}
+.hstand-bc-rdot{width:7px;height:7px;border-radius:50%;background:var(--line-2);margin-top:6px;flex:0 0 auto}
+.hstand-bc-rnote.hstand-strong .hstand-bc-rdot{background:var(--sage)}
+.hstand-bc-rnote.hstand-steady .hstand-bc-rdot{background:var(--gold)}
+.hstand-bc-rnote.hstand-watch .hstand-bc-rdot{background:var(--warn)}
 
 /* blood pressure that READS — interpretation + trajectory, capture behind a tap */
 .hstand-bp-cat{flex:0 0 auto;font-size:.62rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
@@ -3266,9 +3331,6 @@ body.swr-busy::after{
 /* the holistic balance line — permission to live */
 .hstand-balance{background:var(--sage-bg);border-radius:var(--radius);padding:15px 18px}
 .hstand-balance p{font-size:.88rem;line-height:1.55;color:var(--ink-2);margin:7px 0 0;font-style:italic}
-
-/* the folded-in agentic depth (synthesis + recovery + brain), set off below the read */
-.hstand-depth{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}
 
 /* relocated BP capture sheet */
 .bpsheet-ov{position:fixed;inset:0;z-index:80;background:rgba(33,29,23,.42);backdrop-filter:blur(3px);
@@ -3404,9 +3466,6 @@ body.swr-busy::after{
   border-radius:var(--radius-sm);backdrop-filter:blur(8px) saturate(1.05);
   -webkit-backdrop-filter:blur(8px) saturate(1.05)}
 .hmk-groupnote{margin:0 2px 8px;color:var(--muted);font-size:.76rem;line-height:1.45}
-/* foot of the Markers catalog → a quiet path to the Share shelf (the doctor report) */
-.hmk-share-foot{margin-top:18px;padding-top:14px;border-top:1px solid var(--line);
-  display:flex;justify-content:center}
 .hmk-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
   padding:4px 0;overflow:hidden}
 .hmk-subhead{padding:10px 16px 7px;border-top:1px solid var(--line);color:var(--muted);
@@ -3732,11 +3791,10 @@ button.hmk-row:active{background:var(--card-2)}
   #hlist>*{margin-bottom:0;min-width:0}
   #hlist>.empty{grid-column:1/-1}
 
-  /* ME → Health → Read — narrative review + recovery as the primary column, the
-     connected brain (directives / what-matters-now / supplements) as a right rail */
-  .hread-cols{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(300px,1fr);
-    gap:24px;align-items:start}
-  .hread-main,.hread-rail{min-width:0}
+  /* ME → Health → Read — one editorial column, capped + left-aligned (like Profile)
+     so the synthesis story and connected-brain cards keep a comfortable reading width
+     instead of stretching across the full pane. Single column = no empty-gutter break. */
+  .hread{max-width:880px}
 
   /* ME → Health → Standing — comparisons + BP log side-by-side, dimensions below */
   .hstand-hero{grid-template-columns:minmax(0,1fr) minmax(250px,.46fr);align-items:end}
@@ -4209,6 +4267,12 @@ button.hmk-row:active{background:var(--card-2)}
 .ex-rx-up .ex-rx-delta{color:var(--sage)}
 .ex-rx-down .ex-rx-delta{color:var(--accent)}
 .ex-rx-why{margin-top:4px;font-size:.82rem;line-height:1.45;color:var(--ink-2)}
+/* "rotate one in" — the same-pattern swap menu on a 'switch it up' prescription */
+.ex-rx-vary-menu{margin-top:8px}
+.ex-rx-vary-lbl{display:block;color:var(--stone-taupe);margin-bottom:5px;letter-spacing:.06em}
+.ex-rx-opts{display:flex;flex-wrap:wrap;gap:6px}
+.ex-rx-opt{font-size:.78rem;padding:4px 10px;border-radius:999px;background:var(--paper);
+  color:var(--ink-2);border:1px solid var(--line-2)}
 
 /* ---- Today: "it followed your logs" banner + apply control ---- */
 .rx-banner{
@@ -4391,6 +4455,105 @@ button.hmk-row:active{background:var(--card-2)}
 .pperf-opt{font-size:.78rem;padding:4px 11px;border-radius:999px;background:var(--card-2);color:var(--ink-2)}
 .pperf-balance{font-size:.85rem;line-height:1.55;color:var(--muted);padding:2px 4px;font-style:italic}
 
+/* ── new "what changed & why" kinds: this week's runs / DEXA focus / a test week ─── */
+.padj-cardio .padj-glyph{color:var(--sage)}
+.padj-dexa .padj-glyph{color:var(--accent)}
+.padj-test .padj-glyph{color:var(--gold)}
+
+/* ── This week's runs — the periodized weekly mix (Progress → Endurance) ────────── */
+.wrun-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px;margin:14px 0 4px}
+.wrun-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.wrun-mix{font-family:var(--font-display);font-variation-settings:"opsz" 48;font-weight:560;
+  font-size:1.04rem;color:var(--ink)}
+.wrun-focus{margin-top:9px;font-size:.86rem;line-height:1.45;color:var(--ink-2)}
+.wrun-focus .lbl{display:inline;color:var(--accent-deep);margin-right:5px}
+.wrun-rows{display:grid;gap:9px;margin-top:13px}
+.wrun-row{background:var(--card-2);border-radius:var(--radius-sm);padding:10px 12px;
+  border-left:3px solid var(--line-2)}
+.wrun-row.wrun-easy{border-left-color:var(--sage)}
+.wrun-row.wrun-long{border-left-color:var(--sage)}
+.wrun-row.wrun-quality{border-left-color:var(--gold)}
+.wrun-row-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.wrun-kind{font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted)}
+.wrun-easy .wrun-kind,.wrun-long .wrun-kind{color:var(--sage)}
+.wrun-quality .wrun-kind{color:var(--stone-taupe)}
+.wrun-label{font-weight:600;font-size:.9rem;color:var(--ink)}
+.wrun-pres{margin-top:5px;font-variation-settings:"opsz" 32;font-weight:560;font-size:.92rem;
+  color:var(--ink-2);font-variant-numeric:lining-nums}
+.wrun-note{margin-top:4px;font-size:.82rem;line-height:1.45;color:var(--muted)}
+.wrun-why{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+.wrun-why .lbl{display:block;color:var(--muted);margin-bottom:6px}
+.wrun-why p{font-size:.84rem;line-height:1.5;color:var(--ink-2);margin:0 0 5px}
+.wrun-why p:last-child{margin-bottom:0}
+
+/* ── a test week is about due (Progress → Program banner) ───────────────────────── */
+.ptest-slot:empty{display:none}
+.ptest-banner{background:color-mix(in srgb,var(--gold) 12%,var(--card));border-radius:var(--radius);
+  border-left:3px solid var(--gold);padding:13px 16px;margin:4px 0}
+.ptest-head{display:flex;align-items:center;gap:8px}
+.ptest-glyph{color:var(--gold);font-size:.9rem}
+.ptest-title{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
+  font-size:1rem;color:var(--ink)}
+.ptest-why{margin-top:5px;font-size:.84rem;line-height:1.45;color:var(--ink-2)}
+.ptest-lifts{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.ptest-lift{font-size:.78rem;padding:4px 10px;border-radius:999px;background:var(--paper);
+  color:var(--ink-2);border:1px solid var(--line-2)}
+
+/* ── muscle groups — advancing vs stalling (Progress → Program strip) ───────────── */
+.pmus-slot:empty{display:none}
+.pmus-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px;margin:2px 0 4px}
+.pmus-card-head{display:block;color:var(--muted);margin-bottom:9px;letter-spacing:.06em}
+.pmus-headline{font-size:.9rem;line-height:1.5;color:var(--ink-2);margin-bottom:11px}
+.pmus-rows{display:grid;gap:11px}
+.pmus-row{padding:11px 0;border-top:1px solid var(--line)}
+.pmus-row:first-of-type{border-top:none;padding-top:0}
+.pmus-row:last-of-type{padding-bottom:0}
+.pmus-row-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.pmus-name{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:540;
+  font-size:1.02rem;color:var(--ink);text-transform:capitalize}
+.pmus-verdict{font-size:.68rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:3px 9px;border-radius:999px;background:var(--card-2);color:var(--muted);flex:0 0 auto}
+.pmus-verdict.pmus-v-strong{background:var(--sage-bg);color:var(--sage)}
+.pmus-verdict.pmus-v-steady{background:color-mix(in srgb,var(--gold) 16%,var(--card));color:var(--stone-taupe)}
+.pmus-verdict.pmus-v-watch{background:var(--warn-bg);color:var(--warn)}
+.pmus-figs{margin-top:6px}
+.pmus-signal{margin-top:5px;font-size:.84rem;line-height:1.45;color:var(--accent-deep)}
+.pmus-note{margin-top:5px;font-size:.84rem;line-height:1.45;color:var(--ink-2)}
+.pmus-vary{margin-top:9px}
+.pmus-vary-lbl{display:block;color:var(--stone-taupe);margin-bottom:5px;letter-spacing:.06em}
+.pmus-opts{display:flex;flex-wrap:wrap;gap:6px}
+.pmus-opt{font-size:.78rem;padding:4px 10px;border-radius:999px;background:var(--card-2);
+  color:var(--ink-2);border:1px solid var(--line-2)}
+
+/* ── From your DEXA — what to focus on next (Program + Standing) ─────────────────── */
+.pdexa-slot:empty{display:none}
+.pdexa-card{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:16px 18px;margin:2px 0 4px}
+.pdexa-card-head{margin-bottom:13px}
+.pdexa-card-head .lbl{display:block;color:var(--muted);letter-spacing:.06em;margin-bottom:4px}
+.pdexa-focus{font-family:var(--font-display);font-variation-settings:"opsz" 50;font-weight:560;
+  font-size:1.12rem;line-height:1.2;color:var(--ink)}
+.pdexa-targets{display:grid;gap:11px}
+.pdexa-target{background:var(--card-2);border-radius:var(--radius-sm);padding:12px 14px;
+  border-left:3px solid var(--line-2)}
+.pdexa-target.pdexa-train{border-left-color:var(--sage)}
+.pdexa-target.pdexa-nut{border-left-color:var(--gold)}
+.pdexa-target.pdexa-info{border-left-color:var(--stone-taupe)}
+.pdexa-target-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.pdexa-area{font-weight:600;font-size:.92rem;color:var(--ink);text-transform:capitalize}
+.pdexa-tag{flex:0 0 auto;color:var(--muted);text-transform:none;letter-spacing:.02em}
+.pdexa-signal{margin-top:5px;font-size:.84rem;line-height:1.45;color:var(--ink-2)}
+.pdexa-bias{margin-top:4px;font-size:.84rem;line-height:1.45;color:var(--ink-2)}
+.pdexa-moves{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.pdexa-move{font-size:.78rem;padding:4px 10px;border-radius:999px;background:var(--paper);
+  color:var(--ink-2);border:1px solid var(--line-2)}
+.pdexa-path{margin-top:10px;background:var(--paper);border-radius:var(--radius-sm);padding:9px 11px;
+  font-size:.82rem;line-height:1.45;color:var(--ink-2)}
+.pdexa-path .lbl{display:block;color:var(--accent-deep);margin-bottom:3px}
+
 /* ── Phone & PWA access: Settings card + the "add to home screen" coach on Today.
    Calm, copy-first; pull-not-push. Tokens only — no new palette. ───────────────── */
 .phone-access{margin:8px 0 16px}
@@ -4523,3 +4686,96 @@ button.hmk-row:active{background:var(--card-2)}
 
 /* Food-edit detail sheet: macro inputs in a tidy 2-up grid. */
 .fed-macros{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* ─── The conductor: one sequenced whole-athlete focus (coachingFocusCardHtml) ───
+   The cross-domain analog of the health-focus lever. ONE coach's note: a headline
+   through-line, the sage-spined LEAD hero (mirrors .pperf-hero / .hstand-lever),
+   the things handled alongside, the deferred sequence, the plain ties, and one
+   batched re-test. Calm, scannable, no scores. Slot self-hides when empty. */
+.cfocus-slot:empty{display:none}
+.cfocus{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  border-left:3px solid var(--sage);padding:16px 18px;margin-bottom:16px}
+.cfocus-mast{display:block;color:var(--sage);margin-bottom:7px;letter-spacing:.06em}
+.cfocus-headline{font-family:var(--font-display);font-weight:560;
+  font-variation-settings:"opsz" 48;font-size:1.12rem;line-height:1.3;
+  color:var(--ink);margin:0 0 13px}
+
+/* domain tag — a quiet reused label, no new glyph vocabulary */
+.cfocus-dom{flex:0 0 auto;color:var(--muted);letter-spacing:.1em}
+
+/* the lead — the single highest-leverage lever */
+.cfocus-lead{margin-bottom:13px}
+.cfocus-lead-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.cfocus-lead-title{font-family:var(--font-display);font-weight:560;
+  font-variation-settings:"opsz" 40;font-size:1.02rem;line-height:1.25;
+  color:var(--ink);margin:0}
+.cfocus-lead-why{margin:6px 0 0;font-size:.86rem;line-height:1.5;color:var(--ink-2)}
+.cfocus-lead-move{margin:9px 0 0;background:var(--card-2);border-radius:var(--radius-sm);
+  padding:9px 12px;font-size:.85rem;line-height:1.5;color:var(--ink)}
+.cfocus-lead-move .lbl{display:block;margin-bottom:3px;color:var(--sage)}
+
+/* alongside — the parallel levers, compact rows tagged by domain */
+.cfocus-along{border-top:1px solid var(--line);padding-top:12px;margin-bottom:11px}
+.cfocus-sec-lbl{display:block;color:var(--muted);margin-bottom:8px}
+.cfocus-along-row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:5px 0}
+.cfocus-along-title{font-weight:600;font-size:.88rem;color:var(--ink)}
+.cfocus-along-why{flex:1 1 100%;font-size:.82rem;line-height:1.45;color:var(--ink-2)}
+.cfocus-along-move{flex:1 1 100%;font-size:.82rem;line-height:1.45;color:var(--ink);font-weight:600}
+
+/* later — the deferred sequence, one calm line */
+.cfocus-later{margin:0 0 11px;font-size:.84rem;line-height:1.5;color:var(--ink-2)}
+.cfocus-later-lbl{font-weight:600;color:var(--muted)}
+
+/* the cross-domain ties — plain italic */
+.cfocus-conn{margin:0 0 9px;font-size:.84rem;line-height:1.5;font-style:italic;color:var(--ink-2)}
+
+/* one batched re-test — the single check-in */
+.cfocus-retest{border-top:1px solid var(--line);padding-top:11px;margin-top:2px}
+.cfocus-retest-lbl{display:block;color:var(--muted);margin-bottom:4px}
+.cfocus-retest-body{font-size:.86rem;line-height:1.5;color:var(--ink)}
+.cfocus-retest-when{color:var(--sage);font-weight:600}
+.cfocus-retest-why{display:block;margin-top:3px;font-size:.8rem;line-height:1.45;color:var(--muted)}
+
+/* interconnection: a focus row taps through to where the work happens (Program,
+   Endurance, Meals, Markers). The read is a launchpad into the plan, not a dead overview. */
+.cfocus-go{cursor:pointer}
+.cfocus-go:focus-visible{outline:2px solid var(--sage);outline-offset:3px;border-radius:var(--radius-sm)}
+.cfocus-go:hover .cfocus-lead-title,
+.cfocus-go:hover .cfocus-along-title,
+.cfocus-go:hover .cfocus-retest-body{color:var(--sage)}
+.cfocus-go-arrow{margin-left:auto;flex:0 0 auto;color:var(--muted);font-weight:600;opacity:.55;
+  transition:transform .15s ease,opacity .15s ease}
+.cfocus-go:hover .cfocus-go-arrow{opacity:1;transform:translateX(2px)}
+@media (prefers-reduced-motion:reduce){.cfocus-go-arrow,.cfocus-thread-go{transition:none}}
+
+/* the conductor leads the Standing review (Me's first tab); a touch of air above the read */
+.cfocus-standing-slot:not(:empty){margin-bottom:14px}
+
+/* Today's thread — ONE calm line that opens the full focus card on Me → Standing */
+.cfocus-thread{display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  background:var(--card);border:none;border-left:3px solid var(--sage);
+  border-radius:var(--radius-sm);box-shadow:var(--shadow-sm);
+  padding:10px 13px;margin:0 0 12px;cursor:pointer;font:inherit;color:var(--ink);
+  transition:background .15s ease}
+.cfocus-thread:hover{background:var(--card-2)}
+.cfocus-thread-arrow{flex:0 0 auto;color:var(--sage);font-weight:700}
+.cfocus-thread-lbl{flex:0 0 auto;color:var(--sage);letter-spacing:.08em}
+.cfocus-thread-txt{flex:1 1 auto;min-width:0;font-size:.9rem;font-weight:560;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfocus-thread-go{flex:0 0 auto;color:var(--muted);font-weight:600;transition:transform .15s ease}
+.cfocus-thread:hover .cfocus-thread-go{transform:translateX(2px)}
+
+/* ─── Generic "full read" disclosure — collapse depth one tap away ───────────
+   Reusable by the Phase-2 surface agents (Program / Endurance / Health) to tuck
+   the secondary sections behind a quiet, calm summary without touching the CSS.
+   Styled like .hist-fold (a ▸ that rotates open); body stacks its children. */
+.full-read{margin-top:14px}
+.full-read>summary{display:flex;align-items:center;gap:7px;cursor:pointer;
+  list-style:none;color:var(--muted);font-family:var(--font-ui);font-size:.8rem;
+  letter-spacing:.02em;padding:8px 2px}
+.full-read>summary::-webkit-details-marker{display:none}
+.full-read>summary::before{content:"▸";font-size:.7rem;transition:transform .15s ease}
+.full-read[open]>summary::before{transform:rotate(90deg)}
+.full-read>summary:hover{color:var(--ink-2)}
+.full-read-body{margin-top:12px;display:flex;flex-direction:column;gap:14px}
+@media (prefers-reduced-motion: reduce){ .full-read>summary::before{transition:none} }

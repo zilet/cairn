@@ -46,7 +46,17 @@ function rxTargetText(rx) {
 }
 
 // The per-card prescription line. `rx` is one Prescription from the progression
-// engine (or null → renders nothing). Calm, no score, one move + its why.
+// engine (or null → renders nothing). Calm, no score, one move + its why. When the
+// move is "switch it up" (action:'vary'), the engine hands a small menu of same-
+// pattern swaps (vary_options:[{name,why}]) — we render them as a quiet "rotate one
+// in" chip row so the athlete picks, never a forced single substitution.
+function exRxVaryMenuHtml(rx) {
+  const opts = Array.isArray(rx && rx.vary_options) ? rx.vary_options.filter((o) => o && o.name) : [];
+  if (!opts.length) return "";
+  const chips = opts.slice(0, 3).map((o) =>
+    `<span class="ex-rx-opt"${o.why ? ` title="${escAttr(o.why)}"` : ""}>${escHtml(o.name)}</span>`).join("");
+  return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">rotate one in</span><div class="ex-rx-opts">${chips}</div></div>`;
+}
 function exRxLineHtml(rx) {
   if (!rx) return "";
   const meta = RX_ACTION[rx.action] || RX_ACTION.hold;
@@ -59,6 +69,7 @@ function exRxLineHtml(rx) {
         ${delta ? `<span class="ex-rx-delta">${delta}</span>` : ""}
       </div>
       ${rx.why ? `<div class="ex-rx-why">${escHtml(rx.why)}</div>` : ""}
+      ${rx.action === "vary" ? exRxVaryMenuHtml(rx) : ""}
     </div>`;
 }
 
@@ -634,8 +645,11 @@ function briefHtml(read, { showPlan, isToday }) {
   const forward = read.forward && kind !== "done" ? escHtml(read.forward) : "";
   // The goal ARC — where today sits on the path to the goals (one quiet clause, taps to
   // the Program view). Pull, never push; null when there's no goal/block/race. Shown on
-  // a done day too (the arc is forward-looking, not a "what's next today").
-  const arc = read.arc ? escHtml(read.arc) : "";
+  // a done day too (the arc is forward-looking, not a "what's next today"). We render
+  // AT MOST ONE forward-looking line: the near-term ↗ Next wins, and the ◷ goal-arc
+  // only shows when there's no Next — so the Brief never stacks two parallel forward
+  // glyphs (the conductor card carries the longer-horizon framing now).
+  const arc = read.arc && !forward ? escHtml(read.arc) : "";
 
   // ---- Actions: ONE clear thing to do. The accent primary is reserved for a
   // train day ("start the session"); easy/rest stay calm with NO accent CTA, so
@@ -1118,9 +1132,9 @@ function wireGenericAgendaCards(pending) {
       const c = pending.find((x) => x.id === id);
       const payload = c && c.action ? c.action.payload : null;
       if (kind.startsWith("chat")) { gotoChatWith(typeof payload === "string" ? payload : (c && c.title) || ""); return; }
-      // Deep-link into Me → Health → Standing (mirrors the #ctxHealthGo convention:
-      // set the seg state, then activate the Me tab so it renders the right sub-view).
-      if (kind === "me-health-standing") { state.meSeg = "health"; state.healthSeg = "standing"; activateTab("me"); return; }
+      // Deep-link into Me → Standing (the whole-athlete review; set the seg state,
+      // then activate the Me tab so it renders the right sub-view).
+      if (kind === "me-health-standing") { state.meSeg = "standing"; activateTab("me"); return; }
       if (kind.startsWith("tab:")) { activateTab(kind.slice(4)); return; }
       // an unrecognized action kind: a calm no-op rather than a broken link.
     });
@@ -1464,7 +1478,26 @@ async function renderToday(opts = {}) {
   </aside>`;
   let agenda = null;
   const agendaGeneric = []; // generic Era-2 cards we drew (wired after the write)
-  if (!focus) agenda = await fetchTodayAgenda(state.logDate);
+  // The CONDUCTOR — one sequenced whole-athlete focus (GET /api/coaching-focus), the
+  // cross-domain analog of the health focus. It leads Today just under the Brief and
+  // SUBSUMES the parallel banner cluster: when it's available it carries the one
+  // highest-leverage lever, so the standalone health-lever line (#ctxHealth) and the
+  // ◎ goal line / ✦ draft banner stand down (one voice, not five). Fetched in parallel
+  // with the agenda so it adds no serial latency; null/unavailable (thin athlete /
+  // offline / route absent) degrades cleanly — the old lines return exactly as before.
+  let conductor = null;
+  if (!focus) {
+    [agenda, conductor] = await Promise.all([
+      fetchTodayAgenda(state.logDate),
+      api("/coaching-focus").catch(() => null),
+    ]);
+  }
+  // On Today the conductor shows as ONE thread line — the full lead/alongside/
+  // later/check-in card is a weeks-cadence review that lives on Me → Standing.
+  // The thread still subsumes the redundant compass + health-lever banner lines,
+  // but a pending plan PROPOSAL (the brain's prepared change) always shows below.
+  const conductorHtml = conductor ? coachingFocusThreadHtml(conductor) : "";
+  const conductorLeads = !!conductorHtml; // the thread has something to lead with
   const railHtml = focus
     ? ""
     : (agenda ? buildAgendaRailHtml(agenda, agendaGeneric) : fixedRailHtml);
@@ -1474,7 +1507,8 @@ async function renderToday(opts = {}) {
     : `${isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${briefHtml(read, { showPlan, hasPlanDay, isToday })}
-    ${goalLineHtml(stats, curW, isToday)}
+    ${conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
+    ${conductorLeads ? "" : goalLineHtml(stats, curW, isToday)}
     <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
     <div class="capture-row reveal" style="--i:1">
@@ -1751,7 +1785,10 @@ async function renderToday(opts = {}) {
     // morning check-in / a waiting draft) live in .today-main, not the arbitrated
     // rail, so they load unconditionally as before.
     loadContextBanner();
-    loadHealthFocusBanner();
+    // The standalone health-lever line is SUBSUMED by the conductor when it leads —
+    // one voice. It only loads (and the ◎ goal line / ✦ draft banner only render)
+    // when the conductor is unavailable, so Today degrades to exactly its prior shape.
+    if (!conductorLeads) loadHealthFocusBanner();
     loadWearable(isToday);
     if (isToday) { loadCheckin(); loadDraftProposals(); }
     // The RAIL is arbiter-governed: run only the surfaces the agenda surfaced (in its
@@ -3259,8 +3296,10 @@ async function loadHealthFocusBanner() {
       <span class="ctxbanner-go" aria-hidden="true">→</span>
     </button>`;
   wrap.querySelector("#ctxHealthGo").addEventListener("click", () => {
+    // the synthesis + connected-brain focus now live on Health → Read
     state.meSeg = "health";
-    state.healthSeg = "standing"; // the synthesis + connected-brain focus now live on Standing
+    state.healthSeg = "read";
+    state.healthSegPicked = true;
     activateTab("me");
   });
 }
