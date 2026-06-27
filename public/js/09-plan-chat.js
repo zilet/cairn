@@ -1207,7 +1207,10 @@ function appendMsg(m, noScroll, parent, opts = {}) {
   const body = hideText ? "" : m.role === "assistant"
     ? `<div class="bubble-text md">${mdToHtml(m.content)}</div>`
     : `<div class="bubble-text">${escHtml(m.content)}</div>`;
-  const photo = meta?.image ? `<img class="bubble-img" alt="attached photo" loading="lazy" src="${escAttr(meta.image)}" onerror="this.remove()">` : "";
+  const photoSrc = meta?.image && String(meta.image).startsWith("/api/chat-images/")
+    ? withToken(meta.image)
+    : meta?.image;
+  const photo = photoSrc ? `<img class="bubble-img" alt="attached photo" loading="lazy" src="${escAttr(photoSrc)}" onerror="this.remove()">` : "";
   const time = `<span class="bubble-time">${escHtml(chatClock(m.created_at))}</span>`;
   const canCopy = m.role === "assistant" && !hideText && !!m.content;
   const copyBtn = canCopy ? `<button class="bubble-copy" aria-label="Copy reply" title="Copy">${COPY_ICON}</button>` : "";

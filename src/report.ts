@@ -666,10 +666,10 @@ const STYLE = `
 *{box-sizing:border-box}
 html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 body{margin:0;background:var(--paper);color:var(--ink);
-  font-family:'Schibsted Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
   font-size:13px;line-height:1.5}
 .wrap{max-width:880px;margin:0 auto;padding:22px 26px 112px}
-h1,h2,.brand{font-family:'Fraunces',Georgia,'Times New Roman',serif;font-weight:600;letter-spacing:-.01em}
+h1,h2,.brand{font-family:Georgia,'Times New Roman',serif;font-weight:600;letter-spacing:-.01em}
 a{color:var(--terra)}
 
 /* screen-only toolbar */
@@ -800,7 +800,7 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
     : "";
 
   const supps = data.supplements.length
-    ? `<section class="suppwrap"><h2 style="font-family:'Fraunces',Georgia,serif;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:4px;margin:0 0 6px">Supplements</h2>
+    ? `<section class="suppwrap"><h2 style="font-family:Georgia,serif;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:4px;margin:0 0 6px">Supplements</h2>
        <ul class="supps">${data.supplements
          .map((s) => `<li>${esc(s.name)}${[s.dose, s.frequency].filter(Boolean).length ? ` — ${esc([s.dose, s.frequency].filter(Boolean).join(", "))}` : ""}</li>`)
          .join("")}</ul></section>`
@@ -814,9 +814,6 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Health Summary${name ? ` — ${name}` : ""}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>${STYLE}</style>
 </head>
 <body>

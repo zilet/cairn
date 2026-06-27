@@ -89,6 +89,7 @@ test("renders no 0-100 score and escapes document-sourced strings (HTML)", () =>
   assert.ok(/not medical advice/i.test(html) && /not medical advice/i.test(text), "disclaimer present on both renders");
   assert.ok(html.includes('class="actionbar no-print"'), "text/PDF export actions live in a sticky bottom action bar");
   assert.ok(html.includes("Copy text for MyChart"), "plain-text doctor copy is directly reachable");
+  assert.ok(!/https:\/\/fonts\.(?:googleapis|gstatic)\.com/.test(html), "doctor report is self-contained and makes no third-party font requests");
 });
 
 test("plain-text twin carries findings + a copy-ready structure", () => {

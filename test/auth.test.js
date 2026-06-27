@@ -10,6 +10,7 @@ test("query-token auth is limited to browser-only GET surfaces", () => {
   assert.equal(queryTokenAllowedPath("/api/export/db"), true);
   assert.equal(queryTokenAllowedPath("/api/health-export"), true);
   assert.equal(queryTokenAllowedPath("/api/plan.ics"), true);
+  assert.equal(queryTokenAllowedPath("/api/chat-images/123e4567-e89b-12d3-a456-426614174000.jpg"), true);
   // Generated artwork is loaded via <img> (can't set headers) → query token must pass.
   assert.equal(queryTokenAllowedPath("/api/art"), true);
 });
