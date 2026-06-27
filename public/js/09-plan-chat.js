@@ -594,10 +594,27 @@ function renderEnduranceDraftResult(p) {
 // Document-level paste listener for the chat view; swapped on every renderChat.
 let chatPasteHandler = null;
 let chatFuelContext = [];
+const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024; // mirrors src/api.ts CHAT_IMAGE_MAX_BYTES
+const CHAT_IMAGE_EDGE_STEPS = [1280, 1024, 768];
+const CHAT_IMAGE_QUALITY_STEPS = [0.82, 0.72, 0.62, 0.52];
+
+function base64DecodedBytes(base64) {
+  const s = String(base64 || "").replace(/\s/g, "");
+  const pad = s.endsWith("==") ? 2 : s.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((s.length * 3) / 4) - pad);
+}
+
+function chatImagePayload(dataUrl) {
+  const base64 = String(dataUrl || "").split(",")[1] || "";
+  return { dataUrl, base64, mime: "image/jpeg", bytes: base64DecodedBytes(base64) };
+}
+
 // Downscale + re-encode a picked photo to JPEG before upload: phone camera
 // shots are 3-12MB HEIC/JPEG; ~1280px @ q0.82 is plenty for a plate estimate
 // (and Safari decodes HEIC natively, so re-encoding also normalizes the type).
-async function compressChatImage(file, maxEdge = 1280, quality = 0.82) {
+// If the first pass still exceeds the server cap, step down deterministically
+// instead of letting Express reject the whole JSON body with a generic 413.
+async function compressChatImage(file) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((resolve, reject) => {
@@ -606,13 +623,21 @@ async function compressChatImage(file, maxEdge = 1280, quality = 0.82) {
       i.onerror = () => reject(new Error("Couldn't read that image"));
       i.src = url;
     });
-    const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
-    const c = document.createElement("canvas");
-    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
-    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-    const dataUrl = c.toDataURL("image/jpeg", quality);
-    return { dataUrl, base64: dataUrl.split(",")[1], mime: "image/jpeg" };
+    let last = null;
+    for (const maxEdge of CHAT_IMAGE_EDGE_STEPS) {
+      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      for (const quality of CHAT_IMAGE_QUALITY_STEPS) {
+        last = chatImagePayload(c.toDataURL("image/jpeg", quality));
+        if (last.bytes <= CHAT_IMAGE_MAX_BYTES) return last;
+      }
+    }
+    const err = new Error("image-too-large");
+    err.bytes = last ? last.bytes : 0;
+    throw err;
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -941,7 +966,11 @@ async function renderChat() {
       preview.querySelector("img").src = attached.dataUrl;
       preview.hidden = false;
       attachBtn.classList.add("has-img");
-    } catch { toast("Couldn't read that image — try another."); clearAttach(); }
+    } catch (e) {
+      const tooLarge = e && e.message === "image-too-large";
+      toast(tooLarge ? "That photo is too large — try a closer crop." : "Couldn't read that image — try another.");
+      clearAttach();
+    }
   };
   // One "+" control. On iOS a file input with no `capture` opens the native
   // sheet (Take Photo / Photo Library / Choose File); desktop opens the file
