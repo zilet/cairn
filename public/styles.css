@@ -4556,26 +4556,34 @@ button.hmk-row:active{background:var(--card-2)}
 
 /* ── Phone & PWA access: Settings card + the "add to home screen" coach on Today.
    Calm, copy-first; pull-not-push. Tokens only — no new palette. ───────────────── */
-.phone-access{margin:8px 0 16px}
+.phone-access{margin:14px 0 16px;overflow:hidden}
+.phone-access>summary{min-width:0}
+.phone-access-summary{display:flex;flex-direction:column;gap:3px;min-width:0}
+.phone-access-tease{font-size:.82rem;line-height:1.35;color:var(--muted)}
+.phone-access-body{margin-top:10px}
 .phone-access .cmd-line{
   margin:10px 0 0;font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
   font-size:.86rem;line-height:1.4;color:var(--ink-2);
   background:var(--card-2);padding:7px 9px;border-radius:8px;
-  overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;
+  box-sizing:border-box;max-width:100%;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;
 }
 .phone-access .phone-access-then{margin-top:6px}
-.phone-access .phone-access-token{margin-top:10px}
+.phone-access .phone-access-token{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
 .phone-access .phone-token{
-  margin-left:8px;font-family:var(--font-mono,ui-monospace,monospace);
+  min-width:0;max-width:100%;font-family:var(--font-mono,ui-monospace,monospace);
   font-size:.82rem;color:var(--ink-2);word-break:break-all;
 }
 .phone-access .phone-token-set{color:var(--sage)}
 .phone-access .phone-cmd-inline{
   font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
   font-size:.85em;background:var(--card-2);padding:1px 5px;border-radius:5px;
-  white-space:nowrap;
+  display:inline-block;box-sizing:border-box;max-width:100%;overflow-x:auto;white-space:nowrap;
 }
 .phone-access .small-note{margin-top:8px;color:var(--muted);font-size:.8rem;line-height:1.45}
+@media (max-width:480px){
+  .phone-access .cmd-line{font-size:.8rem}
+  .phone-access .ghostbtn{max-width:100%;white-space:normal}
+}
 
 .phone-coach{margin:14px 0 4px}
 .phone-coach .phone-coach-sub{margin-top:4px;color:var(--muted)}
