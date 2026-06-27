@@ -768,7 +768,11 @@ function renderTab(tab) {
   if (tab === "today") return renderToday();
   if (tab === "plan") {
     const jump = state.planJump; state.planJump = null;
-    return jump === "food" ? renderFoodJournal() : jump === "meals" ? renderMeals() : jump === "coach" ? renderCoach() : renderPlanEditor();
+    return jump === "food" ? renderFoodJournal()
+      : jump === "meals" ? renderMeals()
+      : jump === "coach" ? renderCoach()
+      : jump === "endurance" && showEnduranceTab() ? renderPlanEndurance()
+      : renderPlanEditor();
   }
   // Endurance athletes land on the Endurance read first (gentle emphasis, not a
   // different app — History/1RM/Volume are all still one tap away). A user who has
@@ -789,7 +793,14 @@ function renderTab(tab) {
 function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
   if (tab === "progress") { const seg = defaultProgressSeg(); return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3); }
-  if (tab === "plan") return segSkeleton(state.planJump === "food" ? "food" : state.planJump === "meals" ? "meals" : state.planJump === "coach" ? "coach" : "edit", planSeg(), 3);
+  if (tab === "plan") {
+    const jump = state.planJump === "food" ? "food"
+      : state.planJump === "meals" ? "meals"
+      : state.planJump === "coach" ? "coach"
+      : state.planJump === "endurance" && showEnduranceTab() ? "endurance"
+      : "edit";
+    return segSkeleton(jump, planSeg(), 3);
+  }
   if (tab === "me") {
     // Me opens to the Standing review (renderMe defaults meSeg → "standing").
     const seg = state.meSeg || "standing";

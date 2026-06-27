@@ -1148,9 +1148,18 @@ function wireGenericAgendaCards(pending) {
       const c = pending.find((x) => x.id === id);
       const payload = c && c.action ? c.action.payload : null;
       if (kind.startsWith("chat")) { gotoChatWith(typeof payload === "string" ? payload : (c && c.title) || ""); return; }
+      if (kind === "plan-coach") { state.planJump = "coach"; activateTab("plan"); return; }
+      if (kind === "plan-endurance") { state.planJump = "endurance"; activateTab("plan"); return; }
       // Deep-link into Me → Standing (the whole-athlete review; set the seg state,
       // then activate the Me tab so it renders the right sub-view).
       if (kind === "me-health-standing") { state.meSeg = "standing"; activateTab("me"); return; }
+      if (kind === "me-health-read") {
+        state.meSeg = "health";
+        state.healthSeg = "read";
+        state.healthSegPicked = true;
+        activateTab("me");
+        return;
+      }
       if (kind.startsWith("tab:")) { activateTab(kind.slice(4)); return; }
       // an unrecognized action kind: a calm no-op rather than a broken link.
     });

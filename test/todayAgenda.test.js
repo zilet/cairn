@@ -12,7 +12,7 @@
 // goal-checkin) stay silent and the candidate set under test is fully controlled.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedIntake } from "./_seed.js";
+import { db, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -112,6 +112,34 @@ test("surfaced candidates carry the tier of their bucket (primary vs more)", () 
   assert.ok(a.primary.every((c) => c.tier === "primary"));
   assert.ok(a.more.every((c) => c.tier === "more"));
   assert.equal(a.total, a.primary.length + a.more.length);
+});
+
+test("agenda-only draft, health, and running candidates render as generic cards", () => {
+  repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
+  repo.savePlanDay(1, "Run", "Endurance", [
+    { kind: "cardio", exercise: "Long run", target_distance_km: 16 },
+  ]);
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+  ]);
+  repo.deriveDirectives();
+
+  const agenda = repo.todayAgenda();
+  const all = [...agenda.primary, ...agenda.more];
+  const byId = (id) => all.find((c) => c.id === id);
+
+  assert.equal(byId("draft-proposals")?.client_card, undefined, "drafts must not name an unmounted rail slot");
+  assert.equal(byId("draft-proposals")?.action?.kind, "plan-coach");
+  assert.ok(byId("draft-proposals")?.title);
+
+  assert.equal(byId("health-focus")?.client_card, undefined, "health focus must render as generic agenda copy");
+  assert.equal(byId("health-focus")?.action?.kind, "me-health-read");
+  assert.ok(byId("health-focus")?.title);
+
+  assert.equal(byId("run-compliance")?.client_card, undefined, "run compliance must render as generic agenda copy");
+  assert.equal(byId("run-compliance")?.action?.kind, "plan-endurance");
+  assert.ok(byId("run-compliance")?.title);
 });
 
 // ---- one producer throwing never breaks the agenda (each read is isolated) ----

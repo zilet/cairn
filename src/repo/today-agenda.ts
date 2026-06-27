@@ -138,12 +138,16 @@ function planDraftCandidate(): TodayAgendaCandidate | null {
   const plans = listProposals(8) as any[];
   const drafts = (Array.isArray(plans) ? plans : []).filter((p) => p && p.status === "draft");
   if (!drafts.length) return null;
+  const raw = String(drafts[0]?.instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
   return {
     id: "draft-proposals",
     kind: "plan",
     tier: "primary",
     priority: 78,
-    client_card: "draft-proposals",
+    kicker: "PLAN DRAFT",
+    title: drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting",
+    body: raw || "Review the coach's draft before anything changes.",
+    action: { label: "Review", kind: "plan-coach" },
   };
 }
 
@@ -166,7 +170,10 @@ function healthCandidate(): TodayAgendaCandidate | null {
     kind: "health",
     tier: actNow > 0 ? "primary" : "more",
     priority: actNow > 0 ? 80 : 46,
-    client_card: "health-focus",
+    kicker: "HEALTH READ",
+    title: actNow > 0 ? "A health lever is worth reading today" : "Your connected health read has an update",
+    body: "Open the full read when you want the context behind today's coaching.",
+    action: { label: "Open read", kind: "me-health-read" },
   };
 }
 
@@ -285,7 +292,10 @@ function runComplianceCandidate(): TodayAgendaCandidate | null {
     kind: "training",
     tier: "more",
     priority: 36,
-    client_card: "run-compliance",
+    kicker: "RUNNING",
+    title: rc?.in_words ? String(rc.in_words) : "This week's runs have a plan to compare against",
+    body: "Check the endurance view for the week shape and any synced-watch context.",
+    action: { label: "Open endurance", kind: "plan-endurance" },
   };
 }
 
