@@ -1034,6 +1034,20 @@ const TODAY_RAIL_SLOTS = {
   "garmin-reconcile": `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>`,
   lately: `<div id="qlRecent" class="ql-recent lately-slot"></div>`,
 };
+const TODAY_PRIMARY_CLIENT_MAX = 2;
+
+function canRenderAgendaCard(c) {
+  if (!c) return false;
+  return c.client_card ? !!TODAY_RAIL_SLOTS[c.client_card] : true;
+}
+
+function renderableAgendaBuckets(agenda) {
+  const ordered = [...(agenda.primary || []), ...(agenda.more || [])].filter(canRenderAgendaCard);
+  return {
+    primary: ordered.slice(0, TODAY_PRIMARY_CLIENT_MAX),
+    more: ordered.slice(TODAY_PRIMARY_CLIENT_MAX),
+  };
+}
 
 // Fetch the agenda for a date. Best-effort + null-safe: a 404 during dev (route not
 // wired yet) or any failure returns null, and the caller falls back to the CURRENT
@@ -1075,15 +1089,16 @@ function genericAgendaCardHtml(c, revealIdx) {
 // just the Brief). `genericPending` collects the generic candidates we drew so the
 // caller can wire them after the innerHTML write.
 function buildAgendaRailHtml(agenda, genericPending) {
+  const buckets = renderableAgendaBuckets(agenda);
   const cardHtml = (c) => {
     if (c.client_card) return TODAY_RAIL_SLOTS[c.client_card] || ""; // existing card slot
     // generic Era-2 card — index doesn't matter much; stagger by collection order.
     genericPending.push(c);
     return genericAgendaCardHtml(c, genericPending.length - 1);
   };
-  const primaryHtml = agenda.primary.map(cardHtml).filter(Boolean).join("");
-  const moreCards = agenda.more.map(cardHtml).filter(Boolean).join("");
-  const n = agenda.more.length;
+  const primaryHtml = buckets.primary.map(cardHtml).filter(Boolean).join("");
+  const moreCards = buckets.more.map(cardHtml).filter(Boolean).join("");
+  const n = buckets.more.length;
   const moreHtml = (n > 0 && moreCards)
     ? `<details class="today-more" id="todayMore">
         <summary class="today-more-sum"><span class="today-more-lbl">${n === 1 ? "1 more" : `${n} more`}</span><span class="today-more-chev" aria-hidden="true">▾</span></summary>
@@ -1108,7 +1123,8 @@ function buildAgendaRailHtml(agenda, genericPending) {
 // fire it once.
 function runAgendaRail(agenda, genericPending) {
   const called = new Set();
-  for (const c of [...agenda.primary, ...agenda.more]) {
+  const buckets = renderableAgendaBuckets(agenda);
+  for (const c of [...buckets.primary, ...buckets.more]) {
     if (!c.client_card) continue;
     const loader = TODAY_RAIL_LOADERS[c.client_card];
     if (!loader || called.has(loader)) continue;
@@ -2457,7 +2473,12 @@ async function refreshAdaptedRx() {
 
 // Log one set from a card's logrow; update the card inline without a full re-render.
 function wireLogRow(row) {
-  row.querySelector(".logbtn").addEventListener("click", async () => {
+  if (!row) return;
+  const logBtn = row.querySelector(".logbtn");
+  if (!logBtn || logBtn._wired) return;
+  logBtn._wired = true;
+  logBtn.addEventListener("click", async () => {
+    if (logBtn.disabled) return;
     const timed = row.dataset.mode === "timed";
     let body;
     if (timed) {
@@ -2485,11 +2506,24 @@ function wireLogRow(row) {
         date: state.logDate,
       };
     }
-    const res = await api("/sets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    logBtn.disabled = true;
+    let res;
+    try {
+      res = await api("/sets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      logBtn.disabled = false;
+      toast("Couldn't log that set — check your connection.");
+      return;
+    }
+    logBtn.disabled = false;
+    if (!res || res.ok === false || res.error || res.id == null) {
+      toast(res && res.error ? res.error : "Couldn't log that set.");
+      return;
+    }
     state.brief = null; // a logged set reshapes today — the next Today render re-reads the Brief
     // a logged set changes this date's session, the weekly stats, and the History
     // list — drop their SWR caches so every surface revalidates to truth.

@@ -2,13 +2,21 @@
 // the weekly auto-coach schedule, and the enrich/art toggles all live here and
 // are editable at runtime — so a setSettings -> getSettings round-trip MUST
 // persist faithfully and reject nonsense (an unknown strategy falls back).
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
 
+const originalSettingsSecretKey = process.env.CAIRN_SETTINGS_SECRET_KEY;
+
 beforeEach(() => {
+  process.env.CAIRN_SETTINGS_SECRET_KEY = "";
   // Settings is a single id=1 row; reset it so each case starts from defaults.
   try { db.prepare("DELETE FROM settings WHERE id = 1").run(); } catch {}
+});
+
+after(() => {
+  if (originalSettingsSecretKey === undefined) delete process.env.CAIRN_SETTINGS_SECRET_KEY;
+  else process.env.CAIRN_SETTINGS_SECRET_KEY = originalSettingsSecretKey;
 });
 
 test("getSettings lazily creates the singleton with sane defaults", () => {
@@ -114,4 +122,107 @@ test("setSettings({agent_routes:{}}) clears all routing", () => {
   repo.setSettings({ agent_routes: { chat: "claude", meal_plan: "stub" } });
   repo.setSettings({ agent_routes: {} });
   assert.deepEqual(repo.getSettings().agent_routes, {});
+});
+
+test("settings-saved secrets stay out of API-shaped settings responses", () => {
+  repo.setSettings({
+    garmin_username: "athlete@example.com",
+    garmin_password: "watch-password",
+    gemini_api_key: "gemini-key",
+  });
+  const s = repo.getSettings();
+  assert.equal("garmin_password" in s, false);
+  assert.equal("gemini_api_key" in s, false);
+  assert.equal(s.garmin_password_configured, true);
+  assert.equal(s.gemini_api_key_configured, true);
+  assert.deepEqual(repo.getGarminCredentials(), {
+    username: "athlete@example.com",
+    password: "watch-password",
+    configured: true,
+  });
+  assert.equal(repo.getGeminiApiKey(), "gemini-key");
+});
+
+test("CAIRN_SETTINGS_SECRET_KEY encrypts Settings-saved Garmin and Gemini secrets", () => {
+  process.env.CAIRN_SETTINGS_SECRET_KEY = "0".repeat(64);
+  repo.setSettings({
+    garmin_username: "athlete@example.com",
+    garmin_password: "watch-password",
+    gemini_api_key: "gemini-key",
+  });
+
+  const raw = db.prepare(
+    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+  ).get();
+  assert.equal(raw.garmin_password, "");
+  assert.equal(raw.gemini_api_key, "");
+  assert.match(raw.garmin_password_encrypted, /^enc:v1:/);
+  assert.match(raw.gemini_api_key_encrypted, /^enc:v1:/);
+  assert.deepEqual(repo.getGarminCredentials(), {
+    username: "athlete@example.com",
+    password: "watch-password",
+    configured: true,
+  });
+  assert.equal(repo.getGeminiApiKey(), "gemini-key");
+  assert.equal(repo.getSettings().garmin_credentials_source, "settings");
+  assert.equal(repo.getSettings().gemini_api_key_source, "settings");
+
+  repo.setSettings({ coach_hour: 6 });
+  const afterPartial = db.prepare(
+    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+  ).get();
+  assert.equal(afterPartial.garmin_password, "");
+  assert.equal(afterPartial.gemini_api_key, "");
+  assert.equal(afterPartial.garmin_password_encrypted, raw.garmin_password_encrypted);
+  assert.equal(afterPartial.gemini_api_key_encrypted, raw.gemini_api_key_encrypted);
+});
+
+test("legacy plaintext Settings secrets seal themselves once an encryption key is present", () => {
+  repo.setSettings({
+    garmin_username: "athlete@example.com",
+    garmin_password: "legacy-password",
+    gemini_api_key: "legacy-gemini",
+  });
+  let raw = db.prepare(
+    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+  ).get();
+  assert.equal(raw.garmin_password, "legacy-password");
+  assert.equal(raw.gemini_api_key, "legacy-gemini");
+  assert.equal(raw.garmin_password_encrypted, "");
+  assert.equal(raw.gemini_api_key_encrypted, "");
+
+  process.env.CAIRN_SETTINGS_SECRET_KEY = "seal-test-key";
+  assert.equal(repo.getSettings().garmin_password_configured, true);
+  raw = db.prepare(
+    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+  ).get();
+  assert.equal(raw.garmin_password, "");
+  assert.equal(raw.gemini_api_key, "");
+  assert.match(raw.garmin_password_encrypted, /^enc:v1:/);
+  assert.match(raw.gemini_api_key_encrypted, /^enc:v1:/);
+  assert.deepEqual(repo.getGarminCredentials(), {
+    username: "athlete@example.com",
+    password: "legacy-password",
+    configured: true,
+  });
+  assert.equal(repo.getGeminiApiKey(), "legacy-gemini");
+});
+
+test("clear flags remove encrypted Settings secrets without requiring plaintext echoes", () => {
+  process.env.CAIRN_SETTINGS_SECRET_KEY = "clear-test-key";
+  repo.setSettings({
+    garmin_username: "athlete@example.com",
+    garmin_password: "watch-password",
+    gemini_api_key: "gemini-key",
+  });
+  repo.setSettings({ clear_garmin_password: true, clear_gemini_api_key: true });
+  const raw = db.prepare(
+    "SELECT garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1"
+  ).get();
+  assert.equal(raw.garmin_password, "");
+  assert.equal(raw.garmin_password_encrypted, "");
+  assert.equal(raw.gemini_api_key, "");
+  assert.equal(raw.gemini_api_key_encrypted, "");
+  assert.equal(repo.getGarminCredentials().configured, false);
+  assert.equal(repo.getGeminiApiKey(), "");
 });

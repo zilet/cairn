@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { listAgents, agentVersion } from "../agents.js";
+import crypto from "node:crypto";
 
 // ---------- settings & agent selection ----------
 export interface Settings {
@@ -76,7 +77,9 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["meal_prefs", "TEXT DEFAULT ''"],
   ["garmin_username", "TEXT DEFAULT ''"],
   ["garmin_password", "TEXT DEFAULT ''"],
+  ["garmin_password_encrypted", "TEXT DEFAULT ''"],
   ["gemini_api_key", "TEXT DEFAULT ''"],
+  ["gemini_api_key_encrypted", "TEXT DEFAULT ''"],
   ["garmin_last_sync_at", "TEXT DEFAULT ''"],
   ["garmin_last_sync_status", "TEXT DEFAULT ''"],
   ["research_enabled", "INTEGER DEFAULT 0"],
@@ -86,6 +89,91 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
 ];
 let settingsSchemaChecked = false;
 
+type SettingsSecretField = "garmin_password" | "gemini_api_key";
+
+const SECRET_ENV_KEY = "CAIRN_SETTINGS_SECRET_KEY";
+const SECRET_STORAGE_PREFIX = "enc:v1";
+const SECRET_ENCRYPTED_COLUMNS: Record<SettingsSecretField, string> = {
+  garmin_password: "garmin_password_encrypted",
+  gemini_api_key: "gemini_api_key_encrypted",
+};
+
+function settingsEncryptionKey(): Buffer | null {
+  const raw = String(process.env[SECRET_ENV_KEY] ?? "").trim();
+  if (!raw) return null;
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, "hex");
+  if (raw.startsWith("base64:")) {
+    try {
+      const decoded = Buffer.from(raw.slice("base64:".length), "base64");
+      if (decoded.length === 32) return decoded;
+      if (decoded.length) return crypto.createHash("sha256").update(decoded).digest();
+    } catch {
+      // Fall through to hashing the raw value.
+    }
+  }
+  return crypto.createHash("sha256").update(raw, "utf8").digest();
+}
+
+function aadForSecret(field: SettingsSecretField): Buffer {
+  return Buffer.from(`cairn.settings.${field}.v1`, "utf8");
+}
+
+function encryptSettingSecret(field: SettingsSecretField, value: string): string | null {
+  const key = settingsEncryptionKey();
+  if (!key) return null;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(aadForSecret(field));
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${SECRET_STORAGE_PREFIX}:${iv.toString("base64url")}:${tag.toString("base64url")}:${ciphertext.toString("base64url")}`;
+}
+
+function decryptSettingSecret(field: SettingsSecretField, stored: string): string {
+  const value = String(stored ?? "").trim();
+  if (!value) return "";
+  if (!value.startsWith(`${SECRET_STORAGE_PREFIX}:`)) return value;
+  const key = settingsEncryptionKey();
+  if (!key) return "";
+  const [, version, ivRaw, tagRaw, ciphertextRaw] = value.split(":");
+  if (version !== "v1" || !ivRaw || !tagRaw || !ciphertextRaw) return "";
+  try {
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivRaw, "base64url"));
+    decipher.setAAD(aadForSecret(field));
+    decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(ciphertextRaw, "base64url")),
+      decipher.final(),
+    ]).toString("utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function readStoredSecret(row: any, field: SettingsSecretField): string {
+  const encrypted = String(row?.[SECRET_ENCRYPTED_COLUMNS[field]] ?? "").trim();
+  if (encrypted) {
+    const decrypted = decryptSettingSecret(field, encrypted);
+    if (decrypted) return decrypted;
+  }
+  return String(row?.[field] ?? "").trim();
+}
+
+function secretStorageFor(field: SettingsSecretField, value: string) {
+  const clean = String(value ?? "").trim();
+  if (!clean) return { legacy: "", encrypted: "" };
+  const encrypted = encryptSettingSecret(field, clean);
+  if (encrypted) return { legacy: "", encrypted };
+  return { legacy: clean, encrypted: "" };
+}
+
+function preservedSecretStorage(row: any, field: SettingsSecretField) {
+  return {
+    legacy: String(row?.[field] ?? ""),
+    encrypted: String(row?.[SECRET_ENCRYPTED_COLUMNS[field]] ?? ""),
+  };
+}
+
 function ensureSettingsSchema() {
   if (settingsSchemaChecked) return;
   const cols = new Set((db.prepare(`PRAGMA table_info(settings)`).all() as any[]).map((r) => String(r.name)));
@@ -93,6 +181,38 @@ function ensureSettingsSchema() {
     if (!cols.has(name)) db.exec(`ALTER TABLE settings ADD COLUMN ${name} ${def}`);
   }
   settingsSchemaChecked = true;
+}
+
+function sealLegacySettingsSecrets(row: any) {
+  if (!settingsEncryptionKey()) return row;
+  let changed = false;
+  let garminPasswordEncrypted = String(row?.garmin_password_encrypted ?? "");
+  let geminiApiKeyEncrypted = String(row?.gemini_api_key_encrypted ?? "");
+  const legacyGarminPassword = String(row?.garmin_password ?? "").trim();
+  const legacyGeminiApiKey = String(row?.gemini_api_key ?? "").trim();
+  if (legacyGarminPassword) {
+    const next = secretStorageFor("garmin_password", legacyGarminPassword);
+    if (next.encrypted) {
+      garminPasswordEncrypted = next.encrypted;
+      changed = true;
+    }
+  }
+  if (legacyGeminiApiKey) {
+    const next = secretStorageFor("gemini_api_key", legacyGeminiApiKey);
+    if (next.encrypted) {
+      geminiApiKeyEncrypted = next.encrypted;
+      changed = true;
+    }
+  }
+  if (!changed) return row;
+  db.prepare(
+    `UPDATE settings
+       SET garmin_password = '', garmin_password_encrypted = ?,
+           gemini_api_key = '', gemini_api_key_encrypted = ?,
+           updated_at = datetime('now')
+       WHERE id = 1`
+  ).run(garminPasswordEncrypted, geminiApiKeyEncrypted);
+  return db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
 }
 
 function defaultSettings(): Settings {
@@ -155,7 +275,7 @@ function parseArr(s: any): string[] {
 
 function rowToSettings(row: any): Settings {
   const rowGarminUser = String(row.garmin_username ?? "").trim();
-  const rowGarminPass = String(row.garmin_password ?? "").trim();
+  const rowGarminPass = readStoredSecret(row, "garmin_password");
   const envGarminUser = process.env.GARMIN_USERNAME || "";
   const envGarminPass = process.env.GARMIN_PASSWORD || "";
   const hasSettingsGarmin = !!(rowGarminUser || rowGarminPass);
@@ -165,7 +285,7 @@ function rowToSettings(row: any): Settings {
     hasSettingsGarmin && hasEnvGarmin ? "mixed" :
     hasSettingsGarmin ? "settings" :
     hasEnvGarmin ? "env" : "none";
-  const rowGemini = String(row.gemini_api_key ?? "").trim();
+  const rowGemini = readStoredSecret(row, "gemini_api_key");
   const envGemini = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
   return {
     agent_strategy: row.agent_strategy || "round_robin",
@@ -203,7 +323,8 @@ function rowToSettings(row: any): Settings {
 
 export function getSettings(): Settings {
   ensureSettingsSchema();
-  const row = db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
+  let row = db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
+  if (row) row = sealLegacySettingsSecrets(row);
   if (row) return rowToSettings(row);
   const d = defaultSettings();
   db.prepare(
@@ -216,17 +337,31 @@ export function getSettings(): Settings {
 export function setSettings(patch: any): Settings {
   ensureSettingsSchema();
   const cur = getSettings();
-  const raw = db.prepare(`SELECT garmin_username, garmin_password, gemini_api_key FROM settings WHERE id = 1`).get() as any;
+  const raw = db.prepare(
+    `SELECT garmin_username, garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1`
+  ).get() as any;
   const incomingGarminPassword = patch.garmin_password !== undefined ? String(patch.garmin_password).trim() : undefined;
   const incomingGeminiKey = patch.gemini_api_key !== undefined ? String(patch.gemini_api_key).trim() : undefined;
-  const garminPassword =
-    incomingGarminPassword === undefined ? (raw?.garmin_password ?? "") :
-    incomingGarminPassword ? incomingGarminPassword :
-    (patch.clear_garmin_password ? "" : (raw?.garmin_password ?? ""));
-  const geminiApiKey =
-    incomingGeminiKey === undefined ? (raw?.gemini_api_key ?? "") :
-    incomingGeminiKey ? incomingGeminiKey :
-    (patch.clear_gemini_api_key ? "" : (raw?.gemini_api_key ?? ""));
+  const existingGarminPassword = readStoredSecret(raw, "garmin_password");
+  const existingGeminiApiKey = readStoredSecret(raw, "gemini_api_key");
+  let garminPasswordForStatus = existingGarminPassword;
+  let geminiApiKeyForStatus = existingGeminiApiKey;
+  let garminPasswordStorage = preservedSecretStorage(raw, "garmin_password");
+  let geminiApiKeyStorage = preservedSecretStorage(raw, "gemini_api_key");
+  if (patch.clear_garmin_password) {
+    garminPasswordForStatus = "";
+    garminPasswordStorage = secretStorageFor("garmin_password", "");
+  } else if (incomingGarminPassword !== undefined && incomingGarminPassword) {
+    garminPasswordForStatus = incomingGarminPassword;
+    garminPasswordStorage = secretStorageFor("garmin_password", incomingGarminPassword);
+  }
+  if (patch.clear_gemini_api_key) {
+    geminiApiKeyForStatus = "";
+    geminiApiKeyStorage = secretStorageFor("gemini_api_key", "");
+  } else if (incomingGeminiKey !== undefined && incomingGeminiKey) {
+    geminiApiKeyForStatus = incomingGeminiKey;
+    geminiApiKeyStorage = secretStorageFor("gemini_api_key", incomingGeminiKey);
+  }
   const merged: Settings = {
     agent_strategy: patch.agent_strategy ?? cur.agent_strategy,
     agent_order: patch.agent_order ?? cur.agent_order,
@@ -247,13 +382,13 @@ export function setSettings(patch: any): Settings {
         : cur.art_enabled_at,
     meal_prefs: String(patch.meal_prefs ?? cur.meal_prefs).trim().slice(0, 2000),
     garmin_username: patch.garmin_username !== undefined ? String(patch.garmin_username).trim().slice(0, 320) : String(raw?.garmin_username ?? ""),
-    garmin_password_configured: !!garminPassword || cur.garmin_password_configured,
+    garmin_password_configured: !!garminPasswordForStatus || cur.garmin_password_configured,
     garmin_credentials_source: cur.garmin_credentials_source,
     // Sync status is read-only here — recorded by setGarminSyncStatus() and not
     // part of the UPDATE below, so a settings save never clobbers it.
     garmin_last_sync_at: cur.garmin_last_sync_at,
     garmin_last_sync_status: cur.garmin_last_sync_status,
-    gemini_api_key_configured: !!geminiApiKey || cur.gemini_api_key_configured,
+    gemini_api_key_configured: !!geminiApiKeyForStatus || cur.gemini_api_key_configured,
     gemini_api_key_source: cur.gemini_api_key_source,
     research_enabled: patch.research_enabled !== undefined ? !!patch.research_enabled : cur.research_enabled,
     bg_ops_enabled: patch.bg_ops_enabled !== undefined ? !!patch.bg_ops_enabled : cur.bg_ops_enabled,
@@ -274,21 +409,24 @@ export function setSettings(patch: any): Settings {
   db.prepare(
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
-       garmin_username=?, garmin_password=?, gemini_api_key=?, research_enabled=?, bg_ops_enabled=?, agent_routes=?, update_check_enabled=?, updated_at=datetime('now') WHERE id = 1`
+       garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, update_check_enabled=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy, JSON.stringify(merged.agent_order), JSON.stringify(merged.disabled_agents),
     merged.rr_cursor, merged.coach_enabled ? 1 : 0, merged.coach_day, merged.coach_hour,
     merged.onboarded ? 1 : 0, merged.enrich_enabled ? 1 : 0, merged.proactive_enabled ? 1 : 0, merged.art_enabled ? 1 : 0, merged.art_enabled_at ?? "", merged.meal_prefs,
-    merged.garmin_username, garminPassword, geminiApiKey, merged.research_enabled ? 1 : 0, merged.bg_ops_enabled ? 1 : 0, JSON.stringify(merged.agent_routes), merged.update_check_enabled ? 1 : 0
+    merged.garmin_username, garminPasswordStorage.legacy, garminPasswordStorage.encrypted, geminiApiKeyStorage.legacy, geminiApiKeyStorage.encrypted,
+    merged.research_enabled ? 1 : 0, merged.bg_ops_enabled ? 1 : 0, JSON.stringify(merged.agent_routes), merged.update_check_enabled ? 1 : 0
   );
   return getSettings();
 }
 
 export function getGarminCredentials() {
   ensureSettingsSchema();
-  const row = db.prepare(`SELECT garmin_username, garmin_password FROM settings WHERE id = 1`).get() as any;
+  let row = db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
+  if (row) row = sealLegacySettingsSecrets(row);
   const username = String(row?.garmin_username ?? "").trim() || process.env.GARMIN_USERNAME || "";
-  const password = String(row?.garmin_password ?? "").trim() || process.env.GARMIN_PASSWORD || "";
+  const password = readStoredSecret(row, "garmin_password") || process.env.GARMIN_PASSWORD || "";
   return { username, password, configured: !!(username && password) };
 }
 
@@ -305,8 +443,9 @@ export function setGarminSyncStatus(status: string) {
 
 export function getGeminiApiKey() {
   ensureSettingsSchema();
-  const row = db.prepare(`SELECT gemini_api_key FROM settings WHERE id = 1`).get() as any;
-  return String(row?.gemini_api_key ?? "").trim() || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
+  let row = db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
+  if (row) row = sealLegacySettingsSecrets(row);
+  return readStoredSecret(row, "gemini_api_key") || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY || "";
 }
 
 // agents.json merged with settings: effective order + enabled/usable flags.

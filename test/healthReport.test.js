@@ -11,9 +11,11 @@
 //   - all document-sourced strings are HTML-escaped in the HTML render
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { repo, resetTables, seedHealthDoc, marker } from "./_seed.js";
 import {
   buildClinicalReportData,
+  reportScriptCspHash,
   renderClinicalReportHTML,
   renderClinicalReportText,
 } from "../dist/report.js";
@@ -90,6 +92,11 @@ test("renders no 0-100 score and escapes document-sourced strings (HTML)", () =>
   assert.ok(html.includes('class="actionbar no-print"'), "text/PDF export actions live in a sticky bottom action bar");
   assert.ok(html.includes("Copy text for MyChart"), "plain-text doctor copy is directly reachable");
   assert.ok(!/https:\/\/fonts\.(?:googleapis|gstatic)\.com/.test(html), "doctor report is self-contained and makes no third-party font requests");
+  assert.doesNotMatch(html, /\son[a-z]+\s*=/i, "report has no inline event-handler attributes");
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script, "report export controls keep their self-contained script");
+  const hash = `'sha256-${crypto.createHash("sha256").update(script).digest("base64")}'`;
+  assert.equal(reportScriptCspHash(), hash, "report CSP hash matches the rendered inline script exactly");
 });
 
 test("plain-text twin carries findings + a copy-ready structure", () => {

@@ -1772,7 +1772,7 @@ function ensureAgentLoginStyles() {
   border-radius:var(--radius,18px);box-shadow:var(--shadow-lg,0 28px 64px rgba(0,0,0,.3));
   overflow:hidden;font-family:var(--font-ui,system-ui,sans-serif)}
 .agent-login-hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e7dfd2)}
-.agent-login-hd h2{margin:0;font-family:var(--font-display,Fraunces,serif);font-size:19px;font-weight:600;flex:1;line-height:1.2}
+.agent-login-hd h2{margin:0;font-family:var(--font-display,Georgia,serif);font-size:19px;font-weight:600;flex:1;line-height:1.2}
 .agent-login-x{appearance:none;border:0;background:transparent;color:var(--muted,#746c5c);
   font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:8px}
 .agent-login-x:hover{color:var(--ink,#211d17);background:var(--paper,#f4efe7)}

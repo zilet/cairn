@@ -21,7 +21,12 @@ GARMIN_TOKEN_DIR="/path/to/token-dir"
 
 You can also enter the Garmin email/password in the PWA Settings tab. Saved
 settings override `GARMIN_USERNAME` / `GARMIN_PASSWORD`; blank secret fields in
-Settings preserve the current saved/env value.
+Settings preserve the current saved/env value. For the lowest plaintext exposure,
+prefer env vars. If you use Settings for the password, set a stable
+`CAIRN_SETTINGS_SECRET_KEY` in `.env`; Cairn will store new Settings secrets
+encrypted at rest and will seal older plaintext rows the next time settings or
+Garmin credentials are read. Keep that key backed up: if it is lost, encrypted
+Settings secrets must be re-entered.
 
 Manual sync:
 

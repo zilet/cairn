@@ -390,13 +390,14 @@ model (and, for grok/agy, its model catalog).
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code — sign in (URL + code)
 docker exec -u app -it cairn codex login         # Codex — ChatGPT login
-docker exec -u app -it cairn agy                 # Antigravity (Google) — paste code fast, ~30s
-docker exec -u app -it cairn grok login          # Grok — device login (or set XAI_API_KEY)
+docker exec -u app -it cairn agy                 # Antigravity (Google), if installed
+docker exec -u app -it cairn grok login          # Grok, if installed (or set XAI_API_KEY)
 ```
 Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
 (re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent
 in **Settings → Agents**. Notes: `claude -p` on subscription draws from a separate Agent SDK credit
-pool from 2026-06-15; `agy`/`grok` are beta installers — verify them on your target architecture.
+pool from 2026-06-15; `agy`/`grok` use beta vendor installers and are not baked into the default
+release image unless the maintainer supplies a checksum or explicitly opts into unverified installers.
 
 Cairn does **not** proxy a shared API key or shared subscription. The container only ships the
 runner binaries; each user logs in with their own Claude / ChatGPT / Google / xAI account, and
@@ -404,8 +405,8 @@ the `cairn-home` Docker volume keeps those auth directories across restarts and 
 
 ### Updating CLI tools
 
-The image installs the latest enabled CLIs at build time. For a long-running install, update them
-from **Settings → Agents → Update CLI tools**, or from the shell:
+The image installs pinned Claude Code and Codex CLI versions at build time. For a long-running
+install, update them from **Settings → Agents → Update CLI tools**, or from the shell:
 
 ```bash
 docker exec -u app cairn cairn-update-agent-clis
@@ -414,7 +415,7 @@ docker exec -u app cairn cairn-update-agent-clis
 To force a fresh CLI install during an image rebuild without a full Docker cache wipe:
 
 ```bash
-AGENT_CLI_CACHE_BUST=$(date +%s) docker compose build cairn
+docker compose build --build-arg AGENT_CLI_CACHE_BUST="$(date +%s)" cairn
 docker compose up -d
 ```
 

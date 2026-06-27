@@ -40,13 +40,15 @@ Theme-color / manifest background: `#f4efe7`. Color-scheme: light. Status bar: `
 
 ## Typography
 
-- **Display: `Fraunces`** (Google Fonts, variable: opsz 9..144, wght 300..700, + italic).
+- **Display:** system serif stack (`ui-serif`, Iowan Old Style, Georgia, Times New Roman).
   Headings, day names, big numerals (calories, weights, stat strip), section titles.
   Big numerals use `font-variation-settings:"opsz" 144` and weight 560–620.
-- **Body/UI: `Schibsted Grotesk`** (400/500/700). All body copy, inputs, buttons.
-- **Labels:** Schibsted Grotesk uppercase, `letter-spacing:.18em`, `font-size:.62rem`,
+- **Body/UI:** system sans stack (`ui-sans-serif`, system-ui, -apple-system, Segoe UI).
+  All body copy, inputs, buttons.
+- **Labels:** system sans uppercase, `letter-spacing:.18em`, `font-size:.62rem`,
   color `var(--muted)` — the "PROTEIN ───" caps style. Class: `.lbl`.
-- Load fonts in `index.html` from Google Fonts CDN (replaces Oswald + Hanken Grotesk).
+- The main PWA does not load third-party fonts. Keep typography on local/system stacks unless a
+  future slice deliberately self-hosts font files under `public/`.
 
 ## Texture & atmosphere
 
@@ -102,25 +104,25 @@ New/changed components (CSS must implement, app.js must emit):
 - `.artile` — illustration tile: `display:grid;place-items:center`, transparent (art carries its
   own circle). Sizes: `.artile-lg` (96px), `.artile-md` (64px), `.artile-sm` (44px).
 - `.lbl` — tracked caps label (see Typography).
-- `.numeral` — Fraunces display numeral; `.numeral-xl` (2.6rem), `.numeral-lg` (1.6rem).
-- Stat strip: `.statstrip` / `.stat` / `.stat-n` (now Fraunces numeral) / `.stat-l` (`.lbl` style).
+- `.numeral` — display serif numeral; `.numeral-xl` (2.6rem), `.numeral-lg` (1.6rem).
+- Stat strip: `.statstrip` / `.stat` / `.stat-n` (display serif numeral) / `.stat-l` (`.lbl` style).
 - Today exercise card `.ex`: art thumb `.ex-art` (`.artile-sm/md`) left of `.ex-name`
-  (Fraunces, ~1.15rem, weight 540); target weight as `.ex-target` Fraunces numeral;
+  (display serif, ~1.15rem, weight 540); target weight as `.ex-target` display numeral;
   set chips `.chip` are cream pills; completed card gets `.ex-complete` → sage left-edge stamp
   + a small sage "✓ done" mark, slight desaturation.
 - Plan tab (Program gallery): `.prog-day` card per plan day:
-  `.prog-head` (day number small caps + `.prog-name` Fraunces italic + `.prog-focus` muted line),
+  `.prog-head` (day number small caps + `.prog-name` display italic + `.prog-focus` muted line),
   `.prog-strip` horizontal row of `.artile-md` art for the day's exercises (overlapping ~-10px,
   like a catalog contact strip), `.prog-list` of `.prog-row` (small art, name, `sets × reps`
   numerals right-aligned). A `.prog-edit` ghost button flips that day into the existing editor
   markup (`.pday`, `.pi-*` classes — keep them working, restyled as inset wells).
 - Meal plans (Coach tab): `.mp-card`. Header `.mp-hero`: agent + status `.mp-badge` (draft/ok/off),
   daily kcal as `.numeral-xl` + `.lbl "per day"`, protein as `.numeral-lg`. Days `.mp-day`
-  with `.mp-dayname` (Fraunces italic). Each meal `.meal-row`: `.meal-art` (`.artile-md` food art)
+  with `.mp-dayname` (display italic). Each meal `.meal-row`: `.meal-art` (`.artile-md` food art)
   | `.meal-main` (`.meal-name` 600, `.meal-items` muted) | `.meal-macros` right column —
   kcal numeral + tiny `P / C / F` caps figures when present.
 - Finished-session **done card** `.sessiondone`: centered card with a sage `.done-mark`
-  check, `.done-kicker` (`.lbl`), `.done-title` (Fraunces), `.done-chips` (cream pills:
+  check, `.done-kicker` (`.lbl`), `.done-title` (display serif), `.done-chips` (cream pills:
   sets/tonnage/duration), optional `.done-notes` (italic), the `#feedbackSlot` ("how did
   that feel?"), and `.done-actions` (Log more / In your history →). No score, ever.
 - History session card `.sess.hist` is tappable (`.hist-tap`, `role="button"`) → opens the
@@ -254,7 +256,7 @@ one-off spinner. Motion is slow and legible under `prefers-reduced-motion`.
   surface being (re)generated (e.g. the Brief reshaping on an override chip).
 - **`.typing`** — three breathing dots for the chat reply; the pending assistant
   bubble renders an optional caption + `.typing`.
-- **`loadingState(label)`** → `.loadstate`: a centered `.aspin` + Fraunces-italic
+- **`loadingState(label)`** → `.loadstate`: a centered `.aspin` + display-italic
   label for a whole region that's fetching/thinking — the one case the inline
   pieces above don't cover (the chat log hydrating, the history overlay loading).
 - **`.hshimmer`** — the shimmer skeleton placeholder (Health-view picture build).
@@ -332,7 +334,7 @@ tapped tile (`openDetailFrom(tile, build)`) and closed by ✕ / Escape / backdro
 └ .detail-scroll       centred column, max 560px
   ├ .detail-art        hero plate: artImg artile-xl · view-transition-name: detail-art
   │   └ .detail-art-zoom   wheel/pinch "lean in" zoom (CSS transform, clamped 1–2.2)
-  ├ .detail-title      Fraunces ~1.8rem
+  ├ .detail-title      display serif ~1.8rem
   ├ .detail-ctx .lbl   tracked caps context ("19% of the day · 20:01" / muscle group)
   ├ .detail-kcal       .detail-num count-up numeral + .detail-unit label
   ├ .detail-spark      tiny terracotta sparkline (est-1RM trend / durations)
@@ -352,9 +354,9 @@ plan, falls back to the newest draft):
 - `.mealhero` — week-of label + `.mp-badge` status + agent, count-up `daily_kcal` /
   `daily_protein_g` numerals, summary line, Keep/Discard `.pillbtn` row for drafts.
 - `.mealday` — one section per day: `.mealday-head` (tiny caps date + `.mealday-name`
-  big Fraunces day name, per-day kcal/protein `.mealday-total`) over a `.mealday-card`
+  big display day name, per-day kcal/protein `.mealday-total`) over a `.mealday-card`
   of `.meal-row`s (artImg food plate | name + items | kcal numeral + P/C/F caps).
-- `.meals-empty` — illustration plate + italic Fraunces title + "Draft weekly meal plan"
+- `.meals-empty` — illustration plate + italic display title + "Draft weekly meal plan"
   CTA (`.meals-cta`), with `.meals-status` for run feedback.
 - `.mp-history` — `<details>` keeping the classic `.mp-card` list as collapsed history.
 - `.shop-chips` — the plan's shopping list as cream chips.

@@ -111,4 +111,6 @@ test("the migrated schema has the columns later code depends on", () => {
   assert.ok(cols("plan_items").has("target_distance_km"), "v35 plan_items.target_distance_km");
   assert.ok(cols("plan_items").has("target_zone"), "v35 plan_items.target_zone");
   assert.ok(cols("sessions").has("kind"), "v35 sessions.kind");
+  assert.ok(cols("settings").has("garmin_password_encrypted"), "v48 settings.garmin_password_encrypted");
+  assert.ok(cols("settings").has("gemini_api_key_encrypted"), "v48 settings.gemini_api_key_encrypted");
 });

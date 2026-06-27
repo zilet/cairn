@@ -46,6 +46,26 @@ Cairn stores personal data, so an exposed instance is a real privacy risk:
 
 Treat both volumes as sensitive. Back them up privately and never commit them.
 
+## Agent CLI updates and supply-chain posture
+
+Cairn can install or refresh third-party coaching CLIs inside the container. Treat
+that as executing vendor code on the Cairn host:
+
+- Claude Code and Codex are installed from npm at explicit versions by default,
+  not from `@latest`. Bump `CLAUDE_CODE_VERSION` or `CODEX_CLI_VERSION`
+  deliberately when rebuilding or running `cairn-update-agent-clis`.
+- Moving npm tags such as `latest` are refused unless
+  `AGENT_CLI_ALLOW_MOVING_TAGS=1` is set for a one-off update.
+- Antigravity and Grok use vendor shell installers. Cairn skips those installers
+  unless a matching `ANTIGRAVITY_INSTALL_SHA256` / `GROK_INSTALL_SHA256` is
+  provided, or you explicitly set `AGENT_INSTALL_ALLOW_UNVERIFIED=1`.
+- The release workflows pin external GitHub Actions to commit SHAs. When updating
+  action versions, resolve the new tag to a SHA and update the adjacent version
+  comment in the workflow at the same time.
+
+Only run automatic CLI updates on a trusted local or tailnet deployment. Do not
+enable them on an internet-exposed instance.
+
 ## Reaching it from your phone — privately vs publicly
 
 There are two very different ways to put Cairn on your phone, and they have very

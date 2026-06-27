@@ -108,7 +108,7 @@ function drawLineChart(canvas, pts, opts = {}) {
   // and the first/last date axis labels. Re-rendered each frame under the highlight.
   const drawBase = () => {
     c.clearRect(0, 0, W, H);
-    c.font = "10px 'Schibsted Grotesk', sans-serif";
+    c.font = "10px system-ui, sans-serif";
     for (let g = 0; g <= 3; g++) {
       const v = min + ((max - min) * g) / 3, yy = y(v);
       c.strokeStyle = withAlpha(C.line2, 0.55); c.lineWidth = 1;
@@ -121,7 +121,7 @@ function drawLineChart(canvas, pts, opts = {}) {
       const gy = y(opts.goal);
       c.save(); c.strokeStyle = C.sage; c.setLineDash([5, 5]); c.lineWidth = 1.5;
       c.beginPath(); c.moveTo(padL, gy); c.lineTo(W - padR, gy); c.stroke(); c.restore();
-      c.fillStyle = C.sage; c.font = "600 9px 'Schibsted Grotesk', sans-serif";
+      c.fillStyle = C.sage; c.font = "600 9px system-ui, sans-serif";
       c.fillText(`GOAL ${opts.goal}`, padL + 3, gy - 5);
     }
     const tracePath = () => {
@@ -145,11 +145,11 @@ function drawLineChart(canvas, pts, opts = {}) {
     if (opts.peak && n > 1) {
       let pi = 0; vals.forEach((v, i) => { if (v > vals[pi]) pi = i; });
       if (pi !== n - 1) {
-        c.fillStyle = C.gold; c.font = "10px 'Schibsted Grotesk', sans-serif"; c.textAlign = "center";
+        c.fillStyle = C.gold; c.font = "10px system-ui, sans-serif"; c.textAlign = "center";
         c.fillText("\u25b2", xs[pi], ys[pi] - 9); c.textAlign = "left";
       }
     }
-    c.fillStyle = C.label; c.font = "10px 'Schibsted Grotesk', sans-serif";
+    c.fillStyle = C.label; c.font = "10px system-ui, sans-serif";
     c.textAlign = "left"; c.fillText(fmtShortDate(pts[0].date), padL, H - 8);
     if (n > 1) { c.textAlign = "right"; c.fillText(fmtShortDate(pts[n - 1].date), W - padR, H - 8); }
     c.textAlign = "left";
@@ -168,7 +168,7 @@ function drawLineChart(canvas, pts, opts = {}) {
     c.beginPath(); c.arc(hx, hy, r, 0, 7); c.fillStyle = C.accent; c.fill();
     c.beginPath(); c.arc(hx, hy, r, 0, 7); c.strokeStyle = C.card; c.lineWidth = 1.6; c.stroke();
     const badgeTxt = withDate ? `${fmtVal(vals[idx])} \u00b7 ${fmtShortDate(pts[idx].date)}` : fmtVal(vals[idx]);
-    c.font = "600 11px 'Schibsted Grotesk', sans-serif";
+    c.font = "600 11px system-ui, sans-serif";
     const tw = c.measureText(badgeTxt).width;
     const bx = Math.min(Math.max(hx - tw / 2 - 8, padL), W - padR - tw - 16);
     let by = hy - 32; if (by < 4) by = hy + 14;
@@ -1963,4 +1963,3 @@ function wireProgramBlock(slot) {
   const comp = slot.querySelector("[data-blockcomplete]");
   if (comp) comp.addEventListener("click", () => armDelete(comp, () => post(`/program/blocks/${comp.dataset.blockcomplete}/complete`, "Block completed")));
 }
-

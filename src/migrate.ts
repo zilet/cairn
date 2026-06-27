@@ -485,6 +485,13 @@ export const MIGRATIONS: Migration[] = [
     // Releases API surfaces "a newer Cairn is available" in Settings → Data
     // (pull, never push). Default ON; one toggle disables the outbound check.
     addColumn(db, "settings", "update_check_enabled INTEGER DEFAULT 1") },
+  { version: 48, name: "settings-encrypted-secrets", up: (db) => {
+    // Local at-rest hardening for Settings-saved connector secrets. The legacy
+    // plaintext columns stay readable for backward compatibility; settings.ts
+    // seals them into these columns when CAIRN_SETTINGS_SECRET_KEY is available.
+    addColumn(db, "settings", "garmin_password_encrypted TEXT DEFAULT ''");
+    addColumn(db, "settings", "gemini_api_key_encrypted TEXT DEFAULT ''");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

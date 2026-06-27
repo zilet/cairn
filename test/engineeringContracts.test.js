@@ -72,6 +72,23 @@ test("Settings route helper exposes stale-route pruning", () => {
   );
 });
 
+test("app shell privacy contract avoids remote fonts and blanket inline scripts", () => {
+  const index = read("public/index.html");
+  const styles = read("public/styles.css");
+  const server = read("src/server.ts");
+  const design = read("docs/DESIGN.md");
+  const scriptSources = server.match(/const scriptSources = \[([^\]]+)\]/)?.[1] || "";
+
+  assert.doesNotMatch(`${index}\n${server}`, /fonts\.(?:googleapis|gstatic)\.com/);
+  assert.doesNotMatch(index, /\sonload\s*=/i, "app shell must not need an inline font-loader handler");
+  assert.doesNotMatch(styles, /Fraunces|Schibsted Grotesk/, "main CSS must not depend on Google font family names");
+  assert.match(design, /does not load third-party fonts/i);
+  assert.match(server, /"font-src 'self'; "/);
+  assert.match(server, /'unsafe-hashes'/, "fixed inline handlers should be hash-gated");
+  assert.doesNotMatch(scriptSources, /unsafe-inline/, "script-src sources must not allow every inline script");
+  assert.match(server, /reportScriptCspHash\(\)/, "report inline script must be allowed by its exact hash");
+});
+
 test("service worker caches core assets strictly and optional assets best-effort", () => {
   const sw = read("public/sw.js");
   assert.match(sw, /const\s+CORE_ASSETS\s*=/);
@@ -90,4 +107,14 @@ test("public docker run quickstarts bind loopback by default", () => {
     !/(^|\s)-p\s+127\.0\.0\.1:8787:8787(\s|\\|$)/.test(b.text)
   );
   assert.deepEqual(unsafe, []);
+});
+
+test("GitHub Actions workflows pin external actions to commit SHAs", () => {
+  for (const file of [".github/workflows/ci.yml", ".github/workflows/release-image.yml"]) {
+    const refs = [...read(file).matchAll(/uses:\s+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@([^\s#]+)/g)];
+    assert.ok(refs.length > 0, `${file} should use at least one external action`);
+    for (const [, action, ref] of refs) {
+      assert.match(ref, /^[0-9a-f]{40}$/, `${file} must pin ${action} to a full commit SHA, not ${ref}`);
+    }
+  }
 });

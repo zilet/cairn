@@ -1,7 +1,7 @@
 /* ===================================================================
    CAIRN — "Atelier" design system
    Warm-gallery / studio-catalog aesthetic. Frozen contract: docs/DESIGN.md
-   Display: Fraunces (variable opsz/wght). UI: Schibsted Grotesk.
+   Display: system serif stack. UI: system sans stack.
    =================================================================== */
 
 /* -------------------------------------------------------------------
@@ -53,8 +53,8 @@
   --press-sm: scale(.94);   /* compact action buttons */
   --press-xs: scale(.9);    /* tiny icon buttons — ×, dots, swatches, chevrons */
 
-  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
-  --font-ui: 'Schibsted Grotesk', 'Helvetica Neue', system-ui, sans-serif;
+  --font-display: ui-serif, 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
   /* Legacy aliases — app.js still emits inline styles referencing the
      old dark-theme variables. Mapped into the Atelier palette so the
@@ -128,7 +128,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   font-size:.62rem;font-weight:600;color:var(--muted);
 }
 
-/* Fraunces display numerals */
+/* Display serif numerals */
 .numeral{
   font-family:var(--font-display);font-weight:580;
   font-variation-settings:"opsz" 144;line-height:1.05;color:var(--ink);
@@ -2777,7 +2777,7 @@ body.swr-busy::after{
 
 /* the weekly read (E3) — "how the week went + the one change". Its own editorial
    card so a newer connection insight never buries it. Distinct identity from the
-   gold-spark connection card: a sage masthead + a larger Fraunces read + the
+   gold-spark connection card: a sage masthead + a larger display read + the
    keystone "One change" in a terracotta-accented well. Reuses the insight foot. */
 .weekly-slot{margin:0}
 .weekly-slot:empty{display:none}
@@ -2890,7 +2890,7 @@ body.swr-busy::after{
 /* -------------------------------------------------------------------
    Settings — meaningful groups
    Each major cluster (Coaching / Connected sources / Automation / Backup)
-   gets a Fraunces title + a hairline rule, so the long Settings view reads
+   gets a display title + a hairline rule, so the long Settings view reads
    as a few clear sections instead of one flat stack of toggles.
    ------------------------------------------------------------------- */
 .set-lede{font-size:.9rem;color:var(--ink-2);line-height:1.55;margin:8px 2px 0}

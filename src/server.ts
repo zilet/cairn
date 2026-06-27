@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
@@ -14,6 +15,7 @@ import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
 import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents.js";
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
+import { reportScriptCspHash } from "./report.js";
 import { runWithTimeZone } from "./tz.js";
 import * as repo from "./repo.js";
 
@@ -44,24 +46,34 @@ if (seedIfEmpty()) console.log("Database was empty — seeded with the default p
 const app = express();
 app.disable("x-powered-by");
 
-// Conservative security headers (no extra dependency). The PWA only loads its
-// own same-origin assets and inline styles/handlers, so a tight CSP is safe.
+function cspSha256(source: string): string {
+  return `'sha256-${crypto.createHash("sha256").update(source).digest("base64")}'`;
+}
+
+// The app shell has a few fixed inline image handlers emitted by JS templates.
+// Allow only those exact handlers instead of enabling every inline script.
+const INLINE_HANDLER_SCRIPT_HASHES = ["_artOk(this)", "_artErr(this)", "this.remove()"].map(cspSha256);
+
+function contentSecurityPolicy(pathname: string): string {
+  const scriptSources = ["'self'", "'unsafe-hashes'", ...INLINE_HANDLER_SCRIPT_HASHES];
+  if (pathname === "/api/health-report") scriptSources.push(reportScriptCspHash());
+
+  return (
+    "default-src 'self'; img-src 'self' data: blob:; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "font-src 'self'; " +
+    `script-src ${scriptSources.join(" ")}; connect-src 'self'; object-src 'none'; ` +
+    "base-uri 'self'; frame-ancestors 'none'"
+  );
+}
+
+// Conservative security headers (no extra dependency). The app shell loads
+// same-origin assets only; inline style remains for dynamic UI layout/animation.
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data: blob:; " +
-      // The Atelier type system (Fraunces + Schibsted Grotesk) loads from the Google
-      // Fonts CDN — the stylesheet from fonts.googleapis.com, the font files from
-      // fonts.gstatic.com. Without these the display type silently falls back to
-      // system fonts on a cold (uncached) client. This is the canonical Google Fonts CSP.
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-      "font-src 'self' https://fonts.gstatic.com; " +
-      "script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; " +
-      "base-uri 'self'; frame-ancestors 'none'"
-  );
+  res.setHeader("Content-Security-Policy", contentSecurityPolicy(_req.path));
   next();
 });
 
@@ -73,9 +85,10 @@ app.use(rateLimitGuard);
 app.use(authGuard);
 
 // Body parsing: a tight 1mb default, with a 25mb window only on the health-doc
-// upload route (base64 of a ~15MB image/PDF). Keeping the large limit off every
-// other endpoint shrinks the unauthenticated-DoS surface.
+// upload route (base64 of a ~15MB image/PDF). Chat photo capture gets a smaller
+// scoped window; every other endpoint stays at 1mb to shrink the DoS surface.
 app.use("/api/health-docs", express.json({ limit: "25mb" }));
+app.use("/api/chat", express.json({ limit: "8mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 // "One local clock that follows the device": the PWA sends its live IANA zone as

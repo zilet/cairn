@@ -150,8 +150,8 @@ container. Building from source? `git pull && docker compose up -d --build`.
 
 ## Updating CLI Tools
 
-The image installs the latest supported CLIs when it is built. On a long-running
-host, update them from Settings -> Agents -> Update CLI tools, or run:
+The image installs pinned Claude Code and Codex CLI versions when it is built.
+On a long-running host, update them from Settings -> Agents -> Update CLI tools, or run:
 
 ```bash
 docker exec -u app cairn cairn-update-agent-clis
@@ -166,6 +166,10 @@ AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=168
 
 Only enable automatic updates on a trusted local or tailnet deployment because it
 runs vendor installer scripts inside the container.
+
+Antigravity and Grok use moving vendor shell installers. They are not baked into
+the default release image unless the maintainer supplies a checksum or explicitly
+opts into unverified installers.
 
 ## Publishing Images
 

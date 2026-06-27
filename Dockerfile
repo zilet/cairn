@@ -1,7 +1,9 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7.0
+
+ARG NODE_IMAGE=node:24-bookworm-slim
 
 # ---- builder: compile TypeScript ----
-FROM node:24-bookworm-slim AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 COPY package*.json tsconfig.json ./
 # BuildKit cache mount keeps ~/.npm warm across rebuilds (big win on the Pi).
@@ -10,7 +12,7 @@ COPY src ./src
 RUN npm run build
 
 # ---- runtime ----
-FROM node:24-bookworm-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 
 # All CLI logins persist under HOME, which is a mounted volume at runtime.
@@ -24,13 +26,21 @@ COPY scripts/update-agent-clis.sh /usr/local/bin/cairn-update-agent-clis
 COPY scripts/docker-entrypoint.sh /usr/local/bin/cairn-entrypoint
 RUN chmod +x /usr/local/bin/cairn-update-agent-clis /usr/local/bin/cairn-entrypoint
 
-# Bake in coaching CLIs. claude/codex (npm) are reliable and land in /usr/local/bin.
-# antigravity/grok use Google/xAI shell installers (beta; verify arm64 on the Pi).
+# Bake in coaching CLIs. claude/codex are npm installs pinned below.
+# Antigravity/Grok use moving shell installers, so they are opt-in unless a
+# checksum is supplied via the matching *_INSTALL_SHA256 build arg.
 # Binaries are moved OUT of HOME so the home volume mount doesn't hide them.
 ARG INSTALL_CLAUDE=1
 ARG INSTALL_CODEX=1
-ARG INSTALL_ANTIGRAVITY=1
-ARG INSTALL_GROK=1
+ARG INSTALL_ANTIGRAVITY=0
+ARG INSTALL_GROK=0
+ARG CLAUDE_CODE_VERSION=2.1.195
+ARG CODEX_CLI_VERSION=0.142.3
+ARG ANTIGRAVITY_INSTALL_URL=https://antigravity.google/cli/install.sh
+ARG ANTIGRAVITY_INSTALL_SHA256=
+ARG GROK_INSTALL_URL=https://x.ai/cli/install.sh
+ARG GROK_INSTALL_SHA256=
+ARG AGENT_INSTALL_ALLOW_UNVERIFIED=0
 ARG AGENT_CLI_CACHE_BUST=unset
 # Cache mount on ~/.npm — don't `npm cache clean` here, it would wipe the mount.
 # Set AGENT_CLI_CACHE_BUST=$(date +%s) when you want Docker to refresh this layer
@@ -41,6 +51,13 @@ RUN --mount=type=cache,target=/root/.npm set -eux; \
     UPDATE_CODEX="$INSTALL_CODEX" \
     UPDATE_ANTIGRAVITY="$INSTALL_ANTIGRAVITY" \
     UPDATE_GROK="$INSTALL_GROK" \
+    CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" \
+    CODEX_CLI_VERSION="$CODEX_CLI_VERSION" \
+    ANTIGRAVITY_INSTALL_URL="$ANTIGRAVITY_INSTALL_URL" \
+    ANTIGRAVITY_INSTALL_SHA256="$ANTIGRAVITY_INSTALL_SHA256" \
+    GROK_INSTALL_URL="$GROK_INSTALL_URL" \
+    GROK_INSTALL_SHA256="$GROK_INSTALL_SHA256" \
+    AGENT_INSTALL_ALLOW_UNVERIFIED="$AGENT_INSTALL_ALLOW_UNVERIFIED" \
     AGENT_INSTALL_TIMEOUT_SECONDS=300 \
     cairn-update-agent-clis
 

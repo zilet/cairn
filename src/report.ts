@@ -13,6 +13,7 @@
 // preventive/longevity references, clearly labeled as DISTINCT from a lab's
 // population reference interval — informational, not medical advice.
 
+import crypto from "node:crypto";
 import * as repo from "./repo.js";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -708,7 +709,7 @@ h1{font-size:25px;margin:0 0 3px}
 .findings.none h2{color:var(--sage)}
 .f-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 22px}
 .fg{break-inside:avoid}
-.fg h3{margin:0 0 4px;font:700 10.5px/1.3 'Schibsted Grotesk',sans-serif;text-transform:uppercase;
+.fg h3{margin:0 0 4px;font:700 10.5px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;text-transform:uppercase;
   letter-spacing:.05em;color:var(--amber)}
 .fg h3 span{color:var(--soft);font-weight:600}
 .f-list{list-style:none;margin:0;padding:0}
@@ -785,6 +786,32 @@ table.markers tr{break-inside:avoid}
 .body.findings-only .group,.body.findings-only .bodycomp,.body.findings-only .suppwrap{display:none}
 `;
 
+export const REPORT_SCRIPT = `
+(function(){
+  var copyBtn=document.getElementById('copyBtn'),printBtn=document.getElementById('printBtn'),
+      copied=document.getElementById('copied'),toggleBtn=document.getElementById('toggleBtn'),
+      body=document.getElementById('body'),plain=document.getElementById('plain');
+  copyBtn&&copyBtn.addEventListener('click',function(){
+    var text=plain.value;
+    function ok(){copied.style.display='inline';setTimeout(function(){copied.style.display='none'},2200);}
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(ok,function(){plain.select();document.execCommand('copy');ok();});}
+    else{plain.select();document.execCommand('copy');ok();}
+  });
+  printBtn&&printBtn.addEventListener('click',function(){window.print();});
+  toggleBtn&&toggleBtn.addEventListener('click',function(){
+    var on=body.classList.toggle('findings-only');
+    toggleBtn.textContent=on?'Show all markers':'Findings only';
+    toggleBtn.classList.toggle('on',on);
+  });
+})();
+`.trim();
+
+const REPORT_SCRIPT_HASH = crypto.createHash("sha256").update(REPORT_SCRIPT).digest("base64");
+
+export function reportScriptCspHash(): string {
+  return `'sha256-${REPORT_SCRIPT_HASH}'`;
+}
+
 export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?: string } = {}): string {
   // An explicit ?name= override wins; otherwise stamp the name set in the profile.
   // The header span stays contenteditable so it can still be filled/changed on paper.
@@ -847,28 +874,11 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
   <div class="actionbar-in">
     <span class="copied" id="copied">Copied</span>
     <button class="btn primary" id="copyBtn">Copy text for MyChart</button>
-    <button class="btn" onclick="window.print()">Save PDF</button>
+    <button class="btn" id="printBtn">Save PDF</button>
   </div>
 </div>
 <textarea id="plain" style="position:absolute;left:-9999px;top:-9999px" readonly>${esc(plain)}</textarea>
-<script>
-(function(){
-  var copyBtn=document.getElementById('copyBtn'),copied=document.getElementById('copied'),
-      toggleBtn=document.getElementById('toggleBtn'),body=document.getElementById('body'),
-      plain=document.getElementById('plain');
-  copyBtn&&copyBtn.addEventListener('click',function(){
-    var text=plain.value;
-    function ok(){copied.style.display='inline';setTimeout(function(){copied.style.display='none'},2200);}
-    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(ok,function(){plain.select();document.execCommand('copy');ok();});}
-    else{plain.select();document.execCommand('copy');ok();}
-  });
-  toggleBtn&&toggleBtn.addEventListener('click',function(){
-    var on=body.classList.toggle('findings-only');
-    toggleBtn.textContent=on?'Show all markers':'Findings only';
-    toggleBtn.classList.toggle('on',on);
-  });
-})();
-</script>
+<script>${REPORT_SCRIPT}</script>
 </body>
 </html>`;
 }

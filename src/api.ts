@@ -40,6 +40,7 @@ import {
 } from "./coachOps.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "./art.js";
 import { computeDayRead, localToday } from "./dayread.js";
+import { localDateISO } from "./repo/shared.js";
 import { authEnabled } from "./auth.js";
 import { researchAutoEligible } from "./research.js";
 import type { AgentJobKind } from "./agentJobKinds.js";
@@ -48,6 +49,8 @@ import { ACCEPTED_MIME, extForMime, isAcceptedMime } from "./uploadMime.js";
 import { healthDocsRouter } from "./routes/health-docs.js";
 
 export const api = Router();
+
+const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
 // Heavy agentic ops are durable BACKGROUND JOBS by default: the POST
 // handler persists an agent_jobs row, enqueues it, and returns { ok, job } at
@@ -1184,6 +1187,7 @@ api.post("/chat", (req, res) => {
     let buf: Buffer;
     try { buf = Buffer.from(String(b.image_base64), "base64"); } catch { return res.status(400).json({ error: "invalid base64" }); }
     if (!buf.length) return res.status(400).json({ error: "empty image" });
+    if (buf.length > CHAT_IMAGE_MAX_BYTES) return res.status(413).json({ error: "image too large" });
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     const name = `${crypto.randomUUID()}.${extForMime(mime)}`;
     imagePath = path.join(UPLOADS_DIR, name);
@@ -1608,9 +1612,13 @@ api.get("/learnings", (req, res) => {
 // rest collapse behind a quiet "more". Marking "seen" at the end (debounced)
 // powers the "since you last looked" continuity line.
 api.get("/today-agenda", (req, res) => {
-  const date = typeof req.query.date === "string" ? req.query.date : undefined;
+  const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+    ? req.query.date
+    : undefined;
   const agenda = repo.todayAgenda(date);
-  try { repo.markTodaySeen(); } catch { /* best-effort */ }
+  try {
+    if (!date || date === localDateISO()) repo.markTodaySeen();
+  } catch { /* best-effort */ }
   res.json(agenda);
 });
 // The legible "what Cairn has learned about you" timeline (pull-only; no scores).

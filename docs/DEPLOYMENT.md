@@ -130,7 +130,12 @@ Example `.env`:
 ```env
 TZ=Europe/London
 CAIRN_AUTH_TOKEN=use-a-long-random-string
+CAIRN_SETTINGS_SECRET_KEY=use-a-second-long-random-string
 ```
+
+`CAIRN_SETTINGS_SECRET_KEY` is optional but recommended if you save Garmin or
+Gemini artwork credentials through Settings instead of env vars. It encrypts
+those Settings-saved secrets in SQLite; keep it stable across container rebuilds.
 
 Example HTTPS command:
 
@@ -224,6 +229,7 @@ Edit `.env`:
 ```env
 TZ=America/New_York
 CAIRN_AUTH_TOKEN=use-a-long-random-string
+CAIRN_SETTINGS_SECRET_KEY=use-a-second-long-random-string
 ```
 
 Start and verify:
@@ -312,10 +318,12 @@ git pull && docker compose up -d --build
 ```
 
 Schema migrations run automatically on boot (`PRAGMA user_version`). CLI tools can be refreshed
-without rebuilding:
+without rebuilding. Claude Code and Codex default to pinned npm package versions; pass a new
+version deliberately when you want to bump them:
 
 ```bash
 docker compose exec -u app cairn cairn-update-agent-clis
+docker compose exec -u app -e CLAUDE_CODE_VERSION=2.1.195 -e CODEX_CLI_VERSION=0.142.3 cairn cairn-update-agent-clis
 ```
 
 Or **Settings → Agents → Update CLI tools**.
@@ -323,7 +331,31 @@ Or **Settings → Agents → Update CLI tools**.
 Force fresh CLI install on image rebuild:
 
 ```bash
-AGENT_CLI_CACHE_BUST=$(date +%s) docker compose build cairn && docker compose up -d
+docker compose build \
+  --build-arg AGENT_CLI_CACHE_BUST="$(date +%s)" \
+  --build-arg CLAUDE_CODE_VERSION=2.1.195 \
+  --build-arg CODEX_CLI_VERSION=0.142.3 \
+  cairn
+docker compose up -d
+```
+
+Antigravity and Grok use moving vendor shell installers, so the default image build leaves them
+off. To include one, provide a checksum for the installer you audited:
+
+```bash
+docker compose build \
+  --build-arg INSTALL_ANTIGRAVITY=1 \
+  --build-arg ANTIGRAVITY_INSTALL_SHA256=<sha256> \
+  cairn
+```
+
+For a local-only/tailnet box, you can explicitly accept the unverified installer risk:
+
+```bash
+docker compose build \
+  --build-arg INSTALL_GROK=1 \
+  --build-arg AGENT_INSTALL_ALLOW_UNVERIFIED=1 \
+  cairn
 ```
 
 ---

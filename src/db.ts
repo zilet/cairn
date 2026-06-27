@@ -467,8 +467,10 @@ CREATE TABLE IF NOT EXISTS settings (
   art_enabled INTEGER DEFAULT 1,              -- 1 = generated artwork (needs Gemini key)
   meal_prefs TEXT DEFAULT '',                 -- free-text meal/schedule preferences the coach always sees
   garmin_username TEXT DEFAULT '',            -- optional override for GARMIN_USERNAME
-  garmin_password TEXT DEFAULT '',            -- optional override for GARMIN_PASSWORD
-  gemini_api_key TEXT DEFAULT '',             -- optional override for GEMINI_API_KEY / GOOGLE_AI_KEY
+  garmin_password TEXT DEFAULT '',            -- legacy plaintext override for GARMIN_PASSWORD; read for back-compat
+  garmin_password_encrypted TEXT DEFAULT '',  -- encrypted override when CAIRN_SETTINGS_SECRET_KEY is set
+  gemini_api_key TEXT DEFAULT '',             -- legacy plaintext override for GEMINI_API_KEY / GOOGLE_AI_KEY; read for back-compat
+  gemini_api_key_encrypted TEXT DEFAULT '',   -- encrypted override when CAIRN_SETTINGS_SECRET_KEY is set
   art_enabled_at TEXT DEFAULT '',             -- when art_enabled last flipped on (spend telemetry window)
   garmin_last_sync_at TEXT DEFAULT '',        -- when the last Garmin sync finished (UTC ISO)
   garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
