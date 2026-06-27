@@ -1617,7 +1617,7 @@ api.get("/today-agenda", (req, res) => {
     : undefined;
   const agenda = repo.todayAgenda(date);
   try {
-    if (!date || date === localDateISO()) repo.markTodaySeen();
+    if (repo.shouldMarkTodayAgendaSeen(date, localDateISO())) repo.markTodaySeen();
   } catch { /* best-effort */ }
   res.json(agenda);
 });

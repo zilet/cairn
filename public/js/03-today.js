@@ -1200,6 +1200,9 @@ async function renderToday(opts = {}) {
     profile: peekCached("profile"),
     exercises: peekCached("exercises"),
   };
+  const statsPromise = peeks.stats ? Promise.resolve(peeks.stats.data) : api("/stats");
+  const profilePromise = peeks.profile ? Promise.resolve(peeks.profile.data) : api("/profile").catch(() => null);
+  const exercisesPromise = peeks.exercises ? Promise.resolve(peeks.exercises.data) : api("/exercises").catch(() => []);
   const warm = Object.values(peeks).every(Boolean);
   const myToken = pollToken; // staleness guard for the background revalidate tail
   let _todayChanged = false;
@@ -1331,7 +1334,10 @@ async function renderToday(opts = {}) {
   let rxByEx = {};
   if (state.day != null && planEx.length) {
     try {
-      const list = await api("/program/progression?day=" + encodeURIComponent(state.day));
+      const list = await cachedApi("/program/progression?day=" + encodeURIComponent(state.day), {
+        key: `program:progression:${state.day}`,
+        freshFor: 15000,
+      });
       if (Array.isArray(list)) {
         for (const rx of list) {
           if (rx && rx.exercise) rxByEx[String(rx.exercise).toLowerCase()] = rx;
@@ -1349,9 +1355,7 @@ async function renderToday(opts = {}) {
     return { weight: it.target_weight ?? null, reps: it.rep_low ?? null, rir: null, duration_sec: it.target_seconds ?? null };
   }
 
-  const stats = peeks.stats ? peeks.stats.data : await api("/stats");
-  const profile = peeks.profile ? peeks.profile.data : await api("/profile").catch(() => null);
-  const exercises = peeks.exercises ? peeks.exercises.data : await api("/exercises").catch(() => []);
+  const [stats, profile, exercises] = await Promise.all([statsPromise, profilePromise, exercisesPromise]);
   if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); } // keep the emphasis globals warm for Progress/Today/Plan
   reval("/stats", "stats");
   reval("/profile", "profile");
@@ -2259,6 +2263,7 @@ function wireDeletes() {
       swrInvalidate("stats");
       swrInvalidate("history:sessions");
       swrInvalidate("progress:volume");
+      invalidateTodayProgression();
       // refresh from server so set numbers + counts stay correct
       renderToday();
     });
@@ -2429,11 +2434,19 @@ function scheduleRxRefresh() {
   clearTimeout(_rxRefreshTimer);
   _rxRefreshTimer = setTimeout(() => { refreshAdaptedRx(); }, 600);
 }
+function invalidateTodayProgression() {
+  if (state.day != null) swrInvalidate("program:progression:" + state.day);
+}
 async function refreshAdaptedRx() {
   if (state.tab !== "today" || state.day == null) return;
   const day = state.day, date = state.logDate;
   let list = null;
-  try { list = await api("/program/progression?day=" + encodeURIComponent(day)); }
+  try {
+    list = await cachedApi("/program/progression?day=" + encodeURIComponent(day), {
+      key: `program:progression:${day}`,
+      freshFor: 15000,
+    });
+  }
   catch { return; } // calm: leave the last-painted prescription as-is
   // Bail if the surface moved out from under the in-flight fetch (tab/day/date change).
   if (state.tab !== "today" || state.day !== day || state.logDate !== date) return;
@@ -2540,6 +2553,7 @@ function wireLogRow(row) {
     swrInvalidate("stats");
     swrInvalidate("history:sessions");
     swrInvalidate("progress:volume"); // muscle-group volume shifts too
+    invalidateTodayProgression();
     // inline: append chip, tick progress, keep inputs populated for the next tap
     const card = row.closest(".ex");
     const loggedWrap = card.querySelector("[data-logged]");

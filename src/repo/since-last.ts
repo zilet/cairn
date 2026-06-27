@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { localDateISO } from "./shared.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
 
 // ============================================================================
@@ -29,6 +30,10 @@ export const TODAY_LAST_SEEN_KEY = "today_last_seen_at";
 // so frequent same-session reloads don't wipe the window — a genuine "came back
 // later" still has a real window to summarize.
 const MARK_DEBOUNCE_MS = 60 * 60 * 1000; // ~1 hour
+
+export function shouldMarkTodayAgendaSeen(requestedDate?: string | null, today = localDateISO()): boolean {
+  return !requestedDate || requestedDate === today;
+}
 
 // SQLite's own timestamp format (UTC), matching `datetime('now')` columns:
 // "YYYY-MM-DD HH:MM:SS". Stored + compared as a string so it lines up with

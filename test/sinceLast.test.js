@@ -117,3 +117,10 @@ test("markTodaySeen seeds a stamp when none exists, then a later change surfaces
   seedHealthDoc("2026-06-23", [marker("HbA1c", 5.3, { unit: "%" })], "bloodwork");
   assert.ok(repo.sinceLastLookedCandidate(), "a change after the established window surfaces");
 });
+
+test("Today agenda only advances last-seen for the device-local today", () => {
+  assert.equal(repo.shouldMarkTodayAgendaSeen(undefined, "2026-06-27"), true, "no date means the live Today view");
+  assert.equal(repo.shouldMarkTodayAgendaSeen("2026-06-27", "2026-06-27"), true, "today can advance the stamp");
+  assert.equal(repo.shouldMarkTodayAgendaSeen("2026-06-26", "2026-06-27"), false, "past date review must not hide today's continuity line");
+  assert.equal(repo.shouldMarkTodayAgendaSeen("2026-06-28", "2026-06-27"), false, "future date preview must not hide today's continuity line");
+});
