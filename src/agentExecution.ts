@@ -21,6 +21,28 @@ export const AGENT_ENV_DENYLIST = [
   "GARMIN_TOKEN_DIR",
 ];
 
+export function agentCliPath(source: NodeJS.ProcessEnv = process.env): string {
+  const home = source.HOME || source.USERPROFILE || "";
+  const preferred = [
+    home ? path.join(home, ".local", "bin") : "",
+    home ? path.join(home, ".grok", "bin") : "",
+    home ? path.join(home, ".antigravity-ide", "antigravity-ide", "bin") : "",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
+  const existing = String(source.PATH || "").split(path.delimiter);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [...preferred, ...existing]) {
+    const p = raw.trim();
+    if (!p || seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out.join(path.delimiter);
+}
+
 export function sanitizeAgentEnv(
   source: NodeJS.ProcessEnv = process.env,
   restoreKeys: readonly string[] = [],
@@ -30,6 +52,7 @@ export function sanitizeAgentEnv(
   for (const k of restoreKeys) {
     if (source[k] !== undefined) env[k] = source[k];
   }
+  env.PATH = agentCliPath(source);
   return env;
 }
 

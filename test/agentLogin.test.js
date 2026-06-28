@@ -17,6 +17,7 @@ import { resolveLoginArgv, buildPtyInvocation, ptyInvocationFor, loginSessionAct
 import { AGENT_WORKSPACES_DIRNAME } from "../dist/agentExecution.js";
 import {
   AGENT_ENV_DENYLIST,
+  agentCliPath,
   parseModelsOutput,
   parseDefaultModel,
   parseTomlModel,
@@ -114,7 +115,10 @@ test("sanitizeAgentEnv strips Cairn-owned secrets while preserving login-critica
   const env = sanitizeAgentEnv(source);
   for (const key of AGENT_ENV_DENYLIST) assert.equal(env[key], undefined, `${key} should be stripped`);
   assert.equal(env.HOME, "/home/app");
-  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.PATH, agentCliPath(source));
+  assert.ok(env.PATH.split(path.delimiter).includes("/home/app/.local/bin"));
+  assert.ok(env.PATH.split(path.delimiter).includes("/home/app/.grok/bin"));
+  assert.ok(env.PATH.split(path.delimiter).includes("/usr/bin"));
   assert.equal(env.LANG, "C.UTF-8");
   assert.equal(env.XAI_API_KEY, "agent-owned-key");
 
@@ -143,7 +147,15 @@ test("login spawn options use sanitized env and an isolated workspace", () => {
     assert.equal(opts.env.DB_PATH, undefined);
     assert.equal(opts.env.DATA_DIR, undefined);
     assert.equal(opts.env.HOME, "/home/app");
-    assert.equal(opts.env.PATH, "/usr/bin");
+    assert.equal(opts.env.PATH, agentCliPath({
+      ...process.env,
+      DATA_DIR: dataDir,
+      DB_PATH: path.join(dataDir, "cairn.db"),
+      CAIRN_AUTH_TOKEN: "server-token",
+      GARMIN_PASSWORD: "garmin-secret",
+      HOME: "/home/app",
+      PATH: "/usr/bin",
+    }));
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

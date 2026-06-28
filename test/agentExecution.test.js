@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   AGENT_WORKSPACES_DIRNAME,
+  agentCliPath,
   agentExecutionCwd,
   buildAgentSpawnOptions,
   promptReferencesDataDir,
@@ -50,7 +51,37 @@ test("agent spawn options use an isolated workspace and sanitized env", () => wi
   assert.equal(opts.env.DB_PATH, undefined);
   assert.equal(opts.env.DATA_DIR, undefined);
   assert.equal(opts.env.HOME, "/home/app");
-  assert.equal(opts.env.PATH, "/usr/bin");
+  assert.equal(opts.env.PATH, agentCliPath(sourceEnv));
+  assert.ok(opts.env.PATH.split(path.delimiter).includes("/home/app/.local/bin"));
+  assert.ok(opts.env.PATH.split(path.delimiter).includes("/home/app/.grok/bin"));
+  assert.ok(opts.env.PATH.split(path.delimiter).includes("/usr/bin"));
+}));
+
+test("agent command presence can see CLIs installed under the mounted app home", () => withTempDir((dataDir) => {
+  const home = path.join(dataDir, "home");
+  const binDir = path.join(home, ".grok", "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const grok = path.join(binDir, "grok");
+  fs.writeFileSync(grok, "#!/bin/sh\necho grok 0.0.0\n");
+  fs.chmodSync(grok, 0o755);
+
+  const runner = [
+    `import { commandPresent } from ${JSON.stringify(distAgentsUrl)};`,
+    "process.stdout.write(String(commandPresent('grok')));",
+  ].join("\n");
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HOME: home,
+      PATH: "/usr/bin",
+      DATA_DIR: dataDir,
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, "true");
 }));
 
 test("agent cwd falls back to DATA_DIR only when prompt references an uploaded data path", () => withTempDir((dataDir) => {

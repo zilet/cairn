@@ -34,7 +34,7 @@
   },
   "antigravity": {
     "command": "agy",
-    "args": ["-p", "{prompt}", "--print-timeout", "5m"],
+    "args": ["{file_access_args}", "-p", "{prompt}", "--print-timeout", "5m"],
     "input": "arg",
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
     "env_required": [],
@@ -42,11 +42,12 @@
     "status_check": null,
     "auth_state": [".gemini"],
     "models_list": ["models"],
-    "model_flag": ["--model", "{model}"]
+    "model_flag": ["--model", "{model}"],
+    "file_access_args": ["--add-dir", "{data_dir}"]
   },
   "grok": {
     "command": "grok",
-    "args": ["-p", "{prompt}"],
+    "args": ["{file_access_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "xAI Grok Build (SuperGrok/X Premium+). Headless may need XAI_API_KEY.",
     "env_required": [],
@@ -55,9 +56,10 @@
     "auth_state": [".grok/auth.json"],
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],
+    "file_access_args": ["--cwd", "{data_dir}"],
     "stream": {
       "format": "grok",
-      "args": ["-p", "{prompt}", "--output-format", "streaming-json"]
+      "args": ["{file_access_args}", "-p", "{prompt}", "--output-format", "streaming-json"]
     }
   },
   "stub": {

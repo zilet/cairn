@@ -209,6 +209,10 @@ function logPhotoFood(actions: any[], turn: any) {
 // TEXT — not parseable JSON — so it deliberately does NOT reuse the JSON-centric
 // runAgentWithFallback (a pure-prose reply has no JSON and would be judged a
 // failure there). Returns { agent, raw }; throws on abort or all-agents-failed.
+const EMPTY_CHAT_RETRY_SUFFIX =
+  "\n\nYour previous attempt exited without any assistant text. " +
+  "Try once more now. Follow the same Cairn reply contract and produce the athlete-facing reply.";
+
 async function runChatCompletion(
   id: number,
   turn: any,
@@ -255,12 +259,19 @@ async function runChatCompletion(
     const started = Date.now();
     try {
       emit(id, { type: "progress", text: "Asking the coach…" });
-      const res = await runAgent(name, prompt, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
-      const raw = (res.raw ?? "").toString();
+      let res = await runAgent(name, prompt, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
+      let raw = (res.raw ?? "").toString();
+      let retriedEmpty = false;
+      if (!raw.trim() && res.code === 0 && !signal.aborted) {
+        retriedEmpty = true;
+        emit(id, { type: "progress", text: "Trying the coach again…" });
+        res = await runAgent(name, prompt + EMPTY_CHAT_RETRY_SUFFIX, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
+        raw = (res.raw ?? "").toString();
+      }
       const ok = !!raw.trim();
-      try { repo.recordAgentRun({ op: "chat", agent: name, ok, parsed: !!res.parsed, latency_ms: Date.now() - started, tried_json: false }); } catch { /* ignore */ }
+      try { repo.recordAgentRun({ op: "chat", agent: name, ok, parsed: !!res.parsed, latency_ms: Date.now() - started, tried_json: retriedEmpty }); } catch { /* ignore */ }
       if (ok) return { agent: name, raw };
-      lastErr = new Error(`${name}: empty reply`);
+      lastErr = new Error(`${name}: empty reply${retriedEmpty ? " after retry" : ""}`);
     } catch (e: any) {
       if (signal.aborted) throw e;
       lastErr = e;

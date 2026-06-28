@@ -2,8 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
-export { AGENT_ENV_DENYLIST, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
+import { agentCliPath, agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
+export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.AGENTS_CONFIG || path.join(__dirname, "..", "agents.json");
@@ -88,12 +88,12 @@ export function listAgents() {
 // request never pays for it; only the first lookup of each distinct command does.
 const presenceCache = new Map<string, boolean>();
 
-function lookupOnPath(cmd: string): boolean {
+function lookupOnPath(cmd: string, sourceEnv: NodeJS.ProcessEnv = process.env): boolean {
   // Absolute / relative path → just stat it.
   if (cmd.includes("/")) {
     try { return fs.existsSync(cmd); } catch { return false; }
   }
-  const PATH = process.env.PATH || "";
+  const PATH = agentCliPath(sourceEnv);
   const exts = process.platform === "win32"
     ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";")
     : [""];
