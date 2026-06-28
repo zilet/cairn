@@ -1696,7 +1696,8 @@ The photo is a local image file saved on this machine.
 
 LOOK AT THE IMAGE FILE AT THIS ABSOLUTE PATH:
 ${absPath}
-Open and view that image directly before answering.${hint ? `
+Open and view that image directly before answering. If the runtime attached the same image bytes inline,
+use that inline image as the source of truth and do not claim you cannot access the local file.${hint ? `
 The athlete's note for this meal: "${hint}" — use it to disambiguate, but trust what you SEE.` : ""}
 
 YOUR JOB:
@@ -1717,7 +1718,7 @@ GUARDRAILS:
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
 {
   "summary": "<clean dish name / short description of the plate>",
-  "items": [<string>],
+  "items": ["<visible item + estimated quantity, e.g. 'scrambled eggs (~2 eggs)' >"],
   "kcal": <number|null>,
   "protein_g": <number|null>,
   "carbs_g": <number|null>,

@@ -113,6 +113,52 @@ test("one-shot chat agent subprocess receives sanitized env and safe cwd", () =>
   assert.equal(payload.home, "/home/app");
 }));
 
+test("uploaded-image prompts expand file access args and place image args after the prompt", () => withTempDir((dataDir) => {
+  fs.mkdirSync(path.join(dataDir, "uploads"), { recursive: true });
+  const imagePath = path.join(dataDir, "uploads", "plate.jpg");
+  fs.writeFileSync(imagePath, "fake image");
+  const configPath = path.join(dataDir, "agents.json");
+  const childProbe = "process.stdout.write(JSON.stringify({argv: process.argv.slice(1), cwd: process.cwd()}));";
+  fs.writeFileSync(configPath, JSON.stringify({
+    argvprobe: {
+      command: process.execPath,
+      args: ["-e", childProbe, "--", "{file_access_args}", "{prompt}", "{image_args}"],
+      input: "arg",
+      env_required: [],
+      file_access_args: ["--file-root", "{data_dir}"],
+      image_args: ["--image", "{image}"],
+    },
+  }));
+
+  const prompt = `Estimate this uploaded plate: ${imagePath}`;
+  const runner = [
+    `import { runAgent } from ${JSON.stringify(distAgentsUrl)};`,
+    `const res = await runAgent("argvprobe", ${JSON.stringify(prompt)}, { timeoutMs: 5000 });`,
+    "process.stdout.write(JSON.stringify(res.parsed));",
+  ].join("\n");
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
+    cwd: root,
+    env: {
+      ...process.env,
+      AGENTS_CONFIG: configPath,
+      DATA_DIR: dataDir,
+      DB_PATH: path.join(dataDir, "cairn.db"),
+    },
+    encoding: "utf8",
+  });
+
+  assert.equal(res.status, 0, res.stderr);
+  const payload = JSON.parse(res.stdout);
+  assert.equal(fs.realpathSync(payload.cwd), fs.realpathSync(dataDir), "uploaded-file prompts run from DATA_DIR");
+  const argv = payload.argv;
+  assert.ok(argv.includes("--file-root"), "file access args were expanded");
+  assert.equal(argv[argv.indexOf("--file-root") + 1], path.resolve(dataDir));
+  assert.ok(argv.includes(prompt), "prompt was passed as an argv token");
+  assert.ok(argv.includes("--image"), "image args were expanded");
+  assert.ok(argv.indexOf(prompt) < argv.indexOf("--image"), "Codex-style variadic --image must come after the prompt");
+  assert.equal(argv[argv.indexOf("--image") + 1], imagePath);
+}));
+
 test("streaming chat agent subprocess receives sanitized env and safe cwd", () => withTempDir((dataDir) => {
   const configPath = path.join(dataDir, "agents.json");
   const streamProbe = [

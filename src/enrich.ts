@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "./db.js";
 import * as repo from "./repo.js";
-import { runAgentWithFallback } from "./agents.js";
+import { extractJson, runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
 import { reconcileMarkers, synthesizeHealth } from "./coachOps.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
@@ -56,6 +56,9 @@ const ENRICH_TIMEOUT_MS = 120_000;
 // Health ingestion can mean reading a multi-MB PDF or a whole CCDA export folder
 // and splitting years of results into panels — give it the fuller agent budget.
 const HEALTH_INGEST_TIMEOUT_MS = 300_000;
+const GEMINI_FOOD_PHOTO_MODEL = process.env.GEMINI_FOOD_PHOTO_MODEL || process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash";
+const GEMINI_FOOD_PHOTO_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FOOD_PHOTO_MODEL}:generateContent`;
+const FOOD_PHOTO_TIMEOUT_MS = 45_000;
 
 // Refuse pathological archives before unzipping (zip-bomb / huge export guard).
 const ZIP_MAX_UNCOMPRESSED = 200 * 1024 * 1024; // 200 MB
@@ -652,7 +655,8 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
   // file-reading transcriber (Claude-first), the same ordering the 'health' kind
   // uses, rather than the load-spreading round-robin.
   const order = repo.pickHealthAgentOrder();
-  if (!order.length) {
+  const hasGeminiVision = !!repo.getGeminiApiKey();
+  if (!hasGeminiVision && !order.length) {
     repo.setFoodNoteEnrichStatus(id, "skipped");
     return;
   }
@@ -663,21 +667,34 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
 
   const hint = (row.parsed?.summary ?? row.raw_output ?? row.meal ?? "").toString().trim();
   let parsed: any = null;
-  try {
-    const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), ENRICH_TIMEOUT_MS);
-    parsed = fb.result?.parsed ?? null;
-  } catch {
-    parsed = null;
+  let wrote = false;
+
+  if (hasGeminiVision) {
+    try {
+      parsed = await runGeminiFoodPhoto(fp, hint || undefined);
+      wrote = !!parsed && applyFoodPhoto(id, parsed);
+    } catch (e: any) {
+      console.warn(`[enrich] food_photo#${id}: Gemini vision failed (${e?.message ?? e}); falling back to CLI agent.`);
+    }
   }
 
-  if (!parsed || typeof parsed !== "object") {
+  if (!wrote && order.length) {
+    try {
+      const fb = await runAgentWithFallback(order, buildFoodPhotoPrompt(fp, hint || undefined), ENRICH_TIMEOUT_MS);
+      parsed = fb.result?.parsed ?? null;
+      wrote = !!parsed && applyFoodPhoto(id, parsed);
+    } catch {
+      parsed = null;
+    }
+  }
+
+  if (!wrote && (!parsed || typeof parsed !== "object")) {
     // Vision read failed / wrong shape: keep the as-logged note (its instant
     // summary stands), just no macro estimate this run. A re-trigger can retry.
     repo.setFoodNoteEnrichStatus(id, "failed");
     return;
   }
 
-  const wrote = applyFoodPhoto(id, parsed);
   if (!wrote) {
     // Parseable JSON but nothing usable (e.g. a coach-proposal response) — the
     // as-logged note stands; surface it as failed so a re-trigger can retry.
@@ -686,6 +703,50 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
     return;
   }
   repo.setFoodNoteEnrichStatus(id, "done");
+}
+
+async function runGeminiFoodPhoto(absPath: string, hint?: string): Promise<any | null> {
+  const apiKey = repo.getGeminiApiKey();
+  if (!apiKey) return null;
+  const buf = fs.readFileSync(absPath);
+  if (!buf.length) throw new Error("empty image file");
+  const mimeType = mimeForImage(absPath);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FOOD_PHOTO_TIMEOUT_MS);
+  let body: any = null;
+  try {
+    const res = await fetch(GEMINI_FOOD_PHOTO_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: buildFoodPhotoPrompt(absPath, hint) },
+            { inlineData: { mimeType, data: buf.toString("base64") } },
+          ],
+        }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0 },
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`gemini food photo responded ${res.status}`);
+    body = await res.json().catch(() => null);
+  } finally {
+    clearTimeout(timer);
+  }
+  const parts = body?.candidates?.[0]?.content?.parts;
+  const raw = Array.isArray(parts) ? parts.map((p: any) => p?.text ?? "").join("") : "";
+  return extractJson(raw);
+}
+
+function mimeForImage(fp: string): string {
+  const ext = path.extname(fp).toLowerCase();
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".heic") return "image/heic";
+  if (ext === ".heif") return "image/heif";
+  return "image/jpeg";
 }
 
 // Coerce/clamp a vision agent's macro payload and merge it over the food note's
@@ -698,19 +759,31 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
   const cur = (repo.getFoodNote(id) as any)?.parsed ?? {};
   const merged: Record<string, any> = { ...cur };
   let changed = false;
+  let usableMacro = false;
+  const inferredTotals = macroTotalsFromItems(parsed.items) ?? macroTotalsFromItems(parsed.ingredients);
 
   const summary = asStr(parsed.summary);
   if (summary !== undefined) { merged.summary = summary; changed = true; }
   if (Array.isArray(parsed.items)) {
-    merged.items = parsed.items.map((x: any) => String(x).slice(0, 200)).slice(0, 50);
+    const items = parsed.items.map(photoItemLabel).filter((x: any) => !!x).slice(0, 50);
+    if (items.length) {
+      merged.items = items;
+      changed = true;
+    }
+  }
+  const kcal = asNum(parsed.kcal ?? inferredTotals?.kcal); if (kcal !== undefined) { merged.kcal = clampMacro(kcal, 5000); changed = true; usableMacro = true; }
+  const protein = asNum(parsed.protein_g ?? inferredTotals?.protein_g); if (protein !== undefined) { merged.protein_g = clampMacro(protein, 500); changed = true; usableMacro = true; }
+  const carbs = asNum(parsed.carbs_g ?? inferredTotals?.carbs_g); if (carbs !== undefined) { merged.carbs_g = clampMacro(carbs, 1000); changed = true; usableMacro = true; }
+  const fat = asNum(parsed.fat_g ?? inferredTotals?.fat_g); if (fat !== undefined) { merged.fat_g = clampMacro(fat, 500); changed = true; usableMacro = true; }
+  const fiber = asNum(parsed.fiber_g ?? inferredTotals?.fiber_g); if (fiber !== undefined) { merged.fiber_g = clampMacro(fiber, 200); changed = true; usableMacro = true; }
+  const notes = asStr(parsed.notes);
+  if (notes !== undefined) {
+    merged.notes = notes;
+    changed = true;
+  } else if (isImageAccessFailureNote(merged.notes)) {
+    merged.notes = null;
     changed = true;
   }
-  const kcal = asNum(parsed.kcal); if (kcal !== undefined) { merged.kcal = clampMacro(kcal, 5000); changed = true; }
-  const protein = asNum(parsed.protein_g); if (protein !== undefined) { merged.protein_g = clampMacro(protein, 500); changed = true; }
-  const carbs = asNum(parsed.carbs_g); if (carbs !== undefined) { merged.carbs_g = clampMacro(carbs, 1000); changed = true; }
-  const fat = asNum(parsed.fat_g); if (fat !== undefined) { merged.fat_g = clampMacro(fat, 500); changed = true; }
-  const fiber = asNum(parsed.fiber_g); if (fiber !== undefined) { merged.fiber_g = clampMacro(fiber, 200); changed = true; }
-  const notes = asStr(parsed.notes); if (notes !== undefined) { merged.notes = notes; changed = true; }
 
   // A coarse confidence band (low|medium|high) the surface can show as an honest
   // "rough estimate" hint — never a score, never a percentage. Anything else → drop.
@@ -718,10 +791,44 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
   if (["low", "medium", "high"].includes(conf)) { merged.confidence = conf; changed = true; }
   // The estimate came from the plate photo — mark provenance so the surface can say
   // "estimated from your photo" rather than implying a precise hand-entered log.
+  if (!usableMacro) return false;
   if (changed) { merged.from_photo = true; }
 
   if (changed) repo.updateFoodNoteParsed(id, merged);
   return changed;
+}
+
+function photoItemLabel(x: any): string | null {
+  if (x === null || x === undefined) return null;
+  if (typeof x === "object") {
+    const item = asStr(x.item ?? x.name ?? x.summary ?? x.food);
+    const amount = asStr(x.amount ?? x.qty ?? x.quantity ?? x.portion);
+    if (!item) return null;
+    return amount ? `${item} (${amount})`.slice(0, 200) : item.slice(0, 200);
+  }
+  const s = String(x).trim();
+  return s ? s.slice(0, 200) : null;
+}
+
+function macroTotalsFromItems(items: any): Record<string, number> | null {
+  if (!Array.isArray(items)) return null;
+  const totals: Record<string, number> = {};
+  let saw = false;
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    for (const key of ["kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"] as const) {
+      const n = asNum(item[key]);
+      if (n === undefined) continue;
+      totals[key] = (totals[key] ?? 0) + n;
+      saw = true;
+    }
+  }
+  return saw ? totals : null;
+}
+
+function isImageAccessFailureNote(v: any): boolean {
+  const s = String(v ?? "").toLowerCase();
+  return !!s && /(unable|cannot|can't|could not|failed|blocked).{0,80}(image|photo|file|viewer|sandbox|access|open)/i.test(s);
 }
 
 // Clamp a macro value to a non-negative integer under a sane ceiling.

@@ -1,7 +1,7 @@
 {
   "claude": {
     "command": "claude",
-    "args": ["-p", "{prompt}"],
+    "args": ["{file_access_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "env_required": [],
@@ -12,14 +12,15 @@
     "auth_state": [".claude.json", ".claude"],
     "models_list": null,
     "model_flag": ["--model", "{model}"],
+    "file_access_args": ["--add-dir", "{data_dir}"],
     "stream": {
       "format": "claude",
-      "args": ["-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+      "args": ["{file_access_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
     }
   },
   "codex": {
     "command": "codex",
-    "args": ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "{prompt}"],
+    "args": ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "{file_access_args}", "{prompt}", "{image_args}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "env_required": [],
@@ -27,7 +28,9 @@
     "status_check": ["login", "status"],
     "auth_state": [".codex/auth.json"],
     "models_list": null,
-    "model_flag": ["--model", "{model}"]
+    "model_flag": ["--model", "{model}"],
+    "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
+    "image_args": ["--image", "{image}"]
   },
   "antigravity": {
     "command": "agy",

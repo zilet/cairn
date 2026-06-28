@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildAgentSpawnOptions } from "./agentExecution.js";
+import { agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
 export { AGENT_ENV_DENYLIST, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +40,14 @@ export interface AgentDef {
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
   // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
   stream?: { format: "claude" | "grok"; args: string[] };
+  // Args expanded only when a prompt references DATA_DIR (uploads / extracted
+  // health docs). This keeps normal chats isolated while giving file-aware CLIs
+  // explicit read access to the uploaded file tree.
+  file_access_args?: string[];
+  // Args repeated for every uploaded image path found in a DATA_DIR prompt.
+  // Codex supports `--image <file>`, which is more reliable than asking it to
+  // discover a JPEG through shell tools inside its own sandbox.
+  image_args?: string[];
 }
 
 export function loadAgents(): Record<string, AgentDef> {
@@ -515,6 +523,56 @@ export interface RunOpts {
   signal?: AbortSignal;   // abort to kill the live subprocess mid-run (chat-turn Stop)
 }
 
+const UPLOAD_IMAGE_RE = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
+
+function extractPromptImagePaths(prompt: string, sourceEnv: NodeJS.ProcessEnv = process.env): string[] {
+  const dataDir = path.resolve(agentDataDir(sourceEnv));
+  if (!promptReferencesDataDir(prompt, sourceEnv)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const escaped = dataDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`${escaped.replace(/\\\//g, "/")}/[^\\s"'<>),]+`, "g");
+  for (const m of prompt.matchAll(re)) {
+    const raw = m[0].replace(/[.,;:]+$/, "");
+    if (!UPLOAD_IMAGE_RE.test(raw)) continue;
+    try {
+      const p = path.resolve(raw);
+      if (!p.startsWith(dataDir + path.sep) || seen.has(p) || !fs.existsSync(p)) continue;
+      seen.add(p);
+      out.push(p);
+    } catch {
+      /* ignore malformed paths */
+    }
+  }
+  return out.slice(0, 8);
+}
+
+function expandAgentArgs(def: AgentDef, args: string[], prompt: string, useStdin: boolean): string[] {
+  const dataDir = path.resolve(agentDataDir(process.env));
+  const needsFileAccess = promptReferencesDataDir(prompt);
+  const images = needsFileAccess ? extractPromptImagePaths(prompt) : [];
+  const replaceCommon = (s: string, image?: string) => s
+    .replaceAll("{data_dir}", dataDir)
+    .replaceAll("{image}", image ?? "")
+    .replaceAll("{prompt}", useStdin ? "{prompt}" : prompt);
+  const out: string[] = [];
+  for (const arg of args) {
+    if (arg === "{file_access_args}") {
+      if (needsFileAccess) out.push(...(def.file_access_args || []).map((x) => replaceCommon(x)));
+      continue;
+    }
+    if (arg === "{image_args}") {
+      if (images.length && Array.isArray(def.image_args)) {
+        for (const image of images) out.push(...def.image_args.map((x) => replaceCommon(x, image)));
+      }
+      continue;
+    }
+    const expanded = replaceCommon(arg);
+    if (expanded !== "") out.push(expanded);
+  }
+  return out;
+}
+
 // Interactive callers (day-read, session-suggest, chat) pass the short timeout so
 // the request path never hangs on a wedged CLI; background callers (scheduler,
 // review, enrichment) keep the long default. Exported so call sites name them.
@@ -683,7 +741,7 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
 
   const useStdin = def.input === "stdin";
-  const args = def.args.map((a) => (useStdin ? a : a.replaceAll("{prompt}", prompt)));
+  const args = expandAgentArgs(def, def.args, prompt, useStdin);
 
   // Cap accumulated output so a runaway/verbose CLI can't balloon RSS on a small
   // host (e.g. the Pi), especially during a multi-job enrichment queue drain.
@@ -849,7 +907,7 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
   const onDelta = opts.onDelta;
   const format = def.stream.format;
   const useStdin = def.input === "stdin";
-  const args = def.stream.args.map((a) => (useStdin ? a : a.replaceAll("{prompt}", prompt)));
+  const args = expandAgentArgs(def, def.stream.args, prompt, useStdin);
   const MAX_OUT = 4 * 1024 * 1024;
 
   return new Promise((resolve, reject) => {

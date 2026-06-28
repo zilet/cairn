@@ -64,6 +64,27 @@ test("applyFoodPhoto coerces a string-number payload, clamps to ceilings, and me
   assert.equal(after.from_photo, true, "provenance is stamped so the surface can say 'estimated from your photo'");
 });
 
+test("applyFoodPhoto accepts item-object payloads by labeling items and summing macros", () => {
+  const note = seedPhotoNote("/abs/uploads/plate.jpg", { summary: "breakfast" });
+  const wrote = applyFoodPhoto(note.id, {
+    summary: "Eggs, salmon and vegetables",
+    items: [
+      { item: "Scrambled eggs", amount: "~2 eggs", kcal: 160, protein_g: 13, carbs_g: 1, fat_g: 11, fiber_g: 0 },
+      { item: "Smoked salmon", amount: "~70 g", kcal: 120, protein_g: 15, carbs_g: 0, fat_g: 6, fiber_g: 0 },
+      { item: "Spinach and peppers", amount: "~2 cups", kcal: 45, protein_g: 2, carbs_g: 9, fat_g: 0, fiber_g: 4 },
+    ],
+    confidence: "medium",
+  });
+  assert.equal(wrote, true);
+  const p = repo.getFoodNote(note.id).parsed;
+  assert.deepEqual(p.items, ["Scrambled eggs (~2 eggs)", "Smoked salmon (~70 g)", "Spinach and peppers (~2 cups)"]);
+  assert.equal(p.kcal, 325);
+  assert.equal(p.protein_g, 30);
+  assert.equal(p.carbs_g, 10);
+  assert.equal(p.fat_g, 17);
+  assert.equal(p.fiber_g, 4);
+});
+
 test("applyFoodPhoto clamps an absurd payload to sane non-negative ceilings", () => {
   const note = seedPhotoNote("/abs/uploads/plate.jpg");
   applyFoodPhoto(note.id, { kcal: 999999, protein_g: -50, carbs_g: 99999, fat_g: 99999, fiber_g: 99999 });
@@ -94,6 +115,25 @@ test("applyFoodPhoto returns false on a wrong-shape payload and leaves the note 
   assert.ok(!p.from_photo, "no provenance stamp when nothing was written");
 });
 
+test("applyFoodPhoto rejects refusal-only JSON instead of marking a photo estimate done", () => {
+  const note = seedPhotoNote("/abs/uploads/plate.jpg", { summary: "photo breakfast", kcal: null });
+  const wrote = applyFoodPhoto(note.id, {
+    summary: "Unable to inspect the image file in this environment",
+    items: [],
+    kcal: null,
+    protein_g: null,
+    carbs_g: null,
+    fat_g: null,
+    fiber_g: null,
+    notes: "The local image viewer failed before the file could be viewed.",
+    confidence: "low",
+  });
+  assert.equal(wrote, false, "text-only refusal is not a usable nutrition estimate");
+  const p = repo.getFoodNote(note.id).parsed;
+  assert.equal(p.summary, "photo breakfast", "the placeholder/as-logged summary stands");
+  assert.equal(p.from_photo, undefined, "no photo provenance stamp for a failed read");
+});
+
 test("applyFoodPhoto overwrites only the fields the agent returned (merge, not replace)", () => {
   // Seed with a first-pass estimate the chat agent already filled.
   const note = seedPhotoNote("/abs/uploads/plate.jpg", { summary: "lunch", kcal: 300, protein_g: 20, notes: "felt light" });
@@ -103,6 +143,23 @@ test("applyFoodPhoto overwrites only the fields the agent returned (merge, not r
   assert.equal(p.protein_g, 35, "refined");
   assert.equal(p.summary, "lunch", "untouched field preserved");
   assert.equal(p.notes, "felt light", "untouched field preserved");
+});
+
+test("applyFoodPhoto clears a stale image-access failure note after a successful retry", () => {
+  const note = seedPhotoNote("/abs/uploads/plate.jpg", {
+    summary: "Unable to inspect the photo",
+    notes: "The local image viewer failed before the image file could be opened.",
+  });
+  applyFoodPhoto(note.id, {
+    summary: "Eggs and salmon",
+    kcal: 455,
+    protein_g: 42,
+    confidence: "high",
+  });
+  const p = repo.getFoodNote(note.id).parsed;
+  assert.equal(p.summary, "Eggs and salmon");
+  assert.equal(p.kcal, 455);
+  assert.equal(p.notes, null, "old access-failure note is cleared once a real estimate lands");
 });
 
 test("applyFoodPhoto is idempotent — re-running overwrites in place, never appends a second note", () => {
