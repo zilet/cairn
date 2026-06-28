@@ -1110,37 +1110,54 @@ window.addEventListener("orientationchange", syncChatViewport);
   const vv = window.visualViewport;
   if (!vv) return;
   const root = document.documentElement;
-  // On a TOUCH device a focused text field implies the on-screen keyboard. This
-  // is the ONLY signal that's reliable in both a Safari tab AND an installed PWA:
-  // in the standalone PWA iOS shrinks the *layout* viewport together with the
-  // visual viewport, so innerHeight - vv.height ≈ 0 and pure geometry never
-  // detects the keyboard. Focus does. (Geometry is kept as a secondary OR for
-  // the rare keyboard-without-focus case.)
-  // But on a POINTER device (mouse/trackpad) focusing a field opens NO keyboard,
-  // so focus must NOT count as "keyboard open" — otherwise the chat composer's
-  // desktop auto-focus (it focuses on `(hover:hover)`) flips kb-open the instant
-  // Chat opens, sliding the bottom bar out, and the restore timer slides it back
-  // ~350ms later: the visible "bar hides then reappears" flicker. Gate the focus
-  // signal on the same `(hover:hover)` test the auto-focus uses, so the two agree.
-  // Geometry still drives kb-open on the rare pointer device whose keyboard shrinks
-  // the viewport (a touchscreen laptop), since that path is untouched.
+  // On touch devices, focus/tap is useful as an early "keyboard requested" signal,
+  // but it is not durable truth: iOS can dismiss the keyboard while keeping the
+  // textarea focused. The lasting state comes from visualViewport geometry. Compare
+  // both innerHeight-vs-vv.height (Safari tab) and vvMax-vs-vv.height (installed
+  // PWA, where the layout viewport can shrink with the visual viewport). Pointer
+  // devices are excluded from the intent path so desktop chat auto-focus does not
+  // briefly hide the bottom bar.
   const TEXTY = /^(|text|search|email|url|tel|password|number)$/;
   const softKeyboard = () => !matchMedia("(hover:hover)").matches;
-  const kbFocused = () => {
-    if (!softKeyboard()) return false;
-    const el = document.activeElement;
+  const textInputEl = (el) => {
     if (!el || el === document.body) return false;
     if (el.tagName === "TEXTAREA") return true;
     if (el.tagName === "INPUT") return TEXTY.test((el.getAttribute("type") || "").toLowerCase());
     return el.isContentEditable === true;
   };
+  const focusedTextInput = () => softKeyboard() && textInputEl(document.activeElement);
   // The tallest visual viewport seen this orientation ≈ the NO-keyboard height.
   // Used to tell "keyboard is actually on screen" (viewport shrunk) from "keyboard
   // is gone" (viewport back to full) — in BOTH a Safari tab and an installed PWA,
   // since vv.height itself shrinks/grows with the keyboard even when innerHeight
   // tracks it (so the layout-viewport `shrink` reads ~0 in a PWA). Reset on rotate.
   let vvMax = vv.height;
-  let restoreTimer = 0;
+  let keyboardIntentUntil = 0;
+  let settleTimer = 0;
+  let geometryWasOpen = false;
+  const keyboardThreshold = () => Math.max(140, window.innerHeight * 0.18);
+  const keyboardGeometryOpen = () => {
+    const layoutShrink = Math.max(0, window.innerHeight - vv.height);
+    const visualShrink = Math.max(0, vvMax - vv.height);
+    return Math.max(layoutShrink, visualShrink) > keyboardThreshold();
+  };
+  const keyboardIntentOpen = () => Date.now() < keyboardIntentUntil;
+  const releaseStaleChatFocus = () => {
+    const el = document.activeElement;
+    if (!softKeyboard() || !textInputEl(el)) return;
+    if (!document.body.classList.contains("chat-mode") || !el.closest?.(".chatview")) return;
+    el.blur();
+  };
+  const settle = (long = false) => {
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(sync, long ? 960 : 420);
+  };
+  const requestKeyboard = () => {
+    if (!softKeyboard()) return;
+    keyboardIntentUntil = Date.now() + 900;
+    sync();
+    settle(true);
+  };
   const applyVvb = (kbOpen) => {
     // Pin the fixed bottom bars to the VISUAL viewport's bottom edge:
     //  • settled PWA → 0
@@ -1156,36 +1173,32 @@ window.addEventListener("orientationchange", syncChatViewport);
   };
   const sync = () => {
     if (vv.height > vvMax) vvMax = vv.height;
-    const shrink = Math.max(0, window.innerHeight - vv.height);
-    const kbOpen = kbFocused() || shrink > Math.max(140, window.innerHeight * 0.18);
+    const geometryOpen = keyboardGeometryOpen();
+    if (geometryOpen) keyboardIntentUntil = 0;
+    const kbOpen = geometryOpen || keyboardIntentOpen();
     document.body.classList.toggle("kb-open", kbOpen);
     applyVvb(kbOpen);
     syncChatViewport();
-    // iOS's on-screen "hide keyboard" button dismisses the keyboard WITHOUT blurring
-    // the field, so kbFocused() stays true and kb-open stuck — the tab bar stayed
-    // hidden with no keyboard on screen, leaving no way to navigate off Chat. When
-    // the visual viewport sits back at its full (no-keyboard) height, the keyboard is
-    // truly gone: clear kb-open even though focus is retained. The settle delay keeps
-    // it distinct from the focus→keyboard-rising moment (also briefly full-height), so
-    // instant-hide-on-focus is preserved.
-    clearTimeout(restoreTimer);
-    if (kbOpen && vv.height >= vvMax - 40) {
-      restoreTimer = setTimeout(() => {
-        if (vv.height >= vvMax - 40 && document.body.classList.contains("kb-open")) {
-          document.body.classList.remove("kb-open");
-          applyVvb(false);
-          syncChatViewport();
-        }
-      }, 350);
+    // iOS can dismiss the keyboard without blurring the textarea. If we leave that
+    // stale focus alive after the viewport is restored, the next tap reuses an old
+    // native editing session and the caret can be painted somewhere different from
+    // where text will actually insert. Once geometry says the keyboard is gone,
+    // release chat focus so the next tap starts from a clean caret position.
+    if (geometryOpen) geometryWasOpen = true;
+    if (!kbOpen && geometryWasOpen) {
+      geometryWasOpen = false;
+      releaseStaleChatFocus();
     }
   };
   vv.addEventListener("resize", sync);
   vv.addEventListener("scroll", sync); // keyboard open/close shifts offsetTop
   window.addEventListener("orientationchange", () => { vvMax = vv.height; sync(); });
-  // Focus/blur of a text field is the earliest, most reliable keyboard signal —
-  // flip kb-open the instant focus moves, then re-settle after the keyboard
-  // finishes animating (esp. on blur, when the bars slide back).
-  document.addEventListener("focusin", sync, true);
+  // Focus/tap is an early intent signal, not proof that the keyboard is open:
+  // iOS can retain focus after the user hides the keyboard. Geometry owns the
+  // durable state; intent only bridges the first few frames before vv.height moves,
+  // and also covers tapping an already-focused textarea to bring the keyboard back.
+  document.addEventListener("pointerdown", (e) => { if (textInputEl(e.target)) requestKeyboard(); }, true);
+  document.addEventListener("focusin", () => { if (focusedTextInput()) requestKeyboard(); else sync(); }, true);
   document.addEventListener("focusout", () => {
     sync();
     requestAnimationFrame(() => requestAnimationFrame(sync));
