@@ -16,6 +16,26 @@ if [ "$(id -u)" = "0" ]; then
   for d in /data /home/app; do
     [ -d "$d" ] && find "$d" ! -user app -exec chown app:app {} + 2>/dev/null || true
   done
+
+  # Some vendor installers write binaries under the persisted /home/app volume.
+  # If a released image does not have a baked /usr/local/bin binary, expose the
+  # mounted-home copy so shell use and in-app probes agree after upgrades.
+  link_home_cli() {
+    name="$1"
+    shift
+    [ -x "/usr/local/bin/$name" ] && return 0
+    for src in "$@"; do
+      if [ -x "$src" ]; then
+        ln -sfn "$src" "/usr/local/bin/$name" 2>/dev/null || true
+        return 0
+      fi
+    done
+  }
+  link_home_cli agy \
+    /home/app/.local/bin/agy \
+    /home/app/.antigravity-ide/antigravity-ide/bin/agy
+  link_home_cli grok /home/app/.grok/bin/grok
+
   exec su -s /bin/sh -c 'exec "$@"' app sh "$@"
 fi
 

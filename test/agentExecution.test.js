@@ -52,9 +52,11 @@ test("agent spawn options use an isolated workspace and sanitized env", () => wi
   assert.equal(opts.env.DATA_DIR, undefined);
   assert.equal(opts.env.HOME, "/home/app");
   assert.equal(opts.env.PATH, agentCliPath(sourceEnv));
-  assert.ok(opts.env.PATH.split(path.delimiter).includes("/home/app/.local/bin"));
-  assert.ok(opts.env.PATH.split(path.delimiter).includes("/home/app/.grok/bin"));
-  assert.ok(opts.env.PATH.split(path.delimiter).includes("/usr/bin"));
+  const pathParts = opts.env.PATH.split(path.delimiter);
+  assert.equal(pathParts[0], "/usr/local/bin");
+  assert.ok(pathParts.includes("/home/app/.local/bin"));
+  assert.ok(pathParts.includes("/home/app/.grok/bin"));
+  assert.ok(pathParts.includes("/usr/bin"));
 }));
 
 test("agent command presence can see CLIs installed under the mounted app home", () => withTempDir((dataDir) => {

@@ -339,8 +339,9 @@ docker compose build \
 docker compose up -d
 ```
 
-Antigravity and Grok use moving vendor shell installers, so the default image build leaves them
-off. To include one, provide a checksum for the installer you audited:
+Antigravity and Grok use vendor shell installers. The checked-in Dockerfile pins the current
+installer-script hashes so normal source/release builds include them. If a vendor changes its
+installer script before this repo updates the hash, provide the new audited checksum:
 
 ```bash
 docker compose build \

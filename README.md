@@ -396,8 +396,8 @@ docker exec -u app -it cairn grok login          # Grok, if installed (or set XA
 Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
 (re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent
 in **Settings → Agents**. Notes: `claude -p` on subscription draws from a separate Agent SDK credit
-pool from 2026-06-15; `agy`/`grok` use beta vendor installers and are not baked into the default
-release image unless the maintainer supplies a checksum or explicitly opts into unverified installers.
+pool from 2026-06-15; `agy`/`grok` use vendor installers, baked into the release image only when the
+installer-script checksums in the Dockerfile match the currently fetched installer.
 
 Cairn does **not** proxy a shared API key or shared subscription. The container only ships the
 runner binaries; each user logs in with their own Claude / ChatGPT / Google / xAI account, and
@@ -405,8 +405,9 @@ the `cairn-home` Docker volume keeps those auth directories across restarts and 
 
 ### Updating CLI tools
 
-The image installs pinned Claude Code and Codex CLI versions at build time. For a long-running
-install, update them from **Settings → Agents → Update CLI tools**, or from the shell:
+The image installs pinned Claude Code and Codex CLI versions plus checksum-pinned Antigravity/Grok
+installers at build time. For a long-running install, update them from **Settings → Agents → Update
+CLI tools**, or from the shell:
 
 ```bash
 docker exec -u app cairn cairn-update-agent-clis

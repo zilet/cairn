@@ -27,19 +27,19 @@ COPY scripts/docker-entrypoint.sh /usr/local/bin/cairn-entrypoint
 RUN chmod +x /usr/local/bin/cairn-update-agent-clis /usr/local/bin/cairn-entrypoint
 
 # Bake in coaching CLIs. claude/codex are npm installs pinned below.
-# Antigravity/Grok use moving shell installers, so they are opt-in unless a
-# checksum is supplied via the matching *_INSTALL_SHA256 build arg.
+# Antigravity/Grok use vendor shell installers; pin the installer script hashes so
+# public builds can include them without blindly running changed installer code.
 # Binaries are moved OUT of HOME so the home volume mount doesn't hide them.
 ARG INSTALL_CLAUDE=1
 ARG INSTALL_CODEX=1
-ARG INSTALL_ANTIGRAVITY=0
-ARG INSTALL_GROK=0
+ARG INSTALL_ANTIGRAVITY=1
+ARG INSTALL_GROK=1
 ARG CLAUDE_CODE_VERSION=2.1.195
 ARG CODEX_CLI_VERSION=0.142.3
 ARG ANTIGRAVITY_INSTALL_URL=https://antigravity.google/cli/install.sh
-ARG ANTIGRAVITY_INSTALL_SHA256=
+ARG ANTIGRAVITY_INSTALL_SHA256=ee1ea43ce4e9e56356c4ab6dad907ef357ae4bdfcaadb682735909fb57c9c640
 ARG GROK_INSTALL_URL=https://x.ai/cli/install.sh
-ARG GROK_INSTALL_SHA256=
+ARG GROK_INSTALL_SHA256=2019f38002a2beab27f65b928db5d33d2bbe8c2828e4e41081ac23ec33b7a658
 ARG AGENT_INSTALL_ALLOW_UNVERIFIED=0
 ARG AGENT_CLI_CACHE_BUST=unset
 # Cache mount on ~/.npm — don't `npm cache clean` here, it would wipe the mount.

@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(root, "scripts", "update-agent-clis.sh");
+const dockerfile = path.join(root, "Dockerfile");
+const entrypoint = path.join(root, "scripts", "docker-entrypoint.sh");
 
 function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-agent-cli-script-"));
@@ -141,3 +143,23 @@ test("agent CLI install script gates shell installers on checksum or explicit op
   assert.match(readIfExists(curlLog), /curl/);
   assert.match(readIfExists(bashLog), /cairn-agy-installer/);
 }));
+
+test("Docker builds include all coaching CLIs with pinned vendor installer hashes", () => {
+  const body = fs.readFileSync(dockerfile, "utf8");
+  assert.match(body, /ARG INSTALL_CLAUDE=1/);
+  assert.match(body, /ARG INSTALL_CODEX=1/);
+  assert.match(body, /ARG INSTALL_ANTIGRAVITY=1/);
+  assert.match(body, /ARG INSTALL_GROK=1/);
+  assert.match(body, /ARG ANTIGRAVITY_INSTALL_SHA256=[0-9a-f]{64}/);
+  assert.match(body, /ARG GROK_INSTALL_SHA256=[0-9a-f]{64}/);
+  assert.doesNotMatch(body, /ARG ANTIGRAVITY_INSTALL_SHA256=\s*$/m);
+  assert.doesNotMatch(body, /ARG GROK_INSTALL_SHA256=\s*$/m);
+});
+
+test("container startup exposes mounted-home Antigravity and Grok binaries", () => {
+  const body = fs.readFileSync(entrypoint, "utf8");
+  assert.match(body, /link_home_cli agy/);
+  assert.match(body, /\/home\/app\/\.local\/bin\/agy/);
+  assert.match(body, /link_home_cli grok \/home\/app\/\.grok\/bin\/grok/);
+  assert.match(body, /\/usr\/local\/bin\/\$name/);
+});

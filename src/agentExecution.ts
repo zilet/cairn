@@ -24,10 +24,10 @@ export const AGENT_ENV_DENYLIST = [
 export function agentCliPath(source: NodeJS.ProcessEnv = process.env): string {
   const home = source.HOME || source.USERPROFILE || "";
   const preferred = [
+    "/usr/local/bin",
     home ? path.join(home, ".local", "bin") : "",
     home ? path.join(home, ".grok", "bin") : "",
     home ? path.join(home, ".antigravity-ide", "antigravity-ide", "bin") : "",
-    "/usr/local/bin",
     "/usr/bin",
     "/bin",
   ];

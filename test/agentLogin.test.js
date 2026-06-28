@@ -116,9 +116,11 @@ test("sanitizeAgentEnv strips Cairn-owned secrets while preserving login-critica
   for (const key of AGENT_ENV_DENYLIST) assert.equal(env[key], undefined, `${key} should be stripped`);
   assert.equal(env.HOME, "/home/app");
   assert.equal(env.PATH, agentCliPath(source));
-  assert.ok(env.PATH.split(path.delimiter).includes("/home/app/.local/bin"));
-  assert.ok(env.PATH.split(path.delimiter).includes("/home/app/.grok/bin"));
-  assert.ok(env.PATH.split(path.delimiter).includes("/usr/bin"));
+  const pathParts = env.PATH.split(path.delimiter);
+  assert.equal(pathParts[0], "/usr/local/bin");
+  assert.ok(pathParts.includes("/home/app/.local/bin"));
+  assert.ok(pathParts.includes("/home/app/.grok/bin"));
+  assert.ok(pathParts.includes("/usr/bin"));
   assert.equal(env.LANG, "C.UTF-8");
   assert.equal(env.XAI_API_KEY, "agent-owned-key");
 
