@@ -15,6 +15,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/html-utils.ts", output: "public/js/html-utils.js" },
   { source: "src/client/format-utils.ts", output: "public/js/format-utils.js" },
   { source: "src/client/api-client.ts", output: "public/js/api-client.js" },
+  { source: "src/client/swr-cache.ts", output: "public/js/swr-cache.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
 ];
 

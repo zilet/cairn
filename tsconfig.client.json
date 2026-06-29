@@ -12,7 +12,6 @@
   },
   "include": [
     "src/contracts/client-globals.d.ts",
-    "public/js/swr-cache.js",
     "public/js/today-agenda-client.js",
     "public/js/today-training-client.js",
     "public/js/chat-client.js",

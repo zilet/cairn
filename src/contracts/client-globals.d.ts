@@ -27,12 +27,37 @@ declare global {
   declare function fmtKm(km: unknown): string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
-  type CairnApiOptions = RequestInit & { headers?: Record<string, string> };
   declare function authToken(): string;
   declare function withToken(url: string): string;
   declare function deviceTimeZone(): string;
-  declare function api<Path extends string>(p: Path, opts?: CairnApiOptions): Promise<ClientApiResponse<Path>>;
+  declare function api<Path extends string>(
+    p: Path,
+    opts?: RequestInit & { headers?: Record<string, string> },
+  ): Promise<ClientApiResponse<Path>>;
   declare function setOffline(on: unknown): void;
+  type SwrPeek<T> = { data: T; fresh: boolean };
+  type SwrUpgradeMeta = { changed: boolean };
+  type CachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: SwrUpgradeMeta) => void };
+  type PaintSwrOptions<T> = {
+    key?: string;
+    path?: string;
+    peek?: SwrPeek<T> | null;
+    render?: (data: T, meta: { warm: boolean }) => void;
+    token?: unknown;
+    freshFor?: number;
+    tab?: string | null;
+  };
+  declare function peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+  declare function cachedApi<Path extends string>(
+    path: Path,
+    options?: CachedApiOptions<ClientApiResponse<Path>>,
+  ): Promise<ClientApiResponse<Path>>;
+  declare function paintSWR<Path extends string>(
+    options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path },
+  ): Promise<ClientApiResponse<Path> | undefined>;
+  declare function markRefreshing(on: unknown): void;
+  declare function swrInvalidate(keyOrPrefix: string): void;
+  declare function swrSweep(): void;
   declare function stagger(index?: number | null): string;
 
   interface Window {

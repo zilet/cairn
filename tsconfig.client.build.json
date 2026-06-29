@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/client/**/*.ts"]
+  "include": ["src/contracts/client-globals.d.ts", "src/client/**/*.ts"]
 }
