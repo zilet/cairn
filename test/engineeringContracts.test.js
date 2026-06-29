@@ -637,6 +637,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsRoutesSource = read("src/client/settings-routes.ts");
   const settingsClientSource = read("src/client/settings-client.ts");
   const chatClientSource = read("src/client/chat-client.ts");
+  const healthClientSource = read("src/client/health-client.ts");
   const routeStateSource = read("src/client/route-state.ts");
   const routeState = read("public/js/route-state.js");
   const dateUtils = read("public/js/date-utils.js");
@@ -685,7 +686,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-agenda-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-training-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-client\.js/);
-  assert.match(clientTsconfig, /public\/js\/health-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/health-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
   assert.match(clientBuildTsconfig, /"include": \["src\/contracts\/client-globals\.d\.ts", "src\/client\/\*\*\/\*\.ts"\]/);
@@ -709,6 +710,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-client\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-client\.ts/);
+  assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.ok(
@@ -798,6 +801,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-client\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-client\.ts/);
+  assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.match(clientBuild, /export function buildClient\(\)/);
@@ -837,6 +842,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /type ChatImagePayload = \{ dataUrl: string; base64: string; mime: "image\/jpeg"; bytes: number \}/);
   assert.match(chatClientSource, /function chatWantsFuelSurface/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
+  assert.match(healthClientSource, /type HealthEvidenceRow = \{/);
+  assert.match(healthClientSource, /const HEALTH_MARKER_ORDER: Record<string, Array<\[number, RegExp\]>>/);
+  assert.match(healthClientSource, /function orderMarkersForDisplay<T extends HealthMarkerRow>/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
   assert.match(routeState, /root\.CairnRoutes = \{/);
@@ -852,7 +860,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayTrainingClient, /CairnTodayTraining/);
-  assert.match(healthClient, /window\.CairnHealthClient/);
+  assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
+  assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
   assert.match(chatClient, /Object\.assign\(globalThis, \{ CairnChatClient: CAIRN_CHAT_CLIENT \}\)/);
   assert.match(chatClient, /window\.CairnChatClient = CAIRN_CHAT_CLIENT/);
   assert.match(settingsClient, /Object\.assign\(globalThis, \{/);
