@@ -17,6 +17,15 @@ declare global {
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
   declare function escAttr(value: unknown): string;
+  declare function foodNum(value: unknown): number | null;
+  declare function formatFoodNum(value: unknown): string;
+  declare function fmtWeight(weight: unknown): string;
+  declare function parseDur(text: unknown): number | null;
+  declare function fmtDur(sec: unknown): string;
+  declare function fmtPaceKm(minPerKm: unknown): string;
+  declare function fmtKm(km: unknown): string;
+  declare function fmtSpeedKmh(kmh: unknown): string;
+  declare function prDistLabel(km: unknown): string;
   declare function stagger(index?: number | null): string;
 
   interface Window {

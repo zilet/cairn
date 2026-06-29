@@ -621,10 +621,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const pkg = JSON.parse(read("package.json"));
   const clientTsconfig = read("tsconfig.client.json");
   const clientBuildTsconfig = read("tsconfig.client.build.json");
+  const clientGlobals = read("src/contracts/client-globals.d.ts");
   const contracts = read("src/contracts/client.ts");
   const compat = read("src/contracts/client-compat.ts");
   const dateUtilsSource = read("src/client/date-utils.ts");
   const htmlUtilsSource = read("src/client/html-utils.ts");
+  const formatUtilsSource = read("src/client/format-utils.ts");
   const routeStateSource = read("src/client/route-state.ts");
   const routeState = read("public/js/route-state.js");
   const dateUtils = read("public/js/date-utils.js");
@@ -658,9 +660,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientTsconfig, /"checkJs": true/);
   assert.match(clientTsconfig, /"noEmit": true/);
   assert.match(clientTsconfig, /src\/contracts\/client-globals\.d\.ts/);
+  assert.match(clientGlobals, /declare function fmtWeight\(weight: unknown\): string/);
+  assert.match(clientGlobals, /declare function formatFoodNum\(value: unknown\): string/);
+  assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/html-utils\.js/);
-  assert.match(clientTsconfig, /public\/js\/format-utils\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.match(clientTsconfig, /public\/js\/api-client\.js/);
   assert.match(clientTsconfig, /public\/js\/swr-cache\.js/);
   assert.match(clientTsconfig, /public\/js\/today-agenda-client\.js/);
@@ -674,6 +679,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/date-utils\.js/);
   assert.match(clientBuild, /src\/client\/html-utils\.ts/);
   assert.match(clientBuild, /public\/js\/html-utils\.js/);
+  assert.match(clientBuild, /src\/client\/format-utils\.ts/);
+  assert.match(clientBuild, /public\/js\/format-utils\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.ok(
@@ -747,6 +754,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/date-utils\.js/);
   assert.match(clientBuild, /src\/client\/html-utils\.ts/);
   assert.match(clientBuild, /public\/js\/html-utils\.js/);
+  assert.match(clientBuild, /src\/client\/format-utils\.ts/);
+  assert.match(clientBuild, /public\/js\/format-utils\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.match(clientBuild, /export function buildClient\(\)/);
@@ -767,6 +776,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /AssertAssignable<ChatSearchHit, ClientChatSearchHit>/);
   assert.match(dateUtilsSource, /function localISO\(d = new Date\(\)\): string/);
   assert.match(htmlUtilsSource, /function escHtml\(value: unknown\): string/);
+  assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
+  assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
   assert.match(routeState, /root\.CairnRoutes = \{/);

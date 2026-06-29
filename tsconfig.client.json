@@ -12,7 +12,6 @@
   },
   "include": [
     "src/contracts/client-globals.d.ts",
-    "public/js/format-utils.js",
     "public/js/api-client.js",
     "public/js/swr-cache.js",
     "public/js/today-agenda-client.js",
