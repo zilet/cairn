@@ -15,6 +15,11 @@ type TextChipOptions = {
   title?: unknown;
   attrs?: CairnUiAttrs;
 };
+type LoadingStateOptions = {
+  label: unknown;
+  className?: string;
+  live?: boolean;
+};
 type EmptyStateOptions = {
   title: unknown;
   body?: unknown;
@@ -51,6 +56,15 @@ function textChipHtml(options: TextChipOptions): string {
   return `<span class="${escAttr(className)}"${title}${uiAttrsHtml(options.attrs)}>${escHtml(options.label)}</span>`;
 }
 
+function loadingStateHtml(options: LoadingStateOptions): string {
+  const className = options.className || "loadstate";
+  const live = options.live === false ? "" : ` aria-live="polite"`;
+  return `<div class="${escAttr(className)}" role="status"${live}>
+    <span class="aspin aspin-sm" aria-hidden="true"></span>
+    <div class="loadstate-label">${escHtml(options.label)}</div>
+  </div>`;
+}
+
 function emptyStateHtml(options: EmptyStateOptions): string {
   const className = options.className || "empty-state reveal";
   const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -72,6 +86,7 @@ const CAIRN_UI = {
   attrsHtml: uiAttrsHtml,
   actionButtonHtml,
   textChipHtml,
+  loadingStateHtml,
   emptyStateHtml,
 };
 

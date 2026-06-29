@@ -88,3 +88,19 @@ test("text chip component escapes label, title, and attributes", () => {
   assert.match(html, />Incline &lt;press&gt;<\/span>/);
   assert.doesNotMatch(html, /bad attr/);
 });
+
+test("loading state component escapes labels and preserves status semantics", () => {
+  const ui = loadUiComponents();
+  const html = ui.loadingStateHtml({ label: "Reading <labs>", className: `load "wide"` });
+
+  assert.match(html, /class="load &quot;wide&quot;"/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /aria-live="polite"/);
+  assert.match(html, /aria-hidden="true"/);
+  assert.match(html, /Reading &lt;labs&gt;/);
+  assert.doesNotMatch(html, /Reading <labs>/);
+
+  const staticHtml = ui.loadingStateHtml({ label: "Syncing", live: false });
+  assert.match(staticHtml, /role="status"/);
+  assert.doesNotMatch(staticHtml, /aria-live=/);
+});

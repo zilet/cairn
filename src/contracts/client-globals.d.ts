@@ -106,6 +106,11 @@ declare global {
         title?: unknown;
         attrs?: Record<string, unknown>;
       }): string;
+      loadingStateHtml(options: {
+        label: unknown;
+        className?: string;
+        live?: boolean;
+      }): string;
       emptyStateHtml(options: {
         title: unknown;
         body?: unknown;

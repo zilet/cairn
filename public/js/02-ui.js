@@ -1163,10 +1163,7 @@ function countUp(el, target, { dur = 750, fmt = (v) => Math.round(v).toLocaleStr
 // inline button-busy / typing-dots / filament cases live in btnBusy + the
 // .aspin/.typing/.is-thinking CSS — see docs/DESIGN.md › Loading & progress.
 function loadingState(label) {
-  return `<div class="loadstate" role="status" aria-live="polite">
-    <span class="aspin aspin-sm" aria-hidden="true"></span>
-    <div class="loadstate-label">${escHtml(label)}</div>
-  </div>`;
+  return CairnUi.loadingStateHtml({ label });
 }
 
 // Curated, op-specific "an agent is thinking" scripts — calm, Atelier-voiced, a

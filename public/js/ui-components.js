@@ -27,6 +27,14 @@ function textChipHtml(options) {
     const title = options.title == null || !String(options.title).trim() ? "" : ` title="${escAttr(options.title)}"`;
     return `<span class="${escAttr(className)}"${title}${uiAttrsHtml(options.attrs)}>${escHtml(options.label)}</span>`;
 }
+function loadingStateHtml(options) {
+    const className = options.className || "loadstate";
+    const live = options.live === false ? "" : ` aria-live="polite"`;
+    return `<div class="${escAttr(className)}" role="status"${live}>
+    <span class="aspin aspin-sm" aria-hidden="true"></span>
+    <div class="loadstate-label">${escHtml(options.label)}</div>
+  </div>`;
+}
 function emptyStateHtml(options) {
     const className = options.className || "empty-state reveal";
     const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -47,6 +55,7 @@ const CAIRN_UI = {
     attrsHtml: uiAttrsHtml,
     actionButtonHtml,
     textChipHtml,
+    loadingStateHtml,
     emptyStateHtml,
 };
 Object.assign(globalThis, { CairnUi: CAIRN_UI });

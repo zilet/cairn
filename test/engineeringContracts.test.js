@@ -728,6 +728,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const publicScriptCheck = read("scripts/check-public-scripts.mjs");
   const clientBuild = read("scripts/build-client.mjs");
   const clientBuildCheck = read("scripts/check-client-build-output.mjs");
+  const ui = read("public/js/02-ui.js");
   const today = read("public/js/03-today.js");
   const health = read("public/js/07-me-health.js");
   const chat = read("public/js/09-plan-chat.js");
@@ -931,6 +932,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(htmlUtilsSource, /function escHtml\(value: unknown\): string/);
   assert.match(uiComponentsSource, /function emptyStateHtml\(options: EmptyStateOptions\): string/);
   assert.match(uiComponentsSource, /function textChipHtml\(options: TextChipOptions\): string/);
+  assert.match(uiComponentsSource, /function loadingStateHtml\(options: LoadingStateOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
@@ -969,6 +971,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(swrCache, /@returns\s*\{Promise<any>\}/);
   assert.match(uiComponents, /Object\.assign\(globalThis, \{ CairnUi: CAIRN_UI \}\)/);
   assert.match(uiComponents, /window\.CairnUi = CAIRN_UI/);
+  assert.match(uiComponents, /loadingStateHtml/);
   assert.match(todayAgendaClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
@@ -982,6 +985,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsClient, /CairnSettingsClient/);
   assert.match(appJobReconnectors, /Object\.assign\(globalThis, \{ registerAppJobReconnectors \}\)/);
   assert.match(appJobReconnectors, /window\.registerAppJobReconnectors = registerAppJobReconnectors/);
+  assert.match(ui, /function loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
   assert.match(today, /window\.CairnTodayAgenda\.renderableBuckets/);
   assert.match(today, /window\.CairnTodayAgenda\.railHtml/);
   assert.match(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
