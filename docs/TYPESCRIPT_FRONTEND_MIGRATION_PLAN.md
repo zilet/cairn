@@ -31,7 +31,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 
 ### Gaps
 
-- The client source of truth is still mostly `public/js/*.js`, but the migration source tree now exists: `src/client/route-state.ts`, `src/client/date-utils.ts`, `src/client/html-utils.ts`, `src/client/format-utils.ts`, `src/client/api-client.ts`, `src/client/swr-cache.ts`, and `src/client/today-training-client.ts` emit their stable `public/js` files through `scripts/build-client.mjs`.
+- The client source of truth is still mostly `public/js/*.js`, but the migration source tree now exists: `src/client/route-state.ts`, `src/client/date-utils.ts`, `src/client/html-utils.ts`, `src/client/format-utils.ts`, `src/client/api-client.ts`, `src/client/swr-cache.ts`, `src/client/today-agenda-client.ts`, and `src/client/today-training-client.ts` emit their stable `public/js` files through `scripts/build-client.mjs`.
 - The largest and riskiest UI files are not typechecked: `03-today.js`, `07-me-health.js`, `05-progress.js`, `02-ui.js`, `09-plan-chat.js`, `06-coach-meals.js`, `10-boot.js`, `08-me-records.js`, `04-capture.js`, and `settings-routes.js`.
 - The app is still a classic-script graph. Boot order and global names remain part of correctness.
 - `tsconfig.client.json` typechecks selected helper slices, not the full PWA.
@@ -204,7 +204,7 @@ Gate:
 
 ### Wave 1 - Client Build Foundation
 
-Status: in progress. First slices complete: route-state, date helpers, HTML escaping helpers, display-format helpers, the shared API/auth/offline client, the SWR cache layer, and the Today training renderer now have `src/client/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
+Status: in progress. First slices complete: route-state, date helpers, HTML escaping helpers, display-format helpers, the shared API/auth/offline client, the SWR cache layer, the Today agenda renderer, and the Today training renderer now have `src/client/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
 
 Purpose: make TypeScript the source of truth without changing behavior.
 
@@ -225,6 +225,7 @@ Tasks:
 - [x] Move the first browser-global utility helpers (`date-utils`, `html-utils`, `format-utils`) to TypeScript source while preserving stable script filenames.
 - [x] Move the shared API/auth/offline client to TypeScript source while preserving the `public/js/api-client.js` script contract.
 - [x] Move the SWR cache client to TypeScript source while preserving the `public/js/swr-cache.js` script contract.
+- [x] Move the Today agenda renderer to TypeScript source while preserving the `public/js/today-agenda-client.js` script contract.
 - [x] Move the Today training renderer to TypeScript source while preserving the `public/js/today-training-client.js` script contract.
 - [x] Keep the build manifest import side-effect free so freshness checks snapshot current output before rebuilding.
 - [x] Update Docker build inputs so `npm run build` can run the client build in the builder stage.
@@ -290,7 +291,7 @@ Gate:
 
 ### Wave 4 - Helper And Domain Client Migration
 
-Status: seeded by Wave 1. `date-utils`, `html-utils`, `format-utils`, `api-client`, `swr-cache`, and `today-training-client` are now TypeScript-authored browser-global compatibility outputs; the remaining extracted helpers are still `public/js/*.js`.
+Status: seeded by Wave 1. `date-utils`, `html-utils`, `format-utils`, `api-client`, `swr-cache`, `today-agenda-client`, and `today-training-client` are now TypeScript-authored browser-global compatibility outputs; the remaining extracted helpers are still `public/js/*.js`.
 
 Purpose: move already-extracted helper JS into real TS modules.
 
