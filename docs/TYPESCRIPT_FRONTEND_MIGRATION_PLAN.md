@@ -331,6 +331,8 @@ Gate:
 
 ### Wave 5 - Shell, Router, Jobs, And Service Worker
 
+Status: in progress. The first jobs slice added `src/client/app/job-reconnectors.ts` / `public/js/app-job-reconnectors.js`, preserving the exact boot-time agent-job reconnect registration order while keeping `10-boot.js` last. A VM test now guards the order from `session_suggest` through `proposal`, and engineering contracts guard script/cache placement.
+
 Purpose: type the app shell before migrating whole screens.
 
 Teams:
@@ -343,10 +345,10 @@ Teams:
 
 Tasks:
 
-- Move `10-boot.js` into typed source in smaller modules.
-- Replace scattered route literals with shared route definitions.
-- Type `state` and retire broad global declarations.
-- Make job reconnector registration order explicit and tested.
+- [ ] Move `10-boot.js` into typed source in smaller modules.
+- [ ] Replace scattered route literals with shared route definitions.
+- [ ] Type `state` and retire broad global declarations.
+- [x] Make job reconnector registration order explicit and tested.
 - Keep `registerJobReconnector`, `teardownJobs`, and chat teardown paths covered by a browser smoke.
 
 Gate:

@@ -594,6 +594,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/route-state\.js"/);
+  assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
 });
 
 test("PWA deep links return the app shell without capturing API or MCP", () => {
@@ -710,7 +711,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const chatClientSource = read("src/client/chat-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const routeStateSource = read("src/client/route-state.ts");
+  const appJobReconnectorsSource = read("src/client/app/job-reconnectors.ts");
   const routeState = read("public/js/route-state.js");
+  const appJobReconnectors = read("public/js/app-job-reconnectors.js");
   const dateUtils = read("public/js/date-utils.js");
   const htmlUtils = read("public/js/html-utils.js");
   const uiComponents = read("public/js/ui-components.js");
@@ -762,6 +765,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/app-job-reconnectors\.js/);
   assert.match(clientBuildTsconfig, /"include": \["src\/contracts\/client-globals\.d\.ts", "src\/client\/\*\*\/\*\.ts"\]/);
   assert.match(clientBuild, /src\/client\/date-utils\.ts/);
   assert.match(clientBuild, /public\/js\/date-utils\.js/);
@@ -789,6 +793,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
+  assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
+  assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.ok(
     index.indexOf('/js/date-utils.js') > -1 &&
       index.indexOf('/js/date-utils.js') < index.indexOf('/js/01-core.js'),
@@ -851,6 +857,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
       index.indexOf('/js/settings-client.js') < index.indexOf('/js/10-boot.js'),
     "settings-client.js must load before 10-boot.js",
   );
+  assert.ok(
+    index.indexOf('/js/app-job-reconnectors.js') > index.indexOf('/js/route-state.js') &&
+      index.indexOf('/js/app-job-reconnectors.js') < index.indexOf('/js/10-boot.js'),
+    "app-job-reconnectors.js must load after route-state.js and before 10-boot.js",
+  );
   assert.match(dateUtils, /\/\/ @ts-check/);
   assert.match(htmlUtils, /\/\/ @ts-check/);
   assert.match(uiComponents, /\/\/ @ts-check/);
@@ -862,6 +873,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClient, /\/\/ @ts-check/);
   assert.match(chatClient, /\/\/ @ts-check/);
   assert.match(settingsClient, /\/\/ @ts-check/);
+  assert.match(appJobReconnectors, /\/\/ @ts-check/);
   assert.match(publicScriptCheck, /ts\.createSourceFile/);
   assert.match(publicScriptCheck, /topLevelBindings/);
   assert.match(publicScriptCheck, /prior\.lexical\s*\|\|\s*binding\.lexical/);
@@ -889,6 +901,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-client\.js/);
+  assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
+  assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.match(clientBuild, /export function buildClient\(\)/);
@@ -942,6 +956,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClientSource, /function orderMarkersForDisplay<T extends HealthMarkerRow>/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
+  assert.match(appJobReconnectorsSource, /const APP_JOB_RECONNECTORS: AppJobReconnectEntry\[\] = \[/);
+  assert.match(appJobReconnectorsSource, /function registerAppJobReconnectors\(\): void/);
   assert.match(routeState, /root\.CairnRoutes = \{/);
   assert.match(apiClient, /Object\.assign\(globalThis, \{/);
   assert.match(apiClient, /withToken/);
@@ -964,6 +980,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClient, /window\.CairnChatClient = CAIRN_CHAT_CLIENT/);
   assert.match(settingsClient, /Object\.assign\(globalThis, \{/);
   assert.match(settingsClient, /CairnSettingsClient/);
+  assert.match(appJobReconnectors, /Object\.assign\(globalThis, \{ registerAppJobReconnectors \}\)/);
+  assert.match(appJobReconnectors, /window\.registerAppJobReconnectors = registerAppJobReconnectors/);
   assert.match(today, /window\.CairnTodayAgenda\.renderableBuckets/);
   assert.match(today, /window\.CairnTodayAgenda\.railHtml/);
   assert.match(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
@@ -975,12 +993,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(chat, /CairnChatClient\.historySessionRow/);
   assert.match(boot, /CairnSettingsClient\.updateCardHtml/);
+  assert.match(boot, /registerAppJobReconnectors\(\)/);
+  assert.doesNotMatch(boot, /registerJobReconnector\("session_suggest"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
+  assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
 });
 
 test("public docker run quickstarts bind loopback by default", () => {

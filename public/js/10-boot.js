@@ -1014,14 +1014,7 @@ if ("serviceWorker" in navigator) {
 swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the cache
 // Register reconnectors so a job running across a reload re-attaches to its host
 // (the registry const is defined in the job-runner section, so this runs at boot).
-registerJobReconnector("session_suggest", reconnectSessionSuggest);
-registerJobReconnector("meal_plan", reconnectMealPlan);
-registerJobReconnector("meal_swap", reconnectMealSwap);
-registerJobReconnector("recipe", reconnectRecipe);
-registerJobReconnector("day_read_override", reconnectDayReadOverride);
-registerJobReconnector("nutrition_checkin", reconnectNutritionCheckin);
-registerJobReconnector("insight", reconnectInsight);
-registerJobReconnector("proposal", reconnectProposal);
+registerAppJobReconnectors();
 // Prime the discipline emphasis global BEFORE the first paint so a landing straight
 // on Progress (?tab=progress / a PWA shortcut) honors an endurance athlete's default
 // view. Warm cache → set it synchronously (no flash). Cold → fetch, and if the

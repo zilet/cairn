@@ -60,8 +60,19 @@ declare global {
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;
   declare function stagger(index?: number | null): string;
+  declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
+  declare function reconnectSessionSuggest(job?: unknown): unknown;
+  declare function reconnectMealPlan(job?: unknown): unknown;
+  declare function reconnectMealSwap(job?: unknown): unknown;
+  declare function reconnectRecipe(job?: unknown): unknown;
+  declare function reconnectDayReadOverride(job?: unknown): unknown;
+  declare function reconnectNutritionCheckin(job?: unknown): unknown;
+  declare function reconnectInsight(job?: unknown): unknown;
+  declare function reconnectProposal(job?: unknown): unknown;
 
   interface Window {
+    registerAppJobReconnectors(): void;
+
     CairnChatClient: {
       CHAT_IMAGE_MAX_BYTES: number;
       CHAT_IMAGE_EDGE_STEPS: number[];
