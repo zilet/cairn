@@ -68,3 +68,23 @@ test("action button component omits blank actions and supports boolean attribute
   assert.doesNotMatch(html, /bad attr/);
   assert.doesNotMatch(html, /badattr/);
 });
+
+test("text chip component escapes label, title, and attributes", () => {
+  const ui = loadUiComponents();
+  assert.equal(ui.textChipHtml({ label: "" }), "");
+
+  const html = ui.textChipHtml({
+    className: `chip "quiet"`,
+    label: "Incline <press>",
+    title: `same "pattern"`,
+    attrs: { "data-kind": "vary", selected: true, "bad attr": "dropped" },
+  });
+
+  assert.match(html, /^<span /);
+  assert.match(html, /class="chip &quot;quiet&quot;"/);
+  assert.match(html, /title="same &quot;pattern&quot;"/);
+  assert.match(html, /data-kind="vary"/);
+  assert.match(html, /\sselected\b/);
+  assert.match(html, />Incline &lt;press&gt;<\/span>/);
+  assert.doesNotMatch(html, /bad attr/);
+});

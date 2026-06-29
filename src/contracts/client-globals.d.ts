@@ -89,6 +89,12 @@ declare global {
         className?: string;
         attrs?: Record<string, unknown>;
       } | null | undefined): string;
+      textChipHtml(options: {
+        label: unknown;
+        className?: string;
+        title?: unknown;
+        attrs?: Record<string, unknown>;
+      }): string;
       emptyStateHtml(options: {
         title: unknown;
         body?: unknown;

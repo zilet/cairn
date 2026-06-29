@@ -36,6 +36,7 @@ function loadTodayTraining() {
     cardioLabel: (it) => it.label || it.note || it.exercise || "Cardio",
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-training-client.js"), "utf8"), context);
   return context.CairnTodayTraining;
 }

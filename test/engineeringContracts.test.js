@@ -811,6 +811,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "ui-components.js must load after escaping helpers and before component consumers",
   );
   assert.ok(
+    index.indexOf('/js/ui-components.js') > index.indexOf('/js/html-utils.js') &&
+      index.indexOf('/js/ui-components.js') < index.indexOf('/js/today-training-client.js'),
+    "ui-components.js must load before Today training component consumers",
+  );
+  assert.ok(
     index.indexOf('/js/format-utils.js') > -1 &&
       index.indexOf('/js/format-utils.js') < index.indexOf('/js/02-ui.js'),
     "format-utils.js must load before 02-ui.js and feature modules",
@@ -911,6 +916,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(dateUtilsSource, /function localISO\(d = new Date\(\)\): string/);
   assert.match(htmlUtilsSource, /function escHtml\(value: unknown\): string/);
   assert.match(uiComponentsSource, /function emptyStateHtml\(options: EmptyStateOptions\): string/);
+  assert.match(uiComponentsSource, /function textChipHtml\(options: TextChipOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
@@ -949,6 +955,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayTrainingClient, /CairnTodayTraining/);
+  assert.match(todayTrainingClient, /CairnUi\.textChipHtml/);
   assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
   assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
   assert.match(chatClient, /Object\.assign\(globalThis, \{ CairnChatClient: CAIRN_CHAT_CLIENT \}\)/);

@@ -274,7 +274,7 @@ Gate:
 
 ### Wave 3 - Typed Component Core
 
-Status: in progress. The first component slice added `src/client/ui-components.ts` / `public/js/ui-components.js`, a tiny pure `CairnUi` primitive for escaped attributes, action buttons, and empty states. Health marker empty-state markup now uses it, and VM tests guard hostile-string escaping, boolean/invalid attributes, stable button type, index script order, and service-worker cache coverage.
+Status: in progress. The first component slices added `src/client/ui-components.ts` / `public/js/ui-components.js`, a tiny pure `CairnUi` primitive for escaped attributes, action buttons, empty states, and text chips. Health marker empty-state markup and Today training variation chips now use it, and VM tests guard hostile-string escaping, boolean/invalid attributes, stable button type, index script order, component dependencies, and service-worker cache coverage.
 
 Purpose: create a small reusable UI grammar without adding a framework.
 
@@ -289,6 +289,7 @@ Tasks:
 
 - [x] Add the first shared typed UI primitive without a framework or runtime dependency.
 - [x] Move one repeated/safety-sensitive empty-state path through the component primitive.
+- [x] Move one repeated/safety-sensitive chip path through the component primitive.
 - [x] Keep data fetching out of components.
 - [x] Add tests that hostile strings are escaped in component output.
 - [x] Add tests that component classes and stable attributes remain present where screens depend on them.

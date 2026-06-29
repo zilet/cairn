@@ -38,7 +38,7 @@ function exRxVaryMenuHtml(rx) {
         return "";
     const chips = opts
         .slice(0, 3)
-        .map((opt) => `<span class="ex-rx-opt"${opt.why ? ` title="${escAttr(opt.why)}"` : ""}>${escHtml(opt.name)}</span>`)
+        .map((opt) => CairnUi.textChipHtml({ className: "ex-rx-opt", label: opt.name, title: opt.why }))
         .join("");
     return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">rotate one in</span><div class="ex-rx-opts">${chips}</div></div>`;
 }

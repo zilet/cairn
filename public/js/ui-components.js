@@ -20,6 +20,13 @@ function actionButtonHtml(action) {
     const cls = ` class="${escAttr(action.className || "logbtn")}"`;
     return `<button${id}${cls} type="button"${uiAttrsHtml(action.attrs)}>${escHtml(action.label)}</button>`;
 }
+function textChipHtml(options) {
+    if (!String(options.label ?? "").trim())
+        return "";
+    const className = options.className || "chip";
+    const title = options.title == null || !String(options.title).trim() ? "" : ` title="${escAttr(options.title)}"`;
+    return `<span class="${escAttr(className)}"${title}${uiAttrsHtml(options.attrs)}>${escHtml(options.label)}</span>`;
+}
 function emptyStateHtml(options) {
     const className = options.className || "empty-state reveal";
     const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -39,6 +46,7 @@ function emptyStateHtml(options) {
 const CAIRN_UI = {
     attrsHtml: uiAttrsHtml,
     actionButtonHtml,
+    textChipHtml,
     emptyStateHtml,
 };
 Object.assign(globalThis, { CairnUi: CAIRN_UI });

@@ -9,6 +9,12 @@ type CairnUiAction = {
   className?: string;
   attrs?: CairnUiAttrs;
 };
+type TextChipOptions = {
+  label: unknown;
+  className?: string;
+  title?: unknown;
+  attrs?: CairnUiAttrs;
+};
 type EmptyStateOptions = {
   title: unknown;
   body?: unknown;
@@ -38,6 +44,13 @@ function actionButtonHtml(action: CairnUiAction | null | undefined): string {
   return `<button${id}${cls} type="button"${uiAttrsHtml(action.attrs)}>${escHtml(action.label)}</button>`;
 }
 
+function textChipHtml(options: TextChipOptions): string {
+  if (!String(options.label ?? "").trim()) return "";
+  const className = options.className || "chip";
+  const title = options.title == null || !String(options.title).trim() ? "" : ` title="${escAttr(options.title)}"`;
+  return `<span class="${escAttr(className)}"${title}${uiAttrsHtml(options.attrs)}>${escHtml(options.label)}</span>`;
+}
+
 function emptyStateHtml(options: EmptyStateOptions): string {
   const className = options.className || "empty-state reveal";
   const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -58,6 +71,7 @@ function emptyStateHtml(options: EmptyStateOptions): string {
 const CAIRN_UI = {
   attrsHtml: uiAttrsHtml,
   actionButtonHtml,
+  textChipHtml,
   emptyStateHtml,
 };
 
