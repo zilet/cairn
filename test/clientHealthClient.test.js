@@ -26,6 +26,7 @@ function loadHealthClient() {
     stagger: (i) => `--i:${Math.min(i ?? 0, 12)}`,
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-client.js"), "utf8"), context);
   return context.CairnHealthClient;
 }
@@ -80,6 +81,7 @@ test("health markers empty state preserves add-document affordance", () => {
   assert.match(html, /<svg><\/svg>/);
   assert.match(html, /No markers yet/);
   assert.match(html, /id="hMkToRecords"/);
+  assert.match(html, /type="button"/);
   assert.match(html, /ADD A DOCUMENT/);
 });
 

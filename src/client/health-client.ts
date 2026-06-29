@@ -61,12 +61,13 @@ function evidenceCountMap(summary: HealthEvidenceSummary | null | undefined): Ma
 }
 
 function healthMarkersEmptyHtml(heroArt = ""): string {
-  return `<div class="empty-state reveal" style="${stagger(0)}">
-    <div class="artile artile-lg" style="margin:0 auto 14px">${heroArt}</div>
-    <div class="empty-state-line">No markers yet</div>
-    <div class="hpic-hero-sub">Add a lab report or DEXA scan and Cairn pulls out the markers — then tracks each one's trend here.</div>
-    <button id="hMkToRecords" class="logbtn hpic-cta-btn">ADD A DOCUMENT</button>
-  </div>`;
+  return CairnUi.emptyStateHtml({
+    artHtml: heroArt,
+    title: "No markers yet",
+    body: "Add a lab report or DEXA scan and Cairn pulls out the markers — then tracks each one's trend here.",
+    style: stagger(0),
+    action: { id: "hMkToRecords", className: "logbtn hpic-cta-btn", label: "ADD A DOCUMENT" },
+  });
 }
 
 // The Read tab is priority-led. The detailed Markers catalog is clinical-scan-led:

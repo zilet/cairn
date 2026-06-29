@@ -584,6 +584,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /OPTIONAL_ASSETS\.map[\s\S]*catch\(\(\)\s*=>\s*null\)/);
   assert.match(sw, /"\/js\/date-utils\.js"/);
   assert.match(sw, /"\/js\/html-utils\.js"/);
+  assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/format-utils\.js"/);
   assert.match(sw, /"\/js\/api-client\.js"/);
   assert.match(sw, /"\/js\/swr-cache\.js"/);
@@ -698,6 +699,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const compat = read("src/contracts/client-compat.ts");
   const dateUtilsSource = read("src/client/date-utils.ts");
   const htmlUtilsSource = read("src/client/html-utils.ts");
+  const uiComponentsSource = read("src/client/ui-components.ts");
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
   const swrCacheSource = read("src/client/swr-cache.ts");
@@ -711,6 +713,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const routeState = read("public/js/route-state.js");
   const dateUtils = read("public/js/date-utils.js");
   const htmlUtils = read("public/js/html-utils.js");
+  const uiComponents = read("public/js/ui-components.js");
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
   const swrCache = read("public/js/swr-cache.js");
@@ -749,6 +752,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function paintSWR<Path extends string>/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/html-utils\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/ui-components\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/api-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/swr-cache\.js/);
@@ -763,6 +767,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/date-utils\.js/);
   assert.match(clientBuild, /src\/client\/html-utils\.ts/);
   assert.match(clientBuild, /public\/js\/html-utils\.js/);
+  assert.match(clientBuild, /src\/client\/ui-components\.ts/);
+  assert.match(clientBuild, /public\/js\/ui-components\.js/);
   assert.match(clientBuild, /src\/client\/format-utils\.ts/);
   assert.match(clientBuild, /public\/js\/format-utils\.js/);
   assert.match(clientBuild, /src\/client\/api-client\.ts/);
@@ -798,6 +804,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf('/js/html-utils.js') > -1 &&
       index.indexOf('/js/html-utils.js') < index.indexOf('/js/02-ui.js'),
     "html-utils.js must load before 02-ui.js and feature modules",
+  );
+  assert.ok(
+    index.indexOf('/js/ui-components.js') > index.indexOf('/js/html-utils.js') &&
+      index.indexOf('/js/ui-components.js') < index.indexOf('/js/health-client.js'),
+    "ui-components.js must load after escaping helpers and before component consumers",
   );
   assert.ok(
     index.indexOf('/js/format-utils.js') > -1 &&
@@ -837,6 +848,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(dateUtils, /\/\/ @ts-check/);
   assert.match(htmlUtils, /\/\/ @ts-check/);
+  assert.match(uiComponents, /\/\/ @ts-check/);
   assert.match(formatUtils, /\/\/ @ts-check/);
   assert.match(apiClient, /\/\/ @ts-check/);
   assert.match(swrCache, /\/\/ @ts-check/);
@@ -898,6 +910,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /AssertAssignable<ChatSearchHit, ClientChatSearchHit>/);
   assert.match(dateUtilsSource, /function localISO\(d = new Date\(\)\): string/);
   assert.match(htmlUtilsSource, /function escHtml\(value: unknown\): string/);
+  assert.match(uiComponentsSource, /function emptyStateHtml\(options: EmptyStateOptions\): string/);
+  assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
   assert.match(apiClientSource, /function api<Path extends string>/);
@@ -929,6 +943,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(swrCache, /cachedApi/);
   assert.match(swrCache, /paintSWR/);
   assert.doesNotMatch(swrCache, /@returns\s*\{Promise<any>\}/);
+  assert.match(uiComponents, /Object\.assign\(globalThis, \{ CairnUi: CAIRN_UI \}\)/);
+  assert.match(uiComponents, /window\.CairnUi = CAIRN_UI/);
   assert.match(todayAgendaClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
@@ -945,10 +961,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /CairnTodayTraining\.exRxLineHtml/);
   assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
+  assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(chat, /CairnChatClient\.historySessionRow/);
   assert.match(boot, /CairnSettingsClient\.updateCardHtml/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
+  assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);

@@ -81,6 +81,30 @@ declare global {
       historyHitRow(hit: Partial<ClientChatSearchHit>, query: unknown, whenLabel: string): string;
     };
 
+    CairnUi: {
+      attrsHtml(attrs: Record<string, unknown> | null | undefined): string;
+      actionButtonHtml(action: {
+        id?: string;
+        label: unknown;
+        className?: string;
+        attrs?: Record<string, unknown>;
+      } | null | undefined): string;
+      emptyStateHtml(options: {
+        title: unknown;
+        body?: unknown;
+        artHtml?: string;
+        action?: {
+          id?: string;
+          label: unknown;
+          className?: string;
+          attrs?: Record<string, unknown>;
+        } | null;
+        className?: string;
+        style?: string;
+        bodyClassName?: string;
+      }): string;
+    };
+
     CairnHealthClient: {
       evidenceSafeUrl(value: unknown): string | null;
       truncateEvidenceBody(text: unknown): string;
@@ -137,6 +161,7 @@ declare global {
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
+  declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];

@@ -36,7 +36,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 - The app is still a classic-script graph. Boot order and global names remain part of correctness.
 - `tsconfig.client.json` now only provides transitional global declarations; the extracted helpers are typechecked from `src/client/**/*.ts`, while the large screen files are still classic JS.
 - The PWA API seam now has a shared coverage registry: current `public/js` `api()` calls must match a typed contract path or a named temporary waiver. Some response DTOs are still intentionally broad envelopes until the owning screen migrates from classic JS.
-- HTML rendering is distributed across large screen files. Escaping discipline exists, but there is not yet a small typed component system.
+- HTML rendering is distributed across large screen files. Escaping discipline exists, and the first typed component primitive now lives in `src/client/ui-components.ts` as a pure browser-global compatibility module, but most repeated markup still needs to move behind narrow component props.
 - Domain entry points under `src/domain/*` are additive barrels; most routes and services still import the compatibility `repo.js` barrel.
 - `CoachContextEnvelope` exists, but many fields are still `unknown` or broad records. `CoachingFocusInput` still uses `any` heavily.
 - Docker currently builds backend TypeScript in a builder stage but copies `public/` directly from source into the runtime image. A generated frontend build must update this path deliberately.
@@ -274,6 +274,8 @@ Gate:
 
 ### Wave 3 - Typed Component Core
 
+Status: in progress. The first component slice added `src/client/ui-components.ts` / `public/js/ui-components.js`, a tiny pure `CairnUi` primitive for escaped attributes, action buttons, and empty states. Health marker empty-state markup now uses it, and VM tests guard hostile-string escaping, boolean/invalid attributes, stable button type, index script order, and service-worker cache coverage.
+
 Purpose: create a small reusable UI grammar without adding a framework.
 
 Teams:
@@ -285,10 +287,13 @@ Teams:
 
 Tasks:
 
-- Move repeated loading, empty, segmented-control, chip, card, job-status, and detail-sheet markup into typed component helpers.
-- Keep data fetching out of components.
-- Add tests that hostile strings are escaped in component output.
-- Add tests that component classes and ARIA landmarks remain stable where screens depend on them.
+- [x] Add the first shared typed UI primitive without a framework or runtime dependency.
+- [x] Move one repeated/safety-sensitive empty-state path through the component primitive.
+- [x] Keep data fetching out of components.
+- [x] Add tests that hostile strings are escaped in component output.
+- [x] Add tests that component classes and stable attributes remain present where screens depend on them.
+- [ ] Move repeated loading, segmented-control, chip, card, job-status, and detail-sheet markup into typed component helpers.
+- [ ] Add ARIA-focused component tests as the next interactive primitives move over.
 
 Gate:
 
