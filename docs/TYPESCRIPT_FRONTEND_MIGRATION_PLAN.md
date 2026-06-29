@@ -26,7 +26,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 - `/app/<tab>/<section>` deep links exist through `public/js/route-state.js`, `public/js/10-boot.js`, `src/server.ts`, and `public/sw.js`.
 - The public app-shell script graph is now guarded by `scripts/check-public-scripts.mjs`, preventing classic-script top-level redeclaration failures like the `CHAT_IMAGE_MAX_BYTES` deployment break.
 - Critical extracted helpers are now TypeScript sources: API, SWR, routes, date/html/format helpers, Today agenda/training helpers, Settings helpers, Chat helpers, and Health helpers.
-- `src/contracts/client.ts` and `src/contracts/client-compat.ts` establish the first shared backend-to-client payload contracts.
+- `src/contracts/client.ts`, `src/contracts/client-api.ts`, `src/contracts/client-api-coverage.ts`, and `src/contracts/client-compat.ts` establish shared backend-to-client payload contracts, API path coverage, explicit temporary unknown waivers, and compile-time backend assignability checks.
 - PWA cache alignment is guarded by `scripts/check-sw-cache.mjs`.
 
 ### Gaps
@@ -35,7 +35,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 - The largest and riskiest UI files are not typechecked: `03-today.js`, `07-me-health.js`, `05-progress.js`, `02-ui.js`, `09-plan-chat.js`, `06-coach-meals.js`, `10-boot.js`, `08-me-records.js`, and `04-capture.js`.
 - The app is still a classic-script graph. Boot order and global names remain part of correctness.
 - `tsconfig.client.json` now only provides transitional global declarations; the extracted helpers are typechecked from `src/client/**/*.ts`, while the large screen files are still classic JS.
-- `src/contracts/client.ts` covers only selected PWA API responses; `api()` returns `unknown` for most endpoints.
+- The PWA API seam now has a shared coverage registry: current `public/js` `api()` calls must match a typed contract path or a named temporary waiver. Some response DTOs are still intentionally broad envelopes until the owning screen migrates from classic JS.
 - HTML rendering is distributed across large screen files. Escaping discipline exists, but there is not yet a small typed component system.
 - Domain entry points under `src/domain/*` are additive barrels; most routes and services still import the compatibility `repo.js` barrel.
 - `CoachContextEnvelope` exists, but many fields are still `unknown` or broad records. `CoachingFocusInput` still uses `any` heavily.
@@ -244,6 +244,8 @@ Gate:
 
 ### Wave 2 - Contract Expansion
 
+Status: in progress. The first contract slice added `src/contracts/client-api.ts` for shared PWA response DTOs, `src/contracts/client-api-coverage.ts` for every current `public/js` API call plus named temporary waivers, backend assignability checks for Settings/Profile/Goal/Plan/Exercise/Health-document payloads, and a typed `listExercises()` row so SQLite row leakage is not the public contract.
+
 Purpose: remove `unknown` from the PWA API seam.
 
 Teams:
@@ -255,11 +257,13 @@ Teams:
 
 Tasks:
 
-- Expand `ClientApiResponses` by screen, not randomly.
-- Add DTOs for Settings, Profile, Plan, Today, Program, Progress, Health, Records, Chat, Jobs, and Proposals.
+- [x] Expand `ClientApiResponses` by screen, not randomly.
+- [x] Add DTOs for Settings, Profile, Plan, Today, Program, Progress, Health, Records, Chat, Jobs, and Proposals.
 - Replace broad `unknown` in extracted helpers with DTO-backed shapes.
 - Keep payload DTOs client-safe and free of DB row leakage where the UI should not care.
-- Add engineering contracts that fail when new PWA `api()` paths lack an explicit DTO or an intentional `unknown` waiver.
+- [x] Add engineering contracts that fail when new PWA `api()` paths lack an explicit DTO or an intentional `unknown` waiver.
+- [x] Add backend assignability checks for shared DTOs where repo return types are already exported cleanly.
+- [ ] Narrow the broad envelope DTOs as each large screen moves under `src/client/`.
 
 Gate:
 

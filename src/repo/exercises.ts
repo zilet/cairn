@@ -14,12 +14,22 @@ import {
 // ---------- exercises ----------
 const EXERCISE_MODES = ["reps", "timed"];
 
+export interface ExerciseRow {
+  id: number;
+  name: string;
+  muscle_group: string | null;
+  constraint_note: string | null;
+  mode: string | null;
+  created_at?: string;
+  cues?: string | null;
+}
+
 function validMode(mode: any): string | undefined {
   return typeof mode === "string" && EXERCISE_MODES.includes(mode) ? mode : undefined;
 }
 
-export function listExercises() {
-  return db.prepare(`SELECT * FROM exercises ORDER BY name`).all();
+export function listExercises(): ExerciseRow[] {
+  return db.prepare(`SELECT * FROM exercises ORDER BY name`).all() as unknown as ExerciseRow[];
 }
 
 export function findExercise(name: string): any {
@@ -254,4 +264,3 @@ export function recentWorkingWeight(name: string, sessionsBack = 3): number | nu
   }
   return best;
 }
-

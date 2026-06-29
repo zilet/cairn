@@ -27,6 +27,12 @@ export interface ClientDayRead {
   why: string;
   est_minutes: number | null;
   signals: Record<string, unknown>;
+  headline?: string;
+  source?: string;
+  cached?: boolean;
+  forward?: string | null;
+  arc?: string | null;
+  agent_status?: unknown;
 }
 
 export interface ClientTodayAgendaAction {
@@ -186,25 +192,5 @@ export interface ClientChatResetResponse {
   note?: string;
 }
 
-export interface ClientApiResponses {
-  "/api/today-agenda": ClientTodayAgenda;
-  "/api/nutrition/day": ClientDayIntake;
-  "/api/next-step": ClientNextStep | null;
-  "/api/nutrition/expenditure": ClientExpenditureEstimate;
-  "/api/program/progression": ClientPrescription[];
-  "/api/chat/sessions": ClientChatSessionSummary[];
-  "/api/chat/sessions/:sessionId": ClientChatMessage[];
-  "/api/chat/search": ClientChatSearchHit[];
-  "/api/chat/reset": ClientChatResetResponse;
-}
-
-export type ClientApiCanonicalPath = keyof ClientApiResponses;
-
-export type ClientApiPath = ClientApiCanonicalPath extends `/api${infer Path}` ? Path : never;
-
-export type ClientApiResponse<Path extends string> =
-  Path extends `/api${infer Rest}` ? ClientApiResponse<Rest>
-    : Path extends `${infer Base}?${string}` ? ClientApiResponse<Base>
-      : `/api${Path}` extends keyof ClientApiResponses ? ClientApiResponses[`/api${Path}`]
-        : Path extends `/chat/sessions/${string}` ? ClientChatMessage[]
-          : unknown;
+export * from "./client-api.js";
+export * from "./client-api-coverage.js";

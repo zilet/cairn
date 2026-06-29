@@ -2,10 +2,14 @@
 // background job kind strings, Settings route metadata, route docs, and launch docs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
+import {
+  CLIENT_API_CONTRACT_PATHS,
+  CLIENT_API_UNKNOWN_WAIVERS,
+} from "../dist/contracts/client.js";
 import { listRoutableTasks, ROUTABLE_TASKS } from "../dist/repo/settings.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +17,33 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
 
 function stringMatches(src, re) {
   return [...src.matchAll(re)].map((m) => m[1]);
+}
+
+function escapeRegExp(src) {
+  return src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function contractPatternToRegExp(pattern) {
+  return new RegExp(`^${escapeRegExp(pattern).replace(/:[A-Za-z0-9_]+/g, "[^/]+")}$`);
+}
+
+function normalizeApiCallPath(raw) {
+  const withoutTemplateExpressions = raw.replace(/\$\{[^}]*\}/g, ":param");
+  const withoutQuery = withoutTemplateExpressions.split("?")[0].trim();
+  if (!withoutQuery.startsWith("/")) return null;
+  return withoutQuery.endsWith("/") ? `${withoutQuery}:param` : withoutQuery;
+}
+
+function publicApiCallPaths() {
+  return readdirSync(path.join(root, "public/js"))
+    .filter((file) => file.endsWith(".js"))
+    .flatMap((file) => {
+      const src = read(`public/js/${file}`);
+      return [...src.matchAll(/\bapi\(\s*(["'`])([\s\S]*?)\1/g)]
+        .map((match) => normalizeApiCallPath(match[2]))
+        .filter(Boolean)
+        .map((apiPath) => ({ file, path: apiPath }));
+    });
 }
 
 test("background job kind contract covers API enqueue sites and worker handlers", () => {
@@ -620,12 +651,50 @@ test("chat session index is created only after the v49 column migration", () => 
   assert.match(migrations, /CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages\(session_id\)/);
 });
 
+test("PWA API calls are covered by shared client contracts or explicit waivers", () => {
+  const contractSource = [
+    "src/contracts/client.ts",
+    "src/contracts/client-api.ts",
+    "src/contracts/client-api-coverage.ts",
+  ].map(read).join("\n");
+  const contractPatterns = [...CLIENT_API_CONTRACT_PATHS];
+  const waiverPatterns = CLIENT_API_UNKNOWN_WAIVERS.map((waiver) => waiver.pattern);
+  const allPatterns = [...contractPatterns, ...waiverPatterns].map(contractPatternToRegExp);
+
+  assert.deepEqual(new Set(contractPatterns).size, contractPatterns.length, "contract API patterns must be unique");
+  assert.deepEqual(new Set(waiverPatterns).size, waiverPatterns.length, "contract waiver patterns must be unique");
+  assert.doesNotMatch(contractSource, /"\/api\/[^"]+":\s*unknown\b/, "exact API responses must not be bare unknown");
+
+  for (const pattern of contractPatterns) {
+    assert.match(pattern, /^\//, `${pattern} must be a client path without the /api prefix`);
+    assert.doesNotMatch(pattern, /\?/, `${pattern} must not include query strings`);
+    assert.doesNotMatch(pattern, /^\/api\//, `${pattern} must omit the /api prefix`);
+    if (!pattern.includes(":")) {
+      assert.match(contractSource, new RegExp(`"\\/api${escapeRegExp(pattern)}"`), `${pattern} needs a ClientApiResponses entry`);
+    }
+  }
+
+  for (const waiver of CLIENT_API_UNKNOWN_WAIVERS) {
+    assert.match(waiver.pattern, /^\//, `${waiver.pattern} must be a client path without the /api prefix`);
+    assert.ok(waiver.owner.trim().length > 0, `${waiver.pattern} needs a migration owner`);
+    assert.ok(waiver.reason.trim().length > 20, `${waiver.pattern} needs a concrete reason`);
+  }
+
+  const uncovered = publicApiCallPaths()
+    .filter((call) => !allPatterns.some((re) => re.test(call.path)))
+    .map((call) => `${call.file}: ${call.path}`)
+    .sort();
+  assert.deepEqual(uncovered, []);
+});
+
 test("frontend TypeScript contract gate is dependency-light and backed by server payloads", () => {
   const pkg = JSON.parse(read("package.json"));
   const clientTsconfig = read("tsconfig.client.json");
   const clientBuildTsconfig = read("tsconfig.client.build.json");
   const clientGlobals = read("src/contracts/client-globals.d.ts");
   const contracts = read("src/contracts/client.ts");
+  const apiContracts = read("src/contracts/client-api.ts");
+  const apiCoverage = read("src/contracts/client-api-coverage.ts");
   const compat = read("src/contracts/client-compat.ts");
   const dateUtilsSource = read("src/client/date-utils.ts");
   const htmlUtilsSource = read("src/client/html-utils.ts");
@@ -811,13 +880,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuildCheck, /CLIENT_OUTPUTS\.map/);
   assert.match(clientBuildCheck, /client build output was stale/);
   assert.match(clientBuildCheck, /client build output is up to date/);
-  assert.match(contracts, /export interface ClientApiResponses/);
-  assert.match(contracts, /"\/api\/today-agenda": ClientTodayAgenda/);
-  assert.match(contracts, /"\/api\/nutrition\/day": ClientDayIntake/);
-  assert.match(contracts, /"\/api\/program\/progression": ClientPrescription\[\]/);
-  assert.match(contracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
-  assert.match(contracts, /"\/api\/chat\/sessions\/:sessionId": ClientChatMessage\[\]/);
-  assert.match(contracts, /export type ClientApiResponse<Path extends string>/);
+  assert.match(contracts, /export \* from "\.\/client-api\.js"/);
+  assert.match(contracts, /export \* from "\.\/client-api-coverage\.js"/);
+  assert.match(apiContracts, /export interface ClientApiResponses/);
+  assert.match(apiContracts, /"\/api\/today-agenda": ClientTodayAgenda/);
+  assert.match(apiContracts, /"\/api\/nutrition\/day": ClientDayIntake/);
+  assert.match(apiContracts, /"\/api\/program\/progression": ClientPrescription\[\]/);
+  assert.match(apiContracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
+  assert.match(apiContracts, /"\/api\/chat\/sessions\/:sessionId": ClientChatMessage\[\]/);
+  assert.match(apiContracts, /export type ClientApiResponse<Path extends string>/);
+  assert.match(apiCoverage, /export const CLIENT_API_CONTRACT_PATHS/);
+  assert.match(apiCoverage, /export const CLIENT_API_UNKNOWN_WAIVERS/);
   assert.match(compat, /AssertAssignable<TodayAgenda, ClientTodayAgenda>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
   assert.match(compat, /ReturnType<typeof planDayProgression>/);
