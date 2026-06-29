@@ -118,6 +118,35 @@ export interface ClientExpenditureEstimate {
   projection_text?: string | null;
 }
 
+export type ClientProgressionAction = "overload" | "hold" | "deload" | "vary" | "introduce";
+
+export interface ClientPrescriptionTarget {
+  sets: number;
+  rep_low?: number;
+  rep_high?: number;
+  weight?: number | null;
+  seconds?: number;
+}
+
+export interface ClientPrescriptionVariation {
+  name: string;
+  why: string;
+}
+
+export interface ClientPrescription {
+  exercise: string;
+  mode: "reps" | "timed";
+  action: ClientProgressionAction;
+  suggested: ClientPrescriptionTarget;
+  current: ClientPrescriptionTarget | null;
+  delta_text: string;
+  why: string;
+  reground?: boolean;
+  vary_to?: string;
+  vary_options?: ClientPrescriptionVariation[];
+  plan_item_id?: number;
+}
+
 export interface ClientChatSessionSummary {
   session_id: string;
   archived_at: string;
@@ -162,6 +191,7 @@ export interface ClientApiResponses {
   "/api/nutrition/day": ClientDayIntake;
   "/api/next-step": ClientNextStep | null;
   "/api/nutrition/expenditure": ClientExpenditureEstimate;
+  "/api/program/progression": ClientPrescription[];
   "/api/chat/sessions": ClientChatSessionSummary[];
   "/api/chat/sessions/:sessionId": ClientChatMessage[];
   "/api/chat/search": ClientChatSearchHit[];

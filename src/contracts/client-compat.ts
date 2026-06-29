@@ -2,6 +2,7 @@ import type { DayRead, ExpenditureEstimate } from "../repo/intelligence.js";
 import type { ArchivedChatSession, ChatSearchHit } from "../repo/chat.js";
 import type { getDayIntake } from "../repo/nutrition.js";
 import type { NextStep } from "../repo/next-step.js";
+import type { planDayProgression } from "../repo/progression.js";
 import type { TodayAgenda } from "../repo/today-agenda.js";
 import type {
   ClientChatSearchHit,
@@ -10,6 +11,7 @@ import type {
   ClientDayRead,
   ClientExpenditureEstimate,
   ClientNextStep,
+  ClientPrescription,
   ClientTodayAgenda,
 } from "./client.js";
 
@@ -20,5 +22,9 @@ export type DayIntakeMatchesClientContract = AssertAssignable<ReturnType<typeof 
 export type DayReadMatchesClientContract = AssertAssignable<DayRead, ClientDayRead>;
 export type NextStepMatchesClientContract = AssertAssignable<NextStep, ClientNextStep>;
 export type ExpenditureMatchesClientContract = AssertAssignable<ExpenditureEstimate, ClientExpenditureEstimate>;
+export type ProgramProgressionMatchesClientContract = AssertAssignable<
+  ReturnType<typeof planDayProgression>,
+  ClientPrescription[]
+>;
 export type ChatSessionMatchesClientContract = AssertAssignable<ArchivedChatSession, ClientChatSessionSummary>;
 export type ChatSearchHitMatchesClientContract = AssertAssignable<ChatSearchHit, ClientChatSearchHit>;

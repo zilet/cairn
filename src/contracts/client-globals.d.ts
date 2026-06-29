@@ -4,6 +4,7 @@ import type {
   ClientChatSessionSummary,
   ClientApiResponse,
   ClientDayIntake,
+  ClientPrescription,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
 } from "./client.js";
@@ -125,10 +126,10 @@ declare global {
 
     CairnTodayTraining: {
       RX_ACTION: Record<string, { word: string; cls: string }>;
-      rxTargetText(rx: Record<string, unknown> | null | undefined): string;
-      exRxVaryMenuHtml(rx: Record<string, unknown> | null | undefined): string;
-      exRxLineHtml(rx: Record<string, unknown> | null | undefined): string;
-      rxMoveCount(rxByExercise: Record<string, unknown> | null | undefined): number;
+      rxTargetText(rx: Partial<ClientPrescription> | null | undefined): string;
+      exRxVaryMenuHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+      exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+      rxMoveCount(rxByExercise: Record<string, Partial<ClientPrescription> | null | undefined> | null | undefined): number;
       cardioDominantZone(zones: unknown): string;
       cardioVerb(label: unknown): string;
       cardioLogPhrase(item: Record<string, unknown>): string;

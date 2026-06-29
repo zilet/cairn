@@ -629,6 +629,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
   const swrCacheSource = read("src/client/swr-cache.ts");
+  const todayTrainingSource = read("src/client/today-training-client.ts");
   const routeStateSource = read("src/client/route-state.ts");
   const routeState = read("public/js/route-state.js");
   const dateUtils = read("public/js/date-utils.js");
@@ -675,7 +676,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/api-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/swr-cache\.js/);
   assert.match(clientTsconfig, /public\/js\/today-agenda-client\.js/);
-  assert.match(clientTsconfig, /public\/js\/today-training-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-training-client\.js/);
   assert.match(clientTsconfig, /public\/js\/chat-client\.js/);
   assert.match(clientTsconfig, /public\/js\/health-client\.js/);
   assert.match(clientTsconfig, /public\/js\/settings-client\.js/);
@@ -691,6 +692,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/api-client\.js/);
   assert.match(clientBuild, /src\/client\/swr-cache\.ts/);
   assert.match(clientBuild, /public\/js\/swr-cache\.js/);
+  assert.match(clientBuild, /src\/client\/today-training-client\.ts/);
+  assert.match(clientBuild, /public\/js\/today-training-client\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.ok(
@@ -770,6 +773,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/api-client\.js/);
   assert.match(clientBuild, /src\/client\/swr-cache\.ts/);
   assert.match(clientBuild, /public\/js\/swr-cache\.js/);
+  assert.match(clientBuild, /src\/client\/today-training-client\.ts/);
+  assert.match(clientBuild, /public\/js\/today-training-client\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.match(clientBuild, /export function buildClient\(\)/);
@@ -781,11 +786,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(contracts, /export interface ClientApiResponses/);
   assert.match(contracts, /"\/api\/today-agenda": ClientTodayAgenda/);
   assert.match(contracts, /"\/api\/nutrition\/day": ClientDayIntake/);
+  assert.match(contracts, /"\/api\/program\/progression": ClientPrescription\[\]/);
   assert.match(contracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
   assert.match(contracts, /"\/api\/chat\/sessions\/:sessionId": ClientChatMessage\[\]/);
   assert.match(contracts, /export type ClientApiResponse<Path extends string>/);
   assert.match(compat, /AssertAssignable<TodayAgenda, ClientTodayAgenda>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
+  assert.match(compat, /ReturnType<typeof planDayProgression>/);
   assert.match(compat, /AssertAssignable<ArchivedChatSession, ClientChatSessionSummary>/);
   assert.match(compat, /AssertAssignable<ChatSearchHit, ClientChatSearchHit>/);
   assert.match(dateUtilsSource, /function localISO\(d = new Date\(\)\): string/);
@@ -796,6 +803,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiClientSource, /type CairnApiResponse<Path extends string>/);
   assert.match(swrCacheSource, /function cachedApi<Path extends string>/);
   assert.match(swrCacheSource, /function paintSWR<Path extends string>/);
+  assert.match(todayTrainingSource, /type ClientPrescription = import\("\.\.\/contracts\/client\.js"\)\.ClientPrescription/);
+  assert.match(todayTrainingSource, /const TODAY_RX_ACTION: Record<ClientProgressionAction, ClientProgressionMeta>/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
   assert.match(routeState, /root\.CairnRoutes = \{/);
@@ -810,7 +819,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayAgendaClient, /ClientTodayAgenda/);
   assert.match(todayAgendaClient, /ClientDayIntake/);
   assert.match(todayAgendaClient, /window\.CairnTodayAgenda/);
-  assert.match(todayTrainingClient, /window\.CairnTodayTraining/);
+  assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
+  assert.match(todayTrainingClient, /CairnTodayTraining/);
   assert.match(healthClient, /window\.CairnHealthClient/);
   assert.match(chatClient, /window\.CairnChatClient/);
   assert.match(settingsClient, /window\.CairnSettingsClient/);
