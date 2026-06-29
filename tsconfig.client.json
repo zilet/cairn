@@ -13,7 +13,6 @@
   "include": [
     "src/contracts/client-globals.d.ts",
     "public/js/chat-client.js",
-    "public/js/health-client.js",
-    "public/js/settings-client.js"
+    "public/js/health-client.js"
   ]
 }

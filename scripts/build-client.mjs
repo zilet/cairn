@@ -18,6 +18,8 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/swr-cache.ts", output: "public/js/swr-cache.js" },
   { source: "src/client/today-agenda-client.ts", output: "public/js/today-agenda-client.js" },
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
+  { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
+  { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
 ];
 
