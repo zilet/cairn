@@ -85,6 +85,29 @@ test("health markers empty state preserves add-document affordance", () => {
   assert.match(html, /ADD A DOCUMENT/);
 });
 
+test("health marker display helpers keep number, date, span, and trend words stable", () => {
+  const health = loadHealthClient();
+
+  assert.equal(health.formatMarkerNumber(123.6), "124");
+  assert.equal(health.formatMarkerNumber(12.34), "12.3");
+  assert.equal(health.formatMarkerNumber(1.236), "1.24");
+  assert.equal(health.formatMarkerNumber("not numeric"), "not numeric");
+
+  assert.match(health.sparkDateLabel("2026-06-29"), /Jun 29, 26|Jun 29, 2026/);
+  assert.equal(health.sparkDateLabel("not-a-date"), "not-a-date");
+  assert.equal(health.sparkDateLabel(null), "");
+
+  assert.equal(health.markerSpanWord(9), "~9 days");
+  assert.equal(health.markerSpanWord(28), "~4 wk");
+  assert.equal(health.markerSpanWord(420), "~14 mo");
+  assert.equal(health.markerSpanWord(0), "");
+
+  assert.equal(health.markerTrendWord({ trend: { dir: "rising", span_days: 28 } }), "rising over ~4 wk");
+  assert.equal(health.markerTrendWord({ trend: { dir: "stable" } }), "holding steady");
+  assert.equal(health.markerTrendWord({ points: [{ value: 1 }, { value: "2" }] }), "holding steady");
+  assert.equal(health.markerTrendWord({ points: [{ value: "x" }] }), "");
+});
+
 test("health marker ordering keeps clinical scan order before server order", () => {
   const health = loadHealthClient();
   const rows = [

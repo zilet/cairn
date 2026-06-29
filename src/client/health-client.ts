@@ -11,6 +11,12 @@ type HealthEvidenceRow = {
 type HealthEvidenceCountRow = { marker?: unknown; count?: unknown };
 type HealthEvidenceSummary = { by_marker?: HealthEvidenceCountRow[] };
 type HealthMarkerRow = { name?: unknown; key?: unknown; latest?: { date?: unknown } };
+type HealthMarkerPoint = { value?: unknown; date?: unknown };
+type HealthMarkerTrend = { dir?: unknown; span_days?: unknown };
+type HealthMarkerTrendRow = {
+  trend?: HealthMarkerTrend | null;
+  points?: HealthMarkerPoint[] | null;
+};
 
 function evidenceSafeUrl(value: unknown): string | null {
   const url = String(value ?? "").trim();
@@ -68,6 +74,44 @@ function healthMarkersEmptyHtml(heroArt = ""): string {
     style: stagger(0),
     action: { id: "hMkToRecords", className: "logbtn hpic-cta-btn", label: "ADD A DOCUMENT" },
   });
+}
+
+function formatMarkerNumber(value: unknown): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value ?? "");
+  const abs = Math.abs(n);
+  const rounded = abs >= 100 ? Math.round(n) : abs >= 10 ? Math.round(n * 10) / 10 : Math.round(n * 100) / 100;
+  return String(rounded);
+}
+
+function sparkDateLabel(value: unknown): string {
+  if (!value) return "";
+  const source = String(value);
+  const parsed = new Date(source.length === 10 ? `${source}T00:00:00` : source);
+  if (Number.isNaN(parsed.getTime())) return source;
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" });
+}
+
+function markerSpanWord(days: unknown): string {
+  const value = Number(days);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 21) return `~${Math.round(value)} days`;
+  if (value < 75) return `~${Math.round(value / 7)} wk`;
+  return `~${Math.max(1, Math.round(value / 30))} mo`;
+}
+
+function markerTrendWord(marker: HealthMarkerTrendRow | null | undefined): string {
+  const trend = marker?.trend || {};
+  const dir = trend.dir;
+  if (!dir || dir === "stable") {
+    const points = (Array.isArray(marker?.points) ? marker.points : []).filter((point) =>
+      point && Number.isFinite(Number(point.value))
+    );
+    if (dir === "stable" || points.length >= 2) return "holding steady";
+    return "";
+  }
+  const span = markerSpanWord(trend.span_days);
+  return `${dir}${span ? ` over ${span}` : ""}`;
 }
 
 // The Read tab is priority-led. The detailed Markers catalog is clinical-scan-led:
@@ -283,6 +327,10 @@ const CAIRN_HEALTH_CLIENT = {
   evidenceListHtml,
   evidenceCountMap,
   markersEmptyHtml: healthMarkersEmptyHtml,
+  formatMarkerNumber,
+  sparkDateLabel,
+  markerSpanWord,
+  markerTrendWord,
   isDirectLdlMarker,
   isStandardLdlMarker,
   markerRank,

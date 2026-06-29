@@ -117,6 +117,13 @@ declare global {
       evidenceListHtml(evidence: unknown): string;
       evidenceCountMap(summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): Map<string, number>;
       markersEmptyHtml(heroArt?: string): string;
+      formatMarkerNumber(value: unknown): string;
+      sparkDateLabel(value: unknown): string;
+      markerSpanWord(days: unknown): string;
+      markerTrendWord(marker: {
+        trend?: { dir?: unknown; span_days?: unknown } | null;
+        points?: Array<{ value?: unknown; date?: unknown }> | null;
+      } | null | undefined): string;
       isDirectLdlMarker(name: unknown): boolean;
       isStandardLdlMarker(name: unknown): boolean;
       markerRank(groupKey: unknown, name: unknown): number;

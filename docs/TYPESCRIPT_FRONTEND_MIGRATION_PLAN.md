@@ -304,7 +304,7 @@ Gate:
 
 ### Wave 4 - Helper And Domain Client Migration
 
-Status: complete for extracted helpers. `date-utils`, `html-utils`, `format-utils`, `api-client`, `swr-cache`, `today-agenda-client`, `today-training-client`, `settings-routes`, `settings-client`, `chat-client`, and `health-client` are now TypeScript-authored browser-global compatibility outputs.
+Status: complete for extracted helpers. `date-utils`, `html-utils`, `format-utils`, `api-client`, `swr-cache`, `today-agenda-client`, `today-training-client`, `settings-routes`, `settings-client`, `chat-client`, and `health-client` are now TypeScript-authored browser-global compatibility outputs. `health-client` now also owns pure marker display helpers for number/date/span/trend wording, with `07-me-health.js` delegating through the typed compatibility surface.
 
 Purpose: move already-extracted helper JS into real TS modules.
 

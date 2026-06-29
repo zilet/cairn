@@ -936,6 +936,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /function chatWantsFuelSurface/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
   assert.match(healthClientSource, /type HealthEvidenceRow = \{/);
+  assert.match(healthClientSource, /function formatMarkerNumber\(value: unknown\): string/);
+  assert.match(healthClientSource, /function markerTrendWord\(marker: HealthMarkerTrendRow \| null \| undefined\): string/);
   assert.match(healthClientSource, /const HEALTH_MARKER_ORDER: Record<string, Array<\[number, RegExp\]>>/);
   assert.match(healthClientSource, /function orderMarkersForDisplay<T extends HealthMarkerRow>/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
@@ -968,6 +970,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /CairnTodayTraining\.exRxLineHtml/);
   assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
+  assert.match(health, /CairnHealthClient\.formatMarkerNumber/);
+  assert.match(health, /CairnHealthClient\.markerTrendWord/);
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(chat, /CairnChatClient\.historySessionRow/);
   assert.match(boot, /CairnSettingsClient\.updateCardHtml/);

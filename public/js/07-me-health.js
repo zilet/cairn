@@ -816,43 +816,22 @@ async function loadHealthPicture(token, docsP) {
 
 // ---- markers (trends) ----
 function fmtMkNum(v) {
-  const n = Number(v);
-  if (!isFinite(n)) return String(v ?? "");
-  const a = Math.abs(n);
-  const r = a >= 100 ? Math.round(n) : a >= 10 ? Math.round(n * 10) / 10 : Math.round(n * 100) / 100;
-  return String(r);
+  return CairnHealthClient.formatMarkerNumber(v);
 }
 
 function sparkDateLabel(d) {
-  if (!d) return "";
-  const s = String(d);
-  const t = new Date(s.length === 10 ? s + "T00:00:00" : s);
-  if (isNaN(t)) return s;
-  return t.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" });
+  return CairnHealthClient.sparkDateLabel(d);
 }
 
 // Plain-language trend phrase from the server's `trend` (no numeric grade — the
 // constitution bans scores). Falls back to deriving direction from the points span.
 function markerTrendWord(m) {
-  const t = m.trend || {};
-  const dir = t.dir;
-  if (!dir || dir === "stable") {
-    // an explicit stable read, or not enough movement to call
-    const pts = (m.points || []).filter((p) => p && isFinite(Number(p.value)));
-    if (dir === "stable" || pts.length >= 2) return "holding steady";
-    return "";
-  }
-  const span = markerSpanWord(t.span_days);
-  return `${dir}${span ? ` over ${span}` : ""}`;
+  return CairnHealthClient.markerTrendWord(m);
 }
 
 // "~14 mo" / "~3 wk" / "~9 days" — a soft span for the trend phrase.
 function markerSpanWord(days) {
-  const d = Number(days);
-  if (!isFinite(d) || d <= 0) return "";
-  if (d < 21) return `~${Math.round(d)} days`;
-  if (d < 75) return `~${Math.round(d / 7)} wk`;
-  return `~${Math.max(1, Math.round(d / 30))} mo`;
+  return CairnHealthClient.markerSpanWord(days);
 }
 
 // Richer inline progress chart — hand-built SVG, no library. Shades the optimal-zone
