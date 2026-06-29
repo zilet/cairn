@@ -4,6 +4,8 @@ This is the execution plan for making Cairn easier to maintain long term while p
 
 The plan is staged as waves. Each wave can be run by multiple agent teams in parallel, but a wave is not complete until its shared quality gate is green. The guiding rule is simple: improve quality first, strengthen gates second, then migrate frontend TypeScript in a no-fluff way that protects the existing vanilla PWA.
 
+This tracker records the verified maintenance baseline. The next-stage full frontend TypeScript and component-system migration is tracked in `docs/TYPESCRIPT_FRONTEND_MIGRATION_PLAN.md`.
+
 ## Status Tracker
 
 | Wave | Status | Gate |
