@@ -5,7 +5,7 @@ ARG NODE_IMAGE=node:24-bookworm-slim
 # ---- builder: compile TypeScript ----
 FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
-COPY package*.json tsconfig.json ./
+COPY package*.json tsconfig.json tsconfig.client.build.json ./
 # BuildKit cache mount keeps ~/.npm warm across rebuilds (big win on the Pi).
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY src ./src

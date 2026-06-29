@@ -17,7 +17,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "npm run client:build && tsc",
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",
     "seed:demo": "tsx src/demoSeed.ts",
@@ -29,7 +29,10 @@
     "docs:index": "node scripts/gen-docs.mjs",
     "docs:check": "node scripts/gen-docs.mjs --check",
     "actions:check": "node scripts/check-action-pins.mjs",
-    "typecheck:client": "tsc -p tsconfig.client.json",
+    "client:check": "tsc -p tsconfig.client.build.json --noEmit",
+    "client:build": "tsc -p tsconfig.client.build.json",
+    "client:verify": "npm run typecheck:client && node scripts/check-client-build-output.mjs",
+    "typecheck:client": "tsc -p tsconfig.client.json && npm run client:check",
     "public:check": "node scripts/check-public-scripts.mjs",
     "lint": "biome lint .",
     "format": "biome format --write .",
@@ -38,7 +41,7 @@
     "presmoke": "npm run build",
     "smoke": "node test/smoke.mjs",
     "launch:check": "node scripts/check-launch-safety.mjs",
-    "verify": "npm run docs:check && npm run actions:check && npm run typecheck:client && npm run public:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
+    "verify": "npm run docs:check && npm run actions:check && npm run typecheck:client && node scripts/check-client-build-output.mjs && npm run public:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
     "verify:full": "npm run verify && npm run smoke"
   },
   "dependencies": {

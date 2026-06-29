@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "none",
+    "ignoreDeprecations": "6.0",
+    "moduleDetection": "legacy",
+    "rootDir": "src",
+    "outFile": "public/js/route-state.js",
+    "strict": true,
+    "alwaysStrict": false,
+    "lib": ["ES2022", "DOM"],
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "removeComments": false
+  },
+  "files": ["src/client/route-state.ts"]
+}

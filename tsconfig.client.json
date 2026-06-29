@@ -21,7 +21,6 @@
     "public/js/today-training-client.js",
     "public/js/chat-client.js",
     "public/js/health-client.js",
-    "public/js/settings-client.js",
-    "public/js/route-state.js"
+    "public/js/settings-client.js"
   ]
 }
