@@ -31,7 +31,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 
 ### Gaps
 
-- The client source of truth is still mostly `public/js/*.js`, but the migration source tree now exists: `src/client/route-state.ts`, `src/client/date-utils.ts`, `src/client/html-utils.ts`, `src/client/format-utils.ts`, `src/client/api-client.ts`, `src/client/swr-cache.ts`, `src/client/today-agenda-client.ts`, `src/client/today-training-client.ts`, `src/client/settings-routes.ts`, and `src/client/settings-client.ts` emit their stable `public/js` files through `scripts/build-client.mjs`.
+- The client source of truth is still mostly `public/js/*.js`, but the migration source tree now exists: `src/client/route-state.ts`, `src/client/date-utils.ts`, `src/client/html-utils.ts`, `src/client/format-utils.ts`, `src/client/api-client.ts`, `src/client/swr-cache.ts`, `src/client/today-agenda-client.ts`, `src/client/today-training-client.ts`, `src/client/settings-routes.ts`, `src/client/settings-client.ts`, and `src/client/chat-client.ts` emit their stable `public/js` files through `scripts/build-client.mjs`.
 - The largest and riskiest UI files are not typechecked: `03-today.js`, `07-me-health.js`, `05-progress.js`, `02-ui.js`, `09-plan-chat.js`, `06-coach-meals.js`, `10-boot.js`, `08-me-records.js`, and `04-capture.js`.
 - The app is still a classic-script graph. Boot order and global names remain part of correctness.
 - `tsconfig.client.json` typechecks selected helper slices, not the full PWA.
@@ -204,7 +204,7 @@ Gate:
 
 ### Wave 1 - Client Build Foundation
 
-Status: in progress. First slices complete: route-state, date helpers, HTML escaping helpers, display-format helpers, the shared API/auth/offline client, the SWR cache layer, the Today agenda renderer, the Today training renderer, and the Settings route/render helpers now have `src/client/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
+Status: in progress. First slices complete: route-state, date helpers, HTML escaping helpers, display-format helpers, the shared API/auth/offline client, the SWR cache layer, the Today agenda renderer, the Today training renderer, the Settings route/render helpers, and the Chat helper now have `src/client/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
 
 Purpose: make TypeScript the source of truth without changing behavior.
 
@@ -228,6 +228,7 @@ Tasks:
 - [x] Move the Today agenda renderer to TypeScript source while preserving the `public/js/today-agenda-client.js` script contract.
 - [x] Move the Today training renderer to TypeScript source while preserving the `public/js/today-training-client.js` script contract.
 - [x] Move the Settings route/render helpers to TypeScript source while preserving the `public/js/settings-routes.js` and `public/js/settings-client.js` script contracts.
+- [x] Move the Chat helper to TypeScript source while preserving the `public/js/chat-client.js` script contract.
 - [x] Keep the build manifest import side-effect free so freshness checks snapshot current output before rebuilding.
 - [x] Update Docker build inputs so `npm run build` can run the client build in the builder stage.
 - [ ] Update Docker runtime copy path once generated `public/js` output is no longer committed.
@@ -292,7 +293,7 @@ Gate:
 
 ### Wave 4 - Helper And Domain Client Migration
 
-Status: seeded by Wave 1. `date-utils`, `html-utils`, `format-utils`, `api-client`, `swr-cache`, `today-agenda-client`, `today-training-client`, `settings-routes`, and `settings-client` are now TypeScript-authored browser-global compatibility outputs; the remaining extracted helpers are still `public/js/*.js`.
+Status: seeded by Wave 1. `date-utils`, `html-utils`, `format-utils`, `api-client`, `swr-cache`, `today-agenda-client`, `today-training-client`, `settings-routes`, `settings-client`, and `chat-client` are now TypeScript-authored browser-global compatibility outputs; the remaining extracted helper is still `public/js/*.js`.
 
 Purpose: move already-extracted helper JS into real TS modules.
 

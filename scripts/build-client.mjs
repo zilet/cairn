@@ -20,6 +20,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
+  { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
 ];
 
