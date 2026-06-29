@@ -1,6 +1,6 @@
 # Cairn MCP tool index
 
-> Generated from `src/mcp.ts` by `scripts/gen-docs.mjs` — run `npm run docs:index` to refresh. Do not edit by hand.
+> Generated from `src/mcp.ts` and `src/surfaces/mcp/*` by `scripts/gen-docs.mjs` — run `npm run docs:index` to refresh. Do not edit by hand.
 
 Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
@@ -47,7 +47,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_calendar` | Day-by-day training calendar/heatmap data (lifted, tonnage, activity, intensity level) for the last N days (default 84). |
 | `get_cardio` | The day's logged cardio efforts (runs/rides/etc.), each hydrated from the linked Garmin record so a synced effort carries its HR zones + pace. Strength is excluded (it's modeled as a session). Defaults to today; pass date YYYY-MM-DD. [] when there's no cardio that day. |
 | `get_chat_history` | Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the athlete has recently asked or been told. |
-| `get_chat_session` | Read one archived conversation in full (chronological), keyed by its archived_at timestamp from list_chat_sessions. |
+| `get_chat_session` | Read one archived conversation in full (chronological), keyed by its stable session_id from list_chat_sessions. archived_at is accepted as a legacy fallback. |
 | `get_checkin` | Get the latest check-in for a date (or null if none). |
 | `get_coaching_focus` | THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus, the cross-domain analog of get_health_focus. Arbitrates training, running, DEXA body-comp, labs, nutrition and recovery into ONE lead lever for this block + 1-2 things handled alongside (usually via a different lever) + an explicit 'later' (what's deferred) + the cross-domain connections + ONE batched ~6-8wk retest checkpoint. How an elite coach prioritizes + sequences: act on a few things, name what waits, connect the domains. Plain words, no scores. |
 | `get_context_effect` | The active life-context effect: events the athlete mentioned once (a late concert, travel, illness, a hard week) that should shape today — expect worse sleep / a transient inflammation bump (don't alarm) / ease the load / disrupted fueling — each with a fade date. Plain words; empty when nothing's active. |
@@ -153,7 +153,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `reset_chat` | Start a fresh coaching conversation: distill durable facts (preferences, constraints, decisions) from the live chat into memory via one agent call, then archive every current message. Never deletes — archived turns stay in the DB and exports. Archiving never blocks on the agent; on agent failure the chat is still reset with distilled=0. |
 | `run_health_review` | Run a coaching agent over the athlete's full context plus aggregated marker history to produce a fresh whole-picture health review (informational, not medical advice). Returns ok:false when the agent's output is unusable. |
 | `save_plan_day` | Create or replace one training day and its full exercise list (manual plan edit). Unknown exercises are created. |
-| `search_chat` | Keyword-search the whole coaching history (live + archived turns). Returns matches with a snippet and the session they belong to (archived_at, or null for the live thread). |
+| `search_chat` | Keyword-search the whole coaching history (live + archived turns). Returns matches with a snippet and the session they belong to (session_id for archived, null for live). |
 | `set_endurance_goal` | Set or clear the athlete's endurance OBJECTIVE (running goal). mode 'race' → a dated event the coach periodizes a ramp + taper toward (needs date YYYY-MM-DD; optional event, distance_km, target like 'sub-1:45'). mode 'standing' → an ongoing readiness target with NO date (e.g. label '10k-ready', distance_km 10). Pass null to clear. Orthogonal to primary_discipline (a strength-first athlete can hold a standing running goal). |
 | `set_meal_plan_status` | Accept or discard a drafted meal plan. |
 | `set_plan` | Replace the ENTIRE weekly plan — use to change frequency (e.g. 3/4/5/7 days) or to add cardio days. Days not included are removed. Each item may be a strength exercise or a kind:'cardio' endurance prescription. |

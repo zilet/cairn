@@ -4,7 +4,7 @@
 // trip/illness window suppresses confidence rather than re-targeting on noise.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedIntake, seedWeight, isoDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, seedIntake, seedWeight, isoDaysAgo, localDaysAgo } from "./_seed.js";
 
 beforeEach(() => {
   resetTables("food_notes", "bodyweight_log", "context_events");
@@ -83,4 +83,21 @@ test("days with no food logged are absent, never counted as a zero-kcal crash di
   const e = repo.estimateExpenditure(21);
   assert.equal(e.intake_avg_kcal, 2400);
   assert.equal(e.points, 3);
+});
+
+test("groups intake by stamped local day when created_at crosses UTC midnight", () => {
+  const localDay = localDaysAgo(0);
+  const nextUtcDay = new Date(Date.parse(`${localDay}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+     VALUES (?, 'dinner', '', ?, NULL, ?)`
+  ).run(localDay, JSON.stringify({ kcal: 500 }), `${localDay} 23:30:00`);
+  db.prepare(
+    `INSERT INTO food_notes (date, meal, raw_output, parsed_json, enrichment_status, created_at)
+     VALUES (?, 'snack', '', ?, NULL, ?)`
+  ).run(localDay, JSON.stringify({ kcal: 700 }), `${nextUtcDay} 00:30:00`);
+
+  const e = repo.estimateExpenditure(21);
+  assert.equal(e.points, 1, "two UTC timestamps on the same local day count as one intake day");
+  assert.equal(e.intake_avg_kcal, 1200, "the local day's kcal are summed before averaging");
 });

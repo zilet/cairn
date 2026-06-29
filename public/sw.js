@@ -1,4 +1,4 @@
-const CACHE = "cairn-v174";
+const CACHE = "cairn-v189";
 // Generated artwork lives in its own cache: the images are content-keyed and
 // immutable on the server, so they stay valid across app deploys. Keeping them
 // out of the versioned CACHE (and off the activate-cleanup list) means a deploy
@@ -6,9 +6,9 @@ const CACHE = "cairn-v174";
 const ART_CACHE = "cairn-art-v1";
 const CORE_ASSETS = [
   "/", "/index.html", "/styles.css",
-  "/js/01-core.js", "/js/02-ui.js", "/js/03-today.js", "/js/04-capture.js",
+  "/js/date-utils.js", "/js/html-utils.js", "/js/format-utils.js", "/js/api-client.js", "/js/01-core.js", "/js/02-ui.js", "/js/swr-cache.js", "/js/today-agenda-client.js", "/js/today-training-client.js", "/js/03-today.js", "/js/04-capture.js",
   "/js/05-progress.js", "/js/06-coach-meals.js", "/js/07-me-health.js",
-  "/js/08-me-records.js", "/js/09-plan-chat.js", "/js/settings-routes.js", "/js/10-boot.js",
+  "/js/health-client.js", "/js/08-me-records.js", "/js/chat-client.js", "/js/09-plan-chat.js", "/js/settings-routes.js", "/js/settings-client.js", "/js/route-state.js", "/js/10-boot.js",
   "/art.js", "/manifest.json",
 ];
 const OPTIONAL_ASSETS = [
@@ -73,6 +73,10 @@ self.addEventListener("fetch", (e) => {
   }
   // Never cache the rest of API or MCP — always hit network.
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/mcp")) return;
+  if (e.request.mode === "navigate") {
+    e.respondWith(fetch(e.request).catch(() => caches.match("/index.html")));
+    return;
+  }
   e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });
 // Legacy compatibility: the app now calls skipWaiting at install and reloads once

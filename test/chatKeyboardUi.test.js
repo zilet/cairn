@@ -24,6 +24,13 @@ test("mobile chat releases stale textarea focus after iOS dismisses the keyboard
   assert.match(boot, /\.blur\(\)/);
 });
 
+test("mobile bottom inset never publishes a negative safe-area correction", () => {
+  assert.match(boot, /const\s+rawVvb\s*=\s*window\.innerHeight\s*-\s*\(vv\.offsetTop\s*\+\s*vv\.height\)/);
+  assert.match(boot, /const\s+vvb\s*=\s*kbOpen\s*\?\s*0\s*:\s*Math\.max\(0,\s*rawVvb\)/);
+  assert.match(boot, /"cairn:keyboard-settle"/);
+  assert.match(boot, /keyboardIntentUntil\s*=\s*0/);
+});
+
 test("mobile chat still pins the composer to viewport geometry while typing", () => {
   assert.match(styles, /body\.chat-mode \.chatview[\s\S]*position:fixed/);
   assert.match(styles, /body\.chat-mode\.kb-open \.chatview\{bottom:0\}/);

@@ -50,11 +50,17 @@ test("coachingFocus leads with the single highest-leverage lever and sequences t
   // String(o) would render "[object Object]" in the athlete's read).
   assert.ok(out.lead.move && out.lead.move.includes("Push Press"), "move names the variation");
   assert.ok(!/\[object Object\]/.test(out.lead.move || ""), "move never renders [object Object]");
+  assert.ok(Array.isArray(out.lead.based_on), "lead carries plain provenance");
+  assert.ok(out.lead.based_on.length <= 3, "lead provenance stays bounded");
+  assert.ok(out.lead.based_on.some((line) => /stall/i.test(line)), "lead provenance names the cause");
   // Parallel levers are on a DIFFERENT domain than the lead (so they're worked alongside).
   assert.ok(out.parallel.length >= 1 && out.parallel.length <= 2, "1-2 parallel levers");
   for (const p of out.parallel) assert.notEqual(p.domain, out.lead.domain, "parallel never duplicates the lead's domain");
   // The act-now lipid finding rides alongside via nutrition.
   assert.ok(out.parallel.some((p) => p.domain === "nutrition"), "lipids handled in parallel via nutrition");
+  const lipid = out.parallel.find((p) => p.domain === "nutrition");
+  assert.ok(Array.isArray(lipid.based_on), "parallel lever carries provenance");
+  assert.ok(lipid.based_on.some((line) => /health lead|lipid/i.test(line)));
   // The rest is explicitly DEFERRED, not piled on.
   assert.ok(out.later.length >= 1, "a 'later' sequence is named");
   // Cross-domain connections are spelled out.

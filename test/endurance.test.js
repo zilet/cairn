@@ -6,7 +6,7 @@
 // 0-100 grade / impact_score. Offline + deterministic, like the rest of the suite.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables } from "./_seed.js";
+import { db, isoDaysAgo, repo, resetTables } from "./_seed.js";
 
 // A reference date well clear of the recovery window (so an empty recovery fetch
 // can't flip the read) — mirrors dayRead.test.js.
@@ -280,10 +280,12 @@ test("getEndurancePRs leads with the configured endurance sport", () => {
 
 // ---------- C.8 connected-brain endurance markers ----------
 test("VO2max / resting HR / HRV become trending markers from the recovery data", () => {
-  // Source-agnostic daily metrics over a few days → a trend the brain can read.
-  repo.recordDailyMetrics("apple", "2026-03-01", { resting_hr: 58, hrv_ms: 45 });
-  repo.recordDailyMetrics("apple", "2026-03-05", { resting_hr: 56, hrv_ms: 48 });
-  repo.recordDailyMetrics("apple", "2026-03-10", { resting_hr: 54, hrv_ms: 52 });
+  // Source-agnostic daily metrics over a few recent days -> a trend the brain can read.
+  // Keep the fixture inside wearableFitnessMarkers' rolling 120-day window so this
+  // contract does not age out as the calendar advances.
+  repo.recordDailyMetrics("apple", isoDaysAgo(20), { resting_hr: 58, hrv_ms: 45 });
+  repo.recordDailyMetrics("apple", isoDaysAgo(15), { resting_hr: 56, hrv_ms: 48 });
+  repo.recordDailyMetrics("apple", isoDaysAgo(10), { resting_hr: 54, hrv_ms: 52 });
   const { markers } = repo.prioritizeMarkers();
   const rhr = markers.find((m) => m.key === "resting hr");
   const hrv = markers.find((m) => m.key === "hrv");

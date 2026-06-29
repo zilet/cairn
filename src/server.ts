@@ -118,6 +118,14 @@ app.use(
   }),
 );
 
+// PWA deep links. The client owns `/app/<tab>/<section>` route state; the server
+// returns the app shell so copied/bookmarked links hydrate in-place. API/MCP and
+// real static assets are mounted above this, so this fallback stays narrow.
+app.get(/^\/app(?:\/.*)?$/, (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "..", "public", "index.html"));
+});
+
 // Fail closed before binding: if the operator demanded auth (CAIRN_REQUIRE_AUTH)
 // but no token is set, refuse to start rather than serve an open instance.
 const startupAuthError = authStartupError({ requireAuth, authEnabled });

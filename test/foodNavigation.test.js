@@ -26,10 +26,17 @@ test("logged food has a dedicated Plan Food tab and shortcuts land there", () =>
 
 function loadChatFuelGate() {
   const chat = file("public/js/09-plan-chat.js");
+  const chatClient = file("public/js/chat-client.js");
   const start = chat.indexOf("// Chat gets the logged-food glance");
   const end = chat.indexOf("// Expand the collapsed history", start);
   assert.ok(start > 0 && end > start, "chat fuel gate block is extractable");
-  const context = {};
+  const context = { window: {} };
+  vm.runInNewContext(`
+    function escHtml(s) { return String(s ?? ""); }
+    function escAttr(s) { return String(s ?? ""); }
+    ${chatClient}
+    globalThis.CairnChatClient = window.CairnChatClient;
+  `, context);
   vm.runInNewContext(`
     let chatFuelContext = [];
     function localISO() { return "2026-06-25"; }

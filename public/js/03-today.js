@@ -20,29 +20,12 @@ function exTimed(it, logged) {
 
 // The verb word for a prescription action (sage for earned overload, terracotta-
 // quiet for hold/deload/vary). Used as a small caps tag on the card.
-const RX_ACTION = {
-  overload: { word: "next up", cls: "ex-rx-up" },
-  hold: { word: "hold", cls: "ex-rx-hold" },
-  deload: { word: "ease off", cls: "ex-rx-down" },
-  vary: { word: "switch it up", cls: "ex-rx-vary" },
-  introduce: { word: "new", cls: "ex-rx-up" },
-};
+const RX_ACTION = CairnTodayTraining.RX_ACTION;
 
 // A compact target read for the prescription line: "55 lb · 3 × 5", "1:00 hold",
 // "BW · 3 × 8", "30 assist". Mirrors the card's own target vocabulary. Plain words.
 function rxTargetText(rx) {
-  const s = rx.suggested || {};
-  if (rx.mode === "timed") {
-    const secs = s.seconds != null ? fmtDur(Math.round(Number(s.seconds))) : "time";
-    return `${s.sets ?? "?"} × ${secs}`;
-  }
-  const lo = s.rep_low, hi = s.rep_high;
-  const reps = lo != null && hi != null ? (lo === hi ? `${lo}` : `${lo}–${hi}`) : (lo ?? hi ?? "");
-  let load;
-  if (s.weight == null) load = "BW";
-  else if (s.weight < 0) load = `${-s.weight} assist`;
-  else load = fmtWeight(s.weight);
-  return `${load}${reps ? ` · ${s.sets ?? "?"} × ${reps}` : ""}`;
+  return CairnTodayTraining.rxTargetText(rx);
 }
 
 // The per-card prescription line. `rx` is one Prescription from the progression
@@ -51,32 +34,16 @@ function rxTargetText(rx) {
 // pattern swaps (vary_options:[{name,why}]) — we render them as a quiet "rotate one
 // in" chip row so the athlete picks, never a forced single substitution.
 function exRxVaryMenuHtml(rx) {
-  const opts = Array.isArray(rx && rx.vary_options) ? rx.vary_options.filter((o) => o && o.name) : [];
-  if (!opts.length) return "";
-  const chips = opts.slice(0, 3).map((o) =>
-    `<span class="ex-rx-opt"${o.why ? ` title="${escAttr(o.why)}"` : ""}>${escHtml(o.name)}</span>`).join("");
-  return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">rotate one in</span><div class="ex-rx-opts">${chips}</div></div>`;
+  return CairnTodayTraining.exRxVaryMenuHtml(rx);
 }
 function exRxLineHtml(rx) {
-  if (!rx) return "";
-  const meta = RX_ACTION[rx.action] || RX_ACTION.hold;
-  const delta = rx.delta_text ? escHtml(rx.delta_text) : "";
-  const target = escHtml(rxTargetText(rx));
-  return `<div class="ex-rx ${meta.cls}">
-      <div class="ex-rx-line">
-        <span class="ex-rx-tag lbl">${escHtml(meta.word)}</span>
-        <span class="ex-rx-target numeral">${target}</span>
-        ${delta ? `<span class="ex-rx-delta">${delta}</span>` : ""}
-      </div>
-      ${rx.why ? `<div class="ex-rx-why">${escHtml(rx.why)}</div>` : ""}
-      ${rx.action === "vary" ? exRxVaryMenuHtml(rx) : ""}
-    </div>`;
+  return CairnTodayTraining.exRxLineHtml(rx);
 }
 
 // How many of a day's prescriptions are an actual MOVE (not a plain hold) — drives
 // the "apply these" affordance copy + whether it shows at all.
 function rxMoveCount(rxByEx) {
-  return Object.values(rxByEx || {}).filter((rx) => rx && rx.action && rx.action !== "hold").length;
+  return CairnTodayTraining.rxMoveCount(rxByEx);
 }
 
 // "Apply these to my plan" — sends the whole day's adapted targets through the
@@ -238,15 +205,7 @@ function cardioDoneCard(it, eff, revealIdx) {
 // parsed hr_zones [{zone,secs}] off /api/cardio; "" when there's no zone data — never
 // a score, just where the run mostly sat. Mirrors garminSessionCard's zone handling.
 function cardioDominantZone(zones) {
-  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-  const zs = (Array.isArray(zones) ? zones : [])
-    .map((z) => ({ zi: Math.min(5, Math.max(1, num(z && z.zone) || 0)), secs: num(z && z.secs) || 0 }))
-    .filter((z) => z.zi >= 1 && z.secs > 0);
-  if (!zs.length) return "";
-  const total = zs.reduce((t, z) => t + z.secs, 0);
-  if (total <= 0) return "";
-  const top = zs.reduce((a, b) => (b.secs > a.secs ? b : a));
-  return top.secs / total >= 0.5 ? `mostly Z${top.zi}` : `Z${top.zi}`;
+  return CairnTodayTraining.cardioDominantZone(zones);
 }
 
 // Does a synced cardio effort satisfy a planned cardio item? The bar is deliberately
@@ -346,23 +305,12 @@ function wireCardioSync(scope, onDone) {
 }
 // The verb for the "Log this …" button — "run" / "ride" / "swim" / "session".
 function cardioVerb(label) {
-  const l = String(label || "").toLowerCase();
-  if (/run|jog|tempo|interval|long/.test(l)) return "run";
-  if (/ride|bike|cycl|spin/.test(l)) return "ride";
-  if (/swim/.test(l)) return "swim";
-  if (/row/.test(l)) return "row";
-  return "effort";
+  return CairnTodayTraining.cardioVerb(label);
 }
 // A natural-language prefill for the capture box — "ran 12 km easy (Z2)" style — so
 // one tap drops a sensible sentence in and they tweak the actuals before logging.
 function cardioLogPhrase(it) {
-  const verb = cardioVerb(cardioLabel(it));
-  const v = verb === "run" ? "ran" : verb === "ride" ? "rode" : verb === "swim" ? "swam" : verb === "row" ? "rowed" : "did";
-  const bits = [];
-  if (it.target_distance_km != null) bits.push(`${fmtKm(it.target_distance_km)} km`);
-  else if (it.target_duration_min != null) bits.push(`${Math.round(Number(it.target_duration_min))} min`);
-  if (it.target_zone) bits.push(`(${it.target_zone})`);
-  return `${v} ${bits.join(" ")}`.trim() || `${v} my planned ${verb}`;
+  return CairnTodayTraining.cardioLogPhrase({ ...it, label: cardioLabel(it) });
 }
 
 function setChip(s, i) {
@@ -1022,31 +970,8 @@ const TODAY_RAIL_LOADERS = {
   "garmin-reconcile": () => loadGarminReconcile(),
   lately: () => loadRecentActivities(),
 };
-// The slot markup for each rail client_card (stable ids the loaders bind to). A
-// candidate naming a card not in here is a forward card the client can't yet draw
-// (a sibling shipped server-side but not in this build) — it's skipped gracefully.
-const TODAY_RAIL_SLOTS = {
-  fuel: `<div id="fuelSlot" class="fuel-slot"></div>`,
-  "week-ahead": `<div id="weekAheadSlot" class="weekahead-slot"></div>`,
-  "program-adjustments": `<div id="adjustSlot" class="adjust-slot"></div>`,
-  "weekly-read": `<div id="weeklySlot" class="weekly-slot"></div>`,
-  "connection-insight": `<div id="insightSlot" class="insight-slot"></div>`,
-  "garmin-reconcile": `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>`,
-  lately: `<div id="qlRecent" class="ql-recent lately-slot"></div>`,
-};
-const TODAY_PRIMARY_CLIENT_MAX = 2;
-
-function canRenderAgendaCard(c) {
-  if (!c) return false;
-  return c.client_card ? !!TODAY_RAIL_SLOTS[c.client_card] : true;
-}
-
 function renderableAgendaBuckets(agenda) {
-  const ordered = [...(agenda.primary || []), ...(agenda.more || [])].filter(canRenderAgendaCard);
-  return {
-    primary: ordered.slice(0, TODAY_PRIMARY_CLIENT_MAX),
-    more: ordered.slice(TODAY_PRIMARY_CLIENT_MAX),
-  };
+  return window.CairnTodayAgenda.renderableBuckets(agenda);
 }
 
 // Fetch the agenda for a date. Best-effort + null-safe: a 404 during dev (route not
@@ -1060,28 +985,6 @@ async function fetchTodayAgenda(date) {
   } catch { return null; }
 }
 
-// A calm generic Today card for an Era-2 candidate with no client_card (e.g.
-// since-last / goal-checkin). All text through escHtml/escAttr; Atelier classes;
-// reduced-motion safe (the .reveal entrance is gated globally). Pull, never push:
-// a dismissible card carries a quiet ✕. The optional action deep-links (chat / a
-// tab) via its kind — handled in wireGenericAgendaCards.
-function genericAgendaCardHtml(c, revealIdx) {
-  const kicker = c.kicker ? `<div class="agenda-kicker lbl">${escHtml(c.kicker)}</div>` : "";
-  const title = c.title ? `<div class="agenda-title">${escHtml(c.title)}</div>` : "";
-  const body = c.body ? `<div class="agenda-body">${escHtml(c.body)}</div>` : "";
-  const act = c.action && c.action.label
-    ? `<button class="agenda-act" type="button" data-agenda-act="${escAttr(c.action.kind || "")}" data-agenda-id="${escAttr(c.id || "")}">${escHtml(c.action.label)}</button>`
-    : "";
-  const dismiss = c.dismissible
-    ? `<button class="agenda-x" type="button" data-agenda-dismiss="${escAttr(c.id || "")}" aria-label="Dismiss">✕</button>`
-    : "";
-  return `<div class="agenda-card reveal" data-agenda-card="${escAttr(c.id || "")}" data-agenda-kind="${escAttr(c.kind || "")}" style="${stagger(revealIdx || 0)}">
-      ${dismiss}
-      ${kicker}${title}${body}
-      ${act ? `<div class="agenda-foot">${act}</div>` : ""}
-    </div>`;
-}
-
 // Build the rail HTML from the agenda. Each surfaced candidate is either an EXISTING
 // client card (its slot, ordered) or a generic Era-2 card (rendered inline). The
 // `primary` items lead; the `more` items live inside ONE quiet, collapsed disclosure
@@ -1089,31 +992,7 @@ function genericAgendaCardHtml(c, revealIdx) {
 // just the Brief). `genericPending` collects the generic candidates we drew so the
 // caller can wire them after the innerHTML write.
 function buildAgendaRailHtml(agenda, genericPending) {
-  const buckets = renderableAgendaBuckets(agenda);
-  const cardHtml = (c) => {
-    if (c.client_card) return TODAY_RAIL_SLOTS[c.client_card] || ""; // existing card slot
-    // generic Era-2 card — index doesn't matter much; stagger by collection order.
-    genericPending.push(c);
-    return genericAgendaCardHtml(c, genericPending.length - 1);
-  };
-  const primaryHtml = buckets.primary.map(cardHtml).filter(Boolean).join("");
-  const moreCards = buckets.more.map(cardHtml).filter(Boolean).join("");
-  const n = buckets.more.length;
-  const moreHtml = (n > 0 && moreCards)
-    ? `<details class="today-more" id="todayMore">
-        <summary class="today-more-sum"><span class="today-more-lbl">${n === 1 ? "1 more" : `${n} more`}</span><span class="today-more-chev" aria-hidden="true">▾</span></summary>
-        <div class="today-more-body">${moreCards}</div>
-      </details>`
-    : "";
-  if (!primaryHtml && !moreHtml) return ""; // quiet day — no rail, no empty chrome
-  // One calm masthead gives the rail a single identity: these are the coach's other
-  // reads, ranked, beneath the Brief (the day's lead). Without it the cards read as
-  // loose, disconnected features; with it they read as one continued voice. Shown
-  // only when there's a primary card to head (a lone "N more" stands on its own).
-  const mast = primaryHtml
-    ? `<div class="rail-mast"><span class="rail-mast-mark" aria-hidden="true">✦</span><span class="rail-mast-lbl lbl">Also worth a look</span></div>`
-    : "";
-  return `<aside class="today-rail">${mast}${primaryHtml}${moreHtml}</aside>`;
+  return window.CairnTodayAgenda.railHtml(agenda, genericPending);
 }
 
 // Run the rail loaders for every surfaced existing client_card (primary + more) and
@@ -3129,33 +3008,7 @@ async function loadDraftProposals() {
 // candidate when count <= 0). This function is only ever called with logged food;
 // it returns "" defensively if handed an empty day so no capture nudge can render.
 function fuelCardHtml(d) {
-  const t = d.totals || {};
-  const kcal = Math.round(Number(t.kcal) || 0);
-  const protein = Math.round(Number(t.protein_g) || 0);
-  const count = Number(d.count) || 0;
-  if (!count) return ""; // nothing logged → no card at all (never a "log something" prompt)
-  // "remaining", never "consumed"; never red. Over the target reads as a calm "in".
-  let remLine = "";
-  if (d.remaining && d.target) {
-    const left = Math.round(Number(d.remaining.kcal));
-    remLine = left > 0
-      ? `<span class="fuel-rem">~${left} left</span>`
-      : `<span class="fuel-rem fuel-rem-done">fuel's in for today</span>`;
-  }
-  const word = count === 1 ? "item" : "items";
-  return `<button class="fuel-card reveal" id="fuelCard" style="--i:0" type="button" title="Review &amp; edit today's food">
-      <span class="fuel-ico" aria-hidden="true">◷</span>
-      <span class="fuel-body">
-        <span class="fuel-h lbl">Today's fuel · ${count} ${word}</span>
-        <span class="fuel-stats">
-          <span class="numeral" data-cu="${kcal}">0</span><span class="fuel-unit">kcal</span>
-          <span class="fuel-dot" aria-hidden="true">·</span>
-          <span class="numeral" data-cu="${protein}">0</span><span class="fuel-unit">g protein</span>
-          ${remLine}
-        </span>
-      </span>
-      <span class="fuel-go" aria-hidden="true">→</span>
-    </button>`;
+  return window.CairnTodayAgenda.fuelCardHtml(d);
 }
 
 async function loadFuelToday(date) {

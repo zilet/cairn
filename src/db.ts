@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   content TEXT NOT NULL,
   agent TEXT,
   meta TEXT,
+  session_id TEXT,          -- stable archived-conversation id for deep links (e.g. /app/chat?session=...)
   archived_at TEXT           -- set by chat reset/clear ("fresh start"); archived turns leave the live conversation but are never deleted
 );
 

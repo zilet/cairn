@@ -46,7 +46,31 @@ export function listChatMessages(limit = 50) {
 // "Fresh start" / clear both archive rather than delete: chat turns are part of
 // the athlete's history and exports, so nothing is ever hard-deleted anymore.
 export function archiveChat() {
-  return { archived: db.prepare(`UPDATE chat_messages SET archived_at = datetime('now') WHERE archived_at IS NULL`).run().changes };
+  const row = db.prepare(`SELECT MIN(id) AS first_id, COUNT(*) AS count FROM chat_messages WHERE archived_at IS NULL`).get() as any;
+  const count = Number(row?.count ?? 0);
+  if (count <= 0 || row?.first_id == null) return { archived: 0, session_id: null };
+  const sessionId = `chat_${Number(row.first_id)}`;
+  const changes = db.prepare(`UPDATE chat_messages SET archived_at = datetime('now'), session_id = ? WHERE archived_at IS NULL`)
+    .run(sessionId).changes;
+  return { archived: changes, session_id: sessionId };
+}
+
+export interface ArchivedChatSession {
+  session_id: string;
+  archived_at: string;
+  count: number;
+  started_at: string;
+  ended_at: string;
+  preview: string;
+}
+
+export interface ChatSearchHit {
+  id: number;
+  role: string;
+  created_at: string;
+  session_id: string | null;
+  archived_at: string | null;
+  snippet: string;
 }
 
 // Kept for the existing DELETE /api/chat surface; same archive semantics,
@@ -423,40 +447,48 @@ export function saveAiCache(
 }
 
 // ---------- chat history (read-only browse + search over archived turns) ----------
-// Each "fresh start" stamps the live turns with one shared archived_at, so a
-// past conversation IS the set of rows sharing an archived_at. Group them into
-// browsable sessions, newest first, each with a one-line preview.
-export function listArchivedSessions(limit = 50) {
+// Each "fresh start" stamps the live turns with one shared session_id +
+// archived_at. Group them into browsable sessions, newest first, each with a
+// one-line preview. `archived_at` stays in the payload for older clients/MCP.
+export function listArchivedSessions(limit = 50): ArchivedChatSession[] {
   const rows = db.prepare(`
-    SELECT m.archived_at,
+    SELECT COALESCE(m.session_id, 'chat_' || MIN(m.id)) AS session_id,
+           MAX(m.archived_at) AS archived_at,
            COUNT(*)          AS count,
            MIN(m.created_at) AS started_at,
            MAX(m.created_at) AS ended_at,
            (SELECT content FROM chat_messages p
-             WHERE p.archived_at = m.archived_at AND p.role = 'user'
+             WHERE COALESCE(p.session_id, p.archived_at) = COALESCE(m.session_id, m.archived_at) AND p.role = 'user'
                AND p.content <> '' AND p.content <> '(photo)'
              ORDER BY p.id ASC LIMIT 1) AS preview
     FROM chat_messages m
     WHERE m.archived_at IS NOT NULL
-    GROUP BY m.archived_at
-    ORDER BY m.archived_at DESC
+    GROUP BY COALESCE(m.session_id, m.archived_at)
+    ORDER BY archived_at DESC
     LIMIT ?`).all(Math.min(200, Math.max(1, limit))) as any[];
   return rows.map((r) => ({
-    archived_at: r.archived_at, count: r.count, started_at: r.started_at, ended_at: r.ended_at,
+    session_id: r.session_id, archived_at: r.archived_at, count: r.count, started_at: r.started_at, ended_at: r.ended_at,
     preview: (r.preview ?? "").toString().replace(/\s+/g, " ").trim().slice(0, 120),
   }));
 }
 
-// One archived conversation, chronological, hydrated like the live list.
-export function getArchivedConversation(archivedAt: string) {
-  const rows = db.prepare(`SELECT * FROM chat_messages WHERE archived_at = ? ORDER BY id ASC`).all(archivedAt) as any[];
+// One archived conversation, chronological, hydrated like the live list. Accepts
+// the stable session_id first, with archived_at as a legacy fallback.
+export function getArchivedConversation(sessionIdOrArchivedAt: string) {
+  const key = String(sessionIdOrArchivedAt ?? "");
+  const rows = db.prepare(
+    `SELECT * FROM chat_messages
+      WHERE archived_at IS NOT NULL
+        AND (session_id = ? OR archived_at = ?)
+      ORDER BY id ASC`
+  ).all(key, key) as any[];
   return rows.map(hydrateChat);
 }
 
 // Keyword search across the whole history (live + archived). Each hit carries
 // its session key (archived_at, or null for the live thread) and a short
 // snippet centered on the match, so the UI can jump straight to the source.
-export function searchChatMessages(q: string, limit = 40) {
+export function searchChatMessages(q: string, limit = 40): ChatSearchHit[] {
   const query = (q ?? "").toString().trim();
   if (!query) return [];
   const like = "%" + query.replace(/[\\%_]/g, (c) => "\\" + c) + "%";
@@ -471,6 +503,13 @@ export function searchChatMessages(q: string, limit = 40) {
     const idx = content.toLowerCase().indexOf(lower);
     let snippet = content.replace(/\s+/g, " ").trim();
     if (idx > 60) snippet = "…" + content.slice(Math.max(0, idx - 40)).replace(/\s+/g, " ").trim();
-    return { id: m.id, role: m.role, created_at: m.created_at, archived_at: m.archived_at ?? null, snippet: snippet.slice(0, 160) };
+    return {
+      id: m.id,
+      role: m.role,
+      created_at: m.created_at,
+      session_id: m.session_id ?? null,
+      archived_at: m.archived_at ?? null,
+      snippet: snippet.slice(0, 160),
+    };
   });
 }

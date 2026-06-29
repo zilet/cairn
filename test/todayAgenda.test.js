@@ -12,7 +12,7 @@
 // goal-checkin) stay silent and the candidate set under test is fully controlled.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
+import { db, isoDaysAgo, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -140,6 +140,24 @@ test("agenda-only draft, health, and running candidates render as generic cards"
   assert.equal(byId("run-compliance")?.client_card, undefined, "run compliance must render as generic agenda copy");
   assert.equal(byId("run-compliance")?.action?.kind, "plan-endurance");
   assert.ok(byId("run-compliance")?.title);
+});
+
+test("a routed Today date anchors weekly producers to that week", () => {
+  repo.savePlanDay(1, "Run", "Endurance", [
+    { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
+  ]);
+  repo.addActivity({ type: "run", date: isoDaysAgo(0), duration_min: 50, distance_km: 10 });
+
+  const pastAgenda = repo.todayAgenda("2026-01-07");
+  const past = [...pastAgenda.primary, ...pastAgenda.more];
+  const pastRun = past.find((c) => c.id === "run-compliance");
+
+  assert.equal(pastRun?.title, "0 of 10 km this week", "past Today links do not borrow the current week's run");
+  assert.ok(!past.some((c) => c.id === "lately"), "past Today links do not surface current-week activity as lately");
+
+  const liveAgenda = repo.todayAgenda(isoDaysAgo(0));
+  const liveRun = [...liveAgenda.primary, ...liveAgenda.more].find((c) => c.id === "run-compliance");
+  assert.equal(liveRun?.title, "10 of 10 km this week", "the live week still reads the current run");
 });
 
 // ---- one producer throwing never breaks the agenda (each read is isolated) ----

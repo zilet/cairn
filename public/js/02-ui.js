@@ -22,6 +22,7 @@ function setTodayHeaderTitle() {
     state.logDate = inp.value;
     state.day = null;
     state.dayPicked = false;
+    if (typeof syncRouteFromState === "function") syncRouteFromState();
     renderToday();
   });
 }
@@ -626,12 +627,8 @@ function gotoChatWith(text) {
   if (t) t.classList.add("active");
   state.tab = "chat";
   document.body.dataset.tab = "chat"; // keep the header's Today-scoped styling off
+  if (typeof syncRouteFromState === "function") syncRouteFromState();
   renderChat().then(() => { const i = $("#chatInput"); if (i) { i.value = text; autosizeChatInput(i); i.focus(); } });
-}
-
-function fmtWeight(w) {
-  if (w === null || w === undefined) return "BW";
-  return w < 0 ? `${-w} assist` : `${w}`;
 }
 
 // segmented sub-nav: items = [[key,label]]; handlers = {key: renderFn}
@@ -654,6 +651,7 @@ function wireSeg(handlers) {
         seg.style.setProperty("--segi", idx);
       }
       withViewTransition(() => Promise.resolve(f()).then(viewEnter));
+      if (typeof syncRouteFromState === "function") syncRouteFromState();
     })
   );
   view.querySelectorAll(".seg").forEach(fitSeg);
@@ -695,8 +693,6 @@ function planSeg() {
     : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]];
 }
 const PLAN_HANDLERS = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), food: () => renderFoodJournal(), meals: () => renderMeals(), coach: () => renderCoach() };
-
-function escHtml(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
 // ─── The conductor: one sequenced whole-athlete focus card ──────────────────
 // Shared renderer for GET /api/coaching-focus — the cross-domain analog of the
@@ -982,8 +978,6 @@ function refreshPhoneCoach() {
     });
   } catch {}
 }
-function escAttr(s) { return escHtml(s).replace(/"/g, "&quot;"); }
-
 // ---------- markdown (chat bubbles) ----------
 // Tiny dependency-free renderer for assistant replies: headings, bold/italic,
 // inline code + fenced blocks, links, images, bullet/numbered lists, tables,
@@ -1096,6 +1090,11 @@ function skelSwap(fn) {
 // `_vtActive` guards against accidentally nesting a transition inside another
 // (which the browser would resolve by aborting the outer one).
 let _vtActive = false;
+function isViewTransitionAbort(err) {
+  const name = String(err?.name || "");
+  const msg = String(err?.message || err || "");
+  return name === "AbortError" || (name === "InvalidStateError" && /transition/i.test(msg));
+}
 function withViewTransition(fn) {
   const run = () => {
     try { return Promise.resolve(fn()); }
@@ -1106,8 +1105,9 @@ function withViewTransition(fn) {
       _vtActive = true;
       const tx = document.startViewTransition(run);
       const done = tx.updateCallbackDone || tx.finished || Promise.resolve();
-      Promise.resolve(done).finally(() => { _vtActive = false; });
-      return done;
+      return Promise.resolve(done)
+        .catch((err) => { if (!isViewTransitionAbort(err)) throw err; })
+        .finally(() => { _vtActive = false; });
     } catch { _vtActive = false; /* fall through */ }
   }
   return run();
@@ -1269,27 +1269,6 @@ function runCountUps(scope, { snap = false } = {}) {
   });
 }
 
-// ---------- duration helpers (timed exercises) ----------
-// "90" → 90 · "1:30" → 90 · "2m" → 120 · "45s" → 45. null on garbage.
-function parseDur(text) {
-  const s = String(text || "").trim().toLowerCase();
-  if (!s) return null;
-  let m = s.match(/^(\d+):([0-5]?\d)$/);
-  if (m) return Number(m[1]) * 60 + Number(m[2]);
-  m = s.match(/^(\d+(?:\.\d+)?)\s*m(?:in)?$/);
-  if (m) return Math.round(Number(m[1]) * 60);
-  m = s.match(/^(\d+)\s*s(?:ec)?$/);
-  if (m) return Number(m[1]);
-  m = s.match(/^(\d+)$/);
-  if (m) return Number(m[1]);
-  return null;
-}
-// 90 → "1:30", 45 → "0:45"
-function fmtDur(sec) {
-  const v = Math.max(0, Math.round(Number(sec) || 0));
-  return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
-}
-
 // ---------- progressive artwork (CairnArt SVG → generated photo) ----------
 // Server contract: GET /api/art?kind=&q= → 200 image/* when cached, 204 when not ready
 // (the 204 itself kicks off background generation; an <img> treats 204 as an error).
@@ -1315,38 +1294,6 @@ let enduranceGoalSet = false;
 function setEnduranceGoalSet(present) { enduranceGoalSet = !!present; return enduranceGoalSet; }
 // A runner home is warranted when the athlete trains endurance OR has set a goal.
 const showEnduranceTab = () => isEndurance() || isHybrid() || enduranceGoalSet;
-
-// ---------- endurance formatting (min/km pace, distance, plain-word trend) ----------
-// All null-safe. Pace is min/km → "m:ss/km". Never a score, never a grade.
-function fmtPaceKm(minPerKm) {
-  const v = Number(minPerKm);
-  if (!Number.isFinite(v) || v <= 0) return "—";
-  const m = Math.floor(v);
-  const s = Math.round((v - m) * 60);
-  // 60s rounding carry
-  const mm = s === 60 ? m + 1 : m;
-  const ss = s === 60 ? 0 : s;
-  return `${mm}:${String(ss).padStart(2, "0")}`;
-}
-function fmtKm(km) {
-  const v = Number(km);
-  if (!Number.isFinite(v)) return "—";
-  return Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : (Math.round(v * 10) / 10).toFixed(1);
-}
-// Speed in km/h (the metric riders read, the counterpart to a runner's min/km).
-// Null-safe, one decimal. Never a score.
-function fmtSpeedKmh(kmh) {
-  const v = Number(kmh);
-  if (!Number.isFinite(v) || v <= 0) return "—";
-  return Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : (Math.round(v * 10) / 10).toFixed(1);
-}
-// Human label for a standard PR distance (1/5/10/half/full + anything else).
-function prDistLabel(km) {
-  const v = Number(km);
-  if (Math.abs(v - 21.0975) < 0.01) return "Half";
-  if (Math.abs(v - 42.195) < 0.01) return "Full";
-  return `${fmtKm(v)} km`;
-}
 
 // ---------- planned cardio (kind:'cardio') shared rendering ----------
 // A cardio plan item carries an endurance prescription (no loaded exercise). Its

@@ -6,6 +6,7 @@
 // editor) so an in-flight edit is never clobbered by a background refresh.
 async function renderPlanEditor() {
   headerTitle.textContent = "Plan";
+  state.planSeg = "edit";
   const token = ++pollToken;
   const peek = peekCached("plan");
   if (!peek) view.innerHTML = segSkeleton("edit", planSeg(), 3); // cold: skeleton-first
@@ -378,6 +379,7 @@ function endurancePresets(goal) {
 
 async function renderPlanEndurance() {
   headerTitle.textContent = "Plan";
+  state.planSeg = "endurance";
   view.innerHTML = segBar("endurance", planSeg()) + `<div id="endPlanBody">${loadingState("Reading your running…")}</div>`;
   wireSeg(PLAN_HANDLERS);
   const token = ++pollToken;
@@ -594,19 +596,16 @@ function renderEnduranceDraftResult(p) {
 // Document-level paste listener for the chat view; swapped on every renderChat.
 let chatPasteHandler = null;
 let chatFuelContext = [];
-const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024; // mirrors src/api.ts CHAT_IMAGE_MAX_BYTES
-const CHAT_IMAGE_EDGE_STEPS = [1280, 1024, 768];
-const CHAT_IMAGE_QUALITY_STEPS = [0.82, 0.72, 0.62, 0.52];
+const CHAT_UPLOAD_IMAGE_MAX_BYTES = CairnChatClient.CHAT_IMAGE_MAX_BYTES; // mirrors src/api.ts CHAT_IMAGE_MAX_BYTES
+const CHAT_UPLOAD_IMAGE_EDGE_STEPS = CairnChatClient.CHAT_IMAGE_EDGE_STEPS;
+const CHAT_UPLOAD_IMAGE_QUALITY_STEPS = CairnChatClient.CHAT_IMAGE_QUALITY_STEPS;
 
 function base64DecodedBytes(base64) {
-  const s = String(base64 || "").replace(/\s/g, "");
-  const pad = s.endsWith("==") ? 2 : s.endsWith("=") ? 1 : 0;
-  return Math.max(0, Math.floor((s.length * 3) / 4) - pad);
+  return CairnChatClient.base64DecodedBytes(base64);
 }
 
 function chatImagePayload(dataUrl) {
-  const base64 = String(dataUrl || "").split(",")[1] || "";
-  return { dataUrl, base64, mime: "image/jpeg", bytes: base64DecodedBytes(base64) };
+  return CairnChatClient.imagePayload(dataUrl);
 }
 
 // Downscale + re-encode a picked photo to JPEG before upload: phone camera
@@ -624,15 +623,15 @@ async function compressChatImage(file) {
       i.src = url;
     });
     let last = null;
-    for (const maxEdge of CHAT_IMAGE_EDGE_STEPS) {
+    for (const maxEdge of CHAT_UPLOAD_IMAGE_EDGE_STEPS) {
       const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
       const c = document.createElement("canvas");
       c.width = Math.max(1, Math.round(img.naturalWidth * scale));
       c.height = Math.max(1, Math.round(img.naturalHeight * scale));
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      for (const quality of CHAT_IMAGE_QUALITY_STEPS) {
+      for (const quality of CHAT_UPLOAD_IMAGE_QUALITY_STEPS) {
         last = chatImagePayload(c.toDataURL("image/jpeg", quality));
-        if (last.bytes <= CHAT_IMAGE_MAX_BYTES) return last;
+        if (last.bytes <= CHAT_UPLOAD_IMAGE_MAX_BYTES) return last;
       }
     }
     const err = new Error("image-too-large");
@@ -644,9 +643,7 @@ async function compressChatImage(file) {
 // Convert a SQLite UTC timestamp ("YYYY-MM-DD HH:MM:SS") to a local YYYY-MM-DD
 // for day grouping; falls back to today on anything unparseable.
 function chatDayISO(ts) {
-  if (!ts) return localISO();
-  const d = new Date(String(ts).replace(" ", "T") + "Z");
-  return isNaN(d.getTime()) ? localISO() : localISO(d);
+  return CairnChatClient.dayISO(ts, localISO);
 }
 
 function chatDivider(iso) {
@@ -679,38 +676,16 @@ function drawChatChips(log) {
 // food capture or today's fuel. The durable food log still feeds the coach prompt
 // everywhere; this UI guard keeps broad health/nutrition chats from carrying a
 // persistent food banner.
-const CHAT_FOOD_RE = /\b(food|meal|meals|breakfast|lunch|dinner|snack|plate|bowl|ate|eaten|eating|calor(?:y|ies)|kcal|macro|macros|protein|carb|carbs|fiber|fuel|refuel|grams?|ounces?|oz|serving|portion|recipe|restaurant|menu|label|logged?|logging)\b/i;
-const CHAT_NON_FOOD_PHOTO_RE = /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
-const CHAT_FOOD_ACTION_TYPES = new Set(["log_food", "update_food_note"]);
-
 function chatMessageHasFoodAction(m) {
-  if (!m) return false;
-  const meta = m.meta || {};
-  return Array.isArray(meta.applied) && meta.applied.some((a) => CHAT_FOOD_ACTION_TYPES.has(String(a?.type || "")));
+  return CairnChatClient.messageHasFoodAction(m);
 }
 
 function chatUserMessageSuggestsFood(m) {
-  if (!m || String(m.role || "") !== "user") return false;
-  const content = String(m.content || "");
-  const meta = m.meta || {};
-  if (CHAT_FOOD_RE.test(content)) return true;
-  if (meta.image && (!content || content === "(photo)" || !CHAT_NON_FOOD_PHOTO_RE.test(content))) return true;
-  return false;
+  return CairnChatClient.userMessageSuggestsFood(m);
 }
 
 function chatWantsFuelSurface(messages = chatFuelContext) {
-  const today = localISO();
-  const recentToday = (Array.isArray(messages) ? messages : [])
-    .filter((m) => !m?.created_at || chatDayISO(m.created_at) === today)
-    .slice(-12);
-  let latestUserIdx = -1;
-  for (let i = recentToday.length - 1; i >= 0; i--) {
-    if (String(recentToday[i]?.role || "") === "user") { latestUserIdx = i; break; }
-  }
-  if (latestUserIdx < 0) return false;
-  const latestUser = recentToday[latestUserIdx];
-  const sinceLatestUser = recentToday.slice(latestUserIdx);
-  return chatUserMessageSuggestsFood(latestUser) || sinceLatestUser.some(chatMessageHasFoodAction);
+  return CairnChatClient.wantsFuelSurface(messages, { todayISO: localISO(), dayISO: chatDayISO });
 }
 
 function rememberChatFuelContext(...msgs) {
@@ -871,24 +846,7 @@ function settleFreshPill(distilled, token) {
 }
 
 function chatFuelHtml(d) {
-  const count = Number(d?.count) || 0;
-  if (!count) return "";
-  const totals = d.totals || {};
-  const kcal = Math.round(Number(totals.kcal) || 0);
-  const protein = Math.round(Number(totals.protein_g) || 0);
-  let rem = "";
-  if (d.remaining && d.target) {
-    const left = Math.round(Number(d.remaining.kcal));
-    rem = left > 0 ? ` · ~${left.toLocaleString()} left` : " · fuel's in";
-  }
-  return `<button id="chatFuelCard" class="chatfuel-card" type="button" title="Review &amp; edit today's food">
-      <span class="chatfuel-mark" aria-hidden="true">◷</span>
-      <span class="chatfuel-main">
-        <span class="chatfuel-label lbl">Today's fuel · ${count} item${count === 1 ? "" : "s"}</span>
-        <span class="chatfuel-stats">${kcal.toLocaleString()} kcal · ${protein.toLocaleString()}g protein${escHtml(rem)}</span>
-      </span>
-      <span class="chatfuel-go" aria-hidden="true">→</span>
-    </button>`;
+  return CairnChatClient.fuelHtml(d);
 }
 
 async function loadChatFuel(token, messages = chatFuelContext) {
@@ -953,11 +911,18 @@ async function renderChat() {
   const attachBtn = $("#chatAttach"), preview = $("#chatPreview");
   let attached = null; // { dataUrl, base64, mime }
 
+  const settleChatAfterNativePicker = () => {
+    document.dispatchEvent(new CustomEvent("cairn:keyboard-settle"));
+    measureChatTop();
+    requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
+    for (const d of [120, 280, 520, 900]) setTimeout(() => { if (state.tab === "chat") measureChatTop(); }, d);
+  };
   const clearAttach = () => {
     attached = null;
     fileInput.value = "";
     preview.hidden = true;
     attachBtn.classList.remove("has-img");
+    settleChatAfterNativePicker();
   };
   const attachFile = async (f) => {
     if (!f) return;
@@ -970,16 +935,24 @@ async function renderChat() {
       const tooLarge = e && e.message === "image-too-large";
       toast(tooLarge ? "That photo is too large — try a closer crop." : "Couldn't read that image — try another.");
       clearAttach();
+    } finally {
+      settleChatAfterNativePicker();
     }
   };
   // One "+" control. On iOS a file input with no `capture` opens the native
   // sheet (Take Photo / Photo Library / Choose File); desktop opens the file
   // dialog. Attaching is occasional, so this keeps the bar to input + send.
-  attachBtn.addEventListener("click", () => fileInput.click());
+  attachBtn.addEventListener("click", () => {
+    if (document.activeElement === input) input.blur();
+    document.body.classList.remove("kb-open");
+    settleChatAfterNativePicker();
+    fileInput.click();
+  });
   $("#chatPreviewX").addEventListener("click", clearAttach);
   fileInput.addEventListener("change", () => {
     const f = fileInput.files && fileInput.files[0];
     if (f) attachFile(f);
+    else settleChatAfterNativePicker();
   });
   // Paste-an-image support (desktop screenshots, iOS "Copy Photo"). One live
   // handler at a time: re-renders swap it out, and it bails when chat isn't
@@ -1084,6 +1057,7 @@ async function renderChat() {
   loadChatFuel(token);
   // Rebuild any in-flight + queued turns from the server and resume streaming.
   chatReconnect();
+  if (state.pendingChatSession) openChatHistory({ session: state.pendingChatSession });
   requestAnimationFrame(measureChatTop);
 }
 
@@ -1845,35 +1819,19 @@ function histWhen(ts) { return humanDate(chatDayISO(ts)); }
 // Escape text, then emphasize the search term with <mark> (safe — marks added
 // after escaping). Term is regex-escaped.
 function highlightTerm(text, q) {
-  const esc = escHtml(text);
-  const term = (q || "").trim();
-  if (!term) return esc;
-  try {
-    const re = new RegExp("(" + term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig");
-    return esc.replace(re, "<mark>$1</mark>");
-  } catch { return esc; }
+  return CairnChatClient.highlightTerm(text, q);
 }
 
-const HIST_CHEV = `<span class="chat-hist-chev" aria-hidden="true">›</span>`;
 function histSessionRow(s) {
-  return `<button class="chat-hist-item" data-session="${escAttr(s.archived_at)}">
-    <span class="chat-hist-main">
-      <span class="chat-hist-preview">${escHtml(s.preview || "Conversation")}</span>
-      <span class="chat-hist-meta">${escHtml(histWhen(s.ended_at))} · ${s.count} message${s.count === 1 ? "" : "s"}</span>
-    </span>${HIST_CHEV}</button>`;
+  return CairnChatClient.historySessionRow(s, histWhen(s.ended_at));
 }
 function histHitRow(h, q) {
-  const sess = h.archived_at || "live";
-  return `<button class="chat-hist-item" data-open="${escAttr(sess)}">
-    <span class="chat-hist-main">
-      <span class="chat-hist-preview">${highlightTerm(h.snippet, q)}</span>
-      <span class="chat-hist-meta">${h.role === "user" ? "You" : "Coach"} · ${escHtml(histWhen(h.created_at))}${h.archived_at ? "" : " · current"}</span>
-    </span>${HIST_CHEV}</button>`;
+  return CairnChatClient.historyHitRow(h, q, histWhen(h.created_at));
 }
 
 // Open the read-only history/search overlay (reuses the .detail scaffold, so
 // ✕ / Escape / backdrop / tab-switch all close it).
-function openChatHistory() {
+function openChatHistory(opts = {}) {
   const d = mountDetail(`
     <div class="chat-hist">
       <h2 class="detail-title">Conversations</h2>
@@ -1894,7 +1852,7 @@ function openChatHistory() {
     if (!sessions.length) { body.innerHTML = `<div class="empty">No past conversations yet.<br>Start one, and a “fresh start” will tuck it here.</div>`; return; }
     body.innerHTML = `<div class="chat-hist-list">${sessions.map(histSessionRow).join("")}</div>`;
     body.querySelectorAll("[data-session]").forEach((el) =>
-      el.addEventListener("click", () => openConversation(el.dataset.session)));
+      el.addEventListener("click", () => openConversation(el.dataset.session, { syncRoute: true })));
   };
 
   const runSearch = async (q) => {
@@ -1907,17 +1865,27 @@ function openChatHistory() {
     body.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => {
       const sess = el.dataset.open;
       if (sess === "live") { closeDetail(); toast("In your current conversation"); return; }
-      openConversation(sess);
+      openConversation(sess, { syncRoute: true });
     }));
   };
 
-  const openConversation = async (archivedAt) => {
+  const openConversation = async (sessionId, opts = {}) => {
+    if (!sessionId) return;
+    if (opts.syncRoute) {
+      state.pendingChatSession = sessionId;
+      if (typeof syncRouteFromState === "function") syncRouteFromState();
+    }
     body.innerHTML = loadingState("Opening…");
     let msgs = [];
-    try { msgs = await api("/chat/sessions/" + encodeURIComponent(archivedAt)); } catch { msgs = []; }
+    try { msgs = await api("/chat/sessions/" + encodeURIComponent(sessionId)); } catch { msgs = []; }
     if (!d.isConnected) return;
     body.innerHTML = `<button class="chat-hist-back">← All conversations</button><div id="chatHistConvo" class="chatlog chat-hist-convo"></div>`;
-    body.querySelector(".chat-hist-back").addEventListener("click", () => { searchInput.value = ""; renderSessions(); });
+    body.querySelector(".chat-hist-back").addEventListener("click", () => {
+      state.pendingChatSession = null;
+      if (typeof syncRouteFromState === "function") syncRouteFromState();
+      searchInput.value = "";
+      renderSessions();
+    });
     const convo = body.querySelector("#chatHistConvo");
     let lastDay = null;
     for (const m of msgs) {
@@ -1935,5 +1903,6 @@ function openChatHistory() {
     searchTimer = setTimeout(() => runSearch(q), 250);
   });
 
-  renderSessions();
+  if (opts.session) openConversation(opts.session);
+  else renderSessions();
 }

@@ -1,0 +1,173 @@
+import { Router } from "express";
+import { localToday } from "../dayread.js";
+import * as repo from "../repo.js";
+
+export const trainingLogRouter = Router();
+
+trainingLogRouter.get("/sessions", (req, res) => {
+  // ?date= is a soft lookup: "no session for that date yet" is a normal, expected
+  // state, so we return 200 + null (not 404). The PWA's api() helper resolves to
+  // the parsed body regardless of status, so a 404 error-object would read as a
+  // truthy hit and break the caller — null is the correct absence signal here.
+  if (req.query.date) return res.json(repo.getSessionByDate(String(req.query.date)));
+  const limit = req.query.limit ? Number(req.query.limit) : 10;
+  res.json(repo.getRecentSessions(limit));
+});
+
+trainingLogRouter.get("/last-set", (req, res) => {
+  const exercise = req.query.exercise ? String(req.query.exercise) : "";
+  if (!exercise) return res.status(400).json({ error: "exercise required" });
+  // Soft lookup (for input prefill): null when the exercise has no logged sets. See /sessions note above.
+  res.json(repo.getLastSet(exercise));
+});
+
+trainingLogRouter.get("/sessions/:id", (req, res) => {
+  const s = repo.getSessionDetail(Number(req.params.id));
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(s);
+});
+
+trainingLogRouter.post("/sessions/:id/finish", (req, res) => {
+  try {
+    res.json(repo.finishSession(Number(req.params.id), (req.body ?? {}).notes ?? null));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Reopen a finished session to keep logging (clears finished_at).
+trainingLogRouter.post("/sessions/:id/reopen", (req, res) => {
+  const s = repo.reopenSession(Number(req.params.id));
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(s);
+});
+
+// Edit a finished/past session's notes (history correction).
+trainingLogRouter.put("/sessions/:id/notes", (req, res) => {
+  const s = repo.updateSessionNotes(Number(req.params.id), (req.body ?? {}).notes ?? null);
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(s);
+});
+
+// Optional per-session feedback — the human side of autoregulation. A missing
+// session for the date is a normal "not yet" state, so this returns null rather
+// than throwing. Values are clamped in the repo.
+trainingLogRouter.post("/sessions/:date/feedback", (req, res) => {
+  const b = req.body ?? {};
+  try {
+    res.json(repo.setSessionFeedback(String(req.params.date), {
+      soreness: b.soreness,
+      performance: b.performance,
+      joint_pain: b.joint_pain,
+    }));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Mark a planned exercise as intentionally skipped for today (or a passed date).
+// Designed 200 + ok:false when there is no matching open session / plan item.
+trainingLogRouter.post("/sessions/skip", (req, res) => {
+  try {
+    const b = req.body ?? {};
+    if (!b.exercise || !String(b.exercise).trim()) return res.status(400).json({ error: "exercise required" });
+    res.json(repo.skipExercise(String(b.exercise), b.date ? String(b.date) : undefined));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+trainingLogRouter.delete("/sessions/skip", (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const exercise = String(b.exercise ?? req.query.exercise ?? "").trim();
+    if (!exercise) return res.status(400).json({ error: "exercise required" });
+    const date = b.date ?? req.query.date;
+    res.json(repo.unskipExercise(String(exercise), date ? String(date) : undefined));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+trainingLogRouter.post("/sets", (req, res) => {
+  try {
+    const b = req.body ?? {};
+    if (!b.exercise) return res.status(400).json({ error: "exercise is required" });
+    res.json(repo.logSetByName(b));
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+trainingLogRouter.delete("/sets/:id", (req, res) => res.json(repo.deleteSet(Number(req.params.id))));
+
+trainingLogRouter.put("/sets/:id", (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const updated = repo.updateSet(Number(req.params.id), {
+      weight: b.weight,
+      reps: b.reps,
+      rir: b.rir,
+      duration_sec: b.duration_sec,
+      note: b.note,
+    });
+    if (!updated) return res.status(404).json({ error: "not found" });
+    res.json(updated);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+trainingLogRouter.get("/progress/:exercise", (req, res) =>
+  res.json(repo.getProgress(decodeURIComponent(req.params.exercise)))
+);
+
+// ---- activities (free text or structured) ----
+trainingLogRouter.post("/activities", (req, res) => {
+  const b = req.body ?? {};
+  if (!b.text && !b.type) return res.status(400).json({ error: "text or type required" });
+  res.json(repo.addActivity(b));
+});
+
+trainingLogRouter.get("/activities", (req, res) =>
+  res.json(repo.listActivities(req.query.limit ? Number(req.query.limit) : 20))
+);
+
+// The unified "Lately" feed: finished strength sessions + cardio activities merged,
+// newest-first, with the real Garmin start time + body-reaction detail folded in.
+trainingLogRouter.get("/recent-training", (req, res) =>
+  res.json(repo.recentTraining(req.query.limit ? Number(req.query.limit) : 6))
+);
+
+// Single activity row (frontend polls this to watch enrichment_status).
+trainingLogRouter.get("/activities/:id", (req, res) => {
+  const a = repo.getActivity(Number(req.params.id));
+  if (!a) return res.status(404).json({ error: "not found" });
+  res.json(a);
+});
+
+trainingLogRouter.get("/stats", (_req, res) => res.json(repo.getWeeklyStats()));
+
+// Endurance PRs (v35): best efforts from the logged cardio (longest distance /
+// duration + fastest pace at standard distances). ?type=run|ride filters. Plain
+// numbers, never a score. The strength analogue is the est-1RM in /progress.
+trainingLogRouter.get("/endurance-prs", (req, res) =>
+  res.json(repo.getEndurancePRs(req.query.type != null ? String(req.query.type) : undefined))
+);
+
+// Run compliance (closing the runner loop): prescribed plan cardio vs this week's
+// logged efforts, in plain words ("32 of 40 km this week"). Never a 0-100 score.
+trainingLogRouter.get("/run-compliance", (_req, res) => res.json(repo.getRunCompliance()));
+
+// The day's logged cardio efforts (hydrated with Garmin zones/pace). [] when none.
+trainingLogRouter.get("/cardio", (req, res) =>
+  res.json(repo.getCardioForDate(req.query.date != null ? String(req.query.date) : localToday()))
+);
+
+// The endurance OBJECTIVE (v37), computed (race timing/phase derived). null = unset.
+// SET it via PUT /api/profile { endurance_goal: {…} } (or null to clear).
+trainingLogRouter.get("/endurance-goal", (_req, res) => res.json(repo.getEnduranceGoal()));
+
+trainingLogRouter.get("/volume", (req, res) => res.json(repo.getVolumeByMuscle(Number(req.query.days) || 30)));
+
+trainingLogRouter.get("/calendar", (req, res) => res.json(repo.getTrainingCalendar(Number(req.query.days) || 84)));

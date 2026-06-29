@@ -25,21 +25,21 @@
       "name": "Today's workout",
       "short_name": "Today",
       "description": "Log today's sets",
-      "url": "/?tab=today&source=shortcut",
+      "url": "/app/today?source=shortcut",
       "icons": [{ "src": "/icons/icon-192.v2.png", "sizes": "192x192" }]
     },
     {
       "name": "Ask the coach",
       "short_name": "Chat",
       "description": "Chat with your coaching agent",
-      "url": "/?tab=chat&source=shortcut",
+      "url": "/app/chat?source=shortcut",
       "icons": [{ "src": "/icons/icon-192.v2.png", "sizes": "192x192" }]
     },
     {
       "name": "Progress",
       "short_name": "Progress",
       "description": "Volume, PRs and trends",
-      "url": "/?tab=progress&source=shortcut",
+      "url": "/app/progress/sessions?source=shortcut",
       "icons": [{ "src": "/icons/icon-192.v2.png", "sizes": "192x192" }]
     }
   ],

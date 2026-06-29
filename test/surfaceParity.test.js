@@ -1,4 +1,4 @@
-// Surface parity — the two protocol surfaces (REST + src/mcp.ts MCP) are
+// Surface parity — the two protocol surfaces (REST + MCP tool modules) are
 // both thin adapters over the same src/repo.ts. The most common drift in this design
 // is adding a capability to one surface and forgetting the other.
 //
@@ -18,6 +18,26 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
+const MCP_SOURCE_FILES = [
+  "src/mcp.ts",
+  "src/surfaces/mcp/chat.ts",
+  "src/surfaces/mcp/connected-brain.ts",
+  "src/surfaces/mcp/daily-driver.ts",
+  "src/surfaces/mcp/day-coach.ts",
+  "src/surfaces/mcp/garmin.ts",
+  "src/surfaces/mcp/health-metrics.ts",
+  "src/surfaces/mcp/health-records.ts",
+  "src/surfaces/mcp/memory-learning.ts",
+  "src/surfaces/mcp/nutrition.ts",
+  "src/surfaces/mcp/operator.ts",
+  "src/surfaces/mcp/person.ts",
+  "src/surfaces/mcp/person-context.ts",
+  "src/surfaces/mcp/plan-exercises.ts",
+  "src/surfaces/mcp/program.ts",
+  "src/surfaces/mcp/system.ts",
+  "src/surfaces/mcp/training-log.ts",
+  "src/surfaces/mcp/training-status.ts",
+];
 
 // Normalize a path segment / noun to a comparable token: drop separators, lowercase,
 // and singularize (activities→activity, meal-plans→mealplan, bodies→body).
@@ -44,17 +64,36 @@ function addRouteTokens(tokens, src, receiver = "api", prefix = "") {
 function restResourceTokens() {
   const tokens = new Set();
   addRouteTokens(tokens, read("src/api.ts"));
+  addRouteTokens(tokens, read("src/routes/agent-jobs.ts"), "agentJobsRouter", "/agent-jobs");
+  addRouteTokens(tokens, read("src/routes/art.ts"), "artRouter");
+  addRouteTokens(tokens, read("src/routes/chat.ts"), "chatRouter", "/chat");
+  addRouteTokens(tokens, read("src/routes/connected-brain.ts"), "connectedBrainRouter");
+  addRouteTokens(tokens, read("src/routes/day-coach.ts"), "dayCoachRouter");
+  addRouteTokens(tokens, read("src/routes/exports.ts"), "exportsRouter");
+  addRouteTokens(tokens, read("src/routes/garmin.ts"), "garminRouter");
   addRouteTokens(tokens, read("src/routes/health-docs.ts"), "healthDocsRouter", "/health-docs");
+  addRouteTokens(tokens, read("src/routes/health-metrics.ts"), "healthMetricsRouter");
+  addRouteTokens(tokens, read("src/routes/memory-learning.ts"), "memoryLearningRouter");
+  addRouteTokens(tokens, read("src/routes/nutrition.ts"), "nutritionRouter");
+  addRouteTokens(tokens, read("src/routes/operator.ts"), "operatorRouter");
+  addRouteTokens(tokens, read("src/routes/person-context.ts"), "personContextRouter");
+  addRouteTokens(tokens, read("src/routes/person.ts"), "personRouter");
+  addRouteTokens(tokens, read("src/routes/plan-exercises.ts"), "planExercisesRouter");
+  addRouteTokens(tokens, read("src/routes/program.ts"), "programRouter");
+  addRouteTokens(tokens, read("src/routes/system.ts"), "systemRouter");
   addRouteTokens(tokens, read("src/routes/today.ts"), "todayRouter");
+  addRouteTokens(tokens, read("src/routes/training-log.ts"), "trainingLogRouter");
   return tokens;
 }
 
 function mcpToolNames() {
-  const src = read("src/mcp.ts");
-  const re = /server\.tool\(\s*"([a-z0-9_]+)"/g;
   const out = [];
-  let m;
-  while ((m = re.exec(src))) out.push(m[1]);
+  for (const file of MCP_SOURCE_FILES) {
+    const re = /server\.tool\(\s*"([a-z0-9_]+)"/g;
+    const src = read(file);
+    let m;
+    while ((m = re.exec(src))) out.push(m[1]);
+  }
   return out;
 }
 
@@ -92,6 +131,7 @@ test("every MCP tool maps to a REST resource (MCP ⊆ REST — surfaces stay in 
   const routeTokens = restResourceTokens();
   const tools = mcpToolNames();
   assert.ok(tools.length > 100, `expected the full MCP tool set, got ${tools.length}`);
+  assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modular registrations");
 
   const orphans = [];
   for (const tool of tools) {

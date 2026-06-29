@@ -29,6 +29,8 @@
     "docs:index": "node scripts/gen-docs.mjs",
     "docs:check": "node scripts/gen-docs.mjs --check",
     "actions:check": "node scripts/check-action-pins.mjs",
+    "typecheck:client": "tsc -p tsconfig.client.json",
+    "public:check": "node scripts/check-public-scripts.mjs",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "pretest": "npm run build",
@@ -36,7 +38,7 @@
     "presmoke": "npm run build",
     "smoke": "node test/smoke.mjs",
     "launch:check": "node scripts/check-launch-safety.mjs",
-    "verify": "npm run docs:check && npm run actions:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
+    "verify": "npm run docs:check && npm run actions:check && npm run typecheck:client && npm run public:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
     "verify:full": "npm run verify && npm run smoke"
   },
   "dependencies": {

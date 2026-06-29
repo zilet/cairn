@@ -3,7 +3,7 @@
 // drift. Run with `npm run docs:index`. Outputs docs/API.md and docs/MCP-TOOLS.md.
 //
 // This is a deliberately simple text scraper (no TS parser dependency): it reads
-// src/api.ts / src/routes/* route registrations and src/mcp.ts server.tool()
+// src/api.ts / src/routes/* route registrations and MCP server.tool()
 // definitions. If a route/tool stops showing up, the registration shape changed
 // — re-check here.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -77,8 +77,25 @@ const esc = (s) => String(s ?? "").replace(/\|/g, "\\|");
 // ---- API.md ----
 const routes = [
   ...parseApiRoutes(read("src/api.ts")),
+  ...parseApiRoutes(read("src/routes/agent-jobs.ts"), { receiver: "agentJobsRouter", prefix: "/agent-jobs" }),
+  ...parseApiRoutes(read("src/routes/art.ts"), { receiver: "artRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/chat.ts"), { receiver: "chatRouter", prefix: "/chat" }),
+  ...parseApiRoutes(read("src/routes/connected-brain.ts"), { receiver: "connectedBrainRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/day-coach.ts"), { receiver: "dayCoachRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/exports.ts"), { receiver: "exportsRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/garmin.ts"), { receiver: "garminRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/health-docs.ts"), { receiver: "healthDocsRouter", prefix: "/health-docs" }),
+  ...parseApiRoutes(read("src/routes/health-metrics.ts"), { receiver: "healthMetricsRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/memory-learning.ts"), { receiver: "memoryLearningRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/nutrition.ts"), { receiver: "nutritionRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/operator.ts"), { receiver: "operatorRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/person-context.ts"), { receiver: "personContextRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/person.ts"), { receiver: "personRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/plan-exercises.ts"), { receiver: "planExercisesRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/program.ts"), { receiver: "programRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/system.ts"), { receiver: "systemRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/today.ts"), { receiver: "todayRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/training-log.ts"), { receiver: "trainingLogRouter", prefix: "" }),
 ];
 const groups = new Map();
 for (const r of routes) {
@@ -110,10 +127,30 @@ api += `---\n\n*The MCP surface mirrors most of these operations — see [MCP-TO
 emit("docs/API.md", api);
 
 // ---- MCP-TOOLS.md ----
-const tools = parseMcpTools(read("src/mcp.ts")).sort((a, b) => a.name.localeCompare(b.name));
+const mcpSources = [
+  "src/mcp.ts",
+  "src/surfaces/mcp/chat.ts",
+  "src/surfaces/mcp/connected-brain.ts",
+  "src/surfaces/mcp/daily-driver.ts",
+  "src/surfaces/mcp/day-coach.ts",
+  "src/surfaces/mcp/garmin.ts",
+  "src/surfaces/mcp/health-metrics.ts",
+  "src/surfaces/mcp/health-records.ts",
+  "src/surfaces/mcp/memory-learning.ts",
+  "src/surfaces/mcp/nutrition.ts",
+  "src/surfaces/mcp/operator.ts",
+  "src/surfaces/mcp/person.ts",
+  "src/surfaces/mcp/person-context.ts",
+  "src/surfaces/mcp/plan-exercises.ts",
+  "src/surfaces/mcp/program.ts",
+  "src/surfaces/mcp/system.ts",
+  "src/surfaces/mcp/training-log.ts",
+  "src/surfaces/mcp/training-status.ts",
+];
+const tools = mcpSources.flatMap((file) => parseMcpTools(read(file))).sort((a, b) => a.name.localeCompare(b.name));
 let mcp = `# Cairn MCP tool index
 
-> Generated from \`src/mcp.ts\` by \`scripts/gen-docs.mjs\` — run \`npm run docs:index\` to refresh. Do not edit by hand.
+> Generated from \`src/mcp.ts\` and \`src/surfaces/mcp/*\` by \`scripts/gen-docs.mjs\` — run \`npm run docs:index\` to refresh. Do not edit by hand.
 
 Cairn serves an MCP server at **\`/mcp\`** (Streamable HTTP). These tools are thin
 wrappers over the same \`src/repo.ts\` layer the REST API uses. When \`CAIRN_AUTH_TOKEN\`

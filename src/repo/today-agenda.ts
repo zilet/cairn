@@ -29,7 +29,7 @@
 import { getDayIntake } from "./nutrition.js";
 import { localDateISO } from "./shared.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
-import { programAdjustments } from "./progression.js";
+import { programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { getRunCompliance, getWeeklyStats } from "./sessions.js";
 import { listUnreconciledGarminStrength } from "./activities.js";
 import { healthFocus } from "./propagation.js";
@@ -79,6 +79,12 @@ function safe(fn: () => TodayAgendaCandidate | null): TodayAgendaCandidate | nul
   } catch {
     return null;
   }
+}
+
+function weekStartFor(date: string): string {
+  const d = new Date(String(date || localDateISO()).slice(0, 10) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
 }
 
 // ---- The Brief: ALWAYS the hero (the day's judgment leads, §5). It is rendered
@@ -204,14 +210,14 @@ function standingMomentumCandidate(_date: string): TodayAgendaCandidate | null {
 // lift to push / deload, a group that's due, a missing pattern). Moderate, scaled
 // by how actionable the set is: a deload (back off, recover) or a missing-pattern
 // gap is more pressing than a steady earned overload. Reads programAdjustments. ----
-function adjustmentsCandidate(): TodayAgendaCandidate | null {
+function adjustmentsCandidate(date: string): TodayAgendaCandidate | null {
   // Adjustments adapt an ACTIVE plan — on a blank slate (no plan yet) there's
   // nothing to evolve, and the volume landmarks would read every group as a "gap",
   // which would nag a brand-new user about "missing" work. Gate on having a plan
   // (mirrors weekAheadCandidate) — calm by default; no plan → silent.
-  const stats: any = getWeeklyStats();
+  const stats: any = getWeeklyStats(date);
   if ((Number(stats?.week_planned) || 0) <= 0) return null;
-  const rows = programAdjustments();
+  const rows = programAdjustments(programBalance(2, date), recentMuscleLoad(2, date));
   if (!Array.isArray(rows) || !rows.length) return null;
   // A deload or a true gap (not a recovering / already-programmed group) lifts the
   // urgency a little above a routine progression digest.
@@ -267,8 +273,8 @@ function insightCandidate(): TodayAgendaCandidate | null {
 // days. A forward look, never urgent — low priority so it sinks below anything
 // about today. There's no cheap repo read for the agentic week-ahead, so we gate it
 // on having a plan to sketch from (getWeeklyStats carries week_planned). ----
-function weekAheadCandidate(): TodayAgendaCandidate | null {
-  const stats: any = getWeeklyStats();
+function weekAheadCandidate(date: string): TodayAgendaCandidate | null {
+  const stats: any = getWeeklyStats(date);
   const planned = Number(stats?.week_planned) || 0;
   if (planned <= 0) return null; // no plan → nothing to sketch a week from
   return {
@@ -283,8 +289,8 @@ function weekAheadCandidate(): TodayAgendaCandidate | null {
 // ---- run-compliance / endurance: this week's prescribed-vs-actual running, when a
 // run is actually programmed. Low — a quiet trajectory read, not a today decision.
 // Reads getRunCompliance (mirrors the Endurance compliance line). ----
-function runComplianceCandidate(): TodayAgendaCandidate | null {
-  const rc: any = getRunCompliance();
+function runComplianceCandidate(date: string): TodayAgendaCandidate | null {
+  const rc: any = getRunCompliance(weekStartFor(date));
   const prescribed = Number(rc?.prescribed_sessions) || 0;
   if (prescribed <= 0) return null; // no runs prescribed → nothing to comply with
   return {
@@ -303,8 +309,8 @@ function runComplianceCandidate(): TodayAgendaCandidate | null {
 // The lowest steady surface — always-there context, never something that needs
 // attention. It exists whenever there's recent training; gate it on the week having
 // any logged activity so a brand-new install's Today stays empty. ----
-function latelyCandidate(): TodayAgendaCandidate | null {
-  const stats: any = getWeeklyStats();
+function latelyCandidate(date: string): TodayAgendaCandidate | null {
+  const stats: any = getWeeklyStats(date);
   const did = (Number(stats?.week_done) || 0) + (Number(stats?.week_cardio) || 0);
   if (did <= 0) return null;
   return {
@@ -332,12 +338,12 @@ export function todayAgenda(date?: string): TodayAgenda {
   add(safe(() => reconcileCandidate()));
   add(safe(() => planDraftCandidate()));
   add(safe(() => healthCandidate()));
-  add(safe(() => adjustmentsCandidate()));
+  add(safe(() => adjustmentsCandidate(d)));
   add(safe(() => weeklyCandidate()));
   add(safe(() => insightCandidate()));
-  add(safe(() => weekAheadCandidate()));
-  add(safe(() => runComplianceCandidate()));
-  add(safe(() => latelyCandidate()));
+  add(safe(() => weekAheadCandidate(d)));
+  add(safe(() => runComplianceCandidate(d)));
+  add(safe(() => latelyCandidate(d)));
 
   // The two NEW Era-2 candidate producers (sibling-built). They return a finished
   // candidate or null; still wrapped in safe() so a throw never breaks the agenda

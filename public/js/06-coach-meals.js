@@ -2,6 +2,7 @@
 // ---------- Coach ----------
 async function renderCoach() {
   headerTitle.textContent = "Coach";
+  state.planSeg = "coach";
   view.innerHTML = segSkeleton("coach", planSeg(), 2);
   const agents = await api("/agents");
   const proposals = await api("/proposals?limit=10");
@@ -1007,6 +1008,7 @@ function reconnectRecipe(job) {
 // the daily log is always one header tap away.
 function renderFoodJournal() {
   headerTitle.textContent = "Plan";
+  state.planSeg = "food";
   const token = ++pollToken;
   view.innerHTML = segBar("food", planSeg()) + `<section class="meal-energy food-journal" id="mealEnergy">
       <div id="dayFuelSlot" class="dayfuel-slot">${loadingState("Reading today's food…")}</div>
@@ -1030,6 +1032,7 @@ function rerenderFoodSurface() {
 // rare enough that we just reuse whatever the peek/last fetch gave us per paint).
 async function renderMeals() {
   headerTitle.textContent = "Plan";
+  state.planSeg = "meals";
   const token = ++pollToken;
   const peek = peekCached(MEALS_KEY);
   if (!peek) view.innerHTML = segSkeleton("meals", planSeg(), 3); // cold: skeleton-first
@@ -1224,7 +1227,8 @@ async function loadDayFuel(token) {
   const slot = view.querySelector("#dayFuelSlot");
   if (!slot) return;
   let d = null;
-  try { d = await api("/nutrition/day"); } catch { slot.innerHTML = ""; return; }
+  const qs = state.logDate ? `?date=${encodeURIComponent(state.logDate)}` : "";
+  try { d = await api("/nutrition/day" + qs); } catch { slot.innerHTML = ""; return; }
   if (token !== pollToken || !view.querySelector("#dayFuelSlot")) return;
   if (!d || typeof d !== "object") { slot.innerHTML = ""; return; }
   state._dayFuel = d;

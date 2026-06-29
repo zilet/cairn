@@ -19,6 +19,7 @@ import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, heal
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
+import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
 // the existing coach↔intelligence import; resolved at call time, never at module init).
 import { reactionModelForCoach } from "./reaction-model.js";
@@ -82,7 +83,7 @@ function healthReviewForCoach() {
   };
 }
 
-function dayIntakeForCoach(date = localDateISO()) {
+function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
   const d: any = getDayIntake(date);
   const entries = (Array.isArray(d?.entries) ? d.entries : []).slice(0, 12).map((e: any) => ({
     id: e.id,
@@ -239,7 +240,7 @@ export function trainingSignals(recent?: any[]): { progression: ProgressionSigna
 // load-bearing signal (per-lift status/trend/action + stall tells, the volume
 // bands, the mesocycle position + endurance read + the adaptations list) without
 // the verbose internals. Keeps the prompt from exploding on a big training log.
-function programStateForCoach(st: ProgramState) {
+function programStateForCoach(st: ProgramState): CoachProgramState {
   return {
     headline: st.headline,
     discipline: st.discipline,
@@ -279,7 +280,8 @@ function nextPlanDayNumber(read: any): number | null {
   return days[0].day_number;
 }
 
-export function getCoachContext() {
+export function getCoachContext(): CoachContext {
+  const today = localDateISO();
   // Compute the Garmin summary and the unified recovery view ONCE, then thread
   // them through the recovery + day_read keys so a single context build doesn't
   // fan out into getGarminCoachSummary three times.
@@ -289,11 +291,11 @@ export function getCoachContext() {
   const profile = getProfile() as any;
   // Compute the day-read ONCE so both day_read and the progression digest below
   // reference the same read (the progression is for the day this read points at).
-  const dayReadView = getCachedDayRead(localDateISO()) ?? dayRead(undefined, recovery);
+  const dayReadView = getCachedDayRead(today) ?? dayRead(today, recovery);
   // Compute the volume balance + acute load ONCE and thread them into
   // programAdjustments — which would otherwise recompute both from scratch.
-  const programBal = programBalance();
-  const recentLoad = recentMuscleLoad(2);
+  const programBal = programBalance(2, today);
+  const recentLoad = recentMuscleLoad(2, today);
   // Compute the deterministic program-state ONCE and share it: the bounded coach
   // view AND the performance/capacity read both read from the same snapshot (and
   // the same recovery), so a single context build never computes program-state twice.
@@ -308,17 +310,17 @@ export function getCoachContext() {
   // Compute the run plan / DEXA targeting / test-week ONCE here, so both the context
   // keys below AND the programAdjustments digest reuse them (no double compute —
   // dexaTargeting reads healthStanding(), the heaviest of the three).
-  const runPlanView = (() => { try { return weeklyRunPlan(localDateISO(), { programState: fullProgramState, recovery, block: activeBlock, zones: runZonesView ?? undefined }); } catch { return null; } })();
+  const runPlanView = (() => { try { return weeklyRunPlan(today, { programState: fullProgramState, recovery, block: activeBlock, zones: runZonesView ?? undefined }); } catch { return null; } })();
   const dexaTargetingView = (() => { try { return dexaTargeting({ profile }); } catch { return { available: false, targets: [], lead: null, next_dexa_focus: null }; } })();
-  const testWeekView = (() => { try { return testWeekDue(localDateISO(), { programState: fullProgramState, block: activeBlock }); } catch { return null; } })();
+  const testWeekView = (() => { try { return testWeekDue(today, { programState: fullProgramState, block: activeBlock }); } catch { return null; } })();
   // Hoist the domain reads the CONDUCTOR arbitrates so they're computed ONCE here and
   // shared by both the context keys below and coachingFocus() (no double compute).
   const healthFocusView = healthFocus();
-  const performanceView = performanceStanding(localDateISO(), { programState: fullProgramState, recovery, balance: programBal });
+  const performanceView = performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal });
   const programAdjustmentsView = programAdjustments(programBal, recentLoad, { runPlan: runPlanView, dexa: dexaTargetingView, testWeek: testWeekView }).slice(0, 6);
-  const groupsTrajectoryView = (() => { try { return muscleGroupTrajectory(localDateISO(), { programState: fullProgramState }); } catch { return null; } })();
-  const runVarietyView = (() => { try { return runVarietyRead(localDateISO()); } catch { return null; } })();
-  const enduranceTestsView = (() => { try { return enduranceTestsDue(localDateISO()); } catch { return []; } })();
+  const groupsTrajectoryView = (() => { try { return muscleGroupTrajectory(today, { programState: fullProgramState }); } catch { return null; } })();
+  const runVarietyView = (() => { try { return runVarietyRead(today); } catch { return null; } })();
+  const enduranceTestsView = (() => { try { return enduranceTestsDue(today); } catch { return []; } })();
   const trajectoryView = getTrajectory();
   // THE CONDUCTOR (the whole-athlete analog of healthFocus): arbitrate every domain
   // read into ONE sequenced focus — a single lead lever, 1-2 parallel levers, an

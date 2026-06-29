@@ -1,6 +1,7 @@
 import * as repo from "./repo.js";
 import { extractJson } from "./agents.js";
 import { todayISO } from "./db.js";
+import type { CoachContext, PartialCoachContext } from "./repo/coach-context.js";
 
 const PLAN_SCHEMA = `{
   "summary": "one or two sentences on the overall adjustment",
@@ -679,8 +680,8 @@ export const COACHING_STANCE = `COACH LIKE ONE PERSON, NOT A DASHBOARD:
 // later + connections + the batched retest) instead of a flood of co-equal blocks. The
 // `brief` form (for the day-read) shows only the lead line. Returns "" when there's no
 // focus (a thin athlete) so it degrades exactly like the other render* helpers.
-export function renderCoachingFocus(ctx: any, opts: { brief?: boolean } = {}): string {
-  const cf = ctx?.coaching_focus;
+export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: boolean } = {}): string {
+  const cf = ctx?.coaching_focus as any;
   if (!cf || !cf.available || !cf.lead) return "";
   const lead = cf.lead;
   if (opts.brief) {
@@ -696,9 +697,9 @@ export function renderCoachingFocus(ctx: any, opts: { brief?: boolean } = {}): s
   return `${lines.join("\n")}\n\n`;
 }
 
-export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): string {
-  const st = ctx?.program_state;
-  const bal = ctx?.program_balance;
+export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boolean } = {}): string {
+  const st = ctx?.program_state as any;
+  const bal = ctx?.program_balance as any;
   const adj = Array.isArray(ctx?.program_adjustments) ? ctx.program_adjustments : [];
   if (!st && !bal && !adj.length) return "";
   const lines: string[] = [];
@@ -711,7 +712,7 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
   // plan AROUND these, never recommend them for the next session even when the
   // weekly ledger says they're due. This is the connected read that keeps the
   // next-day pick honest (legs are toast after a 3 h ride → train something fresh).
-  const recentLoad = Array.isArray(ctx?.recent_load) ? ctx.recent_load : [];
+  const recentLoad: any[] = Array.isArray(ctx?.recent_load) ? ctx.recent_load as any[] : [];
   const heavy = recentLoad.filter((r: any) => r?.heavy);
   const recoveringSet = new Set<string>(heavy.map((r: any) => String(r.group)));
   let recoveringLine = "";
@@ -791,8 +792,8 @@ export function renderProgramState(ctx: any, opts: { brief?: boolean } = {}): st
 // development — bring laggards up, fix imbalances, re-measure stale lifts, rotate a
 // movement. Plain words / percentile-level reference reads, never a 0-100 score.
 // Returns "" when there's nothing benchmarked yet (quiet by default).
-export function renderPerformance(ctx: any, opts: { brief?: boolean } = {}): string {
-  const p = ctx?.performance;
+export function renderPerformance(ctx: PartialCoachContext, opts: { brief?: boolean } = {}): string {
+  const p = ctx?.performance as any;
   if (!p) return "";
   const caps = Array.isArray(p.capacities) ? p.capacities : [];
   const imb = Array.isArray(p.imbalances) ? p.imbalances : [];
@@ -848,8 +849,8 @@ export function renderPerformance(ctx: any, opts: { brief?: boolean } = {}): str
 // (max-HR + resting HR), so the agent prescribes runs to an actual pulse instead
 // of a vague "easy". Quiet by default — "" when no zones are available (no age +
 // no Garmin HR). Plain words + concrete bpm, never a score.
-export function renderRunZones(ctx: any): string {
-  const z = ctx?.run_zones;
+export function renderRunZones(ctx: PartialCoachContext): string {
+  const z = ctx?.run_zones as any;
   if (!z || !z.available || !Array.isArray(z.zones) || !z.zones.length) return "";
   const bands = z.zones
     .map((b: any) => `${b.zone} ${b.label} ${b.low_bpm}–${b.high_bpm} bpm (${b.feel})`)
@@ -864,9 +865,9 @@ export function renderRunZones(ctx: any): string {
 // sibling running reads (mono-stimulus VARIETY nudge + a due endurance RE-TEST)
 // so they reach every running prompt, not just the conductor's terse deferral.
 // Quiet by default — "" when there's nothing running to say.
-export function renderRunPlan(ctx: any): string {
-  const rp = ctx?.run_plan;
-  const variety = ctx?.run_variety;
+export function renderRunPlan(ctx: PartialCoachContext): string {
+  const rp = ctx?.run_plan as any;
+  const variety = ctx?.run_variety as any;
   const tests = Array.isArray(ctx?.endurance_tests) ? ctx.endurance_tests : [];
   const lines: string[] = [];
   if (rp?.available && Array.isArray(rp.runs) && rp.runs.length) {
@@ -904,9 +905,9 @@ export function renderRunPlan(ctx: any): string {
 // athlete's own mental model), plus — when a group is stalling — the MENU of
 // same-pattern variations to rotate in. Optionally a short TEST WEEK line when a
 // cadenced re-test is due. Quiet by default — "" when nothing's logged to read.
-export function renderMuscleGroups(ctx: any): string {
-  const gt = ctx?.groups_trajectory;
-  const tw = ctx?.test_week;
+export function renderMuscleGroups(ctx: PartialCoachContext): string {
+  const gt = ctx?.groups_trajectory as any;
+  const tw = ctx?.test_week as any;
   const lines: string[] = [];
   if (gt?.available && Array.isArray(gt.groups) && gt.groups.length) {
     lines.push(`MUSCLE GROUPS — ADVANCING vs STALLING (the athlete thinks in groups; plain words, no scores): ${gt.headline}`);
@@ -931,8 +932,8 @@ export function renderMuscleGroups(ctx: any): string {
 // training targets into the strength prompts; 'nutrition' folds the visceral/central
 // fat target into the meal prompts. BMD/visceral stay INFORMATIONAL (clinician-
 // framed), never a score. Quiet by default — "" with no DEXA / no relevant target.
-export function renderDexaTargeting(ctx: any, focus: "training" | "nutrition"): string {
-  const dt = ctx?.dexa_targeting;
+export function renderDexaTargeting(ctx: PartialCoachContext, focus: "training" | "nutrition"): string {
+  const dt = ctx?.dexa_targeting as any;
   if (!dt || !dt.available || !Array.isArray(dt.targets) || !dt.targets.length) return "";
   const want = dt.targets.filter((t: any) => t.domain === focus);
   if (!want.length) return "";
@@ -2162,7 +2163,7 @@ function debriefFacts(date: string): string {
   return lines.length ? `\nDEBRIEF FACTS (deterministic — weave only what's true, drop the rest):\n${lines.map((l) => `- ${l}`).join("\n")}` : "";
 }
 
-export function buildDayReadPrompt(ctx?: any, opts: { override?: string; date?: string } = {}): string {
+export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string; date?: string } = {}): string {
   const context = ctx ?? repo.getCoachContext();
   const baseline = repo.dayRead(opts.date);
   const overrideBlock = opts.override?.trim()
@@ -2267,7 +2268,7 @@ const SESSION_SUGGEST_SCHEMA = `{
 // athlete's constraints (a time budget, an injury, available equipment) and the
 // day read, returning a session SUGGESTION for review (you drive — nothing is
 // applied). opts carry the constraints the launchpad chips pass through.
-export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
+export function buildSessionPrompt(ctx?: CoachContext, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
   const context = ctx ?? repo.getCoachContext();
   const read = repo.dayRead(opts.date);
   const wants: string[] = [];
@@ -2284,7 +2285,7 @@ export function buildSessionPrompt(ctx?: any, opts: { minutes?: number; equipmen
     const injuryAreas = activeInjuryAreas(context);
     const seen = new Set<string>();
     const lines: string[] = [];
-    for (const day of Array.isArray(context?.plan) ? context.plan : []) {
+    for (const day of Array.isArray(context?.plan) ? context.plan as any[] : []) {
       for (const it of Array.isArray(day?.items) ? day.items : []) {
         const name = it?.exercise;
         if (!name || seen.has(name)) continue;
@@ -2521,8 +2522,9 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
   const expBlock = exp.tdee != null
     ? `\nDERIVED EXPENDITURE (real — from logged intake minus the weighted weight trend; confidence ${exp.confidence}): TDEE ≈ ${exp.tdee} kcal/day; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. Anchor daily_kcal to goal.recommended, but SANITY-CHECK it against this measured expenditure — if they diverge a lot, trust the lean-safe target implied by this real TDEE over a stale goal number.\n`
     : "";
-  const fatigue = ctx?.training_signals?.autoregulation?.note
-    ? `\nRECOVERY DEBT (recent training feedback): ${ctx.training_signals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
+  const trainingSignals = ctx.training_signals as any;
+  const fatigue = trainingSignals?.autoregulation?.note
+    ? `\nRECOVERY DEBT (recent training feedback): ${trainingSignals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
     : "";
   return `You are a super-healthy, goal-aware, longevity-focused nutrition coach building a 7-day
 meal plan that fuels the athlete's CURRENT goal (see GOAL MODE below) while eating for healthspan. The
@@ -2589,7 +2591,7 @@ const NUTRITION_CHECKIN_SCHEMA = `{
 // this prompt is the judgement layer, and the loop is adherence-NEUTRAL: a thin
 // logging week is a reason for LESS confidence, never a target cut and never a
 // scold. Macro floors: protect protein first, then fat, then carbs flex.
-export function buildNutritionCheckinPrompt(ctx?: any, opts: { windowDays?: number } = {}): string {
+export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDays?: number } = {}): string {
   const context = ctx ?? repo.getCoachContext();
   const exp = repo.estimateExpenditure(opts.windowDays ?? 21);
   const goal: any = (context as any)?.goal ?? repo.computeGoalCheck();
@@ -2859,7 +2861,7 @@ EXERCISE NAMES (${items.length}):
 ${list}`;
 }
 
-export function buildInsightPrompt(ctx?: any, recent: string[] = []): string {
+export function buildInsightPrompt(ctx?: CoachContext, recent: string[] = []): string {
   const context = ctx ?? repo.getCoachContext();
   const recentBlock = recent.length
     ? `\nALREADY SAID (do NOT repeat or reword any of these — find something genuinely new, or return found:false):\n${recent.map((r) => `  - ${r}`).join("\n")}\n`
@@ -2910,7 +2912,7 @@ const WEEKLY_READ_SCHEMA = `{
 // as an insight with kind:'weekly_read' so the Brief can surface it like any
 // other quiet line. Same calm voice as the cross-domain pass; honest continuity
 // (six steady weeks is "nice", a light week is fine), never streak pressure.
-export function buildWeeklyReadPrompt(ctx?: any): string {
+export function buildWeeklyReadPrompt(ctx?: CoachContext): string {
   const context = ctx ?? repo.getCoachContext();
   return `You are Cairn, the athlete's calm health & training buddy. Prepare a short standing read of
 how THIS WEEK actually went and the ONE change — if any — worth considering next week. It waits in the
@@ -2988,7 +2990,7 @@ function renderHealthDrivers(ctx: any): string {
   return `\nLIFESTYLE LEVERS (NOT lab markers — so absent from the tiering above — but each moves MANY markers at once; connect them: leaner body composition lowers ApoB + triglycerides, improves insulin sensitivity AND raises testosterone; recovery/sleep shapes inflammation + hormones):\n${bits.map((b) => `  - ${b}`).join("\n")}\n`;
 }
 
-export function buildHealthSynthesisPrompt(ctx?: any): string {
+export function buildHealthSynthesisPrompt(ctx?: CoachContext): string {
   const context = ctx ?? repo.getCoachContext();
   const focus = repo.healthFocus();
   return `You are Cairn — the athlete's coach who happens to read bloodwork like a preventive-medicine
@@ -3055,7 +3057,7 @@ const WEEK_AHEAD_SCHEMA = `{
   "summary": "<one calm sentence: the shape of the week and the single thing that matters most>"
 }`;
 
-export function buildWeekAheadPrompt(ctx?: any): string {
+export function buildWeekAheadPrompt(ctx?: CoachContext): string {
   const context = ctx ?? repo.getCoachContext();
   const todayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
   return `You are Cairn, the athlete's calm training buddy. Sketch the SHAPE of the next several days — a

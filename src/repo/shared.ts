@@ -55,6 +55,19 @@ function zonedMonthDay(d: Date, zone?: string): string {
 const isoDate = (p: { year: number; month: number; day: number }) =>
   `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
 
+export function addDaysISO(iso: string, days: number): string | null {
+  const t = Date.parse(`${String(iso).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + days * 864e5).toISOString().slice(0, 10);
+}
+
+export function daysBetweenISO(laterISO: string, earlierISO: string): number | null {
+  const later = Date.parse(`${String(laterISO).slice(0, 10)}T00:00:00Z`);
+  const earlier = Date.parse(`${String(earlierISO).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(later) || !Number.isFinite(earlier)) return null;
+  return Math.round((later - earlier) / 864e5);
+}
+
 // The local calendar date (YYYY-MM-DD). Frames in the active device zone when one
 // is in scope (X-Cairn-TZ), else the server's own zone — so a meal logged at 9 PM
 // counts toward the right day at home AND abroad. The day_reads cache is keyed by

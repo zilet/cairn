@@ -33,8 +33,12 @@ const serverEntry = path.join(root, "dist", "server.js");
 const requestedPort = process.env.SMOKE_PORT ? Number(process.env.SMOKE_PORT) : 0;
 const usedPorts = new Set();
 const AUTH_TOKEN = "cairn-smoke-auth-token";
+const RANDOM_PORT_MIN = 18000;
+const RANDOM_PORT_SPAN = 7000; // 18000-24999: avoids upper loopback ports blocked by some sandboxes.
 
 let passed = 0;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function ok(cond, label, detail) {
   if (cond) {
     passed++;
@@ -53,7 +57,7 @@ function pickPort(offset = 0, attempt = 0) {
     return port;
   }
   for (let i = 0; i < 100; i++) {
-    const port = 18000 + Math.floor(Math.random() * 10000);
+    const port = RANDOM_PORT_MIN + Math.floor(Math.random() * RANDOM_PORT_SPAN);
     if (!usedPorts.has(port)) {
       usedPorts.add(port);
       return port;
@@ -72,22 +76,20 @@ async function getJson(base, p, init) {
 // Poll GET /api/health until the server is listening (or give up).
 async function waitForHealth(ctx, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
+  let lastFetchError = "";
   while (Date.now() < deadline) {
     const log = ctx.serverLog();
     if (/EADDRINUSE|EACCES/.test(log)) return { ok: false, retryable: true };
-    if (log.includes("Cairn running:")) {
-      await new Promise((r) => setTimeout(r, 250));
-      return { ok: true };
-    }
     try {
       const res = await fetch(`${ctx.base}/api/health`);
       if (res.ok) return { ok: true };
-    } catch {
+    } catch (error) {
+      lastFetchError = error?.cause?.code || error?.cause?.message || error?.message || String(error);
       // not up yet — keep polling
     }
-    await new Promise((r) => setTimeout(r, 250));
+    await sleep(log.includes("Cairn running:") ? 100 : 250);
   }
-  return { ok: false, retryable: false };
+  return { ok: false, retryable: false, error: lastFetchError };
 }
 
 async function stopServer(ctx) {
@@ -145,7 +147,10 @@ async function startBuiltServer({ label, authToken = "", portOffset = 0 }) {
 
     lastLog = serverLog;
     await stopServer(ctx);
-    if (!ready.retryable) break;
+    if (!ready.retryable) {
+      if (ready.error) lastLog += `\n[smoke] last readiness fetch error: ${ready.error}\n`;
+      break;
+    }
   }
 
   const tail = lastLog.trim() ? `\n--- server output (tail) ---\n${lastLog.split("\n").slice(-20).join("\n")}` : "";

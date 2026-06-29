@@ -19,7 +19,7 @@ import { examplesForGroup, suggestAlternatives } from "./exercise-variations.js"
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { getPlan } from "./plan.js";
 import { type LiftState, getProgramState } from "./program-state.js";
-import { round2_5 } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
 // compute when programAdjustments is called standalone (Today/Progress). The module
 // cycle (progression → run-progression → coach → progression) is resolved at call
@@ -507,9 +507,9 @@ export interface ProgramBalance {
 // against MUSCLE_LANDMARKS. Mobility is EXCLUDED from set-count math (it never
 // inflates the working-set picture). `due` = a group under its low landmark OR
 // not trained in 7 days; `over` = above its high landmark. Plain words only.
-export function programBalance(weeks = 2): ProgramBalance {
-  const today = new Date().toISOString().slice(0, 10);
-  const since = new Date(new Date(today + "T00:00:00Z").getTime() - (weeks * 7 - 1) * 864e5).toISOString().slice(0, 10);
+export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance {
+  const today = String(date || localDateISO()).slice(0, 10);
+  const since = addDaysISO(today, -(weeks * 7 - 1)) ?? today;
 
   const rows = db.prepare(
     `SELECT e.muscle_group AS mg, e.name AS name, s.date AS date
@@ -531,8 +531,7 @@ export function programBalance(weeks = 2): ProgramBalance {
 
   const daysAgo = (iso: string | null): number | null => {
     if (!iso) return null;
-    const t = Date.parse(iso + "T00:00:00Z");
-    return Number.isFinite(t) ? Math.round((Date.parse(today + "T00:00:00Z") - t) / 864e5) : null;
+    return daysBetweenISO(today, iso);
   };
 
   const groups: GroupBalance[] = [];
@@ -642,13 +641,12 @@ export interface RecentLoad {
 // STRENGTH sets (per group) AND recent ENDURANCE sessions (mapped to the regions
 // they fatigue) into one freshness read. `heavy` = a real dose — enough that the
 // muscle wants a day before it's the smart next pick. Best-effort + null-safe.
-export function recentMuscleLoad(days = 2): Map<MuscleGroup, RecentLoad> {
+export function recentMuscleLoad(days = 2, date = localDateISO()): Map<MuscleGroup, RecentLoad> {
   const out = new Map<MuscleGroup, RecentLoad>();
-  const today = new Date().toISOString().slice(0, 10);
-  const since = new Date(new Date(today + "T00:00:00Z").getTime() - (Math.max(1, days) - 1) * 864e5).toISOString().slice(0, 10);
+  const today = String(date || localDateISO()).slice(0, 10);
+  const since = addDaysISO(today, -(Math.max(1, days) - 1)) ?? today;
   const dAgo = (iso: string): number => {
-    const t = Date.parse(String(iso).slice(0, 10) + "T00:00:00Z");
-    return Number.isFinite(t) ? Math.max(0, Math.round((Date.parse(today + "T00:00:00Z") - t) / 864e5)) : 0;
+    return Math.max(0, daysBetweenISO(today, String(iso).slice(0, 10)) ?? 0);
   };
   const bump = (g: MuscleGroup, date: string, heavy: boolean, src: "strength" | "endurance", activity: string | null, detail: string) => {
     const prev = out.get(g);
@@ -1031,7 +1029,7 @@ export function programEvolutionTrigger(
   //     with real training history (else a blank new plan reads everything "due").
   let bal = opts.balance;
   if (bal === undefined) {
-    try { bal = programBalance(); } catch { bal = undefined; }
+    try { bal = programBalance(2, date); } catch { bal = undefined; }
   }
   const dueGroups = [...(Array.isArray(bal?.due) ? bal!.due : [])].sort();
   if (dueGroups.length && (hasHistory || wantsVary.length || twDue)) {

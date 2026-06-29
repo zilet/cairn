@@ -473,8 +473,9 @@ export function getEndurancePRs(type?: string | null): EndurancePRs {
 
 // Compact dashboard: training days + tonnage over the last 7 days, plus a
 // consistency streak (consecutive days with a logged session or activity).
-export function getWeeklyStats() {
-  const today = localDateISO();
+export function getWeeklyStats(date?: string) {
+  const requested = String(date || "").slice(0, 10);
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : localDateISO();
   // Anchor the rolling windows to LOCAL today (the same anchor the streak/Monday
   // math below uses), not the UTC instant — sessions are keyed by local date, so a
   // UTC-anchored cutoff could clip the trailing day in an evening western zone.
@@ -483,24 +484,24 @@ export function getWeeklyStats() {
   const sixtyAgo = new Date(asOf - 60 * 864e5).toISOString().slice(0, 10);
 
   const weekSess = db
-    .prepare(`SELECT DISTINCT s.date FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ?`)
-    .all(weekAgo) as any[];
+    .prepare(`SELECT DISTINCT s.date FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`)
+    .all(weekAgo, today) as any[];
   const ton = db
     .prepare(
       `SELECT COALESCE(SUM(l.weight * l.reps), 0) AS t FROM logged_sets l JOIN sessions s ON s.id = l.session_id
-       WHERE s.date >= ? AND l.weight > 0 AND l.reps > 0`
+       WHERE s.date >= ? AND s.date <= ? AND l.weight > 0 AND l.reps > 0`
     )
-    .get(weekAgo) as any;
+    .get(weekAgo, today) as any;
   // ALL logged sets count here — including timed sets, which the tonnage math
   // above intentionally excludes (weight > 0 AND reps > 0).
   const weekSets = db
-    .prepare(`SELECT COUNT(*) AS c FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date >= ?`)
-    .get(weekAgo) as any;
+    .prepare(`SELECT COUNT(*) AS c FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date >= ? AND s.date <= ?`)
+    .get(weekAgo, today) as any;
 
   const sessDates = new Set(
-    (db.prepare(`SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ?`).all(sixtyAgo) as any[]).map((r) => r.d)
+    (db.prepare(`SELECT DISTINCT s.date AS d FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ?`).all(sixtyAgo, today) as any[]).map((r) => r.d)
   );
-  const actDates = new Set((db.prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ?`).all(sixtyAgo) as any[]).map((r) => r.d));
+  const actDates = new Set((db.prepare(`SELECT DISTINCT date AS d FROM activities WHERE date >= ? AND date <= ?`).all(sixtyAgo, today) as any[]).map((r) => r.d));
   const active = (d: string) => sessDates.has(d) || actDates.has(d);
   let streak = 0;
   let t = new Date(today + "T00:00:00Z").getTime();
@@ -515,29 +516,30 @@ export function getWeeklyStats() {
     d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return d.toISOString().slice(0, 10);
   })();
+  const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
   const weekDone = db
-    .prepare(`SELECT COUNT(DISTINCT s.date) AS c FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ?`)
-    .get(monday) as any;
+    .prepare(`SELECT COUNT(DISTINCT s.date) AS c FROM sessions s JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date < ?`)
+    .get(monday, nextMonday) as any;
   const weekPlanned = db.prepare(`SELECT COUNT(*) AS c FROM plan_days`).get() as any;
   // Cardio this week (activities table) — so the "This Week" summary speaks to
   // BOTH modalities, not just lifting adherence. Count + total distance.
   const weekCardio = db
-    .prepare(`SELECT COUNT(*) AS c, COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ?`)
-    .get(monday) as any;
+    .prepare(`SELECT COUNT(*) AS c, COALESCE(SUM(distance_km), 0) AS km FROM activities WHERE date >= ? AND date < ?`)
+    .get(monday, nextMonday) as any;
 
   // ---- endurance weekly read (v35, additive) ----
   // A runner/cyclist-first picture: mileage, moving time, the longest single
   // effort, time-in-HR-zone (from synced Garmin activities), and a pace trend.
   // All deterministic + null-safe. The `activities` table is the source-agnostic
   // log; `garmin_activities` adds richer per-effort detail (zones, moving time).
-  const endurance = computeEnduranceWeekly(monday);
+  const endurance = computeEnduranceWeekly(monday, nextMonday);
 
   // Weight trend: least-squares slope over the last 21 days of weigh-ins,
   // in lb/week. Needs ≥2 points spanning ≥3 days to mean anything.
   const since21 = new Date(asOf - 21 * 864e5).toISOString().slice(0, 10);
   const wpts = db
-    .prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? ORDER BY date, id`)
-    .all(since21) as any[];
+    .prepare(`SELECT date, weight_lb FROM bodyweight_log WHERE date >= ? AND date <= ? ORDER BY date, id`)
+    .all(since21, today) as any[];
   let trend: number | null = null;
   if (wpts.length >= 2) {
     const xs = wpts.map((p) => Date.parse(p.date + "T00:00:00Z") / 864e5);
@@ -618,21 +620,22 @@ export interface EnduranceWeekly {
   pace_trend: { this_min_per_km: number | null; prev_min_per_km: number | null; dir: "faster" | "slower" | "steady" | null };
 }
 
-function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
+function computeEnduranceWeekly(mondayISO: string, nextMondayISO?: string): EnduranceWeekly {
   const prevMonday = new Date(new Date(mondayISO + "T00:00:00Z").getTime() - 7 * 864e5).toISOString().slice(0, 10);
+  const weekEnd = nextMondayISO || new Date(new Date(mondayISO + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
 
   // Mileage + moving time this week (activities table is the modality-agnostic log).
   const wk = db.prepare(
-    `SELECT COALESCE(SUM(distance_km), 0) AS km, COALESCE(SUM(duration_min), 0) AS min FROM activities WHERE date >= ?`
-  ).get(mondayISO) as any;
+    `SELECT COALESCE(SUM(distance_km), 0) AS km, COALESCE(SUM(duration_min), 0) AS min FROM activities WHERE date >= ? AND date < ?`
+  ).get(mondayISO, weekEnd) as any;
   const week_km = Math.round(Number(wk?.km ?? 0) * 10) / 10;
   const week_moving_min = Math.round(Number(wk?.min ?? 0));
 
   // Longest single effort this week (by distance, falling back to duration).
   const longest = db.prepare(
-    `SELECT type, distance_km, duration_min FROM activities WHERE date >= ?
+    `SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?
      ORDER BY COALESCE(distance_km, 0) DESC, COALESCE(duration_min, 0) DESC LIMIT 1`
-  ).get(mondayISO) as any;
+  ).get(mondayISO, weekEnd) as any;
   const longest_km = longest?.distance_km != null ? Math.round(Number(longest.distance_km) * 10) / 10 : null;
   const longest_min = longest?.duration_min != null ? Math.round(Number(longest.duration_min)) : null;
   const longest_type = longest?.type ?? null;
@@ -641,8 +644,8 @@ function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
   // [{zone, secs, ...}]). Best-effort: malformed JSON / no Garmin → empty object.
   const time_in_zone: Record<string, number> = {};
   const gz = db.prepare(
-    `SELECT hr_zones_json FROM garmin_activities WHERE date >= ? AND hr_zones_json IS NOT NULL`
-  ).all(mondayISO) as any[];
+    `SELECT hr_zones_json FROM garmin_activities WHERE date >= ? AND date < ? AND hr_zones_json IS NOT NULL`
+  ).all(mondayISO, weekEnd) as any[];
   for (const r of gz) {
     let zones: any = null;
     try { zones = r.hr_zones_json ? JSON.parse(r.hr_zones_json) : null; } catch { zones = null; }
@@ -674,7 +677,7 @@ function computeEnduranceWeekly(mondayISO: string): EnduranceWeekly {
       ? (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND date < ? AND (${sport.sql})`).all(startIso, endIso, ...sport.params) as any[])
       : (db.prepare(`SELECT distance_km, duration_min FROM activities WHERE date >= ? AND (${sport.sql})`).all(startIso, ...sport.params) as any[]);
   }
-  const this_min_per_km = avgPace(mondayISO);
+  const this_min_per_km = avgPace(mondayISO, weekEnd);
   const prev_min_per_km = avgPace(prevMonday, mondayISO);
   let dir: "faster" | "slower" | "steady" | null = null;
   if (this_min_per_km != null && prev_min_per_km != null) {
@@ -723,6 +726,7 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
     d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return d.toISOString().slice(0, 10);
   })();
+  const nextMonday = new Date(new Date(monday + "T00:00:00Z").getTime() + 7 * 864e5).toISOString().slice(0, 10);
 
   // Prescribed: the current plan's cardio items.
   let prescribed_sessions = 0;
@@ -743,8 +747,8 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
 
   // Actual: this week's logged cardio efforts (activities, excluding strength).
   const rows = db
-    .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ?`)
-    .all(monday) as any[];
+    .prepare(`SELECT type, distance_km, duration_min FROM activities WHERE date >= ? AND date < ?`)
+    .all(monday, nextMonday) as any[];
   let actual_sessions = 0;
   let actual_km = 0;
   let actual_min = 0;
@@ -945,4 +949,3 @@ export function getProgress(exerciseName: string) {
   const points = [...byDate.entries()].map(([date, v]) => ({ date, ...v }));
   return { exercise: ex.name, found: true, unit: ex.unit, points };
 }
-

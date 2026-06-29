@@ -3,14 +3,7 @@
 // Garmin sync status line: colored dot + relative time + the short result the
 // server recorded ("ok: 12 activities · 14 daily" / "failed: …").
 function garminStatusLine(s, syncing) {
-  if (syncing) return `<span class="sync-dot pulse"></span><span class="sync-text">Syncing…</span>`;
-  const at = s && s.garmin_last_sync_at;
-  const raw = String((s && s.garmin_last_sync_status) || "");
-  if (!at) return `<span class="sync-dot"></span><span class="sync-text">Never synced</span>`;
-  const ok = raw.startsWith("ok");
-  const text = raw.replace(/^(ok|failed):\s*/, "");
-  return `<span class="sync-dot ${ok ? "ok" : "err"}"></span>
-    <span class="sync-text">${ok ? "Synced" : "Sync failed"} ${escHtml(relTime(at))}${text ? ` · ${escHtml(text)}` : ""}</span>`;
+  return CairnSettingsClient.garminStatusLine(s, syncing, { relTime });
 }
 
 // Agent-health card — a small, calm read on the coaching brain's reliability:
@@ -18,51 +11,14 @@ function garminStatusLine(s, syncing) {
 // style. NO scores, just plain words. Returns "" when the endpoint is absent or
 // empty (Stream 1's GET /api/agent-stats may 404 on an older backend → silent).
 function agentHealthCard(st) {
-  if (!st || !Number(st.runs)) return "";
-  const runs = Number(st.runs);
-  const runWord = `${runs} run${runs === 1 ? "" : "s"} tracked`;
-  const ms = (v) => { const n = Number(v) || 0; return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)}ms`; };
-  // Qualitative ONLY — the constitution bans numeric scores; this is a calm pulse,
-  // not a grade. Thresholds map an internal ok-rate to plain words.
-  const word = (p) => (p == null ? null : p >= 0.9 ? "reliable" : p >= 0.6 ? "mostly clean" : "often retries");
-  const rate = st.ok_rate != null ? Number(st.ok_rate) : null;
-  const okLine = rate == null ? runWord
-    : rate >= 0.9 ? `Recent runs have been completing cleanly · ${runWord}`
-    : rate >= 0.6 ? `Most recent runs completed — a few needed a retry · ${runWord}`
-    : `Several recent runs needed a retry · ${runWord}`;
-  const rows = (Array.isArray(st.by_agent) ? st.by_agent : []).filter((a) => a && a.agent).map((a) => {
-    const tot = (Number(a.ok) || 0) + (Number(a.fail) || 0);
-    const w = tot ? word((Number(a.ok) || 0) / tot) : null;
-    const lat = a.p50_ms != null ? ` · ${ms(a.p50_ms)} typical` : "";
-    return `<div class="agenthealth-row">
-        <span class="agenthealth-name">${escHtml(String(a.agent))}</span>
-        <span class="agenthealth-stat">${w || "—"}${lat}</span>
-      </div>`;
-  }).join("");
-  return `
-    <div class="sess agenthealth" style="margin-top:14px">
-      <div class="lbl" style="margin-bottom:6px">Agent health</div>
-      <div class="sess-line">${okLine}</div>
-      ${rows ? `<div class="agenthealth-rows">${rows}</div>` : ""}
-      <div class="sess-line" style="color:var(--muted);margin-top:8px">A failed run just falls through to the next enabled agent — this is the quiet pulse, not a verdict.</div>
-    </div>`;
+  return CairnSettingsClient.agentHealthCard(st);
 }
 
 // Plain-language label for an agentic op key (from agent_runs.op) — the activity
 // log reads in human words, never an internal token. Falls back to a tidied key.
-const AGENT_OP_LABELS = {
-  day_read: "read your day", session_suggest: "drafted a session", session_verify: "checked the session",
-  meal_plan: "drafted a meal plan", meal_plan_verify: "checked the meal plan", meal_swap: "swapped a meal",
-  recipe: "wrote a recipe", nutrition_checkin: "ran a nutrition check-in", insight: "looked for a connection",
-  weekly_read: "read the week", health_review: "reviewed your labs", chat: "answered in chat",
-  coach: "drafted a coach proposal", enrich: "tidied a log", enrich_activity: "tidied an activity",
-  enrich_food: "tidied a food note", enrich_health: "read a lab document", garmin_strength: "read a strength session",
-  chat_distill: "saved chat to memory", research: "researched evidence",
-};
+const AGENT_OP_LABELS = CairnSettingsClient.AGENT_OP_LABELS;
 function agentOpLabel(op) {
-  const key = String(op || "").trim();
-  if (AGENT_OP_LABELS[key]) return AGENT_OP_LABELS[key];
-  return key ? key.replace(/_/g, " ") : "agent run";
+  return CairnSettingsClient.agentOpLabel(op);
 }
 
 // "What Cairn did" — a calm activity log of recent agentic runs, built from
@@ -70,30 +26,7 @@ function agentOpLabel(op) {
 // op · agent · relative time · "clean" or "needed a retry" (a fall-through to the
 // next agent, or output that needed a repair). Renders nothing when empty/absent.
 function agentActivityCard(st) {
-  const recent = st && Array.isArray(st.recent) ? st.recent : [];
-  if (!recent.length) return "";
-  const rows = recent.slice(0, 12).map((r) => {
-    const op = escHtml(agentOpLabel(r.op));
-    const agent = r.agent ? `<span class="actlog-agent">${escHtml(String(r.agent))}</span>` : "";
-    const when = r.created_at ? `<span class="actlog-when" title="${escAttr(absDate((r.created_at || "").slice(0, 10)))}">${escHtml(relTime((r.created_at || "").replace(" ", "T") + "Z"))}</span>` : "";
-    // "clean" = succeeded first try with parseable output, no fall-through; otherwise
-    // it needed a retry (a repair or a hand-off to the next enabled agent).
-    const clean = r.ok && r.parsed && !r.tried_json;
-    const flag = clean
-      ? `<span class="actlog-flag actlog-clean">clean</span>`
-      : `<span class="actlog-flag actlog-retry">needed a retry</span>`;
-    return `<div class="actlog-row">
-        <span class="actlog-op">${op}</span>
-        <span class="actlog-meta">${agent}${agent && when ? `<span class="actlog-dot">·</span>` : ""}${when}</span>
-        ${flag}
-      </div>`;
-  }).join("");
-  return `
-    <div class="sess agentactivity" style="margin-top:14px">
-      <div class="lbl" style="margin-bottom:6px">What Cairn did</div>
-      <div class="sess-line" style="color:var(--muted);margin-bottom:4px">A quiet log of the most recent agent work — so you can see what ran, and when.</div>
-      <div class="actlog-rows">${rows}</div>
-    </div>`;
+  return CairnSettingsClient.agentActivityCard(st, { relTime, absDate });
 }
 
 // "What Cairn has noticed" (F2) — the durable learnings drawn from comparing what
@@ -102,27 +35,7 @@ function agentActivityCard(st) {
 // assumed"). Gentle observations only — pull-never-push, no scores, never a gate;
 // they just season the coach's defaults. Renders nothing when there's nothing yet.
 function noticedCard(data) {
-  const rows = data && Array.isArray(data.learnings) ? data.learnings : [];
-  if (!rows.length) return "";
-  const items = rows.slice(0, 8).map((l) => {
-    const text = String(l.content || "").trim();
-    if (!text) return "";
-    // noticed_at is a SQLite "YYYY-MM-DD HH:MM:SS" UTC stamp → a relative time.
-    const when = l.noticed_at
-      ? `<span class="noticed-when" title="${escAttr(absDate(String(l.noticed_at).slice(0, 10)))}">${escHtml(relTime(String(l.noticed_at).replace(" ", "T") + "Z"))}</span>`
-      : "";
-    return `<div class="noticed-row">
-        <span class="noticed-dot" aria-hidden="true">·</span>
-        <div class="noticed-body"><span class="noticed-text">${escHtml(text)}</span>${when}</div>
-      </div>`;
-  }).filter(Boolean).join("");
-  if (!items) return "";
-  return `
-    <div class="sess noticed" style="margin-top:14px">
-      <div class="lbl" style="margin-bottom:6px">What Cairn has noticed</div>
-      <div class="sess-line" style="color:var(--muted);margin-bottom:6px">Quiet patterns Cairn has picked up from how its suggestions played out. Gentle observations that shape the defaults — never a rule, never a score.</div>
-      <div class="noticed-rows">${items}</div>
-    </div>`;
+  return CairnSettingsClient.noticedCard(data, { relTime, absDate });
 }
 
 // Settings sub-nav: the long single-scroll tab is split into four calm sections,
@@ -138,10 +51,7 @@ const SET_SEG = [["agents", "Agents"], ["sources", "Sources"], ["automation", "A
 // alarming: "Not installed" when the CLI binary is missing; otherwise the connection
 // state — Connected / Connect → / Installed. Returns {cls, label}.
 function agentChipState(a) {
-  if (a.present === false) return { cls: "agent-chip-absent", label: "Not installed" };
-  if (a.configured === true) return { cls: "agent-chip-ok", label: "✓ Connected" };
-  if (a.configured === false) return { cls: "agent-chip-connect", label: "Connect →" };
-  return { cls: "agent-chip-installed", label: "Installed" }; // configured === null/undefined
+  return CairnSettingsClient.agentChipState(a || {});
 }
 
 async function renderSettings() {
@@ -631,28 +541,7 @@ async function renderSettings() {
   // The update card body, built from a fetched status + the (possibly unsaved) toggle.
   // Calm, operator-facing, copy-first. No version number is ever framed as a score.
   function updateCardHtml(st) {
-    const cur = escHtml(String((st && st.current) || "—"));
-    const head = `<div class="sess-line">Running <b>v${cur}</b>.</div>`;
-    if (!wm.update_check_enabled) {
-      return head + `<div class="sess-line" style="color:var(--muted)">Automatic update checks are off. Turn them on to see when a newer Cairn is released.</div>`;
-    }
-    if (!st) return head + `<div class="sess-line" style="color:var(--muted)">Checking…</div>`;
-    const checked = st.checked_at ? ` · checked ${escHtml(String(st.checked_at).replace("T", " ").slice(0, 16))}` : "";
-    if (st.update_available && st.latest) {
-      const url = st.html_url ? escAttr(String(st.html_url)) : "";
-      return `<div class="sess-line"><b>v${escHtml(String(st.latest))} is available</b> — you're on v${cur}.${checked}</div>
-        ${url ? `<div class="sess-line"><a href="${url}" target="_blank" rel="noopener noreferrer">What's new ↗</a></div>` : ""}
-        <details class="route-card" style="margin-top:8px">
-          <summary><b>How to update</b></summary>
-          <div class="sess-line" style="color:var(--muted);margin-top:6px">Back up first (use <b>Download SQLite snapshot</b> below), then pull the new image and restart. Your data lives in Docker volumes — updating never touches it, and schema migrations run automatically on boot.</div>
-          <div class="cmd-line">docker compose pull &amp;&amp; docker compose up -d</div>
-          <div class="sess-line" style="color:var(--muted);margin-top:6px">Started with <span class="phone-cmd-inline">docker run</span>? Pull <span class="phone-cmd-inline">ghcr.io/zilet/cairn:latest</span> and recreate the container. Building from source? <span class="phone-cmd-inline">git pull &amp;&amp; docker compose up -d --build</span>.</div>
-        </details>`;
-    }
-    if (st.error && !st.latest) {
-      return head + `<div class="sess-line" style="color:var(--muted)">Couldn't reach GitHub to check (${escHtml(String(st.error))}).${checked}</div>`;
-    }
-    return `<div class="sess-line">Running <b>v${cur}</b> · up to date.${checked}</div>`;
+    return CairnSettingsClient.updateCardHtml(st, { updateCheckEnabled: wm.update_check_enabled });
   }
 
   function renderDataSlice() {
@@ -733,6 +622,7 @@ async function renderSettings() {
       seg.style.setProperty("--segi", btns.indexOf(b));
       btns.forEach((x) => x.classList.toggle("active", x === b));
     }
+    if (typeof syncRouteFromState === "function") syncRouteFromState();
     withViewTransition(() => { paintSlice(key); viewEnter(); });
   }));
   view.querySelectorAll(".seg").forEach(fitSeg);
@@ -767,7 +657,7 @@ function renderTab(tab) {
   updateHeaderCondense();
   if (tab === "today") return renderToday();
   if (tab === "plan") {
-    const jump = state.planJump; state.planJump = null;
+    const jump = state.planJump || state.planSeg || "edit"; state.planJump = null;
     return jump === "food" ? renderFoodJournal()
       : jump === "meals" ? renderMeals()
       : jump === "coach" ? renderCoach()
@@ -794,10 +684,11 @@ function tabSkeleton(tab) {
   if (tab === "today") return todaySkeleton();
   if (tab === "progress") { const seg = defaultProgressSeg(); return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3); }
   if (tab === "plan") {
-    const jump = state.planJump === "food" ? "food"
-      : state.planJump === "meals" ? "meals"
-      : state.planJump === "coach" ? "coach"
-      : state.planJump === "endurance" && showEnduranceTab() ? "endurance"
+    const activePlan = state.planJump || state.planSeg;
+    const jump = activePlan === "food" ? "food"
+      : activePlan === "meals" ? "meals"
+      : activePlan === "coach" ? "coach"
+      : activePlan === "endurance" && showEnduranceTab() ? "endurance"
       : "edit";
     return segSkeleton(jump, planSeg(), 3);
   }
@@ -821,20 +712,91 @@ function primaryKeyFor(tab) {
   // (endurance/program/trend/volume/…) reads live — keep its skeleton, never a
   // wrong warm paint from the history cache.
   if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
-  if (tab === "plan") return state.planJump === "coach" || state.planJump === "food" ? null : state.planJump === "meals" ? MEALS_KEY : "plan";
+  if (tab === "plan") {
+    const activePlan = state.planJump || state.planSeg;
+    return activePlan === "coach" || activePlan === "food" ? null : activePlan === "meals" ? MEALS_KEY : "plan";
+  }
   return null;
+}
+
+const ROUTE_TABS = ["today", "plan", "progress", "chat", "me", "settings"];
+function routeKey(key, items, fallback = null) {
+  const s = String(key || "");
+  return (items || []).some((item) => (Array.isArray(item) ? item[0] : item) === s) ? s : fallback;
+}
+function routeApi() {
+  return window.CairnRoutes && typeof window.CairnRoutes.parseRoute === "function" && typeof window.CairnRoutes.routeToUrl === "function"
+    ? window.CairnRoutes
+    : null;
+}
+function applyRouteState(route) {
+  if (!route) return "today";
+  if (route.date) state.logDate = route.date;
+  if (route.tab === "plan") {
+    const section = routeKey(route.section, routeApi()?.planSections || planSeg(), "edit");
+    state.planSeg = section;
+    state.planJump = section === "edit" ? null : section;
+  } else if (route.tab === "progress") {
+    state.progressSeg = routeKey(route.section, PROGRESS_SEG, state.progressSeg || null);
+  } else if (route.tab === "me") {
+    state.meSeg = routeKey(route.section, ME_SEG, "standing");
+    if (state.meSeg === "health") {
+      state.healthSeg = routeKey(route.healthSection, HEALTH_SEG, "read");
+      state.healthSegPicked = true;
+      state.pendingHealthDocId = route.id || null;
+    }
+  } else if (route.tab === "settings") {
+    state.setSeg = routeKey(route.section, SET_SEG, state.setSeg || "agents");
+  } else if (route.tab === "chat") {
+    state.pendingChatSession = route.session || null;
+  }
+  return ROUTE_TABS.includes(route.tab) ? route.tab : "today";
+}
+function currentRouteState() {
+  const tab = ROUTE_TABS.includes(state.tab) ? state.tab : "today";
+  const route = { tab };
+  if (tab === "today") {
+    if (state.logDate) route.date = state.logDate;
+  } else if (tab === "plan") {
+    const section = routeKey(state.planJump || state.planSeg, planSeg(), "edit");
+    route.section = section;
+    if (section === "food" && state.logDate) route.date = state.logDate;
+  } else if (tab === "progress") {
+    route.section = routeKey(state.progressSeg || defaultProgressSeg(), PROGRESS_SEG, defaultProgressSeg());
+  } else if (tab === "me") {
+    route.section = routeKey(state.meSeg, ME_SEG, "standing");
+    if (route.section === "health") {
+      route.healthSection = routeKey(state.healthSeg, HEALTH_SEG, "read");
+      if (state.pendingHealthDocId) route.id = state.pendingHealthDocId;
+    }
+  } else if (tab === "settings") {
+    route.section = routeKey(state.setSeg, SET_SEG, "agents");
+  } else if (tab === "chat" && state.pendingChatSession) {
+    route.session = state.pendingChatSession;
+  }
+  return route;
+}
+function syncRouteFromState(mode = "push") {
+  const routes = routeApi();
+  if (!routes || !history?.pushState) return;
+  const next = routes.routeToUrl(currentRouteState());
+  const current = `${location.pathname}${location.search}`;
+  if (next === current) return;
+  const fn = mode === "replace" ? "replaceState" : "pushState";
+  history[fn]({ cairn: true }, "", next);
 }
 
 // Switch tabs: crossfade the old tab → a synchronous skeleton (the view
 // transition only waits for THIS, never the async render), then hydrate outside
 // the transition. The frozen-tab problem is gone: paint is always instant.
-function switchTab(tab) {
+function switchTab(tab, opts = {}) {
   if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
   teardownJobs(); // close agent-job streams from the leaving tab (jobs keep running server-side; reload reconnects)
   closeDetail(true); // overlays never outlive a tab switch
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   state.tab = tab;
+  if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");
   // Warm re-entry (the tab's primary surface is cached) skips the skeleton — the
   // render paints REAL content from the peek (its own SWR), so there's no flash.
   // Cold keeps the skeleton-first crossfade.
@@ -1008,7 +970,7 @@ function openOnboarding() {
 // view never sits frozen on the previous tab while the (possibly agentic) render
 // awaits its data — the content swaps in once it lands. This is what makes tapping
 // Today feel instant instead of "stuck until the fetch returns".
-function activateTab(name) {
+function activateTab(name, opts = {}) {
   const valid = ["today", "plan", "progress", "chat", "me", "settings"];
   const tab = valid.includes(name) ? name : "today";
   if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
@@ -1017,6 +979,7 @@ function activateTab(name) {
   closeMealSheet(true);
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   state.tab = tab;
+  if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");
   // Warm re-entry skips the skeleton (the render paints from cache) — same as
   // switchTab, so a programmatic/first activate is also flash-free when cached.
   const warm = !!peekCached(primaryKeyFor(tab));
@@ -1080,9 +1043,20 @@ function primeDiscipline() {
     if (state.tab === "plan" && showEnduranceTab() !== beforeEnd) renderTab("plan");
   }).catch(() => {});
 }
-const _landingTab = new URLSearchParams(location.search).get("tab");
+const _landingRoutes = routeApi();
+const _landingRoute = _landingRoutes ? _landingRoutes.parseRoute(location.href) : null;
+const _landingParams = new URLSearchParams(location.search);
+const _hasRouteState = location.pathname.startsWith("/app") || _landingParams.has("tab") || _landingParams.has("date");
+const _landingTab = _hasRouteState ? applyRouteState(_landingRoute) : _landingParams.get("tab");
+const _canonicalizeLanding = _hasRouteState && !location.pathname.startsWith("/app");
 primeDiscipline();
-activateTab(_landingTab);
+activateTab(_landingTab, { replace: _canonicalizeLanding, syncRoute: _canonicalizeLanding });
+window.addEventListener("popstate", () => {
+  const routes = routeApi();
+  const route = routes ? routes.parseRoute(location.href) : null;
+  const tab = applyRouteState(route);
+  activateTab(tab, { syncRoute: false });
+});
 maybeOnboard();
 // Refresh art readiness from the server's on-disk manifest so a cold client (or a
 // background-generated image) renders generated art instantly on the next render.
@@ -1162,13 +1136,13 @@ window.addEventListener("orientationchange", syncChatViewport);
     // Pin the fixed bottom bars to the VISUAL viewport's bottom edge:
     //  • settled PWA → 0
     //  • browser tab with a bottom toolbar → positive (lift the bar above it)
-    //  • after the keyboard drops in a PWA, iOS can leave the LAYOUT viewport
-    //    (innerHeight) SHORT of the restored visible area, so a plain bottom:0
-    //    bar floats above the true screen bottom — this yields a NEGATIVE value
-    //    that pushes the bar back down. The old Math.max(0,…) clamp swallowed
-    //    exactly this correction, so the gap lingered until a re-render.
+    // Negative values mean the visual viewport is larger than the layout viewport
+    // during iOS native-picker / keyboard restoration. Do NOT publish them: bottom
+    // fixed controls would be pushed behind the safe/tab area while WebKit's hit
+    // testing still targets the pre-settled box, making taps land on content above.
     // Keyboard open → 0 (the bar sits behind the keyboard; chat hides it anyway).
-    const vvb = kbOpen ? 0 : window.innerHeight - (vv.offsetTop + vv.height);
+    const rawVvb = window.innerHeight - (vv.offsetTop + vv.height);
+    const vvb = kbOpen ? 0 : Math.max(0, rawVvb);
     root.style.setProperty("--vvb", Math.round(vvb) + "px");
   };
   const sync = () => {
@@ -1214,5 +1188,10 @@ window.addEventListener("orientationchange", syncChatViewport);
   window.addEventListener("pageshow", resync);
   window.addEventListener("focus", resync);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resync(); });
+  document.addEventListener("cairn:keyboard-settle", () => {
+    keyboardIntentUntil = 0;
+    resync();
+    settle(true);
+  });
   sync();
 })();

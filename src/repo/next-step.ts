@@ -1,9 +1,10 @@
-import { db, todayISO } from "../db.js";
+import { db } from "../db.js";
 import { getHealthSynthesis, healthFocus, isAcuteMarker } from "./propagation.js";
 import { programBalance } from "./progression.js";
 import { dayRead } from "./intelligence.js";
 import { computeGoalCheck } from "./profile.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { localDateISO } from "./shared.js";
 
 // ============================================================================
 // THE ONE NEXT-BEST-STEP — a pure, deterministic, cross-domain producer.
@@ -31,6 +32,13 @@ export interface NextStep {
   step_key: string;
   title: string;
   why: string;
+  /** Plain-language evidence that caused this to surface. Bounded, no scores. */
+  based_on?: string[];
+  /** Suggested UI action. Still review-only; nothing auto-applies. */
+  action?: {
+    kind: "open_plan" | "open_food" | "open_health" | "open_recovery" | "open_life";
+    label: string;
+  };
   /** 0..3 — INTERNAL leverage weight. Never surfaced. */
   leverage: number;
 }
@@ -92,9 +100,9 @@ function cooldownPenalty(stepKey: string, now: number): number {
 // TRAIN — a due/lagging group from the volume balance, or a reground/overload
 // read from the day-read (rest is its own RECOVER producer; here we only speak to
 // genuinely-training reads). A due group is the concrete, high-actionability move.
-function produceTrain(read: ReturnType<typeof dayRead>): Candidate | null {
+function produceTrain(read: ReturnType<typeof dayRead>, date: string): Candidate | null {
   let bal: ReturnType<typeof programBalance> | null = null;
-  try { bal = programBalance(); } catch { bal = null; }
+  try { bal = programBalance(2, date); } catch { bal = null; }
   const due = bal?.due ?? [];
   if (due.length) {
     const group = String(due[0]).toLowerCase();
@@ -103,6 +111,8 @@ function produceTrain(read: ReturnType<typeof dayRead>): Candidate | null {
       step_key: `train:gap:${group}`,
       title: `Give ${due[0]} some work`,
       why: bal!.summary || `${due[0]} is running light lately — a little focused volume evens it out.`,
+      based_on: [`Program balance says ${due[0]} is due`, "Today still has room for training"],
+      action: { kind: "open_plan", label: "Open today's plan" },
       leverage: 1,
       actionable: true,
       fresh: false,
@@ -116,6 +126,8 @@ function produceTrain(read: ReturnType<typeof dayRead>): Candidate | null {
       step_key: `train:session:${String(read.focus).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
       title: `Train: ${read.focus}`,
       why: read.why || "You're recovered and due — good to go.",
+      based_on: ["Today's read says training fits", read.why ? "Recovery and recent-load checks support it" : "Plan and recovery context are available"],
+      action: { kind: "open_plan", label: "Open today's session" },
       leverage: 1,
       actionable: true,
       fresh: false,
@@ -161,6 +173,8 @@ function produceFuel(date: string): Candidate | null {
     step_key: "fuel:protein-gap",
     title: "A little more protein today",
     why: `You're about ${gap} g under your protein anchor — an easy way to round out the day.`,
+    based_on: [`Logged food has about ${Math.round(protein)} g protein`, `Protein anchor is about ${Math.round(target)} g`],
+    action: { kind: "open_food", label: "Review today's fuel" },
     leverage: 1,
     actionable: true,
     fresh: false,
@@ -178,6 +192,8 @@ function produceRecover(read: ReturnType<typeof dayRead>): Candidate | null {
       step_key: "recover:earned-rest",
       title: "Take the rest you've earned",
       why: read.why || "You've stacked hard days — let today consolidate.",
+      based_on: ["Today's read calls for rest", read.why ? "Recent training and recovery signals are part of the read" : "Recent load is enough to justify backing off"],
+      action: { kind: "open_recovery", label: "Review recovery" },
       leverage: 2,
       actionable: true,
       fresh: false,
@@ -190,6 +206,8 @@ function produceRecover(read: ReturnType<typeof dayRead>): Candidate | null {
       step_key: "recover:building-fatigue",
       title: "Ease off if it's there",
       why: "Recovery's drifting below your norm while the hard days stack — a lighter day soon will pay off.",
+      based_on: ["Recovery is drifting below your norm", "Recent training load is stacking"],
+      action: { kind: "open_recovery", label: "Review recovery" },
       leverage: 1,
       actionable: false,
       fresh: true,
@@ -202,6 +220,8 @@ function produceRecover(read: ReturnType<typeof dayRead>): Candidate | null {
       step_key: "recover:data-gap",
       title: "Recovery's flying a bit blind",
       why: "No recent sleep or HRV synced — connecting a wearable would let the daily read account for how recovered you actually are.",
+      based_on: ["No recent sleep or HRV data is synced"],
+      action: { kind: "open_recovery", label: "Review recovery data" },
       leverage: 0,
       actionable: false,
       fresh: false,
@@ -224,6 +244,8 @@ function produceRecheck(): Candidate | null {
       step_key: "recheck:synthesis-one-change",
       title: "Your highest-leverage health move",
       why: oneChange,
+      based_on: ["Latest health synthesis", "Connected-brain marker review"],
+      action: { kind: "open_health", label: "Open health read" },
       leverage: 3,
       actionable: true,
       fresh: false,
@@ -250,6 +272,8 @@ function produceRecheck(): Candidate | null {
       // A directive flagged uncertain is a softer nudge.
       title: chronic.uncertain ? `Worth a look: ${chronic.group}` : `Focus area: ${chronic.group}`,
       why: move || chronic.why || `${chronic.group} is outside its optimal band.`,
+      based_on: [`Latest ${chronic.group} markers`, chronic.uncertain ? "Marker match is conservative" : "Trusted optimal-zone comparison"],
+      action: { kind: "open_health", label: "Review markers" },
       leverage: 2,
       actionable: !!move,
       fresh: false,
@@ -263,6 +287,8 @@ function produceRecheck(): Candidate | null {
     step_key: "recheck:acute-inflammation",
     title: "Recheck inflammation when you've had a quiet week",
     why: "An inflammatory marker reads high — often just hard training or a passing bug. Recheck after an easy week before reading anything into it.",
+    based_on: ["Acute inflammatory marker is high", "No chronic marker is leading this step"],
+    action: { kind: "open_health", label: "Review marker trend" },
     leverage: 1,
     actionable: false,
     fresh: false,
@@ -294,6 +320,8 @@ function produceLife(date: string): Candidate | null {
     step_key: `life:${kind}:${row.id}`,
     title: kind === "injury" ? "Work around the injury" : "Plan around what's going on",
     why,
+    based_on: [`Active ${kind.replace(/_/g, " ")} context`, label],
+    action: { kind: "open_life", label: "Review life context" },
     leverage: kind === "injury" ? 2 : 1,
     actionable: true,
     fresh: false,
@@ -315,7 +343,7 @@ function scoreOf(c: Candidate, now: number): number {
 // winner (or NULL on a quiet day). Never throws; missing data → a producer just
 // returns null and is skipped.
 export function nextBestStep(date?: string): NextStep | null {
-  const d = date || todayISO();
+  const d = date || localDateISO();
   const now = Date.now();
 
   // The day-read is shared by the train + recover producers (one fetch).
@@ -326,7 +354,7 @@ export function nextBestStep(date?: string): NextStep | null {
   const push = (c: Candidate | null) => { if (c) candidates.push(c); };
   try { push(produceRecheck()); } catch { /* skip */ }
   try { push(produceRecover(read)); } catch { /* skip */ }
-  try { push(produceTrain(read)); } catch { /* skip */ }
+  try { push(produceTrain(read, d)); } catch { /* skip */ }
   try { push(produceFuel(d)); } catch { /* skip */ }
   try { push(produceLife(d)); } catch { /* skip */ }
 
@@ -346,9 +374,17 @@ export function nextBestStep(date?: string): NextStep | null {
   }
   if (!best) return null;
 
-  const { domain, step_key, title, why, leverage } = best.c;
+  const { domain, step_key, title, why, leverage, based_on, action } = best.c;
   // INTERNAL fields (actionable/fresh/score) never cross the boundary.
-  return { domain, step_key, title, why, leverage };
+  return {
+    domain,
+    step_key,
+    title,
+    why,
+    leverage,
+    based_on: Array.isArray(based_on) ? based_on.filter(Boolean).slice(0, 3) : undefined,
+    action,
+  };
 }
 
 // Stamp app_state so a SNOOZED step (skipped "not today") stays quiet for the

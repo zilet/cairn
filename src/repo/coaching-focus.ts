@@ -29,6 +29,8 @@ export interface FocusItem {
   title: string;
   why: string;
   move?: string;
+  /** Plain-language inputs that caused this lever to surface. Bounded, no scores. */
+  based_on?: string[];
 }
 
 export interface CoachingRetest {
@@ -84,6 +86,16 @@ function clip(s: any, n: number): string {
   const t = String(s ?? "").trim();
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
 }
+function cleanEvidence(lines: any): string[] | undefined {
+  if (!Array.isArray(lines)) return undefined;
+  const out = lines.map((line) => clip(line, 110)).filter(Boolean).slice(0, 3);
+  return out.length ? out : undefined;
+}
+function cleanFocusItem(item: FocusItem | null): FocusItem | null {
+  if (!item) return null;
+  const based_on = cleanEvidence(item.based_on);
+  return based_on ? { ...item, based_on } : { ...item };
+}
 
 // ---- candidate generation: one read per domain, each scored for internal ranking ----
 
@@ -105,6 +117,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       why:
         meso?.note ||
         "Your recent load and recovery signals say a lighter week now pays off — back volume off ~40%, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
+      based_on: ["Mesocycle says deload is due", recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated"],
     },
   };
 }
@@ -132,6 +145,7 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
         title: `Break the plateau on your ${label}`,
         why: `${stalled.lead_lift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.`,
         move: opts.length ? `Rotate in ${opts.join(" or ")} for a few weeks.` : undefined,
+        based_on: [`${stalled.lead_lift || label} is marked stalling`, stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat"],
       },
     };
   }
@@ -147,6 +161,7 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
         title: String(lever.headline),
         why: String(lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is."),
         move: lever.target ? String(lever.target) : undefined,
+        based_on: ["Performance standing lever", lever.why ? String(lever.why) : "Capacity comparison across lifts"],
       },
     };
   }
@@ -171,6 +186,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
           inp.runPlan?.why ||
           `You're in the ${phase} phase — this week's mix matters: the quality session drives fitness, the long run builds durability, the easy runs protect recovery.`,
         move: inp.runPlan?.quality_focus ? `This week's quality focus: ${lc(inp.runPlan.quality_focus)}.` : undefined,
+        based_on: [`Race goal is in ${phase} phase`, inp.runPlan?.quality_focus ? `Run plan quality focus: ${inp.runPlan.quality_focus}` : "Weekly run plan is available"],
       },
     };
   }
@@ -185,6 +201,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
         title: "Lift your aerobic base",
         why: "VO2max is the biggest single lever you have for both endurance and longevity — one weekly quality session moves it while the easy runs build the engine underneath.",
         move: inp.runPlan?.quality_focus ? `Start with ${lc(inp.runPlan.quality_focus)} this week.` : undefined,
+        based_on: ["Performance endurance read is watch-level", inp.runPlan?.quality_focus ? `Run plan quality focus: ${inp.runPlan.quality_focus}` : "Aerobic base is the limiting lever"],
       },
     };
   }
@@ -198,6 +215,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
         domain: "running",
         title: `This week's quality run: ${lc(inp.runPlan.quality_focus)}`,
         why: clip(inp.runPlan.why || inp.runPlan.mix_summary || "Keep the easy runs easy so the one quality session lands.", 200),
+        based_on: ["Weekly run plan is available", `Quality focus: ${inp.runPlan.quality_focus}`],
       },
     };
   }
@@ -223,6 +241,7 @@ function healthCandidate(inp: CoachingFocusInput): Candidate | null {
       title: `Move your ${lc(lead.group)}`,
       why: clip(lead.why || (inp.healthFocus?.headline ?? ""), 220),
       move: move ? clip(move, 240) : undefined,
+      based_on: [`Health lead: ${lead.group}`, lead.tier ? `Tier: ${lead.tier}` : "Connected-brain health focus"],
     },
   };
 }
@@ -248,6 +267,7 @@ function dexaCandidate(inp: CoachingFocusInput): Candidate | null {
       title: `From your DEXA: ${clip(t.area, 60)}`,
       why: clip(t.bias || t.signal || "", 220),
       move: t.path ? clip(t.path, 240) : undefined,
+      based_on: ["Latest DEXA targeting read", t.signal ? `Signal: ${t.signal}` : `Area: ${t.area}`],
     },
   };
 }
@@ -262,6 +282,7 @@ function bodyCandidate(inp: CoachingFocusInput): Candidate | null {
       domain: "nutrition",
       title: "Hold a lean-safe deficit",
       why: "Keep the deficit modest and protein high so the weight that comes off is fat, not the muscle you're working to build.",
+      based_on: ["Goal mode is fat loss", "Nutrition target is lean-safe"],
     },
   };
 }
@@ -270,24 +291,24 @@ function laterCandidates(inp: CoachingFocusInput): Candidate[] {
   const out: Candidate[] = [];
   // Mono-stimulus running → add variety, but only once the lead/parallel is set.
   if (inp.runVariety?.note) {
-    out.push({ key: "later-run-variety", leverage: 1.6, slot: "later", item: { domain: "running", title: "Add variety to your runs", why: clip(inp.runVariety.note, 180) } });
+    out.push({ key: "later-run-variety", leverage: 1.6, slot: "later", item: { domain: "running", title: "Add variety to your runs", why: clip(inp.runVariety.note, 180), based_on: ["Run variety read"] } });
   }
   // A second stalled/building group beyond the lead.
   const groups: any[] = Array.isArray(inp.groupsTrajectory?.groups) ? inp.groupsTrajectory.groups : [];
   const stalledOthers = groups.filter((g) => lc(g?.verdict) === "stalling");
   if (stalledOthers.length > 1) {
     const g = stalledOthers[1];
-    out.push({ key: "later-group", leverage: 1.5, slot: "later", item: { domain: "training", title: `Then revisit your ${lc(g.label || g.group)}`, why: "Address it after the lead lift is moving again — one plateau at a time." } });
+    out.push({ key: "later-group", leverage: 1.5, slot: "later", item: { domain: "training", title: `Then revisit your ${lc(g.label || g.group)}`, why: "Address it after the lead lift is moving again — one plateau at a time.", based_on: ["Another muscle group is stalling"] } });
   }
   // The widest strength imbalance (rounding-out work, deferred).
   const imb = Array.isArray(inp.performance?.imbalances) ? inp.performance.imbalances[0] : null;
   if (imb?.title) {
-    out.push({ key: "later-imbalance", leverage: 1.4, slot: "later", item: { domain: "training", title: clip(imb.title, 60), why: clip(imb.why || "", 180) } });
+    out.push({ key: "later-imbalance", leverage: 1.4, slot: "later", item: { domain: "training", title: clip(imb.title, 60), why: clip(imb.why || "", 180), based_on: ["Performance imbalance read"] } });
   }
   // A "due" muscle group from the balance digest.
   const dueAdj = (inp.programAdjustments || []).find((a: any) => a?.kind === "balance" && /due/i.test(String(a?.title || "")));
   if (dueAdj) {
-    out.push({ key: "later-due", leverage: 1.3, slot: "later", item: { domain: "training", title: clip(dueAdj.title, 60), why: clip(dueAdj.why || "", 180) } });
+    out.push({ key: "later-due", leverage: 1.3, slot: "later", item: { domain: "training", title: clip(dueAdj.title, 60), why: clip(dueAdj.why || "", 180), based_on: ["Program adjustment digest"] } });
   }
   return out;
 }
@@ -382,8 +403,8 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     .slice(0, 3)
     .map((c) => ({ domain: c.item.domain, title: c.item.title }));
 
-  const leadItem = lead?.item ?? null;
-  const parallelItems = parallel.map((c) => c.item);
+  const leadItem = cleanFocusItem(lead?.item ?? null);
+  const parallelItems = parallel.map((c) => cleanFocusItem(c.item)).filter((item): item is FocusItem => item != null);
   const connections = leadItem ? buildConnections(leadItem, parallelItems, input) : [];
   const retest = buildRetest(input);
   const horizon_weeks = num(input.trajectory?.horizon_weeks) ?? num(input.enduranceGoal?.weeks_to_race) ?? null;

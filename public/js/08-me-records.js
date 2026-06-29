@@ -9,28 +9,12 @@
 // Strict scheme allowlist for an outbound source URL — only real http(s) links open
 // in a new tab (rel="noopener noreferrer"); anything else degrades to plain text.
 function evidenceSafeUrl(u) {
-  const url = String(u ?? "").trim();
-  return /^https?:\/\//i.test(url) ? url.replace(/"/g, "&quot;") : null;
+  return CairnHealthClient.evidenceSafeUrl(u);
 }
 
 // Render the fetched evidence list (or a calm "no source on file" note when empty).
 function evidenceListHtml(evidence) {
-  const rows = (Array.isArray(evidence) ? evidence : []).filter((e) => e && (e.source_title || e.source_url || e.claim || e.body));
-  if (!rows.length) {
-    return `<div class="hb-ev-empty">No researched source on file yet — the citation above is the basis for now.</div>`;
-  }
-  return rows.slice(0, 6).map((e) => {
-    const url = evidenceSafeUrl(e.source_url);
-    const title = String(e.source_title || e.claim || "Source").trim();
-    const titleHtml = url
-      ? `<a class="hb-ev-link" href="${url}" target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>`
-      : `<span class="hb-ev-title">${escHtml(title)}</span>`;
-    const claim = e.claim && e.claim !== title ? `<div class="hb-ev-claim">${escHtml(String(e.claim))}</div>` : "";
-    const bodyText = String(e.body || "").trim();
-    const body = bodyText ? `<div class="hb-ev-body">${escHtml(bodyText.length > 240 ? bodyText.slice(0, 237).trimEnd() + "…" : bodyText)}</div>` : "";
-    const conf = e.confidence ? `<span class="hb-ev-conf">${escHtml(String(e.confidence))} confidence</span>` : "";
-    return `<div class="hb-ev-row">${titleHtml}${claim}${body}${conf ? `<div class="hb-ev-meta">${conf}</div>` : ""}</div>`;
-  }).join("");
+  return CairnHealthClient.evidenceListHtml(evidence);
 }
 
 // Toggle the evidence box for one directive; fetch once, then just show/hide.
@@ -82,13 +66,7 @@ async function loadDirectives(token) {
 
 // Build a case-insensitive marker → evidence-count map from the summary.
 function evidenceCountMap(summary) {
-  const map = new Map();
-  const rows = summary && Array.isArray(summary.by_marker) ? summary.by_marker : [];
-  for (const r of rows) {
-    if (!r || !r.marker) continue;
-    map.set(String(r.marker).toLowerCase(), Number(r.count) || 0);
-  }
-  return map;
+  return CairnHealthClient.evidenceCountMap(summary);
 }
 
 function paintDirectives(wrap, active, evSummary) {
@@ -253,12 +231,7 @@ function paintHealthShareTab() {
 }
 
 function healthMarkersEmptyHtml() {
-  return `<div class="empty-state reveal" style="${stagger(0)}">
-    <div class="artile artile-lg" style="margin:0 auto 14px">${HEALTH_HERO_ART}</div>
-    <div class="empty-state-line">No markers yet</div>
-    <div class="hpic-hero-sub">Add a lab report or DEXA scan and Cairn pulls out the markers — then tracks each one's trend here.</div>
-    <button id="hMkToRecords" class="logbtn hpic-cta-btn">ADD A DOCUMENT</button>
-  </div>`;
+  return CairnHealthClient.markersEmptyHtml(HEALTH_HERO_ART);
 }
 
 // ---- Records tab: upload affordance + the document list ----
@@ -643,6 +616,15 @@ async function loadHealthDocs() {
       if (status) pollHealthDoc(Number(el.dataset.hdoc));
     }
   });
+  if (state.pendingHealthDocId) {
+    const wanted = String(state.pendingHealthDocId);
+    const target = [...wrap.querySelectorAll(".hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === wanted);
+    state.pendingHealthDocId = null;
+    if (target) {
+      target.classList.remove("hdoc-collapsed");
+      try { target.scrollIntoView({ block: "start", behavior: "smooth" }); } catch { target.scrollIntoView(); }
+    }
+  }
   return docs;
 }
 

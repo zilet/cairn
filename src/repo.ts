@@ -21,6 +21,7 @@ export * from "./repo/marker-canon.js";
 export * from "./repo/health.js";
 export * from "./repo/ccda.js";
 export * from "./repo/standing.js";
+export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
 export * from "./repo/propagation.js";
 export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker reasoning

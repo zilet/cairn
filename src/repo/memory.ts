@@ -201,12 +201,18 @@ export function listSuggestions(limit = 50) {
 
 // Durable learnings drawn from reconciliation are stored as memory rows of kind
 // 'learning' (source 'outcome-learning'); surfaced to the coach via getCoachContext.
-export function recentLearnings(limit = 6): { content: string; updated_at?: string }[] {
+export function recentLearnings(limit = 6): { id: number; kind: "learning"; content: string; source: string | null; updated_at?: string }[] {
   return (db.prepare(
-    `SELECT content, COALESCE(updated_at, created_at) AS updated_at FROM memory
+    `SELECT id, kind, content, source, COALESCE(updated_at, created_at) AS updated_at FROM memory
      WHERE kind = 'learning' AND superseded_by IS NULL
-     ORDER BY id DESC LIMIT ?`
-  ).all(limit) as any[]).map((r) => ({ content: String(r.content), updated_at: r.updated_at }));
+     ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?`
+  ).all(Math.max(1, Math.min(20, Number(limit) || 6))) as any[]).map((r) => ({
+    id: Number(r.id),
+    kind: "learning",
+    content: String(r.content),
+    source: r.source == null ? null : String(r.source),
+    updated_at: r.updated_at,
+  }));
 }
 
 // Surface the outcome-learning store as a quiet "What Cairn has noticed" read (F2).
@@ -267,6 +273,12 @@ export function reconcileSuggestions(opts: { maxPerPass?: number } = {}): { reco
   return { reconciled: rows.length, learnings };
 }
 
+const OUTCOME_LESSONS = {
+  restTrainedFlat: "Earned-rest reads matter for you: when you trained through one and felt flat, the coach should keep rest prominent next time.",
+  restTrainedFine: "Rest-day reads can be conservative for you: training through one went fine, so the coach can tolerate slightly higher frequency before calling rest.",
+  deficitTrendUp: "Deficit check-ins may be underestimating intake or expenditure when bodyweight trends up; lean toward the higher TDEE next time.",
+};
+
 // Compare ONE suggestion to what actually happened. Returns the recorded outcome
 // blob plus an optional one-line lesson (null = nothing worth remembering — the
 // calm, common answer). All comparisons are best-effort and null-safe.
@@ -288,9 +300,9 @@ function reconcileOneSuggestion(s: any): { outcome: any; lesson: string | null }
       // know it went badly, so the default learning is the higher-frequency one.
       const felt = fb?.performance == null ? null : Number(fb.performance);
       if (felt != null && Number.isFinite(felt) && felt <= 2) {
-        return { outcome, lesson: `Suggested rest on ${date}; trained anyway and felt flat afterward — the earned-rest read was probably right.` };
+        return { outcome, lesson: OUTCOME_LESSONS.restTrainedFlat };
       }
-      return { outcome, lesson: `Suggested a rest day on ${date} but trained anyway and it went fine — tolerates higher training frequency than a 3-hard-days rule assumes.` };
+      return { outcome, lesson: OUTCOME_LESSONS.restTrainedFine };
     }
     if (p.kind === "train" && !trained) {
       return { outcome, lesson: null }; // a planned-but-skipped day is normal life, not a lesson
@@ -313,10 +325,9 @@ function reconcileOneSuggestion(s: any): { outcome: any; lesson: string | null }
     const expected = String(p.direction ?? (Number(p.target_kcal) && p.tdee && Number(p.target_kcal) < Number(p.tdee) ? "down" : ""));
     const outcome = { proposed_target_kcal: p.target_kcal ?? null, expected_direction: expected || null, trend_lb_wk: Number.isFinite(trend) ? trend : null };
     if (expected === "down" && Number.isFinite(trend) && trend > 0.2) {
-      return { outcome, lesson: `Nutrition check-in on ${date} aimed for a deficit but bodyweight has drifted up since — the intake estimate may run low; lean toward the higher TDEE next time.` };
+      return { outcome, lesson: OUTCOME_LESSONS.deficitTrendUp };
     }
     return { outcome, lesson: null };
   }
   return { outcome: null, lesson: null };
 }
-

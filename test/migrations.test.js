@@ -68,6 +68,35 @@ test("v36 makes plan_items.exercise_id nullable on a migrated DB, preserving row
   d.close();
 });
 
+test("v49 backfills stable chat session ids for archived conversations", () => {
+  const d = new DatabaseSync(":memory:");
+  d.exec(`CREATE TABLE chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT (datetime('now')),
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    agent TEXT,
+    meta TEXT,
+    archived_at TEXT
+  );`);
+  d.exec(`INSERT INTO chat_messages (role, content, archived_at) VALUES
+    ('user', 'first thread question', '2026-06-29 10:00:00'),
+    ('assistant', 'first thread answer', '2026-06-29 10:00:00'),
+    ('user', 'second thread question', '2026-06-29 11:00:00')`);
+  d.exec("PRAGMA user_version = 48;");
+
+  runMigrations(d);
+
+  assert.equal(Number(d.prepare("PRAGMA user_version").get().user_version), MAX_VERSION);
+  const cols = new Set(d.prepare("PRAGMA table_info(chat_messages)").all().map((c) => c.name));
+  assert.ok(cols.has("session_id"), "v49 chat_messages.session_id");
+  const rows = d.prepare("SELECT id, session_id FROM chat_messages ORDER BY id").all();
+  assert.deepEqual(rows.map((r) => r.session_id), ["chat_1", "chat_1", "chat_3"]);
+  const indexes = new Set(d.prepare("PRAGMA index_list(chat_messages)").all().map((idx) => idx.name));
+  assert.ok(indexes.has("idx_chat_messages_session"), "v49 chat session index");
+  d.close();
+});
+
 test("migration versions are strictly ascending, unique, and gapless from 1", () => {
   const versions = MIGRATIONS.map((m) => m.version);
   const sorted = [...versions].sort((a, b) => a - b);
@@ -113,4 +142,5 @@ test("the migrated schema has the columns later code depends on", () => {
   assert.ok(cols("sessions").has("kind"), "v35 sessions.kind");
   assert.ok(cols("settings").has("garmin_password_encrypted"), "v48 settings.garmin_password_encrypted");
   assert.ok(cols("settings").has("gemini_api_key_encrypted"), "v48 settings.gemini_api_key_encrypted");
+  assert.ok(cols("chat_messages").has("session_id"), "v49 chat_messages.session_id");
 });

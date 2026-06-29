@@ -18,6 +18,8 @@ import {
   snoozeNextStep,
   nextStepDone,
 } from "../dist/repo/next-step.js";
+import { localDateISO } from "../dist/repo/shared.js";
+import { runWithTimeZone } from "../dist/tz.js";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -94,6 +96,8 @@ test("scoring order: synthesis one_change (lev 3) beats a raw directive group (l
   assert.equal(withSynth.step_key, "recheck:synthesis-one-change");
   assert.equal(withSynth.leverage, 3, "the synthesis lever outranks the raw directive");
   assert.match(withSynth.why, /oily fish/);
+  assert.deepEqual(withSynth.based_on, ["Latest health synthesis", "Connected-brain marker review"]);
+  assert.deepEqual(withSynth.action, { kind: "open_health", label: "Open health read" });
 });
 
 test("snooze cooldown suppresses the step for its window, then it returns", () => {
@@ -157,6 +161,11 @@ test("fuel: a real protein gap on a logged day surfaces (and step_key is stable)
   assert.ok(step, "a material protein gap on a logged day surfaces");
   assert.equal(step.domain, "fuel");
   assert.equal(step.step_key, "fuel:protein-gap");
+  assert.ok(Array.isArray(step.based_on));
+  assert.ok(step.based_on.length <= 3, "provenance stays bounded");
+  assert.ok(step.based_on.some((line) => /logged food/i.test(line)));
+  assert.deepEqual(step.action, { kind: "open_food", label: "Review today's fuel" });
+  assert.doesNotMatch(JSON.stringify(step), /score|priority|actionable|fresh/i);
 
   // Stable key across calls.
   const again = nextBestStep(TODAY);
@@ -173,6 +182,29 @@ test("fuel keys logged food by the stamped local date, not UTC created_at", () =
 
   const utcDay = nextBestStep("2026-06-24");
   assert.equal(utcDay, null, "the UTC-created_at day does not steal the local dinner");
+});
+
+test("default next-best-step date follows the active device timezone", () => {
+  seedProfile();
+  const utcToday = new Date().toISOString().slice(0, 10);
+  let zone = "Pacific/Kiritimati";
+  let localToday = localDateISO(new Date(), zone);
+  if (localToday === utcToday) {
+    zone = "Etc/GMT+12";
+    localToday = localDateISO(new Date(), zone);
+  }
+  assert.notEqual(localToday, utcToday, "test zone must frame a different local day than UTC");
+
+  seedFoodStampedFor(localToday, new Date().toISOString().slice(0, 19).replace("T", " "), {
+    summary: "late plate",
+    kcal: 650,
+    protein_g: 30,
+  });
+
+  const step = runWithTimeZone(zone, () => nextBestStep());
+  assert.ok(step, "the default call reads the active local day");
+  assert.equal(step.domain, "fuel");
+  assert.equal(step.step_key, "fuel:protein-gap");
 });
 
 test("fuel never nudges capture: no food logged → no fuel step", () => {

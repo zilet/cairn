@@ -7,7 +7,7 @@
 // Both are deterministic, offline, no agent/network — exactly what npm test covers.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { localDaysAgo, repo, resetTables } from "./_seed.js";
+import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 
 beforeEach(() => {
   resetTables("evidence_cache", "memory", "settings");
@@ -114,4 +114,41 @@ test("reconcileSuggestions writes a learning that getOutcomeLearnings then surfa
   assert.ok(out.learnings >= 1, "a rest-read-then-trained day yields a learning");
   const { learnings } = repo.getOutcomeLearnings();
   assert.ok(learnings.some((l) => /higher training frequency|rest/i.test(l.content)), "the learning is now visible");
+});
+
+test("repeated outcome learnings reinforce one curatable pattern instead of dated noise", () => {
+  resetTables("suggestions", "sessions", "logged_sets", "exercises", "memory");
+  const first = localDaysAgo(2);
+  const second = localDaysAgo(1);
+
+  repo.recordSuggestion("day_read", first, { kind: "rest" });
+  repo.recordSuggestion("day_read", second, { kind: "rest" });
+  repo.logSetByName({ exercise: "ZTest Bench", weight: 135, reps: 5, date: first });
+  repo.logSetByName({ exercise: "ZTest Bench", weight: 140, reps: 5, date: second });
+
+  const out = repo.reconcileSuggestions({ maxPerPass: 10 });
+  assert.equal(out.reconciled, 2);
+  assert.equal(out.learnings, 2, "both outcomes reinforced the durable pattern");
+
+  const { learnings } = repo.getOutcomeLearnings();
+  assert.equal(learnings.length, 1, "duplicate pattern folded into one live learning");
+  assert.match(learnings[0].content, /Rest-day reads can be conservative/i);
+  assert.doesNotMatch(learnings[0].content, /\d{4}-\d{2}-\d{2}/, "curatable learning is not pinned to one date");
+
+  const rows = repo.listMemory(20).filter((m) => m.kind === "learning");
+  assert.equal(rows.length, 1);
+  assert.ok(Number(rows[0].confidence) > 1, "repeated evidence reinforces confidence instead of appending rows");
+});
+
+test("recentLearnings uses updated_at so reinforced older lessons reach the coach", () => {
+  resetTables("memory");
+  db.prepare(`INSERT INTO memory (kind, content, source, confidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run("learning", "Newer row, older signal", "outcome-learning", 1, "2026-06-10 00:00:00", "2026-06-10 00:00:00");
+  db.prepare(`INSERT INTO memory (kind, content, source, confidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run("learning", "Older row, freshly reinforced", "outcome-learning", 3, "2026-06-01 00:00:00", "2026-06-20 00:00:00");
+
+  const [top] = repo.recentLearnings(1);
+  assert.equal(top.content, "Older row, freshly reinforced");
+  assert.equal(top.kind, "learning");
+  assert.equal(top.source, "outcome-learning");
 });

@@ -492,6 +492,27 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "settings", "garmin_password_encrypted TEXT DEFAULT ''");
     addColumn(db, "settings", "gemini_api_key_encrypted TEXT DEFAULT ''");
   } },
+  { version: 49, name: "chat-session-ids", up: (db) => {
+    // Archived conversations used to be keyed only by archived_at, which is
+    // awkward for stable PWA links. Give each archived group one durable id based
+    // on its first message id; new archiveChat() writes this at archive time.
+    addColumn(db, "chat_messages", "session_id TEXT");
+    try {
+      db.exec(`
+        WITH grouped AS (
+          SELECT archived_at, 'chat_' || MIN(id) AS sid
+            FROM chat_messages
+           WHERE archived_at IS NOT NULL
+           GROUP BY archived_at
+        )
+        UPDATE chat_messages
+           SET session_id = (SELECT sid FROM grouped WHERE grouped.archived_at = chat_messages.archived_at)
+         WHERE archived_at IS NOT NULL
+           AND (session_id IS NULL OR session_id = '')
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)`);
+    } catch { /* best-effort backfill; future archives stamp session_id directly */ }
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

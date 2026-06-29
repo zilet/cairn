@@ -33,7 +33,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/agent-jobs` | Mirrors the chat-turns surface verbatim (the PWA's kind-agnostic job runner codes against this). The `done` event's `result` (and GET /:id's job.result) is byte-for-byte the body the corresponding op endpoint returned synchronously before this change — so the client's done-handler reuses its old rendering. Active (queued + running) jobs, oldest-first — the PWA reconstructs in-flight + queued ops from this on every (re)load (durable across restarts). |
+| GET | `/api/agent-jobs` | Durable agent jobs are the backgrounded heavy agentic ops. This mirrors the chat-turns surface: the PWA's kind-agnostic job runner can restore in-flight and queued work after reloads. Active (queued + running) jobs, oldest-first. |
 | GET | `/api/agent-jobs/:id` | One job's current state (poll fallback when SSE is unavailable). A `done` job includes job.result = the ref-hydrated contract body. |
 | POST | `/api/agent-jobs/:id/cancel` | Stop a queued or running job (drops it / SIGKILLs the live subprocess). |
 | GET | `/api/agent-jobs/:id/stream` | Live progress for one job (Server-Sent Events). An immediate `snapshot` (so a late subscriber / poll-fallback sees current state, with the result if already terminal), then every phase + the terminal event from the worker bus, then close. EventSource can't set headers, so the PWA reaches this with ?token=. |
@@ -49,17 +49,17 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/agents` |  |
-| GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open). Both return ok:false at HTTP 200 (the PWA api() helper reads the body regardless of status), mirroring the rest of the designed failure signals. |
+| GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open). Both return ok:false at HTTP 200, mirroring the rest of Cairn's designed failure signals. |
 | GET | `/api/agents/:name/models` |  |
 
 ## `/art`
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/art` | Cache hit → the PNG, immutable-cached. Miss → 204 immediately and a background generation is queued (when a Gemini key is set and art_enabled); the client simply retries later. No key / disabled / known-failed also → 204. |
-| GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. The PWA primes its readiness set from this so generated art paints immediately (no SVG placeholder flash) even on a cold client. Not cached — readiness changes as the background queue produces images. |
+| GET | `/api/art` | Cache hit -> the cached image, immutable-cached. Miss -> 204 immediately and a background generation is queued when generation is available; the client simply retries later. No key / disabled / known-failed also returns 204. |
+| GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. Not cached because readiness changes as the background queue produces images. |
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. |
-| POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for (exercises, current meal plans, recent food notes/activities). Safe no-op when generation is unavailable — requestArt handles that per query. |
+| POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. |
 
 ## `/blood-pressure`
 
@@ -92,13 +92,13 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| DELETE | `/api/chat` | "Clear" archives rather than deletes (repo.clearChat → archiveChat): chat is part of the athlete's history/export, so nothing is hard-deleted anymore. |
+| DELETE | `/api/chat` | "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is part of the athlete's history/export, so nothing is hard-deleted anymore. |
 | GET | `/api/chat` |  |
 | POST | `/api/chat` | Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the user message + a chat_turn and hand it to the serial worker, returning at once. The PWA streams progress over GET /api/chat/turns/:id/stream and rebuilds the in-flight + queued thread from GET /api/chat/turns on (re)load — so a follow-up queued mid-think, or a turn interrupted by navigation/reload/restart, survives. |
-| POST | `/api/chat/reset` | "Fresh start": ARCHIVE the live conversation immediately (so the composer is usable at once — no blocking on the agent), then distill durable facts from the pre-archive history into memory in the BACKGROUND as a chat_distill job. The PWA settles a "✓ N remembered" pill when the job lands; a message typed during the distill just queues as a normal chat turn (archive-before-enqueue keeps the ordering). When bg_ops is OFF this falls back to the legacy blocking inline path. |
+| POST | `/api/chat/reset` | "Fresh start": ARCHIVE the live conversation immediately (so the composer is usable at once — no blocking on the agent), then distill durable facts from the pre-archive history into memory in the BACKGROUND as a chat_distill job. The PWA settles a "remembered" pill when the job lands; a message typed during the distill just queues as a normal chat turn (archive-before-enqueue keeps the ordering). When bg_ops is OFF this falls back to the legacy blocking inline path. |
 | GET | `/api/chat/search` | Read-only history: browse past conversations (archived by "fresh start") and search across everything. These never mutate — nothing is hard-deleted. |
 | GET | `/api/chat/sessions` |  |
-| GET | `/api/chat/sessions/:archivedAt` |  |
+| GET | `/api/chat/sessions/:sessionId` |  |
 | GET | `/api/chat/turns` | Active (queued + running) turns, oldest-first — the PWA reconstructs the live in-flight + queued thread from this on every (re)load (durable across restarts). |
 | GET | `/api/chat/turns/:id` | One turn's current state (poll fallback when SSE is unavailable). |
 | POST | `/api/chat/turns/:id/cancel` | Stop a queued or running turn (drops it / SIGKILLs the live subprocess). |
@@ -127,7 +127,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/coaching-focus` | THE CONDUCTOR — one sequenced whole-athlete focus (lead + parallel + later + connections + a batched retest) across training, running, DEXA, health, nutrition and recovery. Pull/on-demand; the surface leads with this instead of a card flood. |
+| GET | `/api/coaching-focus` | THE CONDUCTOR: one sequenced whole-athlete focus (lead + parallel + later + connections + a batched retest) across training, running, DEXA, health, nutrition and recovery. Pull/on-demand; the surface leads with this instead of a card flood. |
 
 ## `/context-effect`
 
@@ -194,8 +194,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | PUT | `/api/exercises/:id` |  |
 | DELETE | `/api/exercises/:name` | Delete an exercise by name. Returns 200 with ok:false (not an HTTP error) when it's still referenced by a plan or logged sets — a designed, recoverable state the PWA surfaces as a gentle reason, mirroring the swap/skip failure signal. |
 | GET | `/api/exercises/aliases` | Exercise-name reconciliation (movement de-duplication) — the canon counterpart to /markers/reconcile. GET lists the learned variant→canonical aliases; POST runs the agentic reconciler over the distinct exercise names, tidying descriptive/duplicate titles ("DB bench"/"Dumbbell bench press") into clean reusable canonical names and profiling muscle groups. The deterministic exercise-canon normalizer is always on; this learns the long tail. Synchronous like the marker reconcile — ok:false at 200 is the designed failure signal. Never changes logged numbers — only the series merge. |
-| POST | `/api/exercises/merge` | Merge two exercises: repoint all logged_sets and plan_items from `from` into `into`, then remove the now-empty `from` exercise. ok:false when `into` does not exist (guard; nothing is changed). |
-| POST | `/api/exercises/reconcile-groups` | Backfill / normalize muscle_group for every exercise (null → classified; legacy values like 'legs' → canonical). Idempotent. |
+| POST | `/api/exercises/merge` | Merge duplicate exercises explicitly: repoint logged sets + plan items from `from` into `into`, then remove the now-empty `from` exercise. ok:false when `into` does not exist (guard; nothing is changed). |
+| POST | `/api/exercises/reconcile-groups` | Reconcile exercise muscle groups using the deterministic canonicalizer. Useful after importing/creating older exercises with blank or legacy groups. |
 | POST | `/api/exercises/reconcile-names` |  |
 
 ## `/export`
@@ -318,7 +318,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/injury-impacts` | Structured injury timeline: for each active injury, the planned exercises it touches + calm swap suggestions. Deterministic read — suggestion, never a gate. |
+| GET | `/api/injury-impacts` | Structured injury timeline: for each active injury, the planned exercises it touches + calm swap suggestions. Deterministic read: suggestion, never a gate. |
 
 ## `/insights`
 
@@ -326,7 +326,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/insights` | The Brief surfaces ONE at a time when the app is opened. GET returns the live stream (new + seen, most recent first); dismissed insights stay in the DB and exports but are hidden here. |
 | PUT | `/api/insights/:id` | Mark an insight seen/dismissed and/or record thumbs feedback. On feedback:'up' we ALSO write the insight text to memory so the relationship learns what kind of connection lands. 404 on unknown id (a real lookup, unlike the soft reads). |
-| POST | `/api/insights/generate` | Run ONE agentic pass over the whole picture for a single genuine cross-domain connection, dedupe against what we've already said, and store it. Like the health review, ok:false at status 200 is the designed failure signal — the agent found nothing real (found:false) or returned an unusable shape. NO push notification ever fires; the result simply waits in-app. |
+| POST | `/api/insights/generate` | Run ONE agentic pass over the whole picture for a single genuine cross-domain connection, dedupe against what we've already said, and store it. Like the health review, ok:false at status 200 is the designed failure signal: the agent found nothing real (found:false) or returned an unusable shape. NO push notification ever fires; the result simply waits in-app. |
 
 ## `/last-set`
 
@@ -344,13 +344,13 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/learnings` | The durable, plain-language learnings drawn from suggestion → actual reconciliation (e.g. "tolerates higher training frequency than the read assumed"). A quiet read, never a score or a gate — these only season the coach's defaults. Reads the existing 'learning' memory rows; nothing new stored. |
+| GET | `/api/learnings` | The durable, plain-language learnings drawn from suggestion -> actual reconciliation (e.g. "tolerates higher training frequency than the read assumed"). A quiet read, never a score or a gate — these only season the coach's defaults. Reads the existing 'learning' memory rows; nothing new stored. |
 
 ## `/markers`
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/markers/aliases` | Marker-name canonicalization (analyte de-duplication). GET lists the learned variant→canonical aliases; POST runs the agentic reconciler over the distinct marker names and persists genuine same-analyte merges (the deterministic normalizer + KB are always on; this learns the long tail). Synchronous like the meal swap — one agent call; ok:false at 200 is the designed failure signal. |
+| GET | `/api/markers/aliases` | Marker-name canonicalization (analyte de-duplication). GET lists the learned variant->canonical aliases; POST runs the agentic reconciler over the distinct marker names and persists genuine same-analyte merges (the deterministic normalizer + KB are always on; this learns the long tail). Synchronous like the meal swap: one agent call; ok:false at 200 is the designed failure signal. |
 | GET | `/api/markers/priority` | Markers re-ranked by impact (distance from OPTIMAL, most-actionable first). Informational, not medical advice; the impact_score is an internal ordering signal only and is never rendered as a user-facing grade. |
 | POST | `/api/markers/reconcile` |  |
 
@@ -391,7 +391,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/next-step` |  |
-| POST | `/api/next-step/done` | done / snooze are the calm "did it" / "not today" feedback — a skipped step doesn't return tomorrow (constitution: pull, never push; the athlete drives). |
+| POST | `/api/next-step/done` | done / snooze are the calm "did it" / "not today" feedback: a skipped step doesn't return tomorrow (constitution: pull, never push; the athlete drives). |
 | POST | `/api/next-step/snooze` |  |
 
 ## `/nutrition`
@@ -406,7 +406,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/onboard` | One free-text intro → understood + applied, then onboarded. Never bug-to-death: an empty text just marks onboarded. Always returns ok:true; degrades to the deterministic base (about_me + KB supplements) when no agent is reachable. |
+| POST | `/api/onboard` | One free-text intro -> understood + applied, then onboarded. Never bug-to-death: an empty text just marks onboarded. Always returns ok:true; degrades to the deterministic base (about_me + KB supplements) when no agent is reachable. |
 
 ## `/performance`
 
@@ -476,7 +476,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/reaction-model` | All read-only, plain words, no scores — the personal coaching team, surfaced for the PWA. |
+| GET | `/api/reaction-model` | All read-only, plain words, no scores: the personal coaching team, surfaced for the PWA. |
 
 ## `/recent-training`
 
@@ -494,8 +494,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/research` | Read cached evidence (by ?topic= and/or ?marker=). Always available — reads the cache only, never the network — so it works even with research disabled. |
-| POST | `/api/research` | Run a cited, web-grounded evidence pass for ONE question and cache it. Gated by settings.research_enabled: when off, serves only cached evidence and returns ok:false (the designed signal, at 200) — never reaches the network. Informational, not medical advice. |
+| GET | `/api/research` | Read cached evidence (by ?topic= and/or ?marker=). Always available: reads the cache only, never the network, so it works even with research disabled. |
+| POST | `/api/research` | Run a cited, web-grounded evidence pass for ONE question and cache it. Gated by settings.research_enabled: when off, serves only cached evidence and returns ok:false (the designed signal, at 200): never reaches the network. Informational, not medical advice. |
 
 ## `/run-compliance`
 
@@ -526,13 +526,13 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/sessions` |  |
-| POST | `/api/sessions/:date/feedback` | Optional per-session autoregulation feedback (Phase 3B): 1-tap soreness / performance (1-5, clamped) and a free-text joint_pain area. Keyed by DATE (creates that date's session if needed); only provided fields are written. buildCoachPrompt reads these to bend volume / de-load a sore joint. |
+| POST | `/api/sessions/:date/feedback` | Optional per-session feedback — the human side of autoregulation. A missing session for the date is a normal "not yet" state, so this returns null rather than throwing. Values are clamped in the repo. |
 | GET | `/api/sessions/:id` |  |
 | POST | `/api/sessions/:id/finish` |  |
 | PUT | `/api/sessions/:id/notes` | Edit a finished/past session's notes (history correction). |
 | POST | `/api/sessions/:id/reopen` | Reopen a finished session to keep logging (clears finished_at). |
 | DELETE | `/api/sessions/skip` |  |
-| POST | `/api/sessions/skip` | Skip / unskip a planned exercise for one date's session ("not today"). An exercise with sets already logged that session refuses with 200 + ok:false — a designed state the PWA surfaces as a gentle toast, not an HTTP error. |
+| POST | `/api/sessions/skip` | Mark a planned exercise as intentionally skipped for today (or a passed date). Designed 200 + ok:false when there is no matching open session / plan item. |
 
 ## `/sets`
 
@@ -540,7 +540,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | POST | `/api/sets` |  |
 | DELETE | `/api/sets/:id` |  |
-| PUT | `/api/sets/:id` | Edit a single logged set (history correction). Only provided fields are touched. |
+| PUT | `/api/sets/:id` |  |
 
 ## `/settings`
 
@@ -582,7 +582,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/symptom-links` | Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker — a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
+| GET | `/api/symptom-links` | Symptom <-> marker connections: a symptom the athlete logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
 
 ## `/test-week`
 
@@ -625,7 +625,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/version` | The running version, and whether a newer Cairn release exists. The status is served from the app_state cache (no network on this path); the quiet daily background check (scheduler) keeps it fresh. POST forces an immediate check. |
+| GET | `/api/version` | The running version, and whether a newer Cairn release exists. The status is served from the app_state cache; the scheduler keeps it fresh, and POST forces an explicit operator-pulled check. |
 
 ## `/volume`
 

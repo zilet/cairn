@@ -283,6 +283,16 @@ test("programBalance EXCLUDES mobility from the set-count math", () => {
   assert.ok(!bal.groups.some((g) => g.group === "mobility"), "mobility never appears in the working-set bands");
 });
 
+test("programBalance honors an explicit as-of date", () => {
+  makeExercise("Bench Press", { muscle_group: "chest" });
+  logSet("Bench Press", "2026-02-10", { weight: 185, reps: 8, rir: 2 });
+
+  const bal = programBalance(2, "2026-02-10");
+  const chest = bal.groups.find((g) => g.group === "chest");
+  assert.ok(chest, "the as-of day is included even when it is not the real current date");
+  assert.equal(chest.last_trained, "2026-02-10");
+});
+
 test("programAdjustments flags missing-pattern GAPS (no core / grip / mobility)", () => {
   // A plan that's all pressing — no core, no grip, no mobility programmed.
   makeExercise("Bench Press", { muscle_group: "chest" });
@@ -375,6 +385,15 @@ test("recentMuscleLoad does NOT gate legs after a short casual walk", () => {
     .run(isoDaysAgo(1), "hike", "evening walk", 40, 3, "test");
   const rl = recentMuscleLoad(2).get("quads");
   if (rl) assert.equal(rl.heavy, false, "a short walk loads legs but not HEAVY — it won't hold back leg training");
+});
+
+test("recentMuscleLoad honors an explicit as-of date", () => {
+  logRide("2026-02-10");
+  const rl = recentMuscleLoad(2, "2026-02-11").get("quads");
+  assert.ok(rl, "the as-of window includes yesterday's ride");
+  assert.equal(rl.last_date, "2026-02-10");
+  assert.equal(rl.days_ago, 1);
+  assert.equal(rl.heavy, true);
 });
 
 test("programAdjustments holds back a due group the athlete just smoked on a ride", () => {

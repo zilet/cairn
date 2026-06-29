@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { localDateISO } from "./shared.js";
+import { addDaysISO, localDateISO } from "./shared.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { activeContextEffect } from "./context-effect.js";
 import { listContextEvents } from "./health.js";
@@ -376,7 +376,7 @@ export function forwardLook(date?: string): ForwardLook {
   } catch { /* no plan → no next focus */ }
   let due: string[] = [];
   try {
-    const bal: any = programBalance();
+    const bal: any = programBalance(2, d);
     due = Array.isArray(bal?.due) ? bal.due.slice(0, 2) : [];
   } catch { /* no balance → no due groups */ }
   const parts: string[] = [];
@@ -532,8 +532,9 @@ export interface ExpenditureEstimate {
 // context_events) suppresses confidence — intake logging and the scale are both
 // disrupted then, so we lean conservative rather than re-target on noise.
 export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
-  const since = new Date(Date.now() - Math.max(1, windowDays - 1) * 864e5).toISOString().slice(0, 10);
-  const nowDay = Date.now() / 864e5;
+  const today = localDateISO();
+  const since = addDaysISO(today, -Math.max(1, windowDays - 1)) ?? today;
+  const nowDay = Date.parse(`${today}T00:00:00Z`) / 864e5;
 
   // Goal-pace projection off the measured weigh-in trend — surfaced on the Energy
   // Balance view alongside the expenditure read (plain language, never a score).
@@ -572,14 +573,19 @@ export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
   // then average across days that have any logged food). Days with no food
   // logged are simply absent — never counted as zero (that would slander an
   // off-logging day as a crash diet); they only thin the data.
-  const notes = db.prepare(`SELECT created_at, parsed_json FROM food_notes WHERE substr(created_at,1,10) >= ?`).all(since) as any[];
+  const notes = db.prepare(
+    `SELECT COALESCE(date, substr(created_at, 1, 10)) AS day, parsed_json
+       FROM food_notes
+      WHERE COALESCE(date, substr(created_at, 1, 10)) >= ?`
+  ).all(since) as any[];
   const kcalByDay = new Map<string, number>();
   for (const n of notes) {
     let parsed: any = null;
     try { parsed = n.parsed_json ? JSON.parse(n.parsed_json) : null; } catch { parsed = null; }
     const kcal = Number(parsed?.kcal);
     if (!Number.isFinite(kcal) || kcal <= 0) continue;
-    const day = String(n.created_at ?? "").slice(0, 10);
+    const day = String(n.day ?? "").slice(0, 10);
+    if (!day) continue;
     kcalByDay.set(day, (kcalByDay.get(day) ?? 0) + kcal);
   }
   const dayTotals = [...kcalByDay.values()];
