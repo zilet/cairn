@@ -3,14 +3,13 @@
 // The client build must be deterministic: if running it changes a tracked output,
 // commit that output with the source change and bump public/sw.js when required.
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLIENT_OUTPUTS } from "./build-client.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outputs = ["public/js/route-state.js"];
-const require = createRequire(import.meta.url);
+const outputs = CLIENT_OUTPUTS.map((item) => item.output);
 
 function readOutput(file) {
   const abs = path.join(root, file);
@@ -25,8 +24,7 @@ for (const file of outputs) {
 }
 
 const before = new Map(outputs.map((file) => [file, readOutput(file)]));
-const tsc = require.resolve("typescript/lib/tsc.js");
-execFileSync(process.execPath, [tsc, "-p", "tsconfig.client.build.json"], { cwd: root, stdio: "inherit" });
+execFileSync(process.execPath, ["scripts/build-client.mjs"], { cwd: root, stdio: "inherit" });
 
 const changed = outputs.filter((file) => before.get(file) !== readOutput(file));
 if (changed.length) {

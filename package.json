@@ -17,7 +17,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "npm run client:build && tsc",
+    "build": "npm run client:check && npm run client:build && tsc",
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",
     "seed:demo": "tsx src/demoSeed.ts",
@@ -30,7 +30,7 @@
     "docs:check": "node scripts/gen-docs.mjs --check",
     "actions:check": "node scripts/check-action-pins.mjs",
     "client:check": "tsc -p tsconfig.client.build.json --noEmit",
-    "client:build": "tsc -p tsconfig.client.build.json",
+    "client:build": "node scripts/build-client.mjs",
     "client:verify": "npm run typecheck:client && node scripts/check-client-build-output.mjs",
     "typecheck:client": "tsc -p tsconfig.client.json && npm run client:check",
     "public:check": "node scripts/check-public-scripts.mjs",

@@ -623,6 +623,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const clientBuildTsconfig = read("tsconfig.client.build.json");
   const contracts = read("src/contracts/client.ts");
   const compat = read("src/contracts/client-compat.ts");
+  const dateUtilsSource = read("src/client/date-utils.ts");
+  const htmlUtilsSource = read("src/client/html-utils.ts");
   const routeStateSource = read("src/client/route-state.ts");
   const routeState = read("public/js/route-state.js");
   const dateUtils = read("public/js/date-utils.js");
@@ -636,6 +638,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const chatClient = read("public/js/chat-client.js");
   const settingsClient = read("public/js/settings-client.js");
   const publicScriptCheck = read("scripts/check-public-scripts.mjs");
+  const clientBuild = read("scripts/build-client.mjs");
   const clientBuildCheck = read("scripts/check-client-build-output.mjs");
   const today = read("public/js/03-today.js");
   const health = read("public/js/07-me-health.js");
@@ -643,8 +646,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const boot = read("public/js/10-boot.js");
   const sw = read("public/sw.js");
   const index = read("public/index.html");
+  assert.equal(pkg.scripts.build, "npm run client:check && npm run client:build && tsc");
   assert.equal(pkg.scripts["client:check"], "tsc -p tsconfig.client.build.json --noEmit");
-  assert.equal(pkg.scripts["client:build"], "tsc -p tsconfig.client.build.json");
+  assert.equal(pkg.scripts["client:build"], "node scripts/build-client.mjs");
   assert.match(pkg.scripts["typecheck:client"], /tsc -p tsconfig\.client\.json && npm run client:check/);
   assert.equal(pkg.scripts["public:check"], "node scripts/check-public-scripts.mjs");
   assert.match(pkg.scripts.verify, /npm run typecheck:client/);
@@ -654,8 +658,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientTsconfig, /"checkJs": true/);
   assert.match(clientTsconfig, /"noEmit": true/);
   assert.match(clientTsconfig, /src\/contracts\/client-globals\.d\.ts/);
-  assert.match(clientTsconfig, /public\/js\/date-utils\.js/);
-  assert.match(clientTsconfig, /public\/js\/html-utils\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/html-utils\.js/);
   assert.match(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.match(clientTsconfig, /public\/js\/api-client\.js/);
   assert.match(clientTsconfig, /public\/js\/swr-cache\.js/);
@@ -665,8 +669,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientTsconfig, /public\/js\/health-client\.js/);
   assert.match(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
-  assert.match(clientBuildTsconfig, /"outFile": "public\/js\/route-state\.js"/);
-  assert.match(clientBuildTsconfig, /"files": \["src\/client\/route-state\.ts"\]/);
+  assert.match(clientBuildTsconfig, /"include": \["src\/client\/\*\*\/\*\.ts"\]/);
+  assert.match(clientBuild, /src\/client\/date-utils\.ts/);
+  assert.match(clientBuild, /public\/js\/date-utils\.js/);
+  assert.match(clientBuild, /src\/client\/html-utils\.ts/);
+  assert.match(clientBuild, /public\/js\/html-utils\.js/);
+  assert.match(clientBuild, /src\/client\/route-state\.ts/);
+  assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.ok(
     index.indexOf('/js/date-utils.js') > -1 &&
       index.indexOf('/js/date-utils.js') < index.indexOf('/js/01-core.js'),
@@ -733,8 +742,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(publicScriptCheck, /topLevelBindings/);
   assert.match(publicScriptCheck, /prior\.lexical\s*\|\|\s*binding\.lexical/);
   assert.match(publicScriptCheck, /public app-shell script globals are safe/);
-  assert.match(clientBuildCheck, /public\/js\/route-state\.js/);
-  assert.match(clientBuildCheck, /typescript\/lib\/tsc\.js/);
+  assert.match(clientBuild, /export const CLIENT_OUTPUTS = \[/);
+  assert.match(clientBuild, /src\/client\/date-utils\.ts/);
+  assert.match(clientBuild, /public\/js\/date-utils\.js/);
+  assert.match(clientBuild, /src\/client\/html-utils\.ts/);
+  assert.match(clientBuild, /public\/js\/html-utils\.js/);
+  assert.match(clientBuild, /src\/client\/route-state\.ts/);
+  assert.match(clientBuild, /public\/js\/route-state\.js/);
+  assert.match(clientBuild, /export function buildClient\(\)/);
+  assert.match(clientBuild, /process\.argv\[1\]/);
+  assert.match(clientBuildCheck, /from "\.\/build-client\.mjs"/);
+  assert.match(clientBuildCheck, /CLIENT_OUTPUTS\.map/);
   assert.match(clientBuildCheck, /client build output was stale/);
   assert.match(clientBuildCheck, /client build output is up to date/);
   assert.match(contracts, /export interface ClientApiResponses/);
@@ -747,6 +765,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
   assert.match(compat, /AssertAssignable<ArchivedChatSession, ClientChatSessionSummary>/);
   assert.match(compat, /AssertAssignable<ChatSearchHit, ClientChatSearchHit>/);
+  assert.match(dateUtilsSource, /function localISO\(d = new Date\(\)\): string/);
+  assert.match(htmlUtilsSource, /function escHtml\(value: unknown\): string/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
   assert.match(routeState, /root\.CairnRoutes = \{/);

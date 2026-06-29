@@ -31,7 +31,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 
 ### Gaps
 
-- The client source of truth is still mostly `public/js/*.js`. A true TS source tree does not exist yet.
+- The client source of truth is still mostly `public/js/*.js`, but the migration source tree now exists: `src/client/route-state.ts`, `src/client/date-utils.ts`, and `src/client/html-utils.ts` emit their stable `public/js` files through `scripts/build-client.mjs`.
 - The largest and riskiest UI files are not typechecked: `03-today.js`, `07-me-health.js`, `05-progress.js`, `02-ui.js`, `09-plan-chat.js`, `06-coach-meals.js`, `10-boot.js`, `08-me-records.js`, `04-capture.js`, and `settings-routes.js`.
 - The app is still a classic-script graph. Boot order and global names remain part of correctness.
 - `tsconfig.client.json` typechecks selected helper slices, not the full PWA.
@@ -100,7 +100,7 @@ Add a real client build without extra runtime dependencies:
 - `tsconfig.client.build.json`: compile `src/client/**/*.ts` to browser JS.
 - `npm run client:build`: emits JS to `public/js`.
 - `npm run client:check`: no-emit typecheck for the client tree.
-- `npm run build`: runs `client:build` and backend `tsc`.
+- `npm run build`: runs `client:check`, `client:build`, and backend `tsc`.
 - `npm run verify`: runs client check/build freshness, public script/cache checks, backend build, launch checks, and tests.
 - Transition decision: generated `public/js` output stays committed until the Docker runtime copies generated `public/` from the builder stage and source deploys can rely on `npm run build` before serving.
 
@@ -204,7 +204,7 @@ Gate:
 
 ### Wave 1 - Client Build Foundation
 
-Status: in progress. First slice complete: route-state now has `src/client/route-state.ts` as the authored source, emits `public/js/route-state.js`, and is guarded by `npm run client:verify`.
+Status: in progress. First slices complete: route-state, date helpers, and HTML escaping helpers now have `src/client/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
 
 Purpose: make TypeScript the source of truth without changing behavior.
 
@@ -222,6 +222,8 @@ Tasks:
 - [x] Add `npm run client:build` and `npm run client:check`.
 - [x] Decide and document whether generated JS is committed during the transition.
 - [x] Add a generated-output freshness check if generated JS remains committed.
+- [x] Move the first browser-global utility helpers (`date-utils`, `html-utils`) to TypeScript source while preserving stable script filenames.
+- [x] Keep the build manifest import side-effect free so freshness checks snapshot current output before rebuilding.
 - [x] Update Docker build inputs so `npm run build` can run the client build in the builder stage.
 - [ ] Update Docker runtime copy path once generated `public/js` output is no longer committed.
 - Keep old app behavior byte-for-byte or behavior-equivalent for the first slice.
@@ -284,6 +286,8 @@ Gate:
 - browser smoke for one migrated screen
 
 ### Wave 4 - Helper And Domain Client Migration
+
+Status: seeded by Wave 1. `date-utils` and `html-utils` are now TypeScript-authored browser-global compatibility outputs; the remaining extracted helpers are still `public/js/*.js`.
 
 Purpose: move already-extracted helper JS into real TS modules.
 

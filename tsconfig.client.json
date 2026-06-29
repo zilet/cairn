@@ -12,8 +12,6 @@
   },
   "include": [
     "src/contracts/client-globals.d.ts",
-    "public/js/date-utils.js",
-    "public/js/html-utils.js",
     "public/js/format-utils.js",
     "public/js/api-client.js",
     "public/js/swr-cache.js",
