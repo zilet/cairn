@@ -2,6 +2,7 @@ import type {
   ClientChatMessage,
   ClientChatSearchHit,
   ClientChatSessionSummary,
+  ClientApiResponse,
   ClientDayIntake,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
@@ -26,6 +27,12 @@ declare global {
   declare function fmtKm(km: unknown): string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
+  type CairnApiOptions = RequestInit & { headers?: Record<string, string> };
+  declare function authToken(): string;
+  declare function withToken(url: string): string;
+  declare function deviceTimeZone(): string;
+  declare function api<Path extends string>(p: Path, opts?: CairnApiOptions): Promise<ClientApiResponse<Path>>;
+  declare function setOffline(on: unknown): void;
   declare function stagger(index?: number | null): string;
 
   interface Window {
