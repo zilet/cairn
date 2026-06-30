@@ -253,34 +253,6 @@ async function renderSettings(): Promise<void> {
     return false;
   })();
 
-  function phoneAccessCardHtml() {
-    if (inStandaloneApp) return "";
-    return `
-      <!-- Phone & PWA access: web-only, collapsed-by-default operator hint.
-           Hidden in an installed PWA, where this setup is already complete. -->
-      <details class="sess phone-access route-card">
-        <summary>
-          <span class="phone-access-summary">
-            <span class="lbl">Phone &amp; PWA access</span>
-            <span class="phone-access-tease">Private phone setup and app install notes</span>
-          </span>
-        </summary>
-        <div class="phone-access-body">
-          <div class="sess-line">Reach Cairn from your phone <b>privately</b> with Tailscale <b>Serve</b> — tailnet-only, nothing on the public internet. Easiest: run this once on the host (from the cloned repo):</div>
-          <div class="cmd-line">./scripts/setup-phone.sh</div>
-          <div class="sess-line phone-access-then">It detects your exact <b>https://…ts.net</b> URL and prints the Add-to-Home-Screen steps. By hand:</div>
-          <div class="cmd-line">sudo tailscale serve --bg --https=443 http://127.0.0.1:8787</div>
-          <div id="phoneTokenRow" class="phone-access-token">
-            <button id="phoneGenToken" class="ghostbtn" type="button">Prepare a token for phone</button>
-            <span id="phoneTokenOut" class="phone-token"></span>
-          </div>
-          <div class="small-note">
-            On a private tailnet a token is optional; set one if others share your tailnet, or if Cairn is reachable beyond it (then set <b>CAIRN_REQUIRE_AUTH=1</b> too). iOS needs the HTTPS URL for a full offline app. Details in <b>docs/DEPLOYMENT.md</b> and <b>SECURITY.md</b>.
-          </div>
-        </div>
-      </details>`;
-  }
-
   if (!state.setSeg || !SET_SEG.some(([k]) => k === state.setSeg)) state.setSeg = "agents";
 
   // ---- Stable shell. The sub-nav band + a #setSlice container persist across slice
@@ -327,50 +299,6 @@ async function renderSettings(): Promise<void> {
     onSave: persistSettings,
     onDiscard: () => renderSettings(),
   });
-
-  function wirePhoneAccessCard() {
-    // Phone access token helper (client-only strong suggestion; user places in env/compose).
-    const genTokenBtn = optionalEl<HTMLButtonElement>("#phoneGenToken");
-    const genTokenOut = optionalEl<HTMLElement>("#phoneTokenOut");
-    if (genTokenBtn && genTokenOut) {
-      genTokenBtn.addEventListener("click", async () => {
-        let tok = "";
-        try {
-          if (crypto && crypto.getRandomValues) {
-            const b = new Uint8Array(28);
-            crypto.getRandomValues(b);
-            tok = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
-          }
-        } catch {}
-        if (!tok) tok = "cairn-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-        genTokenOut.textContent = tok;
-        genTokenOut.title = "Set as CAIRN_AUTH_TOKEN=… in .env / compose, then restart";
-        // navigator.clipboard is undefined in insecure contexts (e.g. http://<lan-ip>) — the
-        // exact case this card targets. Only claim "copied" when the write actually succeeds.
-        let copied = false;
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(tok);
-            copied = true;
-          }
-        } catch {}
-        toast(copied
-          ? "Token copied. Set CAIRN_AUTH_TOKEN=… in .env / compose, then restart."
-          : "Token ready — copy it, set CAIRN_AUTH_TOKEN=… in .env / compose, then restart.");
-      });
-    }
-    // Auth-aware: if a shared token is already configured, generating a new one is the wrong
-    // move — say so instead. GET /api/health is auth-exempt and reports auth_required.
-    const phoneTokenRow = optionalEl<HTMLElement>("#phoneTokenRow");
-    if (phoneTokenRow) {
-      api("/health").then((h) => {
-        if (h && h.auth_required) {
-          phoneTokenRow.innerHTML =
-            `<div class="sess-line phone-token-set">✓ A shared token is already set — your phone will be asked for it once.</div>`;
-        }
-      }).catch(() => {});
-    }
-  }
 
   // ---- Slice renderers. Each writes #setSlice and wires its own controls; all reads
   // come from `wm`, all writes go back into `wm` + settingsBar.markDirty().
@@ -686,7 +614,7 @@ async function renderSettings(): Promise<void> {
     slice().innerHTML = `
       <section class="set-group set-group--flush">
         <p class="set-group-sub">Keep an offline copy of everything, check for new versions, or start the first-time setup over.</p>
-        ${phoneAccessCardHtml()}
+        ${CairnSettingsData.phoneAccessCardHtml({ inStandaloneApp })}
 
         <h1 class="lbl" style="margin:14px 0 8px">Cairn version</h1>
         <div id="updateCard" class="sess">${updateCardHtml(updateStatusCache)}</div>
@@ -703,7 +631,7 @@ async function renderSettings(): Promise<void> {
         <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>
       </section>`;
 
-    wirePhoneAccessCard();
+    CairnSettingsData.wirePhoneAccessCard({ api, toast });
     const refreshUpdateCard = (): void => { const el = optionalEl<HTMLElement>("#updateCard"); if (el) el.innerHTML = updateCardHtml(updateStatusCache); };
 
     requiredEl<HTMLInputElement>("#updateCheckEnabled").addEventListener("change", (e) => {

@@ -1,7 +1,11 @@
 (() => {
 // @ts-check
 {
-    const ROUTE_TABS = ["today", "plan", "progress", "chat", "me", "settings"];
+    function routeDefinitions() {
+        const root = (typeof window !== "undefined" ? window : globalThis);
+        return root.CairnRoutes?.routeDefinitions || null;
+    }
+    const ROUTE_TABS = [...(routeDefinitions()?.tabs || ["today"])];
     function itemKey(item) {
         return String(Array.isArray(item) ? item[0] : item);
     }

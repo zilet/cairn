@@ -5,7 +5,7 @@ type TabSwitchOptions = {
 
 // @ts-check
 {
-  const TAB_NAMES: ClientTabName[] = ["today", "plan", "progress", "chat", "me", "settings"];
+  const TAB_NAMES: ClientTabName[] = [...(window.CairnAppRouter?.ROUTE_TABS || ["today"])];
 
   function normalizeTabName(tab: unknown): ClientTabName {
     const candidate = String(tab || "");

@@ -4,8 +4,10 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 function loadRouter() {
+  const routeStateSrc = readFileSync(new URL("../public/js/route-state.js", import.meta.url), "utf8");
   const src = readFileSync(new URL("../public/js/app-router.js", import.meta.url), "utf8");
-  const context = { window: {} };
+  const context = { window: {}, URL, URLSearchParams };
+  vm.runInNewContext(routeStateSrc, context, { filename: "route-state.js" });
   vm.runInNewContext(src, context);
   return context.window.CairnAppRouter;
 }
@@ -22,6 +24,11 @@ const deps = {
   healthSections: [["read", "Read"], ["records", "Records"], ["markers", "Markers"]],
   settingsSections: [["agents", "Agents"], ["data", "Data"]],
 };
+
+test("app router derives tab names from the route contract", () => {
+  const router = loadRouter();
+  assert.deepEqual(plain(router.ROUTE_TABS), ["today", "plan", "progress", "chat", "me", "settings"]);
+});
 
 test("app router applies canonical route state without rendering", () => {
   const router = loadRouter();

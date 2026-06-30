@@ -5,15 +5,35 @@
 // @ts-check
 type CairnRoute = import("../contracts/client.js").ClientRoute;
 type CairnRoutesApi = import("../contracts/client.js").ClientRoutesApi;
+type ClientRouteDefinitions = import("../contracts/client-routes.js").ClientRouteDefinitions;
 type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
 
 (function initCairnRoutes(root: CairnRouteRoot) {
-  const VALID_TABS = new Set(["today", "plan", "progress", "chat", "me", "settings"]);
-  const PLAN_SECTIONS = new Set(["edit", "endurance", "food", "meals", "coach"]);
-  const PROGRESS_SECTIONS = new Set(["trend", "volume", "endurance", "weight", "calendar", "sessions", "program", "energy"]);
-  const ME_SECTIONS = new Set(["standing", "profile", "memory", "health", "life", "family"]);
-  const HEALTH_SECTIONS = new Set(["read", "markers", "records", "share", "learned"]);
-  const SETTINGS_SECTIONS = new Set(["agents", "sources", "automation", "data"]);
+  const CLIENT_ROUTE_DEFINITIONS = {
+    appBasePath: "/app",
+    defaults: {
+      tab: "today",
+      planSection: "edit",
+      meSection: "standing",
+      healthSection: "read",
+      settingsSection: "agents",
+    },
+    tabs: ["today", "plan", "progress", "chat", "me", "settings"],
+    sections: {
+      plan: ["edit", "endurance", "food", "meals", "coach"],
+      progress: ["trend", "volume", "endurance", "weight", "calendar", "sessions", "program", "energy"],
+      me: ["standing", "profile", "memory", "health", "life", "family"],
+      health: ["read", "markers", "records", "share", "learned"],
+      settings: ["agents", "sources", "automation", "data"],
+    },
+  } as const satisfies ClientRouteDefinitions;
+  const APP_PATH_SEGMENT = cleanSegment(CLIENT_ROUTE_DEFINITIONS.appBasePath);
+  const VALID_TABS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.tabs);
+  const PLAN_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.plan);
+  const PROGRESS_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.progress);
+  const ME_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.me);
+  const HEALTH_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.health);
+  const SETTINGS_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.settings);
 
   function cleanSegment(v: unknown): string {
     return String(v || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "");
@@ -47,13 +67,23 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     const url = toUrl(input);
     const params = url.searchParams;
     const parts = url.pathname.split("/").filter(Boolean).map(cleanSegment);
-    let tab = "today";
-    let section = null;
-    let healthSection = null;
+    let tab: CairnRoute["tab"] = CLIENT_ROUTE_DEFINITIONS.defaults.tab;
+    let section: CairnRoute["section"] = null;
+    let healthSection: CairnRoute["healthSection"] = null;
 
-    if (parts[0] === "app") tab = oneOf(parts[1], VALID_TABS, "today") || "today";
-    else if (VALID_TABS.has(parts[0])) tab = parts[0];
-    else tab = oneOf(firstParam(params, "tab"), VALID_TABS, "today") || "today";
+    if (parts[0] === APP_PATH_SEGMENT) {
+      tab = (
+        oneOf(parts[1], VALID_TABS, CLIENT_ROUTE_DEFINITIONS.defaults.tab) ||
+        CLIENT_ROUTE_DEFINITIONS.defaults.tab
+      ) as CairnRoute["tab"];
+    } else if (VALID_TABS.has(parts[0])) {
+      tab = parts[0] as CairnRoute["tab"];
+    } else {
+      tab = (
+        oneOf(firstParam(params, "tab"), VALID_TABS, CLIENT_ROUTE_DEFINITIONS.defaults.tab) ||
+        CLIENT_ROUTE_DEFINITIONS.defaults.tab
+      ) as CairnRoute["tab"];
+    }
 
     const route: CairnRoute = {
       tab,
@@ -65,20 +95,26 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       jump: firstParam(params, "jump"),
     };
 
-    const sectionPart = parts[0] === "app" ? parts[2] : parts[1];
-    const nestedPart = parts[0] === "app" ? parts[3] : parts[2];
+    const sectionPart = parts[0] === APP_PATH_SEGMENT ? parts[2] : parts[1];
+    const nestedPart = parts[0] === APP_PATH_SEGMENT ? parts[3] : parts[2];
 
     if (tab === "plan") {
-      section = oneOf(sectionPart, PLAN_SECTIONS, null) || oneOf(route.jump, PLAN_SECTIONS, null);
+      section = (
+        oneOf(sectionPart, PLAN_SECTIONS, null) ||
+        oneOf(route.jump, PLAN_SECTIONS, null)
+      ) as CairnRoute["section"];
     } else if (tab === "progress") {
-      section = oneOf(sectionPart, PROGRESS_SECTIONS, null);
+      section = oneOf(sectionPart, PROGRESS_SECTIONS, null) as CairnRoute["section"];
     } else if (tab === "me") {
-      section = oneOf(sectionPart, ME_SECTIONS, "standing");
+      section = oneOf(sectionPart, ME_SECTIONS, CLIENT_ROUTE_DEFINITIONS.defaults.meSection) as CairnRoute["section"];
       if (section === "health") {
-        healthSection = oneOf(nestedPart, HEALTH_SECTIONS, null) || oneOf(firstParam(params, "health"), HEALTH_SECTIONS, "read");
+        healthSection = (
+          oneOf(nestedPart, HEALTH_SECTIONS, null) ||
+          oneOf(firstParam(params, "health"), HEALTH_SECTIONS, CLIENT_ROUTE_DEFINITIONS.defaults.healthSection)
+        ) as CairnRoute["healthSection"];
       }
     } else if (tab === "settings") {
-      section = oneOf(sectionPart, SETTINGS_SECTIONS, null);
+      section = oneOf(sectionPart, SETTINGS_SECTIONS, null) as CairnRoute["section"];
     }
 
     route.section = section;
@@ -92,9 +128,12 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
 
   function routeToUrl(route: Partial<CairnRoute> | null | undefined): string {
     const r = route || {};
-    const tab = oneOf(r.tab, VALID_TABS, "today") || "today";
+    const tab = (
+      oneOf(r.tab, VALID_TABS, CLIENT_ROUTE_DEFINITIONS.defaults.tab) ||
+      CLIENT_ROUTE_DEFINITIONS.defaults.tab
+    ) as CairnRoute["tab"];
     const params = new URLSearchParams();
-    let path = `/app/${tab}`;
+    let path = `${CLIENT_ROUTE_DEFINITIONS.appBasePath}/${tab}`;
 
     if (tab === "plan") {
       const section = oneOf(r.section, PLAN_SECTIONS, null);
@@ -126,11 +165,12 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
   root.CairnRoutes = {
     parseRoute,
     routeToUrl,
-    validTabs: [...VALID_TABS],
-    planSections: [...PLAN_SECTIONS],
-    progressSections: [...PROGRESS_SECTIONS],
-    meSections: [...ME_SECTIONS],
-    healthSections: [...HEALTH_SECTIONS],
-    settingsSections: [...SETTINGS_SECTIONS],
+    routeDefinitions: CLIENT_ROUTE_DEFINITIONS,
+    validTabs: [...CLIENT_ROUTE_DEFINITIONS.tabs],
+    planSections: [...CLIENT_ROUTE_DEFINITIONS.sections.plan],
+    progressSections: [...CLIENT_ROUTE_DEFINITIONS.sections.progress],
+    meSections: [...CLIENT_ROUTE_DEFINITIONS.sections.me],
+    healthSections: [...CLIENT_ROUTE_DEFINITIONS.sections.health],
+    settingsSections: [...CLIENT_ROUTE_DEFINITIONS.sections.settings],
   };
 })((typeof window !== "undefined" ? window : globalThis) as CairnRouteRoot);

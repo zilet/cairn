@@ -2,15 +2,25 @@
 // @ts-check
 // Tiny typed UI primitives for the vanilla PWA. Components are pure HTML
 // renderers: no fetching, no global state mutation beyond the compatibility export.
+function mergeAttrs(defaults, attrs) {
+    const row = attrs && typeof attrs === "object" ? attrs : {};
+    return { ...defaults, ...row };
+}
 function uiAttrsHtml(attrs) {
     const row = attrs && typeof attrs === "object" ? attrs : {};
     return Object.entries(row)
-        .filter(([, value]) => value !== false && value != null)
         .map(([key, value]) => {
+        if (value == null)
+            return "";
         const safeKey = /^[a-zA-Z][a-zA-Z0-9_:.:-]*$/.test(key) ? key : "";
         if (!safeKey)
             return "";
-        return value === true ? ` ${safeKey}` : ` ${safeKey}="${escAttr(value)}"`;
+        const isAria = safeKey.toLowerCase().startsWith("aria-");
+        if (value === false)
+            return isAria ? ` ${safeKey}="false"` : "";
+        if (value === true)
+            return isAria ? ` ${safeKey}="true"` : ` ${safeKey}`;
+        return ` ${safeKey}="${escAttr(value)}"`;
     })
         .join("");
 }
@@ -42,16 +52,18 @@ function segmentedNavHtml(options) {
     const buttons = items
         .map(([key, label]) => {
         const activeClass = key === options.active ? " active" : "";
-        return `<button class="segbtn${activeClass}" type="button" data-seg="${escAttr(key)}">${escHtml(label)}</button>`;
+        const pressed = key === options.active ? "true" : "false";
+        return `<button class="segbtn${activeClass}" type="button" data-seg="${escAttr(key)}" aria-pressed="${pressed}">${escHtml(label)}</button>`;
     })
         .join("");
-    return `<div class="segwrap"><div class="seg seg-sliding" style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb"></span>${buttons}</div></div>`;
+    return `<div class="segwrap"><div class="seg seg-sliding" role="group" aria-label="Section navigation" style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb" aria-hidden="true"></span>${buttons}</div></div>`;
 }
 function jobCaptionHtml(options = {}) {
     const tag = options.tag === "div" ? "div" : "span";
     const className = options.className || "job-cap";
     const text = options.text == null ? "" : escHtml(options.text);
-    return `<${tag} class="${escAttr(className)}"${uiAttrsHtml(options.attrs)}>${text}</${tag}>`;
+    const attrs = mergeAttrs({ role: "status", "aria-live": "polite", "aria-atomic": "true" }, options.attrs);
+    return `<${tag} class="${escAttr(className)}"${uiAttrsHtml(attrs)}>${text}</${tag}>`;
 }
 function sheetChipHtml(options) {
     const label = options.label == null ? "" : String(options.label);
@@ -76,7 +88,7 @@ function emptyStateHtml(options) {
     const bodyClass = options.bodyClassName || "hpic-hero-sub";
     const body = options.body ? `<div class="${escAttr(bodyClass)}">${escHtml(options.body)}</div>` : "";
     const action = actionButtonHtml(options.action);
-    return `<div class="${escAttr(className)}"${style}>
+    return `<div class="${escAttr(className)}" role="status" aria-live="polite"${style}>
     ${art}
     <div class="empty-state-line">${escHtml(options.title)}</div>
     ${body}

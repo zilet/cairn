@@ -1,11 +1,30 @@
 (() => {
 (function initCairnRoutes(root) {
-    const VALID_TABS = new Set(["today", "plan", "progress", "chat", "me", "settings"]);
-    const PLAN_SECTIONS = new Set(["edit", "endurance", "food", "meals", "coach"]);
-    const PROGRESS_SECTIONS = new Set(["trend", "volume", "endurance", "weight", "calendar", "sessions", "program", "energy"]);
-    const ME_SECTIONS = new Set(["standing", "profile", "memory", "health", "life", "family"]);
-    const HEALTH_SECTIONS = new Set(["read", "markers", "records", "share", "learned"]);
-    const SETTINGS_SECTIONS = new Set(["agents", "sources", "automation", "data"]);
+    const CLIENT_ROUTE_DEFINITIONS = {
+        appBasePath: "/app",
+        defaults: {
+            tab: "today",
+            planSection: "edit",
+            meSection: "standing",
+            healthSection: "read",
+            settingsSection: "agents",
+        },
+        tabs: ["today", "plan", "progress", "chat", "me", "settings"],
+        sections: {
+            plan: ["edit", "endurance", "food", "meals", "coach"],
+            progress: ["trend", "volume", "endurance", "weight", "calendar", "sessions", "program", "energy"],
+            me: ["standing", "profile", "memory", "health", "life", "family"],
+            health: ["read", "markers", "records", "share", "learned"],
+            settings: ["agents", "sources", "automation", "data"],
+        },
+    };
+    const APP_PATH_SEGMENT = cleanSegment(CLIENT_ROUTE_DEFINITIONS.appBasePath);
+    const VALID_TABS = new Set(CLIENT_ROUTE_DEFINITIONS.tabs);
+    const PLAN_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.plan);
+    const PROGRESS_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.progress);
+    const ME_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.me);
+    const HEALTH_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.health);
+    const SETTINGS_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.settings);
     function cleanSegment(v) {
         return String(v || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "");
     }
@@ -35,15 +54,20 @@
         const url = toUrl(input);
         const params = url.searchParams;
         const parts = url.pathname.split("/").filter(Boolean).map(cleanSegment);
-        let tab = "today";
+        let tab = CLIENT_ROUTE_DEFINITIONS.defaults.tab;
         let section = null;
         let healthSection = null;
-        if (parts[0] === "app")
-            tab = oneOf(parts[1], VALID_TABS, "today") || "today";
-        else if (VALID_TABS.has(parts[0]))
+        if (parts[0] === APP_PATH_SEGMENT) {
+            tab = (oneOf(parts[1], VALID_TABS, CLIENT_ROUTE_DEFINITIONS.defaults.tab) ||
+                CLIENT_ROUTE_DEFINITIONS.defaults.tab);
+        }
+        else if (VALID_TABS.has(parts[0])) {
             tab = parts[0];
-        else
-            tab = oneOf(firstParam(params, "tab"), VALID_TABS, "today") || "today";
+        }
+        else {
+            tab = (oneOf(firstParam(params, "tab"), VALID_TABS, CLIENT_ROUTE_DEFINITIONS.defaults.tab) ||
+                CLIENT_ROUTE_DEFINITIONS.defaults.tab);
+        }
         const route = {
             tab,
             section: null,
@@ -53,18 +77,20 @@
             session: firstParam(params, "session"),
             jump: firstParam(params, "jump"),
         };
-        const sectionPart = parts[0] === "app" ? parts[2] : parts[1];
-        const nestedPart = parts[0] === "app" ? parts[3] : parts[2];
+        const sectionPart = parts[0] === APP_PATH_SEGMENT ? parts[2] : parts[1];
+        const nestedPart = parts[0] === APP_PATH_SEGMENT ? parts[3] : parts[2];
         if (tab === "plan") {
-            section = oneOf(sectionPart, PLAN_SECTIONS, null) || oneOf(route.jump, PLAN_SECTIONS, null);
+            section = (oneOf(sectionPart, PLAN_SECTIONS, null) ||
+                oneOf(route.jump, PLAN_SECTIONS, null));
         }
         else if (tab === "progress") {
             section = oneOf(sectionPart, PROGRESS_SECTIONS, null);
         }
         else if (tab === "me") {
-            section = oneOf(sectionPart, ME_SECTIONS, "standing");
+            section = oneOf(sectionPart, ME_SECTIONS, CLIENT_ROUTE_DEFINITIONS.defaults.meSection);
             if (section === "health") {
-                healthSection = oneOf(nestedPart, HEALTH_SECTIONS, null) || oneOf(firstParam(params, "health"), HEALTH_SECTIONS, "read");
+                healthSection = (oneOf(nestedPart, HEALTH_SECTIONS, null) ||
+                    oneOf(firstParam(params, "health"), HEALTH_SECTIONS, CLIENT_ROUTE_DEFINITIONS.defaults.healthSection));
             }
         }
         else if (tab === "settings") {
@@ -80,9 +106,10 @@
     }
     function routeToUrl(route) {
         const r = route || {};
-        const tab = oneOf(r.tab, VALID_TABS, "today") || "today";
+        const tab = (oneOf(r.tab, VALID_TABS, CLIENT_ROUTE_DEFINITIONS.defaults.tab) ||
+            CLIENT_ROUTE_DEFINITIONS.defaults.tab);
         const params = new URLSearchParams();
-        let path = `/app/${tab}`;
+        let path = `${CLIENT_ROUTE_DEFINITIONS.appBasePath}/${tab}`;
         if (tab === "plan") {
             const section = oneOf(r.section, PLAN_SECTIONS, null);
             if (section)
@@ -118,12 +145,13 @@
     root.CairnRoutes = {
         parseRoute,
         routeToUrl,
-        validTabs: [...VALID_TABS],
-        planSections: [...PLAN_SECTIONS],
-        progressSections: [...PROGRESS_SECTIONS],
-        meSections: [...ME_SECTIONS],
-        healthSections: [...HEALTH_SECTIONS],
-        settingsSections: [...SETTINGS_SECTIONS],
+        routeDefinitions: CLIENT_ROUTE_DEFINITIONS,
+        validTabs: [...CLIENT_ROUTE_DEFINITIONS.tabs],
+        planSections: [...CLIENT_ROUTE_DEFINITIONS.sections.plan],
+        progressSections: [...CLIENT_ROUTE_DEFINITIONS.sections.progress],
+        meSections: [...CLIENT_ROUTE_DEFINITIONS.sections.me],
+        healthSections: [...CLIENT_ROUTE_DEFINITIONS.sections.health],
+        settingsSections: [...CLIENT_ROUTE_DEFINITIONS.sections.settings],
     };
 })((typeof window !== "undefined" ? window : globalThis));
 })();

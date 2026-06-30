@@ -4,10 +4,16 @@ import type {
   ClientChatMessage,
   ClientChatSearchHit,
   ClientChatSessionSummary,
+  ClientHealthSection as ContractClientHealthSection,
+  ClientMeSection as ContractClientMeSection,
+  ClientPlanSection as ContractClientPlanSection,
+  ClientProgressSection as ContractClientProgressSection,
   ClientApiResponse,
   ClientCoachingFocus,
   ClientRoute,
   ClientRoutesApi,
+  ClientSettingsSection as ContractClientSettingsSection,
+  ClientTabName as ContractClientTabName,
   ClientDayIntake,
   ClientGoalCheck,
   ClientPlanDay,
@@ -18,12 +24,12 @@ import type {
 } from "./client.js";
 
 declare global {
-  type ClientTabName = "today" | "plan" | "progress" | "chat" | "me" | "settings";
-  type ClientPlanSection = "edit" | "food" | "meals" | "coach" | "endurance";
-  type ClientProgressSection = "sessions" | "trend" | "volume" | "endurance" | "weight" | "calendar" | "program" | "energy";
-  type ClientMeSection = "standing" | "profile" | "memory" | "health" | "life" | "family";
-  type ClientHealthSection = "read" | "markers" | "records" | "share" | "learned";
-  type ClientSettingsSection = "agents" | "sources" | "automation" | "data";
+  type ClientTabName = ContractClientTabName;
+  type ClientPlanSection = ContractClientPlanSection;
+  type ClientProgressSection = ContractClientProgressSection;
+  type ClientMeSection = ContractClientMeSection;
+  type ClientHealthSection = ContractClientHealthSection;
+  type ClientSettingsSection = ContractClientSettingsSection;
   type ClientSegment = readonly [string, string];
   type ClientSettingsRouteTask = readonly [string, string];
   type ClientSaveBar = { markDirty(): void; save(): Promise<void> };
@@ -829,6 +835,19 @@ declare global {
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
 
+    CairnSettingsData: {
+      phoneAccessCardHtml(options?: { inStandaloneApp?: boolean }): string;
+      wirePhoneAccessCard(options?: {
+        api?: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>;
+        crypto?: Pick<Crypto, "getRandomValues"> | null;
+        document?: Document | null;
+        navigator?: Pick<Navigator, "clipboard"> | null;
+        now?: () => number;
+        random?: () => number;
+        toast?: (message: string) => unknown;
+      }): void;
+    };
+
     CairnMarkdown: {
       mdSafeUrl(url: unknown): string | null;
       mdInline(source: string): string;
@@ -1042,6 +1061,21 @@ declare global {
       cardioLogPhrase(item: Record<string, unknown>): string;
     };
 
+    CairnTodayCards: {
+      exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
+      exerciseCardHtml(
+        item: Record<string, unknown>,
+        loggedSets: Array<Record<string, unknown>>,
+        prefill: Record<string, unknown>,
+        revealIdx: unknown,
+        rx: Partial<ClientPrescription> | null | undefined,
+        options?: { day?: unknown; exModes?: Record<string, unknown> | null },
+      ): string;
+      cardioPlanCardHtml(item: Record<string, unknown>, revealIdx: unknown, done: Record<string, unknown> | null | undefined, syncLine: string): string;
+      cardioDoneCardHtml(item: Record<string, unknown>, effort: Record<string, unknown>, revealIdx: unknown): string;
+      cardioEffortMatches(item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined): boolean;
+    };
+
     CairnTodayLately: {
       garminSessionCard(card: unknown): string;
       when(row: unknown): string;
@@ -1129,6 +1163,7 @@ declare global {
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
+  declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
@@ -1155,6 +1190,7 @@ declare global {
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
+  declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];
   declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];

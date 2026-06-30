@@ -1,7 +1,7 @@
 (() => {
 // @ts-check
 {
-    const TAB_NAMES = ["today", "plan", "progress", "chat", "me", "settings"];
+    const TAB_NAMES = [...(window.CairnAppRouter?.ROUTE_TABS || ["today"])];
     function normalizeTabName(tab) {
         const candidate = String(tab || "");
         return TAB_NAMES.includes(candidate) ? candidate : "today";

@@ -64,7 +64,11 @@ function loadTabs(options = {}) {
     todaySkeleton: () => "today-skeleton",
     view,
     viewEnter: () => calls.push(["viewEnter", view.innerHTML]),
-    window: {},
+    window: {
+      CairnAppRouter: {
+        ROUTE_TABS: ["today", "plan", "progress", "chat", "me", "settings"],
+      },
+    },
     withViewTransition: (fn) => {
       calls.push(["withViewTransition"]);
       fn();

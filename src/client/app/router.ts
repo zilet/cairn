@@ -2,6 +2,7 @@
 // route-state.ts; this module owns applying parsed routes to app state and turning
 // current state back into a canonical browser URL.
 type AppRoute = import("../../contracts/client.js").ClientRoute;
+type AppRouteDefinitions = import("../../contracts/client-routes.js").ClientRouteDefinitions;
 type AppRoutesApi = import("../../contracts/client.js").ClientRoutesApi;
 
 type RouteItem = string | readonly [string, unknown];
@@ -40,7 +41,12 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
 
 // @ts-check
 {
-  const ROUTE_TABS: ClientTabName[] = ["today", "plan", "progress", "chat", "me", "settings"];
+  function routeDefinitions(): AppRouteDefinitions | null {
+    const root = (typeof window !== "undefined" ? window : globalThis) as AppRouterRoot & { CairnRoutes?: AppRoutesApi };
+    return root.CairnRoutes?.routeDefinitions || null;
+  }
+
+  const ROUTE_TABS: ClientTabName[] = [...(routeDefinitions()?.tabs || ["today"])];
 
   function itemKey(item: RouteItem): string {
     return String(Array.isArray(item) ? item[0] : item);
@@ -92,18 +98,18 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       if (state.logDate) route.date = state.logDate;
     } else if (tab === "plan") {
       const section = routeKey(state.planJump || state.planSeg, options.planSections, "edit");
-      route.section = section;
+      route.section = section as AppRoute["section"];
       if (section === "food" && state.logDate) route.date = state.logDate;
     } else if (tab === "progress") {
-      route.section = routeKey(state.progressSeg || options.defaultProgressSection, options.progressSections, options.defaultProgressSection);
+      route.section = routeKey(state.progressSeg || options.defaultProgressSection, options.progressSections, options.defaultProgressSection) as AppRoute["section"];
     } else if (tab === "me") {
-      route.section = routeKey(state.meSeg, options.meSections, "standing");
+      route.section = routeKey(state.meSeg, options.meSections, "standing") as AppRoute["section"];
       if (route.section === "health") {
-        route.healthSection = routeKey(state.healthSeg, options.healthSections, "read");
+        route.healthSection = routeKey(state.healthSeg, options.healthSections, "read") as AppRoute["healthSection"];
         if (state.pendingHealthDocId) route.id = state.pendingHealthDocId;
       }
     } else if (tab === "settings") {
-      route.section = routeKey(state.setSeg, options.settingsSections, "agents");
+      route.section = routeKey(state.setSeg, options.settingsSections, "agents") as AppRoute["section"];
     } else if (tab === "chat" && state.pendingChatSession) {
       route.session = state.pendingChatSession;
     }

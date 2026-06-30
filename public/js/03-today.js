@@ -5,11 +5,7 @@
 // `logged` = sets already logged for this exercise in the loaded session.
 // `prefill` = {weight,reps,rir} to seed the inputs.
 function exTimed(it, logged) {
-    if (it.mode === "timed" || it.target_seconds != null)
-        return true;
-    if ((todayState.exModes || {})[it.exercise] === "timed")
-        return true;
-    return (logged || []).some((s) => s.duration_sec != null);
+    return CairnTodayCards.exTimed(it, logged, todayState.exModes);
 }
 // ---------- Adaptive next-prescription (the loop closes here) ----------
 // On a lift card, render the NEXT session's adapted target straight from the
@@ -81,56 +77,10 @@ async function applyDayProgression(btn, day) {
     activateTab("plan");
 }
 function exCard(it, logged, prefill, revealIdx, rx) {
-    const offPlan = !it.fromPlan;
-    const timed = exTimed(it, logged);
-    const range = offPlan ? "" : (it.rep_low === it.rep_high ? `${it.rep_low}` : `${it.rep_low}–${it.rep_high}`);
-    const targetTxt = timed
-        ? `${it.sets ?? "?"} × ${it.target_seconds != null ? fmtDur(it.target_seconds) : "time"}`
-        : `${it.sets} × ${range}`;
-    const target = offPlan
-        ? `<span class="ex-sets ex-offplan">off-plan</span>`
-        : `<span class="ex-sets">${targetTxt}${!timed && it.target_weight != null ? ` @ <span class="ex-target numeral">${fmtWeight(it.target_weight)}</span>` : ""}</span>`;
-    const done = logged.length;
-    const goal = offPlan ? 0 : (it.sets || 0);
-    const complete = goal && done >= goal;
-    const progress = `<span class="ex-prog${complete ? " done" : ""}" data-prog>${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span></span>`;
-    const pw = prefill.weight, pr = prefill.reps, prir = prefill.rir;
-    const tile = artImg("exercise", it.exercise, "artile-sm ex-art", art("exercise", it.exercise, it.muscle_group));
-    const logrow = timed
-        ? `<div class="logrow" data-ex="${encodeURIComponent(it.exercise)}" data-day="${todayState.day}" data-mode="timed">
-        <input type="text" inputmode="numeric" autocomplete="off" placeholder="TIME · 1:30" class="in-dur" value="${prefill.duration_sec != null ? fmtDur(prefill.duration_sec) : ""}">
-        <button class="logbtn">+</button>
-      </div>`
-        : `<div class="logrow" data-ex="${encodeURIComponent(it.exercise)}" data-day="${todayState.day}">
-        <input type="number" inputmode="decimal" placeholder="WT" class="in-w" aria-label="Weight" value="${pw ?? ""}">
-        <input type="number" inputmode="numeric" placeholder="REPS" class="in-r" aria-label="Reps" value="${pr ?? ""}">
-        <input type="number" inputmode="decimal" placeholder="RIR" class="in-rir" title="Reps in reserve — how many more you could have done" aria-label="RIR (reps in reserve)" value="${prir ?? ""}">
-        <button class="logbtn">+</button>
-      </div>`;
-    // "Not today" — only a planned exercise with nothing logged yet is skippable
-    // (once a set lands, the log wins; the control disappears).
-    const skipBtn = (!offPlan && !done)
-        ? `<button class="ex-skip" data-skip="${encodeURIComponent(it.exercise)}" title="Not today" aria-label="Skip ${escAttr(it.exercise)} today">✕</button>`
-        : "";
-    // off-plan cards (added on the fly) get a remove ✕ even before a set lands, so a
-    // mis-added exercise is never stuck on the page; planned-but-unlogged gets "skip".
-    const removeBtn = (offPlan && !done)
-        ? `<button class="ex-skip ex-remove" data-remove-card title="Remove" aria-label="Remove ${escAttr(it.exercise)}">✕</button>`
-        : "";
-    return `<div class="ex${complete ? " ex-complete" : ""}${revealIdx != null ? " reveal" : ""}" data-card="${escAttr(it.exercise)}" data-mode="${timed ? "timed" : "reps"}"${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
-      <div class="ex-top">
-        ${tile}
-        <button class="ex-name" data-guide="${encodeURIComponent(it.exercise)}">${escHtml(it.exercise)} <span class="guide-i">ⓘ</span></button>
-        ${target}
-        ${skipBtn}${removeBtn}
-      </div>
-      <div class="ex-meta">${progress}</div>
-      ${it.note ? `<div class="ex-note">${escHtml(it.note)}</div>` : ""}
-      ${it.constraint_note ? `<div class="ex-flag">${escHtml(it.constraint_note)}</div>` : ""}
-      ${!complete ? todayExRxLineHtml(rx) : ""}
-      <div class="logged" data-logged>${logged.map(setChip).join("")}</div>
-      ${logrow}
-    </div>`;
+    return CairnTodayCards.exerciseCardHtml(it, logged, prefill, revealIdx, rx, {
+        day: todayState.day,
+        exModes: todayState.exModes,
+    });
 }
 // Today: a planned cardio effort. A prescription (distance/duration/zone/interval)
 // + a calm "log this" affordance that prefills the free-text capture (it routes
@@ -145,33 +95,7 @@ function exCard(it, logged, prefill, revealIdx, rx) {
 // hint, since a synced run is the runner's preferred path. (Sync freshness rides on a
 // separate line — see cardioSyncLine — only when Garmin is configured.)
 function cardioPlanCard(it, revealIdx, done, syncline) {
-    if (done)
-        return cardioDoneCard(it, done, revealIdx);
-    const tile = artImg("activity", cardioArtPhrase(it), "artile-sm ex-art", art("activity", cardioArtPhrase(it)));
-    const pres = cardioPrescription(it);
-    const label = cardioLabel(it);
-    const desc = cardioDescription(it); // the coach's guidance prose, when it overflowed the head
-    const verb = todayCardioVerb(label);
-    // When Garmin is configured, the single freshness line below (cardioSyncLine) carries
-    // the whole "your watch will log it · synced Xh ago · Sync now" story — so "Log this
-    // run →" reads as the fallback without a second, redundant "or it'll sync" hint
-    // stacked above it (a non-Garmin user shows neither — syncline is "").
-    // A planned run is skippable for the day exactly like a planned lift ("not today")
-    // — keyed by its display label, since a cardio item carries no loaded exercise. A
-    // matched/synced run shows the done card instead (no skip — the run already happened).
-    return `<div class="ex ex-cardio${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
-      <div class="ex-top">
-        ${tile}
-        <span class="ex-name ex-name-static"><span class="cardio-name-txt">${escHtml(label)}</span> <span class="cardio-tag lbl">cardio</span></span>
-        ${pres ? `<span class="ex-sets ex-cardio-pres">${escHtml(pres)}</span>` : ""}
-        <button class="ex-skip" data-skip="${encodeURIComponent(label)}" title="Not today" aria-label="Skip ${escAttr(label)} today">✕</button>
-      </div>
-      ${desc ? `<div class="ex-note">${escHtml(desc)}</div>` : ""}
-      <div class="cardio-logrow">
-        <button class="ghostbtn cardio-log-btn" data-cardio-log="${escAttr(todayCardioLogPhrase(it))}">Log this ${escHtml(verb)} →</button>
-      </div>
-      ${syncline || ""}
-    </div>`;
+    return CairnTodayCards.cardioPlanCardHtml(it, revealIdx, done, syncline);
 }
 // A calm "the run happened" card — the cardio analogue of garminSessionCard's
 // "body's reaction" tone. Shows the real distance / zone / pace / HR off the synced
@@ -179,42 +103,7 @@ function cardioPlanCard(it, revealIdx, done, syncline) {
 // is missing. Numbers are plain reads — never a score. `eff` is a CardioEffort row
 // from /api/cardio (the matched run); `it` is the prescription it satisfied.
 function cardioDoneCard(it, eff, revealIdx) {
-    const label = cardioLabel(it);
-    const tile = artImg("activity", cardioArtPhrase(it), "artile-sm ex-art", art("activity", eff.type || cardioArtPhrase(it)));
-    const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-    // Headline read: "Easy run — 8.2 km" (distance preferred, else duration).
-    const dist = num(eff.distance_km);
-    const dur = num(eff.duration_min);
-    const headBits = [];
-    if (dist != null && dist > 0)
-        headBits.push(`${fmtKm(dist)} km`);
-    else if (dur != null && dur > 0)
-        headBits.push(`${Math.round(dur)} min`);
-    const headline = `${label}${headBits.length ? ` — ${headBits.join(" · ")}` : ""}`;
-    // Detail chips: dominant zone (in plain words), pace, avg HR, source.
-    const chips = [];
-    const zoneWord = todayCardioDominantZone(eff.zones);
-    if (zoneWord)
-        chips.push(zoneWord);
-    if (eff.pace)
-        chips.push(`${String(eff.pace)}/km`);
-    const ahr = num(eff.avg_hr);
-    if (ahr != null)
-        chips.push(`${Math.round(ahr)} avg hr`);
-    if (dur != null && dur > 0 && headBits[0] && !headBits[0].includes("min"))
-        chips.push(`${Math.round(dur)} min`);
-    const fromGarmin = eff.source === "garmin";
-    const chipHtml = chips.map((c) => `<span class="done-chip">${escHtml(c)}</span>`).join("");
-    return `<div class="ex ex-cardio ex-cardio-done${revealIdx != null ? " reveal" : ""}" data-cardio-card${revealIdx != null ? ` style="${stagger(revealIdx)}"` : ""}>
-      <div class="ex-top">
-        ${tile}
-        <span class="ex-name ex-name-static cardio-done-head">
-          <span class="cardio-done-mark" aria-hidden="true">✓</span>${escHtml(headline)}
-        </span>
-        ${fromGarmin ? `<span class="garmin-tag">✦ synced from Garmin</span>` : ""}
-      </div>
-      ${chipHtml ? `<div class="cardio-done-chips">${chipHtml}</div>` : ""}
-    </div>`;
+    return CairnTodayCards.cardioDoneCardHtml(it, eff, revealIdx);
 }
 // The dominant HR zone of a synced effort, in plain words ("mostly Z2"). Reads the
 // parsed hr_zones [{zone,secs}] off /api/cardio; "" when there's no zone data — never
@@ -228,15 +117,7 @@ function todayCardioDominantZone(zones) {
 // audit. Compatibility falls back to "any endurance effort" when neither side names a
 // recognizable verb (so a generic activity still flips a generic cardio prescription).
 function cardioEffortMatches(it, eff) {
-    if (!eff)
-        return false;
-    // Read the RAW note (not the now-derived label) so a prose prescription with no sport
-    // keyword stays "effort" → presence is enough, exactly as before the label split.
-    const want = todayCardioVerb(it.note || cardioLabel(it)); // run / ride / swim / row / effort
-    const got = todayCardioVerb(eff.type || eff.name || ""); // map the effort's type the same way
-    if (want === "effort" || got === "effort")
-        return true; // unrecognized either side → presence is enough
-    return want === got;
+    return CairnTodayCards.cardioEffortMatches(it, eff);
 }
 // ---------- sync trust: a quiet freshness line where a runner needs the mileage ----------
 // The Garmin freshness renderer lives in /js/cardio-sync-client.js and preserves

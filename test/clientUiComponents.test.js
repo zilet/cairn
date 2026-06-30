@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
+import ts from "typescript";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -22,7 +23,20 @@ function loadUiComponents() {
     escAttr: (v) => escHtml(v).replace(/"/g, "&quot;"),
   };
   context.window = context;
-  vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
+  const source = readFileSync(join(root, "src/client/ui-components.ts"), "utf8");
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      alwaysStrict: false,
+      ignoreDeprecations: "6.0",
+      module: ts.ModuleKind.None,
+      moduleDetection: ts.ModuleDetectionKind.Legacy,
+      removeComments: false,
+      target: ts.ScriptTarget.ES2022,
+    },
+    fileName: "src/client/ui-components.ts",
+    reportDiagnostics: true,
+  }).outputText;
+  vm.runInNewContext(`(() => {\n${compiled.trimEnd()}\n})();\n`, context);
   return context.CairnUi;
 }
 
@@ -42,6 +56,8 @@ test("empty state component escapes text and preserves explicit art HTML", () =>
   });
 
   assert.match(html, /<svg><circle \/><\/svg>/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /aria-live="polite"/);
   assert.match(html, /&lt;No data&gt;/);
   assert.match(html, /Use &lt;docs&gt; &amp; records/);
   assert.match(html, /id="go&quot;now"/);
@@ -59,12 +75,14 @@ test("action button component omits blank actions and supports boolean attribute
 
   const html = ui.actionButtonHtml({
     label: "Save",
-    attrs: { "aria-pressed": true, "bad attr": "dropped" },
+    attrs: { "aria-pressed": true, "aria-expanded": false, disabled: false, "bad attr": "dropped" },
   });
 
   assert.match(html, /class="logbtn"/);
   assert.match(html, /type="button"/);
-  assert.match(html, /\saria-pressed\b/);
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /\sdisabled\b/);
   assert.doesNotMatch(html, /bad attr/);
   assert.doesNotMatch(html, /badattr/);
 });
@@ -77,13 +95,14 @@ test("text chip component escapes label, title, and attributes", () => {
     className: `chip "quiet"`,
     label: "Incline <press>",
     title: `same "pattern"`,
-    attrs: { "data-kind": "vary", selected: true, "bad attr": "dropped" },
+    attrs: { "data-kind": "vary", "aria-hidden": false, selected: true, "bad attr": "dropped" },
   });
 
   assert.match(html, /^<span /);
   assert.match(html, /class="chip &quot;quiet&quot;"/);
   assert.match(html, /title="same &quot;pattern&quot;"/);
   assert.match(html, /data-kind="vary"/);
+  assert.match(html, /aria-hidden="false"/);
   assert.match(html, /\sselected\b/);
   assert.match(html, />Incline &lt;press&gt;<\/span>/);
   assert.doesNotMatch(html, /bad attr/);
@@ -118,9 +137,13 @@ test("segmented nav component escapes items and preserves active slider contract
 
   assert.match(html, /^<div class="segwrap">/);
   assert.match(html, /class="seg seg-sliding"/);
+  assert.match(html, /role="group"/);
+  assert.match(html, /aria-label="Section navigation"/);
   assert.match(html, /style="--segn:3;--segi:1"/);
-  assert.match(html, /<span class="seg-thumb"><\/span>/);
-  assert.match(html, /class="segbtn active" type="button" data-seg="food&quot;"/);
+  assert.match(html, /<span class="seg-thumb" aria-hidden="true"><\/span>/);
+  assert.match(html, /class="segbtn active" type="button" data-seg="food&quot;" aria-pressed="true"/);
+  assert.match(html, /data-seg="training" aria-pressed="false"/);
+  assert.match(html, /data-seg="coach" aria-pressed="false"/);
   assert.match(html, />Food &lt;today&gt;<\/button>/);
   assert.doesNotMatch(html, /Food <today>/);
   assert.equal((html.match(/type="button"/g) || []).length, 3);
@@ -128,7 +151,10 @@ test("segmented nav component escapes items and preserves active slider contract
 
 test("job caption component preserves the reconnect selector and escapes text", () => {
   const ui = loadUiComponents();
-  assert.equal(ui.jobCaptionHtml(), `<span class="job-cap"></span>`);
+  assert.equal(
+    ui.jobCaptionHtml(),
+    `<span class="job-cap" role="status" aria-live="polite" aria-atomic="true"></span>`
+  );
 
   const span = ui.jobCaptionHtml({
     text: "Reading <trend>",
@@ -138,13 +164,16 @@ test("job caption component preserves the reconnect selector and escapes text", 
 
   assert.match(span, /^<span /);
   assert.match(span, /class="meal-cap job-cap &quot;wide&quot;"/);
+  assert.match(span, /role="status"/);
+  assert.match(span, /aria-live="polite"/);
+  assert.match(span, /aria-atomic="true"/);
   assert.match(span, /data-job="abc&quot;123"/);
   assert.match(span, />Reading &lt;trend&gt;<\/span>/);
   assert.doesNotMatch(span, /bad attr/);
   assert.doesNotMatch(span, /Reading <trend>/);
 
   const div = ui.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" });
-  assert.equal(div, `<div class="sug-loading-line job-cap"></div>`);
+  assert.equal(div, `<div class="sug-loading-line job-cap" role="status" aria-live="polite" aria-atomic="true"></div>`);
 });
 
 test("sheet chip component escapes value, label, classes, and attributes", () => {
@@ -159,12 +188,13 @@ test("sheet chip component escapes value, label, classes, and attributes", () =>
     className: `sheet-chip "wide"`,
     value: "12<3",
     label: `g protein "now"`,
-    attrs: { "data-chip": `macro"p`, selected: true, "bad attr": "dropped" },
+    attrs: { "data-chip": `macro"p`, "aria-label": "12 grams protein", selected: true, "bad attr": "dropped" },
   });
 
   assert.match(html, /^<span /);
   assert.match(html, /class="sheet-chip &quot;wide&quot;"/);
   assert.match(html, /data-chip="macro&quot;p"/);
+  assert.match(html, /aria-label="12 grams protein"/);
   assert.match(html, /\sselected\b/);
   assert.match(html, /<span class="numeral">12&lt;3<\/span>/);
   assert.match(html, /<span class="lbl">g protein "now"<\/span>/);

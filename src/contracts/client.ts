@@ -1,9 +1,20 @@
+import type {
+  ClientHealthSection,
+  ClientMeSection,
+  ClientPlanSection,
+  ClientProgressSection,
+  ClientRouteDefinitions,
+  ClientRouteSection,
+  ClientSettingsSection,
+  ClientTabName,
+} from "./client-routes.js";
+
 export type ISODateString = string;
 
 export interface ClientRoute {
-  tab: string;
-  section: string | null;
-  healthSection: string | null;
+  tab: ClientTabName;
+  section: ClientRouteSection | null;
+  healthSection: ClientHealthSection | null;
   date: ISODateString | null;
   id: string | null;
   session: string | null;
@@ -13,12 +24,13 @@ export interface ClientRoute {
 export interface ClientRoutesApi {
   parseRoute(input: string | URL): ClientRoute;
   routeToUrl(route: Partial<ClientRoute> | null | undefined): string;
-  validTabs: string[];
-  planSections: string[];
-  progressSections: string[];
-  meSections: string[];
-  healthSections: string[];
-  settingsSections: string[];
+  routeDefinitions: ClientRouteDefinitions;
+  validTabs: readonly ClientTabName[];
+  planSections: readonly ClientPlanSection[];
+  progressSections: readonly ClientProgressSection[];
+  meSections: readonly ClientMeSection[];
+  healthSections: readonly ClientHealthSection[];
+  settingsSections: readonly ClientSettingsSection[];
 }
 
 export interface ClientDayRead {
@@ -243,3 +255,4 @@ export interface ClientChatResetResponse {
 
 export * from "./client-api.js";
 export * from "./client-api-coverage.js";
+export * from "./client-routes.js";
