@@ -9,7 +9,7 @@
         ["applied", "Plan changes you accepted", "Adjustments Cairn proposed that you chose to apply. Nothing here changed on its own."],
     ];
     function learnedItemHtml(item, index) {
-        const row = (item ?? {});
+        const row = item ?? {};
         const when = row.when ? String(row.when) : "";
         const rel = when ? relAge(when) : "";
         const abs = when ? absDate(when) : "";
@@ -25,8 +25,7 @@
     </div>`;
     }
     function learnedTimelineHtml(data) {
-        const payload = (data ?? {});
-        const items = Array.isArray(payload.items) ? payload.items : [];
+        const items = Array.isArray(data?.items) ? data.items : [];
         const intro = `<div class="learned-intro sess"><div class="sess-line" style="color:var(--muted)">
       A quiet record of what Cairn has come to understand about you, and the changes it's made with you. It's here to show its working — not to grade anything. Visit it whenever; it never nudges.
     </div></div>`;

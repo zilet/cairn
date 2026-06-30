@@ -21,6 +21,11 @@ import type {
   ClientSessionSuggestion,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
+  ClientLearnedItem,
+  ClientLearnedKind,
+  ClientLearnedTimeline,
+  ClientMemory,
+  ClientMemoryKind,
 } from "./client.js";
 
 declare global {
@@ -144,7 +149,7 @@ declare global {
   declare function humanDate(iso: string): string;
   declare function humanizeReviewText(text: string, latestISO: string | null | undefined): string;
   declare function latestReviewDate(parsed: unknown): string | null;
-  declare function learnedTimelineHtml(data: unknown): string;
+  declare function learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string;
   declare function foodNum(value: unknown): number | null;
   declare function formatFoodNum(value: unknown): string;
   declare function fmtWeight(weight: unknown): string;
@@ -765,15 +770,15 @@ declare global {
     };
 
     CairnHealthLearned: {
-      LEARNED_GROUPS: readonly (readonly [string, string, string])[];
-      learnedItemHtml(item: unknown, index: number): string;
-      learnedTimelineHtml(data: unknown): string;
+      LEARNED_GROUPS: readonly (readonly [ClientLearnedKind, string, string])[];
+      learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, index: number): string;
+      learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string;
     };
 
     CairnMemory: {
-      MEM_KINDS: readonly string[];
-      memoryKindOptionsHtml(selected?: unknown): string;
-      memoryRowHtml(row: Record<string, unknown>, index?: number): string;
+      MEM_KINDS: readonly ClientMemoryKind[];
+      memoryKindOptionsHtml(selected?: ClientMemoryKind | null): string;
+      memoryRowHtml(row: ClientMemory, index?: number): string;
     };
 
     CairnFamily: {

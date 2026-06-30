@@ -177,6 +177,8 @@ These routes are non-negotiable:
 
 The server fallback remains narrow: `/app/*` returns the app shell; `/api/*`, `/mcp`, static assets, uploads, reports, and exports keep their current behavior.
 
+Status: built-server smoke now asserts `/app/today`, `/app/me/health/read`, `/app/chat?session=...`, and `/app/settings/data` return the app shell with the boot script and manifest. Browser route smoke remains the final cache/navigation check for user-facing route changes.
+
 Every router or boot change must include:
 
 - route parse/serialize tests
@@ -445,7 +447,7 @@ Gate:
 - job/reconnect tests
 - Chrome smoke for direct links and tab switching
 - `npm run verify`
-- `npm run smoke`
+- `npm run smoke` / `npm run smoke:built` with canonical `/app/*` deep-link assertions
 
 ### Wave 6 - Screen Migration By Domain
 

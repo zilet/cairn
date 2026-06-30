@@ -9,6 +9,7 @@
 type HealthDocument = import("../contracts/client-api.js").ClientHealthDocument;
 type ContextEvent = import("../contracts/client-api.js").ClientContextEvent;
 type FamilyMember = import("../contracts/client-api.js").ClientFamilyMember;
+type LearnedTimelineData = import("../contracts/client-api.js").ClientLearnedTimeline;
 type ScreenRecord = Record<string, unknown>;
 type WiredElement<T extends Element = HTMLElement> = T & { _wired?: boolean };
 
@@ -158,7 +159,7 @@ function paintHealthRecordsTab() {
 // Cairn has understood and changed — it does NOT GRADE: no scores, no accuracy %,
 // no judgment. A quiet editorial read, grouped by kind under plain-language
 // kickers, newest-first within each group. Reads GET /api/learned-timeline only.
-function renderLearnedTimeline(data: unknown, token: number) {
+function renderLearnedTimeline(data: LearnedTimelineData | null | undefined, token: number) {
   const c = $("#hContent");
   if (!c || token !== pollToken) return; // a sibling tab repainted while we fetched
   c.innerHTML = learnedTimelineHtml(data);

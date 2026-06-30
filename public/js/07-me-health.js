@@ -394,7 +394,8 @@ var _hPic = null; // { review, docCount, newestDocAt }
             return;
         let items = [];
         try {
-            items = healthScreenRows(await api("/memory"));
+            const data = await api("/memory");
+            items = Array.isArray(data) ? data : [data];
         }
         catch {
             items = [];

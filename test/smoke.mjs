@@ -73,6 +73,11 @@ async function getJson(base, p, init) {
   return { status: res.status, body };
 }
 
+async function getText(base, p, init) {
+  const res = await fetch(`${base}${p}`, init);
+  return { status: res.status, headers: res.headers, text: await res.text() };
+}
+
 // Poll GET /api/health until the server is listening (or give up).
 async function waitForHealth(ctx, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
@@ -214,7 +219,17 @@ async function runOpenSmoke(ctx) {
     ok(/settingsRouteTasks/.test(text) && /settingsRouteRowsHtml/.test(text), "settings route helper exposes expected functions");
   }
 
-  // 6) Create a plan day end-to-end (PUT /plan/:day), then read it back. Uses a
+  // 6) PWA deep links — copied/bookmarked route-state URLs must return the app
+  //    shell, not a 404 or JSON API body, so the client can hydrate the screen.
+  for (const route of ["/app/today", "/app/me/health/read", "/app/chat?session=smoke-session", "/app/settings/data"]) {
+    const { status, headers, text } = await getText(base, route);
+    ok(status === 200, `GET ${route} → app shell 200`, `got ${status}`);
+    ok((headers.get("content-type") || "").includes("text/html"), `GET ${route} returns HTML`);
+    ok(/<script src="\/js\/10-boot\.js"><\/script>/.test(text), `GET ${route} includes boot script`);
+    ok(/<link rel="manifest" href="\/manifest\.json">/.test(text), `GET ${route} includes manifest`);
+  }
+
+  // 7) Create a plan day end-to-end (PUT /plan/:day), then read it back. Uses a
   //    high day_number so it never clobbers a seeded day.
   const smokeDay = 91;
   {
@@ -235,7 +250,7 @@ async function runOpenSmoke(ctx) {
     ok(get.status === 200 && get.body?.name === "Smoke Day", "GET /api/plan/91 reads it back", JSON.stringify(get.body?.name));
   }
 
-  // 7) Log a set, then read it back via the session-by-date lookup. Asserts the
+  // 8) Log a set, then read it back via the session-by-date lookup. Asserts the
   //    logged_set round-trips with the right exercise/weight/reps and est-1RM.
   const today = new Date().toISOString().slice(0, 10);
   {
@@ -254,7 +269,7 @@ async function runOpenSmoke(ctx) {
     ok(sets.some((s) => s.exercise === "Smoke Squat" && s.reps === 5), "the logged set is in today's session", JSON.stringify(sets));
   }
 
-  // 8) Export — the JSON backup the whole DB serializes to.
+  // 9) Export — the JSON backup the whole DB serializes to.
   {
     const res = await fetch(`${base}/api/export`);
     ok(res.status === 200, "GET /api/export → 200", `got ${res.status}`);

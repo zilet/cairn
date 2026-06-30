@@ -1,25 +1,20 @@
 // @ts-check
 // Me Memory renderers: pure HTML for remembered facts and preferences.
 
-type MemoryRow = {
-  id?: unknown;
-  kind?: unknown;
-  created_at?: unknown;
-  source?: unknown;
-  content?: unknown;
-};
+type ClientMemory = import("../contracts/client-api.js").ClientMemory;
+type ClientMemoryKind = import("../contracts/client-api.js").ClientMemoryKind;
 
 (() => {
-const MEM_KINDS = ["note", "preference", "constraint", "goal", "fact"] as const;
+const MEM_KINDS = ["note", "preference", "constraint", "goal", "fact"] as const satisfies readonly ClientMemoryKind[];
 
-function memoryKindOptionsHtml(selected: unknown = ""): string {
+function memoryKindOptionsHtml(selected: ClientMemoryKind | null | undefined = ""): string {
   const selectedKind = String(selected || "");
   return MEM_KINDS
     .map((kind) => `<option value="${escAttr(kind)}"${kind === selectedKind ? " selected" : ""}>${escHtml(kind)}</option>`)
     .join("");
 }
 
-function memoryRowHtml(row: MemoryRow, index?: number): string {
+function memoryRowHtml(row: ClientMemory, index?: number): string {
   const reveal = typeof index === "number";
   const date = String(row.created_at || "").slice(0, 10);
   const source = row.source && row.source !== "user" ? ` · ${escHtml(row.source)}` : "";

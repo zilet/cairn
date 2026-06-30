@@ -5,6 +5,7 @@ type HealthPictureCache = { review?: Record<string, unknown> | null; docCount?: 
 var _hPic: HealthPictureCache | null = null;        // { review, docCount, newestDocAt }
 {
 type HealthScreenRecord = Record<string, unknown>;
+type HealthMemory = import("../contracts/client-api.js").ClientMemory;
 type HealthProfile = import("../contracts/client-api.js").ClientProfile & {
   age?: number | string | null;
   height_cm?: number | string | null;
@@ -446,8 +447,11 @@ async function renderMemory() {
 async function loadMemory() {
   const wrap = $<HTMLElement>("#memlist");
   if (!wrap) return;
-  let items: HealthScreenRecord[] = [];
-  try { items = healthScreenRows(await api("/memory")); } catch { items = []; }
+  let items: HealthMemory[] = [];
+  try {
+    const data = await api("/memory");
+    items = Array.isArray(data) ? data : [data];
+  } catch { items = []; }
   if (state.tab !== "me" || state.meSeg !== "memory" || !wrap.isConnected) return;
   if (!items || !items.length) { wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter — they'll gather here.</div>`; return; }
   wrap.innerHTML = items.map((m, i) => CairnMemory.memoryRowHtml(m, i)).join("");

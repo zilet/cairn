@@ -1,15 +1,10 @@
 // @ts-check
 // Health Learned timeline renderers: pure HTML for the pull-only memory/learning read.
 
-type LearnedGroup = readonly [kind: string, label: string, blurb: string];
-
-type LearnedItem = {
-  when?: unknown;
-  kind?: unknown;
-  title?: unknown;
-  detail?: unknown;
-  source?: unknown;
-};
+type ClientLearnedItem = import("../contracts/client-api.js").ClientLearnedItem;
+type ClientLearnedKind = import("../contracts/client-api.js").ClientLearnedKind;
+type ClientLearnedTimeline = import("../contracts/client-api.js").ClientLearnedTimeline;
+type LearnedGroup = readonly [kind: ClientLearnedKind, label: string, blurb: string];
 
 (() => {
 const LEARNED_GROUPS: readonly LearnedGroup[] = [
@@ -19,8 +14,8 @@ const LEARNED_GROUPS: readonly LearnedGroup[] = [
   ["applied", "Plan changes you accepted", "Adjustments Cairn proposed that you chose to apply. Nothing here changed on its own."],
 ];
 
-function learnedItemHtml(item: unknown, index: number): string {
-  const row = (item ?? {}) as LearnedItem;
+function learnedItemHtml(item: Partial<ClientLearnedItem> | null | undefined, index: number): string {
+  const row = item ?? {};
   const when = row.when ? String(row.when) : "";
   const rel = when ? relAge(when) : "";
   const abs = when ? absDate(when) : "";
@@ -36,9 +31,8 @@ function learnedItemHtml(item: unknown, index: number): string {
     </div>`;
 }
 
-function learnedTimelineHtml(data: unknown): string {
-  const payload = (data ?? {}) as { items?: unknown };
-  const items = Array.isArray(payload.items) ? (payload.items as LearnedItem[]) : [];
+function learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string {
+  const items = Array.isArray(data?.items) ? data.items : [];
   const intro = `<div class="learned-intro sess"><div class="sess-line" style="color:var(--muted)">
       A quiet record of what Cairn has come to understand about you, and the changes it's made with you. It's here to show its working — not to grade anything. Visit it whenever; it never nudges.
     </div></div>`;
