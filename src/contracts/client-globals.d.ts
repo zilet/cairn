@@ -596,6 +596,22 @@ declare global {
       directivesSectionHtml(rows: unknown, evSummary: { research_enabled?: unknown; by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): string;
     };
 
+    CairnHealthStanding: {
+      hstandDecade(age: unknown): number;
+      hstandPct(value: unknown): number | null;
+      localDateTimeInputValue(date?: Date): string;
+      hstandTone(tone: unknown): string;
+      hstandBandTone(percentile: unknown): string;
+      hstandMeasureHtml(measure: Record<string, unknown> | null | undefined): string;
+      hstandCompHtml(comparison: Record<string, unknown>, sexWord: string, calendarAge: unknown): string;
+      hstandRefSummaryHtml(comparisons: Array<Record<string, unknown>> | null | undefined, referenceAge: unknown, actualDecade: number | null, sexWord: string): string;
+      hstandDimensionHtml(dimension: Record<string, unknown>, index: number): string;
+      hstandBpRows(rows: Array<Record<string, unknown>> | null | undefined): string;
+      hstandBodyCompHtml(bodyComp: Record<string, unknown> | null | undefined): string;
+      hstandBpCardHtml(bp: Record<string, unknown> | null | undefined): string;
+      renderHealthStandingHtml(data: Record<string, unknown> | null | undefined, options?: { referenceAge?: unknown }): string;
+    };
+
     CairnFoodNote: {
       foodIngredients(value: unknown): Array<Record<string, unknown>>;
       ingredientLabel(ingredient: Record<string, unknown> | null | undefined): string;
@@ -904,6 +920,7 @@ declare global {
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
+  declare const CairnHealthStanding: Window["CairnHealthStanding"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
