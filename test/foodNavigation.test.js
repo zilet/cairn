@@ -8,7 +8,7 @@ const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf
 test("logged food has a dedicated Plan Food tab and shortcuts land there", () => {
   const ui = file("public/js/02-ui.js");
   const meals = file("public/js/06-coach-meals.js");
-  const today = file("public/js/03-today.js");
+  const today = file("src/client/today-screen.ts");
   const chat = file("public/js/09-plan-chat.js");
   const appRenderDispatch = file("public/js/app-render-dispatch.js");
 
@@ -16,7 +16,7 @@ test("logged food has a dedicated Plan Food tab and shortcuts land there", () =>
   assert.match(ui, /food: \(\) => renderFoodJournal\(\)/, "Food segment is wired to the journal renderer");
   assert.match(meals, /segBar\("food", planSeg\(\)\)/, "daily journal renders as the active Food segment");
   assert.match(meals, /class="meal-energy food-journal"/, "Food tab owns the daily journal and energy surface");
-  assert.match(today, /state\.planJump = "food"; activateTab\("plan"\)/, "Today logged-fuel card opens Food");
+  assert.match(today, /todayState\.planJump = "food"; activateTab\("plan"\)/, "Today logged-fuel card opens Food");
   assert.match(chat, /state\.planJump = "food"; activateTab\("plan"\)/, "Chat fuel strip opens Food");
   assert.match(chat, /function chatScreenWantsFuelSurface\(messages = chatFuelContext\)/, "Chat fuel strip is gated by conversation context");
   assert.match(chat, /if \(!chatScreenWantsFuelSurface\(messages\)\) \{[\s\S]*slot\.innerHTML = "";[\s\S]*return;[\s\S]*\}/, "Unrelated chats suppress the fuel strip");

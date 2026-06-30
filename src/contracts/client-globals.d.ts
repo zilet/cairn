@@ -373,7 +373,6 @@ declare global {
   declare function renderSettings(): unknown;
   declare function switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
   declare function loadHealthMarkers(token: number): void;
-  declare function loadDirectives(token: number): void;
   declare function paintHealthMarkersTab(): void;
   declare function paintHealthRecordsTab(): void;
   declare function paintHealthShareTab(): void;
@@ -655,6 +654,10 @@ declare global {
       ): string;
       directivesEmptyHtml(): string;
       directivesSectionHtml(rows: unknown, evSummary: { research_enabled?: unknown; by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): string;
+    };
+
+    CairnHealthDirectiveLoader: {
+      load(token: number): Promise<void>;
     };
 
     CairnHealthStanding: {
@@ -1109,6 +1112,7 @@ declare global {
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
+  declare const CairnHealthDirectiveLoader: Window["CairnHealthDirectiveLoader"];
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
@@ -1152,4 +1156,6 @@ declare global {
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayLately: Window["CairnTodayLately"];
+  declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];
+  declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];
 }

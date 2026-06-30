@@ -920,15 +920,17 @@ var _hPic = null; // { review, docCount, newestDocAt }
         loadHealthSynthesis(pollToken);
         loadRecoverySummary(pollToken, "#hRecovery");
         loadPriorityMarkers(pollToken);
-        loadDirectives(pollToken);
+        const directivesLoaded = CairnHealthDirectiveLoader.load(pollToken);
         loadSymptomLinks(pollToken);
         loadSupplements(pollToken);
         // A provenance "why" deep-link can ask to land on the referenced directive rather
         // than the top. The directives rail hydrates async, so wait for it to render, then
         // scroll it into view. Consumed once; a normal entry never scrolls.
         if (state.pendingHealthScroll === "hbDirectives") {
+            const token = pollToken;
             state.pendingHealthScroll = null;
-            scrollHealthRailIntoView("#hbDirectives");
+            void directivesLoaded.then(() => { if (token === pollToken)
+                scrollHealthRailIntoView("#hbDirectives"); });
         }
         if (_hReviewRun) {
             paintHealthPicture();

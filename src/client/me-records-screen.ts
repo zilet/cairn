@@ -7,13 +7,10 @@
 // ====================================================================
 
 type HealthDocument = import("../contracts/client-api.js").ClientHealthDocument;
-type HealthDirective = import("../contracts/client-api.js").ClientDirective;
-type EvidenceRow = import("../contracts/client-api.js").ClientEvidenceRow;
 type ContextEvent = import("../contracts/client-api.js").ClientContextEvent;
 type FamilyMember = import("../contracts/client-api.js").ClientFamilyMember;
 type ScreenRecord = Record<string, unknown>;
 type WiredElement<T extends Element = HTMLElement> = T & { _wired?: boolean };
-type EvidenceSummaryCompat = { research_enabled?: unknown; by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined;
 
 type UploadBody = {
   original_name: string;
@@ -50,113 +47,6 @@ function inputValue(id: string): string {
 function trimmedInputValue(id: string): string | null {
   const value = inputValue(id).trim();
   return value || null;
-}
-
-function evidenceRows(value: unknown): EvidenceRow[] {
-  const row = screenRecord(value);
-  return screenRows<EvidenceRow>(row.evidence);
-}
-
-// Strict scheme allowlist for an outbound source URL — only real http(s) links open
-// in a new tab (rel="noopener noreferrer"); anything else degrades to plain text.
-function evidenceSafeUrl(u: unknown): string | null {
-  return CairnHealthClient.evidenceSafeUrl(u);
-}
-
-// Render the fetched evidence list (or a calm "no source on file" note when empty).
-function evidenceListHtml(evidence: EvidenceRow[]): string {
-  return CairnHealthClient.evidenceListHtml(evidence);
-}
-
-// Toggle the evidence box for one directive; fetch once, then just show/hide.
-async function toggleEvidence(btn: HTMLElement) {
-  const box = btn.nextElementSibling as HTMLElement | null;
-  if (!box || !box.classList.contains("hb-evbox")) return;
-  // Remember the "see the evidence (N)" label (count included) so closing restores
-  // it verbatim — the count is set in directiveHtml and must survive a toggle.
-  if (!btn.dataset.openLabel) btn.dataset.openLabel = btn.innerHTML;
-  const opening = box.hidden;
-  if (!opening) { // closing
-    box.hidden = true;
-    btn.setAttribute("aria-expanded", "false");
-    btn.innerHTML = btn.dataset.openLabel;
-    return;
-  }
-  btn.setAttribute("aria-expanded", "true");
-  btn.textContent = "hide the evidence";
-  box.hidden = false;
-  if (box.dataset.loaded === "1") { box.classList.remove("chip-in"); void box.offsetWidth; box.classList.add("chip-in"); return; }
-  box.innerHTML = `<div class="hb-ev-loading lbl"><span class="aspin aspin-xs"></span> reading the source…</div>`;
-  let res: unknown = null;
-  try { res = await api(`/evidence?marker=${encodeURIComponent(btn.dataset.evidence || "")}`); } catch { res = null; }
-  if (box.hidden) return; // user closed it mid-flight
-  box.dataset.loaded = "1";
-  box.innerHTML = evidenceListHtml(evidenceRows(res));
-  if (!reducedMotion()) { box.classList.remove("chip-in"); void box.offsetWidth; box.classList.add("chip-in"); }
-}
-
-async function loadDirectives(token: number) {
-  const wrap = $("#hbDirectives");
-  if (!wrap || !wrap.isConnected) return;
-  // Fetch the directives AND the evidence summary together (F1): the summary is
-  // the per-marker count of cited rows on file, so each directive can offer "see
-  // the evidence (N)" even without a citation — and we know whether research is
-  // worth nudging — without an N-fetch fan-out. The summary is best-effort.
-  let res: unknown = null, evSummary: EvidenceSummaryCompat = null;
-  try {
-    [res, evSummary] = await Promise.all([
-      api("/directives"),
-      api("/evidence/summary").then((summary) => summary as unknown as EvidenceSummaryCompat).catch(() => null),
-    ]);
-  } catch { res = null; }
-  if (token !== pollToken || !wrap.isConnected) return;
-  const all = screenRows<HealthDirective>(screenRecord(res).directives);
-  const active = all.filter((d) => !d.status || d.status === "active");
-  paintDirectives(wrap, active, evSummary);
-}
-
-// Build a case-insensitive marker → evidence-count map from the summary.
-function evidenceCountMap(summary: EvidenceSummaryCompat) {
-  return CairnHealthDirectives.evidenceCountMap(summary);
-}
-
-function paintDirectives(wrap: Element, active: HealthDirective[], evSummary: EvidenceSummaryCompat) {
-  wrap.innerHTML = CairnHealthDirectives.directivesSectionHtml(active, evSummary);
-  $("#hbDerive")?.addEventListener("click", deriveDirectives);
-  $("#hbResearchNudge")?.addEventListener("click", () => switchTab("settings"));
-  wrap.querySelectorAll<HTMLElement>("[data-ddone]").forEach((b) => b.addEventListener("click", () => resolveDirective(b.dataset.ddone || "", "resolved")));
-  wrap.querySelectorAll<HTMLElement>("[data-ddismiss]").forEach((b) => b.addEventListener("click", () => resolveDirective(b.dataset.ddismiss || "", "dismissed")));
-  wrap.querySelectorAll<HTMLElement>("[data-evidence]").forEach((b) => b.addEventListener("click", () => toggleEvidence(b)));
-}
-
-// Flip a directive's status (the review side — nothing auto-applies). The card
-// collapses out gently on success.
-async function resolveDirective(id: string, status: "resolved" | "dismissed") {
-  if (!id) return;
-  const card = $(`#hbDirectives .hb-directive[data-dir="${id}"]`);
-  let res: unknown = null;
-  try {
-    res = await api(`/directives/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
-  } catch { res = null; }
-  if (!screenRecord(res).ok) { toast("Couldn't update"); return; }
-  toast(status === "resolved" ? "Marked done" : "Dismissed");
-  const after = () => {
-    // if the group is now empty, drop its header too; reload to re-group cleanly
-    loadDirectives(pollToken);
-  };
-  if (card) collapseEl(card, after); else after();
-}
-
-// Quiet "refresh from latest labs" — re-run the deterministic propagation engine.
-async function deriveDirectives() {
-  const btn = $("#hbDerive");
-  const restore = btnBusy(btn, "refreshing…");
-  let res: unknown = null;
-  try { res = await api("/directives/derive", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { res = null; }
-  const row = screenRecord(res);
-  if (!row.ok) { toast("Couldn't refresh"); restore(); return; }
-  toast(row.derived ? `Refreshed — ${row.derived} found` : "Up to date");
-  loadDirectives(pollToken);
 }
 
 // ---- Markers tab: trends across every document ----
@@ -970,9 +860,6 @@ function startFamilyDelete(btn: Element) {
 }
 
 Object.assign(globalThis, {
-  evidenceCountMap,
-  evidenceListHtml,
-  evidenceSafeUrl,
   healthMarkersEmptyHtml,
   loadHealthDocs,
   paintHealthLearnedTab,
