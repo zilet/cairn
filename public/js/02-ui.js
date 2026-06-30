@@ -1099,13 +1099,20 @@ function withViewTransition(fn) {
     try { return Promise.resolve(fn()); }
     catch (err) { return Promise.reject(err); }
   };
+  const quietTransitionPromise = (promise) => Promise.resolve(promise).catch((err) => {
+    if (!isViewTransitionAbort(err)) throw err;
+  });
+  const quietSecondaryTransitionPromise = (promise) => Promise.resolve(promise).catch((err) => {
+    if (!isViewTransitionAbort(err)) setTimeout(() => { throw err; }, 0);
+  });
   if (document.startViewTransition && !reducedMotion() && !_vtActive) {
     try {
       _vtActive = true;
       const tx = document.startViewTransition(run);
       const done = tx.updateCallbackDone || tx.finished || Promise.resolve();
-      return Promise.resolve(done)
-        .catch((err) => { if (!isViewTransitionAbort(err)) throw err; })
+      if (tx.ready) quietSecondaryTransitionPromise(tx.ready);
+      if (tx.finished && tx.finished !== done) quietSecondaryTransitionPromise(tx.finished);
+      return quietTransitionPromise(done)
         .finally(() => { _vtActive = false; });
     } catch { _vtActive = false; /* fall through */ }
   }

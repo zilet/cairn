@@ -719,10 +719,9 @@ function primaryKeyFor(tab) {
   return null;
 }
 
-const ROUTE_TABS = ["today", "plan", "progress", "chat", "me", "settings"];
+const ROUTE_TABS = CairnAppRouter.ROUTE_TABS;
 function routeKey(key, items, fallback = null) {
-  const s = String(key || "");
-  return (items || []).some((item) => (Array.isArray(item) ? item[0] : item) === s) ? s : fallback;
+  return CairnAppRouter.routeKey(key, items, fallback);
 }
 function routeApi() {
   return window.CairnRoutes && typeof window.CairnRoutes.parseRoute === "function" && typeof window.CairnRoutes.routeToUrl === "function"
@@ -730,60 +729,29 @@ function routeApi() {
     : null;
 }
 function applyRouteState(route) {
-  if (!route) return "today";
-  if (route.date) state.logDate = route.date;
-  if (route.tab === "plan") {
-    const section = routeKey(route.section, routeApi()?.planSections || planSeg(), "edit");
-    state.planSeg = section;
-    state.planJump = section === "edit" ? null : section;
-  } else if (route.tab === "progress") {
-    state.progressSeg = routeKey(route.section, PROGRESS_SEG, state.progressSeg || null);
-  } else if (route.tab === "me") {
-    state.meSeg = routeKey(route.section, ME_SEG, "standing");
-    if (state.meSeg === "health") {
-      state.healthSeg = routeKey(route.healthSection, HEALTH_SEG, "read");
-      state.healthSegPicked = true;
-      state.pendingHealthDocId = route.id || null;
-    }
-  } else if (route.tab === "settings") {
-    state.setSeg = routeKey(route.section, SET_SEG, state.setSeg || "agents");
-  } else if (route.tab === "chat") {
-    state.pendingChatSession = route.session || null;
-  }
-  return ROUTE_TABS.includes(route.tab) ? route.tab : "today";
+  return CairnAppRouter.applyRouteState(route, {
+    state,
+    routeApi: routeApi(),
+    planSections: planSeg(),
+    progressSections: PROGRESS_SEG,
+    meSections: ME_SEG,
+    healthSections: HEALTH_SEG,
+    settingsSections: SET_SEG,
+  });
 }
 function currentRouteState() {
-  const tab = ROUTE_TABS.includes(state.tab) ? state.tab : "today";
-  const route = { tab };
-  if (tab === "today") {
-    if (state.logDate) route.date = state.logDate;
-  } else if (tab === "plan") {
-    const section = routeKey(state.planJump || state.planSeg, planSeg(), "edit");
-    route.section = section;
-    if (section === "food" && state.logDate) route.date = state.logDate;
-  } else if (tab === "progress") {
-    route.section = routeKey(state.progressSeg || defaultProgressSeg(), PROGRESS_SEG, defaultProgressSeg());
-  } else if (tab === "me") {
-    route.section = routeKey(state.meSeg, ME_SEG, "standing");
-    if (route.section === "health") {
-      route.healthSection = routeKey(state.healthSeg, HEALTH_SEG, "read");
-      if (state.pendingHealthDocId) route.id = state.pendingHealthDocId;
-    }
-  } else if (tab === "settings") {
-    route.section = routeKey(state.setSeg, SET_SEG, "agents");
-  } else if (tab === "chat" && state.pendingChatSession) {
-    route.session = state.pendingChatSession;
-  }
-  return route;
+  return CairnAppRouter.currentRouteState({
+    state,
+    planSections: planSeg(),
+    progressSections: PROGRESS_SEG,
+    meSections: ME_SEG,
+    healthSections: HEALTH_SEG,
+    settingsSections: SET_SEG,
+    defaultProgressSection: defaultProgressSeg(),
+  });
 }
 function syncRouteFromState(mode = "push") {
-  const routes = routeApi();
-  if (!routes || !history?.pushState) return;
-  const next = routes.routeToUrl(currentRouteState());
-  const current = `${location.pathname}${location.search}`;
-  if (next === current) return;
-  const fn = mode === "replace" ? "replaceState" : "pushState";
-  history[fn]({ cairn: true }, "", next);
+  CairnAppRouter.syncRouteFromState({ mode, routes: routeApi(), route: currentRouteState(), location, history });
 }
 
 // Switch tabs: crossfade the old tab → a synchronous skeleton (the view

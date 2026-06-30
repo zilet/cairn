@@ -75,6 +75,39 @@ declare global {
     onCanceled?: () => void;
   };
 
+  type ClientAppRouterApi = {
+    ROUTE_TABS: ClientTabName[];
+    routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
+    applyRouteState(
+      route: ClientRoute | null | undefined,
+      options: {
+        state: ClientAppState;
+        routeApi?: ClientRoutesApi | null;
+        planSections: ReadonlyArray<string | readonly [string, unknown]>;
+        progressSections: ReadonlyArray<string | readonly [string, unknown]>;
+        meSections: ReadonlyArray<string | readonly [string, unknown]>;
+        healthSections: ReadonlyArray<string | readonly [string, unknown]>;
+        settingsSections: ReadonlyArray<string | readonly [string, unknown]>;
+      },
+    ): ClientTabName;
+    currentRouteState(options: {
+      state: ClientAppState;
+      planSections: ReadonlyArray<string | readonly [string, unknown]>;
+      progressSections: ReadonlyArray<string | readonly [string, unknown]>;
+      meSections: ReadonlyArray<string | readonly [string, unknown]>;
+      healthSections: ReadonlyArray<string | readonly [string, unknown]>;
+      settingsSections: ReadonlyArray<string | readonly [string, unknown]>;
+      defaultProgressSection: string | null;
+    }): Partial<ClientRoute>;
+    syncRouteFromState(options: {
+      mode?: "push" | "replace";
+      routes?: ClientRoutesApi | null;
+      route: Partial<ClientRoute>;
+      location: Pick<Location, "pathname" | "search">;
+      history?: Pick<History, "pushState" | "replaceState"> | null;
+    }): string | null;
+  };
+
   declare function $<T extends Element = Element>(selector: string): T | null;
   declare const state: ClientAppState;
 
@@ -158,6 +191,7 @@ declare global {
 
   interface Window {
     registerAppJobReconnectors(): void;
+    CairnAppRouter: ClientAppRouterApi;
 
     CairnChatClient: {
       CHAT_IMAGE_MAX_BYTES: number;
