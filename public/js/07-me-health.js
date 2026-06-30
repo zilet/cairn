@@ -1118,13 +1118,10 @@ function loadRecoverySummary(token, sel) {
     if (token !== pollToken || !w || !w.isConnected) return;
     if (!r || !r.has_data) {
       // quiet hint, not a nag — capture is offered, never demanded
-      w.innerHTML = `<div class="hb-recovery hb-recovery-empty reveal" style="${stagger(0)}">
-        <span class="lbl">Recovery</span>
-        <p class="hb-recovery-hint">No sleep or recovery signal yet. Connect a wearable, or jot how you're feeling, and the buddy will fold it into your day.</p>
-      </div>`;
+      w.innerHTML = CairnHealthRead.recoveryNoDataHtml();
       return;
     }
-    w.innerHTML = recoveryHtml(r);
+    w.innerHTML = CairnHealthRead.recoveryHtml(r);
   };
   const peek = peekCached("recovery:14");
   if (peek) { paint(peek.data); if (!peek.fresh) markRefreshing(true); }
@@ -1134,159 +1131,10 @@ function loadRecoverySummary(token, sel) {
   }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
-// Plain-language recovery summary. Each chip is a phrase, not a number you must
-// interpret; we lean on rough bands (sleeping well / a little short, resting HR
-// steady) so it reads like a friend's note. Numbers are kept to quiet captions.
-function recoveryHtml(r) {
-  const rc = r.recovery || {};
-  const lines = [];
-  const cap = (txt, sub) => `<div class="hb-rline"><span class="hb-rphrase">${escHtml(txt)}</span>${sub ? `<span class="hb-rsub">${escHtml(sub)}</span>` : ""}</div>`;
-
-  const sm = Number(rc.avg_sleep_min);
-  if (isFinite(sm) && sm > 0) {
-    const h = Math.floor(sm / 60), m = Math.round(sm % 60);
-    const hrs = sm / 60;
-    const phrase = hrs >= 7.5 ? "Sleeping well" : hrs >= 6.5 ? "Sleep's about right" : hrs >= 5.5 ? "Sleep's run a little short" : "Sleep's been short";
-    // Fold deep/REM architecture into the caption when the wearable reports it.
-    const deep = Number(rc.avg_deep_sleep_min), rem = Number(rc.avg_rem_sleep_min);
-    const arch = [
-      isFinite(deep) && deep > 0 ? `${Math.round(deep)}m deep` : null,
-      isFinite(rem) && rem > 0 ? `${Math.round(rem)}m REM` : null,
-    ].filter(Boolean).join(" · ");
-    lines.push(cap(phrase, `${h}h${m ? " " + m + "m" : ""} a night${arch ? " · " + arch : ""}`));
-  }
-  const rhr = Number(rc.avg_resting_hr);
-  if (isFinite(rhr) && rhr > 0) lines.push(cap("Resting heart rate steady", `~${Math.round(rhr)} bpm`));
-  const hrv = Number(rc.avg_hrv_ms);
-  if (isFinite(hrv) && hrv > 0) {
-    const st = String(rc.hrv_status || "").toLowerCase();
-    const phrase = st === "balanced" ? "Heart-rate variability balanced"
-      : st === "unbalanced" ? "Heart-rate variability a touch off"
-      : (st === "low" || st === "poor") ? "Heart-rate variability running low"
-      : "Heart-rate variability holding";
-    lines.push(cap(phrase, `~${Math.round(hrv)} ms`));
-  }
-  const stress = Number(rc.avg_stress);
-  if (isFinite(stress) && stress > 0) {
-    const phrase = stress < 26 ? "Stress load's low" : stress < 51 ? "Stress load's moderate" : "Stress load's run high";
-    lines.push(cap(phrase, ""));
-  }
-  const bb = Number(rc.avg_body_battery);
-  if (isFinite(bb) && bb > 0) {
-    const phrase = bb >= 60 ? "Energy reserves look good" : bb >= 40 ? "Energy reserves middling" : "Running a bit low on reserves";
-    lines.push(cap(phrase, ""));
-  }
-  // Breathing + blood-oxygen — a quiet illness/altitude tell when it drifts.
-  const resp = Number(rc.avg_respiration), spo2 = Number(rc.avg_spo2);
-  if ((isFinite(resp) && resp > 0) || (isFinite(spo2) && spo2 > 0)) {
-    const sub = [
-      isFinite(resp) && resp > 0 ? `~${Math.round(resp)}/min` : null,
-      isFinite(spo2) && spo2 > 0 ? `SpO₂ ${Math.round(spo2)}%` : null,
-    ].filter(Boolean).join(" · ");
-    const phrase = isFinite(spo2) && spo2 > 0 && spo2 < 93 ? "Blood oxygen ran low overnight" : "Breathing steady overnight";
-    lines.push(cap(phrase, sub));
-  }
-  // Skin-temperature deviation — surface only when it meaningfully drifts (a soft
-  // strain/illness signal on supported devices).
-  const skin = Number(rc.skin_temp_dev_c);
-  if (isFinite(skin) && Math.abs(skin) >= 0.3) {
-    lines.push(cap(skin > 0 ? "Skin temp ran warm overnight" : "Skin temp ran cool overnight", `${skin > 0 ? "+" : ""}${skin}°C vs baseline`));
-  }
-  const tr = Number(rc.avg_training_readiness);
-  if (isFinite(tr) && tr > 0) {
-    const phrase = tr >= 75 ? "Primed to train" : tr >= 50 ? "Ready for a normal day" : tr >= 25 ? "Ease in — recovery's partial" : "Body's asking for a lighter day";
-    lines.push(cap(phrase, ""));
-  }
-  // VO2max + training status read as objective fitness, not a verdict.
-  const vo2 = Number(rc.vo2max);
-  if (isFinite(vo2) && vo2 > 0) {
-    const status = String(rc.training_status || "").replace(/_/g, " ").toLowerCase();
-    lines.push(cap("Aerobic fitness", `VO₂max ~${Math.round(vo2)}${status ? " · " + status : ""}`));
-  }
-  const steps = Number(rc.avg_steps);
-  if (isFinite(steps) && steps > 0) {
-    const phrase = steps >= 8000 ? "Moving plenty day to day" : steps >= 4000 ? "Moving a fair bit" : "Fairly sedentary lately";
-    lines.push(cap(phrase, `~${fmtK(steps)} steps`));
-  }
-  // Body composition (latest weigh-in from a connected scale).
-  const wt = Number(rc.weight_kg), bf = Number(rc.body_fat_pct), mm = Number(rc.muscle_mass_kg);
-  if ((isFinite(wt) && wt > 0) || (isFinite(bf) && bf > 0)) {
-    const sub = [
-      isFinite(wt) && wt > 0 ? `${Math.round(wt * 10) / 10} kg` : null,
-      isFinite(bf) && bf > 0 ? `${Math.round(bf * 10) / 10}% fat` : null,
-      isFinite(mm) && mm > 0 ? `${Math.round(mm * 10) / 10} kg muscle` : null,
-    ].filter(Boolean).join(" · ");
-    lines.push(cap("Body composition", sub));
-  }
-  if (!lines.length) {
-    return `<div class="hb-recovery hb-recovery-empty reveal" style="${stagger(0)}">
-      <span class="lbl">Recovery</span>
-      <p class="hb-recovery-hint">Recovery data's coming in but nothing to call out yet.</p>
-    </div>`;
-  }
-  const srcLabel = (r.sources || []).map((s) => s === "garmin" ? "Garmin" : s === "apple" ? "Apple Health" : s).filter(Boolean).join(" · ");
-  return `<div class="hb-recovery reveal" style="${stagger(0)}">
-    <div class="hb-rtop"><span class="lbl">Recovery · last 2 weeks</span>${srcLabel ? `<span class="hb-rsrc">${escHtml(srcLabel)}</span>` : ""}</div>
-    <div class="hb-rlist">${lines.join("")}</div>
-  </div>`;
-}
-
 // ---- Priority markers (optimal-zone framing, never a score) ----
 // Phrase each marker in plain language against its optimal zone: "ApoB — above
 // optimal", "HbA1c — in your optimal range", "Ferritin — below optimal". Order
 // comes from the server (impact_score); we NEVER render that number.
-function optimalPhrase(m) {
-  const opt = m.optimal;
-  const latest = m.latest || {};
-  const flag = String(latest.flag || "").toLowerCase();
-  // No optimal band: lean on the lab's own flag, still plain language.
-  if (!opt) {
-    if (flag === "high") return { word: "running high", tone: "warn" };
-    if (flag === "low") return { word: "running low", tone: "warn" };
-    if (flag === "normal" || flag === "ok") return { word: "in range", tone: "ok" };
-    return { word: "worth a look", tone: "watch" };
-  }
-  if (m.in_optimal === true) return { word: "in your optimal range", tone: "ok" };
-  if (m.in_optimal === false) {
-    const v = Number(latest.value);
-    // which side of the band — "above" / "below" optimal, in plain words
-    if (isFinite(v)) {
-      if (v > opt.high) return { word: "above optimal", tone: "warn" };
-      if (v < opt.low) return { word: "below optimal", tone: "warn" };
-    }
-    if (opt.dir === "low") return { word: "below optimal", tone: "warn" };
-    if (opt.dir === "high") return { word: "above optimal", tone: "warn" };
-    return { word: "outside your optimal range", tone: "warn" };
-  }
-  // optimal exists but no numeric latest → soft
-  return { word: "worth a look", tone: "watch" };
-}
-
-function priorityMarkerHtml(m, i) {
-  const latest = m.latest || {};
-  const phrase = optimalPhrase(m);
-  const dotClass = phrase.tone === "ok" ? "hdot-ok" : phrase.tone === "warn" ? "hdot-warn" : "hdot-watch";
-  const val = latest.value != null && latest.value !== "" ? fmtMkNum(latest.value) : "";
-  const valLine = val ? `<span class="hb-mkval">${escHtml(val)}${m.unit ? `<span class="hmk-unit">${escHtml(m.unit)}</span>` : ""}</span>` : "";
-  const points = (m.points || []).filter((p) => p && isFinite(Number(p.value)));
-  const trend = points.length >= 2 ? `<div class="hb-mktrend">${sparklineSvg(points.map((p) => Number(p.value)))}</div>` : "";
-  // a calm word on the optimal band itself (where it sits), no numbers-as-grade
-  const bandNote = m.optimal
-    ? `<span class="hb-mkband">optimal ${escHtml(fmtMkNum(m.optimal.low))}–${escHtml(fmtMkNum(m.optimal.high))}${m.unit ? " " + escHtml(m.unit) : ""}</span>`
-    : "";
-  const when = latest.date ? `<span class="hb-mkwhen" title="${escAttr(absDate(latest.date))}">${escHtml(relAge(latest.date))}</span>` : "";
-  return `<div class="hb-mk reveal" style="${stagger(i)}">
-    <div class="hb-mktop">
-      <span class="hdot ${dotClass}"></span>
-      <span class="hb-mkname">${escHtml(m.name || m.key || "")}</span>
-      <span class="hb-mkphrase hb-mkphrase-${phrase.tone}">${escHtml(phrase.word)}</span>
-      <span class="hb-mkright">${valLine}</span>
-    </div>
-    ${bandNote || when ? `<div class="hb-mkmeta">${bandNote}${bandNote && when ? `<span class="hb-mkdot">·</span>` : ""}${when}</div>` : ""}
-    ${trend}
-  </div>`;
-}
-
 // SWR over /markers/priority (key shared with the Markers tab): a warm re-entry
 // into the Health → Read view paints "what matters now" instantly, then revalidates.
 function loadPriorityMarkers(token) {
@@ -1295,28 +1143,7 @@ function loadPriorityMarkers(token) {
   const paint = (res) => {
     if (token !== pollToken || !wrap.isConnected) return;
     const markers = res && Array.isArray(res.markers) ? res.markers : [];
-    if (!markers.length) {
-      wrap.innerHTML = `<div class="hb-section">
-        <div class="hb-sechead"><span class="lbl">What matters now</span></div>
-        <div class="empty">No markers yet. Add a lab report on the Records tab and Cairn pulls out what matters most.</div>
-      </div>`;
-      return;
-    }
-    // Lead with the few that genuinely matter (flagged or out-of-optimal); keep the
-    // good ones quietly behind a fold so already-optimal markers stay silent.
-    const matters = markers.filter((m) => {
-      const ph = optimalPhrase(m);
-      return ph.tone !== "ok";
-    });
-    const good = markers.filter((m) => optimalPhrase(m).tone === "ok");
-    const lead = (matters.length ? matters : markers).slice(0, 4);
-    const rest = (matters.length ? matters.slice(4).concat(good) : markers.slice(4));
-    wrap.innerHTML = `<div class="hb-section">
-      <div class="hb-sechead"><span class="lbl">What matters now</span>${matters.length ? `<span class="hb-secnote">${matters.length} to keep an eye on</span>` : `<span class="hb-secnote">all looking good</span>`}</div>
-      <div class="hb-mklist">${lead.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div>
-      ${rest.length ? `<details class="hb-more"><summary>Everything else (${rest.length})</summary><div class="hb-mklist hb-mklist-quiet">${rest.map((m, i) => priorityMarkerHtml(m, i)).join("")}</div></details>` : ""}
-      <button class="hb-mk-allbtn" id="hbToMarkers" type="button">See every trend →</button>
-    </div>`;
+    wrap.innerHTML = CairnHealthRead.priorityMarkersSectionHtml(markers);
     $("#hbToMarkers")?.addEventListener("click", () => switchHealthSeg("markers"));
   };
   const peek = peekCached("markers:priority");

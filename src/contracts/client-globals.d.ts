@@ -148,6 +148,7 @@ declare global {
   declare function fmtPaceKm(minPerKm: unknown): string;
   declare function fmtKm(km: unknown): string;
   declare const fmtK: (value: unknown) => string;
+  declare function sparklineSvg(vals: unknown, w?: number, h?: number): string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
   declare function authToken(): string;
@@ -612,6 +613,15 @@ declare global {
       renderHealthStandingHtml(data: Record<string, unknown> | null | undefined, options?: { referenceAge?: unknown }): string;
     };
 
+    CairnHealthRead: {
+      recoveryNoDataHtml(message?: string): string;
+      recoveryLineHtml(text: unknown, sub: unknown): string;
+      recoveryHtml(summary: Record<string, unknown> | null | undefined): string;
+      optimalPhrase(marker: Record<string, unknown> | null | undefined): { word: string; tone: "ok" | "warn" | "watch" };
+      priorityMarkerHtml(marker: Record<string, unknown> | null | undefined, index: number): string;
+      priorityMarkersSectionHtml(markers: unknown): string;
+    };
+
     CairnFoodNote: {
       foodIngredients(value: unknown): Array<Record<string, unknown>>;
       ingredientLabel(ingredient: Record<string, unknown> | null | undefined): string;
@@ -921,6 +931,7 @@ declare global {
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
+  declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnDayFuel: Window["CairnDayFuel"];

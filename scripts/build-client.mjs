@@ -55,6 +55,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/day-fuel-client.ts", output: "public/js/day-fuel-client.js" },
   { source: "src/client/food-note-client.ts", output: "public/js/food-note-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
+  { source: "src/client/health-read-client.ts", output: "public/js/health-read-client.js" },
   { source: "src/client/health-standing-client.ts", output: "public/js/health-standing-client.js" },
   { source: "src/client/health-picture-client.ts", output: "public/js/health-picture-client.js" },
   { source: "src/client/health-markers-client.ts", output: "public/js/health-markers-client.js" },
