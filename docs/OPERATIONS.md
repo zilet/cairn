@@ -70,6 +70,10 @@ docker compose up -d --build
 
 The code path is identical. The only difference is `DATA_DIR`: `./data` locally, `/data` in
 Docker (set by the Dockerfile `ENV` directive and the volume mount).
+For source-built Docker images, the Docker builder runs `npm run build`; that typechecks and
+generates the browser client, then the runtime image overlays generated `public/js` from the
+builder over the static `public/` tree. This keeps Raspberry Pi/source deploys from serving stale
+committed client output.
 Docker defaults to `TZ=America/New_York`. Set `TZ` in `.env` to the user's local timezone if weekly
 auto-coach is enabled; the scheduler uses container-local `getDay()` / `getHours()` for the
 configured day and hour. For Belgrade, use `TZ=Europe/Belgrade`.

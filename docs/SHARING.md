@@ -63,7 +63,9 @@ docker compose up -d --build
 ```
 
 The first build bakes the coaching CLIs in and takes a few minutes; later rebuilds are fast. Then
-open `http://localhost:8787`.
+open `http://localhost:8787`. Source builds run `npm run build` inside Docker, including the
+TypeScript browser-client build; the runtime image uses that generated `public/js` output rather
+than any stale checked-in browser files.
 
 ## Ways To Run It
 
@@ -203,7 +205,7 @@ inside the codebase.
 - Keep `.env`, `data/`, SQLite files, exported archives, generated logs, and
   local backups out of Git. The committed `.gitignore` and `.dockerignore`
   already exclude those paths.
-- Run `npm test` before tagging.
+- Run `npm run verify` before tagging.
 - Push a `v*` tag and wait for the release workflow to pass.
 - **Make the GitHub repository public** (GitHub → repo → Settings → General →
   Danger Zone → Change visibility). This is a one-time owner action.
