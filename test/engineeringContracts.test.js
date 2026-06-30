@@ -702,7 +702,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(ui, /energy:\s*\(\)\s*=>\s*renderEnergy\(\)/, "Progress Energy must have a segment handler");
   assert.match(ui, /syncRouteFromState\(\)/, "shared UI events should notify route sync");
   assert.match(meals, /api\("\/nutrition\/day"\s*\+\s*qs\)/, "Plan Food must fetch the routed local day");
-  assert.match(health, /setHealthSegActive\(b\.dataset\.hseg\)[\s\S]*syncRouteFromState\(\)/);
+  assert.match(health, /const next = normalizeHealthSeg\(b\.dataset\.hseg\)[\s\S]*setHealthSegActive\(next\)[\s\S]*syncRouteFromState\(\)/);
   assert.match(records, /state\.pendingHealthDocId[\s\S]*scrollIntoView/);
   assert.match(appRouter, /state\.pendingChatSession\s*=\s*route\.session\s*\|\|\s*null/);
   assert.match(chatClient, /session\.session_id\s*\|\|\s*session\.archived_at/);
@@ -842,6 +842,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const memorySource = read("src/client/memory-client.ts");
   const lifeSource = read("src/client/life-client.ts");
   const familySource = read("src/client/family-client.ts");
+  const meHealthScreenSource = read("src/client/me-health-screen.ts");
   const meRecordsScreenSource = read("src/client/me-records-screen.ts");
   const healthDocsSource = read("src/client/health-docs-client.ts");
   const routeStateSource = read("src/client/route-state.ts");
@@ -1180,6 +1181,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/memory-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/life-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/family-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/07-me-health\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-docs-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-screen\.js/);
@@ -1322,6 +1324,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/life-client\.js/);
   assert.match(clientBuild, /src\/client\/family-client\.ts/);
   assert.match(clientBuild, /public\/js\/family-client\.js/);
+  assert.match(clientBuild, /src\/client\/me-health-screen\.ts/);
+  assert.match(clientBuild, /public\/js\/07-me-health\.js/);
   assert.match(clientBuild, /src\/client\/me-records-screen\.ts/);
   assert.match(clientBuild, /public\/js\/08-me-records\.js/);
   assert.match(clientBuild, /src\/client\/health-docs-client\.ts/);
@@ -1880,6 +1884,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/life-client\.js/);
   assert.match(clientBuild, /src\/client\/family-client\.ts/);
   assert.match(clientBuild, /public\/js\/family-client\.js/);
+  assert.match(clientBuild, /src\/client\/me-health-screen\.ts/);
+  assert.match(clientBuild, /public\/js\/07-me-health\.js/);
   assert.match(clientBuild, /src\/client\/me-records-screen\.ts/);
   assert.match(clientBuild, /public\/js\/08-me-records\.js/);
   assert.match(clientBuild, /src\/client\/app\/router\.ts/);
@@ -2252,6 +2258,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(familySource, /function familyCardHtml\(row: FamilyRow, index\?: number\): string/);
   assert.match(familySource, /function familySwatches\(selected: unknown\): string/);
   assert.match(familySource, /CairnFamily/);
+  assert.match(meHealthScreenSource, /const ME_SEG: readonly ClientSegment\[\]/);
+  assert.match(meHealthScreenSource, /async function renderMeProfile\(\)/);
+  assert.match(meHealthScreenSource, /function renderHealthSynthesis\(data: unknown, token\?: number \| null\): void/);
+  assert.match(meHealthScreenSource, /function switchHealthSeg\(seg: ClientHealthSection, opts: \{ openPicker\?: boolean \} = \{\}\): void/);
+  assert.match(meHealthScreenSource, /var _hPic: HealthPictureCache \| null/);
+  assert.match(meHealthScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(meRecordsScreenSource, /async function renderLife\(\)/);
   assert.match(meRecordsScreenSource, /async function renderFamily\(\)/);
   assert.match(meRecordsScreenSource, /function wireHealthUpload\(\)/);
@@ -2644,9 +2656,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(health, /CairnHealthMarkers\.markerTrendWord/);
   assert.match(health, /CairnHealthMarkers\.markerChartSvg/);
   assert.match(health, /CairnHealthMarkers\.hmkRowHtml/);
-  assert.match(health, /function markerChartSvg\(m\) \{\n {2}return CairnHealthMarkers\.markerChartSvg\(m\);\n\}/);
-  assert.match(health, /function wireMarkerChart\(svg\) \{\n {2}return CairnHealthMarkers\.wireMarkerChart\(svg\);\n\}/);
-  assert.match(health, /function hmkRowHtml\(m, i\) \{\n {2}return CairnHealthMarkers\.hmkRowHtml\(m, i\);\n\}/);
+  assert.match(health, /function markerChartSvg\(m\) \{\n\s+return CairnHealthMarkers\.markerChartSvg\(m\);\n\s+\}/);
+  assert.match(health, /function wireMarkerChart\(svg\) \{[\s\S]*if \(!\(svg instanceof SVGElement\)\)[\s\S]*CairnHealthMarkers\.wireMarkerChart\(svg\);[\s\S]*\}/);
+  assert.match(health, /function hmkRowHtml\(m, i\) \{\n\s+return CairnHealthMarkers\.hmkRowHtml\(m, i\);\n\s+\}/);
   assert.match(health, /CairnHealthPicture\.parsedReview/);
   assert.match(health, /CairnHealthPicture\.healthHeroHtml/);
   assert.match(health, /CairnHealthPicture\.reviewHtml/);

@@ -121,6 +121,7 @@ declare global {
 
   declare let pollToken: number;
   declare let artEnabled: boolean;
+  declare let primaryDiscipline: string;
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
   declare const PLAN_HANDLERS: Record<string, () => unknown>;
@@ -378,6 +379,11 @@ declare global {
   declare function renderSettings(): unknown;
   declare function switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
   declare function loadHealthMarkers(token: number): void;
+  declare function loadDirectives(token: number): void;
+  declare function paintHealthMarkersTab(): void;
+  declare function paintHealthRecordsTab(): void;
+  declare function paintHealthShareTab(): void;
+  declare function paintHealthLearnedTab(): void;
   declare function paintHealthPicture(): void;
   declare var _hPic: { review?: unknown; docCount?: number; newestDocAt?: string | null } | null;
   declare function updateHeaderCondense(): void;
@@ -401,6 +407,7 @@ declare global {
   declare function openDetailFrom(fromEl: Element | null | undefined, build: () => unknown): void;
   declare function mountDetail(html: string): HTMLElement;
   declare function wireDetailCommon(): void;
+  declare function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void>;
   declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
   declare function measureChatTop(): void;
   declare function ensureRestBar(): HTMLElement;
