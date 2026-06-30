@@ -128,6 +128,22 @@ test("applyChatActions ignores unknown action types without throwing", () => {
   assert.deepEqual(drafts, []);
 });
 
+test("applyChatActions rejects malformed write actions before repo calls", () => {
+  const { applied, drafts } = applyChatActions({
+    actions: [
+      { type: "add_memory" },
+      { type: "update_memory", id: "not-a-number", content: "bad id" },
+      { type: "update_food_note", summary: "missing id" },
+      { type: "plan_update", summary: "missing changes" },
+      { type: "plan_restructure", days: [] },
+    ],
+  }, { agent: "stub" });
+  assert.deepEqual(applied, []);
+  assert.deepEqual(drafts, []);
+  assert.deepEqual(repo.listMemory(10), []);
+  assert.deepEqual(repo.listProposals(), []);
+});
+
 test("applyChatActions can correct an existing food note instead of duplicating it", () => {
   const row = repo.addFoodNote("breakfast", "", { summary: "Turkey toast", kcal: 310, protein_g: 28 });
   const { applied } = applyChatActions({

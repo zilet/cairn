@@ -16,7 +16,7 @@ This tracker records the verified maintenance baseline. The next-stage full fron
 | Wave 3 - Backend module grouping | Complete | REST/MCP/docs parity still green after domain extraction |
 | Wave 4 - Frontend TypeScript foundation | Complete | client typecheck runs with no new framework and no unnecessary dependencies |
 | Wave 5 - High-risk frontend migration | Mostly complete | critical Today, Chat, Health, Settings, API, SWR, route, and cache helpers are typechecked; large screen modules still need shrinking |
-| Wave 6 - Brain and memory hardening | In progress | typed conductor/memory spine is in place; remaining coach-context slices still need narrower DTOs |
+| Wave 6 - Brain and memory hardening | In progress | typed conductor/memory/chat-action spine is in place; remaining coach-context slices still need narrower DTOs |
 | Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; automated browser workflow smoke is still pending |
 
 ## Non-Negotiables
@@ -294,6 +294,7 @@ Tasks:
 - [x] Strengthen outcome learning: suggestion -> actual -> durable learning -> future defaults.
 - [x] Add evidence/provenance fields for next-step recommendations where useful.
 - [x] Add evidence/provenance fields for conductor recommendations where useful.
+- [x] Add a typed chat-action trust boundary so malformed model write actions are rejected before repo calls.
 - [x] Keep memory user-curatable and self-updating; avoid append-only memory noise.
 
 Gate:

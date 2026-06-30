@@ -20,6 +20,21 @@ ${CHAT_ACTION_SENTINEL}
   assert.equal(actions[0].type, "add_memory");
 });
 
+test("parseChatReply: malformed known actions are dropped at the trust boundary", () => {
+  const out = `I captured the durable part.
+${CHAT_ACTION_SENTINEL}
+{"actions": [
+  {"type": "add_memory"},
+  {"type": "update_food_note", "summary": "missing id"},
+  {"type": "plan_update", "summary": "missing changes"},
+  {"type": "add_memory", "content": "Prefers evening lifts", "kind": "preference"},
+  {"type": "log_activity", "text": "walked 30 minutes"}
+]}`;
+  const { reply, actions } = parseChatReply(out);
+  assert.equal(reply, "I captured the durable part.");
+  assert.deepEqual(actions.map((a) => a.type), ["add_memory", "log_activity"]);
+});
+
 test("parseChatReply: pure prose (no sentinel) → whole text is the reply, no actions", () => {
   const { reply, actions } = parseChatReply("You're recovered and due — good to train today.");
   assert.equal(reply, "You're recovered and due — good to train today.");

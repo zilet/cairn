@@ -578,6 +578,7 @@ Tasks:
 
 - [x] Type the first memory/learning DTO spine: `MemoryRow`, `RecentLearning`, `MemorySupersedeResult`, `CoachContextEnvelope.memory`, `CoachContextEnvelope.learnings`, `CoachContextEnvelope.coaching_focus`, learned-timeline source projections, and the about-me memory prompt path.
 - [x] Type the conductor input seam with local minimal DTOs and remove `any` from `src/repo/coaching-focus.ts` while preserving the one-focus/no-score/no-leverage contract.
+- [x] Add a typed `ChatAction` union and trust-boundary normalizer so parsed model actions and direct `applyChatActions` calls reject malformed write actions before repo calls; keep prompt action names and executor switch cases aligned by engineering contract.
 - Replace broad `unknown` and `any` fields incrementally with domain DTOs.
 - Add typed provenance for recommendations: based on, source freshness, dismissed/superseded status, retest due.
 - Separate "coach context DTO" from raw DB/repo rows.

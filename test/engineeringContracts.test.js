@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLIENT_OUTPUTS } from "../scripts/build-client.mjs";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
+import { CHAT_ACTION_TYPES } from "../dist/chatActions.js";
 import {
   CLIENT_API_BROAD_RESPONSE_WAIVERS,
   CLIENT_API_CONTRACT_PATHS,
@@ -928,6 +929,24 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
     .map((call) => `${call.file}: ${call.path}`)
     .sort();
   assert.deepEqual(uncovered, []);
+});
+
+test("chat action write contract stays typed and prompt-aligned", () => {
+  const prompt = read("src/prompt.ts");
+  const chatTurns = read("src/chatTurns.ts");
+  const chatActions = read("src/chatActions.ts");
+
+  assert.match(prompt, /normalizeChatActions/);
+  assert.match(prompt, /actions: ChatAction\[\]/);
+  assert.doesNotMatch(prompt, /actions:\s*any\[\]/);
+  assert.match(chatTurns, /normalizeChatActions/);
+  assert.doesNotMatch(chatTurns, /parsed:\s*any/);
+
+  for (const actionType of CHAT_ACTION_TYPES) {
+    assert.match(chatActions, new RegExp(`"${actionType}"`), `${actionType} should be owned by chatActions.ts`);
+    assert.match(prompt, new RegExp(`\\b${actionType}\\b`), `${actionType} should be described in the prompt action schema`);
+    assert.match(chatTurns, new RegExp(`case "${actionType}"`), `${actionType} should be handled by applyChatActions`);
+  }
 });
 
 test("frontend TypeScript contract gate is dependency-light and backed by server payloads", () => {

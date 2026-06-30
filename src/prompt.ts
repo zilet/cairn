@@ -1,5 +1,6 @@
 import * as repo from "./repo.js";
 import { extractJson } from "./agents.js";
+import { normalizeChatActions, type ChatAction } from "./chatActions.js";
 import { todayISO } from "./db.js";
 import { HEALTH_DOCUMENT_KIND_SCHEMA } from "./healthDocumentKinds.js";
 import type { CoachContext, PartialCoachContext } from "./repo/coach-context.js";
@@ -1187,7 +1188,7 @@ function stripLeadingNarration(s: string): string {
   return lines.slice(i).join("\n").trim();
 }
 
-export function parseChatReply(text: string): { reply: string; actions: any[] } {
+export function parseChatReply(text: string): { reply: string; actions: ChatAction[] } {
   let raw = (text ?? "").toString();
   // Drop any tool-step preamble before the athlete-facing reply marker. Keep the
   // LAST marker, in case the literal token shows up earlier inside the narration.
@@ -1206,7 +1207,7 @@ export function parseChatReply(text: string): { reply: string; actions: any[] } 
     if (obj && typeof obj === "object" && (typeof obj.reply === "string" || Array.isArray(obj.actions))) {
       return {
         reply: ((obj.reply ?? "").toString().trim()) || clean(raw),
-        actions: Array.isArray(obj.actions) ? obj.actions : [],
+        actions: normalizeChatActions(obj.actions),
       };
     }
     return { reply: clean(raw), actions: [] };
@@ -1214,7 +1215,7 @@ export function parseChatReply(text: string): { reply: string; actions: any[] } 
   const reply = clean(raw.slice(0, idx));
   const obj = extractJson(raw.slice(idx + CHAT_ACTION_SENTINEL.length));
   const actions = obj && Array.isArray(obj.actions) ? obj.actions : (Array.isArray(obj) ? obj : []);
-  return { reply, actions };
+  return { reply, actions: normalizeChatActions(actions) };
 }
 
 const CHAT_ACTIONS_SCHEMA = `[

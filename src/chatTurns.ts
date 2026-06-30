@@ -5,6 +5,13 @@ import { chatHistoryTimeLabel } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
 import { runAgent, runAgentStreaming, agentSupportsStream, INTERACTIVE_TIMEOUT_MS } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
+import type { MemoryKind } from "./repo/memory.js";
+import {
+  normalizeChatActions,
+  type ChatAction,
+  type ChatActionType,
+  type LogFoodAction,
+} from "./chatActions.js";
 
 // Background, in-process chat-turn engine — the durable counterpart to the
 // enrichment queue. A chat turn is no longer a blocking request/response: the
@@ -123,7 +130,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
     const meta = {
       applied,
-      drafts: drafts.map((d) => ({ id: d.id, kind: d.parsed?.days ? "restructure" : "plan_update", summary: d.parsed?.summary })),
+      drafts: drafts.map(proposalMeta),
     };
     const assistant = repo.addChatMessage("assistant", reply, agent, meta);
     const finished = repo.finishChatTurn(id, { reply, chosen_agent: agent, assistant_message_id: (assistant as any).id, meta });
@@ -154,6 +161,32 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
 const PHOTO_FOOD_HINT_RE = /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|weigh(?:ed)?|grams?|oz|serving|portion|recipe|restaurant|label|packag(?:e|ing)|menu)\b/i;
 const PHOTO_NON_FOOD_HINT_RE = /\b(physique|body|mirror|pose|form|equipment|bike|run|shoe|injur(?:y|ed)?|pain|dexa|scan|lab|blood|chart|screenshot)\b/i;
 
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function memoryKind(value: unknown): MemoryKind | undefined {
+  return typeof value === "string" && value.trim() ? value as MemoryKind : undefined;
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function proposalMeta(draft: unknown): { id: unknown; kind: "restructure" | "plan_update"; summary: unknown } {
+  const row = recordOrNull(draft) ?? {};
+  const parsed = recordOrNull(row.parsed);
+  return {
+    id: row.id,
+    kind: parsed && Array.isArray(parsed.days) ? "restructure" : "plan_update",
+    summary: parsed?.summary,
+  };
+}
+
 export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefined): boolean {
   const s = (message ?? "").toString().trim();
   if (!s) return true; // photo-only in Chat means "estimate/log this plate" by default
@@ -162,13 +195,13 @@ export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefi
   return false;
 }
 
-function logPhotoFood(actions: any[], turn: any) {
+function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {
   if (!turn.image_path) return null;
   // Pull out any log_food the agent emitted (it saw the photo) to seed the note.
-  const lf = (Array.isArray(actions) ? actions : []).find((a) => a?.type === "log_food");
+  const lf = actions.find((a): a is LogFoodAction => a.type === "log_food");
   const message = (turn.message ?? "").toString();
   if (!lf && !shouldCreatePhotoFoodPlaceholder(message)) return null;
-  const parsedNote: Record<string, any> = {
+  const parsedNote: Record<string, unknown> = {
     summary: (lf?.summary ?? lf?.name ?? (message.trim() || "Photo meal")).toString(),
     items: Array.isArray(lf?.items) ? lf.items : undefined,
     kcal: lf?.kcal ?? null,
@@ -181,13 +214,17 @@ function logPhotoFood(actions: any[], turn: any) {
   // raw="" so addFoodNote does NOT queue the TEXT enricher (that would overwrite the
   // vision estimate). We enqueue the dedicated food_photo job explicitly below.
   const meal = (lf?.meal ?? "meal").toString();
-  let note: any = null;
+  let note: { id: number; [key: string]: unknown } | null = null;
   try {
-    note = repo.addFoodNote(meal, "", parsedNote, turn.image_path);
-  } catch (e: any) {
-    console.error(`[chat] turn#${turn.id}: failed to create photo food note: ${e?.message ?? e}`);
+    const created = repo.addFoodNote(meal, "", parsedNote, turn.image_path);
+    const row = recordOrNull(created);
+    note = row && typeof row.id === "number" ? row as { id: number; [key: string]: unknown } : null;
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[chat] turn#${turn.id}: failed to create photo food note: ${message}`);
     return null;
   }
+  if (!note) return null;
   // Mark the note pending + enqueue the vision job — unless enrichment is off, in
   // which case the as-logged note (with the chat agent's first-pass estimate, if
   // any) simply stands, no background refine.
@@ -320,13 +357,14 @@ export function recoverChatTurns(): { requeued: number; interrupted: number } {
 // Each action is independently guarded — one bad action records its error and the
 // rest still apply.
 export function applyChatActions(
-  parsed: any,
+  parsed: { actions?: unknown } | ChatAction[] | null | undefined,
   ctx: { agent: string; imagePath?: string | null; message?: string | null; skipLogFood?: boolean },
-): { applied: any[]; drafts: any[] } {
-  const applied: any[] = [];
-  const drafts: any[] = [];
+): { applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>; drafts: unknown[] } {
+  const applied: Array<{ type: ChatActionType; result?: unknown; error?: string }> = [];
+  const drafts: unknown[] = [];
   const message = ctx.message ?? "";
-  for (const a of Array.isArray(parsed?.actions) ? parsed.actions : []) {
+  const actions = normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions);
+  for (const a of actions) {
     try {
       switch (a.type) {
         case "log_activity":
@@ -346,17 +384,23 @@ export function applyChatActions(
           break;
         }
         case "add_memory":
-          applied.push({ type: a.type, result: repo.addMemory(a.content, a.kind, "chat") });
+          applied.push({ type: a.type, result: repo.addMemory(a.content, memoryKind(a.kind), "chat") });
           break;
         case "update_memory":
           // A fact CHANGED: edit the existing memory row in place (self-updating
           // memory — the agent saw the row id in DATA.memory and is correcting it).
-          applied.push({ type: a.type, result: repo.updateMemory(Number(a.id), { content: a.content, kind: a.kind }) ?? { error: "not found", id: a.id } });
+          applied.push({ type: a.type, result: repo.updateMemory(Number(a.id), { content: a.content, kind: memoryKind(a.kind) }) ?? { error: "not found", id: a.id } });
           break;
         case "supersede_memory":
           // A fact was CONTRADICTED/REPLACED: mark the old row superseded (never
           // hard-deleted), optionally with a replacement.
-          applied.push({ type: a.type, result: repo.supersedeMemory(Number(a.id), { content: a.replacement, reason: a.reason }) ?? { error: "not found", id: a.id } });
+          applied.push({
+            type: a.type,
+            result: repo.supersedeMemory(Number(a.id), {
+              content: stringOrUndefined(a.replacement),
+              reason: stringOrUndefined(a.reason),
+            }) ?? { error: "not found", id: a.id },
+          });
           break;
         case "log_food": {
           // A photo turn already created the food note via logPhotoFood (with the
@@ -378,7 +422,7 @@ export function applyChatActions(
             fiber_g: a.fiber_g ?? null,
             notes: a.notes ?? null,
           };
-          applied.push({ type: a.type, result: repo.addFoodNote(a.meal || "meal", "", parsedNote, ctx.imagePath ?? undefined) });
+          applied.push({ type: a.type, result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined) });
           break;
         }
         case "update_food_note": {
@@ -399,16 +443,19 @@ export function applyChatActions(
         case "log_health": {
           // Lab/DEXA results reported in chat → a 'done' health record (no binary),
           // mirroring the MCP add_health_record path. Markers feed the trend view.
+          const parsedDocObject = a.parsed && typeof a.parsed === "object"
+            ? a.parsed as Record<string, unknown>
+            : null;
           const markers = Array.isArray(a.markers)
             ? a.markers
-            : (a.parsed && Array.isArray(a.parsed.markers) ? a.parsed.markers : []);
-          const parsedDoc = a.parsed && typeof a.parsed === "object"
-            ? a.parsed
+            : (parsedDocObject && Array.isArray(parsedDocObject.markers) ? parsedDocObject.markers : []);
+          const parsedDoc = parsedDocObject
+            ? parsedDocObject
             : (markers.length ? { markers } : null);
           applied.push({ type: a.type, result: repo.addHealthDocument({
             kind: a.kind,
-            doc_date: a.doc_date ?? null,
-            summary: a.summary ?? null,
+            doc_date: stringOrNull(a.doc_date),
+            summary: stringOrNull(a.summary),
             parsed_json: parsedDoc,
             enrichment_status: "done",
           }) });
@@ -419,8 +466,12 @@ export function applyChatActions(
         }
         case "add_context_event":
           applied.push({ type: a.type, result: repo.addContextEvent({
-            kind: a.kind, title: a.title, detail: a.detail,
-            start_date: a.start_date, end_date: a.end_date, meta: a.meta,
+            kind: a.kind,
+            title: stringOrUndefined(a.title),
+            detail: stringOrUndefined(a.detail),
+            start_date: stringOrUndefined(a.start_date),
+            end_date: stringOrUndefined(a.end_date),
+            meta: a.meta,
           }) });
           // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
           // the active-context effect — bust the cached Brief so the next open reflects
@@ -433,9 +484,9 @@ export function applyChatActions(
           // they take. Prefer the agent's already-structured items (long tail); fall
           // back to deterministic free-text understanding (the KB approximates).
           if (Array.isArray(a.items) && a.items.length) {
-            applied.push({ type: a.type, result: a.items.map((it: any) => repo.addSupplement(it)) });
+            applied.push({ type: a.type, result: a.items.map((it) => repo.addSupplement(it)) });
           } else {
-            applied.push({ type: a.type, result: repo.understandSupplements(a.text ?? a.summary ?? message) });
+            applied.push({ type: a.type, result: repo.understandSupplements(String(a.text ?? a.summary ?? message)) });
           }
           break;
         }
@@ -445,11 +496,13 @@ export function applyChatActions(
         case "plan_restructure":
           drafts.push(repo.createProposal(ctx.agent, "chat: restructure", "", { summary: a.summary, days: a.days }));
           break;
-        default:
-          break;
+        default: {
+          const _exhaustive: never = a;
+          void _exhaustive;
+        }
       }
-    } catch (e: any) {
-      applied.push({ type: a.type, error: e.message });
+    } catch (e: unknown) {
+      applied.push({ type: a.type, error: e instanceof Error ? e.message : String(e) });
     }
   }
   return { applied, drafts };
