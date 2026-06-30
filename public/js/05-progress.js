@@ -529,38 +529,6 @@ async function loadVolumeBalance() {
 // longest single effort, a calm time-in-HR-zone bar, the pace trend in plain words
 // (never a grade), and endurance PRs (longest distance + best pace by distance).
 // Fed by /api/stats `.endurance` + /api/endurance-prs. No 0–100 scores anywhere.
-// Plain-word pace-trend read. Never a verdict, never a grade — just direction.
-function paceTrendWord(pt) {
-  if (!pt || pt.dir == null || pt.this_min_per_km == null) return "";
-  if (pt.dir === "steady") return "holding about the same pace as last week";
-  if (pt.prev_min_per_km == null) return `averaging ${fmtPaceKm(pt.this_min_per_km)}/km`;
-  const delta = Math.abs(pt.this_min_per_km - pt.prev_min_per_km);
-  const mag = delta < 0.15 ? "a touch" : delta < 0.5 ? "a little" : "noticeably";
-  return pt.dir === "faster" ? `${mag} faster than last week` : `${mag} easier than last week`;
-}
-
-// Calm time-in-HR-zone bar (reuses the Today garmin-card .gz-* vocabulary). zones is
-// the { Z1: secs, Z2: secs, … } map from /stats .endurance.time_in_zone. "" when empty.
-function zoneBarHtml(zones) {
-  const entries = Object.entries(zones || {})
-    .map(([k, secs]) => ({ zi: Math.min(5, Math.max(1, Number(String(k).replace(/\D/g, "")) || 1)), secs: Number(secs) || 0 }))
-    .filter((z) => z.secs > 0)
-    .sort((a, b) => a.zi - b.zi);
-  const total = entries.reduce((t, z) => t + z.secs, 0);
-  if (total <= 0) return "";
-  const colors = (typeof HR_ZONE_COLORS !== "undefined" && HR_ZONE_COLORS) || ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b4552d"];
-  const segs = entries.map((z) => {
-    const pct = (z.secs / total) * 100;
-    const mins = Math.round(z.secs / 60);
-    return `<span class="gz-seg" style="width:${pct.toFixed(1)}%;background:${colors[z.zi - 1]}" title="Zone ${z.zi} · ${mins} min"></span>`;
-  }).join("");
-  return `<div class="end-zones reveal" style="${stagger(3)}">
-      <div class="lbl" style="margin-bottom:6px">Time in heart-rate zones · this week</div>
-      <div class="gz-bar">${segs}</div>
-      <div class="gz-legend lbl">${entries.map((z) => `Z${z.zi} ${Math.round(z.secs / 60)}m`).join(" · ")}</div>
-    </div>`;
-}
-
 async function renderEndurance() {
   headerTitle.textContent = "Progress";
   state.progressSeg = "endurance";
@@ -583,38 +551,6 @@ async function renderEndurance() {
   } catch { stats = null; }
   if (token !== pollToken || !view.querySelector("#endBody")) return;
   paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal, compliance, settings, runPlan);
-}
-
-// The bests for ONE sport, as scannable rows — pace at standard distances for foot
-// sports (run/walk), distance/duration/speed for everything else. A cyclist's best
-// is read in km/h, never as a min/km "pace" (the whole point of the sport split).
-function enduranceBestRows(g) {
-  const rows = [];
-  if (g.longest_km) rows.push({ label: "Longest distance", val: `${fmtKm(g.longest_km.value)} km`, date: g.longest_km.date, type: g.longest_km.type });
-  if (g.longest_min) rows.push({ label: "Longest duration", val: `${Math.round(g.longest_min.value)} min`, date: g.longest_min.date, type: g.longest_min.type });
-  if (g.paced) {
-    for (const bp of (g.best_pace || [])) rows.push({ label: `Best ${prDistLabel(bp.distance_km)} pace`, val: `${fmtPaceKm(bp.min_per_km)}/km`, date: bp.date, type: bp.type });
-  } else if (g.best_speed_kmh) {
-    rows.push({ label: "Best speed", val: `${fmtSpeedKmh(g.best_speed_kmh.value)} km/h`, date: g.best_speed_kmh.date, type: g.best_speed_kmh.type });
-  }
-  return rows;
-}
-
-// One sport's bests as a labelled card (sport name + the rows). `idx` seeds the
-// reveal stagger so groups cascade in order.
-function enduranceSportCardHtml(g, idx) {
-  const rows = enduranceBestRows(g);
-  if (!rows.length) return "";
-  const body = rows.map((r, i) => `
-    <div class="end-pr reveal" style="${stagger(idx + i)}">
-      <div class="end-pr-id">
-        <span class="end-pr-label">${escHtml(r.label)}</span>
-        ${r.date ? `<span class="end-pr-when lbl" title="${escAttr(absDate(r.date))}">${escHtml(relAge(r.date))}${r.type ? ` · ${escHtml(r.type)}` : ""}</span>` : ""}
-      </div>
-      <span class="end-pr-val numeral">${escHtml(r.val)}</span>
-    </div>`).join("");
-  const head = g.label ? `<div class="end-pr-sport reveal" style="${stagger(idx)}">${escHtml(g.label)}</div>` : "";
-  return `${head}<div class="end-pr-card">${body}</div>`;
 }
 
 function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {

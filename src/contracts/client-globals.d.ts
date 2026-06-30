@@ -133,6 +133,7 @@ declare global {
   declare function escHtml(value: unknown): string;
   declare function escAttr(value: unknown): string;
   declare function relTime(iso: string): string;
+  declare function relAge(iso: string): string;
   declare function absDate(iso: string): string;
   declare function foodNum(value: unknown): number | null;
   declare function formatFoodNum(value: unknown): string;
@@ -301,6 +302,11 @@ declare global {
     end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
     idx: number,
   ): string;
+  declare function paceTrendWord(trend: unknown): string;
+  declare function zoneBarHtml(zones: unknown): string;
+  declare function enduranceBestRows(group: unknown): unknown[];
+  declare function enduranceSportCardHtml(group: unknown, idx: number): string;
+  declare const HR_ZONE_COLORS: string[] | undefined;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
   declare function isEndurance(): boolean;
@@ -679,6 +685,10 @@ declare global {
         end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
         idx: number,
       ): string;
+      paceTrendWord(trend: unknown): string;
+      zoneBarHtml(zones: unknown): string;
+      enduranceBestRows(group: unknown): unknown[];
+      enduranceSportCardHtml(group: unknown, idx: number): string;
     };
 
     CairnTodayActivity: {

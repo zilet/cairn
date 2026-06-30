@@ -886,11 +886,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function fmtWeight\(weight: unknown\): string/);
   assert.match(clientGlobals, /declare function formatFoodNum\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
+  assert.match(clientGlobals, /declare function relAge\(iso: string\): string/);
   assert.match(clientGlobals, /declare function mdToHtml\(source: unknown\): string/);
   assert.match(clientGlobals, /CairnMarkdown/);
   assert.match(clientGlobals, /declare function cardioPrescription\(item: Record<string, unknown> \| null \| undefined\): string/);
   assert.match(clientGlobals, /CairnCardioPlan/);
   assert.match(clientGlobals, /declare function enduranceBlockHtml/);
+  assert.match(clientGlobals, /declare function paceTrendWord\(trend: unknown\): string/);
+  assert.match(clientGlobals, /declare function zoneBarHtml\(zones: unknown\): string/);
+  assert.match(clientGlobals, /declare function enduranceBestRows\(group: unknown\): unknown\[\]/);
+  assert.match(clientGlobals, /declare function enduranceSportCardHtml\(group: unknown, idx: number\): string/);
   assert.match(clientGlobals, /CairnProgressEndurance/);
   assert.match(clientGlobals, /declare function withToken\(url: string\): string/);
   assert.match(clientGlobals, /declare function downloadFile\(href: string\): void/);
@@ -1618,6 +1623,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(cardioPlanSource, /CairnCardioPlan/);
   assert.match(progressEnduranceSource, /function enduranceStatusWord\(status: unknown\): string/);
   assert.match(progressEnduranceSource, /function enduranceBlockHtml\(end: ProgramEnduranceBlock \| null \| undefined, idx: number\): string/);
+  assert.match(progressEnduranceSource, /function paceTrendWord\(trend: unknown\): string/);
+  assert.match(progressEnduranceSource, /function zoneBarHtml\(zones: unknown\): string/);
+  assert.match(progressEnduranceSource, /function enduranceBestRows\(group: unknown\): EnduranceBestPoint\[\]/);
+  assert.match(progressEnduranceSource, /function enduranceSportCardHtml\(group: unknown, idx: number\): string/);
   assert.match(progressEnduranceSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnduranceSource, /CairnProgressEndurance/);
   assert.match(progressComponentsSource, /function progressShortDate\(iso: unknown\): string/);
@@ -1827,7 +1836,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(ui, /function\s+cardioPrescription|function\s+cardioLabel|function\s+isCardioItem/);
   assert.match(progressEnduranceClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnduranceClient, /CairnProgressEndurance/);
-  assert.doesNotMatch(progress, /function\s+enduranceStatusWord|function\s+enduranceBlockHtml/);
+  assert.doesNotMatch(progress, /function\s+enduranceStatusWord|function\s+enduranceBlockHtml|function\s+paceTrendWord|function\s+zoneBarHtml|function\s+enduranceBestRows|function\s+enduranceSportCardHtml/);
   assert.match(progressComponentsClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressComponentsClient, /CairnProgressComponents/);
   assert.doesNotMatch(progress, /function\s+progressHero|function\s+emptyStateHtml|const\s+fmtShortDate/);
