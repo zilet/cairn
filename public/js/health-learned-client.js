@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Health Learned timeline renderers: pure HTML for the pull-only memory/learning read.
 (() => {
@@ -68,4 +69,5 @@
             learnedTimelineHtml,
         });
     }
+})();
 })();

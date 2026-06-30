@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Ordered app-level agent-job reconnector registration. The factories live on
 // their owning screens; this module only preserves boot order.
@@ -27,4 +28,5 @@
     if (typeof window !== "undefined") {
         window.registerAppJobReconnectors = registerAppJobReconnectors;
     }
+})();
 })();

@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Today session status rendering helpers for the vanilla PWA.
 (() => {
@@ -120,4 +121,5 @@
             setsTonnage: todaySetsTonnage,
         });
     }
+})();
 })();

@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress Muscle trajectory presentation helpers.
 async function loadMuscleTrajectory() {
@@ -109,3 +110,4 @@ if (typeof window !== "undefined") {
         muscleTrajectoryHtml,
     });
 }
+})();

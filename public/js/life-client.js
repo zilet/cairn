@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Me Life timeline renderers: pure HTML for trips, injuries, and life events.
 (() => {
@@ -177,4 +178,5 @@
     if (typeof window !== "undefined") {
         window.CairnLife = CAIRN_LIFE;
     }
+})();
 })();

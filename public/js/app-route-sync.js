@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function routeSyncKey(key, items, fallback = null) {
@@ -50,3 +51,4 @@
         });
     }
 }
+})();

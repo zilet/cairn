@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress program-adjustments digest presentation helpers.
 const PROGRAM_ADJUSTMENT_KIND = {
@@ -71,3 +72,4 @@ if (typeof window !== "undefined") {
         programAdjustmentsHtml,
     });
 }
+})();

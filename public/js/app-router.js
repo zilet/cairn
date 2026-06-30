@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     const ROUTE_TABS = ["today", "plan", "progress", "chat", "me", "settings"];
@@ -98,3 +99,4 @@
     };
     (typeof window !== "undefined" ? window : globalThis).CairnAppRouter = api;
 }
+})();

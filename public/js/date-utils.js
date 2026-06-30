@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared browser date/label helpers. Kept as a plain script so existing vanilla
 // PWA modules can keep using global functions while this pure slice is typechecked.
@@ -116,3 +117,4 @@ Object.assign(globalThis, {
     humanizeReviewText,
     latestReviewDate,
 });
+})();

@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Today session-suggestion rendering helpers for the vanilla PWA.
 (() => {
@@ -100,4 +101,5 @@
     if (typeof window !== "undefined") {
         window.CairnTodaySessionSuggest = CAIRN_TODAY_SESSION_SUGGEST;
     }
+})();
 })();

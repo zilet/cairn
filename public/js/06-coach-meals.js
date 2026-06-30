@@ -1,3 +1,4 @@
+(() => {
 function isCoachMealRecord(value) {
     return !!value && typeof value === "object";
 }
@@ -1158,3 +1159,4 @@ Object.assign(globalThis, {
     renderMeals,
     rerenderFoodSurface,
 });
+})();

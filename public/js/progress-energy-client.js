@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress Energy Balance read helpers.
 (() => {
@@ -151,4 +152,5 @@
             energyRead,
         });
     }
+})();
 })();

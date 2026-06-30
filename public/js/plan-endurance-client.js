@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Plan -> Endurance renderers plus the running-plan screen orchestration.
 (() => {
@@ -288,4 +289,5 @@
             renderEnduranceDraftResult,
         });
     }
+})();
 })();

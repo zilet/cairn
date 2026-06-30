@@ -1,3 +1,4 @@
+(() => {
 // _hPic is intentionally a true global var: the Records screen mutates it while
 // this screen owns rendering the health picture cache.
 var _hPic = null; // { review, docCount, newestDocAt }
@@ -1441,3 +1442,4 @@ var _hPic = null; // { review, docCount, newestDocAt }
         });
     }
 }
+})();

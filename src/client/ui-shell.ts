@@ -742,12 +742,22 @@ function runCountUps(scope?: ParentNode | null, { snap = false }: { snap?: boole
 // Server contract: GET /api/art?kind=&q= → 200 image/* when cached, 204 when not ready
 // (the 204 itself kicks off background generation; an <img> treats 204 as an error).
 let artEnabled: boolean = true; // refreshed from /settings at boot + on Settings save
+Object.defineProperty(globalThis, "artEnabled", {
+  configurable: true,
+  get: () => artEnabled,
+  set: (value) => { artEnabled = !!value; },
+});
 
 // Primary training discipline ('strength'|'endurance'|'hybrid'), read once from the
 // profile and used for a GENTLE emphasis reframe — never to hide a surface. Default
 // 'strength' so a profile that never set it behaves exactly as before. Refreshed by
 // the profile loader (renderToday/renderMeProfile) and on a profile save.
 let primaryDiscipline: string = "strength";
+Object.defineProperty(globalThis, "primaryDiscipline", {
+  configurable: true,
+  get: () => primaryDiscipline,
+  set: (value) => { primaryDiscipline = String(value || "strength"); },
+});
 function setDiscipline(d: unknown): string {
   primaryDiscipline = d === "endurance" || d === "hybrid" ? d : "strength";
   return primaryDiscipline;
@@ -760,6 +770,11 @@ const isHybrid = (): boolean => primaryDiscipline === "hybrid";
 // on save). Used to surface the Plan → Endurance tab even when the discipline label
 // is 'strength' — setting a running goal is a clear signal you want a running plan.
 let enduranceGoalSet: boolean = false;
+Object.defineProperty(globalThis, "enduranceGoalSet", {
+  configurable: true,
+  get: () => enduranceGoalSet,
+  set: (value) => { enduranceGoalSet = !!value; },
+});
 function setEnduranceGoalSet(present: unknown): boolean { enduranceGoalSet = !!present; return enduranceGoalSet; }
 // A runner home is warranted when the athlete trains endurance OR has set a goal.
 const showEnduranceTab = (): boolean => isEndurance() || isHybrid() || enduranceGoalSet;
@@ -974,6 +989,11 @@ function setPollTokenForClassicScripts(value: number): number {
   pollToken = value;
   return pollToken;
 }
+Object.defineProperty(globalThis, "pollToken", {
+  configurable: true,
+  get: () => pollToken,
+  set: (value) => { pollToken = Number(value) || 0; },
+});
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 function enrichmentActive(status: unknown): boolean {
   return status === "pending" || status === "in_progress";
@@ -1322,33 +1342,63 @@ async function openAgentLoginModal(agentName: unknown): Promise<void> {
   });
 }
 
-// These names are intentionally consumed by later classic scripts. Keep a typed
-// reference list so the source stays lint-clean without renaming public globals.
-void {
+const CAIRN_UI_SHELL_GLOBALS = {
   setTodayHeaderTitle,
+  updateHeaderCondense,
+  toast,
   armDelete,
   wireGuides,
   exerciseExplanation,
+  exerciseExplanationHtml,
+  replaceExerciseExplanation,
+  gotoChatWith,
   openFoodDetail,
+  segBar,
   wireSeg,
+  fitSeg,
   PROGRESS_SEG,
   PROGRESS_HANDLERS,
   planSeg,
   PLAN_HANDLERS,
+  art,
   stagger,
+  reducedMotion,
+  viewEnter,
+  withViewTransition,
   skelSwap,
   btnBusy,
+  countUp,
+  fmtK,
+  runCountUps,
   loadingState,
   thinkingCaption,
   tabErrorState,
+  skelLines,
   todaySkeleton,
   segSkeleton,
   setDiscipline,
+  isEndurance,
+  isHybrid,
   setEnduranceGoalSet,
+  showEnduranceTab,
   primeArtManifest,
+  artImg,
+  sparklineSvg,
+  closeDetail,
+  openDetailFrom,
+  mountDetail,
+  wireDetailCommon,
+  wireArtZoom,
   setPollTokenForClassicScripts,
+  enrichmentActive,
   pollEnrichment,
   enrichBadge,
   activityLine,
   openAgentLoginModal,
 };
+
+Object.assign(globalThis, CAIRN_UI_SHELL_GLOBALS);
+
+if (typeof window !== "undefined") {
+  Object.assign(window, CAIRN_UI_SHELL_GLOBALS);
+}

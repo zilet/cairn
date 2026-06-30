@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress test-week banner presentation helpers.
 async function loadTestWeek() {
@@ -45,3 +46,4 @@ if (typeof window !== "undefined") {
         testWeekBannerHtml,
     });
 }
+})();

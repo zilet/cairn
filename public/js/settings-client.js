@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Settings renderers for the vanilla PWA.
 const SETTINGS_AGENT_OP_LABELS = {
@@ -201,3 +202,4 @@ Object.assign(globalThis, {
         updateCardHtml,
     },
 });
+})();

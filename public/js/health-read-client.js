@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health Read rail renderers for recovery and priority markers.
 (() => {
@@ -196,4 +197,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthRead = CAIRN_HEALTH_READ;
     }
+})();
 })();

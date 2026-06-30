@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health picture/review rendering helpers for the vanilla PWA.
 (() => {
@@ -133,4 +134,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthPicture = CAIRN_HEALTH_PICTURE;
     }
+})();
 })();

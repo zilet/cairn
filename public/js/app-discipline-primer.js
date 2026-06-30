@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function primeDiscipline() {
@@ -29,3 +30,4 @@
         window.primeDiscipline = primeDiscipline;
     }
 }
+})();

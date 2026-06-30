@@ -227,42 +227,8 @@ function cardioEffortMatches(it, eff) {
 // The Garmin freshness renderer lives in /js/cardio-sync-client.js and preserves
 // the cardioSyncLine compatibility global used by Today, Progress, and Plan.
 
-// Wire every "Sync now" control within `scope`: POST /garmin/sync, pulse while it
-// runs, then refresh the surface so the fresh mileage / synced run lands. Shared by
-// Today (re-renders Today) and Endurance (re-renders the endurance view via the passed
-// onDone). Degrades calmly: a failure restores the button + toasts, never throws.
-function wireCardioSync(scope, onDone) {
-  (scope || view).querySelectorAll("[data-syncnow]").forEach((btn) => {
-    if (btn._wired) return; btn._wired = true;
-    btn.addEventListener("click", async () => {
-      const line = btn.closest("[data-cardio-sync]");
-      btn.disabled = true;
-      const text = line && line.querySelector(".cardio-sync-text");
-      const prevText = text ? text.textContent : "";
-      const dot = line && line.querySelector(".cardio-sync-dot");
-      if (dot) dot.classList.add("pulse");
-      if (text) text.textContent = "Syncing…";
-      btn.textContent = "…";
-      let r = null;
-      try { r = await api("/garmin/sync", { method: "POST" }); } catch {}
-      if (!btn.isConnected) return; // a re-render replaced the view while we waited
-      const ok = r && r.ok;
-      toast(ok ? `Garmin synced · ${r.activities} activit${r.activities === 1 ? "y" : "ies"}` : "Garmin sync failed");
-      if (ok) {
-        // a sync may have landed today's run + reshaped the day — drop the relevant
-        // peeks so the refresh reads truth.
-        swrInvalidate("today:session:" + state.logDate);
-        swrInvalidate("stats");
-        if (onDone) { onDone(); return; }
-      }
-      // not ok (or no onDone): restore the line in place so it never stays stuck.
-      if (dot) dot.classList.remove("pulse");
-      if (text) text.textContent = prevText;
-      btn.disabled = false;
-      btn.textContent = "Sync now";
-    });
-  });
-}
+// Cardio sync execution wiring also lives in /js/cardio-sync-client.js. It preserves
+// the wireCardioSync compatibility global used by Today, Progress, and Plan.
 // The verb for the "Log this …" button — "run" / "ride" / "swim" / "session".
 function cardioVerb(label) {
   return CairnTodayTraining.cardioVerb(label);
@@ -2291,41 +2257,8 @@ async function appendOffPlanCard(name, mode) {
 // Today: the "body's reaction" card for a strength session reconciled from Garmin —
 // HR / calories / training-effect tiles + a time-in-HR-zone bar + the agent's
 // one-line read. All server strings via escHtml; numbers coerced. "" without data.
-const HR_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b4552d"]; // z1..z5, calm → hot
 function garminSessionCard(g) {
-  if (!g) return "";
-  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-  const tiles = [];
-  const tile = (val, lbl) => tiles.push(`<span class="wear-cell"><span class="wear-n numeral">${val}</span><span class="wear-l lbl">${lbl}</span></span>`);
-  const dur = num(g.duration_min); if (dur != null) tile(`${Math.round(dur * 10) / 10}`, "min");
-  const ahr = num(g.avg_hr); if (ahr != null) tile(`${Math.round(ahr)}`, "avg hr");
-  const mhr = num(g.max_hr); if (mhr != null) tile(`${Math.round(mhr)}`, "max hr");
-  const kcal = num(g.calories); if (kcal != null) tile(`${Math.round(kcal)}`, "kcal");
-  const te = num(g.training_effect); if (te != null) tile(`${Math.round(te * 10) / 10}`, "effect");
-
-  let bar = "";
-  const zones = (Array.isArray(g.hr_zones) ? g.hr_zones : [])
-    .filter((z) => z && num(z.secs) != null && num(z.secs) > 0)
-    .sort((a, b) => (num(a.zone) || 0) - (num(b.zone) || 0));
-  const total = zones.reduce((t, z) => t + (num(z.secs) || 0), 0);
-  if (total > 0) {
-    const segs = zones.map((z) => {
-      const zi = Math.min(5, Math.max(1, num(z.zone) || 1));
-      const pct = ((num(z.secs) || 0) / total) * 100;
-      const mins = Math.round((num(z.secs) || 0) / 60);
-      return `<span class="gz-seg" style="width:${pct.toFixed(1)}%;background:${HR_ZONE_COLORS[zi - 1]}" title="Zone ${zi} · ${mins} min"></span>`;
-    }).join("");
-    bar = `<div class="gz-bar">${segs}</div><div class="gz-legend lbl">time in HR zones</div>`;
-  }
-
-  if (!tiles.length && !bar && !g.summary) return "";
-  const tag = g.extrapolated ? `<span class="garmin-tag">✦ logged from Garmin</span>` : "";
-  return `<div class="garmin-card reveal" style="--i:2">
-      <div class="garmin-card-h"><span class="lbl">Garmin · body's reaction</span>${tag}</div>
-      ${tiles.length ? `<div class="garmin-tiles">${tiles.join("")}</div>` : ""}
-      ${bar}
-      ${g.summary ? `<div class="garmin-sum">${escHtml(g.summary)}</div>` : ""}
-    </div>`;
+  return CairnTodayLately.garminSessionCard(g);
 }
 
 // ---------- Today: the unified "Lately" feed ----------
@@ -2339,50 +2272,14 @@ function garminSessionCard(g) {
 // gives "2h ago" within a day, then "yesterday · 6:40pm"; a manual log with no
 // honest time-of-day stays day-granular ("yesterday", "3 days ago").
 function latelyWhen(row) {
-  if (row.at) {
-    const t = Date.parse(row.at);
-    if (t) {
-      const ageH = (Date.now() - t) / 3600000;
-      if (ageH >= 0 && ageH < 22) return relTime(row.at); // "just now" / "2h ago"
-      const clock = new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-        .toLowerCase().replace(/\s/g, "");
-      return `${humanDate(row.date)} · ${clock}`;
-    }
-  }
-  return humanDate(row.date);
+  return CairnTodayLately.when(row);
 }
 
 // The tap-to-expand body-reaction for a Garmin-enriched row: physiology tiles +
 // the HR-time-in-zone bar, reusing the garminSessionCard vocabulary verbatim.
 // "" when the detail blob has nothing renderable.
 function latelyDetail(d) {
-  if (!d) return "";
-  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-  const tiles = [];
-  const tile = (val, lbl) => tiles.push(`<span class="wear-cell"><span class="wear-n numeral">${val}</span><span class="wear-l lbl">${lbl}</span></span>`);
-  const ahr = num(d.avg_hr); if (ahr != null) tile(Math.round(ahr), "avg hr");
-  const mhr = num(d.max_hr); if (mhr != null) tile(Math.round(mhr), "max hr");
-  const te = num(d.training_effect); if (te != null) tile(Math.round(te * 10) / 10, "effect");
-  const vo2 = num(d.vo2max); if (vo2 != null) tile(Math.round(vo2), "vo₂max");
-  const kcal = num(d.calories); if (kcal != null) tile(Math.round(kcal), "kcal");
-  const temp = num(d.avg_temp); if (temp != null) tile(`${Math.round(temp)}°`, "temp");
-
-  let bar = "";
-  const zones = (Array.isArray(d.hr_zones) ? d.hr_zones : [])
-    .filter((z) => z && num(z.secs) != null && num(z.secs) > 0)
-    .sort((a, b) => (num(a.zone) || 0) - (num(b.zone) || 0));
-  const total = zones.reduce((t, z) => t + (num(z.secs) || 0), 0);
-  if (total > 0) {
-    const segs = zones.map((z) => {
-      const zi = Math.min(5, Math.max(1, num(z.zone) || 1));
-      const pct = ((num(z.secs) || 0) / total) * 100;
-      const mins = Math.round((num(z.secs) || 0) / 60);
-      return `<span class="gz-seg" style="width:${pct.toFixed(1)}%;background:${HR_ZONE_COLORS[zi - 1]}" title="Zone ${zi} · ${mins} min"></span>`;
-    }).join("");
-    bar = `<div class="gz-bar">${segs}</div><div class="gz-legend lbl">time in HR zones</div>`;
-  }
-  if (!tiles.length && !bar) return "";
-  return `<div class="lately-body">${tiles.length ? `<div class="garmin-tiles">${tiles.join("")}</div>` : ""}${bar}</div>`;
+  return CairnTodayLately.detailHtml(d);
 }
 
 // The tap-to-expand movement breakdown for a strength session: each exercise and
@@ -2390,45 +2287,12 @@ function latelyDetail(d) {
 // blob) worth tapping — and makes an off-plan session legible when its title is
 // stale (e.g. a "Full Body" card that was really mobility/core). "" when empty.
 function latelyMovements(moves) {
-  if (!Array.isArray(moves) || !moves.length) return "";
-  const rows = moves.map((m) =>
-    `<div class="lately-mv">
-       <span class="lately-mv-name">${escHtml(m.name)}</span>
-       <span class="lately-mv-best numeral">${escHtml(m.best || "")}${m.sets > 1 ? `<span class="lbl lately-mv-sets"> · ${m.sets}×</span>` : ""}</span>
-     </div>`
-  ).join("");
-  return `<div class="lately-moves">${rows}</div>`;
+  return CairnTodayLately.movementsHtml(moves);
 }
 
 // One row of the Lately feed — strength or cardio, normalized.
 function latelyRow(row) {
-  const isStrength = row.kind === "strength";
-  // Strength rows are a whole session (not one exercise), so they show the generic
-  // kettlebell SVG with NO generated photo — an empty query keeps artImg SVG-only
-  // and avoids filing a session title like "Push day" into the art cache. Cardio
-  // keeps its activity photo (run/ride/…), exactly as the old Recent strip did.
-  const tile = isStrength
-    ? artImg("exercise", "", "artile-sm lately-art", art("exercise", row.title))
-    : artImg("activity", actArtText({ type: row.title }), "artile-sm lately-art", art("activity", row.title));
-  // A strength row expands to its movement breakdown (always available) plus its
-  // Garmin physiology if synced; a cardio row keeps just the body-reaction blob.
-  const detailHtml = (isStrength ? latelyMovements(row.movements) : "") + (row.detail ? latelyDetail(row.detail) : "");
-  const expandable = !!detailHtml;
-  return `<div class="lately-row${isStrength ? " lately-strength" : ""}">
-      <div class="lately-head"${expandable ? ' role="button" tabindex="0" aria-expanded="false"' : ""}>
-        ${tile}
-        <div class="lately-main">
-          <div class="lately-top">
-            <span class="lately-title">${escHtml(row.title)}</span>
-            <span class="lately-when lbl">${escHtml(latelyWhen(row))}</span>
-          </div>
-          ${row.stats ? `<div class="lately-stats">${escHtml(row.stats)}</div>` : ""}
-          ${row.note ? `<div class="lately-note">${escHtml(row.note)}</div>` : ""}
-        </div>
-        ${expandable ? `<span class="lately-chev" aria-hidden="true">▾</span>` : ""}
-      </div>
-      ${expandable ? `<div class="lately-detail" hidden>${detailHtml}</div>` : ""}
-    </div>`;
+  return CairnTodayLately.rowHtml(row);
 }
 
 async function loadRecentActivities() {

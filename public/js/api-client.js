@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared API/auth/offline browser client. Kept as a plain script so the existing
 // vanilla PWA modules can keep using global functions while this slice is typed.
@@ -114,3 +115,4 @@ Object.assign(globalThis, {
     api,
     setOffline,
 });
+})();

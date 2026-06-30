@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared floating unsaved-changes save bar.
 let saveCtx = null;
@@ -155,3 +156,4 @@ Object.assign(globalThis, { hideSaveBar, mountSaveBar });
 if (typeof window !== "undefined") {
     Object.assign(window, { hideSaveBar, mountSaveBar });
 }
+})();

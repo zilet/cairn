@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Exercise detail helpers for the vanilla PWA.
 function exerciseDetailLine(setup, move, feel, avoid = "Stop if pain changes your position or range.") {
@@ -63,3 +64,4 @@ Object.assign(globalThis, { CairnExerciseDetail: CAIRN_EXERCISE_DETAIL });
 if (typeof window !== "undefined") {
     window.CairnExerciseDetail = CAIRN_EXERCISE_DETAIL;
 }
+})();

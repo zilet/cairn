@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function downloadFile(href) {
@@ -13,3 +14,4 @@
         window.downloadFile = downloadFile;
     }
 }
+})();

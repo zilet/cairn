@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared proposal/result render helpers used by Today, Plan, Chat, and Meals.
 (() => {
@@ -177,4 +178,5 @@
             isOpenProposal,
         });
     }
+})();
 })();

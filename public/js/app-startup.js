@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function startAppShell() {
@@ -31,3 +32,4 @@
         window.startAppShell = startAppShell;
     }
 }
+})();

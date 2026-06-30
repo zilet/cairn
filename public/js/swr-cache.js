@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared stale-while-revalidate cache layer for the vanilla PWA.
 // ---------- stale-while-revalidate (SWR) cache layer ----------
@@ -235,3 +236,4 @@ Object.assign(globalThis, {
     swrInvalidate,
     swrSweep,
 });
+})();

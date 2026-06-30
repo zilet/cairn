@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared planned-cardio helpers for Today, Progress, and Plan surfaces.
 function cardioRecord(value) {
@@ -173,3 +174,4 @@ if (typeof window !== "undefined") {
         cardioPrescription,
     });
 }
+})();

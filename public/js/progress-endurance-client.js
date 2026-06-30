@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress endurance helpers shared by the Program read.
 function enduranceStatusWord(status) {
@@ -147,3 +148,4 @@ if (typeof window !== "undefined") {
         enduranceSportCardHtml,
     });
 }
+})();

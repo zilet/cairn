@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health/Records rendering helpers for the vanilla PWA.
 (() => {
@@ -387,4 +388,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthClient = CAIRN_HEALTH_CLIENT;
     }
+})();
 })();

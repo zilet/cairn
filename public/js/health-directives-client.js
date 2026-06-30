@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health connected-brain directive rendering helpers for the vanilla PWA.
 (() => {
@@ -60,4 +61,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthDirectives = CAIRN_HEALTH_DIRECTIVES;
     }
+})();
 })();

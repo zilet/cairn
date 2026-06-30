@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress Program summary renderers: lift rows, volume rows, mesocycle, and adaptations.
 function asProgramLift(lift) {
@@ -182,3 +183,4 @@ if (typeof window !== "undefined") {
         adaptationsHtml,
     });
 }
+})();

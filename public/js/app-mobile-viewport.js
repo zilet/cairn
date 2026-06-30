@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     let installed = false;
@@ -149,3 +150,4 @@
         window.installMobileViewportGuards = installMobileViewportGuards;
     }
 }
+})();

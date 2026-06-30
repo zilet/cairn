@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Plan editor render/model helpers plus the Training screen orchestration.
 (() => {
@@ -437,4 +438,5 @@
         window.CairnPlanEditor = CAIRN_PLAN_EDITOR;
         window.renderPlanEditor = renderPlanEditor;
     }
+})();
 })();

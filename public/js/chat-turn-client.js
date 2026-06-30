@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // ==== chat-turn-client.js ====
 // Durable chat turns: queue monitor, SSE streaming markdown, cancellation,
@@ -468,4 +469,5 @@
             measureChatTop,
         });
     }
+})();
 })();

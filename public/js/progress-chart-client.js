@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress chart color helpers.
 function withAlpha(hex, alpha) {
@@ -345,3 +346,4 @@ if (typeof window !== "undefined") {
         drawLineChart,
     });
 }
+})();

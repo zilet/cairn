@@ -32,6 +32,8 @@ function loadCardioSync() {
 test("cardio sync helper detects configured Garmin credentials", () => {
   const sync = loadCardioSync();
 
+  assert.equal(typeof sync.wire, "function");
+  assert.deepEqual(Array.from(sync.zoneColors), ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b4552d"]);
   assert.equal(sync.configured(null), false);
   assert.equal(sync.configured({ garmin_credentials_source: "none" }), false);
   assert.equal(sync.configured({ garmin_credentials_source: "env" }), true);

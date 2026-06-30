@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Tiny typed UI primitives for the vanilla PWA. Components are pure HTML
 // renderers: no fetching, no global state mutation beyond the compatibility export.
@@ -96,3 +97,4 @@ Object.assign(globalThis, { CairnUi: CAIRN_UI });
 if (typeof window !== "undefined") {
     window.CairnUi = CAIRN_UI;
 }
+})();

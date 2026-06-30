@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Today agenda/fuel rendering helpers for the vanilla PWA.
 // The slot markup for each rail client_card (stable ids the loaders bind to). A
@@ -105,3 +106,4 @@ Object.assign(globalThis, {
         fuelCardHtml: todayFuelCardHtml,
     },
 });
+})();

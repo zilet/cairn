@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // ==== chat-history-client.js ====
 // Read-only chat history/search overlay for the Chat surface.
@@ -156,4 +157,5 @@
     if (typeof window !== "undefined") {
         window.openChatHistory = openChatHistory;
     }
+})();
 })();

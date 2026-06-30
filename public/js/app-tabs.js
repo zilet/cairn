@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     const TAB_NAMES = ["today", "plan", "progress", "chat", "me", "settings"];
@@ -73,7 +74,10 @@
         if (opts.syncRoute !== false)
             syncRouteFromState(opts.replace ? "replace" : "push");
         Promise.resolve(withViewTransition(() => paintTabSkeleton(next))).finally(() => {
-            Promise.resolve(renderTab(next)).catch(() => tabErrorState(next));
+            Promise.resolve(renderTab(next)).catch((err) => {
+                console.error("[cairn] render failed", err);
+                tabErrorState(next);
+            });
         });
     }
     function registerTabBarHandlers() {
@@ -94,3 +98,4 @@
         window.switchTab = switchTab;
     }
 }
+})();

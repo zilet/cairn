@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared display-format helpers for the vanilla PWA.
 function foodNum(value) {
@@ -90,3 +91,4 @@ Object.assign(globalThis, {
     fmtSpeedKmh,
     prDistLabel,
 });
+})();

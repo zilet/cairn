@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress program-block card and controls.
 function blockFocusWord(focus) {
@@ -145,3 +146,4 @@ if (typeof window !== "undefined") {
         wireProgramBlock,
     });
 }
+})();

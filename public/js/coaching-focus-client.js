@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Whole-athlete focus card renderer and routing bridge.
 const CFOCUS_DOMAIN_LABEL = {
@@ -180,3 +181,4 @@ if (typeof window !== "undefined") {
         cfocusRoute,
     });
 }
+})();

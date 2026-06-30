@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // ==== agent-job-client.js ====
 // Durable agent jobs: kind-agnostic non-blocking ops + live SSE progress.
@@ -309,4 +310,5 @@
             runOp,
         });
     }
+})();
 })();

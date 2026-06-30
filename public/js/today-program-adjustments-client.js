@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Today program-adjustment rail rendering helpers.
 (() => {
@@ -97,4 +98,5 @@
     if (typeof window !== "undefined") {
         window.CairnTodayProgramAdjustments = CAIRN_TODAY_PROGRAM_ADJUSTMENTS;
     }
+})();
 })();

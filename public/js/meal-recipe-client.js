@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure recipe rendering for the Plan -> Meals bottom sheet.
 (() => {
@@ -62,4 +63,5 @@
     if (typeof window !== "undefined") {
         window.CairnMealRecipe = CAIRN_MEAL_RECIPE;
     }
+})();
 })();

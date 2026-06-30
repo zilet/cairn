@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function renderAppTab(tabName) {
@@ -33,3 +34,4 @@
         window.renderTab = renderAppTab;
     }
 }
+})();

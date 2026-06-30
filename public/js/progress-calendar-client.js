@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress Calendar month-grid presentation helpers.
 function calMonthHtml(ym, byDate, todayIso, idx) {
@@ -40,3 +41,4 @@ if (typeof window !== "undefined") {
         calMonthHtml,
     });
 }
+})();

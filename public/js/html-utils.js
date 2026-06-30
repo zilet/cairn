@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared HTML escaping helpers for string-built UI. Keep these tiny and boring:
 // callers decide whether a value is text content or an attribute value.
@@ -11,3 +12,4 @@ Object.assign(globalThis, {
     escHtml,
     escAttr,
 });
+})();

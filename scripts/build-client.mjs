@@ -34,6 +34,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-brief-client.ts", output: "public/js/today-brief-client.js" },
   { source: "src/client/cardio-plan-client.ts", output: "public/js/cardio-plan-client.js" },
   { source: "src/client/cardio-sync-client.ts", output: "public/js/cardio-sync-client.js" },
+  { source: "src/client/today-lately-client.ts", output: "public/js/today-lately-client.js" },
   { source: "src/client/proposal-client.ts", output: "public/js/proposal-client.js" },
   { source: "src/client/today-session-suggest-client.ts", output: "public/js/today-session-suggest-client.js" },
   { source: "src/client/today-session-status-client.ts", output: "public/js/today-session-status-client.js" },
@@ -63,6 +64,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/chat-history-client.ts", output: "public/js/chat-history-client.js" },
   { source: "src/client/plan-endurance-client.ts", output: "public/js/plan-endurance-client.js" },
   { source: "src/client/plan-editor-client.ts", output: "public/js/plan-editor-client.js" },
+  { source: "src/client/chat-screen.ts", output: "public/js/09-plan-chat.js" },
   { source: "src/client/day-fuel-client.ts", output: "public/js/day-fuel-client.js" },
   { source: "src/client/meal-plan-client.ts", output: "public/js/meal-plan-client.js" },
   { source: "src/client/meal-recipe-client.ts", output: "public/js/meal-recipe-client.js" },
@@ -104,6 +106,10 @@ const compilerOptions = {
   target: ts.ScriptTarget.ES2022,
 };
 
+function wrapClassicScript(source) {
+  return `(() => {\n${source.trimEnd()}\n})();\n`;
+}
+
 export function buildClient() {
   for (const item of CLIENT_OUTPUTS) {
     const sourcePath = path.join(root, item.source);
@@ -125,7 +131,7 @@ export function buildClient() {
       process.exit(1);
     }
     mkdirSync(path.dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, result.outputText.trimEnd() + "\n");
+    writeFileSync(outputPath, wrapClassicScript(result.outputText));
   }
 
   console.log(`✓ built client output (${CLIENT_OUTPUTS.length} file${CLIENT_OUTPUTS.length === 1 ? "" : "s"})`);

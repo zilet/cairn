@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress Endurance run-plan presentation helpers.
 function runKindClass(kind) {
@@ -136,3 +137,4 @@ if (typeof window !== "undefined") {
         enduranceCoachLine,
     });
 }
+})();

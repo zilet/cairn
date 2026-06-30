@@ -992,6 +992,8 @@ declare global {
     CairnCardioSync: {
       configured(settings: Record<string, unknown> | null | undefined): boolean;
       lineHtml(settings: Record<string, unknown> | null | undefined, opts?: { expectingRun?: unknown }): string;
+      wire(root?: ParentNode | null, onDone?: () => unknown): void;
+      zoneColors: readonly string[];
     };
 
     CairnProgressEndurance: {
@@ -1035,6 +1037,14 @@ declare global {
       cardioDominantZone(zones: unknown): string;
       cardioVerb(label: unknown): string;
       cardioLogPhrase(item: Record<string, unknown>): string;
+    };
+
+    CairnTodayLately: {
+      garminSessionCard(card: unknown): string;
+      when(row: unknown): string;
+      detailHtml(detail: unknown): string;
+      movementsHtml(movements: unknown): string;
+      rowHtml(row: unknown): string;
     };
 
     CairnTodayBrief: {
@@ -1141,4 +1151,5 @@ declare global {
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
+  declare const CairnTodayLately: Window["CairnTodayLately"];
 }

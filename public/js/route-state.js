@@ -1,3 +1,4 @@
+(() => {
 (function initCairnRoutes(root) {
     const VALID_TABS = new Set(["today", "plan", "progress", "chat", "me", "settings"]);
     const PLAN_SECTIONS = new Set(["edit", "endurance", "food", "meals", "coach"]);
@@ -125,3 +126,4 @@
         settingsSections: [...SETTINGS_SECTIONS],
     };
 })((typeof window !== "undefined" ? window : globalThis));
+})();

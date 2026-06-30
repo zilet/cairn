@@ -1,3 +1,4 @@
+(() => {
 // ==== 08-me-records.js ====
 // ====================================================================
 // Evidence is inspectable — a calm "see the evidence" disclosure that lazy-fetches
@@ -1161,3 +1162,4 @@ Object.assign(globalThis, {
     renderFamily,
     renderLife,
 });
+})();

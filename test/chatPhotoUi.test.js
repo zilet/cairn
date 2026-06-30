@@ -11,7 +11,8 @@ const chatClient = readFileSync(path.join(root, "public/js/chat-client.js"), "ut
 test("chat photo capture compresses under the server upload cap before enqueue", () => {
   assert.match(chatClient, /const\s+CHAT_IMAGE_MAX_BYTES\s*=\s*4\s*\*\s*1024\s*\*\s*1024/);
   assert.match(chat, /const\s+CHAT_UPLOAD_IMAGE_MAX_BYTES\s*=\s*CairnChatClient\.CHAT_IMAGE_MAX_BYTES/);
-  assert.match(chat, /function\s+base64DecodedBytes/);
+  assert.match(chatClient, /function\s+base64DecodedBytes/);
+  assert.match(chatClient, /imagePayload: chatImagePayload/);
   assert.match(chat, /CHAT_UPLOAD_IMAGE_EDGE_STEPS/);
   assert.match(chat, /CHAT_UPLOAD_IMAGE_QUALITY_STEPS/);
   assert.match(chat, /last\.bytes\s*<=\s*CHAT_UPLOAD_IMAGE_MAX_BYTES/);

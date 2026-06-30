@@ -1,3 +1,4 @@
+(() => {
 function isProgressRecord(value) {
     return !!value && typeof value === "object";
 }
@@ -954,3 +955,4 @@ Object.assign(globalThis, {
     renderVolume,
     renderWeight,
 });
+})();

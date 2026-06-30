@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Food-note parsing and rendering shared by Me notes and the food detail sheet.
 (() => {
@@ -161,4 +162,5 @@
             noteEntryHtml,
         });
     }
+})();
 })();

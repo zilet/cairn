@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Tiny dependency-free markdown renderer for assistant chat bubbles.
 function mdSafeUrl(url) {
@@ -126,3 +127,4 @@ if (typeof window !== "undefined") {
         mdToHtml,
     });
 }
+})();

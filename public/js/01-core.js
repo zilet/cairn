@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // ==== 01-core.js ====
 {
@@ -19,3 +20,4 @@
     // globalThis properties avoids relying on cross-file lexical declarations.
     Object.assign(globalThis, { $: query, view: appView, headerTitle: appHeaderTitle, state: appState });
 }
+})();

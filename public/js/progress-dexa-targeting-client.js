@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress/Health DEXA targeting presentation helpers.
 async function loadDexaTargeting(slotId) {
@@ -69,3 +70,4 @@ if (typeof window !== "undefined") {
         dexaTargetingHtml,
     });
 }
+})();

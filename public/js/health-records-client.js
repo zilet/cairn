@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health Records tab renderers. Upload, polling, and delete behavior stay in
 // 08-me-records.js; this module owns only stable HTML.
@@ -43,4 +44,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthRecords = CAIRN_HEALTH_RECORDS;
     }
+})();
 })();

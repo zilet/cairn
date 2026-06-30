@@ -711,6 +711,8 @@ function maybeGenerateWeekly(): void {
 // explicit while this surface is migrated incrementally to TypeScript.
 Object.assign(globalThis, {
   MIC_GLYPH,
+  provenanceLineHtml,
+  weekRangeLabel,
   quickLog,
   loadTrainingProvenance,
   loadMealProvenance,

@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Bottom rest timer shown after logging a set.
 const rest = { id: null, remaining: 0, total: 0 };
@@ -93,3 +94,4 @@ if (typeof window !== "undefined") {
         stopRest,
     });
 }
+})();

@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Early service-worker updater. Its filename is intentionally separate from the
 // normal app-service-worker helper so old caches fetch it from the network.
@@ -28,3 +29,4 @@
     }
     startServiceWorkerLifecycle();
 }
+})();

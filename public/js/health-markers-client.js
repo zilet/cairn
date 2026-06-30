@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health marker row/chart helpers for the vanilla PWA.
 (() => {
@@ -254,4 +255,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthMarkers = CAIRN_HEALTH_MARKERS;
     }
+})();
 })();

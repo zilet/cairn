@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared Progress view presentation helpers.
 function progressShortDate(iso) {
@@ -46,3 +47,4 @@ if (typeof window !== "undefined") {
         emptyStateHtml: progressEmptyStateHtml,
     });
 }
+})();

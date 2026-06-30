@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Calm PWA install guidance used by Today and Settings.
 (() => {
@@ -183,4 +184,5 @@
             refreshPhoneCoach,
         });
     }
+})();
 })();

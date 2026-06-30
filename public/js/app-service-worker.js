@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function registerServiceWorkerLifecycle() {
@@ -26,3 +27,4 @@
         window.registerServiceWorkerLifecycle = registerServiceWorkerLifecycle;
     }
 }
+})();

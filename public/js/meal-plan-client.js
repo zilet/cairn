@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure meal-plan render/model helpers for Plan -> Meals and Coach meal-plan history.
 (() => {
@@ -277,4 +278,5 @@
     if (typeof window !== "undefined") {
         Object.assign(window, { CairnMealPlan: CAIRN_MEAL_PLAN, mealSlotFor, mealRowHtml, mealDayHtml });
     }
+})();
 })();

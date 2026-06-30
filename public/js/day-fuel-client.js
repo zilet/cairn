@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Plan -> Meals day-fuel review renderer.
 (() => {
@@ -77,4 +78,5 @@
             dayFuelHtml,
         });
     }
+})();
 })();

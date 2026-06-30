@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // ==== settings-screen.js ====
 {
@@ -741,3 +742,4 @@
         Object.assign(window, { renderSettings });
     }
 }
+})();

@@ -1,3 +1,4 @@
+(() => {
 // ==== settings-routes.js ====
 // Server-owned route-task metadata + compact rendering helpers for Settings.
 // 10-boot owns the Settings shell; this file owns the route-list policy boundary so
@@ -89,3 +90,4 @@ Object.assign(globalThis, {
     settingsPruneRoutes,
     settingsRouteRowsHtml,
 });
+})();

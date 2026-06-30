@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Health Standing renderer for the vanilla PWA.
 (() => {
@@ -298,4 +299,5 @@
     if (typeof window !== "undefined") {
         window.CairnHealthStanding = CAIRN_HEALTH_STANDING;
     }
+})();
 })();

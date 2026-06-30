@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 {
     function requiredElement(root, selector) {
@@ -167,3 +168,4 @@
         window.openOnboarding = openOnboarding;
     }
 }
+})();

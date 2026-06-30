@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Shared activity-row rendering for Today, capture, and Health history.
 (() => {
@@ -68,4 +69,5 @@
             updateActEntry,
         });
     }
+})();
 })();

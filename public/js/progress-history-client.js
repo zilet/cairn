@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress history card renderer and shared edit-field number coercion.
 function sessionSetScore(set) {
@@ -69,3 +70,4 @@ if (typeof window !== "undefined") {
         numOrNull,
     });
 }
+})();

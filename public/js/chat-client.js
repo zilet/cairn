@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure chat helpers for the vanilla PWA.
 const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
@@ -206,3 +207,4 @@ Object.assign(globalThis, { CairnChatClient: CAIRN_CHAT_CLIENT });
 if (typeof window !== "undefined") {
     window.CairnChatClient = CAIRN_CHAT_CLIENT;
 }
+})();

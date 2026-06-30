@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Today Brief and focus-bar rendering helpers for the vanilla PWA.
 (() => {
@@ -164,4 +165,5 @@
     if (typeof window !== "undefined") {
         window.CairnTodayBrief = CAIRN_TODAY_BRIEF;
     }
+})();
 })();

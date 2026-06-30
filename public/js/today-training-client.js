@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Pure Today training/cardio helpers for the vanilla PWA.
 const TODAY_RX_ACTION = {
@@ -117,3 +118,4 @@ Object.assign(globalThis, {
         cardioLogPhrase,
     },
 });
+})();

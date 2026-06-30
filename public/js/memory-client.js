@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Me Memory renderers: pure HTML for remembered facts and preferences.
 (() => {
@@ -32,4 +33,5 @@
     if (typeof window !== "undefined") {
         window.CairnMemory = CAIRN_MEMORY;
     }
+})();
 })();

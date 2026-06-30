@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Me Family renderers: pure HTML for the people the coach plans around.
 (() => {
@@ -93,4 +94,5 @@
     if (typeof window !== "undefined") {
         window.CairnFamily = CAIRN_FAMILY;
     }
+})();
 })();

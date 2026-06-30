@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Health document card rendering shared by Health and Records surfaces.
 const HEALTH_DOC_KINDS = [
@@ -163,3 +164,4 @@ if (typeof window !== "undefined") {
         healthDocHtml,
     });
 }
+})();

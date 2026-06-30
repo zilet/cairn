@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress performance standing presentation helpers.
 async function loadPerformance() {
@@ -114,3 +115,4 @@ if (typeof window !== "undefined") {
         performanceHtml,
     });
 }
+})();

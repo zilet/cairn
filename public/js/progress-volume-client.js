@@ -1,3 +1,4 @@
+(() => {
 // @ts-check
 // Progress Volume balance presentation helpers.
 // The canonical taxonomy's first-class volume patterns. Mobility is intentionally
@@ -56,3 +57,4 @@ if (typeof window !== "undefined") {
         volBalanceHtml,
     });
 }
+})();
