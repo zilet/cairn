@@ -1,6 +1,25 @@
 import { z } from "zod";
 import { reconcileExercises } from "../../coachOps.js";
-import * as repo from "../../repo.js";
+import {
+  buildPlanICS,
+  deleteExercise,
+  deletePlanDay,
+  findExercise,
+  getExerciseDetail,
+  getPlan,
+  getPlanDay,
+  listExerciseAliases,
+  listExercises,
+  mergeExercises,
+  reconcileExerciseGroups,
+  replacePlan,
+  savePlanDay,
+  suggestAlternatives,
+  suggestVariations,
+  updateExercise,
+  updateTarget,
+  upsertExercise,
+} from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 const planItemShape = z.object({
@@ -27,14 +46,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "get_plan",
     "Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, and injury notes.",
     {},
-    async () => asText(repo.getPlan())
+    async () => asText(getPlan())
   );
 
   server.tool(
     "get_plan_day",
     "Get one training day by its number (1-5) with prescribed exercises and targets.",
     { day_number: z.number().int().describe("1 through 5") },
-    async ({ day_number }) => asText(repo.getPlanDay(day_number))
+    async ({ day_number }) => asText(getPlanDay(day_number))
   );
 
   server.tool(
@@ -42,7 +61,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "Export the training plan as an iCalendar (.ics) feed — each plan day as a weekly-recurring all-day event. Pull-not-push: subscribe in a calendar app. Day 1 maps to Monday by default; pass start_weekday (0=Sun..6=Sat) to shift.",
     { start_weekday: z.number().int().min(0).max(6).optional().describe("JS weekday (0=Sun..6=Sat) that plan Day 1 lands on; default 1 (Monday)") },
     async ({ start_weekday }) => ({
-      content: [{ type: "text" as const, text: repo.buildPlanICS({ startWeekday: start_weekday }) }],
+      content: [{ type: "text" as const, text: buildPlanICS({ startWeekday: start_weekday }) }],
     })
   );
 
@@ -50,7 +69,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "get_exercise",
     "Get the guide for one exercise: muscle group, injury constraint, form cues, where it appears in the plan, est-1RM trend, and recent sets.",
     { exercise: z.string() },
-    async ({ exercise }) => asText(repo.getExerciseDetail(exercise))
+    async ({ exercise }) => asText(getExerciseDetail(exercise))
   );
 
   server.tool(
@@ -62,7 +81,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       target_weight: z.number().optional(),
       target_seconds: z.number().int().optional().describe("prescribed hold/duration in seconds, for timed exercises"),
     },
-    async (target) => asText(repo.updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds))
+    async (target) => asText(updateTarget(target.day_number, target.exercise, target.target_weight, target.target_seconds))
   );
 
   server.tool(
@@ -74,14 +93,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       focus: z.string().nullable().optional(),
       items: z.array(planItemShape),
     },
-    async (day) => asText(repo.savePlanDay(day.day_number, day.name, day.focus ?? null, day.items))
+    async (day) => asText(savePlanDay(day.day_number, day.name, day.focus ?? null, day.items))
   );
 
   server.tool(
     "delete_plan_day",
     "Remove a training day from the plan (logged history is kept).",
     { day_number: z.number().int() },
-    async ({ day_number }) => asText(repo.deletePlanDay(day_number))
+    async ({ day_number }) => asText(deletePlanDay(day_number))
   );
 
   server.tool(
@@ -95,14 +114,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
         items: z.array(planItemShape),
       })),
     },
-    async ({ days }) => asText(repo.replacePlan(days))
+    async ({ days }) => asText(replacePlan(days))
   );
 
   server.tool(
     "list_exercises",
     "List every exercise with its muscle group, mode (reps|timed), constraint note, and cues.",
     {},
-    async () => asText(repo.listExercises())
+    async () => asText(listExercises())
   );
 
   server.tool(
@@ -113,7 +132,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       muscle_group: z.string().nullable().optional(),
       mode: z.enum(["reps", "timed"]).optional(),
     },
-    async (exercise) => asText(repo.upsertExercise(exercise))
+    async (exercise) => asText(upsertExercise(exercise))
   );
 
   server.tool(
@@ -127,9 +146,9 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       constraint_note: z.string().nullable().optional(),
     },
     async ({ exercise, ...patch }) => {
-      const row = repo.findExercise(exercise);
+      const row = findExercise(exercise);
       if (!row) return asText({ error: "not found", exercise });
-      return asText(repo.updateExercise(row.id, patch));
+      return asText(updateExercise(row.id, patch));
     }
   );
 
@@ -137,7 +156,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "delete_exercise",
     "Delete an exercise by name. Refuses (ok:false) if it still has logged sets or is referenced in a plan — remove those first.",
     { name: z.string().describe("exact exercise name") },
-    async ({ name }) => asText(repo.deleteExercise(name))
+    async ({ name }) => asText(deleteExercise(name))
   );
 
   server.tool(
@@ -152,15 +171,15 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     },
     async ({ exercise, mode, bodyweight_only, avoid_equipment, injury_areas }) =>
       asText(mode === "alternatives"
-        ? repo.suggestAlternatives(exercise, { bodyweightOnly: bodyweight_only, avoidEquipment: avoid_equipment as any, injuryAreas: injury_areas })
-        : repo.suggestVariations(exercise))
+        ? suggestAlternatives(exercise, { bodyweightOnly: bodyweight_only, avoidEquipment: avoid_equipment as any, injuryAreas: injury_areas })
+        : suggestVariations(exercise))
   );
 
   server.tool(
     "reconcile_exercise_groups",
     "Backfill and normalize the muscle_group for every exercise: null values are auto-classified from the exercise name; legacy values (e.g. 'legs' → 'quads', 'posterior' → 'hamstrings') are mapped to the canonical taxonomy. Idempotent — safe to run repeatedly.",
     {},
-    async () => asText(repo.reconcileExerciseGroups())
+    async () => asText(reconcileExerciseGroups())
   );
 
   server.tool(
@@ -170,14 +189,14 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       from: z.string().describe("the exercise name to merge away (will be deleted after merge)"),
       into: z.string().describe("the exercise name to keep (must already exist)"),
     },
-    async ({ from, into }) => asText(repo.mergeExercises(from, into))
+    async ({ from, into }) => asText(mergeExercises(from, into))
   );
 
   server.tool(
     "list_exercise_aliases",
     "List the learned exercise-name aliases (variant → canonical movement) — the de-duplication map behind the volume/progression read. Each row is { alias, canonical, source }. The deterministic exercise-canon normalizer is always on; these are the harder synonyms learned by reconcile_exercise_names.",
     {},
-    async () => asText(repo.listExerciseAliases())
+    async () => asText(listExerciseAliases())
   );
 
   server.tool(

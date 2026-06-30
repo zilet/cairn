@@ -534,6 +534,7 @@ Tasks:
 - [x] Move Health Metrics REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/health/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Health Docs REST and Health Records MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/health/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Training Log REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts`, guarded by `test/domainGrouping.test.js`.
+- [x] Move Plan/Exercise REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Garmin REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Training Status MCP tools off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts` / `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Person Context REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
