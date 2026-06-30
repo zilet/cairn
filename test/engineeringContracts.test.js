@@ -752,6 +752,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const boot = read("public/js/10-boot.js");
   const sw = read("public/sw.js");
   const index = read("public/index.html");
+  const dockerfile = read("Dockerfile");
   assert.equal(pkg.scripts.build, "npm run client:check && npm run client:build && tsc");
   assert.equal(pkg.scripts["client:check"], "tsc -p tsconfig.client.build.json --noEmit");
   assert.equal(pkg.scripts["client:build"], "node scripts/build-client.mjs");
@@ -761,6 +762,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(verifyRunner, /npm",\s*"run",\s*"typecheck:client"/);
   assert.match(verifyRunner, /node",\s*"scripts\/check-client-build-output\.mjs"/);
   assert.match(verifyRunner, /npm",\s*"run",\s*"public:check"/);
+  assert.match(verifyRunner, /const buildJobs = \[/);
+  assert.match(verifyRunner, /const postBuildJobs = \[/);
+  assert.match(verifyRunner, /await runGroup\("build", buildJobs\);\nawait runGroup\("post-build", postBuildJobs\);/);
   assert.match(clientTsconfig, /"allowJs": true/);
   assert.match(clientTsconfig, /"checkJs": true/);
   assert.match(clientTsconfig, /"noEmit": true/);
@@ -953,6 +957,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponentsSource, /function loadingStateHtml\(options: LoadingStateOptions\): string/);
   assert.match(uiComponentsSource, /function segmentedNavHtml\(options: SegmentedNavOptions\): string/);
   assert.match(uiComponentsSource, /function jobCaptionHtml\(options: JobCaptionOptions = \{\}\): string/);
+  assert.match(uiComponentsSource, /function sheetChipHtml\(options: SheetChipOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
@@ -1006,6 +1011,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /loadingStateHtml/);
   assert.match(uiComponents, /segmentedNavHtml/);
   assert.match(uiComponents, /jobCaptionHtml/);
+  assert.match(uiComponents, /sheetChipHtml/);
   assert.match(todayAgendaClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
@@ -1028,6 +1034,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /CairnUi\.jobCaptionHtml\(\{ tag: "div", className: "sug-loading-line job-cap" \}\)/);
   assert.match(progress, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
   assert.match(meals, /CairnUi\.jobCaptionHtml\(\{ className: "meal-cap job-cap" \}\)/);
+  assert.match(meals, /CairnUi\.sheetChipHtml\(\{ label:/);
+  assert.match(
+    meals,
+    /CairnUi\.sheetChipHtml\(\{ className: "sheet-chip sheet-chip-kcal", value: meal\.kcal, label: "cal" \}\)/
+  );
   assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
   assert.match(health, /CairnHealthClient\.formatMarkerNumber/);
@@ -1046,6 +1057,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
+  assert.match(dockerfile, /COPY package\*\.json tsconfig\.json tsconfig\.client\.build\.json \.\//);
+  assert.match(dockerfile, /COPY scripts\/build-client\.mjs \.\/scripts\/build-client\.mjs/);
+  assert.match(dockerfile, /COPY --from=builder \/app\/public\/js \.\/public\/js/);
 });
 
 test("public docker run quickstarts bind loopback by default", () => {

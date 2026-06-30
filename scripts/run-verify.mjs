@@ -17,16 +17,17 @@ const clientJobs = [
   },
 ];
 
-const finalJobs = [
+const buildJobs = [
+  {
+    name: "server build",
+    steps: [["npm", "run", "build"]],
+  },
+];
+
+const postBuildJobs = [
   { name: "public scripts", steps: [["npm", "run", "public:check"]] },
   { name: "service worker cache", steps: [["node", "scripts/check-sw-cache.mjs"]] },
-  {
-    name: "server build + tests",
-    steps: [
-      ["npm", "run", "build"],
-      ["npm", "run", "test:built"],
-    ],
-  },
+  { name: "tests", steps: [["npm", "run", "test:built"]] },
 ];
 
 function runStep(argv) {
@@ -89,4 +90,5 @@ async function runGroup(label, jobs) {
 
 await runGroup("initial", initialJobs);
 await runGroup("client", clientJobs);
-await runGroup("final", finalJobs);
+await runGroup("build", buildJobs);
+await runGroup("post-build", postBuildJobs);

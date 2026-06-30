@@ -296,7 +296,7 @@ Tasks:
 - [x] Keep data fetching out of components.
 - [x] Add tests that hostile strings are escaped in component output.
 - [x] Add tests that component classes and stable attributes remain present where screens depend on them.
-- [ ] Move repeated loading, segmented-control, chip, card, job-status, and detail-sheet markup into typed component helpers.
+- [x] Move repeated loading, segmented-control, chip, job-status, and meal detail-sheet chip markup into typed component helpers.
 - [ ] Add ARIA-focused component tests as the next interactive primitives move over.
 
 Gate:

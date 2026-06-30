@@ -146,3 +146,27 @@ test("job caption component preserves the reconnect selector and escapes text", 
   const div = ui.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" });
   assert.equal(div, `<div class="sug-loading-line job-cap"></div>`);
 });
+
+test("sheet chip component escapes value, label, classes, and attributes", () => {
+  const ui = loadUiComponents();
+  assert.equal(ui.sheetChipHtml({}), "");
+  assert.equal(
+    ui.sheetChipHtml({ label: "serves 2" }),
+    `<span class="sheet-chip"><span class="lbl">serves 2</span></span>`
+  );
+
+  const html = ui.sheetChipHtml({
+    className: `sheet-chip "wide"`,
+    value: "12<3",
+    label: `g protein "now"`,
+    attrs: { "data-chip": `macro"p`, selected: true, "bad attr": "dropped" },
+  });
+
+  assert.match(html, /^<span /);
+  assert.match(html, /class="sheet-chip &quot;wide&quot;"/);
+  assert.match(html, /data-chip="macro&quot;p"/);
+  assert.match(html, /\sselected\b/);
+  assert.match(html, /<span class="numeral">12&lt;3<\/span>/);
+  assert.match(html, /<span class="lbl">g protein "now"<\/span>/);
+  assert.doesNotMatch(html, /bad attr/);
+});

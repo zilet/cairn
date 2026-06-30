@@ -121,6 +121,14 @@ declare global {
         tag?: "span" | "div";
         attrs?: Record<string, unknown>;
       }): string;
+      sheetChipHtml(options: {
+        label?: unknown;
+        value?: unknown;
+        className?: string;
+        valueClassName?: string;
+        labelClassName?: string;
+        attrs?: Record<string, unknown>;
+      }): string;
       emptyStateHtml(options: {
         title: unknown;
         body?: unknown;

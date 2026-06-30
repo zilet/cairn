@@ -31,6 +31,14 @@ type JobCaptionOptions = {
   tag?: "span" | "div";
   attrs?: CairnUiAttrs;
 };
+type SheetChipOptions = {
+  label?: unknown;
+  value?: unknown;
+  className?: string;
+  valueClassName?: string;
+  labelClassName?: string;
+  attrs?: CairnUiAttrs;
+};
 type EmptyStateOptions = {
   title: unknown;
   body?: unknown;
@@ -95,6 +103,20 @@ function jobCaptionHtml(options: JobCaptionOptions = {}): string {
   return `<${tag} class="${escAttr(className)}"${uiAttrsHtml(options.attrs)}>${text}</${tag}>`;
 }
 
+function sheetChipHtml(options: SheetChipOptions): string {
+  const label = options.label == null ? "" : String(options.label);
+  const value = options.value == null ? "" : String(options.value);
+  if (!label.trim() && !value.trim()) return "";
+  const className = options.className || "sheet-chip";
+  const valueHtml = value.trim()
+    ? `<span class="${escAttr(options.valueClassName || "numeral")}">${escHtml(value)}</span>`
+    : "";
+  const labelHtml = label.trim()
+    ? `<span class="${escAttr(options.labelClassName || "lbl")}">${escHtml(label)}</span>`
+    : "";
+  return `<span class="${escAttr(className)}"${uiAttrsHtml(options.attrs)}>${valueHtml}${labelHtml}</span>`;
+}
+
 function emptyStateHtml(options: EmptyStateOptions): string {
   const className = options.className || "empty-state reveal";
   const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -119,6 +141,7 @@ const CAIRN_UI = {
   loadingStateHtml,
   segmentedNavHtml,
   jobCaptionHtml,
+  sheetChipHtml,
   emptyStateHtml,
 };
 

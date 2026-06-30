@@ -842,9 +842,9 @@ function openMealSheet(current, di, mi) {
   const q = `${meal.name || meal.meal || ""} ${items}`.trim(); // EXACTLY the row's art query
   const figs = [["P", meal.protein_g], ["C", meal.carbs_g], ["F", meal.fat_g]]
     .filter(([l, v]) => v != null && v !== "" && (l === "P" || Number(v) > 0))
-    .map(([l, v]) => `<span class="sheet-chip"><span class="lbl">${l} ${escHtml(String(v))}g</span></span>`).join("");
+    .map(([l, v]) => CairnUi.sheetChipHtml({ label: `${l} ${v}g` })).join("");
   const kcal = meal.kcal
-    ? `<span class="sheet-chip sheet-chip-kcal"><span class="numeral">${escHtml(String(meal.kcal))}</span><span class="lbl">cal</span></span>`
+    ? CairnUi.sheetChipHtml({ className: "sheet-chip sheet-chip-kcal", value: meal.kcal, label: "cal" })
     : "";
   const s = document.createElement("div");
   s.className = "sheet";
@@ -882,8 +882,8 @@ function recipeCtaHtml() {
 function recipeHtml(r) {
   if (!r || typeof r !== "object") return "";
   const chips = [
-    r.time_min ? `<span class="sheet-chip"><span class="numeral">${escHtml(String(r.time_min))}</span><span class="lbl">min</span></span>` : "",
-    r.servings ? `<span class="sheet-chip"><span class="lbl">serves ${escHtml(String(r.servings))}</span></span>` : "",
+    r.time_min ? CairnUi.sheetChipHtml({ value: r.time_min, label: "min" }) : "",
+    r.servings ? CairnUi.sheetChipHtml({ label: `serves ${r.servings}` }) : "",
   ].join("");
   const ings = Array.isArray(r.ingredients) && r.ingredients.length
     ? `<div class="sheet-section"><div class="lbl">Ingredients</div>
