@@ -524,53 +524,6 @@ async function loadVolumeBalance() {
   slot.innerHTML = html;
 }
 
-// The canonical taxonomy's first-class patterns the elite-build added — used to
-// name a missing VOLUME pattern in plain words ("no core or grip work lately").
-// Mobility is intentionally excluded: it's non-volume-counting, so the balance
-// endpoint never reports it — flagging it "not programmed" would be a false signal.
-const PATTERN_WORD = { core: "core", forearms: "grip" };
-
-// Render the balance read. Returns "" when there's nothing meaningful to say.
-function volBalanceHtml(bal) {
-  if (!bal || !Array.isArray(bal.groups) || !bal.groups.length) return "";
-  const due = Array.isArray(bal.due) ? bal.due : [];
-  const over = Array.isArray(bal.over) ? bal.over : [];
-  // Missing patterns: a first-class taxonomy group with NO sets logged in the window.
-  const trained = new Set(bal.groups.map((g) => String(g.group).toLowerCase()));
-  const missing = Object.keys(PATTERN_WORD).filter((p) => !trained.has(p));
-
-  // Calm chip rows — due (terracotta-quiet), high (gold-quiet), missing (muted).
-  const chip = (label, cls) => `<span class="vbal-chip ${cls}">${escHtml(label)}</span>`;
-  // Broad-low (most groups due at once) → the summary already says "volume's light
-  // across the board", so cap the Due row to the few that matter + a quiet "+N more"
-  // instead of a wall of terracotta chips. Otherwise show them all.
-  const dueShown = bal.broad_low ? due.slice(0, 4) : due;
-  const dueMore = due.length - dueShown.length;
-  const dueChips = dueShown.map((g) => chip(capWord(g), "vbal-due")).join("")
-    + (dueMore > 0 ? chip(`+${dueMore} more`, "vbal-miss") : "");
-  const overChips = over.map((g) => chip(capWord(g), "vbal-high")).join("");
-  const missChips = missing.map((p) => chip(PATTERN_WORD[p], "vbal-miss")).join("");
-
-  const rows = [];
-  if (dueShown.length) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Due</span><span class="vbal-chips">${dueChips}</span></div>`);
-  if (overChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Running high</span><span class="vbal-chips">${overChips}</span></div>`);
-  if (missChips) rows.push(`<div class="vbal-row"><span class="vbal-lead lbl">Not programmed</span><span class="vbal-chips">${missChips}</span></div>`);
-
-  const summary = bal.summary ? `<div class="vbal-summary">${escHtml(bal.summary)}</div>` : "";
-  if (!rows.length && !summary) return "";
-  return `<div class="vbal">
-      <div class="vbal-head lbl">Balance</div>
-      ${summary}
-      ${rows.join("")}
-    </div>`;
-}
-
-// Capitalize a single group/pattern word for display.
-function capWord(s) {
-  s = String(s || "");
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-}
-
 // ---------- Progress: Endurance (runner/cyclist-first read) ----------
 // The endurance analogue to the 1RM view: this week's mileage + moving time, the
 // longest single effort, a calm time-in-HR-zone bar, the pace trend in plain words
