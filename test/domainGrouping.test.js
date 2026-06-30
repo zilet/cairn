@@ -95,6 +95,13 @@ test("garmin adapters use the training domain entry point", () => {
   }
 });
 
+test("training status MCP tools use domain entry points", () => {
+  const src = read("src/surfaces/mcp/training-status.ts");
+  assert.match(src, /from "\.\.\/\.\.\/domain\/training\/index\.js"/);
+  assert.match(src, /from "\.\.\/\.\.\/domain\/person\/index\.js"/);
+  assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, "training-status MCP should not import the repo barrel");
+});
+
 test("person context adapters use the person domain entry point", () => {
   for (const [file, importPath] of [
     ["src/routes/person-context.ts", "../domain/person/index.js"],
