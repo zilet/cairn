@@ -44,6 +44,7 @@ declare global {
     planSeg?: ClientPlanSection;
     planJump?: ClientPlanSection | null;
     progressSeg?: ClientProgressSection;
+    progressEx?: string;
     meSeg?: ClientMeSection;
     healthSeg?: ClientHealthSection;
     healthSegPicked?: boolean;
@@ -72,6 +73,7 @@ declare global {
   type ClientAgentOpHandlers = {
     path?: string;
     anchor?: string;
+    caption?: string | readonly string[];
     guard?: () => boolean;
     isFail?: (result: unknown) => boolean;
     render?: (result: unknown) => void;
@@ -117,7 +119,7 @@ declare global {
   declare function $<T extends Element = Element>(selector: string): T | null;
   declare const state: ClientAppState;
 
-  declare let pollToken: unknown;
+  declare let pollToken: number;
   declare let artEnabled: boolean;
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
@@ -128,7 +130,7 @@ declare global {
   declare const SET_SEG: readonly ClientSegment[];
   declare const MEALS_KEY: string;
   declare const MEAL_LABEL: Record<string, string>;
-  declare let _progFocusCard: unknown;
+  declare var _progFocusCard: string | undefined;
 
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
@@ -203,7 +205,9 @@ declare global {
     onDiscard: () => unknown;
   }): ClientSaveBar;
   declare function segBar(active: string, items: readonly ClientSegment[]): string;
+  declare function wireSeg(handlers: Record<string, () => unknown>): void;
   declare function fitSeg(seg: Element): void;
+  declare function loadingState(label: string): string;
   declare function isStandalonePWA(): boolean;
   declare function getInstallGuidance(): { mode: string } | null;
   declare function phoneCoachContent(mode: string): string;
@@ -221,6 +225,7 @@ declare global {
     fmt?: (value: number) => string;
     peak?: boolean;
   }): void;
+  declare function runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
   declare function chartColors(): {
     accent: string;
     sage: string;
@@ -368,7 +373,12 @@ declare global {
   declare function closeDetail(instant?: boolean): void;
   declare function closeMealSheet(instant?: boolean): void;
   declare function hideSaveBar(): void;
-  declare function thinkingCaption(el: Element, op?: string): unknown;
+  declare function thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
+  declare function btnBusy(btn: Element | null | undefined, text: string): () => void;
+  declare function openDetailFrom(fromEl: Element | null | undefined, build: () => unknown): void;
+  declare function mountDetail(html: string): HTMLElement;
+  declare function wireDetailCommon(): void;
+  declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
   declare function measureChatTop(): void;
   declare function ensureRestBar(): HTMLElement;
   declare function paintRest(): void;
@@ -399,7 +409,7 @@ declare global {
   declare function actArtText(activity: ClientActivity & Record<string, unknown>): string;
   declare function actEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
   declare function updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
-  declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): unknown;
+  declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
   declare function collapseEl(el: Element, done?: () => void): void;
   declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
   declare function registerAppJobReconnectors(): void;
