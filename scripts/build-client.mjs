@@ -24,6 +24,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/capture.ts", output: "public/js/04-capture.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
+  { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },

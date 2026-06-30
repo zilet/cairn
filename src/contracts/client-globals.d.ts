@@ -24,6 +24,8 @@ declare global {
   type ClientHealthSection = "read" | "markers" | "records" | "share" | "learned";
   type ClientSettingsSection = "agents" | "sources" | "automation" | "data";
   type ClientSegment = readonly [string, string];
+  type ClientSettingsRouteTask = readonly [string, string];
+  type ClientSaveBar = { markDirty(): void };
 
   type ClientBriefCache = {
     date: string;
@@ -128,6 +130,8 @@ declare global {
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
   declare function escAttr(value: unknown): string;
+  declare function relTime(iso: string): string;
+  declare function absDate(iso: string): string;
   declare function foodNum(value: unknown): number | null;
   declare function formatFoodNum(value: unknown): string;
   declare function fmtWeight(weight: unknown): string;
@@ -177,6 +181,28 @@ declare global {
   declare function stagger(index?: number | null): string;
   declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
+  declare function mountSaveBar(options: {
+    sentinel: Element | null;
+    fields: Element;
+    onSave: () => boolean | Promise<boolean>;
+    onDiscard: () => unknown;
+  }): ClientSaveBar;
+  declare function segBar(active: string, items: readonly ClientSegment[]): string;
+  declare function fitSeg(seg: Element): void;
+  declare function isStandalonePWA(): boolean;
+  declare const sleep: (ms: number) => Promise<void>;
+  declare function openAgentLoginModal(agentName: string): unknown;
+  declare function settingsRouteTasks(data: unknown): ClientSettingsRouteTask[];
+  declare function settingsPruneRoutes(
+    routes: Record<string, string>,
+    routeTasks: readonly ClientSettingsRouteTask[],
+    enabledAgents: readonly { name: string }[],
+  ): Record<string, string>;
+  declare function settingsRouteRowsHtml(
+    routeTasks: readonly ClientSettingsRouteTask[],
+    enabledAgents: readonly { name: string }[],
+    routes: Record<string, string>,
+  ): string;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
   declare function isEndurance(): boolean;
