@@ -519,62 +519,8 @@ function briefSignalsText(read) {
   return CairnTodayBrief.signalsText(read);
 }
 
-// Render one session-suggest item line (sets × reps, or seconds for timed; assisted
-// / bodyweight per the weight convention). `it` is one item from the suggested session.
-function suggestItemHtml(it, i = 0) {
-  const name = escHtml(it.exercise || "Exercise");
-  const timed = it.mode === "timed" || it.target_seconds != null;
-  let prescription;
-  if (timed) {
-    const secs = it.target_seconds != null ? fmtDur(it.target_seconds) : "time";
-    prescription = `${it.sets ?? "?"} × ${secs}`;
-  } else {
-    const lo = it.rep_low, hi = it.rep_high;
-    const reps = lo != null && hi != null ? (lo === hi ? `${lo}` : `${lo}–${hi}`) : (lo ?? hi ?? "");
-    prescription = `${it.sets ?? "?"}${reps ? ` × ${reps}` : ""}`;
-    if (it.target_weight != null) {
-      prescription += it.target_weight < 0 ? ` · ${-it.target_weight} assist` : ` · ${it.target_weight} lb`;
-    } else {
-      prescription += " · BW";
-    }
-  }
-  const tile = artImg("exercise", it.exercise || "", "artile-sm sug-art", art("exercise", it.exercise || ""));
-  return `<div class="sug-item reveal" style="${stagger(i + 1)}">
-      ${tile}
-      <div class="sug-item-main">
-        <div class="sug-item-name">${name}</div>
-        ${it.note ? `<div class="sug-item-note">${escHtml(it.note)}</div>` : ""}
-      </div>
-      <div class="sug-item-rx numeral">${escHtml(prescription)}</div>
-    </div>`;
-}
-
-// Render the suggested session as a reviewable card under the Brief. It is a
-// SUGGESTION — not saved. "Log these" surfaces the items in the existing Today
-// logging UI (reuse appendOffPlanCard); "Dismiss" clears it.
-function suggestCardHtml(session, verified) {
-  const name = escHtml(session.name || "Session");
-  const focus = session.focus ? escHtml(session.focus) : "";
-  const est = session.est_minutes != null && Number(session.est_minutes) > 0 ? `${Math.round(session.est_minutes)} min` : "";
-  const why = session.why ? escHtml(session.why) : "";
-  const items = (Array.isArray(session.items) ? session.items : []).map((it, i) => suggestItemHtml(it, i)).join("");
-  return `<section class="sug-card settle-in">
-      <div class="sug-head">
-        <div class="sug-kicker lbl">A session for today${est ? ` · ${escHtml(est)}` : ""}</div>
-        <h3 class="sug-name">${name}</h3>
-        ${focus ? `<div class="sug-focus">${focus}</div>` : ""}
-      </div>
-      ${why ? `<p class="sug-why">${why}</p>` : ""}
-      <div class="sug-items">${items || `<div class="sug-empty">No exercises came back — try again.</div>`}</div>
-      ${verifiedBadgeHtml(verified)}
-      ${session.notes ? `<div class="sug-notes">${escHtml(session.notes)}</div>` : ""}
-      <div class="sug-actions">
-        <button class="pillbtn pill-accent" data-sugaction="log">Log these</button>
-        <button class="pillbtn" data-sugaction="dismiss">Not now</button>
-      </div>
-      <div class="sug-hint">A suggestion to follow or ignore — it isn't saved as your plan.</div>
-    </section>`;
-}
+// Session-suggest render helpers live in /js/today-session-suggest-client.js. This
+// screen keeps the job/reconnect/log-these wiring and delegates pure markup.
 
 // The shared runOp options for a session-suggest — used by both the live trigger
 // (askForSession) and the reload reconnector, so the render/fail behavior is
@@ -594,7 +540,7 @@ function sessionSuggestOpOpts() {
       const s = view.querySelector("#sugSlot");
       if (!s) return;
       state.suggestedSession = r.session;
-      s.innerHTML = suggestCardHtml(r.session, r.verified);
+      s.innerHTML = CairnTodaySessionSuggest.cardHtml(r.session, r.verified);
       runCountUps(s);
       wireSuggestCard(s);
       s.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
@@ -603,15 +549,7 @@ function sessionSuggestOpOpts() {
       sessionSuggestInFlight = false;
       const s = view.querySelector("#sugSlot");
       if (!s) return;
-      // designed failure (ok:false) or unreachable — gentle, never an error. When the
-      // result says coaching is simply unconfigured, point at Settings (honest cause).
-      const line = r && r.agent_status === "unconfigured"
-        ? "Building a session needs a coaching agent — connect one in Settings. You can train anyway in the meantime."
-        : "Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.";
-      s.innerHTML = `<div class="sug-card sug-fail settle-in">
-          <div class="sug-fail-line">${escHtml(line)}</div>
-          <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>
-        </div>`;
+      s.innerHTML = CairnTodaySessionSuggest.failureHtml(r);
       wireSuggestCard(s);
     },
   };
@@ -626,10 +564,7 @@ function reconnectSessionSuggest() {
   const slot = view.querySelector("#sugSlot");
   if (!slot) return null; // not on Today — a later renderToday() will retry reconnect
   sessionSuggestInFlight = true;
-  slot.innerHTML = `<div class="sug-card sug-loading settle-in">
-      <span class="aspin" aria-hidden="true"></span>
-      ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
-    </div>`;
+  slot.innerHTML = CairnTodaySessionSuggest.loadingHtml();
   const o = sessionSuggestOpOpts();
   let stop = () => {};
   const capEl = slot.querySelector(".job-cap");
@@ -658,18 +593,7 @@ let sessionSuggestInFlight = false;
 function revealSessionComposer() {
   const slot = view.querySelector("#sugSlot");
   if (!slot || sessionSuggestInFlight) return;
-  slot.innerHTML = `<div class="sug-composer settle-in">
-      <input class="sug-prompt" type="text" autocomplete="off" enterkeyhint="go"
-        aria-label="Describe the session you want"
-        placeholder="say what you want — e.g. legs sore from yesterday's run, easier on the legs">
-      <div class="sug-composer-row">
-        <div class="sug-vibes">${SESSION_VIBES.map((v) => `<button class="sug-vibe" type="button" data-vibe="${escAttr(v)}">${escHtml(v)}</button>`).join("")}</div>
-        <div class="sug-composer-actions">
-          <button class="pillbtn" type="button" data-sugcancel>Cancel</button>
-          <button class="pillbtn pill-accent" type="button" data-sugbuild>Build it</button>
-        </div>
-      </div>
-    </div>`;
+  slot.innerHTML = CairnTodaySessionSuggest.composerHtml();
   const input = slot.querySelector(".sug-prompt");
   if (input && !reducedMotion()) setTimeout(() => input.focus(), 60);
   const go = () => { const t = (input?.value || "").trim(); askForSession(t ? { constraints: t } : {}); };
@@ -683,7 +607,6 @@ function revealSessionComposer() {
   }));
   input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
 }
-const SESSION_VIBES = ["easier on the legs", "30 min", "upper body", "no barbell", "low impact", "push hard"];
 
 async function askForSession(opts = {}) {
   if (sessionSuggestInFlight) { toast("Already drafting a session…"); return; }
@@ -692,10 +615,7 @@ async function askForSession(opts = {}) {
   sessionSuggestInFlight = true;
   // The loading card carries a .job-cap for the evolving thinkingCaption; a running
   // session re-attaches after a reload via its registered reconnector.
-  slot.innerHTML = `<div class="sug-card sug-loading settle-in">
-      <span class="aspin" aria-hidden="true"></span>
-      ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
-    </div>`;
+  slot.innerHTML = CairnTodaySessionSuggest.loadingHtml();
   const body = { date: state.logDate };
   if (opts.minutes != null) body.minutes = opts.minutes;
   if (opts.focus) body.focus = opts.focus;

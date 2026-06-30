@@ -9,6 +9,7 @@ import type {
   ClientExpenditureEstimate,
   ClientNextStep,
   ClientPrescription,
+  ClientSessionSuggestion,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
   ISODateString,
@@ -20,6 +21,11 @@ export type ClientJsonArray = ClientJsonObject[];
 export interface ClientOkResponse {
   ok: boolean;
   error?: string;
+}
+
+export interface ClientAgentJobEnvelope {
+  ok: true;
+  job: ClientAgentJob;
 }
 
 export interface ClientHealthResponse {
@@ -486,6 +492,24 @@ export interface ClientAgentJob {
   [key: string]: unknown;
 }
 
+export type ClientSessionSuggestResponse =
+  | {
+    ok: true;
+    session: ClientSessionSuggestion;
+    verified?: unknown;
+    agent?: string | null;
+    tried?: unknown;
+    agent_status?: unknown;
+  }
+  | {
+    ok: false;
+    error?: string;
+    agent?: string | null;
+    tried?: unknown;
+    agent_status?: unknown;
+  }
+  | ClientAgentJobEnvelope;
+
 export interface ClientAgentJobsResponse {
   ok: boolean;
   jobs: ClientAgentJob[];
@@ -559,7 +583,7 @@ export interface ClientApiResponses {
   "/api/endurance-goal": ClientJsonObject | null;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
-  "/api/session-suggest": ClientJsonObject;
+  "/api/session-suggest": ClientSessionSuggestResponse;
   "/api/week-ahead": ClientJsonObject;
   "/api/today-agenda": ClientTodayAgenda;
   "/api/learned-timeline": ClientLearnedTimeline;

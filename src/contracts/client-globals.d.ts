@@ -12,7 +12,7 @@ import type {
   ClientGoalCheck,
   ClientPlanDay,
   ClientPrescription,
-  ClientTrainingSession,
+  ClientSessionSuggestion,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
 } from "./client.js";
@@ -57,7 +57,7 @@ declare global {
     _briefMorph?: boolean;
     focus?: { date: string; on: boolean };
     planReveal?: { date: string; on: boolean; blank?: boolean };
-    suggestedSession?: ClientTrainingSession | null;
+    suggestedSession?: ClientSessionSuggestion | null;
     exModes?: Record<string, string>;
     pendingOffPlan?: Record<string, Array<Record<string, unknown>>>;
     _dayFuel?: ClientDayIntake | null;
@@ -985,6 +985,15 @@ declare global {
       focusBarHtml(read: Partial<ClientDayRead> | null | undefined, day: { name?: unknown } | null | undefined, options?: { exDone?: unknown; exTotal?: unknown; isToday?: boolean }): string;
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
     };
+
+    CairnTodaySessionSuggest: {
+      SESSION_VIBES: string[];
+      itemHtml(item: Partial<ClientSessionSuggestion["items"][number]> | null | undefined, index?: number): string;
+      cardHtml(session: Partial<ClientSessionSuggestion> | null | undefined, verified?: unknown): string;
+      loadingHtml(): string;
+      failureHtml(result?: unknown): string;
+      composerHtml(vibes?: readonly string[]): string;
+    };
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
@@ -1012,6 +1021,7 @@ declare global {
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnTodayBrief: Window["CairnTodayBrief"];
+  declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];

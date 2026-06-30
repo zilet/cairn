@@ -180,6 +180,28 @@ export interface ClientPrescription {
   plan_item_id?: number;
 }
 
+export interface ClientSessionSuggestionItem {
+  exercise: string;
+  sets?: number | null;
+  rep_low?: number | null;
+  rep_high?: number | null;
+  target_weight?: number | null;
+  target_seconds?: number | null;
+  mode?: "reps" | "timed" | string | null;
+  note?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ClientSessionSuggestion {
+  name?: string | null;
+  focus?: string | null;
+  why?: string | null;
+  est_minutes?: number | null;
+  notes?: string | null;
+  items: ClientSessionSuggestionItem[];
+  [key: string]: unknown;
+}
+
 export interface ClientChatSessionSummary {
   session_id: string;
   archived_at: string;

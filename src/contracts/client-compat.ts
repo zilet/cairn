@@ -1,5 +1,6 @@
 import type { DayRead, ExpenditureEstimate } from "../repo/intelligence.js";
 import type { ArchivedChatSession, ChatSearchHit } from "../repo/chat.js";
+import type { suggestSession } from "../coachOps.js";
 import type { CoachingFocus } from "../repo/coaching-focus.js";
 import type { getDayIntake } from "../repo/nutrition.js";
 import type { NextStep } from "../repo/next-step.js";
@@ -33,7 +34,7 @@ import type {
   ClientSettings,
   ClientTodayAgenda,
 } from "./client.js";
-import type { ClientLearnedTimeline, ClientMemory, ClientOutcomeLearningsResponse } from "./client-api.js";
+import type { ClientLearnedTimeline, ClientMemory, ClientOutcomeLearningsResponse, ClientSessionSuggestResponse } from "./client-api.js";
 
 type AssertAssignable<_Actual extends Expected, Expected> = true;
 
@@ -46,6 +47,10 @@ export type ExpenditureMatchesClientContract = AssertAssignable<ExpenditureEstim
 export type ProgramProgressionMatchesClientContract = AssertAssignable<
   ReturnType<typeof planDayProgression>,
   ClientPrescription[]
+>;
+export type SessionSuggestMatchesClientContract = AssertAssignable<
+  Awaited<ReturnType<typeof suggestSession>>,
+  ClientSessionSuggestResponse
 >;
 export type ChatSessionMatchesClientContract = AssertAssignable<ArchivedChatSession, ClientChatSessionSummary>;
 export type ChatSearchHitMatchesClientContract = AssertAssignable<ChatSearchHit, ClientChatSearchHit>;
