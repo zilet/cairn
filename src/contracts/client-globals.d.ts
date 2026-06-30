@@ -340,9 +340,13 @@ declare global {
   declare function paintEnergyBody(exp: unknown): void;
   declare function applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown>;
   declare function renderPlanEndurance(): unknown;
+  declare function paintPlanEndurance(goalValue: unknown, compliance: unknown, plan: unknown, settings: Record<string, unknown> | null): void;
   declare function gotoChatWith(text: string): void;
   declare function enduranceComposerLock(): void;
+  declare function enduranceComposerRestore(): void;
+  declare function draftEnduranceRuns(instruction: unknown): void;
   declare function enduranceProposalOpOpts(): ClientAgentOpHandlers;
+  declare function renderEnduranceDraftResult(proposal: unknown): void;
   declare function runTargetText(run: Record<string, unknown>): string;
   declare function statusBadge(status: unknown): string;
   declare function applyResultMessage(result: unknown): { failed: boolean; message: string };

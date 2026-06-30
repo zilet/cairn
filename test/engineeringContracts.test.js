@@ -2,9 +2,10 @@
 // background job kind strings, Settings route metadata, route docs, and launch docs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLIENT_OUTPUTS } from "../scripts/build-client.mjs";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
 import { CLIENT_API_CONTRACT_PATHS, CLIENT_API_UNKNOWN_WAIVERS } from "../dist/contracts/client.js";
 import { listRoutableTasks, ROUTABLE_TASKS } from "../dist/repo/settings.js";
@@ -74,6 +75,36 @@ function publicApiCallPaths() {
         .map((apiPath) => ({ file, path: apiPath }));
     });
 }
+
+test("client build manifest owns generated browser outputs and cache wiring", () => {
+  const index = read("public/index.html");
+  const sw = read("public/sw.js");
+  const manifestOutputs = new Set(CLIENT_OUTPUTS.map((item) => item.output));
+  assert.equal(manifestOutputs.size, CLIENT_OUTPUTS.length, "CLIENT_OUTPUTS must not contain duplicate outputs");
+
+  const handwrittenClassicScripts = new Set(["public/js/03-today.js", "public/js/09-plan-chat.js", "public/js/10-boot.js"]);
+  const publicScripts = readdirSync(path.join(root, "public/js"))
+    .filter((file) => file.endsWith(".js"))
+    .map((file) => `public/js/${file}`);
+
+  for (const item of CLIENT_OUTPUTS) {
+    assert.ok(item.source.startsWith("src/client/"), `${item.source} should be a client TypeScript source`);
+    assert.ok(item.source.endsWith(".ts"), `${item.source} should be a TypeScript source`);
+    assert.ok(item.output.startsWith("public/js/"), `${item.output} should emit into public/js`);
+    assert.ok(item.output.endsWith(".js"), `${item.output} should be a served JavaScript output`);
+    assert.ok(existsSync(path.join(root, item.source)), `${item.source} listed in CLIENT_OUTPUTS does not exist`);
+    assert.ok(existsSync(path.join(root, item.output)), `${item.output} listed in CLIENT_OUTPUTS does not exist`);
+
+    const url = `/${item.output.replace(/^public\//, "")}`;
+    assert.ok(index.includes(`<script src="${url}"></script>`), `${url} must be loaded by public/index.html`);
+    assert.ok(sw.includes(`"${url}"`), `${url} must be precached by public/sw.js`);
+  }
+
+  const unownedPublicScripts = publicScripts.filter(
+    (file) => !manifestOutputs.has(file) && !handwrittenClassicScripts.has(file)
+  );
+  assert.deepEqual(unownedPublicScripts, [], "public/js scripts must be generated or explicitly classified");
+});
 
 test("background job kind contract covers API enqueue sites and worker handlers", () => {
   const api = [
@@ -2323,11 +2354,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceSource, /function enduranceRampHtml\(goal: EnduranceGoalRow/);
   assert.match(planEnduranceSource, /function endurancePresets\(goal: EnduranceGoalRow/);
   assert.match(planEnduranceSource, /function endDraftCardHtml\(proposal: EnduranceProposal\): string/);
+  assert.match(planEnduranceSource, /async function renderPlanEndurance\(\): Promise<void>/);
+  assert.match(planEnduranceSource, /function paintPlanEndurance\(goalValue: unknown, compliance: unknown, plan: unknown, settings: Record<string, unknown> \| null\): void/);
+  assert.match(planEnduranceSource, /function enduranceProposalOpOpts\(\): ClientAgentOpHandlers/);
   assert.match(planEnduranceSource, /CairnPlanEndurance/);
   assert.match(planEditorSource, /type PlanEditorItem = \{/);
-  assert.match(planEditorSource, /function dayModelFromPlan\(day: PlanEditorDay\)/);
+  assert.match(planEditorSource, /function dayModelFromPlan\(day: PlanEditorDay \| PlanEditorApiDay\)/);
   assert.match(planEditorSource, /function progDayHtml\(day: PlanEditorDay, dayIndex: number\): string/);
   assert.match(planEditorSource, /function pitemHtml\(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number\): string/);
+  assert.match(planEditorSource, /async function renderPlanEditor\(\): Promise<void>/);
+  assert.match(planEditorSource, /mountSaveBar\(\{/);
+  assert.match(planEditorSource, /api\("\/plan",\s*\{ method: "PUT"/);
   assert.match(planEditorSource, /CairnPlanEditor/);
   assert.match(dayFuelSource, /const MEAL_LABEL: Record<string, string>/);
   assert.match(dayFuelSource, /function dayFuelHtml\(day: DayFuelData \| null \| undefined\): string/);
@@ -2640,10 +2677,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramBlockClient, /CairnProgressProgramBlock/);
   assert.doesNotMatch(progress, /function\s+blockFocusWord|function\s+activeBlockHtml|function\s+startBlockHtml|function\s+loadProgramBlock|function\s+wireProgramBlock/);
   assert.match(planEnduranceClient, /Object\.assign\(globalThis, \{ CairnPlanEndurance: CAIRN_PLAN_ENDURANCE \}\)/);
+  assert.match(planEnduranceClient, /Object\.assign\(globalThis,\s*\{[\s\S]*renderPlanEndurance[\s\S]*enduranceProposalOpOpts[\s\S]*renderEnduranceDraftResult[\s\S]*\}\)/);
   assert.match(planEnduranceClient, /window\.CairnPlanEndurance = CAIRN_PLAN_ENDURANCE/);
   assert.doesNotMatch(planEnduranceClient, /^const\s+ENDURANCE_PHASES|^function\s+enduranceRampHtml|^function\s+endDraftCardHtml/m);
   assert.match(planEditorClient, /Object\.assign\(globalThis, \{ CairnPlanEditor: CAIRN_PLAN_EDITOR \}\)/);
+  assert.match(planEditorClient, /Object\.assign\(globalThis, \{ renderPlanEditor \}\)/);
   assert.match(planEditorClient, /window\.CairnPlanEditor = CAIRN_PLAN_EDITOR/);
+  assert.match(planEditorClient, /window\.renderPlanEditor = renderPlanEditor/);
   assert.match(planEditorClient, /dayModelFromPlan/);
   assert.match(planEditorClient, /progDayHtml/);
   assert.doesNotMatch(planEditorClient, /^function\s+progDayHtml|^function\s+pitemHtml|^function\s+pdayHtml/m);
@@ -2874,16 +2914,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(chat, /\bconst\s+CHAT_DRAFT_KEY\b|\blet\s+chatStream\b|\bconst\s+chatPendingBubbles\b/);
   assert.doesNotMatch(chat, /\bfunction\s+chatTeardownMonitor\b|\bfunction\s+chatReconnect\b|\bfunction\s+measureChatTop\b/);
   assert.doesNotMatch(chat, /\bfunction\s+histWhen\b|\bfunction\s+histSessionRow\b|\bfunction\s+histHitRow\b|\bfunction\s+openChatHistory\b/);
-  assert.match(chat, /CairnUi\.jobCaptionHtml\(\)/);
-  assert.match(chat, /CairnPlanEndurance\.rampHtml/);
-  assert.match(chat, /CairnPlanEndurance\.presets/);
-  assert.match(chat, /CairnPlanEndurance\.draftCardHtml/);
+  assert.match(planEnduranceClient, /CairnUi\.jobCaptionHtml\(\)/);
+  assert.match(chat, /Plan editor and Plan Endurance screen orchestration live in \/js\/plan-editor-client\.js and \/js\/plan-endurance-client\.js/);
+  assert.doesNotMatch(chat, /CairnPlanEndurance\.rampHtml|CairnPlanEndurance\.presets|CairnPlanEndurance\.draftCardHtml/);
+  assert.doesNotMatch(chat, /function\s+renderPlanEndurance|function\s+paintPlanEndurance|function\s+draftEnduranceRuns|function\s+enduranceProposalOpOpts|function\s+renderEnduranceDraftResult/);
   assert.doesNotMatch(chat, /const\s+ENDURANCE_PHASES|function\s+enduranceRampHtml|function\s+endurancePresets|function\s+endDraftCardHtml/);
-  assert.match(chat, /CairnPlanEditor\.dayModelFromPlan/);
-  assert.match(chat, /CairnPlanEditor\.calendarFooterHtml/);
-  assert.match(chat, /CairnPlanEditor\.progDayHtml/);
-  assert.match(chat, /CairnPlanEditor\.pdayHtml/);
-  assert.doesNotMatch(chat, /function\s+progDayHtml|function\s+pitemHtml|function\s+pdayHtml|const\s+blankStrength|const\s+blankCardio/);
+  assert.doesNotMatch(chat, /CairnPlanEditor\.dayModelFromPlan|CairnPlanEditor\.calendarFooterHtml|CairnPlanEditor\.progDayHtml|CairnPlanEditor\.pdayHtml/);
+  assert.doesNotMatch(chat, /function\s+renderPlanEditor|function\s+progDayHtml|function\s+pitemHtml|function\s+pdayHtml|const\s+blankStrength|const\s+blankCardio/);
   assert.match(settingsScreen, /CairnSettingsClient\.updateCardHtml/);
   assert.match(appOnboarding, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /startAppShell\(\)/);

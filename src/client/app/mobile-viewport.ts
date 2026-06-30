@@ -43,6 +43,7 @@
     // in both Safari tabs and installed PWAs.
     let vvMax = vv.height;
     let keyboardIntentUntil = 0;
+    let chatFocusGraceUntil = 0;
     let settleTimer: ReturnType<typeof setTimeout> | 0 = 0;
     let geometryWasOpen = false;
     const keyboardThreshold = () => Math.max(140, window.innerHeight * 0.18);
@@ -52,19 +53,24 @@
       return Math.max(layoutShrink, visualShrink) > keyboardThreshold();
     };
     const keyboardIntentOpen = () => Date.now() < keyboardIntentUntil;
+    const isChatTextInput = (el: EventTarget | Element | null | undefined): el is HTMLElement =>
+      textInputEl(el) && Boolean(el.closest?.(".chatview"));
     const releaseStaleChatFocus = () => {
       const el = document.activeElement;
       if (!softKeyboard() || !textInputEl(el)) return;
       if (!document.body.classList.contains("chat-mode") || !el.closest?.(".chatview")) return;
+      if (Date.now() < chatFocusGraceUntil) return;
       el.blur();
     };
     const settle = (long = false) => {
       if (settleTimer) clearTimeout(settleTimer);
       settleTimer = setTimeout(sync, long ? 960 : 420);
     };
-    const requestKeyboard = () => {
+    const requestKeyboard = (target: EventTarget | Element | null | undefined = document.activeElement) => {
       if (!softKeyboard()) return;
-      keyboardIntentUntil = Date.now() + 900;
+      const isChatTarget = isChatTextInput(target);
+      keyboardIntentUntil = Date.now() + (isChatTarget ? 1500 : 900);
+      if (isChatTarget) chatFocusGraceUntil = Date.now() + 1700;
       sync();
       settle(true);
     };
@@ -96,8 +102,8 @@
     vv.addEventListener("scroll", sync); // keyboard open/close shifts offsetTop
     window.addEventListener("orientationchange", () => { vvMax = vv.height; sync(); });
     // Focus/tap is an early intent signal, not proof that the keyboard is open.
-    document.addEventListener("pointerdown", (e) => { if (textInputEl(e.target)) requestKeyboard(); }, true);
-    document.addEventListener("focusin", () => { if (focusedTextInput()) requestKeyboard(); else sync(); }, true);
+    document.addEventListener("pointerdown", (e) => { if (textInputEl(e.target)) requestKeyboard(e.target); }, true);
+    document.addEventListener("focusin", (e) => { if (focusedTextInput()) requestKeyboard(e.target); else sync(); }, true);
     document.addEventListener("focusout", () => {
       sync();
       requestAnimationFrame(() => requestAnimationFrame(sync));
@@ -109,7 +115,12 @@
     window.addEventListener("pageshow", resync);
     window.addEventListener("focus", resync);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resync(); });
-    document.addEventListener("cairn:keyboard-settle", () => {
+    document.addEventListener("cairn:keyboard-settle", (event) => {
+      const detail = event instanceof CustomEvent && event.detail && typeof event.detail === "object"
+        ? event.detail as { chatFocusGraceMs?: unknown }
+        : null;
+      const chatFocusGraceMs = Number(detail?.chatFocusGraceMs) || 0;
+      if (chatFocusGraceMs > 0) chatFocusGraceUntil = Math.max(chatFocusGraceUntil, Date.now() + Math.min(chatFocusGraceMs, 2400));
       keyboardIntentUntil = 0;
       resync();
       settle(true);

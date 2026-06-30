@@ -1,388 +1,5 @@
 // ==== 09-plan-chat.js ====
-// ---------- Plan editor (manual) ----------
-// SWR over /plan (key `plan`, shared with Today — one revalidate feeds both): a
-// warm re-entry paints the training editor instantly, then revalidates. A changed
-// payload re-renders, but only when the user isn't mid-edit (a day flipped into the
-// editor) so an in-flight edit is never clobbered by a background refresh.
-async function renderPlanEditor() {
-  headerTitle.textContent = "Plan";
-  state.planSeg = "edit";
-  const token = ++pollToken;
-  const peek = peekCached("plan");
-  if (!peek) view.innerHTML = segSkeleton("edit", planSeg(), 3); // cold: skeleton-first
-  // Background revalidate populates the shared `plan` key for both surfaces; on a
-  // changed payload re-render, but only when idle (no open day editor / unsaved
-  // structural edit) so an in-flight edit is never clobbered by the refresh.
-  const revalidate = cachedApi("/plan", {
-    key: "plan",
-    onUpgrade: (_data, { changed }) => {
-      if (peek && !peek.fresh) markRefreshing(false);
-      if (!changed || !peek) return; // cold load already rendered; no-op revalidate stays quiet
-      if (state.tab !== "plan" || token !== pollToken || !view.querySelector("#planedit")) return; // moved on
-      if (view.querySelector(".pday") || document.querySelector(".savebar.show")) return; // mid-edit — don't clobber
-      renderPlanEditor();
-    },
-  });
-  // Cold: wait on the revalidate's data (one fetch). Warm: paint from the peek now,
-  // and let the background revalidate above upgrade in place.
-  const plan = peek ? peek.data : await revalidate.catch(() => []);
-  if (token !== pollToken || state.tab !== "plan") return;
-  if (peek && !peek.fresh) markRefreshing(true);
-  // Pull-not-push calendar: subscribe to the plan as a weekly iCal feed. webcal://
-  // hands most OSes straight to "add to calendar"; the (.ics) link is the fallback.
-  const icsUrl = withToken("/api/plan.ics");
-  const calFooter = CairnPlanEditor.calendarFooterHtml(plan, location.host, icsUrl);
-  view.innerHTML = segBar("edit", planSeg()) + `<div id="planedit"></div>
-    <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
-    <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}`;
-  wireSeg(PLAN_HANDLERS);
-
-  const model = plan.map((d) => CairnPlanEditor.dayModelFromPlan(d));
-  const editing = new Set(); // day indices currently flipped into the editor
-
-  function sync() {
-    view.querySelectorAll(".pday").forEach((dayEl) => {
-      const d = model[+dayEl.dataset.d]; if (!d) return;
-      d.name = dayEl.querySelector(".pday-name").value;
-      d.focus = dayEl.querySelector(".pday-focus").value;
-    });
-    view.querySelectorAll(".pitem").forEach((itEl) => {
-      const d = model[+itEl.dataset.d]; const it = d && d.items[+itEl.dataset.i]; if (!it) return;
-      const num = (sel) => { const el = itEl.querySelector(sel); if (!el) return null; const v = el.value; return v === "" ? null : Number(v); };
-      const txt = (sel) => { const el = itEl.querySelector(sel); return el ? el.value : ""; };
-      if (itEl.dataset.kind === "cardio") {
-        // The cardio label rides in `note`; the exercise input doubles as the label.
-        it.note = txt(".pi-ex");
-        it.target_distance_km = num(".pi-km");
-        it.target_duration_min = num(".pi-min");
-        it.target_zone = (txt(".pi-zone") || "").trim() || null;
-        it.interval_note = (txt(".pi-ivl") || "").trim();
-        return;
-      }
-      it.exercise = txt(".pi-ex");
-      it.sets = num(".pi-sets") ?? 3; it.rep_low = num(".pi-lo"); it.rep_high = num(".pi-hi"); it.target_weight = num(".pi-tw");
-      it.warmup_sets = num(".pi-wu"); it.note = txt(".pi-note");
-    });
-  }
-
-  function draw() {
-    $("#planedit").innerHTML = model.map((d, di) => editing.has(di) ? CairnPlanEditor.pdayHtml(d, di) : CairnPlanEditor.progDayHtml(d, di)).join("");
-    wireGuides($("#planedit"));
-
-    view.querySelectorAll("[data-editday]").forEach((b) => b.addEventListener("click", () => {
-      sync(); editing.add(+b.dataset.editday); draw();
-    }));
-    view.querySelectorAll("[data-doneday]").forEach((b) => b.addEventListener("click", () => {
-      sync(); editing.delete(+b.dataset.doneday); draw();
-    }));
-    view.querySelectorAll("[data-delday]").forEach((b) => b.addEventListener("click", () => {
-      sync();
-      const del = +b.dataset.delday;
-      model.splice(del, 1);
-      const keep = [...editing].filter((i) => i !== del).map((i) => (i > del ? i - 1 : i));
-      editing.clear(); keep.forEach((i) => editing.add(i));
-      planBar.markDirty(); draw();
-    }));
-    view.querySelectorAll("[data-delitem]").forEach((b) => b.addEventListener("click", () => {
-      sync(); const [di, ii] = b.dataset.delitem.split(":").map(Number); model[di].items.splice(ii, 1); planBar.markDirty(); draw();
-    }));
-    view.querySelectorAll("[data-additem]").forEach((b) => b.addEventListener("click", () => {
-      sync(); model[+b.dataset.additem].items.push(CairnPlanEditor.blankStrength()); planBar.markDirty(); draw();
-    }));
-    view.querySelectorAll("[data-addcardio]").forEach((b) => b.addEventListener("click", () => {
-      sync(); model[+b.dataset.addcardio].items.push(CairnPlanEditor.blankCardio()); planBar.markDirty(); draw();
-    }));
-    // Flip one item between a lift and a cardio prescription — preserves the note/label,
-    // resets the kind-specific numbers (they don't translate between modalities).
-    view.querySelectorAll("[data-pikind]").forEach((b) => b.addEventListener("click", () => {
-      sync(); const [di, ii, kind] = b.dataset.pikind.split(":");
-      const it = model[+di] && model[+di].items[+ii]; if (!it) return;
-      if (it.kind === kind) return; // already this kind
-      const label = it.kind === "cardio" ? (it.note || "") : (it.exercise || "");
-      const next = kind === "cardio" ? CairnPlanEditor.blankCardio() : CairnPlanEditor.blankStrength();
-      if (kind === "cardio") next.note = label; else next.exercise = label;
-      model[+di].items[+ii] = next; planBar.markDirty(); draw();
-    }));
-    view.querySelectorAll("[data-upitem]").forEach((b) => b.addEventListener("click", () => {
-      sync(); const [di, ii] = b.dataset.upitem.split(":").map(Number);
-      const items = model[di].items;
-      if (ii > 0) { [items[ii - 1], items[ii]] = [items[ii], items[ii - 1]]; planBar.markDirty(); draw(); }
-    }));
-    view.querySelectorAll("[data-downitem]").forEach((b) => b.addEventListener("click", () => {
-      sync(); const [di, ii] = b.dataset.downitem.split(":").map(Number);
-      const items = model[di].items;
-      if (ii < items.length - 1) { [items[ii + 1], items[ii]] = [items[ii], items[ii + 1]]; planBar.markDirty(); draw(); }
-    }));
-  }
-
-  $("#addDay").addEventListener("click", () => {
-    sync();
-    const next = model.reduce((m, d) => Math.max(m, d.day_number), 0) + 1;
-    model.push({ day_number: next, name: `Day ${next}`, focus: "", items: [] });
-    editing.add(model.length - 1); // a fresh day opens straight into the editor
-    planBar.markDirty(); draw();
-  });
-
-  const persistPlan = async () => {
-    sync();
-    const days = model.map((d, i) => ({
-      day_number: i + 1, name: d.name || `Day ${i + 1}`, focus: d.focus || null,
-      items: d.items
-        // a cardio item is kept when it has any prescription or a label; a strength
-        // item still needs a non-empty exercise name (an empty row is dropped).
-        .filter((it) => isCardioItem(it)
-          ? ((it.note && it.note.trim()) || it.target_distance_km != null || it.target_duration_min != null || (it.target_zone && String(it.target_zone).trim()))
-          : (it.exercise && it.exercise.trim()))
-        .map((it) => {
-          if (isCardioItem(it)) {
-            const ivl = (it.interval_note || "").trim();
-            return {
-              kind: "cardio",
-              note: it.note && it.note.trim() ? it.note.trim() : null,
-              target_distance_km: it.target_distance_km ?? null,
-              target_duration_min: it.target_duration_min ?? null,
-              target_zone: it.target_zone && String(it.target_zone).trim() ? String(it.target_zone).trim() : null,
-              interval: ivl ? { note: ivl } : null,
-            };
-          }
-          return {
-            kind: "strength",
-            exercise: it.exercise.trim(), sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high,
-            target_weight: it.target_weight, note: it.note && it.note.trim() ? it.note.trim() : null,
-            warmup_sets: it.warmup_sets ?? null,
-            target_seconds: it.target_seconds ?? null, // preserve timed targets across edits
-          };
-        }),
-    }));
-    if (!days.length) { $("#planstatus").textContent = "Add at least one day before saving."; return false; }
-    const r = await api("/plan", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days }) });
-    if (r.error) { $("#planstatus").textContent = "Couldn't save your plan — try again."; return false; }
-    state.plan = [];
-    swrInvalidate("plan"); // the shared plan cache (Today + this editor) is now stale
-    renderPlanEditor(); // fresh render — the save bar finishes its success flash on top
-    return true;
-  };
-  // floating save bar: edits inside any day editor (or structural changes via
-  // markDirty above) surface Save/Discard right above the tab bar
-  const planBar = mountSaveBar({
-    sentinel: $("#planedit"),
-    fields: $("#planedit"),
-    onSave: persistPlan,
-    onDiscard: () => renderPlanEditor(),
-  });
-
-  draw();
-}
-
-// ---------- Plan → Endurance (the running plan home) ----------
-// The forward-looking counterpart to Progress → Endurance (which reads how running is
-// GOING): here you see the periodized RAMP toward race day, THIS WEEK's prescribed
-// runs, and SHAPE the running — ask the coach to plan/adjust runs, which lands as a
-// draft you apply surgically (each run attaches to its day, lifts untouched). Bound to
-// the constitution: pull-never-push, suggestion-not-a-gate, no 0–100 scores. Reuses
-// enduranceGoalCard/runComplianceLine (05), the cardio helpers (02), cardioSyncLine/
-// wireCardioSync (03), runTargetText/applyProposalById (06) — all global at runtime.
-
-// Pure ramp, preset, and drafted-run card renderers live in plan-endurance-client.js.
-
-async function renderPlanEndurance() {
-  headerTitle.textContent = "Plan";
-  state.planSeg = "endurance";
-  view.innerHTML = segBar("endurance", planSeg()) + `<div id="endPlanBody">${loadingState("Reading your running…")}</div>`;
-  wireSeg(PLAN_HANDLERS);
-  const token = ++pollToken;
-  let goal = null, compliance = null, plan = [], settings = null;
-  try {
-    [goal, compliance, plan, settings] = await Promise.all([
-      api("/endurance-goal").catch(() => null),
-      api("/run-compliance").catch(() => null),
-      api("/plan").catch(() => []),
-      api("/settings").then((r) => (r && r.settings) || null).catch(() => null),
-    ]);
-  } catch { /* paint with whatever resolved */ }
-  if (token !== pollToken || !view.querySelector("#endPlanBody")) return;
-  paintPlanEndurance(goal, compliance, plan, settings);
-}
-
-function paintPlanEndurance(goal, compliance, plan, settings) {
-  const body = view.querySelector("#endPlanBody");
-  if (!body) return;
-  _endDrafting = false; // fresh composer — never inherit a stuck in-flight lock (any
-  // truly in-flight proposal job re-attaches via reconnectProposal and re-locks the UI)
-
-  // No goal yet → invite setting one (the ramp + race-coach framing need an objective).
-  const goalHtml = (goal && goal.mode)
-    ? enduranceGoalCard(goal)
-    : `<div class="end-goal reveal" style="${stagger(0)}">
-         <div class="end-goal-head"><span class="lbl">Running goal</span></div>
-         <div class="end-goal-name">No goal set yet</div>
-         <div class="end-goal-sub">Set a race or a standing readiness target in <b>Me → Profile</b> and the coach will periodize your running toward it.</div>
-       </div>`;
-
-  const rampHtml = CairnPlanEndurance.rampHtml(goal);
-  const standingNote = (goal && goal.mode === "standing")
-    ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(goal.weekly_km)} km/wk</b>.` : ""}</div>`
-    : "";
-
-  // This week's prescribed runs, from the plan's cardio items.
-  const runs = [];
-  (plan || []).forEach((d) => (d.items || []).forEach((it) => { if (isCardioItem(it)) runs.push({ it, day_number: d.day_number }); }));
-  // Weekly volume at a glance — a runner thinks in total mileage first. Plain words,
-  // never a score; shown against the goal's weekly_km anchor when one is set.
-  const totalKm = runs.reduce((s, { it }) => s + (Number(it.target_distance_km) || 0), 0);
-  const totalMin = runs.reduce((s, { it }) => s + (Number(it.target_duration_min) || 0), 0);
-  let volText = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
-  if (totalKm > 0) volText += ` · ${fmtKm(totalKm)} km planned`;
-  else if (totalMin > 0) volText += ` · ${Math.round(totalMin)} min planned`;
-  if (totalKm > 0 && goal && goal.weekly_km) volText += ` · target ~${goal.weekly_km} km/wk`;
-  const volLine = runs.length ? `<div class="end-runs-total numeral">${escHtml(volText)}</div>` : "";
-  const runRows = runs.map(({ it, day_number }, i) => `
-      <div class="end-run-row reveal" style="${stagger(i + 2)}">
-        <span class="run-pin" aria-hidden="true">▸</span>
-        <div class="end-run-main">
-          <span class="end-run-name">${escHtml(cardioLabel(it))}</span>
-          <span class="end-run-day lbl">Day ${escHtml(day_number)}</span>
-        </div>
-        <span class="end-run-pres numeral">${escHtml(cardioPrescription(it) || "—")}</span>
-      </div>`).join("");
-  const complianceHtml = (typeof runComplianceLine === "function") ? runComplianceLine(compliance) : "";
-  const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(settings, {}) : "";
-  const runsSection = runs.length
-    ? `<div class="end-runs reveal" style="${stagger(2)}">
-         <div class="end-runs-h"><span class="lbl">This week's runs</span>
-           <button class="end-link" id="endEditRuns">Edit in Training →</button></div>
-         ${volLine}
-         ${runRows}
-       </div>${complianceHtml}${syncHtml}`
-    : `<div class="end-runs-empty reveal" style="${stagger(2)}">
-         <div class="lbl">This week's runs</div>
-         <p>No runs in your plan yet. Ask the coach below to build your week — each run lands on its day and keeps your lifts intact.</p>
-       </div>${complianceHtml}${syncHtml}`;
-
-  // Shape-your-running composer — the adjust/comment surface.
-  const presets = CairnPlanEndurance.presets(goal);
-  const chips = presets.map((p, i) => `<button class="end-chip" data-egi="${i}">${escHtml(p.t)}</button>`).join("");
-  const composer = `<div class="end-shape reveal" style="${stagger(3)}">
-      <div class="end-shape-h"><span class="lbl">Shape your running</span></div>
-      <p class="end-shape-sub">Tell the coach what you want — it drafts run prescriptions you review and apply. Your lifting plan is never touched.</p>
-      <div class="end-chips">${chips}</div>
-      <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or add a tempo on Thursday"></textarea>
-      <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
-      <div id="endDraftStatus" class="end-shape-status"></div>
-      <div id="endDraft"></div>
-    </div>`;
-
-  // A one-line lead so this reads as the PLANNING home, distinct from Progress →
-  // Endurance (which is the backward-looking analytics on the same goal banner).
-  const leadHtml = (goal && goal.mode)
-    ? `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
-    : "";
-  body.innerHTML = goalHtml + leadHtml + rampHtml + standingNote + runsSection + composer;
-
-  const editBtn = body.querySelector("#endEditRuns");
-  if (editBtn) editBtn.addEventListener("click", () => renderPlanEditor());
-  if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderPlanEndurance());
-  body.querySelectorAll(".end-chip").forEach((b) => b.addEventListener("click", () => {
-    const p = presets[+b.dataset.egi]; if (p) draftEnduranceRuns(p.i);
-  }));
-  const draftBtn = body.querySelector("#endDraftBtn");
-  if (draftBtn) draftBtn.addEventListener("click", () => {
-    const txt = (body.querySelector("#endInstr")?.value || "").trim();
-    draftEnduranceRuns(txt || presets[0].i);
-  });
-}
-
-// Drafted run proposal card rendering lives in plan-endurance-client.js.
-
-// Ask the coach to draft (or adjust) this week's runs. Runs as a durable background
-// `proposal` job (the SAME elite loader the Coach tab + session-suggest use): the
-// evolving caption + filament stream into #endDraftStatus and survive a reload —
-// replacing the old blocking ~80s await that sat on a static "Asking the coach…".
-// The created proposal's run prescriptions render inline to apply here (surgical
-// setWeeklyRuns via the shared applyProposalById), degrading calmly when the coach
-// returns no runs or no agent is configured.
-let _endDrafting = false; // chip + button both call this; never race two drafts in one render
-
-// Lock the composer for the length of a draft: hold the in-flight flag + disable the
-// chips so a chip tap can't race a second job. Used by the live trigger AND the reload
-// reconnector (reconnectProposal) — so a job still streaming after a reload re-locks
-// the whole composer, not just the button. enduranceComposerRestore() is the inverse.
-function enduranceComposerLock() {
-  _endDrafting = true;
-  view.querySelectorAll(".end-chip").forEach((c) => { c.disabled = true; });
-}
-function enduranceComposerRestore() {
-  view.querySelectorAll(".end-chip").forEach((c) => { c.disabled = false; });
-  const btn = view.querySelector("#endDraftBtn");
-  if (btn && btn._busyRestore) btn._busyRestore();
-  _endDrafting = false;
-}
-
-function draftEnduranceRuns(instruction) {
-  if (_endDrafting) return;
-  enduranceComposerLock();
-  const btn = view.querySelector("#endDraftBtn");
-  if (btn) btnBusy(btn, "Asking…");
-  const status = view.querySelector("#endDraftStatus");
-  if (status) status.innerHTML = CairnUi.jobCaptionHtml();
-  const draftWrap = view.querySelector("#endDraft");
-  if (draftWrap) draftWrap.innerHTML = "";
-  runOp("proposal", { agent: "auto", instruction }, enduranceProposalOpOpts());
-}
-
-// Shared runOp options for an Endurance "shape your running" draft — used by the
-// trigger and the reload reconnector (reconnectProposal) so render/fail are identical.
-function enduranceProposalOpOpts() {
-  return {
-    path: "/agent/run",
-    anchor: "#endDraftStatus",
-    caption: "endurance_runs",
-    guard: () => !view.querySelector("#endDraftStatus")?.isConnected,
-    // The coach must return a parsed proposal; a parsed proposal with NO runs is NOT a
-    // failure — it's the calm "proposed changes but no runs" branch, handled in render.
-    isFail: (r) => !r || r.ok === false || !r.proposal || !r.proposal.parsed,
-    render: (r) => renderEnduranceDraftResult(r.proposal),
-    onFail: (err) => {
-      enduranceComposerRestore();
-      const status = view.querySelector("#endDraftStatus");
-      if (!status) return;
-      status.textContent = (err && err.agent_status === "unconfigured")
-        ? "Drafting runs needs a coaching agent — connect one in Settings. You can still edit runs in Training."
-        : "The coach couldn't finish — try again, or pick another agent in Settings.";
-    },
-  };
-}
-
-// Render a drafted proposal's run prescriptions inline (or the calm no-runs line),
-// then wire APPLY (surgical setWeeklyRuns) + DISCARD. Shared by the live draft and the
-// reload reconnector.
-function renderEnduranceDraftResult(p) {
-  enduranceComposerRestore();
-  const status = view.querySelector("#endDraftStatus");
-  const draftWrap = view.querySelector("#endDraft");
-  if (!status || !draftWrap) return;
-  const cardio = p && p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
-  if (!cardio.length) {
-    // The coach answered, but with strength / restructure changes rather than runs.
-    status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
-    const toCoach = status.querySelector("#endToCoach");
-    if (toCoach) toCoach.addEventListener("click", () => renderCoach());
-    return;
-  }
-  status.textContent = "";
-  draftWrap.innerHTML = CairnPlanEndurance.draftCardHtml(p);
-  const ab = draftWrap.querySelector("[data-egapply]");
-  if (ab) ab.addEventListener("click", async () => {
-    await applyProposalById(ab.dataset.egapply, ab);
-    renderPlanEndurance(); // re-read so the applied runs show under "This week's runs"
-  });
-  const db = draftWrap.querySelector("[data-egdiscard]");
-  if (db) db.addEventListener("click", async () => {
-    try { await api(`/proposals/${db.dataset.egdiscard}/discard`, { method: "POST" }); } catch {}
-    draftWrap.innerHTML = "";
-    if (status) status.textContent = "Discarded.";
-  });
-}
+// Plan editor and Plan Endurance screen orchestration live in /js/plan-editor-client.js and /js/plan-endurance-client.js.
 
 // ---------- Chat ----------
 // Document-level paste listener for the chat view; swapped on every renderChat.
@@ -659,8 +276,15 @@ async function renderChat() {
   const attachBtn = $("#chatAttach"), preview = $("#chatPreview");
   let attached = null; // { dataUrl, base64, mime }
 
+  const isSoftKeyboardChat = () => !matchMedia("(hover:hover)").matches;
+  const resetChatFocusAfterNativePicker = () => {
+    if (!isSoftKeyboardChat()) return;
+    if (document.activeElement === input) input.blur();
+    if (document.activeElement === fileInput) fileInput.blur();
+    document.body.classList.remove("kb-open");
+  };
   const settleChatAfterNativePicker = () => {
-    document.dispatchEvent(new CustomEvent("cairn:keyboard-settle"));
+    document.dispatchEvent(new CustomEvent("cairn:keyboard-settle", { detail: { chatFocusGraceMs: 1200 } }));
     measureChatTop();
     requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
     for (const d of [120, 280, 520, 900]) setTimeout(() => { if (state.tab === "chat") measureChatTop(); }, d);
@@ -691,13 +315,13 @@ async function renderChat() {
   // sheet (Take Photo / Photo Library / Choose File); desktop opens the file
   // dialog. Attaching is occasional, so this keeps the bar to input + send.
   attachBtn.addEventListener("click", () => {
-    if (document.activeElement === input) input.blur();
-    document.body.classList.remove("kb-open");
+    resetChatFocusAfterNativePicker();
     settleChatAfterNativePicker();
     fileInput.click();
   });
   $("#chatPreviewX").addEventListener("click", clearAttach);
   fileInput.addEventListener("change", () => {
+    resetChatFocusAfterNativePicker();
     const f = fileInput.files && fileInput.files[0];
     if (f) attachFile(f);
     else settleChatAfterNativePicker();
@@ -782,6 +406,16 @@ async function renderChat() {
     requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
     for (const d of [80, 160, 260, 380, 520]) setTimeout(() => { if (state.tab === "chat") measureChatTop(); }, d);
   };
+  const recoverChatInputFocus = () => {
+    if (!isSoftKeyboardChat() || document.body.classList.contains("kb-open")) return;
+    if (document.activeElement !== input) return;
+    input.blur();
+    try { input.focus({ preventScroll: true }); }
+    catch { input.focus(); }
+    settleChatViewport();
+  };
+  input.addEventListener("pointerdown", recoverChatInputFocus);
+  input.addEventListener("pointerup", () => { if (document.activeElement === input) settleChatViewport(); }, { passive: true });
   for (const ev of ["focus", "blur"]) input.addEventListener(ev, settleChatViewport);
   // Persist the unsent draft on every keystroke so it survives a tab switch /
   // reload — restored below unless a deep-link prefill takes precedence. Re-grow
