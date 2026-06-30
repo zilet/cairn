@@ -486,10 +486,6 @@ function startMemDelete(btn) {
   });
 }
 
-// ---------- Me: Health (uploaded docs + agentic analysis) ----------
-const MAX_DOC_BYTES = 15 * 1024 * 1024; // ~15MB client cap
-const MAX_DOC_TEXT = 400000;
-
 // ---------- Me: Health — the whole picture (review · markers · records) ----------
 // _hPic caches what the picture panel needs across in-place repaints; the in-flight
 // review run lives at module level so it survives sub-view re-renders (the POST can
@@ -498,22 +494,6 @@ let _hPic = null;        // { review, docCount, newestDocAt }
 let _hReviewRun = null;  // in-flight POST /health/review promise
 let _hReviewErr = null;  // gentle inline message after a failed run
 let _hReadSpy = null;    // scroll-spy IntersectionObserver for the Read tab's sticky nav
-
-const H_FILE_PROMPT = "Drop a lab PDF, MyChart export (.zip), HTML, XML, a photo, or text…";
-
-// Browsers leave file.type empty for many .zip/.xml picks — infer from the name
-// so the server's MIME allowlist accepts it. Unknown → octet-stream (rejected).
-function guessUploadMime(f) {
-  const t = (f.type || "").toLowerCase();
-  if (t) return t;
-  const name = (f.name || "").toLowerCase();
-  if (name.endsWith(".zip")) return "application/zip";
-  if (name.endsWith(".html") || name.endsWith(".htm")) return "text/html";
-  if (name.endsWith(".xml")) return "application/xml";
-  if (name.endsWith(".pdf")) return "application/pdf";
-  if (name.endsWith(".txt")) return "text/plain";
-  return "application/octet-stream";
-}
 
 // review.parsed may arrive as a JSON string or an object
 function parsedReview(r) {
@@ -532,15 +512,6 @@ function healthDotClass(flag) {
   return f ? "hdot-watch" : "hdot-mute";
 }
 
-// Static studio plate for the no-docs hero (trusted SVG, no caller text — same
-// rules as art.js: cream circle, ink line, one terracotta accent).
-const HEALTH_HERO_ART = `<svg viewBox="0 0 96 96" aria-hidden="true">
-  <circle cx="48" cy="48" r="44" fill="#efe8db"/>
-  <ellipse cx="48" cy="78" rx="24" ry="5" fill="rgba(72,58,35,.10)"/>
-  <polyline points="18,54 32,54 38,40 47,66 54,44 59,54 70,54" fill="none" stroke="#211d17" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="74" cy="54" r="4" fill="#b4552d"/>
-</svg>`;
-
 function reviewBusyHtml() {
   return `<div class="hpic hpic-busy">
     <div class="hpic-top"><span class="lbl">Your picture</span><span class="hpic-when">reviewing…</span></div>
@@ -553,7 +524,7 @@ function reviewBusyHtml() {
 
 function healthHeroHtml(err) {
   return `<div class="hpic hpic-hero reveal" style="${stagger(0)}">
-    <div class="artile artile-lg hpic-hero-art">${HEALTH_HERO_ART}</div>
+    <div class="artile artile-lg hpic-hero-art">${CairnHealthClient.HEALTH_HERO_ART}</div>
     <div class="hpic-hero-title">Build your whole picture</div>
     <div class="hpic-hero-sub">Share your bloodwork or a DEXA scan and Cairn reads it — markers, trends, and a coach's-eye view of what to do next.</div>
     ${err}
@@ -1984,39 +1955,4 @@ function loadPriorityMarkers(token) {
 }
 
 // ---- Cross-domain directives, grouped by domain (the review side) ----
-const DIRECTIVE_DOMAINS = [
-  ["nutrition", "Nutrition", "❧"],
-  ["training", "Training", "◇"],
-  ["watch", "Watch", "◉"],
-];
-
-function directiveHtml(d, i = 0, evMap = null) {
-  const soft = d.uncertain && !d.citation;
-  const marker = d.marker ? `<span class="hb-dmarker">${escHtml(d.marker)}</span>` : "";
-  // uncertain (no citation) reads tentative — a lead, not gospel
-  const lead = soft ? `<span class="hb-dsoft">Worth looking into · </span>` : "";
-  const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
-  // "See the evidence" — turn an asserted claim into a verifiable one. Lazy-fetches
-  // GET /api/evidence?marker= on first open. F1: the affordance now shows when the
-  // marker has a citation OR has cached evidence rows on file (so researched
-  // sources are discoverable even on a directive that carries no citation string),
-  // and the count is surfaced — "see the evidence (3)". Keyed by the directive's marker.
-  const evCount = d.marker && evMap ? (evMap.get(String(d.marker).toLowerCase()) || 0) : 0;
-  const ev = d.marker && (d.citation || evCount > 0)
-    ? `<button class="hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
-       <div class="hb-evbox" hidden></div>`
-    : "";
-  return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${d.id}">
-    <div class="hb-dmain">
-      ${marker}
-      <p class="hb-dtext">${lead}${escHtml(d.directive || "")}</p>
-      ${d.rationale ? `<p class="hb-drat">${escHtml(d.rationale)}</p>` : ""}
-      ${cite}
-      ${ev}
-    </div>
-    <div class="hb-dctl">
-      <button class="hb-dbtn hb-ddone" data-ddone="${d.id}" title="Mark handled; the coach will stop carrying this unless new results change">Done</button>
-      <button class="hb-dbtn hb-ddismiss" data-ddismiss="${d.id}" title="Dismiss; the coach will avoid repeating this unless the marker materially changes">Dismiss</button>
-    </div>
-  </div>`;
-}
+// Pure directive grouping and card rendering live in health-client.js.

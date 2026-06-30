@@ -82,12 +82,12 @@ function paintDirectives(wrap, active, evSummary) {
   }
   // running index across groups → directives settle in one continuous stagger
   let dIdx = 0;
-  const groups = DIRECTIVE_DOMAINS.map(([key, label, glyph]) => {
+  const groups = CairnHealthClient.DIRECTIVE_DOMAINS.map(([key, label, glyph]) => {
     const rows = active.filter((d) => (d.domain || "watch") === key);
     if (!rows.length) return "";
     return `<div class="hb-dgroup">
       <div class="hb-dgrouphead"><span class="hb-dglyph" aria-hidden="true">${glyph}</span><span class="hb-dgname">${label}</span></div>
-      <div class="hb-dlist">${rows.map((d) => directiveHtml(d, dIdx++, evMap)).join("")}</div>
+      <div class="hb-dlist">${rows.map((d) => CairnHealthClient.directiveHtml(d, dIdx++, evMap)).join("")}</div>
     </div>`;
   }).filter(Boolean).join("");
   // Research-discoverability nudge (F1): only when research is OFF and at least one
@@ -231,7 +231,7 @@ function paintHealthShareTab() {
 }
 
 function healthMarkersEmptyHtml() {
-  return CairnHealthClient.markersEmptyHtml(HEALTH_HERO_ART);
+  return CairnHealthClient.markersEmptyHtml(CairnHealthClient.HEALTH_HERO_ART);
 }
 
 // ---- Records tab: upload affordance + the document list ----
@@ -243,7 +243,7 @@ function paintHealthRecordsTab() {
       <label class="hupload-file" id="hFileLabel">
         <input id="hFile" type="file" accept="image/*,application/pdf,.zip,.htm,.html,.xml,application/zip,text/html,application/xml" hidden>
         <span class="hupload-plus" aria-hidden="true">+</span>
-        <span id="hFileName">${H_FILE_PROMPT}</span>
+        <span id="hFileName">${CairnHealthClient.H_FILE_PROMPT}</span>
       </label>
       <textarea id="hText" class="hupload-text" rows="4" placeholder="Paste result text or HTML export"></textarea>
       <button id="hUpload" class="logbtn hupload-btn" disabled>ADD &amp; ANALYZE</button>
@@ -296,15 +296,15 @@ function wireHealthUpload() {
   const setPendingFile = (f) => {
     if (!f) {
       pendingFile = null;
-      fileName.textContent = H_FILE_PROMPT;
+      fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
       setUploadReady();
       return;
     }
-    if (f.size > MAX_DOC_BYTES) {
+    if (f.size > CairnHealthClient.MAX_DOC_BYTES) {
       toast("File too large (max 15MB)");
       fileInput.value = "";
       pendingFile = null;
-      fileName.textContent = H_FILE_PROMPT;
+      fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
       setUploadReady();
       return;
     }
@@ -353,8 +353,8 @@ function wireHealthUpload() {
     const f = pendingFile;
     const pastedText = textInput.value.trim();
     if (!f && !pastedText) { toast("Add a file or text first"); return; }
-    if (f && f.size > MAX_DOC_BYTES) { toast("File too large (max 15MB)"); return; }
-    if (!f && pastedText.length > MAX_DOC_TEXT) { toast("Text is too long"); return; }
+    if (f && f.size > CairnHealthClient.MAX_DOC_BYTES) { toast("File too large (max 15MB)"); return; }
+    if (!f && pastedText.length > CairnHealthClient.MAX_DOC_TEXT) { toast("Text is too long"); return; }
     uploadBtn.disabled = true;
     status.textContent = "Uploading…";
 
@@ -374,7 +374,7 @@ function wireHealthUpload() {
         return;
       }
       body.original_name = f.name || "Pasted image";
-      body.mime = guessUploadMime(f);
+      body.mime = CairnHealthClient.guessUploadMime(f);
       body.data_base64 = String(dataUrl).split(",")[1] || "";
     } else {
       body.original_name = "Pasted results";
@@ -394,7 +394,7 @@ function wireHealthUpload() {
     status.textContent = "";
     toast("Uploaded");
     // reset the picker
-    fileInput.value = ""; textInput.value = ""; pendingFile = null; fileName.textContent = H_FILE_PROMPT;
+    fileInput.value = ""; textInput.value = ""; pendingFile = null; fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
     // stays disabled until a new file is picked
 
     // prepend the new doc and poll for analysis if pending

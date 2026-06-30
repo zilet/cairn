@@ -17,6 +17,52 @@ type HealthMarkerTrendRow = {
   trend?: HealthMarkerTrend | null;
   points?: HealthMarkerPoint[] | null;
 };
+type HealthDirectiveRow = {
+  id?: unknown;
+  marker?: unknown;
+  uncertain?: unknown;
+  citation?: unknown;
+  directive?: unknown;
+  rationale?: unknown;
+};
+type UploadFileLike = {
+  type?: unknown;
+  name?: unknown;
+};
+
+(() => {
+const MAX_DOC_BYTES = 15 * 1024 * 1024;
+const MAX_DOC_TEXT = 400000;
+const H_FILE_PROMPT = "Drop a lab PDF, MyChart export (.zip), HTML, XML, a photo, or text…";
+
+// Static studio plate for the no-docs hero (trusted SVG, no caller text — same
+// rules as art.js: cream circle, ink line, one terracotta accent).
+const HEALTH_HERO_ART = `<svg viewBox="0 0 96 96" aria-hidden="true">
+  <circle cx="48" cy="48" r="44" fill="#efe8db"/>
+  <ellipse cx="48" cy="78" rx="24" ry="5" fill="rgba(72,58,35,.10)"/>
+  <polyline points="18,54 32,54 38,40 47,66 54,44 59,54 70,54" fill="none" stroke="#211d17" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="74" cy="54" r="4" fill="#b4552d"/>
+</svg>`;
+
+const DIRECTIVE_DOMAINS: Array<readonly [string, string, string]> = [
+  ["nutrition", "Nutrition", "❧"],
+  ["training", "Training", "◇"],
+  ["watch", "Watch", "◉"],
+];
+
+// Browsers leave file.type empty for many .zip/.xml picks — infer from the name
+// so the server's MIME allowlist accepts it. Unknown → octet-stream (rejected).
+function guessUploadMime(file: UploadFileLike | null | undefined): string {
+  const explicitType = String(file?.type || "").toLowerCase();
+  if (explicitType) return explicitType;
+  const name = String(file?.name || "").toLowerCase();
+  if (name.endsWith(".zip")) return "application/zip";
+  if (name.endsWith(".html") || name.endsWith(".htm")) return "text/html";
+  if (name.endsWith(".xml")) return "application/xml";
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".txt")) return "text/plain";
+  return "application/octet-stream";
+}
 
 function evidenceSafeUrl(value: unknown): string | null {
   const url = String(value ?? "").trim();
@@ -64,6 +110,31 @@ function evidenceCountMap(summary: HealthEvidenceSummary | null | undefined): Ma
     map.set(String(row.marker).toLowerCase(), Number(row.count) || 0);
   }
   return map;
+}
+
+function directiveHtml(d: HealthDirectiveRow, i = 0, evMap: Map<string, number> | null = null): string {
+  const soft = d.uncertain && !d.citation;
+  const marker = d.marker ? `<span class="hb-dmarker">${escHtml(d.marker)}</span>` : "";
+  const lead = soft ? `<span class="hb-dsoft">Worth looking into · </span>` : "";
+  const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
+  const evCount = d.marker && evMap ? (evMap.get(String(d.marker).toLowerCase()) || 0) : 0;
+  const evidence = d.marker && (d.citation || evCount > 0)
+    ? `<button class="hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
+       <div class="hb-evbox" hidden></div>`
+    : "";
+  return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">
+    <div class="hb-dmain">
+      ${marker}
+      <p class="hb-dtext">${lead}${escHtml(d.directive || "")}</p>
+      ${d.rationale ? `<p class="hb-drat">${escHtml(d.rationale)}</p>` : ""}
+      ${cite}
+      ${evidence}
+    </div>
+    <div class="hb-dctl">
+      <button class="hb-dbtn hb-ddone" data-ddone="${escAttr(d.id)}" title="Mark handled; the coach will stop carrying this unless new results change">Done</button>
+      <button class="hb-dbtn hb-ddismiss" data-ddismiss="${escAttr(d.id)}" title="Dismiss; the coach will avoid repeating this unless the marker materially changes">Dismiss</button>
+    </div>
+  </div>`;
 }
 
 function healthMarkersEmptyHtml(heroArt = ""): string {
@@ -322,10 +393,17 @@ function lipidGroupNoteHtml(
 }
 
 const CAIRN_HEALTH_CLIENT = {
+  MAX_DOC_BYTES,
+  MAX_DOC_TEXT,
+  H_FILE_PROMPT,
+  HEALTH_HERO_ART,
+  DIRECTIVE_DOMAINS,
+  guessUploadMime,
   evidenceSafeUrl,
   truncateEvidenceBody,
   evidenceListHtml,
   evidenceCountMap,
+  directiveHtml,
   markersEmptyHtml: healthMarkersEmptyHtml,
   formatMarkerNumber,
   sparkDateLabel,
@@ -346,3 +424,4 @@ Object.assign(globalThis, { CairnHealthClient: CAIRN_HEALTH_CLIENT });
 if (typeof window !== "undefined") {
   window.CairnHealthClient = CAIRN_HEALTH_CLIENT;
 }
+})();

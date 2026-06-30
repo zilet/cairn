@@ -497,10 +497,28 @@ declare global {
     };
 
     CairnHealthClient: {
+      MAX_DOC_BYTES: number;
+      MAX_DOC_TEXT: number;
+      H_FILE_PROMPT: string;
+      HEALTH_HERO_ART: string;
+      DIRECTIVE_DOMAINS: readonly (readonly [string, string, string])[];
+      guessUploadMime(file: { type?: unknown; name?: unknown } | null | undefined): string;
       evidenceSafeUrl(value: unknown): string | null;
       truncateEvidenceBody(text: unknown): string;
       evidenceListHtml(evidence: unknown): string;
       evidenceCountMap(summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): Map<string, number>;
+      directiveHtml(
+        directive: {
+          id?: unknown;
+          marker?: unknown;
+          uncertain?: unknown;
+          citation?: unknown;
+          directive?: unknown;
+          rationale?: unknown;
+        },
+        index?: number,
+        evidenceMap?: Map<string, number> | null,
+      ): string;
       markersEmptyHtml(heroArt?: string): string;
       formatMarkerNumber(value: unknown): string;
       sparkDateLabel(value: unknown): string;

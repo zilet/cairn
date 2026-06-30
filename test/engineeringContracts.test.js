@@ -984,6 +984,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnProgressProgramBlock/);
   assert.match(clientGlobals, /declare function healthDocHtml\(doc: unknown, index\?: number\): string/);
   assert.match(clientGlobals, /CairnHealthDocs/);
+  assert.match(clientGlobals, /H_FILE_PROMPT: string/);
+  assert.match(clientGlobals, /guessUploadMime/);
+  assert.match(clientGlobals, /directiveHtml/);
   assert.match(clientGlobals, /declare function learnedTimelineHtml\(data: unknown\): string/);
   assert.match(clientGlobals, /CairnHealthLearned/);
   assert.match(clientGlobals, /CairnLife/);
@@ -1785,6 +1788,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /function chatWantsFuelSurface/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
   assert.match(healthClientSource, /type HealthEvidenceRow = \{/);
+  assert.match(healthClientSource, /const MAX_DOC_BYTES = 15 \* 1024 \* 1024/);
+  assert.match(healthClientSource, /function guessUploadMime\(file: UploadFileLike/);
+  assert.match(healthClientSource, /const DIRECTIVE_DOMAINS: Array<readonly \[string, string, string\]>/);
+  assert.match(healthClientSource, /function directiveHtml\(d: HealthDirectiveRow/);
   assert.match(healthClientSource, /function formatMarkerNumber\(value: unknown\): string/);
   assert.match(
     healthClientSource,
@@ -1968,6 +1975,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(progress, /function\s+blockFocusWord|function\s+activeBlockHtml|function\s+startBlockHtml|function\s+loadProgramBlock|function\s+wireProgramBlock/);
   assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
   assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
+  assert.doesNotMatch(healthClient, /^const\s+MAX_DOC_BYTES|^const\s+H_FILE_PROMPT|^const\s+DIRECTIVE_DOMAINS|^function\s+guessUploadMime|^function\s+directiveHtml/m);
   assert.match(healthLearnedClient, /Object\.assign\(globalThis, \{/);
   assert.match(healthLearnedClient, /CairnHealthLearned/);
   assert.doesNotMatch(healthLearnedClient, /^const\s+LEARNED_GROUPS|^function\s+learnedItemHtml/m);
@@ -2027,7 +2035,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
   assert.match(health, /CairnHealthClient\.formatMarkerNumber/);
   assert.match(health, /CairnHealthClient\.markerTrendWord/);
+  assert.match(health, /CairnHealthClient\.HEALTH_HERO_ART/);
+  assert.doesNotMatch(health, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml/);
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
+  assert.match(records, /CairnHealthClient\.H_FILE_PROMPT/);
+  assert.match(records, /CairnHealthClient\.guessUploadMime/);
+  assert.match(records, /CairnHealthClient\.directiveHtml/);
+  assert.match(records, /CairnHealthClient\.DIRECTIVE_DOMAINS/);
+  assert.doesNotMatch(records, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml/);
   assert.doesNotMatch(records, /const\s+LEARNED_GROUPS|function\s+learnedItemHtml/);
   assert.match(records, /learnedTimelineHtml\(data\)/);
   assert.doesNotMatch(records, /const\s+LIFE_KINDS|function\s+lifeEventHtml|function\s+lifeFieldsHtml/);

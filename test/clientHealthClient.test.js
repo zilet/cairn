@@ -77,12 +77,52 @@ test("health evidence count map normalizes marker keys", () => {
 
 test("health markers empty state preserves add-document affordance", () => {
   const health = loadHealthClient();
-  const html = health.markersEmptyHtml("<svg></svg>");
-  assert.match(html, /<svg><\/svg>/);
+  const html = health.markersEmptyHtml(health.HEALTH_HERO_ART);
+  assert.match(html, /<svg/);
   assert.match(html, /No markers yet/);
   assert.match(html, /id="hMkToRecords"/);
   assert.match(html, /type="button"/);
   assert.match(html, /ADD A DOCUMENT/);
+});
+
+test("health upload constants and MIME inference stay centralized", () => {
+  const health = loadHealthClient();
+
+  assert.equal(health.MAX_DOC_BYTES, 15 * 1024 * 1024);
+  assert.equal(health.MAX_DOC_TEXT, 400000);
+  assert.match(health.H_FILE_PROMPT, /MyChart export/);
+  assert.equal(health.guessUploadMime({ type: "Application/PDF", name: "ignored.bin" }), "application/pdf");
+  assert.equal(health.guessUploadMime({ type: "", name: "labs.zip" }), "application/zip");
+  assert.equal(health.guessUploadMime({ name: "export.XML" }), "application/xml");
+  assert.equal(health.guessUploadMime({ name: "report.pdf" }), "application/pdf");
+  assert.equal(health.guessUploadMime({ name: "notes.txt" }), "text/plain");
+  assert.equal(health.guessUploadMime({ name: "unknown.bin" }), "application/octet-stream");
+});
+
+test("health directive renderer escapes content and exposes evidence affordance", () => {
+  const health = loadHealthClient();
+  const evMap = new Map([["apob <risk>", 2]]);
+  const html = health.directiveHtml(
+    {
+      id: '42" onclick="bad',
+      marker: "ApoB <risk>",
+      uncertain: true,
+      directive: "Keep saturated fat lower <this week>",
+      rationale: "Particle burden <watch>",
+    },
+    2,
+    evMap,
+  );
+
+  assert.equal(JSON.stringify(health.DIRECTIVE_DOMAINS.map((row) => row[0])), '["nutrition","training","watch"]');
+  assert.match(html, /data-dir="42&quot; onclick=&quot;bad"/);
+  assert.match(html, /ApoB &lt;risk&gt;/);
+  assert.match(html, /Worth looking into/);
+  assert.match(html, /Keep saturated fat lower &lt;this week&gt;/);
+  assert.match(html, /Particle burden &lt;watch&gt;/);
+  assert.match(html, /see the evidence/);
+  assert.match(html, /\(2\)/);
+  assert.doesNotMatch(html, /<risk>|<this week>|onclick="bad/);
 });
 
 test("health marker display helpers keep number, date, span, and trend words stable", () => {
