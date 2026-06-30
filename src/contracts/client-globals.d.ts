@@ -226,6 +226,11 @@ declare global {
   declare function cardioLabel(item: Record<string, unknown> | null | undefined): string;
   declare function cardioDescription(item: Record<string, unknown> | null | undefined): string;
   declare function cardioPrescription(item: Record<string, unknown> | null | undefined): string;
+  declare function enduranceStatusWord(status: unknown): string;
+  declare function enduranceBlockHtml(
+    end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
+    idx: number,
+  ): string;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
   declare function isEndurance(): boolean;
@@ -478,6 +483,14 @@ declare global {
       cardioPrescription(item: Record<string, unknown> | null | undefined): string;
     };
 
+    CairnProgressEndurance: {
+      enduranceStatusWord(status: unknown): string;
+      enduranceBlockHtml(
+        end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
+        idx: number,
+      ): string;
+    };
+
     CairnTodayActivity: {
       ACT_ART_PHRASE: Record<string, string>;
       actArtText(activity: ClientActivity & Record<string, unknown>): string;
@@ -519,6 +532,7 @@ declare global {
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
+  declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
