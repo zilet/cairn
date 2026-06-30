@@ -55,6 +55,11 @@ export interface ClientRouteTask {
 }
 
 export interface ClientAgentInfo {
+  name?: string;
+  description?: string | null;
+  enabled?: boolean;
+  env_ok?: boolean;
+  usable?: boolean;
   present?: boolean;
   configured?: boolean | null;
   auth_state?: string | null;
@@ -64,12 +69,7 @@ export interface ClientAgentInfo {
   [key: string]: unknown;
 }
 
-export interface ClientAgentConfig {
-  agents?: ClientAgentInfo[];
-  order?: string[];
-  disabled?: string[];
-  [agent: string]: unknown;
-}
+export type ClientAgentConfig = ClientAgentInfo[];
 
 export interface ClientSettings {
   onboarded?: boolean;

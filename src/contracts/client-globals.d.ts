@@ -123,13 +123,14 @@ declare global {
   declare let artEnabled: boolean;
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
+  declare const PLAN_HANDLERS: Record<string, () => unknown>;
   declare const PROGRESS_SEG: readonly ClientSegment[];
   declare const PROGRESS_HANDLERS: Record<string, () => unknown>;
   declare const ME_SEG: readonly ClientSegment[];
   declare const ME_HANDLERS: Record<string, () => unknown>;
   declare const HEALTH_SEG: readonly ClientSegment[];
   declare const SET_SEG: readonly ClientSegment[];
-  declare const MEALS_KEY: string;
+  declare var MEALS_KEY: string;
   declare const MEAL_LABEL: Record<string, string>;
   declare var _progFocusCard: string | undefined;
 
@@ -344,7 +345,14 @@ declare global {
   declare function renderFoodJournal(): unknown;
   declare function renderMeals(): unknown;
   declare function renderCoach(): unknown;
+  declare function rerenderFoodSurface(): void;
+  declare function loadMealProvenance(): unknown;
+  declare function paintEnergyBody(exp: unknown): void;
+  declare function applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown>;
   declare function renderPlanEndurance(): unknown;
+  declare function gotoChatWith(text: string): void;
+  declare function enduranceComposerLock(): void;
+  declare function enduranceProposalOpOpts(): ClientAgentOpHandlers;
   declare function runTargetText(run: Record<string, unknown>): string;
   declare function statusBadge(status: unknown): string;
   declare function applyResultMessage(result: unknown): { failed: boolean; message: string };
@@ -389,7 +397,7 @@ declare global {
   declare function closeMealSheet(instant?: boolean): void;
   declare function hideSaveBar(): void;
   declare function thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
-  declare function btnBusy(btn: Element | null | undefined, text: string): () => void;
+  declare function btnBusy(btn: Element | null | undefined, text: string, options?: { ghost?: boolean }): () => void;
   declare function openDetailFrom(fromEl: Element | null | undefined, build: () => unknown): void;
   declare function mountDetail(html: string): HTMLElement;
   declare function wireDetailCommon(): void;

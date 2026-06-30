@@ -829,6 +829,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const dayFuelSource = read("src/client/day-fuel-client.ts");
   const mealPlanSource = read("src/client/meal-plan-client.ts");
   const mealRecipeSource = read("src/client/meal-recipe-client.ts");
+  const coachMealsScreenSource = read("src/client/coach-meals-screen.ts");
   const foodNoteSource = read("src/client/food-note-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const healthReadSource = read("src/client/health-read-client.ts");
@@ -1301,6 +1302,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
   assert.match(clientBuild, /public\/js\/meal-recipe-client\.js/);
+  assert.match(clientBuild, /src\/client\/coach-meals-screen\.ts/);
+  assert.match(clientBuild, /public\/js\/06-coach-meals\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
   assert.match(clientBuild, /public\/js\/food-note-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
@@ -1859,6 +1862,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/plan-endurance-client\.js/);
   assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
   assert.match(clientBuild, /public\/js\/day-fuel-client\.js/);
+  assert.match(clientBuild, /src\/client\/meal-plan-client\.ts/);
+  assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
+  assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
+  assert.match(clientBuild, /public\/js\/meal-recipe-client\.js/);
+  assert.match(clientBuild, /src\/client\/coach-meals-screen\.ts/);
+  assert.match(clientBuild, /public\/js\/06-coach-meals\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
   assert.match(clientBuild, /public\/js\/food-note-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
@@ -1904,6 +1913,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(contracts, /export \* from "\.\/client-api\.js"/);
   assert.match(contracts, /export \* from "\.\/client-api-coverage\.js"/);
   assert.match(apiContracts, /export interface ClientApiResponses/);
+  assert.match(apiContracts, /export type ClientAgentConfig = ClientAgentInfo\[\]/);
+  assert.match(apiContracts, /"\/api\/agents": ClientAgentConfig/);
   assert.match(apiContracts, /"\/api\/today-agenda": ClientTodayAgenda/);
   assert.match(apiContracts, /"\/api\/coaching-focus": ClientCoachingFocus/);
   assert.match(apiContracts, /"\/api\/nutrition\/day": ClientDayIntake/);
@@ -2170,6 +2181,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealRecipeSource, /function mealRecipeHtml\(recipe: unknown\): string/);
   assert.match(mealRecipeSource, /function mealRecipeLoadingHtml\(\): string/);
   assert.match(mealRecipeSource, /CairnMealRecipe/);
+  assert.match(coachMealsScreenSource, /async function renderCoach\(\): Promise<void>/);
+  assert.match(coachMealsScreenSource, /async function renderMeals\(\): Promise<unknown>/);
+  assert.match(coachMealsScreenSource, /function renderFoodJournal\(\): void/);
+  assert.match(coachMealsScreenSource, /function reconnectMealPlan\(\): ClientAgentOpHandlers \| null/);
+  assert.match(coachMealsScreenSource, /function reconnectMealSwap\(job\?: unknown\): ClientAgentOpHandlers \| null/);
+  assert.match(coachMealsScreenSource, /function reconnectRecipe\(job\?: unknown\): ClientAgentOpHandlers \| null/);
+  assert.match(coachMealsScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(foodNoteSource, /type FoodNoteRow = \{/);
   assert.match(foodNoteSource, /function foodIngredients\(value: unknown\): FoodIngredientRow\[\]/);
   assert.match(foodNoteSource, /function noteEntryHtml\(note: FoodNoteRow, index\?: number\): string/);
@@ -2606,6 +2624,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
   assert.match(progress, /coachingFocusCardHtml\(f\)/);
+  assert.match(meals, /function renderCoach\(\)/);
+  assert.match(meals, /function renderMeals\(\)/);
+  assert.match(meals, /function renderFoodJournal\(\)/);
+  assert.match(meals, /function reconnectMealPlan\(\)/);
+  assert.match(meals, /function reconnectMealSwap\(job\)/);
+  assert.match(meals, /function reconnectRecipe\(job\)/);
+  assert.match(meals, /Object\.assign\(globalThis, \{/);
   assert.match(meals, /CairnUi\.jobCaptionHtml\(\{ className: "meal-cap job-cap" \}\)/);
   assert.match(meals, /CairnUi\.sheetChipHtml\(\{ label:/);
   assert.match(
