@@ -25,13 +25,13 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 - `docs:check` and `test/surfaceParity.test.js` guard REST/MCP/docs parity.
 - `/app/<tab>/<section>` deep links exist through `public/js/route-state.js`, typed app-shell route modules, `public/js/settings-screen.js`, `src/server.ts`, and `public/sw.js`.
 - The public app-shell script graph is now guarded by `scripts/check-public-scripts.mjs`, preventing classic-script top-level redeclaration failures like the `CHAT_IMAGE_MAX_BYTES` deployment break.
-- Critical extracted helpers and shell slices are now TypeScript sources: app core state, app download helper, app route bridge, app route-sync wrapper, app render dispatcher, app tab controller, app onboarding, app startup, app job reconnectors, app mobile viewport guards, app service-worker lifecycle, app discipline primer, API, SWR, routes, date/html/format/markdown helpers, the shared save bar, Today agenda/training helpers, planned-cardio helpers, Settings helpers, the Settings screen shell, Chat helpers, and Health helpers.
+- Critical extracted helpers and shell slices are now TypeScript sources: app core state, app download helper, app route bridge, app route-sync wrapper, app render dispatcher, app tab controller, app onboarding, app startup, app job reconnectors, app mobile viewport guards, app service-worker lifecycle, app discipline primer, API, SWR, routes, date/html/format/markdown helpers, Today activity rows, the shared save bar, Today agenda/training helpers, planned-cardio helpers, Settings helpers, the Settings screen shell, Chat helpers, and Health helpers.
 - `src/contracts/client.ts`, `src/contracts/client-api.ts`, `src/contracts/client-api-coverage.ts`, and `src/contracts/client-compat.ts` establish shared backend-to-client payload contracts, API path coverage, explicit temporary unknown waivers, and compile-time backend assignability checks.
 - PWA cache alignment is guarded by `scripts/check-sw-cache.mjs`.
 
 ### Gaps
 
-- The client source of truth is still mostly `public/js/*.js`, but all extracted helper files now have TypeScript source: `src/client/app/state.ts`, `src/client/app/download.ts`, `src/client/app/router.ts`, `src/client/app/route-sync.ts`, `src/client/app/render-dispatch.ts`, `src/client/app/tabs.ts`, `src/client/app/onboarding.ts`, `src/client/app/startup.ts`, `src/client/app/job-reconnectors.ts`, `src/client/app/mobile-viewport.ts`, `src/client/app/service-worker.ts`, `src/client/app/discipline-primer.ts`, `src/client/route-state.ts`, `src/client/date-utils.ts`, `src/client/html-utils.ts`, `src/client/markdown-client.ts`, `src/client/format-utils.ts`, `src/client/api-client.ts`, `src/client/save-bar.ts`, `src/client/swr-cache.ts`, `src/client/today-agenda-client.ts`, `src/client/today-training-client.ts`, `src/client/cardio-plan-client.ts`, `src/client/settings-routes.ts`, `src/client/settings-client.ts`, `src/client/settings-screen.ts`, `src/client/chat-client.ts`, and `src/client/health-client.ts` emit their stable `public/js` files through `scripts/build-client.mjs`. `public/js/10-boot.js` is now only the final startup shim.
+- The client source of truth is still mostly `public/js/*.js`, but all extracted helper files now have TypeScript source: `src/client/app/state.ts`, `src/client/app/download.ts`, `src/client/app/router.ts`, `src/client/app/route-sync.ts`, `src/client/app/render-dispatch.ts`, `src/client/app/tabs.ts`, `src/client/app/onboarding.ts`, `src/client/app/startup.ts`, `src/client/app/job-reconnectors.ts`, `src/client/app/mobile-viewport.ts`, `src/client/app/service-worker.ts`, `src/client/app/discipline-primer.ts`, `src/client/route-state.ts`, `src/client/date-utils.ts`, `src/client/html-utils.ts`, `src/client/markdown-client.ts`, `src/client/format-utils.ts`, `src/client/api-client.ts`, `src/client/today-activity-client.ts`, `src/client/save-bar.ts`, `src/client/swr-cache.ts`, `src/client/today-agenda-client.ts`, `src/client/today-training-client.ts`, `src/client/cardio-plan-client.ts`, `src/client/settings-routes.ts`, `src/client/settings-client.ts`, `src/client/settings-screen.ts`, `src/client/chat-client.ts`, and `src/client/health-client.ts` emit their stable `public/js` files through `scripts/build-client.mjs`. `public/js/10-boot.js` is now only the final startup shim.
 - The largest and riskiest UI files are not typechecked: `03-today.js`, `07-me-health.js`, `05-progress.js`, `02-ui.js`, `09-plan-chat.js`, `06-coach-meals.js`, and `08-me-records.js`. `04-capture.js` is now generated from `src/client/capture.ts`; Settings screen rendering is generated from `src/client/settings-screen.ts`.
 - The app is still a classic-script graph. Boot order and global names remain part of correctness.
 - `tsconfig.client.json` now only provides transitional global declarations; the extracted helpers are typechecked from `src/client/**/*.ts`, while the large screen files are still classic JS.
@@ -204,7 +204,7 @@ Gate:
 
 ### Wave 1 - Client Build Foundation
 
-Status: in progress. First slices complete: app core state, app download helper, app router bridge, app route-sync wrapper, app render dispatcher, app tab controller, app onboarding, app startup, app job reconnectors, app mobile viewport guards, app service-worker lifecycle, app discipline primer, route-state, date helpers, HTML escaping helpers, markdown rendering, display-format helpers, the shared API/auth/offline client, the shared save bar, the SWR cache layer, the Today agenda renderer, the Today training renderer, the planned-cardio renderer helpers, the Settings route/render helpers, the Settings screen shell, the Chat helper, and the Health helper now have `src/client/**/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
+Status: in progress. First slices complete: app core state, app download helper, app router bridge, app route-sync wrapper, app render dispatcher, app tab controller, app onboarding, app startup, app job reconnectors, app mobile viewport guards, app service-worker lifecycle, app discipline primer, route-state, date helpers, HTML escaping helpers, markdown rendering, display-format helpers, the shared API/auth/offline client, Today activity-row rendering, the shared save bar, the SWR cache layer, the Today agenda renderer, the Today training renderer, the planned-cardio renderer helpers, the Settings route/render helpers, the Settings screen shell, the Chat helper, and the Health helper now have `src/client/**/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
 
 Purpose: make TypeScript the source of truth without changing behavior.
 
@@ -227,6 +227,7 @@ Tasks:
 - [x] Move the shared API/auth/offline client to TypeScript source while preserving the `public/js/api-client.js` script contract.
 - [x] Move the shared download helper to TypeScript source while preserving global `downloadFile` compatibility.
 - [x] Move the app core state/bootstrap globals to TypeScript source while preserving the `public/js/01-core.js` script contract.
+- [x] Move shared Today activity-row rendering to TypeScript source while preserving `actEntryHtml` / `updateActEntry` compatibility for Today, capture, and Health.
 - [x] Move the shared floating save bar to TypeScript source while preserving global `mountSaveBar` / `hideSaveBar` compatibility.
 - [x] Move app route apply/current/sync logic to TypeScript source while preserving `10-boot.js` compatibility.
 - [x] Move the app route-sync compatibility wrappers to TypeScript source while preserving screen-level global route helpers.
@@ -324,7 +325,7 @@ Gate:
 
 ### Wave 4 - Helper And Domain Client Migration
 
-Status: complete for extracted helpers. `date-utils`, `html-utils`, `markdown-client`, `format-utils`, `api-client`, `swr-cache`, `today-agenda-client`, `today-training-client`, `cardio-plan-client`, `settings-routes`, `settings-client`, `chat-client`, and `health-client` are now TypeScript-authored browser-global compatibility outputs. `markdown-client` owns chat markdown rendering and URL scheme allowlisting. `cardio-plan-client` owns planned-cardio label, sport, interval, and prescription wording used by Today, Progress, and Plan. `health-client` now also owns pure marker display helpers for number/date/span/trend wording, with `07-me-health.js` delegating through the typed compatibility surface. The first screen migration slice is also complete: `04-capture.js` is emitted from `src/client/capture.ts`.
+Status: complete for extracted helpers. `date-utils`, `html-utils`, `markdown-client`, `format-utils`, `api-client`, `today-activity-client`, `swr-cache`, `today-agenda-client`, `today-training-client`, `cardio-plan-client`, `settings-routes`, `settings-client`, `chat-client`, and `health-client` are now TypeScript-authored browser-global compatibility outputs. `markdown-client` owns chat markdown rendering and URL scheme allowlisting. `today-activity-client` owns shared activity-row art phrase mapping, row markup, and enrichment updates used by Today, capture, and Health. `cardio-plan-client` owns planned-cardio label, sport, interval, and prescription wording used by Today, Progress, and Plan. `health-client` now also owns pure marker display helpers for number/date/span/trend wording, with `07-me-health.js` delegating through the typed compatibility surface. The first screen migration slice is also complete: `04-capture.js` is emitted from `src/client/capture.ts`.
 
 Purpose: move already-extracted helper JS into real TS modules.
 
@@ -383,7 +384,7 @@ Gate:
 
 ### Wave 6 - Screen Migration By Domain
 
-Status: in progress. The Today team's capture/provenance/insight script now has TypeScript source in `src/client/capture.ts`, preserving the served `/js/04-capture.js` filename and its classic-script globals for `03-today.js`, meals, and job reconnectors.
+Status: in progress. The Today team's capture/provenance/insight script now has TypeScript source in `src/client/capture.ts`, preserving the served `/js/04-capture.js` filename and its classic-script globals for `03-today.js`, meals, and job reconnectors. Shared activity-row rendering now lives in `src/client/today-activity-client.ts`, reducing `04-capture.js` and Health activity history dependence on `03-today.js`.
 
 Purpose: convert large screens without losing behavior.
 
@@ -404,6 +405,7 @@ Tasks:
 - Do not rewrite behavior during conversion unless a test exposes a bug.
 - Preserve current route and cache behavior for every screen.
 - [x] Move `04-capture.js` to TypeScript-authored source while preserving output filename, script order, and browser-global compatibility.
+- [x] Move shared activity-row rendering out of `03-today.js` while preserving Today, quick-log, and Health history behavior.
 
 Gate per screen:
 

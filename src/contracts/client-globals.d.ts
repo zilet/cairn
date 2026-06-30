@@ -253,6 +253,9 @@ declare global {
   declare function thinkingCaption(el: Element, op?: string): unknown;
   declare function measureChatTop(): void;
   declare function art(kind: string, text: string): string;
+  declare function artImg(kind: string, text: string, className?: string, svg?: string | null): string;
+  declare function enrichBadge(status: unknown): string;
+  declare function activityLine(activity: ClientActivity & Record<string, unknown>): string;
   declare function pollEnrichment(
     path: "/activities" | "/food-notes" | string,
     id: number,
@@ -263,6 +266,7 @@ declare global {
     },
   ): void;
   declare function enrichmentActive(status: unknown): boolean;
+  declare function actArtText(activity: ClientActivity & Record<string, unknown>): string;
   declare function actEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
   declare function updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
   declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): unknown;
@@ -436,6 +440,13 @@ declare global {
       cardioPrescription(item: Record<string, unknown> | null | undefined): string;
     };
 
+    CairnTodayActivity: {
+      ACT_ART_PHRASE: Record<string, string>;
+      actArtText(activity: ClientActivity & Record<string, unknown>): string;
+      actEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
+      updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
+    };
+
     CairnTodayAgenda: {
       TODAY_RAIL_SLOTS: Record<string, string>;
       TODAY_PRIMARY_CLIENT_MAX: number;
@@ -467,6 +478,7 @@ declare global {
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
+  declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
 }

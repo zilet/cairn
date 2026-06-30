@@ -2608,43 +2608,6 @@ async function appendOffPlanCard(name, mode) {
   (cardEl.querySelector(".in-r") || cardEl.querySelector(".in-dur"))?.focus();
 }
 
-// Bare activity types make ambiguous image prompts ("ride" → horseback), so map
-// common types to an explicit phrase for the generated photo; the SVG fallback
-// still keys off the raw type.
-const ACT_ART_PHRASE = {
-  ride: "riding a road bicycle", bike: "riding a road bicycle", cycl: "riding a road bicycle",
-  run: "running", jog: "jogging", hike: "hiking with a backpack",
-  walk: "walking briskly", swim: "swimming freestyle", row: "rowing on a rowing machine",
-  yoga: "holding a yoga pose", climb: "climbing an indoor wall", ski: "cross-country skiing",
-};
-function actArtText(a) {
-  const t = (a.type || "").toLowerCase();
-  for (const k in ACT_ART_PHRASE) if (t.includes(k)) return ACT_ART_PHRASE[k];
-  return a.type || a.raw_text || "";
-}
-
-// Render one activity row (instant or enriched). `live` adds the pending badge while enriching.
-function actEntryHtml(a) {
-  const tile = artImg("activity", actArtText(a), "artile-sm qlent-art", art("activity", a.type));
-  return `<div class="qlent" data-actid="${a.id}">
-      ${tile}
-      <div class="qlent-line">${escHtml(activityLine(a))}</div>
-      <div class="qlent-badge">${enrichBadge(a.enrichment_status)}</div>
-    </div>`;
-}
-
-// Shared poll-update for an activity entry: refresh text, badge, and (if present) the art tile.
-function updateActEntry(el, row) {
-  el.querySelector(".qlent-line").textContent = activityLine(row);
-  el.querySelector(".qlent-badge").innerHTML = enrichBadge(row.enrichment_status);
-  const tileEl = el.querySelector(".qlent-art");
-  if (tileEl) {
-    const t = artImg("activity", actArtText(row), "artile-sm qlent-art", art("activity", row.type));
-    if (t) tileEl.outerHTML = t;
-  }
-  if (row.enrichment_status === "done") el.classList.add("qlent-done");
-}
-
 // Today: the "body's reaction" card for a strength session reconciled from Garmin —
 // HR / calories / training-effect tiles + a time-in-HR-zone bar + the agent's
 // one-line read. All server strings via escHtml; numbers coerced. "" without data.
