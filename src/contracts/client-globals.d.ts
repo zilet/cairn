@@ -220,6 +220,9 @@ declare global {
   declare function enduranceCoachLine(plan: unknown): string;
   declare function capWord(input: unknown): string;
   declare function volBalanceHtml(balance: unknown): string;
+  declare const CONF_WORD: Record<string, string>;
+  declare function kcalFmt(value: unknown): string;
+  declare function energyRead(exp: unknown): { lead: string; body: string; tone: string; dir?: string | null };
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -523,6 +526,12 @@ declare global {
       volBalanceHtml(balance: unknown): string;
     };
 
+    CairnProgressEnergy: {
+      CONF_WORD: Record<string, string>;
+      kcalFmt(value: unknown): string;
+      energyRead(exp: unknown): { lead: string; body: string; tone: string; dir?: string | null };
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -596,6 +605,7 @@ declare global {
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];
   declare const CairnProgressVolume: Window["CairnProgressVolume"];
+  declare const CairnProgressEnergy: Window["CairnProgressEnergy"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
