@@ -3,6 +3,7 @@ import type {
   ClientChatResetResponse,
   ClientChatSearchHit,
   ClientChatSessionSummary,
+  ClientCoachingFocus,
   ClientDayIntake,
   ClientDayRead,
   ClientExpenditureEstimate,
@@ -541,7 +542,7 @@ export interface ClientApiResponses {
   "/api/test-week": ClientJsonObject;
   "/api/dexa-targeting": ClientJsonObject;
   "/api/program/run-plan/apply": ClientProposalResult;
-  "/api/coaching-focus": ClientJsonObject;
+  "/api/coaching-focus": ClientCoachingFocus;
   "/api/health/markers": ClientHealthMarker[];
   "/api/health/standing": ClientJsonObject;
   "/api/health/review": ClientHealthReview | null;

@@ -63,6 +63,33 @@ export interface ClientTodayAgenda {
   total: number;
 }
 
+export type ClientCoachingFocusDomain = "training" | "running" | "nutrition" | "health" | "recovery" | "body";
+
+export interface ClientCoachingFocusItem {
+  domain: ClientCoachingFocusDomain | string;
+  title: string;
+  why: string;
+  move?: string;
+  based_on?: string[];
+}
+
+export interface ClientCoachingRetest {
+  in_weeks: number | null;
+  focus: string[];
+  why: string;
+}
+
+export interface ClientCoachingFocus {
+  available: boolean;
+  headline: string;
+  lead: ClientCoachingFocusItem | null;
+  parallel: ClientCoachingFocusItem[];
+  later: Array<{ domain: ClientCoachingFocusDomain | string; title: string }>;
+  connections: string[];
+  retest: ClientCoachingRetest | null;
+  horizon_weeks: number | null;
+}
+
 export interface ClientMacroTotals {
   kcal: number;
   protein_g: number;

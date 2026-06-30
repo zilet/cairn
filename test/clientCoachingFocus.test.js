@@ -1,0 +1,190 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import vm from "node:vm";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+class FakeElement {
+  constructor(attrs = {}) {
+    this.attrs = attrs;
+    this.dataset = {};
+    this.isConnected = true;
+    this.id = attrs.id || "";
+    this.innerHTML = "";
+    this.removed = false;
+  }
+
+  closest(selector) {
+    if (selector === "[data-cfocus-go]" && this.attrs["data-cfocus-go"] != null) return this;
+    if (selector === '[data-cfocus-go][role="link"]' && this.attrs["data-cfocus-go"] != null && this.attrs.role === "link") return this;
+    return null;
+  }
+
+  getAttribute(name) {
+    return this.attrs[name] ?? null;
+  }
+
+  remove() {
+    this.removed = true;
+  }
+}
+
+class FakeHtmlElement extends FakeElement {
+  constructor(attrs = {}) {
+    super(attrs);
+    this.dataset = { cfocusGo: attrs["data-cfocus-go"] || "" };
+  }
+}
+
+function loadCoachingFocus(options = {}) {
+  const handlers = {};
+  const activated = [];
+  const state = {};
+  const context = {
+    Array,
+    Math,
+    Number,
+    Object,
+    Promise,
+    RegExp,
+    String,
+    Element: FakeElement,
+    HTMLElement: FakeHtmlElement,
+    state,
+    activateTab: (tab) => activated.push(tab),
+    document: {
+      addEventListener: (name, handler) => {
+        handlers[name] = handler;
+      },
+      querySelector: () => null,
+    },
+    api: options.api || (async () => null),
+  };
+  context.window = context;
+  context.view = {
+    querySelector: () => null,
+  };
+  vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/coaching-focus-client.js"), "utf8"), context);
+  return { focus: context.CairnCoachingFocus, handlers, state, activated };
+}
+
+const richFocus = {
+  available: true,
+  headline: "Build <patiently>",
+  lead: {
+    domain: "training",
+    title: "Break <plateau>",
+    why: "Bench needs a new stimulus",
+    move: "Rotate incline <press>",
+  },
+  parallel: [
+    {
+      domain: "nutrition",
+      title: "Protein floor",
+      why: "Support the block",
+      move: "Add breakfast protein",
+    },
+  ],
+  later: [{ domain: "running", title: "Add strides <later>" }],
+  connections: ["Strength and fuel move together <now>"],
+  retest: { in_weeks: 2, focus: ["Bench <top set>", "5k"], why: "Batch checks" },
+  horizon_weeks: 6,
+};
+
+test("coaching focus renderer escapes text and preserves conductor structure", () => {
+  const { focus } = loadCoachingFocus();
+  const html = focus.coachingFocusCardHtml(richFocus);
+
+  assert.match(html, /Where to focus/);
+  assert.match(html, /Training/);
+  assert.match(html, /Nutrition/);
+  assert.match(html, /Build &lt;patiently&gt;/);
+  assert.match(html, /Break &lt;plateau&gt;/);
+  assert.match(html, /Rotate incline &lt;press&gt;/);
+  assert.match(html, /Add strides &lt;later&gt;/);
+  assert.match(html, /Bench &lt;top set&gt; · 5k/);
+  assert.doesNotMatch(html, /<plateau>|<press>|<later>|<top set>/);
+
+  assert.equal(focus.coachingFocusCardHtml({ ...richFocus, available: false }), "");
+  assert.equal(focus.coachingFocusThreadHtml({ ...richFocus, lead: { ...richFocus.lead, title: "Use <thread>" } }).includes("Use &lt;thread&gt;"), true);
+});
+
+test("coaching focus route bridge preserves deep-link destinations", () => {
+  const { focus, state, activated } = loadCoachingFocus();
+
+  focus.cfocusRoute("running");
+  assert.equal(state.progressSeg, "endurance");
+  assert.deepEqual(activated.at(-1), "progress");
+
+  focus.cfocusRoute("nutrition");
+  assert.equal(state.planJump, "meals");
+  assert.deepEqual(activated.at(-1), "plan");
+
+  focus.cfocusRoute("health");
+  assert.equal(state.meSeg, "health");
+  assert.equal(state.healthSeg, "markers");
+  assert.equal(state.healthSegPicked, true);
+  assert.deepEqual(activated.at(-1), "me");
+
+  focus.cfocusRoute("me-standing");
+  assert.equal(state.meSeg, "standing");
+  assert.deepEqual(activated.at(-1), "me");
+
+  focus.cfocusRoute("training");
+  assert.equal(state.progressSeg, "program");
+  assert.deepEqual(activated.at(-1), "progress");
+});
+
+test("coaching focus loader degrades quietly and suppresses duplicate Standing lead", async () => {
+  const slot = new FakeElement({ id: "cfocusStandingSlot" });
+  const lever = new FakeElement();
+  const rootNode = {
+    querySelector: (selector) => {
+      if (selector === "#cfocusStandingSlot") return slot;
+      if (selector === ".hstand-lever") return lever;
+      return null;
+    },
+  };
+  const { focus } = loadCoachingFocus({ api: async () => richFocus });
+
+  await focus.loadCoachingFocus("#cfocusStandingSlot", rootNode);
+
+  assert.match(slot.innerHTML, /cfocus/);
+  assert.equal(lever.removed, true);
+
+  const emptySlot = new FakeElement({ id: "cfocusStandingSlot" });
+  const quietRoot = {
+    querySelector: (selector) => (selector === "#cfocusStandingSlot" ? emptySlot : null),
+  };
+  const quiet = loadCoachingFocus({ api: async () => ({ available: false }) }).focus;
+  emptySlot.innerHTML = "stale";
+
+  await quiet.loadCoachingFocus("#cfocusStandingSlot", quietRoot);
+
+  assert.equal(emptySlot.innerHTML, "");
+});
+
+test("coaching focus delegated listeners share the route bridge", () => {
+  const { handlers, state, activated } = loadCoachingFocus();
+  const target = new FakeHtmlElement({ "data-cfocus-go": "endurance", role: "link" });
+
+  handlers.click({ target });
+  assert.equal(state.progressSeg, "endurance");
+  assert.deepEqual(activated.at(-1), "progress");
+
+  let prevented = false;
+  handlers.keydown({
+    key: " ",
+    target,
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, true);
+  assert.deepEqual(activated.at(-1), "progress");
+});

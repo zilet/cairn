@@ -2,6 +2,9 @@
 {
   function registerServiceWorkerLifecycle(): void {
     if (!("serviceWorker" in navigator)) return;
+    const root = globalThis as typeof globalThis & { __cairnSwLifecycleStarted?: boolean };
+    if (root.__cairnSwLifecycleStarted) return;
+    root.__cairnSwLifecycleStarted = true;
 
     // Single-user self-hosted app: a deploy should always be live on the next open,
     // never stranded behind a manual tap. sw.js skipWaiting()s on install, so the

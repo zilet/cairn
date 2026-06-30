@@ -598,8 +598,10 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/format-utils\.js"/);
   assert.match(sw, /"\/js\/api-client\.js"/);
   assert.match(sw, /"\/js\/app-download\.js"/);
+  assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
+  assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
   assert.match(sw, /"\/js\/today-activity-client\.js"/);
   assert.match(sw, /"\/js\/save-bar\.js"/);
   assert.match(sw, /"\/js\/swr-cache\.js"/);
@@ -741,9 +743,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
   const appDownloadSource = read("src/client/app/download.ts");
+  const appSwRecoverySource = read("src/client/app/sw-recovery.ts");
   const coreStateSource = read("src/client/app/state.ts");
   const pwaInstallSource = read("src/client/pwa-install-coach.ts");
   const restTimerSource = read("src/client/rest-timer.ts");
+  const coachingFocusSource = read("src/client/coaching-focus-client.ts");
   const todayActivitySource = read("src/client/today-activity-client.ts");
   const saveBarSource = read("src/client/save-bar.ts");
   const swrCacheSource = read("src/client/swr-cache.ts");
@@ -785,9 +789,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
   const appDownload = read("public/js/app-download.js");
+  const appSwRecovery = read("public/js/app-sw-recovery.js");
   const coreState = read("public/js/01-core.js");
   const pwaInstall = read("public/js/pwa-install-coach.js");
   const restTimer = read("public/js/rest-timer.js");
+  const coachingFocusClient = read("public/js/coaching-focus-client.js");
   const todayActivityClient = read("public/js/today-activity-client.js");
   const saveBar = read("public/js/save-bar.js");
   const swrCache = read("public/js/swr-cache.js");
@@ -858,6 +864,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnPwaInstall/);
   assert.match(clientGlobals, /declare function startRest\(seconds\?: number\): void/);
   assert.match(clientGlobals, /CairnRestTimer/);
+  assert.match(clientGlobals, /declare function coachingFocusCardHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
+  assert.match(clientGlobals, /declare function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
+  assert.match(clientGlobals, /CairnCoachingFocus/);
   assert.match(clientGlobals, /declare function settingsRouteRowsHtml/);
   assert.match(clientGlobals, /declare function switchTab\(tab: unknown/);
   assert.match(clientGlobals, /declare function registerTabBarHandlers\(\): void/);
@@ -876,9 +885,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/api-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-download\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/app-sw-recovery\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/01-core\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/pwa-install-coach\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/rest-timer\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/coaching-focus-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-activity-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/save-bar\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/swr-cache\.js/);
@@ -919,12 +930,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/api-client\.js/);
   assert.match(clientBuild, /src\/client\/app\/download\.ts/);
   assert.match(clientBuild, /public\/js\/app-download\.js/);
+  assert.match(clientBuild, /src\/client\/app\/sw-recovery\.ts/);
+  assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
   assert.match(clientBuild, /src\/client\/app\/state\.ts/);
   assert.match(clientBuild, /public\/js\/01-core\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/rest-timer\.ts/);
   assert.match(clientBuild, /public\/js\/rest-timer\.js/);
+  assert.match(clientBuild, /src\/client\/coaching-focus-client\.ts/);
+  assert.match(clientBuild, /public\/js\/coaching-focus-client\.js/);
   assert.match(clientBuild, /src\/client\/today-activity-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-activity-client\.js/);
   assert.match(clientBuild, /src\/client\/save-bar\.ts/);
@@ -987,6 +1002,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "app-download.js must load after api-client.js and before 01-core.js"
   );
   assert.ok(
+    index.indexOf("/js/app-sw-recovery.js") > index.indexOf("/js/app-download.js") &&
+      index.indexOf("/js/app-sw-recovery.js") < index.indexOf("/js/01-core.js"),
+    "app-sw-recovery.js must load before app state and fragile feature scripts"
+  );
+  assert.ok(
     index.indexOf("/js/pwa-install-coach.js") > index.indexOf("/js/01-core.js") &&
       index.indexOf("/js/pwa-install-coach.js") < index.indexOf("/js/02-ui.js"),
     "pwa-install-coach.js must load early, after app state and before feature consumers"
@@ -1019,6 +1039,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
       index.indexOf("/js/rest-timer.js") > index.indexOf("/js/02-ui.js") &&
       index.indexOf("/js/rest-timer.js") < index.indexOf("/js/03-today.js"),
     "rest-timer.js must load after toast/UI helpers and before Today set logging"
+  );
+  assert.ok(
+    index.indexOf("/js/coaching-focus-client.js") > index.indexOf("/js/rest-timer.js") &&
+      index.indexOf("/js/coaching-focus-client.js") < index.indexOf("/js/03-today.js"),
+    "coaching-focus-client.js must load after legacy UI helpers and before focus consumers"
   );
   assert.ok(
     index.indexOf("/js/02-ui.js") > -1 &&
@@ -1135,8 +1160,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(formatUtils, /\/\/ @ts-check/);
   assert.match(apiClient, /\/\/ @ts-check/);
   assert.match(appDownload, /\/\/ @ts-check/);
+  assert.match(appSwRecovery, /\/\/ @ts-check/);
   assert.match(pwaInstall, /\/\/ @ts-check/);
   assert.match(restTimer, /\/\/ @ts-check/);
+  assert.match(coachingFocusClient, /\/\/ @ts-check/);
   assert.match(todayActivityClient, /\/\/ @ts-check/);
   assert.match(swrCache, /\/\/ @ts-check/);
   assert.match(todayAgendaClient, /\/\/ @ts-check/);
@@ -1173,10 +1200,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/api-client\.js/);
   assert.match(clientBuild, /src\/client\/app\/download\.ts/);
   assert.match(clientBuild, /public\/js\/app-download\.js/);
+  assert.match(clientBuild, /src\/client\/app\/sw-recovery\.ts/);
+  assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/rest-timer\.ts/);
   assert.match(clientBuild, /public\/js\/rest-timer\.js/);
+  assert.match(clientBuild, /src\/client\/coaching-focus-client\.ts/);
+  assert.match(clientBuild, /public\/js\/coaching-focus-client\.js/);
   assert.match(clientBuild, /src\/client\/today-activity-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-activity-client\.js/);
   assert.match(clientBuild, /src\/client\/save-bar\.ts/);
@@ -1233,6 +1264,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(contracts, /export \* from "\.\/client-api-coverage\.js"/);
   assert.match(apiContracts, /export interface ClientApiResponses/);
   assert.match(apiContracts, /"\/api\/today-agenda": ClientTodayAgenda/);
+  assert.match(apiContracts, /"\/api\/coaching-focus": ClientCoachingFocus/);
   assert.match(apiContracts, /"\/api\/nutrition\/day": ClientDayIntake/);
   assert.match(apiContracts, /"\/api\/program\/progression": ClientPrescription\[\]/);
   assert.match(apiContracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
@@ -1241,6 +1273,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiCoverage, /export const CLIENT_API_CONTRACT_PATHS/);
   assert.match(apiCoverage, /export const CLIENT_API_UNKNOWN_WAIVERS/);
   assert.match(compat, /AssertAssignable<TodayAgenda, ClientTodayAgenda>/);
+  assert.match(compat, /AssertAssignable<CoachingFocus, ClientCoachingFocus>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
   assert.match(compat, /ReturnType<typeof planDayProgression>/);
   assert.match(compat, /AssertAssignable<ArchivedChatSession, ClientChatSessionSummary>/);
@@ -1261,6 +1294,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
   assert.match(apiClientSource, /function api<Path extends string>/);
   assert.match(apiClientSource, /type CairnApiResponse<Path extends string>/);
+  assert.match(appSwRecoverySource, /function startServiceWorkerLifecycle\(\): void/);
+  assert.match(appSwRecoverySource, /__cairnSwLifecycleStarted/);
+  assert.match(appSwRecoverySource, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
+  assert.match(appSwRecoverySource, /window\.registerServiceWorkerLifecycle = startServiceWorkerLifecycle/);
   assert.match(coreStateSource, /const query = <T extends Element = Element>/);
   assert.match(coreStateSource, /const appView = \(\(\) => \{/);
   assert.match(coreStateSource, /const appHeaderTitle = \(\(\) => \{/);
@@ -1274,6 +1311,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(restTimerSource, /function stopRest\(\): void/);
   assert.match(restTimerSource, /Object\.assign\(globalThis, \{/);
   assert.match(restTimerSource, /CairnRestTimer/);
+  assert.match(coachingFocusSource, /type ClientCoachingFocus = import\("\.\.\/contracts\/client\.js"\)\.ClientCoachingFocus/);
+  assert.match(coachingFocusSource, /function coachingFocusCardHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
+  assert.match(coachingFocusSource, /async function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
+  assert.match(coachingFocusSource, /function cfocusRoute\(go: unknown\): void/);
+  assert.match(coachingFocusSource, /Object\.assign\(globalThis, \{/);
+  assert.match(coachingFocusSource, /CairnCoachingFocus/);
   assert.match(todayActivitySource, /function actEntryHtml\(activity: ClientActivityLike\): string/);
   assert.match(todayActivitySource, /function updateActEntry\(el: Element, row: ClientActivityLike\): void/);
   assert.match(todayActivitySource, /Object\.assign\(globalThis, \{/);
@@ -1347,6 +1390,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appMobileViewportSource, /measureChatTop/);
   assert.match(appMobileViewportSource, /window\.visualViewport/);
   assert.match(appServiceWorkerSource, /function registerServiceWorkerLifecycle\(\): void/);
+  assert.match(appServiceWorkerSource, /__cairnSwLifecycleStarted/);
   assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
   assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
   assert.match(appDisciplinePrimerSource, /function primeDiscipline\(\): void/);
@@ -1385,6 +1429,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appDownloadSource, /function downloadFile\(href: string\): void/);
   assert.match(appDownload, /Object\.assign\(globalThis, \{ downloadFile \}\)/);
   assert.match(appDownload, /window\.downloadFile = downloadFile/);
+  assert.match(appSwRecovery, /startServiceWorkerLifecycle\(\)/);
+  assert.match(appSwRecovery, /registerServiceWorkerLifecycle/);
+  assert.match(appSwRecovery, /__cairnSwLifecycleStarted/);
   assert.match(coreState, /\/\/ @ts-check/);
   assert.match(coreState, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
   assert.match(pwaInstall, /Object\.assign\(globalThis, \{/);
@@ -1393,6 +1440,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(restTimer, /Object\.assign\(globalThis, \{/);
   assert.match(restTimer, /CairnRestTimer/);
   assert.doesNotMatch(ui, /function\s+startRest|function\s+stopRest|const\s+rest\s*=/);
+  assert.match(coachingFocusClient, /Object\.assign\(globalThis, \{/);
+  assert.match(coachingFocusClient, /CairnCoachingFocus/);
+  assert.match(coachingFocusClient, /document\.addEventListener\("click"/);
+  assert.doesNotMatch(ui, /function\s+coachingFocusCardHtml|function\s+loadCoachingFocus|function\s+cfocusRoute|const\s+CFOCUS_DOMAIN_LABEL/);
   assert.match(todayActivityClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayActivityClient, /CairnTodayActivity/);
   assert.doesNotMatch(today, /function\s+actEntryHtml|function\s+updateActEntry|const\s+ACT_ART_PHRASE/);
@@ -1449,12 +1500,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /window\.CairnTodayAgenda\.renderableBuckets/);
   assert.match(today, /window\.CairnTodayAgenda\.railHtml/);
   assert.match(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
+  assert.match(today, /coachingFocusThreadHtml\(conductor\)/);
   assert.match(today, /CairnTodayTraining\.exRxLineHtml/);
   assert.match(today, /CairnUi\.jobCaptionHtml\(\{ tag: "div", className: "sug-loading-line job-cap" \}\)/);
   assert.match(capture, /function loadTrainingProvenance/);
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progress, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
+  assert.match(progress, /coachingFocusCardHtml\(f\)/);
   assert.match(meals, /CairnUi\.jobCaptionHtml\(\{ className: "meal-cap job-cap" \}\)/);
   assert.match(meals, /CairnUi\.sheetChipHtml\(\{ label:/);
   assert.match(
@@ -1462,6 +1515,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /CairnUi\.sheetChipHtml\(\{ className: "sheet-chip sheet-chip-kcal", value: meal\.kcal, label: "cal" \}\)/
   );
   assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
+  assert.match(health, /loadCoachingFocus\("#cfocusStandingSlot", view\)/);
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
   assert.match(health, /CairnHealthClient\.formatMarkerNumber/);
   assert.match(health, /CairnHealthClient\.markerTrendWord/);
@@ -1485,6 +1539,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
   assert.match(sw, /"\/js\/cardio-plan-client\.js"/);
+  assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
   assert.match(sw, /"\/js\/markdown-client\.js"/);
   assert.match(sw, /"\/js\/today-activity-client\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
@@ -1495,6 +1550,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/app-download\.js"/);
+  assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
   assert.match(sw, /"\/js\/save-bar\.js"/);
   assert.match(sw, /"\/js\/app-route-sync\.js"/);
   assert.match(sw, /"\/js\/app-render-dispatch\.js"/);

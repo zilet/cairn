@@ -1,16 +1,14 @@
 // @ts-check
+// Early service-worker updater. Its filename is intentionally separate from the
+// normal app-service-worker helper so old caches fetch it from the network.
 {
-    function registerServiceWorkerLifecycle() {
+    function startServiceWorkerLifecycle() {
         if (!("serviceWorker" in navigator))
             return;
         const root = globalThis;
         if (root.__cairnSwLifecycleStarted)
             return;
         root.__cairnSwLifecycleStarted = true;
-        // Single-user self-hosted app: a deploy should always be live on the next open,
-        // never stranded behind a manual tap. sw.js skipWaiting()s on install, so the
-        // new worker activates as soon as it downloads; reload once when it takes
-        // control. The first-ever install has no prior controller and must not reload.
         const hadController = !!navigator.serviceWorker.controller;
         let swReloading = false;
         navigator.serviceWorker.addEventListener("controllerchange", () => {
@@ -21,8 +19,12 @@
         });
         navigator.serviceWorker.register("/sw.js").catch(() => { });
     }
-    Object.assign(globalThis, { registerServiceWorkerLifecycle });
-    if (typeof window !== "undefined") {
-        window.registerServiceWorkerLifecycle = registerServiceWorkerLifecycle;
+    const root = globalThis;
+    if (typeof root.registerServiceWorkerLifecycle !== "function") {
+        root.registerServiceWorkerLifecycle = startServiceWorkerLifecycle;
     }
+    if (typeof window !== "undefined" && typeof window.registerServiceWorkerLifecycle !== "function") {
+        window.registerServiceWorkerLifecycle = startServiceWorkerLifecycle;
+    }
+    startServiceWorkerLifecycle();
 }

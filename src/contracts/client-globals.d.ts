@@ -5,6 +5,7 @@ import type {
   ClientChatSearchHit,
   ClientChatSessionSummary,
   ClientApiResponse,
+  ClientCoachingFocus,
   ClientRoute,
   ClientRoutesApi,
   ClientDayIntake,
@@ -194,6 +195,11 @@ declare global {
   declare function phoneCoachContent(mode: string): string;
   declare function renderPhoneCoachBanner(container: Element | null | undefined): void;
   declare function refreshPhoneCoach(): void;
+  declare function cfocusDomainTag(domain: unknown): string;
+  declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
+  declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
+  declare function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string;
+  declare function cfocusRoute(go: unknown): void;
   declare const sleep: (ms: number) => Promise<void>;
   declare function openAgentLoginModal(agentName: string): unknown;
   declare function mdSafeUrl(url: unknown): string | null;
@@ -450,6 +456,15 @@ declare global {
       stopRest(): void;
     };
 
+    CairnCoachingFocus: {
+      CFOCUS_DOMAIN_LABEL: Record<string, string>;
+      cfocusDomainTag(domain: unknown): string;
+      coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
+      loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
+      coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string;
+      cfocusRoute(go: unknown): void;
+    };
+
     CairnCardioPlan: {
       isCardioItem(item: unknown): boolean;
       cardioIntervalNote(interval: unknown): string;
@@ -502,6 +517,7 @@ declare global {
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
+  declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
