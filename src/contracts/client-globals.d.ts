@@ -127,6 +127,7 @@ declare global {
   declare const HEALTH_SEG: readonly ClientSegment[];
   declare const SET_SEG: readonly ClientSegment[];
   declare const MEALS_KEY: string;
+  declare const MEAL_LABEL: Record<string, string>;
   declare let _progFocusCard: unknown;
 
   declare function skelSwap(fn: () => void): void;
@@ -335,6 +336,7 @@ declare global {
   declare function renderCoach(): unknown;
   declare function renderPlanEndurance(): unknown;
   declare function runTargetText(run: Record<string, unknown>): string;
+  declare function dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
   declare function renderPlanEditor(): unknown;
   declare function renderHistory(): unknown;
   declare function renderChat(): unknown;
@@ -562,6 +564,12 @@ declare global {
       rampHtml(goal: Record<string, unknown> | null | undefined): string;
       presets(goal: Record<string, unknown> | null | undefined): Array<{ t: string; i: string }>;
       draftCardHtml(proposal: Record<string, unknown>): string;
+    };
+
+    CairnDayFuel: {
+      MEAL_LABEL: Record<string, string>;
+      mealLabelHtml(meal: unknown): string;
+      dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
     };
 
     CairnHealthLearned: {
@@ -837,6 +845,7 @@ declare global {
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
+  declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];
   declare const CairnFamily: Window["CairnFamily"];

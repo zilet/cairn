@@ -625,6 +625,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/progress-program-summary-client\.js"/);
   assert.match(sw, /"\/js\/progress-program-block-client\.js"/);
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-learned-client\.js"/);
@@ -633,6 +634,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/family-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/route-state\.js"/);
@@ -802,6 +804,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsScreenSource = read("src/client/settings-screen.ts");
   const chatClientSource = read("src/client/chat-client.ts");
   const planEnduranceSource = read("src/client/plan-endurance-client.ts");
+  const dayFuelSource = read("src/client/day-fuel-client.ts");
   const foodNoteSource = read("src/client/food-note-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const healthLearnedSource = read("src/client/health-learned-client.ts");
@@ -867,6 +870,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressProgramBlockClient = read("public/js/progress-program-block-client.js");
   const capture = read("public/js/04-capture.js");
   const planEnduranceClient = read("public/js/plan-endurance-client.js");
+  const dayFuelClient = read("public/js/day-fuel-client.js");
   const foodNoteClient = read("public/js/food-note-client.js");
   const healthClient = read("public/js/health-client.js");
   const healthLearnedClient = read("public/js/health-learned-client.js");
@@ -1004,6 +1008,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
   assert.match(clientGlobals, /CairnPlanEndurance/);
+  assert.match(clientGlobals, /CairnDayFuel/);
+  assert.match(clientGlobals, /declare function dayFuelHtml\(day: Record<string, unknown> \| null \| undefined\): string/);
+  assert.match(clientGlobals, /declare const MEAL_LABEL: Record<string, string>/);
   assert.match(clientGlobals, /runTargetText\(run: Record<string, unknown>\): string/);
   assert.match(clientGlobals, /declare function learnedTimelineHtml\(data: unknown\): string/);
   assert.match(clientGlobals, /CairnHealthLearned/);
@@ -1064,6 +1071,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/04-capture\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/plan-endurance-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/day-fuel-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/food-note-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-learned-client\.js/);
@@ -1168,6 +1176,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
   assert.match(clientBuild, /src\/client\/plan-endurance-client\.ts/);
   assert.match(clientBuild, /public\/js\/plan-endurance-client\.js/);
+  assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
+  assert.match(clientBuild, /public\/js\/day-fuel-client\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
   assert.match(clientBuild, /public\/js\/food-note-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
@@ -1425,6 +1435,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "plan-endurance-client.js must load before Plan endurance consumers"
   );
   assert.ok(
+    index.indexOf("/js/day-fuel-client.js") > index.indexOf("/js/05-progress.js") &&
+      index.indexOf("/js/day-fuel-client.js") < index.indexOf("/js/06-coach-meals.js"),
+    "day-fuel-client.js must load before Meals day-fuel consumers"
+  );
+  assert.ok(
     index.indexOf("/js/food-note-client.js") > index.indexOf("/js/06-coach-meals.js") &&
       index.indexOf("/js/food-note-client.js") < index.indexOf("/js/07-me-health.js"),
     "food-note-client.js must load before Me food-note consumers"
@@ -1613,6 +1628,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
   assert.match(clientBuild, /src\/client\/plan-endurance-client\.ts/);
   assert.match(clientBuild, /public\/js\/plan-endurance-client\.js/);
+  assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
+  assert.match(clientBuild, /public\/js\/day-fuel-client\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
   assert.match(clientBuild, /public\/js\/food-note-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
@@ -1857,6 +1874,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceSource, /function endurancePresets\(goal: EnduranceGoalRow/);
   assert.match(planEnduranceSource, /function endDraftCardHtml\(proposal: EnduranceProposal\): string/);
   assert.match(planEnduranceSource, /CairnPlanEndurance/);
+  assert.match(dayFuelSource, /const MEAL_LABEL: Record<string, string>/);
+  assert.match(dayFuelSource, /function dayFuelHtml\(day: DayFuelData \| null \| undefined\): string/);
+  assert.match(dayFuelSource, /CairnDayFuel/);
   assert.match(foodNoteSource, /type FoodNoteRow = \{/);
   assert.match(foodNoteSource, /function foodIngredients\(value: unknown\): FoodIngredientRow\[\]/);
   assert.match(foodNoteSource, /function noteEntryHtml\(note: FoodNoteRow, index\?: number\): string/);
@@ -2061,6 +2081,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceClient, /Object\.assign\(globalThis, \{ CairnPlanEndurance: CAIRN_PLAN_ENDURANCE \}\)/);
   assert.match(planEnduranceClient, /window\.CairnPlanEndurance = CAIRN_PLAN_ENDURANCE/);
   assert.doesNotMatch(planEnduranceClient, /^const\s+ENDURANCE_PHASES|^function\s+enduranceRampHtml|^function\s+endDraftCardHtml/m);
+  assert.match(dayFuelClient, /Object\.assign\(globalThis, \{/);
+  assert.match(dayFuelClient, /CairnDayFuel/);
+  assert.match(dayFuelClient, /MEAL_LABEL/);
+  assert.match(dayFuelClient, /dayFuelHtml/);
+  assert.doesNotMatch(dayFuelClient, /^const\s+MEAL_LABEL|^function\s+dayFuelHtml/m);
+  assert.doesNotMatch(meals, /const\s+MEAL_LABEL|function\s+dayFuelHtml/);
+  assert.match(meals, /day-fuel-client\.js/);
   assert.match(foodNoteClient, /Object\.assign\(globalThis, \{/);
   assert.match(foodNoteClient, /CairnFoodNote/);
   assert.match(foodNoteClient, /foodIngredients/);
@@ -2197,6 +2224,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-learned-client\.js"/);
@@ -2206,6 +2234,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/app-download\.js"/);
