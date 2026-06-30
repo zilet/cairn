@@ -256,6 +256,10 @@ declare global {
   declare function hideSaveBar(): void;
   declare function thinkingCaption(el: Element, op?: string): unknown;
   declare function measureChatTop(): void;
+  declare function ensureRestBar(): HTMLElement;
+  declare function paintRest(): void;
+  declare function startRest(seconds?: number): void;
+  declare function stopRest(): void;
   declare function art(kind: string, text: string): string;
   declare function artImg(kind: string, text: string, className?: string, svg?: string | null): string;
   declare function enrichBadge(status: unknown): string;
@@ -439,6 +443,13 @@ declare global {
       refreshPhoneCoach(): void;
     };
 
+    CairnRestTimer: {
+      ensureRestBar(): HTMLElement;
+      paintRest(): void;
+      startRest(seconds?: number): void;
+      stopRest(): void;
+    };
+
     CairnCardioPlan: {
       isCardioItem(item: unknown): boolean;
       cardioIntervalNote(interval: unknown): string;
@@ -490,6 +501,7 @@ declare global {
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
+  declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];

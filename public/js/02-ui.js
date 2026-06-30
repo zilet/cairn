@@ -87,57 +87,6 @@ function armDelete(btn, onConfirm, { label = "remove?" } = {}) {
   btn.addEventListener("blur", reset, { once: true });
 }
 
-// ---------- rest timer ----------
-const rest = { id: null, remaining: 0, total: 0 };
-function ensureRestBar() {
-  let bar = document.querySelector(".rest");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.className = "rest";
-    bar.innerHTML = `<div class="rest-fill"></div>
-      <div class="rest-row">
-        <button class="rest-btn" data-r="-15">−15</button>
-        <span class="rest-time"></span>
-        <button class="rest-btn" data-r="15">+15</button>
-        <button class="rest-btn rest-skip" data-r="0">Skip</button>
-      </div>`;
-    document.body.appendChild(bar);
-    bar.querySelectorAll("[data-r]").forEach((b) => b.addEventListener("click", () => {
-      const v = Number(b.dataset.r);
-      if (v === 0) return stopRest();
-      rest.remaining = Math.max(1, rest.remaining + v);
-      rest.total = Math.max(rest.total, rest.remaining);
-      paintRest();
-    }));
-  }
-  return bar;
-}
-function paintRest() {
-  const bar = document.querySelector(".rest"); if (!bar) return;
-  const m = Math.floor(rest.remaining / 60), s = String(rest.remaining % 60).padStart(2, "0");
-  bar.querySelector(".rest-time").textContent = `Rest ${m}:${s}`;
-  bar.querySelector(".rest-fill").style.width = `${Math.max(0, (rest.remaining / rest.total) * 100)}%`;
-}
-function startRest(seconds) {
-  rest.total = seconds || Number(localStorage.getItem("restSec") || 120);
-  rest.remaining = rest.total;
-  ensureRestBar().classList.add("show");
-  // give the page bottom clearance so the bar never traps the FINISH row / chatbar
-  document.body.classList.add("resting");
-  paintRest();
-  clearInterval(rest.id);
-  rest.id = setInterval(() => {
-    rest.remaining -= 1;
-    if (rest.remaining <= 0) { stopRest(); toast("Rest done"); if (navigator.vibrate) navigator.vibrate(150); return; }
-    paintRest();
-  }, 1000);
-}
-function stopRest() {
-  clearInterval(rest.id); rest.id = null;
-  const bar = document.querySelector(".rest"); if (bar) bar.classList.remove("show");
-  document.body.classList.remove("resting");
-}
-
 // ---------- exercise detail (full-screen overlay, Morsel-style) ----------
 
 // Wire every [data-guide] in scope + make the card's art tile tappable; both
