@@ -336,6 +336,12 @@ declare global {
   declare function renderCoach(): unknown;
   declare function renderPlanEndurance(): unknown;
   declare function runTargetText(run: Record<string, unknown>): string;
+  declare function statusBadge(status: unknown): string;
+  declare function applyResultMessage(result: unknown): { failed: boolean; message: string };
+  declare function clampNoteHtml(clamped: unknown): string;
+  declare function verifiedBadgeHtml(verified: unknown): string;
+  declare function strengthChangeHtml(change: unknown): string;
+  declare function isOpenProposal(proposal: unknown): boolean;
   declare function dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
   declare function renderPlanEditor(): unknown;
   declare function renderHistory(): unknown;
@@ -570,6 +576,16 @@ declare global {
       MEAL_LABEL: Record<string, string>;
       mealLabelHtml(meal: unknown): string;
       dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
+    };
+
+    CairnProposal: {
+      statusBadge(status: unknown): string;
+      applyResultMessage(result: unknown): { failed: boolean; message: string };
+      clampNoteHtml(clamped: unknown): string;
+      verifiedBadgeHtml(verified: unknown): string;
+      strengthChangeHtml(change: unknown): string;
+      runTargetText(run: Record<string, unknown>): string;
+      isOpenProposal(proposal: unknown): boolean;
     };
 
     CairnHealthLearned: {
@@ -846,6 +862,7 @@ declare global {
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
+  declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];
   declare const CairnFamily: Window["CairnFamily"];

@@ -30,6 +30,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
   { source: "src/client/cardio-plan-client.ts", output: "public/js/cardio-plan-client.js" },
   { source: "src/client/cardio-sync-client.ts", output: "public/js/cardio-sync-client.js" },
+  { source: "src/client/proposal-client.ts", output: "public/js/proposal-client.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
   { source: "src/client/progress-components-client.ts", output: "public/js/progress-components-client.js" },
   { source: "src/client/progress-chart-client.ts", output: "public/js/progress-chart-client.js" },

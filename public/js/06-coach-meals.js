@@ -99,31 +99,11 @@ function coachProposalOpOpts() {
   };
 }
 
-// Shared status chip for proposals + meal plans (mp-badge per contract).
-function statusBadge(status) {
-  const cls = status === "accepted" || status === "applied" || status === "kept" ? "ok"
-    : status === "discarded" ? "off"
-    : status === "superseded" ? "muted" : "draft";
-  return `<span class="mp-badge ${cls}">${escHtml(status || "draft")}</span>`;
-}
-
 // Clamp transparency from the most recent apply, keyed by proposal id, so a light
 // re-render of the list can still surface the "adjusted to a safe step" note on the
 // card that was just applied (the clamp detail isn't persisted on the row).
+// Shared proposal render helpers live in /js/proposal-client.js.
 const lastApplyClamp = {};
-
-// Map a /proposals/:id/apply response → the toast to show. Shared by the Coach-list
-// applier (below) and the chat draft-apply handler (09) so the failure guard + the
-// success wording stay identical. failed:true ⇒ never claim "Applied" (a 400 {error},
-// ok:false = nothing changed, or a transport drop).
-function applyResultMessage(r) {
-  if (!r || r.ok === false || r.error) return { failed: true, message: (r && r.error) || "Couldn't apply — try again" };
-  if (Array.isArray(r.clamped) && r.clamped.length) return { failed: false, message: "Applied · adjusted to a safe step" };
-  const addedN = Array.isArray(r.added) ? r.added.length : 0;
-  if (addedN) return { failed: false, message: addedN > 1 ? `Added ${addedN} movements to your plan` : "Added to your plan" };
-  if (r.restructured) return { failed: false, message: "Plan restructured" };
-  return { failed: false, message: "Applied" };
-}
 
 // Apply one proposal by id — the single apply path shared by the Coach list and the
 // Plan → Endurance "shape your running" composer. Flips the draft to 'applied'
@@ -149,88 +129,6 @@ async function refreshProposals() {
   try { renderProposals(await api("/proposals?limit=10")); } catch { /* keep last paint */ }
 }
 
-// Clamp/verify transparency — when an applied proposal returned `clamped[]` (a code
-// guardrail nudged a value to a safe step), surface it as a calm hairline note, never
-// an alarm: trust through honesty. Shapes: {exercise, field, requested, applied, reason}.
-// Returns "" when there was nothing to adjust. Each line reads in plain words.
-function clampNoteHtml(clamped) {
-  const rows = (Array.isArray(clamped) ? clamped : []).filter(Boolean);
-  if (!rows.length) return "";
-  const lines = rows.slice(0, 6).map((c) => {
-    const what = String(c.exercise || c.field || "a value").trim();
-    const reason = String(c.reason || "kept to a safe step").trim();
-    const from = c.requested != null && c.requested !== "" ? `${escHtml(String(c.requested))} → ` : "";
-    const to = c.applied != null && c.applied !== "" ? `<b>${escHtml(String(c.applied))}</b>` : "";
-    const move = from || to ? `<span class="clampnote-move">${from}${to}</span>` : "";
-    return `<div class="clampnote-row"><span class="clampnote-what">${escHtml(what)}</span>${move}<span class="clampnote-why">${escHtml(reason)}</span></div>`;
-  }).join("");
-  return `<div class="clampnote settle-in" role="note">
-      <div class="clampnote-lbl lbl"><span class="clampnote-glyph" aria-hidden="true">⚖</span> adjusted to a safe step</div>
-      ${lines}
-    </div>`;
-}
-
-// Clamp/verify transparency — a quiet "checked against your floors" badge for a
-// meal plan / suggested session that carried `verified.checked`. Lists the named
-// adjustments behind a disclosure when present; otherwise just the calm reassurance.
-// Trust through honesty, never alarm. Returns "" when nothing was checked.
-function verifiedBadgeHtml(verified) {
-  if (!verified || !verified.checked) return "";
-  const adj = (Array.isArray(verified.adjustments) ? verified.adjustments : []).filter((a) => a != null && String(a).trim());
-  const detail = adj.length
-    ? `<details class="verified-detail"><summary>what was adjusted</summary>
-         <ul class="verified-list">${adj.slice(0, 8).map((a) => `<li>${escHtml(String(a))}</li>`).join("")}</ul>
-       </details>`
-    : "";
-  return `<div class="verified-badge settle-in" role="note">
-      <span class="verified-mark" aria-hidden="true">✓</span>
-      <span class="verified-text">Checked against your floors</span>
-      ${detail}
-    </div>`;
-}
-
-// One strength change line in a proposal card — robust to partial payloads. Shows the
-// day only when present (no more "Dundefined"), the target (loaded weight or a timed
-// hold), the rep range when known, and the coach's plain-words reason on its own muted
-// line (never empty parens). Used for both auto-progression and coach `changes[]`.
-function strengthChangeHtml(c) {
-  if (!c) return "";
-  const dayTag = c.day_number != null
-    ? `<span class="lbl" style="margin-right:7px;opacity:.7">Day ${escHtml(c.day_number)}</span>`
-    : "";
-  const tgt = c.target_seconds != null
-    ? `${escHtml(c.target_seconds)}s`
-    : (c.target_weight != null ? escHtml(fmtWeight(c.target_weight)) : "—");
-  const reps = (c.rep_low != null)
-    ? ` <span style="color:var(--muted)">× ${escHtml(c.rep_low)}${c.rep_high != null && c.rep_high !== c.rep_low ? "–" + escHtml(c.rep_high) : ""}</span>`
-    : "";
-  const reason = c.reason || c.note;
-  const why = reason
-    ? `<div class="sess-why" style="color:var(--muted);font-size:.82rem;margin:0 0 5px">${escHtml(reason)}</div>`
-    : "";
-  return `<div class="sess-line">${dayTag}<b>${escHtml(c.exercise || "")}</b> → <span class="numeral">${tgt}</span>${reps}</div>${why}`;
-}
-
-// A run prescription's target in plain words — "8 km · Z2", "45 min · easy".
-function runTargetText(c) {
-  const bits = [];
-  if (c.target_distance_km != null) bits.push(`${c.target_distance_km} km`);
-  if (c.target_duration_min != null) bits.push(`${Math.round(c.target_duration_min)} min`);
-  if (c.target_zone) bits.push(String(c.target_zone));
-  return bits.join(" · ") || "run";
-}
-
-// A proposal is "open work" only while it's a draft that still has something to
-// apply (strength changes, a restructure, or run prescriptions). An advisory
-// nutrition_target draft (applied from Energy Balance, not here) is NOT open work,
-// so it collapses with the settled history instead of sitting at the top forever.
-function isOpenProposal(p) {
-  return p.status === "draft" && (
-    (p.parsed && Array.isArray(p.parsed.changes) && p.parsed.changes.length) ||
-    (p.parsed && Array.isArray(p.parsed.cardio) && p.parsed.cardio.length) ||
-    (p.parsed && Array.isArray(p.parsed.days) && p.parsed.days.length)
-  );
-}
 
 function renderProposals(proposals) {
   const wrap = $("#proplist");
