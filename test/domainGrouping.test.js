@@ -124,6 +124,16 @@ test("memory learning adapters use the person domain entry point", () => {
   }
 });
 
+test("daily driver adapters use domain entry points", () => {
+  for (const file of ["src/routes/today.ts", "src/surfaces/mcp/daily-driver.ts"]) {
+    const src = read(file);
+    assert.match(src, /domain\/brain\/index\.js/, `${file} should import brain domain exports`);
+    assert.match(src, /domain\/health\/index\.js/, `${file} should import health domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+  assert.match(read("src/surfaces/mcp/daily-driver.ts"), /domain\/person\/index\.js/, "daily driver MCP should import person domain exports for feedback memory");
+});
+
 test("repo compatibility barrel remains the public back-compat surface", () => {
   const repo = read("src/repo.ts");
   assert.match(repo, /Barrel: repo\.ts was split into cohesive domain modules/);
