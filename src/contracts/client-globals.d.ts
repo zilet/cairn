@@ -195,6 +195,12 @@ declare global {
   declare function phoneCoachContent(mode: string): string;
   declare function renderPhoneCoachBanner(container: Element | null | undefined): void;
   declare function refreshPhoneCoach(): void;
+  declare function fmtShortDate(iso: unknown): string;
+  declare function progressHero(
+    title: unknown,
+    stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }] | null | undefined | false>,
+  ): string;
+  declare function emptyStateHtml(svg: string | null | undefined, line: unknown): string;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -461,6 +467,15 @@ declare global {
       stopRest(): void;
     };
 
+    CairnProgressComponents: {
+      fmtShortDate(iso: unknown): string;
+      progressHero(
+        title: unknown,
+        stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }] | null | undefined | false>,
+      ): string;
+      emptyStateHtml(svg: string | null | undefined, line: unknown): string;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -530,6 +545,7 @@ declare global {
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
+  declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];

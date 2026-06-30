@@ -1,34 +1,4 @@
 // ==== 05-progress.js ====
-// ---------- Progress: shared premium helpers ----------
-const fmtShortDate = (iso) => {
-  const [y, m, d] = String(iso || "").split("-").map(Number);
-  if (!y || !m || !d) return String(iso || "");
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-};
-
-// Hero band at the top of every Progress sub-view: serif heading + key numerals.
-// stats: [label, value, opts?] \u2014 opts.text renders as-is (no count-up), opts.k humanizes.
-function progressHero(title, stats) {
-  const cells = (stats || []).filter(Boolean).map(([label, value, opts = {}]) => {
-    const fig = opts.text
-      ? `<span class="phero-n numeral${String(value).length > 6 ? " phero-n-sm" : ""}">${escHtml(String(value))}</span>`
-      : `<span class="phero-n numeral" data-cu="${Number(value) || 0}"${opts.k ? ` data-cufmt="k"` : ""}>0</span>`;
-    return `<div class="phero-stat">${fig}<span class="lbl">${escHtml(label)}</span></div>`;
-  }).join("");
-  return `<div class="phero reveal" style="${stagger(0)}">
-      <h2 class="phero-title">${escHtml(title)}</h2>
-      ${cells ? `<div class="phero-stats">${cells}</div>` : ""}
-    </div>`;
-}
-
-// Consistent empty state: illustration plate + one serif line.
-function emptyStateHtml(svg, line) {
-  return `<div class="empty-state reveal" style="${stagger(1)}">
-      <div class="artile artile-lg">${svg || art("exercise", "")}</div>
-      <div class="empty-state-line">${escHtml(line)}</div>
-    </div>`;
-}
-
 // Canvas charts read their palette from the :root CSS tokens (never hardcoded
 // hexes) so they can't drift from the design system. Resolved once per draw.
 // `gridline`/`grid-label` have no token, so they derive from the palette here.
