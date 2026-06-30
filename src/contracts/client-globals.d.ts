@@ -25,7 +25,7 @@ declare global {
   type ClientSettingsSection = "agents" | "sources" | "automation" | "data";
   type ClientSegment = readonly [string, string];
   type ClientSettingsRouteTask = readonly [string, string];
-  type ClientSaveBar = { markDirty(): void };
+  type ClientSaveBar = { markDirty(): void; save(): Promise<void> };
 
   type ClientBriefCache = {
     date: string;

@@ -18,6 +18,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/api-client.ts", output: "public/js/api-client.js" },
   { source: "src/client/app/download.ts", output: "public/js/app-download.js" },
   { source: "src/client/app/state.ts", output: "public/js/01-core.js" },
+  { source: "src/client/save-bar.ts", output: "public/js/save-bar.js" },
   { source: "src/client/swr-cache.ts", output: "public/js/swr-cache.js" },
   { source: "src/client/today-agenda-client.ts", output: "public/js/today-agenda-client.js" },
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
