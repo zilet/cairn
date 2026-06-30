@@ -78,7 +78,7 @@ export interface ClientTodayAgenda {
 export type ClientCoachingFocusDomain = "training" | "running" | "nutrition" | "health" | "recovery" | "body";
 
 export interface ClientCoachingFocusItem {
-  domain: ClientCoachingFocusDomain | string;
+  domain: ClientCoachingFocusDomain;
   title: string;
   why: string;
   move?: string;
@@ -96,7 +96,7 @@ export interface ClientCoachingFocus {
   headline: string;
   lead: ClientCoachingFocusItem | null;
   parallel: ClientCoachingFocusItem[];
-  later: Array<{ domain: ClientCoachingFocusDomain | string; title: string }>;
+  later: Array<{ domain: ClientCoachingFocusDomain; title: string }>;
   connections: string[];
   retest: ClientCoachingRetest | null;
   horizon_weeks: number | null;

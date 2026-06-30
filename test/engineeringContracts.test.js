@@ -1141,6 +1141,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(verifyRunner, /const postBuildJobs = \[/);
   assert.match(verifyRunner, /await runGroup\("build", buildJobs\);\nawait runGroup\("post-build", postBuildJobs\);/);
   assert.match(rootTsconfig, /"exclude": \["src\/client\/\*\*\/\*\.ts"\]/);
+  assert.match(contracts, /export type ClientCoachingFocusDomain = "training" \| "running" \| "nutrition" \| "health" \| "recovery" \| "body"/);
+  assert.doesNotMatch(contracts, /domain: ClientCoachingFocusDomain \| string/);
   assert.match(clientTsconfig, /"allowJs": true/);
   assert.match(clientTsconfig, /"checkJs": true/);
   assert.match(clientTsconfig, /"noEmit": true/);

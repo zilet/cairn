@@ -9,9 +9,11 @@ const CFOCUS_DOMAIN_LABEL = {
     recovery: "Recovery",
     body: "Body",
 };
+function isCoachingFocusDomain(domain) {
+    return typeof domain === "string" && domain in CFOCUS_DOMAIN_LABEL;
+}
 function cfocusDomainTag(domain) {
-    const label = CFOCUS_DOMAIN_LABEL[String(domain || "")] || "";
-    return label ? `<span class="cfocus-dom lbl">${escHtml(label)}</span>` : "";
+    return isCoachingFocusDomain(domain) ? `<span class="cfocus-dom lbl">${escHtml(CFOCUS_DOMAIN_LABEL[domain])}</span>` : "";
 }
 function focusItems(items) {
     return Array.isArray(items) ? items.filter((item) => !!item) : [];
@@ -101,24 +103,46 @@ function coachingFocusThreadHtml(focus) {
     <span class="cfocus-thread-go" aria-hidden="true">→</span>
   </button>`;
 }
+function cfocusDomainRoute(domain) {
+    switch (domain) {
+        case "running":
+            state.progressSeg = "endurance";
+            activateTab("progress");
+            return;
+        case "nutrition":
+        case "body":
+            state.planJump = "meals";
+            activateTab("plan");
+            return;
+        case "health":
+            state.meSeg = "health";
+            state.healthSeg = "markers";
+            state.healthSegPicked = true;
+            activateTab("me");
+            return;
+        case "training":
+        case "recovery":
+            state.progressSeg = "program";
+            activateTab("progress");
+            return;
+    }
+    const _exhaustive = domain;
+    return _exhaustive;
+}
 function cfocusRoute(go) {
     switch (String(go || "")) {
         case "me-standing":
             state.meSeg = "standing";
             activateTab("me");
             break;
-        case "running":
         case "endurance":
             state.progressSeg = "endurance";
             activateTab("progress");
             break;
-        case "nutrition":
         case "meals":
-        case "body":
             state.planJump = "meals";
             activateTab("plan");
             break;
-        case "health":
         case "markers":
             state.meSeg = "health";
             state.healthSeg = "markers";
@@ -126,8 +150,13 @@ function cfocusRoute(go) {
             activateTab("me");
             break;
         default:
-            state.progressSeg = "program";
-            activateTab("progress");
+            if (isCoachingFocusDomain(go)) {
+                cfocusDomainRoute(go);
+            }
+            else {
+                state.progressSeg = "program";
+                activateTab("progress");
+            }
             break;
     }
 }

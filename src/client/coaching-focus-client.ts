@@ -2,9 +2,10 @@
 // Whole-athlete focus card renderer and routing bridge.
 
 type ClientCoachingFocus = import("../contracts/client.js").ClientCoachingFocus;
+type ClientCoachingFocusDomain = import("../contracts/client.js").ClientCoachingFocusDomain;
 type ClientCoachingFocusItem = import("../contracts/client.js").ClientCoachingFocusItem;
 
-const CFOCUS_DOMAIN_LABEL: Record<string, string> = {
+const CFOCUS_DOMAIN_LABEL: Record<ClientCoachingFocusDomain, string> = {
   training: "Training",
   running: "Running",
   nutrition: "Nutrition",
@@ -13,9 +14,12 @@ const CFOCUS_DOMAIN_LABEL: Record<string, string> = {
   body: "Body",
 };
 
+function isCoachingFocusDomain(domain: unknown): domain is ClientCoachingFocusDomain {
+  return typeof domain === "string" && domain in CFOCUS_DOMAIN_LABEL;
+}
+
 function cfocusDomainTag(domain: unknown): string {
-  const label = CFOCUS_DOMAIN_LABEL[String(domain || "")] || "";
-  return label ? `<span class="cfocus-dom lbl">${escHtml(label)}</span>` : "";
+  return isCoachingFocusDomain(domain) ? `<span class="cfocus-dom lbl">${escHtml(CFOCUS_DOMAIN_LABEL[domain])}</span>` : "";
 }
 
 function focusItems(items: unknown): ClientCoachingFocusItem[] {
@@ -105,24 +109,47 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   </button>`;
 }
 
+function cfocusDomainRoute(domain: ClientCoachingFocusDomain): void {
+  switch (domain) {
+    case "running":
+      state.progressSeg = "endurance";
+      activateTab("progress");
+      return;
+    case "nutrition":
+    case "body":
+      state.planJump = "meals";
+      activateTab("plan");
+      return;
+    case "health":
+      state.meSeg = "health";
+      state.healthSeg = "markers";
+      state.healthSegPicked = true;
+      activateTab("me");
+      return;
+    case "training":
+    case "recovery":
+      state.progressSeg = "program";
+      activateTab("progress");
+      return;
+  }
+  const _exhaustive: never = domain;
+  return _exhaustive;
+}
+
 function cfocusRoute(go: unknown): void {
   switch (String(go || "")) {
     case "me-standing":
       state.meSeg = "standing";
       activateTab("me");
       break;
-    case "running":
     case "endurance":
       state.progressSeg = "endurance";
       activateTab("progress");
       break;
-    case "nutrition":
     case "meals":
-    case "body":
       state.planJump = "meals";
       activateTab("plan");
       break;
-    case "health":
     case "markers":
       state.meSeg = "health";
       state.healthSeg = "markers";
@@ -130,8 +157,12 @@ function cfocusRoute(go: unknown): void {
       activateTab("me");
       break;
     default:
-      state.progressSeg = "program";
-      activateTab("progress");
+      if (isCoachingFocusDomain(go)) {
+        cfocusDomainRoute(go);
+      } else {
+        state.progressSeg = "program";
+        activateTab("progress");
+      }
       break;
   }
 }
