@@ -1,12 +1,41 @@
 import { Router } from "express";
 import { generateInsight, reconcileMarkers, runHealthReview, runResearch, synthesizeHealth } from "../coachOps.js";
-import * as repo from "../repo.js";
+import {
+  activeContextEffect,
+  getCoachingFocus,
+  getTrajectory,
+  listDirectives,
+  listVisibleInsights,
+  nextBestStep,
+  nextStepDone,
+  reactionModelForCoach,
+  snoozeNextStep,
+  updateDirective,
+  updateInsight,
+} from "../domain/brain/index.js";
+import {
+  annotateDirectiveFreshness,
+  deriveDirectives,
+  evidenceSummary,
+  getEvidence,
+  getEvidenceForMarker,
+  getHealthSynthesisView,
+  getLatestHealthReview,
+  getMarkerHistory,
+  getSettings,
+  healthFocus,
+  healthStanding,
+  listMarkerAliases,
+  prioritizeMarkers,
+  symptomMarkerLinks,
+} from "../domain/health/index.js";
+import { addMemory } from "../domain/person/index.js";
 import { backgroundOp } from "./background-op.js";
 
 export const connectedBrainRouter = Router();
 
 // ---- health insights (marker history + whole-picture agentic review) ----
-connectedBrainRouter.get("/health/markers", (_req, res) => res.json(repo.getMarkerHistory()));
+connectedBrainRouter.get("/health/markers", (_req, res) => res.json(getMarkerHistory()));
 
 // Pull-based health standing: a descriptive, visual-friendly orientation read.
 // Percentiles are real reference comparisons where a trustworthy curve exists
@@ -14,12 +43,12 @@ connectedBrainRouter.get("/health/markers", (_req, res) => res.json(repo.getMark
 // synthesis, not a 0-100 score or medical diagnosis.
 connectedBrainRouter.get("/health/standing", (req, res) => {
   const referenceAge = req.query.reference_age != null ? Number(req.query.reference_age) : undefined;
-  res.json(repo.healthStanding({ referenceAge }));
+  res.json(healthStanding({ referenceAge }));
 });
 
 // Latest review or null — a soft lookup like /sessions?date= (200 + null on
 // absence, never 404): "no review yet" is a normal state the PWA renders.
-connectedBrainRouter.get("/health/review", (_req, res) => res.json(repo.getLatestHealthReview()));
+connectedBrainRouter.get("/health/review", (_req, res) => res.json(getLatestHealthReview()));
 
 // Run a fresh whole-picture health review via the shared agent rotation.
 // Like the meal swap, ok:false at status 200 is the designed failure signal
@@ -38,14 +67,14 @@ connectedBrainRouter.post("/health/review", async (req, res) => {
 // Markers re-ranked by impact (distance from OPTIMAL, most-actionable first).
 // Informational, not medical advice; the impact_score is an internal ordering
 // signal only and is never rendered as a user-facing grade.
-connectedBrainRouter.get("/markers/priority", (_req, res) => res.json(repo.prioritizeMarkers()));
+connectedBrainRouter.get("/markers/priority", (_req, res) => res.json(prioritizeMarkers()));
 
 // Marker-name canonicalization (analyte de-duplication). GET lists the learned
 // variant->canonical aliases; POST runs the agentic reconciler over the distinct
 // marker names and persists genuine same-analyte merges (the deterministic
 // normalizer + KB are always on; this learns the long tail). Synchronous like the
 // meal swap: one agent call; ok:false at 200 is the designed failure signal.
-connectedBrainRouter.get("/markers/aliases", (_req, res) => res.json({ aliases: repo.listMarkerAliases() }));
+connectedBrainRouter.get("/markers/aliases", (_req, res) => res.json({ aliases: listMarkerAliases() }));
 
 connectedBrainRouter.post("/markers/reconcile", async (req, res) => {
   try {
@@ -58,15 +87,15 @@ connectedBrainRouter.post("/markers/reconcile", async (req, res) => {
 
 // ---- the "knows-me" layer: personal model, trajectory, life-context, next-step ----
 // All read-only, plain words, no scores: the personal coaching team, surfaced for the PWA.
-connectedBrainRouter.get("/reaction-model", (_req, res) => res.json(repo.reactionModelForCoach()));
+connectedBrainRouter.get("/reaction-model", (_req, res) => res.json(reactionModelForCoach()));
 connectedBrainRouter.get("/trajectory", (req, res) =>
-  res.json(repo.getTrajectory(typeof req.query.date === "string" ? req.query.date : undefined))
+  res.json(getTrajectory(typeof req.query.date === "string" ? req.query.date : undefined))
 );
 connectedBrainRouter.get("/context-effect", (req, res) =>
-  res.json(repo.activeContextEffect(typeof req.query.date === "string" ? req.query.date : undefined))
+  res.json(activeContextEffect(typeof req.query.date === "string" ? req.query.date : undefined))
 );
 connectedBrainRouter.get("/next-step", (req, res) =>
-  res.json(repo.nextBestStep(typeof req.query.date === "string" ? req.query.date : undefined) ?? null)
+  res.json(nextBestStep(typeof req.query.date === "string" ? req.query.date : undefined) ?? null)
 );
 
 // done / snooze are the calm "did it" / "not today" feedback: a skipped step doesn't
@@ -74,32 +103,32 @@ connectedBrainRouter.get("/next-step", (req, res) =>
 connectedBrainRouter.post("/next-step/done", (req, res) => {
   const k = String(req.body?.step_key ?? "").trim();
   if (!k) return res.status(400).json({ ok: false, error: "step_key required" });
-  repo.nextStepDone(k);
+  nextStepDone(k);
   res.json({ ok: true });
 });
 
 connectedBrainRouter.post("/next-step/snooze", (req, res) => {
   const k = String(req.body?.step_key ?? "").trim();
   if (!k) return res.status(400).json({ ok: false, error: "step_key required" });
-  repo.snoozeNextStep(k);
+  snoozeNextStep(k);
   res.json({ ok: true });
 });
 
 // The elite-coach synthesis layer: the deterministic TIERED focus (priorities,
 // not a flat directive flood) + the latest cached agentic health-story narrative.
 // Both informational, no scores. The narrative is regenerated via POST below.
-connectedBrainRouter.get("/health/focus", (_req, res) => res.json(repo.healthFocus()));
+connectedBrainRouter.get("/health/focus", (_req, res) => res.json(healthFocus()));
 
 // THE CONDUCTOR: one sequenced whole-athlete focus (lead + parallel + later +
 // connections + a batched retest) across training, running, DEXA, health, nutrition
 // and recovery. Pull/on-demand; the surface leads with this instead of a card flood.
-connectedBrainRouter.get("/coaching-focus", (_req, res) => res.json(repo.getCoachingFocus()));
+connectedBrainRouter.get("/coaching-focus", (_req, res) => res.json(getCoachingFocus()));
 
 // The cached synthesis carries a `stale` flag so the PWA can offer a calm
 // "refresh this read" affordance when newer labs/training have drifted past it.
 connectedBrainRouter.get("/health/synthesis", (_req, res) => {
-  const view = repo.getHealthSynthesisView();
-  res.json({ synthesis: view.synthesis, focus: repo.healthFocus(), stale: view.stale });
+  const view = getHealthSynthesisView();
+  res.json({ synthesis: view.synthesis, focus: healthFocus(), stale: view.stale });
 });
 
 connectedBrainRouter.post("/health/synthesis", async (req, res) => {
@@ -118,8 +147,8 @@ connectedBrainRouter.post("/health/synthesis", async (req, res) => {
 // as a current training/nutrition shaper while chronic findings stay put.
 connectedBrainRouter.get("/directives", (req, res) =>
   res.json({
-    directives: repo.annotateDirectiveFreshness(
-      repo.listDirectives({ all: req.query.all === "1" || req.query.all === "true" }),
+    directives: annotateDirectiveFreshness(
+      listDirectives({ all: req.query.all === "1" || req.query.all === "true" }),
     ),
   })
 );
@@ -128,7 +157,7 @@ connectedBrainRouter.get("/directives", (req, res) =>
 // check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet
 // "worth mentioning to your clinician" read. Informational, never diagnostic; [] when
 // nothing co-occurs. The connected brain reaching ACROSS the logs.
-connectedBrainRouter.get("/symptom-links", (_req, res) => res.json({ links: repo.symptomMarkerLinks() }));
+connectedBrainRouter.get("/symptom-links", (_req, res) => res.json({ links: symptomMarkerLinks() }));
 
 // User-controlled status flip (the review side of propose-review-apply). This
 // is feedback memory, not just a hide: resolved/dismissed directives suppress
@@ -139,14 +168,14 @@ connectedBrainRouter.put("/directives/:id", (req, res) => {
   if (!["active", "resolved", "dismissed"].includes(status)) {
     return res.status(400).json({ error: "status must be active | resolved | dismissed" });
   }
-  const updated = repo.updateDirective(Number(req.params.id), { status });
+  const updated = updateDirective(Number(req.params.id), { status });
   if (!updated) return res.status(404).json({ error: "directive not found" });
   res.json({ ok: true, directive: updated });
 });
 
 // Re-run the deterministic propagation engine over the latest markers.
 connectedBrainRouter.post("/directives/derive", (_req, res) => {
-  const out = repo.deriveDirectives(); // busts today's cached Brief itself
+  const out = deriveDirectives(); // busts today's cached Brief itself
   res.json({ ok: true, derived: out.derived, directives: out.directives });
 });
 
@@ -156,7 +185,7 @@ connectedBrainRouter.post("/directives/derive", (_req, res) => {
 connectedBrainRouter.get("/research", (req, res) => {
   const topic = typeof req.query.topic === "string" ? req.query.topic : undefined;
   const marker = typeof req.query.marker === "string" ? req.query.marker : undefined;
-  res.json({ enabled: repo.getSettings().research_enabled, evidence: repo.getEvidence({ topic, marker }) });
+  res.json({ enabled: getSettings().research_enabled, evidence: getEvidence({ topic, marker }) });
 });
 
 // Make a directive's citation INSPECTABLE: the cited evidence behind ONE marker,
@@ -166,13 +195,13 @@ connectedBrainRouter.get("/research", (req, res) => {
 connectedBrainRouter.get("/evidence", (req, res) => {
   const marker = typeof req.query.marker === "string" ? req.query.marker : undefined;
   const limit = req.query.limit ? Number(req.query.limit) : undefined;
-  res.json(repo.getEvidenceForMarker(marker, Number.isFinite(limit as number) ? (limit as number) : undefined));
+  res.json(getEvidenceForMarker(marker, Number.isFinite(limit as number) ? (limit as number) : undefined));
 });
 
 // Make cached evidence DISCOVERABLE (F1): the per-marker counts so a directive /
 // marker view can show "see the evidence (N)" without an N-fetch fan-out, plus a
 // total and whether research is on. Reads the cache only (never the network).
-connectedBrainRouter.get("/evidence/summary", (_req, res) => res.json(repo.evidenceSummary()));
+connectedBrainRouter.get("/evidence/summary", (_req, res) => res.json(evidenceSummary()));
 
 // Run a cited, web-grounded evidence pass for ONE question and cache it. Gated by
 // settings.research_enabled: when off, serves only cached evidence and returns
@@ -194,7 +223,7 @@ connectedBrainRouter.post("/research", async (req, res) => {
 // stream (new + seen, most recent first); dismissed insights stay in the DB and
 // exports but are hidden here.
 connectedBrainRouter.get("/insights", (req, res) =>
-  res.json(repo.listVisibleInsights(req.query.limit ? Number(req.query.limit) : 20))
+  res.json(listVisibleInsights(req.query.limit ? Number(req.query.limit) : 20))
 );
 
 // Run ONE agentic pass over the whole picture for a single genuine cross-domain
@@ -218,11 +247,11 @@ connectedBrainRouter.post("/insights/generate", async (req, res) => {
 // of connection lands. 404 on unknown id (a real lookup, unlike the soft reads).
 connectedBrainRouter.put("/insights/:id", (req, res) => {
   const b = req.body ?? {};
-  const updated = repo.updateInsight(Number(req.params.id), { status: b.status, feedback: b.feedback });
+  const updated = updateInsight(Number(req.params.id), { status: b.status, feedback: b.feedback });
   if (!updated) return res.status(404).json({ error: "not found" });
   if (b.feedback === "up") {
     const text = String((updated as any).text ?? "").trim();
-    if (text) repo.addMemory(text, "insight", "insight-feedback");
+    if (text) addMemory(text, "insight", "insight-feedback");
   }
   res.json(updated);
 });

@@ -383,7 +383,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(connectedBrainRoutes, /backgroundOp\(res,\s*"health_synthesis"/);
   assert.match(connectedBrainRoutes, /backgroundOp\(res,\s*kind/);
   assert.match(connectedBrainRoutes, /reconcileMarkers/);
-  assert.match(connectedBrainRoutes, /repo\.getEvidence\(\{\s*topic,\s*marker\s*\}\)/);
+  assert.match(connectedBrainRoutes, /getEvidence\(\{\s*topic,\s*marker\s*\}\)/);
   assert.match(connectedBrainRoutes, /runResearch/);
   assert.match(connectedBrainRoutes, /addMemory\(text,\s*"insight",\s*"insight-feedback"\)/);
   assert.match(api, /api\.use\("\/",\s*dayCoachRouter\)/);
