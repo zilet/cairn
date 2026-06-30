@@ -469,6 +469,23 @@ declare global {
       historyHitRow(hit: Partial<ClientChatSearchHit>, query: unknown, whenLabel: string): string;
     };
 
+    CairnExerciseDetail: {
+      explanation(exercise: { name?: unknown; muscle_group?: unknown } | null | undefined): {
+        setup?: unknown;
+        move?: unknown;
+        feel?: unknown;
+        avoid?: unknown;
+      };
+      explanationHtml(
+        exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
+        explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null,
+      ): string;
+      validExplanationPayload(payload: {
+        ok?: unknown;
+        explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null;
+      } | null | undefined): boolean;
+    };
+
     CairnUi: {
       attrsHtml(attrs: Record<string, unknown> | null | undefined): string;
       actionButtonHtml(action: {
@@ -1028,6 +1045,7 @@ declare global {
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
+  declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
