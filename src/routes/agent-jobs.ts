@@ -1,6 +1,6 @@
 import { Router } from "express";
-import * as repo from "../repo.js";
 import { cancelAgentJob, onJobEvent } from "../agentJobs.js";
+import { getAgentJob, listActiveAgentJobs } from "../domain/person/index.js";
 
 export const agentJobsRouter = Router();
 
@@ -9,12 +9,12 @@ export const agentJobsRouter = Router();
 // and queued work after reloads.
 
 // Active (queued + running) jobs, oldest-first.
-agentJobsRouter.get("/", (_req, res) => res.json({ ok: true, jobs: repo.listActiveAgentJobs() }));
+agentJobsRouter.get("/", (_req, res) => res.json({ ok: true, jobs: listActiveAgentJobs() }));
 
 // One job's current state (poll fallback when SSE is unavailable). A `done` job
 // includes job.result = the ref-hydrated contract body.
 agentJobsRouter.get("/:id", (req, res) => {
-  const job = repo.getAgentJob(Number(req.params.id));
+  const job = getAgentJob(Number(req.params.id));
   if (!job) return res.status(404).json({ ok: false, error: "not found" });
   res.json({ ok: true, job });
 });
@@ -41,7 +41,7 @@ agentJobsRouter.get("/:id/stream", (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
-  const job = repo.getAgentJob(id) as any;
+  const job = getAgentJob(id) as any;
   if (!job) { send("error", { error: "no such job" }); return res.end(); }
 
   // Initial snapshot, with the result if the job already finished.

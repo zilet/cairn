@@ -540,6 +540,7 @@ Tasks:
 - [x] Move Person Context REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Person REST and MCP adapters off the `repo.js` compatibility barrel and onto person/health domain entry points, guarded by `test/domainGrouping.test.js`.
 - [x] Move Memory/Learning REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
+- [x] Move Agent Job REST/background helpers off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Today/Daily Driver REST and MCP adapters off the `repo.js` compatibility barrel and onto brain/health/person domain entry points, guarded by `test/domainGrouping.test.js`.
 - Replace broad `import * as repo from "../repo.js"` in route modules with domain imports where ownership is clear.
 - Keep `src/repo.ts` as compatibility until references are low enough to remove safely.
