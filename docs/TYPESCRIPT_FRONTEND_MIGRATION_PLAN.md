@@ -540,6 +540,7 @@ Tasks:
 - [x] Move Person Context REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Person REST and MCP adapters off the `repo.js` compatibility barrel and onto person/health domain entry points, guarded by `test/domainGrouping.test.js`.
 - [x] Move Memory/Learning REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
+- [x] Move Chat REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Agent Job REST/background helpers off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Export REST routes off the `repo.js` compatibility barrel and onto health/training domain entry points, guarded by `test/domainGrouping.test.js`.
 - [x] Add `src/domain/operator/index.ts` and move Operator/Art REST and MCP adapters off the `repo.js` compatibility barrel, guarded by `test/domainGrouping.test.js`.

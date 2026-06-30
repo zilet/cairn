@@ -2,10 +2,24 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import * as repo from "../repo.js";
 import { enqueueChatTurn, cancelTurn, onTurnEvent } from "../chatTurns.js";
 import { enqueueAgentJob } from "../agentJobs.js";
 import { distillChat } from "../coachOps.js";
+import {
+  addChatMessage,
+  archiveChat,
+  clearChat,
+  createAgentJob,
+  createChatTurn,
+  getArchivedConversation,
+  getChatMessage,
+  getChatTurn,
+  getSettings,
+  listActiveChatTurns,
+  listArchivedSessions,
+  listChatMessages,
+  searchChatMessages,
+} from "../domain/person/index.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime } from "../uploadMime.js";
 
@@ -13,7 +27,7 @@ export const chatRouter = Router();
 
 const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
-chatRouter.get("/", (req, res) => res.json(repo.listChatMessages(req.query.limit ? Number(req.query.limit) : 50)));
+chatRouter.get("/", (req, res) => res.json(listChatMessages(req.query.limit ? Number(req.query.limit) : 50)));
 
 // Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the
 // user message + a chat_turn and hand it to the serial worker, returning at once.
@@ -46,8 +60,8 @@ chatRouter.post("/", (req, res) => {
 
   if (!message && !imagePath) return res.status(400).json({ error: "message or image required" });
 
-  const userMsg = repo.addChatMessage("user", message || "(photo)", null, imageUrl ? { image: imageUrl } : undefined);
-  const turn = repo.createChatTurn({
+  const userMsg = addChatMessage("user", message || "(photo)", null, imageUrl ? { image: imageUrl } : undefined);
+  const turn = createChatTurn({
     message,
     image_path: imagePath,
     image_url: imageUrl,
@@ -61,15 +75,15 @@ chatRouter.post("/", (req, res) => {
 // Read-only history: browse past conversations (archived by "fresh start") and
 // search across everything. These never mutate — nothing is hard-deleted.
 chatRouter.get("/search", (req, res) =>
-  res.json(repo.searchChatMessages(String(req.query.q ?? ""), req.query.limit ? Number(req.query.limit) : 40)));
+  res.json(searchChatMessages(String(req.query.q ?? ""), req.query.limit ? Number(req.query.limit) : 40)));
 chatRouter.get("/sessions", (req, res) =>
-  res.json(repo.listArchivedSessions(req.query.limit ? Number(req.query.limit) : 50)));
+  res.json(listArchivedSessions(req.query.limit ? Number(req.query.limit) : 50)));
 chatRouter.get("/sessions/:sessionId", (req, res) =>
-  res.json(repo.getArchivedConversation(req.params.sessionId)));
+  res.json(getArchivedConversation(req.params.sessionId)));
 
 // "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is
 // part of the athlete's history/export, so nothing is hard-deleted anymore.
-chatRouter.delete("/", (_req, res) => res.json(repo.clearChat()));
+chatRouter.delete("/", (_req, res) => res.json(clearChat()));
 
 // "Fresh start": ARCHIVE the live conversation immediately (so the composer is
 // usable at once — no blocking on the agent), then distill durable facts from the
@@ -78,19 +92,19 @@ chatRouter.delete("/", (_req, res) => res.json(repo.clearChat()));
 // the distill just queues as a normal chat turn (archive-before-enqueue keeps the
 // ordering). When bg_ops is OFF this falls back to the legacy blocking inline path.
 chatRouter.post("/reset", async (req, res) => {
-  const history = repo.listChatMessages(200);
+  const history = listChatMessages(200);
   if (!history.length) return res.json({ ok: true, distilled: 0, archived: 0 });
   const agent = req.body?.agent ?? null;
-  if (repo.getSettings().bg_ops_enabled) {
+  if (getSettings().bg_ops_enabled) {
     const snapshot = history.map((m: any) => ({ role: m.role, content: m.content }));
-    const { archived, session_id } = repo.archiveChat();
-    const job = repo.createAgentJob({ kind: "chat_distill", input: { agent, history: snapshot }, agent });
+    const { archived, session_id } = archiveChat();
+    const job = createAgentJob({ kind: "chat_distill", input: { agent, history: snapshot }, agent });
     enqueueAgentJob((job as any).id);
     return res.json({ ok: true, archived, session_id, distilling: (job as any).id });
   }
   // Legacy inline path (bg_ops off): distill (best-effort) then archive.
   const r = await distillChat(agent, history.map((m: any) => ({ role: m.role, content: m.content })));
-  const { archived, session_id } = repo.archiveChat();
+  const { archived, session_id } = archiveChat();
   res.json({
     ok: true,
     distilled: r.distilled,
@@ -103,10 +117,10 @@ chatRouter.post("/reset", async (req, res) => {
 
 // Active (queued + running) turns, oldest-first — the PWA reconstructs the live
 // in-flight + queued thread from this on every (re)load (durable across restarts).
-chatRouter.get("/turns", (_req, res) => res.json(repo.listActiveChatTurns()));
+chatRouter.get("/turns", (_req, res) => res.json(listActiveChatTurns()));
 
 // One turn's current state (poll fallback when SSE is unavailable).
-chatRouter.get("/turns/:id", (req, res) => res.json(repo.getChatTurn(Number(req.params.id)) ?? null));
+chatRouter.get("/turns/:id", (req, res) => res.json(getChatTurn(Number(req.params.id)) ?? null));
 
 // Stop a queued or running turn (drops it / SIGKILLs the live subprocess).
 chatRouter.post("/turns/:id/cancel", (req, res) => {
@@ -131,11 +145,11 @@ chatRouter.get("/turns/:id/stream", (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* client gone */ }
   };
 
-  const turn = repo.getChatTurn(id) as any;
+  const turn = getChatTurn(id) as any;
   if (!turn) { send("error", { error: "no such turn" }); return res.end(); }
 
   // Initial snapshot, with the assistant message if the turn already finished.
-  const assistantMsg = turn.assistant_message_id ? repo.getChatMessage(turn.assistant_message_id) : null;
+  const assistantMsg = turn.assistant_message_id ? getChatMessage(turn.assistant_message_id) : null;
   send("snapshot", { turn, message: assistantMsg });
   if (["done", "error", "canceled"].includes(turn.status)) return res.end();
 
