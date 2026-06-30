@@ -539,6 +539,25 @@ declare global {
       familySwatches(selected: unknown): string;
     };
 
+    CairnLife: {
+      LIFE_KINDS: readonly (readonly [string, string])[];
+      LIFE_ICONS: Record<string, string>;
+      lifeKindLabel(kind: unknown): string;
+      lifeKindOptionsHtml(): string;
+      parsedMeta(event: Record<string, unknown> | null | undefined): Record<string, unknown>;
+      fmtDateRange(start: unknown, end: unknown): string;
+      daysUntil(iso: unknown, todayIso?: string): number | null;
+      eventActive(event: Record<string, unknown> | null | undefined, todayIso?: string): boolean;
+      lifeFieldsHtml(kind: unknown): string;
+      lifeImpactsHtml(impact: Record<string, unknown> | null | undefined): string;
+      lifeEventInner(event: Record<string, unknown>, impact?: Record<string, unknown> | null): string;
+      lifeEventHtml(
+        event: Record<string, unknown>,
+        index: number | undefined,
+        impactsById?: Record<string, Record<string, unknown>>,
+      ): string;
+    };
+
     CairnHealthDocs: {
       healthKindLabel(kind: unknown): string;
       parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
@@ -765,6 +784,7 @@ declare global {
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnFamily: Window["CairnFamily"];
+  declare const CairnLife: Window["CairnLife"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];

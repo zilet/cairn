@@ -591,45 +591,7 @@ function startHealthDelete(btn) {
 }
 
 // ---------- Me: Life (trips / injuries / life events) ----------
-const LIFE_KINDS = [["trip", "Trip"], ["injury", "Injury"], ["life_event", "Life event"]];
-const LIFE_ICONS = { trip: "✈", injury: "🤕", life_event: "◆" };
-
-function lifeKindLabel(k) {
-  const m = LIFE_KINDS.find((x) => x[0] === k);
-  return m ? m[1] : (k || "Event");
-}
-
-// meta_json may arrive as a JSON string or an object
-function parsedMeta(ev) {
-  let mj = ev.meta_json;
-  if (typeof mj === "string") { try { mj = JSON.parse(mj); } catch { mj = null; } }
-  return mj || {};
-}
-
-function fmtDateRange(start, end) {
-  if (start && end && start !== end) return `${escHtml(start)} → ${escHtml(end)}`;
-  if (start) return escHtml(start);
-  if (end) return `until ${escHtml(end)}`;
-  return "";
-}
-
-// Days until a start date (positive = upcoming, 0 = today/active, negative = past). null if no date.
-function daysUntil(iso) {
-  if (!iso) return null;
-  const today = new Date(localISO() + "T00:00:00");
-  const d = new Date(iso + "T00:00:00");
-  if (isNaN(d)) return null;
-  return Math.round((d - today) / 86400000);
-}
-
-// Is an event currently active or upcoming (not fully in the past, not archived)?
-function eventActive(ev) {
-  if (ev.archived) return false;
-  const todayIso = localISO();
-  if (ev.end_date) return ev.end_date >= todayIso;       // ends today or later
-  if (ev.start_date) return true;                         // open-ended (e.g. ongoing injury)
-  return true;
-}
+// Pure Life timeline renderers live in life-client.js.
 
 async function renderLife() {
   headerTitle.textContent = "Me";
@@ -642,7 +604,7 @@ async function renderLife() {
     <h1 class="lbl" style="margin:20px 0 8px">Add to your timeline</h1>
     <div class="lifeadd">
       <div class="field" style="margin-bottom:9px"><label>Kind</label>
-        <select id="lKind" class="selflex">${LIFE_KINDS.map(([k, l]) => `<option value="${k}">${LIFE_ICONS[k]} ${l}</option>`).join("")}</select>
+        <select id="lKind" class="selflex">${CairnLife.lifeKindOptionsHtml()}</select>
       </div>
       <div id="lFields"></div>
       <button id="lAdd" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ADD</button>
@@ -665,37 +627,7 @@ async function renderLife() {
 function drawLifeFields(kind) {
   const wrap = $("#lFields");
   if (!wrap) return;
-  const text = (id, label, ph = "") =>
-    `<div class="field" style="margin-bottom:9px"><label>${label}</label><input id="${id}" type="text" placeholder="${escAttr(ph)}" class="form-input"></div>`;
-  const date = (id, label) =>
-    `<div class="field" style="margin-bottom:9px"><label>${label}</label><input id="${id}" type="date" class="form-input" value=""></div>`;
-  if (kind === "trip") {
-    wrap.innerHTML =
-      text("lTitle", "Title", "e.g. Lisbon work trip") +
-      text("lLocation", "Location", "e.g. Lisbon") +
-      `<div class="ob-grid">${date("lStart", "Start")}${date("lEnd", "End")}</div>` +
-      text("lDetail", "Detail (optional)");
-  } else if (kind === "injury") {
-    wrap.innerHTML =
-      text("lTitle", "Title", "e.g. Right knee") +
-      text("lArea", "Area", "e.g. knee / lower back") +
-      `<div class="field" style="margin-bottom:9px"><label>Severity</label>
-        <select id="lSeverity" class="selflex">
-          <option value="mild">Mild</option><option value="moderate">Moderate</option><option value="severe">Severe</option>
-        </select></div>` +
-      date("lStart", "Since") +
-      date("lEnd", "Expected resolved (optional)") +
-      text("lDetail", "Detail (optional)");
-  } else {
-    wrap.innerHTML =
-      text("lTitle", "Title", "e.g. New baby") +
-      `<div class="ob-grid">${date("lStart", "Start")}${date("lEnd", "End (optional)")}</div>` +
-      `<div class="field" style="margin-bottom:9px"><label>Impact</label>
-        <select id="lImpact" class="selflex">
-          <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
-        </select></div>` +
-      text("lDetail", "Detail (optional)");
-  }
+  wrap.innerHTML = CairnLife.lifeFieldsHtml(kind);
 }
 
 function collectLifeForm() {
@@ -730,79 +662,6 @@ async function submitLifeEvent() {
   finally { btn.disabled = false; }
 }
 
-// The connected-brain block for an active injury: the planned movements it
-// touches + a few calm swap ideas per movement. Pull, not push — suggestions
-// only, never a button that changes the plan. Rendered from /injury-impacts
-// (keyed by the injury's context_event id), so an empty/no-match injury shows
-// nothing (zero noise).
-function lifeImpactsHtml(impact) {
-  if (!impact || !Array.isArray(impact.affected) || !impact.affected.length) return "";
-  const rows = impact.affected.map((a) => {
-    const where = Array.isArray(a.days) && a.days.length
-      ? a.days.map((d) => escHtml(d.day_name || `Day ${d.day_number}`)).join(", ")
-      : "";
-    const note = a.constraint_note ? `<div class="linj-note">${escHtml(a.constraint_note)}</div>` : "";
-    const swaps = Array.isArray(a.swaps) && a.swaps.length
-      ? `<div class="linj-swaps"><span class="linj-swaps-lbl">try instead</span>${a.swaps
-          .map((s) => `<span class="linj-swap" title="${escAttr(s.why || "")}">${escHtml(s.name)}</span>`)
-          .join("")}</div>`
-      : "";
-    return `<div class="linj-ex">
-        <div class="linj-exhead">
-          <span class="linj-exname">${escHtml(a.exercise)}</span>
-          ${where ? `<span class="linj-exwhere">${where}</span>` : ""}
-        </div>
-        ${note}
-        ${swaps}
-      </div>`;
-  }).join("");
-  return `<div class="linj">
-      <div class="linj-lead">Touches ${impact.affected.length} planned move${impact.affected.length === 1 ? "" : "s"} — ease off or swap, your call.</div>
-      ${rows}
-    </div>`;
-}
-
-// One timeline card (view mode). `impact` (optional) is the injury-impacts row
-// for this event, when it's an active injury — rendered as a calm sub-block.
-function lifeEventInner(ev, impact) {
-  const meta = parsedMeta(ev);
-  const icon = LIFE_ICONS[ev.kind] || "◆";
-  const range = fmtDateRange(ev.start_date, ev.end_date);
-  const du = daysUntil(ev.start_date);
-  let when = "";
-  if (!ev.archived && du != null) {
-    if (du > 0) when = `in ${du} day${du === 1 ? "" : "s"}`;
-    else if (du === 0) when = `today`;
-    else if (ev.kind !== "injury" && (!ev.end_date || ev.end_date < localISO())) when = "past";
-    else when = "active";
-  }
-  const metaBits = [];
-  if (meta.location) metaBits.push(escHtml(meta.location));
-  if (meta.area) metaBits.push(escHtml(meta.area));
-  if (meta.severity) metaBits.push(escHtml(meta.severity));
-  if (meta.impact) metaBits.push(escHtml(meta.impact) + " impact");
-  const metaLine = metaBits.join(" · ");
-  return `<div class="sess-head">
-      <span class="sess-date"><span class="life-ico">${icon}</span> ${escHtml(ev.title || lifeKindLabel(ev.kind))}</span>
-      ${when ? `<span class="sess-day">${escHtml(when)}</span>` : ""}
-    </div>
-    ${range ? `<div class="sess-line" style="color:var(--muted)">${range}</div>` : ""}
-    ${metaLine ? `<div class="sess-line" style="color:var(--muted);font-size:.78rem">${metaLine}</div>` : ""}
-    ${ev.detail ? `<div class="sess-line">${escHtml(ev.detail)}</div>` : ""}
-    ${lifeImpactsHtml(impact)}
-    <div class="hdoc-ctl">
-      <button class="iconbtn" data-ledit="${ev.id}" title="edit">✎</button>
-      <button class="iconbtn life-del" data-ldel="${ev.id}" title="delete">×</button>
-    </div>`;
-}
-
-function lifeEventHtml(ev, i, impactsById) {
-  const past = !eventActive(ev) || ev.archived;
-  const rev = typeof i === "number";
-  const impact = ev.kind === "injury" && !past ? (impactsById || {})[String(ev.id)] : null;
-  return `<div class="sess life-ev${past ? " life-past" : ""}${rev ? " reveal" : ""}" data-life="${ev.id}"${rev ? ` style="${stagger(i)}"` : ""}>${lifeEventInner(ev, impact)}</div>`;
-}
-
 async function loadLifeEvents() {
   const wrap = $("#llist");
   if (!wrap) return;
@@ -823,13 +682,13 @@ async function loadLifeEvents() {
     for (const inj of impacts.injuries) impactsById[String(inj.id)] = inj;
   }
   // active/upcoming first (sorted by soonest start), then past/archived
-  const active = events.filter((e) => eventActive(e));
-  const past = events.filter((e) => !eventActive(e));
+  const active = events.filter((e) => CairnLife.eventActive(e));
+  const past = events.filter((e) => !CairnLife.eventActive(e));
   const byStart = (a, b) => (a.start_date || "9999") < (b.start_date || "9999") ? -1 : 1;
   active.sort(byStart);
   past.sort((a, b) => byStart(b, a)); // most recent past first
   state._lifeById = Object.fromEntries(events.map((e) => [String(e.id), e]));
-  wrap.innerHTML = [...active, ...past].map((ev, i) => lifeEventHtml(ev, i, impactsById)).join("");
+  wrap.innerHTML = [...active, ...past].map((ev, i) => CairnLife.lifeEventHtml(ev, i, impactsById)).join("");
 
   wrap.querySelectorAll("[data-ledit]").forEach((b) => b.addEventListener("click", () => startLifeEdit(b.closest(".life-ev"))));
   wrap.querySelectorAll("[data-ldel]").forEach((b) => b.addEventListener("click", () => startLifeDelete(b)));
@@ -841,7 +700,7 @@ function startLifeEdit(card) {
   const id = card.dataset.life;
   const ev = (state._lifeById || {})[id];
   if (!ev) return;
-  const meta = parsedMeta(ev);
+  const meta = CairnLife.parsedMeta(ev);
   const metaField = ev.kind === "trip"
     ? `<input class="le-meta form-input" placeholder="Location" value="${escAttr(meta.location || "")}">`
     : ev.kind === "injury"
