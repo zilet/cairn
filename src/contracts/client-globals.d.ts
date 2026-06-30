@@ -224,6 +224,11 @@ declare global {
   declare function kcalFmt(value: unknown): string;
   declare function energyRead(exp: unknown): { lead: string; body: string; tone: string; dir?: string | null };
   declare function calMonthHtml(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number): string;
+  declare function muscleVerdictTone(verdict: unknown): string;
+  declare function muscleVerdictWord(verdict: unknown): string;
+  declare function muscleTrendGlyph(trend: unknown): string;
+  declare function muscleGroupRowHtml(group: unknown): string;
+  declare function muscleTrajectoryHtml(trajectory: unknown): string;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -554,6 +559,14 @@ declare global {
       calMonthHtml(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number): string;
     };
 
+    CairnProgressMuscleTrajectory: {
+      muscleVerdictTone(verdict: unknown): string;
+      muscleVerdictWord(verdict: unknown): string;
+      muscleTrendGlyph(trend: unknown): string;
+      muscleGroupRowHtml(group: unknown): string;
+      muscleTrajectoryHtml(trajectory: unknown): string;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -630,6 +643,7 @@ declare global {
   declare const CairnProgressVolume: Window["CairnProgressVolume"];
   declare const CairnProgressEnergy: Window["CairnProgressEnergy"];
   declare const CairnProgressCalendar: Window["CairnProgressCalendar"];
+  declare const CairnProgressMuscleTrajectory: Window["CairnProgressMuscleTrajectory"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];

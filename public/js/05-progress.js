@@ -1493,58 +1493,6 @@ async function loadMuscleTrajectory() {
   const html = muscleTrajectoryHtml(m);
   slot.innerHTML = html || "";
 }
-function muscleVerdictTone(v) {
-  if (v === "advancing") return "strong";   // sage
-  if (v === "stalling") return "watch";      // warn — the only genuinely below-par read
-  return "steady";                            // building / maintaining — gold
-}
-function muscleVerdictWord(v) {
-  if (v === "advancing") return "Advancing";
-  if (v === "stalling") return "Stalling";
-  if (v === "building") return "Building";
-  if (v === "maintaining") return "Holding";
-  return "";
-}
-function muscleTrendGlyph(t) {
-  if (t === "rising") return "↑";
-  if (t === "falling") return "↓";
-  if (t === "stable") return "→";
-  return "";
-}
-function muscleGroupRowHtml(g) {
-  const tone = muscleVerdictTone(g.verdict);
-  const word = muscleVerdictWord(g.verdict);
-  const figs = [];
-  if (g.lead_lift) figs.push(escHtml(g.lead_lift));
-  if (g.volume_band) figs.push(`${escHtml(g.volume_band)} volume`);
-  const trendG = muscleTrendGlyph(g.trend);
-  if (trendG) figs.push(`${trendG} ${escHtml(g.trend)}`);
-  const opts = Array.isArray(g.vary_options) ? g.vary_options.filter((o) => o && o.name) : [];
-  const varyHtml = (g.verdict === "stalling" && opts.length)
-    ? `<div class="pmus-vary"><span class="pmus-vary-lbl lbl">rotate one in</span><div class="pmus-opts">${
-        opts.slice(0, 3).map((o) => `<span class="pmus-opt"${o.why ? ` title="${escAttr(o.why)}"` : ""}>${escHtml(o.name)}</span>`).join("")
-      }</div></div>`
-    : "";
-  return `<div class="pmus-row pmus-${tone}">
-      <div class="pmus-row-head">
-        <span class="pmus-name">${escHtml(g.label || g.group || "")}</span>
-        ${word ? `<span class="pmus-verdict pmus-v-${tone}">${escHtml(word)}</span>` : ""}
-      </div>
-      ${figs.length ? `<div class="pmus-figs lbl">${figs.join(" · ")}</div>` : ""}
-      ${g.stalled_signal ? `<div class="pmus-signal">${escHtml(g.stalled_signal)}</div>` : ""}
-      ${g.note ? `<div class="pmus-note">${escHtml(g.note)}</div>` : ""}
-      ${varyHtml}
-    </div>`;
-}
-function muscleTrajectoryHtml(m) {
-  if (!m || m.available === false || !Array.isArray(m.groups) || !m.groups.length) return "";
-  return `<div class="pmus-card">
-      <div class="pmus-card-head lbl">Muscle groups — advancing vs stalling</div>
-      ${m.headline ? `<div class="pmus-headline">${escHtml(m.headline)}</div>` : ""}
-      <div class="pmus-rows">${m.groups.map(muscleGroupRowHtml).join("")}</div>
-    </div>`;
-}
-
 // ---------- DEXA-driven exercise targeting ----------
 // Fed by GET /api/dexa-targeting — {available, targets:[{area,signal,bias,moves,
 // domain,path,groups,informational}], lead, next_dexa_focus}. Maps regional DEXA
