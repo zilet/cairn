@@ -19,7 +19,8 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
-  docker:
+  verify:
+    name: Verify release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,6 +33,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -45,9 +47,74 @@ jobs:
       - name: Runtime smoke
         run: npm run smoke
 
-      - name: Set up QEMU
-        # docker/setup-qemu-action v4.1.0
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up Docker Buildx
+        # docker/setup-buildx-action v4.1.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+
+      - name: Log in to GHCR
+        # docker/login-action v4.2.0
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        # docker/metadata-action v6.1.0
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag,suffix=-${{ matrix.arch }}
+            type=semver,pattern=v{{major}}.{{minor}},suffix=-${{ matrix.arch }}
+            type=raw,value=latest-${{ matrix.arch }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge-${{ matrix.arch }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push ${{ matrix.arch }}
+        # docker/build-push-action v7.2.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Bake the exact tag into the image so the in-app update check reports a
+          # precise running version even on the :latest tag. Non-tag dispatch
+          # builds pass a branch name, which version.ts ignores (→ package.json).
+          build-args: |
+            CAIRN_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  manifest:
+    name: Publish manifest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Set up Docker Buildx
         # docker/setup-buildx-action v4.1.0
@@ -73,22 +140,23 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      - name: Build and push
-        # docker/build-push-action v7.2.0
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Bake the exact tag into the image so the in-app update check reports a
-          # precise running version even on the :latest tag. Non-tag dispatch
-          # builds pass a branch name, which version.ts ignores (→ package.json).
-          build-args: |
-            CAIRN_VERSION=${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create multi-arch manifest
+        run: |
+          set -euo pipefail
+          mapfile -t tags <<< "${TAGS}"
+          first="${tags[0]}"
+          repo="${first%:*}"
+          version="${first##*:}"
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=("-t" "${tag}")
+          done
+          docker buildx imagetools create \
+            "${args[@]}" \
+            "${repo}:${version}-amd64" \
+            "${repo}:${version}-arm64"
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
 
       - name: Prepare release compose file
         if: startsWith(github.ref, 'refs/tags/v')

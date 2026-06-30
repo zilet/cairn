@@ -8,7 +8,9 @@
     "noEmit": true,
     "strict": true,
     "lib": ["ES2022", "DOM"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildcache/client.tsbuildinfo"
   },
   "include": [
     "src/contracts/client-globals.d.ts"

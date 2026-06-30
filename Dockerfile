@@ -5,15 +5,22 @@ ARG NODE_IMAGE=node:24-bookworm-slim
 # ---- builder: compile TypeScript ----
 FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
 COPY package*.json tsconfig.json tsconfig.client.build.json ./
 # BuildKit cache mount keeps ~/.npm warm across rebuilds (big win on the Pi).
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
+COPY scripts/build-client.mjs ./scripts/build-client.mjs
 COPY src ./src
-RUN npm run build
+RUN --mount=type=cache,target=/app/.tsbuildcache,sharing=locked npm run build
 
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # All CLI logins persist under HOME, which is a mounted volume at runtime.
 ENV HOME=/home/app
@@ -45,7 +52,7 @@ ARG AGENT_CLI_CACHE_BUST=unset
 # Cache mount on ~/.npm — don't `npm cache clean` here, it would wipe the mount.
 # Set AGENT_CLI_CACHE_BUST=$(date +%s) when you want Docker to refresh this layer
 # without doing a full --no-cache rebuild.
-RUN --mount=type=cache,target=/root/.npm set -eux; \
+RUN --mount=type=cache,target=/root/.npm,sharing=locked set -eux; \
     echo "agent cli cache bust: ${AGENT_CLI_CACHE_BUST}"; \
     UPDATE_CLAUDE="$INSTALL_CLAUDE" \
     UPDATE_CODEX="$INSTALL_CODEX" \
@@ -62,9 +69,10 @@ RUN --mount=type=cache,target=/root/.npm set -eux; \
     cairn-update-agent-clis
 
 COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 COPY public ./public
+COPY --from=builder /app/public/js ./public/js
 COPY agents.json ./
 
 # Hand the writable areas to the unprivileged `app` user. /usr/local is baked into

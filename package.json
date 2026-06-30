@@ -35,14 +35,19 @@
     "typecheck:client": "tsc -p tsconfig.client.json && npm run client:check",
     "public:check": "node scripts/check-public-scripts.mjs",
     "lint": "biome lint .",
+    "lint:changed": "biome lint --changed",
     "format": "biome format --write .",
+    "format:changed": "biome format --write --changed",
     "pretest": "npm run build",
     "test": "node test/run.mjs",
+    "test:built": "node test/run.mjs",
+    "test:serial": "node test/run.mjs --workers=1 --reporter=spec",
     "presmoke": "npm run build",
     "smoke": "node test/smoke.mjs",
+    "smoke:built": "node test/smoke.mjs",
     "launch:check": "node scripts/check-launch-safety.mjs",
-    "verify": "npm run docs:check && npm run actions:check && npm run typecheck:client && node scripts/check-client-build-output.mjs && npm run public:check && node scripts/check-sw-cache.mjs && npm run launch:check && npm test",
-    "verify:full": "npm run verify && npm run smoke"
+    "verify": "node scripts/run-verify.mjs",
+    "verify:full": "npm run verify && npm run smoke:built"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

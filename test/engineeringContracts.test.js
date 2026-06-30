@@ -6,10 +6,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
-import {
-  CLIENT_API_CONTRACT_PATHS,
-  CLIENT_API_UNKNOWN_WAIVERS,
-} from "../dist/contracts/client.js";
+import { CLIENT_API_CONTRACT_PATHS, CLIENT_API_UNKNOWN_WAIVERS } from "../dist/contracts/client.js";
 import { listRoutableTasks, ROUTABLE_TASKS } from "../dist/repo/settings.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,7 +51,9 @@ test("background job kind contract covers API enqueue sites and worker handlers"
     "src/routes/memory-learning.ts",
     "src/routes/nutrition.ts",
     "src/routes/program.ts",
-  ].map(read).join("\n");
+  ]
+    .map(read)
+    .join("\n");
   const jobs = read("src/agentJobs.ts");
   const apiKinds = new Set(stringMatches(api, /backgroundOp\(res,\s*"([^"]+)"/g));
   stringMatches(api, /createAgentJob\(\{\s*kind:\s*"([^"]+)"/g).forEach((kind) => apiKinds.add(kind));
@@ -64,10 +63,17 @@ test("background job kind contract covers API enqueue sites and worker handlers"
 
   const handled = new Set(stringMatches(jobs, /case\s+"([^"]+)"/g));
   const canonical = new Set(AGENT_JOB_KINDS);
-  assert.deepEqual([...canonical].sort(), AGENT_JOB_KINDS.slice().sort(), "AGENT_JOB_KINDS must not contain duplicates");
-  for (const kind of apiKinds) assert.ok(canonical.has(kind), `${kind} is enqueued by API but missing from AGENT_JOB_KINDS`);
-  for (const kind of handled) assert.ok(canonical.has(kind), `${kind} is handled by agentJobs but missing from AGENT_JOB_KINDS`);
-  for (const kind of canonical) assert.ok(handled.has(kind), `${kind} is listed in AGENT_JOB_KINDS but not handled by agentJobs`);
+  assert.deepEqual(
+    [...canonical].sort(),
+    AGENT_JOB_KINDS.slice().sort(),
+    "AGENT_JOB_KINDS must not contain duplicates"
+  );
+  for (const kind of apiKinds)
+    assert.ok(canonical.has(kind), `${kind} is enqueued by API but missing from AGENT_JOB_KINDS`);
+  for (const kind of handled)
+    assert.ok(canonical.has(kind), `${kind} is handled by agentJobs but missing from AGENT_JOB_KINDS`);
+  for (const kind of canonical)
+    assert.ok(handled.has(kind), `${kind} is listed in AGENT_JOB_KINDS but not handled by agentJobs`);
 });
 
 test("route task metadata covers every routable task exactly once", () => {
@@ -309,7 +315,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*connectedBrainRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:health(?:\/|")|markers(?:\/|")|reaction-model"|trajectory"|context-effect"|next-step(?:\/|")|coaching-focus"|directives(?:\/|")|symptom-links"|research"|evidence(?:\/|")|insights(?:\/|"))/,
+    /api\.(get|post|put|delete|patch)\("\/(?:health(?:\/|")|markers(?:\/|")|reaction-model"|trajectory"|context-effect"|next-step(?:\/|")|coaching-focus"|directives(?:\/|")|symptom-links"|research"|evidence(?:\/|")|insights(?:\/|"))/
   );
   assert.match(connectedBrainRoutes, /connectedBrainRouter\.get\("\/health\/markers"/);
   assert.match(connectedBrainRoutes, /connectedBrainRouter\.post\("\/health\/review"/);
@@ -347,7 +353,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*operatorRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:agents(?:\/|")|agent-clis\/update|settings"|agent-stats")/,
+    /api\.(get|post|put|delete|patch)\("\/(?:agents(?:\/|")|agent-clis\/update|settings"|agent-stats")/
   );
   assert.match(operatorRoutes, /operatorRouter\.get\("\/agents"/);
   assert.match(operatorRoutes, /operatorRouter\.put\("\/settings"/);
@@ -355,7 +361,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*personContextRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:context-events(?:\/|")|injury-impacts"|family(?:\/|")|supplements(?:\/|")|onboard")/,
+    /api\.(get|post|put|delete|patch)\("\/(?:context-events(?:\/|")|injury-impacts"|family(?:\/|")|supplements(?:\/|")|onboard")/
   );
   assert.match(personContextRoutes, /personContextRouter\.get\("\/context-events"/);
   assert.match(personContextRoutes, /personContextRouter\.get\("\/injury-impacts"/);
@@ -369,7 +375,10 @@ test("generated API docs include mounted route modules", () => {
   assert.match(garminRoutes, /await import\("\.\.\/garmin\.js"\)/);
   assert.match(garminRoutes, /await import\("\.\.\/enrich\.js"\)/);
   assert.match(api, /api\.use\("\/",\s*exportsRouter\)/);
-  assert.doesNotMatch(api, /api\.(get|post|put|delete|patch)\("\/(?:export(?:\/|")|health-export"|health-report(?:\.txt)?")/);
+  assert.doesNotMatch(
+    api,
+    /api\.(get|post|put|delete|patch)\("\/(?:export(?:\/|")|health-export"|health-report(?:\.txt)?")/
+  );
   assert.match(exportRoutes, /exportsRouter\.get\("\/export"/);
   assert.match(exportRoutes, /exportsRouter\.get\("\/health-report\.txt"/);
   assert.match(exportRoutes, /fs\.rm\(tmp,\s*\{\s*force:\s*true\s*\}/);
@@ -381,7 +390,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*memoryLearningRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:memory(?:\/|")|profile\/grow-about-me"|suggestions(?:\/|")|learnings")/,
+    /api\.(get|post|put|delete|patch)\("\/(?:memory(?:\/|")|profile\/grow-about-me"|suggestions(?:\/|")|learnings")/
   );
   assert.match(memoryLearningRoutes, /memoryLearningRouter\.get\("\/memory"/);
   assert.match(memoryLearningRoutes, /memoryLearningRouter\.post\("\/memory\/consolidate"/);
@@ -393,7 +402,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*nutritionRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:coach\/mealplan|mealplans(?:\/|")|nutrition(?:\/|")|meal-plans(?:\/|")|food-notes(?:\/|")|frequent-foods"|chat-images(?:\/|"))/,
+    /api\.(get|post|put|delete|patch)\("\/(?:coach\/mealplan|mealplans(?:\/|")|nutrition(?:\/|")|meal-plans(?:\/|")|food-notes(?:\/|")|frequent-foods"|chat-images(?:\/|"))/
   );
   assert.match(nutritionRoutes, /nutritionRouter\.post\("\/coach\/mealplan"/);
   assert.match(nutritionRoutes, /nutritionRouter\.get\("\/nutrition\/day"/);
@@ -407,7 +416,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*personRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:profile"|goal"|bodyweight(?:\/|")|blood-pressure(?:\/|")|checkins(?:\/|"))/,
+    /api\.(get|post|put|delete|patch)\("\/(?:profile"|goal"|bodyweight(?:\/|")|blood-pressure(?:\/|")|checkins(?:\/|"))/
   );
   assert.match(personRoutes, /personRouter\.get\("\/profile"/);
   assert.match(personRoutes, /personRouter\.post\("\/blood-pressure"/);
@@ -415,15 +424,15 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*planExercisesRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:plan(?:\/|\.ics"|")|exercises(?:\/|")|exercise(?:\/|")|program\/variations")/,
+    /api\.(get|post|put|delete|patch)\("\/(?:plan(?:\/|\.ics"|")|exercises(?:\/|")|exercise(?:\/|")|program\/variations")/
   );
   assert.match(planExerciseRoutes, /planExercisesRouter\.get\("\/plan"/);
   assert.ok(
     planExerciseRoutes.indexOf('planExercisesRouter.get("/plan.ics"') >
       planExerciseRoutes.indexOf('planExercisesRouter.get("/plan"') &&
       planExerciseRoutes.indexOf('planExercisesRouter.get("/plan.ics"') <
-      planExerciseRoutes.indexOf('planExercisesRouter.get("/plan/:day"'),
-    "plan.ics route must stay before /plan/:day",
+        planExerciseRoutes.indexOf('planExercisesRouter.get("/plan/:day"'),
+    "plan.ics route must stay before /plan/:day"
   );
   assert.match(planExerciseRoutes, /planExercisesRouter\.post\("\/exercises\/reconcile-groups"/);
   assert.match(planExerciseRoutes, /planExercisesRouter\.get\("\/program\/variations"/);
@@ -431,7 +440,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*programRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:agent\/run|program(?:\/|")|proposals(?:\/|")|program-state"|performance"|run-plan"|run-zones"|muscle-trajectory"|test-week"|dexa-targeting")/,
+    /api\.(get|post|put|delete|patch)\("\/(?:agent\/run|program(?:\/|")|proposals(?:\/|")|program-state"|performance"|run-plan"|run-zones"|muscle-trajectory"|test-week"|dexa-targeting")/
   );
   assert.match(programRoutes, /programRouter\.post\("\/agent\/run"/);
   assert.match(programRoutes, /programRouter\.post\("\/program\/evolve"/);
@@ -446,7 +455,7 @@ test("generated API docs include mounted route modules", () => {
   assert.match(api, /api\.use\("\/",\s*trainingLogRouter\)/);
   assert.doesNotMatch(
     api,
-    /api\.(get|post|put|delete|patch)\("\/(?:sessions(?:\/|")|last-set"|sets(?:\/|")|progress(?:\/|")|activities(?:\/|")|recent-training"|stats"|endurance-prs"|run-compliance"|cardio"|endurance-goal"|volume"|calendar")/,
+    /api\.(get|post|put|delete|patch)\("\/(?:sessions(?:\/|")|last-set"|sets(?:\/|")|progress(?:\/|")|activities(?:\/|")|recent-training"|stats"|endurance-prs"|run-compliance"|cardio"|endurance-goal"|volume"|calendar")/
   );
   assert.match(trainingLogRoutes, /trainingLogRouter\.get\("\/sessions"/);
   assert.match(trainingLogRoutes, /req\.query\.date[\s\S]*repo\.getSessionByDate/);
@@ -542,9 +551,9 @@ test("Settings route helper exposes stale-route pruning", () => {
   assert.doesNotMatch(helper, /\bescHtml\b|\bescAttr\b/);
   assert.match(boot, /settingsPruneRoutes\(wm\.routes,\s*routeTasks,\s*enabledAgents\)/);
   assert.ok(
-    index.indexOf('/js/settings-routes.js') > -1 &&
-      index.indexOf('/js/settings-routes.js') < index.indexOf('/js/10-boot.js'),
-    "settings-routes.js must load before 10-boot.js",
+    index.indexOf("/js/settings-routes.js") > -1 &&
+      index.indexOf("/js/settings-routes.js") < index.indexOf("/js/10-boot.js"),
+    "settings-routes.js must load before 10-boot.js"
   );
 });
 
@@ -618,9 +627,8 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const chat = read("public/js/09-plan-chat.js");
   const chatClient = read("public/js/chat-client.js");
   assert.ok(
-    index.indexOf('/js/route-state.js') > -1 &&
-      index.indexOf('/js/route-state.js') < index.indexOf('/js/10-boot.js'),
-    "route-state.js must load before 10-boot.js",
+    index.indexOf("/js/route-state.js") > -1 && index.indexOf("/js/route-state.js") < index.indexOf("/js/10-boot.js"),
+    "route-state.js must load before 10-boot.js"
   );
   assert.match(boot, /function\s+applyRouteState/);
   assert.match(boot, /function\s+syncRouteFromState/);
@@ -647,7 +655,7 @@ test("chat session index is created only after the v49 column migration", () => 
   assert.doesNotMatch(
     schema,
     /CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages\(session_id\)/,
-    "old DBs do not have chat_messages.session_id until migration v49 runs",
+    "old DBs do not have chat_messages.session_id until migration v49 runs"
   );
   assert.match(migrations, /addColumn\(db,\s*"chat_messages",\s*"session_id TEXT"\)/);
   assert.match(migrations, /CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages\(session_id\)/);
@@ -658,7 +666,9 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
     "src/contracts/client.ts",
     "src/contracts/client-api.ts",
     "src/contracts/client-api-coverage.ts",
-  ].map(read).join("\n");
+  ]
+    .map(read)
+    .join("\n");
   const contractPatterns = [...CLIENT_API_CONTRACT_PATHS];
   const waiverPatterns = CLIENT_API_UNKNOWN_WAIVERS.map((waiver) => waiver.pattern);
   const allPatterns = [...contractPatterns, ...waiverPatterns].map(contractPatternToRegExp);
@@ -672,7 +682,11 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
     assert.doesNotMatch(pattern, /\?/, `${pattern} must not include query strings`);
     assert.doesNotMatch(pattern, /^\/api\//, `${pattern} must omit the /api prefix`);
     if (!pattern.includes(":")) {
-      assert.match(contractSource, new RegExp(`"\\/api${escapeRegExp(pattern)}"`), `${pattern} needs a ClientApiResponses entry`);
+      assert.match(
+        contractSource,
+        new RegExp(`"\\/api${escapeRegExp(pattern)}"`),
+        `${pattern} needs a ClientApiResponses entry`
+      );
     }
   }
 
@@ -728,6 +742,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const publicScriptCheck = read("scripts/check-public-scripts.mjs");
   const clientBuild = read("scripts/build-client.mjs");
   const clientBuildCheck = read("scripts/check-client-build-output.mjs");
+  const verifyRunner = read("scripts/run-verify.mjs");
   const ui = read("public/js/02-ui.js");
   const today = read("public/js/03-today.js");
   const progress = read("public/js/05-progress.js");
@@ -742,9 +757,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.equal(pkg.scripts["client:build"], "node scripts/build-client.mjs");
   assert.match(pkg.scripts["typecheck:client"], /tsc -p tsconfig\.client\.json && npm run client:check/);
   assert.equal(pkg.scripts["public:check"], "node scripts/check-public-scripts.mjs");
-  assert.match(pkg.scripts.verify, /npm run typecheck:client/);
-  assert.match(pkg.scripts.verify, /check-client-build-output\.mjs/);
-  assert.match(pkg.scripts.verify, /npm run public:check/);
+  assert.equal(pkg.scripts.verify, "node scripts/run-verify.mjs");
+  assert.match(verifyRunner, /npm",\s*"run",\s*"typecheck:client"/);
+  assert.match(verifyRunner, /node",\s*"scripts\/check-client-build-output\.mjs"/);
+  assert.match(verifyRunner, /npm",\s*"run",\s*"public:check"/);
   assert.match(clientTsconfig, /"allowJs": true/);
   assert.match(clientTsconfig, /"checkJs": true/);
   assert.match(clientTsconfig, /"noEmit": true/);
@@ -769,7 +785,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-job-reconnectors\.js/);
-  assert.match(clientBuildTsconfig, /"include": \["src\/contracts\/client-globals\.d\.ts", "src\/client\/\*\*\/\*\.ts"\]/);
+  assert.match(
+    clientBuildTsconfig,
+    /"include": \["src\/contracts\/client-globals\.d\.ts", "src\/client\/\*\*\/\*\.ts"\]/
+  );
   assert.match(clientBuild, /src\/client\/date-utils\.ts/);
   assert.match(clientBuild, /public\/js\/date-utils\.js/);
   assert.match(clientBuild, /src\/client\/html-utils\.ts/);
@@ -799,71 +818,68 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
   assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.ok(
-    index.indexOf('/js/date-utils.js') > -1 &&
-      index.indexOf('/js/date-utils.js') < index.indexOf('/js/01-core.js'),
-    "date-utils.js must load before 01-core.js",
+    index.indexOf("/js/date-utils.js") > -1 && index.indexOf("/js/date-utils.js") < index.indexOf("/js/01-core.js"),
+    "date-utils.js must load before 01-core.js"
   );
   assert.ok(
-    index.indexOf('/js/date-utils.js') > -1 &&
-      index.indexOf('/js/api-client.js') > index.indexOf('/js/date-utils.js') &&
-      index.indexOf('/js/api-client.js') < index.indexOf('/js/01-core.js'),
-    "api-client.js must load after date-utils.js and before 01-core.js",
+    index.indexOf("/js/date-utils.js") > -1 &&
+      index.indexOf("/js/api-client.js") > index.indexOf("/js/date-utils.js") &&
+      index.indexOf("/js/api-client.js") < index.indexOf("/js/01-core.js"),
+    "api-client.js must load after date-utils.js and before 01-core.js"
   );
   assert.ok(
-    index.indexOf('/js/html-utils.js') > -1 &&
-      index.indexOf('/js/html-utils.js') < index.indexOf('/js/02-ui.js'),
-    "html-utils.js must load before 02-ui.js and feature modules",
+    index.indexOf("/js/html-utils.js") > -1 && index.indexOf("/js/html-utils.js") < index.indexOf("/js/02-ui.js"),
+    "html-utils.js must load before 02-ui.js and feature modules"
   );
   assert.ok(
-    index.indexOf('/js/ui-components.js') > index.indexOf('/js/html-utils.js') &&
-      index.indexOf('/js/ui-components.js') < index.indexOf('/js/health-client.js'),
-    "ui-components.js must load after escaping helpers and before component consumers",
+    index.indexOf("/js/ui-components.js") > index.indexOf("/js/html-utils.js") &&
+      index.indexOf("/js/ui-components.js") < index.indexOf("/js/health-client.js"),
+    "ui-components.js must load after escaping helpers and before component consumers"
   );
   assert.ok(
-    index.indexOf('/js/ui-components.js') > index.indexOf('/js/html-utils.js') &&
-      index.indexOf('/js/ui-components.js') < index.indexOf('/js/today-training-client.js'),
-    "ui-components.js must load before Today training component consumers",
+    index.indexOf("/js/ui-components.js") > index.indexOf("/js/html-utils.js") &&
+      index.indexOf("/js/ui-components.js") < index.indexOf("/js/today-training-client.js"),
+    "ui-components.js must load before Today training component consumers"
   );
   assert.ok(
-    index.indexOf('/js/format-utils.js') > -1 &&
-      index.indexOf('/js/format-utils.js') < index.indexOf('/js/02-ui.js'),
-    "format-utils.js must load before 02-ui.js and feature modules",
+    index.indexOf("/js/format-utils.js") > -1 && index.indexOf("/js/format-utils.js") < index.indexOf("/js/02-ui.js"),
+    "format-utils.js must load before 02-ui.js and feature modules"
   );
   assert.ok(
-    index.indexOf('/js/02-ui.js') > -1 &&
-      index.indexOf('/js/swr-cache.js') > index.indexOf('/js/02-ui.js') &&
-      index.indexOf('/js/swr-cache.js') < index.indexOf('/js/03-today.js'),
-    "swr-cache.js must load after 02-ui.js and before feature modules",
+    index.indexOf("/js/02-ui.js") > -1 &&
+      index.indexOf("/js/swr-cache.js") > index.indexOf("/js/02-ui.js") &&
+      index.indexOf("/js/swr-cache.js") < index.indexOf("/js/03-today.js"),
+    "swr-cache.js must load after 02-ui.js and before feature modules"
   );
   assert.ok(
-    index.indexOf('/js/today-agenda-client.js') > index.indexOf('/js/swr-cache.js') &&
-      index.indexOf('/js/today-agenda-client.js') < index.indexOf('/js/03-today.js'),
-    "today-agenda-client.js must load after swr-cache.js and before 03-today.js",
+    index.indexOf("/js/today-agenda-client.js") > index.indexOf("/js/swr-cache.js") &&
+      index.indexOf("/js/today-agenda-client.js") < index.indexOf("/js/03-today.js"),
+    "today-agenda-client.js must load after swr-cache.js and before 03-today.js"
   );
   assert.ok(
-    index.indexOf('/js/today-training-client.js') > index.indexOf('/js/today-agenda-client.js') &&
-      index.indexOf('/js/today-training-client.js') < index.indexOf('/js/03-today.js'),
-    "today-training-client.js must load before 03-today.js",
+    index.indexOf("/js/today-training-client.js") > index.indexOf("/js/today-agenda-client.js") &&
+      index.indexOf("/js/today-training-client.js") < index.indexOf("/js/03-today.js"),
+    "today-training-client.js must load before 03-today.js"
   );
   assert.ok(
-    index.indexOf('/js/health-client.js') > index.indexOf('/js/07-me-health.js') &&
-      index.indexOf('/js/health-client.js') < index.indexOf('/js/08-me-records.js'),
-    "health-client.js must load after Health view definitions and before Records view hydration",
+    index.indexOf("/js/health-client.js") > index.indexOf("/js/07-me-health.js") &&
+      index.indexOf("/js/health-client.js") < index.indexOf("/js/08-me-records.js"),
+    "health-client.js must load after Health view definitions and before Records view hydration"
   );
   assert.ok(
-    index.indexOf('/js/chat-client.js') > index.indexOf('/js/08-me-records.js') &&
-      index.indexOf('/js/chat-client.js') < index.indexOf('/js/09-plan-chat.js'),
-    "chat-client.js must load before 09-plan-chat.js",
+    index.indexOf("/js/chat-client.js") > index.indexOf("/js/08-me-records.js") &&
+      index.indexOf("/js/chat-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    "chat-client.js must load before 09-plan-chat.js"
   );
   assert.ok(
-    index.indexOf('/js/settings-client.js') > index.indexOf('/js/settings-routes.js') &&
-      index.indexOf('/js/settings-client.js') < index.indexOf('/js/10-boot.js'),
-    "settings-client.js must load before 10-boot.js",
+    index.indexOf("/js/settings-client.js") > index.indexOf("/js/settings-routes.js") &&
+      index.indexOf("/js/settings-client.js") < index.indexOf("/js/10-boot.js"),
+    "settings-client.js must load before 10-boot.js"
   );
   assert.ok(
-    index.indexOf('/js/app-job-reconnectors.js') > index.indexOf('/js/route-state.js') &&
-      index.indexOf('/js/app-job-reconnectors.js') < index.indexOf('/js/10-boot.js'),
-    "app-job-reconnectors.js must load after route-state.js and before 10-boot.js",
+    index.indexOf("/js/app-job-reconnectors.js") > index.indexOf("/js/route-state.js") &&
+      index.indexOf("/js/app-job-reconnectors.js") < index.indexOf("/js/10-boot.js"),
+    "app-job-reconnectors.js must load after route-state.js and before 10-boot.js"
   );
   assert.match(dateUtils, /\/\/ @ts-check/);
   assert.match(htmlUtils, /\/\/ @ts-check/);
@@ -944,20 +960,32 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiClientSource, /type CairnApiResponse<Path extends string>/);
   assert.match(swrCacheSource, /function cachedApi<Path extends string>/);
   assert.match(swrCacheSource, /function paintSWR<Path extends string>/);
-  assert.match(todayAgendaSource, /type ClientTodayAgenda = import\("\.\.\/contracts\/client\.js"\)\.ClientTodayAgenda/);
+  assert.match(
+    todayAgendaSource,
+    /type ClientTodayAgenda = import\("\.\.\/contracts\/client\.js"\)\.ClientTodayAgenda/
+  );
   assert.match(todayAgendaSource, /function todayAgendaRailHtml/);
-  assert.match(todayTrainingSource, /type ClientPrescription = import\("\.\.\/contracts\/client\.js"\)\.ClientPrescription/);
+  assert.match(
+    todayTrainingSource,
+    /type ClientPrescription = import\("\.\.\/contracts\/client\.js"\)\.ClientPrescription/
+  );
   assert.match(todayTrainingSource, /const TODAY_RX_ACTION: Record<ClientProgressionAction, ClientProgressionMeta>/);
   assert.match(settingsRoutesSource, /function settingsRouteRowsHtml/);
   assert.match(settingsRoutesSource, /function settingsPruneRoutes/);
   assert.match(settingsClientSource, /type SettingsUpdateOptions = \{ updateCheckEnabled: boolean \}/);
   assert.match(settingsClientSource, /function updateCardHtml/);
-  assert.match(chatClientSource, /type ChatImagePayload = \{ dataUrl: string; base64: string; mime: "image\/jpeg"; bytes: number \}/);
+  assert.match(
+    chatClientSource,
+    /type ChatImagePayload = \{ dataUrl: string; base64: string; mime: "image\/jpeg"; bytes: number \}/
+  );
   assert.match(chatClientSource, /function chatWantsFuelSurface/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
   assert.match(healthClientSource, /type HealthEvidenceRow = \{/);
   assert.match(healthClientSource, /function formatMarkerNumber\(value: unknown\): string/);
-  assert.match(healthClientSource, /function markerTrendWord\(marker: HealthMarkerTrendRow \| null \| undefined\): string/);
+  assert.match(
+    healthClientSource,
+    /function markerTrendWord\(marker: HealthMarkerTrendRow \| null \| undefined\): string/
+  );
   assert.match(healthClientSource, /const HEALTH_MARKER_ORDER: Record<string, Array<\[number, RegExp\]>>/);
   assert.match(healthClientSource, /function orderMarkersForDisplay<T extends HealthMarkerRow>/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
@@ -1024,10 +1052,11 @@ test("public docker run quickstarts bind loopback by default", () => {
   const blocks = ["README.md", "docs/QUICKSTART.md", "docs/SHARING.md"].flatMap((file) =>
     [...read(file).matchAll(/```(?:bash|sh)?\n([\s\S]*?)```/g)].map((m) => ({ file, text: m[1] }))
   );
-  const unsafe = blocks.filter((b) =>
-    /\bdocker\s+run\b/.test(b.text) &&
-    /(^|\s)-p\s+8787:8787(\s|\\|$)/.test(b.text) &&
-    !/(^|\s)-p\s+127\.0\.0\.1:8787:8787(\s|\\|$)/.test(b.text)
+  const unsafe = blocks.filter(
+    (b) =>
+      /\bdocker\s+run\b/.test(b.text) &&
+      /(^|\s)-p\s+8787:8787(\s|\\|$)/.test(b.text) &&
+      !/(^|\s)-p\s+127\.0\.0\.1:8787:8787(\s|\\|$)/.test(b.text)
   );
   assert.deepEqual(unsafe, []);
 });
@@ -1035,7 +1064,9 @@ test("public docker run quickstarts bind loopback by default", () => {
 test("GitHub Actions workflows pin external actions to commit SHAs", () => {
   const pkg = JSON.parse(read("package.json"));
   const checker = read("scripts/check-action-pins.mjs");
-  assert.match(pkg.scripts.verify, /npm run actions:check/);
+  const verifyRunner = read("scripts/run-verify.mjs");
+  assert.equal(pkg.scripts.verify, "node scripts/run-verify.mjs");
+  assert.match(verifyRunner, /npm",\s*"run",\s*"actions:check"/);
   assert.match(checker, /--remote/);
   for (const file of [".github/workflows/ci.yml", ".github/workflows/release-image.yml"]) {
     assert.match(read(file), /npm run actions:check -- --remote/, `${file} must verify action tag drift in CI`);
