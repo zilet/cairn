@@ -717,6 +717,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const uiComponentsSource = read("src/client/ui-components.ts");
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
+  const coreStateSource = read("src/client/app/state.ts");
   const swrCacheSource = read("src/client/swr-cache.ts");
   const todayAgendaSource = read("src/client/today-agenda-client.ts");
   const todayTrainingSource = read("src/client/today-training-client.ts");
@@ -734,6 +735,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const uiComponents = read("public/js/ui-components.js");
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
+  const coreState = read("public/js/01-core.js");
   const swrCache = read("public/js/swr-cache.js");
   const todayAgendaClient = read("public/js/today-agenda-client.js");
   const todayTrainingClient = read("public/js/today-training-client.js");
@@ -776,6 +778,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
   assert.match(clientGlobals, /declare function withToken\(url: string\): string/);
   assert.match(clientGlobals, /declare function api<Path extends string>/);
+  assert.match(clientGlobals, /type ClientAppState = \{/);
+  assert.match(clientGlobals, /declare const state: ClientAppState/);
+  assert.match(clientGlobals, /declare function \$<T extends Element = Element>/);
   assert.match(clientGlobals, /declare function cachedApi<Path extends string>/);
   assert.match(clientGlobals, /declare function paintSWR<Path extends string>/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
@@ -783,6 +788,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/ui-components\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/api-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/01-core\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/swr-cache\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-agenda-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-training-client\.js/);
@@ -806,6 +812,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/format-utils\.js/);
   assert.match(clientBuild, /src\/client\/api-client\.ts/);
   assert.match(clientBuild, /public\/js\/api-client\.js/);
+  assert.match(clientBuild, /src\/client\/app\/state\.ts/);
+  assert.match(clientBuild, /public\/js\/01-core\.js/);
   assert.match(clientBuild, /src\/client\/swr-cache\.ts/);
   assert.match(clientBuild, /public\/js\/swr-cache\.js/);
   assert.match(clientBuild, /src\/client\/today-agenda-client\.ts/);
@@ -976,6 +984,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
   assert.match(apiClientSource, /function api<Path extends string>/);
   assert.match(apiClientSource, /type CairnApiResponse<Path extends string>/);
+  assert.match(coreStateSource, /const query = <T extends Element = Element>/);
+  assert.match(coreStateSource, /const appView = \(\(\) => \{/);
+  assert.match(coreStateSource, /const appHeaderTitle = \(\(\) => \{/);
+  assert.match(coreStateSource, /const appState: ClientAppState/);
+  assert.match(coreStateSource, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
   assert.match(swrCacheSource, /function cachedApi<Path extends string>/);
   assert.match(swrCacheSource, /function paintSWR<Path extends string>/);
   assert.match(
@@ -1018,6 +1031,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiClient, /withToken/);
   assert.match(apiClient, /api/);
   assert.doesNotMatch(apiClient, /@returns\s*\{Promise<any>\}/);
+  assert.match(coreState, /\/\/ @ts-check/);
+  assert.match(coreState, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
   assert.match(swrCache, /Object\.assign\(globalThis, \{/);
   assert.match(swrCache, /cachedApi/);
   assert.match(swrCache, /paintSWR/);

@@ -1,16 +1,68 @@
 import type {
   ClientActivity,
+  ClientDayRead,
   ClientChatMessage,
   ClientChatSearchHit,
   ClientChatSessionSummary,
   ClientApiResponse,
   ClientDayIntake,
+  ClientGoalCheck,
+  ClientPlanDay,
   ClientPrescription,
+  ClientTrainingSession,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
 } from "./client.js";
 
 declare global {
+  type ClientTabName = "today" | "plan" | "progress" | "chat" | "me" | "settings";
+  type ClientPlanSection = "edit" | "food" | "meals" | "coach" | "endurance";
+  type ClientProgressSection = "sessions" | "trend" | "volume" | "endurance" | "weight" | "calendar" | "program";
+  type ClientMeSection = "standing" | "profile" | "memory" | "health" | "life" | "family";
+  type ClientHealthSection = "read" | "markers" | "records" | "share" | "learned";
+  type ClientSettingsSection = "agents" | "sources" | "automation" | "data";
+
+  type ClientBriefCache = {
+    date: string;
+    override: string;
+    read: ClientDayRead;
+  };
+
+  type ClientAppState = {
+    tab: ClientTabName;
+    day: number | null;
+    dayPicked: boolean;
+    plan: ClientPlanDay[];
+    today: Record<string, unknown>;
+    logDate: string;
+    planSeg?: ClientPlanSection;
+    planJump?: ClientPlanSection | null;
+    progressSeg?: ClientProgressSection;
+    meSeg?: ClientMeSection;
+    healthSeg?: ClientHealthSection;
+    healthSegPicked?: boolean;
+    setSeg?: ClientSettingsSection;
+    pendingChatSession?: string | null;
+    pendingHealthDocId?: string | null;
+    pendingHealthScroll?: "hbDirectives" | string | null;
+    chatPrefill?: string | null;
+    brief?: ClientBriefCache | null;
+    _briefInflight?: { date: string; override: string; promise: Promise<ClientDayRead> } | null;
+    _briefMorph?: boolean;
+    focus?: { date: string; on: boolean };
+    planReveal?: { date: string; on: boolean; blank?: boolean };
+    suggestedSession?: ClientTrainingSession | null;
+    exModes?: Record<string, string>;
+    pendingOffPlan?: Record<string, Array<Record<string, unknown>>>;
+    _dayFuel?: ClientDayIntake | null;
+    _goal?: ClientGoalCheck | null;
+    _lifeById?: Record<string, unknown>;
+    _famById?: Record<string, unknown>;
+    _notesById?: Record<string, unknown>;
+    healthReview?: unknown;
+    healthStandingRef?: number;
+  };
+
   type ClientAgentOpHandlers = {
     path?: string;
     anchor?: string;
@@ -23,16 +75,12 @@ declare global {
     onCanceled?: () => void;
   };
 
-  declare const state: {
-    tab?: string;
-    meSeg?: string;
-    healthSeg?: string;
-    healthSegPicked?: boolean;
-    pendingHealthScroll?: string;
-  };
+  declare function $<T extends Element = Element>(selector: string): T | null;
+  declare const state: ClientAppState;
 
   declare let pollToken: unknown;
   declare const view: HTMLElement;
+  declare const headerTitle: HTMLElement;
 
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
