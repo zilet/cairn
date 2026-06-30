@@ -528,6 +528,17 @@ declare global {
       learnedTimelineHtml(data: unknown): string;
     };
 
+    CairnFamily: {
+      FAMILY_COLORS: readonly { v: string; l: string }[];
+      FAMILY_DEFAULT_COLOR: string;
+      familyColor(color: unknown): string;
+      ageFromBirthdate(birthdate: unknown): string;
+      familyInitials(name: unknown): string;
+      familyCardInner(row: Record<string, unknown>): string;
+      familyCardHtml(row: Record<string, unknown>, index?: number): string;
+      familySwatches(selected: unknown): string;
+    };
+
     CairnHealthDocs: {
       healthKindLabel(kind: unknown): string;
       parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
@@ -753,6 +764,7 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
+  declare const CairnFamily: Window["CairnFamily"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];

@@ -907,80 +907,7 @@ function startLifeDelete(btn) {
 // commitments (soccer Tuesdays) live on the Life timeline as family_event
 // context_events — this roster is the people, not their calendar.
 
-// A small Atelier swatch palette drawn from the design tokens. Each entry is the
-// stored color value (the token's hex) plus a display label.
-const FAMILY_COLORS = [
-  { v: "#b4552d", l: "Terracotta" },
-  { v: "#6e7f5c", l: "Sage" },
-  { v: "#c9a86a", l: "Gold" },
-  { v: "#8e4f6d", l: "Plum" },
-  { v: "#57503f", l: "Ink" },
-  { v: "#7d8f5e", l: "Olive" },
-];
-const FAMILY_DEFAULT_COLOR = FAMILY_COLORS[0].v;
-
-function familyColor(c) {
-  const v = String(c || "").trim();
-  return /^#[0-9a-fA-F]{3,8}$/.test(v) ? v : FAMILY_DEFAULT_COLOR;
-}
-
-// Plain-language age from a free-text YYYY-MM-DD birthdate. Babies read in months;
-// everyone else in years. Null/garbage → "" (no age line shown).
-function ageFromBirthdate(bd) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(bd || ""));
-  if (!m) return "";
-  const b = new Date(+m[1], +m[2] - 1, +m[3]);
-  if (isNaN(b)) return "";
-  const now = new Date();
-  let months = (now.getFullYear() - b.getFullYear()) * 12 + (now.getMonth() - b.getMonth());
-  if (now.getDate() < b.getDate()) months--;
-  if (months < 0) return "";
-  if (months < 24) return `${months} mo`;
-  return `${Math.floor(months / 12)} yr`;
-}
-
-// Two-initials monogram from a name (deterministic, no caller text in markup risk —
-// it's escHtml'd at the call site).
-function familyInitials(name) {
-  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-function familyCardInner(f) {
-  const color = familyColor(f.color);
-  const age = ageFromBirthdate(f.birthdate);
-  const meta = [];
-  if (f.relationship) meta.push(escHtml(f.relationship));
-  if (age) meta.push(escHtml(age));
-  return `<div class="fam-head">
-      <span class="fam-mono" style="--fam:${escAttr(color)}">${escHtml(familyInitials(f.name))}</span>
-      <div class="fam-id">
-        <span class="fam-name">${escHtml(f.name || "Someone")}</span>
-        ${meta.length ? `<span class="fam-meta">${meta.join(" · ")}</span>` : ""}
-      </div>
-    </div>
-    ${f.notes ? `<div class="sess-line fam-notes">${escHtml(f.notes)}</div>` : ""}
-    ${(f.allergies || f.dietary_restrictions) ? `<div class="sess-line fam-notes" style="color:var(--muted)">${[f.allergies ? "avoids " + escHtml(f.allergies) : "", f.dietary_restrictions ? escHtml(f.dietary_restrictions) : ""].filter(Boolean).join(" · ")}</div>` : ""}
-    <div class="hdoc-ctl">
-      <button class="iconbtn" data-fedit="${f.id}" title="edit">✎</button>
-      <button class="iconbtn fam-del" data-fdel="${f.id}" title="delete">×</button>
-    </div>`;
-}
-
-function familyCardHtml(f, i) {
-  const rev = typeof i === "number";
-  return `<div class="sess fam-card${rev ? " reveal" : ""}" data-fam="${f.id}"${rev ? ` style="${stagger(i)}"` : ""}>${familyCardInner(f)}</div>`;
-}
-
-// The swatch row for the add/edit forms. `selected` is the chosen hex.
-function familySwatches(selected) {
-  const sel = familyColor(selected);
-  return `<div class="fam-swatches" role="radiogroup" aria-label="Colour">
-    ${FAMILY_COLORS.map((c) => `<button type="button" class="fam-swatch${c.v === sel ? " fam-swatch-on" : ""}" data-color="${escAttr(c.v)}" style="--fam:${escAttr(c.v)}" title="${escAttr(c.l)}" aria-label="${escAttr(c.l)}"></button>`).join("")}
-  </div>`;
-}
+// Pure Family card/swatch renderers live in family-client.js.
 
 async function renderFamily() {
   headerTitle.textContent = "Me";
@@ -998,7 +925,7 @@ async function renderFamily() {
         <input id="fRel" type="text" placeholder="e.g. daughter / partner" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Birthday (optional)</label>
         <input id="fBirth" type="date" max="${localISO()}" class="form-input"></div>
-      <div class="field" style="margin-bottom:9px"><label>Colour</label>${familySwatches(FAMILY_DEFAULT_COLOR)}</div>
+      <div class="field" style="margin-bottom:9px"><label>Colour</label>${CairnFamily.familySwatches(CairnFamily.FAMILY_DEFAULT_COLOR)}</div>
       <div class="field" style="margin-bottom:9px"><label>Notes (optional)</label>
         <input id="fNotes" type="text" placeholder="e.g. trains with me on weekends" class="form-input"></div>
       <div class="field" style="margin-bottom:9px"><label>Allergies (optional)</label>
@@ -1015,7 +942,7 @@ async function renderFamily() {
   $("#famToLife")?.addEventListener("click", () => withViewTransition(() => renderLife().then(viewEnter)));
 
   // swatch picker (add form)
-  let addColor = FAMILY_DEFAULT_COLOR;
+  let addColor = CairnFamily.FAMILY_DEFAULT_COLOR;
   view.querySelectorAll(".famadd .fam-swatch").forEach((b) => b.addEventListener("click", () => {
     addColor = b.dataset.color;
     view.querySelectorAll(".famadd .fam-swatch").forEach((x) => x.classList.toggle("fam-swatch-on", x === b));
@@ -1062,7 +989,7 @@ async function loadFamily() {
     return;
   }
   state._famById = Object.fromEntries(people.map((f) => [String(f.id), f]));
-  wrap.innerHTML = people.map((f, i) => familyCardHtml(f, i)).join("");
+  wrap.innerHTML = people.map((f, i) => CairnFamily.familyCardHtml(f, i)).join("");
   wrap.querySelectorAll("[data-fedit]").forEach((b) => b.addEventListener("click", () => startFamilyEdit(b.closest(".fam-card"))));
   wrap.querySelectorAll("[data-fdel]").forEach((b) => b.addEventListener("click", () => startFamilyDelete(b)));
 }
@@ -1073,14 +1000,14 @@ function startFamilyEdit(card) {
   const id = card.dataset.fam;
   const f = (state._famById || {})[id];
   if (!f) return;
-  let editColor = familyColor(f.color);
+  let editColor = CairnFamily.familyColor(f.color);
   const box = document.createElement("div");
   box.className = "fam-edit";
   box.innerHTML = `
     <input class="fe-name form-input" placeholder="Name" value="${escAttr(f.name || "")}">
     <input class="fe-rel form-input" placeholder="Relationship" value="${escAttr(f.relationship || "")}">
     <input class="fe-birth form-input" type="date" max="${localISO()}" value="${escAttr(f.birthdate || "")}">
-    ${familySwatches(editColor)}
+    ${CairnFamily.familySwatches(editColor)}
     <input class="fe-notes form-input" placeholder="Notes" value="${escAttr(f.notes || "")}">
     <input class="fe-allergy form-input" placeholder="Allergies" value="${escAttr(f.allergies || "")}">
     <input class="fe-diet form-input" placeholder="Dietary needs" value="${escAttr(f.dietary_restrictions || "")}">
