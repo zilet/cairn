@@ -450,7 +450,7 @@ async function loadMemory() {
   let items: HealthMemory[] = [];
   try {
     const data = await api("/memory");
-    items = Array.isArray(data) ? data : [data];
+    items = Array.isArray(data) ? data : data && typeof data === "object" ? [data as HealthMemory] : [];
   } catch { items = []; }
   if (state.tab !== "me" || state.meSeg !== "memory" || !wrap.isConnected) return;
   if (!items || !items.length) { wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter — they'll gather here.</div>`; return; }

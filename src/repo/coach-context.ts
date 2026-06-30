@@ -1,3 +1,6 @@
+import type { CoachingFocus } from "./coaching-focus.js";
+import type { MemoryRow, RecentLearning } from "./memory.js";
+
 export type CoachRecord = Record<string, unknown>;
 
 export interface CoachNowContext {
@@ -8,16 +11,8 @@ export interface CoachNowContext {
   [key: string]: unknown;
 }
 
-export interface CoachMemory {
-  id?: number;
-  kind?: string;
-  content?: string;
-  source?: string | null;
-  created_at?: string;
-  updated_at?: string | null;
-  last_referenced_at?: string | null;
-  [key: string]: unknown;
-}
+export type CoachMemory = MemoryRow;
+export type CoachLearning = RecentLearning;
 
 export interface CoachDayIntakeEntry {
   id: number;
@@ -72,13 +67,13 @@ export interface CoachContextEnvelope {
   training_signals: unknown;
   garmin: unknown;
   memory: CoachMemory[];
-  learnings: CoachMemory[];
+  learnings: CoachLearning[];
   health: unknown[];
   health_review: unknown;
   context_events: unknown[];
   directives: unknown[];
   health_focus: unknown;
-  coaching_focus: unknown;
+  coaching_focus: CoachingFocus;
   symptom_links: unknown[];
   health_synthesis: unknown;
   directive_feedback: unknown[];

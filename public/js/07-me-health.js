@@ -395,7 +395,7 @@ var _hPic = null; // { review, docCount, newestDocAt }
         let items = [];
         try {
             const data = await api("/memory");
-            items = Array.isArray(data) ? data : [data];
+            items = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
         }
         catch {
             items = [];

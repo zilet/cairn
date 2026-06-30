@@ -54,6 +54,11 @@ test("aggregates memories, a directive, and an applied proposal — newest-first
   assert.ok(kinds.has("directive"));
   assert.ok(kinds.has("applied"));
 
+  const applied = items.find((i) => i.kind === "applied");
+  assert.ok(applied, "expected applied proposal item");
+  assert.match(applied.detail, /Adjusted 1 prescription/);
+  assert.equal(applied.source, "coach (stub)");
+
   // Every item has the required shape.
   for (const it of items) {
     assert.equal(typeof it.when, "string");

@@ -1473,7 +1473,7 @@ const ABOUT_ME_SCHEMA = `{
 export function buildAboutMeGrowthPrompt(): string {
   const ctx = repo.getCoachContext();
   const profile = ctx.profile || {};
-  const mem = (ctx.memory as any[] || []).map((m) => `- (${m.kind ?? "observation"}) ${String(m.content ?? "").slice(0, 240)}`).join("\n");
+  const mem = ctx.memory.map((m) => `- (${m.kind ?? "observation"}) ${String(m.content ?? "").slice(0, 240)}`).join("\n");
   const family = (ctx.family as any[] || []).map((f: any) => `- ${f.name ?? "member"}${f.relation ? ` (${f.relation})` : ""}${f.notes ? `: ${String(f.notes).slice(0, 120)}` : ""}`).join("\n");
   const checkins = (ctx.checkins as any[] || []).slice(0, 7).map((c: any) => `- ${c.date}: mood ${c.mood ?? "—"}, energy ${c.energy ?? "—"}, sleep ${c.sleep_feel ?? "—"}${c.note ? ` · ${String(c.note).slice(0, 80)}` : ""}`).join("\n");
   return `You are Cairn's coaching memory, maintaining the athlete's "about me" — a short, warm,

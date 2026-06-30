@@ -2,9 +2,12 @@ import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getSessionByDate, getWeeklyStats, sessionSummary } from "./sessions.js";
 
+export type KnownMemoryKind = "note" | "preference" | "constraint" | "goal" | "fact" | "observation" | "injury" | "decision" | "milestone" | "learning";
+export type MemoryKind = KnownMemoryKind | (string & {});
+
 export interface MemoryRow {
   id: number;
-  kind: string | null;
+  kind: MemoryKind | null;
   content: string;
   source: string | null;
   created_at?: string | null;
@@ -12,6 +15,19 @@ export interface MemoryRow {
   superseded_by?: number | null;
   confidence?: number | null;
   last_referenced_at?: string | null;
+}
+
+export interface MemorySupersedeResult {
+  superseded: MemoryRow | null;
+  replacement: MemoryRow | null;
+}
+
+export interface RecentLearning {
+  id: number;
+  kind: "learning";
+  content: string;
+  source: string | null;
+  updated_at?: string | null;
 }
 
 // ---------- memory (self-updating) ----------
@@ -57,15 +73,15 @@ function memOverlap(a: string, b: string): number {
 //   3. otherwise → insert a fresh row.
 // Superseded rows are excluded from the near-dup comparison (they're history).
 const MEM_DUP_THRESHOLD = 0.6;
-export function addMemory(content: string, kind = "observation", source = "user") {
+export function addMemory(content: string, kind: MemoryKind = "observation", source = "user"): MemoryRow | null {
   const trimmed = (content ?? "").toString().trim();
   if (!trimmed) {
     // Nothing to remember — return the most recent live row as a harmless no-op
     // value so callers that read `.id` don't crash (matches prior truthy return).
-    return db.prepare(`SELECT * FROM memory WHERE superseded_by IS NULL ORDER BY id DESC LIMIT 1`).get() ?? null;
+    return (db.prepare(`SELECT * FROM memory WHERE superseded_by IS NULL ORDER BY id DESC LIMIT 1`).get() as MemoryRow | undefined) ?? null;
   }
   // 1. exact repeat (any kind) — reinforce, never duplicate.
-  const exact = db.prepare(`SELECT * FROM memory WHERE content = ? COLLATE NOCASE AND superseded_by IS NULL`).get(trimmed) as any;
+  const exact = db.prepare(`SELECT * FROM memory WHERE content = ? COLLATE NOCASE AND superseded_by IS NULL`).get(trimmed) as MemoryRow | undefined;
   if (exact) {
     db.prepare(`UPDATE memory SET updated_at = datetime('now'), confidence = MIN(5, COALESCE(confidence,1) + 0.5) WHERE id = ?`).run(exact.id);
     return getMemory(exact.id);
@@ -73,8 +89,8 @@ export function addMemory(content: string, kind = "observation", source = "user"
   // 2. semantic near-duplicate among recent same-kind live rows.
   const recent = db.prepare(
     `SELECT * FROM memory WHERE superseded_by IS NULL AND kind = ? ORDER BY id DESC LIMIT 60`
-  ).all(kind) as any[];
-  let best: any = null, bestScore = 0;
+  ).all(kind) as unknown as MemoryRow[];
+  let best: MemoryRow | null = null, bestScore = 0;
   for (const r of recent) {
     const score = memOverlap(trimmed, String(r.content ?? ""));
     if (score > bestScore) { bestScore = score; best = r; }
@@ -88,7 +104,7 @@ export function addMemory(content: string, kind = "observation", source = "user"
   }
   // 3. genuinely new fact.
   const info = db.prepare(`INSERT INTO memory (kind, content, source, confidence) VALUES (?, ?, ?, 1)`).run(kind, trimmed, source);
-  return db.prepare(`SELECT * FROM memory WHERE id = ?`).get(info.lastInsertRowid);
+  return (db.prepare(`SELECT * FROM memory WHERE id = ?`).get(info.lastInsertRowid) as MemoryRow | undefined) ?? null;
 }
 
 // List memory, newest first. Superseded rows are HIDDEN by default (they're
@@ -100,14 +116,14 @@ export function listMemory(limit = 50, opts: { includeSuperseded?: boolean } = {
   return db.prepare(`SELECT * FROM memory ${where} ORDER BY id DESC LIMIT ?`).all(limit) as unknown as MemoryRow[];
 }
 
-export function getMemory(id: number) {
-  return db.prepare(`SELECT * FROM memory WHERE id = ?`).get(id) ?? null;
+export function getMemory(id: number): MemoryRow | null {
+  return (db.prepare(`SELECT * FROM memory WHERE id = ?`).get(id) as MemoryRow | undefined) ?? null;
 }
 
-export function updateMemory(id: number, patch: { content?: string; kind?: string; confidence?: number }) {
-  const cur = getMemory(id) as any;
+export function updateMemory(id: number, patch: { content?: string; kind?: MemoryKind; confidence?: number }): MemoryRow | null {
+  const cur = getMemory(id);
   if (!cur) return null;
-  const conf = Number.isFinite(patch.confidence as number) ? Math.min(5, Math.max(0, Number(patch.confidence))) : cur.confidence;
+  const conf = Number.isFinite(patch.confidence as number) ? Math.min(5, Math.max(0, Number(patch.confidence))) : cur.confidence ?? null;
   db.prepare(`UPDATE memory SET content = ?, kind = ?, confidence = ?, updated_at = datetime('now') WHERE id = ?`).run(
     patch.content != null ? String(patch.content).trim() : cur.content,
     patch.kind ?? cur.kind,
@@ -121,16 +137,16 @@ export function updateMemory(id: number, patch: { content?: string; kind?: strin
 // stays in the DB and exports for an audit trail, just hidden from live reads).
 // If replacementContent is given, a new row is created first and the old one
 // points at it; otherwise the caller passes an existing replacementId.
-export function supersedeMemory(id: number, replacement?: { content?: string; kind?: string; replacementId?: number; reason?: string }) {
-  const cur = getMemory(id) as any;
+export function supersedeMemory(id: number, replacement?: { content?: string; kind?: MemoryKind; replacementId?: number; reason?: string }): MemorySupersedeResult | null {
+  const cur = getMemory(id);
   if (!cur) return null;
   let newId = replacement?.replacementId ?? null;
-  let newRow: any = null;
+  let newRow: MemoryRow | null = null;
   const content = replacement?.content ? String(replacement.content).trim() : "";
   if (!newId && content) {
     // addMemory may itself fold the replacement into an existing live row; use
     // whatever id it lands on as the supersedor (and never point a row at itself).
-    newRow = addMemory(content, replacement?.kind ?? cur.kind, "supersede") as any;
+    newRow = addMemory(content, replacement?.kind ?? cur.kind ?? "observation", "supersede");
     newId = newRow?.id ?? null;
   } else if (newId) {
     newRow = getMemory(newId);
@@ -157,18 +173,18 @@ function touchMemoryReferenced(ids: number[]) {
 // milestone/goal) — the durable person-model — PLUS the most recent observations,
 // excludes superseded rows, and is bounded. Surfacing a memory stamps its
 // last_referenced_at so the consolidation pass can tell live facts from stale ones.
-export function memoryForCoach(limit = 40): any[] {
+export function memoryForCoach(limit = 40): MemoryRow[] {
   const loadBearing = db.prepare(
     `SELECT * FROM memory
      WHERE superseded_by IS NULL AND kind IN ('constraint','injury','preference','decision','milestone','goal')
      ORDER BY COALESCE(confidence,1) DESC, COALESCE(updated_at, created_at) DESC, id DESC
      LIMIT ?`
-  ).all(Math.max(8, Math.floor(limit * 0.7))) as any[];
+  ).all(Math.max(8, Math.floor(limit * 0.7))) as unknown as MemoryRow[];
   const seen = new Set(loadBearing.map((r) => r.id));
   const recent = db.prepare(
     `SELECT * FROM memory WHERE superseded_by IS NULL ORDER BY id DESC LIMIT ?`
-  ).all(limit) as any[];
-  const merged: any[] = [...loadBearing];
+  ).all(limit) as unknown as MemoryRow[];
+  const merged: MemoryRow[] = [...loadBearing];
   for (const r of recent) {
     if (merged.length >= limit) break;
     if (seen.has(r.id)) continue;
@@ -213,12 +229,12 @@ export function listSuggestions(limit = 50) {
 
 // Durable learnings drawn from reconciliation are stored as memory rows of kind
 // 'learning' (source 'outcome-learning'); surfaced to the coach via getCoachContext.
-export function recentLearnings(limit = 6): { id: number; kind: "learning"; content: string; source: string | null; updated_at?: string }[] {
+export function recentLearnings(limit = 6): RecentLearning[] {
   return (db.prepare(
     `SELECT id, kind, content, source, COALESCE(updated_at, created_at) AS updated_at FROM memory
      WHERE kind = 'learning' AND superseded_by IS NULL
      ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?`
-  ).all(Math.max(1, Math.min(20, Number(limit) || 6))) as any[]).map((r) => ({
+  ).all(Math.max(1, Math.min(20, Number(limit) || 6))) as Array<{ id: number; content: string; source: string | null; updated_at?: string | null }>).map((r) => ({
     id: Number(r.id),
     kind: "learning",
     content: String(r.content),

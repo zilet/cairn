@@ -1,4 +1,4 @@
-import { listMemory, getOutcomeLearnings } from "./memory.js";
+import { listMemory, getOutcomeLearnings, type MemoryRow } from "./memory.js";
 import { listDirectives } from "./coach.js";
 import { listProposals } from "./profile.js";
 
@@ -29,6 +29,31 @@ export interface LearnedItem {
   source?: string;       // a quiet provenance hint (e.g. "memory:injury", "connected brain")
 }
 
+interface LearnedDirectiveSource {
+  created_at?: string | null;
+  directive?: string | null;
+  domain?: string | null;
+  marker?: string | null;
+  rationale?: string | null;
+  status?: string | null;
+  status_at?: string | null;
+}
+
+interface LearnedProposalPayload {
+  kind?: string | null;
+  days?: unknown[];
+  changes?: unknown[];
+  cardio?: unknown[];
+}
+
+interface LearnedProposalSource {
+  agent?: string | null;
+  created_at?: string | null;
+  instruction?: string | null;
+  parsed?: LearnedProposalPayload | null;
+  status?: string | null;
+}
+
 const DEFAULT_LIMIT = 40;
 const HARD_CAP = 200;
 
@@ -49,7 +74,7 @@ const MEMORY_KIND_LABEL: Record<string, string> = {
 
 // Normalize a SQLite "YYYY-MM-DD HH:MM:SS" / date / ISO string to a comparable
 // ISO-ish string. Null-safe: a falsy stamp sorts oldest (empty string).
-function toWhen(v: any): string {
+function toWhen(v: unknown): string {
   const s = String(v ?? "").trim();
   if (!s) return "";
   // SQLite datetime('now') is space-separated; make it ISO-ish for Date.parse + display.
@@ -57,7 +82,7 @@ function toWhen(v: any): string {
 }
 
 // Trim + cap a free-text field to a calm length (never a wall of text).
-function clip(v: any, max = 280): string {
+function clip(v: unknown, max = 280): string {
   return String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
@@ -67,7 +92,7 @@ function clip(v: any, max = 280): string {
 function memoryItems(): LearnedItem[] {
   const out: LearnedItem[] = [];
   try {
-    const rows = listMemory(200) as any[]; // superseded excluded by default
+    const rows: MemoryRow[] = listMemory(200); // superseded excluded by default
     for (const r of rows) {
       const kind = String(r?.kind ?? "");
       if (kind === "learning") continue; // surfaced separately as outcome learnings
@@ -115,7 +140,7 @@ function learningItems(): LearnedItem[] {
 function directiveItems(): LearnedItem[] {
   const out: LearnedItem[] = [];
   try {
-    const rows = listDirectives({ all: true }) as any[];
+    const rows = listDirectives({ all: true }) as LearnedDirectiveSource[];
     for (const d of rows) {
       const directive = clip(d?.directive, 280);
       if (!directive) continue;
@@ -146,7 +171,7 @@ function directiveItems(): LearnedItem[] {
 function appliedItems(): LearnedItem[] {
   const out: LearnedItem[] = [];
   try {
-    const rows = listProposals(200) as any[];
+    const rows = listProposals(200) as LearnedProposalSource[];
     for (const p of rows) {
       if (String(p?.status ?? "") !== "applied") continue;
       const instruction = clip(p?.instruction, 240);

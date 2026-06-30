@@ -108,6 +108,24 @@ test("coach context memory excludes superseded rows", () => {
   assert.match(text, /Now prefers short morning sessions/);
 });
 
+test("coach context memory and learnings expose typed DTO fields", () => {
+  repo.addMemory("Prefers morning protein before training", "preference", "test");
+  repo.addMemory("Rest-day reads can be conservative for you", "learning", "outcome-learning");
+
+  const ctx = repo.getCoachContext();
+  const memory = ctx.memory.find((row) => row.content.includes("morning protein"));
+  assert.ok(memory, "expected memory row in coach context");
+  assert.equal(typeof memory.id, "number");
+  assert.equal(typeof memory.content, "string");
+  assert.equal(memory.kind, "preference");
+
+  const learning = ctx.learnings.find((row) => row.content.includes("Rest-day reads"));
+  assert.ok(learning, "expected learning row in coach context");
+  assert.equal(learning.kind, "learning");
+  assert.equal(typeof learning.id, "number");
+  assert.equal(typeof learning.content, "string");
+});
+
 test("coach context does not leak conductor ranking internals", () => {
   const ctx = repo.getCoachContext();
   const conductor = JSON.stringify(ctx.coaching_focus);
