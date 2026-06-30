@@ -41,8 +41,8 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 - `tsconfig.client.json` now only provides transitional global declarations, while `tsconfig.client.build.json` typechecks the browser source under `src/client/**/*.ts`. Remaining work is shrinking large typed screen modules into smaller responsibility modules, not keeping public JS as source.
 - The PWA API seam now has a shared coverage registry: current `public/js` `api()` calls must match a typed contract path or a named temporary waiver. Some response DTOs are still intentionally broad envelopes until the owning screen migrates from classic JS.
 - HTML rendering is distributed across large screen files. Escaping discipline exists, and the first typed component primitive now lives in `src/client/ui-components.ts` as a pure browser-global compatibility module with ARIA-focused VM coverage, but most repeated markup still needs to move behind narrow component props.
-- Domain entry points under `src/domain/*` are additive barrels; many routes and services still import the compatibility `repo.js` barrel. Nutrition, Health Metrics, and Training Log REST/MCP adapters now import their domain entry points directly as the first Wave 7 adapter cleanup slices.
-- `CoachContextEnvelope` exists, with memory, outcome learnings, and the conductor result now typed through shared repo DTOs. Many other fields are still `unknown` or broad records, and `CoachingFocusInput` still uses `any` heavily.
+- Domain entry points under `src/domain/*` are additive barrels; many routes and services still import the compatibility `repo.js` barrel. Nutrition, Health Metrics, Training Log, and Person Context REST/MCP adapters now import their domain entry points directly as the first Wave 7 adapter cleanup slices.
+- `CoachContextEnvelope` exists, with memory, outcome learnings, and the conductor result now typed through shared repo DTOs. `CoachingFocusInput` now uses local minimal DTOs and the conductor module is free of `any`; many other coach-context fields are still `unknown` or broad records.
 - Docker now runs the client build in the builder stage and overlays generated `public/js` into the runtime image from that builder, so source-build and Pi Docker deploys do not serve stale committed browser output.
 
 ## Target Architecture
@@ -533,6 +533,7 @@ Tasks:
 - [x] Move Nutrition REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/nutrition/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Health Metrics REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/health/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Training Log REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts`, guarded by `test/domainGrouping.test.js`.
+- [x] Move Person Context REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - Replace broad `import * as repo from "../repo.js"` in route modules with domain imports where ownership is clear.
 - Keep `src/repo.ts` as compatibility until references are low enough to remove safely.
 - Avoid moving DB schema ownership out of `src/db.ts` unless the migration system is redesigned deliberately.
@@ -560,6 +561,7 @@ Teams:
 Tasks:
 
 - [x] Type the first memory/learning DTO spine: `MemoryRow`, `RecentLearning`, `MemorySupersedeResult`, `CoachContextEnvelope.memory`, `CoachContextEnvelope.learnings`, `CoachContextEnvelope.coaching_focus`, learned-timeline source projections, and the about-me memory prompt path.
+- [x] Type the conductor input seam with local minimal DTOs and remove `any` from `src/repo/coaching-focus.ts` while preserving the one-focus/no-score/no-leverage contract.
 - Replace broad `unknown` and `any` fields incrementally with domain DTOs.
 - Add typed provenance for recommendations: based on, source freshness, dismissed/superseded status, retest due.
 - Separate "coach context DTO" from raw DB/repo rows.

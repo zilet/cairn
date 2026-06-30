@@ -50,22 +50,157 @@ export interface CoachingFocus {
   horizon_weeks: number | null;
 }
 
+interface CoachingDisciplineInput {
+  primary?: unknown;
+  endurance_sport?: unknown;
+}
+
+interface EnduranceGoalInput {
+  is_race?: unknown;
+  phase?: unknown;
+  weeks_to_race?: unknown;
+}
+
+interface ProgramMesocycleInput {
+  phase?: unknown;
+  note?: unknown;
+}
+
+interface ProgramStateInput {
+  mesocycle?: ProgramMesocycleInput | null;
+}
+
+interface RecoveryDeltaInput {
+  hrv?: unknown;
+  rhr?: unknown;
+}
+
+interface RecoveryInput {
+  delta?: RecoveryDeltaInput | null;
+}
+
+interface HealthFocusMovesInput {
+  nutrition?: unknown;
+  training?: unknown;
+  watch?: unknown;
+}
+
+interface HealthFocusLeadInput {
+  group?: unknown;
+  why?: unknown;
+  tier?: unknown;
+  moves?: HealthFocusMovesInput | null;
+}
+
+interface HealthFocusInput {
+  headline?: unknown;
+  lead?: HealthFocusLeadInput | null;
+}
+
+interface PerformanceLeverInput {
+  headline?: unknown;
+  why?: unknown;
+  target?: unknown;
+}
+
+interface PerformanceEnduranceInput {
+  tone?: unknown;
+}
+
+interface PerformanceHeroInput {
+  headline?: unknown;
+}
+
+interface PerformanceImbalanceInput {
+  title?: unknown;
+  why?: unknown;
+}
+
+interface PerformanceTestDueInput {
+  exercise?: unknown;
+  kind?: unknown;
+}
+
+interface PerformanceInput {
+  hero?: PerformanceHeroInput | null;
+  lever?: PerformanceLeverInput | null;
+  endurance?: PerformanceEnduranceInput | null;
+  imbalances?: unknown;
+  tests_due?: unknown;
+}
+
+interface ProgramAdjustmentInput {
+  kind?: unknown;
+  title?: unknown;
+  why?: unknown;
+}
+
+interface RunPlanInput {
+  available?: unknown;
+  quality_focus?: unknown;
+  why?: unknown;
+  mix_summary?: unknown;
+}
+
+interface RunVarietyInput {
+  note?: unknown;
+}
+
+interface DexaLeadInput {
+  area?: unknown;
+  signal?: unknown;
+  bias?: unknown;
+  domain?: unknown;
+  path?: unknown;
+}
+
+interface DexaInput {
+  available?: unknown;
+  lead?: DexaLeadInput | null;
+}
+
+interface MuscleGroupTrajectoryInput {
+  verdict?: unknown;
+  label?: unknown;
+  group?: unknown;
+  lead_lift?: unknown;
+  stalled_signal?: unknown;
+  vary_options?: unknown;
+}
+
+interface GroupsTrajectoryInput {
+  groups?: unknown;
+}
+
+interface TrajectoryInput {
+  horizon_weeks?: unknown;
+}
+
+interface TestWeekInput {
+  due?: unknown;
+  key_lifts?: unknown;
+}
+
+interface EnduranceTestInput {
+  exercise?: unknown;
+}
+
 export interface CoachingFocusInput {
-  discipline?: any;
-  enduranceGoal?: any;
+  discipline?: CoachingDisciplineInput | null;
+  enduranceGoal?: EnduranceGoalInput | null;
   goalMode?: string;
-  programState?: any;
-  recovery?: any;
-  healthFocus?: any;
-  performance?: any;
-  programAdjustments?: any[];
-  runPlan?: any;
-  runVariety?: any;
-  dexa?: any;
-  groupsTrajectory?: any;
-  trajectory?: any;
-  testWeek?: any;
-  enduranceTests?: any[];
+  programState?: ProgramStateInput | null;
+  recovery?: RecoveryInput | null;
+  healthFocus?: HealthFocusInput | null;
+  performance?: PerformanceInput | null;
+  programAdjustments?: unknown;
+  runPlan?: RunPlanInput | null;
+  runVariety?: RunVarietyInput | null;
+  dexa?: DexaInput | null;
+  groupsTrajectory?: GroupsTrajectoryInput | null;
+  trajectory?: TrajectoryInput | null;
+  testWeek?: TestWeekInput | null;
+  enduranceTests?: unknown;
 }
 
 interface Candidate {
@@ -75,26 +210,33 @@ interface Candidate {
   key: string;
 }
 
-function num(v: any): number | null {
+function num(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
-function lc(s: any): string {
+function lc(s: unknown): string {
   return String(s ?? "").trim().toLowerCase();
 }
-function clip(s: any, n: number): string {
+function clip(s: unknown, n: number): string {
   const t = String(s ?? "").trim();
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
 }
-function cleanEvidence(lines: any): string[] | undefined {
-  if (!Array.isArray(lines)) return undefined;
-  const out = lines.map((line) => clip(line, 110)).filter(Boolean).slice(0, 3);
+function inputArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+function cleanEvidence(lines: unknown): string[] | undefined {
+  const out = inputArray<unknown>(lines).map((line) => clip(line, 110)).filter(Boolean).slice(0, 3);
   return out.length ? out : undefined;
 }
 function cleanFocusItem(item: FocusItem | null): FocusItem | null {
   if (!item) return null;
   const based_on = cleanEvidence(item.based_on);
   return based_on ? { ...item, based_on } : { ...item };
+}
+
+function varyOptionName(option: unknown): string | null {
+  const raw = option && typeof option === "object" && "name" in option ? option.name : option;
+  return raw ? String(raw) : null;
 }
 
 // ---- candidate generation: one read per domain, each scored for internal ranking ----
@@ -115,7 +257,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       domain: "recovery",
       title: "Take an earned recovery week",
       why:
-        meso?.note ||
+        (meso?.note ? String(meso.note) : "") ||
         "Your recent load and recovery signals say a lighter week now pays off — back volume off ~40%, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
       based_on: ["Mesocycle says deload is due", recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated"],
     },
@@ -125,16 +267,15 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
 function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
   // A genuinely STALLED canonical group with a concrete swap menu is the most
   // coach-like training lead (the athlete's own "which groups stall" framing).
-  const groups: any[] = Array.isArray(inp.groupsTrajectory?.groups) ? inp.groupsTrajectory.groups : [];
+  const groups = inputArray<MuscleGroupTrajectoryInput>(inp.groupsTrajectory?.groups);
   const stalled = groups.find((g) => lc(g?.verdict) === "stalling" && (g?.lead_lift || g?.label));
   if (stalled) {
     // vary_options are {name, why} objects — pull the movement NAME (a bare
     // String(o) renders "[object Object]"). Tolerate a plain-string option too.
-    const opts = (Array.isArray(stalled.vary_options) ? stalled.vary_options : [])
+    const opts = inputArray<unknown>(stalled.vary_options)
       .slice(0, 2)
-      .map((o: any) => (o && typeof o === "object" ? o.name : o))
-      .filter(Boolean)
-      .map((s: any) => String(s));
+      .map(varyOptionName)
+      .filter((name): name is string => name != null);
     const label = lc(stalled.label || stalled.group);
     return {
       key: "training-stall",
@@ -183,7 +324,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
         domain: "running",
         title: phase === "sharpen" ? "Sharpen for your race" : "Build toward your race",
         why:
-          inp.runPlan?.why ||
+          (inp.runPlan?.why ? String(inp.runPlan.why) : "") ||
           `You're in the ${phase} phase — this week's mix matters: the quality session drives fitness, the long run builds durability, the easy runs protect recovery.`,
         move: inp.runPlan?.quality_focus ? `This week's quality focus: ${lc(inp.runPlan.quality_focus)}.` : undefined,
         based_on: [`Race goal is in ${phase} phase`, inp.runPlan?.quality_focus ? `Run plan quality focus: ${inp.runPlan.quality_focus}` : "Weekly run plan is available"],
@@ -226,7 +367,7 @@ function healthCandidate(inp: CoachingFocusInput): Candidate | null {
   const lead = inp.healthFocus?.lead;
   if (!lead?.group) return null;
   const actNow = lc(lead.tier) === "act_now";
-  const moves = lead.moves || {};
+  const moves: HealthFocusMovesInput = lead.moves ?? {};
   const move = moves.nutrition || moves.training || moves.watch;
   const viaNutrition = !!moves.nutrition;
   return {
@@ -294,19 +435,19 @@ function laterCandidates(inp: CoachingFocusInput): Candidate[] {
     out.push({ key: "later-run-variety", leverage: 1.6, slot: "later", item: { domain: "running", title: "Add variety to your runs", why: clip(inp.runVariety.note, 180), based_on: ["Run variety read"] } });
   }
   // A second stalled/building group beyond the lead.
-  const groups: any[] = Array.isArray(inp.groupsTrajectory?.groups) ? inp.groupsTrajectory.groups : [];
+  const groups = inputArray<MuscleGroupTrajectoryInput>(inp.groupsTrajectory?.groups);
   const stalledOthers = groups.filter((g) => lc(g?.verdict) === "stalling");
   if (stalledOthers.length > 1) {
     const g = stalledOthers[1];
     out.push({ key: "later-group", leverage: 1.5, slot: "later", item: { domain: "training", title: `Then revisit your ${lc(g.label || g.group)}`, why: "Address it after the lead lift is moving again — one plateau at a time.", based_on: ["Another muscle group is stalling"] } });
   }
   // The widest strength imbalance (rounding-out work, deferred).
-  const imb = Array.isArray(inp.performance?.imbalances) ? inp.performance.imbalances[0] : null;
+  const imb = inputArray<PerformanceImbalanceInput>(inp.performance?.imbalances)[0] ?? null;
   if (imb?.title) {
     out.push({ key: "later-imbalance", leverage: 1.4, slot: "later", item: { domain: "training", title: clip(imb.title, 60), why: clip(imb.why || "", 180), based_on: ["Performance imbalance read"] } });
   }
   // A "due" muscle group from the balance digest.
-  const dueAdj = (inp.programAdjustments || []).find((a: any) => a?.kind === "balance" && /due/i.test(String(a?.title || "")));
+  const dueAdj = inputArray<ProgramAdjustmentInput>(inp.programAdjustments).find((a) => a?.kind === "balance" && /due/i.test(String(a?.title || "")));
   if (dueAdj) {
     out.push({ key: "later-due", leverage: 1.3, slot: "later", item: { domain: "training", title: clip(dueAdj.title, 60), why: clip(dueAdj.why || "", 180), based_on: ["Program adjustment digest"] } });
   }
@@ -345,12 +486,12 @@ function buildConnections(lead: FocusItem | null, parallel: FocusItem[], inp: Co
 function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   const focus: string[] = [];
   if (inp.testWeek?.due) {
-    for (const l of inp.testWeek.key_lifts || []) focus.push(String(l));
+    for (const l of inputArray<unknown>(inp.testWeek.key_lifts)) focus.push(String(l));
   }
-  for (const t of inp.enduranceTests || []) {
+  for (const t of inputArray<EnduranceTestInput>(inp.enduranceTests)) {
     if (t?.exercise) focus.push(String(t.exercise));
   }
-  for (const t of inp.performance?.tests_due || []) {
+  for (const t of inputArray<PerformanceTestDueInput>(inp.performance?.tests_due)) {
     if (t?.exercise && t.kind !== "endurance") focus.push(String(t.exercise));
   }
   const dedup = [...new Set(focus.map((f) => f.trim()).filter(Boolean))].slice(0, 4);

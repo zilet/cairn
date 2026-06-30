@@ -1,6 +1,20 @@
 import { z } from "zod";
 import { onboardFromText } from "../../coachOps.js";
-import * as repo from "../../repo.js";
+import {
+  addContextEvent,
+  addFamily,
+  deleteContextEvent,
+  deleteFamily,
+  deleteSupplement,
+  getInjuryImpacts,
+  listContextEvents,
+  listFamily,
+  listSupplements,
+  understandSupplements,
+  updateContextEvent,
+  updateFamily,
+  updateSupplement,
+} from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerPersonContextTools(server: McpToolRegistrar) {
@@ -16,14 +30,14 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
       end_date: z.string().nullable().optional().describe("YYYY-MM-DD; null/omit = ongoing/open-ended"),
       meta: z.any().optional().describe("kind-specific: trip {location}, injury {area,severity}, life_event {impact}, family_event {member,recurrence}"),
     },
-    async (a) => asText(repo.addContextEvent(a))
+    async (a) => asText(addContextEvent(a))
   );
 
   server.tool(
     "list_context_events",
     "List life-timeline events. Pass active=true for only active/upcoming (not archived and not past their end_date).",
     { active: z.boolean().optional() },
-    async ({ active }) => asText(repo.listContextEvents({ activeOnly: !!active }))
+    async ({ active }) => asText(listContextEvents({ activeOnly: !!active }))
   );
 
   server.tool(
@@ -39,21 +53,21 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
       meta: z.any().optional(),
       archived: z.boolean().optional(),
     },
-    async ({ id, ...patch }) => asText(repo.updateContextEvent(id, patch) ?? { error: "not found", id })
+    async ({ id, ...patch }) => asText(updateContextEvent(id, patch) ?? { error: "not found", id })
   );
 
   server.tool(
     "delete_context_event",
     "Delete a life-timeline event by id.",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.deleteContextEvent(id))
+    async ({ id }) => asText(deleteContextEvent(id))
   );
 
   server.tool(
     "get_injury_impacts",
     "For each ACTIVE injury on the life timeline, the planned exercises it loads (with where they appear in the plan + any existing constraint note) and a few safe alternative exercises to consider. Deterministic, offline. Suggestions only — it never changes the plan.",
     {},
-    async () => asText(repo.getInjuryImpacts())
+    async () => asText(getInjuryImpacts())
   );
 
   // ---- family roster (people the coach plans life around) ----
@@ -61,7 +75,7 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     "list_family",
     "List the household roster (kids, partner, etc.) the coach plans life around. Their recurring commitments live as context_events with kind:'family_event'.",
     {},
-    async () => asText(repo.listFamily())
+    async () => asText(listFamily())
   );
 
   server.tool(
@@ -76,7 +90,7 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
       allergies: z.string().nullable().optional(),
       dietary_restrictions: z.string().nullable().optional(),
     },
-    async (a) => asText(repo.addFamily(a))
+    async (a) => asText(addFamily(a))
   );
 
   server.tool(
@@ -92,14 +106,14 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
       allergies: z.string().nullable().optional(),
       dietary_restrictions: z.string().nullable().optional(),
     },
-    async ({ id, ...patch }) => asText(repo.updateFamily(id, patch) ?? { error: "not found", id })
+    async ({ id, ...patch }) => asText(updateFamily(id, patch) ?? { error: "not found", id })
   );
 
   server.tool(
     "delete_family",
     "Delete a family member by id.",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.deleteFamily(id))
+    async ({ id }) => asText(deleteFamily(id))
   );
 
   // ---- supplements (UNDERSTANDING, not a daily log) ----
@@ -107,28 +121,28 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
     "list_supplements",
     "List the athlete's understood supplement regimen (canonical name, approximate dose, cadence, the markers/domains each touches). Not a daily log. all=true includes stopped ones.",
     { all: z.boolean().optional() },
-    async ({ all }) => asText(repo.listSupplements({ activeOnly: !all }))
+    async ({ all }) => asText(listSupplements({ activeOnly: !all }))
   );
 
   server.tool(
     "understand_supplements",
     "Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items.",
     { text: z.string().describe("free-text mention of what they take") },
-    async ({ text }) => asText(repo.understandSupplements(text))
+    async ({ text }) => asText(understandSupplements(text))
   );
 
   server.tool(
     "update_supplement",
     "Edit one understood supplement (dose, frequency, note), or set active=false to mark it stopped (kept for history).",
     { id: z.number().int(), dose: z.string().optional(), frequency: z.string().optional(), note: z.string().optional(), active: z.boolean().optional() },
-    async (args) => asText(repo.updateSupplement(args.id, args) ?? { error: "not found", id: args.id })
+    async (args) => asText(updateSupplement(args.id, args) ?? { error: "not found", id: args.id })
   );
 
   server.tool(
     "delete_supplement",
     "Remove one supplement from the regimen by id.",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.deleteSupplement(id))
+    async ({ id }) => asText(deleteSupplement(id))
   );
 
   server.tool(

@@ -1,8 +1,11 @@
 export * from "../../repo/chat.js";
 export * from "../../repo/context-effect.js";
+export { addFamily, deleteFamily, listFamily, updateFamily } from "../../repo/coach.js";
+export { addContextEvent, deleteContextEvent, getInjuryImpacts, listContextEvents, updateContextEvent } from "../../repo/health.js";
 export * from "../../repo/memory.js";
 export * from "../../repo/next-step.js";
 export * from "../../repo/profile.js";
+export { addSupplement, deleteSupplement, listSupplements, understandSupplements, updateSupplement } from "../../repo/propagation.js";
 export * from "../../repo/reaction-model.js";
 export * from "../../repo/settings.js";
 export * from "../../repo/trajectory.js";
