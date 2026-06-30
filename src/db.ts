@@ -553,7 +553,7 @@ CREATE INDEX IF NOT EXISTS idx_art_usage_created ON art_usage(created_at);
 CREATE TABLE IF NOT EXISTS health_documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
-  kind TEXT,                          -- bloodwork | dexa | other
+  kind TEXT,                          -- bloodwork | dexa | ecg | other
   doc_date TEXT,                      -- the test date (YYYY-MM-DD)
   original_name TEXT,
   mime TEXT,

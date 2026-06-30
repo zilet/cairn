@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HEALTH_DOCUMENT_KINDS } from "../../healthDocumentKinds.js";
 import * as repo from "../../repo.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
@@ -14,7 +15,7 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
     "add_health_record",
     "Record a health-document ANALYSIS without uploading a binary (e.g. after reading a lab report image in a Claude client). Stores extracted markers + summary directly; status is 'done'.",
     {
-      kind: z.enum(["bloodwork", "dexa", "other"]),
+      kind: z.enum(HEALTH_DOCUMENT_KINDS),
       doc_date: z.string().nullable().optional().describe("the test date, YYYY-MM-DD"),
       summary: z.string().describe("plain-language summary, 1-3 sentences"),
       parsed: z.any().optional().describe("structured markers, e.g. { markers: [{name,value,unit,flag}], type }"),

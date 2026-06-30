@@ -624,8 +624,8 @@ async function renderLife() {
     </div></div>
     <h1 class="lbl" style="margin:20px 0 8px">Add to your timeline</h1>
     <div class="lifeadd">
-      <div class="field" style="margin-bottom:9px"><label>Kind</label>
-        <select id="lKind" class="selflex">${CairnLife.lifeKindOptionsHtml()}</select>
+      <div class="field" style="margin-bottom:9px"><label for="lKind">Kind</label>
+        <select id="lKind" name="lKind" class="selflex">${CairnLife.lifeKindOptionsHtml()}</select>
       </div>
       <div id="lFields"></div>
       <button id="lAdd" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ADD</button>
@@ -736,20 +736,20 @@ function startLifeEdit(card: HTMLElement | null) {
   if (!ev.id) return;
   const meta = CairnLife.parsedMeta(ev);
   const metaField = ev.kind === "trip"
-    ? `<input class="le-meta form-input" placeholder="Location" value="${escAttr(meta.location || "")}">`
+    ? `<input class="le-meta form-input" name="life_location" aria-label="Location" placeholder="Location" value="${escAttr(meta.location || "")}">`
     : ev.kind === "injury"
-      ? `<input class="le-meta form-input" placeholder="Area" value="${escAttr(meta.area || "")}">`
+      ? `<input class="le-meta form-input" name="life_area" aria-label="Area" placeholder="Area" value="${escAttr(meta.area || "")}">`
       : "";
   const box = document.createElement("div");
   box.className = "life-edit";
   box.innerHTML = `
-    <input class="le-title form-input" placeholder="Title" value="${escAttr(ev.title || "")}">
+    <input class="le-title form-input" name="life_title" aria-label="Title" placeholder="Title" value="${escAttr(ev.title || "")}">
     ${metaField}
     <div class="ob-grid" style="margin-top:6px">
-      <input class="le-start form-input" type="date" value="${escAttr(ev.start_date || "")}">
-      <input class="le-end form-input" type="date" value="${escAttr(ev.end_date || "")}">
+      <input class="le-start form-input" name="life_start" aria-label="Start" type="date" value="${escAttr(ev.start_date || "")}">
+      <input class="le-end form-input" name="life_end" aria-label="End" type="date" value="${escAttr(ev.end_date || "")}">
     </div>
-    <input class="le-detail form-input" placeholder="Detail" value="${escAttr(ev.detail || "")}">
+    <input class="le-detail form-input" name="life_detail" aria-label="Detail" placeholder="Detail" value="${escAttr(ev.detail || "")}">
     <div class="life-edit-ctl">
       <button class="iconbtn memok le-save" title="save">✓</button>
       <button class="iconbtn le-cancel" title="cancel">×</button>
@@ -818,19 +818,19 @@ async function renderFamily() {
     </div></div>
     <h1 class="lbl" style="margin:20px 0 8px">Add someone</h1>
     <div class="lifeadd famadd">
-      <div class="field" style="margin-bottom:9px"><label>Name</label>
-        <input id="fName" type="text" placeholder="e.g. Mara" class="form-input"></div>
-      <div class="field" style="margin-bottom:9px"><label>Relationship (optional)</label>
-        <input id="fRel" type="text" placeholder="e.g. daughter / partner" class="form-input"></div>
-      <div class="field" style="margin-bottom:9px"><label>Birthday (optional)</label>
-        <input id="fBirth" type="date" max="${localISO()}" class="form-input"></div>
-      <div class="field" style="margin-bottom:9px"><label>Colour</label>${CairnFamily.familySwatches(CairnFamily.FAMILY_DEFAULT_COLOR)}</div>
-      <div class="field" style="margin-bottom:9px"><label>Notes (optional)</label>
-        <input id="fNotes" type="text" placeholder="e.g. trains with me on weekends" class="form-input"></div>
-      <div class="field" style="margin-bottom:9px"><label>Allergies (optional)</label>
-        <input id="fAllergy" type="text" placeholder="e.g. peanuts, shellfish" class="form-input"></div>
-      <div class="field" style="margin-bottom:9px"><label>Dietary needs (optional)</label>
-        <input id="fDiet" type="text" placeholder="e.g. vegetarian, no pork" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><label for="fName">Name</label>
+        <input id="fName" name="fName" type="text" placeholder="e.g. Mara" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><label for="fRel">Relationship (optional)</label>
+        <input id="fRel" name="fRel" type="text" placeholder="e.g. daughter / partner" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><label for="fBirth">Birthday (optional)</label>
+        <input id="fBirth" name="fBirth" type="date" max="${localISO()}" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><span class="field-label">Colour</span>${CairnFamily.familySwatches(CairnFamily.FAMILY_DEFAULT_COLOR)}</div>
+      <div class="field" style="margin-bottom:9px"><label for="fNotes">Notes (optional)</label>
+        <input id="fNotes" name="fNotes" type="text" placeholder="e.g. trains with me on weekends" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><label for="fAllergy">Allergies (optional)</label>
+        <input id="fAllergy" name="fAllergy" type="text" placeholder="e.g. peanuts, shellfish" class="form-input"></div>
+      <div class="field" style="margin-bottom:9px"><label for="fDiet">Dietary needs (optional)</label>
+        <input id="fDiet" name="fDiet" type="text" placeholder="e.g. vegetarian, no pork" class="form-input"></div>
       <button id="fAdd" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ADD</button>
       <div id="fStatus" style="margin-top:6px;color:var(--muted);font-size:.82rem"></div>
     </div>
@@ -911,13 +911,13 @@ function startFamilyEdit(card: HTMLElement | null) {
   const box = document.createElement("div");
   box.className = "fam-edit";
   box.innerHTML = `
-    <input class="fe-name form-input" placeholder="Name" value="${escAttr(f.name || "")}">
-    <input class="fe-rel form-input" placeholder="Relationship" value="${escAttr(f.relationship || "")}">
-    <input class="fe-birth form-input" type="date" max="${localISO()}" value="${escAttr(f.birthdate || "")}">
+    <input class="fe-name form-input" name="family_name" aria-label="Name" placeholder="Name" value="${escAttr(f.name || "")}">
+    <input class="fe-rel form-input" name="family_relationship" aria-label="Relationship" placeholder="Relationship" value="${escAttr(f.relationship || "")}">
+    <input class="fe-birth form-input" name="family_birthdate" aria-label="Birthday" type="date" max="${localISO()}" value="${escAttr(f.birthdate || "")}">
     ${CairnFamily.familySwatches(editColor)}
-    <input class="fe-notes form-input" placeholder="Notes" value="${escAttr(f.notes || "")}">
-    <input class="fe-allergy form-input" placeholder="Allergies" value="${escAttr(f.allergies || "")}">
-    <input class="fe-diet form-input" placeholder="Dietary needs" value="${escAttr(f.dietary_restrictions || "")}">
+    <input class="fe-notes form-input" name="family_notes" aria-label="Notes" placeholder="Notes" value="${escAttr(f.notes || "")}">
+    <input class="fe-allergy form-input" name="family_allergies" aria-label="Allergies" placeholder="Allergies" value="${escAttr(f.allergies || "")}">
+    <input class="fe-diet form-input" name="family_dietary_needs" aria-label="Dietary needs" placeholder="Dietary needs" value="${escAttr(f.dietary_restrictions || "")}">
     <div class="life-edit-ctl">
       <button class="iconbtn memok fe-save" title="save">✓</button>
       <button class="iconbtn fe-cancel" title="cancel">×</button>

@@ -47,11 +47,14 @@ test("health document helpers render analyzed records safely", () => {
   assert.match(inner, /2 markers · 1 flagged/);
   assert.match(inner, /LDL-C &lt;direct&gt;/);
   assert.match(inner, /Looks &lt;steady&gt;/);
+  assert.match(inner, /id="hdate-12"/);
+  assert.match(inner, /name="health_doc_date_12"/);
   assert.match(inner, /TOKEN:\/api\/health-docs\/12\/file/);
   assert.doesNotMatch(inner, /<direct>|<steady>|labs <raw>/);
   assert.equal(docs.docCollapsible(row), true);
   assert.equal(docs.markerFlagClass("critical"), "hm-flag warn");
   assert.equal(docs.healthKindLabel("dexa"), "DEXA");
+  assert.equal(docs.healthKindLabel("ecg"), "ECG - Garmin");
 });
 
 test("health document wrappers collapse older cards and handle pending rows", () => {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "./db.js";
+import { isHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import * as repo from "./repo.js";
 import { extractJson, runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
@@ -933,7 +934,7 @@ function applyHealthIngest(id: number, parsed: any): boolean {
     .map((p: any) => {
       const date = asStr(p.doc_date);
       const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
-      const kind = ["bloodwork", "dexa", "other"].includes(p.kind) ? p.kind : (["bloodwork", "dexa", "other"].includes(p.type) ? p.type : "other");
+      const kind = isHealthDocumentKind(p.kind) ? p.kind : normalizeHealthDocumentKind(p.type);
       return {
         doc_date: validDate,
         kind,

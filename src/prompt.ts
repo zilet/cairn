@@ -1,6 +1,7 @@
 import * as repo from "./repo.js";
 import { extractJson } from "./agents.js";
 import { todayISO } from "./db.js";
+import { HEALTH_DOCUMENT_KIND_SCHEMA } from "./healthDocumentKinds.js";
 import type { CoachContext, PartialCoachContext } from "./repo/coach-context.js";
 
 const PLAN_SCHEMA = `{
@@ -1251,7 +1252,7 @@ const CHAT_ACTIONS_SCHEMA = `[
       { "day_number": 1, "name": "Lower A", "focus": "Quad", "items": [
         { "exercise": "Back Squat", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 190, "note": "" },
         { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed", "note": "" } ] } ] },
-    { "type": "log_health", "kind": "bloodwork|dexa|other", "doc_date": "YYYY-MM-DD|null",
+    { "type": "log_health", "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}", "doc_date": "YYYY-MM-DD|null",
       "summary": "<plain-language 1-2 sentence read on the results>",
       "markers": [ { "name": "Ferritin", "value": 45, "unit": "ng/mL", "flag": "low|high|normal|null" } ] },
     { "type": "add_context_event", "kind": "trip|injury|life_event|family_event", "title": "<short>",
@@ -1333,7 +1334,7 @@ ACTIONS — only when the athlete clearly asks to log or change something:
   BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today,
   reference it instead of logging a duplicate. If the athlete is correcting that row, emit
   update_food_note with the existing id.
-- log_health records lab/bloodwork/DEXA results the athlete reports in chat — transcribe EVERY
+- log_health records lab/bloodwork/DEXA/ECG results the athlete reports in chat — transcribe EVERY
   marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short
   plain-language summary. Do NOT curate to "the interesting ones": an in-range/normal/boring marker
   (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every
@@ -1593,13 +1594,13 @@ ${raw}`;
 }
 
 const ENRICH_HEALTH_SCHEMA = `{
-  "kind": "bloodwork|dexa|other",
+  "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}",
   "doc_date": "YYYY-MM-DD|null",
   "structured": {
     "markers": [
       { "name": "<marker name, e.g. 'Ferritin'>", "value": <number|string>, "unit": "<unit, e.g. 'ng/mL'>", "flag": "low|normal|high|null" }
     ],
-    "type": "bloodwork|dexa|other"
+    "type": "${HEALTH_DOCUMENT_KIND_SCHEMA}"
   },
   "summary": "<plain-language summary, 1-3 sentences>",
   "memory": [
@@ -1658,7 +1659,7 @@ const HEALTH_INGEST_SCHEMA = `{
     // A multi-year lab export becomes many panels — split every dated result out.
     {
       "doc_date": "YYYY-MM-DD",
-      "kind": "bloodwork|dexa|other",
+      "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}",
       "summary": "<1-2 sentence plain-language read for THIS date's results>",
       "marker_count": <integer — how many results this date's source actually lists; markers[] MUST have this many entries>,
       "markers": [
@@ -1815,7 +1816,7 @@ OTHER GUARDRAILS:
 - doc_date is the specimen/collection/scan date (prefer it over a final-report date), YYYY-MM-DD.
   Drop any panel whose date you genuinely cannot determine.
 - Infer each panel's "kind" from its content (a lab panel is "bloodwork", a body-composition/bone
-  scan is "dexa", else "other").
+  scan is "dexa", an ECG/electrocardiogram recording is "ecg", else "other").
 - "memory" is [] unless there is a genuinely durable, notable fact (a clear out-of-range trend, a
   meaningful body-composition change, an active medication/allergy/condition/procedure/injury or
   family/social-history fact that should shape training, nutrition, safety, or coaching). Do NOT

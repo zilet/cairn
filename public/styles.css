@@ -817,7 +817,7 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
    14 · Progress: chart, volume, calendar heatmap
    ------------------------------------------------------------------- */
 .field{margin-bottom:15px}
-.field label{
+.field label,.field .field-label{
   display:block;font-family:var(--font-ui);font-size:.62rem;font-weight:600;
   text-transform:uppercase;letter-spacing:.18em;color:var(--muted);margin-bottom:7px;
 }

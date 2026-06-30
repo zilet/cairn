@@ -37,7 +37,11 @@ test("life helper formats kinds, dates, activity state, and fields", () => {
   assert.equal(life.eventActive({ end_date: "2026-06-29" }, "2026-06-30"), false);
   assert.equal(life.eventActive({ end_date: "2026-06-30" }, "2026-06-30"), true);
   assert.match(life.lifeFieldsHtml("injury"), /id="lSeverity"/);
+  assert.match(life.lifeFieldsHtml("injury"), /<label for="lSeverity">Severity<\/label>/);
+  assert.match(life.lifeFieldsHtml("injury"), /name="lSeverity"/);
   assert.match(life.lifeFieldsHtml("trip"), /id="lLocation"/);
+  assert.match(life.lifeFieldsHtml("trip"), /<label for="lTitle">Title<\/label>/);
+  assert.match(life.lifeFieldsHtml("trip"), /name="lStart"/);
 });
 
 test("life event renderer escapes timeline content and injury impact swaps", () => {

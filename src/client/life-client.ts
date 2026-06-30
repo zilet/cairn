@@ -81,9 +81,9 @@ function eventActive(event: LifeEventRow | null | undefined, todayIso = localISO
 
 function lifeFieldsHtml(kind: unknown): string {
   const text = (id: string, label: string, placeholder = "") =>
-    `<div class="field" style="margin-bottom:9px"><label>${escHtml(label)}</label><input id="${escAttr(id)}" type="text" placeholder="${escAttr(placeholder)}" class="form-input"></div>`;
+    `<div class="field" style="margin-bottom:9px"><label for="${escAttr(id)}">${escHtml(label)}</label><input id="${escAttr(id)}" name="${escAttr(id)}" type="text" placeholder="${escAttr(placeholder)}" class="form-input"></div>`;
   const date = (id: string, label: string) =>
-    `<div class="field" style="margin-bottom:9px"><label>${escHtml(label)}</label><input id="${escAttr(id)}" type="date" class="form-input" value=""></div>`;
+    `<div class="field" style="margin-bottom:9px"><label for="${escAttr(id)}">${escHtml(label)}</label><input id="${escAttr(id)}" name="${escAttr(id)}" type="date" class="form-input" value=""></div>`;
   if (kind === "trip") {
     return text("lTitle", "Title", "e.g. Lisbon work trip") +
       text("lLocation", "Location", "e.g. Lisbon") +
@@ -93,8 +93,8 @@ function lifeFieldsHtml(kind: unknown): string {
   if (kind === "injury") {
     return text("lTitle", "Title", "e.g. Right knee") +
       text("lArea", "Area", "e.g. knee / lower back") +
-      `<div class="field" style="margin-bottom:9px"><label>Severity</label>
-        <select id="lSeverity" class="selflex">
+      `<div class="field" style="margin-bottom:9px"><label for="lSeverity">Severity</label>
+        <select id="lSeverity" name="lSeverity" class="selflex">
           <option value="mild">Mild</option><option value="moderate">Moderate</option><option value="severe">Severe</option>
         </select></div>` +
       date("lStart", "Since") +
@@ -103,8 +103,8 @@ function lifeFieldsHtml(kind: unknown): string {
   }
   return text("lTitle", "Title", "e.g. New baby") +
     `<div class="ob-grid">${date("lStart", "Start")}${date("lEnd", "End (optional)")}</div>` +
-    `<div class="field" style="margin-bottom:9px"><label>Impact</label>
-      <select id="lImpact" class="selflex">
+    `<div class="field" style="margin-bottom:9px"><label for="lImpact">Impact</label>
+      <select id="lImpact" name="lImpact" class="selflex">
         <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
       </select></div>` +
     text("lDetail", "Detail (optional)");

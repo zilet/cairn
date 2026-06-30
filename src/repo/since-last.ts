@@ -78,7 +78,7 @@ function newLabChange(stampSql: string): Change | null {
       (db.prepare(`SELECT COUNT(*) AS n FROM health_documents WHERE created_at > ?`).get(stampSql) as any)?.n ?? 0
     );
     const kind = String(row.kind ?? "").toLowerCase();
-    const label = kind === "bloodwork" ? "Your latest bloodwork" : kind === "dexa" ? "Your DEXA scan" : "A new health document";
+    const label = kind === "bloodwork" ? "Your latest bloodwork" : kind === "dexa" ? "Your DEXA scan" : kind === "ecg" ? "Your Garmin ECG" : "A new health document";
     const phrase = count > 1 ? `${label} and ${count - 1} more result${count - 1 === 1 ? "" : "s"} came in` : `${label} came in`;
     return { weight: 90, phrase };
   } catch {

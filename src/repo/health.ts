@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
 import { localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
@@ -407,7 +408,7 @@ export interface HealthDocInput {
 }
 
 export function addHealthDocument(input: HealthDocInput) {
-  const kind = input.kind && ["bloodwork", "dexa", "other"].includes(input.kind) ? input.kind : "other";
+  const kind = normalizeHealthDocumentKind(input.kind);
   const info = db
     .prepare(
       `INSERT INTO health_documents (kind, doc_date, original_name, mime, file_path, parsed_json, summary, enrichment_status, source_doc_id)
@@ -474,7 +475,7 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
     if (p.type) parsed.type = String(p.type).slice(0, 80);
     if (clinicalFacts.length) parsed.clinical_facts = clinicalFacts;
     const row = addHealthDocument({
-      kind: p.kind && ["bloodwork", "dexa", "other"].includes(p.kind) ? p.kind : "other",
+      kind: normalizeHealthDocumentKind(p.kind),
       doc_date: date,
       original_name: originalName ?? null,
       file_path: null,             // the binary lives on the source row only
@@ -559,7 +560,7 @@ export function updateHealthDocFields(id: number, fields: { parsed_json?: any; s
   if (fields.parsed_json !== undefined) { sets.push("parsed_json = ?"); vals.push(fields.parsed_json != null ? JSON.stringify(fields.parsed_json) : null); }
   if (fields.summary !== undefined) { sets.push("summary = ?"); vals.push(fields.summary ?? null); }
   if (fields.kind !== undefined) {
-    const kind = fields.kind && ["bloodwork", "dexa", "other"].includes(fields.kind) ? fields.kind : "other";
+    const kind = normalizeHealthDocumentKind(fields.kind);
     sets.push("kind = ?");
     vals.push(kind);
   }

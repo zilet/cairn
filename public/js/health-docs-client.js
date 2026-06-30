@@ -3,6 +3,7 @@
 const HEALTH_DOC_KINDS = [
     ["bloodwork", "Bloodwork"],
     ["dexa", "DEXA"],
+    ["ecg", "ECG - Garmin"],
     ["other", "Other"],
 ];
 function healthKindLabel(kind) {
@@ -55,6 +56,7 @@ function healthDocInner(doc) {
     const parsed = parsedDoc(doc);
     const status = doc.enrichment_status;
     const derived = !!doc.source_doc_id;
+    const docIdAttr = escAttr(doc.id || "");
     let analysisBadge = "";
     if (enrichmentActive(status))
         analysisBadge = `<span class="enr enr-pending">analyzing...</span>`;
@@ -107,28 +109,28 @@ function healthDocInner(doc) {
     </div>
     <div class="hdoc-foot">
       <div class="hdoc-date-wrap">
-        <button class="hdoc-datebtn" data-hdate-edit="${doc.id}" title="Change the result date">
+        <button class="hdoc-datebtn" data-hdate-edit="${docIdAttr}" title="Change the result date">
           <span class="hdoc-date-ico" aria-hidden="true">✎</span>
           <span class="hdoc-date-val">${doc.doc_date ? escHtml(doc.doc_date) : "Set date"}</span>
         </button>
-        <span class="hdoc-date-edit" data-hdate-editor="${doc.id}" hidden>
-          <input class="hdoc-date" data-hdate="${doc.id}" type="date" value="${escAttr(doc.doc_date || "")}" max="${localISO()}" aria-label="Result date">
-          <button class="hdoc-date-save" data-hdate-save="${doc.id}">Save</button>
-          <button class="hdoc-date-cancel" data-hdate-cancel="${doc.id}">Cancel</button>
+        <span class="hdoc-date-edit" data-hdate-editor="${docIdAttr}" hidden>
+          <input id="hdate-${docIdAttr}" name="health_doc_date_${docIdAttr}" class="hdoc-date" data-hdate="${docIdAttr}" type="date" value="${escAttr(doc.doc_date || "")}" max="${localISO()}" aria-label="Result date">
+          <button class="hdoc-date-save" data-hdate-save="${docIdAttr}">Save</button>
+          <button class="hdoc-date-cancel" data-hdate-cancel="${docIdAttr}">Cancel</button>
         </span>
-        <span class="hdoc-date-flash" data-hdate-flash="${doc.id}" hidden>✓ updated</span>
+        <span class="hdoc-date-flash" data-hdate-flash="${docIdAttr}" hidden>✓ updated</span>
       </div>
       <div class="hdoc-actions">
-        ${doc.has_file ? `<button class="hdoc-link hdoc-rescan" data-hrescan="${doc.id}"${busy ? " disabled" : ""} title="Re-run the scan over the original file">↻ re-analyze</button>` : ""}
+        ${doc.has_file ? `<button class="hdoc-link hdoc-rescan" data-hrescan="${docIdAttr}"${busy ? " disabled" : ""} title="Re-run the scan over the original file">↻ re-analyze</button>` : ""}
         ${fileId ? `<a class="hdoc-link" href="${withToken(`/api/health-docs/${fileId}/file`)}" target="_blank" rel="noopener">view file</a>` : ""}
-        <button class="iconbtn hdoc-del" data-hdel="${doc.id}" title="delete">×</button>
+        <button class="iconbtn hdoc-del" data-hdel="${docIdAttr}" title="delete">×</button>
       </div>
     </div>`;
 }
 function healthDocHtml(doc, index) {
     const reveal = typeof index === "number";
     const collapsed = docCollapsible(doc) && reveal && Number(index) > 0;
-    return `<div class="sess hdoc${reveal ? " reveal" : ""}${collapsed ? " hdoc-collapsed" : ""}" data-hdoc="${doc.id}"${reveal ? ` style="${stagger(index)}"` : ""}>${healthDocInner(doc)}</div>`;
+    return `<div class="sess hdoc${reveal ? " reveal" : ""}${collapsed ? " hdoc-collapsed" : ""}" data-hdoc="${escAttr(doc.id || "")}"${reveal ? ` style="${stagger(index)}"` : ""}>${healthDocInner(doc)}</div>`;
 }
 const CAIRN_HEALTH_DOCS = {
     healthKindLabel,

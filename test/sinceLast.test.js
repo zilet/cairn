@@ -57,6 +57,15 @@ test("a new lab since the stamp → a calm continuity candidate", () => {
   assert.ok(!/\b\d+\s*\/\s*\d+\b/.test(c.title), "no numeric score");
 });
 
+test("a new Garmin ECG since the stamp gets a specific continuity label", () => {
+  repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
+  seedHealthDoc("2026-06-23", [marker("Sinus Rhythm", "normal", { flag: "normal" })], "ecg");
+
+  const c = repo.sinceLastLookedCandidate();
+  assert.ok(c, "expected a candidate when a Garmin ECG landed in the window");
+  assert.match(c.title, /Garmin ECG/i);
+});
+
 test("a resolved directive since the stamp → continuity candidate", () => {
   repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
   const dir = repo.addDirective({ source: "markers", domain: "nutrition", marker: "LDL-C", directive: "Lean toward oats." });
