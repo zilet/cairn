@@ -185,7 +185,7 @@ async function runOpenSmoke(ctx) {
   {
     const { status, body } = await getJson(base, "/api/today-read");
     ok(status === 200, "GET /api/today-read → 200", `got ${status}`);
-    ok(body && ["train", "easy", "rest"].includes(body.kind), "day-read has a valid kind", JSON.stringify(body?.kind));
+    ok(body && ["train", "easy", "rest", "done"].includes(body.kind), "day-read has a valid kind", JSON.stringify(body?.kind));
     ok(body && typeof body.headline === "string" && body.headline.length > 0, "day-read has a headline", JSON.stringify(body?.headline));
   }
 

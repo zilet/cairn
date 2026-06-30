@@ -4,7 +4,7 @@
 // descriptive-first — a "remaining" only appears when a real target exists.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, seedIntake, seedWeight, isoDaysAgo } from "./_seed.js";
+import { repo, resetTables, seedIntake, seedWeight, localDaysAgo } from "./_seed.js";
 
 // A complete profile so computeGoalCheck() is `ok` (needs age/height/weight).
 function setProfile(extra = {}) {
@@ -87,8 +87,8 @@ test("updateFoodNote corrects fields, clamps, and stamps enrichment terminal", (
 
 test("pace_status speaks the goal mode — 'holding' when maintaining, never 'behind'", () => {
   setProfile({ goal_mode: "maintain", weight_lb: 185 });
-  seedWeight(isoDaysAgo(10), 185.0);
-  seedWeight(isoDaysAgo(0), 185.1); // essentially flat
+  seedWeight(localDaysAgo(10), 185.0);
+  seedWeight(localDaysAgo(0), 185.1); // essentially flat
   const s = repo.getWeeklyStats();
   assert.equal(s.goal_mode, "maintain");
   assert.equal(s.pace_status, "holding");
@@ -97,8 +97,8 @@ test("pace_status speaks the goal mode — 'holding' when maintaining, never 'be
 
 test("gain mode reads a steady upward trend as 'building'", () => {
   setProfile({ goal_mode: "gain", weight_lb: 185 });
-  seedWeight(isoDaysAgo(10), 184);
-  seedWeight(isoDaysAgo(0), 185); // ~0.7 lb/wk — within the lean-gain lane
+  seedWeight(localDaysAgo(10), 184);
+  seedWeight(localDaysAgo(0), 185); // ~0.7 lb/wk — within the lean-gain lane
   const s = repo.getWeeklyStats();
   assert.equal(s.goal_mode, "gain");
   assert.equal(s.pace_status, "on");

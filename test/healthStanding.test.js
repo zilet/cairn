@@ -1,6 +1,6 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, isoDaysAgo, marker, repo, resetTables, seedHealthDoc, seedTrainingDay } from "./_seed.js";
+import { db, isoDaysAgo, localDaysAgo, marker, repo, resetTables, seedHealthDoc, seedTrainingDay } from "./_seed.js";
 
 beforeEach(() => {
   resetTables(
@@ -30,14 +30,14 @@ test("healthStanding compares actual age against a selectable reference decade",
     marker("ApoB", 78, { unit: "mg/dL", flag: "normal" }),
   ]);
   repo.addBloodPressureReading({ measured_at: "2026-06-24T07:15", systolic: 116, diastolic: 72, pulse: 58 });
-  seedTrainingDay(isoDaysAgo(0));
-  seedTrainingDay(isoDaysAgo(2));
+  seedTrainingDay(localDaysAgo(0));
+  seedTrainingDay(localDaysAgo(2));
 
   const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','standing-test')`).run();
   db.prepare(
     `INSERT INTO garmin_daily_metrics (source_id, date, vo2max, resting_hr, hrv_ms, steps, fitness_age, body_fat_pct)
      VALUES (?, ?, 48, 55, 58, 9200, 36, 18)`
-  ).run(src.lastInsertRowid, isoDaysAgo(0));
+  ).run(src.lastInsertRowid, localDaysAgo(0));
 
   const standing = repo.healthStanding({ referenceAge: 20 });
   assert.equal(standing.subject.age, 44);
@@ -83,7 +83,7 @@ test("healthStanding compares actual age against a selectable reference decade",
 test("healthStanding leads with momentum: live body-fat estimate, lab bio-age, the one lever", () => {
   repo.setProfile({ age: 44, sex: "male", height_cm: 170, weight_lb: 177.6, goal_weight_lb: 164, goal_mode: "lose" });
   // A 3-week-old DEXA: lean mass measured, body fat 35.6% at a heavier scan weight.
-  seedHealthDoc(isoDaysAgo(21), [
+  seedHealthDoc(localDaysAgo(21), [
     marker("Body Fat %", 35.6, { unit: "%", flag: "high" }),
     marker("Lean Mass (Total)", 112.6, { unit: "lbs" }),
     marker("Bone Mineral Content (BMC)", 6.1, { unit: "lbs" }),
@@ -91,15 +91,15 @@ test("healthStanding leads with momentum: live body-fat estimate, lab bio-age, t
     marker("Total Mass", 184.3, { unit: "lbs" }),
   ], "dexa");
   // Bloodwork: lipids flagged high (the real lever) + a lab biological age younger by 7.4.
-  seedHealthDoc(isoDaysAgo(15), [
+  seedHealthDoc(localDaysAgo(15), [
     marker("LDL-Cholesterol", 207, { unit: "mg/dL", flag: "high" }),
     marker("Apolipoprotein B (ApoB)", 148, { unit: "mg/dL", flag: "high" }),
     marker("Non-HDL Cholesterol", 234, { unit: "mg/dL", flag: "high" }),
     marker("Biological Age", -7.4),
   ]);
   // Weight coming down since the scan.
-  repo.logWeight(184, isoDaysAgo(21));
-  repo.logWeight(177.6, isoDaysAgo(0));
+  repo.logWeight(184, localDaysAgo(21));
+  repo.logWeight(177.6, localDaysAgo(0));
   // BP improving 144 -> 113 across home readings.
   repo.addBloodPressureReading({ measured_at: "2026-02-24T08:00", systolic: 125, diastolic: 78 });
   repo.addBloodPressureReading({ measured_at: "2026-03-10T08:00", systolic: 144, diastolic: 87 });
