@@ -484,202 +484,35 @@ async function loadHealthPicture(token, docsP) {
 
 // ---- markers (trends) ----
 function fmtMkNum(v) {
-  return CairnHealthClient.formatMarkerNumber(v);
+  return CairnHealthMarkers.formatMarkerNumber(v);
 }
 
 function sparkDateLabel(d) {
-  return CairnHealthClient.sparkDateLabel(d);
+  return CairnHealthMarkers.sparkDateLabel(d);
 }
 
-// Plain-language trend phrase from the server's `trend` (no numeric grade — the
-// constitution bans scores). Falls back to deriving direction from the points span.
 function markerTrendWord(m) {
-  return CairnHealthClient.markerTrendWord(m);
+  return CairnHealthMarkers.markerTrendWord(m);
 }
 
-// "~14 mo" / "~3 wk" / "~9 days" — a soft span for the trend phrase.
 function markerSpanWord(days) {
-  return CairnHealthClient.markerSpanWord(days);
+  return CairnHealthMarkers.markerSpanWord(days);
 }
 
-// Richer inline progress chart — hand-built SVG, no library. Shades the optimal-zone
-// band (when present, folded into the y-domain so it's always visible), draws a
-// Catmull-Rom curve through the readings (the house line), plots every numeric point
-// as a flag-tinted dot, and labels the date axis at the ends. Numbers go in as
-// attributes; the only text (endpoint dates) is escHtml'd — same rules as the old sparkline.
 function markerChartSvg(m) {
-  const raw = (m.points || []).filter((p) => p && isFinite(Number(p.value)));
-  if (raw.length < 2) return "";
-  const W = 300, H = 108, L = 14, R = 14, T = 14, B = 26;
-  const vals = raw.map((p) => Number(p.value));
-  let min = Math.min(...vals), max = Math.max(...vals);
-  const opt = m.optimal && isFinite(Number(m.optimal.low)) && isFinite(Number(m.optimal.high)) ? m.optimal : null;
-  // fold the optimal band into the y-domain so the shaded zone is always on-screen
-  if (opt) { min = Math.min(min, Number(opt.low)); max = Math.max(max, Number(opt.high)); }
-  if (max === min) { max += 1; min -= 1; }
-  // a touch of headroom so dots & the band edge don't kiss the frame
-  const pad = (max - min) * 0.08; min -= pad; max += pad;
-  const x = (i) => L + (i * (W - L - R)) / (raw.length - 1);
-  const y = (v) => T + (1 - (v - min) / (max - min)) * (H - T - B);
-  const P = raw.map((p, i) => [x(i), y(Number(p.value))]);
-  // optimal band rectangle (clamped to the plot)
-  let band = "";
-  if (opt) {
-    const yHi = Math.max(T, y(Number(opt.high))), yLo = Math.min(H - B, y(Number(opt.low)));
-    band = `<rect class="hchart-band" x="${L}" y="${yHi.toFixed(1)}" width="${(W - L - R).toFixed(1)}" height="${Math.max(1, yLo - yHi).toFixed(1)}" rx="3"/>`;
-  }
-  // gentle Catmull-Rom curve through the points
-  let d = `M${P[0][0].toFixed(1)} ${P[0][1].toFixed(1)}`;
-  for (let i = 0; i < P.length - 1; i++) {
-    const p0 = P[Math.max(0, i - 1)], p1 = P[i], p2 = P[i + 1], p3 = P[Math.min(P.length - 1, i + 2)];
-    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
-    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
-    d += ` C${c1[0].toFixed(1)} ${c1[1].toFixed(1)} ${c2[0].toFixed(1)} ${c2[1].toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
-  }
-  const dots = P.map(([px, py], i) => {
-    const f = String(raw[i].flag || "").toLowerCase();
-    const flagged = f === "low" || f === "high" || f === "abnormal" || f === "critical";
-    return `<circle class="hchart-dot" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${i === P.length - 1 ? 4 : 2.8}" fill="${flagged ? "#b3402e" : "#6e7f5c"}"/>`;
-  }).join("");
-  // Per-point scrub data (value+date strings, pre-formatted) for wireMarkerChart.
-  // JSON-in-attribute, escAttr'd — round-trips cleanly back via JSON.parse(dataset.pts).
-  const tipData = raw.map((p, i) => ({
-    x: Number(P[i][0].toFixed(1)),
-    y: Number(P[i][1].toFixed(1)),
-    t: `${fmtMkNum(p.value)}${m.unit ? " " + m.unit : ""} · ${sparkDateLabel(p.date)}`,
-  }));
-  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" data-pts="${escAttr(JSON.stringify(tipData))}" aria-hidden="true">
-      ${band}
-      <path class="hchart-line" d="${d}" fill="none" stroke="#211d17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      ${dots}
-      <text class="hchart-txt" x="${L}" y="${H - 7}" text-anchor="start">${escHtml(sparkDateLabel(raw[0].date))}</text>
-      <text class="hchart-txt" x="${W - R}" y="${H - 7}" text-anchor="end">${escHtml(sparkDateLabel(raw[raw.length - 1].date))}</text>
-      <line class="hchart-guide" x1="0" y1="${T}" x2="0" y2="${H - B}"/>
-      <circle class="hchart-cursor" cx="0" cy="0" r="4.2"/>
-      <g class="hchart-tip" transform="translate(0,0)"><rect rx="9" x="0" y="0" width="0" height="18"/><text x="8" y="13"></text></g>
-    </svg>`;
+  return CairnHealthMarkers.markerChartSvg(m);
 }
 
-// Wire pointer scrubbing onto a marker chart SVG: hover (mouse) or drag (touch)
-// glides a dashed guide + highlighted dot + a value·date pill to the nearest reading,
-// so every past lab value is legible — not just the latest. The cursor eases between
-// points (rAF lerp) and the dot springs as it lands; first touch snaps (no fly-in)
-// and reduced-motion snaps throughout. Values are real readings, never interpolated.
-// Idempotent per element.
 function wireMarkerChart(svg) {
-  if (!svg || svg._scrubWired) return;
-  let pts;
-  try { pts = JSON.parse(svg.dataset.pts || "[]"); } catch { pts = []; }
-  if (!Array.isArray(pts) || pts.length < 2) return;
-  svg._scrubWired = true;
-  const VB = 300; // viewBox width — matches markerChartSvg's W
-  const guide = svg.querySelector(".hchart-guide");
-  const cursor = svg.querySelector(".hchart-cursor");
-  const tip = svg.querySelector(".hchart-tip");
-  const tipRect = tip && tip.querySelector("rect");
-  const tipText = tip && tip.querySelector("text");
-  const last = pts[pts.length - 1];
-  const cur = { x: last.x, y: last.y, pop: 0 };
-  const tgt = { x: last.x, y: last.y, idx: pts.length - 1 };
-  let touchActive = false, raf = null, tipW = 0;
-
-  const apply = () => {
-    if (guide) { guide.setAttribute("x1", cur.x.toFixed(1)); guide.setAttribute("x2", cur.x.toFixed(1)); }
-    if (cursor) { cursor.setAttribute("cx", cur.x.toFixed(1)); cursor.setAttribute("cy", cur.y.toFixed(1)); cursor.setAttribute("r", (4.2 + 1.8 * cur.pop).toFixed(2)); }
-    if (tip) {
-      const tx = Math.max(2, Math.min(cur.x - tipW / 2, VB - tipW - 2)); // clamp the pill on-screen
-      const ty = cur.y - 26 < 0 ? cur.y + 8 : cur.y - 26;
-      tip.setAttribute("transform", `translate(${tx.toFixed(1)},${ty.toFixed(1)})`);
-    }
-  };
-  const tick = () => {
-    cur.x += (tgt.x - cur.x) * 0.34; cur.y += (tgt.y - cur.y) * 0.34; cur.pop *= 0.8;
-    const settled = Math.abs(cur.x - tgt.x) < 0.3 && Math.abs(cur.y - tgt.y) < 0.3 && cur.pop < 0.02;
-    if (settled) { cur.x = tgt.x; cur.y = tgt.y; cur.pop = 0; }
-    apply();
-    raf = settled ? null : requestAnimationFrame(tick);
-  };
-  const setIdx = (i, snap) => {
-    if ((i !== tgt.idx || snap) && tipText && tipRect) {
-      tipText.textContent = pts[i].t;
-      tipW = (tipText.getComputedTextLength ? tipText.getComputedTextLength() : pts[i].t.length * 5.2) + 16;
-      tipRect.setAttribute("width", tipW.toFixed(1));
-      if (i !== tgt.idx && !snap) cur.pop = 1; // spring only when landing on a new reading
-    }
-    tgt.x = pts[i].x; tgt.y = pts[i].y; tgt.idx = i;
-    if (snap || reducedMotion()) { cur.x = tgt.x; cur.y = tgt.y; cur.pop = 0; apply(); return; }
-    if (!raf) raf = requestAnimationFrame(tick);
-  };
-  const show = (e) => {
-    const rect = svg.getBoundingClientRect();
-    if (!rect.width) return;
-    const vx = ((e.clientX - rect.left) / rect.width) * VB; // client px → viewBox units
-    let idx = 0, best = Infinity;
-    for (let i = 0; i < pts.length; i++) { const dd = Math.abs(pts[i].x - vx); if (dd < best) { best = dd; idx = i; } }
-    const firstTouch = !svg.classList.contains("scrubbing");
-    svg.classList.add("scrubbing");
-    setIdx(idx, firstTouch);
-  };
-  const rest = () => svg.classList.remove("scrubbing");
-  svg.addEventListener("pointerdown", (e) => {
-    if (e.pointerType !== "mouse") { touchActive = true; try { svg.setPointerCapture(e.pointerId); } catch {} }
-    show(e);
-  });
-  svg.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || touchActive) show(e); });
-  svg.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") { touchActive = false; rest(); } });
-  svg.addEventListener("pointercancel", () => { touchActive = false; rest(); });
-  svg.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") rest(); });
+  return CairnHealthMarkers.wireMarkerChart(svg);
 }
 
-// The full expanded panel: the chart, an optimal-band caption + trend words, and the
-// latest reading with its relative recency. No numeric grade anywhere.
 function markerPanelHtml(m) {
-  const latest = m.latest || {};
-  const chart = markerChartSvg(m);
-  if (!chart) return "";
-  const band = m.optimal && isFinite(Number(m.optimal.low)) && isFinite(Number(m.optimal.high))
-    ? `optimal ${escHtml(fmtMkNum(m.optimal.low))}–${escHtml(fmtMkNum(m.optimal.high))}${m.unit ? " " + escHtml(m.unit) : ""}`
-    : "";
-  const trend = markerTrendWord(m);
-  const caption = [band, trend].filter(Boolean).join(" · ");
-  const lv = latest.value != null && latest.value !== "" ? fmtMkNum(latest.value) : "";
-  const age = latest.date ? relAge(latest.date) : "";
-  const latestLine = lv
-    ? `<div class="hchart-latest">
-        <span class="hchart-latest-v">${escHtml(lv)}${m.unit ? `<span class="hmk-unit">${escHtml(m.unit)}</span>` : ""}</span>
-        ${age ? `<span class="hchart-latest-when" title="${escAttr(absDate(latest.date))}">latest · ${escHtml(age)}</span>` : ""}
-      </div>`
-    : "";
-  return `${latestLine}${chart}${caption ? `<div class="hchart-cap">${caption}</div>` : ""}`;
+  return CairnHealthMarkers.markerPanelHtml(m);
 }
 
 function hmkRowHtml(m, i) {
-  const latest = m.latest || {};
-  const exp = (m.points || []).filter((p) => p && isFinite(Number(p.value))).length >= 2;
-  const lv = Number(latest.value), pv = m.prev ? Number(m.prev.value) : NaN;
-  let delta = "";
-  if (isFinite(lv) && isFinite(pv) && lv !== pv) {
-    const df = lv - pv;
-    delta = `<span class="hmk-delta">${df > 0 ? "▲" : "▼"} ${escHtml(fmtMkNum(Math.abs(df)))}</span>`;
-  }
-  const age = latest.date ? relAge(latest.date) : "";
-  const when = age ? `<span class="hmk-when" title="${escAttr(absDate(latest.date))}">${escHtml(age)}</span>` : "";
-  const rowInner = `<span class="hdot ${healthDotClass(latest.flag)}"></span>
-      <span class="hmk-id">
-        <span class="hmk-name">${escHtml(m.name || m.key || "")}</span>
-        ${when}
-      </span>
-      <span class="hmk-right">
-        ${delta}
-        <span class="hmk-val">${escHtml(fmtMkNum(latest.value))}${m.unit ? `<span class="hmk-unit">${escHtml(m.unit)}</span>` : ""}</span>
-        <span class="hmk-chev${exp ? "" : " hmk-chev-ghost"}" aria-hidden="true">${exp ? "▾" : ""}</span>
-      </span>`;
-  return `<div class="hmk reveal${exp ? " hmk-x" : ""}" style="${stagger(i)}" data-mkey="${escAttr(m.key || "")}">
-    ${exp
-      ? `<button class="hmk-row" aria-expanded="false">${rowInner}</button>
-        <div class="hmk-panel"><div class="hmk-panel-in">${markerPanelHtml(m)}</div></div>`
-      : `<div class="hmk-row">${rowInner}</div>`}
-  </div>`;
+  return CairnHealthMarkers.hmkRowHtml(m, i);
 }
 
 function orderHealthMarkersForDisplay(groupKey, list) {

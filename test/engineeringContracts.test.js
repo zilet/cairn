@@ -810,6 +810,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const foodNoteSource = read("src/client/food-note-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const healthPictureSource = read("src/client/health-picture-client.ts");
+  const healthMarkersSource = read("src/client/health-markers-client.ts");
   const healthLearnedSource = read("src/client/health-learned-client.ts");
   const memorySource = read("src/client/memory-client.ts");
   const lifeSource = read("src/client/life-client.ts");
@@ -878,6 +879,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const foodNoteClient = read("public/js/food-note-client.js");
   const healthClient = read("public/js/health-client.js");
   const healthPictureClient = read("public/js/health-picture-client.js");
+  const healthMarkersClient = read("public/js/health-markers-client.js");
   const healthLearnedClient = read("public/js/health-learned-client.js");
   const memoryClient = read("public/js/memory-client.js");
   const lifeClient = read("public/js/life-client.js");
@@ -1012,6 +1014,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /directiveHtml/);
   assert.match(clientGlobals, /CairnHealthPicture/);
   assert.match(clientGlobals, /reviewHtml\(/);
+  assert.match(clientGlobals, /CairnHealthMarkers/);
+  assert.match(clientGlobals, /hmkRowHtml\(/);
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
   assert.match(clientGlobals, /CairnPlanEndurance/);
@@ -1431,9 +1435,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "health-picture-client.js must load after shared Health helpers and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-learned-client.js") > index.indexOf("/js/health-picture-client.js") &&
+    index.indexOf("/js/health-markers-client.js") > index.indexOf("/js/health-picture-client.js") &&
+      index.indexOf("/js/health-markers-client.js") < index.indexOf("/js/08-me-records.js"),
+    "health-markers-client.js must load after Health picture helpers and before Records view hydration"
+  );
+  assert.ok(
+    index.indexOf("/js/health-learned-client.js") > index.indexOf("/js/health-markers-client.js") &&
       index.indexOf("/js/health-learned-client.js") < index.indexOf("/js/08-me-records.js"),
-    "health-learned-client.js must load after Health picture helpers and before Records learned timeline consumers"
+    "health-learned-client.js must load after Health marker helpers and before Records learned timeline consumers"
   );
   assert.ok(
     index.indexOf("/js/memory-client.js") > index.indexOf("/js/health-learned-client.js") &&
@@ -1930,6 +1939,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthPictureSource, /function parsedReview\(review: HealthPictureReview/);
   assert.match(healthPictureSource, /function reviewHtml\(review: HealthPictureReview/);
   assert.match(healthPictureSource, /CairnHealthPicture/);
+  assert.match(healthMarkersSource, /type HealthMarkersPoint = \{/);
+  assert.match(healthMarkersSource, /function markerChartSvg\(marker: HealthMarkersRow/);
+  assert.match(healthMarkersSource, /function wireMarkerChart\(svg: SVGElement/);
+  assert.match(healthMarkersSource, /function hmkRowHtml\(marker: HealthMarkersRow/);
+  assert.match(healthMarkersSource, /CairnHealthMarkers/);
   assert.match(healthDocsSource, /type HealthDocRow = \{/);
   assert.match(healthDocsSource, /function healthDocInner\(doc: HealthDocRow\): string/);
   assert.match(healthDocsSource, /function healthDocHtml\(doc: HealthDocRow, index\?: number\): string/);
@@ -2149,6 +2163,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthPictureClient, /reviewBusyHtml/);
   assert.match(healthPictureClient, /reviewHtml/);
   assert.doesNotMatch(healthPictureClient, /^function\s+parsedReview|^function\s+reviewHtml/m);
+  assert.match(healthMarkersClient, /Object\.assign\(globalThis, \{ CairnHealthMarkers: CAIRN_HEALTH_MARKERS \}\)/);
+  assert.match(healthMarkersClient, /window\.CairnHealthMarkers = CAIRN_HEALTH_MARKERS/);
+  assert.match(healthMarkersClient, /markerChartSvg/);
+  assert.match(healthMarkersClient, /wireMarkerChart/);
+  assert.match(healthMarkersClient, /hmkRowHtml/);
+  assert.doesNotMatch(healthMarkersClient, /^function\s+markerChartSvg|^function\s+hmkRowHtml/m);
   assert.match(healthLearnedClient, /Object\.assign\(globalThis, \{/);
   assert.match(healthLearnedClient, /CairnHealthLearned/);
   assert.doesNotMatch(healthLearnedClient, /^const\s+LEARNED_GROUPS|^function\s+learnedItemHtml/m);
@@ -2209,11 +2229,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(health, /loadCoachingFocus\("#cfocusStandingSlot", view\)/);
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
-  assert.match(health, /CairnHealthClient\.formatMarkerNumber/);
-  assert.match(health, /CairnHealthClient\.markerTrendWord/);
+  assert.match(health, /CairnHealthMarkers\.formatMarkerNumber/);
+  assert.match(health, /CairnHealthMarkers\.markerTrendWord/);
+  assert.match(health, /CairnHealthMarkers\.markerChartSvg/);
+  assert.match(health, /CairnHealthMarkers\.hmkRowHtml/);
+  assert.match(health, /function markerChartSvg\(m\) \{\n {2}return CairnHealthMarkers\.markerChartSvg\(m\);\n\}/);
+  assert.match(health, /function wireMarkerChart\(svg\) \{\n {2}return CairnHealthMarkers\.wireMarkerChart\(svg\);\n\}/);
+  assert.match(health, /function hmkRowHtml\(m, i\) \{\n {2}return CairnHealthMarkers\.hmkRowHtml\(m, i\);\n\}/);
   assert.match(health, /CairnHealthPicture\.parsedReview/);
   assert.match(health, /CairnHealthPicture\.healthHeroHtml/);
   assert.match(health, /CairnHealthPicture\.reviewHtml/);
+  assert.doesNotMatch(health, /Catmull-Rom|const W = 300|tipText\.textContent = pts|const rowInner = `<span class="hdot/);
   assert.doesNotMatch(health, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml/);
   assert.match(health, /CairnMemory\.memoryKindOptionsHtml/);
   assert.match(health, /CairnMemory\.memoryRowHtml/);

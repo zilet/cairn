@@ -570,6 +570,20 @@ declare global {
       ): string;
     };
 
+    CairnHealthMarkers: {
+      formatMarkerNumber(value: unknown): string;
+      sparkDateLabel(value: unknown): string;
+      markerTrendWord(marker: {
+        trend?: { dir?: unknown; span_days?: unknown } | null;
+        points?: Array<{ value?: unknown; date?: unknown }> | null;
+      } | null | undefined): string;
+      markerSpanWord(days: unknown): string;
+      markerChartSvg(marker: Record<string, unknown> | null | undefined): string;
+      wireMarkerChart(svg: SVGElement | null | undefined): void;
+      markerPanelHtml(marker: Record<string, unknown> | null | undefined): string;
+      hmkRowHtml(marker: Record<string, unknown> | null | undefined, index?: number): string;
+    };
+
     CairnFoodNote: {
       foodIngredients(value: unknown): Array<Record<string, unknown>>;
       ingredientLabel(ingredient: Record<string, unknown> | null | undefined): string;
@@ -876,6 +890,7 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
+  declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
