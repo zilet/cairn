@@ -126,6 +126,7 @@ declare global {
   declare const PROGRESS_SEG: readonly ClientSegment[];
   declare const PROGRESS_HANDLERS: Record<string, () => unknown>;
   declare const ME_SEG: readonly ClientSegment[];
+  declare const ME_HANDLERS: Record<string, () => unknown>;
   declare const HEALTH_SEG: readonly ClientSegment[];
   declare const SET_SEG: readonly ClientSegment[];
   declare const MEALS_KEY: string;
@@ -354,9 +355,23 @@ declare global {
   declare function dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
   declare function renderPlanEditor(): unknown;
   declare function renderHistory(): unknown;
+  declare function renderProgress(): unknown;
+  declare function renderWeight(): unknown;
+  declare function renderVolume(): unknown;
+  declare function renderEndurance(): unknown;
+  declare function renderCalendar(): unknown;
+  declare function renderEnergy(): unknown;
+  declare function renderProgram(): unknown;
   declare function renderChat(): unknown;
   declare function renderMe(): unknown;
+  declare function renderMemory(): Promise<void>;
+  declare function renderLife(): Promise<void>;
+  declare function renderFamily(): Promise<void>;
   declare function renderSettings(): unknown;
+  declare function switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
+  declare function loadHealthMarkers(token: number): void;
+  declare function paintHealthPicture(): void;
+  declare var _hPic: { review?: unknown; docCount?: number; newestDocAt?: string | null } | null;
   declare function updateHeaderCondense(): void;
   declare function switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function registerTabBarHandlers(): void;
@@ -395,6 +410,8 @@ declare global {
     options?: {
       tab?: string;
       token?: unknown;
+      tries?: number;
+      interval?: number;
       onUpdate?: (row: ClientActivity & Record<string, unknown>) => void;
     },
   ): void;

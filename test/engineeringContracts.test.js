@@ -841,6 +841,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const memorySource = read("src/client/memory-client.ts");
   const lifeSource = read("src/client/life-client.ts");
   const familySource = read("src/client/family-client.ts");
+  const meRecordsScreenSource = read("src/client/me-records-screen.ts");
   const healthDocsSource = read("src/client/health-docs-client.ts");
   const routeStateSource = read("src/client/route-state.ts");
   const appRouterSource = read("src/client/app/router.ts");
@@ -1318,6 +1319,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/life-client\.js/);
   assert.match(clientBuild, /src\/client\/family-client\.ts/);
   assert.match(clientBuild, /public\/js\/family-client\.js/);
+  assert.match(clientBuild, /src\/client\/me-records-screen\.ts/);
+  assert.match(clientBuild, /public\/js\/08-me-records\.js/);
   assert.match(clientBuild, /src\/client\/health-docs-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-docs-client\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
@@ -1868,6 +1871,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/life-client\.js/);
   assert.match(clientBuild, /src\/client\/family-client\.ts/);
   assert.match(clientBuild, /public\/js\/family-client\.js/);
+  assert.match(clientBuild, /src\/client\/me-records-screen\.ts/);
+  assert.match(clientBuild, /public\/js\/08-me-records\.js/);
   assert.match(clientBuild, /src\/client\/app\/router\.ts/);
   assert.match(clientBuild, /public\/js\/app-router\.js/);
   assert.match(clientBuild, /src\/client\/app\/route-sync\.ts/);
@@ -2229,6 +2234,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(familySource, /function familyCardHtml\(row: FamilyRow, index\?: number\): string/);
   assert.match(familySource, /function familySwatches\(selected: unknown\): string/);
   assert.match(familySource, /CairnFamily/);
+  assert.match(meRecordsScreenSource, /async function renderLife\(\)/);
+  assert.match(meRecordsScreenSource, /async function renderFamily\(\)/);
+  assert.match(meRecordsScreenSource, /function wireHealthUpload\(\)/);
+  assert.match(meRecordsScreenSource, /function loadHealthDocs\(\): Promise<HealthDocument\[\]>/);
+  assert.match(meRecordsScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
   assert.match(routeStateSource, /function parseRoute\(input: string \| URL\): CairnRoute/);
   assert.match(appRouterSource, /function applyRouteState\(route: AppRoute \| null \| undefined/);

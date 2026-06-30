@@ -74,6 +74,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/memory-client.ts", output: "public/js/memory-client.js" },
   { source: "src/client/life-client.ts", output: "public/js/life-client.js" },
   { source: "src/client/family-client.ts", output: "public/js/family-client.js" },
+  { source: "src/client/me-records-screen.ts", output: "public/js/08-me-records.js" },
   { source: "src/client/health-docs-client.ts", output: "public/js/health-docs-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
   { source: "src/client/app/router.ts", output: "public/js/app-router.js" },
