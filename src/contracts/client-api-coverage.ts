@@ -42,6 +42,9 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/progress/:exercise",
   "/activities",
   "/activities/:id",
+  "/garmin/daily",
+  "/garmin/unreconciled",
+  "/garmin/reconcile",
   "/recent-training",
   "/stats",
   "/endurance-prs",
@@ -141,21 +144,6 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [
     pattern: "/garmin/sync",
     owner: "Wave 6 Settings/Garmin screen",
     reason: "Garmin sync returns connector-specific telemetry; type with the Settings and Garmin screen migration.",
-  },
-  {
-    pattern: "/garmin/daily",
-    owner: "Wave 6 Today/Garmin screen",
-    reason: "Garmin daily rows are connector-specific and still need a narrow Today DTO before removing the waiver.",
-  },
-  {
-    pattern: "/garmin/unreconciled",
-    owner: "Wave 6 Today/Garmin screen",
-    reason: "Garmin reconciliation rows use a connector-specific envelope that needs a dedicated client DTO.",
-  },
-  {
-    pattern: "/garmin/reconcile",
-    owner: "Wave 6 Today/Garmin screen",
-    reason: "Garmin reconciliation result is connector-specific and still needs a narrow result DTO before removing the waiver.",
   },
   {
     pattern: "/agents/:name/info",

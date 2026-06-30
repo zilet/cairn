@@ -1,6 +1,7 @@
 // @ts-check
 // Today Garmin strength-session reconciliation wiring.
 
+type ClientGarminReconcileResponse = import("../contracts/client-api.js").ClientGarminReconcileResponse;
 type TodayGarminReconcileApi = (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>;
 
 type TodayGarminReconcileOptions = {
@@ -54,7 +55,7 @@ type TodayGarminReconcileOptions = {
         options.toast("Couldn't reconcile — check your connection");
         return;
       }
-      const response = result && typeof result === "object" ? result as { error?: unknown; reconciled?: unknown } : null;
+      const response = result && typeof result === "object" ? result as Partial<ClientGarminReconcileResponse> & { error?: unknown } : null;
       if (!response || response.error) {
         btn.disabled = false; btn.textContent = "Reconcile";
         options.toast("Couldn't reconcile right now");

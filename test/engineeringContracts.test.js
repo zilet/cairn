@@ -2180,6 +2180,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiContracts, /"\/api\/coaching-focus": ClientCoachingFocus/);
   assert.match(apiContracts, /"\/api\/nutrition\/day": ClientDayIntake/);
   assert.match(apiContracts, /"\/api\/program\/progression": ClientPrescription\[\]/);
+  assert.match(apiContracts, /export interface ClientGarminActivity/);
+  assert.match(apiContracts, /export interface ClientGarminReconcileResponse extends ClientOkResponse/);
+  assert.match(apiContracts, /"\/api\/garmin\/daily": ClientGarminDailyMetric\[\]/);
+  assert.match(apiContracts, /"\/api\/garmin\/unreconciled": ClientGarminActivity\[\]/);
+  assert.match(apiContracts, /"\/api\/garmin\/reconcile": ClientGarminReconcileResponse/);
   assert.match(apiContracts, /"\/api\/learned-timeline": ClientLearnedTimeline/);
   assert.match(apiContracts, /"\/api\/learnings": ClientOutcomeLearningsResponse/);
   assert.match(apiContracts, /"\/api\/memory": ClientMemory\[\] \| ClientMemory/);
@@ -2203,6 +2208,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiContracts, /export type ClientApiResponse<Path extends string>/);
   assert.match(apiCoverage, /export const CLIENT_API_CONTRACT_PATHS/);
   assert.match(apiCoverage, /export const CLIENT_API_UNKNOWN_WAIVERS/);
+  assert.doesNotMatch(apiCoverage, /pattern:\s*"\/garmin\/(?:daily|unreconciled|reconcile)"/);
   assert.match(compat, /AssertAssignable<TodayAgenda, ClientTodayAgenda>/);
   assert.match(compat, /AssertAssignable<CoachingFocus, ClientCoachingFocus>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
@@ -2319,6 +2325,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayProgramAdjustmentsSource, /function todayProgramAdjustmentsBannerHtml\(rows: unknown\): string/);
   assert.match(todayProgramAdjustmentsSource, /CairnTodayProgramAdjustments/);
   assert.match(todayGarminReconciliationSource, /type TodayGarminReconcileOptions = \{/);
+  assert.match(todayGarminReconciliationSource, /type ClientGarminReconcileResponse = import\("\.\.\/contracts\/client-api\.js"\)\.ClientGarminReconcileResponse/);
   assert.match(todayGarminReconciliationSource, /function reconcilePromptHtml\(count: number/);
   assert.match(todayGarminReconciliationSource, /async function load\(options: TodayGarminReconcileOptions\): Promise<void>/);
   assert.match(todayGarminReconciliationSource, /CairnTodayGarminReconciliation/);

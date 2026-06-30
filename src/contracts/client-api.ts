@@ -219,6 +219,53 @@ export interface ClientActivity {
   [key: string]: unknown;
 }
 
+export interface ClientGarminActivity {
+  id: number;
+  source_id?: number | null;
+  activity_id?: string | null;
+  date?: ISODateString | string | null;
+  type?: string | null;
+  name?: string | null;
+  duration_min?: number | null;
+  distance_km?: number | null;
+  avg_hr?: number | null;
+  max_hr?: number | null;
+  calories?: number | null;
+  training_load?: number | null;
+  training_effect?: number | null;
+  aerobic_te?: number | null;
+  anaerobic_te?: number | null;
+  te_label?: string | null;
+  avg_power?: number | null;
+  vo2max?: number | null;
+  session_id?: number | null;
+  hr_zones?: unknown;
+  exercise_sets?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ClientGarminDailyMetric {
+  id: number;
+  source_id?: number | null;
+  date?: ISODateString | string | null;
+  resting_hr?: number | null;
+  hrv_ms?: number | null;
+  body_battery?: number | null;
+  stress_avg?: number | null;
+  sleep_score?: number | null;
+  sleep_hours?: number | null;
+  calories_active?: number | null;
+  calories_total?: number | null;
+  vo2max?: number | null;
+  training_readiness?: number | null;
+  [key: string]: unknown;
+}
+
+export interface ClientGarminReconcileResponse extends ClientOkResponse {
+  reconciled: number;
+  sessions: ClientTrainingSession[];
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -575,6 +622,9 @@ export interface ClientApiResponses {
   "/api/sets": ClientLoggedSet;
   "/api/last-set": ClientLoggedSet | null;
   "/api/activities": ClientActivity[];
+  "/api/garmin/daily": ClientGarminDailyMetric[];
+  "/api/garmin/unreconciled": ClientGarminActivity[];
+  "/api/garmin/reconcile": ClientGarminReconcileResponse;
   "/api/recent-training": ClientJsonArray;
   "/api/stats": ClientWeeklyStats;
   "/api/endurance-prs": ClientJsonObject;
