@@ -668,41 +668,6 @@ function renderTab(tab) {
   return renderSettings();
 }
 
-const ROUTE_TABS = CairnAppRouter.ROUTE_TABS;
-function routeKey(key, items, fallback = null) {
-  return CairnAppRouter.routeKey(key, items, fallback);
-}
-function routeApi() {
-  return window.CairnRoutes && typeof window.CairnRoutes.parseRoute === "function" && typeof window.CairnRoutes.routeToUrl === "function"
-    ? window.CairnRoutes
-    : null;
-}
-function applyRouteState(route) {
-  return CairnAppRouter.applyRouteState(route, {
-    state,
-    routeApi: routeApi(),
-    planSections: planSeg(),
-    progressSections: PROGRESS_SEG,
-    meSections: ME_SEG,
-    healthSections: HEALTH_SEG,
-    settingsSections: SET_SEG,
-  });
-}
-function currentRouteState() {
-  return CairnAppRouter.currentRouteState({
-    state,
-    planSections: planSeg(),
-    progressSections: PROGRESS_SEG,
-    meSections: ME_SEG,
-    healthSections: HEALTH_SEG,
-    settingsSections: SET_SEG,
-    defaultProgressSection: defaultProgressSeg(),
-  });
-}
-function syncRouteFromState(mode = "push") {
-  CairnAppRouter.syncRouteFromState({ mode, routes: routeApi(), route: currentRouteState(), location, history });
-}
-
 // ---------- first-run onboarding ----------
 async function maybeOnboard() {
   let onboarded = true;

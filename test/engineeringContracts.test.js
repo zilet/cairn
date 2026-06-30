@@ -604,6 +604,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/route-state\.js"/);
   assert.match(sw, /"\/js\/app-router\.js"/);
+  assert.match(sw, /"\/js\/app-route-sync\.js"/);
   assert.match(sw, /"\/js\/app-tabs\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
@@ -625,8 +626,8 @@ test("PWA deep links return the app shell without capturing API or MCP", () => {
 
 test("PWA route state is wired through boot, tabs, nested screens, and date-aware fuel", () => {
   const index = read("public/index.html");
-  const boot = read("public/js/10-boot.js");
   const appStartup = read("public/js/app-startup.js");
+  const appRouteSync = read("public/js/app-route-sync.js");
   const appTabs = read("public/js/app-tabs.js");
   const appRouter = read("public/js/app-router.js");
   const ui = read("public/js/02-ui.js");
@@ -639,8 +640,8 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
     index.indexOf("/js/route-state.js") > -1 && index.indexOf("/js/route-state.js") < index.indexOf("/js/10-boot.js"),
     "route-state.js must load before 10-boot.js"
   );
-  assert.match(boot, /function\s+applyRouteState/);
-  assert.match(boot, /function\s+syncRouteFromState/);
+  assert.match(appRouteSync, /routeSyncApply/);
+  assert.match(appRouteSync, /routeSyncFromState/);
   assert.match(appStartup, /parseRoute\(location\.href\)/);
   assert.match(appStartup, /window\.addEventListener\("popstate"/);
   assert.match(appRouter, /history\[mode === "replace" \? "replaceState" : "pushState"\]\(\{ cairn: true \},\s*"",\s*next\)/);
@@ -737,6 +738,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthClientSource = read("src/client/health-client.ts");
   const routeStateSource = read("src/client/route-state.ts");
   const appRouterSource = read("src/client/app/router.ts");
+  const appRouteSyncSource = read("src/client/app/route-sync.ts");
   const appTabsSource = read("src/client/app/tabs.ts");
   const appJobReconnectorsSource = read("src/client/app/job-reconnectors.ts");
   const appMobileViewportSource = read("src/client/app/mobile-viewport.ts");
@@ -745,6 +747,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const appStartupSource = read("src/client/app/startup.ts");
   const routeState = read("public/js/route-state.js");
   const appRouter = read("public/js/app-router.js");
+  const appRouteSync = read("public/js/app-route-sync.js");
   const appTabs = read("public/js/app-tabs.js");
   const appJobReconnectors = read("public/js/app-job-reconnectors.js");
   const appMobileViewport = read("public/js/app-mobile-viewport.js");
@@ -813,6 +816,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function switchTab\(tab: unknown/);
   assert.match(clientGlobals, /declare function registerTabBarHandlers\(\): void/);
   assert.match(clientGlobals, /declare function routeApi\(\): ClientRoutesApi \| null/);
+  assert.match(clientGlobals, /declare function currentRouteState\(\): Partial<ClientRoute>/);
+  assert.match(clientGlobals, /CairnRoutes\?: ClientRoutesApi/);
   assert.match(clientGlobals, /declare function setDiscipline\(discipline: unknown\): string/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/html-utils\.js/);
@@ -829,6 +834,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-router\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/app-route-sync\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-tabs\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-job-reconnectors\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-mobile-viewport\.js/);
@@ -871,6 +877,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.match(clientBuild, /src\/client\/app\/router\.ts/);
   assert.match(clientBuild, /public\/js\/app-router\.js/);
+  assert.match(clientBuild, /src\/client\/app\/route-sync\.ts/);
+  assert.match(clientBuild, /public\/js\/app-route-sync\.js/);
   assert.match(clientBuild, /src\/client\/app\/tabs\.ts/);
   assert.match(clientBuild, /public\/js\/app-tabs\.js/);
   assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
@@ -949,13 +957,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/app-router.js") > index.indexOf("/js/route-state.js") &&
-      index.indexOf("/js/app-router.js") < index.indexOf("/js/app-tabs.js"),
-    "app-router.js must load after route-state.js and before tab shell controls"
+      index.indexOf("/js/app-router.js") < index.indexOf("/js/app-route-sync.js"),
+    "app-router.js must load after route-state.js and before route sync wrappers"
   );
   assert.ok(
-    index.indexOf("/js/app-tabs.js") > index.indexOf("/js/app-router.js") &&
+    index.indexOf("/js/app-route-sync.js") > index.indexOf("/js/app-router.js") &&
+      index.indexOf("/js/app-route-sync.js") < index.indexOf("/js/app-tabs.js"),
+    "app-route-sync.js must load after router helpers and before tab shell controls"
+  );
+  assert.ok(
+    index.indexOf("/js/app-tabs.js") > index.indexOf("/js/app-route-sync.js") &&
       index.indexOf("/js/app-tabs.js") < index.indexOf("/js/app-job-reconnectors.js"),
-    "app-tabs.js must load after router helpers and before boot-time reconnectors"
+    "app-tabs.js must load after route sync wrappers and before boot-time reconnectors"
   );
   assert.ok(
     index.indexOf("/js/app-job-reconnectors.js") > index.indexOf("/js/app-tabs.js") &&
@@ -995,6 +1008,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClient, /\/\/ @ts-check/);
   assert.match(settingsClient, /\/\/ @ts-check/);
   assert.match(appRouter, /\/\/ @ts-check/);
+  assert.match(appRouteSync, /\/\/ @ts-check/);
   assert.match(appTabs, /\/\/ @ts-check/);
   assert.match(appJobReconnectors, /\/\/ @ts-check/);
   assert.match(appMobileViewport, /\/\/ @ts-check/);
@@ -1032,6 +1046,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/app\/router\.ts/);
   assert.match(clientBuild, /public\/js\/app-router\.js/);
+  assert.match(clientBuild, /src\/client\/app\/route-sync\.ts/);
+  assert.match(clientBuild, /public\/js\/app-route-sync\.js/);
   assert.match(clientBuild, /src\/client\/app\/tabs\.ts/);
   assert.match(clientBuild, /public\/js\/app-tabs\.js/);
   assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
@@ -1125,6 +1141,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appRouterSource, /function currentRouteState\(options: CurrentRouteOptions\): Partial<AppRoute>/);
   assert.match(appRouterSource, /function syncRouteFromState\(options: SyncRouteOptions\): string \| null/);
   assert.match(appRouterSource, /\.CairnAppRouter = api/);
+  assert.match(appRouteSyncSource, /function routeSyncApi\(\): RouteSyncRoutesApi \| null/);
+  assert.match(appRouteSyncSource, /function routeSyncApply\(route: RouteSyncRoute \| null \| undefined\): ClientTabName/);
+  assert.match(appRouteSyncSource, /function routeSyncCurrent\(\): Partial<RouteSyncRoute>/);
+  assert.match(appRouteSyncSource, /function routeSyncFromState\(mode: RouteSyncMode = "push"\): void/);
+  assert.match(appRouteSyncSource, /Object\.assign\(globalThis, \{/);
   assert.match(appTabsSource, /function defaultProgressSeg\(\): string/);
   assert.match(appTabsSource, /function switchTab\(tab: unknown, opts: TabSwitchOptions = \{\}\): void/);
   assert.match(appTabsSource, /function registerTabBarHandlers\(\): void/);
@@ -1149,13 +1170,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appStartupSource, /setTimeout\(\(\) => \{ jobReconnect\(\); \}, 0\)/);
   assert.match(routeState, /root\.CairnRoutes = \{/);
   assert.match(appRouter, /CairnAppRouter = api/);
+  assert.match(appRouteSync, /Object\.assign\(globalThis, \{/);
+  assert.match(appRouteSync, /applyRouteState: routeSyncApply/);
+  assert.match(appRouteSync, /syncRouteFromState: routeSyncFromState/);
   assert.match(appTabs, /Object\.assign\(globalThis, \{ activateTab, defaultProgressSeg, registerTabBarHandlers, switchTab \}\)/);
   assert.match(appTabs, /window\.activateTab = activateTab/);
   assert.match(appTabs, /window\.switchTab = switchTab/);
-  assert.match(boot, /const ROUTE_TABS = CairnAppRouter\.ROUTE_TABS/);
-  assert.match(boot, /return CairnAppRouter\.applyRouteState\(route, \{/);
-  assert.match(boot, /return CairnAppRouter\.currentRouteState\(\{/);
-  assert.match(boot, /CairnAppRouter\.syncRouteFromState\(\{ mode, routes: routeApi\(\), route: currentRouteState\(\), location, history \}\)/);
+  assert.doesNotMatch(boot, /const ROUTE_TABS = CairnAppRouter\.ROUTE_TABS/);
+  assert.doesNotMatch(boot, /function\s+applyRouteState/);
+  assert.doesNotMatch(boot, /function\s+currentRouteState/);
+  assert.doesNotMatch(boot, /function\s+syncRouteFromState/);
   assert.match(apiClient, /Object\.assign\(globalThis, \{/);
   assert.match(apiClient, /withToken/);
   assert.match(apiClient, /api/);
@@ -1233,6 +1257,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
+  assert.match(sw, /"\/js\/app-route-sync\.js"/);
   assert.match(sw, /"\/js\/app-tabs\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);

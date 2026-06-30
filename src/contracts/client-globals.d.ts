@@ -5,6 +5,8 @@ import type {
   ClientChatSearchHit,
   ClientChatSessionSummary,
   ClientApiResponse,
+  ClientRoute,
+  ClientRoutesApi,
   ClientDayIntake,
   ClientGoalCheck,
   ClientPlanDay,
@@ -117,6 +119,8 @@ declare global {
   declare const headerTitle: HTMLElement;
   declare const PROGRESS_SEG: readonly ClientSegment[];
   declare const ME_SEG: readonly ClientSegment[];
+  declare const HEALTH_SEG: readonly ClientSegment[];
+  declare const SET_SEG: readonly ClientSegment[];
   declare const MEALS_KEY: string;
 
   declare function skelSwap(fn: () => void): void;
@@ -164,7 +168,9 @@ declare global {
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;
   declare function routeApi(): ClientRoutesApi | null;
+  declare function routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
   declare function applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
+  declare function currentRouteState(): Partial<ClientRoute>;
   declare function stagger(index?: number | null): string;
   declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
@@ -226,9 +232,15 @@ declare global {
 
   interface Window {
     activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
+    applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
+    currentRouteState(): Partial<ClientRoute>;
     defaultProgressSeg(): string;
     registerTabBarHandlers(): void;
+    routeApi(): ClientRoutesApi | null;
+    routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
+    syncRouteFromState(mode?: "push" | "replace"): void;
     switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
+    CairnRoutes?: ClientRoutesApi;
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
     registerServiceWorkerLifecycle(): void;
