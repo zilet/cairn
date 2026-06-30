@@ -698,6 +698,8 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(appRenderDispatch, /renderTab: renderAppTab/);
   assert.match(appTabs, /function\s+switchTab\(tab,\s*opts\s*=\s*\{\}\)/);
   assert.match(appTabs, /function\s+activateTab\(name,\s*opts\s*=\s*\{\}\)/);
+  assert.match(ui, /\["energy", "Energy"\]/, "Progress Energy must remain a routable segment");
+  assert.match(ui, /energy:\s*\(\)\s*=>\s*renderEnergy\(\)/, "Progress Energy must have a segment handler");
   assert.match(ui, /syncRouteFromState\(\)/, "shared UI events should notify route sync");
   assert.match(meals, /api\("\/nutrition\/day"\s*\+\s*qs\)/, "Plan Food must fetch the routed local day");
   assert.match(health, /setHealthSegActive\(b\.dataset\.hseg\)[\s\S]*syncRouteFromState\(\)/);
@@ -975,6 +977,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function downloadFile\(href: string\): void/);
   assert.match(clientGlobals, /declare function api<Path extends string>/);
   assert.match(clientGlobals, /type ClientAppState = \{/);
+  assert.match(clientGlobals, /type ClientProgressSection = "sessions" \| "trend" \| "volume" \| "endurance" \| "weight" \| "calendar" \| "program" \| "energy"/);
   assert.match(clientGlobals, /type ClientAppRouterApi = \{/);
   assert.match(clientGlobals, /declare const state: ClientAppState/);
   assert.match(clientGlobals, /declare function \$<T extends Element = Element>/);
@@ -1025,6 +1028,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function kcalFmt\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function energyRead\(exp: unknown\)/);
   assert.match(clientGlobals, /CairnProgressEnergy/);
+  assert.match(clientGlobals, /energyBodyHtml\(exp: unknown\): \{ heroHtml: string; cardHtml: string \}/);
+  assert.match(clientGlobals, /nutritionCheckinProposalHtml\(result: unknown\): string/);
   assert.match(clientGlobals, /declare function calMonthHtml\(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number\): string/);
   assert.match(clientGlobals, /CairnProgressCalendar/);
   assert.match(clientGlobals, /declare function loadMuscleTrajectory\(\): Promise<void>/);
@@ -2055,6 +2060,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressVolumeSource, /CairnProgressVolume/);
   assert.match(progressEnergySource, /function kcalFmt\(value: unknown\): string/);
   assert.match(progressEnergySource, /function energyRead\(exp: EnergyExpenditure \| null \| undefined\): EnergyRead/);
+  assert.match(progressEnergySource, /function energyBodyHtml\(exp: EnergyExpenditure \| null \| undefined\): EnergyBodyHtml/);
+  assert.match(progressEnergySource, /function nutritionCheckinLoadingHtml\(\): string/);
+  assert.match(progressEnergySource, /function nutritionCheckinOkHtml\(result: NutritionCheckinResult \| null \| undefined\): string/);
+  assert.match(progressEnergySource, /function nutritionCheckinFailHtml\(\): string/);
+  assert.match(progressEnergySource, /function nutritionCheckinProposalHtml\(result: NutritionCheckinResult \| null \| undefined\): string/);
   assert.match(progressEnergySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnergySource, /CairnProgressEnergy/);
   assert.match(progressCalendarSource, /function calMonthHtml\(ym: string, byDate: Map<string, CalendarCell>, todayIso: string, idx: number\): string/);
@@ -2390,8 +2400,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(progress, /const\s+PATTERN_WORD|function\s+volBalanceHtml|function\s+capWord/);
   assert.match(progressEnergyClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnergyClient, /CairnProgressEnergy/);
+  assert.match(progressEnergyClient, /energyBodyHtml/);
+  assert.match(progressEnergyClient, /nutritionCheckinLoadingHtml/);
+  assert.match(progressEnergyClient, /nutritionCheckinProposalHtml/);
   assert.doesNotMatch(progressEnergyClient, /^const\s+ENERGY_CONF_WORD|^function\s+kcalFmt/m);
-  assert.doesNotMatch(progress, /const\s+kcalFmt|function\s+energyRead|const\s+CONF_WORD/);
+  assert.doesNotMatch(progress, /const\s+kcalFmt|function\s+energyRead|const\s+CONF_WORD|const\s+macroBits|prev_target_kcal|eb-checkin-ok settle-in|eb-checkin-quiet/);
+  assert.match(progress, /CairnProgressEnergy\.energyBodyHtml\(exp\)/);
+  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinLoadingHtml\(\)/);
+  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinOkHtml\(r\)/);
+  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinFailHtml\(\)/);
+  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinProposalHtml\(r\)/);
   assert.match(progressCalendarClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressCalendarClient, /CairnProgressCalendar/);
   assert.doesNotMatch(progress, /function\s+calMonthHtml/);
@@ -2569,7 +2587,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(capture, /function loadTrainingProvenance/);
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
-  assert.match(progress, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
+  assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
   assert.match(progress, /coachingFocusCardHtml\(f\)/);
   assert.match(meals, /CairnUi\.jobCaptionHtml\(\{ className: "meal-cap job-cap" \}\)/);
   assert.match(meals, /CairnUi\.sheetChipHtml\(\{ label:/);

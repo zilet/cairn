@@ -396,11 +396,8 @@ window.addEventListener("resize", () => {
   cancelAnimationFrame(_segFitRaf);
   _segFitRaf = requestAnimationFrame(() => view.querySelectorAll(".seg").forEach(fitSeg));
 });
-// Energy Balance (TDEE + the nutrition check-in) lives in Plan → Food with the
-// logged-day journal, so it is no longer an orphaned Progress pill. Progress stays
-// training-history focused.
-const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"], ["program", "Program"]];
-const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory(), program: () => renderProgram() };
+const PROGRESS_SEG = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"], ["program", "Program"], ["energy", "Energy"]];
+const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory(), program: () => renderProgram(), energy: () => renderEnergy() };
 // The Plan sub-nav is dynamic: a runner/hybrid (or anyone with an endurance goal)
 // gets a dedicated ENDURANCE tab — the home for the periodized ramp, this week's
 // prescribed runs, and shaping the running plan. A pure strength athlete with no

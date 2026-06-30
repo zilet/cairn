@@ -17,7 +17,7 @@ function plain(value) {
 const deps = {
   routeApi: { planSections: ["edit", "food", "meals", "coach"] },
   planSections: [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]],
-  progressSections: [["sessions", "History"], ["program", "Program"]],
+  progressSections: [["sessions", "History"], ["program", "Program"], ["energy", "Energy"]],
   meSections: [["standing", "Standing"], ["health", "Health"]],
   healthSections: [["read", "Read"], ["records", "Records"], ["markers", "Markers"]],
   settingsSections: [["agents", "Agents"], ["data", "Data"]],
@@ -41,6 +41,12 @@ test("app router applies canonical route state without rendering", () => {
   assert.equal(state.logDate, "2026-06-30");
   assert.equal(state.planSeg, "food");
   assert.equal(state.planJump, "food");
+
+  assert.equal(
+    router.applyRouteState({ tab: "progress", section: "energy" }, { state, ...deps }),
+    "progress",
+  );
+  assert.equal(state.progressSeg, "energy");
 
   assert.equal(
     router.applyRouteState({ tab: "me", section: "health", healthSection: "records", id: "42" }, { state, ...deps }),

@@ -20,7 +20,7 @@ import type {
 declare global {
   type ClientTabName = "today" | "plan" | "progress" | "chat" | "me" | "settings";
   type ClientPlanSection = "edit" | "food" | "meals" | "coach" | "endurance";
-  type ClientProgressSection = "sessions" | "trend" | "volume" | "endurance" | "weight" | "calendar" | "program";
+  type ClientProgressSection = "sessions" | "trend" | "volume" | "endurance" | "weight" | "calendar" | "program" | "energy";
   type ClientMeSection = "standing" | "profile" | "memory" | "health" | "life" | "family";
   type ClientHealthSection = "read" | "markers" | "records" | "share" | "learned";
   type ClientSettingsSection = "agents" | "sources" | "automation" | "data";
@@ -863,6 +863,13 @@ declare global {
       CONF_WORD: Record<string, string>;
       kcalFmt(value: unknown): string;
       energyRead(exp: unknown): { lead: string; body: string; tone: string; dir?: string | null };
+      energyHeroHtml(exp: unknown): string;
+      energyCardHtml(exp: unknown): string;
+      energyBodyHtml(exp: unknown): { heroHtml: string; cardHtml: string };
+      nutritionCheckinLoadingHtml(): string;
+      nutritionCheckinOkHtml(result: unknown): string;
+      nutritionCheckinFailHtml(): string;
+      nutritionCheckinProposalHtml(result: unknown): string;
     };
 
     CairnProgressCalendar: {

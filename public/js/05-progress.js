@@ -545,36 +545,17 @@ async function renderEnergy() {
 // Fill the Energy Balance hero + card from a derived-expenditure payload. Leaves
 // #checkinResult untouched (the check-in renders there independently). Idempotent.
 function paintEnergyBody(exp) {
-  const read = energyRead(exp);
-  const usable = exp && exp.tdee != null && exp.confidence !== "none";
+  const rendered = CairnProgressEnergy.energyBodyHtml(exp);
 
   const heroWrap = view.querySelector("#energyHero");
   if (heroWrap) {
-    heroWrap.innerHTML = usable
-      ? progressHero("Energy Balance", [
-          ["est. expenditure · kcal", exp.tdee],
-          exp.intake_avg_kcal != null ? ["avg intake · kcal", exp.intake_avg_kcal] : null,
-          exp.trend_lb_wk != null ? ["trend · lb/wk", `${exp.trend_lb_wk > 0 ? "+" : ""}${Math.round(exp.trend_lb_wk * 10) / 10}`, { text: true }] : null,
-        ])
-      : progressHero("Energy Balance", []);
+    heroWrap.innerHTML = rendered.heroHtml;
     runCountUps(heroWrap);
   }
 
   const card = view.querySelector("#energyCard");
   if (!card) return;
-  const ctx = usable
-    ? `<div class="eb-ctx lbl">${escHtml(CONF_WORD[exp.confidence] || "")} · ${exp.points} day${exp.points === 1 ? "" : "s"} of data · ${exp.window_days}-day window</div>`
-    : "";
-  card.innerHTML = `<section class="eb-card reveal" style="--i:1">
-      <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> ${usable ? "How you're tracking" : "Not enough data yet"}</div>
-      <p class="eb-lead">${escHtml(read.lead)}</p>
-      ${read.body ? `<p class="eb-body">${escHtml(read.body)}</p>` : ""}
-      ${ctx}
-      <div class="eb-foot">
-        <button class="ghostbtn eb-checkin" id="runCheckin" type="button">Run a check-in</button>
-        <span class="eb-note lbl">a reviewed read — costs an agent call</span>
-      </div>
-    </section>`;
+  card.innerHTML = rendered.cardHtml;
 
   const btn = view.querySelector("#runCheckin");
   if (btn) btn.addEventListener("click", () => runNutritionCheckin(btn));
@@ -594,7 +575,7 @@ function runNutritionCheckin(btn) {
   if (!out) return;
   const restore = btnBusy(btn, "Checking…");
   // A .job-cap carries the evolving thinkingCaption while the agent reads.
-  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> ${CairnUi.jobCaptionHtml({ text: "reading your trend…" })}</div>`;
+  out.innerHTML = CairnProgressEnergy.nutritionCheckinLoadingHtml();
   runOp("nutrition_checkin", { window: 21 }, nutritionCheckinOpOpts(restore));
 }
 
@@ -613,12 +594,7 @@ function nutritionCheckinOpOpts(restore) {
       const out = view.querySelector("#checkinResult");
       if (!out) return;
       if (!r.change) {
-        const summary = r.summary && String(r.summary).trim();
-        out.innerHTML = `<div class="eb-checkin-ok settle-in">
-            <span class="eb-ok-mark" aria-hidden="true">✓</span>
-            <div><div class="eb-ok-lead">No change needed — you're tracking well.</div>
-            ${summary ? `<p class="eb-ok-body">${escHtml(summary)}</p>` : ""}</div>
-          </div>`;
+        out.innerHTML = CairnProgressEnergy.nutritionCheckinOkHtml(r);
         return;
       }
       renderCheckinProposal(out, r);
@@ -626,7 +602,7 @@ function nutritionCheckinOpOpts(restore) {
     onFail: () => {
       done();
       const out = view.querySelector("#checkinResult");
-      if (out) out.innerHTML = `<div class="eb-checkin-quiet">Couldn't run a check-in right now — no worries, your read above still stands. Try again in a bit.</div>`;
+      if (out) out.innerHTML = CairnProgressEnergy.nutritionCheckinFailHtml();
     },
   };
 }
@@ -636,7 +612,7 @@ function nutritionCheckinOpOpts(restore) {
 function reconnectNutritionCheckin() {
   const out = view.querySelector("#checkinResult");
   if (!out) return null; // not on Energy — a later renderEnergy() retries reconnect
-  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> ${CairnUi.jobCaptionHtml({ text: "reading your trend…" })}</div>`;
+  out.innerHTML = CairnProgressEnergy.nutritionCheckinLoadingHtml();
   const o = nutritionCheckinOpOpts(null);
   let stop = () => {};
   const capEl = out.querySelector(".job-cap");
@@ -653,34 +629,7 @@ function reconnectNutritionCheckin() {
 // this; calories live in the meal plan's daily_kcal. The user takes the read
 // into a meal-plan regenerate, or just acknowledges it.
 function renderCheckinProposal(out, r) {
-  const pj = (r.proposal && (r.proposal.parsed || r.proposal.parsed_json)) || r.proposal || {};
-  let parsed = pj;
-  if (typeof pj === "string") { try { parsed = JSON.parse(pj); } catch { parsed = {}; } }
-  const n = parsed.nutrition || {};
-  const target = Number(n.target_kcal);
-  const prev = n.prev_target_kcal != null ? Number(n.prev_target_kcal) : null;
-  const delta = prev != null && Number.isFinite(target) ? target - prev : null;
-  const macroBits = [];
-  if (n.protein_g != null) macroBits.push(`${Math.round(Number(n.protein_g))}g protein`);
-  if (n.carbs_g != null) macroBits.push(`${Math.round(Number(n.carbs_g))}g carbs`);
-  if (n.fat_g != null) macroBits.push(`${Math.round(Number(n.fat_g))}g fat`);
-  const reason = n.reason || parsed.summary || "";
-  const notes = parsed.notes && String(parsed.notes).trim();
-  out.innerHTML = `<section class="eb-proposal settle-in">
-      <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> A target worth considering</div>
-      <div class="eb-target">
-        <span class="numeral numeral-lg"${Number.isFinite(target) ? ` data-cu="${Math.round(target)}"` : ""}>${Number.isFinite(target) ? "0" : "—"}</span>
-        <span class="eb-target-unit lbl">kcal / day${delta != null ? ` · ${delta > 0 ? "+" : ""}${kcalFmt(delta)} vs now` : ""}</span>
-      </div>
-      ${macroBits.length ? `<div class="eb-macros lbl">${escHtml(macroBits.join(" · "))}</div>` : ""}
-      ${reason ? `<p class="eb-why">${escHtml(String(reason))}</p>` : ""}
-      ${notes ? `<p class="eb-body">${escHtml(notes)}</p>` : ""}
-      <div class="eb-foot">
-        <button class="draftbtn" id="ckGoMeals" type="button">Regenerate meal plan around this</button>
-        <button class="ghostbtn" id="ckDismiss" type="button">Got it</button>
-      </div>
-      <div class="eb-advisory lbl">advisory — nothing changes until you act on it</div>
-    </section>`;
+  out.innerHTML = CairnProgressEnergy.nutritionCheckinProposalHtml(r);
   runCountUps(out);
   const go = out.querySelector("#ckGoMeals");
   if (go) go.addEventListener("click", () => {
