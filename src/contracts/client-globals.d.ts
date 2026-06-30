@@ -329,6 +329,7 @@ declare global {
   declare function renderMeals(): unknown;
   declare function renderCoach(): unknown;
   declare function renderPlanEndurance(): unknown;
+  declare function runTargetText(run: Record<string, unknown>): string;
   declare function renderPlanEditor(): unknown;
   declare function renderHistory(): unknown;
   declare function renderChat(): unknown;
@@ -549,6 +550,13 @@ declare global {
       parsedNote(note: Record<string, unknown> | null | undefined): Record<string, unknown> | null;
       noteEntryInner(note: Record<string, unknown>): string;
       noteEntryHtml(note: Record<string, unknown>, index?: number): string;
+    };
+
+    CairnPlanEndurance: {
+      ENDURANCE_PHASES: readonly Record<string, string>[];
+      rampHtml(goal: Record<string, unknown> | null | undefined): string;
+      presets(goal: Record<string, unknown> | null | undefined): Array<{ t: string; i: string }>;
+      draftCardHtml(proposal: Record<string, unknown>): string;
     };
 
     CairnHealthLearned: {
@@ -818,6 +826,7 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
+  declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];
   declare const CairnFamily: Window["CairnFamily"];
