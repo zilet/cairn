@@ -164,6 +164,11 @@ declare global {
   declare function toast(message: string): void;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
+  declare function setDiscipline(discipline: unknown): string;
+  declare function setEnduranceGoalSet(present: unknown): boolean;
+  declare function showEnduranceTab(): boolean;
+  declare function defaultProgressSeg(): string;
+  declare function renderTab(tab: string): unknown;
   declare function measureChatTop(): void;
   declare function art(kind: string, text: string): string;
   declare function pollEnrichment(
@@ -190,11 +195,13 @@ declare global {
   declare function reconnectInsight(job?: unknown): unknown;
   declare function reconnectProposal(job?: unknown): unknown;
   declare function registerServiceWorkerLifecycle(): void;
+  declare function primeDiscipline(): void;
 
   interface Window {
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
     registerServiceWorkerLifecycle(): void;
+    primeDiscipline(): void;
     CairnAppRouter: ClientAppRouterApi;
 
     CairnChatClient: {

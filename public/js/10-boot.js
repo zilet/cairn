@@ -965,27 +965,6 @@ swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the ca
 // Register reconnectors so a job running across a reload re-attaches to its host
 // (the registry const is defined in the job-runner section, so this runs at boot).
 registerAppJobReconnectors();
-// Prime the discipline emphasis global BEFORE the first paint so a landing straight
-// on Progress (?tab=progress / a PWA shortcut) honors an endurance athlete's default
-// view. Warm cache → set it synchronously (no flash). Cold → fetch, and if the
-// landing tab is Progress and the default seg flipped, re-render it once.
-function primeDiscipline() {
-  const warm = peekCached("profile");
-  if (warm && warm.data) { setDiscipline(warm.data.primary_discipline); setEnduranceGoalSet(!!warm.data.endurance_goal_json); return; }
-  api("/profile").then((p) => {
-    if (!p) return;
-    const before = defaultProgressSeg();
-    const beforeEnd = showEnduranceTab();
-    setDiscipline(p.primary_discipline);
-    setEnduranceGoalSet(!!p.endurance_goal_json);
-    // only re-render if we're still sitting on the Progress tab AND nothing was
-    // navigated since boot AND the endurance default actually changed the seg.
-    if (state.tab === "progress" && !state.progressSeg && defaultProgressSeg() !== before) renderTab("progress");
-    // Likewise: a cold-boot landing straight on Plan painted the 3-tab sub-nav before
-    // the profile resolved — repaint so the Endurance pill appears once we know.
-    if (state.tab === "plan" && showEnduranceTab() !== beforeEnd) renderTab("plan");
-  }).catch(() => {});
-}
 const _landingRoutes = routeApi();
 const _landingRoute = _landingRoutes ? _landingRoutes.parseRoute(location.href) : null;
 const _landingParams = new URLSearchParams(location.search);

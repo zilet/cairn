@@ -30,6 +30,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/app/job-reconnectors.ts", output: "public/js/app-job-reconnectors.js" },
   { source: "src/client/app/mobile-viewport.ts", output: "public/js/app-mobile-viewport.js" },
   { source: "src/client/app/service-worker.ts", output: "public/js/app-service-worker.js" },
+  { source: "src/client/app/discipline-primer.ts", output: "public/js/app-discipline-primer.js" },
 ];
 
 const compilerOptions = {
