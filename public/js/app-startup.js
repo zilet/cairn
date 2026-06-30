@@ -4,6 +4,7 @@
         registerServiceWorkerLifecycle();
         swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the cache
         registerAppJobReconnectors();
+        registerTabBarHandlers();
         const landingRoutes = routeApi();
         const landingRoute = landingRoutes ? landingRoutes.parseRoute(location.href) : null;
         const landingParams = new URLSearchParams(location.search);

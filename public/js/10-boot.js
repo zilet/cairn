@@ -636,15 +636,7 @@ function downloadFile(href) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
-// ---------- tabs ----------
-// The Progress sub-view to land on. Endurance athletes default to the Endurance
-// read; everyone else to History. Once the user picks any Progress seg this session
-// we remember it (state.progressSeg) so the default never yanks them back.
-function defaultProgressSeg() {
-  if (state.progressSeg && PROGRESS_SEG.some(([k]) => k === state.progressSeg)) return state.progressSeg;
-  return isEndurance() ? "endurance" : "sessions";
-}
-
+// ---------- tab render dispatch ----------
 function renderTab(tab) {
   headerTitle.classList.remove("hdr-tappable"); // only Today re-arms the date control
   document.getElementById("hdrChatActions")?.remove(); // only Chat re-creates the header affordances
@@ -674,49 +666,6 @@ function renderTab(tab) {
   if (tab === "chat") return renderChat();
   if (tab === "me") return renderMe();
   return renderSettings();
-}
-// Synchronous skeleton for a tab, so the view-transition crossfade lands on a
-// shaped placeholder INSTANTLY — the old tab never sits frozen through the data/
-// agent awaits. Each render function paints its own matching skeleton on entry
-// (idempotent), then hydrates in place once data lands. Chat owns its own
-// shell-first paint, so we don't pre-skeleton it.
-function tabSkeleton(tab) {
-  if (tab === "today") return todaySkeleton();
-  if (tab === "progress") { const seg = defaultProgressSeg(); return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3); }
-  if (tab === "plan") {
-    const activePlan = state.planJump || state.planSeg;
-    const jump = activePlan === "food" ? "food"
-      : activePlan === "meals" ? "meals"
-      : activePlan === "coach" ? "coach"
-      : activePlan === "endurance" && showEnduranceTab() ? "endurance"
-      : "edit";
-    return segSkeleton(jump, planSeg(), 3);
-  }
-  if (tab === "me") {
-    // Me opens to the Standing review (renderMe defaults meSeg → "standing").
-    const seg = state.meSeg || "standing";
-    return ME_SEG.some(([k]) => k === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("standing", ME_SEG, 2);
-  }
-  if (tab === "settings") return skelLines(2) + skelLines(3);
-  return "";
-}
-
-// The cache key whose warm presence means a tab's render can paint REAL content
-// from the peek immediately — so switchTab/activateTab skip the skeleton on a warm
-// re-entry (the render then SWR-paints in place). Returns null for tabs that own
-// their own paint (chat) or have no single primary surface (me/settings keep their
-// skeleton). The plan tab lands on Training/Food/Meals/Coach per state.planJump.
-function primaryKeyFor(tab) {
-  if (tab === "today") return "plan"; // Today's first input; warm => render paints from cache
-  // Only the History (sessions) default warms off a peek; every other seg
-  // (endurance/program/trend/volume/…) reads live — keep its skeleton, never a
-  // wrong warm paint from the history cache.
-  if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
-  if (tab === "plan") {
-    const activePlan = state.planJump || state.planSeg;
-    return activePlan === "coach" || activePlan === "food" ? null : activePlan === "meals" ? MEALS_KEY : "plan";
-  }
-  return null;
 }
 
 const ROUTE_TABS = CairnAppRouter.ROUTE_TABS;
@@ -753,35 +702,6 @@ function currentRouteState() {
 function syncRouteFromState(mode = "push") {
   CairnAppRouter.syncRouteFromState({ mode, routes: routeApi(), route: currentRouteState(), location, history });
 }
-
-// Switch tabs: crossfade the old tab → a synchronous skeleton (the view
-// transition only waits for THIS, never the async render), then hydrate outside
-// the transition. The frozen-tab problem is gone: paint is always instant.
-function switchTab(tab, opts = {}) {
-  if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
-  teardownJobs(); // close agent-job streams from the leaving tab (jobs keep running server-side; reload reconnects)
-  closeDetail(true); // overlays never outlive a tab switch
-  closeMealSheet(true);
-  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
-  state.tab = tab;
-  if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");
-  // Warm re-entry (the tab's primary surface is cached) skips the skeleton — the
-  // render paints REAL content from the peek (its own SWR), so there's no flash.
-  // Cold keeps the skeleton-first crossfade.
-  const warm = !!peekCached(primaryKeyFor(tab));
-  const paintSkeleton = () => {
-    const skel = warm ? "" : tabSkeleton(tab);
-    if (skel) { view.innerHTML = skel; viewEnter(); }
-  };
-  // Wrap ONLY the synchronous skeleton paint in the transition; the (possibly
-  // slow, agentic) render runs after, swapping skeleton→content with no wait.
-  Promise.resolve(withViewTransition(paintSkeleton)).finally(() => {
-    Promise.resolve(renderTab(tab)).catch(() => tabErrorState(tab));
-  });
-}
-document.querySelectorAll(".tab").forEach((t) =>
-  t.addEventListener("click", () => switchTab(t.dataset.tab))
-);
 
 // ---------- first-run onboarding ----------
 async function maybeOnboard() {
@@ -930,33 +850,6 @@ function openOnboarding() {
       toast("Saved — you can refine anytime in Me");
     }
     enterApp();
-  });
-}
-
-// Activate a tab programmatically (used at startup + by manifest shortcuts via ?tab=).
-// Skeleton-first, exactly like switchTab(): paint the synchronous skeleton now so the
-// view never sits frozen on the previous tab while the (possibly agentic) render
-// awaits its data — the content swaps in once it lands. This is what makes tapping
-// Today feel instant instead of "stuck until the fetch returns".
-function activateTab(name, opts = {}) {
-  const valid = ["today", "plan", "progress", "chat", "me", "settings"];
-  const tab = valid.includes(name) ? name : "today";
-  if (state.tab === "chat" && tab !== "chat") chatTeardownMonitor(); // drop the chat stream when leaving
-  teardownJobs(); // close agent-job streams from the leaving tab (jobs keep running server-side; reload reconnects)
-  closeDetail(true);
-  closeMealSheet(true);
-  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
-  state.tab = tab;
-  if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");
-  // Warm re-entry skips the skeleton (the render paints from cache) — same as
-  // switchTab, so a programmatic/first activate is also flash-free when cached.
-  const warm = !!peekCached(primaryKeyFor(tab));
-  const paintSkeleton = () => {
-    const skel = warm ? "" : tabSkeleton(tab);
-    if (skel) { view.innerHTML = skel; viewEnter(); }
-  };
-  Promise.resolve(withViewTransition(paintSkeleton)).finally(() => {
-    Promise.resolve(renderTab(tab)).catch(() => tabErrorState(tab));
   });
 }
 

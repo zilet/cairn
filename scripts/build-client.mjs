@@ -27,6 +27,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
   { source: "src/client/app/router.ts", output: "public/js/app-router.js" },
+  { source: "src/client/app/tabs.ts", output: "public/js/app-tabs.js" },
   { source: "src/client/app/job-reconnectors.ts", output: "public/js/app-job-reconnectors.js" },
   { source: "src/client/app/mobile-viewport.ts", output: "public/js/app-mobile-viewport.js" },
   { source: "src/client/app/service-worker.ts", output: "public/js/app-service-worker.js" },

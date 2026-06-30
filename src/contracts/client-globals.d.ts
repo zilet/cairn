@@ -21,6 +21,7 @@ declare global {
   type ClientMeSection = "standing" | "profile" | "memory" | "health" | "life" | "family";
   type ClientHealthSection = "read" | "markers" | "records" | "share" | "learned";
   type ClientSettingsSection = "agents" | "sources" | "automation" | "data";
+  type ClientSegment = readonly [string, string];
 
   type ClientBriefCache = {
     date: string;
@@ -114,6 +115,9 @@ declare global {
   declare let pollToken: unknown;
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
+  declare const PROGRESS_SEG: readonly ClientSegment[];
+  declare const ME_SEG: readonly ClientSegment[];
+  declare const MEALS_KEY: string;
 
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
@@ -162,15 +166,30 @@ declare global {
   declare function routeApi(): ClientRoutesApi | null;
   declare function applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
   declare function stagger(index?: number | null): string;
-  declare function activateTab(name: string, opts?: Record<string, unknown>): void;
+  declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
+  declare function isEndurance(): boolean;
   declare function setDiscipline(discipline: unknown): string;
   declare function setEnduranceGoalSet(present: unknown): boolean;
   declare function showEnduranceTab(): boolean;
   declare function defaultProgressSeg(): string;
   declare function renderTab(tab: string): unknown;
+  declare function switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
+  declare function registerTabBarHandlers(): void;
+  declare function syncRouteFromState(mode?: "push" | "replace"): void;
+  declare function planSeg(): readonly ClientSegment[];
+  declare function todaySkeleton(): string;
+  declare function segSkeleton(active: string, seg: readonly ClientSegment[], cards?: number): string;
+  declare function skelLines(count?: number): string;
+  declare function withViewTransition(fn: () => void): unknown;
+  declare function viewEnter(): void;
+  declare function tabErrorState(tab: string): void;
+  declare function chatTeardownMonitor(): void;
+  declare function teardownJobs(pred?: unknown): void;
+  declare function closeDetail(instant?: boolean): void;
+  declare function closeMealSheet(instant?: boolean): void;
   declare function measureChatTop(): void;
   declare function art(kind: string, text: string): string;
   declare function pollEnrichment(
@@ -206,6 +225,10 @@ declare global {
   declare function startAppShell(): void;
 
   interface Window {
+    activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
+    defaultProgressSeg(): string;
+    registerTabBarHandlers(): void;
+    switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
     registerServiceWorkerLifecycle(): void;

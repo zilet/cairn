@@ -36,6 +36,7 @@ function loadStartup(options = {}) {
     primeDiscipline: () => calls.push(["primeDiscipline"]),
     registerAppJobReconnectors: () => calls.push(["registerAppJobReconnectors"]),
     registerServiceWorkerLifecycle: () => calls.push(["registerServiceWorkerLifecycle"]),
+    registerTabBarHandlers: () => calls.push(["registerTabBarHandlers"]),
     routeApi: () => {
       calls.push(["routeApi"]);
       return routeApiValue;
@@ -77,6 +78,7 @@ test("app startup activates direct app routes without canonicalizing", () => {
     ["registerServiceWorkerLifecycle"],
     ["swrSweep"],
     ["registerAppJobReconnectors"],
+    ["registerTabBarHandlers"],
     ["routeApi"],
     ["parseRoute", "http://cairn.local/app/chat"],
     ["applyRouteState", { tab: "chat" }],
@@ -101,10 +103,11 @@ test("app startup canonicalizes legacy tab/date query routes", () => {
 
   env.context.startAppShell();
 
-  assert.deepEqual(plain(env.calls.slice(0, 8)), [
+  assert.deepEqual(plain(env.calls.slice(0, 9)), [
     ["registerServiceWorkerLifecycle"],
     ["swrSweep"],
     ["registerAppJobReconnectors"],
+    ["registerTabBarHandlers"],
     ["routeApi"],
     ["parseRoute", "http://cairn.local/?tab=plan&date=2026-06-30"],
     ["applyRouteState", { tab: "plan", date: "2026-06-30" }],
