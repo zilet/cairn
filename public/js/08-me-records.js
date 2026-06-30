@@ -202,18 +202,7 @@ function healthMarkersEmptyHtml() {
 function paintHealthRecordsTab() {
   const c = $("#hContent");
   if (!c) return;
-  c.innerHTML = `
-    <div class="hupload" id="hUploadBox">
-      <label class="hupload-file" id="hFileLabel">
-        <input id="hFile" type="file" accept="image/*,application/pdf,.zip,.htm,.html,.xml,application/zip,text/html,application/xml" hidden>
-        <span class="hupload-plus" aria-hidden="true">+</span>
-        <span id="hFileName">${CairnHealthClient.H_FILE_PROMPT}</span>
-      </label>
-      <textarea id="hText" class="hupload-text" rows="4" placeholder="Paste result text or HTML export"></textarea>
-      <button id="hUpload" class="logbtn hupload-btn" disabled>ADD &amp; ANALYZE</button>
-      <div id="hStatus" style="margin-top:6px;color:var(--muted);font-size:.82rem"></div>
-    </div>
-    <div id="hlist"></div>`;
+  c.innerHTML = CairnHealthRecords.recordsTabHtml();
   wireHealthUpload();
   loadHealthDocs();
 }
@@ -365,7 +354,7 @@ function wireHealthUpload() {
     const wrap = $("#hlist");
     if (wrap) {
       const emptyEl = wrap.querySelector(".empty"); if (emptyEl) emptyEl.remove();
-      wrap.insertAdjacentHTML("afterbegin", healthDocHtml(row));
+      wrap.insertAdjacentHTML("afterbegin", CairnHealthDocs.healthDocHtml(row));
       wireHealthDoc(wrap.querySelector(`.hdoc[data-hdoc="${row.id}"]`));
     }
     if (row.id && enrichmentActive(row.enrichment_status)) pollHealthDoc(row.id);
@@ -457,7 +446,7 @@ async function saveHealthDocDate(id) {
     return;
   }
   if (updated && !updated.error) {
-    row.innerHTML = healthDocInner(updated); // back to view mode with the new date
+    row.innerHTML = CairnHealthDocs.healthDocInner(updated); // back to view mode with the new date
     wireHealthDoc(row);
     const flash = row.querySelector("[data-hdate-flash]");
     if (flash) { flash.hidden = false; setTimeout(() => { if (flash.isConnected) flash.hidden = true; }, 2200); }
@@ -481,7 +470,7 @@ async function reanalyzeHealthDoc(id) {
   }
   if (!updated || updated.error) { toast((updated && updated.error) || "Couldn't re-analyze"); return; }
   toast("Re-analyzing…");
-  if (row) { row.innerHTML = healthDocInner(updated); wireHealthDoc(row); }
+  if (row) { row.innerHTML = CairnHealthDocs.healthDocInner(updated); wireHealthDoc(row); }
   pollHealthDoc(id);
 }
 
@@ -494,7 +483,7 @@ function pollHealthDoc(id) {
     onUpdate: (row) => {
       if (state.meSeg !== "health" || state.healthSeg !== "records") return;
       const el = $(`#hlist .hdoc[data-hdoc="${row.id}"]`);
-      if (el) { el.innerHTML = healthDocInner(row); wireHealthDoc(el); }
+      if (el) { el.innerHTML = CairnHealthDocs.healthDocInner(row); wireHealthDoc(el); }
       if (row.enrichment_status === "done") {
         // An import may have split into NEW dated panels → reload the whole list
         // so they appear; also refresh the trends + the whole-picture review.
@@ -516,8 +505,8 @@ async function loadHealthDocs() {
   // Only on a real fetch: a transient offline [] must never cache a false zero.
   if (fetched && Array.isArray(docs)) { try { localStorage.setItem("cairn:healthDocCount", String(docs.length)); } catch {} }
   if (state.tab !== "me" || state.meSeg !== "health" || !wrap.isConnected) return docs || [];
-  if (!docs || !docs.length) { wrap.innerHTML = `<div class="empty">No documents yet.</div>`; return []; }
-  wrap.innerHTML = docs.map((d, i) => healthDocHtml(d, i)).join("");
+  if (!docs || !docs.length) { wrap.innerHTML = CairnHealthRecords.recordsEmptyHtml(); return []; }
+  wrap.innerHTML = CairnHealthRecords.recordsListHtml(docs);
   wrap.querySelectorAll(".hdoc").forEach((el) => {
     wireHealthDoc(el);
     if (el.dataset.hdoc) {
@@ -546,7 +535,7 @@ function startHealthDelete(btn) {
     api(`/health-docs/${id}`, { method: "DELETE" })
       .then(() => {
         toast("Removed"); row.remove();
-        if (!$("#hlist").children.length) $("#hlist").innerHTML = `<div class="empty">No documents yet.</div>`;
+        if (!$("#hlist").children.length) $("#hlist").innerHTML = CairnHealthRecords.recordsEmptyHtml();
         if (_hPic && _hPic.docCount > 0) { _hPic.docCount--; paintHealthPicture(); }
         loadHealthMarkers(pollToken);
       })

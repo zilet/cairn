@@ -708,6 +708,14 @@ declare global {
       healthDocHtml(doc: unknown, index?: number): string;
     };
 
+    CairnHealthRecords: {
+      recordsUploadHtml(filePrompt?: string): string;
+      recordsEmptyHtml(message?: string): string;
+      recordsTabHtml(filePrompt?: string): string;
+      normalizeDocuments(docs: unknown): unknown[];
+      recordsListHtml(docs: unknown): string;
+    };
+
     CairnSettingsClient: {
       AGENT_OP_LABELS: Record<string, string>;
       garminStatusLine(settings: unknown, syncing: boolean, options?: { relTime?: (value: string) => string }): string;
@@ -941,6 +949,7 @@ declare global {
   declare const CairnFamily: Window["CairnFamily"];
   declare const CairnLife: Window["CairnLife"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
+  declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
