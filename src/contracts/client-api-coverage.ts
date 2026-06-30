@@ -135,7 +135,7 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [
   {
     pattern: "/art/stats",
     owner: "Wave 6 Settings/system screen",
-    reason: "Operator-only art telemetry stays screen-local until Settings is migrated from classic JS.",
+    reason: "Operator-only art telemetry stays intentionally broad until the Settings data slice gets a narrow stats DTO.",
   },
   {
     pattern: "/garmin/sync",
@@ -145,12 +145,12 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [
   {
     pattern: "/garmin/daily",
     owner: "Wave 6 Today/Garmin screen",
-    reason: "Garmin daily rows are still rendered from a classic screen-local shape.",
+    reason: "Garmin daily rows are connector-specific and still need a narrow Today DTO before removing the waiver.",
   },
   {
     pattern: "/garmin/unreconciled",
     owner: "Wave 6 Today/Garmin screen",
-    reason: "Garmin reconciliation rows are still screen-local until the Today reconciliation module is typed.",
+    reason: "Garmin reconciliation rows use a connector-specific envelope that needs a dedicated client DTO.",
   },
   {
     pattern: "/garmin/reconcile",
