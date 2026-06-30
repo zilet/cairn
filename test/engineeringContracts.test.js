@@ -774,6 +774,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const clientTsconfig = read("tsconfig.client.json");
   const clientBuildTsconfig = read("tsconfig.client.build.json");
   const clientGlobals = read("src/contracts/client-globals.d.ts");
+  const clientShellGlobals = read("src/contracts/client-shell-globals.d.ts");
   const contracts = read("src/contracts/client.ts");
   const apiContracts = read("src/contracts/client-api.ts");
   const apiCoverage = read("src/contracts/client-api-coverage.ts");
@@ -788,6 +789,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const appDownloadSource = read("src/client/app/download.ts");
   const appSwRecoverySource = read("src/client/app/sw-recovery.ts");
   const coreStateSource = read("src/client/app/state.ts");
+  const uiShellSource = read("src/client/ui-shell.ts");
   const pwaInstallSource = read("src/client/pwa-install-coach.ts");
   const restTimerSource = read("src/client/rest-timer.ts");
   const coachingFocusSource = read("src/client/coaching-focus-client.ts");
@@ -963,8 +965,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function fmtWeight\(weight: unknown\): string/);
   assert.match(clientGlobals, /declare function formatFoodNum\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
+  assert.match(clientShellGlobals, /declare global \{/);
+  assert.match(clientShellGlobals, /declare let pollToken: number/);
+  assert.match(clientShellGlobals, /declare const PROGRESS_SEG: readonly ClientSegment\[\]/);
+  assert.match(clientShellGlobals, /declare const PROGRESS_HANDLERS: Record<string, \(\) => unknown>/);
+  assert.match(clientShellGlobals, /declare const PLAN_HANDLERS: Record<string, \(\) => unknown>/);
+  assert.match(clientShellGlobals, /declare const art: \(fn: string, \.\.\.args: unknown\[\]\) => string/);
+  assert.match(clientShellGlobals, /declare const stagger: \(index\?: number \| null\) => string/);
+  assert.match(clientShellGlobals, /declare const reducedMotion: \(\) => boolean/);
+  assert.match(clientShellGlobals, /declare const fmtK: \(value: unknown\) => string/);
+  assert.match(clientShellGlobals, /declare function withViewTransition\(fn: \(\) => unknown\): Promise<unknown>/);
   assert.match(clientGlobals, /declare function relAge\(iso: string\): string/);
-  assert.match(clientGlobals, /declare const fmtK: \(value: unknown\) => string/);
   assert.match(clientGlobals, /declare function mdToHtml\(source: unknown\): string/);
   assert.match(clientGlobals, /CairnMarkdown/);
   assert.match(clientGlobals, /declare function cardioPrescription\(item: Record<string, unknown> \| null \| undefined\): string/);
@@ -1139,6 +1150,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-download\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-sw-recovery\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/01-core\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/02-ui\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/pwa-install-coach\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/rest-timer\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/coaching-focus-client\.js/);
@@ -1200,6 +1212,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     clientBuildTsconfig,
     /"include": \["src\/contracts\/client-globals\.d\.ts", "src\/client\/\*\*\/\*\.ts"\]/
   );
+  assert.doesNotMatch(clientBuildTsconfig, /client-shell-globals/);
   assert.match(clientBuild, /src\/client\/date-utils\.ts/);
   assert.match(clientBuild, /public\/js\/date-utils\.js/);
   assert.match(clientBuild, /src\/client\/html-utils\.ts/);
@@ -1220,6 +1233,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
   assert.match(clientBuild, /src\/client\/app\/state\.ts/);
   assert.match(clientBuild, /public\/js\/01-core\.js/);
+  assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
+  assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/rest-timer\.ts/);
@@ -1792,6 +1807,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-download\.js/);
   assert.match(clientBuild, /src\/client\/app\/sw-recovery\.ts/);
   assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
+  assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
+  assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/rest-timer\.ts/);
@@ -1987,6 +2004,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coreStateSource, /const appHeaderTitle = \(\(\) => \{/);
   assert.match(coreStateSource, /const appState: ClientAppState/);
   assert.match(coreStateSource, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
+  assert.match(uiShellSource, /type ToastOptions = \{ action\?: string; onAction\?: \(\) => void \}/);
+  assert.match(uiShellSource, /function setTodayHeaderTitle\(\)/);
+  assert.match(uiShellSource, /function toast\(msg: unknown, opts: ToastOptions = \{\}\): void/);
+  assert.match(uiShellSource, /function wireGuides\(scope\?: ParentNode \| null\): void/);
+  assert.match(uiShellSource, /const PROGRESS_SEG: readonly UiSegment\[\]/);
+  assert.match(uiShellSource, /const PROGRESS_HANDLERS: Record<string, \(\) => unknown>/);
+  assert.match(uiShellSource, /function withViewTransition\(fn: \(\) => unknown\): Promise<unknown>/);
+  assert.match(uiShellSource, /let pollToken: number = 0/);
+  assert.match(uiShellSource, /async function pollEnrichment<T extends UiRecord = UiRecord>/);
+  assert.match(uiShellSource, /async function openAgentLoginModal\(agentName: unknown\): Promise<void>/);
   assert.match(pwaInstallSource, /function isStandalonePWA\(\): boolean/);
   assert.match(pwaInstallSource, /function renderPhoneCoachBanner\(container: Element \| null \| undefined\): void/);
   assert.match(pwaInstallSource, /Object\.assign\(globalThis, \{/);

@@ -21,6 +21,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/app/download.ts", output: "public/js/app-download.js" },
   { source: "src/client/app/sw-recovery.ts", output: "public/js/app-sw-recovery.js" },
   { source: "src/client/app/state.ts", output: "public/js/01-core.js" },
+  { source: "src/client/ui-shell.ts", output: "public/js/02-ui.js" },
   { source: "src/client/pwa-install-coach.ts", output: "public/js/pwa-install-coach.js" },
   { source: "src/client/rest-timer.ts", output: "public/js/rest-timer.js" },
   { source: "src/client/coaching-focus-client.ts", output: "public/js/coaching-focus-client.js" },

@@ -119,14 +119,8 @@ declare global {
   declare function $<T extends Element = Element>(selector: string): T | null;
   declare const state: ClientAppState;
 
-  declare let pollToken: number;
-  declare let artEnabled: boolean;
-  declare let primaryDiscipline: string;
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
-  declare const PLAN_HANDLERS: Record<string, () => unknown>;
-  declare const PROGRESS_SEG: readonly ClientSegment[];
-  declare const PROGRESS_HANDLERS: Record<string, () => unknown>;
   declare const ME_SEG: readonly ClientSegment[];
   declare const ME_HANDLERS: Record<string, () => unknown>;
   declare const HEALTH_SEG: readonly ClientSegment[];
@@ -152,7 +146,6 @@ declare global {
   declare function fmtDur(sec: unknown): string;
   declare function fmtPaceKm(minPerKm: unknown): string;
   declare function fmtKm(km: unknown): string;
-  declare const fmtK: (value: unknown) => string;
   declare function sparklineSvg(vals: unknown, w?: number, h?: number): string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
@@ -161,6 +154,7 @@ declare global {
   declare function downloadFile(href: string): void;
   declare function deviceTimeZone(): string;
   declare function localISO(date?: Date): string;
+  declare function dateLabel(iso: string): string;
   declare function api<Path extends string>(
     p: Path,
     opts?: RequestInit & { headers?: Record<string, string> },
@@ -193,7 +187,6 @@ declare global {
   declare function routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
   declare function applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
   declare function currentRouteState(): Partial<ClientRoute>;
-  declare function stagger(index?: number | null): string;
   declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
   declare function armDelete(
@@ -293,7 +286,6 @@ declare global {
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
   declare function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function cfocusRoute(go: unknown): void;
-  declare const sleep: (ms: number) => Promise<void>;
   declare function openAgentLoginModal(agentName: string): unknown;
   declare function mdSafeUrl(url: unknown): string | null;
   declare function mdInline(source: string): string;
@@ -335,11 +327,8 @@ declare global {
   declare function enduranceSportCardHtml(group: unknown, idx: number): string;
   declare const HR_ZONE_COLORS: string[] | undefined;
   declare function reshapeToday(): Promise<void>;
-  declare function reducedMotion(): boolean;
-  declare function isEndurance(): boolean;
   declare function setDiscipline(discipline: unknown): string;
   declare function setEnduranceGoalSet(present: unknown): boolean;
-  declare function showEnduranceTab(): boolean;
   declare function defaultProgressSeg(): string;
   declare function renderTab(tab: string): unknown;
   declare function renderToday(): unknown;
@@ -372,6 +361,7 @@ declare global {
   declare function renderEnergy(): unknown;
   declare function renderProgram(): unknown;
   declare function renderChat(): unknown;
+  declare function autosizeChatInput(input: HTMLTextAreaElement | HTMLInputElement): void;
   declare function renderMe(): unknown;
   declare function renderMemory(): Promise<void>;
   declare function renderLife(): Promise<void>;
@@ -386,6 +376,7 @@ declare global {
   declare function paintHealthLearnedTab(): void;
   declare function paintHealthPicture(): void;
   declare var _hPic: { review?: unknown; docCount?: number; newestDocAt?: string | null } | null;
+  declare function postExerciseMode(name: string, mode: string): Promise<unknown>;
   declare function updateHeaderCondense(): void;
   declare function switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function registerTabBarHandlers(): void;
@@ -394,7 +385,6 @@ declare global {
   declare function todaySkeleton(): string;
   declare function segSkeleton(active: string, seg: readonly ClientSegment[], cards?: number): string;
   declare function skelLines(count?: number): string;
-  declare function withViewTransition(fn: () => void): unknown;
   declare function viewEnter(): void;
   declare function tabErrorState(tab: string): void;
   declare function chatTeardownMonitor(): void;
@@ -414,7 +404,6 @@ declare global {
   declare function paintRest(): void;
   declare function startRest(seconds?: number): void;
   declare function stopRest(): void;
-  declare function art(kind: string, text: string, ...args: unknown[]): string;
   declare function artImg(kind: string, text: string, className?: string, svg?: string | null): string;
   declare function setsTonnage(sets: unknown): number;
   declare function enrichBadge(status: unknown): string;
