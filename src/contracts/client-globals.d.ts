@@ -314,6 +314,13 @@ declare global {
     },
   ): void;
   declare function enrichmentActive(status: unknown): boolean;
+  declare function healthKindLabel(kind: unknown): string;
+  declare function parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
+  declare function markerFlagClass(flag: unknown): string;
+  declare function markersTable(parsed: unknown): string;
+  declare function docCollapsible(doc: unknown): boolean;
+  declare function healthDocInner(doc: unknown): string;
+  declare function healthDocHtml(doc: unknown, index?: number): string;
   declare function actArtText(activity: ClientActivity & Record<string, unknown>): string;
   declare function actEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
   declare function updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
@@ -456,6 +463,16 @@ declare global {
         list: Array<{ name?: unknown; key?: unknown; latest?: { date?: unknown } }> | null | undefined,
         options?: { relAge?: (date: string) => string },
       ): string;
+    };
+
+    CairnHealthDocs: {
+      healthKindLabel(kind: unknown): string;
+      parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
+      markerFlagClass(flag: unknown): string;
+      markersTable(parsed: unknown): string;
+      docCollapsible(doc: unknown): boolean;
+      healthDocInner(doc: unknown): string;
+      healthDocHtml(doc: unknown, index?: number): string;
     };
 
     CairnSettingsClient: {
@@ -602,6 +619,7 @@ declare global {
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
+  declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
