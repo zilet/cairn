@@ -177,43 +177,6 @@ function drawLineChart(canvas, pts, opts = {}) {
 }
 
 // ---------- Progress: History ----------
-// One editorial session card: serif weekday, date kicker, tonnage/duration chips,
-// per-exercise lines with the best set emphasized.
-function sessionCardHtml(s, i) {
-  const [y, m, d] = (s.date || "").split("-").map(Number);
-  const weekday = y ? new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "long" }) : "";
-  const byEx = {};
-  for (const set of s.sets || []) (byEx[set.exercise] ??= []).push(set);
-  const score = (x) => x.duration_sec != null ? x.duration_sec
-    : (x.weight > 0 && x.reps ? x.weight * (1 + x.reps / 30) : (x.reps || 0));
-  const lines = Object.entries(byEx).map(([ex, sets]) => {
-    let bi = 0; sets.forEach((x, j) => { if (score(x) > score(sets[bi])) bi = j; });
-    const figs = sets.map((x, j) => {
-      const fig = x.duration_sec != null ? fmtDur(x.duration_sec) : `${fmtWeight(x.weight)}\u00d7${x.reps}`;
-      return `<span class="hist-set${j === bi && sets.length > 1 ? " hist-best" : ""}">${fig}</span>`;
-    }).join(`<span class="hist-sep">\u00b7</span>`);
-    return `<div class="hist-line"><span class="hist-ex">${escHtml(ex)}</span><span class="hist-sets">${figs}</span></div>`;
-  }).join("");
-  const tonnage = setsTonnage(s.sets);
-  const nSets = (s.sets || []).length;
-  const chips = [
-    tonnage ? `${fmtK(Math.round(tonnage))} lb` : null,
-    s.duration_min ? `${s.duration_min} min` : null,
-    `${nSets} set${nSets === 1 ? "" : "s"}`,
-  ].filter(Boolean).map((t) => `<span class="hist-chip">${t}</span>`).join("");
-  return `<div class="sess hist hist-tap reveal" data-sessid="${s.id}" role="button" tabindex="0" style="${stagger(i)}" aria-label="Edit ${escAttr(weekday)} session">
-      <div class="hist-head">
-        <div>
-          <div class="hist-kicker lbl">${fmtShortDate(s.date)}${(s.title || s.day_name) ? ` \u00b7 ${escHtml(s.title || s.day_name)}` : ""}</div>
-          <div class="hist-day">${escHtml(weekday)}<span class="hist-edit" aria-hidden="true">edit</span></div>
-        </div>
-        <div class="hist-chips">${chips}</div>
-      </div>
-      ${lines || `<div class="hist-line"><span class="hist-ex" style="color:var(--muted)">No sets</span></div>`}
-      ${s.notes ? `<div class="hist-notes">\u201c${escHtml(s.notes)}\u201d</div>` : ""}
-    </div>`;
-}
-
 // SWR over /sessions?limit=30 (key history:sessions): a warm re-entry into the
 // History seg paints the hero + session cards instantly, then revalidates and
 // re-paints only on change. A set-log / session-edit invalidates the key.
@@ -340,11 +303,6 @@ async function openSessionEdit(sess, fromEl) {
     });
   });
 }
-// Coerce an edit-field value to a number or null. The empty-string guard is
-// load-bearing: a blank input must clear the field, but Number("") is 0 — so don't
-// "simplify" it away to a bare Number.isFinite check.
-function numOrNull(v) { return v === "" || v == null ? null : (Number.isFinite(Number(v)) ? Number(v) : null); }
-
 // ---------- Progress: est-1RM trend ----------
 // SWR over /exercises (key progress:exercises): the 1RM seg paints its exercise
 // picker + chart shell instantly on a warm re-entry, then revalidates.

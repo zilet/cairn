@@ -142,6 +142,7 @@ declare global {
   declare function fmtDur(sec: unknown): string;
   declare function fmtPaceKm(minPerKm: unknown): string;
   declare function fmtKm(km: unknown): string;
+  declare const fmtK: (value: unknown) => string;
   declare function fmtSpeedKmh(kmh: unknown): string;
   declare function prDistLabel(km: unknown): string;
   declare function authToken(): string;
@@ -221,6 +222,8 @@ declare global {
   };
   declare function runKindClass(kind: unknown): string;
   declare function runKindLabel(kind: unknown): string;
+  declare function sessionCardHtml(session: unknown, index: number): string;
+  declare function numOrNull(value: unknown): number | null;
   declare function weeklyRunPlanCard(plan: unknown): string;
   declare function enduranceGoalCard(goal: unknown): string;
   declare function runComplianceLine(compliance: unknown): string;
@@ -349,6 +352,7 @@ declare global {
   declare function stopRest(): void;
   declare function art(kind: string, text: string): string;
   declare function artImg(kind: string, text: string, className?: string, svg?: string | null): string;
+  declare function setsTonnage(sets: unknown): number;
   declare function enrichBadge(status: unknown): string;
   declare function activityLine(activity: ClientActivity & Record<string, unknown>): string;
   declare function pollEnrichment(
@@ -577,6 +581,11 @@ declare global {
       };
     };
 
+    CairnProgressHistory: {
+      sessionCardHtml(session: unknown, index: number): string;
+      numOrNull(value: unknown): number | null;
+    };
+
     CairnProgressRunPlan: {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
@@ -733,6 +742,7 @@ declare global {
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
+  declare const CairnProgressHistory: Window["CairnProgressHistory"];
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];
   declare const CairnProgressVolume: Window["CairnProgressVolume"];
   declare const CairnProgressEnergy: Window["CairnProgressEnergy"];
