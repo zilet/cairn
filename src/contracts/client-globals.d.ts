@@ -127,6 +127,7 @@ declare global {
   declare const HEALTH_SEG: readonly ClientSegment[];
   declare const SET_SEG: readonly ClientSegment[];
   declare const MEALS_KEY: string;
+  declare let _progFocusCard: unknown;
 
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
@@ -233,6 +234,10 @@ declare global {
   declare function dexaTargetToneCls(target: unknown): string;
   declare function dexaTargetHtml(target: unknown): string;
   declare function dexaTargetingHtml(targeting: unknown): string;
+  declare function loadPerformance(): Promise<void>;
+  declare function pctClamp(value: unknown): number;
+  declare function capacityRowHtml(capacity: unknown, sexWord: unknown): string;
+  declare function performanceHtml(performance: unknown, options?: { suppressLever?: boolean }): string;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -578,6 +583,13 @@ declare global {
       dexaTargetingHtml(targeting: unknown): string;
     };
 
+    CairnProgressPerformance: {
+      loadPerformance(): Promise<void>;
+      pctClamp(value: unknown): number;
+      capacityRowHtml(capacity: unknown, sexWord: unknown): string;
+      performanceHtml(performance: unknown, options?: { suppressLever?: boolean }): string;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -656,6 +668,7 @@ declare global {
   declare const CairnProgressCalendar: Window["CairnProgressCalendar"];
   declare const CairnProgressMuscleTrajectory: Window["CairnProgressMuscleTrajectory"];
   declare const CairnProgressDexaTargeting: Window["CairnProgressDexaTargeting"];
+  declare const CairnProgressPerformance: Window["CairnProgressPerformance"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
