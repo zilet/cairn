@@ -928,6 +928,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function progressHero/);
   assert.match(clientGlobals, /CairnProgressComponents/);
   assert.match(clientGlobals, /declare function withAlpha\(hex: unknown, alpha: number\): string/);
+  assert.match(clientGlobals, /declare function drawLineChart/);
   assert.match(clientGlobals, /CairnProgressChart/);
   assert.match(clientGlobals, /declare function sessionCardHtml\(session: unknown, index: number\): string/);
   assert.match(clientGlobals, /declare function numOrNull\(value: unknown\): number \| null/);
@@ -1657,6 +1658,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressComponentsSource, /CairnProgressComponents/);
   assert.match(progressChartSource, /function withAlpha\(hex: unknown, alpha: number\): string/);
   assert.match(progressChartSource, /function chartColors\(\): ProgressChartPalette/);
+  assert.match(progressChartSource, /function drawLineChart/);
   assert.match(progressChartSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressChartSource, /CairnProgressChart/);
   assert.match(progressHistorySource, /function sessionCardHtml\(session: unknown, index: number\): string/);
@@ -1864,7 +1866,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(progress, /function\s+progressHero|function\s+emptyStateHtml|const\s+fmtShortDate/);
   assert.match(progressChartClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressChartClient, /CairnProgressChart/);
-  assert.doesNotMatch(progress, /function\s+withAlpha|function\s+chartColors/);
+  assert.match(progressChartClient, /drawLineChart/);
+  assert.doesNotMatch(progress, /function\s+withAlpha|function\s+chartColors|function\s+drawLineChart/);
   assert.match(progressHistoryClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressHistoryClient, /CairnProgressHistory/);
   assert.doesNotMatch(progress, /function\s+sessionCardHtml|function\s+numOrNull/);

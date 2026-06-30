@@ -210,6 +210,11 @@ declare global {
   ): string;
   declare function emptyStateHtml(svg: string | null | undefined, line: unknown): string;
   declare function withAlpha(hex: unknown, alpha: number): string;
+  declare function drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: Array<{ date: string; v: number }>, opts?: {
+    goal?: number | null;
+    fmt?: (value: number) => string;
+    peak?: boolean;
+  }): void;
   declare function chartColors(): {
     accent: string;
     sage: string;
@@ -569,6 +574,11 @@ declare global {
 
     CairnProgressChart: {
       withAlpha(hex: unknown, alpha: number): string;
+      drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: Array<{ date: string; v: number }>, opts?: {
+        goal?: number | null;
+        fmt?: (value: number) => string;
+        peak?: boolean;
+      }): void;
       chartColors(): {
         accent: string;
         sage: string;
