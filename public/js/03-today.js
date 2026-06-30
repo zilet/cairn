@@ -340,25 +340,9 @@ async function suggestedPlanDayNumber(session, isToday) {
 // the surface is always one move away. The read is cached per-date on state.brief
 // (keyed by date+override) so re-renders that don't change the day don't re-fetch.
 
-// Map the read kind to its calm copy + glyph. Restful for rest, light for easy,
-// energetic-but-quiet for train. Phrasing is plain language — never a score.
-const BRIEF_KIND = {
-  rest: { word: "Rest", glyph: "◐", lead: "A quiet day" },
-  easy: { word: "Easy", glyph: "◑", lead: "Keep it light" },
-  train: { word: "Train", glyph: "◆", lead: "Good to go" },
-  // 'done' = a real session is already logged today. The kicker reflects that fact
-  // ("TRAINED TODAY", never "EASY DAY"); a sage ✓ signals completion, not a to-do.
-  done: { word: "Done", glyph: "✓", lead: "You're done for today", kicker: "Trained today" },
-};
-// Escape-hatch chips — each reshapes the read via ?override=. They open, never scold.
-// "Train anyway" intentionally lives only in the launchpad (an instant plan-reveal),
-// not here: an override chip of the same name would be a slow agentic round-trip AND
-// a confusing duplicate of the primary button.
-const BRIEF_OVERRIDES = [
-  { intent: "rough night", label: "Rough night" },
-  { intent: "short on time", label: "Short on time" },
-  { intent: "give me an easy day", label: "Easy day instead" },
-];
+// Brief/focus-bar render helpers live in /js/today-brief-client.js. This screen
+// keeps the stateful fetch/cache/job wiring and passes render context into the
+// typed pure helpers.
 
 // Fetch (or reuse) the day-read for the selected date. Always resolves to a read
 // object — the endpoint is always 200 (agentic or deterministic fallback). On a
@@ -368,7 +352,7 @@ const BRIEF_OVERRIDES = [
 // agentic read isn't warm yet. Marked _provisional so the background upgrade knows
 // to replace it; it's never cached as the final read.
 function provisionalRead(_date) {
-  return { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true };
+  return CairnTodayBrief.provisionalRead();
 }
 
 async function loadBrief(date, override, opts = {}) {
@@ -485,46 +469,9 @@ async function reshapeToday() {
   }
 }
 
-// One launchpad redirect chip. `primary` gets the accent treatment (the day's
-// smart default action); the rest are quiet hairline pills.
-function briefRedirect(action, label, primary) {
-  return `<button class="brief-redirect${primary ? " brief-redirect-primary" : ""}" data-redirect="${escAttr(action)}">${escHtml(label)}</button>`;
-}
-
-function visibleBriefOverrides({ kind, estMinutes, activeOverride }) {
-  return BRIEF_OVERRIDES.filter((o) => {
-    if (o.intent === activeOverride) return false;
-    if (kind === "easy" && o.intent === "give me an easy day") return false;
-    if (kind === "rest" && o.intent === "rough night") return false;
-    if (estMinutes != null && estMinutes <= 30 && o.intent === "short on time") return false;
-    return true;
-  });
-}
-
-// ---------- honest degradation: one calm line when coaching is offline ----------
-// The agentic endpoints (day-read, session-suggest, meal-plan, insight) return an
-// `agent_status` of 'ok' | 'unconfigured' | 'all_failed'. When no agent is reachable
-// the deterministic floor still answers, but silently — so we surface ONE quiet,
-// dismissible line where the agentic read was expected. Never alarming (no red,
-// no warn band — a hairline aside), absent when status is 'ok'/missing, and
-// dismissed for the session so it never nags. Pull-never-push.
+// Honest degradation: one calm line when coaching is offline. The typed helper
+// renders the notice; this screen owns the session-only dismissal state and collapse.
 let _agentOfflineDismissed = false;
-function agentOffline(status) {
-  return status === "unconfigured" || status === "all_failed";
-}
-function agentOfflineNoticeHtml(status) {
-  if (_agentOfflineDismissed || !agentOffline(status)) return "";
-  const line = status === "unconfigured"
-    ? "Coaching is offline — connect an agent in Settings for the agentic read."
-    : "Couldn't reach a coaching agent just now — showing the deterministic read.";
-  return `<div class="agent-offline" role="note">
-      <span class="agent-offline-dot" aria-hidden="true"></span>
-      <span class="agent-offline-text">${escHtml(line)}</span>
-      <button class="agent-offline-x" data-agentoffx aria-label="Dismiss">✕</button>
-    </div>`;
-}
-// Wire the dismiss ✕ on any rendered offline notice within `scope`. Dismissal is
-// for the session (a module flag), so it stays quiet until the next reload.
 function wireAgentOffline(scope) {
   (scope || view).querySelectorAll("[data-agentoffx]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -534,91 +481,16 @@ function wireAgentOffline(scope) {
     }));
 }
 
-// Build the Brief hero + actions row + steer line. `showPlan` = the plan surface
-// is already (or about to be) visible. The controls split into two clear tiers:
-// an ACTIONS row (one primary thing to do, scaled to the day) and a quiet, labeled
-// STEER line ("tell me different" — each option reshapes the read agentically).
 function briefHtml(read, { showPlan, isToday }) {
-  const kind = BRIEF_KIND[read.kind] ? read.kind : "train";
-  const meta = BRIEF_KIND[kind];
-  const focus = read.focus ? escHtml(read.focus) : "";
-  const estMinutes = read.est_minutes != null && Number(read.est_minutes) > 0 ? Math.round(read.est_minutes) : null;
-  const est = estMinutes != null ? `${estMinutes} min` : "";
-  // Headline leads; on a train day the focus IS the headline-adjacent line.
-  const headline = escHtml(read.headline || meta.lead);
-  const why = read.why ? escHtml(read.why) : "";
-  // The day-ahead heads-up — the Program-tab intelligence woven onto the Brief so the
-  // athlete never opens a separate tab to know what's next. Quiet, one tap to the week.
-  // Suppressed on a done day (the debrief's why already voices what's coming).
-  const forward = read.forward && kind !== "done" ? escHtml(read.forward) : "";
-  // The goal ARC — where today sits on the path to the goals (one quiet clause, taps to
-  // the Program view). Pull, never push; null when there's no goal/block/race. Shown on
-  // a done day too (the arc is forward-looking, not a "what's next today"). We render
-  // AT MOST ONE forward-looking line: the near-term ↗ Next wins, and the ◷ goal-arc
-  // only shows when there's no Next — so the Brief never stacks two parallel forward
-  // glyphs (the conductor card carries the longer-horizon framing now).
-  const arc = read.arc && !forward ? escHtml(read.arc) : "";
-
-  // ---- Actions: ONE clear thing to do. The accent primary is reserved for a
-  // train day ("start the session"); easy/rest stay calm with NO accent CTA, so
-  // the card never contradicts a read the athlete just chose to take easy.
-  const actions = [];
-  if (kind === "train") {
-    actions.push(briefRedirect("start-session", "Start session", true));
-  } else if (kind !== "done" && !showPlan) {
-    // easy / rest — a quiet way into the plan if they want it, never shouted
-    actions.push(briefRedirect("reveal-plan", "Train anyway", false));
-  }
-  // 'done' offers no CTA — the day's work is in. The session done-card below carries
-  // "Log more" for the rare second session; the Brief just acknowledges and rests.
-  if (kind !== "done") actions.push(briefRedirect("ask-session", "Ask for a session", false));
-
-  // ---- Steer line: visually subordinate to the actions. Only meaningful for
-  // today (a live read to reshape). When a steer is already active, the label
-  // shifts and a quiet "back to today's read" clears it (the un-steer escape).
   const activeOverride = state.brief && state.brief.date === state.logDate ? state.brief.override : "";
-  const steered = !!activeOverride;
-  const opts = visibleBriefOverrides({ kind, estMinutes, activeOverride });
-  let steer = "";
-  // No steer chips once the day is DONE — reshaping "rough night / short on time"
-  // is meaningless after a real session is already in. The day stands on its own.
-  if (isToday && kind !== "done" && (opts.length || steered)) {
-    const optBtns = opts.map((o) =>
-      `<button class="brief-steer-opt" data-override="${escAttr(o.intent)}">${escHtml(o.label)}</button>`
-    ).join(`<span class="brief-steer-dot" aria-hidden="true">·</span>`);
-    const reset = steered ? `<button class="brief-steer-reset" data-steerreset>back to today's read</button>` : "";
-    steer = `<div class="brief-steer">
-        <span class="brief-steer-lead">${steered ? "Changed your mind?" : "Not quite right?"}</span>
-        <span class="brief-steer-opts">${optBtns}</span>
-        ${reset}
-      </div>`;
-  }
-
-  // When reshaping via a steer, the hero morphs through a view transition —
-  // skip the entrance `rise` so the two motions don't stack.
-  const morph = state._briefMorph ? " brief-morph" : "";
-  const enter = state._briefMorph ? "" : " reveal";
-  // A provisional (cold-cache) read paints with the terracotta→gold filament so
-  // the wait reads as the agentic read still arriving, not a stalled guess.
-  const thinking = read._provisional && !reducedMotion() ? " is-thinking" : "";
-  const busy = read._provisional ? ` aria-busy="true"` : "";
-  // Honest degradation: a real (non-provisional) read whose agent_status says no
-  // agent answered surfaces ONE calm line. Skipped while provisional (the agentic
-  // read may still be arriving via upgradeBriefInPlace).
-  const offline = read._provisional ? "" : agentOfflineNoticeHtml(read.agent_status);
-  return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
-      ${offline}
-      <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est ? ` · ${escHtml(est)}` : ""}</div>
-      <h2 class="brief-headline">${headline}</h2>
-      ${focus && kind === "train" ? `<div class="brief-focus">${focus}</div>` : ""}
-      ${why ? `<p class="brief-why">${why}</p>` : ""}
-      ${forward ? `<button class="brief-forward" data-redirect="view-week" title="See your week"><span class="brief-forward-arrow" aria-hidden="true">↗</span><span class="brief-forward-txt">${forward}</span></button>` : ""}
-      ${arc ? `<button class="brief-forward brief-arc" data-redirect="view-program" title="See your plan's arc"><span class="brief-forward-arrow" aria-hidden="true">◷</span><span class="brief-forward-txt">${arc}</span></button>` : ""}
-      <div id="briefProvenance" class="prov-slot"></div>
-      ${actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : ""}
-      ${steer}
-      <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
-    </section>`;
+  return CairnTodayBrief.briefHtml(read, {
+    showPlan,
+    isToday,
+    activeOverride,
+    morph: !!state._briefMorph,
+    reducedMotion: reducedMotion(),
+    offlineDismissed: _agentOfflineDismissed,
+  });
 }
 
 // ---- Focus mode: a distraction-free logging view for a training day ----
@@ -638,38 +510,13 @@ function setFocus(date, on) { state.focus = { date, on }; }
 // The slim sticky header shown in focus mode — day name, sets-of-exercises progress,
 // the one-line Brief read for context, and a one-tap exit back to the full Today.
 function focusBarHtml(read, day, { exDone, exTotal, isToday }) {
-  const meta = BRIEF_KIND[BRIEF_KIND[read.kind] ? read.kind : "train"];
-  const line = read.headline || read.focus || meta.lead;
-  const dayName = day && day.name ? day.name : "Today's session";
-  const prog = exTotal
-    ? `<span class="focus-prog"><span class="focus-prog-done">${exDone}</span><span class="focus-prog-sep">/</span>${exTotal} done</span>`
-    : "";
-  return `<div class="focus-bar reveal" style="--i:0" aria-label="Workout focus">
-      <div class="focus-bar-row">
-        ${!isToday ? `<button class="focus-back" id="backToday" aria-label="Back to today">←</button>` : `<span class="focus-glyph" aria-hidden="true">${meta.glyph}</span>`}
-        <div class="focus-id">
-          <span class="focus-day">${escHtml(dayName)}</span>
-          ${prog}
-        </div>
-        <button class="focus-exit" id="focusExit">Exit focus</button>
-      </div>
-      ${line ? `<div class="focus-read">${escHtml(line)}</div>` : ""}
-    </div>`;
+  return CairnTodayBrief.focusBarHtml(read, day, { exDone, exTotal, isToday });
 }
 
 // The optional "tap to see why" detail — plain-language signals, never raw numbers
 // as a verdict. Built lazily into a toast-like inline expander under the Brief.
 function briefSignalsText(read) {
-  const s = read.signals || {};
-  const bits = [];
-  if (s.consecutive_training_days != null && s.consecutive_training_days > 0) {
-    bits.push(`${s.consecutive_training_days} day${s.consecutive_training_days === 1 ? "" : "s"} of training in a row`);
-  }
-  if (s.low_sleep) bits.push("your sleep's been running short");
-  else if (s.avg_sleep_min != null && s.has_recovery_data) bits.push("sleep's been about normal for you");
-  if (s.checkin) bits.push("you mentioned how you're feeling");
-  if (!bits.length) return "Reading your recent training and recovery.";
-  return bits.join("; ") + ".";
+  return CairnTodayBrief.signalsText(read);
 }
 
 // Render one session-suggest item line (sets × reps, or seconds for timed; assisted
@@ -1436,7 +1283,7 @@ async function renderToday(opts = {}) {
           </div>
           <div class="session-head-side">
             ${exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${exDone}</b><span class="session-prog-sep">/</span>${exTotal}</span>` : ""}
-            <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${BRIEF_KIND.train.glyph} Focus</button>
+            <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${CairnTodayBrief.BRIEF_KIND.train.glyph} Focus</button>
           </div>
         </div>`;
       }

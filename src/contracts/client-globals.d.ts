@@ -963,6 +963,28 @@ declare global {
       cardioVerb(label: unknown): string;
       cardioLogPhrase(item: Record<string, unknown>): string;
     };
+
+    CairnTodayBrief: {
+      BRIEF_KIND: Record<string, { word: string; glyph: string; lead: string; kicker?: string }>;
+      BRIEF_OVERRIDES: Array<{ intent: string; label: string }>;
+      kind(read: Partial<ClientDayRead> | null | undefined): string;
+      meta(read: Partial<ClientDayRead> | null | undefined): { word: string; glyph: string; lead: string; kicker?: string };
+      provisionalRead(): ClientDayRead & { _provisional: boolean };
+      redirectHtml(action: unknown, label: unknown, primary?: boolean): string;
+      visibleOverrides(args: { kind?: unknown; estMinutes?: unknown; activeOverride?: unknown }): Array<{ intent: string; label: string }>;
+      agentOffline(status: unknown): boolean;
+      agentOfflineNoticeHtml(status: unknown, dismissed?: boolean): string;
+      briefHtml(read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined, options?: {
+        showPlan?: boolean;
+        isToday?: boolean;
+        activeOverride?: unknown;
+        morph?: boolean;
+        reducedMotion?: boolean;
+        offlineDismissed?: boolean;
+      }): string;
+      focusBarHtml(read: Partial<ClientDayRead> | null | undefined, day: { name?: unknown } | null | undefined, options?: { exDone?: unknown; exTotal?: unknown; isToday?: boolean }): string;
+      signalsText(read: Partial<ClientDayRead> | null | undefined): string;
+    };
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
@@ -989,6 +1011,7 @@ declare global {
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
+  declare const CairnTodayBrief: Window["CairnTodayBrief"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];
