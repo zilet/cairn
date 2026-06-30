@@ -1,32 +1,4 @@
 // ==== 05-progress.js ====
-// Canvas charts read their palette from the :root CSS tokens (never hardcoded
-// hexes) so they can't drift from the design system. Resolved once per draw.
-// `gridline`/`grid-label` have no token, so they derive from the palette here.
-// Hex (#rgb / #rrggbb) → "rgba(r,g,b,a)" so canvas fills can layer a token color
-// at a given opacity (gridlines, area gradient, halo) without hardcoding the hex.
-function withAlpha(hex, a) {
-  let h = String(hex || "").trim().replace("#", "");
-  if (h.length === 3) h = h.split("").map((x) => x + x).join("");
-  if (h.length < 6) return `rgba(0,0,0,${a})`;
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-function chartColors() {
-  const cs = getComputedStyle(document.documentElement);
-  const v = (name, fallback) => (cs.getPropertyValue(name).trim() || fallback);
-  return {
-    accent: v("--accent", "#b4552d"),
-    sage: v("--sage", "#6e7f5c"),
-    gold: v("--gold", "#c9a86a"),
-    ink: v("--ink", "#211d17"),
-    paper: v("--paper", "#f4efe7"),
-    card: v("--card", "#fffdf8"),
-    line2: v("--line-2", "#d8cfbd"),
-    label: v("--muted", "#746c5c"),
-  };
-}
-
 // Shared premium line chart: monotone-cubic curve, soft gradient area fill, light
 // gridlines with y labels, first/last date x labels, emphasized final point with
 // an ink value badge, optional sage dashed goal line and \u25b2 at the all-time peak.

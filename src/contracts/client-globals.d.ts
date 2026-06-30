@@ -201,6 +201,17 @@ declare global {
     stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }] | null | undefined | false>,
   ): string;
   declare function emptyStateHtml(svg: string | null | undefined, line: unknown): string;
+  declare function withAlpha(hex: unknown, alpha: number): string;
+  declare function chartColors(): {
+    accent: string;
+    sage: string;
+    gold: string;
+    ink: string;
+    paper: string;
+    card: string;
+    line2: string;
+    label: string;
+  };
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -476,6 +487,20 @@ declare global {
       emptyStateHtml(svg: string | null | undefined, line: unknown): string;
     };
 
+    CairnProgressChart: {
+      withAlpha(hex: unknown, alpha: number): string;
+      chartColors(): {
+        accent: string;
+        sage: string;
+        gold: string;
+        ink: string;
+        paper: string;
+        card: string;
+        line2: string;
+        label: string;
+      };
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -546,6 +571,7 @@ declare global {
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
+  declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];

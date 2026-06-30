@@ -31,6 +31,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/cardio-plan-client.ts", output: "public/js/cardio-plan-client.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
   { source: "src/client/progress-components-client.ts", output: "public/js/progress-components-client.js" },
+  { source: "src/client/progress-chart-client.ts", output: "public/js/progress-chart-client.js" },
   { source: "src/client/capture.ts", output: "public/js/04-capture.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
