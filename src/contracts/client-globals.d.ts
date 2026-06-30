@@ -446,8 +446,16 @@ declare global {
       CHAT_IMAGE_MAX_BYTES: number;
       CHAT_IMAGE_EDGE_STEPS: number[];
       CHAT_IMAGE_QUALITY_STEPS: number[];
+      CHAT_STARTERS: string[];
       base64DecodedBytes(base64: unknown): number;
       imagePayload(dataUrl: unknown): { dataUrl: string; base64: string; mime: "image/jpeg"; bytes: number };
+      shellHtml(): string;
+      headerActionsHtml(): string;
+      freshPillHtml(distilled: unknown): string;
+      emptyHtml(): string;
+      starterChipsHtml(starters?: readonly unknown[]): string;
+      dividerHtml(iso: unknown, label: unknown): string;
+      earlierBarHtml(): string;
       dayISO(timestamp: unknown, localISO: (date?: Date) => string): string;
       messageHasFoodAction(message: Partial<ClientChatMessage> | null | undefined): boolean;
       userMessageSuggestsFood(message: Partial<ClientChatMessage> | null | undefined): boolean;

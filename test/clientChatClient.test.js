@@ -117,3 +117,42 @@ test("chat fuel and history HTML escape dynamic content", () => {
   assert.match(hit, /<mark>protein\.\*<\/mark> &lt;script&gt;/);
   assert.match(hit, /You · today · current/);
 });
+
+test("chat shell, header, starter, and divider helpers preserve selectors safely", () => {
+  const chat = loadChatClient();
+
+  const shell = chat.shellHtml();
+  assert.match(shell, /id="chatlog"/);
+  assert.match(shell, /id="chatJump"/);
+  assert.match(shell, /id="chatFuelSlot"/);
+  assert.match(shell, /id="chatPreview"/);
+  assert.match(shell, /id="chatAttach"/);
+  assert.match(shell, /id="chatFile"/);
+  assert.match(shell, /id="chatInput"/);
+  assert.match(shell, /id="chatSend"/);
+  assert.match(shell, /Logs save instantly/);
+
+  const header = chat.headerActionsHtml();
+  assert.match(header, /id="hdrChatActions"/);
+  assert.match(header, /id="hdrHistory"/);
+  assert.match(header, /aria-label="Past conversations &amp; search"/);
+  assert.match(header, /id="hdrFresh"/);
+  assert.match(header, /Start fresh\?/);
+
+  const starters = chat.starterChipsHtml(["<meal>", `plan "week"`]);
+  assert.match(starters, /class="chat-chips"/);
+  assert.match(starters, /style="--i:0"/);
+  assert.match(starters, /&lt;meal&gt;/);
+  assert.match(starters, /plan "week"/);
+  assert.doesNotMatch(starters, /<meal>/);
+
+  const divider = chat.dividerHtml(`2026-06-30" onclick="x`, "<Today>");
+  assert.match(divider, /class="chat-divider"/);
+  assert.match(divider, /data-day="2026-06-30&quot; onclick=&quot;x"/);
+  assert.match(divider, /&lt;Today&gt;/);
+
+  assert.match(chat.earlierBarHtml(), /class="chat-earlierbar"/);
+  assert.match(chat.emptyHtml(), /class="empty"/);
+  assert.match(chat.freshPillHtml(2), /2 things remembered/);
+  assert.match(chat.freshPillHtml(0), /Fresh start/);
+});

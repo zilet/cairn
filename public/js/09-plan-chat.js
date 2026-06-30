@@ -439,21 +439,25 @@ function chatDayISO(ts) {
 }
 
 function chatDivider(iso) {
-  const el = document.createElement("div");
-  el.className = "chat-divider";
-  el.dataset.day = iso;
-  el.innerHTML = `<span>${escHtml(dateLabel(iso))}</span>`;
-  return el;
+  const template = document.createElement("template");
+  template.innerHTML = CairnChatClient.dividerHtml(iso, dateLabel(iso)).trim();
+  const el = template.content.firstElementChild;
+  if (el) return el;
+  const fallback = document.createElement("div");
+  fallback.className = "chat-divider";
+  fallback.dataset.day = iso;
+  fallback.textContent = dateLabel(iso);
+  return fallback;
 }
 
 // Starter chips shown while the conversation is empty (fresh chat / after a
 // fresh start); tapping one prefills the input and sends through the normal
 // send path. They vanish as soon as the first message lands (appendMsg removes them).
-const CHAT_STARTERS = ["Plan my week", "Evaluate my last meal", "How's my progress?", "Swap today's workout"];
 function drawChatChips(log) {
-  const wrap = document.createElement("div");
-  wrap.className = "chat-chips";
-  wrap.innerHTML = CHAT_STARTERS.map((t, i) => `<button class="chat-chip" style="--i:${i}">${escHtml(t)}</button>`).join("");
+  const template = document.createElement("template");
+  template.innerHTML = CairnChatClient.starterChipsHtml().trim();
+  const wrap = template.content.firstElementChild;
+  if (!wrap) return;
   log.appendChild(wrap);
   wrap.querySelectorAll(".chat-chip").forEach((b) => b.addEventListener("click", () => {
     const input = $("#chatInput");
@@ -533,34 +537,15 @@ function expandChatEarlier(log, bar, block) {
 // the athlete leaves Chat — no listeners outlive their elements.
 function ensureChatHeaderBtns() {
   document.getElementById("hdrChatActions")?.remove();
-  const wrap = document.createElement("div");
-  wrap.id = "hdrChatActions";
-  wrap.className = "hdr-chat-actions";
-
-  // history + search: always available (past conversations live on even when
-  // the current thread is empty).
-  const hist = document.createElement("button");
-  hist.id = "hdrHistory";
-  hist.className = "hdrcircbtn";
-  hist.setAttribute("aria-label", "Past conversations & search");
-  hist.innerHTML = `
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M3.5 12a8.5 8.5 0 1 1 2.5 6"/><path d="M3.5 12H6M3.5 12V9.5"/><path d="M12 7.5V12l3 2"/>
-    </svg>`;
+  const template = document.createElement("template");
+  template.innerHTML = CairnChatClient.headerActionsHtml().trim();
+  const wrap = template.content.firstElementChild;
+  const hist = wrap?.querySelector("#hdrHistory");
+  const b = wrap?.querySelector("#hdrFresh");
+  if (!wrap || !hist || !b) return { freshBtn: null, historyBtn: null };
   hist.addEventListener("click", openChatHistory);
 
   // fresh start (sparkle, two-tap confirm) — unchanged behavior.
-  const b = document.createElement("button");
-  b.id = "hdrFresh";
-  b.className = "freshbtn";
-  b.hidden = true;
-  b.setAttribute("aria-label", "Start a fresh conversation");
-  b.innerHTML = `
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 4.2l1.7 4.1 4.1 1.7-4.1 1.7L12 15.8l-1.7-4.1-4.1-1.7 4.1-1.7Z"/>
-      <path d="M18.6 14.6l.7 1.7 1.7.7-1.7.7-.7 1.7-.7-1.7-1.7-.7 1.7-.7Z"/>
-      <path d="M5.4 16.2l.55 1.35 1.35.55-1.35.55-.55 1.35-.55-1.35-1.35-.55 1.35-.55Z"/>
-    </svg><span class="freshbtn-txt">Start fresh?</span>`;
   let disarm = null;
   b.addEventListener("click", () => {
     if (!b.classList.contains("armed")) {
@@ -574,8 +559,6 @@ function ensureChatHeaderBtns() {
     chatFreshStart();
   });
 
-  wrap.appendChild(hist);
-  wrap.appendChild(b);
   document.querySelector("header").appendChild(wrap);
   return { freshBtn: b, historyBtn: hist };
 }
@@ -631,7 +614,7 @@ function settleFreshPill(distilled, token) {
   host.querySelector(".fresh-pill")?.remove();
   const pill = document.createElement("span");
   pill.className = "fresh-pill";
-  pill.innerHTML = `<span class="distill-check">✓</span><span>${n ? `${n} thing${n === 1 ? "" : "s"} remembered` : "Fresh start"}</span>`;
+  pill.innerHTML = CairnChatClient.freshPillHtml(n);
   host.prepend(pill);
   requestAnimationFrame(() => pill.classList.add("fresh-pill-in"));
   setTimeout(() => { pill.classList.remove("fresh-pill-in"); setTimeout(() => pill.remove(), 360); }, 2600);
@@ -663,34 +646,7 @@ async function renderChat() {
   // Paint the shell FIRST so the composer is usable instantly; the log hydrates
   // in the background. The flex viewport column keeps the composer pinned above
   // the tab bar no matter how the OS zooms (height is re-measured, not magic).
-  view.innerHTML = `
-    <div class="chatview">
-      <div class="chatlog-wrap">
-        <div id="chatlog" class="chatlog" aria-live="polite"></div>
-        <button id="chatJump" class="chat-jump" hidden aria-label="Jump to latest">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 10l6 6 6-6"/></svg>
-        </button>
-      </div>
-      <div class="chatdock">
-        <div id="chatFuelSlot" class="chatfuel-slot"></div>
-        <div id="chatPreview" class="chat-preview" hidden>
-          <img alt="">
-          <span class="chat-preview-hint">Photo attached — I'll estimate &amp; log it</span>
-          <button id="chatPreviewX" class="chip-x" aria-label="Remove photo">✕</button>
-        </div>
-        <div class="chatbar">
-          <button id="chatAttach" class="attachbtn" aria-label="Attach a photo — camera, library, or files">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 5.5v13M5.5 12h13"/>
-            </svg>
-          </button>
-          <input id="chatFile" type="file" accept="image/*" hidden>
-          <textarea id="chatInput" rows="1" autocomplete="off" placeholder="Ask, log, or snap a plate…"></textarea>
-          <button id="chatSend" class="logbtn" aria-label="Send">↑</button>
-        </div>
-        <div class="chatnote">Logs save instantly. Plan changes arrive as drafts for you to apply.</div>
-      </div>
-    </div>`;
+  view.innerHTML = CairnChatClient.shellHtml();
 
   const log = $("#chatlog");
   log.innerHTML = loadingState("Catching up…");
@@ -843,7 +799,7 @@ async function renderChat() {
   let msgs = [];
   try { msgs = await api("/chat?limit=200"); } catch { msgs = []; }
   if (token !== pollToken || !log.isConnected) return; // navigated away / re-rendered
-  freshBtn.hidden = !msgs.length;
+  if (freshBtn) freshBtn.hidden = !msgs.length;
   chatFuelContext = msgs.slice(-24);
   drawChat(msgs);
   loadChatFuel(token);
@@ -857,7 +813,7 @@ function drawChat(msgs) {
   const log = $("#chatlog");
   log.innerHTML = "";
   if (!msgs.length) {
-    log.innerHTML = `<div class="empty">Say hi, log a ride, or ask the coach to change your plan.</div>`;
+    log.innerHTML = CairnChatClient.emptyHtml();
     drawChatChips(log);
     return;
   }
@@ -878,9 +834,10 @@ function drawChat(msgs) {
   }
   const earlier = groups.slice(0, cut);
   if (earlier.length) {
-    const bar = document.createElement("div");
-    bar.className = "chat-earlierbar";
-    bar.innerHTML = `<button class="earlierbtn">Show earlier ↑</button>`;
+    const template = document.createElement("template");
+    template.innerHTML = CairnChatClient.earlierBarHtml().trim();
+    const bar = template.content.firstElementChild;
+    if (!bar) return;
     log.appendChild(bar);
     const block = document.createElement("div");
     block.className = "chat-earlier";
