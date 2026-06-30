@@ -31,7 +31,7 @@ type TabSwitchOptions = {
       const jump = activePlan === "food" ? "food"
         : activePlan === "meals" ? "meals"
         : activePlan === "coach" ? "coach"
-        : activePlan === "endurance" && showEnduranceTab() ? "endurance"
+        : activePlan === "endurance" ? "endurance"
         : "edit";
       return segSkeleton(jump, planSeg(), 3);
     }

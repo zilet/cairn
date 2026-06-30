@@ -475,7 +475,8 @@ const PROGRESS_HANDLERS = { trend: () => renderProgress(), volume: () => renderV
 // prescribed runs, and shaping the running plan. A pure strength athlete with no
 // running goal never sees it (calm, no empty surface).
 function planSeg() {
-    return showEnduranceTab()
+    const routedToEndurance = state.planSeg === "endurance" || state.planJump === "endurance";
+    return showEnduranceTab() || routedToEndurance
         ? [["edit", "Training"], ["endurance", "Endurance"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]]
         : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]];
 }

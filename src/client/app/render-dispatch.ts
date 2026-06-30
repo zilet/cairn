@@ -16,7 +16,7 @@
       return jump === "food" ? renderFoodJournal()
         : jump === "meals" ? renderMeals()
         : jump === "coach" ? renderCoach()
-        : jump === "endurance" && showEnduranceTab() ? renderPlanEndurance()
+        : jump === "endurance" ? renderPlanEndurance()
         : renderPlanEditor();
     }
     if (tab === "progress") return (PROGRESS_HANDLERS[defaultProgressSeg()] || renderHistory)();

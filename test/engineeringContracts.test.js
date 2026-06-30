@@ -24,6 +24,38 @@ function contractPatternToRegExp(pattern) {
   return new RegExp(`^${escapeRegExp(pattern).replace(/:[A-Za-z0-9_]+/g, "[^/]+")}$`);
 }
 
+function quotedValues(src) {
+  return [...src.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+}
+
+function routeSetValues(src, name) {
+  const match = src.match(new RegExp(`const ${name} = new Set\\(\\[([^\\]]+)\\]\\)`));
+  assert.ok(match, `${name} route set should be declared in route-state`);
+  return quotedValues(match[1]);
+}
+
+function unionValues(src, name) {
+  const match = src.match(new RegExp(`type ${name} = ([^;]+);`));
+  assert.ok(match, `${name} should be declared as a string union`);
+  return quotedValues(match[1]);
+}
+
+function segmentKeys(src, name) {
+  const line = src.split("\n").find((row) => row.includes(`const ${name}`));
+  assert.ok(line, `${name} segment registry should be declared`);
+  return [...line.matchAll(/\["([^"]+)",\s*"[^"]+"\]/g)].map((m) => m[1]);
+}
+
+function objectKeys(src, name) {
+  const line = src.split("\n").find((row) => row.includes(`const ${name}`));
+  assert.ok(line, `${name} object registry should be declared`);
+  return [...line.matchAll(/\b([A-Za-z0-9_]+):\s*\(\)\s*=>/g)].map((m) => m[1]);
+}
+
+function assertSameMembers(actual, expected, message) {
+  assert.deepEqual([...actual].sort(), [...expected].sort(), message);
+}
+
 function normalizeApiCallPath(raw) {
   const withoutTemplateExpressions = raw.replace(/\$\{[^}]*\}/g, ":param");
   const withoutQuery = withoutTemplateExpressions.split("?")[0].trim();
@@ -644,6 +676,8 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/life-client\.js"/);
   assert.match(sw, /"\/js\/family-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
+  assert.match(sw, /"\/js\/chat-turn-client\.js"/);
+  assert.match(sw, /"\/js\/chat-history-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
   assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
@@ -654,6 +688,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/app-route-sync\.js"/);
   assert.match(sw, /"\/js\/app-render-dispatch\.js"/);
   assert.match(sw, /"\/js\/app-tabs\.js"/);
+  assert.match(sw, /"\/js\/agent-job-client\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
   assert.match(sw, /"\/js\/app-service-worker\.js"/);
@@ -686,6 +721,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const records = read("public/js/08-me-records.js");
   const chat = read("public/js/09-plan-chat.js");
   const chatClient = read("public/js/chat-client.js");
+  const chatHistoryClient = read("public/js/chat-history-client.js");
   assert.ok(
     index.indexOf("/js/route-state.js") > -1 && index.indexOf("/js/route-state.js") < index.indexOf("/js/10-boot.js"),
     "route-state.js must load before 10-boot.js"
@@ -707,9 +743,44 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(appRouter, /state\.pendingChatSession\s*=\s*route\.session\s*\|\|\s*null/);
   assert.match(chatClient, /session\.session_id\s*\|\|\s*session\.archived_at/);
   assert.match(chatClient, /hit\.session_id\s*\|\|\s*hit\.archived_at/);
-  assert.match(chat, /openChatHistory\(opts\s*=\s*\{\}\)/);
-  assert.match(chat, /state\.pendingChatSession\s*=\s*sessionId[\s\S]*syncRouteFromState\(\)/);
-  assert.match(chat, /api\("\/chat\/sessions\/"\s*\+\s*encodeURIComponent\(sessionId\)\)/);
+  assert.match(chat, /openChatHistory/);
+  assert.match(chatHistoryClient, /function openChatHistory\(options/);
+  assert.match(chatHistoryClient, /state\.pendingChatSession\s*=\s*sessionId[\s\S]*syncRouteFromState\(\)/);
+  assert.match(chatHistoryClient, /api\("\/chat\/sessions\/"\s*\+\s*encodeURIComponent\(sessionId\)\)/);
+});
+
+test("PWA route literals stay aligned across parser, types, and segment registries", () => {
+  const routeState = read("src/client/route-state.ts");
+  const clientGlobals = read("src/contracts/client-globals.d.ts");
+  const appRouter = read("src/client/app/router.ts");
+  const appTabs = read("src/client/app/tabs.ts");
+  const uiShell = read("src/client/ui-shell.ts");
+  const meHealth = read("src/client/me-health-screen.ts");
+  const settingsScreen = read("src/client/settings-screen.ts");
+
+  const tabs = routeSetValues(routeState, "VALID_TABS");
+  const plan = routeSetValues(routeState, "PLAN_SECTIONS");
+  const progress = routeSetValues(routeState, "PROGRESS_SECTIONS");
+  const me = routeSetValues(routeState, "ME_SECTIONS");
+  const health = routeSetValues(routeState, "HEALTH_SECTIONS");
+  const settings = routeSetValues(routeState, "SETTINGS_SECTIONS");
+
+  assertSameMembers(unionValues(clientGlobals, "ClientTabName"), tabs, "ClientTabName must match route-state tabs");
+  assertSameMembers(unionValues(clientGlobals, "ClientPlanSection"), plan, "ClientPlanSection must match plan route sections");
+  assertSameMembers(unionValues(clientGlobals, "ClientProgressSection"), progress, "ClientProgressSection must match progress route sections");
+  assertSameMembers(unionValues(clientGlobals, "ClientMeSection"), me, "ClientMeSection must match Me route sections");
+  assertSameMembers(unionValues(clientGlobals, "ClientHealthSection"), health, "ClientHealthSection must match Health route sections");
+  assertSameMembers(unionValues(clientGlobals, "ClientSettingsSection"), settings, "ClientSettingsSection must match Settings route sections");
+
+  assertSameMembers(quotedValues(appRouter.match(/const ROUTE_TABS:[^\n]+/)?.[0] || ""), tabs, "app router tabs must match route-state tabs");
+  assertSameMembers(quotedValues(appTabs.match(/const TAB_NAMES:[^\n]+/)?.[0] || ""), tabs, "tab controller tabs must match route-state tabs");
+  assertSameMembers(objectKeys(uiShell, "PLAN_HANDLERS"), plan, "Plan handlers must cover every plan route section");
+  assertSameMembers(segmentKeys(uiShell, "PROGRESS_SEG"), progress, "Progress segments must cover every progress route section");
+  assert.match(uiShell, /routedToEndurance\s*=\s*state\.planSeg\s*===\s*"endurance"\s*\|\|\s*state\.planJump\s*===\s*"endurance"/);
+  assertSameMembers(segmentKeys(meHealth, "ME_SEG"), me, "Me segments must cover every Me route section");
+  assertSameMembers(objectKeys(meHealth, "ME_HANDLERS"), me, "Me handlers must cover every Me route section");
+  assertSameMembers(segmentKeys(meHealth, "HEALTH_SEG"), health, "Health segments must cover every Health route section");
+  assertSameMembers(segmentKeys(settingsScreen, "SET_SEG"), settings, "Settings segments must cover every Settings route section");
 });
 
 test("chat session index is created only after the v49 column migration", () => {
@@ -788,6 +859,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const apiClientSource = read("src/client/api-client.ts");
   const appDownloadSource = read("src/client/app/download.ts");
   const appSwRecoverySource = read("src/client/app/sw-recovery.ts");
+  const agentJobClientSource = read("src/client/agent-job-client.ts");
   const coreStateSource = read("src/client/app/state.ts");
   const uiShellSource = read("src/client/ui-shell.ts");
   const pwaInstallSource = read("src/client/pwa-install-coach.ts");
@@ -826,6 +898,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsClientSource = read("src/client/settings-client.ts");
   const settingsScreenSource = read("src/client/settings-screen.ts");
   const chatClientSource = read("src/client/chat-client.ts");
+  const chatTurnClientSource = read("src/client/chat-turn-client.ts");
+  const chatHistoryClientSource = read("src/client/chat-history-client.ts");
   const planEnduranceSource = read("src/client/plan-endurance-client.ts");
   const planEditorSource = read("src/client/plan-editor-client.ts");
   const dayFuelSource = read("src/client/day-fuel-client.ts");
@@ -878,6 +952,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const apiClient = read("public/js/api-client.js");
   const appDownload = read("public/js/app-download.js");
   const appSwRecovery = read("public/js/app-sw-recovery.js");
+  const agentJobClient = read("public/js/agent-job-client.js");
   const coreState = read("public/js/01-core.js");
   const pwaInstall = read("public/js/pwa-install-coach.js");
   const restTimer = read("public/js/rest-timer.js");
@@ -929,6 +1004,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const familyClient = read("public/js/family-client.js");
   const healthDocsClient = read("public/js/health-docs-client.js");
   const chatClient = read("public/js/chat-client.js");
+  const chatTurnClient = read("public/js/chat-turn-client.js");
+  const chatHistoryClient = read("public/js/chat-history-client.js");
   const settingsClient = read("public/js/settings-client.js");
   const settingsScreen = read("public/js/settings-screen.js");
   const publicScriptCheck = read("scripts/check-public-scripts.mjs");
@@ -1183,6 +1260,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-program-block-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/04-capture\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/chat-turn-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/chat-history-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/plan-endurance-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/day-fuel-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/meal-plan-client\.js/);
@@ -1202,6 +1281,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-route-sync\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-render-dispatch\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-tabs\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/agent-job-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-job-reconnectors\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-mobile-viewport\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-service-worker\.js/);
@@ -1309,6 +1389,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-screen\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
+  assert.match(clientBuild, /src\/client\/chat-turn-client\.ts/);
+  assert.match(clientBuild, /public\/js\/chat-turn-client\.js/);
+  assert.match(clientBuild, /src\/client\/chat-history-client\.ts/);
+  assert.match(clientBuild, /public\/js\/chat-history-client\.js/);
   assert.match(clientBuild, /src\/client\/plan-endurance-client\.ts/);
   assert.match(clientBuild, /public\/js\/plan-endurance-client\.js/);
   assert.match(clientBuild, /src\/client\/plan-editor-client\.ts/);
@@ -1355,6 +1439,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-render-dispatch\.js/);
   assert.match(clientBuild, /src\/client\/app\/tabs\.ts/);
   assert.match(clientBuild, /public\/js\/app-tabs\.js/);
+  assert.match(clientBuild, /src\/client\/agent-job-client\.ts/);
+  assert.match(clientBuild, /public\/js\/agent-job-client\.js/);
   assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
   assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.match(clientBuild, /src\/client\/app\/mobile-viewport\.ts/);
@@ -1393,6 +1479,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf("/js/pwa-install-coach.js") > index.indexOf("/js/01-core.js") &&
       index.indexOf("/js/pwa-install-coach.js") < index.indexOf("/js/02-ui.js"),
     "pwa-install-coach.js must load early, after app state and before feature consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/agent-job-client.js") > index.indexOf("/js/02-ui.js") &&
+      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/rest-timer.js") &&
+      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/03-today.js") &&
+      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/09-plan-chat.js") &&
+      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/app-job-reconnectors.js"),
+    "agent-job-client.js must load after UI helpers and before job consumers/reconnectors"
   );
   assert.ok(
     index.indexOf("/js/html-utils.js") > -1 && index.indexOf("/js/html-utils.js") < index.indexOf("/js/02-ui.js"),
@@ -1658,7 +1752,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "chat-client.js must load before 09-plan-chat.js"
   );
   assert.ok(
-    index.indexOf("/js/plan-endurance-client.js") > index.indexOf("/js/chat-client.js") &&
+    index.indexOf("/js/chat-turn-client.js") > index.indexOf("/js/chat-client.js") &&
+      index.indexOf("/js/chat-turn-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    "chat-turn-client.js must load after chat helpers and before 09-plan-chat.js"
+  );
+  assert.ok(
+    index.indexOf("/js/chat-history-client.js") > index.indexOf("/js/chat-turn-client.js") &&
+      index.indexOf("/js/chat-history-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    "chat-history-client.js must load after chat turn helpers and before 09-plan-chat.js"
+  );
+  assert.ok(
+    index.indexOf("/js/plan-endurance-client.js") > index.indexOf("/js/chat-history-client.js") &&
       index.indexOf("/js/plan-endurance-client.js") < index.indexOf("/js/09-plan-chat.js"),
     "plan-endurance-client.js must load before Plan endurance consumers"
   );
@@ -1746,6 +1850,17 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiClient, /\/\/ @ts-check/);
   assert.match(appDownload, /\/\/ @ts-check/);
   assert.match(appSwRecovery, /\/\/ @ts-check/);
+  assert.match(agentJobClient, /\/\/ @ts-check/);
+  assert.match(agentJobClientSource, /function\s+registerJobReconnector/);
+  assert.match(agentJobClientSource, /async function\s+enqueueJob/);
+  assert.match(agentJobClientSource, /function\s+openJobStream/);
+  assert.match(agentJobClientSource, /async function\s+jobReconnect/);
+  assert.match(agentJobClientSource, /function\s+teardownJobs/);
+  assert.match(agentJobClientSource, /async function\s+runOp/);
+  assert.match(agentJobClient, /Object\.assign\(globalThis,\s*\{/);
+  assert.doesNotMatch(chat, /\bconst\s+jobStreams\b/);
+  assert.doesNotMatch(chat, /\bfunction\s+registerJobReconnector\b/);
+  assert.match(chat, /Durable agent job helpers live in \/js\/agent-job-client\.js/);
   assert.match(pwaInstall, /\/\/ @ts-check/);
   assert.match(restTimer, /\/\/ @ts-check/);
   assert.match(coachingFocusClient, /\/\/ @ts-check/);
@@ -1775,6 +1890,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClient, /\/\/ @ts-check/);
   assert.match(healthDocsClient, /\/\/ @ts-check/);
   assert.match(chatClient, /\/\/ @ts-check/);
+  assert.match(chatTurnClient, /\/\/ @ts-check/);
   assert.match(settingsClient, /\/\/ @ts-check/);
   assert.match(appRouter, /\/\/ @ts-check/);
   assert.match(appRouteSync, /\/\/ @ts-check/);
@@ -1879,6 +1995,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-screen\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
+  assert.match(clientBuild, /src\/client\/chat-turn-client\.ts/);
+  assert.match(clientBuild, /public\/js\/chat-turn-client\.js/);
+  assert.match(clientBuild, /src\/client\/chat-history-client\.ts/);
+  assert.match(clientBuild, /public\/js\/chat-history-client\.js/);
   assert.match(clientBuild, /src\/client\/plan-endurance-client\.ts/);
   assert.match(clientBuild, /public\/js\/plan-endurance-client\.js/);
   assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
@@ -1913,6 +2033,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-render-dispatch\.js/);
   assert.match(clientBuild, /src\/client\/app\/tabs\.ts/);
   assert.match(clientBuild, /public\/js\/app-tabs\.js/);
+  assert.match(clientBuild, /src\/client\/agent-job-client\.ts/);
+  assert.match(clientBuild, /public\/js\/agent-job-client\.js/);
   assert.match(clientBuild, /src\/client\/app\/job-reconnectors\.ts/);
   assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.match(clientBuild, /src\/client\/app\/mobile-viewport\.ts/);
@@ -2188,6 +2310,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /function chatDividerHtml\(iso: unknown, label: unknown\): string/);
   assert.match(chatClientSource, /function chatEarlierBarHtml\(\): string/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
+  assert.match(chatTurnClientSource, /function\s+saveChatDraft\(value: string\): void/);
+  assert.match(chatTurnClientSource, /async function\s+chatReconnect\(\): Promise<void>/);
+  assert.match(chatTurnClientSource, /function\s+chatTeardownMonitor\(\): void/);
+  assert.match(chatTurnClientSource, /function\s+measureChatTop\(\): void/);
+  assert.match(chatTurnClientSource, /Object\.assign\(globalThis,\s*\{/);
+  assert.match(chatHistoryClientSource, /function openChatHistory\(options: \{ session\?: string \| null \} = \{\}\): void/);
+  assert.match(chatHistoryClientSource, /function histSessionRow/);
+  assert.match(chatHistoryClientSource, /function histHitRow/);
+  assert.match(chatHistoryClientSource, /Object\.assign\(globalThis,\s*\{ openChatHistory \}\)/);
   assert.match(planEnduranceSource, /const ENDURANCE_PHASES/);
   assert.match(planEnduranceSource, /function enduranceRampHtml\(goal: EnduranceGoalRow/);
   assert.match(planEnduranceSource, /function endurancePresets\(goal: EnduranceGoalRow/);
@@ -2607,6 +2738,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClient, /starterChipsHtml: chatStarterChipsHtml/);
   assert.match(chatClient, /dividerHtml: chatDividerHtml/);
   assert.match(chatClient, /earlierBarHtml: chatEarlierBarHtml/);
+  assert.match(chatTurnClient, /saveChatDraft/);
+  assert.match(chatTurnClient, /chatReconnect/);
+  assert.match(chatTurnClient, /measureChatTop/);
+  assert.match(chatHistoryClient, /function openChatHistory/);
+  assert.match(chatHistoryClient, /historySessionRow/);
+  assert.match(chatHistoryClient, /openChatHistory/);
   assert.match(settingsClient, /Object\.assign\(globalThis, \{/);
   assert.match(settingsClient, /CairnSettingsClient/);
   assert.match(settingsScreen, /\/\/ @ts-check/);
@@ -2724,13 +2861,19 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(records, /const\s+FAMILY_COLORS|function\s+familyCardHtml|function\s+familySwatches/);
   assert.match(records, /CairnFamily\.familyCardHtml/);
   assert.match(records, /CairnFamily\.familySwatches/);
-  assert.match(chat, /CairnChatClient\.historySessionRow/);
+  assert.match(chatHistoryClient, /CairnChatClient\.historySessionRow/);
+  assert.match(chatHistoryClient, /CairnChatClient\.historyHitRow/);
   assert.match(chat, /CairnChatClient\.shellHtml\(\)/);
   assert.match(chat, /CairnChatClient\.headerActionsHtml\(\)/);
   assert.match(chat, /CairnChatClient\.starterChipsHtml\(\)/);
   assert.match(chat, /CairnChatClient\.dividerHtml\(iso, dateLabel\(iso\)\)/);
   assert.match(chat, /CairnChatClient\.earlierBarHtml\(\)/);
   assert.doesNotMatch(chat, /const\s+CHAT_STARTERS|<div class="chatview"|id="hdrHistory"|id="chatJump"|class="chat-earlierbar"/);
+  assert.match(chat, /Durable chat turn helpers live in \/js\/chat-turn-client\.js/);
+  assert.match(chat, /Chat history\/search helpers live in \/js\/chat-history-client\.js/);
+  assert.doesNotMatch(chat, /\bconst\s+CHAT_DRAFT_KEY\b|\blet\s+chatStream\b|\bconst\s+chatPendingBubbles\b/);
+  assert.doesNotMatch(chat, /\bfunction\s+chatTeardownMonitor\b|\bfunction\s+chatReconnect\b|\bfunction\s+measureChatTop\b/);
+  assert.doesNotMatch(chat, /\bfunction\s+histWhen\b|\bfunction\s+histSessionRow\b|\bfunction\s+histHitRow\b|\bfunction\s+openChatHistory\b/);
   assert.match(chat, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(chat, /CairnPlanEndurance\.rampHtml/);
   assert.match(chat, /CairnPlanEndurance\.presets/);
@@ -2800,6 +2943,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/family-client\.js"/);
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
+  assert.match(sw, /"\/js\/chat-turn-client\.js"/);
+  assert.match(sw, /"\/js\/chat-history-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
   assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
@@ -2813,6 +2958,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/app-route-sync\.js"/);
   assert.match(sw, /"\/js\/app-render-dispatch\.js"/);
   assert.match(sw, /"\/js\/app-tabs\.js"/);
+  assert.match(sw, /"\/js\/agent-job-client\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
   assert.match(sw, /"\/js\/app-service-worker\.js"/);

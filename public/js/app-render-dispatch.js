@@ -17,7 +17,7 @@
             return jump === "food" ? renderFoodJournal()
                 : jump === "meals" ? renderMeals()
                     : jump === "coach" ? renderCoach()
-                        : jump === "endurance" && showEnduranceTab() ? renderPlanEndurance()
+                        : jump === "endurance" ? renderPlanEndurance()
                             : renderPlanEditor();
         }
         if (tab === "progress")

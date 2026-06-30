@@ -130,6 +130,16 @@ test("tab controller skips warm skeletons and tears down chat when leaving", asy
   ]);
 });
 
+test("tab controller honors a direct Plan Endurance route even when the tab is normally hidden", async () => {
+  const env = loadTabs({ planSeg: "endurance" });
+
+  env.context.switchTab("plan", { syncRoute: false });
+  await flush();
+
+  assert.equal(env.context.state.tab, "plan");
+  assert.equal(env.view.innerHTML, "seg:endurance:5:3");
+});
+
 test("tab controller registers tabbar clicks and normalizes invalid tabs", async () => {
   const env = loadTabs();
 

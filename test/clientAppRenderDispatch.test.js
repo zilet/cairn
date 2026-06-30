@@ -86,6 +86,10 @@ test("render dispatcher respects endurance visibility and progress fallback", ()
   endurance.context.renderTab("plan");
   assert.equal(endurance.calls.at(-1)[0], "renderPlanEndurance");
 
+  const routedEndurance = loadRenderDispatch({ planJump: "endurance", showEnduranceTab: false });
+  routedEndurance.context.renderTab("plan");
+  assert.equal(routedEndurance.calls.at(-1)[0], "renderPlanEndurance");
+
   const fallback = loadRenderDispatch({ progressSeg: "missing" });
   fallback.context.renderTab("progress");
   assert.equal(fallback.calls.at(-1)[0], "renderHistory");
