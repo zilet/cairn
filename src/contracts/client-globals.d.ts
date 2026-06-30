@@ -1,4 +1,5 @@
 import type {
+  ClientActivity,
   ClientChatMessage,
   ClientChatSearchHit,
   ClientChatSessionSummary,
@@ -10,11 +11,28 @@ import type {
 } from "./client.js";
 
 declare global {
+  type ClientAgentOpHandlers = {
+    path?: string;
+    anchor?: string;
+    guard?: () => boolean;
+    isFail?: (result: unknown) => boolean;
+    render?: (result: unknown) => void;
+    onFail?: (error: unknown) => void;
+    onDone?: (result: unknown) => void;
+    onError?: (error?: unknown) => void;
+    onCanceled?: () => void;
+  };
+
   declare const state: {
     tab?: string;
+    meSeg?: string;
+    healthSeg?: string;
+    healthSegPicked?: boolean;
+    pendingHealthScroll?: string;
   };
 
   declare let pollToken: unknown;
+  declare const view: HTMLElement;
 
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
@@ -31,6 +49,7 @@ declare global {
   declare function authToken(): string;
   declare function withToken(url: string): string;
   declare function deviceTimeZone(): string;
+  declare function localISO(date?: Date): string;
   declare function api<Path extends string>(
     p: Path,
     opts?: RequestInit & { headers?: Record<string, string> },
@@ -60,6 +79,25 @@ declare global {
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;
   declare function stagger(index?: number | null): string;
+  declare function activateTab(name: string, opts?: Record<string, unknown>): void;
+  declare function toast(message: string): void;
+  declare function reshapeToday(): Promise<void>;
+  declare function reducedMotion(): boolean;
+  declare function art(kind: string, text: string): string;
+  declare function pollEnrichment(
+    path: "/activities" | "/food-notes" | string,
+    id: number,
+    options?: {
+      tab?: string;
+      token?: unknown;
+      onUpdate?: (row: ClientActivity & Record<string, unknown>) => void;
+    },
+  ): void;
+  declare function enrichmentActive(status: unknown): boolean;
+  declare function actEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
+  declare function updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
+  declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): unknown;
+  declare function collapseEl(el: Element, done?: () => void): void;
   declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
   declare function reconnectSessionSuggest(job?: unknown): unknown;
   declare function reconnectMealPlan(job?: unknown): unknown;
