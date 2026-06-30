@@ -190,6 +190,10 @@ declare global {
   declare function segBar(active: string, items: readonly ClientSegment[]): string;
   declare function fitSeg(seg: Element): void;
   declare function isStandalonePWA(): boolean;
+  declare function getInstallGuidance(): { mode: string } | null;
+  declare function phoneCoachContent(mode: string): string;
+  declare function renderPhoneCoachBanner(container: Element | null | undefined): void;
+  declare function refreshPhoneCoach(): void;
   declare const sleep: (ms: number) => Promise<void>;
   declare function openAgentLoginModal(agentName: string): unknown;
   declare function mdSafeUrl(url: unknown): string | null;
@@ -427,6 +431,14 @@ declare global {
       mdToHtml(source: unknown): string;
     };
 
+    CairnPwaInstall: {
+      isStandalonePWA(): boolean;
+      getInstallGuidance(): { mode: string } | null;
+      phoneCoachContent(mode: string): string;
+      renderPhoneCoachBanner(container: Element | null | undefined): void;
+      refreshPhoneCoach(): void;
+    };
+
     CairnCardioPlan: {
       isCardioItem(item: unknown): boolean;
       cardioIntervalNote(interval: unknown): string;
@@ -477,6 +489,7 @@ declare global {
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
+  declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
