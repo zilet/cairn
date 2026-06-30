@@ -132,51 +132,8 @@ async function refreshProposals() {
 
 function renderProposals(proposals) {
   const wrap = $("#proplist");
-  if (!proposals.length) { wrap.innerHTML = `<div class="empty">No drafts yet. Ask the coach above for next week's targets — every change waits here for you to apply.</div>`; return; }
-  const proposalCardHtml = (p, pi) => {
-    const parsed = p.parsed;
-    const changes = parsed && Array.isArray(parsed.changes) ? parsed.changes : [];
-    const cardio = parsed && Array.isArray(parsed.cardio) ? parsed.cardio : [];
-    const cardioHtml = cardio.map((c) =>
-      `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(c.day_number)} ${escHtml(c.label || c.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(c))}</span> <span style="color:var(--muted)">(${escHtml(c.reason || c.note || "")})</span></div>`
-    ).join("");
-    const body = parsed
-      ? `<div class="sess-line">${escHtml(parsed.summary || "")}</div>` +
-        changes.map(strengthChangeHtml).join("") +
-        cardioHtml +
-        (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "")
-      : `<div class="sess-line" style="color:var(--warn)">Unparseable output</div><div class="sess-line" style="color:var(--muted);font-size:.78rem">${escHtml((p.raw_output || "").slice(0, 200))}\u2026</div>`;
-    const actions = isOpenProposal(p)
-      ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-apply="${p.id}">APPLY</button>
-         <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${p.id}">DISCARD</button></div>`
-      : "";
-    // Just-applied confirmation: a calm "lands in your plan" line + the (un-persisted)
-    // clamp note, so applying clearly registered even after the light re-render.
-    const applied = p.status === "applied"
-      ? `<div class="apply-done settle-in"><span class="apply-done-mark" aria-hidden="true">✓</span> Applied to your plan</div>`
-        + (lastApplyClamp[p.id] ? clampNoteHtml(lastApplyClamp[p.id]) : "")
-      : "";
-    return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(pi)}">
-      <div class="mp-hero">
-        <span class="lbl">${escHtml(p.agent)} \u00b7 #${p.id} \u00b7 ${escHtml(p.created_at || "")}</span>
-        ${statusBadge(p.status)}
-      </div>
-      ${body}${actions}${applied}</div>`;
-  };
-
-  // Show open drafts + the single most-recent settled proposal (the result you just
-  // acted on); fold everything older behind a "show earlier" disclosure. Applying one
-  // draft retires its siblings (server-side 'superseded'), so the list stays calm.
-  const open = proposals.filter(isOpenProposal);
-  const settled = proposals.filter((p) => !isOpenProposal(p)); // newest first (id DESC)
-  const shown = [...open, ...settled.slice(0, 1)];
-  const earlier = settled.slice(1);
-  wrap.innerHTML =
-    shown.map((p, i) => proposalCardHtml(p, i)).join("") +
-    (earlier.length
-      ? `<details class="hist-fold"><summary>Show earlier proposals (${earlier.length})</summary>
-           <div class="hist-fold-body">${earlier.map((p, i) => proposalCardHtml(p, i)).join("")}</div></details>`
-      : "");
+  if (!wrap) return;
+  wrap.innerHTML = CairnProposal.coachProposalListHtml(proposals, lastApplyClamp);
 
   wrap.querySelectorAll("[data-apply]").forEach((b) =>
     b.addEventListener("click", async () => {

@@ -1869,6 +1869,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(proposalSource, /function verifiedBadgeHtml\(verified: unknown\)/);
   assert.match(proposalSource, /function strengthChangeHtml\(change: unknown\)/);
   assert.match(proposalSource, /function runTargetText\(run: unknown\): string/);
+  assert.match(proposalSource, /function coachProposalCardHtml\(proposal: unknown, index: number, lastApplyClamp\?: unknown\): string/);
+  assert.match(proposalSource, /function coachProposalListHtml\(proposals: unknown, lastApplyClamp\?: unknown\): string/);
   assert.match(proposalSource, /CairnProposal/);
   assert.match(progressEnduranceSource, /function enduranceStatusWord\(status: unknown\): string/);
   assert.match(progressEnduranceSource, /function enduranceBlockHtml\(end: ProgramEnduranceBlock \| null \| undefined, idx: number\): string/);
@@ -2166,11 +2168,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(proposalClient, /applyResultMessage/);
   assert.match(proposalClient, /verifiedBadgeHtml/);
   assert.match(proposalClient, /runTargetText/);
+  assert.match(proposalClient, /coachProposalListHtml/);
   assert.doesNotMatch(
     proposalClient,
-    /^function\s+applyResultMessage|^function\s+verifiedBadgeHtml|^function\s+strengthChangeHtml|^function\s+runTargetText|^function\s+isOpenProposal/m
+    /^function\s+applyResultMessage|^function\s+verifiedBadgeHtml|^function\s+strengthChangeHtml|^function\s+runTargetText|^function\s+isOpenProposal|^function\s+coachProposalCardHtml|^function\s+coachProposalListHtml/m
   );
-  assert.doesNotMatch(meals, /function\s+statusBadge|function\s+applyResultMessage|function\s+clampNoteHtml|function\s+verifiedBadgeHtml|function\s+strengthChangeHtml|function\s+runTargetText|function\s+isOpenProposal/);
+  assert.doesNotMatch(meals, /function\s+statusBadge|function\s+applyResultMessage|function\s+clampNoteHtml|function\s+verifiedBadgeHtml|function\s+strengthChangeHtml|function\s+runTargetText|function\s+isOpenProposal|const\s+proposalCardHtml/);
+  assert.match(meals, /CairnProposal\.coachProposalListHtml\(proposals, lastApplyClamp\)/);
   assert.match(meals, /proposal-client\.js/);
   assert.doesNotMatch(ui, /function\s+cardioPrescription|function\s+cardioLabel|function\s+isCardioItem/);
   assert.match(progressEnduranceClient, /Object\.assign\(globalThis, \{/);

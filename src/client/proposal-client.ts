@@ -102,6 +102,58 @@ type ApplyResultMessage = {
     );
   }
 
+  function appliedClampFor(proposal: ProposalRecord, lastApplyClamp?: unknown): unknown {
+    if (!lastApplyClamp || typeof lastApplyClamp !== "object" || proposal.id == null) return null;
+    const lookup = lastApplyClamp as Record<string, unknown>;
+    return lookup[String(proposal.id)] ?? null;
+  }
+
+  function coachProposalCardHtml(proposal: unknown, index: number, lastApplyClamp?: unknown): string {
+    const p = proposalRecord(proposal);
+    const parsed = proposalRecord(p.parsed);
+    const changes = Array.isArray(parsed.changes) ? parsed.changes : [];
+    const cardio = Array.isArray(parsed.cardio) ? parsed.cardio : [];
+    const cardioHtml = cardio.map((run) => {
+      const c = proposalRecord(run);
+      return `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(c.day_number)} ${escHtml(c.label || c.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(c))}</span> <span style="color:var(--muted)">(${escHtml(c.reason || c.note || "")})</span></div>`;
+    }).join("");
+    const body = p.parsed
+      ? `<div class="sess-line">${escHtml(parsed.summary || "")}</div>` +
+        changes.map(strengthChangeHtml).join("") +
+        cardioHtml +
+        (parsed.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.notes)}</div>` : "")
+      : `<div class="sess-line" style="color:var(--warn)">Unparseable output</div><div class="sess-line" style="color:var(--muted);font-size:.78rem">${escHtml(String(p.raw_output || "").slice(0, 200))}…</div>`;
+    const actions = isOpenProposal(p)
+      ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-apply="${escAttr(p.id)}">APPLY</button>
+         <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${escAttr(p.id)}">DISCARD</button></div>`
+      : "";
+    const applied = p.status === "applied"
+      ? `<div class="apply-done settle-in"><span class="apply-done-mark" aria-hidden="true">✓</span> Applied to your plan</div>`
+        + clampNoteHtml(appliedClampFor(p, lastApplyClamp))
+      : "";
+    return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(index)}">
+      <div class="mp-hero">
+        <span class="lbl">${escHtml(p.agent)} · #${escHtml(p.id)} · ${escHtml(p.created_at || "")}</span>
+        ${statusBadge(p.status)}
+      </div>
+      ${body}${actions}${applied}</div>`;
+  }
+
+  function coachProposalListHtml(proposals: unknown, lastApplyClamp?: unknown): string {
+    const rows = Array.isArray(proposals) ? proposals : [];
+    if (!rows.length) return `<div class="empty">No drafts yet. Ask the coach above for next week's targets — every change waits here for you to apply.</div>`;
+
+    const open = rows.filter(isOpenProposal);
+    const settled = rows.filter((p) => !isOpenProposal(p));
+    const shown = [...open, ...settled.slice(0, 1)];
+    const earlier = settled.slice(1);
+    return shown.map((p, i) => coachProposalCardHtml(p, i, lastApplyClamp)).join("") +
+      (earlier.length
+        ? `<details class="hist-fold"><summary>Show earlier proposals (${earlier.length})</summary>
+           <div class="hist-fold-body">${earlier.map((p, i) => coachProposalCardHtml(p, i, lastApplyClamp)).join("")}</div></details>`
+        : "");
+  }
+
   const CAIRN_PROPOSAL = {
     statusBadge,
     applyResultMessage,
@@ -110,6 +162,8 @@ type ApplyResultMessage = {
     strengthChangeHtml,
     runTargetText,
     isOpenProposal,
+    coachProposalCardHtml,
+    coachProposalListHtml,
   };
 
   Object.assign(globalThis, {

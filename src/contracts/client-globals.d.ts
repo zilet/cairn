@@ -664,6 +664,8 @@ declare global {
       strengthChangeHtml(change: unknown): string;
       runTargetText(run: Record<string, unknown>): string;
       isOpenProposal(proposal: unknown): boolean;
+      coachProposalCardHtml(proposal: unknown, index: number, lastApplyClamp?: unknown): string;
+      coachProposalListHtml(proposals: unknown, lastApplyClamp?: unknown): string;
     };
 
     CairnHealthLearned: {

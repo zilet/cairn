@@ -15,6 +15,7 @@ function loadProposal() {
     Object,
     String,
     fmtWeight: (weight) => `${weight} lb`,
+    stagger: (index) => `--i:${index}`,
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
@@ -90,4 +91,59 @@ test("proposal helper classifies open work conservatively", () => {
   assert.equal(proposal.isOpenProposal({ status: "draft", parsed: { days: [{}] } }), true);
   assert.equal(proposal.isOpenProposal({ status: "draft", parsed: { nutrition_target: {} } }), false);
   assert.equal(proposal.isOpenProposal({ status: "applied", parsed: { changes: [{}] } }), false);
+});
+
+test("proposal helper renders Coach proposal list with actions, folds, and escaping", () => {
+  const proposal = loadProposal();
+  const html = proposal.coachProposalListHtml(
+    [
+      {
+        id: "draft<1>",
+        status: "draft",
+        agent: "coach<script>",
+        created_at: "now",
+        parsed: {
+          summary: "Push <carefully>",
+          changes: [{ exercise: "Bench <Press>", day_number: 2, target_weight: 155, reason: "earned <it>" }],
+          cardio: [{ day_number: 3, label: "Easy <run>", target_distance_km: 5, target_zone: "Z2", reason: "base <work>" }],
+          notes: "Hold <form>",
+        },
+      },
+      {
+        id: 2,
+        status: "applied",
+        agent: "stub",
+        created_at: "later",
+        parsed: { summary: "Done" },
+      },
+      {
+        id: 3,
+        status: "discarded",
+        agent: "stub",
+        created_at: "earlier",
+        raw_output: "<bad json>",
+      },
+    ],
+    {
+      2: [{ exercise: "Squat <heavy>", requested: 300, applied: 275, reason: "safe <step>" }],
+    }
+  );
+
+  assert.match(html, /data-apply="draft&lt;1&gt;"/);
+  assert.match(html, /data-discard="draft&lt;1&gt;"/);
+  assert.match(html, /coach&lt;script&gt;/);
+  assert.match(html, /Push &lt;carefully&gt;/);
+  assert.match(html, /Bench &lt;Press&gt;/);
+  assert.match(html, /D3 Easy &lt;run&gt;/);
+  assert.match(html, /Applied to your plan/);
+  assert.match(html, /Squat &lt;heavy&gt;/);
+  assert.match(html, /Show earlier proposals \(1\)/);
+  assert.doesNotMatch(html, /coach<script>|Push <carefully>|<bad json>/);
+});
+
+test("proposal helper renders Coach proposal empty state", () => {
+  const proposal = loadProposal();
+
+  assert.match(proposal.coachProposalListHtml([]), /No drafts yet/);
+  assert.match(proposal.coachProposalListHtml(null), /No drafts yet/);
 });
