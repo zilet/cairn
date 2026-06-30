@@ -1,6 +1,7 @@
 # dependencies & build output
 node_modules/
 dist/
+.tsbuildcache/
 
 # runtime SQLite database (created on first boot)
 /data/
