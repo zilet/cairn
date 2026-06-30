@@ -1,24 +1,32 @@
 import { Router } from "express";
 import { consolidateMemory, growAboutMe, reconcileOutcomes } from "../coachOps.js";
-import * as repo from "../repo.js";
+import {
+  addMemory,
+  deleteMemory,
+  getOutcomeLearnings,
+  listMemory,
+  listSuggestions,
+  supersedeMemory,
+  updateMemory,
+} from "../domain/person/index.js";
 
 export const memoryLearningRouter = Router();
 
 // ---- memory ----
 // ?all=1 includes superseded rows (history) for the curation UI; default hides them.
 memoryLearningRouter.get("/memory", (req, res) =>
-  res.json(repo.listMemory(req.query.limit ? Number(req.query.limit) : 50, { includeSuperseded: req.query.all === "1" }))
+  res.json(listMemory(req.query.limit ? Number(req.query.limit) : 50, { includeSuperseded: req.query.all === "1" }))
 );
 
 memoryLearningRouter.post("/memory", (req, res) => {
   const b = req.body ?? {};
   if (!b.content) return res.status(400).json({ error: "content required" });
-  res.json(repo.addMemory(b.content, b.kind, b.source));
+  res.json(addMemory(b.content, b.kind, b.source));
 });
 
 memoryLearningRouter.put("/memory/:id", (req, res) => {
   const b = req.body ?? {};
-  const updated = repo.updateMemory(Number(req.params.id), {
+  const updated = updateMemory(Number(req.params.id), {
     content: b.content,
     kind: b.kind,
     confidence: b.confidence,
@@ -31,7 +39,7 @@ memoryLearningRouter.put("/memory/:id", (req, res) => {
 // (a new row is created) or replacement_id (point at an existing row).
 memoryLearningRouter.post("/memory/:id/supersede", (req, res) => {
   const b = req.body ?? {};
-  const r = repo.supersedeMemory(Number(req.params.id), {
+  const r = supersedeMemory(Number(req.params.id), {
     content: b.replacement ?? b.content,
     kind: b.kind,
     replacementId: b.replacement_id,
@@ -41,7 +49,7 @@ memoryLearningRouter.post("/memory/:id/supersede", (req, res) => {
   res.json(r);
 });
 
-memoryLearningRouter.delete("/memory/:id", (req, res) => res.json(repo.deleteMemory(Number(req.params.id))));
+memoryLearningRouter.delete("/memory/:id", (req, res) => res.json(deleteMemory(Number(req.params.id))));
 
 // Quiet memory consolidation: merge near-duplicates, supersede contradictions,
 // promote recurring observations. Marks, never hard-deletes. On demand here; also
@@ -66,7 +74,7 @@ memoryLearningRouter.post("/profile/grow-about-me", async (req, res) => {
 
 // ---- outcome learning (suggestions -> actuals) ----
 memoryLearningRouter.get("/suggestions", (req, res) =>
-  res.json(repo.listSuggestions(req.query.limit ? Number(req.query.limit) : 50))
+  res.json(listSuggestions(req.query.limit ? Number(req.query.limit) : 50))
 );
 
 // Reconcile past suggestions to what actually happened, writing durable learnings.
@@ -82,5 +90,5 @@ memoryLearningRouter.post("/suggestions/reconcile", (req, res) =>
 // coach's defaults. Reads the existing 'learning' memory rows; nothing new stored.
 memoryLearningRouter.get("/learnings", (req, res) => {
   const limit = req.query.limit ? Number(req.query.limit) : undefined;
-  res.json(repo.getOutcomeLearnings(Number.isFinite(limit as number) ? (limit as number) : undefined));
+  res.json(getOutcomeLearnings(Number.isFinite(limit as number) ? (limit as number) : undefined));
 });

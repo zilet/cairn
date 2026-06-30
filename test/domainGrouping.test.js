@@ -113,6 +113,17 @@ test("person context adapters use the person domain entry point", () => {
   }
 });
 
+test("memory learning adapters use the person domain entry point", () => {
+  for (const [file, importPath] of [
+    ["src/routes/memory-learning.ts", "../domain/person/index.js"],
+    ["src/surfaces/mcp/memory-learning.ts", "../../domain/person/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import person domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
 test("repo compatibility barrel remains the public back-compat surface", () => {
   const repo = read("src/repo.ts");
   assert.match(repo, /Barrel: repo\.ts was split into cohesive domain modules/);

@@ -537,6 +537,7 @@ Tasks:
 - [x] Move Garmin REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Training Status MCP tools off the `repo.js` compatibility barrel and onto `src/domain/training/index.ts` / `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - [x] Move Person Context REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
+- [x] Move Memory/Learning REST and MCP adapters off the `repo.js` compatibility barrel and onto `src/domain/person/index.ts`, guarded by `test/domainGrouping.test.js`.
 - Replace broad `import * as repo from "../repo.js"` in route modules with domain imports where ownership is clear.
 - Keep `src/repo.ts` as compatibility until references are low enough to remove safely.
 - Avoid moving DB schema ownership out of `src/db.ts` unless the migration system is redesigned deliberately.
