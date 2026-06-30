@@ -248,25 +248,7 @@ function renderMealPlans(plans, sel = "#meallist", refresh = null) {
 // A Morsel-style journal over the current weekly meal plan: big serif day names,
 // floating food art, per-meal macro chips, per-day totals. The classic mp-card
 // list survives as a collapsed history beneath it.
-const MEAL_PREFS_PLACEHOLDER = "e.g. fasted morning training, simple prep on busy days";
-const MEAL_PREF_CHIPS = ["Fasted AM training", "Train before lunch some days", "Simple prep, busy weekdays", "More fish, less red meat"];
-
-// Collapsed-by-default "Planning preferences" card: shows the saved meal_prefs (or a
-// muted placeholder); expands into a textarea + quick-insert chips. Edits surface
-// the shared floating save bar (PUT /settings) — see wireMealPrefs().
-function mealPrefsHtml(prefs, idx) {
-  return `<div class="mealprefs reveal" style="${stagger(idx)}" id="mealPrefs">
-      <button type="button" class="mealprefs-head" id="mealPrefsToggle" aria-expanded="false">
-        <span class="lbl">Planning preferences<span class="mealprefs-caret">▾</span></span>
-        <span class="mealprefs-preview${prefs ? "" : " mealprefs-placeholder"}">${escHtml(prefs || MEAL_PREFS_PLACEHOLDER)}</span>
-      </button>
-      <div class="mealprefs-body" hidden>
-        <textarea id="mealPrefsText" rows="3" placeholder="${escAttr(MEAL_PREFS_PLACEHOLDER)}">${escHtml(prefs)}</textarea>
-        <div class="mealprefs-chips">${MEAL_PREF_CHIPS.map((c) =>
-          `<button type="button" class="chip prefchip" data-pref="${escAttr(c)}">${escHtml(c)}</button>`).join("")}</div>
-      </div>
-    </div>`;
-}
+// Meal-plan shell/prefs/day render helpers live in /js/meal-plan-client.js.
 
 function wireMealPrefs() {
   const card = view.querySelector("#mealPrefs");
@@ -294,7 +276,7 @@ function wireMealPrefs() {
       if (r && r.error) { toast("Couldn't save preferences"); return false; }
       const v = ta.value.trim();
       const prev = card.querySelector(".mealprefs-preview");
-      prev.textContent = v || MEAL_PREFS_PLACEHOLDER;
+      prev.textContent = v || CairnMealPlan.MEAL_PREFS_PLACEHOLDER;
       prev.classList.toggle("mealprefs-placeholder", !v);
       bodyEl.hidden = true; // collapse back to the preview; the bar flashes Saved
       card.classList.remove("open");
@@ -408,7 +390,7 @@ function reconnectMealSwap(job) {
   );
   const mi = Number(input.meal_index);
   if (di < 0 || !Number.isFinite(mi)) return null;
-  const ctx = mealsCtxFor(current);
+  const ctx = CairnMealPlan.mealsCtxFor(current);
   const rowSel = `.mealday[data-mday="${di}"] .meal-row[data-mi="${mi}"]`;
   const row = view.querySelector(rowSel);
   if (!row) return null; // row not on screen (e.g. a different sub-view) — retry later
@@ -427,15 +409,6 @@ function reconnectMealSwap(job) {
     onError: () => { clear(); o.onFail(null); },
     onCanceled: () => { clear(); o.onFail(null); },
   };
-}
-
-// Rebuild the meals ctx ({weekOf, targetKcal, todayName}) for a plan row — mirrors
-// the ctx renderMeals computes, so the swap reconnector can re-render a day section.
-function mealsCtxFor(current) {
-  const m = current.parsed || {};
-  const weekOf = current.week_of || (current.created_at || "").slice(0, 10);
-  const todayName = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
-  return { weekOf, targetKcal: Number(m.daily_kcal) || 0, todayName };
 }
 
 // Move a meal up/down within its day: optimistic re-render, then persist the full
@@ -784,64 +757,14 @@ async function renderMeals() {
 // Called synchronously on a warm peek and again on a changed revalidate; the inner
 // wiring is idempotent (it re-queries the freshly-written DOM each time).
 function paintMealsBody(plans, mealPrefs) {
-  const KEPT = ["accepted", "applied", "kept"];
-  const current =
-    plans.find((p) => KEPT.includes(p.status) && p.parsed) ||
-    plans.find((p) => p.status === "draft" && p.parsed) || null;
-
-  let body, ctx = null;
-  if (!current) {
-    body = `<div class="meals-empty reveal" style="${stagger(0)}">
-        <div class="artile artile-xl meals-empty-art">${art("food", "meal plate")}</div>
-        <div class="meals-empty-title">No meal plan yet</div>
-        <div class="meals-empty-sub">Ask the coach to draft a week of meals built around your training and lean-safe targets.</div>
-        <button id="mealDraftBtn" class="logbtn meals-cta">DRAFT WEEKLY MEAL PLAN</button>
-        <div id="mealDraftStatus" class="meals-status"></div>
-      </div>` + mealPrefsHtml(mealPrefs, 1);
-  } else {
-    const m = current.parsed;
-    const weekOf = current.week_of || (current.created_at || "").slice(0, 10);
-    const isDraft = current.status === "draft";
-    const days = Array.isArray(m.days) ? m.days : [];
-    const targetKcal = Number(m.daily_kcal) || 0;
-    const todayName = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
-    ctx = { weekOf, targetKcal, todayName };
-    const dayHtml = days.map((d, di) => CairnMealPlan.mealDayHtml(d, di, ctx)).join("");
-    const shopChecked = new Set(JSON.parse(localStorage.getItem(`shop:${current.id}`) || "[]"));
-    const shopping = Array.isArray(m.shopping) && m.shopping.length
-      ? `<div class="detail-section reveal" style="${stagger(days.length + 2)}"><div class="lbl">Shopping</div>
-          <div class="shop-chips">${m.shopping.map((s, si) =>
-            `<button class="chip shop-chip${shopChecked.has(si) ? " chip-done" : ""}" data-shop="${si}">${escHtml(String(s))}</button>`).join("")}</div></div>`
-      : "";
-    const actions = isDraft
-      ? `<div class="meals-actions">
-           <button class="pillbtn pill-accent" data-mkeep="${current.id}">Keep this plan</button>
-           <button class="pillbtn" data-mdiscard="${current.id}">Discard</button>
-         </div>`
-      : "";
-    body = `<div class="mealhero reveal" style="${stagger(0)}">
-        <div class="mp-hero-head">
-          <span class="lbl">Week of ${escHtml(weekOf)} · ${escHtml(current.agent || "")}</span>
-          ${statusBadge(current.status)}
-        </div>
-        <div class="mp-hero-nums">
-          <div><span class="numeral numeral-xl" data-cu="${Number(m.daily_kcal) || 0}">0</span><span class="lbl" style="display:block;margin-top:3px">kcal per day</span></div>
-          <div><span class="numeral numeral-lg" data-cu="${Number(m.daily_protein_g) || 0}">0</span><span class="lbl" style="display:block;margin-top:3px">g protein</span></div>
-        </div>
-        ${m.summary ? `<div class="sess-line">${escHtml(m.summary)}</div>` : ""}
-        ${isDraft ? verifiedBadgeHtml(_verifiedByPlan.get(current.id)) : ""}
-        <div id="mealProvenance" class="prov-slot"></div>
-        ${actions}
-      </div>
-      ${mealPrefsHtml(mealPrefs, 1)}
-      ${dayHtml}
-      ${shopping}
-      ${m.notes ? `<div class="sess-line reveal" style="color:var(--muted);${stagger(days.length + 3)}">${escHtml(m.notes)}</div>` : ""}
-      <div class="meals-redraft">
-        <button id="mealDraftBtn" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Draft a new weekly plan</button>
-        <div id="mealDraftStatus" class="meals-status"></div>
-      </div>`;
-  }
+  const current = CairnMealPlan.currentMealPlan(plans);
+  const shopChecked = current ? new Set(JSON.parse(localStorage.getItem(`shop:${current.id}`) || "[]")) : new Set();
+  const painted = CairnMealPlan.mealPlannerBodyHtml(current, mealPrefs, {
+    checkedShopping: shopChecked,
+    verified: current ? _verifiedByPlan.get(current.id) : null,
+  });
+  const body = painted.html;
+  const ctx = painted.context;
 
   view.innerHTML = segBar("meals", planSeg()) + body + `
     <details class="mp-history">

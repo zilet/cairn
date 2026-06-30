@@ -18,14 +18,17 @@ function testEsc(value) {
 function loadMealPlan() {
   const context = {
     Array,
+    Date,
     JSON,
     Math,
     Number,
     Object,
+    Set,
     String,
     art: (_kind, text) => `art:${text}`,
     artImg: (_kind, text, className) => `<span class="${testEsc(className)}">${testEsc(text)}</span>`,
     statusBadge: (status) => `<span class="status">${testEsc(status)}</span>`,
+    verifiedBadgeHtml: (verified) => verified ? `<span class="verified">${testEsc(JSON.stringify(verified))}</span>` : "",
     stagger: (index) => `--i:${index}`,
   };
   context.window = context;
@@ -133,4 +136,94 @@ test("meal-plan helper renders planner days with totals and target bar", () => {
   assert.match(html, /lift &lt;later&gt;/);
   assert.match(html, /data-di="1" data-mi="0"/);
   assert.match(html, /data-di="1" data-mi="1"/);
+});
+
+test("meal-plan helper renders planner preferences and empty state safely", () => {
+  const meals = loadMealPlan();
+  const prefsHtml = meals.mealPrefsHtml("Fasted <AM>", 1);
+  const emptyHtml = meals.mealPlanEmptyHtml("fish & rice");
+
+  assert.match(prefsHtml, /id="mealPrefs"/);
+  assert.match(prefsHtml, /id="mealPrefsToggle" aria-expanded="false"/);
+  assert.match(prefsHtml, /Fasted &lt;AM&gt;/);
+  assert.match(prefsHtml, /data-pref="Fasted AM training"/);
+  assert.doesNotMatch(prefsHtml, /Fasted <AM>/);
+  assert.match(emptyHtml, /No meal plan yet/);
+  assert.match(emptyHtml, /id="mealDraftBtn"/);
+  assert.match(emptyHtml, /fish &amp; rice/);
+});
+
+test("meal-plan helper selects and renders the current weekly planner shell", () => {
+  const meals = loadMealPlan();
+  const plans = [
+    {
+      id: 1,
+      status: "draft",
+      agent: "stub",
+      parsed: { daily_kcal: 2200, days: [] },
+    },
+    {
+      id: "kept<2>",
+      status: "accepted",
+      agent: "chef<script>",
+      week_of: "2026-06-30",
+      parsed: {
+        daily_kcal: 2400,
+        daily_protein_g: 180,
+        summary: "steady <week>",
+        days: [
+          {
+            day: "Tuesday",
+            meals: [{ name: "Breakfast", items: "oats", kcal: 500, protein_g: 40 }],
+          },
+        ],
+        shopping: ["oats", "berries<script>"],
+        notes: "Prep <ahead>",
+      },
+    },
+  ];
+  const current = meals.currentMealPlan(plans);
+  const painted = meals.mealPlannerBodyHtml(current, "fasted <AM>", {
+    checkedShopping: new Set([1]),
+    now: { getDay: () => 2 },
+  });
+
+  assert.equal(current.id, "kept<2>");
+  assert.equal(painted.context.weekOf, "2026-06-30");
+  assert.equal(painted.context.targetKcal, 2400);
+  assert.equal(painted.context.todayName, "tue");
+  assert.match(painted.html, /mealhero/);
+  assert.match(painted.html, /Week of 2026-06-30 · chef&lt;script&gt;/);
+  assert.match(painted.html, /steady &lt;week&gt;/);
+  assert.match(painted.html, /fasted &lt;AM&gt;/);
+  assert.match(painted.html, /mealday mealday-today/);
+  assert.match(painted.html, /shop-chip chip-done" data-shop="1"/);
+  assert.match(painted.html, /berries&lt;script&gt;/);
+  assert.match(painted.html, /Prep &lt;ahead&gt;/);
+  assert.doesNotMatch(painted.html, /chef<script>|steady <week>|berries<script>|Prep <ahead>/);
+});
+
+test("meal-plan helper preserves draft actions in the planner shell", () => {
+  const meals = loadMealPlan();
+  const painted = meals.mealPlannerBodyHtml(
+    {
+      id: "draft<1>",
+      status: "draft",
+      agent: "chef",
+      created_at: "2026-06-30T12:00:00Z",
+      parsed: {
+        daily_kcal: 2300,
+        daily_protein_g: 170,
+        days: [],
+      },
+    },
+    "",
+    { verified: { source: "test<ok>" }, now: { getDay: () => 1 } }
+  );
+
+  assert.match(painted.html, /data-mkeep="draft&lt;1&gt;"/);
+  assert.match(painted.html, /data-mdiscard="draft&lt;1&gt;"/);
+  assert.match(painted.html, /test&lt;ok&gt;/);
+  assert.equal(painted.context.weekOf, "2026-06-30");
+  assert.equal(painted.context.todayName, "mon");
 });

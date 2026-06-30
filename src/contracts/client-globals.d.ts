@@ -658,10 +658,22 @@ declare global {
 
     CairnMealPlan: {
       MEAL_HINT_CHIPS: string[];
+      MEAL_PREFS_PLACEHOLDER: string;
+      MEAL_PREF_CHIPS: string[];
       mealSlotFor(name: unknown, index: unknown): string;
+      currentMealPlan(plans: unknown): Record<string, unknown> | null;
+      mealsCtxFor(plan: unknown, now?: unknown): { weekOf: string; targetKcal: number; todayName: string };
       mealRowHtml(meal: unknown, mealIndex?: number, options?: { di?: number; count?: number }): string;
       mealPlanCardHtml(plan: unknown, index: number): string;
       mealPlanListHtml(plans: unknown): string;
+      mealPrefsHtml(prefs: unknown, index: number): string;
+      mealPlanEmptyHtml(mealPrefs: unknown): string;
+      mealPlanHeroHtml(plan: unknown, verified?: unknown): string;
+      mealShoppingHtml(shopping: unknown, checkedShopping: unknown, revealIndex: number): string;
+      mealPlannerBodyHtml(current: unknown, mealPrefs: unknown, options?: { checkedShopping?: unknown; verified?: unknown; now?: unknown }): {
+        html: string;
+        context: { weekOf: string; targetKcal: number; todayName: string } | null;
+      };
       mealDayHtml(day: unknown, dayIndex: number, context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown }): string;
     };
 
