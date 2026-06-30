@@ -155,7 +155,7 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [
   {
     pattern: "/garmin/reconcile",
     owner: "Wave 6 Today/Garmin screen",
-    reason: "Garmin reconciliation result is connector-specific and will be typed with the reconciliation UI.",
+    reason: "Garmin reconciliation result is connector-specific and still needs a narrow result DTO before removing the waiver.",
   },
   {
     pattern: "/agents/:name/info",

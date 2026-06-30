@@ -40,6 +40,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-session-status-client.ts", output: "public/js/today-session-status-client.js" },
   { source: "src/client/today-cards-client.ts", output: "public/js/today-cards-client.js" },
   { source: "src/client/today-program-adjustments-client.ts", output: "public/js/today-program-adjustments-client.js" },
+  { source: "src/client/today-garmin-reconciliation-client.ts", output: "public/js/today-garmin-reconciliation-client.js" },
   { source: "src/client/today-screen.ts", output: "public/js/03-today.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
   { source: "src/client/progress-components-client.ts", output: "public/js/progress-components-client.js" },

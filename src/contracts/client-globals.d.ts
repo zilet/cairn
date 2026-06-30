@@ -1142,6 +1142,19 @@ declare global {
       rowHtml(adjustment: unknown, index: number): string;
       bannerHtml(rows: unknown): string;
     };
+
+    CairnTodayGarminReconciliation: {
+      load(options: {
+        root: ParentNode | null | undefined;
+        date: string;
+        isCurrentToday: () => boolean;
+        api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+        escapeHtml(value: unknown): string;
+        toast(message: string): void;
+        invalidate(key: string): void;
+        refreshToday(options: { soft: boolean }): unknown;
+      }): Promise<void>;
+    };
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
@@ -1199,4 +1212,5 @@ declare global {
   declare const CairnTodayLately: Window["CairnTodayLately"];
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];
   declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];
+  declare const CairnTodayGarminReconciliation: Window["CairnTodayGarminReconciliation"];
 }

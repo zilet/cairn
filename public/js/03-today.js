@@ -2858,61 +2858,16 @@ async function loadHealthFocusBanner() {
 // reconcile), then refreshes Today so the reconciled garminSessionCard / Lately row
 // replaces this. Degrades silently: a failed fetch → empty slot.
 async function loadGarminReconcile() {
-    const slot = todayView.querySelector("#garminReconcileSlot");
-    if (!slot)
-        return;
-    let rows = [];
-    try {
-        rows = await todayApi("/garmin/unreconciled");
-    }
-    catch {
-        rows = [];
-    }
-    if (todayState.tab !== "today" || !slot.isConnected)
-        return;
-    rows = Array.isArray(rows) ? rows : [];
-    if (!rows.length) {
-        slot.innerHTML = "";
-        return;
-    }
-    const n = rows.length;
-    const noun = n === 1 ? "a lift" : `${n} lifts`;
-    slot.innerHTML = `<div class="garmin-reconcile chip-in">
-      <div class="garmin-reconcile-text">
-        <span class="garmin-reconcile-glyph" aria-hidden="true">✦</span>
-        <span>Garmin logged ${escHtml(noun)} that ${n === 1 ? "isn't" : "aren't"} in Cairn yet</span>
-      </div>
-      <button class="garmin-reconcile-btn" id="garminReconcileGo" type="button">Reconcile</button>
-    </div>`;
-    const btn = slot.querySelector("#garminReconcileGo");
-    if (btn)
-        btn.addEventListener("click", async () => {
-            btn.disabled = true;
-            btn.textContent = "Reconciling…";
-            let r;
-            try {
-                r = await todayApi("/garmin/reconcile", {
-                    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
-                });
-            }
-            catch {
-                btn.disabled = false;
-                btn.textContent = "Reconcile";
-                toast("Couldn't reconcile — check your connection");
-                return;
-            }
-            if (!r || r.error) {
-                btn.disabled = false;
-                btn.textContent = "Reconcile";
-                toast("Couldn't reconcile right now");
-                return;
-            }
-            toast(r.reconciled === 1 ? "Reconciled the Garmin lift" : `Reconciled ${r.reconciled || 0} Garmin lifts`);
-            // The lift now lives on a Cairn session — drop the stale session peek so the
-            // re-render reads truth and the reconciled garminSessionCard takes this card's place.
-            swrInvalidate("today:session:" + todayState.logDate);
-            renderToday({ soft: true });
-        });
+    await CairnTodayGarminReconciliation.load({
+        root: todayView,
+        date: todayState.logDate,
+        isCurrentToday: () => todayState.tab === "today",
+        api: todayApi,
+        escapeHtml: escHtml,
+        toast,
+        invalidate: swrInvalidate,
+        refreshToday: renderToday,
+    });
 }
 Object.assign(globalThis, {
     collapseEl,
