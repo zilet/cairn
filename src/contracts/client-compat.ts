@@ -10,8 +10,11 @@ import type {
   getPlan,
   getProfile,
   getSettings,
+  getOutcomeLearnings,
+  learnedTimeline,
   listExercises,
   listHealthDocuments,
+  listMemory,
 } from "../repo.js";
 import type {
   ClientChatSearchHit,
@@ -30,6 +33,7 @@ import type {
   ClientSettings,
   ClientTodayAgenda,
 } from "./client.js";
+import type { ClientLearnedTimeline, ClientMemory, ClientOutcomeLearningsResponse } from "./client-api.js";
 
 type AssertAssignable<_Actual extends Expected, Expected> = true;
 
@@ -53,4 +57,10 @@ export type ExerciseMatchesClientContract = AssertAssignable<ReturnType<typeof l
 export type HealthDocumentMatchesClientContract = AssertAssignable<
   ReturnType<typeof listHealthDocuments>[number],
   ClientHealthDocument
+>;
+export type MemoryMatchesClientContract = AssertAssignable<ReturnType<typeof listMemory>[number], ClientMemory>;
+export type LearnedTimelineMatchesClientContract = AssertAssignable<ReturnType<typeof learnedTimeline>, ClientLearnedTimeline>;
+export type OutcomeLearningsMatchesClientContract = AssertAssignable<
+  ReturnType<typeof getOutcomeLearnings>,
+  ClientOutcomeLearningsResponse
 >;

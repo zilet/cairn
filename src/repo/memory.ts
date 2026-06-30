@@ -2,6 +2,18 @@ import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getSessionByDate, getWeeklyStats, sessionSummary } from "./sessions.js";
 
+export interface MemoryRow {
+  id: number;
+  kind: string | null;
+  content: string;
+  source: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  superseded_by?: number | null;
+  confidence?: number | null;
+  last_referenced_at?: string | null;
+}
+
 // ---------- memory (self-updating) ----------
 // Memory is no longer a flat append-only log. A row can be RE-OBSERVED (its
 // content refreshed, confidence bumped), SUPERSEDED by a newer row (marked, never
@@ -82,10 +94,10 @@ export function addMemory(content: string, kind = "observation", source = "user"
 // List memory, newest first. Superseded rows are HIDDEN by default (they're
 // history kept for the curation UI / export, never surfaced to the coach);
 // pass includeSuperseded for the full curate-able list.
-export function listMemory(limit = 50, opts: { includeSuperseded?: boolean } = {}) {
+export function listMemory(limit = 50, opts: { includeSuperseded?: boolean } = {}): MemoryRow[] {
   limit = Math.max(1, Math.min(500, Number(limit) || 50)); // clamp caller-supplied limit
   const where = opts.includeSuperseded ? "" : "WHERE superseded_by IS NULL";
-  return db.prepare(`SELECT * FROM memory ${where} ORDER BY id DESC LIMIT ?`).all(limit);
+  return db.prepare(`SELECT * FROM memory ${where} ORDER BY id DESC LIMIT ?`).all(limit) as unknown as MemoryRow[];
 }
 
 export function getMemory(id: number) {

@@ -409,14 +409,59 @@ export interface ClientSupplement {
   [key: string]: unknown;
 }
 
+export type ClientMemoryKind =
+  | "note"
+  | "preference"
+  | "constraint"
+  | "goal"
+  | "fact"
+  | "observation"
+  | "injury"
+  | "decision"
+  | "milestone"
+  | "learning"
+  | "reaction"
+  | string;
+
 export interface ClientMemory {
   id: number;
   content: string;
-  kind?: string | null;
+  kind?: ClientMemoryKind | null;
   source?: string | null;
-  created_at?: string;
-  updated_at?: string;
-  [key: string]: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+  superseded_by?: number | null;
+  confidence?: number | null;
+  last_referenced_at?: string | null;
+}
+
+export interface ClientMemorySupersedeResponse {
+  superseded: ClientMemory;
+  replacement: ClientMemory | null;
+}
+
+export interface ClientOutcomeLearning {
+  id: number;
+  content: string;
+  noticed_at: string | null;
+}
+
+export interface ClientOutcomeLearningsResponse {
+  learnings: ClientOutcomeLearning[];
+}
+
+export type ClientLearnedKind = "memory" | "learning" | "directive" | "applied" | "about_me" | "outcome";
+
+export interface ClientLearnedItem {
+  when: string;
+  kind: ClientLearnedKind;
+  title: string;
+  detail?: string;
+  source?: string;
+}
+
+export interface ClientLearnedTimeline {
+  items: ClientLearnedItem[];
 }
 
 export interface ClientInsight {
@@ -517,7 +562,7 @@ export interface ClientApiResponses {
   "/api/session-suggest": ClientJsonObject;
   "/api/week-ahead": ClientJsonObject;
   "/api/today-agenda": ClientTodayAgenda;
-  "/api/learned-timeline": ClientJsonObject;
+  "/api/learned-timeline": ClientLearnedTimeline;
   "/api/since-last": ClientTodayAgendaCandidate | null;
   "/api/guidelines": ClientJsonObject;
   "/api/nutrition/day": ClientDayIntake;
@@ -558,7 +603,8 @@ export interface ClientApiResponses {
   "/api/context-events": ClientContextEvent[];
   "/api/injury-impacts": ClientJsonObject;
   "/api/family": ClientFamilyMember[];
-  "/api/memory": ClientMemory[];
+  "/api/learnings": ClientOutcomeLearningsResponse;
+  "/api/memory": ClientMemory[] | ClientMemory;
   "/api/supplements": ClientSupplement[];
   "/api/supplements/understand": { ok: true; supplements: ClientSupplement[] };
   "/api/onboard": ClientOkResponse;
@@ -577,8 +623,8 @@ export type ClientApiPath = ClientApiCanonicalPath extends `/api${infer Path}` ?
 
 type ClientApiResponseForCleanPath<Path extends string> =
   `/api${Path}` extends keyof ClientApiResponses ? ClientApiResponses[`/api${Path}`]
-    : Path extends `/plan/${string}` ? ClientPlanDay | ClientDeleteResponse
-      : Path extends `/plan/${string}/target` ? ClientPlanItem
+    : Path extends `/plan/${string}/target` ? ClientPlanItem
+      : Path extends `/plan/${string}` ? ClientPlanDay | ClientDeleteResponse
         : Path extends `/exercises/${string}` ? ClientExercise | ClientDeleteResponse
           : Path extends `/exercise/${string}/explanation` ? ClientExerciseExplanation
             : Path extends `/exercise/${string}` ? ClientExerciseDetail
@@ -603,14 +649,15 @@ type ClientApiResponseForCleanPath<Path extends string> =
                                                   : Path extends `/health-docs/${string}` ? ClientHealthDocument | ClientDeleteResponse
                                                     : Path extends `/context-events/${string}` ? ClientContextEvent | ClientDeleteResponse
                                                       : Path extends `/family/${string}` ? ClientFamilyMember | ClientDeleteResponse
-                                                        : Path extends `/memory/${string}` ? ClientMemory | ClientDeleteResponse
-                                                          : Path extends `/supplements/${string}` ? ClientSupplement | ClientDeleteResponse
-                                                            : Path extends `/chat/sessions/${string}` ? ClientChatMessage[]
-                                                              : Path extends `/chat/turns/${string}/cancel` ? ClientChatTurnCancelResponse
-                                                                : Path extends `/chat/turns/${string}` ? ClientChatTurn | null
-                                                                  : Path extends `/agent-jobs/${string}/cancel` ? ClientAgentJobResponse
-                                                                    : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
-                                                                      : unknown;
+                                                        : Path extends `/memory/${string}/supersede` ? ClientMemorySupersedeResponse
+                                                          : Path extends `/memory/${string}` ? ClientMemory | ClientDeleteResponse
+                                                            : Path extends `/supplements/${string}` ? ClientSupplement | ClientDeleteResponse
+                                                              : Path extends `/chat/sessions/${string}` ? ClientChatMessage[]
+                                                                : Path extends `/chat/turns/${string}/cancel` ? ClientChatTurnCancelResponse
+                                                                  : Path extends `/chat/turns/${string}` ? ClientChatTurn | null
+                                                                    : Path extends `/agent-jobs/${string}/cancel` ? ClientAgentJobResponse
+                                                                      : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
+                                                                        : unknown;
 
 export type ClientApiResponse<Path extends string> =
   Path extends `/api${infer Rest}` ? ClientApiResponse<Rest>

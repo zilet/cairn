@@ -105,8 +105,10 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/injury-impacts",
   "/family",
   "/family/:id",
+  "/learnings",
   "/memory",
   "/memory/:id",
+  "/memory/:id/supersede",
   "/supplements",
   "/supplements/:id",
   "/supplements/understand",
@@ -164,10 +166,5 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [
     pattern: "/agents/:name/models",
     owner: "Wave 5 Shell/Settings jobs",
     reason: "Per-agent model listings depend on the installed CLI and remain intentionally loose until Settings is typed.",
-  },
-  {
-    pattern: "/learnings",
-    owner: "Wave 8 Memory contract",
-    reason: "Outcome-learning projection belongs with the typed memory/agentic-brain contract wave.",
   },
 ] as const satisfies readonly ClientApiUnknownWaiver[];

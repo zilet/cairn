@@ -707,6 +707,9 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
 
   assert.deepEqual(new Set(contractPatterns).size, contractPatterns.length, "contract API patterns must be unique");
   assert.deepEqual(new Set(waiverPatterns).size, waiverPatterns.length, "contract waiver patterns must be unique");
+  assert.ok(contractPatterns.includes("/learnings"), "/learnings should be covered by the typed memory contract");
+  assert.ok(contractPatterns.includes("/memory/:id/supersede"), "/memory/:id/supersede should be covered by the typed memory contract");
+  assert.ok(!waiverPatterns.includes("/learnings"), "/learnings must not regress to a broad JSON waiver");
   assert.doesNotMatch(contractSource, /"\/api\/[^"]+":\s*unknown\b/, "exact API responses must not be bare unknown");
 
   for (const pattern of contractPatterns) {
@@ -1395,6 +1398,22 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiContracts, /"\/api\/coaching-focus": ClientCoachingFocus/);
   assert.match(apiContracts, /"\/api\/nutrition\/day": ClientDayIntake/);
   assert.match(apiContracts, /"\/api\/program\/progression": ClientPrescription\[\]/);
+  assert.match(apiContracts, /"\/api\/learned-timeline": ClientLearnedTimeline/);
+  assert.match(apiContracts, /"\/api\/learnings": ClientOutcomeLearningsResponse/);
+  assert.match(apiContracts, /"\/api\/memory": ClientMemory\[\] \| ClientMemory/);
+  assert.match(apiContracts, /Path extends `\/memory\/\$\{string\}\/supersede` \? ClientMemorySupersedeResponse/);
+  const memorySupersedePattern = "Path extends `/memory/$" + "{string}/supersede`";
+  const memoryIdPattern = "Path extends `/memory/$" + "{string}`";
+  const planTargetPattern = "Path extends `/plan/$" + "{string}/target`";
+  const planIdPattern = "Path extends `/plan/$" + "{string}`";
+  assert.ok(
+    apiContracts.indexOf(memorySupersedePattern) < apiContracts.indexOf(memoryIdPattern),
+    "specific memory supersede route must be typed before generic /memory/:id"
+  );
+  assert.ok(
+    apiContracts.indexOf(planTargetPattern) < apiContracts.indexOf(planIdPattern),
+    "specific plan target route must be typed before generic /plan/:id"
+  );
   assert.match(apiContracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
   assert.match(apiContracts, /"\/api\/chat\/sessions\/:sessionId": ClientChatMessage\[\]/);
   assert.match(apiContracts, /export type ClientApiResponse<Path extends string>/);
@@ -1404,6 +1423,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /AssertAssignable<CoachingFocus, ClientCoachingFocus>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
   assert.match(compat, /ReturnType<typeof planDayProgression>/);
+  assert.match(compat, /ReturnType<typeof learnedTimeline>/);
+  assert.match(compat, /ReturnType<typeof getOutcomeLearnings>/);
+  assert.match(compat, /ReturnType<typeof listMemory>\[number\]/);
   assert.match(compat, /AssertAssignable<ArchivedChatSession, ClientChatSessionSummary>/);
   assert.match(compat, /AssertAssignable<ChatSearchHit, ClientChatSearchHit>/);
   assert.match(dateUtilsSource, /function localISO\(d = new Date\(\)\): string/);
