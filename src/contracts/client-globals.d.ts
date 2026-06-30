@@ -656,6 +656,15 @@ declare global {
       dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
     };
 
+    CairnMealPlan: {
+      MEAL_HINT_CHIPS: string[];
+      mealSlotFor(name: unknown, index: unknown): string;
+      mealRowHtml(meal: unknown, mealIndex?: number, options?: { di?: number; count?: number }): string;
+      mealPlanCardHtml(plan: unknown, index: number): string;
+      mealPlanListHtml(plans: unknown): string;
+      mealDayHtml(day: unknown, dayIndex: number, context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown }): string;
+    };
+
     CairnProposal: {
       statusBadge(status: unknown): string;
       applyResultMessage(result: unknown): { failed: boolean; message: string };
@@ -956,6 +965,7 @@ declare global {
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
+  declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];

@@ -219,119 +219,12 @@ function coachMealPlanOpOpts() {
   };
 }
 
-// One meal row: studio food art | name + items | macros column.
-// When `opts` ({di, count}) is passed (the weekly planner), the row also carries
-// Swap + ▲▼ reorder controls and is followed by a hidden inline swap panel.
-const MEAL_HINT_CHIPS = ["Fish", "Chicken", "Beef", "Veggie", "Lighter", "Bigger", "Quick to make"];
-function mealRowHtml(x, mi, opts) {
-  const items = Array.isArray(x.items) ? x.items.join(", ") : (x.items || "");
-  const q = `${x.name || x.meal || ""} ${items}`.trim();
-  const tile = artImg("food", q, "artile-md meal-art", art("food", q));
-  const figs = [["P", x.protein_g], ["C", x.carbs_g], ["F", x.fat_g]]
-    .filter(([l, v]) => v != null && v !== "" && (l === "P" || Number(v) > 0))
-    .map(([l, v]) => `<span class="lbl">${l} ${escHtml(String(v))}</span>`).join("");
-  // mi (meal index within the day) marks planner rows as loggable: "I ate this"
-  // writes the planned meal straight into the food journal with its macros.
-  const loggable = typeof mi === "number";
-  const planner = loggable && opts && typeof opts.di === "number";
-  const logBtn = loggable ? `<button class="meal-log" data-mlog="${escAttr(JSON.stringify({
-    name: x.name || x.meal || "", items, kcal: x.kcal ?? null,
-    protein_g: x.protein_g ?? null, carbs_g: x.carbs_g ?? null, fat_g: x.fat_g ?? null, i: mi,
-  }))}">+ Log it</button>` : "";
-  const tools = planner
-    ? `<div class="meal-rowtools">${logBtn}<button class="meal-swapbtn" data-mswap aria-label="Swap this meal">⇄ Swap</button><span class="meal-mvgrp"><button class="meal-mv" data-mv="-1" aria-label="Move up" ${mi === 0 ? "disabled" : ""}>▲</button><button class="meal-mv" data-mv="1" aria-label="Move down" ${mi >= opts.count - 1 ? "disabled" : ""}>▼</button></span></div>`
-    : logBtn;
-  const row = `<div class="meal-row"${planner ? ` data-di="${opts.di}" data-mi="${mi}"` : ""}>
-      ${tile}
-      <div class="meal-main">
-        <div class="meal-name">${escHtml(x.name || x.meal || "")}</div>
-        ${items ? `<div class="meal-items">${escHtml(items)}</div>` : ""}
-        ${tools}
-      </div>
-      <div class="meal-macros">
-        ${x.kcal ? `<span class="numeral">${escHtml(String(x.kcal))}</span>` : ""}
-        ${figs}
-      </div>
-    </div>`;
-  if (!planner) return row;
-  return row + `<div class="meal-swap" hidden data-di="${opts.di}" data-mi="${mi}">
-      <input class="meal-swap-hint" type="text" maxlength="140" placeholder="Optional hint — fish, lighter, quick…">
-      <div class="meal-swap-chips">${MEAL_HINT_CHIPS.map((h) =>
-        `<button type="button" class="chip hintchip" data-hint="${escAttr(h)}">${escHtml(h)}</button>`).join("")}</div>
-      <div class="meal-swap-actions">
-        <button type="button" class="pillbtn pill-accent meal-swap-go">Swap it</button>
-        <button type="button" class="pillbtn meal-swap-cancel">Cancel</button>
-      </div>
-    </div>`;
-}
-
-// Planned meal → journal entry. Meal slot comes from the name when it's a
-// conventional one, else from its position in the day.
-function mealSlotFor(name, i) {
-  const n = (name || "").toLowerCase();
-  for (const s of ["breakfast", "lunch", "dinner", "snack"]) if (n.includes(s)) return s;
-  return ["breakfast", "lunch", "dinner"][i] || "snack";
-}
+// Meal-plan row/list/day render helpers live in /js/meal-plan-client.js.
 
 function renderMealPlans(plans, sel = "#meallist", refresh = null) {
   const wrap = $(sel);
   if (!wrap) return;
-  if (!plans.length) { wrap.innerHTML = `<div class="empty">No meal plans yet. Draft one above and a week of meals built around your training lands here.</div>`; return; }
-  const mealCardHtml = (p, pi) => {
-    const m = p.parsed;
-    let hero, body;
-    if (m) {
-      hero = `<div class="mp-hero">
-          <div class="mp-hero-head">
-            <span class="lbl">${escHtml(p.agent)} \u00b7 #${p.id}</span>
-            ${statusBadge(p.status)}
-          </div>
-          <div class="mp-hero-nums">
-            <div class="mp-hero-kcal">
-              <span class="numeral numeral-xl">${escHtml(String(m.daily_kcal ?? "?"))}</span>
-              <span class="lbl">kcal per day</span>
-            </div>
-            <div class="mp-hero-protein">
-              <span class="numeral numeral-lg">${escHtml(String(m.daily_protein_g ?? "?"))}g</span>
-              <span class="lbl">protein</span>
-            </div>
-          </div>
-          ${m.summary ? `<div class="sess-line">${escHtml(m.summary)}</div>` : ""}
-        </div>`;
-      const dayDetail = Array.isArray(m.days) ? m.days.map((d) => {
-        const meals = (d.meals || []).map((mm) => mealRowHtml(mm)).join("");
-        return `<div class="mp-day"><div class="mp-dayname">${escHtml(d.day || "")}</div>${meals || `<div class="sess-line" style="color:var(--muted)">No meals</div>`}</div>`;
-      }).join("") : "";
-      body = dayDetail + (m.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(m.notes)}</div>` : "");
-    } else {
-      hero = `<div class="mp-hero">
-          <div class="mp-hero-head">
-            <span class="lbl">${escHtml(p.agent)} \u00b7 #${p.id}</span>
-            ${statusBadge(p.status)}
-          </div>
-        </div>`;
-      body = `<div class="sess-line" style="color:var(--warn)">Unparseable output</div>`;
-    }
-    const actions = p.status === "draft"
-      ? `<div class="logrow" style="margin-top:10px"><button class="logbtn" style="width:auto;padding:0 14px;font-size:.85rem" data-accept="${p.id}">ACCEPT</button>
-         <button class="ghostbtn" style="width:auto;padding:0 14px" data-discard="${p.id}">DISCARD</button></div>`
-      : "";
-    return `<div class="mp-card reveal${p.status === "superseded" ? " mp-card-faded" : ""}" style="${stagger(pi)}">
-      ${hero}${body}${actions}</div>`;
-  };
-
-  // Same calm history as proposals: show open drafts + the most-recent settled plan,
-  // fold older ones away. Accepting a plan retires the other drafts (server 'superseded').
-  const drafts = plans.filter((p) => p.status === "draft");
-  const settled = plans.filter((p) => p.status !== "draft"); // newest first (id DESC)
-  const shown = [...drafts, ...settled.slice(0, 1)];
-  const earlier = settled.slice(1);
-  wrap.innerHTML =
-    shown.map((p, i) => mealCardHtml(p, i)).join("") +
-    (earlier.length
-      ? `<details class="hist-fold"><summary>Show earlier meal plans (${earlier.length})</summary>
-           <div class="hist-fold-body">${earlier.map((p, i) => mealCardHtml(p, i)).join("")}</div></details>`
-      : "");
+  wrap.innerHTML = CairnMealPlan.mealPlanListHtml(plans);
 
   wrap.querySelectorAll("[data-accept]").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -422,30 +315,8 @@ function wireMealPrefs() {
   );
 }
 
-// One planner day section — extracted so swap/reorder can re-render a single day
-// in place (data-mday hook). ctx = { weekOf, targetKcal, todayName }.
-function mealDayHtml(d, di, ctx) {
-  const meals = d.meals || [];
-  const kcal = meals.reduce((t, x) => t + (Number(x.kcal) || 0), 0);
-  const prot = meals.reduce((t, x) => t + (Number(x.protein_g) || 0), 0);
-  const isToday = (d.day || "").toLowerCase().startsWith(ctx.todayName);
-  const totals = kcal || prot
-    ? `<div class="mealday-total"><span class="numeral" data-cu="${kcal}">0</span><span class="lbl"> cal${prot ? ` · ${prot}g protein` : ""}</span></div>`
-    : "";
-  // hairline: day total vs the plan's daily target (Morsel's red rule)
-  const bar = kcal && ctx.targetKcal
-    ? `<div class="mealday-bar"><div class="mealday-bar-fill barfill" style="width:${Math.min(100, Math.round((kcal / ctx.targetKcal) * 100))}%"></div></div>`
-    : "";
-  return `<section class="mealday${isToday ? " mealday-today" : ""} reveal" style="${stagger(di + 2)}" data-mday="${di}">
-      <div class="mealday-head">
-        <div><div class="lbl">${isToday ? `<span class="mealday-now">Today</span> · ` : ""}${escHtml(ctx.weekOf)}</div><h2 class="mealday-name">${escHtml(d.day || `Day ${di + 1}`)}</h2></div>
-        ${totals}
-      </div>
-      ${bar}
-      <div class="mealday-card">${meals.map((mm, mi) => mealRowHtml(mm, mi, { di, count: meals.length })).join("") || `<div class="empty">No meals</div>`}</div>
-      ${d.note ? `<div class="mealday-note">${escHtml(d.note)}</div>` : ""}
-    </section>`;
-}
+// One planner day section lives in /js/meal-plan-client.js so swap/reorder rerenders
+// use the same typed source as the initial Meals paint.
 
 // Re-render a single planner day from the in-memory plan (after swap/reorder) —
 // regenerates data-* indices, totals, the target bar, and re-runs count-ups.
@@ -455,7 +326,7 @@ function rerenderMealDay(current, di, ctx, settleMi = null) {
   const d = current.parsed?.days?.[di];
   if (!sec || !d) return;
   const tmp = document.createElement("div");
-  tmp.innerHTML = mealDayHtml(d, di, ctx);
+  tmp.innerHTML = CairnMealPlan.mealDayHtml(d, di, ctx);
   const fresh = tmp.firstElementChild;
   fresh.classList.remove("reveal"); // no re-entrance rise on an in-place update
   sec.replaceWith(fresh);
@@ -609,7 +480,7 @@ function wireMealRows(scope, current, ctx) {
         await api("/food-notes", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            meal: mealSlotFor(x.name, x.i), raw: "",
+            meal: CairnMealPlan.mealSlotFor(x.name, x.i), raw: "",
             parsed: { summary: title, items: x.items || "", kcal: x.kcal, protein_g: x.protein_g, carbs_g: x.carbs_g, fat_g: x.fat_g },
           }),
         });
@@ -935,7 +806,7 @@ function paintMealsBody(plans, mealPrefs) {
     const targetKcal = Number(m.daily_kcal) || 0;
     const todayName = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
     ctx = { weekOf, targetKcal, todayName };
-    const dayHtml = days.map((d, di) => mealDayHtml(d, di, ctx)).join("");
+    const dayHtml = days.map((d, di) => CairnMealPlan.mealDayHtml(d, di, ctx)).join("");
     const shopChecked = new Set(JSON.parse(localStorage.getItem(`shop:${current.id}`) || "[]"));
     const shopping = Array.isArray(m.shopping) && m.shopping.length
       ? `<div class="detail-section reveal" style="${stagger(days.length + 2)}"><div class="lbl">Shopping</div>
