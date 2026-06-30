@@ -1,5 +1,14 @@
 import { z } from "zod";
-import * as repo from "../../repo.js";
+import {
+  getGarminCoachSummary,
+  listGarminSources,
+  listStrengthGarminActivities,
+  listUnreconciledGarminStrength,
+  reconcileGarminStrength,
+  upsertGarminActivity,
+  upsertGarminDailyMetric,
+  upsertGarminSource,
+} from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerGarminTools(server: McpToolRegistrar) {
@@ -12,10 +21,10 @@ export function registerGarminTools(server: McpToolRegistrar) {
       sync_cursor: z.string().nullable().optional(),
       last_sync_at: z.string().nullable().optional(),
     },
-    async (a) => asText(repo.upsertGarminSource(a)));
+    async (a) => asText(upsertGarminSource(a)));
 
   server.tool("list_garmin_sources", "List configured Garmin source records without token material.", {},
-    async () => asText(repo.listGarminSources()));
+    async () => asText(listGarminSources()));
 
   server.tool("sync_garmin",
     "Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings).",
@@ -49,7 +58,7 @@ export function registerGarminTools(server: McpToolRegistrar) {
       hr_zones: z.array(z.any()).nullable().optional(),
       exercise_sets: z.array(z.any()).nullable().optional().describe("Detected strength sets: [{category,name,reps,weight_kg,duration_sec,set_type}]"),
     },
-    async ({ source_id, ...activity }) => asText(repo.upsertGarminActivity(activity, source_id)));
+    async ({ source_id, ...activity }) => asText(upsertGarminActivity(activity, source_id)));
 
   server.tool("upsert_garmin_daily_metric",
     "Ingest one normalized Garmin all-day/recovery metric row for a date.",
@@ -67,26 +76,26 @@ export function registerGarminTools(server: McpToolRegistrar) {
       body_battery_max: z.number().nullable().optional(),
       active_calories: z.number().nullable().optional(),
     },
-    async ({ source_id, ...metric }) => asText(repo.upsertGarminDailyMetric(metric, source_id)));
+    async ({ source_id, ...metric }) => asText(upsertGarminDailyMetric(metric, source_id)));
 
   server.tool("get_garmin_summary",
     "Compact coach-facing Garmin summary: recent endurance load and recovery metrics. Use as context, not as plan authority.",
     { days: z.number().int().optional() },
-    async ({ days }) => asText(repo.getGarminCoachSummary(days ?? 14)));
+    async ({ days }) => asText(getGarminCoachSummary(days ?? 14)));
 
   server.tool("list_unreconciled_garmin_strength",
     "List synced Garmin strength activities not yet linked to a Cairn session (session_id null) over a recent window — the watch logged a lift Cairn doesn't know about. Empty when Garmin isn't configured. Follow with reconcile_garmin_strength to merge them in.",
     { days: z.number().int().optional() },
-    async ({ days }) => asText(repo.listUnreconciledGarminStrength(days ?? 30)));
+    async ({ days }) => asText(listUnreconciledGarminStrength(days ?? 30)));
 
   server.tool("reconcile_garmin_strength",
     "Reconcile synced Garmin strength activities into the day's Cairn session: merge the physiology layer (HR/zones/calories/training effect) now, and queue the agentic narrative + extrapolation of the detected exercises the athlete didn't already log. Pass {date} for one day, else {days} for a recent window.",
     { date: z.string().optional(), days: z.number().int().optional() },
     async ({ date, days }) => {
-      const rows = repo.listStrengthGarminActivities(date ? { date } : { days });
+      const rows = listStrengthGarminActivities(date ? { date } : { days });
       const sessions: any[] = [];
       for (const r of rows) {
-        const out = repo.reconcileGarminStrength(r.id);
+        const out = reconcileGarminStrength(r.id);
         if (out?.session) sessions.push(out.session);
       }
       if (rows.length) {

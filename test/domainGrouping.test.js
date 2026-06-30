@@ -84,6 +84,17 @@ test("training log adapters use the training domain entry point", () => {
   }
 });
 
+test("garmin adapters use the training domain entry point", () => {
+  for (const [file, importPath] of [
+    ["src/routes/garmin.ts", "../domain/training/index.js"],
+    ["src/surfaces/mcp/garmin.ts", "../../domain/training/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import training domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
 test("person context adapters use the person domain entry point", () => {
   for (const [file, importPath] of [
     ["src/routes/person-context.ts", "../domain/person/index.js"],
