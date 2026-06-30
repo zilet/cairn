@@ -392,99 +392,28 @@ let _hReviewRun = null;  // in-flight POST /health/review promise
 let _hReviewErr = null;  // gentle inline message after a failed run
 let _hReadSpy = null;    // scroll-spy IntersectionObserver for the Read tab's sticky nav
 
-// review.parsed may arrive as a JSON string or an object
 function parsedReview(r) {
-  if (!r || r.error) return null;
-  let p = r.parsed;
-  if (typeof p === "string") { try { p = JSON.parse(p); } catch { p = null; } }
-  return p && typeof p === "object" ? p : null;
+  return CairnHealthPicture.parsedReview(r);
 }
 
-// flag/status → dot modifier. Colors mirror the marker flag pills:
-// low/high → warn, "watch" → gold, normal → sage, none → neutral hairline.
 function healthDotClass(flag) {
-  const f = String(flag || "").toLowerCase();
-  if (f === "low" || f === "high" || f === "abnormal" || f === "critical") return "hdot-warn";
-  if (f === "normal" || f === "ok") return "hdot-ok";
-  return f ? "hdot-watch" : "hdot-mute";
+  return CairnHealthPicture.healthDotClass(flag);
 }
 
 function reviewBusyHtml() {
-  return `<div class="hpic hpic-busy">
-    <div class="hpic-top"><span class="lbl">Your picture</span><span class="hpic-when">reviewing…</span></div>
-    <div class="hshimmer hshimmer-lg"></div>
-    <div class="hshimmer"></div>
-    <div class="hshimmer hshimmer-sm"></div>
-    <div class="hpic-busynote">Reading every record and trend — this can take a few minutes. You can keep using Cairn.</div>
-  </div>`;
+  return CairnHealthPicture.reviewBusyHtml();
 }
 
 function healthHeroHtml(err) {
-  return `<div class="hpic hpic-hero reveal" style="${stagger(0)}">
-    <div class="artile artile-lg hpic-hero-art">${CairnHealthClient.HEALTH_HERO_ART}</div>
-    <div class="hpic-hero-title">Build your whole picture</div>
-    <div class="hpic-hero-sub">Share your bloodwork or a DEXA scan and Cairn reads it — markers, trends, and a coach's-eye view of what to do next.</div>
-    ${err}
-    <button id="hHeroShare" class="logbtn hpic-cta-btn">SHARE A DOCUMENT</button>
-  </div>`;
+  return CairnHealthPicture.healthHeroHtml(err);
 }
 
 function buildPictureHtml(err, docCount) {
-  const n = Number(docCount) || 0;
-  return `<div class="hpic hpic-build reveal" style="${stagger(0)}">
-    <span class="lbl">Your picture</span>
-    <div class="hpic-headline">Your records are in.</div>
-    <div class="hpic-hero-sub">One review across ${n === 1 ? "your document" : `all ${n} documents`} — what's strong, what to watch, and what to do this week.</div>
-    ${err}
-    <button id="hRevBtn" class="logbtn hpic-cta-btn">BUILD MY PICTURE</button>
-  </div>`;
+  return CairnHealthPicture.buildPictureHtml(err, docCount);
 }
 
 function reviewHtml(review, stale, err) {
-  const p = parsedReview(review) || {};
-  const latestISO = latestReviewDate(p);
-  const hz = (t) => escHtml(humanizeReviewText(t, latestISO)); // humanize, then escape
-  const focus = (Array.isArray(p.focus) ? p.focus : []).filter((f) => f && (f.title || f.action)).map((f) => `
-    <div class="hfocus">
-      ${f.title ? `<div class="hfocus-title">${hz(f.title)}</div>` : ""}
-      ${f.why ? `<div class="hfocus-why">${hz(f.why)}</div>` : ""}
-      ${f.action ? `<div class="hfocus-act">→ ${hz(f.action)}</div>` : ""}
-    </div>`).join("");
-  const watch = (Array.isArray(p.watchlist) ? p.watchlist : []).filter((w) => w && (w.marker || w.why)).map((w) => `
-    <div class="hwatch">
-      <span class="hdot ${healthDotClass(w.status)}"></span>
-      <div class="hwatch-main">
-        <div class="hwatch-line"><span class="hwatch-name">${escHtml(w.marker || "")}</span>${w.status ? `<span class="hwatch-st">${escHtml(w.status)}</span>` : ""}</div>
-        ${w.why ? `<div class="hwatch-why">${hz(w.why)}</div>` : ""}
-        ${w.action ? `<div class="hwatch-act">${hz(w.action)}</div>` : ""}
-      </div>
-    </div>`).join("");
-  const wins = (Array.isArray(p.wins) ? p.wins : []).filter(Boolean).map((w) => `<li>${hz(w)}</li>`).join("");
-  const fu = (Array.isArray(p.followups) ? p.followups : []).filter((f) => f && f.what).map((f) => `
-    <div class="hfu"><span class="hfu-what">${hz(f.what)}</span>${f.when ? `<span class="hfu-when">${escHtml(f.when)}</span>` : ""}</div>`).join("");
-  const impacts = [["Training", p.training_impact], ["Nutrition", p.nutrition_impact]]
-    .filter(([, v]) => v)
-    .map(([l, v]) => `<div class="himpact"><span class="lbl">${l}</span><span class="himpact-t">${hz(v)}</span></div>`).join("");
-  const when = review.created_at ? `Reviewed ${relTime(review.created_at)}` : "Reviewed";
-  const asOf = latestISO ? `<span class="hpic-asof lbl">As of ${escHtml(humanDate(latestISO))}</span>` : "";
-  const refresh = stale
-    ? `<button id="hRevBtn" class="hpic-refresh hpic-refresh-stale" title="New results since this review"><span class="hdot hdot-warn"></span>New results — refresh</button>`
-    : `<button id="hRevBtn" class="hpic-refresh">↻ refresh</button>`;
-  return `<div class="hpic reveal" style="${stagger(0)}">
-    <span class="lbl">Your picture</span>
-    ${p.headline ? `<div class="hpic-headline">${hz(p.headline)}</div>` : ""}
-    ${asOf}
-    ${focus ? `<span class="hpic-sub lbl">This week's focus</span><div class="hfocus-list">${focus}</div>` : ""}
-    ${watch ? `<span class="hpic-sub lbl">Watchlist</span><div class="hwatch-list">${watch}</div>` : ""}
-    ${wins ? `<span class="hpic-sub lbl">Going well</span><ul class="hwins">${wins}</ul>` : ""}
-    ${fu ? `<span class="hpic-sub lbl">Follow-ups</span><div class="hfu-list">${fu}</div>` : ""}
-    ${impacts ? `<div class="himpacts">${impacts}</div>` : ""}
-    ${err}
-    <div class="hpic-foot">
-      <span class="hpic-when">${escHtml(when)}${review.agent ? ` · ${escHtml(review.agent)}` : ""}</span>
-      ${refresh}
-    </div>
-  </div>`;
+  return CairnHealthPicture.reviewHtml(review, stale, err);
 }
 
 // Paint #hPicture from _hPic + the in-flight run state. Safe to call anytime —

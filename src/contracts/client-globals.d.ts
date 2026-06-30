@@ -136,6 +136,9 @@ declare global {
   declare function relTime(iso: string): string;
   declare function relAge(iso: string): string;
   declare function absDate(iso: string): string;
+  declare function humanDate(iso: string): string;
+  declare function humanizeReviewText(text: string, latestISO: string | null | undefined): string;
+  declare function latestReviewDate(parsed: unknown): string | null;
   declare function learnedTimelineHtml(data: unknown): string;
   declare function foodNum(value: unknown): number | null;
   declare function formatFoodNum(value: unknown): string;
@@ -554,6 +557,19 @@ declare global {
       ): string;
     };
 
+    CairnHealthPicture: {
+      parsedReview(review: { parsed?: unknown; error?: unknown } | null | undefined): Record<string, unknown> | null;
+      healthDotClass(flag: unknown): string;
+      reviewBusyHtml(): string;
+      healthHeroHtml(errorHtml: unknown): string;
+      buildPictureHtml(errorHtml: unknown, docCount: unknown): string;
+      reviewHtml(
+        review: { parsed?: unknown; error?: unknown; created_at?: unknown; agent?: unknown },
+        stale: unknown,
+        errorHtml: unknown,
+      ): string;
+    };
+
     CairnFoodNote: {
       foodIngredients(value: unknown): Array<Record<string, unknown>>;
       ingredientLabel(ingredient: Record<string, unknown> | null | undefined): string;
@@ -859,6 +875,7 @@ declare global {
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
+  declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
