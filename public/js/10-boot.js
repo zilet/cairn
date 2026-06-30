@@ -960,25 +960,7 @@ function activateTab(name, opts = {}) {
   });
 }
 
-// ---------- service-worker lifecycle: register + auto-update ----------
-// Single-user self-hosted app: a deploy should always be live on the next open,
-// never stranded behind a manual tap (a client once fell ~40 cache versions behind
-// because the old build couldn't show the update prompt). sw.js skipWaiting()s on
-// install, so the new worker activates as soon as it downloads; here we reload ONCE
-// when it takes control. The first-ever install (no prior controller) must NOT
-// reload — there's nothing to update and it would loop. Chat drafts + in-flight
-// turns are persisted (localStorage + /chat/turns), and SWR repaints warm, so the
-// reload is seamless and loses nothing.
-if ("serviceWorker" in navigator) {
-  const _hadController = !!navigator.serviceWorker.controller;
-  let _swReloading = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!_hadController || _swReloading) return; // first install → nothing to reload
-    _swReloading = true;
-    location.reload();
-  });
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
-}
+registerServiceWorkerLifecycle();
 swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the cache
 // Register reconnectors so a job running across a reload re-attaches to its host
 // (the registry const is defined in the job-runner section, so this runs at boot).

@@ -189,10 +189,12 @@ declare global {
   declare function reconnectNutritionCheckin(job?: unknown): unknown;
   declare function reconnectInsight(job?: unknown): unknown;
   declare function reconnectProposal(job?: unknown): unknown;
+  declare function registerServiceWorkerLifecycle(): void;
 
   interface Window {
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
+    registerServiceWorkerLifecycle(): void;
     CairnAppRouter: ClientAppRouterApi;
 
     CairnChatClient: {

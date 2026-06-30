@@ -606,6 +606,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/app-router\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
+  assert.match(sw, /"\/js\/app-service-worker\.js"/);
 });
 
 test("PWA deep links return the app shell without capturing API or MCP", () => {
@@ -733,10 +734,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const appRouterSource = read("src/client/app/router.ts");
   const appJobReconnectorsSource = read("src/client/app/job-reconnectors.ts");
   const appMobileViewportSource = read("src/client/app/mobile-viewport.ts");
+  const appServiceWorkerSource = read("src/client/app/service-worker.ts");
   const routeState = read("public/js/route-state.js");
   const appRouter = read("public/js/app-router.js");
   const appJobReconnectors = read("public/js/app-job-reconnectors.js");
   const appMobileViewport = read("public/js/app-mobile-viewport.js");
+  const appServiceWorker = read("public/js/app-service-worker.js");
   const dateUtils = read("public/js/date-utils.js");
   const htmlUtils = read("public/js/html-utils.js");
   const uiComponents = read("public/js/ui-components.js");
@@ -793,6 +796,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function paintSWR<Path extends string>/);
   assert.match(clientGlobals, /declare function measureChatTop\(\): void/);
   assert.match(clientGlobals, /installMobileViewportGuards\(\): void/);
+  assert.match(clientGlobals, /registerServiceWorkerLifecycle\(\): void/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/html-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/ui-components\.js/);
@@ -810,6 +814,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-router\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-job-reconnectors\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-mobile-viewport\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/app-service-worker\.js/);
   assert.match(
     clientBuildTsconfig,
     /"include": \["src\/contracts\/client-globals\.d\.ts", "src\/client\/\*\*\/\*\.ts"\]/
@@ -850,6 +855,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.match(clientBuild, /src\/client\/app\/mobile-viewport\.ts/);
   assert.match(clientBuild, /public\/js\/app-mobile-viewport\.js/);
+  assert.match(clientBuild, /src\/client\/app\/service-worker\.ts/);
+  assert.match(clientBuild, /public\/js\/app-service-worker\.js/);
   assert.ok(
     index.indexOf("/js/date-utils.js") > -1 && index.indexOf("/js/date-utils.js") < index.indexOf("/js/01-core.js"),
     "date-utils.js must load before 01-core.js"
@@ -929,6 +936,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
       index.indexOf("/js/app-mobile-viewport.js") < index.indexOf("/js/10-boot.js"),
     "app-mobile-viewport.js must load after boot-time reconnectors and before 10-boot.js"
   );
+  assert.ok(
+    index.indexOf("/js/app-service-worker.js") > index.indexOf("/js/app-mobile-viewport.js") &&
+      index.indexOf("/js/app-service-worker.js") < index.indexOf("/js/10-boot.js"),
+    "app-service-worker.js must load after app shell helpers and before 10-boot.js"
+  );
   assert.match(dateUtils, /\/\/ @ts-check/);
   assert.match(htmlUtils, /\/\/ @ts-check/);
   assert.match(uiComponents, /\/\/ @ts-check/);
@@ -944,6 +956,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appRouter, /\/\/ @ts-check/);
   assert.match(appJobReconnectors, /\/\/ @ts-check/);
   assert.match(appMobileViewport, /\/\/ @ts-check/);
+  assert.match(appServiceWorker, /\/\/ @ts-check/);
   assert.match(publicScriptCheck, /ts\.createSourceFile/);
   assert.match(publicScriptCheck, /topLevelBindings/);
   assert.match(publicScriptCheck, /prior\.lexical\s*\|\|\s*binding\.lexical/);
@@ -979,6 +992,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-job-reconnectors\.js/);
   assert.match(clientBuild, /src\/client\/app\/mobile-viewport\.ts/);
   assert.match(clientBuild, /public\/js\/app-mobile-viewport\.js/);
+  assert.match(clientBuild, /src\/client\/app\/service-worker\.ts/);
+  assert.match(clientBuild, /public\/js\/app-service-worker\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
   assert.match(clientBuild, /public\/js\/route-state\.js/);
   assert.match(clientBuild, /export function buildClient\(\)/);
@@ -1065,6 +1080,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appMobileViewportSource, /function installMobileViewportGuards\(\): void/);
   assert.match(appMobileViewportSource, /measureChatTop/);
   assert.match(appMobileViewportSource, /window\.visualViewport/);
+  assert.match(appServiceWorkerSource, /function registerServiceWorkerLifecycle\(\): void/);
+  assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
+  assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
   assert.match(routeState, /root\.CairnRoutes = \{/);
   assert.match(appRouter, /CairnAppRouter = api/);
   assert.match(boot, /const ROUTE_TABS = CairnAppRouter\.ROUTE_TABS/);
@@ -1103,6 +1121,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appMobileViewport, /Object\.assign\(globalThis, \{ installMobileViewportGuards \}\)/);
   assert.match(appMobileViewport, /window\.installMobileViewportGuards = installMobileViewportGuards/);
   assert.match(appMobileViewport, /installMobileViewportGuards/);
+  assert.match(appServiceWorker, /Object\.assign\(globalThis, \{ registerServiceWorkerLifecycle \}\)/);
+  assert.match(appServiceWorker, /window\.registerServiceWorkerLifecycle = registerServiceWorkerLifecycle/);
   assert.match(ui, /function segBar\(active, items\)[\s\S]*CairnUi\.segmentedNavHtml\(\{ active, items \}\)/);
   assert.match(ui, /function loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
   assert.match(today, /window\.CairnTodayAgenda\.renderableBuckets/);
@@ -1131,7 +1151,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(boot, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /registerAppJobReconnectors\(\)/);
   assert.match(boot, /installMobileViewportGuards\(\)/);
+  assert.match(boot, /registerServiceWorkerLifecycle\(\)/);
   assert.doesNotMatch(boot, /registerJobReconnector\("session_suggest"/);
+  assert.doesNotMatch(boot, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
@@ -1140,6 +1162,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
+  assert.match(sw, /"\/js\/app-service-worker\.js"/);
   assert.match(dockerfile, /COPY package\*\.json tsconfig\.json tsconfig\.client\.build\.json \.\//);
   assert.match(dockerfile, /COPY scripts\/build-client\.mjs \.\/scripts\/build-client\.mjs/);
   assert.match(dockerfile, /COPY --from=builder \/app\/public\/js \.\/public\/js/);
