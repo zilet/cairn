@@ -1,12 +1,5 @@
 // ==== 03-today.js ====
 // ---------- Today ----------
-// Build one exercise logging card. `it` = plan item (or synthetic {exercise} for off-plan).
-// `logged` = sets already logged for this exercise in the loaded session.
-// `prefill` = {weight,reps,rir} to seed the inputs.
-function exTimed(it: any, logged: any) {
-  return CairnTodayCards.exTimed(it, logged, todayState.exModes);
-}
-
 // ---------- Adaptive next-prescription (the loop closes here) ----------
 // On a lift card, render the NEXT session's adapted target straight from the
 // deterministic progression engine (GET /api/program/progression). It reads what
@@ -15,30 +8,16 @@ function exTimed(it: any, logged: any) {
 // score; the server hands us finished plain words (delta_text + why), we just frame
 // them. The whole day's prescriptions become a DRAFT plan proposal via the apply
 // control in the session head — nothing auto-applies.
-
-// The verb word for a prescription action (sage for earned overload, terracotta-
-// quiet for hold/deload/vary). Used as a small caps tag on the card.
-const RX_ACTION = CairnTodayTraining.RX_ACTION;
 const todayApi = api as (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<any>;
 const todayCachedApi = cachedApi as (path: string, opts?: any) => Promise<any>;
 const todayPeekCached = peekCached as (key: string, freshFor?: number) => { data: any; fresh: boolean } | null;
 const todayState = state as any;
 const todayView = view as HTMLElement & any;
 
-// A compact target read for the prescription line: "55 lb · 3 × 5", "1:00 hold",
-// "BW · 3 × 8", "30 assist". Mirrors the card's own target vocabulary. Plain words.
-function todayRxTargetText(rx: any) {
-  return CairnTodayTraining.rxTargetText(rx);
-}
-
 // The per-card prescription line. `rx` is one Prescription from the progression
 // engine (or null → renders nothing). Calm, no score, one move + its why. When the
 // move is "switch it up" (action:'vary'), the engine hands a small menu of same-
-// pattern swaps (vary_options:[{name,why}]) — we render them as a quiet "rotate one
-// in" chip row so the athlete picks, never a forced single substitution.
-function todayExRxVaryMenuHtml(rx: any) {
-  return CairnTodayTraining.exRxVaryMenuHtml(rx);
-}
+// pattern swaps that the card renderer frames as a quiet choice.
 function todayExRxLineHtml(rx: any) {
   return CairnTodayTraining.exRxLineHtml(rx);
 }
@@ -86,29 +65,13 @@ function exCard(it: any, logged: any, prefill: any, revealIdx: any, rx: any) {
 //
 // `done` (optional) = a matched synced cardio effort (a CardioEffort from
 // /api/cardio). When present the card flips to a calm "✓ Easy run — 8.2 km · mostly
-// Z2 · synced from Garmin" read (see cardioDoneCard) with NO "log this" button — the
-// run already happened, the watch carried it. When absent we keep the prescription,
-// but "Log this run →" is the FALLBACK with a quiet "or it'll sync from your watch"
-// hint, since a synced run is the runner's preferred path. (Sync freshness rides on a
-// separate line — see cardioSyncLine — only when Garmin is configured.)
+// Z2 · synced from Garmin" read with NO "log this" button — the run already
+// happened, the watch carried it. When absent we keep the prescription, but "Log
+// this run →" is the FALLBACK with a quiet "or it'll sync from your watch" hint,
+// since a synced run is the runner's preferred path. (Sync freshness rides on a
+// separate line only when Garmin is configured.)
 function cardioPlanCard(it: any, revealIdx: any, done: any, syncline: any) {
   return CairnTodayCards.cardioPlanCardHtml(it, revealIdx, done, syncline);
-}
-
-// A calm "the run happened" card — the cardio analogue of garminSessionCard's
-// "body's reaction" tone. Shows the real distance / zone / pace / HR off the synced
-// effort, a sage ✓, and NO log button (it's done). Falls back gracefully when a field
-// is missing. Numbers are plain reads — never a score. `eff` is a CardioEffort row
-// from /api/cardio (the matched run); `it` is the prescription it satisfied.
-function cardioDoneCard(it: any, eff: any, revealIdx: any) {
-  return CairnTodayCards.cardioDoneCardHtml(it, eff, revealIdx);
-}
-
-// The dominant HR zone of a synced effort, in plain words ("mostly Z2"). Reads the
-// parsed hr_zones [{zone,secs}] off /api/cardio; "" when there's no zone data — never
-// a score, just where the run mostly sat. Mirrors garminSessionCard's zone handling.
-function todayCardioDominantZone(zones: any) {
-  return CairnTodayTraining.cardioDominantZone(zones);
 }
 
 // Does a synced cardio effort satisfy a planned cardio item? The bar is deliberately
@@ -126,15 +89,6 @@ function cardioEffortMatches(it: any, eff: any) {
 
 // Cardio sync execution wiring also lives in /js/cardio-sync-client.js. It preserves
 // the wireCardioSync compatibility global used by Today, Progress, and Plan.
-// The verb for the "Log this …" button — "run" / "ride" / "swim" / "session".
-function todayCardioVerb(label: any) {
-  return CairnTodayTraining.cardioVerb(label);
-}
-// A natural-language prefill for the capture box — "ran 12 km easy (Z2)" style — so
-// one tap drops a sensible sentence in and they tweak the actuals before logging.
-function todayCardioLogPhrase(it: any) {
-  return CairnTodayTraining.cardioLogPhrase({ ...it, label: cardioLabel(it) });
-}
 
 function setChip(s: any, i?: any) {
   return CairnTodaySessionStatus.setChipHtml(s, i);
@@ -842,7 +796,7 @@ async function renderToday(opts: any = {}) {
     maintain: { holding: "holding steady", drifting_up: "drifting up", drifting_down: "easing down" },
   };
   const paceWord = (PACE_WORDS[goalMode] || PACE_WORDS.lose)[stats.pace_status] || "";
-  let paceTile;
+  let paceTile = "";
   if (stats.trend_lb_wk == null) {
     paceTile = `<div class="stat stat-pace"><div class="stat-n numeral stat-dim">—</div><div class="stat-l lbl">pace · log weigh-ins</div></div>`;
   } else if (stats.needed_lb_wk == null) {
@@ -1183,7 +1137,7 @@ async function renderToday(opts: any = {}) {
       </button>`;
     // Compass cells per mode: endurance leads mileage; hybrid pairs lifts+mileage;
     // strength keeps the original adherence + pace + weight.
-    let compassCells;
+    let compassCells = "";
     if (isEndurance()) compassCells = `${mileageTile}${paceTile}${wtTile}`;
     else if (isHybrid()) compassCells = `${adherenceTile}${mileageTile}${wtTile}`;
     else compassCells = `${adherenceTile}${paceTile}${wtTile}`;
@@ -1342,7 +1296,7 @@ async function renderToday(opts: any = {}) {
   if (finishBtn) finishBtn.addEventListener("click", async () => {
     finishBtn.disabled = true;
     const notes = todayView.querySelector("#sessNotes").value.trim();
-    let r;
+    let r: any;
     try {
       r = await todayApi(`/sessions/${session.id}/finish`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes }),
@@ -1761,7 +1715,7 @@ function removeSkipName(name: any) {
 }
 
 async function skipFromCard(card: any, exercise: any) {
-  let res;
+  let res: any;
   try {
     res = await todayApi("/sessions/skip", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1925,7 +1879,7 @@ function wireLogRow(row: any) {
   logBtn.addEventListener("click", async () => {
     if (logBtn.disabled) return;
     const timed = row.dataset.mode === "timed";
-    let body;
+    let body: any;
     if (timed) {
       const durEl = row.querySelector(".in-dur");
       const sec = parseDur(durEl.value);
@@ -1952,7 +1906,7 @@ function wireLogRow(row: any) {
       };
     }
     logBtn.disabled = true;
-    let res;
+    let res: any;
     try {
       res = await todayApi("/sets", {
         method: "POST",
@@ -2168,28 +2122,6 @@ function garminSessionCard(g: any) {
 // to lifting). Each row carries a real relative time, and a Garmin-synced row taps
 // open to its body-reaction (HR zones, effort, VO2, temp) — the same physiology a
 // strength session already shows. Fed by GET /api/recent-training (FeedRow[]).
-
-// Relative "when" for a feed row. A real timestamp (Garmin start / session finish)
-// gives "2h ago" within a day, then "yesterday · 6:40pm"; a manual log with no
-// honest time-of-day stays day-granular ("yesterday", "3 days ago").
-function latelyWhen(row: any) {
-  return CairnTodayLately.when(row);
-}
-
-// The tap-to-expand body-reaction for a Garmin-enriched row: physiology tiles +
-// the HR-time-in-zone bar, reusing the garminSessionCard vocabulary verbatim.
-// "" when the detail blob has nothing renderable.
-function latelyDetail(d: any) {
-  return CairnTodayLately.detailHtml(d);
-}
-
-// The tap-to-expand movement breakdown for a strength session: each exercise and
-// its top working set. This is what makes a manually-logged session (no Garmin
-// blob) worth tapping — and makes an off-plan session legible when its title is
-// stale (e.g. a "Full Body" card that was really mobility/core). "" when empty.
-function latelyMovements(moves: any) {
-  return CairnTodayLately.movementsHtml(moves);
-}
 
 // One row of the Lately feed — strength or cardio, normalized.
 function latelyRow(row: any) {
@@ -2582,7 +2514,7 @@ async function loadGarminReconcile() {
   if (btn) btn.addEventListener("click", async () => {
     btn.disabled = true;
     btn.textContent = "Reconciling…";
-    let r;
+    let r: any;
     try {
       r = await todayApi("/garmin/reconcile", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),

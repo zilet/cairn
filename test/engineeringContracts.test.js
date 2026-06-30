@@ -25,22 +25,6 @@ function contractPatternToRegExp(pattern) {
   return new RegExp(`^${escapeRegExp(pattern).replace(/:[A-Za-z0-9_]+/g, "[^/]+")}$`);
 }
 
-function quotedValues(src) {
-  return [...src.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-}
-
-function routeSetValues(src, name) {
-  const match = src.match(new RegExp(`const ${name} = new Set\\(\\[([^\\]]+)\\]\\)`));
-  assert.ok(match, `${name} route set should be declared in route-state`);
-  return quotedValues(match[1]);
-}
-
-function unionValues(src, name) {
-  const match = src.match(new RegExp(`type ${name} = ([^;]+);`));
-  assert.ok(match, `${name} should be declared as a string union`);
-  return quotedValues(match[1]);
-}
-
 function segmentKeys(src, name) {
   const line = src.split("\n").find((row) => row.includes(`const ${name}`));
   assert.ok(line, `${name} segment registry should be declared`);
@@ -799,7 +783,6 @@ test("PWA route literals stay aligned across parser, types, and segment registri
   const meHealth = read("src/client/me-health-screen.ts");
   const settingsScreen = read("src/client/settings-screen.ts");
 
-  const tabs = CLIENT_ROUTE_DEFINITIONS.tabs;
   const plan = CLIENT_ROUTE_DEFINITIONS.sections.plan;
   const progress = CLIENT_ROUTE_DEFINITIONS.sections.progress;
   const me = CLIENT_ROUTE_DEFINITIONS.sections.me;
