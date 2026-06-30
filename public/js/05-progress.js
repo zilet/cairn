@@ -733,34 +733,6 @@ function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
   if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderEndurance());
 }
 
-// ---------- Progress: training calendar (refined month grids) ----------
-function calMonthHtml(ym, byDate, todayIso, idx) {
-  const [y, m] = ym.split("-").map(Number);
-  const firstDow = new Date(y, m - 1, 1).getDay();
-  const daysIn = new Date(y, m, 0).getDate();
-  const monthName = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
-  const dows = ["S", "M", "T", "W", "T", "F", "S"];
-  let cellsHtml = "";
-  for (let i = 0; i < firstDow; i++) cellsHtml += `<span class="cal-day cal-pad"></span>`;
-  for (let d = 1; d <= daysIn; d++) {
-    const iso = `${ym}-${String(d).padStart(2, "0")}`;
-    const c = byDate.get(iso);
-    const future = iso > todayIso;
-    const lvl = !future && c ? (c.level || 0) : null; // null = outside the window / future
-    const hasData = !future && c && (c.sets || c.activity);
-    const isToday = iso === todayIso;
-    const title = c && !future
-      ? `${iso} · ${c.sets || 0} sets · ${(c.tonnage || 0).toLocaleString()} lb${c.activity ? " · activity" : ""}`
-      : iso;
-    cellsHtml += `<span class="cal-day${lvl != null ? ` cl${lvl}` : " cal-out"}${isToday ? " cal-today" : ""}${hasData ? " cal-has" : ""}"${hasData ? ` data-goto="${iso}"` : ""} title="${escAttr(title)}">${d}</span>`;
-  }
-  return `<div class="cal-month reveal" style="${stagger(idx)}">
-      <div class="cal-name">${escHtml(monthName)}</div>
-      <div class="cal-dows">${dows.map((l) => `<span class="lbl">${l}</span>`).join("")}</div>
-      <div class="cal-grid">${cellsHtml}</div>
-    </div>`;
-}
-
 // SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its
 // month grids instantly on a warm re-entry, then revalidates.
 async function renderCalendar() {

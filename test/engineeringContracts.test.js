@@ -614,6 +614,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
   assert.match(sw, /"\/js\/progress-volume-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-client\.js"/);
+  assert.match(sw, /"\/js\/progress-calendar-client\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
@@ -766,6 +767,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressRunPlanSource = read("src/client/progress-run-plan-client.ts");
   const progressVolumeSource = read("src/client/progress-volume-client.ts");
   const progressEnergySource = read("src/client/progress-energy-client.ts");
+  const progressCalendarSource = read("src/client/progress-calendar-client.ts");
   const captureSource = read("src/client/capture.ts");
   const settingsRoutesSource = read("src/client/settings-routes.ts");
   const settingsClientSource = read("src/client/settings-client.ts");
@@ -818,6 +820,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressRunPlanClient = read("public/js/progress-run-plan-client.js");
   const progressVolumeClient = read("public/js/progress-volume-client.js");
   const progressEnergyClient = read("public/js/progress-energy-client.js");
+  const progressCalendarClient = read("public/js/progress-calendar-client.js");
   const capture = read("public/js/04-capture.js");
   const healthClient = read("public/js/health-client.js");
   const chatClient = read("public/js/chat-client.js");
@@ -895,6 +898,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function kcalFmt\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function energyRead\(exp: unknown\)/);
   assert.match(clientGlobals, /CairnProgressEnergy/);
+  assert.match(clientGlobals, /declare function calMonthHtml\(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number\): string/);
+  assert.match(clientGlobals, /CairnProgressCalendar/);
   assert.match(clientGlobals, /declare function coachingFocusCardHtml\(focus: ClientCoachingFocus \| null \| undefined\): string/);
   assert.match(clientGlobals, /declare function loadCoachingFocus\(slotSelector: string, root\?: ParentNode \| null\): Promise<void>/);
   assert.match(clientGlobals, /CairnCoachingFocus/);
@@ -933,6 +938,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-run-plan-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-volume-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-energy-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/progress-calendar-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/04-capture\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-client\.js/);
@@ -1001,6 +1007,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-volume-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-energy-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-energy-client\.js/);
+  assert.match(clientBuild, /src\/client\/progress-calendar-client\.ts/);
+  assert.match(clientBuild, /public\/js\/progress-calendar-client\.js/);
   assert.match(clientBuild, /src\/client\/capture\.ts/);
   assert.match(clientBuild, /public\/js\/04-capture\.js/);
   assert.match(clientBuild, /src\/client\/settings-routes\.ts/);
@@ -1158,6 +1166,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "progress-energy-client.js must load before Progress Energy consumers"
   );
   assert.ok(
+    index.indexOf("/js/progress-calendar-client.js") > index.indexOf("/js/progress-energy-client.js") &&
+      index.indexOf("/js/progress-calendar-client.js") < index.indexOf("/js/05-progress.js"),
+    "progress-calendar-client.js must load before Progress Calendar consumers"
+  );
+  assert.ok(
     index.indexOf("/js/04-capture.js") > index.indexOf("/js/03-today.js") &&
       index.indexOf("/js/04-capture.js") < index.indexOf("/js/05-progress.js"),
     "04-capture.js must load after Today and before downstream screens"
@@ -1254,6 +1267,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressRunPlanClient, /\/\/ @ts-check/);
   assert.match(progressVolumeClient, /\/\/ @ts-check/);
   assert.match(progressEnergyClient, /\/\/ @ts-check/);
+  assert.match(progressCalendarClient, /\/\/ @ts-check/);
   assert.match(capture, /\/\/ @ts-check/);
   assert.match(healthClient, /\/\/ @ts-check/);
   assert.match(chatClient, /\/\/ @ts-check/);
@@ -1317,6 +1331,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-volume-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-energy-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-energy-client\.js/);
+  assert.match(clientBuild, /src\/client\/progress-calendar-client\.ts/);
+  assert.match(clientBuild, /public\/js\/progress-calendar-client\.js/);
   assert.match(clientBuild, /src\/client\/capture\.ts/);
   assert.match(clientBuild, /public\/js\/04-capture\.js/);
   assert.match(clientBuild, /src\/client\/settings-routes\.ts/);
@@ -1465,6 +1481,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnergySource, /function energyRead\(exp: EnergyExpenditure \| null \| undefined\): EnergyRead/);
   assert.match(progressEnergySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnergySource, /CairnProgressEnergy/);
+  assert.match(progressCalendarSource, /function calMonthHtml\(ym: string, byDate: Map<string, CalendarCell>, todayIso: string, idx: number\): string/);
+  assert.match(progressCalendarSource, /Object\.assign\(globalThis, \{/);
+  assert.match(progressCalendarSource, /CairnProgressCalendar/);
   assert.match(captureSource, /type CaptureDirective = import\("\.\.\/contracts\/client\.js"\)\.ClientDirective/);
   assert.match(captureSource, /function loadTodayReads\(\): Promise<void>/);
   assert.match(captureSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
@@ -1615,6 +1634,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnergyClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnergyClient, /CairnProgressEnergy/);
   assert.doesNotMatch(progress, /const\s+kcalFmt|function\s+energyRead|const\s+CONF_WORD/);
+  assert.match(progressCalendarClient, /Object\.assign\(globalThis, \{/);
+  assert.match(progressCalendarClient, /CairnProgressCalendar/);
+  assert.doesNotMatch(progress, /function\s+calMonthHtml/);
   assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
   assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
   assert.match(chatClient, /Object\.assign\(globalThis, \{ CairnChatClient: CAIRN_CHAT_CLIENT \}\)/);
@@ -1689,6 +1711,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
   assert.match(sw, /"\/js\/progress-volume-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-client\.js"/);
+  assert.match(sw, /"\/js\/progress-calendar-client\.js"/);
   assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
   assert.match(sw, /"\/js\/markdown-client\.js"/);
   assert.match(sw, /"\/js\/today-activity-client\.js"/);

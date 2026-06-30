@@ -35,6 +35,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-run-plan-client.ts", output: "public/js/progress-run-plan-client.js" },
   { source: "src/client/progress-volume-client.ts", output: "public/js/progress-volume-client.js" },
   { source: "src/client/progress-energy-client.ts", output: "public/js/progress-energy-client.js" },
+  { source: "src/client/progress-calendar-client.ts", output: "public/js/progress-calendar-client.js" },
   { source: "src/client/capture.ts", output: "public/js/04-capture.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
