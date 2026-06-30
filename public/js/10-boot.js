@@ -946,7 +946,7 @@ function openOnboarding() {
     // Same elite loader the planning surfaces use — an oscillating filament + a calm
     // rotating caption so a 10–60s first-run agent pass reads as quiet motion, never a
     // frozen line. (Self-clears when enterApp() tears down the modal.)
-    status.innerHTML = `<span class="job-cap"></span>`;
+    status.innerHTML = CairnUi.jobCaptionHtml();
     const capEl = status.querySelector(".job-cap");
     if (capEl) thinkingCaption(capEl, "onboard");
     if (!reducedMotion()) status.classList.add("is-thinking");

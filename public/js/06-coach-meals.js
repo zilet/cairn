@@ -59,7 +59,7 @@ function runCoach() {
   const status = $("#runstatus");
   const btn = $("#runbtn");
   if (btn) btnBusy(btn, "Drafting\u2026");
-  if (status) status.innerHTML = `<span class="job-cap"></span>`;
+  if (status) status.innerHTML = CairnUi.jobCaptionHtml();
   runOp("proposal", { agent, instruction: instructionValue() }, coachProposalOpOpts());
 }
 
@@ -333,7 +333,7 @@ function runMealPlan() {
   const status = $("#mealstatus");
   const btn = $("#mealbtn");
   if (btn) btnBusy(btn, "Drafting\u2026");
-  if (status) status.innerHTML = `<span class="job-cap"></span>`;
+  if (status) status.innerHTML = CairnUi.jobCaptionHtml();
   runOp("meal_plan", { agent, instruction: instructionValue() }, coachMealPlanOpOpts());
 }
 
@@ -622,7 +622,7 @@ async function submitMealSwap(current, ctx, di, mi, panel) {
   if (row && row.classList.contains("meal-busy")) { toast("A swap is already running"); return; }
   const hint = panel.querySelector(".meal-swap-hint")?.value.trim() || "";
   const go = panel.querySelector(".meal-swap-go");
-  if (row) { row.classList.add("meal-busy"); row.querySelector(".meal-cap")?.remove(); row.insertAdjacentHTML("beforeend", `<span class="meal-cap job-cap"></span>`); }
+  if (row) { row.classList.add("meal-busy"); row.querySelector(".meal-cap")?.remove(); row.insertAdjacentHTML("beforeend", CairnUi.jobCaptionHtml({ className: "meal-cap job-cap" })); }
   panel.classList.add("meal-swap-busy");
   btnBusy(go, "Asking the coach…", { ghost: true });
   panel.querySelectorAll("button,input").forEach((el) => { if (el !== go) el.disabled = true; });
@@ -688,7 +688,7 @@ function reconnectMealSwap(job) {
   if (!row) return null; // row not on screen (e.g. a different sub-view) — retry later
   row.classList.add("meal-busy");
   row.querySelector(".meal-cap")?.remove();
-  row.insertAdjacentHTML("beforeend", `<span class="meal-cap job-cap"></span>`);
+  row.insertAdjacentHTML("beforeend", CairnUi.jobCaptionHtml({ className: "meal-cap job-cap" }));
   const o = mealSwapOpOpts(current, ctx, di, mi);
   let stop = () => {};
   const capEl = row.querySelector(".job-cap");
@@ -908,7 +908,7 @@ function recipeHtml(r) {
 function recipeLoadingHtml() {
   return `<div class="sheet-section sheet-section-c sheet-recipe-loading">
       <span class="aspin aspin-sm" aria-hidden="true"></span>
-      <div class="sheet-recipe-load-line job-cap"></div>
+      ${CairnUi.jobCaptionHtml({ tag: "div", className: "sheet-recipe-load-line job-cap" })}
     </div>`;
 }
 
@@ -1307,7 +1307,7 @@ function draftWeeklyMeals() {
   if (draftBtn) btnBusy(draftBtn, "Drafting…", { ghost: true });
   // The status line carries the .job-cap caption slot; a running draft re-attaches
   // after a reload via its registered reconnector.
-  status.innerHTML = `<span class="job-cap"></span>`;
+  status.innerHTML = CairnUi.jobCaptionHtml();
   runOp("meal_plan", { agent: "auto" }, mealPlanDraftOpOpts());
 }
 
@@ -1346,7 +1346,7 @@ function reconnectStatusHost(o, statusSel, btnSel, ghost) {
   if (!status) return null; // host not mounted — a later render retries
   const btn = btnSel ? view.querySelector(btnSel) : null;
   if (btn) btnBusy(btn, "Drafting…", { ghost });
-  status.innerHTML = `<span class="job-cap"></span>`;
+  status.innerHTML = CairnUi.jobCaptionHtml();
   let stop = () => {};
   const capEl = status.querySelector(".job-cap");
   if (capEl) stop = thinkingCaption(capEl, o.caption);

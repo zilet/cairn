@@ -532,7 +532,7 @@ function draftEnduranceRuns(instruction) {
   const btn = view.querySelector("#endDraftBtn");
   if (btn) btnBusy(btn, "Asking…");
   const status = view.querySelector("#endDraftStatus");
-  if (status) status.innerHTML = `<span class="job-cap"></span>`;
+  if (status) status.innerHTML = CairnUi.jobCaptionHtml();
   const draftWrap = view.querySelector("#endDraft");
   if (draftWrap) draftWrap.innerHTML = "";
   runOp("proposal", { agent: "auto", instruction }, enduranceProposalOpOpts());

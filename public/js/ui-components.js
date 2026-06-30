@@ -46,6 +46,12 @@ function segmentedNavHtml(options) {
         .join("");
     return `<div class="segwrap"><div class="seg seg-sliding" style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb"></span>${buttons}</div></div>`;
 }
+function jobCaptionHtml(options = {}) {
+    const tag = options.tag === "div" ? "div" : "span";
+    const className = options.className || "job-cap";
+    const text = options.text == null ? "" : escHtml(options.text);
+    return `<${tag} class="${escAttr(className)}"${uiAttrsHtml(options.attrs)}>${text}</${tag}>`;
+}
 function emptyStateHtml(options) {
     const className = options.className || "empty-state reveal";
     const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -68,6 +74,7 @@ const CAIRN_UI = {
     textChipHtml,
     loadingStateHtml,
     segmentedNavHtml,
+    jobCaptionHtml,
     emptyStateHtml,
 };
 Object.assign(globalThis, { CairnUi: CAIRN_UI });

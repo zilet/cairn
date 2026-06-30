@@ -730,6 +730,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const clientBuildCheck = read("scripts/check-client-build-output.mjs");
   const ui = read("public/js/02-ui.js");
   const today = read("public/js/03-today.js");
+  const progress = read("public/js/05-progress.js");
+  const meals = read("public/js/06-coach-meals.js");
   const health = read("public/js/07-me-health.js");
   const chat = read("public/js/09-plan-chat.js");
   const boot = read("public/js/10-boot.js");
@@ -934,6 +936,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponentsSource, /function textChipHtml\(options: TextChipOptions\): string/);
   assert.match(uiComponentsSource, /function loadingStateHtml\(options: LoadingStateOptions\): string/);
   assert.match(uiComponentsSource, /function segmentedNavHtml\(options: SegmentedNavOptions\): string/);
+  assert.match(uiComponentsSource, /function jobCaptionHtml\(options: JobCaptionOptions = \{\}\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
@@ -974,6 +977,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /window\.CairnUi = CAIRN_UI/);
   assert.match(uiComponents, /loadingStateHtml/);
   assert.match(uiComponents, /segmentedNavHtml/);
+  assert.match(uiComponents, /jobCaptionHtml/);
   assert.match(todayAgendaClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
@@ -993,13 +997,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /window\.CairnTodayAgenda\.railHtml/);
   assert.match(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
   assert.match(today, /CairnTodayTraining\.exRxLineHtml/);
+  assert.match(today, /CairnUi\.jobCaptionHtml\(\{ tag: "div", className: "sug-loading-line job-cap" \}\)/);
+  assert.match(progress, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
+  assert.match(meals, /CairnUi\.jobCaptionHtml\(\{ className: "meal-cap job-cap" \}\)/);
   assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
   assert.match(health, /CairnHealthClient\.formatMarkerNumber/);
   assert.match(health, /CairnHealthClient\.markerTrendWord/);
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(chat, /CairnChatClient\.historySessionRow/);
+  assert.match(chat, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /CairnSettingsClient\.updateCardHtml/);
+  assert.match(boot, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /registerAppJobReconnectors\(\)/);
   assert.doesNotMatch(boot, /registerJobReconnector\("session_suggest"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);

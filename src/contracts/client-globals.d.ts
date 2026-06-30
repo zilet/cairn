@@ -115,6 +115,12 @@ declare global {
         active: unknown;
         items: ReadonlyArray<readonly [unknown, unknown]>;
       }): string;
+      jobCaptionHtml(options?: {
+        text?: unknown;
+        className?: string;
+        tag?: "span" | "div";
+        attrs?: Record<string, unknown>;
+      }): string;
       emptyStateHtml(options: {
         title: unknown;
         body?: unknown;

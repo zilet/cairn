@@ -274,7 +274,7 @@ Gate:
 
 ### Wave 3 - Typed Component Core
 
-Status: in progress. The first component slices added `src/client/ui-components.ts` / `public/js/ui-components.js`, a tiny pure `CairnUi` primitive for escaped attributes, action buttons, empty states, text chips, loading states, and segmented navigation. Health marker empty-state markup, Today training variation chips, and the legacy `loadingState()` / `segBar()` wrappers now use it, and VM tests guard hostile-string escaping, boolean/invalid attributes, stable button type/status semantics, active segment slider markup, index script order, component dependencies, and service-worker cache coverage.
+Status: in progress. The first component slices added `src/client/ui-components.ts` / `public/js/ui-components.js`, a tiny pure `CairnUi` primitive for escaped attributes, action buttons, empty states, text chips, loading states, segmented navigation, and job captions. Health marker empty-state markup, Today training variation chips, the legacy `loadingState()` / `segBar()` wrappers, and shared agent-job caption slots now use it, and VM tests guard hostile-string escaping, boolean/invalid attributes, stable button type/status semantics, active segment slider markup, job reconnect selector markup, index script order, component dependencies, and service-worker cache coverage.
 
 Purpose: create a small reusable UI grammar without adding a framework.
 
@@ -292,6 +292,7 @@ Tasks:
 - [x] Move one repeated/safety-sensitive chip path through the component primitive.
 - [x] Move the central loading-state path through the component primitive.
 - [x] Move the central segmented sub-nav path through the component primitive.
+- [x] Move repeated agent-job caption slots through the component primitive.
 - [x] Keep data fetching out of components.
 - [x] Add tests that hostile strings are escaped in component output.
 - [x] Add tests that component classes and stable attributes remain present where screens depend on them.

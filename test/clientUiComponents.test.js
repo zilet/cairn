@@ -125,3 +125,24 @@ test("segmented nav component escapes items and preserves active slider contract
   assert.doesNotMatch(html, /Food <today>/);
   assert.equal((html.match(/type="button"/g) || []).length, 3);
 });
+
+test("job caption component preserves the reconnect selector and escapes text", () => {
+  const ui = loadUiComponents();
+  assert.equal(ui.jobCaptionHtml(), `<span class="job-cap"></span>`);
+
+  const span = ui.jobCaptionHtml({
+    text: "Reading <trend>",
+    className: `meal-cap job-cap "wide"`,
+    attrs: { "data-job": `abc"123`, "bad attr": "dropped" },
+  });
+
+  assert.match(span, /^<span /);
+  assert.match(span, /class="meal-cap job-cap &quot;wide&quot;"/);
+  assert.match(span, /data-job="abc&quot;123"/);
+  assert.match(span, />Reading &lt;trend&gt;<\/span>/);
+  assert.doesNotMatch(span, /bad attr/);
+  assert.doesNotMatch(span, /Reading <trend>/);
+
+  const div = ui.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" });
+  assert.equal(div, `<div class="sug-loading-line job-cap"></div>`);
+});

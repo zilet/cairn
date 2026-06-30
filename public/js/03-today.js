@@ -821,7 +821,7 @@ function reconnectSessionSuggest() {
   sessionSuggestInFlight = true;
   slot.innerHTML = `<div class="sug-card sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
-      <div class="sug-loading-line job-cap"></div>
+      ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
     </div>`;
   const o = sessionSuggestOpOpts();
   let stop = () => {};
@@ -887,7 +887,7 @@ async function askForSession(opts = {}) {
   // session re-attaches after a reload via its registered reconnector.
   slot.innerHTML = `<div class="sug-card sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
-      <div class="sug-loading-line job-cap"></div>
+      ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
     </div>`;
   const body = { date: state.logDate };
   if (opts.minutes != null) body.minutes = opts.minutes;

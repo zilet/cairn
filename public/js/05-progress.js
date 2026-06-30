@@ -1142,7 +1142,7 @@ function runNutritionCheckin(btn) {
   if (!out) return;
   const restore = btnBusy(btn, "Checking…");
   // A .job-cap carries the evolving thinkingCaption while the agent reads.
-  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> <span class="job-cap">reading your trend…</span></div>`;
+  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> ${CairnUi.jobCaptionHtml({ text: "reading your trend…" })}</div>`;
   runOp("nutrition_checkin", { window: 21 }, nutritionCheckinOpOpts(restore));
 }
 
@@ -1184,7 +1184,7 @@ function nutritionCheckinOpOpts(restore) {
 function reconnectNutritionCheckin() {
   const out = view.querySelector("#checkinResult");
   if (!out) return null; // not on Energy — a later renderEnergy() retries reconnect
-  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> <span class="job-cap">reading your trend…</span></div>`;
+  out.innerHTML = `<div class="eb-checking lbl"><span class="aspin aspin-xs"></span> ${CairnUi.jobCaptionHtml({ text: "reading your trend…" })}</div>`;
   const o = nutritionCheckinOpOpts(null);
   let stop = () => {};
   const capEl = out.querySelector(".job-cap");
