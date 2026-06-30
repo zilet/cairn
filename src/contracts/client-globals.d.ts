@@ -374,7 +374,7 @@ declare global {
   declare function paintRest(): void;
   declare function startRest(seconds?: number): void;
   declare function stopRest(): void;
-  declare function art(kind: string, text: string): string;
+  declare function art(kind: string, text: string, ...args: unknown[]): string;
   declare function artImg(kind: string, text: string, className?: string, svg?: string | null): string;
   declare function setsTonnage(sets: unknown): number;
   declare function enrichBadge(status: unknown): string;
@@ -638,6 +638,16 @@ declare global {
       rampHtml(goal: Record<string, unknown> | null | undefined): string;
       presets(goal: Record<string, unknown> | null | undefined): Array<{ t: string; i: string }>;
       draftCardHtml(proposal: Record<string, unknown>): string;
+    };
+
+    CairnPlanEditor: {
+      blankStrength(): Record<string, unknown>;
+      blankCardio(): Record<string, unknown>;
+      dayModelFromPlan(day: Record<string, unknown>): Record<string, unknown>;
+      calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string;
+      progDayHtml(day: Record<string, unknown>, dayIndex: number): string;
+      pitemHtml(item: Record<string, unknown>, dayIndex: number, itemIndex: number, lastIndex: number): string;
+      pdayHtml(day: Record<string, unknown>, dayIndex: number): string;
     };
 
     CairnDayFuel: {
@@ -942,6 +952,7 @@ declare global {
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
+  declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];

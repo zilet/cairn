@@ -31,33 +31,13 @@ async function renderPlanEditor() {
   // Pull-not-push calendar: subscribe to the plan as a weekly iCal feed. webcal://
   // hands most OSes straight to "add to calendar"; the (.ics) link is the fallback.
   const icsUrl = withToken("/api/plan.ics");
-  const calFooter = (plan && plan.length)
-    ? `<div id="planCal" style="margin-top:16px;text-align:center;font-size:.82rem;color:var(--muted)">
-         <a href="webcal://${escAttr(location.host)}${escAttr(icsUrl)}" style="color:var(--muted);text-decoration:none">📅 Subscribe to this plan in your calendar</a>
-         <a href="${escAttr(icsUrl)}" target="_blank" rel="noopener" style="color:var(--muted);opacity:.7;margin-left:8px">(.ics)</a>
-       </div>`
-    : "";
+  const calFooter = CairnPlanEditor.calendarFooterHtml(plan, location.host, icsUrl);
   view.innerHTML = segBar("edit", planSeg()) + `<div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}`;
   wireSeg(PLAN_HANDLERS);
 
-  const model = plan.map((d) => ({
-    day_number: d.day_number, name: d.name, focus: d.focus || "",
-    items: d.items.map((it) => ({
-      kind: it.kind === "cardio" ? "cardio" : "strength",
-      exercise: it.exercise, sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high, target_weight: it.target_weight,
-      note: it.note ?? "", warmup_sets: it.warmup_sets ?? null, muscle_group: it.muscle_group ?? null,
-      target_seconds: it.target_seconds ?? null, mode: it.mode ?? null, // carried through so saving never drops timed targets
-      // cardio prescription (kind:'cardio') — null on a strength item, preserved on save.
-      target_distance_km: it.target_distance_km ?? null,
-      target_duration_min: it.target_duration_min ?? null,
-      target_zone: it.target_zone ?? null,
-      // the interval is structured JSON server-side; the editor surfaces a plain note,
-      // read from a {note} blob (or a bare string) when present.
-      interval_note: cardioIntervalNote(it.interval),
-    })),
-  }));
+  const model = plan.map((d) => CairnPlanEditor.dayModelFromPlan(d));
   const editing = new Set(); // day indices currently flipped into the editor
 
   function sync() {
@@ -85,134 +65,8 @@ async function renderPlanEditor() {
     });
   }
 
-  // A blank item of a given kind, used by "+ exercise" / "+ cardio" / the kind toggle.
-  const blankStrength = () => ({ kind: "strength", exercise: "", sets: 3, rep_low: 8, rep_high: 10, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" });
-  const blankCardio = () => ({ kind: "cardio", exercise: "", sets: 1, rep_low: null, rep_high: null, target_weight: null, note: "", warmup_sets: null, target_distance_km: null, target_duration_min: null, target_zone: null, interval_note: "" });
-
-  // Gallery card: the default, beautiful state of a plan day (read-only catalog page).
-  function progDayHtml(d, di) {
-    const strip = d.items.map((it) => {
-      if (isCardioItem(it)) {
-        const t = artImg("activity", cardioArtPhrase(it), "artile-md strip-tile", art("activity", cardioArtPhrase(it)));
-        return t ? `<div>${t}</div>` : "";
-      }
-      const t = artImg("exercise", it.exercise, "artile-md strip-tile", art("exercise", it.exercise, it.muscle_group));
-      return t ? `<div data-guide="${encodeURIComponent(it.exercise)}" style="cursor:pointer">${t}</div>` : "";
-    }).join("");
-    const rows = d.items.map((it) => {
-      if (isCardioItem(it)) {
-        const t = artImg("activity", cardioArtPhrase(it), "artile-sm", art("activity", cardioArtPhrase(it)));
-        const pres = cardioPrescription(it);
-        const desc = cardioDescription(it); // coach prose, displaced from the short label
-        return `<div class="prog-row prog-row-cardio">
-            ${t}
-            <div class="prog-row-main">
-              <span class="prog-row-name prog-row-name-static">${escHtml(cardioLabel(it))}</span>
-              <div class="prog-row-hint"><span class="cardio-tag lbl">cardio</span>${desc ? ` ${escHtml(desc)}` : ""}</div>
-            </div>
-            <div class="prog-row-nums"><span class="numeral prog-row-cardio-pres">${escHtml(pres || "—")}</span></div>
-          </div>`;
-      }
-      const t = artImg("exercise", it.exercise, "artile-sm", art("exercise", it.exercise, it.muscle_group));
-      const timed = it.mode === "timed" || it.target_seconds != null;
-      const range = timed
-        ? (it.target_seconds != null ? fmtDur(it.target_seconds) : "time")
-        : (it.rep_low === it.rep_high ? `${it.rep_low ?? ""}` : `${it.rep_low ?? "?"}–${it.rep_high ?? "?"}`);
-      const hints = [
-        it.warmup_sets ? `${it.warmup_sets} warmup` : null,
-        it.note ? escHtml(it.note) : null,
-      ].filter(Boolean).join(" · ");
-      return `<div class="prog-row">
-          ${t}
-          <div class="prog-row-main">
-            <button class="prog-row-name" data-guide="${encodeURIComponent(it.exercise)}">${escHtml(it.exercise)}</button>
-            ${hints ? `<div class="prog-row-hint">${hints}</div>` : ""}
-          </div>
-          <div class="prog-row-nums">
-            <span class="numeral">${it.sets ?? "?"} × ${range}</span>
-            ${!timed && it.target_weight != null ? `<span class="numeral prog-row-wt">${fmtWeight(it.target_weight)}</span>` : ""}
-          </div>
-        </div>`;
-    }).join("");
-    return `<div class="prog-day reveal" style="${stagger(di)}" data-pd="${di}">
-        <div class="prog-head">
-          <div class="prog-head-main">
-            <div class="lbl">Day ${d.day_number}</div>
-            <div class="prog-name">${escHtml(d.name || `Day ${d.day_number}`)}</div>
-            ${d.focus ? `<div class="prog-focus">${escHtml(d.focus)}</div>` : ""}
-          </div>
-          <button class="ghostbtn prog-edit" data-editday="${di}">Edit day</button>
-        </div>
-        ${strip ? `<div class="prog-strip">${strip}</div>` : ""}
-        <div class="prog-list">${rows || `<div class="empty">No exercises yet — tap Edit day.</div>`}</div>
-      </div>`;
-  }
-
-  // One item editor: a strength prescription (the original .pi-* markup) or a cardio
-  // prescription (distance/duration/zone/interval). A kind toggle flips between them.
-  function pitemHtml(it, di, ii, lastIdx) {
-    const cardio = isCardioItem(it);
-    const ord = `<div class="pi-ord">
-        <button class="ordbtn" data-upitem="${di}:${ii}" ${ii === 0 ? "disabled" : ""}>↑</button>
-        <button class="ordbtn" data-downitem="${di}:${ii}" ${ii === lastIdx ? "disabled" : ""}>↓</button>
-      </div>`;
-    const kindToggle = `<div class="pi-kind" role="group" aria-label="Item type">
-        <button type="button" class="pi-kindbtn${cardio ? "" : " active"}" data-pikind="${di}:${ii}:strength">Lift</button>
-        <button type="button" class="pi-kindbtn${cardio ? " active" : ""}" data-pikind="${di}:${ii}:cardio">Cardio</button>
-      </div>`;
-    if (cardio) {
-      return `<div class="pitem pitem-cardio" data-d="${di}" data-i="${ii}" data-kind="cardio">
-          <div class="pi-row1">
-            <input class="pi-ex" value="${escAttr(it.note || "")}" placeholder="e.g. Long run, Tempo, Easy ride">
-            ${ord}
-          </div>
-          ${kindToggle}
-          <div class="pi-nums pi-nums-cardio">
-            <input class="pi-km" type="number" inputmode="decimal" step="0.1" value="${it.target_distance_km ?? ""}" placeholder="km">
-            <input class="pi-min" type="number" inputmode="numeric" value="${it.target_duration_min ?? ""}" placeholder="min">
-            <input class="pi-zone" type="text" value="${escAttr(it.target_zone || "")}" placeholder="zone (Z2)">
-            <button class="delbtn" data-delitem="${di}:${ii}">✕</button>
-          </div>
-          <input class="pi-ivl" value="${escAttr(it.interval_note || "")}" placeholder="Interval note (optional, e.g. 6×400m @ Z4)">
-        </div>`;
-    }
-    return `<div class="pitem" data-d="${di}" data-i="${ii}" data-kind="strength">
-        <div class="pi-row1">
-          <input class="pi-ex" value="${escAttr(it.exercise)}" placeholder="Exercise">
-          ${ord}
-        </div>
-        ${kindToggle}
-        <div class="pi-nums">
-          <input class="pi-sets" type="number" inputmode="numeric" value="${it.sets ?? ""}" placeholder="sets">
-          <input class="pi-lo" type="number" inputmode="numeric" value="${it.rep_low ?? ""}" placeholder="lo">
-          <input class="pi-hi" type="number" inputmode="numeric" value="${it.rep_high ?? ""}" placeholder="hi">
-          <input class="pi-tw" type="number" inputmode="decimal" value="${it.target_weight ?? ""}" placeholder="wt">
-          <input class="pi-wu" type="number" inputmode="numeric" value="${it.warmup_sets ?? ""}" placeholder="WU">
-          <button class="delbtn" data-delitem="${di}:${ii}">✕</button>
-        </div>
-        <input class="pi-note" value="${escAttr(it.note || "")}" placeholder="Note (optional)">
-      </div>`;
-  }
-
-  // Editor card: the pre-existing .pday / .pi-* markup, flipped in per day via "Edit day".
-  function pdayHtml(d, di) {
-    return `<div class="pday" data-d="${di}">
-        <div class="pday-head">
-          <input class="pday-name" value="${escAttr(d.name)}" placeholder="Day name">
-          <button class="ghostbtn pday-done" data-doneday="${di}">Done</button>
-          <button class="delbtn" data-delday="${di}">✕</button>
-        </div>
-        <input class="pday-focus" value="${escAttr(d.focus)}" placeholder="Focus (optional)">
-        ${d.items.map((it, ii) => pitemHtml(it, di, ii, d.items.length - 1)).join("")}
-        <div class="pday-add">
-          <button class="ghostbtn" data-additem="${di}">+ exercise</button>
-          <button class="ghostbtn" data-addcardio="${di}">+ cardio</button>
-        </div>
-      </div>`;
-  }
-
   function draw() {
-    $("#planedit").innerHTML = model.map((d, di) => editing.has(di) ? pdayHtml(d, di) : progDayHtml(d, di)).join("");
+    $("#planedit").innerHTML = model.map((d, di) => editing.has(di) ? CairnPlanEditor.pdayHtml(d, di) : CairnPlanEditor.progDayHtml(d, di)).join("");
     wireGuides($("#planedit"));
 
     view.querySelectorAll("[data-editday]").forEach((b) => b.addEventListener("click", () => {
@@ -233,10 +87,10 @@ async function renderPlanEditor() {
       sync(); const [di, ii] = b.dataset.delitem.split(":").map(Number); model[di].items.splice(ii, 1); planBar.markDirty(); draw();
     }));
     view.querySelectorAll("[data-additem]").forEach((b) => b.addEventListener("click", () => {
-      sync(); model[+b.dataset.additem].items.push(blankStrength()); planBar.markDirty(); draw();
+      sync(); model[+b.dataset.additem].items.push(CairnPlanEditor.blankStrength()); planBar.markDirty(); draw();
     }));
     view.querySelectorAll("[data-addcardio]").forEach((b) => b.addEventListener("click", () => {
-      sync(); model[+b.dataset.addcardio].items.push(blankCardio()); planBar.markDirty(); draw();
+      sync(); model[+b.dataset.addcardio].items.push(CairnPlanEditor.blankCardio()); planBar.markDirty(); draw();
     }));
     // Flip one item between a lift and a cardio prescription — preserves the note/label,
     // resets the kind-specific numbers (they don't translate between modalities).
@@ -245,7 +99,7 @@ async function renderPlanEditor() {
       const it = model[+di] && model[+di].items[+ii]; if (!it) return;
       if (it.kind === kind) return; // already this kind
       const label = it.kind === "cardio" ? (it.note || "") : (it.exercise || "");
-      const next = kind === "cardio" ? blankCardio() : blankStrength();
+      const next = kind === "cardio" ? CairnPlanEditor.blankCardio() : CairnPlanEditor.blankStrength();
       if (kind === "cardio") next.note = label; else next.exercise = label;
       model[+di].items[+ii] = next; planBar.markDirty(); draw();
     }));

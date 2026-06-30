@@ -638,6 +638,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/family-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
+  assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
@@ -809,6 +810,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsScreenSource = read("src/client/settings-screen.ts");
   const chatClientSource = read("src/client/chat-client.ts");
   const planEnduranceSource = read("src/client/plan-endurance-client.ts");
+  const planEditorSource = read("src/client/plan-editor-client.ts");
   const dayFuelSource = read("src/client/day-fuel-client.ts");
   const foodNoteSource = read("src/client/food-note-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
@@ -882,6 +884,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressProgramBlockClient = read("public/js/progress-program-block-client.js");
   const capture = read("public/js/04-capture.js");
   const planEnduranceClient = read("public/js/plan-endurance-client.js");
+  const planEditorClient = read("public/js/plan-editor-client.js");
   const dayFuelClient = read("public/js/day-fuel-client.js");
   const foodNoteClient = read("public/js/food-note-client.js");
   const healthClient = read("public/js/health-client.js");
@@ -1038,6 +1041,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
   assert.match(clientGlobals, /CairnPlanEndurance/);
+  assert.match(clientGlobals, /CairnPlanEditor/);
+  assert.match(clientGlobals, /progDayHtml\(/);
   assert.match(clientGlobals, /CairnDayFuel/);
   assert.match(clientGlobals, /declare function dayFuelHtml\(day: Record<string, unknown> \| null \| undefined\): string/);
   assert.match(clientGlobals, /declare const MEAL_LABEL: Record<string, string>/);
@@ -1213,6 +1218,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
   assert.match(clientBuild, /src\/client\/plan-endurance-client\.ts/);
   assert.match(clientBuild, /public\/js\/plan-endurance-client\.js/);
+  assert.match(clientBuild, /src\/client\/plan-editor-client\.ts/);
+  assert.match(clientBuild, /public\/js\/plan-editor-client\.js/);
   assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
   assert.match(clientBuild, /public\/js\/day-fuel-client\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
@@ -1513,6 +1520,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf("/js/plan-endurance-client.js") > index.indexOf("/js/chat-client.js") &&
       index.indexOf("/js/plan-endurance-client.js") < index.indexOf("/js/09-plan-chat.js"),
     "plan-endurance-client.js must load before Plan endurance consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/plan-editor-client.js") > index.indexOf("/js/plan-endurance-client.js") &&
+      index.indexOf("/js/plan-editor-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    "plan-editor-client.js must load after Plan endurance helpers and before Plan editor consumers"
   );
   assert.ok(
     index.indexOf("/js/day-fuel-client.js") > index.indexOf("/js/05-progress.js") &&
@@ -1961,6 +1973,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceSource, /function endurancePresets\(goal: EnduranceGoalRow/);
   assert.match(planEnduranceSource, /function endDraftCardHtml\(proposal: EnduranceProposal\): string/);
   assert.match(planEnduranceSource, /CairnPlanEndurance/);
+  assert.match(planEditorSource, /type PlanEditorItem = \{/);
+  assert.match(planEditorSource, /function dayModelFromPlan\(day: PlanEditorDay\)/);
+  assert.match(planEditorSource, /function progDayHtml\(day: PlanEditorDay, dayIndex: number\): string/);
+  assert.match(planEditorSource, /function pitemHtml\(item: PlanEditorItem, dayIndex: number, itemIndex: number, lastIndex: number\): string/);
+  assert.match(planEditorSource, /CairnPlanEditor/);
   assert.match(dayFuelSource, /const MEAL_LABEL: Record<string, string>/);
   assert.match(dayFuelSource, /function dayFuelHtml\(day: DayFuelData \| null \| undefined\): string/);
   assert.match(dayFuelSource, /CairnDayFuel/);
@@ -2206,6 +2223,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEnduranceClient, /Object\.assign\(globalThis, \{ CairnPlanEndurance: CAIRN_PLAN_ENDURANCE \}\)/);
   assert.match(planEnduranceClient, /window\.CairnPlanEndurance = CAIRN_PLAN_ENDURANCE/);
   assert.doesNotMatch(planEnduranceClient, /^const\s+ENDURANCE_PHASES|^function\s+enduranceRampHtml|^function\s+endDraftCardHtml/m);
+  assert.match(planEditorClient, /Object\.assign\(globalThis, \{ CairnPlanEditor: CAIRN_PLAN_EDITOR \}\)/);
+  assert.match(planEditorClient, /window\.CairnPlanEditor = CAIRN_PLAN_EDITOR/);
+  assert.match(planEditorClient, /dayModelFromPlan/);
+  assert.match(planEditorClient, /progDayHtml/);
+  assert.doesNotMatch(planEditorClient, /^function\s+progDayHtml|^function\s+pitemHtml|^function\s+pdayHtml/m);
   assert.match(dayFuelClient, /Object\.assign\(globalThis, \{/);
   assert.match(dayFuelClient, /CairnDayFuel/);
   assert.match(dayFuelClient, /MEAL_LABEL/);
@@ -2364,6 +2386,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chat, /CairnPlanEndurance\.presets/);
   assert.match(chat, /CairnPlanEndurance\.draftCardHtml/);
   assert.doesNotMatch(chat, /const\s+ENDURANCE_PHASES|function\s+enduranceRampHtml|function\s+endurancePresets|function\s+endDraftCardHtml/);
+  assert.match(chat, /CairnPlanEditor\.dayModelFromPlan/);
+  assert.match(chat, /CairnPlanEditor\.calendarFooterHtml/);
+  assert.match(chat, /CairnPlanEditor\.progDayHtml/);
+  assert.match(chat, /CairnPlanEditor\.pdayHtml/);
+  assert.doesNotMatch(chat, /function\s+progDayHtml|function\s+pitemHtml|function\s+pdayHtml|const\s+blankStrength|const\s+blankCardio/);
   assert.match(settingsScreen, /CairnSettingsClient\.updateCardHtml/);
   assert.match(appOnboarding, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /startAppShell\(\)/);
@@ -2417,6 +2444,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
+  assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);

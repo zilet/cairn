@@ -52,6 +52,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
   { source: "src/client/plan-endurance-client.ts", output: "public/js/plan-endurance-client.js" },
+  { source: "src/client/plan-editor-client.ts", output: "public/js/plan-editor-client.js" },
   { source: "src/client/day-fuel-client.ts", output: "public/js/day-fuel-client.js" },
   { source: "src/client/food-note-client.ts", output: "public/js/food-note-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
