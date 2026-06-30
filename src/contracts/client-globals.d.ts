@@ -203,6 +203,16 @@ declare global {
     enabledAgents: readonly { name: string }[],
     routes: Record<string, string>,
   ): string;
+  declare function isCardioItem(item: unknown): boolean;
+  declare function cardioIntervalNote(interval: unknown): string;
+  declare function cardioIntervalStructure(interval: unknown, targetZone: unknown): string;
+  declare function cardioArtPhrase(item: Record<string, unknown> | null | undefined): string;
+  declare function cardioNoteIsDescriptive(note: unknown): boolean;
+  declare function cardioSport(item: Record<string, unknown> | null | undefined): string;
+  declare function derivedCardioLabel(item: Record<string, unknown> | null | undefined): string;
+  declare function cardioLabel(item: Record<string, unknown> | null | undefined): string;
+  declare function cardioDescription(item: Record<string, unknown> | null | undefined): string;
+  declare function cardioPrescription(item: Record<string, unknown> | null | undefined): string;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
   declare function isEndurance(): boolean;
@@ -404,6 +414,19 @@ declare global {
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
 
+    CairnCardioPlan: {
+      isCardioItem(item: unknown): boolean;
+      cardioIntervalNote(interval: unknown): string;
+      cardioIntervalStructure(interval: unknown, targetZone: unknown): string;
+      cardioArtPhrase(item: Record<string, unknown> | null | undefined): string;
+      cardioNoteIsDescriptive(note: unknown): boolean;
+      cardioSport(item: Record<string, unknown> | null | undefined): string;
+      derivedCardioLabel(item: Record<string, unknown> | null | undefined): string;
+      cardioLabel(item: Record<string, unknown> | null | undefined): string;
+      cardioDescription(item: Record<string, unknown> | null | undefined): string;
+      cardioPrescription(item: Record<string, unknown> | null | undefined): string;
+    };
+
     CairnTodayAgenda: {
       TODAY_RAIL_SLOTS: Record<string, string>;
       TODAY_PRIMARY_CLIENT_MAX: number;
@@ -433,6 +456,7 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
+  declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
 }
