@@ -183,6 +183,11 @@ declare global {
   declare function stagger(index?: number | null): string;
   declare function activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function toast(message: string): void;
+  declare function armDelete(
+    btn: Element,
+    onConfirm: () => unknown,
+    options?: { label?: string },
+  ): void;
   declare function mountSaveBar(options: {
     sentinel: Element | null;
     fields: Element;
@@ -244,6 +249,12 @@ declare global {
   declare function programAdjustmentsHtml(rows: unknown): string;
   declare function loadTestWeek(): Promise<void>;
   declare function testWeekBannerHtml(testWeek: unknown): string;
+  declare function phaseWord(phase: unknown): string;
+  declare function blockFocusWord(focus: unknown): string;
+  declare function activeBlockHtml(block: unknown): string;
+  declare function startBlockHtml(): string;
+  declare function loadProgramBlock(): Promise<void>;
+  declare function wireProgramBlock(slot: Element): void;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -608,6 +619,14 @@ declare global {
       testWeekBannerHtml(testWeek: unknown): string;
     };
 
+    CairnProgressProgramBlock: {
+      blockFocusWord(focus: unknown): string;
+      activeBlockHtml(block: unknown): string;
+      startBlockHtml(): string;
+      loadProgramBlock(): Promise<void>;
+      wireProgramBlock(slot: Element): void;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -689,6 +708,7 @@ declare global {
   declare const CairnProgressPerformance: Window["CairnProgressPerformance"];
   declare const CairnProgressProgramAdjustments: Window["CairnProgressProgramAdjustments"];
   declare const CairnProgressTestWeek: Window["CairnProgressTestWeek"];
+  declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
