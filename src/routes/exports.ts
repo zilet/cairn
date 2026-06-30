@@ -2,14 +2,15 @@ import { Router } from "express";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as repo from "../repo.js";
 import { todayISO } from "../db.js";
+import { buildHealthExport } from "../domain/health/index.js";
+import { exportAll, snapshotDbTo } from "../domain/training/index.js";
 import { buildClinicalReportData, renderClinicalReportHTML, renderClinicalReportText } from "../report.js";
 
 export const exportsRouter = Router();
 
 exportsRouter.get("/export", (_req, res) => {
-  const data = { exported_at: todayISO(), ...repo.exportAll() };
+  const data = { exported_at: todayISO(), ...exportAll() };
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Content-Disposition", `attachment; filename="cairn-export-${todayISO()}.json"`);
   res.send(JSON.stringify(data, null, 2));
@@ -18,7 +19,7 @@ exportsRouter.get("/export", (_req, res) => {
 exportsRouter.get("/export/db", async (_req, res) => {
   const tmp = path.join(os.tmpdir(), `cairn-snap-${process.pid}-${Date.now()}.db`);
   try {
-    repo.snapshotDbTo(tmp);
+    snapshotDbTo(tmp);
     res.download(tmp, `cairn-${todayISO()}.db`, (_err) => {
       fs.rm(tmp, { force: true }, () => {});
     });
@@ -31,7 +32,7 @@ exportsRouter.get("/export/db", async (_req, res) => {
 // non-marker clinical facts + supplements + active directives) — a portable
 // read-only slice to hand a physician or another tool. Optimal-zone framing, no scores.
 exportsRouter.get("/health-export", (_req, res) => {
-  const data = repo.buildHealthExport();
+  const data = buildHealthExport();
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Content-Disposition", `attachment; filename="cairn-health-${todayISO()}.json"`);
   res.send(JSON.stringify(data, null, 2));

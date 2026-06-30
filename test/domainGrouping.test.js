@@ -158,6 +158,13 @@ test("agent job adapters use the person domain entry point", () => {
   }
 });
 
+test("export route uses health and training domain entry points", () => {
+  const src = read("src/routes/exports.ts");
+  assert.match(src, /from "\.\.\/domain\/health\/index\.js"/);
+  assert.match(src, /from "\.\.\/domain\/training\/index\.js"/);
+  assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, "exports route should not import the repo barrel");
+});
+
 test("daily driver adapters use domain entry points", () => {
   for (const file of ["src/routes/today.ts", "src/surfaces/mcp/daily-driver.ts"]) {
     const src = read(file);
