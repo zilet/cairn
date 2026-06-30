@@ -274,19 +274,12 @@ function cardioLogPhrase(it) {
 }
 
 function setChip(s, i) {
-  const n = s.set_number ?? (i != null ? i + 1 : null);
-  const figure = s.duration_sec != null
-    ? fmtDur(s.duration_sec)
-    : `${fmtWeight(s.weight)} <span>×</span> ${s.reps}${s.rir != null ? ` <span>@${s.rir}</span>` : ""}`;
-  return `<span class="chip" data-set="${s.id}">${n != null ? `<span class="chip-n">#${n}</span> ` : ""}${figure}<button class="chip-x" data-del="${s.id}" title="delete">×</button></span>`;
+  return CairnTodaySessionStatus.setChipHtml(s, i);
 }
 
-// Tonnage = Σ weight×reps over LOADED sets (positive weight AND reps; timed and
-// bodyweight/assisted sets excluded). One definition of "what counts" — reused by
-// the done card, the finish row, and history so the rule can't drift.
-function setsTonnage(sets) {
-  return (sets || []).reduce((t, s) => t + (s.weight > 0 && s.reps ? s.weight * s.reps : 0), 0);
-}
+// Session status render helpers live in /js/today-session-status-client.js. They
+// own tonnage, set chips, completion, skip-line, and feedback markup while this
+// screen keeps DOM wiring and persistence.
 
 // Set an exercise's mode by name (upsert-by-name). Returns the api() promise.
 function postExerciseMode(name, mode) {
@@ -1554,28 +1547,7 @@ async function renderToday(opts = {}) {
 // matter, the "how did that feel?" slot, and two soft ways forward (log more /
 // see it in history). No score, no verdict — just "that's done, well played".
 function sessionDoneCard(session, day, { isToday }) {
-  const sets = (session.sets || []).length;
-  const tonnage = setsTonnage(session.sets);
-  // Prefer the session's content-true title (e.g. an off-plan "Full Body" that was
-  // really mobility/core), falling back to the matched plan day / raw day name.
-  const name = session.title || (day && day.name) || session.day_name || "Session";
-  const chips = [
-    `${sets} set${sets === 1 ? "" : "s"}`,
-    tonnage ? `${Math.round(tonnage).toLocaleString()} lb` : null,
-    session.duration_min ? `${session.duration_min} min` : null,
-  ].filter(Boolean).map((t) => `<span class="done-chip">${escHtml(t)}</span>`).join("");
-  return `<div class="sessiondone reveal" style="--i:2">
-      <div class="done-mark" aria-hidden="true">✓</div>
-      <div class="done-kicker lbl">${isToday ? "Today · complete" : "Complete"}</div>
-      <h2 class="done-title">${escHtml(name)}</h2>
-      <div class="done-chips">${chips}</div>
-      ${session.notes ? `<div class="done-notes">“${escHtml(session.notes)}”</div>` : ""}
-      <div id="feedbackSlot" class="feedback-slot done-feedback"></div>
-      <div class="done-actions">
-        <button class="ghostbtn done-reopen" id="reopenBtn">Log more</button>
-        <button class="ghostbtn done-history" id="toHistoryBtn">In your history →</button>
-      </div>
-    </div>`;
+  return CairnTodaySessionStatus.sessionDoneCardHtml(session, day, { isToday });
 }
 
 // ---------- Autoregulation: gentle 1-tap "how did that feel?" ----------
@@ -1585,30 +1557,20 @@ function sessionDoneCard(session, day, { isToday }) {
 // answer, so we render it as recorded when it's set. Recovery INFORMS the
 // coach — it never auto-changes a plan (you drive).
 function hasFeedback(session) {
-  return session && (session.soreness != null || session.performance != null ||
-    (session.joint_pain != null && String(session.joint_pain).trim()));
+  return CairnTodaySessionStatus.hasFeedback(session);
 }
 
 function renderFeedback(slot, session) {
   if (!slot) return;
   if (hasFeedback(session)) { renderFeedbackDone(slot, session); return; }
   // collapsed by default — one quiet line, opt-in
-  slot.innerHTML = `<button class="checkin-open" id="feedbackOpen" type="button">
-      <span class="checkin-open-dot" aria-hidden="true"></span>
-      how did that feel?
-    </button>`;
+  slot.innerHTML = CairnTodaySessionStatus.feedbackOpenHtml();
   const open = slot.querySelector("#feedbackOpen");
   if (open) open.addEventListener("click", () => renderFeedbackForm(slot, session));
 }
 
 function renderFeedbackForm(slot, session) {
-  slot.innerHTML = `<div class="checkin-form feedback-form chip-in">
-      ${feelScale("soreness", "soreness")}
-      ${feelScale("performance", "performance")}
-      <input id="feedbackJoint" class="feedback-joint" type="text" autocomplete="off"
-        placeholder="any joint or area? (e.g. left knee)" value="${escAttr(session.joint_pain || "")}">
-      <button class="checkin-dismiss" id="feedbackDismiss" type="button" aria-label="Not now">✕</button>
-    </div>`;
+  slot.innerHTML = CairnTodaySessionStatus.feedbackFormHtml(session);
   const date = session.date || state.logDate;
   const picked = {};
   const save = async () => {
@@ -1642,15 +1604,9 @@ function renderFeedbackForm(slot, session) {
 }
 
 function renderFeedbackDone(slot, session) {
-  const parts = [];
-  if (session.soreness != null) parts.push(`soreness ${Number(session.soreness)}/5`);
-  if (session.performance != null) parts.push(`performance ${Number(session.performance)}/5`);
-  if (session.joint_pain && String(session.joint_pain).trim()) parts.push(escHtml(String(session.joint_pain).trim()));
-  if (!parts.length) { slot.innerHTML = ""; return; }
-  slot.innerHTML = `<div class="checkin-done feedback-done chip-in">
-      <span class="checkin-done-mark" aria-hidden="true">✓</span> ${parts.join(" · ")}
-      <button class="feedback-edit" id="feedbackEdit" type="button">edit</button>
-    </div>`;
+  const html = CairnTodaySessionStatus.feedbackDoneHtml(session);
+  if (!html) { slot.innerHTML = ""; return; }
+  slot.innerHTML = html;
   const edit = slot.querySelector("#feedbackEdit");
   if (edit) edit.addEventListener("click", () => renderFeedbackForm(slot, session));
 }
@@ -1911,13 +1867,10 @@ function expandEl(el) {
 
 // The slim "Skipped: …" line at the very bottom of Today. Hidden while empty.
 function skipNameHtml(name) {
-  return `<button class="skip-name" data-unskip="${encodeURIComponent(name)}" title="Restore ${escAttr(name)}">${escHtml(name)}<span class="skip-undo">↺</span></button>`;
+  return CairnTodaySessionStatus.skipNameHtml(name);
 }
 function skipLineHtml(names) {
-  return `<div class="skipline${names.length ? "" : " skipline-empty"}" id="skipLine" aria-live="polite">
-      <span class="lbl">Skipped</span>
-      <span class="skipline-names">${names.map(skipNameHtml).join("")}</span>
-    </div>`;
+  return CairnTodaySessionStatus.skipLineHtml(names);
 }
 function addSkipName(name) {
   const line = view.querySelector("#skipLine");

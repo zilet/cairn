@@ -994,6 +994,20 @@ declare global {
       failureHtml(result?: unknown): string;
       composerHtml(vibes?: readonly string[]): string;
     };
+
+    CairnTodaySessionStatus: {
+      FEEL_FACES: readonly string[];
+      setChipHtml(set: Record<string, unknown> | null | undefined, index?: number): string;
+      setsTonnage(sets: unknown): number;
+      sessionDoneCardHtml(session: Record<string, unknown> | null | undefined, day: { name?: unknown } | null | undefined, options?: { isToday?: boolean }): string;
+      hasFeedback(session: Record<string, unknown> | null | undefined): boolean;
+      feedbackOpenHtml(): string;
+      feedbackScaleHtml(kind: "soreness" | "performance", label: string): string;
+      feedbackFormHtml(session: Record<string, unknown> | null | undefined): string;
+      feedbackDoneHtml(session: Record<string, unknown> | null | undefined): string;
+      skipNameHtml(name: unknown): string;
+      skipLineHtml(names: unknown): string;
+    };
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
