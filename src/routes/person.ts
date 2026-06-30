@@ -1,33 +1,49 @@
 import { Router } from "express";
-import * as repo from "../repo.js";
+import {
+  addBloodPressureReading,
+  deleteBloodPressureReading,
+  deriveDirectives,
+  listBloodPressureReadings,
+} from "../domain/health/index.js";
+import {
+  addCheckin,
+  computeGoalCheck,
+  confirmGoalCheckin,
+  getCheckinByDate,
+  getProfile,
+  listCheckins,
+  listWeight,
+  logWeight,
+  setProfile,
+} from "../domain/person/index.js";
 
 export const personRouter = Router();
 
 // ---- profile & goal ----
-personRouter.get("/profile", (_req, res) => res.json(repo.getProfile()));
+personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 personRouter.put("/profile", (req, res) => {
   const body = req.body ?? {};
   // A real goal change is a confirmation: restart the gentle goal-check clock so
   // it does not resurface immediately after the athlete just set it.
   if ("goal_mode" in body || "goal_weight_lb" in body || "goal_date" in body) {
     try {
-      repo.confirmGoalCheckin();
+      confirmGoalCheckin();
     } catch {
       /* best-effort */
     }
   }
-  res.json(repo.setProfile(body));
+  res.json(setProfile(body));
 });
-personRouter.get("/goal", (_req, res) => res.json(repo.computeGoalCheck()));
+personRouter.get("/goal", (_req, res) => res.json(computeGoalCheck()));
 
 // ---- bodyweight log ----
 personRouter.get("/bodyweight", (req, res) =>
-  res.json(repo.listWeight(req.query.limit ? Number(req.query.limit) : 60))
+  res.json(listWeight(req.query.limit ? Number(req.query.limit) : 60))
 );
 personRouter.post("/bodyweight", (req, res) => {
   const b = req.body ?? {};
   if (b.weight_lb == null) return res.status(400).json({ error: "weight_lb required" });
-  res.json(repo.logWeight(Number(b.weight_lb), b.date, b.note));
+  res.json(logWeight(Number(b.weight_lb), b.date, b.note));
 });
 
 // ---- blood pressure log ----
@@ -35,12 +51,12 @@ personRouter.post("/bodyweight", (req, res) => {
 // and clinic readings all land as dated observations that also project into the
 // marker history as Systolic BP / Diastolic BP / Pulse.
 personRouter.get("/blood-pressure", (req, res) =>
-  res.json(repo.listBloodPressureReadings(req.query.limit ? Number(req.query.limit) : 60))
+  res.json(listBloodPressureReadings(req.query.limit ? Number(req.query.limit) : 60))
 );
 personRouter.post("/blood-pressure", (req, res) => {
   const b = req.body ?? {};
   try {
-    const row = repo.addBloodPressureReading({
+    const row = addBloodPressureReading({
       measured_at: b.measured_at ?? b.measuredAt ?? null,
       systolic: b.systolic,
       diastolic: b.diastolic,
@@ -50,7 +66,7 @@ personRouter.post("/blood-pressure", (req, res) => {
       note: b.note ?? null,
     });
     try {
-      repo.deriveDirectives();
+      deriveDirectives();
     } catch {
       /* never fail the vital log */
     }
@@ -60,7 +76,7 @@ personRouter.post("/blood-pressure", (req, res) => {
   }
 });
 personRouter.delete("/blood-pressure/:id", (req, res) =>
-  res.json(repo.deleteBloodPressureReading(Number(req.params.id)))
+  res.json(deleteBloodPressureReading(Number(req.params.id)))
 );
 
 // ---- optional morning check-in (T5C: a day-read signal, offered never required) ----
@@ -69,7 +85,7 @@ personRouter.delete("/blood-pressure/:id", (req, res) =>
 // GET /checkins (no date) lists recent.
 personRouter.post("/checkins", (req, res) => {
   const b = req.body ?? {};
-  res.json(repo.addCheckin(b.date, {
+  res.json(addCheckin(b.date, {
     mood: b.mood,
     energy: b.energy,
     sleep_feel: b.sleep_feel,
@@ -78,6 +94,6 @@ personRouter.post("/checkins", (req, res) => {
   }));
 });
 personRouter.get("/checkins", (req, res) => {
-  if (req.query.date) return res.json(repo.getCheckinByDate(String(req.query.date)));
-  res.json(repo.listCheckins(req.query.limit ? Number(req.query.limit) : 14));
+  if (req.query.date) return res.json(getCheckinByDate(String(req.query.date)));
+  res.json(listCheckins(req.query.limit ? Number(req.query.limit) : 14));
 });

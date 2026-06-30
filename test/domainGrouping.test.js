@@ -113,6 +113,18 @@ test("person context adapters use the person domain entry point", () => {
   }
 });
 
+test("person adapters use person and health domain entry points", () => {
+  for (const [file, personImportPath, healthImportPath] of [
+    ["src/routes/person.ts", "../domain/person/index.js", "../domain/health/index.js"],
+    ["src/surfaces/mcp/person.ts", "../../domain/person/index.js", "../../domain/health/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${personImportPath.replaceAll(".", "\\.")}"`), `${file} should import person domain exports`);
+    assert.match(src, new RegExp(`from "${healthImportPath.replaceAll(".", "\\.")}"`), `${file} should import health domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
 test("memory learning adapters use the person domain entry point", () => {
   for (const [file, importPath] of [
     ["src/routes/memory-learning.ts", "../domain/person/index.js"],
