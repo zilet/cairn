@@ -611,6 +611,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
   assert.match(sw, /"\/js\/app-service-worker\.js"/);
   assert.match(sw, /"\/js\/app-discipline-primer\.js"/);
+  assert.match(sw, /"\/js\/app-onboarding\.js"/);
   assert.match(sw, /"\/js\/app-startup\.js"/);
 });
 
@@ -748,6 +749,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const appMobileViewportSource = read("src/client/app/mobile-viewport.ts");
   const appServiceWorkerSource = read("src/client/app/service-worker.ts");
   const appDisciplinePrimerSource = read("src/client/app/discipline-primer.ts");
+  const appOnboardingSource = read("src/client/app/onboarding.ts");
   const appStartupSource = read("src/client/app/startup.ts");
   const routeState = read("public/js/route-state.js");
   const appRouter = read("public/js/app-router.js");
@@ -758,6 +760,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const appMobileViewport = read("public/js/app-mobile-viewport.js");
   const appServiceWorker = read("public/js/app-service-worker.js");
   const appDisciplinePrimer = read("public/js/app-discipline-primer.js");
+  const appOnboarding = read("public/js/app-onboarding.js");
   const appStartup = read("public/js/app-startup.js");
   const dateUtils = read("public/js/date-utils.js");
   const htmlUtils = read("public/js/html-utils.js");
@@ -817,6 +820,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /installMobileViewportGuards\(\): void/);
   assert.match(clientGlobals, /registerServiceWorkerLifecycle\(\): void/);
   assert.match(clientGlobals, /primeDiscipline\(\): void/);
+  assert.match(clientGlobals, /openOnboarding\(\): void/);
   assert.match(clientGlobals, /startAppShell\(\): void/);
   assert.match(clientGlobals, /declare function switchTab\(tab: unknown/);
   assert.match(clientGlobals, /declare function registerTabBarHandlers\(\): void/);
@@ -848,6 +852,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-mobile-viewport\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-service-worker\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-discipline-primer\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/app-onboarding\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-startup\.js/);
   assert.match(
     clientBuildTsconfig,
@@ -899,6 +904,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-service-worker\.js/);
   assert.match(clientBuild, /src\/client\/app\/discipline-primer\.ts/);
   assert.match(clientBuild, /public\/js\/app-discipline-primer\.js/);
+  assert.match(clientBuild, /src\/client\/app\/onboarding\.ts/);
+  assert.match(clientBuild, /public\/js\/app-onboarding\.js/);
   assert.match(clientBuild, /src\/client\/app\/startup\.ts/);
   assert.match(clientBuild, /public\/js\/app-startup\.js/);
   assert.ok(
@@ -1002,11 +1009,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/app-discipline-primer.js") > index.indexOf("/js/app-service-worker.js") &&
-      index.indexOf("/js/app-discipline-primer.js") < index.indexOf("/js/10-boot.js"),
+      index.indexOf("/js/app-discipline-primer.js") < index.indexOf("/js/app-onboarding.js"),
     "app-discipline-primer.js must load after app shell helpers and before 10-boot.js"
   );
   assert.ok(
-    index.indexOf("/js/app-startup.js") > index.indexOf("/js/app-discipline-primer.js") &&
+    index.indexOf("/js/app-onboarding.js") > index.indexOf("/js/app-discipline-primer.js") &&
+      index.indexOf("/js/app-onboarding.js") < index.indexOf("/js/app-startup.js"),
+    "app-onboarding.js must load after discipline priming and before startup"
+  );
+  assert.ok(
+    index.indexOf("/js/app-startup.js") > index.indexOf("/js/app-onboarding.js") &&
       index.indexOf("/js/app-startup.js") < index.indexOf("/js/10-boot.js"),
     "app-startup.js must load after app shell helpers and before 10-boot.js"
   );
@@ -1030,6 +1042,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appMobileViewport, /\/\/ @ts-check/);
   assert.match(appServiceWorker, /\/\/ @ts-check/);
   assert.match(appDisciplinePrimer, /\/\/ @ts-check/);
+  assert.match(appOnboarding, /\/\/ @ts-check/);
   assert.match(appStartup, /\/\/ @ts-check/);
   assert.match(publicScriptCheck, /ts\.createSourceFile/);
   assert.match(publicScriptCheck, /topLevelBindings/);
@@ -1076,6 +1089,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-service-worker\.js/);
   assert.match(clientBuild, /src\/client\/app\/discipline-primer\.ts/);
   assert.match(clientBuild, /public\/js\/app-discipline-primer\.js/);
+  assert.match(clientBuild, /src\/client\/app\/onboarding\.ts/);
+  assert.match(clientBuild, /public\/js\/app-onboarding\.js/);
   assert.match(clientBuild, /src\/client\/app\/startup\.ts/);
   assert.match(clientBuild, /public\/js\/app-startup\.js/);
   assert.match(clientBuild, /src\/client\/route-state\.ts/);
@@ -1185,6 +1200,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appDisciplinePrimerSource, /peekCached<\{ primary_discipline\?: unknown; endurance_goal_json\?: unknown \}>/);
   assert.match(appDisciplinePrimerSource, /renderTab\("progress"\)/);
   assert.match(appDisciplinePrimerSource, /renderTab\("plan"\)/);
+  assert.match(appOnboardingSource, /async function maybeOnboard\(\): Promise<void>/);
+  assert.match(appOnboardingSource, /function openOnboarding\(\): void/);
+  assert.match(appOnboardingSource, /hideSaveBar\(\)/);
+  assert.match(appOnboardingSource, /CairnUi\.jobCaptionHtml\(\)/);
+  assert.match(appOnboardingSource, /thinkingCaption\(capEl, "onboard"\)/);
   assert.match(appStartupSource, /function startAppShell\(\): void/);
   assert.match(appStartupSource, /registerTabBarHandlers\(\)/);
   assert.match(appStartupSource, /activateTab\(landingTab \|\| "today"/);
@@ -1241,6 +1261,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appServiceWorker, /window\.registerServiceWorkerLifecycle = registerServiceWorkerLifecycle/);
   assert.match(appDisciplinePrimer, /Object\.assign\(globalThis, \{ primeDiscipline \}\)/);
   assert.match(appDisciplinePrimer, /window\.primeDiscipline = primeDiscipline/);
+  assert.match(appOnboarding, /Object\.assign\(globalThis, \{ maybeOnboard, openOnboarding \}\)/);
+  assert.match(appOnboarding, /window\.maybeOnboard = maybeOnboard/);
   assert.match(appStartup, /Object\.assign\(globalThis, \{ startAppShell \}\)/);
   assert.match(appStartup, /window\.startAppShell = startAppShell/);
   assert.match(ui, /function segBar\(active, items\)[\s\S]*CairnUi\.segmentedNavHtml\(\{ active, items \}\)/);
@@ -1268,13 +1290,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chat, /CairnChatClient\.historySessionRow/);
   assert.match(chat, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /CairnSettingsClient\.updateCardHtml/);
-  assert.match(boot, /CairnUi\.jobCaptionHtml\(\)/);
+  assert.match(appOnboarding, /CairnUi\.jobCaptionHtml\(\)/);
   assert.match(boot, /startAppShell\(\)/);
   assert.doesNotMatch(boot, /registerJobReconnector\("session_suggest"/);
   assert.doesNotMatch(boot, /function\s+switchTab\(tab/);
   assert.doesNotMatch(boot, /function\s+activateTab\(name/);
   assert.doesNotMatch(boot, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
   assert.doesNotMatch(boot, /function\s+primeDiscipline/);
+  assert.doesNotMatch(boot, /function\s+maybeOnboard/);
+  assert.doesNotMatch(boot, /function\s+openOnboarding/);
   assert.doesNotMatch(boot, /window\.addEventListener\("popstate"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
@@ -1289,6 +1313,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
   assert.match(sw, /"\/js\/app-service-worker\.js"/);
   assert.match(sw, /"\/js\/app-discipline-primer\.js"/);
+  assert.match(sw, /"\/js\/app-onboarding\.js"/);
   assert.match(sw, /"\/js\/app-startup\.js"/);
   assert.match(dockerfile, /COPY package\*\.json tsconfig\.json tsconfig\.client\.build\.json \.\//);
   assert.match(dockerfile, /COPY scripts\/build-client\.mjs \.\/scripts\/build-client\.mjs/);

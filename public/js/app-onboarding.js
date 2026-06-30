@@ -1,0 +1,169 @@
+// @ts-check
+{
+    function requiredElement(root, selector) {
+        const el = root.querySelector(selector);
+        if (!el)
+            throw new Error(`Missing onboarding element: ${selector}`);
+        return el;
+    }
+    async function markOnboarded() {
+        try {
+            await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ onboarded: true }) });
+        }
+        catch { }
+    }
+    async function maybeOnboard() {
+        let onboarded = true;
+        try {
+            const data = await api("/settings");
+            onboarded = !!data?.settings?.onboarded;
+            if (data?.settings && "art_enabled" in data.settings)
+                artEnabled = !!data.settings.art_enabled;
+        }
+        catch {
+            onboarded = true;
+        }
+        if (!onboarded)
+            openOnboarding();
+    }
+    function openOnboarding() {
+        const modal = document.createElement("div");
+        modal.className = "modal";
+        modal.innerHTML = `<div class="modal-card">
+      <h2 class="modal-title">Welcome to Cairn</h2>
+      <p class="ob-lead">A few basics, then you're in — I'll learn the rest as we go.</p>
+      <div class="ob-grid">
+        <div class="field"><label>Age</label>
+          <input id="obAge" type="number" inputmode="numeric" min="13" max="100" placeholder="years"></div>
+        <div class="field"><label>Days / week</label>
+          <div class="seg" id="obDays">
+            <button type="button" class="segbtn" data-dpw="3">3</button>
+            <button type="button" class="segbtn active" data-dpw="4">4</button>
+            <button type="button" class="segbtn" data-dpw="5">5</button>
+            <button type="button" class="segbtn" data-dpw="6">6</button>
+          </div></div>
+      </div>
+      <div class="field"><label>Your sport <span class="ob-opt">— optional</span></label>
+        <div class="seg disc-seg" id="obDisc" role="group" aria-label="Primary discipline">
+          <button type="button" class="segbtn active" data-disc="strength">Strength</button>
+          <button type="button" class="segbtn" data-disc="endurance">Endurance</button>
+          <button type="button" class="segbtn" data-disc="hybrid">Hybrid</button>
+        </div></div>
+      <div class="field"><label>Main goal</label>
+        <select id="obGoal">
+          <option value="">What matters most? (optional)</option>
+          <option value="stay strong and age well">Stay strong &amp; age well</option>
+          <option value="build muscle">Build muscle</option>
+          <option value="lose fat and lean out">Lose fat / lean out</option>
+          <option value="sport or event performance">Sport / performance</option>
+          <option value="overall health and energy">Overall health &amp; energy</option>
+        </select></div>
+      <div class="field"><label>Anything else <span class="ob-opt">— optional</span></label>
+        <textarea id="obIntro" class="ob-intro" rows="3"
+          placeholder="injuries, how you eat, height &amp; weight, supplements you take… a sentence is plenty."></textarea></div>
+      <button id="obStart" class="logbtn" style="width:100%;height:46px;margin-top:6px;letter-spacing:.05em">START</button>
+      <button id="obSkip" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">Skip — just get me in</button>
+      <div id="obStatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>
+    </div>`;
+        document.body.appendChild(modal);
+        let daysPerWeek = 4;
+        modal.querySelectorAll("#obDays [data-dpw]").forEach((button) => {
+            button.addEventListener("click", () => {
+                daysPerWeek = Number(button.dataset.dpw) || 4;
+                modal.querySelectorAll("#obDays .segbtn").forEach((el) => el.classList.toggle("active", el === button));
+            });
+        });
+        let discipline = "strength";
+        modal.querySelectorAll("#obDisc [data-disc]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const next = button.dataset.disc;
+                discipline = next === "endurance" || next === "hybrid" ? next : "strength";
+                modal.querySelectorAll("#obDisc .segbtn").forEach((el) => el.classList.toggle("active", el === button));
+            });
+        });
+        const intro = requiredElement(modal, "#obIntro");
+        setTimeout(() => {
+            try {
+                requiredElement(modal, "#obAge").focus();
+            }
+            catch { }
+        }, 60);
+        function enterApp() {
+            state.plan = [];
+            state.day = null;
+            state.dayPicked = false;
+            ["plan", "profile", "stats", "progress:weight", "progress:energy", "supplements", "memory"].forEach(swrInvalidate);
+            swrInvalidate("today:session:");
+            modal.remove();
+            hideSaveBar();
+            document.querySelectorAll(".tab").forEach((el) => el.classList.remove("active"));
+            document.querySelector('.tab[data-tab="today"]')?.classList.add("active");
+            state.tab = "today";
+            document.body.dataset.tab = "today";
+            renderToday();
+        }
+        function composeIntro() {
+            const parts = [];
+            const age = Number(requiredElement(modal, "#obAge").value) || null;
+            if (age)
+                parts.push(`I'm ${age}.`);
+            parts.push(`I train about ${daysPerWeek} days a week.`);
+            if (discipline === "endurance")
+                parts.push("I'm primarily an endurance athlete.");
+            else if (discipline === "hybrid")
+                parts.push("I train both strength and endurance (hybrid).");
+            const goal = requiredElement(modal, "#obGoal").value;
+            if (goal)
+                parts.push(`My main goal is to ${goal}.`);
+            const note = intro.value.trim();
+            if (note)
+                parts.push(note);
+            return parts.join(" ").trim();
+        }
+        async function persistDiscipline() {
+            if (discipline === "strength") {
+                setDiscipline("strength");
+                return;
+            }
+            try {
+                await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ primary_discipline: discipline }) });
+                setDiscipline(discipline);
+            }
+            catch { }
+        }
+        requiredElement(modal, "#obSkip").addEventListener("click", async () => {
+            await persistDiscipline();
+            await markOnboarded();
+            enterApp();
+        });
+        requiredElement(modal, "#obStart").addEventListener("click", async () => {
+            const text = composeIntro();
+            const status = requiredElement(modal, "#obStatus");
+            const button = requiredElement(modal, "#obStart");
+            button.disabled = true;
+            button.textContent = "GETTING TO KNOW YOU…";
+            status.innerHTML = CairnUi.jobCaptionHtml();
+            const capEl = status.querySelector(".job-cap");
+            if (capEl)
+                thinkingCaption(capEl, "onboard");
+            if (!reducedMotion())
+                status.classList.add("is-thinking");
+            try {
+                await api("/onboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+                await persistDiscipline();
+                toast("You're all set");
+            }
+            catch {
+                await persistDiscipline();
+                await markOnboarded();
+                toast("Saved — you can refine anytime in Me");
+            }
+            enterApp();
+        });
+    }
+    Object.assign(globalThis, { maybeOnboard, openOnboarding });
+    if (typeof window !== "undefined") {
+        window.maybeOnboard = maybeOnboard;
+        window.openOnboarding = openOnboarding;
+    }
+}

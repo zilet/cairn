@@ -115,6 +115,7 @@ declare global {
   declare const state: ClientAppState;
 
   declare let pollToken: unknown;
+  declare let artEnabled: boolean;
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
   declare const PROGRESS_SEG: readonly ClientSegment[];
@@ -208,6 +209,8 @@ declare global {
   declare function teardownJobs(pred?: unknown): void;
   declare function closeDetail(instant?: boolean): void;
   declare function closeMealSheet(instant?: boolean): void;
+  declare function hideSaveBar(): void;
+  declare function thinkingCaption(el: Element, op?: string): unknown;
   declare function measureChatTop(): void;
   declare function art(kind: string, text: string): string;
   declare function pollEnrichment(
@@ -238,6 +241,7 @@ declare global {
   declare function registerServiceWorkerLifecycle(): void;
   declare function primeDiscipline(): void;
   declare function maybeOnboard(): Promise<void>;
+  declare function openOnboarding(): void;
   declare function primeArtManifest(): Promise<void>;
   declare function jobReconnect(): Promise<void>;
   declare function startAppShell(): void;
@@ -258,6 +262,8 @@ declare global {
     installMobileViewportGuards(): void;
     registerServiceWorkerLifecycle(): void;
     primeDiscipline(): void;
+    maybeOnboard(): Promise<void>;
+    openOnboarding(): void;
     startAppShell(): void;
     CairnAppRouter: ClientAppRouterApi;
 
