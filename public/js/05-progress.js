@@ -1307,28 +1307,6 @@ async function tidyExerciseNames(btn) {
   if (n) { swrInvalidate("progress:program"); renderProgram(); }
 }
 
-// ---------- a "test week is about due" banner ----------
-// Fed by GET /api/test-week — {due, why, key_lifts, cadence_weeks, last_test_week}.
-// Renders only when due: a calm invitation to re-measure true capacity (the cadenced
-// counterpart to the reactive "Worth re-testing" rows). Pull-never-push, no score.
-async function loadTestWeek() {
-  const slot = view.querySelector("#progTestSlot");
-  if (!slot) return;
-  let t = null;
-  try { t = await api("/test-week"); } catch { t = null; }
-  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
-  if (!t || !t.due) { slot.innerHTML = ""; return; }
-  slot.innerHTML = testWeekBannerHtml(t);
-}
-function testWeekBannerHtml(t) {
-  const lifts = Array.isArray(t.key_lifts) ? t.key_lifts.filter(Boolean) : [];
-  return `<div class="ptest-banner">
-      <div class="ptest-head"><span class="ptest-glyph" aria-hidden="true">✦</span><span class="ptest-title">A test week is about due</span></div>
-      ${t.why ? `<div class="ptest-why">${escHtml(t.why)}</div>` : ""}
-      ${lifts.length ? `<div class="ptest-lifts">${lifts.map((l) => `<span class="ptest-lift">${escHtml(l)}</span>`).join("")}</div>` : ""}
-    </div>`;
-}
-
 // ---------- per-muscle-group advancing/stalling strip ----------
 // Fed by GET /api/muscle-trajectory — {available, headline, groups:[{group,label,
 // verdict,lead_lift,stalled_signal,vary_options,volume_band,trend,note}]}. The owner's

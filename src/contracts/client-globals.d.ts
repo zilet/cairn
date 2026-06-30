@@ -241,6 +241,8 @@ declare global {
   declare const PADJ_KIND: Record<string, { glyph: string; cls: string }>;
   declare function loadProgramAdjustments(): Promise<void>;
   declare function programAdjustmentsHtml(rows: unknown): string;
+  declare function loadTestWeek(): Promise<void>;
+  declare function testWeekBannerHtml(testWeek: unknown): string;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -599,6 +601,11 @@ declare global {
       programAdjustmentsHtml(rows: unknown): string;
     };
 
+    CairnProgressTestWeek: {
+      loadTestWeek(): Promise<void>;
+      testWeekBannerHtml(testWeek: unknown): string;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -679,6 +686,7 @@ declare global {
   declare const CairnProgressDexaTargeting: Window["CairnProgressDexaTargeting"];
   declare const CairnProgressPerformance: Window["CairnProgressPerformance"];
   declare const CairnProgressProgramAdjustments: Window["CairnProgressProgramAdjustments"];
+  declare const CairnProgressTestWeek: Window["CairnProgressTestWeek"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
