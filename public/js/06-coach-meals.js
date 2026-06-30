@@ -569,46 +569,17 @@ function openMealSheet(current, di, mi) {
   wireRecipeCta(s, current, dayLabel, di, mi);
 }
 
+// Meal recipe CTA/result/loading render helpers live in /js/meal-recipe-client.js.
 function recipeCtaHtml() {
-  return `<div class="sheet-section sheet-section-c">
-      <div class="lbl">Recipe</div>
-      <button class="pillbtn pill-accent sheet-recipe-cta" data-getrecipe>Get the recipe from the coach</button>
-      <div class="sheet-recipe-note">Written for this exact meal — can take 15–120s.</div>
-    </div>`;
+  return CairnMealRecipe.ctaHtml();
 }
 
-// recipe = { summary, time_min, servings, ingredients:[{item,qty}], steps:[], tips:[] }
 function recipeHtml(r) {
-  if (!r || typeof r !== "object") return "";
-  const chips = [
-    r.time_min ? CairnUi.sheetChipHtml({ value: r.time_min, label: "min" }) : "",
-    r.servings ? CairnUi.sheetChipHtml({ label: `serves ${r.servings}` }) : "",
-  ].join("");
-  const ings = Array.isArray(r.ingredients) && r.ingredients.length
-    ? `<div class="sheet-section"><div class="lbl">Ingredients</div>
-        <div class="recipe-ings">${r.ingredients.map((x) => `
-          <div class="recipe-ing"><span class="recipe-ing-item">${escHtml(x && typeof x === "object" ? x.item ?? "" : String(x ?? ""))}</span><span class="recipe-ing-qty">${escHtml(x && typeof x === "object" ? x.qty ?? "" : "")}</span></div>`).join("")}</div></div>`
-    : "";
-  const steps = Array.isArray(r.steps) && r.steps.length
-    ? `<div class="sheet-section"><div class="lbl">Method</div>
-        <ol class="recipe-steps">${r.steps.map((st) => `<li>${escHtml(String(st))}</li>`).join("")}</ol></div>`
-    : "";
-  const tips = Array.isArray(r.tips) && r.tips.length
-    ? `<div class="sheet-section"><div class="lbl">Tips</div>
-        <div class="recipe-tips">${r.tips.map((t) => `<div class="recipe-tip">${escHtml(String(t))}</div>`).join("")}</div></div>`
-    : "";
-  return `${r.summary ? `<div class="recipe-lede">${escHtml(r.summary)}</div>` : ""}
-    ${chips ? `<div class="recipe-meta">${chips}</div>` : ""}
-    ${ings}${steps}${tips}`;
+  return CairnMealRecipe.recipeHtml(r);
 }
 
-// A calm recipe-loading state inside the [data-recipe] wrapper — the .job-cap
-// carries the evolving "writing the recipe" caption; the host gets the filament.
 function recipeLoadingHtml() {
-  return `<div class="sheet-section sheet-section-c sheet-recipe-loading">
-      <span class="aspin aspin-sm" aria-hidden="true"></span>
-      ${CairnUi.jobCaptionHtml({ tag: "div", className: "sheet-recipe-load-line job-cap" })}
-    </div>`;
+  return CairnMealRecipe.loadingHtml();
 }
 
 // POST /meal-plans/:id/recipe — runs an external CLI agent (15–120s) as a durable

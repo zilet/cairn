@@ -702,6 +702,12 @@ declare global {
       mealDayHtml(day: unknown, dayIndex: number, context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown }): string;
     };
 
+    CairnMealRecipe: {
+      ctaHtml(): string;
+      recipeHtml(recipe: unknown): string;
+      loadingHtml(): string;
+    };
+
     CairnProposal: {
       statusBadge(status: unknown): string;
       applyResultMessage(result: unknown): { failed: boolean; message: string };
@@ -1058,6 +1064,7 @@ declare global {
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
+  declare const CairnMealRecipe: Window["CairnMealRecipe"];
   declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];

@@ -60,6 +60,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/plan-editor-client.ts", output: "public/js/plan-editor-client.js" },
   { source: "src/client/day-fuel-client.ts", output: "public/js/day-fuel-client.js" },
   { source: "src/client/meal-plan-client.ts", output: "public/js/meal-plan-client.js" },
+  { source: "src/client/meal-recipe-client.ts", output: "public/js/meal-recipe-client.js" },
   { source: "src/client/food-note-client.ts", output: "public/js/food-note-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
   { source: "src/client/health-read-client.ts", output: "public/js/health-read-client.js" },
