@@ -272,98 +272,8 @@ async function renderMeProfile() {
   $("#profToProgress")?.addEventListener("click", () => activateTab("progress"));
 }
 
-function foodIngredients(pj) {
-  if (!pj || typeof pj !== "object") return [];
-  if (Array.isArray(pj.ingredients)) {
-    return pj.ingredients.map((x) => {
-      if (typeof x === "string") return { item: x };
-      if (!x || typeof x !== "object") return null;
-      const item = String(x.item || x.name || "").trim();
-      if (!item) return null;
-      return {
-        item,
-        amount: x.amount || x.qty || x.quantity || "",
-        kcal: foodNum(x.kcal),
-        protein_g: foodNum(x.protein_g),
-        carbs_g: foodNum(x.carbs_g),
-        fat_g: foodNum(x.fat_g),
-      };
-    }).filter(Boolean);
-  }
-  if (Array.isArray(pj.items)) {
-    return pj.items.map((x) => {
-      if (typeof x === "string") return { item: x };
-      if (!x || typeof x !== "object") return null;
-      const item = String(x.item || x.name || "").trim();
-      return item ? { item, amount: x.amount || x.qty || x.quantity || "" } : null;
-    }).filter(Boolean);
-  }
-  return [];
-}
-function ingredientLabel(ing) {
-  const amount = String(ing?.amount || "").trim();
-  const item = String(ing?.item || "").trim();
-  if (!amount) return item;
-  if (item.toLowerCase().startsWith(amount.toLowerCase())) return item;
-  return `${amount} ${item}`;
-}
-function foodItemsText(pj) {
-  if (!pj || typeof pj !== "object") return "";
-  if (Array.isArray(pj.items)) return pj.items.map((x) => typeof x === "string" ? x : (x?.item || x?.name || "")).filter(Boolean).join(", ");
-  return pj.items || "";
-}
-function foodTitleFromIngredients(pj) {
-  const items = foodIngredients(pj).map((x) => x.item).filter(Boolean);
-  if (!items.length) return "";
-  return items.slice(0, 3).join(", ") + (items.length > 3 ? "..." : "");
-}
-function foodMacroText(pj, opts = {}) {
-  if (!pj || typeof pj !== "object") return "";
-  const parts = [];
-  if (opts.kcal !== false && foodNum(pj.kcal) !== null) parts.push(`${formatFoodNum(pj.kcal)} kcal`);
-  const labels = opts.short
-    ? [["P", "protein_g"], ["C", "carbs_g"], ["F", "fat_g"], ["Fiber", "fiber_g"]]
-    : [["protein", "protein_g"], ["carbs", "carbs_g"], ["fat", "fat_g"], ["fiber", "fiber_g"]];
-  for (const [label, key] of labels) {
-    if (foodNum(pj[key]) !== null) parts.push(`${formatFoodNum(pj[key])}g ${label}`);
-  }
-  return parts.join(" · ");
-}
-
-// food-note parsed_json may arrive as a JSON string or an object
-function parsedNote(n) {
-  let pj = n?.parsed && typeof n.parsed === "object" ? n.parsed : n?.parsed_json;
-  if (typeof pj === "string") { try { pj = JSON.parse(pj); } catch { pj = null; } }
-  return pj || null;
-}
-function noteEntryInner(n) {
-  const pj = parsedNote(n);
-  const date = (n.created_at || "").slice(0, 10);
-  let detail;
-  const text = n.raw || n.raw_output || "";
-  if (pj) {
-    const macros = foodMacroText(pj, { kcal: true, short: true });
-    const ingredients = foodIngredients(pj);
-    const items = ingredients.length ? ingredients.map(ingredientLabel).join(", ") : foodItemsText(pj);
-    const title = pj.summary || foodTitleFromIngredients(pj) || text;
-    detail = `<div class="meal-name">${escHtml(title)}</div>` +
-      (items ? `<div class="meal-items">${escHtml(items)}</div>` : "") +
-      (macros ? `<span class="fn-macros">${escHtml(macros)}</span>` : "") +
-      (pj.notes ? `<div class="sess-line" style="color:var(--muted)">${escHtml(pj.notes)}</div>` : "");
-  } else {
-    detail = `<div class="meal-name">${escHtml(text)}</div>`;
-  }
-  const q = n.raw_text || n.raw || n.raw_output || (pj && (pj.summary || pj.items)) || "";
-  const tile = artImg("food", q, "artile-sm meal-art", art("food", q));
-  const body = tile
-    ? `<div class="meal-row">${tile}<div class="meal-main">${detail}</div></div>`
-    : detail;
-  return `<div class="sess-head"><span class="sess-date" style="font-size:.9rem">${escHtml(n.meal || "")} · ${escHtml(date)}</span><span class="fnent-badge">${enrichBadge(n.enrichment_status)}</span></div>${body}`;
-}
-function noteEntryHtml(n, i) {
-  const rev = typeof i === "number";
-  return `<div class="sess fnent tappable${rev ? " reveal" : ""}" data-noteid="${n.id}"${rev ? ` style="${stagger(i)}"` : ""}>${noteEntryInner(n)}</div>`;
-}
+// Pure food-note parsing/rendering lives in food-note-client.js; direct globals
+// are preserved there for the food detail sheet in 02-ui.js.
 
 // tap a note card → full-screen food detail (zooming from its art tile)
 function wireNoteCard(el) {
@@ -379,7 +289,7 @@ function renderNotes(notes) {
   const wrap = $("#notelist");
   if (!notes || !notes.length) { wrap.innerHTML = `<div class="empty">Nothing logged yet. Snap a plate or jot a meal in Chat and it shows up here.</div>`; return; }
   state._notesById = Object.fromEntries(notes.map((n) => [String(n.id), n]));
-  wrap.innerHTML = notes.map((n, i) => noteEntryHtml(n, i)).join("");
+  wrap.innerHTML = notes.map((n, i) => CairnFoodNote.noteEntryHtml(n, i)).join("");
   wrap.querySelectorAll(".fnent").forEach(wireNoteCard);
 }
 

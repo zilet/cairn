@@ -540,6 +540,17 @@ declare global {
       ): string;
     };
 
+    CairnFoodNote: {
+      foodIngredients(value: unknown): Array<Record<string, unknown>>;
+      ingredientLabel(ingredient: Record<string, unknown> | null | undefined): string;
+      foodItemsText(value: unknown): string;
+      foodTitleFromIngredients(value: unknown): string;
+      foodMacroText(value: unknown, opts?: { kcal?: boolean; short?: boolean }): string;
+      parsedNote(note: Record<string, unknown> | null | undefined): Record<string, unknown> | null;
+      noteEntryInner(note: Record<string, unknown>): string;
+      noteEntryHtml(note: Record<string, unknown>, index?: number): string;
+    };
+
     CairnHealthLearned: {
       LEARNED_GROUPS: readonly (readonly [string, string, string])[];
       learnedItemHtml(item: unknown, index: number): string;
@@ -806,6 +817,7 @@ declare global {
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
+  declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];
   declare const CairnFamily: Window["CairnFamily"];

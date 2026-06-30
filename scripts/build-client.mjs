@@ -49,6 +49,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
   { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
+  { source: "src/client/food-note-client.ts", output: "public/js/food-note-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
   { source: "src/client/health-learned-client.ts", output: "public/js/health-learned-client.js" },
   { source: "src/client/memory-client.ts", output: "public/js/memory-client.js" },
