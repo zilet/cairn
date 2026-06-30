@@ -63,12 +63,10 @@ type CliUpdateStatus = {
   error?: string;
 };
 
-type ArtStats = {
-  since_enabled?: { est_cost_usd?: unknown; images_generated?: unknown; reused?: unknown; est_saved_usd?: unknown };
-  all_time?: { est_cost_usd?: unknown; images_generated?: unknown };
-  enabled_at?: unknown;
-  cached_assets?: unknown;
-};
+type AgentInfoResponse = import("../contracts/client-api.js").ClientAgentProbeResponse;
+type AgentModelsResponse = import("../contracts/client-api.js").ClientAgentModelsResponse;
+type ArtStats = import("../contracts/client-api.js").ClientArtStatsResponse;
+type GarminSyncResponse = import("../contracts/client-api.js").ClientGarminSyncResponse;
 
 type UpdateStatus = Record<string, unknown> | null;
 type SettingsSliceKey = ClientSettingsSection;
@@ -447,8 +445,8 @@ async function renderSettings(): Promise<void> {
       if (agentInfo[n]) return; // already shown
       b.disabled = true; b.textContent = "checking…";
       try {
-        const r = settingsScreenRecord(await api(`/agents/${encodeURIComponent(n)}/info`));
-        if (r.ok) agentInfo[n] = { version: r.version, model_current: r.model_current, update_available: !!r.update_available };
+        const r = await api(`/agents/${encodeURIComponent(n)}/info`) as AgentInfoResponse;
+        if (r.ok) agentInfo[n] = { version: r.version ?? null, model_current: r.model_current ?? null, update_available: !!r.update_available };
         else agentInfo[n] = { version: null, model_current: null, update_available: false };
       } catch { agentInfo[n] = { version: null, model_current: null, update_available: false }; }
       renderAgentList();
@@ -459,7 +457,7 @@ async function renderSettings(): Promise<void> {
       if (Array.isArray(agentModels[n])) { delete agentModels[n]; renderAgentList(); return; } // toggle off
       b.disabled = true; b.textContent = "loading…";
       try {
-        const r = settingsScreenRecord(await api(`/agents/${encodeURIComponent(n)}/models`));
+        const r = await api(`/agents/${encodeURIComponent(n)}/models`) as AgentModelsResponse;
         agentModels[n] = r && r.ok && Array.isArray(r.models) ? r.models : [];
       } catch { agentModels[n] = []; }
       renderAgentList();
@@ -549,8 +547,8 @@ async function renderSettings(): Promise<void> {
       const status = requiredEl<HTMLElement>("#garminStatus");
       btn.disabled = true; btn.textContent = "Syncing…";
       status.innerHTML = garminStatusLine(null, true);
-      let r: Record<string, unknown> | null = null;
-      try { r = settingsScreenRecord(await api("/garmin/sync", { method: "POST" })); } catch {}
+      let r: GarminSyncResponse | null = null;
+      try { r = await api("/garmin/sync", { method: "POST" }); } catch {}
       let fresh: unknown = s;
       try { fresh = settingsData(await api("/settings")).settings; } catch {}
       if (!btn.isConnected) return; // slice/tab swapped while we waited

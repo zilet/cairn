@@ -311,14 +311,16 @@ function wireHealthUpload() {
         if (doc.id && enrichmentActive(doc.enrichment_status))
             pollHealthDoc(doc.id);
         // the Analysis picture cares: doc count + newest-doc stamp drive its empty/stale states
-        if (_hPic) {
-            _hPic.docCount = (_hPic.docCount || 0) + 1;
+        const pictureCache = getHealthPictureCache();
+        if (pictureCache) {
+            pictureCache.docCount = (pictureCache.docCount || 0) + 1;
             const stamp = doc.created_at || new Date().toISOString();
-            if (!_hPic.newestDocAt || stamp > _hPic.newestDocAt)
-                _hPic.newestDocAt = stamp;
+            if (!pictureCache.newestDocAt || stamp > pictureCache.newestDocAt)
+                pictureCache.newestDocAt = stamp;
+            setHealthPictureCache(pictureCache);
         }
         else {
-            _hPic = { review: null, docCount: 1, newestDocAt: doc.created_at || new Date().toISOString() };
+            setHealthPictureCache({ review: null, docCount: 1, newestDocAt: doc.created_at || new Date().toISOString() });
         }
         paintHealthPicture(); // no-op unless the Analysis tab is showing
     });
@@ -565,9 +567,11 @@ function startHealthDelete(btn) {
             const list = $("#hlist");
             if (list && !list.children.length)
                 list.innerHTML = CairnHealthRecords.recordsEmptyHtml();
-            const docCount = _hPic?.docCount || 0;
-            if (_hPic && docCount > 0) {
-                _hPic.docCount = docCount - 1;
+            const pictureCache = getHealthPictureCache();
+            const docCount = pictureCache?.docCount || 0;
+            if (pictureCache && docCount > 0) {
+                pictureCache.docCount = docCount - 1;
+                setHealthPictureCache(pictureCache);
                 paintHealthPicture();
             }
             loadHealthMarkers(pollToken);

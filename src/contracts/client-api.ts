@@ -113,6 +113,43 @@ export interface ClientAgentCliUpdateStatus {
   [key: string]: unknown;
 }
 
+export interface ClientAgentProbeResponse extends ClientOkResponse {
+  ok: boolean;
+  version?: string | null;
+  model_current?: string | null;
+  update_available?: boolean | null;
+  [key: string]: unknown;
+}
+
+export interface ClientAgentModelsResponse extends ClientOkResponse {
+  ok: boolean;
+  models: string[];
+}
+
+export interface ClientArtManifestResponse {
+  ready: string[];
+  enabled: boolean;
+}
+
+export interface ClientArtUsageTotals {
+  images_generated: number;
+  canonicalize_calls: number;
+  reused: number;
+  failed: number;
+  est_cost_usd: number;
+  est_saved_usd: number;
+}
+
+export interface ClientArtStatsResponse {
+  art_enabled: boolean;
+  gemini_configured: boolean;
+  enabled_at: string | null;
+  since_enabled: ClientArtUsageTotals;
+  all_time: ClientArtUsageTotals;
+  cached_assets: number;
+  aliases: number;
+}
+
 export interface ClientProfile {
   id?: number;
   name?: string | null;
@@ -266,6 +303,42 @@ export interface ClientGarminReconcileResponse extends ClientOkResponse {
   sessions: ClientTrainingSession[];
 }
 
+export interface ClientGarminSyncResponse extends ClientOkResponse {
+  ok: boolean;
+  source_id?: number | null;
+  days?: number;
+  activities?: number;
+  daily_metrics?: number;
+  error?: string;
+}
+
+export interface ClientVolumeByMuscleRow {
+  muscle_group: string;
+  tonnage: number;
+  sets: number;
+  pct: number;
+}
+
+export interface ClientVolumeByMuscleResponse {
+  days: number;
+  total_tonnage: number;
+  by_muscle: ClientVolumeByMuscleRow[];
+}
+
+export interface ClientTrainingCalendarCell {
+  date: ISODateString | string;
+  lifted: boolean;
+  tonnage: number;
+  sets: number;
+  activity: boolean;
+  level: number;
+}
+
+export interface ClientTrainingCalendarResponse {
+  days: number;
+  cells: ClientTrainingCalendarCell[];
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -359,6 +432,30 @@ export interface ClientProposalResult {
   [key: string]: unknown;
 }
 
+export interface ClientMealPlanDraftResponse extends ClientOkResponse {
+  ok: boolean;
+  plan?: ClientMealPlan;
+  verified?: unknown;
+  agent_status?: string;
+  [key: string]: unknown;
+}
+
+export interface ClientMealSwapResponse extends ClientOkResponse {
+  ok: boolean;
+  plan?: ClientMealPlan;
+  meal?: unknown;
+  agent_status?: string;
+  [key: string]: unknown;
+}
+
+export interface ClientMealRecipeResponse extends ClientOkResponse {
+  ok: boolean;
+  recipe?: unknown;
+  cached?: boolean;
+  agent_status?: string;
+  [key: string]: unknown;
+}
+
 export interface ClientHealthDocument {
   id: number;
   kind?: string | null;
@@ -391,6 +488,39 @@ export interface ClientDirective {
   stale?: boolean;
   acute?: boolean;
   age_days?: number | null;
+  [key: string]: unknown;
+}
+
+export interface ClientPriorityMarkersResponse {
+  flagged_count?: number;
+  markers: ClientHealthMarker[];
+  groups?: unknown[];
+}
+
+export interface ClientRecoverySummary {
+  has_data?: boolean;
+  sources?: string[];
+  recovery?: {
+    avg_sleep_min?: number | null;
+    avg_deep_sleep_min?: number | null;
+    avg_rem_sleep_min?: number | null;
+    avg_resting_hr?: number | null;
+    avg_hrv_ms?: number | null;
+    hrv_status?: string | null;
+    avg_stress?: number | null;
+    avg_body_battery?: number | null;
+    avg_respiration?: number | null;
+    avg_spo2?: number | null;
+    skin_temp_dev_c?: number | null;
+    avg_training_readiness?: number | null;
+    vo2max?: number | null;
+    training_status?: string | null;
+    avg_steps?: number | null;
+    weight_kg?: number | null;
+    body_fat_pct?: number | null;
+    muscle_mass_kg?: number | null;
+    [key: string]: unknown;
+  } | null;
   [key: string]: unknown;
 }
 
@@ -526,6 +656,14 @@ export interface ClientInsight {
   [key: string]: unknown;
 }
 
+export interface ClientInsightGenerateResponse extends ClientOkResponse {
+  ok: boolean;
+  found?: boolean;
+  insight?: ClientInsight;
+  agent_status?: string;
+  [key: string]: unknown;
+}
+
 export interface ClientAgentJob {
   id: number;
   kind: string;
@@ -609,6 +747,8 @@ export interface ClientApiResponses {
   "/api/agents": ClientAgentConfig;
   "/api/agent-stats": ClientAgentStats;
   "/api/agent-clis/update": ClientAgentCliUpdateStatus;
+  "/api/art/manifest": ClientArtManifestResponse;
+  "/api/art/stats": ClientArtStatsResponse;
   "/api/profile": ClientProfile;
   "/api/goal": ClientGoalCheck;
   "/api/bodyweight": ClientWeightRow[];
@@ -622,15 +762,19 @@ export interface ClientApiResponses {
   "/api/sets": ClientLoggedSet;
   "/api/last-set": ClientLoggedSet | null;
   "/api/activities": ClientActivity[];
+  "/api/agent/run": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/garmin/daily": ClientGarminDailyMetric[];
   "/api/garmin/unreconciled": ClientGarminActivity[];
   "/api/garmin/reconcile": ClientGarminReconcileResponse;
+  "/api/garmin/sync": ClientGarminSyncResponse;
   "/api/recent-training": ClientJsonArray;
   "/api/stats": ClientWeeklyStats;
   "/api/endurance-prs": ClientJsonObject;
   "/api/run-compliance": ClientJsonObject;
   "/api/cardio": ClientJsonArray;
   "/api/endurance-goal": ClientJsonObject | null;
+  "/api/volume": ClientVolumeByMuscleResponse;
+  "/api/calendar": ClientTrainingCalendarResponse;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;
@@ -643,10 +787,12 @@ export interface ClientApiResponses {
   "/api/next-step": ClientNextStep | null;
   "/api/nutrition/expenditure": ClientExpenditureEstimate;
   "/api/nutrition/checkin": ClientProposalResult;
+  "/api/coach/mealplan": ClientMealPlanDraftResponse | ClientAgentJobEnvelope;
   "/api/mealplans": ClientMealPlan[];
   "/api/food-notes": ClientFoodNote[] | ClientFoodNote;
   "/api/frequent-foods": ClientFrequentFood[];
   "/api/proposals": ClientProposal[];
+  "/api/program/evolve": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/program/progression": ClientPrescription[];
   "/api/program/progression/apply": ClientProposalResult;
   "/api/program/balance": ClientJsonObject;
@@ -663,16 +809,19 @@ export interface ClientApiResponses {
   "/api/program/run-plan/apply": ClientProposalResult;
   "/api/coaching-focus": ClientCoachingFocus;
   "/api/health/markers": ClientHealthMarker[];
+  "/api/markers/priority": ClientPriorityMarkersResponse;
   "/api/health/standing": ClientJsonObject;
   "/api/health/review": ClientHealthReview | null;
   "/api/health/synthesis": ClientHealthSynthesisResponse;
   "/api/directives": ClientDirectivesResponse;
   "/api/directives/derive": ClientDirectivesResponse & { ok: true; derived: number };
   "/api/markers/reconcile": ClientOkResponse & { merges?: unknown[] };
+  "/api/recovery": ClientRecoverySummary;
   "/api/symptom-links": { links: unknown[] };
   "/api/evidence": ClientEvidenceRow[];
   "/api/evidence/summary": ClientEvidenceSummary;
   "/api/insights": ClientInsight[];
+  "/api/insights/generate": ClientInsightGenerateResponse | ClientAgentJobEnvelope;
   "/api/health-docs": ClientHealthDocument[];
   "/api/context-events": ClientContextEvent[];
   "/api/injury-impacts": ClientJsonObject;
@@ -712,26 +861,30 @@ type ClientApiResponseForCleanPath<Path extends string> =
                             : Path extends `/activities/${string}` ? ClientActivity
                               : Path extends `/mealplans/${string}/accept` ? ClientMealPlan
                                 : Path extends `/mealplans/${string}/discard` ? ClientMealPlan
-                                  : Path extends `/meal-plans/${string}/days` ? ClientMealPlan
-                                    : Path extends `/food-notes/${string}` ? ClientFoodNote | ClientDeleteResponse
-                                      : Path extends `/proposals/${string}/apply` ? ClientProposalResult
-                                        : Path extends `/proposals/${string}/discard` ? ClientProposal
-                                          : Path extends `/program/blocks/${string}` ? ClientJsonObject
-                                            : Path extends `/directives/${string}` ? { ok: true; directive: ClientDirective }
-                                              : Path extends `/insights/${string}` ? ClientInsight
-                                                : Path extends `/health-docs/${string}/reanalyze` ? ClientHealthDocument
-                                                  : Path extends `/health-docs/${string}` ? ClientHealthDocument | ClientDeleteResponse
-                                                    : Path extends `/context-events/${string}` ? ClientContextEvent | ClientDeleteResponse
-                                                      : Path extends `/family/${string}` ? ClientFamilyMember | ClientDeleteResponse
-                                                        : Path extends `/memory/${string}/supersede` ? ClientMemorySupersedeResponse
-                                                          : Path extends `/memory/${string}` ? ClientMemory | ClientDeleteResponse
-                                                            : Path extends `/supplements/${string}` ? ClientSupplement | ClientDeleteResponse
-                                                              : Path extends `/chat/sessions/${string}` ? ClientChatMessage[]
-                                                                : Path extends `/chat/turns/${string}/cancel` ? ClientChatTurnCancelResponse
-                                                                  : Path extends `/chat/turns/${string}` ? ClientChatTurn | null
-                                                                    : Path extends `/agent-jobs/${string}/cancel` ? ClientAgentJobResponse
-                                                                      : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
-                                                                        : unknown;
+                                  : Path extends `/meal-plans/${string}/swap` ? ClientMealSwapResponse | ClientAgentJobEnvelope
+                                    : Path extends `/meal-plans/${string}/recipe` ? ClientMealRecipeResponse | ClientAgentJobEnvelope
+                                      : Path extends `/meal-plans/${string}/days` ? ClientMealPlan
+                                        : Path extends `/food-notes/${string}` ? ClientFoodNote | ClientDeleteResponse
+                                          : Path extends `/proposals/${string}/apply` ? ClientProposalResult
+                                            : Path extends `/proposals/${string}/discard` ? ClientProposal
+                                              : Path extends `/program/blocks/${string}` ? ClientJsonObject
+                                                : Path extends `/directives/${string}` ? { ok: true; directive: ClientDirective }
+                                                  : Path extends `/insights/${string}` ? ClientInsight
+                                                    : Path extends `/health-docs/${string}/reanalyze` ? ClientHealthDocument
+                                                      : Path extends `/health-docs/${string}` ? ClientHealthDocument | ClientDeleteResponse
+                                                        : Path extends `/context-events/${string}` ? ClientContextEvent | ClientDeleteResponse
+                                                          : Path extends `/family/${string}` ? ClientFamilyMember | ClientDeleteResponse
+                                                            : Path extends `/memory/${string}/supersede` ? ClientMemorySupersedeResponse
+                                                              : Path extends `/memory/${string}` ? ClientMemory | ClientDeleteResponse
+                                                                : Path extends `/supplements/${string}` ? ClientSupplement | ClientDeleteResponse
+                                                                  : Path extends `/chat/sessions/${string}` ? ClientChatMessage[]
+                                                                    : Path extends `/chat/turns/${string}/cancel` ? ClientChatTurnCancelResponse
+                                                                      : Path extends `/chat/turns/${string}` ? ClientChatTurn | null
+                                                                        : Path extends `/agent-jobs/${string}/cancel` ? ClientAgentJobResponse
+                                                                          : Path extends `/agent-jobs/${string}` ? ClientAgentJobResponse
+                                                                            : Path extends `/agents/${string}/info` ? ClientAgentProbeResponse
+                                                                              : Path extends `/agents/${string}/models` ? ClientAgentModelsResponse
+                                                                                : unknown;
 
 export type ClientApiResponse<Path extends string> =
   Path extends `/api${infer Rest}` ? ClientApiResponse<Rest>

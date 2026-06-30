@@ -15,9 +15,9 @@ This tracker records the verified maintenance baseline. The next-stage full fron
 | Wave 2 - Route and screen identity | Complete | deep links round-trip to tabs, subviews, dates, selected records, and chat sessions |
 | Wave 3 - Backend module grouping | Complete | REST/MCP/docs parity still green after domain extraction |
 | Wave 4 - Frontend TypeScript foundation | Complete | client typecheck runs with no new framework and no unnecessary dependencies |
-| Wave 5 - High-risk frontend migration | Complete | critical Today, Chat, Health, Settings, API, SWR, route, and cache helpers are typechecked and behavior-smoked |
-| Wave 6 - Brain and memory hardening | Complete | typed coach-context contract, recommendation provenance, and memory regression tests green |
-| Wave 7 - Final consolidation | Complete | `npm run verify` green; smoke green after allowing loopback readiness checks |
+| Wave 5 - High-risk frontend migration | Mostly complete | critical Today, Chat, Health, Settings, API, SWR, route, and cache helpers are typechecked; large screen modules still need shrinking |
+| Wave 6 - Brain and memory hardening | In progress | typed conductor/memory spine is in place; remaining coach-context slices still need narrower DTOs |
+| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; automated browser workflow smoke is still pending |
 
 ## Non-Negotiables
 
@@ -273,7 +273,7 @@ Gate:
 
 - Client typecheck green.
 - `npm run verify` green.
-- Smoke coverage for Today log set, skip, cardio, Chat send/stream/reconnect, Health markers, and Settings Data.
+- Automated gates cover client typecheck, route deep links, public-script/cache contracts, built HTTP smoke, and Pi deploy app-shell smoke. Browser workflow smoke for Today log set/skip/cardio, Chat send/stream/reconnect, Health markers, and Settings Data remains a manual release check until a dedicated browser lane is added.
 
 ## Wave 6 - Brain And Memory Hardening
 

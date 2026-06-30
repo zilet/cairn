@@ -7,7 +7,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLIENT_OUTPUTS } from "../scripts/build-client.mjs";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
-import { CLIENT_API_CONTRACT_PATHS, CLIENT_API_UNKNOWN_WAIVERS, CLIENT_ROUTE_DEFINITIONS } from "../dist/contracts/client.js";
+import {
+  CLIENT_API_BROAD_RESPONSE_WAIVERS,
+  CLIENT_API_CONTRACT_PATHS,
+  CLIENT_API_UNKNOWN_WAIVERS,
+  CLIENT_ROUTE_DEFINITIONS,
+} from "../dist/contracts/client.js";
 import { listRoutableTasks, ROUTABLE_TASKS } from "../dist/repo/settings.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,16 +53,48 @@ function normalizeApiCallPath(raw) {
   return withoutQuery.endsWith("/") ? `${withoutQuery}:param` : withoutQuery;
 }
 
-function publicApiCallPaths() {
-  return readdirSync(path.join(root, "public/js"))
-    .filter((file) => file.endsWith(".js"))
-    .flatMap((file) => {
-      const src = read(`public/js/${file}`);
-      return [...src.matchAll(/\bapi\(\s*(["'`])([\s\S]*?)\1/g)]
-        .map((match) => normalizeApiCallPath(match[2]))
-        .filter(Boolean)
-        .map((apiPath) => ({ file, path: apiPath }));
-    });
+function sourceFilesUnder(dir, exts) {
+  const abs = path.join(root, dir);
+  return readdirSync(abs, { withFileTypes: true }).flatMap((entry) => {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) return sourceFilesUnder(rel, exts);
+    return exts.some((ext) => entry.name.endsWith(ext)) ? [rel] : [];
+  });
+}
+
+function stripLineComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n");
+}
+
+function apiCallPathsForFile(file) {
+  const src = stripLineComments(read(file));
+  const direct = [...src.matchAll(/\b(?:api|cachedApi|enqueueJob)\(\s*(["'`])([\s\S]*?)\1/g)]
+    .map((match) => normalizeApiCallPath(match[2]));
+  const staticPathOptions = [...src.matchAll(/\bpath:\s*(["'`])([\s\S]*?)\1/g)]
+    .map((match) => normalizeApiCallPath(match[2]));
+  return [...direct, ...staticPathOptions]
+    .filter(Boolean)
+    .map((apiPath) => ({ file, path: apiPath }));
+}
+
+function clientApiCallPaths() {
+  const sourceFiles = sourceFilesUnder("src/client", [".ts"]);
+  const publicFiles = sourceFilesUnder("public/js", [".js"]);
+  return [...sourceFiles, ...publicFiles].flatMap(apiCallPathsForFile);
+}
+
+function broadExactApiResponses(contractSource) {
+  const start = contractSource.indexOf("export interface ClientApiResponses {");
+  const end = contractSource.indexOf("\n}", start);
+  assert.ok(start >= 0 && end > start, "ClientApiResponses interface should be present");
+  const body = contractSource.slice(start, end);
+  return [...body.matchAll(/"\/api([^"]+)":\s*([^;]+);/g)]
+    .map((match) => ({ pattern: match[1], response: match[2].trim() }))
+    .filter((entry) => /\bClientJson(?:Object|Array)\b/.test(entry.response));
 }
 
 test("client build manifest owns generated browser outputs and cache wiring", () => {
@@ -834,12 +871,19 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
     .join("\n");
   const contractPatterns = [...CLIENT_API_CONTRACT_PATHS];
   const waiverPatterns = CLIENT_API_UNKNOWN_WAIVERS.map((waiver) => waiver.pattern);
+  const broadWaiverPatterns = CLIENT_API_BROAD_RESPONSE_WAIVERS.map((waiver) => waiver.pattern);
   const allPatterns = [...contractPatterns, ...waiverPatterns].map(contractPatternToRegExp);
 
   assert.deepEqual(new Set(contractPatterns).size, contractPatterns.length, "contract API patterns must be unique");
   assert.deepEqual(new Set(waiverPatterns).size, waiverPatterns.length, "contract waiver patterns must be unique");
+  assert.deepEqual(new Set(broadWaiverPatterns).size, broadWaiverPatterns.length, "broad DTO waiver patterns must be unique");
   assert.ok(contractPatterns.includes("/learnings"), "/learnings should be covered by the typed memory contract");
   assert.ok(contractPatterns.includes("/memory/:id/supersede"), "/memory/:id/supersede should be covered by the typed memory contract");
+  assert.ok(contractPatterns.includes("/volume"), "/volume should be covered for SWR Progress volume reads");
+  assert.ok(contractPatterns.includes("/calendar"), "/calendar should be covered for SWR Progress calendar reads");
+  assert.ok(contractPatterns.includes("/agent/run"), "/agent/run should be covered for durable proposal jobs");
+  assert.ok(contractPatterns.includes("/coach/mealplan"), "/coach/mealplan should be covered for durable meal-plan jobs");
+  assert.ok(contractPatterns.includes("/insights/generate"), "/insights/generate should be covered for durable insight jobs");
   assert.ok(!waiverPatterns.includes("/learnings"), "/learnings must not regress to a broad JSON waiver");
   assert.doesNotMatch(contractSource, /"\/api\/[^"]+":\s*unknown\b/, "exact API responses must not be bare unknown");
 
@@ -862,7 +906,24 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
     assert.ok(waiver.reason.trim().length > 20, `${waiver.pattern} needs a concrete reason`);
   }
 
-  const uncovered = publicApiCallPaths()
+  for (const waiver of CLIENT_API_BROAD_RESPONSE_WAIVERS) {
+    assert.match(waiver.pattern, /^\//, `${waiver.pattern} must be a client path without the /api prefix`);
+    assert.ok(waiver.owner.trim().length > 0, `${waiver.pattern} needs a migration owner`);
+    assert.ok(waiver.reason.trim().length > 20, `${waiver.pattern} needs a concrete reason`);
+  }
+
+  const broadExactResponses = broadExactApiResponses(contractSource);
+  const unownedBroadResponses = broadExactResponses
+    .filter((entry) => !broadWaiverPatterns.includes(entry.pattern))
+    .map((entry) => `${entry.pattern}: ${entry.response}`)
+    .sort();
+  assert.deepEqual(unownedBroadResponses, [], "exact broad client response DTOs need an owner/reason waiver");
+  const staleBroadWaivers = broadWaiverPatterns
+    .filter((pattern) => !broadExactResponses.some((entry) => entry.pattern === pattern))
+    .sort();
+  assert.deepEqual(staleBroadWaivers, [], "remove broad DTO waivers once responses are narrowed");
+
+  const uncovered = clientApiCallPaths()
     .filter((call) => !allPatterns.some((re) => re.test(call.path)))
     .map((call) => `${call.file}: ${call.path}`)
     .sort();
@@ -2584,7 +2645,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meHealthScreenSource, /async function renderMeProfile\(\)/);
   assert.match(meHealthScreenSource, /function renderHealthSynthesis\(data: unknown, token\?: number \| null\): void/);
   assert.match(meHealthScreenSource, /function switchHealthSeg\(seg: ClientHealthSection, opts: \{ openPicker\?: boolean \} = \{\}\): void/);
-  assert.match(meHealthScreenSource, /var _hPic: HealthPictureCache \| null/);
+  assert.match(meHealthScreenSource, /function getHealthPictureCache\(\): HealthPictureCache \| null/);
+  assert.match(meHealthScreenSource, /function setHealthPictureCache\(cache: HealthPictureCache \| null\): HealthPictureCache \| null/);
+  assert.match(meRecordsScreenSource, /getHealthPictureCache\(\)/);
+  assert.match(meRecordsScreenSource, /setHealthPictureCache\(/);
+  assert.doesNotMatch(meRecordsScreenSource, /\b_hPic\b/);
   assert.match(meHealthScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(meRecordsScreenSource, /async function renderLife\(\)/);
   assert.match(meRecordsScreenSource, /async function renderFamily\(\)/);

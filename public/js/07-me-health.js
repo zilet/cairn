@@ -1,7 +1,14 @@
 (() => {
-// _hPic is intentionally a true global var: the Records screen mutates it while
-// this screen owns rendering the health picture cache.
-var _hPic = null; // { review, docCount, newestDocAt }
+function healthPictureCacheRoot() {
+    return globalThis;
+}
+function getHealthPictureCache() {
+    return healthPictureCacheRoot()._hPic ?? null;
+}
+function setHealthPictureCache(cache) {
+    healthPictureCacheRoot()._hPic = cache;
+    return cache;
+}
 {
     function healthScreenRecord(value) {
         return value && typeof value === "object" ? value : {};
@@ -466,7 +473,8 @@ var _hPic = null; // { review, docCount, newestDocAt }
         });
     }
     // ---------- Me: Health — the whole picture (review · markers · records) ----------
-    // _hPic caches what the picture panel needs across in-place repaints; the in-flight
+    // The shared health-picture cache keeps Records and Health coordinated across
+    // generated IIFEs; the in-flight
     // review run lives at module level so it survives sub-view re-renders (the POST can
     // take minutes — an agent CLI run) and quietly lands wherever the user is.
     let _hReviewRun = null; // in-flight POST /health/review promise
@@ -490,7 +498,7 @@ var _hPic = null; // { review, docCount, newestDocAt }
     function reviewHtml(review, stale, err) {
         return CairnHealthPicture.reviewHtml(review, stale, err);
     }
-    // Paint #hPicture from _hPic + the in-flight run state. Safe to call anytime —
+    // Paint #hPicture from the shared cache + the in-flight run state. Safe to call anytime —
     // bails unless the Health sub-view is live.
     function paintHealthPicture() {
         const wrap = $("#hPicture");
@@ -500,7 +508,7 @@ var _hPic = null; // { review, docCount, newestDocAt }
             wrap.innerHTML = reviewBusyHtml();
             return;
         }
-        const pic = _hPic || {};
+        const pic = getHealthPictureCache() ?? {};
         const err = _hReviewErr ? `<div class="hpic-err">${escHtml(_hReviewErr)}</div>` : "";
         const p = parsedReview(pic.review);
         if (!p && !((pic.docCount ?? 0) > 0)) {
@@ -541,7 +549,7 @@ var _hPic = null; // { review, docCount, newestDocAt }
         _hReviewRun = null;
         if (res && res.ok && res.review) {
             state.healthReview = res.review;
-            _hPic = { ...(_hPic || {}), review: res.review };
+            setHealthPictureCache({ ...(getHealthPictureCache() || {}), review: res.review });
             toast("Your picture is ready");
         }
         else {
@@ -574,8 +582,8 @@ var _hPic = null; // { review, docCount, newestDocAt }
         if (token !== pollToken)
             return; // navigated away / re-rendered
         const newest = docs.reduce((m, d) => (d.created_at && (!m || d.created_at > m) ? d.created_at : m), null);
-        _hPic = { review, docCount: docs.length, newestDocAt: newest };
-        // Persist the count so a returning new-user (a fresh page load resets _hPic) still
+        setHealthPictureCache({ review, docCount: docs.length, newestDocAt: newest });
+        // Persist the count so a returning new-user (a fresh page load resets the cache) still
         // opens Health on Records until they've added a document — see healthDocsKnownEmpty.
         // Only on a real fetch: a transient offline [] must never cache a false zero.
         if (docsOk) {
@@ -743,12 +751,13 @@ var _hPic = null; // { review, docCount, newestDocAt }
         return typeof seg === "string" && HEALTH_SEG.some(([k]) => k === seg) ? seg : "read";
     }
     // True when we positively know there are zero health documents — from this session's
-    // last load (_hPic.docCount) or this device's last visit (persisted). Used to open a
+    // last load (cache.docCount) or this device's last visit (persisted). Used to open a
     // brand-new user on Records (where they upload) instead of an empty Standing read.
     // Returns false when the count is unknown, so we only override on a confident zero.
     function healthDocsKnownEmpty() {
-        if (_hPic && Number.isFinite(_hPic.docCount))
-            return _hPic.docCount === 0;
+        const pic = getHealthPictureCache();
+        if (pic && Number.isFinite(pic.docCount))
+            return pic.docCount === 0;
         try {
             const cached = localStorage.getItem("cairn:healthDocCount");
             if (cached != null)
@@ -1381,9 +1390,9 @@ var _hPic = null; // { review, docCount, newestDocAt }
         HEALTH_SEG,
         ME_HANDLERS,
         ME_SEG,
-        _hPic,
         buildPictureHtml,
         fmtMkNum,
+        getHealthPictureCache,
         healthDotClass,
         healthDocsKnownEmpty,
         healthHeroHtml,
@@ -1427,6 +1436,7 @@ var _hPic = null; // { review, docCount, newestDocAt }
         runHealthReview,
         scrollHealthRailIntoView,
         setHealthSegActive,
+        setHealthPictureCache,
         sparkDateLabel,
         startMemDelete,
         startMemEdit,

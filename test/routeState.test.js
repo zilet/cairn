@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { CLIENT_ROUTE_DEFINITIONS } from "../dist/contracts/client.js";
 
 function loadRoutes() {
   const src = readFileSync(new URL("../public/js/route-state.js", import.meta.url), "utf8");
@@ -16,24 +17,7 @@ function plain(value) {
 
 test("route-state parses canonical deep links", () => {
   const routes = loadRoutes();
-  assert.deepEqual(plain(routes.routeDefinitions), {
-    appBasePath: "/app",
-    defaults: {
-      tab: "today",
-      planSection: "edit",
-      meSection: "standing",
-      healthSection: "read",
-      settingsSection: "agents",
-    },
-    tabs: ["today", "plan", "progress", "chat", "me", "settings"],
-    sections: {
-      plan: ["edit", "endurance", "food", "meals", "coach"],
-      progress: ["trend", "volume", "endurance", "weight", "calendar", "sessions", "program", "energy"],
-      me: ["standing", "profile", "memory", "health", "life", "family"],
-      health: ["read", "markers", "records", "share", "learned"],
-      settings: ["agents", "sources", "automation", "data"],
-    },
-  });
+  assert.deepEqual(plain(routes.routeDefinitions), plain(CLIENT_ROUTE_DEFINITIONS));
   assert.deepEqual(plain(routes.parseRoute("/app/today?date=2026-06-29")), {
     tab: "today", section: null, healthSection: null, date: "2026-06-29", id: null, session: null, jump: null,
   });

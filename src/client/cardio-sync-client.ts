@@ -13,6 +13,8 @@ type CardioSyncOptions = {
   expectingRun?: unknown;
 };
 
+type GarminSyncResponse = import("../contracts/client-api.js").ClientGarminSyncResponse;
+
 const CARDIO_HR_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b4552d"];
 
 (() => {
@@ -59,9 +61,9 @@ const CARDIO_HR_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b45
         if (dot) dot.classList.add("pulse");
         if (text) text.textContent = "Syncing...";
         btn.textContent = "...";
-        let result: { ok?: unknown; activities?: unknown } | null = null;
+        let result: GarminSyncResponse | null = null;
         try {
-          result = await api("/garmin/sync", { method: "POST" }) as { ok?: unknown; activities?: unknown };
+          result = await api("/garmin/sync", { method: "POST" });
         } catch {}
         if (!btn.isConnected) return;
         const ok = !!(result && result.ok);

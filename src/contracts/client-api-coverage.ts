@@ -6,6 +6,12 @@ export interface ClientApiUnknownWaiver {
   reason: string;
 }
 
+export interface ClientApiBroadResponseWaiver {
+  pattern: string;
+  owner: string;
+  reason: string;
+}
+
 export const CLIENT_API_CONTRACT_PATHS = [
   "/health",
   "/version",
@@ -15,6 +21,8 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/agents",
   "/agent-stats",
   "/agent-clis/update",
+  "/art/manifest",
+  "/art/stats",
   "/profile",
   "/goal",
   "/bodyweight",
@@ -42,15 +50,19 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/progress/:exercise",
   "/activities",
   "/activities/:id",
+  "/agent/run",
   "/garmin/daily",
   "/garmin/unreconciled",
   "/garmin/reconcile",
+  "/garmin/sync",
   "/recent-training",
   "/stats",
   "/endurance-prs",
   "/run-compliance",
   "/cardio",
   "/endurance-goal",
+  "/volume",
+  "/calendar",
   "/today-read",
   "/today-read/reshape",
   "/session-suggest",
@@ -62,9 +74,12 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/nutrition/day",
   "/nutrition/expenditure",
   "/nutrition/checkin",
+  "/coach/mealplan",
   "/mealplans",
   "/mealplans/:id/accept",
   "/mealplans/:id/discard",
+  "/meal-plans/:id/swap",
+  "/meal-plans/:id/recipe",
   "/meal-plans/:id/days",
   "/food-notes",
   "/food-notes/:id",
@@ -72,6 +87,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/proposals",
   "/proposals/:id/apply",
   "/proposals/:id/discard",
+  "/program/evolve",
   "/program/progression",
   "/program/progression/apply",
   "/program/balance",
@@ -88,6 +104,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/program/run-plan/apply",
   "/coaching-focus",
   "/health/markers",
+  "/markers/priority",
   "/health/standing",
   "/health/review",
   "/health/synthesis",
@@ -95,10 +112,12 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/directives/:id",
   "/directives/derive",
   "/markers/reconcile",
+  "/recovery",
   "/symptom-links",
   "/evidence",
   "/evidence/summary",
   "/insights",
+  "/insights/generate",
   "/insights/:id",
   "/health-docs",
   "/health-docs/:id",
@@ -127,32 +146,116 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/agent-jobs",
   "/agent-jobs/:id",
   "/agent-jobs/:id/cancel",
+  "/agents/:name/info",
+  "/agents/:name/models",
 ] as const satisfies readonly ClientApiContractPattern[];
 
-export const CLIENT_API_UNKNOWN_WAIVERS = [
+export const CLIENT_API_UNKNOWN_WAIVERS = [] as const satisfies readonly ClientApiUnknownWaiver[];
+
+export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
   {
-    pattern: "/art/manifest",
-    owner: "Wave 6 Shell/visual assets",
-    reason: "Art manifest is a static asset inventory read; type it when the shell/art surface moves under src/client.",
+    pattern: "/exercises/reconcile-names",
+    owner: "Plan exercise reconciliation",
+    reason: "Agent merge details are operator-facing and still need a narrow reconciliation result DTO.",
   },
   {
-    pattern: "/art/stats",
-    owner: "Wave 6 Settings/system screen",
-    reason: "Operator-only art telemetry stays intentionally broad until the Settings data slice gets a narrow stats DTO.",
+    pattern: "/recent-training",
+    owner: "Training log client",
+    reason: "Recent training feeds mixed session/activity summaries until the Training client owns a typed union.",
   },
   {
-    pattern: "/garmin/sync",
-    owner: "Wave 6 Settings/Garmin screen",
-    reason: "Garmin sync returns connector-specific telemetry; type with the Settings and Garmin screen migration.",
+    pattern: "/endurance-prs",
+    owner: "Endurance progress client",
+    reason: "PR buckets are grouped by distance and need a dedicated endurance records DTO.",
   },
   {
-    pattern: "/agents/:name/info",
-    owner: "Wave 5 Shell/Settings jobs",
-    reason: "Per-agent probe output depends on the installed CLI and remains intentionally loose until Settings is typed.",
+    pattern: "/run-compliance",
+    owner: "Endurance progress client",
+    reason: "Compliance summary still mirrors the broad backend read until the run-plan screen narrows it.",
   },
   {
-    pattern: "/agents/:name/models",
-    owner: "Wave 5 Shell/Settings jobs",
-    reason: "Per-agent model listings depend on the installed CLI and remain intentionally loose until Settings is typed.",
+    pattern: "/cardio",
+    owner: "Cardio planning client",
+    reason: "Cardio rows include planned and logged variants that should become a typed discriminated union.",
   },
-] as const satisfies readonly ClientApiUnknownWaiver[];
+  {
+    pattern: "/endurance-goal",
+    owner: "Endurance progress client",
+    reason: "Goal metadata is broad while discipline-specific target fields are still evolving.",
+  },
+  {
+    pattern: "/week-ahead",
+    owner: "Day coach client",
+    reason: "Week-ahead combines deterministic and agent text until the day-coach payload is narrowed.",
+  },
+  {
+    pattern: "/guidelines",
+    owner: "Connected-brain evidence",
+    reason: "Guideline packs are keyed records of trusted references and need a client-safe map DTO.",
+  },
+  {
+    pattern: "/program/balance",
+    owner: "Program progress client",
+    reason: "Program balance is a rich deterministic read and should be narrowed with the Program surface.",
+  },
+  {
+    pattern: "/program/adjustments",
+    owner: "Program progress client",
+    reason: "Adjustment rows mix due groups and lift changes until the Program surface owns a typed union.",
+  },
+  {
+    pattern: "/program/blocks",
+    owner: "Program block client",
+    reason: "Block history rows are still rendered as backend records and need a narrow block summary DTO.",
+  },
+  {
+    pattern: "/program/blocks/active",
+    owner: "Program block client",
+    reason: "The active block read mirrors a backend row until block lifecycle DTOs are extracted.",
+  },
+  {
+    pattern: "/program-state",
+    owner: "Agentic training brain",
+    reason: "Program state is a large coach-context read and needs a shared deterministic DTO.",
+  },
+  {
+    pattern: "/performance",
+    owner: "Agentic training brain",
+    reason: "Performance standing is a large deterministic read and needs a shared client-safe DTO.",
+  },
+  {
+    pattern: "/run-plan",
+    owner: "Agentic running brain",
+    reason: "Weekly run plan structure should be shared from the run-progression domain before narrowing.",
+  },
+  {
+    pattern: "/run-zones",
+    owner: "Agentic running brain",
+    reason: "Run-zone bands should be shared from the run-progression domain before narrowing.",
+  },
+  {
+    pattern: "/muscle-trajectory",
+    owner: "Agentic training brain",
+    reason: "Muscle trajectory groups and variation options need a shared domain DTO.",
+  },
+  {
+    pattern: "/test-week",
+    owner: "Agentic training brain",
+    reason: "Test-week cadence data needs a shared deterministic DTO before client narrowing.",
+  },
+  {
+    pattern: "/dexa-targeting",
+    owner: "Agentic body-composition brain",
+    reason: "DEXA targets are broad while scan-domain DTOs are still backend-owned.",
+  },
+  {
+    pattern: "/health/standing",
+    owner: "Health standing client",
+    reason: "Standing combines body composition, BP, age references, and momentum until the Health DTO is split.",
+  },
+  {
+    pattern: "/injury-impacts",
+    owner: "Personal context client",
+    reason: "Injury impact metadata is a keyed advisory map and needs a small typed record.",
+  },
+] as const satisfies readonly ClientApiBroadResponseWaiver[];

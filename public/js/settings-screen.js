@@ -372,9 +372,9 @@
                 b.disabled = true;
                 b.textContent = "checking…";
                 try {
-                    const r = settingsScreenRecord(await api(`/agents/${encodeURIComponent(n)}/info`));
+                    const r = await api(`/agents/${encodeURIComponent(n)}/info`);
                     if (r.ok)
-                        agentInfo[n] = { version: r.version, model_current: r.model_current, update_available: !!r.update_available };
+                        agentInfo[n] = { version: r.version ?? null, model_current: r.model_current ?? null, update_available: !!r.update_available };
                     else
                         agentInfo[n] = { version: null, model_current: null, update_available: false };
                 }
@@ -394,7 +394,7 @@
                 b.disabled = true;
                 b.textContent = "loading…";
                 try {
-                    const r = settingsScreenRecord(await api(`/agents/${encodeURIComponent(n)}/models`));
+                    const r = await api(`/agents/${encodeURIComponent(n)}/models`);
                     agentModels[n] = r && r.ok && Array.isArray(r.models) ? r.models : [];
                 }
                 catch {
@@ -496,7 +496,7 @@
                 status.innerHTML = garminStatusLine(null, true);
                 let r = null;
                 try {
-                    r = settingsScreenRecord(await api("/garmin/sync", { method: "POST" }));
+                    r = await api("/garmin/sync", { method: "POST" });
                 }
                 catch { }
                 let fresh = s;

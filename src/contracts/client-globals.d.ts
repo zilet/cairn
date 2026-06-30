@@ -389,7 +389,10 @@ declare global {
   declare function paintHealthShareTab(): void;
   declare function paintHealthLearnedTab(): void;
   declare function paintHealthPicture(): void;
-  declare var _hPic: { review?: unknown; docCount?: number; newestDocAt?: string | null } | null;
+  declare function getHealthPictureCache(): { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null;
+  declare function setHealthPictureCache(
+    cache: { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null,
+  ): { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null } | null;
   declare function postExerciseMode(name: string, mode: string): Promise<unknown>;
   declare function updateHeaderCondense(): void;
   declare function switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
