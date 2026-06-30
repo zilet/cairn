@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { HEALTH_DOCUMENT_KINDS } from "../../healthDocumentKinds.js";
-import * as repo from "../../repo.js";
+import {
+  addHealthDocument,
+  deleteHealthDocument,
+  deriveDirectives,
+  listHealthDocuments,
+} from "../../domain/health/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerHealthRecordTools(server: McpToolRegistrar) {
@@ -8,7 +13,7 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
     "list_health_records",
     "List recent health documents (bloodwork / DEXA / other) with their kind, test date, summary, key markers and analysis status. Does not include the binary file.",
     { limit: z.number().int().optional() },
-    async ({ limit }) => asText(repo.listHealthDocuments(limit ?? 50))
+    async ({ limit }) => asText(listHealthDocuments(limit ?? 50))
   );
 
   server.tool(
@@ -21,14 +26,14 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
       parsed: z.any().optional().describe("structured markers, e.g. { markers: [{name,value,unit,flag}], type }"),
     },
     async (record) => {
-      const doc = repo.addHealthDocument({
+      const doc = addHealthDocument({
         kind: record.kind,
         doc_date: record.doc_date ?? null,
         summary: record.summary,
         parsed_json: record.parsed ?? null,
         enrichment_status: "done",
       });
-      try { repo.deriveDirectives(); } catch { /* never fail the record */ }
+      try { deriveDirectives(); } catch { /* never fail the record */ }
       return asText(doc);
     }
   );
@@ -37,6 +42,6 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
     "delete_health_record",
     "Delete a health document by id.",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.deleteHealthDocument(id))
+    async ({ id }) => asText(deleteHealthDocument(id))
   );
 }

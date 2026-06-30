@@ -2,26 +2,36 @@ import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import * as repo from "../repo.js";
+import {
+  addHealthDocument,
+  deleteHealthDocument,
+  deriveDirectives,
+  getHealthDocument,
+  getHealthDocumentRaw,
+  getSettings,
+  listHealthDocuments,
+  setHealthDocEnrichStatus,
+  updateHealthDocFields,
+} from "../domain/health/index.js";
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime, isInlineMime } from "../uploadMime.js";
 
 export const healthDocsRouter = Router();
 
 healthDocsRouter.get("/", (req, res) =>
-  res.json(repo.listHealthDocuments(req.query.limit ? Number(req.query.limit) : 50))
+  res.json(listHealthDocuments(req.query.limit ? Number(req.query.limit) : 50))
 );
 
 // Single row (frontend polls this to watch enrichment_status).
 healthDocsRouter.get("/:id", (req, res) => {
-  const d = repo.getHealthDocument(Number(req.params.id));
+  const d = getHealthDocument(Number(req.params.id));
   if (!d) return res.status(404).json({ error: "not found" });
   res.json(d);
 });
 
 // Stream the original file. Only raster images / PDF are served inline.
 healthDocsRouter.get("/:id/file", (req, res) => {
-  const row = repo.getHealthDocumentRaw(Number(req.params.id)) as any;
+  const row = getHealthDocumentRaw(Number(req.params.id)) as any;
   const filePath = safeUploadPath(row?.file_path);
   if (!row || !filePath || !fs.existsSync(filePath)) {
     return res.status(404).json({ error: "not found" });
@@ -62,8 +72,8 @@ healthDocsRouter.post("/", (req, res) => {
     const filePath = path.join(UPLOADS_DIR, name);
     fs.writeFileSync(filePath, buf);
 
-    const status = repo.getSettings().enrich_enabled ? "pending" : "skipped";
-    const row = repo.addHealthDocument({
+    const status = getSettings().enrich_enabled ? "pending" : "skipped";
+    const row = addHealthDocument({
       kind: b.kind ?? "other",
       doc_date: b.doc_date ?? null,
       original_name: b.original_name ?? (pasted ? "Pasted results" : null),
@@ -82,7 +92,7 @@ healthDocsRouter.post("/", (req, res) => {
 });
 
 healthDocsRouter.put("/:id", (req, res) => {
-  const row = repo.getHealthDocument(Number(req.params.id));
+  const row = getHealthDocument(Number(req.params.id));
   if (!row) return res.status(404).json({ error: "not found" });
   const b = req.body ?? {};
   const fields: { kind?: string | null; doc_date?: string | null } = {};
@@ -94,9 +104,9 @@ healthDocsRouter.put("/:id", (req, res) => {
     fields.doc_date = d || null;
     dateChanged = (d || null) !== (row.doc_date || null);
   }
-  const updated = repo.updateHealthDocFields(Number(req.params.id), fields);
+  const updated = updateHealthDocFields(Number(req.params.id), fields);
   if (dateChanged) {
-    try { repo.deriveDirectives(); } catch { /* keep the edit path resilient */ }
+    try { deriveDirectives(); } catch { /* keep the edit path resilient */ }
     import("../enrich.js").then((m) => m.enqueueReviewRefresh()).catch(() => {});
   }
   res.json(updated);
@@ -104,19 +114,19 @@ healthDocsRouter.put("/:id", (req, res) => {
 
 // Re-run the agentic scan over a document's original file.
 healthDocsRouter.post("/:id/reanalyze", (req, res) => {
-  const row = repo.getHealthDocumentRaw(Number(req.params.id)) as any;
+  const row = getHealthDocumentRaw(Number(req.params.id)) as any;
   if (!row) return res.status(404).json({ error: "not found" });
   const filePath = safeUploadPath(row.file_path);
   if (!filePath || !fs.existsSync(filePath)) return res.status(400).json({ error: "no source file to re-analyze" });
-  if (!repo.getSettings().enrich_enabled) return res.status(409).json({ error: "analysis is disabled in settings" });
-  repo.setHealthDocEnrichStatus(Number(req.params.id), "pending");
+  if (!getSettings().enrich_enabled) return res.status(409).json({ error: "analysis is disabled in settings" });
+  setHealthDocEnrichStatus(Number(req.params.id), "pending");
   import("../enrich.js").then((m) => m.enqueueEnrich("health", Number(req.params.id))).catch(() => {});
-  res.json(repo.getHealthDocument(Number(req.params.id)));
+  res.json(getHealthDocument(Number(req.params.id)));
 });
 
 healthDocsRouter.delete("/:id", (req, res) => {
-  const row = repo.getHealthDocumentRaw(Number(req.params.id)) as any;
-  const result = repo.deleteHealthDocument(Number(req.params.id));
+  const row = getHealthDocumentRaw(Number(req.params.id)) as any;
+  const result = deleteHealthDocument(Number(req.params.id));
   const filePath = safeUploadPath(row?.file_path);
   if (filePath) {
     try { fs.rmSync(filePath, { force: true }); } catch { /* best-effort */ }

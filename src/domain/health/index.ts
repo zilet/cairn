@@ -7,5 +7,6 @@ export { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../../r
 export * from "../../repo/lab-units.js";
 export * from "../../repo/marker-canon.js";
 export * from "../../repo/propagation.js";
+export { getSettings } from "../../repo/settings.js";
 export * from "../../repo/standing.js";
 export * from "../../repo/symptom-links.js";

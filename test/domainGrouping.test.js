@@ -62,6 +62,17 @@ test("health metrics adapters use the health domain entry point", () => {
   }
 });
 
+test("health document adapters use the health domain entry point", () => {
+  for (const [file, importPath] of [
+    ["src/routes/health-docs.ts", "../domain/health/index.js"],
+    ["src/surfaces/mcp/health-records.ts", "../../domain/health/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import health domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
 test("training log adapters use the training domain entry point", () => {
   for (const [file, importPath] of [
     ["src/routes/training-log.ts", "../domain/training/index.js"],
