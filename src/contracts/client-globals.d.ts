@@ -159,6 +159,8 @@ declare global {
   declare function markRefreshing(on: unknown): void;
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;
+  declare function routeApi(): ClientRoutesApi | null;
+  declare function applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
   declare function stagger(index?: number | null): string;
   declare function activateTab(name: string, opts?: Record<string, unknown>): void;
   declare function toast(message: string): void;
@@ -186,6 +188,8 @@ declare global {
   declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): unknown;
   declare function collapseEl(el: Element, done?: () => void): void;
   declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
+  declare function registerAppJobReconnectors(): void;
+  declare function installMobileViewportGuards(): void;
   declare function reconnectSessionSuggest(job?: unknown): unknown;
   declare function reconnectMealPlan(job?: unknown): unknown;
   declare function reconnectMealSwap(job?: unknown): unknown;
@@ -196,12 +200,17 @@ declare global {
   declare function reconnectProposal(job?: unknown): unknown;
   declare function registerServiceWorkerLifecycle(): void;
   declare function primeDiscipline(): void;
+  declare function maybeOnboard(): Promise<void>;
+  declare function primeArtManifest(): Promise<void>;
+  declare function jobReconnect(): Promise<void>;
+  declare function startAppShell(): void;
 
   interface Window {
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
     registerServiceWorkerLifecycle(): void;
     primeDiscipline(): void;
+    startAppShell(): void;
     CairnAppRouter: ClientAppRouterApi;
 
     CairnChatClient: {

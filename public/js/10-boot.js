@@ -960,33 +960,4 @@ function activateTab(name, opts = {}) {
   });
 }
 
-registerServiceWorkerLifecycle();
-swrSweep(); // evict stale/over-cap SWR rows before the first paint reads the cache
-// Register reconnectors so a job running across a reload re-attaches to its host
-// (the registry const is defined in the job-runner section, so this runs at boot).
-registerAppJobReconnectors();
-const _landingRoutes = routeApi();
-const _landingRoute = _landingRoutes ? _landingRoutes.parseRoute(location.href) : null;
-const _landingParams = new URLSearchParams(location.search);
-const _hasRouteState = location.pathname.startsWith("/app") || _landingParams.has("tab") || _landingParams.has("date");
-const _landingTab = _hasRouteState ? applyRouteState(_landingRoute) : _landingParams.get("tab");
-const _canonicalizeLanding = _hasRouteState && !location.pathname.startsWith("/app");
-primeDiscipline();
-activateTab(_landingTab, { replace: _canonicalizeLanding, syncRoute: _canonicalizeLanding });
-window.addEventListener("popstate", () => {
-  const routes = routeApi();
-  const route = routes ? routes.parseRoute(location.href) : null;
-  const tab = applyRouteState(route);
-  activateTab(tab, { syncRoute: false });
-});
-maybeOnboard();
-// Refresh art readiness from the server's on-disk manifest so a cold client (or a
-// background-generated image) renders generated art instantly on the next render.
-// The first paint already used the localStorage-hydrated set; this is the backstop.
-primeArtManifest();
-// Re-attach any agent job that was running when the app last closed. The first
-// paint is async, so defer a tick; jobReconnect rebuilds each running job's host
-// via its registered reconnector.
-setTimeout(() => { jobReconnect(); }, 0);
-
-installMobileViewportGuards();
+startAppShell();

@@ -5,12 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const boot = readFileSync(path.join(root, "public/js/10-boot.js"), "utf8");
+const appStartup = readFileSync(path.join(root, "public/js/app-startup.js"), "utf8");
 const mobileViewport = readFileSync(path.join(root, "public/js/app-mobile-viewport.js"), "utf8");
 const styles = readFileSync(path.join(root, "public/styles.css"), "utf8");
 
 test("mobile chat keyboard state is geometry-led with a short focus/tap intent bridge", () => {
-  assert.match(boot, /installMobileViewportGuards\(\)/);
+  assert.match(appStartup, /installMobileViewportGuards\(\)/);
   assert.match(mobileViewport, /let\s+keyboardIntentUntil\s*=\s*0/);
   assert.match(mobileViewport, /const\s+keyboardGeometryOpen\s*=\s*\(\)\s*=>/);
   assert.match(mobileViewport, /vvMax\s*-\s*vv\.height/);
