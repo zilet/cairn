@@ -35,6 +35,17 @@ function loadingStateHtml(options) {
     <div class="loadstate-label">${escHtml(options.label)}</div>
   </div>`;
 }
+function segmentedNavHtml(options) {
+    const items = Array.isArray(options.items) ? options.items : [];
+    const idx = Math.max(0, items.findIndex(([key]) => key === options.active));
+    const buttons = items
+        .map(([key, label]) => {
+        const activeClass = key === options.active ? " active" : "";
+        return `<button class="segbtn${activeClass}" type="button" data-seg="${escAttr(key)}">${escHtml(label)}</button>`;
+    })
+        .join("");
+    return `<div class="segwrap"><div class="seg seg-sliding" style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb"></span>${buttons}</div></div>`;
+}
 function emptyStateHtml(options) {
     const className = options.className || "empty-state reveal";
     const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -56,6 +67,7 @@ const CAIRN_UI = {
     actionButtonHtml,
     textChipHtml,
     loadingStateHtml,
+    segmentedNavHtml,
     emptyStateHtml,
 };
 Object.assign(globalThis, { CairnUi: CAIRN_UI });

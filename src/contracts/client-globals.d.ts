@@ -111,6 +111,10 @@ declare global {
         className?: string;
         live?: boolean;
       }): string;
+      segmentedNavHtml(options: {
+        active: unknown;
+        items: ReadonlyArray<readonly [unknown, unknown]>;
+      }): string;
       emptyStateHtml(options: {
         title: unknown;
         body?: unknown;

@@ -20,6 +20,11 @@ type LoadingStateOptions = {
   className?: string;
   live?: boolean;
 };
+type SegmentedNavItem = readonly [unknown, unknown];
+type SegmentedNavOptions = {
+  active: unknown;
+  items: ReadonlyArray<SegmentedNavItem>;
+};
 type EmptyStateOptions = {
   title: unknown;
   body?: unknown;
@@ -65,6 +70,18 @@ function loadingStateHtml(options: LoadingStateOptions): string {
   </div>`;
 }
 
+function segmentedNavHtml(options: SegmentedNavOptions): string {
+  const items = Array.isArray(options.items) ? options.items : [];
+  const idx = Math.max(0, items.findIndex(([key]) => key === options.active));
+  const buttons = items
+    .map(([key, label]) => {
+      const activeClass = key === options.active ? " active" : "";
+      return `<button class="segbtn${activeClass}" type="button" data-seg="${escAttr(key)}">${escHtml(label)}</button>`;
+    })
+    .join("");
+  return `<div class="segwrap"><div class="seg seg-sliding" style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb"></span>${buttons}</div></div>`;
+}
+
 function emptyStateHtml(options: EmptyStateOptions): string {
   const className = options.className || "empty-state reveal";
   const style = options.style ? ` style="${escAttr(options.style)}"` : "";
@@ -87,6 +104,7 @@ const CAIRN_UI = {
   actionButtonHtml,
   textChipHtml,
   loadingStateHtml,
+  segmentedNavHtml,
   emptyStateHtml,
 };
 

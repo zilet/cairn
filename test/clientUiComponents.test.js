@@ -104,3 +104,24 @@ test("loading state component escapes labels and preserves status semantics", ()
   assert.match(staticHtml, /role="status"/);
   assert.doesNotMatch(staticHtml, /aria-live=/);
 });
+
+test("segmented nav component escapes items and preserves active slider contract", () => {
+  const ui = loadUiComponents();
+  const html = ui.segmentedNavHtml({
+    active: `food"`,
+    items: [
+      ["training", "Training"],
+      [`food"`, "Food <today>"],
+      ["coach", "Coach"],
+    ],
+  });
+
+  assert.match(html, /^<div class="segwrap">/);
+  assert.match(html, /class="seg seg-sliding"/);
+  assert.match(html, /style="--segn:3;--segi:1"/);
+  assert.match(html, /<span class="seg-thumb"><\/span>/);
+  assert.match(html, /class="segbtn active" type="button" data-seg="food&quot;"/);
+  assert.match(html, />Food &lt;today&gt;<\/button>/);
+  assert.doesNotMatch(html, /Food <today>/);
+  assert.equal((html.match(/type="button"/g) || []).length, 3);
+});

@@ -637,8 +637,7 @@ function gotoChatWith(text) {
 // sticky .segwrap band so the sub-nav stays pinned to the top while you scroll a
 // long sub-view — one tap back to another section, never lost from focus.
 function segBar(active, items) {
-  const idx = Math.max(0, items.findIndex(([k]) => k === active));
-  return `<div class="segwrap"><div class="seg seg-sliding" style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb"></span>${items.map(([k, l]) => `<button class="segbtn${k === active ? " active" : ""}" data-seg="${k}">${l}</button>`).join("")}</div></div>`;
+  return CairnUi.segmentedNavHtml({ active, items });
 }
 function wireSeg(handlers) {
   view.querySelectorAll(".segbtn").forEach((b, _i) =>

@@ -933,6 +933,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponentsSource, /function emptyStateHtml\(options: EmptyStateOptions\): string/);
   assert.match(uiComponentsSource, /function textChipHtml\(options: TextChipOptions\): string/);
   assert.match(uiComponentsSource, /function loadingStateHtml\(options: LoadingStateOptions\): string/);
+  assert.match(uiComponentsSource, /function segmentedNavHtml\(options: SegmentedNavOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
@@ -972,6 +973,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /Object\.assign\(globalThis, \{ CairnUi: CAIRN_UI \}\)/);
   assert.match(uiComponents, /window\.CairnUi = CAIRN_UI/);
   assert.match(uiComponents, /loadingStateHtml/);
+  assert.match(uiComponents, /segmentedNavHtml/);
   assert.match(todayAgendaClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
@@ -985,6 +987,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsClient, /CairnSettingsClient/);
   assert.match(appJobReconnectors, /Object\.assign\(globalThis, \{ registerAppJobReconnectors \}\)/);
   assert.match(appJobReconnectors, /window\.registerAppJobReconnectors = registerAppJobReconnectors/);
+  assert.match(ui, /function segBar\(active, items\)[\s\S]*CairnUi\.segmentedNavHtml\(\{ active, items \}\)/);
   assert.match(ui, /function loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
   assert.match(today, /window\.CairnTodayAgenda\.renderableBuckets/);
   assert.match(today, /window\.CairnTodayAgenda\.railHtml/);
