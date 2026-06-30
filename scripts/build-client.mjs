@@ -37,6 +37,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-energy-client.ts", output: "public/js/progress-energy-client.js" },
   { source: "src/client/progress-calendar-client.ts", output: "public/js/progress-calendar-client.js" },
   { source: "src/client/progress-muscle-trajectory-client.ts", output: "public/js/progress-muscle-trajectory-client.js" },
+  { source: "src/client/progress-dexa-targeting-client.ts", output: "public/js/progress-dexa-targeting-client.js" },
   { source: "src/client/capture.ts", output: "public/js/04-capture.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },

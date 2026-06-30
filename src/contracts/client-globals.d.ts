@@ -229,6 +229,10 @@ declare global {
   declare function muscleTrendGlyph(trend: unknown): string;
   declare function muscleGroupRowHtml(group: unknown): string;
   declare function muscleTrajectoryHtml(trajectory: unknown): string;
+  declare function loadDexaTargeting(slotId: string): Promise<void>;
+  declare function dexaTargetToneCls(target: unknown): string;
+  declare function dexaTargetHtml(target: unknown): string;
+  declare function dexaTargetingHtml(targeting: unknown): string;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -567,6 +571,13 @@ declare global {
       muscleTrajectoryHtml(trajectory: unknown): string;
     };
 
+    CairnProgressDexaTargeting: {
+      loadDexaTargeting(slotId: string): Promise<void>;
+      dexaTargetToneCls(target: unknown): string;
+      dexaTargetHtml(target: unknown): string;
+      dexaTargetingHtml(targeting: unknown): string;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -644,6 +655,7 @@ declare global {
   declare const CairnProgressEnergy: Window["CairnProgressEnergy"];
   declare const CairnProgressCalendar: Window["CairnProgressCalendar"];
   declare const CairnProgressMuscleTrajectory: Window["CairnProgressMuscleTrajectory"];
+  declare const CairnProgressDexaTargeting: Window["CairnProgressDexaTargeting"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];

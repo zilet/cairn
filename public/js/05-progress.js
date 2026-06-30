@@ -1493,50 +1493,6 @@ async function loadMuscleTrajectory() {
   const html = muscleTrajectoryHtml(m);
   slot.innerHTML = html || "";
 }
-// ---------- DEXA-driven exercise targeting ----------
-// Fed by GET /api/dexa-targeting — {available, targets:[{area,signal,bias,moves,
-// domain,path,groups,informational}], lead, next_dexa_focus}. Maps regional DEXA
-// signals → what to focus on before the next scan. Shared by Progress→Program and
-// the top-level Me→Standing review (co-located with the regional read). {available:false} → "".
-// informational:true targets (e.g. low BMD) are clinician-framed, never a directive.
-async function loadDexaTargeting(slotId) {
-  const slot = document.getElementById(slotId);
-  if (!slot) return;
-  let d = null;
-  try { d = await api("/dexa-targeting"); } catch { d = null; }
-  if (!slot.isConnected) return;
-  slot.innerHTML = dexaTargetingHtml(d) || "";
-}
-function dexaTargetToneCls(t) {
-  if (t.informational) return "pdexa-info"; // clinician-framed (e.g. BMD) — neutral/steady
-  if (t.domain === "nutrition") return "pdexa-nut";
-  return "pdexa-train";
-}
-function dexaTargetHtml(t) {
-  const moves = Array.isArray(t.moves) ? t.moves.filter(Boolean) : [];
-  return `<div class="pdexa-target ${dexaTargetToneCls(t)}">
-      <div class="pdexa-target-head">
-        <span class="pdexa-area">${escHtml(t.area || "")}</span>
-        ${t.informational ? `<span class="pdexa-tag lbl">worth discussing with your clinician</span>` : ""}
-      </div>
-      ${t.signal ? `<div class="pdexa-signal">${escHtml(t.signal)}</div>` : ""}
-      ${t.bias ? `<div class="pdexa-bias">${escHtml(t.bias)}</div>` : ""}
-      ${moves.length ? `<div class="pdexa-moves">${moves.map((m) => `<span class="pdexa-move">${escHtml(m)}</span>`).join("")}</div>` : ""}
-      ${t.path ? `<div class="pdexa-path"><span class="lbl">Path to your next scan</span>${escHtml(t.path)}</div>` : ""}
-    </div>`;
-}
-function dexaTargetingHtml(d) {
-  if (!d || d.available === false || !Array.isArray(d.targets) || !d.targets.length) return "";
-  const heading = (d.lead && d.lead.next_dexa_focus) || d.next_dexa_focus || "From your DEXA — what to focus on next";
-  return `<div class="pdexa-card">
-      <div class="pdexa-card-head">
-        <span class="lbl">From your DEXA</span>
-        <div class="pdexa-focus">${escHtml(heading)}</div>
-      </div>
-      <div class="pdexa-targets">${d.targets.map(dexaTargetHtml).join("")}</div>
-    </div>`;
-}
-
 // ---- periodization block (the mesocycle the coach periodizes toward) ----
 function blockFocusWord(f) {
   if (f === "strength") return "Strength";
