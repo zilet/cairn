@@ -616,7 +616,7 @@ test("app shell privacy contract avoids remote fonts and blanket inline scripts"
   const styles = read("public/styles.css");
   const server = read("src/server.ts");
   const design = read("docs/DESIGN.md");
-  const publicJs = ["public/js/02-ui.js", "public/js/save-bar.js", "public/js/09-plan-chat.js"].map(read).join("\n");
+  const publicJs = ["public/js/02-ui.js", "public/js/agent-login-client.js", "public/js/save-bar.js", "public/js/09-plan-chat.js"].map(read).join("\n");
   const scriptSources = server.match(/const scriptSources = \[([^\]]+)\]/)?.[1] || "";
 
   assert.doesNotMatch(`${index}\n${server}`, /fonts\.(?:googleapis|gstatic)\.com/);
@@ -655,6 +655,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/app-download\.js"/);
   assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
+  assert.match(sw, /"\/js\/agent-login-client\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
   assert.match(sw, /"\/js\/today-activity-client\.js"/);
@@ -888,6 +889,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const apiClientSource = read("src/client/api-client.ts");
   const appDownloadSource = read("src/client/app/download.ts");
   const appSwRecoverySource = read("src/client/app/sw-recovery.ts");
+  const agentLoginSource = read("src/client/agent-login-client.ts");
   const agentJobClientSource = read("src/client/agent-job-client.ts");
   const coreStateSource = read("src/client/app/state.ts");
   const uiShellSource = read("src/client/ui-shell.ts");
@@ -988,6 +990,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const apiClient = read("public/js/api-client.js");
   const appDownload = read("public/js/app-download.js");
   const appSwRecovery = read("public/js/app-sw-recovery.js");
+  const agentLoginClient = read("public/js/agent-login-client.js");
   const agentJobClient = read("public/js/agent-job-client.js");
   const coreState = read("public/js/01-core.js");
   const pwaInstall = read("public/js/pwa-install-coach.js");
@@ -1367,6 +1370,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
+  assert.match(clientBuild, /src\/client\/agent-login-client\.ts/);
+  assert.match(clientBuild, /public\/js\/agent-login-client\.js/);
   assert.match(clientBuild, /src\/client\/rest-timer\.ts/);
   assert.match(clientBuild, /public\/js\/rest-timer\.js/);
   assert.match(clientBuild, /src\/client\/coaching-focus-client\.ts/);
@@ -1545,12 +1550,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "pwa-install-coach.js must load early, after app state and before feature consumers"
   );
   assert.ok(
-    index.indexOf("/js/agent-job-client.js") > index.indexOf("/js/02-ui.js") &&
+    index.indexOf("/js/agent-login-client.js") > index.indexOf("/js/02-ui.js") &&
+      index.indexOf("/js/agent-login-client.js") < index.indexOf("/js/agent-job-client.js") &&
+      index.indexOf("/js/agent-login-client.js") < index.indexOf("/js/settings-screen.js"),
+    "agent-login-client.js must load after UI helpers and before Settings can launch agent login"
+  );
+  assert.ok(
+    index.indexOf("/js/agent-job-client.js") > index.indexOf("/js/agent-login-client.js") &&
       index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/rest-timer.js") &&
       index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/03-today.js") &&
       index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/09-plan-chat.js") &&
       index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/app-job-reconnectors.js"),
-    "agent-job-client.js must load after UI helpers and before job consumers/reconnectors"
+    "agent-job-client.js must load after UI and agent-login helpers and before job consumers/reconnectors"
   );
   assert.ok(
     index.indexOf("/js/html-utils.js") > -1 && index.indexOf("/js/html-utils.js") < index.indexOf("/js/02-ui.js"),
@@ -1951,6 +1962,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(chat, /\bfunction\s+registerJobReconnector\b/);
   assert.match(chat, /Durable agent job helpers live in \/js\/agent-job-client\.js/);
   assert.match(pwaInstall, /\/\/ @ts-check/);
+  assert.match(agentLoginClient, /\/\/ @ts-check/);
   assert.match(restTimer, /\/\/ @ts-check/);
   assert.match(coachingFocusClient, /\/\/ @ts-check/);
   assert.match(todayActivityClient, /\/\/ @ts-check/);
@@ -2017,6 +2029,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
+  assert.match(clientBuild, /src\/client\/agent-login-client\.ts/);
+  assert.match(clientBuild, /public\/js\/agent-login-client\.js/);
   assert.match(clientBuild, /src\/client\/rest-timer\.ts/);
   assert.match(clientBuild, /public\/js\/rest-timer\.js/);
   assert.match(clientBuild, /src\/client\/coaching-focus-client\.ts/);
@@ -2237,7 +2251,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiShellSource, /function withViewTransition\(fn: \(\) => unknown\): Promise<unknown>/);
   assert.match(uiShellSource, /let pollToken: number = 0/);
   assert.match(uiShellSource, /async function pollEnrichment<T extends UiRecord = UiRecord>/);
-  assert.match(uiShellSource, /async function openAgentLoginModal\(agentName: unknown\): Promise<void>/);
+  assert.doesNotMatch(uiShellSource, /openAgentLoginModal|xtermWindow|agent-login-ov/);
+  assert.match(agentLoginSource, /type AgentLoginOverlay = HTMLDivElement & \{/);
+  assert.match(agentLoginSource, /function xtermWindow\(\): \{ Terminal\?: AgentLoginXtermConstructor/);
+  assert.match(agentLoginSource, /async function openAgentLoginModal\(agentName: unknown\): Promise<void>/);
+  assert.match(agentLoginSource, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);
   assert.match(pwaInstallSource, /function isStandalonePWA\(\): boolean/);
   assert.match(pwaInstallSource, /function renderPhoneCoachBanner\(container: Element \| null \| undefined\): void/);
   assert.match(pwaInstallSource, /Object\.assign\(globalThis, \{/);
@@ -2733,6 +2751,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayGarminReconciliationClient, /window\.CairnTodayGarminReconciliation = CAIRN_TODAY_GARMIN_RECONCILIATION/);
   assert.match(todayGarminReconciliationClient, /load,/);
   assert.doesNotMatch(todayGarminReconciliationClient, /^function\s+reconcilePromptHtml|^function\s+reconciledToast|^async function\s+load/m);
+  assert.match(agentLoginClient, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);
+  assert.match(agentLoginClient, /Object\.assign\(window, \{ openAgentLoginModal \}\)/);
+  assert.doesNotMatch(agentLoginClient, /^function\s+xtermWindow|^function\s+loadXtermAssets|^async function\s+openAgentLoginModal/m);
+  assert.doesNotMatch(ui, /openAgentLoginModal|xtermWindow|agent-login-ov/);
   assert.doesNotMatch(meals, /function\s+statusBadge|function\s+applyResultMessage|function\s+clampNoteHtml|function\s+verifiedBadgeHtml|function\s+strengthChangeHtml|function\s+runTargetText|function\s+isOpenProposal|const\s+proposalCardHtml/);
   assert.match(meals, /CairnProposal\.coachProposalListHtml\(proposals, lastApplyClamp\)/);
   assert.match(meals, /proposal-client\.js/);
@@ -3098,6 +3120,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/markdown-client\.js"/);
   assert.match(sw, /"\/js\/today-activity-client\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
+  assert.match(sw, /"\/js\/agent-login-client\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
