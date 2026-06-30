@@ -249,7 +249,17 @@ declare global {
   declare function programAdjustmentsHtml(rows: unknown): string;
   declare function loadTestWeek(): Promise<void>;
   declare function testWeekBannerHtml(testWeek: unknown): string;
+  declare function liftStatusWord(lift: unknown): string;
+  declare function liftTrendFig(lift: unknown): string;
+  declare function liftBestFig(lift: unknown): string;
+  declare function sortLifts(lifts: unknown): unknown[];
+  declare function volBandWord(band: unknown): string;
+  declare function volTrendGlyph(trend: unknown): string;
   declare function phaseWord(phase: unknown): string;
+  declare function liftRowHtml(lift: unknown, index: number): string;
+  declare function volumeBlockHtml(volume: unknown, startIdx: number): string;
+  declare function mesoBlockHtml(meso: unknown, index: number): string;
+  declare function adaptationsHtml(adaptations: unknown, index: number): string;
   declare function blockFocusWord(focus: unknown): string;
   declare function activeBlockHtml(block: unknown): string;
   declare function startBlockHtml(): string;
@@ -619,6 +629,20 @@ declare global {
       testWeekBannerHtml(testWeek: unknown): string;
     };
 
+    CairnProgressProgramSummary: {
+      liftStatusWord(lift: unknown): string;
+      liftTrendFig(lift: unknown): string;
+      liftBestFig(lift: unknown): string;
+      sortLifts(lifts: unknown): unknown[];
+      volBandWord(band: unknown): string;
+      volTrendGlyph(trend: unknown): string;
+      phaseWord(phase: unknown): string;
+      liftRowHtml(lift: unknown, index: number): string;
+      volumeBlockHtml(volume: unknown, startIdx: number): string;
+      mesoBlockHtml(meso: unknown, index: number): string;
+      adaptationsHtml(adaptations: unknown, index: number): string;
+    };
+
     CairnProgressProgramBlock: {
       blockFocusWord(focus: unknown): string;
       activeBlockHtml(block: unknown): string;
@@ -708,6 +732,7 @@ declare global {
   declare const CairnProgressPerformance: Window["CairnProgressPerformance"];
   declare const CairnProgressProgramAdjustments: Window["CairnProgressProgramAdjustments"];
   declare const CairnProgressTestWeek: Window["CairnProgressTestWeek"];
+  declare const CairnProgressProgramSummary: Window["CairnProgressProgramSummary"];
   declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
