@@ -1008,6 +1008,15 @@ declare global {
       skipNameHtml(name: unknown): string;
       skipLineHtml(names: unknown): string;
     };
+
+    CairnTodayProgramAdjustments: {
+      ADJUST_GLYPH: Record<string, string>;
+      COLLAPSE_AFTER: number;
+      extraCount(rows: unknown): number;
+      planRequest(adjustment: unknown): string;
+      rowHtml(adjustment: unknown, index: number): string;
+      bannerHtml(rows: unknown): string;
+    };
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];

@@ -2711,44 +2711,8 @@ async function loadWeekAhead() {
 // up as the next move. "+N more" expands the rest IN PLACE (no yank to a charts
 // screen); the header "My plan →" opens the actual plan. Pull, never push: it waits
 // quietly and renders NOTHING when there's nothing to say. Best-effort + null-safe.
-const ADJUST_GLYPH = { progression: "↑", balance: "◆", deload: "↓", gap: "○" };
-
-// The calm chat-prefill request behind "Plan it →" on one adjustment — phrased so
-// the coach drafts a concrete plan change (which day, which movement). Tailored per
-// kind; falls back to the title.
-function adjustPlanRequest(a) {
-  if (!a) return "Help me adjust my plan.";
-  const g = a.group || "";
-  const sugg = Array.isArray(a.suggestions) && a.suggestions.length
-    ? ` (e.g. ${a.suggestions.join(", ")})` : "";
-  // A recovering group is due on the week but freshly torched — don't ask to add it
-  // now; ask the coach to plan AROUND it and say when to come back to it.
-  if (a.recovering) {
-    return `My ${g || "those muscles"} took a beating recently and ${g ? "is" : "are"} still recovering. Plan my next session around fresher muscles instead, and tell me which day to come back to ${g || "them"}.`;
-  }
-  switch (a.kind) {
-    case "gap":
-      return `Add some ${g || "the missing"} work to my plan${sugg}. Fit it in without adding much time, and tell me which day it goes on.`;
-    case "balance":
-      if (a.title && /running high/i.test(a.title))
-        return `My ${g} volume is running high lately — rebalance some of it toward a group that's due.`;
-      // Already programmed → the gap is logged volume, not a missing movement. Ask the
-      // coach to help fit those sessions in, never to add MORE work you already have.
-      if (a.programmed)
-        return `I'm light on logged ${g} volume this week, but ${g} is already in my plan${sugg ? ` (${a.suggestions.join(", ")})` : ""}. Help me actually get those sessions in this week — don't add more ${g} work.`;
-      return `I'm light on ${g} lately. Add a ${g} movement to my plan this week${sugg}, and tell me which day.`;
-    case "deload":
-      return a.exercise
-        ? `Ease off ${a.exercise} next session — back the load off about 10% and let it rebuild.`
-        : "A deload week looks about due — plan me a lighter week.";
-    case "progression":
-      if (a.title && /rotate/i.test(a.title))
-        return `Rotate ${a.exercise || "this lift"} to a close variation (same movement) to break the plateau.`;
-      return `Apply the earned step up for ${a.exercise || "this lift"} on my plan.`;
-    default:
-      return a.title || "Help me adjust my plan.";
-  }
-}
+// Today program-adjustment rail markup lives in /js/today-program-adjustments-client.js.
+// This screen keeps API loading, tab navigation, and expand/collapse wiring.
 
 async function loadProgramAdjustmentsBanner() {
   const slot = view.querySelector("#adjustSlot");
@@ -2758,40 +2722,8 @@ async function loadProgramAdjustmentsBanner() {
   if (state.tab !== "today" || !slot.isConnected) return;
   rows = Array.isArray(rows) ? rows : [];
   if (!rows.length) { slot.innerHTML = ""; return; }
-  // Render EVERY row, but keep all but the first 3 collapsed behind "+N more" — which
-  // expands them IN PLACE (no yank to a charts screen). The first 3 lead.
-  const more = Math.max(0, rows.length - 3);
-  const items = rows.map((a, i) => {
-    const glyph = (a && a.recovering) ? "↻" : (ADJUST_GLYPH[a && a.kind] || "○");
-    // "Try" suggests NEW movements to add; an already-programmed due group instead
-    // lists what's in the plan, so label it "In your plan" — never "Try".
-    const sugLbl = a && a.programmed ? "In your plan" : "Try";
-    const chips = a && Array.isArray(a.suggestions) && a.suggestions.length
-      ? `<div class="adjust-sugs"><span class="adjust-sugs-lbl lbl">${sugLbl}</span>${a.suggestions
-          .map((s) => `<span class="adjust-chip">${escHtml(s)}</span>`).join("")}</div>`
-      : "";
-    const act = a && a.recovering ? "Plan around it →" : a && a.programmed ? "Help me fit it in →" : "Plan it →";
-    return `<div class="adjust-row${i >= 3 ? " adjust-extra" : ""}${a && a.recovering ? " adjust-rec" : ""}">
-        <button class="adjust-item" type="button" aria-expanded="false">
-          <span class="adjust-glyph" aria-hidden="true">${glyph}</span>
-          <span class="adjust-title">${escHtml((a && a.title) || "")}</span>
-          <span class="adjust-chev" aria-hidden="true">⌄</span>
-        </button>
-        <div class="adjust-detail" hidden>
-          ${a && a.why ? `<div class="adjust-why">${escHtml(a.why)}</div>` : ""}
-          ${chips}
-          <button class="adjust-act" type="button" data-req="${escAttr(adjustPlanRequest(a))}">${act}</button>
-        </div>
-      </div>`;
-  }).join("");
-  slot.innerHTML = `<div class="adjust-card reveal" style="--i:0">
-      <div class="adjust-head">
-        <span class="lbl">What changed</span>
-        <button class="adjust-all lbl" id="adjustAll" type="button">My plan →</button>
-      </div>
-      ${items}
-      ${more > 0 ? `<button class="adjust-more lbl" id="adjustMore" type="button" aria-expanded="false">+${more} more in your program</button>` : ""}
-    </div>`;
+  const more = CairnTodayProgramAdjustments.extraCount(rows);
+  slot.innerHTML = CairnTodayProgramAdjustments.bannerHtml(rows);
   const card = slot.querySelector(".adjust-card");
   if (!card) return;
   card.addEventListener("click", (e) => {

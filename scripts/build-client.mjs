@@ -34,6 +34,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/proposal-client.ts", output: "public/js/proposal-client.js" },
   { source: "src/client/today-session-suggest-client.ts", output: "public/js/today-session-suggest-client.js" },
   { source: "src/client/today-session-status-client.ts", output: "public/js/today-session-status-client.js" },
+  { source: "src/client/today-program-adjustments-client.ts", output: "public/js/today-program-adjustments-client.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
   { source: "src/client/progress-components-client.ts", output: "public/js/progress-components-client.js" },
   { source: "src/client/progress-chart-client.ts", output: "public/js/progress-chart-client.js" },
