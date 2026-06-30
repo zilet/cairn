@@ -62,3 +62,28 @@ test("progress muscle trajectory exposes calm mappings and empty states", () => 
   assert.equal(muscle.muscleTrendGlyph("stable"), "→");
   assert.equal(muscle.muscleTrajectoryHtml({ available: false, groups: [] }), "");
 });
+
+test("progress muscle trajectory loader hydrates active Program slot", async () => {
+  const context = { Object, String };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-muscle-trajectory-client.js"), "utf8"), context);
+  const slot = { isConnected: true, innerHTML: "" };
+  context.state = { tab: "progress", progressSeg: "program" };
+  context.view = {
+    querySelector(selector) {
+      return selector === "#progMuscleSlot" ? slot : null;
+    },
+  };
+  context.api = async () => ({
+    available: true,
+    headline: "Groups <read>",
+    groups: [{ group: "chest", label: "Chest <press>", verdict: "advancing" }],
+  });
+
+  await context.CairnProgressMuscleTrajectory.loadMuscleTrajectory();
+
+  assert.match(slot.innerHTML, /Groups &lt;read&gt;/);
+  assert.match(slot.innerHTML, /Chest &lt;press&gt;/);
+  assert.doesNotMatch(slot.innerHTML, /<read>|<press>/);
+});

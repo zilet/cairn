@@ -922,6 +922,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnProgressEnergy/);
   assert.match(clientGlobals, /declare function calMonthHtml\(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number\): string/);
   assert.match(clientGlobals, /CairnProgressCalendar/);
+  assert.match(clientGlobals, /declare function loadMuscleTrajectory\(\): Promise<void>/);
   assert.match(clientGlobals, /declare function muscleTrajectoryHtml\(trajectory: unknown\): string/);
   assert.match(clientGlobals, /CairnProgressMuscleTrajectory/);
   assert.match(clientGlobals, /declare function dexaTargetingHtml\(targeting: unknown\): string/);
@@ -1602,6 +1603,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressCalendarSource, /function calMonthHtml\(ym: string, byDate: Map<string, CalendarCell>, todayIso: string, idx: number\): string/);
   assert.match(progressCalendarSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressCalendarSource, /CairnProgressCalendar/);
+  assert.match(progressMuscleTrajectorySource, /async function loadMuscleTrajectory\(\): Promise<void>/);
   assert.match(progressMuscleTrajectorySource, /function muscleTrajectoryHtml\(trajectory: MuscleTrajectory \| null \| undefined\): string/);
   assert.match(progressMuscleTrajectorySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressMuscleTrajectorySource, /CairnProgressMuscleTrajectory/);
@@ -1784,7 +1786,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(progress, /function\s+calMonthHtml/);
   assert.match(progressMuscleTrajectoryClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressMuscleTrajectoryClient, /CairnProgressMuscleTrajectory/);
-  assert.doesNotMatch(progress, /function\s+muscleVerdictTone|function\s+muscleVerdictWord|function\s+muscleTrendGlyph|function\s+muscleGroupRowHtml|function\s+muscleTrajectoryHtml/);
+  assert.doesNotMatch(progress, /function\s+loadMuscleTrajectory|function\s+muscleVerdictTone|function\s+muscleVerdictWord|function\s+muscleTrendGlyph|function\s+muscleGroupRowHtml|function\s+muscleTrajectoryHtml/);
   assert.match(progressDexaTargetingClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressDexaTargetingClient, /CairnProgressDexaTargeting/);
   assert.doesNotMatch(progress, /function\s+loadDexaTargeting|function\s+dexaTargetToneCls|function\s+dexaTargetHtml|function\s+dexaTargetingHtml/);

@@ -1,5 +1,21 @@
 // @ts-check
 // Progress Muscle trajectory presentation helpers.
+async function loadMuscleTrajectory() {
+    const slot = view.querySelector("#progMuscleSlot");
+    if (!slot)
+        return;
+    let trajectory = null;
+    try {
+        trajectory = (await api("/muscle-trajectory"));
+    }
+    catch {
+        trajectory = null;
+    }
+    if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected)
+        return;
+    const html = muscleTrajectoryHtml(trajectory);
+    slot.innerHTML = html || "";
+}
 function muscleVerdictTone(verdict) {
     if (verdict === "advancing")
         return "strong";
@@ -66,6 +82,7 @@ function muscleTrajectoryHtml(trajectory) {
     </div>`;
 }
 const CAIRN_PROGRESS_MUSCLE_TRAJECTORY = {
+    loadMuscleTrajectory,
     muscleVerdictTone,
     muscleVerdictWord,
     muscleTrendGlyph,
@@ -74,6 +91,7 @@ const CAIRN_PROGRESS_MUSCLE_TRAJECTORY = {
 };
 Object.assign(globalThis, {
     CairnProgressMuscleTrajectory: CAIRN_PROGRESS_MUSCLE_TRAJECTORY,
+    loadMuscleTrajectory,
     muscleVerdictTone,
     muscleVerdictWord,
     muscleTrendGlyph,
@@ -83,6 +101,7 @@ Object.assign(globalThis, {
 if (typeof window !== "undefined") {
     Object.assign(window, {
         CairnProgressMuscleTrajectory: CAIRN_PROGRESS_MUSCLE_TRAJECTORY,
+        loadMuscleTrajectory,
         muscleVerdictTone,
         muscleVerdictWord,
         muscleTrendGlyph,

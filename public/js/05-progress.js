@@ -1307,21 +1307,6 @@ async function tidyExerciseNames(btn) {
   if (n) { swrInvalidate("progress:program"); renderProgram(); }
 }
 
-// ---------- per-muscle-group advancing/stalling strip ----------
-// Fed by GET /api/muscle-trajectory — {available, headline, groups:[{group,label,
-// verdict,lead_lift,stalled_signal,vary_options,volume_band,trend,note}]}. The owner's
-// "which groups advance, which stall" framing; a stalling group exposes its
-// vary_options as a "rotate one in" menu. Monotonic tone: sage = advancing, gold =
-// building/maintaining, warn ONLY for a genuine stall. No scores.
-async function loadMuscleTrajectory() {
-  const slot = view.querySelector("#progMuscleSlot");
-  if (!slot) return;
-  let m = null;
-  try { m = await api("/muscle-trajectory"); } catch { m = null; }
-  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
-  const html = muscleTrajectoryHtml(m);
-  slot.innerHTML = html || "";
-}
 // ---- periodization block (the mesocycle the coach periodizes toward) ----
 function blockFocusWord(f) {
   if (f === "strength") return "Strength";

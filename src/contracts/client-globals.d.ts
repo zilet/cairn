@@ -225,6 +225,7 @@ declare global {
   declare function kcalFmt(value: unknown): string;
   declare function energyRead(exp: unknown): { lead: string; body: string; tone: string; dir?: string | null };
   declare function calMonthHtml(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number): string;
+  declare function loadMuscleTrajectory(): Promise<void>;
   declare function muscleVerdictTone(verdict: unknown): string;
   declare function muscleVerdictWord(verdict: unknown): string;
   declare function muscleTrendGlyph(trend: unknown): string;
@@ -574,6 +575,7 @@ declare global {
     };
 
     CairnProgressMuscleTrajectory: {
+      loadMuscleTrajectory(): Promise<void>;
       muscleVerdictTone(verdict: unknown): string;
       muscleVerdictWord(verdict: unknown): string;
       muscleTrendGlyph(trend: unknown): string;

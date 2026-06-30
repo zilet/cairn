@@ -24,6 +24,20 @@ type MuscleTrajectory = {
   groups?: MuscleGroupTrajectoryRow[];
 };
 
+async function loadMuscleTrajectory(): Promise<void> {
+  const slot = view.querySelector("#progMuscleSlot");
+  if (!slot) return;
+  let trajectory: MuscleTrajectory | null = null;
+  try {
+    trajectory = (await api("/muscle-trajectory")) as MuscleTrajectory;
+  } catch {
+    trajectory = null;
+  }
+  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
+  const html = muscleTrajectoryHtml(trajectory);
+  slot.innerHTML = html || "";
+}
+
 function muscleVerdictTone(verdict: unknown): string {
   if (verdict === "advancing") return "strong";
   if (verdict === "stalling") return "watch";
@@ -83,6 +97,7 @@ function muscleTrajectoryHtml(trajectory: MuscleTrajectory | null | undefined): 
 }
 
 const CAIRN_PROGRESS_MUSCLE_TRAJECTORY = {
+  loadMuscleTrajectory,
   muscleVerdictTone,
   muscleVerdictWord,
   muscleTrendGlyph,
@@ -92,6 +107,7 @@ const CAIRN_PROGRESS_MUSCLE_TRAJECTORY = {
 
 Object.assign(globalThis, {
   CairnProgressMuscleTrajectory: CAIRN_PROGRESS_MUSCLE_TRAJECTORY,
+  loadMuscleTrajectory,
   muscleVerdictTone,
   muscleVerdictWord,
   muscleTrendGlyph,
@@ -102,6 +118,7 @@ Object.assign(globalThis, {
 if (typeof window !== "undefined") {
   Object.assign(window, {
     CairnProgressMuscleTrajectory: CAIRN_PROGRESS_MUSCLE_TRAJECTORY,
+    loadMuscleTrajectory,
     muscleVerdictTone,
     muscleVerdictWord,
     muscleTrendGlyph,
