@@ -546,6 +546,12 @@ declare global {
       learnedTimelineHtml(data: unknown): string;
     };
 
+    CairnMemory: {
+      MEM_KINDS: readonly string[];
+      memoryKindOptionsHtml(selected?: unknown): string;
+      memoryRowHtml(row: Record<string, unknown>, index?: number): string;
+    };
+
     CairnFamily: {
       FAMILY_COLORS: readonly { v: string; l: string }[];
       FAMILY_DEFAULT_COLOR: string;
@@ -801,6 +807,7 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
+  declare const CairnMemory: Window["CairnMemory"];
   declare const CairnFamily: Window["CairnFamily"];
   declare const CairnLife: Window["CairnLife"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];

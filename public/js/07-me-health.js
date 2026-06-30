@@ -390,7 +390,7 @@ function renderActs(acts) {
 }
 
 // ---------- Me: Memory (what the coach remembers) ----------
-const MEM_KINDS = ["note", "preference", "constraint", "goal", "fact"];
+// Pure Memory option and row renderers live in memory-client.js.
 async function renderMemory() {
   headerTitle.textContent = "Me";
   state.meSeg = "memory";
@@ -401,7 +401,7 @@ async function renderMemory() {
     </div></div>
     <h1 class="lbl" style="margin:20px 0 8px">What the coach remembers</h1>
     <div class="memadd">
-      <select id="memKind">${MEM_KINDS.map((k) => `<option value="${k}">${k}</option>`).join("")}</select>
+      <select id="memKind">${CairnMemory.memoryKindOptionsHtml()}</select>
       <input id="memInput" type="text" placeholder="Add something to remember…">
       <button id="memAdd" class="logbtn">+</button>
     </div>
@@ -431,20 +431,7 @@ async function loadMemory() {
   try { items = await api("/memory"); } catch { items = []; }
   if (state.tab !== "me" || state.meSeg !== "memory" || !wrap.isConnected) return;
   if (!items || !items.length) { wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter — they'll gather here.</div>`; return; }
-  wrap.innerHTML = items.map((m, i) => {
-    const date = (m.created_at || "").slice(0, 10);
-    const src = m.source && m.source !== "user" ? ` · ${escHtml(m.source)}` : "";
-    return `<div class="memrow reveal" style="${stagger(i)}" data-mem="${m.id}">
-      <div class="memrow-main">
-        <div class="memrow-top"><span class="memtag">${escHtml(m.kind || "note")}</span><span class="memdate">${escHtml(date)}${src}</span></div>
-        <div class="memcontent" data-memcontent>${escHtml(m.content || "")}</div>
-      </div>
-      <div class="memctl">
-        <button class="iconbtn" data-memedit title="edit">✎</button>
-        <button class="iconbtn memdel" data-memdel title="delete">×</button>
-      </div>
-    </div>`;
-  }).join("");
+  wrap.innerHTML = items.map((m, i) => CairnMemory.memoryRowHtml(m, i)).join("");
 
   wrap.querySelectorAll("[data-memedit]").forEach((b) => b.addEventListener("click", () => startMemEdit(b.closest(".memrow"))));
   wrap.querySelectorAll("[data-memdel]").forEach((b) => b.addEventListener("click", () => startMemDelete(b)));
