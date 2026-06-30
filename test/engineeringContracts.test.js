@@ -596,6 +596,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/format-utils\.js"/);
   assert.match(sw, /"\/js\/api-client\.js"/);
+  assert.match(sw, /"\/js\/app-download\.js"/);
   assert.match(sw, /"\/js\/swr-cache\.js"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
@@ -731,6 +732,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const uiComponentsSource = read("src/client/ui-components.ts");
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
+  const appDownloadSource = read("src/client/app/download.ts");
   const coreStateSource = read("src/client/app/state.ts");
   const swrCacheSource = read("src/client/swr-cache.ts");
   const todayAgendaSource = read("src/client/today-agenda-client.ts");
@@ -767,6 +769,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const uiComponents = read("public/js/ui-components.js");
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
+  const appDownload = read("public/js/app-download.js");
   const coreState = read("public/js/01-core.js");
   const swrCache = read("public/js/swr-cache.js");
   const todayAgendaClient = read("public/js/today-agenda-client.js");
@@ -809,6 +812,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function formatFoodNum\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
   assert.match(clientGlobals, /declare function withToken\(url: string\): string/);
+  assert.match(clientGlobals, /declare function downloadFile\(href: string\): void/);
   assert.match(clientGlobals, /declare function api<Path extends string>/);
   assert.match(clientGlobals, /type ClientAppState = \{/);
   assert.match(clientGlobals, /type ClientAppRouterApi = \{/);
@@ -835,6 +839,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/ui-components\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/api-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/app-download\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/01-core\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/swr-cache\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-agenda-client\.js/);
@@ -868,6 +873,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/format-utils\.js/);
   assert.match(clientBuild, /src\/client\/api-client\.ts/);
   assert.match(clientBuild, /public\/js\/api-client\.js/);
+  assert.match(clientBuild, /src\/client\/app\/download\.ts/);
+  assert.match(clientBuild, /public\/js\/app-download\.js/);
   assert.match(clientBuild, /src\/client\/app\/state\.ts/);
   assert.match(clientBuild, /public\/js\/01-core\.js/);
   assert.match(clientBuild, /src\/client\/swr-cache\.ts/);
@@ -915,8 +922,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.ok(
     index.indexOf("/js/date-utils.js") > -1 &&
       index.indexOf("/js/api-client.js") > index.indexOf("/js/date-utils.js") &&
-      index.indexOf("/js/api-client.js") < index.indexOf("/js/01-core.js"),
-    "api-client.js must load after date-utils.js and before 01-core.js"
+      index.indexOf("/js/api-client.js") < index.indexOf("/js/app-download.js"),
+    "api-client.js must load after date-utils.js and before app-download.js"
+  );
+  assert.ok(
+    index.indexOf("/js/app-download.js") > index.indexOf("/js/api-client.js") &&
+      index.indexOf("/js/app-download.js") < index.indexOf("/js/01-core.js"),
+    "app-download.js must load after api-client.js and before 01-core.js"
   );
   assert.ok(
     index.indexOf("/js/html-utils.js") > -1 && index.indexOf("/js/html-utils.js") < index.indexOf("/js/02-ui.js"),
@@ -1027,6 +1039,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /\/\/ @ts-check/);
   assert.match(formatUtils, /\/\/ @ts-check/);
   assert.match(apiClient, /\/\/ @ts-check/);
+  assert.match(appDownload, /\/\/ @ts-check/);
   assert.match(swrCache, /\/\/ @ts-check/);
   assert.match(todayAgendaClient, /\/\/ @ts-check/);
   assert.match(todayTrainingClient, /\/\/ @ts-check/);
@@ -1057,6 +1070,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/format-utils\.js/);
   assert.match(clientBuild, /src\/client\/api-client\.ts/);
   assert.match(clientBuild, /public\/js\/api-client\.js/);
+  assert.match(clientBuild, /src\/client\/app\/download\.ts/);
+  assert.match(clientBuild, /public\/js\/app-download\.js/);
   assert.match(clientBuild, /src\/client\/swr-cache\.ts/);
   assert.match(clientBuild, /public\/js\/swr-cache\.js/);
   assert.match(clientBuild, /src\/client\/today-agenda-client\.ts/);
@@ -1229,6 +1244,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiClient, /withToken/);
   assert.match(apiClient, /api/);
   assert.doesNotMatch(apiClient, /@returns\s*\{Promise<any>\}/);
+  assert.match(appDownloadSource, /function downloadFile\(href: string\): void/);
+  assert.match(appDownload, /Object\.assign\(globalThis, \{ downloadFile \}\)/);
+  assert.match(appDownload, /window\.downloadFile = downloadFile/);
   assert.match(coreState, /\/\/ @ts-check/);
   assert.match(coreState, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
   assert.match(swrCache, /Object\.assign\(globalThis, \{/);
@@ -1299,6 +1317,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(boot, /function\s+primeDiscipline/);
   assert.doesNotMatch(boot, /function\s+maybeOnboard/);
   assert.doesNotMatch(boot, /function\s+openOnboarding/);
+  assert.doesNotMatch(boot, /function\s+downloadFile/);
   assert.doesNotMatch(boot, /window\.addEventListener\("popstate"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
@@ -1306,6 +1325,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
+  assert.match(sw, /"\/js\/app-download\.js"/);
   assert.match(sw, /"\/js\/app-route-sync\.js"/);
   assert.match(sw, /"\/js\/app-render-dispatch\.js"/);
   assert.match(sw, /"\/js\/app-tabs\.js"/);

@@ -139,6 +139,7 @@ declare global {
   declare function prDistLabel(km: unknown): string;
   declare function authToken(): string;
   declare function withToken(url: string): string;
+  declare function downloadFile(href: string): void;
   declare function deviceTimeZone(): string;
   declare function localISO(date?: Date): string;
   declare function api<Path extends string>(
@@ -257,6 +258,7 @@ declare global {
     syncRouteFromState(mode?: "push" | "replace"): void;
     switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
     renderTab(tab: string): unknown;
+    downloadFile(href: string): void;
     CairnRoutes?: ClientRoutesApi;
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;

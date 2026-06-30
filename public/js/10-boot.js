@@ -630,10 +630,4 @@ async function renderSettings() {
   paintSlice(state.setSeg);
 }
 
-function downloadFile(href) {
-  const a = document.createElement("a");
-  a.href = href; a.download = "";
-  document.body.appendChild(a); a.click(); a.remove();
-}
-
 startAppShell();
