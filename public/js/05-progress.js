@@ -632,92 +632,6 @@ async function renderEndurance() {
   paintEnduranceBody(stats && stats.endurance ? stats.endurance : null, prs, goal, compliance, settings, runPlan);
 }
 
-// The periodized "This week's runs" card — the deterministic weekly run mix from
-// GET /api/run-plan (easy / quality / long, each with a bpm-bearing zone + the one
-// quality focus + a plain "why this week looks like this"). Endurance analogue of the
-// program-state read. {available:false} for a non-runner → "". No scores; a calm plan.
-function runKindClass(k) {
-  if (k === "quality") return "wrun-quality"; // the one hard session — gold (steady, earned)
-  if (k === "long") return "wrun-long";       // the long run — sage
-  return "wrun-easy";                          // easy Z2 — sage, the bread-and-butter
-}
-function runKindLabel(k) {
-  if (k === "quality") return "Quality";
-  if (k === "long") return "Long";
-  return "Easy";
-}
-function weeklyRunPlanCard(plan) {
-  if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length) return "";
-  const runs = plan.runs.map((r) => {
-    const pres = cardioPrescription({
-      target_distance_km: r.target_distance_km,
-      target_duration_min: r.target_duration_min,
-      target_zone: r.target_zone,
-      interval: r.interval,
-      note: r.note,
-    });
-    const kind = runKindClass(r.kind_label);
-    const label = r.label || (r.kind_label ? `${runKindLabel(r.kind_label)} run` : "Run");
-    return `<div class="wrun-row ${kind}">
-        <div class="wrun-row-head">
-          <span class="wrun-kind">${escHtml(runKindLabel(r.kind_label))}</span>
-          <span class="wrun-label">${escHtml(label)}</span>
-        </div>
-        ${pres ? `<div class="wrun-pres numeral">${escHtml(pres)}</div>` : ""}
-        ${r.note && r.note !== label ? `<div class="wrun-note">${escHtml(r.note)}</div>` : ""}
-      </div>`;
-  }).join("");
-  const rationale = Array.isArray(plan.rationale) ? plan.rationale.filter(Boolean) : [];
-  const whyBits = [plan.why, ...rationale].filter(Boolean);
-  return `<div class="wrun-card reveal" style="${stagger(0)}">
-      <div class="wrun-head">
-        <span class="lbl">This week's runs</span>
-        ${plan.mix_summary ? `<span class="wrun-mix">${escHtml(plan.mix_summary)}</span>` : ""}
-      </div>
-      ${plan.quality_focus ? `<div class="wrun-focus"><span class="lbl">Quality focus</span> ${escHtml(plan.quality_focus)}</div>` : ""}
-      <div class="wrun-rows">${runs}</div>
-      ${whyBits.length ? `<div class="wrun-why"><span class="lbl">Why this week looks like this</span>${whyBits.map((w) => `<p>${escHtml(w)}</p>`).join("")}</div>` : ""}
-    </div>`;
-}
-
-// Race countdown / standing-readiness banner — the persistent home for the endurance
-// goal. Race: event + phase + how long to go. Standing: what you're staying ready for.
-// No 0–100 scores; a calm anchor, never a gate.
-function enduranceGoalCard(g) {
-  if (!g || !g.mode) return "";
-  if (g.mode === "race") {
-    const d = g.days_to_race;
-    const when = d == null ? "" : d < 0 ? "race day passed"
-      : d === 0 ? "race day" : d <= 14 ? `${d} day${d === 1 ? "" : "s"} to go` : `${g.weeks_to_race} weeks to go`;
-    const phaseLabel = { base: "Base building", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Race done" }[g.phase] || "";
-    const sub = [g.distance_km ? `${g.distance_km} km` : null, g.target ? `target ${g.target}` : null, g.date ? absDate(g.date) : null].filter(Boolean).join(" · ");
-    return `<div class="end-goal reveal" style="${stagger(0)}">
-        <div class="end-goal-head"><span class="lbl">Race goal</span>${phaseLabel ? `<span class="end-goal-phase">${escHtml(phaseLabel)}</span>` : ""}</div>
-        <div class="end-goal-name">${escHtml(g.event || "Your race")}</div>
-        ${sub ? `<div class="end-goal-sub">${escHtml(sub)}</div>` : ""}
-        ${when ? `<div class="end-goal-count numeral">${escHtml(when)}</div>` : ""}
-      </div>`;
-  }
-  const sub = [g.distance_km ? `${g.distance_km} km` : null, g.weekly_km ? `~${g.weekly_km} km/wk` : null].filter(Boolean).join(" · ");
-  return `<div class="end-goal reveal" style="${stagger(0)}">
-      <div class="end-goal-head"><span class="lbl">Standing goal</span></div>
-      <div class="end-goal-name">Staying ${escHtml(g.label || "race-ready")}</div>
-      ${sub ? `<div class="end-goal-sub">${escHtml(sub)}</div>` : ""}
-    </div>`;
-}
-
-// A calm run-compliance line for the Endurance view — "32 of 40 km this week" in
-// plain words from GET /api/run-compliance (in_words). A ratio, never a 0–100 grade.
-// "" when there's nothing prescribed AND nothing logged (no week to speak to).
-function runComplianceLine(c) {
-  if (!c || !c.in_words) return "";
-  if (!c.prescribed_sessions && !c.actual_sessions) return ""; // nothing to say
-  return `<div class="end-compliance reveal" style="${stagger(0)}">
-      <span class="lbl">This week's runs</span>
-      <span class="end-compliance-v">${escHtml(c.in_words)}</span>
-    </div>`;
-}
-
 // The bests for ONE sport, as scannable rows — pace at standard distances for foot
 // sports (run/walk), distance/duration/speed for everything else. A cyclist's best
 // is read in km/h, never as a min/km "pace" (the whole point of the sport split).
@@ -748,27 +662,6 @@ function enduranceSportCardHtml(g, idx) {
     </div>`).join("");
   const head = g.label ? `<div class="end-pr-sport reveal" style="${stagger(idx)}">${escHtml(g.label)}</div>` : "";
   return `${head}<div class="end-pr-card">${body}</div>`;
-}
-
-// The Endurance lead — ONE calm coach sentence derived from this week's run plan: the
-// long run is the session that matters, else the quality day, else "keep easy easy".
-// Reuses .prog-headline (the lead-sentence style); "" for a non-runner / no plan, so
-// the view degrades to its stacked sections. The full plan still renders below in the
-// weekly run-plan card (Endurance is its home; Today shows just today's run).
-function enduranceCoachLine(plan) {
-  if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length) return "";
-  const long = plan.runs.find((r) => r.kind_label === "long");
-  const quality = plan.runs.find((r) => r.kind_label === "quality");
-  let s;
-  if (long) {
-    const dist = long.target_distance_km ? `${fmtKm(long.target_distance_km)} km ` : "";
-    s = `This week, your ${dist}long run is the one that matters.`;
-  } else if (quality) {
-    s = `This week, your quality session is the one that matters.`;
-  } else {
-    s = `This week, keep your easy runs genuinely easy — that's the work.`;
-  }
-  return `<div class="prog-headline reveal" style="${stagger(0)}">${escHtml(s)}</div>`;
 }
 
 function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
