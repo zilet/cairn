@@ -164,6 +164,7 @@ declare global {
   declare function toast(message: string): void;
   declare function reshapeToday(): Promise<void>;
   declare function reducedMotion(): boolean;
+  declare function measureChatTop(): void;
   declare function art(kind: string, text: string): string;
   declare function pollEnrichment(
     path: "/activities" | "/food-notes" | string,
@@ -191,6 +192,7 @@ declare global {
 
   interface Window {
     registerAppJobReconnectors(): void;
+    installMobileViewportGuards(): void;
     CairnAppRouter: ClientAppRouterApi;
 
     CairnChatClient: {

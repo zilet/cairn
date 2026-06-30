@@ -25,7 +25,7 @@ No frontend framework. No extra runtime dependencies by default. No `v1`/`v2` fi
 - `docs:check` and `test/surfaceParity.test.js` guard REST/MCP/docs parity.
 - `/app/<tab>/<section>` deep links exist through `public/js/route-state.js`, `public/js/10-boot.js`, `src/server.ts`, and `public/sw.js`.
 - The public app-shell script graph is now guarded by `scripts/check-public-scripts.mjs`, preventing classic-script top-level redeclaration failures like the `CHAT_IMAGE_MAX_BYTES` deployment break.
-- Critical extracted helpers are now TypeScript sources: app core state, API, SWR, routes, date/html/format helpers, Today agenda/training helpers, Settings helpers, Chat helpers, and Health helpers.
+- Critical extracted helpers are now TypeScript sources: app core state, app route bridge, app job reconnectors, app mobile viewport guards, API, SWR, routes, date/html/format helpers, Today agenda/training helpers, Settings helpers, Chat helpers, and Health helpers.
 - `src/contracts/client.ts`, `src/contracts/client-api.ts`, `src/contracts/client-api-coverage.ts`, and `src/contracts/client-compat.ts` establish shared backend-to-client payload contracts, API path coverage, explicit temporary unknown waivers, and compile-time backend assignability checks.
 - PWA cache alignment is guarded by `scripts/check-sw-cache.mjs`.
 
@@ -204,7 +204,7 @@ Gate:
 
 ### Wave 1 - Client Build Foundation
 
-Status: in progress. First slices complete: app core state, app router bridge, route-state, date helpers, HTML escaping helpers, display-format helpers, the shared API/auth/offline client, the SWR cache layer, the Today agenda renderer, the Today training renderer, the Settings route/render helpers, the Chat helper, and the Health helper now have `src/client/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
+Status: in progress. First slices complete: app core state, app router bridge, app job reconnectors, app mobile viewport guards, route-state, date helpers, HTML escaping helpers, display-format helpers, the shared API/auth/offline client, the SWR cache layer, the Today agenda renderer, the Today training renderer, the Settings route/render helpers, the Chat helper, and the Health helper now have `src/client/**/*.ts` authored sources, emit stable `public/js/*.js` filenames through `scripts/build-client.mjs`, and are guarded by `npm run client:verify`.
 
 Purpose: make TypeScript the source of truth without changing behavior.
 
@@ -226,6 +226,8 @@ Tasks:
 - [x] Move the shared API/auth/offline client to TypeScript source while preserving the `public/js/api-client.js` script contract.
 - [x] Move the app core state/bootstrap globals to TypeScript source while preserving the `public/js/01-core.js` script contract.
 - [x] Move app route apply/current/sync logic to TypeScript source while preserving `10-boot.js` compatibility.
+- [x] Move boot-time job reconnection registration to TypeScript source while preserving the `registerJobReconnector` compatibility seam.
+- [x] Move mobile visual-viewport and soft-keyboard guards to TypeScript source while preserving the `10-boot.js` compatibility call.
 - [x] Move the SWR cache client to TypeScript source while preserving the `public/js/swr-cache.js` script contract.
 - [x] Move the Today agenda renderer to TypeScript source while preserving the `public/js/today-agenda-client.js` script contract.
 - [x] Move the Today training renderer to TypeScript source while preserving the `public/js/today-training-client.js` script contract.
@@ -336,7 +338,7 @@ Gate:
 
 ### Wave 5 - Shell, Router, Jobs, And Service Worker
 
-Status: in progress. The first shell slice added `src/client/app/state.ts` / `public/js/01-core.js` for typed `$`, `view`, `headerTitle`, and `state` initialization. The first router slice added `src/client/app/router.ts` / `public/js/app-router.js`, so parsed route application, current route serialization, and browser history sync are typed while `10-boot.js` still owns activation/rendering. The first jobs slice added `src/client/app/job-reconnectors.ts` / `public/js/app-job-reconnectors.js`, preserving the exact boot-time agent-job reconnect registration order while keeping `10-boot.js` last. VM tests now guard app-state initialization, route apply/current/sync behavior, and the registration order from `session_suggest` through `proposal`, and engineering contracts guard script/cache placement.
+Status: in progress. The first shell slice added `src/client/app/state.ts` / `public/js/01-core.js` for typed `$`, `view`, `headerTitle`, and `state` initialization. The first router slice added `src/client/app/router.ts` / `public/js/app-router.js`, so parsed route application, current route serialization, and browser history sync are typed while `10-boot.js` still owns activation/rendering. The first jobs slice added `src/client/app/job-reconnectors.ts` / `public/js/app-job-reconnectors.js`, preserving the exact boot-time agent-job reconnect registration order while keeping `10-boot.js` last. The mobile viewport slice added `src/client/app/mobile-viewport.ts` / `public/js/app-mobile-viewport.js`, keeping iOS visual-viewport and soft-keyboard correction behavior outside the boot file. VM tests now guard app-state initialization, route apply/current/sync behavior, reconnect registration order, and viewport keyboard geometry, and engineering contracts guard script/cache placement.
 
 Purpose: type the app shell before migrating whole screens.
 
