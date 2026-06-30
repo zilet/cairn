@@ -238,6 +238,9 @@ declare global {
   declare function pctClamp(value: unknown): number;
   declare function capacityRowHtml(capacity: unknown, sexWord: unknown): string;
   declare function performanceHtml(performance: unknown, options?: { suppressLever?: boolean }): string;
+  declare const PADJ_KIND: Record<string, { glyph: string; cls: string }>;
+  declare function loadProgramAdjustments(): Promise<void>;
+  declare function programAdjustmentsHtml(rows: unknown): string;
   declare function cfocusDomainTag(domain: unknown): string;
   declare function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): string;
   declare function loadCoachingFocus(slotSelector: string, root?: ParentNode | null): Promise<void>;
@@ -590,6 +593,12 @@ declare global {
       performanceHtml(performance: unknown, options?: { suppressLever?: boolean }): string;
     };
 
+    CairnProgressProgramAdjustments: {
+      PADJ_KIND: Record<string, { glyph: string; cls: string }>;
+      loadProgramAdjustments(): Promise<void>;
+      programAdjustmentsHtml(rows: unknown): string;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -669,6 +678,7 @@ declare global {
   declare const CairnProgressMuscleTrajectory: Window["CairnProgressMuscleTrajectory"];
   declare const CairnProgressDexaTargeting: Window["CairnProgressDexaTargeting"];
   declare const CairnProgressPerformance: Window["CairnProgressPerformance"];
+  declare const CairnProgressProgramAdjustments: Window["CairnProgressProgramAdjustments"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];

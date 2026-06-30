@@ -1307,53 +1307,6 @@ async function tidyExerciseNames(btn) {
   if (n) { swrInvalidate("progress:program"); renderProgram(); }
 }
 
-// ---------- "What changed & why" — the program-adjustments digest ----------
-// Fed by GET /api/program/adjustments — the handful of concrete adaptations the
-// engine has noticed, each with a plain-words reason. So the athlete always
-// understands WHAT the system did and WHY. Constitution: calm, one-at-a-time,
-// pull-never-push, NO scores. Best-effort + null-safe: an unwired endpoint (404)
-// leaves the slot empty, the rest of the view untouched.
-// Calm per-kind glyph + tint class for an adjustment.
-const PADJ_KIND = {
-  progression: { glyph: "↑", cls: "padj-prog" },
-  balance: { glyph: "◆", cls: "padj-bal" },
-  deload: { glyph: "↓", cls: "padj-deload" },
-  gap: { glyph: "○", cls: "padj-gap" },
-  cardio: { glyph: "↗", cls: "padj-cardio" }, // this week's run mix
-  dexa: { glyph: "◇", cls: "padj-dexa" },     // a DEXA-driven focus
-  test: { glyph: "✦", cls: "padj-test" },     // a test week is about due
-};
-
-async function loadProgramAdjustments() {
-  const slot = view.querySelector("#progAdjustSlot");
-  if (!slot) return;
-  let rows = null;
-  try { rows = await api("/program/adjustments"); } catch { rows = null; }
-  if (state.tab !== "progress" || state.progressSeg !== "program" || !slot.isConnected) return;
-  const html = programAdjustmentsHtml(rows);
-  if (!html) { slot.innerHTML = ""; return; }
-  slot.innerHTML = html;
-}
-
-// Render the digest. `rows` is an array of {kind,title,why,exercise?}. "" when empty.
-function programAdjustmentsHtml(rows) {
-  if (!Array.isArray(rows) || !rows.length) return "";
-  const items = rows.slice(0, 6).map((a) => {
-    const meta = PADJ_KIND[a && a.kind] || PADJ_KIND.gap;
-    return `<div class="padj-item ${meta.cls}">
-        <span class="padj-glyph" aria-hidden="true">${meta.glyph}</span>
-        <div class="padj-body">
-          <div class="padj-title">${escHtml((a && a.title) || "")}</div>
-          ${a && a.why ? `<div class="padj-why">${escHtml(a.why)}</div>` : ""}
-        </div>
-      </div>`;
-  }).join("");
-  return `<div class="padj-card">
-      <div class="padj-card-head lbl">What changed &amp; why</div>
-      ${items}
-    </div>`;
-}
-
 // ---------- a "test week is about due" banner ----------
 // Fed by GET /api/test-week — {due, why, key_lifts, cadence_weeks, last_test_week}.
 // Renders only when due: a calm invitation to re-measure true capacity (the cadenced
