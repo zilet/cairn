@@ -118,6 +118,7 @@ declare global {
   declare const view: HTMLElement;
   declare const headerTitle: HTMLElement;
   declare const PROGRESS_SEG: readonly ClientSegment[];
+  declare const PROGRESS_HANDLERS: Record<string, () => unknown>;
   declare const ME_SEG: readonly ClientSegment[];
   declare const HEALTH_SEG: readonly ClientSegment[];
   declare const SET_SEG: readonly ClientSegment[];
@@ -182,6 +183,17 @@ declare global {
   declare function showEnduranceTab(): boolean;
   declare function defaultProgressSeg(): string;
   declare function renderTab(tab: string): unknown;
+  declare function renderToday(): unknown;
+  declare function renderFoodJournal(): unknown;
+  declare function renderMeals(): unknown;
+  declare function renderCoach(): unknown;
+  declare function renderPlanEndurance(): unknown;
+  declare function renderPlanEditor(): unknown;
+  declare function renderHistory(): unknown;
+  declare function renderChat(): unknown;
+  declare function renderMe(): unknown;
+  declare function renderSettings(): unknown;
+  declare function updateHeaderCondense(): void;
   declare function switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
   declare function registerTabBarHandlers(): void;
   declare function syncRouteFromState(mode?: "push" | "replace"): void;
@@ -240,6 +252,7 @@ declare global {
     routeKey(key: unknown, items: ReadonlyArray<string | readonly [string, unknown]>, fallback?: string | null): string | null;
     syncRouteFromState(mode?: "push" | "replace"): void;
     switchTab(tab: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
+    renderTab(tab: string): unknown;
     CairnRoutes?: ClientRoutesApi;
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;

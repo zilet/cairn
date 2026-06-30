@@ -28,6 +28,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
   { source: "src/client/app/router.ts", output: "public/js/app-router.js" },
   { source: "src/client/app/route-sync.ts", output: "public/js/app-route-sync.js" },
+  { source: "src/client/app/render-dispatch.ts", output: "public/js/app-render-dispatch.js" },
   { source: "src/client/app/tabs.ts", output: "public/js/app-tabs.js" },
   { source: "src/client/app/job-reconnectors.ts", output: "public/js/app-job-reconnectors.js" },
   { source: "src/client/app/mobile-viewport.ts", output: "public/js/app-mobile-viewport.js" },

@@ -10,7 +10,7 @@ test("logged food has a dedicated Plan Food tab and shortcuts land there", () =>
   const meals = file("public/js/06-coach-meals.js");
   const today = file("public/js/03-today.js");
   const chat = file("public/js/09-plan-chat.js");
-  const boot = file("public/js/10-boot.js");
+  const appRenderDispatch = file("public/js/app-render-dispatch.js");
 
   assert.match(ui, /\["food", "Food"\]/, "Plan segment includes Food");
   assert.match(ui, /food: \(\) => renderFoodJournal\(\)/, "Food segment is wired to the journal renderer");
@@ -21,7 +21,7 @@ test("logged food has a dedicated Plan Food tab and shortcuts land there", () =>
   assert.match(chat, /function chatWantsFuelSurface\(messages = chatFuelContext\)/, "Chat fuel strip is gated by conversation context");
   assert.match(chat, /if \(!chatWantsFuelSurface\(messages\)\) \{ slot\.innerHTML = ""; return; \}/, "Unrelated chats suppress the fuel strip");
   assert.doesNotMatch(chat, /requestAnimationFrame\(measureChatTop\); \/\/ re-measure once layout\/fonts settle\s+loadChatFuel\(token\);/, "Chat fuel strip waits for hydrated messages, not the empty shell");
-  assert.match(boot, /jump === "food" \? renderFoodJournal\(\)/, "Plan routing can jump directly to Food");
+  assert.match(appRenderDispatch, /jump === "food" \? renderFoodJournal\(\)/, "Plan routing can jump directly to Food");
 });
 
 function loadChatFuelGate() {

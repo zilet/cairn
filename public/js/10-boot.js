@@ -636,38 +636,6 @@ function downloadFile(href) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
-// ---------- tab render dispatch ----------
-function renderTab(tab) {
-  headerTitle.classList.remove("hdr-tappable"); // only Today re-arms the date control
-  document.getElementById("hdrChatActions")?.remove(); // only Chat re-creates the header affordances
-  document.body.classList.remove("chat-mode");
-  // Leaving Chat: drop any lingering keyboard state so a non-installed Safari tab
-  // bar isn't left un-lifted (--vvb:0). Removing a focused field doesn't reliably
-  // fire blur, so don't rely on focusout alone here. Chat re-arms it via focusin.
-  if (tab !== "chat") document.body.classList.remove("kb-open");
-  document.body.dataset.tab = tab; // scopes the sticky/condensing header to Today
-  updateHeaderCondense();
-  if (tab === "today") return renderToday();
-  if (tab === "plan") {
-    const jump = state.planJump || state.planSeg || "edit"; state.planJump = null;
-    return jump === "food" ? renderFoodJournal()
-      : jump === "meals" ? renderMeals()
-      : jump === "coach" ? renderCoach()
-      : jump === "endurance" && showEnduranceTab() ? renderPlanEndurance()
-      : renderPlanEditor();
-  }
-  // Endurance athletes land on the Endurance read first (gentle emphasis, not a
-  // different app — History/1RM/Volume are all still one tap away). A user who has
-  // navigated to another Progress seg this session keeps it.
-  // Dispatch through the seg→render map so a programmatic seg (e.g. the conductor's
-  // "Training"/retest lead setting progressSeg="program") reaches its real view, not
-  // just endurance-or-history. Unknown seg → History.
-  if (tab === "progress") return (PROGRESS_HANDLERS[defaultProgressSeg()] || renderHistory)();
-  if (tab === "chat") return renderChat();
-  if (tab === "me") return renderMe();
-  return renderSettings();
-}
-
 // ---------- first-run onboarding ----------
 async function maybeOnboard() {
   let onboarded = true;
