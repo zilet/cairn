@@ -1,10 +1,18 @@
 import { z } from "zod";
 import { AGENT_JOB_KINDS } from "../../agentJobKinds.js";
 import { agentInfoOp, agentModelsOp } from "../../coachOps.js";
-import * as repo from "../../repo.js";
+import {
+  getAgentConfig,
+  getAgentStats,
+  getArtStats,
+  getSettings,
+  listRoutableTasks,
+  ROUTABLE_TASKS,
+  setSettings,
+} from "../../domain/operator/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
-const ROUTABLE_TASK_LIST = repo.ROUTABLE_TASKS.join(", ");
+const ROUTABLE_TASK_LIST = ROUTABLE_TASKS.join(", ");
 const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
 
 export function registerOperatorTools(server: McpToolRegistrar) {
@@ -12,7 +20,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
     "list_agents",
     "List the configured coaching agents (claude, codex, stub, ...) with their enabled state, order, whether the CLI binary is present, the tri-state login/connected probe (configured: true|false|null), installed version, and whether each declares an interactive login / a model catalog. usable rolls these up (only a KNOWN logged-out agent — configured:false — is excluded from the rotation).",
     {},
-    async () => asText(repo.getAgentConfig())
+    async () => asText(getAgentConfig())
   );
 
   server.tool(
@@ -32,7 +40,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
   server.tool("get_settings",
     "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the weekly auto-coach schedule, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
     {},
-    async () => asText({ settings: repo.getSettings(), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
+    async () => asText({ settings: getSettings(), agents: getAgentConfig(), route_tasks: listRoutableTasks() }));
 
   server.tool("set_settings",
     "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_enabled/coach_day(0-6)/coach_hour(0-23) control the weekly auto-draft.",
@@ -56,15 +64,15 @@ export function registerOperatorTools(server: McpToolRegistrar) {
       research_enabled: z.boolean().optional().describe("host-side evidence research on/off (default OFF; off ⇒ deterministic, no network — used to ground & verify health-review citations)"),
       bg_ops_enabled: z.boolean().optional().describe(`run the heavy agentic ops as durable background jobs (default on); job kinds are: ${AGENT_JOB_KIND_LIST}; off ⇒ legacy inline blocking behavior where supported`),
     },
-    async (p) => asText({ settings: repo.setSettings(p), agents: repo.getAgentConfig(), route_tasks: repo.listRoutableTasks() }));
+    async (p) => asText({ settings: setSettings(p), agents: getAgentConfig(), route_tasks: listRoutableTasks() }));
 
   server.tool("get_art_stats",
     "Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size.",
     {},
-    async () => asText(repo.getArtStats()));
+    async () => asText(getArtStats()));
 
   server.tool("get_agent_stats",
     "Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up).",
     { recent: z.number().int().optional(), days: z.number().int().optional() },
-    async ({ recent, days }) => asText(repo.getAgentStats({ recent, days })));
+    async ({ recent, days }) => asText(getAgentStats({ recent, days })));
 }

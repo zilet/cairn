@@ -1,12 +1,12 @@
 import { Router } from "express";
-import * as repo from "../repo.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate } from "../agentCliUpdates.js";
 import { agentInfoOp, agentModelsOp } from "../coachOps.js";
+import { getAgentConfig, getAgentStats, getSettings, listRoutableTasks, setSettings } from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
 
 export const operatorRouter = Router();
 
-operatorRouter.get("/agents", (_req, res) => res.json(repo.getAgentConfig()));
+operatorRouter.get("/agents", (_req, res) => res.json(getAgentConfig()));
 
 // Per-agent read-only visibility (subprocess probes — fetched lazily, not on
 // every Settings open). Both return ok:false at HTTP 200, mirroring the rest of
@@ -22,17 +22,17 @@ operatorRouter.post("/agent-clis/update", (_req, res) => res.status(202).json(st
 // backend allowlist.
 operatorRouter.get("/settings", (_req, res) =>
   res.json({
-    settings: repo.getSettings(),
-    agents: repo.getAgentConfig(),
-    route_tasks: repo.listRoutableTasks(),
+    settings: getSettings(),
+    agents: getAgentConfig(),
+    route_tasks: listRoutableTasks(),
     research_auto_eligible: researchAutoEligible(),
   })
 );
 operatorRouter.put("/settings", (req, res) =>
   res.json({
-    settings: repo.setSettings(req.body ?? {}),
-    agents: repo.getAgentConfig(),
-    route_tasks: repo.listRoutableTasks(),
+    settings: setSettings(req.body ?? {}),
+    agents: getAgentConfig(),
+    route_tasks: listRoutableTasks(),
   })
 );
 
@@ -42,5 +42,5 @@ operatorRouter.put("/settings", (req, res) =>
 operatorRouter.get("/agent-stats", (req, res) => {
   const recent = req.query.recent != null ? Number(req.query.recent) : undefined;
   const days = req.query.days != null ? Number(req.query.days) : undefined;
-  res.json(repo.getAgentStats({ recent, days }));
+  res.json(getAgentStats({ recent, days }));
 });

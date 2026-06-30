@@ -1,7 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs";
-import * as repo from "../repo.js";
 import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "../art.js";
+import { getArtStats } from "../domain/operator/index.js";
 
 export const artRouter = Router();
 
@@ -58,4 +58,4 @@ artRouter.get("/art/manifest", (_req, res) => {
 
 // Artwork spend telemetry: estimated Gemini cost since art was last enabled,
 // all-time totals, generations avoided via semantic reuse, and cache size.
-artRouter.get("/art/stats", (_req, res) => res.json(repo.getArtStats()));
+artRouter.get("/art/stats", (_req, res) => res.json(getArtStats()));

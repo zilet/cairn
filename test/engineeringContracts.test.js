@@ -141,10 +141,11 @@ test("route task metadata covers every routable task exactly once", () => {
 
 test("MCP Settings exposes route metadata and derives task lists from contracts", () => {
   const operatorTools = read("src/surfaces/mcp/operator.ts");
-  assert.match(operatorTools, /ROUTABLE_TASK_LIST\s*=\s*repo\.ROUTABLE_TASKS\.join/);
+  assert.match(operatorTools, /ROUTABLE_TASKS[\s\S]*from "\.\.\/\.\.\/domain\/operator\/index\.js"/);
+  assert.match(operatorTools, /ROUTABLE_TASK_LIST\s*=\s*ROUTABLE_TASKS\.join/);
   assert.match(operatorTools, /AGENT_JOB_KIND_LIST\s*=\s*AGENT_JOB_KINDS\.join/);
-  assert.match(operatorTools, /get_settings[\s\S]*route_tasks:\s*repo\.listRoutableTasks\(\)/);
-  assert.match(operatorTools, /set_settings[\s\S]*route_tasks:\s*repo\.listRoutableTasks\(\)/);
+  assert.match(operatorTools, /get_settings[\s\S]*route_tasks:\s*listRoutableTasks\(\)/);
+  assert.match(operatorTools, /set_settings[\s\S]*route_tasks:\s*listRoutableTasks\(\)/);
 });
 
 test("MCP modular tool sources are discovered without duplicate names", () => {
