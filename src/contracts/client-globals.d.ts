@@ -306,6 +306,11 @@ declare global {
   declare function cardioLabel(item: Record<string, unknown> | null | undefined): string;
   declare function cardioDescription(item: Record<string, unknown> | null | undefined): string;
   declare function cardioPrescription(item: Record<string, unknown> | null | undefined): string;
+  declare function garminConfigured(settings: Record<string, unknown> | null | undefined): boolean;
+  declare function cardioSyncLine(
+    settings: Record<string, unknown> | null | undefined,
+    opts?: { expectingRun?: unknown },
+  ): string;
   declare function enduranceStatusWord(status: unknown): string;
   declare function enduranceBlockHtml(
     end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
@@ -778,6 +783,11 @@ declare global {
       cardioPrescription(item: Record<string, unknown> | null | undefined): string;
     };
 
+    CairnCardioSync: {
+      configured(settings: Record<string, unknown> | null | undefined): boolean;
+      lineHtml(settings: Record<string, unknown> | null | undefined, opts?: { expectingRun?: unknown }): string;
+    };
+
     CairnProgressEndurance: {
       enduranceStatusWord(status: unknown): string;
       enduranceBlockHtml(
@@ -852,6 +862,7 @@ declare global {
   declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
+  declare const CairnCardioSync: Window["CairnCardioSync"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];

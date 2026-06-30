@@ -224,48 +224,8 @@ function cardioEffortMatches(it, eff) {
 }
 
 // ---------- sync trust: a quiet freshness line where a runner needs the mileage ----------
-// A runner trusts the watch — so where mileage is shown (the run card, the Endurance
-// view) we surface, calmly: "synced 2h ago · Sync now". Read freshness from the
-// settings object (garmin_last_sync_at / garmin_last_sync_status). Only shown when
-// Garmin is actually configured; otherwise we stay silent (no nag, no empty chrome).
-//
-// Garmin counts as configured when credentials are present (username/password, from
-// settings or env) — the same signal the Settings sync card uses.
-function garminConfigured(settings) {
-  if (!settings) return false;
-  if (settings.garmin_credentials_source && settings.garmin_credentials_source !== "none") return true;
-  return !!(settings.garmin_username || settings.garmin_password_configured);
-}
-
-// Build the quiet "synced 2h ago · Sync now" line for a run/Endurance surface. When a
-// run is prescribed today but nothing's synced yet AND the last sync is stale, swaps
-// the lead for a calm "this morning's run not synced yet?" nudge (never nagging).
-// Returns "" when Garmin isn't configured. `opts.expectingRun` flags the stale-nudge
-// case (a prescribed run with no synced effort today).
-function cardioSyncLine(settings, { expectingRun } = {}) {
-  if (!garminConfigured(settings)) return "";
-  const at = settings.garmin_last_sync_at;
-  const raw = String(settings.garmin_last_sync_status || "");
-  const failed = raw.startsWith("failed");
-  // "Stale" = no sync, a failed sync, or the last good sync was a while ago (>3h) —
-  // long enough that this morning's run may not be in yet.
-  const ageH = at ? Math.max(0, (Date.now() - Date.parse(at)) / 3600000) : Infinity;
-  const stale = !at || failed || ageH > 3;
-  let lead;
-  if (expectingRun && stale) {
-    lead = `<span class="cardio-sync-dot stale" aria-hidden="true"></span><span class="cardio-sync-text">this morning's run not synced yet?</span>`;
-  } else if (!at) {
-    lead = `<span class="cardio-sync-dot" aria-hidden="true"></span><span class="cardio-sync-text">not synced yet</span>`;
-  } else {
-    const dotCls = failed ? "err" : "";
-    const word = failed ? "Sync failed" : "synced";
-    lead = `<span class="cardio-sync-dot ${dotCls}" aria-hidden="true"></span><span class="cardio-sync-text">${word} ${escHtml(relTime(at))}</span>`;
-  }
-  return `<div class="cardio-sync" data-cardio-sync>
-      ${lead}
-      <button class="cardio-sync-go" type="button" data-syncnow>Sync now</button>
-    </div>`;
-}
+// The Garmin freshness renderer lives in /js/cardio-sync-client.js and preserves
+// the cardioSyncLine compatibility global used by Today, Progress, and Plan.
 
 // Wire every "Sync now" control within `scope`: POST /garmin/sync, pulse while it
 // runs, then refresh the surface so the fresh mileage / synced run lands. Shared by
