@@ -13,6 +13,7 @@ const root = path.resolve(path.dirname(currentFile), "..");
 export const CLIENT_OUTPUTS = [
   { source: "src/client/date-utils.ts", output: "public/js/date-utils.js" },
   { source: "src/client/html-utils.ts", output: "public/js/html-utils.js" },
+  { source: "src/client/markdown-client.ts", output: "public/js/markdown-client.js" },
   { source: "src/client/ui-components.ts", output: "public/js/ui-components.js" },
   { source: "src/client/format-utils.ts", output: "public/js/format-utils.js" },
   { source: "src/client/api-client.ts", output: "public/js/api-client.js" },

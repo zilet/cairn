@@ -192,6 +192,9 @@ declare global {
   declare function isStandalonePWA(): boolean;
   declare const sleep: (ms: number) => Promise<void>;
   declare function openAgentLoginModal(agentName: string): unknown;
+  declare function mdSafeUrl(url: unknown): string | null;
+  declare function mdInline(source: string): string;
+  declare function mdToHtml(source: unknown): string;
   declare function settingsRouteTasks(data: unknown): ClientSettingsRouteTask[];
   declare function settingsPruneRoutes(
     routes: Record<string, string>,
@@ -414,6 +417,12 @@ declare global {
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
     };
 
+    CairnMarkdown: {
+      mdSafeUrl(url: unknown): string | null;
+      mdInline(source: string): string;
+      mdToHtml(source: unknown): string;
+    };
+
     CairnCardioPlan: {
       isCardioItem(item: unknown): boolean;
       cardioIntervalNote(interval: unknown): string;
@@ -456,6 +465,7 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
+  declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];

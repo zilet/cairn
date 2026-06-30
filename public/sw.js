@@ -1,4 +1,4 @@
-const CACHE = "cairn-v223";
+const CACHE = "cairn-v224";
 // Generated artwork lives in its own cache: the images are content-keyed and
 // immutable on the server, so they stay valid across app deploys. Keeping them
 // out of the versioned CACHE (and off the activate-cleanup list) means a deploy
@@ -6,7 +6,7 @@ const CACHE = "cairn-v223";
 const ART_CACHE = "cairn-art-v1";
 const CORE_ASSETS = [
   "/", "/index.html", "/styles.css",
-  "/js/date-utils.js", "/js/html-utils.js", "/js/ui-components.js", "/js/format-utils.js", "/js/api-client.js", "/js/app-download.js", "/js/01-core.js", "/js/02-ui.js", "/js/save-bar.js", "/js/swr-cache.js", "/js/today-agenda-client.js", "/js/today-training-client.js", "/js/cardio-plan-client.js", "/js/03-today.js", "/js/04-capture.js",
+  "/js/date-utils.js", "/js/html-utils.js", "/js/markdown-client.js", "/js/ui-components.js", "/js/format-utils.js", "/js/api-client.js", "/js/app-download.js", "/js/01-core.js", "/js/02-ui.js", "/js/save-bar.js", "/js/swr-cache.js", "/js/today-agenda-client.js", "/js/today-training-client.js", "/js/cardio-plan-client.js", "/js/03-today.js", "/js/04-capture.js",
   "/js/05-progress.js", "/js/06-coach-meals.js", "/js/07-me-health.js",
   "/js/health-client.js", "/js/08-me-records.js", "/js/chat-client.js", "/js/09-plan-chat.js", "/js/settings-routes.js", "/js/settings-client.js", "/js/settings-screen.js", "/js/route-state.js", "/js/app-router.js", "/js/app-route-sync.js", "/js/app-render-dispatch.js", "/js/app-tabs.js", "/js/app-job-reconnectors.js", "/js/app-mobile-viewport.js", "/js/app-service-worker.js", "/js/app-discipline-primer.js", "/js/app-onboarding.js", "/js/app-startup.js", "/js/10-boot.js",
   "/art.js", "/manifest.json",
