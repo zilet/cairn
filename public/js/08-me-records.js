@@ -66,47 +66,11 @@ async function loadDirectives(token) {
 
 // Build a case-insensitive marker → evidence-count map from the summary.
 function evidenceCountMap(summary) {
-  return CairnHealthClient.evidenceCountMap(summary);
+  return CairnHealthDirectives.evidenceCountMap(summary);
 }
 
 function paintDirectives(wrap, active, evSummary) {
-  const evMap = evidenceCountMap(evSummary);
-  const researchOff = !!(evSummary && evSummary.research_enabled === false);
-  if (!active.length) {
-    wrap.innerHTML = `<div class="hb-section hb-dir-section">
-      <div class="hb-sechead"><span class="lbl">Across your life</span><button class="hb-derive" id="hbDerive" title="Refresh from your latest labs">refresh from labs</button></div>
-      <div class="empty">Nothing to carry across domains right now. When a lab finding has a clear lever, it'll show up here as something to review.</div>
-    </div>`;
-    $("#hbDerive")?.addEventListener("click", deriveDirectives);
-    return;
-  }
-  // running index across groups → directives settle in one continuous stagger
-  let dIdx = 0;
-  const groups = CairnHealthClient.DIRECTIVE_DOMAINS.map(([key, label, glyph]) => {
-    const rows = active.filter((d) => (d.domain || "watch") === key);
-    if (!rows.length) return "";
-    return `<div class="hb-dgroup">
-      <div class="hb-dgrouphead"><span class="hb-dglyph" aria-hidden="true">${glyph}</span><span class="hb-dgname">${label}</span></div>
-      <div class="hb-dlist">${rows.map((d) => CairnHealthClient.directiveHtml(d, dIdx++, evMap)).join("")}</div>
-    </div>`;
-  }).filter(Boolean).join("");
-  // Research-discoverability nudge (F1): only when research is OFF and at least one
-  // marker-bearing directive has NO source on file yet (a citation or cached
-  // evidence). Calm, one line, informational — it surfaces a capability that's
-  // genuinely relevant here, never nags. Hidden the moment everything is sourced.
-  const unsourced = active.some((d) =>
-    d.marker && !d.citation && !(evMap.get(String(d.marker).toLowerCase()) > 0));
-  const researchNudge = researchOff && unsourced
-    ? `<div class="hb-research-nudge">
-        <span class="hb-rn-text">Cairn can research these and cite real sources behind each one.</span>
-        <button class="hb-rn-link" id="hbResearchNudge" type="button">turn on research in Settings</button>
-      </div>`
-    : "";
-  wrap.innerHTML = `<div class="hb-section hb-dir-section">
-    <div class="hb-sechead"><span class="lbl">Across your life</span><button class="hb-derive" id="hbDerive" title="Refresh from your latest labs">refresh from labs</button></div>
-    ${groups}
-    ${researchNudge}
-  </div>`;
+  wrap.innerHTML = CairnHealthDirectives.directivesSectionHtml(active, evSummary);
   $("#hbDerive")?.addEventListener("click", deriveDirectives);
   $("#hbResearchNudge")?.addEventListener("click", () => switchTab("settings"));
   wrap.querySelectorAll("[data-ddone]").forEach((b) => b.addEventListener("click", () => resolveDirective(b.dataset.ddone, "resolved")));

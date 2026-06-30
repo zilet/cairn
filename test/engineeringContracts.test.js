@@ -811,6 +811,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthClientSource = read("src/client/health-client.ts");
   const healthPictureSource = read("src/client/health-picture-client.ts");
   const healthMarkersSource = read("src/client/health-markers-client.ts");
+  const healthDirectivesSource = read("src/client/health-directives-client.ts");
   const healthLearnedSource = read("src/client/health-learned-client.ts");
   const memorySource = read("src/client/memory-client.ts");
   const lifeSource = read("src/client/life-client.ts");
@@ -880,6 +881,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthClient = read("public/js/health-client.js");
   const healthPictureClient = read("public/js/health-picture-client.js");
   const healthMarkersClient = read("public/js/health-markers-client.js");
+  const healthDirectivesClient = read("public/js/health-directives-client.js");
   const healthLearnedClient = read("public/js/health-learned-client.js");
   const memoryClient = read("public/js/memory-client.js");
   const lifeClient = read("public/js/life-client.js");
@@ -1016,6 +1018,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /reviewHtml\(/);
   assert.match(clientGlobals, /CairnHealthMarkers/);
   assert.match(clientGlobals, /hmkRowHtml\(/);
+  assert.match(clientGlobals, /CairnHealthDirectives/);
+  assert.match(clientGlobals, /directivesSectionHtml\(/);
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
   assert.match(clientGlobals, /CairnPlanEndurance/);
@@ -1440,9 +1444,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "health-markers-client.js must load after Health picture helpers and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-learned-client.js") > index.indexOf("/js/health-markers-client.js") &&
+    index.indexOf("/js/health-directives-client.js") > index.indexOf("/js/health-markers-client.js") &&
+      index.indexOf("/js/health-directives-client.js") < index.indexOf("/js/08-me-records.js"),
+    "health-directives-client.js must load after Health marker helpers and before Records view hydration"
+  );
+  assert.ok(
+    index.indexOf("/js/health-learned-client.js") > index.indexOf("/js/health-directives-client.js") &&
       index.indexOf("/js/health-learned-client.js") < index.indexOf("/js/08-me-records.js"),
-    "health-learned-client.js must load after Health marker helpers and before Records learned timeline consumers"
+    "health-learned-client.js must load after Health directive helpers and before Records learned timeline consumers"
   );
   assert.ok(
     index.indexOf("/js/memory-client.js") > index.indexOf("/js/health-learned-client.js") &&
@@ -1944,6 +1953,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthMarkersSource, /function wireMarkerChart\(svg: SVGElement/);
   assert.match(healthMarkersSource, /function hmkRowHtml\(marker: HealthMarkersRow/);
   assert.match(healthMarkersSource, /CairnHealthMarkers/);
+  assert.match(healthDirectivesSource, /type HealthDirectivesRow = \{/);
+  assert.match(healthDirectivesSource, /function directivesSectionHtml\(rows: unknown/);
+  assert.match(healthDirectivesSource, /function directiveResearchNudgeHtml/);
+  assert.match(healthDirectivesSource, /CairnHealthDirectives/);
   assert.match(healthDocsSource, /type HealthDocRow = \{/);
   assert.match(healthDocsSource, /function healthDocInner\(doc: HealthDocRow\): string/);
   assert.match(healthDocsSource, /function healthDocHtml\(doc: HealthDocRow, index\?: number\): string/);
@@ -2169,6 +2182,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthMarkersClient, /wireMarkerChart/);
   assert.match(healthMarkersClient, /hmkRowHtml/);
   assert.doesNotMatch(healthMarkersClient, /^function\s+markerChartSvg|^function\s+hmkRowHtml/m);
+  assert.match(healthDirectivesClient, /Object\.assign\(globalThis, \{ CairnHealthDirectives: CAIRN_HEALTH_DIRECTIVES \}\)/);
+  assert.match(healthDirectivesClient, /window\.CairnHealthDirectives = CAIRN_HEALTH_DIRECTIVES/);
+  assert.match(healthDirectivesClient, /directivesSectionHtml/);
+  assert.match(healthDirectivesClient, /directiveResearchNudgeHtml/);
+  assert.doesNotMatch(healthDirectivesClient, /^function\s+directivesSectionHtml|^function\s+directiveResearchNudgeHtml/m);
   assert.match(healthLearnedClient, /Object\.assign\(globalThis, \{/);
   assert.match(healthLearnedClient, /CairnHealthLearned/);
   assert.doesNotMatch(healthLearnedClient, /^const\s+LEARNED_GROUPS|^function\s+learnedItemHtml/m);
@@ -2249,9 +2267,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(records, /CairnHealthClient\.H_FILE_PROMPT/);
   assert.match(records, /CairnHealthClient\.guessUploadMime/);
-  assert.match(records, /CairnHealthClient\.directiveHtml/);
-  assert.match(records, /CairnHealthClient\.DIRECTIVE_DOMAINS/);
-  assert.doesNotMatch(records, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml/);
+  assert.match(records, /CairnHealthDirectives\.directivesSectionHtml/);
+  assert.match(records, /CairnHealthDirectives\.evidenceCountMap/);
+  assert.doesNotMatch(records, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml|CairnHealthClient\.directiveHtml|CairnHealthClient\.DIRECTIVE_DOMAINS/);
+  assert.doesNotMatch(records, /let\s+dIdx|const\s+researchNudge|hb-research-nudge[\s\S]*turn on research in Settings/);
   assert.doesNotMatch(records, /const\s+LEARNED_GROUPS|function\s+learnedItemHtml/);
   assert.match(records, /learnedTimelineHtml\(data\)/);
   assert.doesNotMatch(records, /const\s+LIFE_KINDS|function\s+lifeEventHtml|function\s+lifeFieldsHtml/);

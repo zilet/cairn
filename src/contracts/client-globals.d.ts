@@ -584,6 +584,18 @@ declare global {
       hmkRowHtml(marker: Record<string, unknown> | null | undefined, index?: number): string;
     };
 
+    CairnHealthDirectives: {
+      activeDirectives(rows: unknown): Array<Record<string, unknown>>;
+      evidenceCountMap(summary: { by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): Map<string, number>;
+      directiveResearchNudgeHtml(
+        active: Array<Record<string, unknown>>,
+        evidenceMap: Map<string, number>,
+        summary: { research_enabled?: unknown } | null | undefined,
+      ): string;
+      directivesEmptyHtml(): string;
+      directivesSectionHtml(rows: unknown, evSummary: { research_enabled?: unknown; by_marker?: Array<{ marker?: unknown; count?: unknown }> } | null | undefined): string;
+    };
+
     CairnFoodNote: {
       foodIngredients(value: unknown): Array<Record<string, unknown>>;
       ingredientLabel(ingredient: Record<string, unknown> | null | undefined): string;
@@ -891,6 +903,7 @@ declare global {
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
+  declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
