@@ -1,5 +1,25 @@
 import { z } from "zod";
-import * as repo from "../../repo.js";
+import {
+  addActivity,
+  deleteSet,
+  finishSession,
+  getLastSet,
+  getProgress,
+  getRecentSessions,
+  getSessionByDate,
+  getSessionDetail,
+  getTrainingCalendar,
+  getVolumeByMuscle,
+  listActivities,
+  logSetByName,
+  recentTraining,
+  reopenSession,
+  setSessionFeedback,
+  skipExercise,
+  unskipExercise,
+  updateSessionNotes,
+  updateSet,
+} from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerTrainingLogTools(server: McpToolRegistrar) {
@@ -18,49 +38,49 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       day_number: z.number().int().optional(),
       note: z.string().optional(),
     },
-    async (args) => asText(repo.logSetByName(args))
+    async (args) => asText(logSetByName(args))
   );
 
   server.tool(
     "get_progress",
     "Get logged history and estimated-1RM trend (Epley) for one exercise over time.",
     { exercise: z.string() },
-    async ({ exercise }) => asText(repo.getProgress(exercise))
+    async ({ exercise }) => asText(getProgress(exercise))
   );
 
   server.tool(
     "recent_sessions",
     "List recent logged sessions, each with all its sets.",
     { limit: z.number().int().optional() },
-    async ({ limit }) => asText(repo.getRecentSessions(limit ?? 10))
+    async ({ limit }) => asText(getRecentSessions(limit ?? 10))
   );
 
   server.tool(
     "get_session_detail",
     "Get one logged session by its id, with all its sets.",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.getSessionDetail(id) ?? { error: "not found", id })
+    async ({ id }) => asText(getSessionDetail(id) ?? { error: "not found", id })
   );
 
   server.tool(
     "get_recent_training",
     "The unified 'Lately' feed: finished strength sessions and cardio activities merged newest-first, each with a real timestamp (Garmin) and body-reaction detail (HR zones, temperature, effort, VO2) when available.",
     { limit: z.number().int().optional() },
-    async ({ limit }) => asText(repo.recentTraining(limit ?? 6))
+    async ({ limit }) => asText(recentTraining(limit ?? 6))
   );
 
   server.tool(
     "finish_session",
     "Mark a session finished (optionally attaching notes) and return its summary (sets, tonnage, PRs).",
     { id: z.number().int(), notes: z.string().nullable().optional() },
-    async ({ id, notes }) => asText(repo.finishSession(id, notes ?? null))
+    async ({ id, notes }) => asText(finishSession(id, notes ?? null))
   );
 
   server.tool(
     "delete_set",
     "Delete one logged set by id (e.g. a mis-entry).",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.deleteSet(id))
+    async ({ id }) => asText(deleteSet(id))
   );
 
   server.tool(
@@ -75,7 +95,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       duration_sec: z.number().nullable().optional(),
     },
     async ({ id, ...fields }) => {
-      const row = repo.updateSet(id, fields);
+      const row = updateSet(id, fields);
       return asText(row ?? { error: "not found", id });
     }
   );
@@ -84,14 +104,14 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "reopen_session",
     "Reopen a finished session to keep logging (clears its finished stamp).",
     { id: z.number().int() },
-    async ({ id }) => asText(repo.reopenSession(id) ?? { error: "not found", id })
+    async ({ id }) => asText(reopenSession(id) ?? { error: "not found", id })
   );
 
   server.tool(
     "update_session_notes",
     "Edit a session's notes after the fact (history correction).",
     { id: z.number().int(), notes: z.string().nullable() },
-    async ({ id, notes }) => asText(repo.updateSessionNotes(id, notes ?? null) ?? { error: "not found", id })
+    async ({ id, notes }) => asText(updateSessionNotes(id, notes ?? null) ?? { error: "not found", id })
   );
 
   server.tool(
@@ -107,35 +127,35 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       date: z.string().optional(),
       notes: z.string().optional(),
     },
-    async (activity) => asText(repo.addActivity(activity))
+    async (activity) => asText(addActivity(activity))
   );
 
   server.tool(
     "list_activities",
     "List recent logged activities.",
     { limit: z.number().int().optional() },
-    async ({ limit }) => asText(repo.listActivities(limit ?? 20))
+    async ({ limit }) => asText(listActivities(limit ?? 20))
   );
 
   server.tool(
     "get_volume",
     "Training volume (tonnage) broken down by muscle group over the last N days (default 30).",
     { days: z.number().int().optional().describe("Number of days to look back (default 30)") },
-    async ({ days }) => asText(repo.getVolumeByMuscle(days ?? 30))
+    async ({ days }) => asText(getVolumeByMuscle(days ?? 30))
   );
 
   server.tool(
     "get_calendar",
     "Day-by-day training calendar/heatmap data (lifted, tonnage, activity, intensity level) for the last N days (default 84).",
     { days: z.number().int().optional().describe("Number of days to include (default 84)") },
-    async ({ days }) => asText(repo.getTrainingCalendar(days ?? 84))
+    async ({ days }) => asText(getTrainingCalendar(days ?? 84))
   );
 
   server.tool(
     "get_session",
     "Get the logged session for a specific date (YYYY-MM-DD), with its sets and any skipped exercises.",
     { date: z.string().describe("YYYY-MM-DD") },
-    async ({ date }) => asText(repo.getSessionByDate(date))
+    async ({ date }) => asText(getSessionByDate(date))
   );
 
   server.tool(
@@ -145,7 +165,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       exercise: z.string(),
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
     },
-    async ({ exercise, date }) => asText(repo.skipExercise(exercise, date))
+    async ({ exercise, date }) => asText(skipExercise(exercise, date))
   );
 
   server.tool(
@@ -155,14 +175,14 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       exercise: z.string(),
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
     },
-    async ({ exercise, date }) => asText(repo.unskipExercise(exercise, date))
+    async ({ exercise, date }) => asText(unskipExercise(exercise, date))
   );
 
   server.tool(
     "get_last_set",
     "Get the most recent logged set for an exercise (for prefill).",
     { exercise: z.string() },
-    async ({ exercise }) => asText(repo.getLastSet(exercise))
+    async ({ exercise }) => asText(getLastSet(exercise))
   );
 
   server.tool(
@@ -175,6 +195,6 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       joint_pain: z.string().nullable().optional(),
     },
     async ({ date, soreness, performance, joint_pain }) =>
-      asText(repo.setSessionFeedback(date, { soreness, performance, joint_pain }))
+      asText(setSessionFeedback(date, { soreness, performance, joint_pain }))
   );
 }

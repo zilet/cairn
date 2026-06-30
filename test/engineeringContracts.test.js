@@ -527,7 +527,7 @@ test("generated API docs include mounted route modules", () => {
     /api\.(get|post|put|delete|patch)\("\/(?:sessions(?:\/|")|last-set"|sets(?:\/|")|progress(?:\/|")|activities(?:\/|")|recent-training"|stats"|endurance-prs"|run-compliance"|cardio"|endurance-goal"|volume"|calendar")/
   );
   assert.match(trainingLogRoutes, /trainingLogRouter\.get\("\/sessions"/);
-  assert.match(trainingLogRoutes, /req\.query\.date[\s\S]*repo\.getSessionByDate/);
+  assert.match(trainingLogRoutes, /req\.query\.date[\s\S]*getSessionByDate/);
   assert.match(trainingLogRoutes, /trainingLogRouter\.delete\("\/sessions\/skip"/);
   assert.match(trainingLogRoutes, /req\.body\s*\?\?\s*\{\}[\s\S]*req\.query\.exercise/);
   assert.match(trainingLogRoutes, /trainingLogRouter\.get\("\/activities\/:id"/);

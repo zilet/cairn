@@ -143,9 +143,16 @@ export function registerProgramTools(server: McpToolRegistrar) {
     async ({ day }) => {
       const prescriptions = repo.planDayProgression(day);
       const changes = prescriptions
-        .filter((prescription: any) => prescription.action !== "hold" || prescription.plan_item_id)
+        .filter((prescription: any) => prescription.action !== "hold")
         .map((prescription: any) => {
-          const change: Record<string, any> = { exercise: prescription.exercise };
+          const change: Record<string, any> = {
+            day_number: day,
+            exercise: prescription.exercise,
+            sets: prescription.suggested?.sets ?? null,
+            rep_low: prescription.suggested?.rep_low ?? null,
+            rep_high: prescription.suggested?.rep_high ?? null,
+            reason: prescription.why || prescription.delta_text || null,
+          };
           if (prescription.mode === "timed") {
             if (prescription.suggested?.seconds != null) change.target_seconds = prescription.suggested.seconds;
           } else if (prescription.suggested?.weight !== undefined) {
@@ -153,12 +160,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
           }
           return change;
         })
-        .filter((change: any) => Object.keys(change).length > 1);
+        .filter((change: any) => change.target_weight !== undefined || change.target_seconds !== undefined);
       if (!changes.length) return asText({ ok: false, error: "nothing to propose for this day" });
       const parsed = {
-        summary: `Auto-progression for day ${day} — ${changes.length} lift(s)`,
+        summary: `Auto-progression for day ${day} — ${changes.length} lift${changes.length === 1 ? "" : "s"}`,
         changes,
       };
+      repo.supersedeAutoProgressionDrafts(day);
       const proposal = repo.createProposal("auto-progression", `day ${day} progression`, "", parsed);
       return asText({ ok: true, proposal });
     }

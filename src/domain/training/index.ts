@@ -5,6 +5,7 @@ export * from "../../repo/exercises.js";
 export * from "../../repo/muscle-trajectory.js";
 export * from "../../repo/performance.js";
 export * from "../../repo/plan.js";
+export { getEnduranceGoal } from "../../repo/profile.js";
 export * from "../../repo/program-blocks.js";
 export * from "../../repo/program-state.js";
 export * from "../../repo/progression.js";

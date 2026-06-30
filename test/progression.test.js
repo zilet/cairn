@@ -22,10 +22,11 @@ import {
   programAdjustments,
   recentMuscleLoad,
 } from "../dist/repo/progression.js";
+import { registerProgramTools } from "../dist/surfaces/mcp/program.js";
 
 // ---- local seeding (kept in-file so we don't touch the shared _seed.js) ----
 function reset() {
-  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities"]) {
+  for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "bodyweight_log", "program_blocks", "activities", "garmin_activities", "plan_proposals"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
 }
@@ -53,6 +54,19 @@ function logSet(name, date, { weight = null, reps = null, rir = null, duration_s
 
 function isoDaysAgo(n) {
   return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+}
+
+async function callProgramTool(name, args = {}) {
+  const tools = new Map();
+  registerProgramTools({
+    tool(toolName, _description, _schema, handler) {
+      tools.set(toolName, handler);
+    },
+  });
+  const handler = tools.get(name);
+  assert.ok(handler, `MCP tool registered: ${name}`);
+  const result = await handler(args);
+  return JSON.parse(result.content[0].text);
 }
 
 beforeEach(reset);
@@ -221,6 +235,41 @@ test("planDayProgression covers every strength item and skips cardio", () => {
   assert.ok(names.includes("Incline Press"));
   assert.ok(!names.some((n) => /run/i.test(n)), "cardio is skipped");
   for (const r of rows) assert.ok(typeof r.plan_item_id === "number", "each row carries its plan_item_id for the apply path");
+});
+
+test("MCP apply_progression mirrors REST proposal shape and supersedes stale same-day drafts", async () => {
+  makeExercise("Bench Press", { muscle_group: "chest" });
+  makeExercise("Overhead Press", { muscle_group: "shoulders" });
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 95 },
+  ]);
+  logSet("Bench Press", isoDaysAgo(14), { weight: 180, reps: 8, rir: 2 });
+  logSet("Bench Press", isoDaysAgo(5), { weight: 185, reps: 8, rir: 2 });
+  logSet("Overhead Press", isoDaysAgo(5), { weight: 95, reps: 6, rir: 1 });
+
+  const first = await callProgramTool("apply_progression", { day: 1 });
+  assert.equal(first.ok, true);
+  assert.equal(first.proposal.agent, "auto-progression");
+  assert.equal(first.proposal.parsed.summary, "Auto-progression for day 1 — 1 lift");
+  assert.deepEqual(first.proposal.parsed.changes, [
+    {
+      day_number: 1,
+      exercise: "Bench Press",
+      sets: 3,
+      rep_low: 6,
+      rep_high: 8,
+      reason: first.proposal.parsed.changes[0].reason,
+      target_weight: 190,
+    },
+  ]);
+  assert.ok(first.proposal.parsed.changes[0].reason, "change carries a plain-words reason");
+  assert.ok(!first.proposal.parsed.changes.some((c) => c.exercise === "Overhead Press"), "hold prescriptions stay out of apply proposals");
+
+  const second = await callProgramTool("apply_progression", { day: 1 });
+  assert.equal(second.ok, true);
+  assert.equal(repo.getProposal(first.proposal.id).status, "superseded");
+  assert.equal(repo.getProposal(second.proposal.id).status, "draft");
 });
 
 test("nextPrescription returns null when there's no history and no plan item", () => {

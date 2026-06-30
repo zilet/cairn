@@ -1,5 +1,5 @@
 import { Router } from "express";
-import * as repo from "../repo.js";
+import { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../domain/health/index.js";
 
 export const healthMetricsRouter = Router();
 
@@ -28,7 +28,7 @@ healthMetricsRouter.post("/health-metrics", (req, res) => {
       continue;
     }
     try {
-      saved.push(repo.recordDailyMetrics(row.source ?? "apple", String(row.date), {
+      saved.push(recordDailyMetrics(row.source ?? "apple", String(row.date), {
         steps: row.steps,
         sleep_min: row.sleep_min,
         sleep_score: row.sleep_score,
@@ -48,10 +48,10 @@ healthMetricsRouter.post("/health-metrics", (req, res) => {
 healthMetricsRouter.get("/health-metrics", (req, res) => {
   const source = req.query.source ? String(req.query.source) : null;
   const days = req.query.days ? Number(req.query.days) : 30;
-  res.json(repo.getDailyMetrics(source, Number.isFinite(days) ? days : 30));
+  res.json(getDailyMetrics(source, Number.isFinite(days) ? days : 30));
 });
 
 // Unified recovery view (Garmin + Apple/other merged) — graceful when empty.
 healthMetricsRouter.get("/recovery", (req, res) =>
-  res.json(repo.getRecoverySummary(req.query.days ? Number(req.query.days) : 14))
+  res.json(getRecoverySummary(req.query.days ? Number(req.query.days) : 14))
 );

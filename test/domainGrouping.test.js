@@ -40,6 +40,39 @@ test("domain entry points are additive barrels, not new behavior layers", () => 
   }
 });
 
+test("nutrition adapters use the nutrition domain entry point", () => {
+  for (const [file, importPath] of [
+    ["src/routes/nutrition.ts", "../domain/nutrition/index.js"],
+    ["src/surfaces/mcp/nutrition.ts", "../../domain/nutrition/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import nutrition domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
+test("health metrics adapters use the health domain entry point", () => {
+  for (const [file, importPath] of [
+    ["src/routes/health-metrics.ts", "../domain/health/index.js"],
+    ["src/surfaces/mcp/health-metrics.ts", "../../domain/health/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import health domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
+test("training log adapters use the training domain entry point", () => {
+  for (const [file, importPath] of [
+    ["src/routes/training-log.ts", "../domain/training/index.js"],
+    ["src/surfaces/mcp/training-log.ts", "../../domain/training/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import training domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
 test("repo compatibility barrel remains the public back-compat surface", () => {
   const repo = read("src/repo.ts");
   assert.match(repo, /Barrel: repo\.ts was split into cohesive domain modules/);

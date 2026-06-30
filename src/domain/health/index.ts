@@ -3,6 +3,7 @@ export * from "../../repo/ccda.js";
 export * from "../../repo/dexa-targeting.js";
 export * from "../../repo/evidence.js";
 export * from "../../repo/health.js";
+export { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../../repo/coach.js";
 export * from "../../repo/lab-units.js";
 export * from "../../repo/marker-canon.js";
 export * from "../../repo/propagation.js";

@@ -7,9 +7,23 @@ import {
   nutritionCheckin,
   swapMealAgentic,
 } from "../coachOps.js";
+import {
+  acceptMealPlan,
+  addFoodNote,
+  deleteFoodNote,
+  estimateExpenditure,
+  frequentFoods,
+  getDayIntake,
+  getFoodNote,
+  getMealPlan,
+  listFoodNotes,
+  listMealPlans,
+  setMealPlanStatus,
+  updateFoodNote,
+  updateMealPlanDays,
+} from "../domain/nutrition/index.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
-import * as repo from "../repo.js";
 import { backgroundOp } from "./background-op.js";
 
 export const nutritionRouter = Router();
@@ -30,7 +44,7 @@ nutritionRouter.post("/coach/mealplan", async (req, res) => {
 });
 
 nutritionRouter.get("/mealplans", (req, res) =>
-  res.json(repo.listMealPlans(req.query.limit ? Number(req.query.limit) : 10))
+  res.json(listMealPlans(req.query.limit ? Number(req.query.limit) : 10))
 );
 
 // ---- adaptive nutrition (T3 / Phase 3A) ----
@@ -38,7 +52,7 @@ nutritionRouter.get("/mealplans", (req, res) =>
 // powers the calm "Energy Balance" view. ?window= overrides the 21-day window.
 nutritionRouter.get("/nutrition/expenditure", (req, res) => {
   const window = req.query.window ? Number(req.query.window) : undefined;
-  res.json(repo.estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21));
+  res.json(estimateExpenditure(Number.isFinite(window as number) ? (window as number) : 21));
 });
 
 // A calm review of ONE day's logged food (v41): the entries (each editable),
@@ -46,7 +60,7 @@ nutritionRouter.get("/nutrition/expenditure", (req, res) => {
 // the maintenance anchor) — a gentle "remaining". ?date=YYYY-MM-DD overrides today.
 nutritionRouter.get("/nutrition/day", (req, res) => {
   const date = typeof req.query.date === "string" ? req.query.date : undefined;
-  res.json(repo.getDayIntake(date));
+  res.json(getDayIntake(date));
 });
 
 // Quiet adaptive-nutrition check-in: when the derived expenditure has drifted
@@ -72,7 +86,7 @@ nutritionRouter.post("/nutrition/checkin", async (req, res) => {
 nutritionRouter.post("/meal-plans/:id/swap", async (req, res) => {
   const b = req.body ?? {};
   const id = Number(req.params.id);
-  const plan = repo.getMealPlan(id);
+  const plan = getMealPlan(id);
   if (!plan) return res.status(404).json({ error: "not found" });
   if (backgroundOp(res, "meal_swap", { agent: b.agent ?? null, id, day: String(b.day ?? ""), meal_index: Number(b.meal_index), hint: b.hint }, b.agent)) return;
   try {
@@ -88,7 +102,7 @@ nutritionRouter.post("/meal-plans/:id/swap", async (req, res) => {
 nutritionRouter.post("/meal-plans/:id/recipe", async (req, res) => {
   const b = req.body ?? {};
   const id = Number(req.params.id);
-  const plan = repo.getMealPlan(id);
+  const plan = getMealPlan(id);
   if (!plan) return res.status(404).json({ error: "not found" });
   const day = String(b.day ?? "");
   const mealIndex = Number(b.meal_index);
@@ -109,7 +123,7 @@ nutritionRouter.post("/meal-plans/:id/recipe", async (req, res) => {
 // parsed_json key (daily_kcal, shopping, notes, ...).
 nutritionRouter.put("/meal-plans/:id/days", (req, res) => {
   try {
-    const updated = repo.updateMealPlanDays(Number(req.params.id), (req.body ?? {}).days);
+    const updated = updateMealPlanDays(Number(req.params.id), (req.body ?? {}).days);
     if (!updated) return res.status(404).json({ error: "not found" });
     res.json(updated);
   } catch (e: any) {
@@ -120,36 +134,36 @@ nutritionRouter.put("/meal-plans/:id/days", (req, res) => {
 nutritionRouter.post("/mealplans/:id/:status", (req, res) => {
   const s = req.params.status;
   if (!["accept", "discard"].includes(s)) return res.status(400).json({ error: "bad status" });
-  res.json(s === "accept" ? repo.acceptMealPlan(Number(req.params.id)) : repo.setMealPlanStatus(Number(req.params.id), "discarded"));
+  res.json(s === "accept" ? acceptMealPlan(Number(req.params.id)) : setMealPlanStatus(Number(req.params.id), "discarded"));
 });
 
 // ---- food notes (vision happens in the Claude client; this stores the result) ----
 nutritionRouter.get("/food-notes", (req, res) =>
-  res.json(repo.listFoodNotes(req.query.limit ? Number(req.query.limit) : 20))
+  res.json(listFoodNotes(req.query.limit ? Number(req.query.limit) : 20))
 );
 
 // Single food note row, hydrated (frontend polls this to watch enrichment_status).
 nutritionRouter.get("/food-notes/:id", (req, res) => {
-  const f = repo.getFoodNote(Number(req.params.id));
+  const f = getFoodNote(Number(req.params.id));
   if (!f) return res.status(404).json({ error: "not found" });
   res.json(f);
 });
 
 nutritionRouter.post("/food-notes", (req, res) => {
   const b = req.body ?? {};
-  res.json(repo.addFoodNote(b.meal, b.raw ?? b.text ?? "", b.parsed ?? null, b.image_path));
+  res.json(addFoodNote(b.meal, b.raw ?? b.text ?? "", b.parsed ?? null, b.image_path));
 });
 
 // Manual correction of a logged food note (fix a macro, rename it, change the meal
 // slot, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered.
 // 404 on unknown id.
 nutritionRouter.put("/food-notes/:id", (req, res) => {
-  const updated = repo.updateFoodNote(Number(req.params.id), req.body ?? {});
+  const updated = updateFoodNote(Number(req.params.id), req.body ?? {});
   if (!updated) return res.status(404).json({ error: "not found" });
   res.json(updated);
 });
 
-nutritionRouter.delete("/food-notes/:id", (req, res) => res.json(repo.deleteFoodNote(Number(req.params.id))));
+nutritionRouter.delete("/food-notes/:id", (req, res) => res.json(deleteFoodNote(Number(req.params.id))));
 
 // One-tap "frequents": the foods most often logged near a time of day (±2h),
 // most-frequent first (max 8), with macros carried from the latest occurrence
@@ -157,7 +171,7 @@ nutritionRouter.delete("/food-notes/:id", (req, res) => res.json(repo.deleteFood
 // hour so frequents match the user's local time-of-day, not UTC).
 nutritionRouter.get("/frequent-foods", (req, res) => {
   const hour = req.query.hour != null ? Number(req.query.hour) : undefined;
-  res.json(repo.frequentFoods(Number.isFinite(hour) ? hour : undefined));
+  res.json(frequentFoods(Number.isFinite(hour) ? hour : undefined));
 });
 
 // Serve a chat-attached photo back to the PWA. Filename is locked to the
