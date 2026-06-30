@@ -5,6 +5,7 @@ type ClientActivity = import("../contracts/client.js").ClientActivity;
 
 type ClientActivityLike = ClientActivity & Record<string, unknown>;
 
+(() => {
 // Bare activity types make ambiguous image prompts ("ride" can mean horseback),
 // so generated photos get explicit phrases while the SVG fallback keeps the raw type.
 const ACT_ART_PHRASE: Record<string, string> = {
@@ -59,7 +60,6 @@ const CAIRN_TODAY_ACTIVITY = {
 
 Object.assign(globalThis, {
   CairnTodayActivity: CAIRN_TODAY_ACTIVITY,
-  ACT_ART_PHRASE,
   actArtText,
   actEntryHtml,
   updateActEntry,
@@ -68,9 +68,9 @@ Object.assign(globalThis, {
 if (typeof window !== "undefined") {
   Object.assign(window, {
     CairnTodayActivity: CAIRN_TODAY_ACTIVITY,
-    ACT_ART_PHRASE,
     actArtText,
     actEntryHtml,
     updateActEntry,
   });
 }
+})();

@@ -15,6 +15,7 @@ type EnergyRead = {
   dir?: "down" | "up" | "flat" | null;
 };
 
+(() => {
 const ENERGY_CONF_WORD: Record<string, string> = { high: "well-established", medium: "settling in", low: "still early" };
 
 function kcalFmt(value: unknown): string {
@@ -62,3 +63,4 @@ if (typeof window !== "undefined") {
     energyRead,
   });
 }
+})();

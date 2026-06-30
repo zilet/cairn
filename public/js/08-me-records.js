@@ -259,64 +259,10 @@ function paintHealthRecordsTab() {
 // Cairn has understood and changed — it does NOT GRADE: no scores, no accuracy %,
 // no judgment. A quiet editorial read, grouped by kind under plain-language
 // kickers, newest-first within each group. Reads GET /api/learned-timeline only.
-const LEARNED_GROUPS = [
-  ["memory", "Understood about you", "Constraints, preferences and goals it carries — the durable picture of who you are."],
-  ["learning", "What we tried, and how it went", "Quiet observations from comparing a suggestion to what actually happened. Never a verdict — just what it noticed."],
-  ["directive", "Connections it made", "When a finding in your labs quietly shaped your meals, training, or what to watch. Informational, never medical advice."],
-  ["applied", "Plan changes you accepted", "Adjustments Cairn proposed that you chose to apply. Nothing here changed on its own."],
-];
-
-function learnedItemHtml(it, i) {
-  const when = it.when || "";
-  // relAge wants a YYYY-MM-DD; a SQLite "YYYY-MM-DDTHH:MM:SS" works (it slices the date).
-  const rel = when ? relAge(when) : "";
-  const abs = when ? absDate(when) : "";
-  // Reuse the `sess` editorial card so the read inherits Atelier styling without new
-  // CSS: sess-head (title + date), sess-line (detail), a quiet lbl source footer.
-  const dateHtml = rel
-    ? `<span class="sess-day"${abs ? ` title="${escAttr(abs)}"` : ""}>${escHtml(rel)}</span>`
-    : "";
-  const detail = it.detail ? `<div class="sess-line">${escHtml(it.detail)}</div>` : "";
-  const source = it.source ? `<div class="sess-line lbl" style="color:var(--muted);margin-top:6px">${escHtml(it.source)}</div>` : "";
-  return `<div class="sess reveal" style="${stagger(i + 1)}">
-      <div class="sess-head"><span class="sess-date">${escHtml(it.title || "")}</span>${dateHtml}</div>
-      ${detail}
-      ${source}
-    </div>`;
-}
-
 function renderLearnedTimeline(data, token) {
   const c = $("#hContent");
   if (!c || token !== pollToken) return; // a sibling tab repainted while we fetched
-  const items = (data && Array.isArray(data.items)) ? data.items : [];
-  const intro = `<div class="learned-intro sess"><div class="sess-line" style="color:var(--muted)">
-      A quiet record of what Cairn has come to understand about you, and the changes it's made with you. It's here to show its working — not to grade anything. Visit it whenever; it never nudges.
-    </div></div>`;
-  if (!items.length) {
-    c.innerHTML = intro + `<div class="empty-state reveal" style="${stagger(0)}">
-        <div class="empty-state-line">Nothing learned yet</div>
-        <div class="hpic-hero-sub">As you log, chat, and add labs, Cairn builds up a picture of you — and what it understands will show up here, in plain words.</div>
-      </div>`;
-    return;
-  }
-  let body = "";
-  let idx = 0;
-  for (const [kind, label, blurb] of LEARNED_GROUPS) {
-    const group = items.filter((it) => it.kind === kind);
-    if (!group.length) continue;
-    // The "Understood about you" group is the curate-able coach memory; offer a quiet
-    // path to the Memory sub-view (a Me-seg sibling, not a Health-seg) to edit it.
-    const foot = kind === "memory"
-      ? `<button class="linkbtn" id="learnedToMemory" style="margin-top:8px">Curate these in Memory →</button>`
-      : "";
-    body += `<section style="margin-top:22px">
-        <h2 class="lbl" style="margin:0 0 4px">${escHtml(label)}</h2>
-        <p class="hpic-hero-sub" style="margin:0 0 10px;text-align:left">${escHtml(blurb)}</p>
-        ${group.map((it) => learnedItemHtml(it, idx++)).join("")}
-        ${foot}
-      </section>`;
-  }
-  c.innerHTML = intro + (body || `<div class="empty-state reveal" style="${stagger(0)}"><div class="empty-state-line">Nothing learned yet</div></div>`);
+  c.innerHTML = learnedTimelineHtml(data);
   $("#learnedToMemory")?.addEventListener("click", () => withViewTransition(() => renderMemory().then(viewEnter)));
 }
 

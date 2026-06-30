@@ -135,6 +135,7 @@ declare global {
   declare function relTime(iso: string): string;
   declare function relAge(iso: string): string;
   declare function absDate(iso: string): string;
+  declare function learnedTimelineHtml(data: unknown): string;
   declare function foodNum(value: unknown): number | null;
   declare function formatFoodNum(value: unknown): string;
   declare function fmtWeight(weight: unknown): string;
@@ -521,6 +522,12 @@ declare global {
       ): string;
     };
 
+    CairnHealthLearned: {
+      LEARNED_GROUPS: readonly (readonly [string, string, string])[];
+      learnedItemHtml(item: unknown, index: number): string;
+      learnedTimelineHtml(data: unknown): string;
+    };
+
     CairnHealthDocs: {
       healthKindLabel(kind: unknown): string;
       parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
@@ -745,6 +752,7 @@ declare global {
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
+  declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnMarkdown: Window["CairnMarkdown"];

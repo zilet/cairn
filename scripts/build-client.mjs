@@ -50,6 +50,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
+  { source: "src/client/health-learned-client.ts", output: "public/js/health-learned-client.js" },
   { source: "src/client/health-docs-client.ts", output: "public/js/health-docs-client.js" },
   { source: "src/client/route-state.ts", output: "public/js/route-state.js" },
   { source: "src/client/app/router.ts", output: "public/js/app-router.js" },

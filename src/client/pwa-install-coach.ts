@@ -8,6 +8,7 @@ type InstallPromptEvent = Event & {
 
 type InstallGuidance = { mode: "prompt" | "ios" | "safari-desktop" | "menu-generic" | "chromium-menu" };
 
+(() => {
 let deferredInstallPrompt: InstallPromptEvent | null = null;
 
 try {
@@ -180,3 +181,4 @@ if (typeof window !== "undefined") {
     refreshPhoneCoach,
   });
 }
+})();

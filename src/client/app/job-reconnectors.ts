@@ -14,23 +14,28 @@ type AppJobReconnectKind =
 type AppJobReconnectFactory = (job?: unknown) => unknown;
 type AppJobReconnectEntry = {
   kind: AppJobReconnectKind;
-  factory: AppJobReconnectFactory;
+  factoryName: string;
 };
 
+(() => {
 const APP_JOB_RECONNECTORS: AppJobReconnectEntry[] = [
-  { kind: "session_suggest", factory: reconnectSessionSuggest },
-  { kind: "meal_plan", factory: reconnectMealPlan },
-  { kind: "meal_swap", factory: reconnectMealSwap },
-  { kind: "recipe", factory: reconnectRecipe },
-  { kind: "day_read_override", factory: reconnectDayReadOverride },
-  { kind: "nutrition_checkin", factory: reconnectNutritionCheckin },
-  { kind: "insight", factory: reconnectInsight },
-  { kind: "proposal", factory: reconnectProposal },
+  { kind: "session_suggest", factoryName: "reconnectSessionSuggest" },
+  { kind: "meal_plan", factoryName: "reconnectMealPlan" },
+  { kind: "meal_swap", factoryName: "reconnectMealSwap" },
+  { kind: "recipe", factoryName: "reconnectRecipe" },
+  { kind: "day_read_override", factoryName: "reconnectDayReadOverride" },
+  { kind: "nutrition_checkin", factoryName: "reconnectNutritionCheckin" },
+  { kind: "insight", factoryName: "reconnectInsight" },
+  { kind: "proposal", factoryName: "reconnectProposal" },
 ];
 
 function registerAppJobReconnectors(): void {
-  for (const { kind, factory } of APP_JOB_RECONNECTORS) {
-    registerJobReconnector(kind, factory);
+  const root = globalThis as Record<string, unknown>;
+  const register = root.registerJobReconnector;
+  if (typeof register !== "function") return;
+  for (const { kind, factoryName } of APP_JOB_RECONNECTORS) {
+    const factory = root[factoryName];
+    if (typeof factory === "function") register(kind, factory as AppJobReconnectFactory);
   }
 }
 
@@ -39,3 +44,4 @@ Object.assign(globalThis, { registerAppJobReconnectors });
 if (typeof window !== "undefined") {
   window.registerAppJobReconnectors = registerAppJobReconnectors;
 }
+})();
