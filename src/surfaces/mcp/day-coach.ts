@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { agentStatusFor, suggestSession, weekAheadRead } from "../../coachOps.js";
 import { computeDayRead, localToday } from "../../dayread.js";
-import * as repo from "../../repo.js";
+import { dayRead, forwardLook, getCachedDayRead } from "../../domain/brain/index.js";
+import { getTrajectory } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerDayCoachTools(server: McpToolRegistrar) {
@@ -23,21 +24,21 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
       const withForward = (r: any) => {
         let arc: string | null = null;
         try {
-          arc = repo.getTrajectory(readDate)?.line ?? null;
+          arc = getTrajectory(readDate)?.line ?? null;
         } catch {
           arc = null;
         }
-        return { ...r, forward: r?.kind === "done" ? null : repo.forwardLook(readDate).text || null, arc };
+        return { ...r, forward: r?.kind === "done" ? null : forwardLook(readDate).text || null, arc };
       };
       try {
         if (!override) {
-          const cached = repo.getCachedDayRead(readDate);
+          const cached = getCachedDayRead(readDate);
           if (cached) return asText(withForward({ ...cached, cached: true, agent_status: agentStatusFor(cached) }));
         }
         const r: any = await computeDayRead({ date, override, agent });
         return asText(withForward({ ...r, agent_status: agentStatusFor(r) }));
       } catch (e: any) {
-        const b = repo.dayRead(date);
+        const b = dayRead(date);
         const headline = b.kind === "done"
           ? "You're done for today."
           : b.kind === "rest"

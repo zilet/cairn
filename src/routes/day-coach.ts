@@ -3,7 +3,8 @@ import { enqueueAgentJob } from "../agentJobs.js";
 import { agentStatusFor, suggestSession, weekAheadRead } from "../coachOps.js";
 import { db } from "../db.js";
 import { computeDayRead, localToday } from "../dayread.js";
-import * as repo from "../repo.js";
+import { dayRead, forwardLook, getCachedDayRead, invalidateDayRead } from "../domain/brain/index.js";
+import { createAgentJob, getSettings, getTrajectory, recordSuggestion } from "../domain/person/index.js";
 import { backgroundOp } from "./background-op.js";
 
 export const dayCoachRouter = Router();
@@ -29,7 +30,7 @@ function recordDayReadSuggestion(date: string, read: any, override: string | nul
       // A canonical (no-override) row already recorded for this date — don't duplicate.
       if (existing) return;
     }
-    repo.recordSuggestion("day_read", date, {
+    recordSuggestion("day_read", date, {
       kind: read?.kind ?? null,
       focus: read?.focus ?? null,
       est_minutes: read?.est_minutes ?? null,
@@ -70,21 +71,21 @@ dayCoachRouter.get("/today-read", async (req, res) => {
   const withForward = (r: any) => {
     let arc: string | null = null;
     try {
-      arc = repo.getTrajectory(readDate)?.line ?? null;
+      arc = getTrajectory(readDate)?.line ?? null;
     } catch {
       arc = null;
     }
-    return { ...r, forward: r?.kind === "done" ? null : repo.forwardLook(readDate).text || null, arc };
+    return { ...r, forward: r?.kind === "done" ? null : forwardLook(readDate).text || null, arc };
   };
   try {
     if (reset) {
-      repo.invalidateDayRead(readDate);
+      invalidateDayRead(readDate);
       const r: any = await computeDayRead({ date, agent: agentParam });
       recordDayReadSuggestion(readDate, r, null);
       return res.json(withForward({ ...r, agent_status: agentStatusFor(r) }));
     }
     if (!override) {
-      const cached = repo.getCachedDayRead(readDate);
+      const cached = getCachedDayRead(readDate);
       if (cached) {
         // Outcome learning on the FAST path too: the canonical read is precomputed
         // nightly and served cached every morning, so without recording here the
@@ -103,7 +104,7 @@ dayCoachRouter.get("/today-read", async (req, res) => {
   } catch (e: any) {
     // Last-resort floor — computeDayRead already swallows agent failures, so this
     // only fires on an unexpected repo error. Still return a real read, never 500.
-    const b = repo.dayRead(date);
+    const b = dayRead(date);
     const headline = b.kind === "done"
       ? "You're done for today."
       : b.kind === "rest"
@@ -129,8 +130,8 @@ dayCoachRouter.post("/today-read/reshape", async (req, res) => {
   const date = b.date != null ? String(b.date) : undefined;
   const override = b.override != null ? String(b.override) : undefined;
   const agentParam = b.agent != null ? String(b.agent) : undefined;
-  if (repo.getSettings().bg_ops_enabled) {
-    const job = repo.createAgentJob({
+  if (getSettings().bg_ops_enabled) {
+    const job = createAgentJob({
       kind: "day_read_override",
       input: { date, override, agent: agentParam ?? null },
       agent: agentParam ?? null,
@@ -144,7 +145,7 @@ dayCoachRouter.post("/today-read/reshape", async (req, res) => {
     recordDayReadSuggestion(date || localToday(), read, override ?? null);
     return res.json({ ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {
-    const f = repo.dayRead(date);
+    const f = dayRead(date);
     const headline = f.kind === "rest"
       ? "Rest today."
       : f.kind === "easy"

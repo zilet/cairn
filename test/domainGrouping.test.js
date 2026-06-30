@@ -110,6 +110,19 @@ test("plan exercise adapters use the training domain entry point", () => {
   }
 });
 
+test("program adapters use training and brain domain entry points", () => {
+  for (const [file, trainingImportPath, brainImportPath, healthImportPath] of [
+    ["src/routes/program.ts", "../domain/training/index.js", "../domain/brain/index.js", "../domain/health/index.js"],
+    ["src/surfaces/mcp/program.ts", "../../domain/training/index.js", "../../domain/brain/index.js", "../../domain/health/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${trainingImportPath.replaceAll(".", "\\.")}"`), `${file} should import training domain exports`);
+    assert.match(src, new RegExp(`from "${brainImportPath.replaceAll(".", "\\.")}"`), `${file} should import brain domain exports for cached day reads`);
+    assert.match(src, new RegExp(`from "${healthImportPath.replaceAll(".", "\\.")}"`), `${file} should import health domain exports for DEXA targeting`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
 test("training status MCP tools use domain entry points", () => {
   const src = read("src/surfaces/mcp/training-status.ts");
   assert.match(src, /from "\.\.\/\.\.\/domain\/training\/index\.js"/);
@@ -169,6 +182,18 @@ test("agent job adapters use the person domain entry point", () => {
   ]) {
     const src = read(file);
     assert.match(src, new RegExp(`from "${importPath.replaceAll(".", "\\.")}"`), `${file} should import person domain exports`);
+    assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
+  }
+});
+
+test("day coach adapters use brain and person domain entry points", () => {
+  for (const [file, brainImportPath, personImportPath] of [
+    ["src/routes/day-coach.ts", "../domain/brain/index.js", "../domain/person/index.js"],
+    ["src/surfaces/mcp/day-coach.ts", "../../domain/brain/index.js", "../../domain/person/index.js"],
+  ]) {
+    const src = read(file);
+    assert.match(src, new RegExp(`from "${brainImportPath.replaceAll(".", "\\.")}"`), `${file} should import brain domain exports`);
+    assert.match(src, new RegExp(`from "${personImportPath.replaceAll(".", "\\.")}"`), `${file} should import person domain exports`);
     assert.doesNotMatch(src, /import\s+\*\s+as\s+repo\s+from\s+["'][^"']*repo\.js["']/, `${file} should not import the repo barrel`);
   }
 });
