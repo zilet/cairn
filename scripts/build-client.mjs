@@ -107,6 +107,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/health-picture-client.ts", output: "public/js/health-picture-client.js" },
   { source: "src/client/health-picture-controller.ts", output: "public/js/health-picture-controller.js" },
   { source: "src/client/health-markers-client.ts", output: "public/js/health-markers-client.js" },
+  { source: "src/client/health-markers-controller.ts", output: "public/js/health-markers-controller.js" },
   { source: "src/client/health-directives-client.ts", output: "public/js/health-directives-client.js" },
   { source: "src/client/health-directives-loader-client.ts", output: "public/js/health-directives-loader-client.js" },
   { source: "src/client/health-read-controller.ts", output: "public/js/health-read-controller.js" },

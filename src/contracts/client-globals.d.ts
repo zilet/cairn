@@ -255,6 +255,19 @@ declare global {
     teardownReadSpy(): void;
   };
 
+  type ClientHealthMarkersControllerDeps = {
+    root: ParentNode;
+    cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
+    peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    markRefreshing(on: unknown): void;
+    pollToken(): number;
+    relAge(iso: string | null | undefined): string;
+    select<T extends Element = Element>(selector: string): T | null;
+    stagger(index?: number | null): string;
+    switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
+    escapeHtml(value: unknown): string;
+  };
+
   type ClientHealthRecordsControllerDeps = {
     state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthDocId">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
@@ -953,6 +966,10 @@ declare global {
       wireMarkerChart(svg: SVGElement | null | undefined): void;
       markerPanelHtml(marker: Record<string, unknown> | null | undefined): string;
       hmkRowHtml(marker: Record<string, unknown> | null | undefined, index?: number): string;
+    };
+
+    CairnHealthMarkersController: {
+      load(deps: ClientHealthMarkersControllerDeps, token: number): void;
     };
 
     CairnHealthDirectives: {
@@ -1757,6 +1774,7 @@ declare global {
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthPictureController: Window["CairnHealthPictureController"];
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
+  declare const CairnHealthMarkersController: Window["CairnHealthMarkersController"];
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
   declare const CairnHealthDirectiveLoader: Window["CairnHealthDirectiveLoader"];
   declare const CairnHealthStanding: Window["CairnHealthStanding"];

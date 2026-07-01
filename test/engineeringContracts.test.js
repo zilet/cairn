@@ -1122,6 +1122,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthPictureSource = read("src/client/health-picture-client.ts");
   const healthPictureControllerSource = read("src/client/health-picture-controller.ts");
   const healthMarkersSource = read("src/client/health-markers-client.ts");
+  const healthMarkersControllerSource = read("src/client/health-markers-controller.ts");
   const healthDirectivesSource = read("src/client/health-directives-client.ts");
   const healthDirectiveLoaderSource = read("src/client/health-directives-loader-client.ts");
   const healthReadControllerSource = read("src/client/health-read-controller.ts");
@@ -1236,6 +1237,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthPictureClient = read("public/js/health-picture-client.js");
   const healthPictureController = read("public/js/health-picture-controller.js");
   const healthMarkersClient = read("public/js/health-markers-client.js");
+  const healthMarkersController = read("public/js/health-markers-controller.js");
   const healthDirectivesClient = read("public/js/health-directives-client.js");
   const healthDirectiveLoaderClient = read("public/js/health-directives-loader-client.js");
   const healthReadController = read("public/js/health-read-controller.js");
@@ -1487,6 +1489,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /loadHealthPicture\(token: number, docsPromise: Promise<unknown>/);
   assert.match(clientGlobals, /CairnHealthMarkers/);
   assert.match(clientGlobals, /hmkRowHtml\(/);
+  assert.match(clientGlobals, /ClientHealthMarkersControllerDeps/);
+  assert.match(clientGlobals, /CairnHealthMarkersController/);
+  assert.match(clientGlobals, /load\(deps: ClientHealthMarkersControllerDeps, token: number\): void/);
   assert.match(clientGlobals, /CairnHealthDirectives/);
   assert.match(clientGlobals, /directivesSectionHtml\(/);
   assert.match(clientGlobals, /CairnHealthDirectiveLoader/);
@@ -3316,6 +3321,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthMarkersSource, /function wireMarkerChart\(svg: SVGElement/);
   assert.match(healthMarkersSource, /function hmkRowHtml\(marker: HealthMarkersRow/);
   assert.match(healthMarkersSource, /CairnHealthMarkers/);
+  assert.match(healthMarkersControllerSource, /type HealthMarkersControllerGroup = \{/);
+  assert.match(healthMarkersControllerSource, /function markerGroups\(data: HealthMarkersControllerResponse, markers: HealthMarkersControllerRow\[\]\): HealthMarkersControllerGroup\[\]/);
+  assert.match(healthMarkersControllerSource, /function groupMarkers\(groups: HealthMarkersControllerGroup\[\], markers: HealthMarkersControllerRow\[\]\): Map<string, HealthMarkersControllerRow\[\]>/);
+  assert.match(healthMarkersControllerSource, /CairnHealthClient\.orderMarkersForDisplay/);
+  assert.match(healthMarkersControllerSource, /CairnHealthClient\.lipidGroupNoteHtml/);
+  assert.match(healthMarkersControllerSource, /CairnHealthMarkers\.hmkRowHtml/);
+  assert.match(healthMarkersControllerSource, /CairnHealthMarkers\.wireMarkerChart/);
+  assert.match(healthMarkersControllerSource, /deps\.cachedApi\("\/markers\/priority"/);
+  assert.match(healthMarkersControllerSource, /deps\.switchHealthSeg\("records", \{ openPicker: true \}\)/);
+  assert.match(healthMarkersControllerSource, /CairnHealthMarkersController/);
   assert.match(healthDirectivesSource, /type HealthDirectivesRow = \{/);
   assert.match(healthDirectivesSource, /function directivesSectionHtml\(rows: unknown/);
   assert.match(healthDirectivesSource, /function directiveResearchNudgeHtml/);
@@ -3777,6 +3792,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthMarkersClient, /wireMarkerChart/);
   assert.match(healthMarkersClient, /hmkRowHtml/);
   assert.doesNotMatch(healthMarkersClient, /^function\s+markerChartSvg|^function\s+hmkRowHtml/m);
+  assert.match(healthMarkersController, /CairnHealthMarkersController: CAIRN_HEALTH_MARKERS_CONTROLLER/);
+  assert.match(healthMarkersController, /window\.CairnHealthMarkersController = CAIRN_HEALTH_MARKERS_CONTROLLER/);
+  assert.match(healthMarkersController, /CairnHealthClient\.orderMarkersForDisplay/);
+  assert.match(healthMarkersController, /CairnHealthMarkers\.wireMarkerChart/);
   assert.match(healthDirectivesClient, /Object\.assign\(globalThis, \{ CairnHealthDirectives: CAIRN_HEALTH_DIRECTIVES \}\)/);
   assert.match(healthDirectivesClient, /window\.CairnHealthDirectives = CAIRN_HEALTH_DIRECTIVES/);
   assert.match(healthDirectivesClient, /directivesSectionHtml/);
@@ -3969,16 +3988,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     mealRecipeController,
     /CairnUi\.sheetChipHtml\(\{ className: "sheet-chip sheet-chip-kcal", value: meal\.kcal, label: "cal" \}\)/
   );
-  assert.match(health, /CairnHealthClient\.orderMarkersForDisplay/);
   assert.match(health, /loadCoachingFocus\("#cfocusStandingSlot", view\)/);
-  assert.match(health, /CairnHealthClient\.lipidGroupNoteHtml/);
-  assert.match(health, /CairnHealthMarkers\.formatMarkerNumber/);
-  assert.match(health, /CairnHealthMarkers\.markerTrendWord/);
-  assert.match(health, /CairnHealthMarkers\.markerChartSvg/);
-  assert.match(health, /CairnHealthMarkers\.hmkRowHtml/);
-  assert.match(health, /function markerChartSvg\(m\) \{\n\s+return CairnHealthMarkers\.markerChartSvg\(m\);\n\s+\}/);
-  assert.match(health, /function wireMarkerChart\(svg\) \{[\s\S]*if \(!\(svg instanceof SVGElement\)\)[\s\S]*CairnHealthMarkers\.wireMarkerChart\(svg\);[\s\S]*\}/);
-  assert.match(health, /function hmkRowHtml\(m, i\) \{\n\s+return CairnHealthMarkers\.hmkRowHtml\(m, i\);\n\s+\}/);
+  assert.match(health, /function healthMarkersDeps\(\)/);
+  assert.match(health, /CairnHealthMarkersController\.load\(healthMarkersDeps\(\), token\)/);
+  assert.doesNotMatch(health, /CairnHealthClient\.orderMarkersForDisplay|CairnHealthClient\.lipidGroupNoteHtml/);
+  assert.doesNotMatch(health, /CairnHealthMarkers\.formatMarkerNumber|CairnHealthMarkers\.markerTrendWord|CairnHealthMarkers\.markerChartSvg|CairnHealthMarkers\.hmkRowHtml/);
   assert.match(health, /CairnHealthPicture\.parsedReview/);
   assert.match(health, /CairnHealthPicture\.healthHeroHtml/);
   assert.match(health, /CairnHealthPicture\.reviewHtml/);

@@ -232,141 +232,22 @@
     async function loadHealthPicture(token, docsP) {
         await CairnHealthPictureController.loadHealthPicture(token, docsP, healthPictureDeps());
     }
-    // ---- markers (trends) ----
-    function fmtMkNum(v) {
-        return CairnHealthMarkers.formatMarkerNumber(v);
-    }
-    function sparkDateLabel(d) {
-        return CairnHealthMarkers.sparkDateLabel(d);
-    }
-    function markerTrendWord(m) {
-        return CairnHealthMarkers.markerTrendWord(m);
-    }
-    function markerSpanWord(days) {
-        return CairnHealthMarkers.markerSpanWord(days);
-    }
-    function markerChartSvg(m) {
-        return CairnHealthMarkers.markerChartSvg(m);
-    }
-    function wireMarkerChart(svg) {
-        if (!(svg instanceof SVGElement))
-            return;
-        CairnHealthMarkers.wireMarkerChart(svg);
-    }
-    function markerPanelHtml(m) {
-        return CairnHealthMarkers.markerPanelHtml(m);
-    }
-    function hmkRowHtml(m, i) {
-        return CairnHealthMarkers.hmkRowHtml(m, i);
-    }
-    function orderHealthMarkersForDisplay(groupKey, list) {
-        return CairnHealthClient.orderMarkersForDisplay(groupKey, list);
-    }
-    function healthMarkerSubgroup(groupKey, name) {
-        return CairnHealthClient.markerSubgroup(groupKey, name);
-    }
-    function lipidGroupNoteHtml(list) {
-        return CairnHealthClient.lipidGroupNoteHtml(list, { relAge });
-    }
-    // SWR over /markers/priority (key shared with the Health → Read priority view): a
-    // warm re-entry paints the grouped marker list instantly, then revalidates and
-    // re-paints only if the payload changed. The render is unchanged — SWR only
-    // changes WHEN the data arrives.
-    function loadHealthMarkers(token) {
-        const wrap = $("#hMarkers");
-        if (!wrap || !wrap.isConnected)
-            return;
-        // /markers/priority is the superset: it carries the optimal bands (for the chart) plus
-        // group + trend on top of the flat marker shape /health/markers returns.
-        const paint = (res) => {
-            if (token !== pollToken || !wrap.isConnected)
-                return;
-            const data = healthScreenRecord(res);
-            const markers = healthScreenRows(data.markers);
-            if (!markers.length) {
-                wrap.innerHTML = CairnHealthClient.markersEmptyHtml(CairnHealthClient.HEALTH_HERO_ART);
-                const b = wrap.querySelector("#hMkToRecords");
-                if (b)
-                    b.addEventListener("click", () => switchHealthSeg("records", { openPicker: true }));
-                return;
-            }
-            // Server `groups` is the canonical ordered list of groups that hold ≥1 marker; render
-            // headers in that order. Most groups preserve server priority order; lipids get a
-            // clinician-style scan order so LDL variants and particle markers don't read as one pile.
-            // Degrade gracefully if the backend hasn't shipped grouping yet: derive an ordered list
-            // from the markers themselves, falling everything ungrouped into a single "Markers" bucket.
-            let groups = healthScreenRows(data.groups).filter((g) => !!g.key);
-            if (!groups.length) {
-                const seen = new Set(), derived = [];
-                for (const m of markers) {
-                    const key = typeof m.group === "string" && m.group ? m.group : "other";
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        derived.push({ key, label: m.group_label || (m.group ? m.group : "Markers") });
-                    }
-                }
-                groups = derived;
-            }
-            const byGroup = new Map(groups.map((g) => [g.key, []]));
-            for (const m of markers) {
-                const groupKey = typeof m.group === "string" ? m.group : "";
-                const key = byGroup.has(groupKey) ? groupKey : (groups[0] && groups[0].key);
-                if (key && byGroup.has(key))
-                    byGroup.get(key)?.push(m);
-            }
-            let i = 0;
-            const sections = groups.map((g, gi) => {
-                const list = (typeof orderHealthMarkersForDisplay === "function")
-                    ? orderHealthMarkersForDisplay(g.key, byGroup.get(g.key) || [])
-                    : (byGroup.get(g.key) || []);
-                if (!list.length)
-                    return "";
-                let lastSub = "";
-                const rows = list.map((m) => {
-                    const subgroup = typeof healthMarkerSubgroup === "function"
-                        ? healthMarkerSubgroup(g.key, m.name || m.key || "")
-                        : "";
-                    const subhead = subgroup && subgroup !== lastSub
-                        ? `<div class="hmk-subhead">${escHtml(subgroup)}</div>`
-                        : "";
-                    if (subgroup)
-                        lastSub = subgroup;
-                    return subhead + hmkRowHtml(m, i++);
-                }).join("");
-                const head = `<div class="hmk-grouphead lbl reveal" style="${stagger(gi)}">${escHtml(g.label || g.key)}</div>`;
-                const note = g.key === "lipids" && typeof lipidGroupNoteHtml === "function"
-                    ? lipidGroupNoteHtml(list)
-                    : "";
-                return `<section class="hmk-section">${head}${note}<div class="hmk-card">${rows}</div></section>`;
-            }).join("");
-            // The clinical report + portable export live on their own Share sub-tab, so the
-            // catalog doesn't repeat a "share with your doctor" footer here.
-            wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
-            wrap.querySelectorAll(".hmk-x .hmk-row").forEach((b) => b.addEventListener("click", () => {
-                const item = b.closest(".hmk");
-                if (!item)
-                    return;
-                const open = item.classList.toggle("open");
-                b.setAttribute("aria-expanded", open ? "true" : "false");
-            }));
-            wrap.querySelectorAll("svg.hchart").forEach(wireMarkerChart);
+    function healthMarkersDeps() {
+        return {
+            root: view,
+            cachedApi,
+            peekCached,
+            markRefreshing,
+            pollToken: () => pollToken,
+            relAge,
+            select: $,
+            stagger,
+            switchHealthSeg,
+            escapeHtml: escHtml,
         };
-        const peek = peekCached("markers:priority");
-        if (peek) {
-            paint(peek.data);
-            if (!peek.fresh)
-                markRefreshing(true);
-        }
-        cachedApi("/markers/priority", {
-            key: "markers:priority",
-            onUpgrade: (data, { changed }) => { if (peek && !peek.fresh)
-                markRefreshing(false); if (changed || !peek)
-                paint(data); },
-            // No cached read + a thrown fetch (offline / parse failure): clear the
-            // "Loading markers…" placeholder to the calm empty state, never a stuck loader.
-        }).catch(() => { if (peek && !peek.fresh)
-            markRefreshing(false); if (!peek)
-            paint(null); });
+    }
+    function loadHealthMarkers(token) {
+        CairnHealthMarkersController.load(healthMarkersDeps(), token);
     }
     // Health's inner views. The whole-picture DEPTH (synthesis + connected brain) used to
     // be inlined under the top-level Standing review, ballooning it to ~8 screens. It now
@@ -678,14 +559,10 @@
         ME_HANDLERS,
         ME_SEG,
         buildPictureHtml,
-        fmtMkNum,
         getHealthPictureCache,
         healthDotClass,
         healthDocsKnownEmpty,
         healthHeroHtml,
-        healthMarkerSubgroup,
-        hmkRowHtml,
-        lipidGroupNoteHtml,
         loadHealthMarkers,
         loadHealthPicture,
         loadHealthStanding,
@@ -694,15 +571,10 @@
         loadRecoverySummary,
         loadSupplements,
         loadSymptomLinks,
-        markerChartSvg,
-        markerPanelHtml,
-        markerSpanWord,
-        markerTrendWord,
         normalizeHealthSeg,
         onHealthReadView,
         openBpSheet,
         openHealthRead,
-        orderHealthMarkersForDisplay,
         paintHealthPicture,
         paintHealthReadTab,
         paintHealthTab,
@@ -724,7 +596,6 @@
         scrollHealthRailIntoView,
         setHealthSegActive,
         setHealthPictureCache,
-        sparkDateLabel,
         switchHealthSeg,
         triggerHealthSynthesis,
         understandSupplementsFromInput,
