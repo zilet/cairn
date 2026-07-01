@@ -274,7 +274,7 @@ Tasks:
 - [x] Keep generated browser source under `src/client/**/*.ts`, with `public/js` treated as build output except for the tiny `10-boot.js` shim.
 - [x] Keep the exact client API route map narrow enough that `CLIENT_API_BROAD_RESPONSE_WAIVERS` is empty; deterministic DTO coverage is complete for the current deterministic client surfaces.
 - [ ] Split large typed screen-controller modules into smaller render, data, state, and wiring modules.
-  - [x] Recent reductions: Today Week Ahead, Today context/goal/health rail, Today session-suggestion lifecycle controller, Today adapted-progression refresh controller, Today add/off-plan exercise controller, Today session/logging controller, Progress Energy surface, Chat attachment handling and post-picker input-focus recovery, Settings Agents render helpers, Day Fuel load/edit controller, Meal Recipe sheet/job controller, shared Detail Overlay scaffold, and Exercise/Food detail modal controllers.
+  - [x] Recent reductions: Today Week Ahead, Today context/goal/health rail, Today session-suggestion lifecycle controller, Today adapted-progression refresh controller, Today add/off-plan exercise controller, Today session/logging controller, Progress Energy surface, Chat attachment handling and geometry-aware post-picker input-focus recovery, Settings Agents render helpers, Day Fuel load/edit controller, Meal Recipe sheet/job controller, shared Detail Overlay scaffold, Exercise/Food detail modal controllers, and the Me Profile controller.
 
 Gate:
 
@@ -288,13 +288,21 @@ Goal: make the agentic brain more elite by strengthening deterministic context a
 
 Agent teams:
 
-- Coach Context Agent: define a typed `CoachContext` contract with bounded slices.
-- Memory Agent: improve the person model compiled from memory, outcomes, preferences, constraints, family, context, and reaction patterns.
-- Evidence Agent: make recommendation provenance clearer: what data caused the suggestion, what changed, what can be dismissed, and what needs retest.
-- Conductor Agent: keep the one-focus arbitration strong across today, week, block, and healthspan.
-- Prompt Agent: ensure prompts consume typed slices and stay calm, grounded, and suggestion-only.
+- Brain Contract Agent: promote the highest-risk prompt-envelope fields from `unknown` to typed internal contracts.
+- Day Read Agent: unify REST and MCP day-read behavior behind one use-case function.
+- Chat Action Agent: make chat action schema and prompt prose render from one source.
+- Coach Context Agent: split `getCoachContext()` into typed slice builders while preserving the current envelope.
+- Prompt Surface Agent: split pure prompt renderers from full prompt builders once contracts are stable.
 
 Tasks:
+
+- [ ] Add internal brain contract files for memory, context events, day intake, directives, recovery, program state, and coaching focus using TypeScript only: `as const`, `satisfies`, and small pure type guards.
+- [ ] Extract a shared `getDayReadOp({ date, override, agent, reset, recordOutcome })` so REST and MCP day-read surfaces cannot drift.
+- [ ] Generate the chat action prompt schema from `chatActions.ts` instead of maintaining field prose separately in `prompt.ts`.
+- [ ] Split `getCoachContext()` into typed slice builders (`person`, `training`, `health`, `life`, `running`) with equality-style tests against the current envelope.
+- [ ] Split prompt renderers such as coaching focus, program state, today fuel, and connected brain into a prompt-renderer module before splitting full prompt builders.
+- [ ] Normalize memory/context write inputs through shared DTO helpers before replacing route/MCP imports with domain service facades.
+- [ ] Revisit read-side memory side effects: separate pure selection from marking memories referenced, then mark only after successful user-visible operations.
 
 - [x] Define a `CoachContextEnvelope` with explicit bounded slices.
 - [x] Add context/golden tests that lock the prompt envelope, bounded slices, superseded-memory exclusion, conductor internals, and conductor-first prompt ordering.

@@ -45,6 +45,7 @@
     let keyboardIntentUntil = 0;
     let chatFocusGraceUntil = 0;
     let settleTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    let staleChatFocusTimer: ReturnType<typeof setTimeout> | 0 = 0;
     let geometryWasOpen = false;
     const keyboardThreshold = () => Math.max(140, window.innerHeight * 0.18);
     const keyboardGeometryOpen = () => {
@@ -61,6 +62,18 @@
       if (!document.body.classList.contains("chat-mode") || !el.closest?.(".chatview")) return;
       if (Date.now() < chatFocusGraceUntil) return;
       el.blur();
+    };
+    const scheduleStaleChatFocusRelease = () => {
+      if (staleChatFocusTimer) clearTimeout(staleChatFocusTimer);
+      const delay = Math.max(0, chatFocusGraceUntil - Date.now() + 20);
+      staleChatFocusTimer = setTimeout(() => {
+        staleChatFocusTimer = 0;
+        if (!keyboardGeometryOpen()) {
+          chatFocusGraceUntil = 0;
+          releaseStaleChatFocus();
+          syncChatViewport();
+        }
+      }, delay);
     };
     const settle = (long = false) => {
       if (settleTimer) clearTimeout(settleTimer);
@@ -87,6 +100,7 @@
       const geometryOpen = keyboardGeometryOpen();
       if (geometryOpen) keyboardIntentUntil = 0;
       const kbOpen = geometryOpen || keyboardIntentOpen();
+      document.body.classList.toggle("kb-geometry-open", geometryOpen);
       document.body.classList.toggle("kb-open", kbOpen);
       applyVvb(kbOpen);
       syncChatViewport();
@@ -120,7 +134,10 @@
         ? event.detail as { chatFocusGraceMs?: unknown }
         : null;
       const chatFocusGraceMs = Number(detail?.chatFocusGraceMs) || 0;
-      if (chatFocusGraceMs > 0) chatFocusGraceUntil = Math.max(chatFocusGraceUntil, Date.now() + Math.min(chatFocusGraceMs, 2400));
+      if (chatFocusGraceMs > 0) {
+        chatFocusGraceUntil = Math.max(chatFocusGraceUntil, Date.now() + Math.min(chatFocusGraceMs, 2400));
+        scheduleStaleChatFocusRelease();
+      }
       keyboardIntentUntil = 0;
       resync();
       settle(true);

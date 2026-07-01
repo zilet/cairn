@@ -451,11 +451,11 @@ async function renderChat() {
     const recoverChatInputFocus = () => {
         if (!isSoftKeyboardChat())
             return;
-        const kbOpen = document.body.classList.contains("kb-open");
+        const kbGeometryOpen = document.body.classList.contains("kb-geometry-open");
         const alreadyFocused = document.activeElement === input;
-        if (!kbOpen && alreadyFocused)
+        if (!kbGeometryOpen && alreadyFocused)
             input.blur();
-        if (!alreadyFocused || !kbOpen) {
+        if (!alreadyFocused || !kbGeometryOpen) {
             try {
                 input.focus({ preventScroll: true });
             }

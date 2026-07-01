@@ -51,6 +51,7 @@ function chatAttachmentResetFocusAfterNativePicker(options) {
     if (document.activeElement === options.fileInput)
         options.fileInput.blur();
     document.body.classList.remove("kb-open");
+    document.body.classList.remove("kb-geometry-open");
 }
 function chatAttachmentSettleAfterNativePicker(options) {
     document.dispatchEvent(new CustomEvent("cairn:keyboard-settle", { detail: { chatFocusGraceMs: options.graceMs ?? 1200 } }));

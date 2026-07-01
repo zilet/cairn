@@ -517,6 +517,7 @@ async function smokeChatAttachmentFocus(cdp, base) {
       input.focus();
       const focusedBeforeReset = document.activeElement === input;
       document.body.classList.add("kb-open");
+      document.body.classList.add("kb-geometry-open");
       attachment.resetFocusAfterNativePicker({ input, fileInput, isSoftKeyboard: () => true });
 
       let measureCount = 0;
@@ -535,6 +536,7 @@ async function smokeChatAttachmentFocus(cdp, base) {
             document.activeElement !== input &&
             document.activeElement !== fileInput &&
             !document.body.classList.contains("kb-open") &&
+            !document.body.classList.contains("kb-geometry-open") &&
             events.length === 1 &&
             events[0].chatFocusGraceMs === 1300 &&
             measureCount >= 1
@@ -543,6 +545,7 @@ async function smokeChatAttachmentFocus(cdp, base) {
           focusedBeforeReset,
           activeId: document.activeElement ? document.activeElement.id : "",
           kbOpen: document.body.classList.contains("kb-open"),
+          kbGeometryOpen: document.body.classList.contains("kb-geometry-open"),
           events,
           measureCount
         });

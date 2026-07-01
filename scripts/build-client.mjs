@@ -90,6 +90,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/coach-meals-screen.ts", output: "public/js/06-coach-meals.js" },
   { source: "src/client/food-note-client.ts", output: "public/js/food-note-client.js" },
   { source: "src/client/food-detail-controller.ts", output: "public/js/food-detail-controller.js" },
+  { source: "src/client/me-profile-controller.ts", output: "public/js/me-profile-controller.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
   { source: "src/client/health-read-client.ts", output: "public/js/health-read-client.js" },
   { source: "src/client/health-standing-client.ts", output: "public/js/health-standing-client.js" },

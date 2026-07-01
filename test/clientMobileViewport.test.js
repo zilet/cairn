@@ -128,6 +128,7 @@ test("mobile viewport guard installs once and preserves bottom inset", () => {
   install();
   assert.equal(env.getStyle("--vvb"), "40px");
   assert.equal(env.body.classList.contains("kb-open"), false);
+  assert.equal(env.body.classList.contains("kb-geometry-open"), false);
   assert.equal(env.getMeasureCount(), 1);
   assert.equal(env.windowListeners.get("resize").length, 1);
   assert.equal(env.viewportListeners.get("resize").length, 1);
@@ -151,6 +152,7 @@ test("mobile viewport guard derives keyboard state from visual viewport geometry
   env.visualViewport.height = 540;
   env.fireViewport("resize");
   assert.equal(env.body.classList.contains("kb-open"), true);
+  assert.equal(env.body.classList.contains("kb-geometry-open"), true);
   assert.equal(env.getStyle("--vvb"), "0px");
 
   const chatView = new FakeElement("DIV");
@@ -162,5 +164,19 @@ test("mobile viewport guard derives keyboard state from visual viewport geometry
   env.fireViewport("resize");
 
   assert.equal(env.body.classList.contains("kb-open"), false);
+  assert.equal(env.body.classList.contains("kb-geometry-open"), false);
   assert.equal(input.blurCount, 1);
+});
+
+test("mobile viewport keeps keyboard intent separate from geometry truth", () => {
+  const env = loadMobileViewport({ viewportHeight: 800 });
+  env.context.window.installMobileViewportGuards();
+  const chatView = new FakeElement("DIV");
+  const input = new FakeElement("TEXTAREA");
+  input.chatView = chatView;
+
+  env.fireDocument("pointerdown", { target: input });
+
+  assert.equal(env.body.classList.contains("kb-open"), true);
+  assert.equal(env.body.classList.contains("kb-geometry-open"), false);
 });

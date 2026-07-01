@@ -19,15 +19,8 @@ function setHealthPictureCache(cache) {
     function healthInput(selector, root = document) {
         return root.querySelector(selector);
     }
-    function healthTextArea(selector, root = document) {
-        return root.querySelector(selector);
-    }
     function healthInputValue(selector, root = document) {
         return healthInput(selector, root)?.value ?? "";
-    }
-    function healthNumberValue(selector, root = document) {
-        const n = Number(healthInputValue(selector, root));
-        return Number.isFinite(n) && healthInputValue(selector, root) !== "" ? n : null;
     }
     // ---------- Me (segmented: Profile / Memory / Health / Life) ----------
     // Standing leads — Me opens to the REVIEW (where you stand + where to focus), not a
@@ -66,251 +59,51 @@ function setHealthPictureCache(cache) {
         loadCoachingFocus("#cfocusStandingSlot", view); // the whole-athlete lead → planning
         paintStandingReview(); // the detailed where-you-stand health read
     }
-    async function renderMeProfile() {
-        headerTitle.textContent = "Me";
-        state.meSeg = "profile";
-        pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
-        view.innerHTML = segSkeleton("profile", ME_SEG, 2); // skeleton-first: seg paints now, fields hydrate
-        // Profile is identity + goals + allergies/diet ONLY. Capture lives on Today
-        // (quick-log + frequents + voice + the bodyweight chip) and in Chat — never
-        // duplicated here. The activity/nutrition HISTORY lives in Today's "Lately"
-        // and Progress → History, not on Profile.
-        const [profileRaw, goalRaw] = await Promise.all([api("/profile"), api("/goal")]);
-        const p = healthScreenRecord(profileRaw);
-        const goal = healthScreenRecord(goalRaw);
-        setDiscipline(p.primary_discipline); // keep the emphasis global in sync with what's on file
-        setEnduranceGoalSet(!!p.endurance_goal_json);
-        const disc = primaryDiscipline;
-        // The endurance OBJECTIVE (v37) — race | standing | none. Parsed from the profile
-        // row's JSON; the editor below lets the athlete set a race to build toward or a
-        // standing "stay ready" target, orthogonal to the sport/discipline above.
-        let egCur = {};
-        try {
-            egCur = p.endurance_goal_json ? healthScreenRecord(JSON.parse(p.endurance_goal_json)) : {};
-        }
-        catch {
-            egCur = {};
-        }
-        const egMode = typeof egCur.mode === "string" && egCur.mode ? egCur.mode : "none";
-        // The journey's SHAPE (v41) — lose | maintain | gain. Prefer the server's effective
-        // mode (goal.goal_mode); fall back to the stored column, then derive for back-compat.
-        const goalMode = (goal && goal.goal_mode) || p.goal_mode
-            || ((p.goal_weight_lb != null && p.weight_lb != null && p.goal_weight_lb < p.weight_lb - 0.5) ? "lose" : "maintain");
-        const num = (id, label, val, step = 1) => `<div class="field" style="margin-bottom:9px"><label>${label}</label>
-     <input id="${id}" type="number" step="${step || 1}" value="${val ?? ""}" class="form-input"></div>`;
-        const reqWarn = goal?.requested?.aggressive
-            ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${goal.message}</div>`
-            : `<div class="sess-line">${goal?.message || ""}</div>`;
-        await skelSwap(() => {
-            view.innerHTML = segBar("profile", ME_SEG) + `
-    <div class="sess">
-      <div class="sess-head"><span class="sess-date">Goal check</span><span class="sess-day">${goal?.tdee ? goal.tdee + " kcal TDEE" : ""}</span></div>
-      ${reqWarn}
-      ${goal?.recommended ? `<div class="sess-line" style="margin-top:6px"><b>${goal.goal_mode === "maintain" ? "Maintenance target" : goal.goal_mode === "gain" ? "Lean-gain target" : "Lean-safe target"}:</b> ${goal.recommended.target_intake_kcal} kcal \u00b7 ${goal.recommended.protein_g} g protein${goal.recommended.weekly_rate_lb ? ` \u00b7 ${goal.recommended.weekly_rate_lb} lb/wk` : ""}</div>` : ""}
-    </div>
-    <h1 class="lbl" style="margin:24px 0 8px">Profile</h1>
-    <div id="profFields">
-    <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">Stamped on the doctor report you export from Health → Share. Leave empty to fill it in on paper instead.</p>
-      <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${escAttr(p.name || "")}" class="form-input"></div>
-    ${num("age", "Age", p.age)}
-    ${num("height_cm", "Height (cm)", p.height_cm, 0.1)}
-    ${num("weight_lb", "Weight (lb)", p.weight_lb, 0.1)}
-    <div class="field" style="margin-bottom:9px">
-      <label>Your goal</label>
-      <p class="aboutme-hint">Losing weight, holding steady, or a slow lean gain. Cairn fuels and frames everything around this \u2014 maintaining is a real goal, not "no goal". Change it anytime.</p>
-      <div class="seg goalmode-seg" id="goalModeSeg" role="group" aria-label="Goal mode">
-        <button type="button" class="segbtn${goalMode === "lose" ? " active" : ""}" data-goalmode="lose">Lose</button>
-        <button type="button" class="segbtn${goalMode === "maintain" ? " active" : ""}" data-goalmode="maintain">Maintain</button>
-        <button type="button" class="segbtn${goalMode === "gain" ? " active" : ""}" data-goalmode="gain">Gain</button>
-      </div>
-    </div>
-    <div id="goalTargetFields" style="${goalMode === "maintain" ? "display:none" : ""}">
-      ${num("goal_weight_lb", "Goal weight (lb)", p.goal_weight_lb, 0.1)}
-      <div class="field" style="margin-bottom:9px"><label>Goal date <span class="ob-opt">\u2014 optional</span></label>
-        <input id="goal_date" type="date" value="${p.goal_date || ""}" class="form-input"></div>
-    </div>
-    <p class="aboutme-hint" id="goalMaintainNote" style="margin:-2px 0 9px${goalMode === "maintain" ? "" : ";display:none"}">We anchor to your real expenditure \u2014 no goal weight needed. Cairn stays quiet unless your weight genuinely drifts.</p>
-    ${num("activity_factor", "Activity factor (1.3\u20131.8)", p.activity_factor, 0.05)}
-
-    <div class="field" style="margin-bottom:9px">
-      <label>Your sport</label>
-      <p class="aboutme-hint">What you mostly train. Cairn meets you in it \u2014 the language, the day's read, and Progress reshape around it. Change it anytime.</p>
-      <div class="seg disc-seg" id="discSeg" role="group" aria-label="Primary discipline">
-        <button type="button" class="segbtn${disc === "strength" ? " active" : ""}" data-disc="strength">Strength</button>
-        <button type="button" class="segbtn${disc === "endurance" ? " active" : ""}" data-disc="endurance">Endurance</button>
-        <button type="button" class="segbtn${disc === "hybrid" ? " active" : ""}" data-disc="hybrid">Hybrid</button>
-      </div>
-    </div>
-    <div class="field" id="endSportField" style="margin-bottom:9px${disc === "strength" ? ";display:none" : ""}">
-      <label for="endurance_sport">Endurance sport <span class="ob-opt">\u2014 optional</span></label>
-      <input id="endurance_sport" type="text" placeholder="e.g. running, cycling, triathlon, rowing" maxlength="120"
-        value="${escAttr(p.endurance_sport || "")}" class="form-input">
-    </div>
-
-    <div class="field" id="endGoalField" style="margin-bottom:9px">
-      <label>Running goal <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">A race the coach builds you toward, or an ongoing "stay ready" target. Either way it prescribes your runs each week alongside lifting — separate from the sport above.</p>
-      <div class="seg" id="endGoalMode" role="group" aria-label="Running goal mode">
-        <button type="button" class="segbtn${egMode === "none" ? " active" : ""}" data-egmode="none">None</button>
-        <button type="button" class="segbtn${egMode === "race" ? " active" : ""}" data-egmode="race">Race</button>
-        <button type="button" class="segbtn${egMode === "standing" ? " active" : ""}" data-egmode="standing">Standing</button>
-      </div>
-      <div id="egRace" class="eg-sub" style="${egMode === "race" ? "" : "display:none"}">
-        <div class="field" style="margin:9px 0 0"><label for="eg_event">Race</label>
-          <input id="eg_event" type="text" maxlength="120" placeholder="e.g. Cambridge Half" value="${escAttr(egCur.event || "")}" class="form-input"></div>
-        <div class="field" style="margin:9px 0 0"><label for="eg_date">Race date</label>
-          <input id="eg_date" type="date" value="${escAttr(egCur.date || "")}" class="form-input"></div>
-        <div class="field" style="margin:9px 0 0"><label for="eg_target">Target <span class="ob-opt">— optional</span></label>
-          <input id="eg_target" type="text" maxlength="60" placeholder="e.g. sub-1:45, just finish" value="${escAttr(egCur.target || "")}" class="form-input"></div>
-      </div>
-      <div id="egStanding" class="eg-sub" style="${egMode === "standing" ? "" : "display:none"}">
-        <div class="field" style="margin:9px 0 0"><label for="eg_label">Readiness</label>
-          <input id="eg_label" type="text" maxlength="80" placeholder="e.g. 10k-ready, half-ready" value="${escAttr(egCur.label || "")}" class="form-input"></div>
-      </div>
-      <div id="egShared" class="eg-grid" style="${egMode === "none" ? "display:none" : ""}">
-        <div class="field" style="margin:9px 0 0"><label for="eg_distance">Distance (km) <span class="ob-opt">— optional</span></label>
-          <input id="eg_distance" type="number" step="0.1" value="${egCur.distance_km ?? ""}" class="form-input"></div>
-        <div class="field" style="margin:9px 0 0"><label for="eg_weekly_km">Weekly km <span class="ob-opt">— optional</span></label>
-          <input id="eg_weekly_km" type="number" step="1" value="${egCur.weekly_km ?? ""}" class="form-input"></div>
-      </div>
-    </div>
-
-    <div class="field aboutme" style="margin-bottom:0">
-      <label for="about_me">About you</label>
-      <p class="aboutme-hint">What "better" means to you, a little of your history, the foods you love and avoid, how work and life run. Optional \u2014 the coach reads it to make the pointing yours.</p>
-      <textarea id="about_me" rows="6" placeholder="e.g. lifted on and off for years; fasted mornings suit me; two young kids, so evenings are unpredictable…"
-        maxlength="8000">${escHtml(p.about_me || "")}</textarea>
-    </div>
-    <div class="field" style="margin-top:9px;margin-bottom:9px">
-      <label for="allergies">Food allergies</label>
-      <p class="aboutme-hint">A hard exclusion — the coach never puts these in a meal, recipe, or swap. Leave empty if none.</p>
-      <input id="allergies" type="text" placeholder="e.g. peanuts, shellfish" maxlength="1000" class="form-input">
-    </div>
-    <div class="field" style="margin-bottom:0">
-      <label for="dietary_restrictions">Dietary preferences</label>
-      <p class="aboutme-hint">Respected strongly in your meal plans (e.g. vegetarian, pescatarian, no pork).</p>
-      <input id="dietary_restrictions" type="text" placeholder="e.g. pescatarian, no pork" maxlength="1000" class="form-input">
-    </div>
-    </div>
-
-    <div class="prof-capture-note sess">
-      <div class="sess-line" style="color:var(--muted)">
-        Log your bodyweight, activities, and meals on <button class="linkbtn" id="profToToday">Today</button> — the quick-log, the bodyweight chip, voice, and your frequents all live there. They show up in <b>Lately</b> and <button class="linkbtn" id="profToProgress">Progress</button>.
-      </div>
-    </div>`;
-        });
-        wireSeg(ME_HANDLERS);
-        // Track the chosen discipline locally (a seg tap isn't an input/change event the
-        // save bar listens for, so we mark dirty + persist it explicitly).
-        let pickedDisc = String(disc || "strength");
-        let pickedEgMode = String(egMode || "none");
-        let pickedGoalMode = String(goalMode || "maintain");
-        // Assemble the endurance goal from the active mode's fields (none → null clears it).
-        const egPayload = () => {
-            const dist = healthNumberValue("#eg_distance");
-            const wk = healthNumberValue("#eg_weekly_km");
-            if (pickedEgMode === "race") {
-                const date = healthInputValue("#eg_date") || null;
-                // A race needs a date to be periodized — the server would reject a dateless
-                // race to null (a silent clear). Don't clobber an existing goal mid-entry:
-                // return undefined (JSON omits it → leaves the saved goal intact) + a calm hint.
-                if (!date) {
-                    toast("Add a race date to save your race goal");
-                    return undefined;
-                }
-                return { mode: "race", event: healthInputValue("#eg_event").trim() || null,
-                    date, distance_km: dist, target: healthInputValue("#eg_target").trim() || null, weekly_km: wk };
-            }
-            if (pickedEgMode === "standing") {
-                return { mode: "standing", label: healthInputValue("#eg_label").trim() || null, distance_km: dist, weekly_km: wk };
-            }
-            return null; // none
-        };
-        const persistProfile = async () => {
-            const body = {
-                name: healthInputValue("#name").trim(),
-                age: healthNumberValue("#age"), height_cm: healthNumberValue("#height_cm"),
-                weight_lb: healthNumberValue("#weight_lb"), goal_weight_lb: healthNumberValue("#goal_weight_lb"),
-                goal_date: healthInputValue("#goal_date") || null, activity_factor: healthNumberValue("#activity_factor"),
-                goal_mode: pickedGoalMode,
-                primary_discipline: pickedDisc,
-                endurance_sport: pickedDisc === "strength" ? "" : healthInputValue("#endurance_sport").trim(),
-                endurance_goal: egPayload(),
-                about_me: (healthTextArea("#about_me")?.value ?? "").trim(),
-                allergies: healthInputValue("#allergies").trim(),
-                dietary_restrictions: healthInputValue("#dietary_restrictions").trim(),
-            };
-            await api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-            setDiscipline(pickedDisc); // the emphasis global follows what was just saved
-            // Only re-derive the goal flag when the payload actually CARRIED a goal decision.
-            // egPayload() returns undefined for a rejected race-with-no-date (the server then
-            // leaves the existing goal intact), so we must NOT flip the tab off in that case.
-            if (body.endurance_goal !== undefined) {
-                const hadGoal = !!(egCur && egCur.mode);
-                setEnduranceGoalSet(!!body.endurance_goal);
-                // First time a running goal lands → point the athlete at its planning home.
-                if (!hadGoal && body.endurance_goal)
-                    toast("Your running plan now lives in Plan → Endurance");
-            }
-            // new goal weight/date/factor moves the pace + goal lines across surfaces; a
-            // discipline change reshapes Today's compass + the default Progress view.
-            ["profile", "stats", "progress:weight", "progress:energy"].forEach(swrInvalidate);
-            renderMe(); // refresh the goal check with the new numbers; flash continues on top
-            return true;
-        };
-        // floating save bar: scoped to the profile fields only.
-        const profFields = $("#profFields");
-        if (!profFields)
-            return;
-        const profBar = mountSaveBar({
-            sentinel: profFields,
-            fields: profFields,
-            onSave: persistProfile,
-            onDiscard: () => renderMeProfile(),
-        });
-        // Discipline segmented control: pick one (background-swap active state, like
-        // onboarding's days/week), reveal the optional sport field for endurance/hybrid,
-        // and mark the screen dirty so Save surfaces.
-        $("#discSeg")?.querySelectorAll("[data-disc]").forEach((b) => b.addEventListener("click", () => {
-            pickedDisc = b.dataset.disc || pickedDisc;
-            $("#discSeg")?.querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
-            const sportField = $("#endSportField");
-            if (sportField)
-                sportField.style.display = pickedDisc === "strength" ? "none" : "";
-            profBar.markDirty();
-        }));
-        // Running-goal mode: None / Race / Standing — toggle the relevant fields, mark dirty.
-        $("#endGoalMode")?.querySelectorAll("[data-egmode]").forEach((b) => b.addEventListener("click", () => {
-            pickedEgMode = b.dataset.egmode || pickedEgMode;
-            $("#endGoalMode")?.querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
-            const race = $("#egRace"), standing = $("#egStanding"), shared = $("#egShared");
-            if (race)
-                race.style.display = pickedEgMode === "race" ? "" : "none";
-            if (standing)
-                standing.style.display = pickedEgMode === "standing" ? "" : "none";
-            if (shared)
-                shared.style.display = pickedEgMode === "none" ? "none" : "";
-            profBar.markDirty();
-        }));
-        // Goal mode: Lose / Maintain / Gain — swap active state, show/hide the goal-weight
-        // target (maintenance anchors to real expenditure, no target needed), mark dirty.
-        $("#goalModeSeg")?.querySelectorAll("[data-goalmode]").forEach((b) => b.addEventListener("click", () => {
-            pickedGoalMode = b.dataset.goalmode || pickedGoalMode;
-            $("#goalModeSeg")?.querySelectorAll(".segbtn").forEach((x) => x.classList.toggle("active", x === b));
-            const tgt = $("#goalTargetFields"), note = $("#goalMaintainNote");
-            if (tgt)
-                tgt.style.display = pickedGoalMode === "maintain" ? "none" : "";
-            if (note)
-                note.style.display = pickedGoalMode === "maintain" ? "" : "none";
-            profBar.markDirty();
-        }));
-        // Capture is consolidated on Today + Chat — these just route there.
-        $("#profToToday")?.addEventListener("click", () => activateTab("today"));
-        $("#profToProgress")?.addEventListener("click", () => activateTab("progress"));
+    function healthNumberValue(selector, root = document) {
+        const raw = healthInputValue(selector, root);
+        if (!raw)
+            return null;
+        const value = Number(raw);
+        return Number.isFinite(value) ? value : null;
     }
-    // Pure food-note parsing/rendering lives in food-note-client.js; direct globals
-    // are preserved there for the food detail sheet in 02-ui.js.
+    function healthTextAreaValue(selector, root = document) {
+        return root.querySelector(selector)?.value ?? "";
+    }
+    function meProfileDeps() {
+        return {
+            root: view,
+            state,
+            segments: ME_SEG,
+            handlers: ME_HANDLERS,
+            headerTitle,
+            api,
+            activateTab,
+            escapeAttr: escAttr,
+            escapeHtml: escHtml,
+            inputValue: healthInputValue,
+            invalidatePoll: () => { pollToken++; },
+            mountSaveBar,
+            numberValue: healthNumberValue,
+            primaryDiscipline: () => primaryDiscipline,
+            renderMe,
+            renderProfile: () => renderMeProfile(),
+            segBar,
+            segSkeleton,
+            setDiscipline,
+            setEnduranceGoalSet,
+            skeletonSwap: skelSwap,
+            swrInvalidate,
+            textAreaValue: healthTextAreaValue,
+            toast,
+            wireSeg,
+            select: $,
+        };
+    }
+    async function renderMeProfile() {
+        return CairnMeProfileController.renderProfile(meProfileDeps());
+    }
+    // Pure food-note parsing/rendering lives in food-note-client.js; the food detail
+    // modal is owned by food-detail-controller.js.
     // tap a note card → full-screen food detail (zooming from its art tile)
     function wireNoteCard(el) {
         const card = el;

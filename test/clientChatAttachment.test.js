@@ -110,6 +110,7 @@ test("chat attachment soft-keyboard reset blurs active picker participants and c
   const env = loadAttachment();
 
   env.document.body.classList.add("kb-open");
+  env.document.body.classList.add("kb-geometry-open");
   env.document.activeElement = env.input;
   env.attachment.resetFocusAfterNativePicker({
     input: env.input,
@@ -120,8 +121,10 @@ test("chat attachment soft-keyboard reset blurs active picker participants and c
   assert.equal(env.input.blurCount, 1);
   assert.equal(env.fileInput.blurCount, 0);
   assert.equal(env.document.body.classList.contains("kb-open"), false);
+  assert.equal(env.document.body.classList.contains("kb-geometry-open"), false);
 
   env.document.body.classList.add("kb-open");
+  env.document.body.classList.add("kb-geometry-open");
   env.document.activeElement = env.fileInput;
   env.attachment.resetFocusAfterNativePicker({
     input: env.input,
@@ -131,6 +134,7 @@ test("chat attachment soft-keyboard reset blurs active picker participants and c
 
   assert.equal(env.fileInput.blurCount, 1);
   assert.equal(env.document.body.classList.contains("kb-open"), false);
+  assert.equal(env.document.body.classList.contains("kb-geometry-open"), false);
 });
 
 test("chat attachment non-soft reset leaves focus and keyboard class untouched", () => {

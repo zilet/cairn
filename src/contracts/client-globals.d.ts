@@ -852,6 +852,10 @@ declare global {
       openFoodDetail(note: unknown, fromTile: Element | null | undefined, deps: FoodDetailControllerDeps): Promise<void>;
     };
 
+    CairnMeProfileController: {
+      renderProfile(deps: MeProfileControllerDeps): Promise<void>;
+    };
+
     CairnPlanEndurance: {
       ENDURANCE_PHASES: readonly Record<string, string>[];
       rampHtml(goal: ClientEnduranceGoal | null | undefined): string;
@@ -1468,6 +1472,7 @@ declare global {
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
+  declare const CairnMeProfileController: Window["CairnMeProfileController"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnDayFuel: Window["CairnDayFuel"];

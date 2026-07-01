@@ -60,6 +60,7 @@ function chatAttachmentResetFocusAfterNativePicker(options: ChatAttachmentFocusO
   if (document.activeElement === options.input) options.input.blur();
   if (document.activeElement === options.fileInput) options.fileInput.blur();
   document.body.classList.remove("kb-open");
+  document.body.classList.remove("kb-geometry-open");
 }
 
 function chatAttachmentSettleAfterNativePicker(options: ChatAttachmentSettleOptions): void {
