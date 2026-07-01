@@ -2299,6 +2299,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /ReturnType<typeof planDayProgression>/);
   assert.match(compat, /AssertAssignable<ProgramBlock, ClientProgramBlock>/);
   assert.match(compat, /AssertAssignable<GuidelineEntry, ClientGuidelineEntry>/);
+  assert.match(compat, /ReturnType<typeof getInjuryImpacts>/);
   assert.match(compat, /Awaited<ReturnType<typeof suggestSession>>/);
   assert.match(compat, /ReturnType<typeof learnedTimeline>/);
   assert.match(compat, /ReturnType<typeof getOutcomeLearnings>/);

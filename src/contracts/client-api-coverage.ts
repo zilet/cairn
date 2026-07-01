@@ -203,9 +203,4 @@ export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
     owner: "Health standing client",
     reason: "Standing combines body composition, BP, age references, and momentum until the Health DTO is split.",
   },
-  {
-    pattern: "/injury-impacts",
-    owner: "Personal context client",
-    reason: "Injury impact metadata is a keyed advisory map and needs a small typed record.",
-  },
 ] as const satisfies readonly ClientApiBroadResponseWaiver[];

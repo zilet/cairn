@@ -498,6 +498,42 @@ export type ClientGuidelinesResponse =
   | { guidelines: ClientGuidelineEntry[] }
   | { marker: string; guideline: ClientGuidelineEntry | null };
 
+export interface ClientInjuryImpactDay {
+  day_number: number;
+  day_name: string;
+}
+
+export interface ClientInjuryImpactSwap {
+  name: string;
+  muscle_group: string | null;
+  mode: "reps" | "timed";
+  why: string;
+}
+
+export interface ClientInjuryImpactAffected {
+  exercise: string;
+  muscle_group: string | null;
+  mode: "reps" | "timed";
+  constraint_note: string | null;
+  days: ClientInjuryImpactDay[];
+  swaps: ClientInjuryImpactSwap[];
+}
+
+export interface ClientInjuryImpact {
+  id: number;
+  title: string;
+  area: string | null;
+  severity: string | null;
+  since: ISODateString | string | null;
+  areas: string[];
+  affected: ClientInjuryImpactAffected[];
+}
+
+export interface ClientInjuryImpactsResponse {
+  injuries: ClientInjuryImpact[];
+  count: number;
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -983,7 +1019,7 @@ export interface ClientApiResponses {
   "/api/insights/generate": ClientInsightGenerateResponse | ClientAgentJobEnvelope;
   "/api/health-docs": ClientHealthDocument[];
   "/api/context-events": ClientContextEvent[];
-  "/api/injury-impacts": ClientJsonObject;
+  "/api/injury-impacts": ClientInjuryImpactsResponse;
   "/api/family": ClientFamilyMember[];
   "/api/learnings": ClientOutcomeLearningsResponse;
   "/api/memory": ClientMemory[] | ClientMemory;

@@ -3,6 +3,7 @@ import type { ArchivedChatSession, ChatSearchHit } from "../repo/chat.js";
 import type { suggestSession } from "../coachOps.js";
 import type { GuidelineEntry } from "../guidelines.js";
 import type { CoachingFocus } from "../repo/coaching-focus.js";
+import type { getInjuryImpacts } from "../repo/health.js";
 import type { getDayIntake } from "../repo/nutrition.js";
 import type { NextStep } from "../repo/next-step.js";
 import type { DexaTargeting } from "../repo/dexa-targeting.js";
@@ -42,6 +43,7 @@ import type {
 import type {
   ClientDexaTargeting,
   ClientGuidelineEntry,
+  ClientInjuryImpactsResponse,
   ClientLearnedTimeline,
   ClientMemory,
   ClientMuscleGroupTrajectory,
@@ -71,6 +73,7 @@ export type ProgramBalanceMatchesClientContract = AssertAssignable<ProgramBalanc
 export type ProgramAdjustmentsMatchClientContract = AssertAssignable<ProgramAdjustment[], ClientProgramAdjustment[]>;
 export type ProgramBlockMatchesClientContract = AssertAssignable<ProgramBlock, ClientProgramBlock>;
 export type GuidelineEntryMatchesClientContract = AssertAssignable<GuidelineEntry, ClientGuidelineEntry>;
+export type InjuryImpactsMatchClientContract = AssertAssignable<ReturnType<typeof getInjuryImpacts>, ClientInjuryImpactsResponse>;
 export type RunZonesMatchClientContract = AssertAssignable<RunZones, ClientRunZones>;
 export type WeeklyRunPlanMatchesClientContract = AssertAssignable<WeeklyRunPlan, ClientWeeklyRunPlan>;
 export type MuscleTrajectoryMatchesClientContract = AssertAssignable<

@@ -1200,7 +1200,7 @@ function suggestSwapsFor(
   areas: BodyArea[],
   allExercises: any[],
   limit = 3
-): { name: string; muscle_group: string | null; mode: string; why: string }[] {
+): { name: string; muscle_group: string | null; mode: "reps" | "timed"; why: string }[] {
   const affectedTokens = exerciseTokens(affected);
   const affectedMode = affected.mode === "timed" ? "timed" : "reps";
   const candidates = allExercises.filter((c) => {
@@ -1231,7 +1231,7 @@ function suggestSwapsFor(
   return candidates.slice(0, limit).map((c) => ({
     name: c.name,
     muscle_group: c.muscle_group ?? null,
-    mode: c.mode === "timed" ? "timed" : "reps",
+    mode: (c.mode === "timed" ? "timed" : "reps") as "timed" | "reps",
     why: c.muscle_group ? `hits ${c.muscle_group}, clear of the area` : "clear of the area",
   }));
 }
@@ -1280,7 +1280,7 @@ export function getInjuryImpacts() {
       .map(({ ex, days }) => ({
         exercise: ex.name,
         muscle_group: ex.muscle_group,
-        mode: ex.mode === "timed" ? "timed" : "reps",
+        mode: (ex.mode === "timed" ? "timed" : "reps") as "timed" | "reps",
         constraint_note: ex.constraint_note || null,
         days,
         swaps: areas.length ? suggestSwapsFor(ex, areas, allExercises) : [],
