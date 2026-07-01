@@ -36,6 +36,7 @@ import type {
   ClientHealthStandingComparison,
   ClientHealthStandingDimension,
   ClientHealthStandingMeasure,
+  ClientHealthDocument,
   ClientPerformanceStanding,
   ClientProgramBlock,
   ClientProgramState,
@@ -139,6 +140,32 @@ declare global {
   type ClientTodaySessionSurfaceOptions = {
     session: Record<string, unknown>;
     hasLoggedSets: boolean;
+  };
+
+  type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
+
+  type ClientHealthRecordsControllerDeps = {
+    state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthDocId">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
+    pollEnrichment(
+      path: string,
+      id: number,
+      options?: {
+        tab?: string;
+        token?: unknown;
+        tries?: number;
+        interval?: number;
+        onUpdate?: (row: Record<string, unknown>) => void;
+      },
+    ): unknown;
+    enrichmentActive(status: unknown): boolean;
+    pollToken(): number;
+    loadHealthMarkers(token: number): void;
+    paintHealthPicture(): void;
+    getHealthPictureCache(): ClientHealthPictureCache | null;
+    setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
   };
 
   type ClientAgentOpHandlers = {
@@ -1013,6 +1040,13 @@ declare global {
       recordsListHtml(docs: unknown): string;
     };
 
+    CairnHealthRecordsController: {
+      render(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
+      loadDocs(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
+      wireDoc(el: HTMLElement | null, deps: ClientHealthRecordsControllerDeps): void;
+      wireUpload(deps: ClientHealthRecordsControllerDeps): void;
+    };
+
     CairnSettingsClient: {
       AGENT_OP_LABELS: Record<string, string>;
       garminStatusLine(settings: unknown, syncing: boolean, options?: { relTime?: (value: string) => string }): string;
@@ -1487,6 +1521,7 @@ declare global {
   declare const CairnLife: Window["CairnLife"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
+  declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];

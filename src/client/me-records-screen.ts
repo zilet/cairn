@@ -6,19 +6,10 @@
 // evidence ⇒ the citation string already shown stands alone (a quiet note here).
 // ====================================================================
 
-type HealthDocument = import("../contracts/client-api.js").ClientHealthDocument;
 type ContextEvent = import("../contracts/client-api.js").ClientContextEvent;
 type FamilyMember = import("../contracts/client-api.js").ClientFamilyMember;
 type LearnedTimelineData = import("../contracts/client-api.js").ClientLearnedTimeline;
 type ScreenRecord = Record<string, unknown>;
-type WiredElement<T extends Element = HTMLElement> = T & { _wired?: boolean };
-
-type UploadBody = {
-  original_name: string;
-  mime?: string;
-  data_base64?: string;
-  text?: string;
-};
 
 type LifeForm = {
   kind: string;
@@ -147,11 +138,7 @@ function healthMarkersEmptyHtml() {
 
 // ---- Records tab: upload affordance + the document list ----
 function paintHealthRecordsTab() {
-  const c = $("#hContent");
-  if (!c) return;
-  c.innerHTML = CairnHealthRecords.recordsTabHtml();
-  wireHealthUpload();
-  loadHealthDocs();
+  void CairnHealthRecordsController.render(healthRecordsDeps());
 }
 
 // ---- Learned tab: the legible "what Cairn has understood about you" timeline ----
@@ -176,337 +163,20 @@ function paintHealthLearnedTab() {
     .catch(() => renderLearnedTimeline({ items: [] }, token));
 }
 
-// Wire the Records upload affordance (file picker / drag / paste / submit).
-// Extracted from renderHealth so each inner tab paints independently.
-function wireHealthUpload() {
-  const fileInput = $<HTMLInputElement>("#hFile");
-  const fileName = $("#hFileName");
-  const uploadBox = $<HTMLElement>("#hUploadBox");
-  const textInput = $<HTMLTextAreaElement>("#hText");
-  const uploadBtn = $<HTMLButtonElement>("#hUpload");
-  const status = $("#hStatus");
-  const fileLabel = $("#hFileLabel");
-  if (!fileInput || !fileName || !uploadBox || !textInput || !uploadBtn || !status || !fileLabel) return;
-  let pendingFile: File | null = null;
-
-  const setUploadReady = () => {
-    const hasText = textInput.value.trim().length > 0;
-    uploadBtn.disabled = !pendingFile && !hasText;
+function healthRecordsDeps() {
+  return {
+    state,
+    api,
+    toast,
+    armDelete,
+    pollEnrichment,
+    enrichmentActive,
+    pollToken: () => pollToken,
+    loadHealthMarkers,
+    paintHealthPicture,
+    getHealthPictureCache,
+    setHealthPictureCache,
   };
-
-  const setPendingFile = (f: File | null) => {
-    if (!f) {
-      pendingFile = null;
-      fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
-      setUploadReady();
-      return;
-    }
-    if (f.size > CairnHealthClient.MAX_DOC_BYTES) {
-      toast("File too large (max 15MB)");
-      fileInput.value = "";
-      pendingFile = null;
-      fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
-      setUploadReady();
-      return;
-    }
-    pendingFile = f;
-    fileName.textContent = f.name || "Pasted image";
-    setUploadReady();
-  };
-
-  fileInput.addEventListener("change", () => {
-    const f = fileInput.files && fileInput.files[0];
-    setPendingFile(f || null);
-  });
-
-  textInput.addEventListener("input", setUploadReady);
-
-  uploadBox.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    fileLabel.classList.add("dragover");
-  });
-  uploadBox.addEventListener("dragleave", () => fileLabel.classList.remove("dragover"));
-  uploadBox.addEventListener("drop", (e) => {
-    e.preventDefault();
-    fileLabel.classList.remove("dragover");
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) setPendingFile(f);
-  });
-  uploadBox.addEventListener("paste", (e) => {
-    const files = Array.from(e.clipboardData?.files || []);
-    const img = files.find((f) => (f.type || "").startsWith("image/"));
-    if (img) {
-      e.preventDefault();
-      setPendingFile(img);
-      return;
-    }
-    if (e.target !== textInput) {
-      const text = e.clipboardData && e.clipboardData.getData("text/plain");
-      if (text) {
-        e.preventDefault();
-        textInput.value = text;
-        setUploadReady();
-      }
-    }
-  });
-
-  uploadBtn.addEventListener("click", async () => {
-    const f = pendingFile;
-    const pastedText = textInput.value.trim();
-    if (!f && !pastedText) { toast("Add a file or text first"); return; }
-    if (f && f.size > CairnHealthClient.MAX_DOC_BYTES) { toast("File too large (max 15MB)"); return; }
-    if (!f && pastedText.length > CairnHealthClient.MAX_DOC_TEXT) { toast("Text is too long"); return; }
-    uploadBtn.disabled = true;
-    status.textContent = "Uploading…";
-
-    const body: UploadBody = { original_name: "" };
-    if (f) {
-      let dataUrl: string | ArrayBuffer | null;
-      try {
-        dataUrl = await new Promise<string | ArrayBuffer | null>((resolve, reject) => {
-          const fr = new FileReader();
-          fr.onload = () => resolve(fr.result);
-          fr.onerror = () => reject(new Error("read failed"));
-          fr.readAsDataURL(f);
-        });
-      } catch {
-        status.textContent = "Couldn't read that file. Try a different one.";
-        uploadBtn.disabled = false;
-        return;
-      }
-      body.original_name = f.name || "Pasted image";
-      body.mime = CairnHealthClient.guessUploadMime(f);
-      body.data_base64 = String(dataUrl).split(",")[1] || "";
-    } else {
-      body.original_name = "Pasted results";
-      body.text = pastedText;
-    }
-
-    let row: unknown = null;
-    try {
-      row = await api("/health-docs", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } catch { status.textContent = "Couldn't upload that — check your connection."; uploadBtn.disabled = false; return; }
-
-    const doc = screenRecord(row) as HealthDocument;
-    if (!doc.id || doc.error) { status.textContent = "Couldn't upload that — try again."; uploadBtn.disabled = false; return; }
-
-    status.textContent = "";
-    toast("Uploaded");
-    // reset the picker
-    fileInput.value = ""; textInput.value = ""; pendingFile = null; fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
-    // stays disabled until a new file is picked
-
-    // prepend the new doc and poll for analysis if pending
-    const wrap = $("#hlist");
-    if (wrap) {
-      const emptyEl = wrap.querySelector(".empty"); if (emptyEl) emptyEl.remove();
-      wrap.insertAdjacentHTML("afterbegin", CairnHealthDocs.healthDocHtml(doc));
-      wireHealthDoc(wrap.querySelector<HTMLElement>(`.hdoc[data-hdoc="${doc.id}"]`));
-    }
-    if (doc.id && enrichmentActive(doc.enrichment_status)) pollHealthDoc(doc.id);
-
-    // the Analysis picture cares: doc count + newest-doc stamp drive its empty/stale states
-    const pictureCache = getHealthPictureCache();
-    if (pictureCache) {
-      pictureCache.docCount = (pictureCache.docCount || 0) + 1;
-      const stamp = doc.created_at || new Date().toISOString();
-      if (!pictureCache.newestDocAt || stamp > pictureCache.newestDocAt) pictureCache.newestDocAt = stamp;
-      setHealthPictureCache(pictureCache);
-    } else {
-      setHealthPictureCache({ review: null, docCount: 1, newestDocAt: doc.created_at || new Date().toISOString() });
-    }
-    paintHealthPicture(); // no-op unless the Analysis tab is showing
-  });
-}
-
-function wireHealthDoc(el: HTMLElement | null) {
-  if (!el) return;
-  const id = el.dataset.hdoc;
-  if (!id) return;
-  const del = el.querySelector<WiredElement<HTMLElement>>("[data-hdel]");
-  if (del && !del._wired) { del._wired = true; del.addEventListener("click", () => startHealthDelete(del)); }
-
-  // Date is read-only until the user explicitly asks to change it.
-  const editBtn = el.querySelector<WiredElement<HTMLElement>>("[data-hdate-edit]");
-  if (editBtn && !editBtn._wired) {
-    editBtn._wired = true;
-    editBtn.addEventListener("click", () => {
-      const editor = el.querySelector<HTMLElement>("[data-hdate-editor]");
-      const flash = el.querySelector<HTMLElement>("[data-hdate-flash]");
-      if (flash) flash.hidden = true;
-      editBtn.hidden = true;
-      if (editor) {
-        editor.hidden = false;
-        const inp = editor.querySelector<HTMLInputElement>("[data-hdate]");
-        if (inp) inp.focus();
-      }
-    });
-  }
-  const saveBtn = el.querySelector<WiredElement<HTMLElement>>("[data-hdate-save]");
-  if (saveBtn && !saveBtn._wired) { saveBtn._wired = true; saveBtn.addEventListener("click", () => saveHealthDocDate(id)); }
-  const cancelBtn = el.querySelector<WiredElement<HTMLElement>>("[data-hdate-cancel]");
-  if (cancelBtn && !cancelBtn._wired) {
-    cancelBtn._wired = true;
-    cancelBtn.addEventListener("click", () => {
-      const editor = el.querySelector<HTMLElement>("[data-hdate-editor]");
-      const inp = el.querySelector<HTMLInputElement>("[data-hdate]");
-      if (inp) inp.value = inp.defaultValue; // discard the unsaved change
-      if (editor) editor.hidden = true;
-      if (editBtn) editBtn.hidden = false;
-    });
-  }
-  const rescan = el.querySelector<WiredElement<HTMLElement>>("[data-hrescan]");
-  if (rescan && !rescan._wired) { rescan._wired = true; rescan.addEventListener("click", () => reanalyzeHealthDoc(id)); }
-
-  // Collapse / expand the record's detail (the header and the collapsed teaser
-  // both carry data-hdoc-toggle). Keeps a long history scannable.
-  el.querySelectorAll<WiredElement<HTMLElement>>("[data-hdoc-toggle]").forEach((t) => {
-    if (t._wired) return;
-    t._wired = true;
-    const toggle = () => el.classList.toggle("hdoc-collapsed");
-    t.addEventListener("click", toggle);
-    if (t.getAttribute("role") === "button") {
-      t.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-      });
-    }
-  });
-}
-
-// Save an explicitly-changed result date, confirm with a brief "✓ updated", and
-// re-run the downstream trends + whole-picture review so analysis stays in sync.
-async function saveHealthDocDate(id: string | number) {
-  const row = $<HTMLElement>(`#hlist .hdoc[data-hdoc="${id}"]`);
-  if (!row) return;
-  const inp = row.querySelector<HTMLInputElement>("[data-hdate]");
-  const save = row.querySelector<HTMLButtonElement>("[data-hdate-save]");
-  if (!inp) return;
-  if (save) { save.disabled = true; save.textContent = "Saving…"; }
-  let updated: unknown = null;
-  try {
-    updated = await api(`/health-docs/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doc_date: inp.value || null }),
-    });
-  } catch {
-    if (save) { save.disabled = false; save.textContent = "Save"; }
-    toast("Couldn't update date");
-    return;
-  }
-  const doc = screenRecord(updated) as HealthDocument;
-  if (doc.id && !doc.error) {
-    row.innerHTML = CairnHealthDocs.healthDocInner(doc); // back to view mode with the new date
-    wireHealthDoc(row);
-    const flash = row.querySelector<HTMLElement>("[data-hdate-flash]");
-    if (flash) { flash.hidden = false; setTimeout(() => { if (flash.isConnected) flash.hidden = true; }, 2200); }
-    loadHealthMarkers(pollToken);
-    paintHealthPicture(); // the review is now stale (date moved) → re-run nudge appears
-  } else {
-    if (save) { save.disabled = false; save.textContent = "Save"; }
-    toast(String(doc.error || "Couldn't update date"));
-  }
-}
-
-// Re-run the agentic scan over a document's original file (re-extracts panels).
-async function reanalyzeHealthDoc(id: string | number) {
-  const row = $<HTMLElement>(`#hlist .hdoc[data-hdoc="${id}"]`);
-  let updated: unknown = null;
-  try {
-    updated = await api(`/health-docs/${id}/reanalyze`, { method: "POST" });
-  } catch {
-    toast("Couldn't start re-analysis");
-    return;
-  }
-  const doc = screenRecord(updated) as HealthDocument;
-  if (!doc.id || doc.error) { toast(String(doc.error || "Couldn't re-analyze")); return; }
-  toast("Re-analyzing…");
-  if (row) { row.innerHTML = CairnHealthDocs.healthDocInner(doc); wireHealthDoc(row); }
-  pollHealthDoc(id);
-}
-
-function pollHealthDoc(id: string | number) {
-  const numericId = Number(id);
-  if (!Number.isFinite(numericId) || numericId <= 0) return;
-  const tab = state.tab, token = pollToken;
-  // Health ingestion reads PDFs/whole export folders and can run for minutes —
-  // poll far longer than the activity/food default (~15s).
-  pollEnrichment("/health-docs", numericId, {
-    tab, token, tries: 100, interval: 4000,
-    onUpdate: (row) => {
-      const doc = screenRecord(row) as HealthDocument;
-      if (state.meSeg !== "health" || state.healthSeg !== "records") return;
-      const el = $<HTMLElement>(`#hlist .hdoc[data-hdoc="${doc.id}"]`);
-      if (el) { el.innerHTML = CairnHealthDocs.healthDocInner(doc); wireHealthDoc(el); }
-      if (doc.enrichment_status === "done") {
-        // An import may have split into NEW dated panels → reload the whole list
-        // so they appear; also refresh the trends + the whole-picture review.
-        loadHealthDocs();
-        loadHealthMarkers(pollToken);
-        paintHealthPicture();
-      }
-    },
-  });
-}
-
-async function loadHealthDocs(): Promise<HealthDocument[]> {
-  const wrap = $("#hlist");
-  if (!wrap) return [];
-  let docs: HealthDocument[] = [], fetched = false;
-  try { docs = screenRows<HealthDocument>(await api("/health-docs")); fetched = true; } catch { docs = []; }
-  // Keep the persisted doc count fresh (drives the new-user Records default) so an
-  // upload here is reflected even before Standing reloads — see healthDocsKnownEmpty.
-  // Only on a real fetch: a transient offline [] must never cache a false zero.
-  if (fetched && Array.isArray(docs)) { try { localStorage.setItem("cairn:healthDocCount", String(docs.length)); } catch {} }
-  if (state.tab !== "me" || state.meSeg !== "health" || !wrap.isConnected) return docs || [];
-  if (!docs || !docs.length) { wrap.innerHTML = CairnHealthRecords.recordsEmptyHtml(); return []; }
-  wrap.innerHTML = CairnHealthRecords.recordsListHtml(docs);
-  wrap.querySelectorAll<HTMLElement>(".hdoc").forEach((el) => {
-    wireHealthDoc(el);
-    if (el.dataset.hdoc) {
-      // resume polling any still-pending doc
-      const status = el.querySelector(".enr-pending");
-      if (status) pollHealthDoc(Number(el.dataset.hdoc));
-    }
-  });
-  if (state.pendingHealthDocId) {
-    const wanted = String(state.pendingHealthDocId);
-    const target = [...wrap.querySelectorAll<HTMLElement>(".hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === wanted);
-    state.pendingHealthDocId = null;
-    if (target) {
-      target.classList.remove("hdoc-collapsed");
-      try { target.scrollIntoView({ block: "start", behavior: "smooth" }); } catch { target.scrollIntoView(); }
-    }
-  }
-  return docs;
-}
-
-// two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js)
-function startHealthDelete(btn: Element) {
-  const row = btn.closest(".hdoc");
-  if (!(row instanceof HTMLElement)) return;
-  const id = row.dataset.hdoc;
-  if (!id) return;
-  armDelete(btn, () => {
-    api(`/health-docs/${id}`, { method: "DELETE" })
-      .then(() => {
-        toast("Removed"); row.remove();
-        const list = $("#hlist");
-        if (list && !list.children.length) list.innerHTML = CairnHealthRecords.recordsEmptyHtml();
-        const pictureCache = getHealthPictureCache();
-        const docCount = pictureCache?.docCount || 0;
-        if (pictureCache && docCount > 0) {
-          pictureCache.docCount = docCount - 1;
-          setHealthPictureCache(pictureCache);
-          paintHealthPicture();
-        }
-        loadHealthMarkers(pollToken);
-      })
-      .catch(() => toast("Couldn't remove that — try again."));
-  });
 }
 
 // ---------- Me: Life (trips / injuries / life events) ----------
