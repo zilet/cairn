@@ -1035,6 +1035,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const agentJobClientSource = read("src/client/agent-job-client.ts");
   const coreStateSource = read("src/client/app/state.ts");
   const uiShellSource = read("src/client/ui-shell.ts");
+  const uiShellTypesSource = read("src/client/ui-shell-types.d.ts");
   const pwaInstallSource = read("src/client/pwa-install-coach.ts");
   const restTimerSource = read("src/client/rest-timer.ts");
   const coachingFocusSource = read("src/client/coaching-focus-client.ts");
@@ -1088,6 +1089,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsDataControllerSource = read("src/client/settings-data-controller.ts");
   const settingsAgentsSource = read("src/client/settings-agents-client.ts");
   const settingsScreenSource = read("src/client/settings-screen.ts");
+  const settingsScreenTypesSource = read("src/client/settings-screen-types.d.ts");
   const chatClientSource = read("src/client/chat-client.ts");
   const chatAttachmentSource = read("src/client/chat-attachment-client.ts");
   const chatTurnClientSource = read("src/client/chat-turn-client.ts");
@@ -2789,7 +2791,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coreStateSource, /const appHeaderTitle = \(\(\) => \{/);
   assert.match(coreStateSource, /const appState: ClientAppState/);
   assert.match(coreStateSource, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
-  assert.match(uiShellSource, /type ToastOptions = \{ action\?: string; onAction\?: \(\) => void \}/);
+  assert.match(uiShellTypesSource, /type ToastOptions = \{ action\?: string; onAction\?: \(\) => void \}/);
+  assert.match(uiShellTypesSource, /type UiRecord = Record<string, unknown>/);
   assert.match(uiShellSource, /function setTodayHeaderTitle\(\)/);
   assert.match(uiShellSource, /function toast\(msg: unknown, opts: ToastOptions = \{\}\): void/);
   assert.match(uiShellSource, /function wireGuides\(scope\?: ParentNode \| null\): void/);
@@ -3057,7 +3060,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsDataControllerSource, /CairnSettingsDataController/);
   assert.match(settingsAgentsSource, /function settingsAgentsSliceHtml/);
   assert.match(settingsAgentsSource, /function settingsAgentListHtml/);
-  assert.match(settingsScreenSource, /type SettingsWorkingModel = \{/);
+  assert.match(settingsScreenTypesSource, /type SettingsScreenWorkingModel = \{/);
   assert.match(settingsScreenSource, /async function renderSettings\(\): Promise<void>/);
   assert.match(settingsScreenSource, /function settingsDataDeps\(\): ClientSettingsDataControllerDeps/);
   assert.match(settingsScreenSource, /CairnSettingsDataController\.render\(settingsDataDeps\(\)\)/);
