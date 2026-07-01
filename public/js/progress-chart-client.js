@@ -1,37 +1,12 @@
 (() => {
 // @ts-check
-// Progress chart color helpers.
-function withAlpha(hex, alpha) {
-    let value = String(hex || "").trim().replace("#", "");
-    if (value.length === 3)
-        value = value.split("").map((part) => part + part).join("");
-    if (value.length < 6)
-        return `rgba(0,0,0,${alpha})`;
-    const r = Number.parseInt(value.slice(0, 2), 16);
-    const g = Number.parseInt(value.slice(2, 4), 16);
-    const b = Number.parseInt(value.slice(4, 6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-}
-function chartColors() {
-    const styles = getComputedStyle(document.documentElement);
-    const value = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
-    return {
-        accent: value("--accent", "#b4552d"),
-        sage: value("--sage", "#6e7f5c"),
-        gold: value("--gold", "#c9a86a"),
-        ink: value("--ink", "#211d17"),
-        paper: value("--paper", "#f4efe7"),
-        card: value("--card", "#fffdf8"),
-        line2: value("--line-2", "#d8cfbd"),
-        label: value("--muted", "#746c5c"),
-    };
-}
+// Progress chart canvas lifecycle and scrub orchestration.
 function drawLineChart(canvas, pts, opts = {}) {
     if (!canvas)
         return;
     const points = Array.isArray(pts) ? pts : [];
     const chartCanvas = canvas;
-    const colors = chartColors();
+    const colors = CairnProgressChartDrawing.chartColors();
     const count = points.length;
     if (!count)
         return;
@@ -48,136 +23,26 @@ function drawLineChart(canvas, pts, opts = {}) {
     const model = CairnProgressLineChartModel.buildModel(points, { goal: opts.goal, width, height });
     if (!model)
         return;
-    const { values: vals, min, max, xs, ys, slopes, padding, peakIndex } = model;
-    const { left: padL, right: padR, top: padT, bottom: padB } = padding;
-    const y = model.y;
+    const { xs, ys } = model;
     chartCanvas._chartXs = xs;
     const drawBase = () => {
-        ctx.clearRect(0, 0, width, height);
-        ctx.font = "10px system-ui, sans-serif";
-        for (let grid = 0; grid <= 3; grid++) {
-            const value = min + ((max - min) * grid) / 3;
-            const yy = y(value);
-            ctx.strokeStyle = withAlpha(colors.line2, 0.55);
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(padL, yy);
-            ctx.lineTo(width - padR, yy);
-            ctx.stroke();
-            ctx.fillStyle = colors.label;
-            ctx.textAlign = "right";
-            ctx.fillText(String(Math.round(value)), padL - 7, yy + 3);
-        }
-        ctx.textAlign = "left";
-        if (opts.goal != null) {
-            const goalY = y(Number(opts.goal));
-            ctx.save();
-            ctx.strokeStyle = colors.sage;
-            ctx.setLineDash([5, 5]);
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(padL, goalY);
-            ctx.lineTo(width - padR, goalY);
-            ctx.stroke();
-            ctx.restore();
-            ctx.fillStyle = colors.sage;
-            ctx.font = "600 9px system-ui, sans-serif";
-            ctx.fillText(`GOAL ${opts.goal}`, padL + 3, goalY - 5);
-        }
-        const tracePath = () => {
-            ctx.beginPath();
-            ctx.moveTo(xs[0], ys[0]);
-            for (let index = 0; index < count - 1; index++) {
-                const dx = (xs[index + 1] - xs[index]) / 3;
-                ctx.bezierCurveTo(xs[index] + dx, ys[index] + slopes[index] * dx, xs[index + 1] - dx, ys[index + 1] - slopes[index + 1] * dx, xs[index + 1], ys[index + 1]);
-            }
-        };
-        if (count > 1) {
-            tracePath();
-            ctx.lineTo(xs[count - 1], height - padB);
-            ctx.lineTo(xs[0], height - padB);
-            ctx.closePath();
-            const grad = ctx.createLinearGradient(0, padT, 0, height - padB);
-            grad.addColorStop(0, withAlpha(colors.accent, 0.16));
-            grad.addColorStop(1, withAlpha(colors.accent, 0));
-            ctx.fillStyle = grad;
-            ctx.fill();
-            tracePath();
-            ctx.strokeStyle = colors.accent;
-            ctx.lineWidth = 2.25;
-            ctx.lineJoin = "round";
-            ctx.lineCap = "round";
-            ctx.stroke();
-            ctx.fillStyle = colors.accent;
-            for (let index = 0; index < count - 1; index++) {
-                ctx.beginPath();
-                ctx.arc(xs[index], ys[index], 2, 0, 7);
-                ctx.fill();
-            }
-        }
-        if (opts.peak && count > 1) {
-            if (peakIndex !== count - 1) {
-                ctx.fillStyle = colors.gold;
-                ctx.font = "10px system-ui, sans-serif";
-                ctx.textAlign = "center";
-                ctx.fillText("▲", xs[peakIndex], ys[peakIndex] - 9);
-                ctx.textAlign = "left";
-            }
-        }
-        ctx.fillStyle = colors.label;
-        ctx.font = "10px system-ui, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillText(fmtShortDate(points[0].date), padL, height - 8);
-        if (count > 1) {
-            ctx.textAlign = "right";
-            ctx.fillText(fmtShortDate(points[count - 1].date), width - padR, height - 8);
-        }
-        ctx.textAlign = "left";
+        CairnProgressChartDrawing.drawBase(ctx, model, points, opts, colors, width, height);
     };
     const drawHighlight = (hx, hy, index, pop, withDate) => {
-        if (withDate && count > 1) {
-            ctx.save();
-            ctx.strokeStyle = withAlpha(colors.ink, 0.22);
-            ctx.lineWidth = 1;
-            ctx.setLineDash([3, 3]);
-            ctx.beginPath();
-            ctx.moveTo(hx, padT - 6);
-            ctx.lineTo(hx, height - padB);
-            ctx.stroke();
-            ctx.restore();
-        }
-        const radius = 4.5 + 2.2 * pop;
-        ctx.beginPath();
-        ctx.arc(hx, hy, radius + 3.5, 0, 7);
-        ctx.fillStyle = withAlpha(colors.accent, 0.16);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(hx, hy, radius, 0, 7);
-        ctx.fillStyle = colors.accent;
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(hx, hy, radius, 0, 7);
-        ctx.strokeStyle = colors.card;
-        ctx.lineWidth = 1.6;
-        ctx.stroke();
-        const badgeText = withDate ? `${fmtVal(vals[index])} · ${fmtShortDate(points[index].date)}` : fmtVal(vals[index]);
-        ctx.font = "600 11px system-ui, sans-serif";
-        const textWidth = ctx.measureText(badgeText).width;
-        const badgeX = Math.min(Math.max(hx - textWidth / 2 - 8, padL), width - padR - textWidth - 16);
-        let badgeY = hy - 32;
-        if (badgeY < 4)
-            badgeY = hy + 14;
-        ctx.fillStyle = colors.ink;
-        if (ctx.roundRect) {
-            ctx.beginPath();
-            ctx.roundRect(badgeX, badgeY, textWidth + 16, 20, 10);
-            ctx.fill();
-        }
-        else {
-            ctx.fillRect(badgeX, badgeY, textWidth + 16, 20);
-        }
-        ctx.fillStyle = colors.paper;
-        ctx.fillText(badgeText, badgeX + 8, badgeY + 14);
+        CairnProgressChartDrawing.drawHighlight(ctx, {
+            hx,
+            hy,
+            index,
+            pop,
+            withDate,
+            model,
+            points,
+            options: opts,
+            colors,
+            width,
+            height,
+            formatValue: fmtVal,
+        });
     };
     if (chartCanvas._raf) {
         cancelAnimationFrame(chartCanvas._raf);
@@ -228,21 +93,21 @@ function drawLineChart(canvas, pts, opts = {}) {
     render();
 }
 const CAIRN_PROGRESS_CHART = {
-    withAlpha,
-    chartColors,
+    withAlpha: CairnProgressChartDrawing.withAlpha,
+    chartColors: CairnProgressChartDrawing.chartColors,
     drawLineChart,
 };
 Object.assign(globalThis, {
     CairnProgressChart: CAIRN_PROGRESS_CHART,
-    withAlpha,
-    chartColors,
+    withAlpha: CairnProgressChartDrawing.withAlpha,
+    chartColors: CairnProgressChartDrawing.chartColors,
     drawLineChart,
 });
 if (typeof window !== "undefined") {
     Object.assign(window, {
         CairnProgressChart: CAIRN_PROGRESS_CHART,
-        withAlpha,
-        chartColors,
+        withAlpha: CairnProgressChartDrawing.withAlpha,
+        chartColors: CairnProgressChartDrawing.chartColors,
         drawLineChart,
     });
 }

@@ -1,11 +1,6 @@
 // @ts-check
 // Pure Progress line-chart geometry helpers.
 
-type ProgressChartPoint = {
-  date: string;
-  v: number;
-};
-
 type ProgressLineChartPadding = {
   left: number;
   right: number;
@@ -18,20 +13,6 @@ type ProgressLineChartModelOptions = {
   height: number;
   goal?: number | null;
   padding?: Partial<ProgressLineChartPadding> | null;
-};
-
-type ProgressLineChartModel = {
-  points: ProgressChartPoint[];
-  values: number[];
-  min: number;
-  max: number;
-  xs: number[];
-  ys: number[];
-  slopes: number[];
-  padding: ProgressLineChartPadding;
-  peakIndex: number;
-  x(index: number): number;
-  y(value: number): number;
 };
 
 const PROGRESS_LINE_CHART_PADDING: ProgressLineChartPadding = {

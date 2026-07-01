@@ -26,6 +26,7 @@ function loadProgressChart(tokens = {}) {
   context.window = Object.assign(context.window, context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-line-chart-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-chart-scrub-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-chart-drawing-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-chart-client.js"), "utf8"), context);
   return context.CairnProgressChart;
 }

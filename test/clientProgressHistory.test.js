@@ -36,6 +36,8 @@ function loadProgressHistory() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-history-model-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-history-render-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-history-client.js"), "utf8"), context);
   return context.CairnProgressHistory;
 }

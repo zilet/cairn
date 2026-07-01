@@ -62,6 +62,91 @@ declare global {
   type ProgressRecord = Record<string, unknown>;
   type ProgressExercise = ProgressRecord & { name: string };
   type ProgressWeightRow = ProgressRecord & { date?: string; weight_lb?: number | null };
+  type ProgressChartPoint = { date: string; v: number };
+  type ProgressLineChartOptions = {
+    goal?: number | null;
+    fmt?: (value: number) => string;
+    peak?: boolean;
+  };
+  type ProgressChartPalette = {
+    accent: string;
+    sage: string;
+    gold: string;
+    ink: string;
+    paper: string;
+    card: string;
+    line2: string;
+    label: string;
+  };
+  type ProgressLineChartModel = {
+    points: ProgressChartPoint[];
+    values: number[];
+    min: number;
+    max: number;
+    xs: number[];
+    ys: number[];
+    slopes: number[];
+    padding: { left: number; right: number; top: number; bottom: number };
+    peakIndex: number;
+    x(index: number): number;
+    y(value: number): number;
+  };
+  type ProgressChartHighlightOptions = {
+    hx: number;
+    hy: number;
+    index: number;
+    pop: number;
+    withDate: boolean;
+    model: ProgressLineChartModel;
+    points: ProgressChartPoint[];
+    options: ProgressLineChartOptions;
+    colors: ProgressChartPalette;
+    width: number;
+    height: number;
+    formatValue(value: number): string;
+  };
+  type ProgressHistoryRecord = Record<string, unknown>;
+  type ProgressHistoryStat = readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }];
+  type ProgressHistorySet = ProgressHistoryRecord & {
+    id?: number | string;
+    exercise?: unknown;
+    mode?: unknown;
+    duration_sec?: unknown;
+    weight?: unknown;
+    reps?: unknown;
+    rir?: unknown;
+  };
+  type HistorySession = ProgressHistoryRecord & {
+    id?: unknown;
+    date?: unknown;
+    title?: unknown;
+    day_name?: unknown;
+    duration_min?: unknown;
+    notes?: unknown;
+    sets?: ProgressHistorySet[] | null;
+  };
+  type ProgressHistoryExerciseGroup = {
+    exercise: string;
+    sets: ProgressHistorySet[];
+    bestIndex: number;
+  };
+  type ProgressHistoryEditGroup = {
+    exercise: string;
+    sets: ProgressHistorySet[];
+  };
+  type ProgressHistorySessionCardModel = {
+    row: HistorySession;
+    weekday: string;
+    groups: ProgressHistoryExerciseGroup[];
+    tonnage: number;
+    setCount: number;
+  };
+  type ProgressHistorySummary = {
+    monthSessions: number;
+    tonnage30: number;
+    sets30: number;
+    stats: ProgressHistoryStat[];
+  };
   type ProgressVolumeGroup = ProgressRecord & { muscle_group?: string; sets?: number | null; tonnage?: number | null };
   type ProgressCalendarCell = ProgressRecord & { date?: string; lifted?: unknown; activity?: unknown };
   type ChatLayoutApi = {
@@ -471,6 +556,29 @@ declare global {
     ): string;
     briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
     revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
+  };
+  type ClientTodayScreenRuntimeDepsApi = {
+    create(input: {
+      root: HTMLElement;
+      state: ClientTodayScreenRuntimeState;
+      api<Path extends string>(path: Path, opts?: RequestInit & { headers?: Record<string, string> }): Promise<ClientApiResponse<Path>>;
+      cachedApi<Path extends string>(path: Path, opts?: CachedApiOptions<ClientApiResponse<Path>>): Promise<ClientApiResponse<Path>>;
+      peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+      renderToday(): Promise<unknown> | unknown;
+      micGlyph(): string;
+      bridge(): ClientTodayCompatibilityBridgesContext;
+      exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+      rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
+      applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
+      exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
+      cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
+      cardioEffortMatches(item: any, effort: any): boolean;
+      suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+      upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
+      setFocus(date: string, on: boolean): void;
+      revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
+      postExerciseMode(name: string, mode: string): Promise<unknown>;
+    }): ClientTodayDependenciesContext;
   };
   type ClientTodayScreenRuntimeApi = {
     micGlyph(): string;
@@ -2228,24 +2336,12 @@ declare global {
     };
 
     CairnProgressLineChartModel: {
-      buildModel(pts: Array<{ date: string; v: number }> | null | undefined, options: {
+      buildModel(pts: ProgressChartPoint[] | null | undefined, options: {
         width: number;
         height: number;
         goal?: number | null;
         padding?: Partial<{ left: number; right: number; top: number; bottom: number }> | null;
-      }): {
-        points: Array<{ date: string; v: number }>;
-        values: number[];
-        min: number;
-        max: number;
-        xs: number[];
-        ys: number[];
-        slopes: number[];
-        padding: { left: number; right: number; top: number; bottom: number };
-        peakIndex: number;
-        x(index: number): number;
-        y(value: number): number;
-      } | null;
+      }): ProgressLineChartModel | null;
       nearestIndex(axis: readonly number[] | null | undefined, pixelX: number): number | null;
     };
 
@@ -2257,23 +2353,26 @@ declare global {
       }): void;
     };
 
+    CairnProgressChartDrawing: {
+      withAlpha(hex: unknown, alpha: number): string;
+      chartColors(): ProgressChartPalette;
+      tracePath(ctx: CanvasRenderingContext2D, xs: number[], ys: number[], slopes: number[], count: number): void;
+      drawBase(
+        ctx: CanvasRenderingContext2D,
+        model: ProgressLineChartModel,
+        points: ProgressChartPoint[],
+        options: ProgressLineChartOptions,
+        colors: ProgressChartPalette,
+        width: number,
+        height: number,
+      ): void;
+      drawHighlight(ctx: CanvasRenderingContext2D, args: ProgressChartHighlightOptions): void;
+    };
+
     CairnProgressChart: {
       withAlpha(hex: unknown, alpha: number): string;
-      drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: Array<{ date: string; v: number }>, opts?: {
-        goal?: number | null;
-        fmt?: (value: number) => string;
-        peak?: boolean;
-      }): void;
-      chartColors(): {
-        accent: string;
-        sage: string;
-        gold: string;
-        ink: string;
-        paper: string;
-        card: string;
-        line2: string;
-        label: string;
-      };
+      drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: ProgressChartPoint[], opts?: ProgressLineChartOptions): void;
+      chartColors(): ProgressChartPalette;
     };
 
     CairnProgressTrendWeight: {
@@ -2285,6 +2384,27 @@ declare global {
     CairnProgressHistory: {
       sessionCardHtml(session: unknown, index: number): string;
       numOrNull(value: unknown): number | null;
+    };
+
+    CairnProgressHistoryModel: {
+      rows<T extends ProgressHistoryRecord = ProgressHistoryRecord>(value: unknown): T[];
+      string(value: unknown): string;
+      number(value: unknown, fallback?: number): number;
+      numOrNull(value: unknown): number | null;
+      sessionSetScore(set: ProgressHistorySet): number;
+      weekday(date: unknown): string;
+      exerciseGroups(sets: ProgressHistorySet[] | null | undefined): ProgressHistoryExerciseGroup[];
+      sessionCardModel(session: unknown): ProgressHistorySessionCardModel;
+      editGroups(session: HistorySession): ProgressHistoryEditGroup[];
+      summary(sessions: HistorySession[], now?: Date): ProgressHistorySummary;
+    };
+
+    CairnProgressHistoryRender: {
+      setFigure(set: ProgressHistorySet): string;
+      sessionCardHtml(session: unknown, index: number): string;
+      editSetHtml(set: ProgressHistorySet): string;
+      editGroupHtml(group: ProgressHistoryEditGroup): string;
+      sessionEditHtml(session: HistorySession): string;
     };
 
     CairnProgressRunPlan: {
@@ -2765,6 +2885,7 @@ declare global {
 
     CairnTodayDependencies: ClientTodayDependenciesApi;
     CairnTodayCompatibilityBridges: ClientTodayCompatibilityBridgesApi;
+    CairnTodayScreenRuntimeDeps: ClientTodayScreenRuntimeDepsApi;
     CairnTodayScreenRuntime: ClientTodayScreenRuntimeApi;
 
     CairnTodayTraining: {
@@ -2941,6 +3062,11 @@ declare global {
       loadTrainingProvenance(isToday?: boolean): Promise<void>;
       loadMealProvenance(): Promise<void>;
     };
+
+    CairnCaptureReadDate: CaptureReadDateApi;
+    CairnCaptureReadCards: CaptureReadCardsApi;
+    CairnCaptureReadJobs: CaptureReadJobsApi;
+    CairnCaptureReads: CaptureReadsRuntime;
 
     CairnCaptureVoice: {
       micGlyph: string;
@@ -3156,6 +3282,10 @@ declare global {
   declare const CairnTodayBriefActionsClient: Window["CairnTodayBriefActionsClient"];
   declare const CairnTodayBriefController: Window["CairnTodayBriefController"];
   declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
+  declare const CairnCaptureReadDate: Window["CairnCaptureReadDate"];
+  declare const CairnCaptureReadCards: Window["CairnCaptureReadCards"];
+  declare const CairnCaptureReadJobs: Window["CairnCaptureReadJobs"];
+  declare const CairnCaptureReads: Window["CairnCaptureReads"];
   declare const CairnCaptureVoice: Window["CairnCaptureVoice"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
@@ -3163,8 +3293,11 @@ declare global {
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressLineChartModel: Window["CairnProgressLineChartModel"];
   declare const CairnProgressChartScrub: Window["CairnProgressChartScrub"];
+  declare const CairnProgressChartDrawing: Window["CairnProgressChartDrawing"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressTrendWeight: Window["CairnProgressTrendWeight"];
+  declare const CairnProgressHistoryModel: Window["CairnProgressHistoryModel"];
+  declare const CairnProgressHistoryRender: Window["CairnProgressHistoryRender"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];
   declare const CairnProgressVolume: Window["CairnProgressVolume"];
@@ -3199,6 +3332,7 @@ declare global {
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayDependencies: Window["CairnTodayDependencies"];
   declare const CairnTodayCompatibilityBridges: Window["CairnTodayCompatibilityBridges"];
+  declare const CairnTodayScreenRuntimeDeps: Window["CairnTodayScreenRuntimeDeps"];
   declare const CairnTodayScreenRuntime: Window["CairnTodayScreenRuntime"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];

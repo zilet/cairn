@@ -221,24 +221,6 @@ function renderCheckinDone(slot: HTMLElement, c: CaptureCheckin): void {
   slot.innerHTML = `<div class="checkin-done chip-in"><span class="checkin-done-mark" aria-hidden="true">✓</span> ${escHtml(parts.join(" · "))}</div>`;
 }
 
-type CaptureReadsRuntime = {
-  createController(deps: {
-    root: ParentNode;
-    state: Pick<ClientAppState, "tab">;
-    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
-    runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): unknown;
-    toast(message: string): void;
-    collapseEl(el: Element, done?: () => void): void;
-    escapeHtml(value: unknown): string;
-    storage?: Pick<Storage, "getItem" | "setItem"> | null;
-  }): {
-    weekRangeLabel(iso: unknown): string;
-    loadTodayReads(): Promise<void>;
-    reconnectInsight(): ClientAgentOpHandlers | null;
-  };
-  weekRangeLabel(iso: unknown): string;
-};
-
 let _captureReads: ReturnType<CaptureReadsRuntime["createController"]> | null = null;
 
 function captureReads(): ReturnType<CaptureReadsRuntime["createController"]> {
