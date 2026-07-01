@@ -11,24 +11,23 @@ function chatScreenMessages(value: unknown): ChatScreenMessage[] {
 }
 
 // ---------- Chat ----------
-let chatFuelContext: ChatScreenMessage[] = [];
+function chatStarterChips(): ChatStarterChipsApi {
+  return (globalThis as unknown as { CairnChatStarterChips: ChatStarterChipsApi }).CairnChatStarterChips;
+}
+
+function chatFuelContextApi(): ChatFuelContextApi {
+  return (globalThis as unknown as { CairnChatFuelContext: ChatFuelContextApi }).CairnChatFuelContext;
+}
+
+function chatEarlierHistory(): ChatEarlierHistoryApi {
+  return (globalThis as unknown as { CairnChatEarlierHistory: ChatEarlierHistoryApi }).CairnChatEarlierHistory;
+}
 
 // Starter chips shown while the conversation is empty (fresh chat / after a
 // fresh start); tapping one prefills the input and sends through the normal
 // send path. They vanish as soon as the first message lands (appendMsg removes them).
 function drawChatChips(log: Element): void {
-  const template = document.createElement("template");
-  template.innerHTML = CairnChatClient.starterChipsHtml().trim();
-  const wrap = template.content.firstElementChild;
-  if (!wrap) return;
-  log.appendChild(wrap);
-  wrap.querySelectorAll(".chat-chip").forEach((b) => b.addEventListener("click", () => {
-    const input = $<HTMLTextAreaElement>("#chatInput");
-    if (!input) return;
-    input.value = b.textContent || "";
-    const send = $("#chatSend");
-    if (send) (send as HTMLElement).click();
-  }));
+  chatStarterChips().draw(log);
 }
 
 // Chat gets the logged-food glance only when the active thread is already about
@@ -36,21 +35,19 @@ function drawChatChips(log: Element): void {
 // everywhere; this UI guard keeps broad health/nutrition chats from carrying a
 // persistent food banner.
 function chatScreenMessageHasFoodAction(m: Partial<ChatScreenMessage> | null | undefined): boolean {
-  return CairnChatClient.messageHasFoodAction(m);
+  return chatFuelContextApi().messageHasFoodAction(m);
 }
 
 function chatScreenUserMessageSuggestsFood(m: Partial<ChatScreenMessage> | null | undefined): boolean {
-  return CairnChatClient.userMessageSuggestsFood(m);
+  return chatFuelContextApi().userMessageSuggestsFood(m);
 }
 
-function chatScreenWantsFuelSurface(messages: Partial<ChatScreenMessage>[] = chatFuelContext): boolean {
-  return CairnChatClient.wantsFuelSurface(messages, { todayISO: localISO(), dayISO: chatDayISO });
+function chatScreenWantsFuelSurface(messages: Partial<ChatScreenMessage>[] = chatFuelContextApi().current()): boolean {
+  return chatFuelContextApi().wants(messages);
 }
 
 function rememberChatFuelContext(...msgs: Array<Partial<ChatScreenMessage> | null | undefined>): ChatScreenMessage[] {
-  const next = [...chatFuelContext, ...msgs.filter((msg): msg is ChatScreenMessage => !!msg && typeof msg === "object")];
-  chatFuelContext = next.slice(-24);
-  return chatFuelContext;
+  return chatFuelContextApi().remember(...msgs);
 }
 
 // Expand the collapsed history block at the top of the chat log: smooth
@@ -59,62 +56,26 @@ function rememberChatFuelContext(...msgs: Array<Partial<ChatScreenMessage> | nul
 // visible element every frame (rather than accumulating deltas), so scroll
 // clamping while the scroller is still shorter than its viewport self-corrects.
 function expandChatEarlier(log: HTMLElement, bar: Element, block: HTMLElement): void {
-  const logTop = log.getBoundingClientRect().top;
-  const anchor = [...log.children].find((el) => el !== bar && el !== block && el.getBoundingClientRect().bottom > logTop) || null;
-  const anchorY = anchor ? anchor.getBoundingClientRect().top : 0;
-  const keep = () => { if (anchor) log.scrollTop += anchor.getBoundingClientRect().top - anchorY; };
-  if (reducedMotion()) {
-    bar.remove();
-    block.hidden = false;
-    keep();
-    return;
-  }
-  block.hidden = false;
-  block.style.overflow = "hidden";
-  block.style.maxHeight = "0px";
-  block.style.opacity = "0";
-  bar.remove();
-  keep();
-  const target = block.scrollHeight;
-  void block.offsetHeight; // commit the collapsed start state
-  block.style.transition = "max-height var(--dur-3) var(--ease), opacity var(--dur-3) var(--ease)";
-  block.style.maxHeight = `${target}px`;
-  block.style.opacity = "1";
-  const t0 = performance.now();
-  const step = (t: number) => {
-    if (!block.isConnected) return;
-    keep();
-    if (t - t0 < 600) { requestAnimationFrame(step); return; } // --dur-3 + settle
-    block.style.maxHeight = "";
-    block.style.overflow = "";
-    block.style.transition = "";
-    block.style.opacity = "";
-    keep();
-  };
-  requestAnimationFrame(step);
+  chatEarlierHistory().expand(log, bar, block);
 }
 
 function chatScreenFuelHtml(d: import("../contracts/client.js").ClientDayIntake | null | undefined): string {
-  return CairnChatClient.fuelHtml(d);
+  return chatFuelContextApi().html(d);
 }
 
-async function loadChatFuel(token: number, messages: Partial<ChatScreenMessage>[] = chatFuelContext): Promise<void> {
-  const slot = $("#chatFuelSlot");
-  if (!slot) return;
-  if (!chatScreenWantsFuelSurface(messages)) { slot.innerHTML = ""; return; }
-  let d: import("../contracts/client.js").ClientDayIntake | null = null;
-  try { d = await api("/nutrition/day"); } catch { slot.innerHTML = ""; return; }
-  if (token !== pollToken || state.tab !== "chat" || !slot.isConnected) return;
-  slot.innerHTML = chatScreenFuelHtml(d);
-  const card = slot.querySelector("#chatFuelCard");
-  if (card) card.addEventListener("click", () => { state.planJump = "food"; activateTab("plan"); });
+async function loadChatFuel(token: number, messages: Partial<ChatScreenMessage>[] = chatFuelContextApi().current()): Promise<void> {
+  return chatFuelContextApi().load(token, messages, {
+    currentToken: () => pollToken,
+    currentTab: () => state.tab,
+    openFoodReview: () => { state.planJump = "food"; activateTab("plan"); },
+  });
 }
 
 function chatHeaderDeps(): ChatHeaderControllerDeps {
   return {
     state,
     currentToken: () => pollToken,
-    clearFuelContext: () => { chatFuelContext = []; },
+    clearFuelContext: () => chatFuelContextApi().clear(),
     drawEmptyChat: () => drawChat([]),
     enqueueJob,
     openJobStream,
@@ -128,7 +89,7 @@ async function renderChat(): Promise<void> {
   chatTeardownMonitor(); // the log is about to be rebuilt -- drop the old stream + bubble map
   const token = ++pollToken; // bump so the async hydrate below can detect a stale tab
   const { freshBtn } = CairnChatHeaderController.ensureChatHeaderBtns(chatHeaderDeps());
-  chatFuelContext = [];
+  chatFuelContextApi().clear();
   // Paint the shell FIRST so the composer is usable instantly; the log hydrates
   // in the background. The flex viewport column keeps the composer pinned above
   // the tab bar no matter how the OS zooms (height is re-measured, not magic).
@@ -173,7 +134,7 @@ async function renderChat(): Promise<void> {
   try { msgs = chatScreenMessages(await api("/chat?limit=200")); } catch { msgs = []; }
   if (token !== pollToken || !log.isConnected) return; // navigated away / re-rendered
   if (freshBtn) freshBtn.hidden = !msgs.length;
-  chatFuelContext = msgs.slice(-24);
+  chatFuelContextApi().seed(msgs);
   drawChat(msgs);
   void loadChatFuel(token);
   // Rebuild any in-flight + queued turns from the server and resume streaming.

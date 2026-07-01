@@ -11,6 +11,7 @@ test("logged food has a dedicated Plan Food tab and shortcuts land there", () =>
   const meals = file("public/js/06-coach-meals.js");
   const todayRail = file("src/client/today-rail-controller.ts");
   const chat = file("public/js/09-plan-chat.js");
+  const chatFuelContext = file("public/js/chat-fuel-context-client.js");
   const appRenderDispatch = file("public/js/app-render-dispatch.js");
 
   assert.match(uiSegments, /\["food",\s*"Food"\]/, "Plan segment includes Food");
@@ -20,31 +21,26 @@ test("logged food has a dedicated Plan Food tab and shortcuts land there", () =>
   assert.match(meals, /class="meal-energy food-journal"/, "Food tab owns the daily journal and energy surface");
   assert.match(todayRail, /deps\.state\.planJump = "food"; deps\.activateTab\("plan"\)/, "Today logged-fuel card opens Food");
   assert.match(chat, /state\.planJump = "food"; activateTab\("plan"\)/, "Chat fuel strip opens Food");
-  assert.match(chat, /function chatScreenWantsFuelSurface\(messages = chatFuelContext\)/, "Chat fuel strip is gated by conversation context");
-  assert.match(chat, /if \(!chatScreenWantsFuelSurface\(messages\)\) \{[\s\S]*slot\.innerHTML = "";[\s\S]*return;[\s\S]*\}/, "Unrelated chats suppress the fuel strip");
+  assert.match(chat, /chatFuelContextApi\(\)\.wants\(messages\)/, "Chat screen delegates fuel gating to the context helper");
+  assert.match(chatFuelContext, /function chatFuelWantsSurface\(messages = chatFuelContextMessages\)/, "Chat fuel strip is gated by conversation context");
+  assert.match(chatFuelContext, /if \(!chatFuelWantsSurface\(messages \|\| chatFuelContextMessages\)\) \{[\s\S]*slot\.innerHTML = "";[\s\S]*return;[\s\S]*\}/, "Unrelated chats suppress the fuel strip");
   assert.doesNotMatch(chat, /requestAnimationFrame\(measureChatTop\); \/\/ re-measure once layout\/fonts settle\s+loadChatFuel\(token\);/, "Chat fuel strip waits for hydrated messages, not the empty shell");
   assert.match(appRenderDispatch, /jump === "food" \? renderFoodJournal\(\)/, "Plan routing can jump directly to Food");
 });
 
 function loadChatFuelGate() {
-  const chat = file("public/js/09-plan-chat.js");
   const chatClient = file("public/js/chat-client.js");
-  const start = chat.indexOf("// Chat gets the logged-food glance");
-  const end = chat.indexOf("// Expand the collapsed history", start);
-  assert.ok(start > 0 && end > start, "chat fuel gate block is extractable");
+  const chatFuelContext = file("public/js/chat-fuel-context-client.js");
   const context = { window: {} };
   vm.runInNewContext(`
     function escHtml(s) { return String(s ?? ""); }
     function escAttr(s) { return String(s ?? ""); }
-    ${chatClient}
-    globalThis.CairnChatClient = window.CairnChatClient;
-  `, context);
-  vm.runInNewContext(`
-    let chatFuelContext = [];
     function localISO() { return "2026-06-25"; }
     function chatDayISO() { return "2026-06-25"; }
-    ${chat.slice(start, end)}
-    globalThis.chatFuelGate = { chatWantsFuelSurface: chatScreenWantsFuelSurface };
+    ${chatClient}
+    globalThis.CairnChatClient = window.CairnChatClient;
+    ${chatFuelContext}
+    globalThis.chatFuelGate = { chatWantsFuelSurface: window.CairnChatFuelContext.wants };
   `, context);
   return context.chatFuelGate;
 }

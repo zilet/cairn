@@ -195,6 +195,8 @@ function loadController() {
   context.$ = (selector) => document.querySelector(selector);
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/life-form-helpers.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/life-timeline-actions.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-controller.js"), "utf8"), context);
   return { context, document };
 }

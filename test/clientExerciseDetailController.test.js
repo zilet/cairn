@@ -156,7 +156,15 @@ function loadController() {
   };
   context.window = context;
   context.globalThis = context;
-  vm.runInNewContext(readFileSync(join(root, "public/js/exercise-detail-controller.js"), "utf8"), context);
+  for (const script of [
+    "exercise-detail-data-client.js",
+    "exercise-detail-explanation-client.js",
+    "exercise-detail-render-client.js",
+    "exercise-detail-actions-client.js",
+    "exercise-detail-controller.js",
+  ]) {
+    vm.runInNewContext(readFileSync(join(root, "public/js", script), "utf8"), context);
+  }
   return { context, document };
 }
 

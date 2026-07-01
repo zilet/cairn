@@ -1537,6 +1537,34 @@ declare global {
       };
     };
 
+    CairnChatStarterChips: {
+      draw(log: Element): void;
+    };
+
+    CairnChatFuelContext: {
+      clear(): void;
+      current(): ChatScreenMessage[];
+      seed(messages: Partial<ChatScreenMessage>[]): ChatScreenMessage[];
+      remember(...msgs: Array<Partial<ChatScreenMessage> | null | undefined>): ChatScreenMessage[];
+      messageHasFoodAction(message: Partial<ChatScreenMessage> | null | undefined): boolean;
+      userMessageSuggestsFood(message: Partial<ChatScreenMessage> | null | undefined): boolean;
+      wants(messages?: Partial<ChatScreenMessage>[]): boolean;
+      html(day: ClientDayIntake | null | undefined): string;
+      load(
+        token: number,
+        messages: Partial<ChatScreenMessage>[] | undefined,
+        deps: {
+          currentToken(): number;
+          currentTab(): string | undefined;
+          openFoodReview(): void;
+        },
+      ): Promise<void>;
+    };
+
+    CairnChatEarlierHistory: {
+      expand(log: HTMLElement, bar: Element, block: HTMLElement): void;
+    };
+
     CairnExerciseDetail: {
       explanation(exercise: { name?: unknown; muscle_group?: unknown } | null | undefined): {
         setup?: unknown;
@@ -1552,6 +1580,89 @@ declare global {
         ok?: unknown;
         explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null;
       } | null | undefined): boolean;
+    };
+
+    CairnExerciseDetailData: {
+      number(value: unknown, fallback?: number): number;
+      record(value: unknown): Record<string, unknown>;
+      rows<T extends Record<string, unknown> = Record<string, unknown>>(value: unknown): T[];
+      view(row: Record<string, unknown>, deps: {
+        escapeHtml(value: unknown): string;
+        fmtDur(seconds: unknown): string;
+        fmtWeight(weight: unknown): string;
+      }): {
+        timed: boolean;
+        heroVal: number;
+        heroLbl: string;
+        heroTxt: string;
+        sparkVals: unknown[];
+        hasPR: boolean;
+        appears: string;
+        recentLines: string;
+      };
+    };
+
+    CairnExerciseDetailExplanation: {
+      exerciseExplanation(
+        exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
+        deps: ExerciseDetailControllerDeps,
+      ): { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown };
+      exerciseExplanationHtml(
+        exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
+        explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
+        deps: ExerciseDetailControllerDeps,
+      ): string;
+      hydrateExerciseExplanation(
+        el: ParentNode,
+        exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
+        deps: ExerciseDetailControllerDeps,
+      ): Promise<void>;
+      replaceExerciseExplanation(
+        el: ParentNode,
+        exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
+        explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
+        deps: ExerciseDetailControllerDeps,
+      ): void;
+      validExerciseExplanationPayload(value: unknown, deps: ExerciseDetailControllerDeps): boolean;
+    };
+
+    CairnExerciseDetailRender: {
+      missingHtml(name: string, svg: string, deps: {
+        artImg(kind: string, query: unknown, className?: string, svg?: string | null): string;
+        escapeHtml(value: unknown): string;
+        sparklineSvg(values: unknown, width?: number, height?: number): string;
+      }): string;
+      modalHtml(
+        row: Record<string, unknown>,
+        fallbackName: string,
+        svg: string,
+        view: {
+          timed: boolean;
+          heroVal: number;
+          heroLbl: string;
+          heroTxt: string;
+          sparkVals: unknown[];
+          hasPR: boolean;
+          appears: string;
+          recentLines: string;
+        },
+        explanationHtml: string,
+        deps: {
+          artImg(kind: string, query: unknown, className?: string, svg?: string | null): string;
+          escapeHtml(value: unknown): string;
+          sparklineSvg(values: unknown, width?: number, height?: number): string;
+        },
+      ): string;
+    };
+
+    CairnExerciseDetailActions: {
+      wireActions(
+        el: ParentNode,
+        row: { name?: string } & Record<string, unknown>,
+        fallbackName: string,
+        timed: boolean,
+        deps: ExerciseDetailControllerDeps,
+      ): void;
     };
 
     CairnExerciseDetailController: {
@@ -2219,6 +2330,23 @@ declare global {
         index: number | undefined,
         impactsById?: Record<string, Record<string, unknown>>,
       ): string;
+    };
+
+    CairnLifeFormHelpers: {
+      record(value: unknown): Record<string, unknown>;
+      rows<T extends Record<string, unknown> = Record<string, unknown>>(value: unknown): T[];
+      inputValue(id: string): string;
+      trimmedInputValue(id: string): string | null;
+      drawFields(kind: unknown): void;
+      collectForm(): ClientLifeControllerForm;
+      submit(deps: ClientLifeControllerDeps): Promise<void>;
+    };
+
+    CairnLifeTimelineActions: {
+      load(deps: ClientLifeControllerDeps): Promise<void>;
+      rewireCard(card: HTMLElement, deps: ClientLifeControllerDeps): void;
+      startDelete(button: Element, deps: ClientLifeControllerDeps): void;
+      startEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps): void;
     };
 
     CairnLifeController: {
@@ -3290,7 +3418,14 @@ declare global {
   declare const CairnChatTurnRecords: Window["CairnChatTurnRecords"];
   declare const CairnChatTurnStreamState: Window["CairnChatTurnStreamState"];
   declare const CairnChatLayout: Window["CairnChatLayout"];
+  declare const CairnChatStarterChips: Window["CairnChatStarterChips"];
+  declare const CairnChatFuelContext: Window["CairnChatFuelContext"];
+  declare const CairnChatEarlierHistory: Window["CairnChatEarlierHistory"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
+  declare const CairnExerciseDetailData: Window["CairnExerciseDetailData"];
+  declare const CairnExerciseDetailExplanation: Window["CairnExerciseDetailExplanation"];
+  declare const CairnExerciseDetailRender: Window["CairnExerciseDetailRender"];
+  declare const CairnExerciseDetailActions: Window["CairnExerciseDetailActions"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
@@ -3348,6 +3483,8 @@ declare global {
   declare const CairnMeMemoryController: Window["CairnMeMemoryController"];
   declare const CairnFamily: Window["CairnFamily"];
   declare const CairnLife: Window["CairnLife"];
+  declare const CairnLifeFormHelpers: Window["CairnLifeFormHelpers"];
+  declare const CairnLifeTimelineActions: Window["CairnLifeTimelineActions"];
   declare const CairnLifeController: Window["CairnLifeController"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
