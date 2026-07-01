@@ -3003,8 +3003,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
   assert.match(chatAttachmentSource, /async function chatAttachmentCompressImage\(file: File\): Promise<ChatAttachmentImagePayload>/);
   assert.match(chatAttachmentSource, /function chatAttachmentResetFocusAfterNativePicker/);
-  assert.match(chatAttachmentSource, /classList\.remove\("kb-geometry-open"\)/);
+  assert.doesNotMatch(chatAttachmentSource, /classList\.remove\("kb-(?:geometry-)?open"\)/);
   assert.match(chatAttachmentSource, /function chatAttachmentSettleAfterNativePicker/);
+  assert.match(chatAttachmentSource, /nativePickerSuppressMs:\s*options\.nativePickerSuppressMs\s*\?\?\s*900/);
   assert.match(chatAttachmentSource, /Object\.assign\(globalThis,\s*\{ CairnChatAttachment: CAIRN_CHAT_ATTACHMENT \}\)/);
   assert.match(chatTurnClientSource, /function\s+saveChatDraft\(value: string\): void/);
   assert.match(chatTurnClientSource, /async function\s+chatReconnect\(\): Promise<void>/);

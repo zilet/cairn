@@ -90,6 +90,12 @@ function loadMobileViewport(options = {}) {
     Element: FakeElement,
     HTMLElement: FakeElement,
     clearTimeout,
+    CustomEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    },
     document,
     globalThis: null,
     matchMedia: () => ({ matches: false }),
@@ -179,4 +185,25 @@ test("mobile viewport keeps keyboard intent separate from geometry truth", () =>
 
   assert.equal(env.body.classList.contains("kb-open"), true);
   assert.equal(env.body.classList.contains("kb-geometry-open"), false);
+});
+
+test("mobile viewport suppresses post-picker chat intent until geometry opens", () => {
+  const env = loadMobileViewport({ viewportHeight: 800 });
+  env.context.window.installMobileViewportGuards();
+  const chatView = new FakeElement("DIV");
+  const input = new FakeElement("TEXTAREA");
+  input.chatView = chatView;
+
+  env.fireDocument("cairn:keyboard-settle", new env.context.CustomEvent("cairn:keyboard-settle", {
+    detail: { chatFocusGraceMs: 1200, nativePickerSuppressMs: 1000 },
+  }));
+  env.fireDocument("pointerdown", { target: input });
+
+  assert.equal(env.body.classList.contains("kb-open"), false);
+  assert.equal(env.body.classList.contains("kb-geometry-open"), false);
+
+  env.visualViewport.height = 540;
+  env.fireViewport("resize");
+  assert.equal(env.body.classList.contains("kb-open"), true);
+  assert.equal(env.body.classList.contains("kb-geometry-open"), true);
 });

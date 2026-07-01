@@ -26,11 +26,12 @@ test("chat photo picker settles keyboard geometry before and after the native pi
   assert.match(chat, /CairnChatAttachment\.resetFocusAfterNativePicker/);
   assert.match(chatAttachment, /if\s*\(document\.activeElement\s*===\s*options\.input\)\s*options\.input\.blur\(\)/);
   assert.match(chatAttachment, /if\s*\(document\.activeElement\s*===\s*options\.fileInput\)\s*options\.fileInput\.blur\(\)/);
-  assert.match(chatAttachment, /document\.body\.classList\.remove\("kb-open"\)/);
-  assert.match(chatAttachment, /document\.body\.classList\.remove\("kb-geometry-open"\)/);
+  assert.doesNotMatch(chatAttachment, /classList\.remove\("kb-open"\)/);
+  assert.doesNotMatch(chatAttachment, /classList\.remove\("kb-geometry-open"\)/);
   assert.match(chat, /const\s+settleChatAfterNativePicker\s*=\s*\(\)\s*=>/);
   assert.match(chat, /CairnChatAttachment\.settleAfterNativePicker/);
-  assert.match(chatAttachment, /new CustomEvent\("cairn:keyboard-settle",\s*\{\s*detail:\s*\{\s*chatFocusGraceMs:\s*options\.graceMs\s*\?\?\s*1200\s*\}/);
+  assert.match(chatAttachment, /chatFocusGraceMs:\s*options\.graceMs\s*\?\?\s*1200/);
+  assert.match(chatAttachment, /nativePickerSuppressMs:\s*options\.nativePickerSuppressMs\s*\?\?\s*900/);
   assert.match(chat, /attachBtn\.addEventListener\("click",\s*\(\)\s*=>\s*\{\s*resetChatFocusAfterNativePicker\(\)/);
   assert.match(chat, /fileInput\.addEventListener\("change",\s*\(\)\s*=>\s*\{\s*resetChatFocusAfterNativePicker\(\)/);
   assert.match(chat, /fileInput\.click\(\)/);
@@ -38,14 +39,16 @@ test("chat photo picker settles keyboard geometry before and after the native pi
 });
 
 test("chat photo composer can refocus the same textarea after the keyboard hides", () => {
+  assert.match(chat, /const\s+releaseStaleChatInputFocus\s*=\s*\(\)\s*=>/);
   assert.match(chat, /const\s+recoverChatInputFocus\s*=\s*\(\)\s*=>/);
   assert.match(chat, /const\s+kbGeometryOpen\s*=\s*document\.body\.classList\.contains\("kb-geometry-open"\)/);
   assert.match(chat, /const\s+alreadyFocused\s*=\s*document\.activeElement\s*===\s*input/);
-  assert.match(chat, /if\s*\(!kbGeometryOpen\s*&&\s*alreadyFocused\)\s*input\.blur\(\)/);
-  assert.match(chat, /if\s*\(!alreadyFocused\s*\|\|\s*!kbGeometryOpen\)\s*\{/);
+  assert.match(chat, /if\s*\(!kbGeometryOpen\s*&&\s*document\.activeElement\s*===\s*input\)\s*input\.blur\(\)/);
+  assert.match(chat, /if\s*\(!alreadyFocused\s*&&\s*!kbGeometryOpen\)\s*\{/);
   assert.match(chat, /input\.focus\(\{\s*preventScroll:\s*true\s*\}\)/);
   assert.doesNotMatch(chat, /document\.body\.classList\.contains\("kb-open"\)/);
   assert.doesNotMatch(chat, /document\.activeElement\s*!==\s*input\)\s*return/);
-  assert.match(chat, /input\.addEventListener\("pointerdown",\s*recoverChatInputFocus\)/);
-  assert.match(chat, /input\.addEventListener\("pointerup"[\s\S]*settleChatViewport/);
+  assert.match(chat, /input\.addEventListener\("pointerdown",\s*releaseStaleChatInputFocus\)/);
+  assert.match(chat, /input\.addEventListener\("pointerup",\s*recoverChatInputFocus/);
+  assert.match(chat, /input\.addEventListener\("click",\s*recoverChatInputFocusAfterClick\)/);
 });

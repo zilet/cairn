@@ -448,26 +448,51 @@ async function renderChat() {
             setTimeout(() => { if (state.tab === "chat")
                 measureChatTop(); }, d);
     };
-    const recoverChatInputFocus = () => {
+    const releaseStaleChatInputFocus = () => {
         if (!isSoftKeyboardChat())
             return;
         const kbGeometryOpen = document.body.classList.contains("kb-geometry-open");
-        const alreadyFocused = document.activeElement === input;
-        if (!kbGeometryOpen && alreadyFocused)
+        if (!kbGeometryOpen && document.activeElement === input)
             input.blur();
-        if (!alreadyFocused || !kbGeometryOpen) {
+        settleChatViewport();
+    };
+    const recoverChatInputFocus = () => {
+        if (!isSoftKeyboardChat())
+            return;
+        setTimeout(() => {
+            if (state.tab !== "chat" || !input.isConnected)
+                return;
+            const kbGeometryOpen = document.body.classList.contains("kb-geometry-open");
+            const alreadyFocused = document.activeElement === input;
+            if (!alreadyFocused && !kbGeometryOpen) {
+                try {
+                    input.focus({ preventScroll: true });
+                }
+                catch {
+                    input.focus();
+                }
+            }
+            settleChatViewport();
+        }, 0);
+    };
+    const recoverChatInputFocusAfterClick = () => {
+        if (!isSoftKeyboardChat())
+            return;
+        setTimeout(() => {
+            if (state.tab !== "chat" || !input.isConnected || document.activeElement === input)
+                return;
             try {
                 input.focus({ preventScroll: true });
             }
             catch {
                 input.focus();
             }
-        }
-        settleChatViewport();
+            settleChatViewport();
+        }, 80);
     };
-    input.addEventListener("pointerdown", recoverChatInputFocus);
-    input.addEventListener("pointerup", () => { if (document.activeElement === input)
-        settleChatViewport(); }, { passive: true });
+    input.addEventListener("pointerdown", releaseStaleChatInputFocus);
+    input.addEventListener("pointerup", recoverChatInputFocus, { passive: true });
+    input.addEventListener("click", recoverChatInputFocusAfterClick);
     for (const ev of ["focus", "blur"])
         input.addEventListener(ev, settleChatViewport);
     // Persist the unsent draft on every keystroke so it survives a tab switch /

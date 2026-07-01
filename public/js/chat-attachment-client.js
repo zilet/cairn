@@ -50,11 +50,14 @@ function chatAttachmentResetFocusAfterNativePicker(options) {
         options.input.blur();
     if (document.activeElement === options.fileInput)
         options.fileInput.blur();
-    document.body.classList.remove("kb-open");
-    document.body.classList.remove("kb-geometry-open");
 }
 function chatAttachmentSettleAfterNativePicker(options) {
-    document.dispatchEvent(new CustomEvent("cairn:keyboard-settle", { detail: { chatFocusGraceMs: options.graceMs ?? 1200 } }));
+    document.dispatchEvent(new CustomEvent("cairn:keyboard-settle", {
+        detail: {
+            chatFocusGraceMs: options.graceMs ?? 1200,
+            nativePickerSuppressMs: options.nativePickerSuppressMs ?? 900,
+        },
+    }));
     options.measure();
     requestAnimationFrame(() => requestAnimationFrame(options.measure));
     for (const delay of [120, 280, 520, 900]) {

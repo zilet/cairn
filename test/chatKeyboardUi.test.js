@@ -29,11 +29,15 @@ test("mobile chat releases stale textarea focus after iOS dismisses the keyboard
 
 test("mobile chat taps after native image pickers get a focus grace window", () => {
   assert.match(mobileViewport, /let\s+chatFocusGraceUntil\s*=\s*0/);
+  assert.match(mobileViewport, /let\s+nativePickerFocusSuppressUntil\s*=\s*0/);
   assert.match(mobileViewport, /const\s+isChatTextInput\s*=/);
+  assert.match(mobileViewport, /Date\.now\(\)\s*<\s*nativePickerFocusSuppressUntil/);
   assert.match(mobileViewport, /keyboardIntentUntil\s*=\s*Date\.now\(\)\s*\+\s*\(isChatTarget\s*\?\s*1500\s*:\s*900\)/);
   assert.match(mobileViewport, /chatFocusGraceUntil\s*=\s*Date\.now\(\)\s*\+\s*1700/);
   assert.match(mobileViewport, /chatFocusGraceMs/);
+  assert.match(mobileViewport, /nativePickerSuppressMs/);
   assert.match(mobileViewport, /Math\.min\(chatFocusGraceMs,\s*2400\)/);
+  assert.match(mobileViewport, /Math\.min\(nativePickerSuppressMs,\s*1800\)/);
 });
 
 test("mobile bottom inset never publishes a negative safe-area correction", () => {

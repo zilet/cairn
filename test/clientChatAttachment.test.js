@@ -106,7 +106,7 @@ function loadAttachment() {
   };
 }
 
-test("chat attachment soft-keyboard reset blurs active picker participants and clears kb-open", () => {
+test("chat attachment soft-keyboard reset blurs active picker participants without owning keyboard classes", () => {
   const env = loadAttachment();
 
   env.document.body.classList.add("kb-open");
@@ -120,8 +120,8 @@ test("chat attachment soft-keyboard reset blurs active picker participants and c
 
   assert.equal(env.input.blurCount, 1);
   assert.equal(env.fileInput.blurCount, 0);
-  assert.equal(env.document.body.classList.contains("kb-open"), false);
-  assert.equal(env.document.body.classList.contains("kb-geometry-open"), false);
+  assert.equal(env.document.body.classList.contains("kb-open"), true);
+  assert.equal(env.document.body.classList.contains("kb-geometry-open"), true);
 
   env.document.body.classList.add("kb-open");
   env.document.body.classList.add("kb-geometry-open");
@@ -133,8 +133,8 @@ test("chat attachment soft-keyboard reset blurs active picker participants and c
   });
 
   assert.equal(env.fileInput.blurCount, 1);
-  assert.equal(env.document.body.classList.contains("kb-open"), false);
-  assert.equal(env.document.body.classList.contains("kb-geometry-open"), false);
+  assert.equal(env.document.body.classList.contains("kb-open"), true);
+  assert.equal(env.document.body.classList.contains("kb-geometry-open"), true);
 });
 
 test("chat attachment non-soft reset leaves focus and keyboard class untouched", () => {
@@ -167,6 +167,7 @@ test("chat attachment settle dispatches focus-grace event and suppresses delayed
   assert.equal(env.events.length, 1);
   assert.equal(env.events[0].type, "cairn:keyboard-settle");
   assert.equal(env.events[0].detail.chatFocusGraceMs, 1300);
+  assert.equal(env.events[0].detail.nativePickerSuppressMs, 900);
   assert.equal(measures, 1, "settle measures immediately");
   assert.equal(env.rafs.length, 1);
   env.rafs.shift()();

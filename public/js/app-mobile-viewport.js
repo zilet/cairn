@@ -48,6 +48,7 @@
         let vvMax = vv.height;
         let keyboardIntentUntil = 0;
         let chatFocusGraceUntil = 0;
+        let nativePickerFocusSuppressUntil = 0;
         let settleTimer = 0;
         let staleChatFocusTimer = 0;
         let geometryWasOpen = false;
@@ -91,6 +92,11 @@
             if (!softKeyboard())
                 return;
             const isChatTarget = isChatTextInput(target);
+            if (isChatTarget && Date.now() < nativePickerFocusSuppressUntil) {
+                sync();
+                settle(true);
+                return;
+            }
             keyboardIntentUntil = Date.now() + (isChatTarget ? 1500 : 900);
             if (isChatTarget)
                 chatFocusGraceUntil = Date.now() + 1700;
@@ -109,8 +115,10 @@
             if (vv.height > vvMax)
                 vvMax = vv.height;
             const geometryOpen = keyboardGeometryOpen();
-            if (geometryOpen)
+            if (geometryOpen) {
                 keyboardIntentUntil = 0;
+                nativePickerFocusSuppressUntil = 0;
+            }
             const kbOpen = geometryOpen || keyboardIntentOpen();
             document.body.classList.toggle("kb-geometry-open", geometryOpen);
             document.body.classList.toggle("kb-open", kbOpen);
@@ -152,9 +160,13 @@
                 ? event.detail
                 : null;
             const chatFocusGraceMs = Number(detail?.chatFocusGraceMs) || 0;
+            const nativePickerSuppressMs = Number(detail?.nativePickerSuppressMs) || 0;
             if (chatFocusGraceMs > 0) {
                 chatFocusGraceUntil = Math.max(chatFocusGraceUntil, Date.now() + Math.min(chatFocusGraceMs, 2400));
                 scheduleStaleChatFocusRelease();
+            }
+            if (nativePickerSuppressMs > 0) {
+                nativePickerFocusSuppressUntil = Math.max(nativePickerFocusSuppressUntil, Date.now() + Math.min(nativePickerSuppressMs, 1800));
             }
             keyboardIntentUntil = 0;
             resync();
