@@ -733,6 +733,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/today-week-ahead-client\.js"/);
   assert.match(sw, /"\/js\/today-context-client\.js"/);
   assert.match(sw, /"\/js\/today-garmin-reconciliation-client\.js"/);
+  assert.match(sw, /"\/js\/today-side-loaders\.js"/);
   assert.match(sw, /"\/js\/meal-plan-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
   assert.match(sw, /"\/js\/progress-endurance-client\.js"/);
@@ -1064,6 +1065,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayWeekAheadSource = read("src/client/today-week-ahead-client.ts");
   const todayContextSource = read("src/client/today-context-client.ts");
   const todayGarminReconciliationSource = read("src/client/today-garmin-reconciliation-client.ts");
+  const todaySideLoadersSource = read("src/client/today-side-loaders.ts");
   const todayScreenSource = read("src/client/today-screen.ts");
   const progressEnduranceSource = read("src/client/progress-endurance-client.ts");
   const progressComponentsSource = read("src/client/progress-components-client.ts");
@@ -1192,6 +1194,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayWeekAheadClient = read("public/js/today-week-ahead-client.js");
   const todayContextClient = read("public/js/today-context-client.js");
   const todayGarminReconciliationClient = read("public/js/today-garmin-reconciliation-client.js");
+  const todaySideLoadersClient = read("public/js/today-side-loaders.js");
   const progressEnduranceClient = read("public/js/progress-endurance-client.js");
   const progressComponentsClient = read("public/js/progress-components-client.js");
   const progressChartClient = read("public/js/progress-chart-client.js");
@@ -1602,6 +1605,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-program-adjustments-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-week-ahead-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-context-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-side-loaders\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-endurance-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-components-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-chart-client\.js/);
@@ -1740,6 +1744,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-week-ahead-client\.js/);
   assert.match(clientBuild, /src\/client\/today-context-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-context-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-side-loaders\.ts/);
+  assert.match(clientBuild, /public\/js\/today-side-loaders\.js/);
   assert.match(clientBuild, /src\/client\/today-screen\.ts/);
   assert.match(clientBuild, /public\/js\/03-today\.js/);
   assert.match(clientBuild, /src\/client\/capture-provenance-client\.ts/);
@@ -1892,6 +1898,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-discipline-primer\.js/);
   assert.match(clientBuild, /src\/client\/today-garmin-reconciliation-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-garmin-reconciliation-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-side-loaders\.ts/);
+  assert.match(clientBuild, /public\/js\/today-side-loaders\.js/);
   assert.match(clientBuild, /src\/client\/app\/onboarding\.ts/);
   assert.match(clientBuild, /public\/js\/app-onboarding\.js/);
   assert.match(clientBuild, /src\/client\/app\/startup\.ts/);
@@ -2027,6 +2035,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-garmin-reconciliation-client.js must load after Today helper dependencies and before 03-today.js"
   );
   assert.ok(
+    index.indexOf("/js/today-side-loaders.js") > index.indexOf("/js/today-garmin-reconciliation-client.js") &&
+      index.indexOf("/js/today-side-loaders.js") < index.indexOf("/js/03-today.js"),
+    "today-side-loaders.js must load after Today side-loader dependencies and before 03-today.js"
+  );
+  assert.ok(
     index.indexOf("/js/today-training-client.js") > index.indexOf("/js/today-plan-selection-client.js") &&
       index.indexOf("/js/today-training-client.js") < index.indexOf("/js/03-today.js"),
     "today-training-client.js must load before 03-today.js"
@@ -2107,9 +2120,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-context-client.js must load after Today week-ahead helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-endurance-client.js") > index.indexOf("/js/today-context-client.js") &&
+    index.indexOf("/js/progress-endurance-client.js") > index.indexOf("/js/today-side-loaders.js") &&
       index.indexOf("/js/progress-endurance-client.js") < index.indexOf("/js/05-progress.js"),
-    "progress-endurance-client.js must load after Today rail helpers and before Progress consumers"
+    "progress-endurance-client.js must load after Today side-loader helpers and before Progress consumers"
   );
   assert.ok(
     index.indexOf("/js/progress-components-client.js") > index.indexOf("/js/progress-endurance-client.js") &&
@@ -2488,6 +2501,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayWeekAheadClient, /\/\/ @ts-check/);
   assert.match(todayContextClient, /\/\/ @ts-check/);
   assert.match(todayGarminReconciliationClient, /\/\/ @ts-check/);
+  assert.match(todaySideLoadersClient, /\/\/ @ts-check/);
   assert.match(progressEnduranceClient, /\/\/ @ts-check/);
   assert.match(progressComponentsClient, /\/\/ @ts-check/);
   assert.match(progressChartClient, /\/\/ @ts-check/);
@@ -2595,6 +2609,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-week-ahead-client\.js/);
   assert.match(clientBuild, /src\/client\/today-context-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-context-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-side-loaders\.ts/);
+  assert.match(clientBuild, /public\/js\/today-side-loaders\.js/);
   assert.match(clientBuild, /src\/client\/today-screen\.ts/);
   assert.match(clientBuild, /public\/js\/03-today\.js/);
   assert.match(clientBuild, /src\/client\/progress-endurance-client\.ts/);
@@ -2957,6 +2973,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayGarminReconciliationSource, /function reconcilePromptHtml\(count: number/);
   assert.match(todayGarminReconciliationSource, /async function load\(options: TodayGarminReconcileOptions\): Promise<void>/);
   assert.match(todayGarminReconciliationSource, /CairnTodayGarminReconciliation/);
+  assert.match(todaySideLoadersSource, /type TodaySideLoaderDeps = \{/);
+  assert.match(todaySideLoadersSource, /function garminSessionCard\(value: unknown\): string/);
+  assert.match(todaySideLoadersSource, /async function loadWearable\(isToday: unknown, deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(todaySideLoadersSource, /async function loadTableHint\(deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(todaySideLoadersSource, /async function loadContextBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(todaySideLoadersSource, /async function loadDraftProposals\(deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(todaySideLoadersSource, /async function loadHealthFocusBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
+  assert.match(todaySideLoadersSource, /CairnTodaySideLoaders/);
+  assert.doesNotMatch(todayScreenSource, /\/garmin\/daily\?limit=1|\/mealplans\?limit=6|\/context-events\?active=1|\/proposals\?limit=8|\/health\/synthesis/);
   assert.doesNotMatch(todayScreenSource, /function collapseEl\(/);
   assert.doesNotMatch(todayScreenSource, /function expandEl\(/);
   assert.match(
@@ -3512,7 +3537,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayLatelyClient, /CairnTodayLately/);
   assert.match(todayLatelyClient, /garminSessionCard/);
   assert.match(todayLatelyClient, /rowHtml: latelyRow/);
-  assert.match(today, /CairnTodayLately\.garminSessionCard/);
+  assert.match(todaySideLoadersClient, /CairnTodayLately\.garminSessionCard/);
+  assert.match(today, /todaySideLoaders\.garminSessionCard/);
   assert.match(todayRailControllerSource, /CairnTodayLately\.rowHtml/);
   assert.doesNotMatch(today, /CairnTodayLately\.rowHtml/);
   assert.doesNotMatch(today, /function\s+garminSessionCard\(g\) \{[\s\S]*const\s+tiles\s*=\s*\[\]/);
@@ -3565,6 +3591,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayGarminReconciliationClient, /window\.CairnTodayGarminReconciliation = CAIRN_TODAY_GARMIN_RECONCILIATION/);
   assert.match(todayGarminReconciliationClient, /load,/);
   assert.doesNotMatch(todayGarminReconciliationClient, /^function\s+reconcilePromptHtml|^function\s+reconciledToast|^async function\s+load/m);
+  assert.match(todaySideLoadersClient, /Object\.assign\(globalThis, \{ CairnTodaySideLoaders: CAIRN_TODAY_SIDE_LOADERS \}\)/);
+  assert.match(todaySideLoadersClient, /CairnTodaySideLoaders: CAIRN_TODAY_SIDE_LOADERS/);
+  assert.match(todaySideLoadersClient, /loadWearable,/);
+  assert.match(todaySideLoadersClient, /loadHealthFocusBanner,/);
   assert.match(agentLoginClient, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);
   assert.match(agentLoginClient, /Object\.assign\(window, \{ openAgentLoginModal \}\)/);
   assert.doesNotMatch(agentLoginClient, /^function\s+xtermWindow|^function\s+loadXtermAssets|^async function\s+openAgentLoginModal/m);
@@ -3871,8 +3901,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(today, /CairnTodayWeekAhead\.cardHtml/);
   assert.doesNotMatch(today, /const\s+WEEK_AHEAD_GLYPH|class="weekahead reveal"|class="wa-row/);
   assert.match(today, /CairnTodayContext\.goalLineHtml/);
-  assert.match(today, /CairnTodayContext\.contextBannerHtml/);
-  assert.match(today, /CairnTodayContext\.healthFocusBannerHtml/);
+  assert.match(todaySideLoadersClient, /CairnTodayContext\.contextBannerHtml/);
+  assert.match(todaySideLoadersClient, /CairnTodayContext\.healthFocusBannerHtml/);
+  assert.match(today, /todaySideLoaders\.loadContextBanner/);
+  assert.match(today, /todaySideLoaders\.loadHealthFocusBanner/);
   assert.doesNotMatch(today, /const\s+CTX_ICONS|function\s+daysUntil|function\s+eventCountdown|function\s+isNearTermContext|function\s+ctxBannerLine|function\s+goalLineHtml/);
   assert.match(todayRailController, /CairnTodayGarminReconciliation\.load/);
   assert.doesNotMatch(today, /CairnTodayGarminReconciliation\.load/);
@@ -4014,6 +4046,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/today-program-adjustments-client\.js"/);
   assert.match(sw, /"\/js\/today-week-ahead-client\.js"/);
   assert.match(sw, /"\/js\/today-context-client\.js"/);
+  assert.match(sw, /"\/js\/today-side-loaders\.js"/);
   assert.match(sw, /"\/js\/progress-endurance-client\.js"/);
   assert.match(sw, /"\/js\/progress-components-client\.js"/);
   assert.match(sw, /"\/js\/progress-chart-client\.js"/);

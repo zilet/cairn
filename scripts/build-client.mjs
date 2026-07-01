@@ -53,6 +53,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-week-ahead-client.ts", output: "public/js/today-week-ahead-client.js" },
   { source: "src/client/today-context-client.ts", output: "public/js/today-context-client.js" },
   { source: "src/client/today-garmin-reconciliation-client.ts", output: "public/js/today-garmin-reconciliation-client.js" },
+  { source: "src/client/today-side-loaders.ts", output: "public/js/today-side-loaders.js" },
   { source: "src/client/today-screen.ts", output: "public/js/03-today.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
   { source: "src/client/progress-components-client.ts", output: "public/js/progress-components-client.js" },

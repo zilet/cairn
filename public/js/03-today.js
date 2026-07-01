@@ -10,6 +10,19 @@ function todayPeekCached(key, freshFor) {
 }
 const todayState = state;
 const todayView = view;
+const todaySideLoaders = globalThis.CairnTodaySideLoaders;
+function todaySideLoaderDeps() {
+    return {
+        root: todayView,
+        state: todayState,
+        api: todayApi,
+        activateTab,
+        runCountUps,
+        escapeHtml: escHtml,
+        localISO,
+        stagger,
+    };
+}
 // The per-card prescription line. `rx` is one Prescription from the progression
 // engine (or null → renders nothing). Calm, no score, one move + its why. When the
 // move is "switch it up" (action:'vary'), the engine hands a small menu of same-
@@ -1428,176 +1441,25 @@ async function setupAddExercise() {
 async function appendOffPlanCard(name, mode) {
     await CairnTodayAddExerciseController.appendOffPlanCard(name, mode, todayAddExerciseDeps());
 }
-// Today: the "body's reaction" card for a strength session reconciled from Garmin —
-// HR / calories / training-effect tiles + a time-in-HR-zone bar + the agent's
-// one-line read. All server strings via escHtml; numbers coerced. "" without data.
 function garminSessionCard(g) {
-    return CairnTodayLately.garminSessionCard(g);
+    return todaySideLoaders.garminSessionCard(g);
 }
-// Today: slim Garmin wearable strip under the compass — steps · sleep · resting
-// HR (· HRV) from the most recent garmin_daily_metrics row. Renders nothing at
-// all unless that row is from today or yesterday, so non-Garmin users (and the
-// past-date view) see zero clutter. Values are numeric — server text never
-// reaches innerHTML here.
 async function loadWearable(isToday) {
-    const slot = todayView.querySelector("#wearStrip");
-    if (!slot || !isToday)
-        return;
-    let rows = [];
-    try {
-        rows = await todayApi("/garmin/daily?limit=1");
-    }
-    catch {
-        return;
-    }
-    if (todayState.tab !== "today" || !slot.isConnected)
-        return;
-    const m = Array.isArray(rows) ? rows[0] : null;
-    if (!m || !m.date)
-        return;
-    const yest = new Date();
-    yest.setDate(yest.getDate() - 1);
-    if (m.date !== localISO() && m.date !== localISO(yest))
-        return;
-    const cells = [];
-    if (m.steps != null) {
-        cells.push(`<span class="wear-cell"><span class="wear-n numeral" data-cu="${Number(m.steps) || 0}" data-cufmt="k">0</span><span class="wear-l lbl">steps</span></span>`);
-    }
-    if (m.sleep_min != null) {
-        const v = Math.max(0, Math.round(Number(m.sleep_min) || 0));
-        const score = m.sleep_score != null ? ` · ${Math.round(Number(m.sleep_score))}` : "";
-        cells.push(`<span class="wear-cell"><span class="wear-n numeral">${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}</span><span class="wear-l lbl">sleep${score}</span></span>`);
-    }
-    if (m.resting_hr != null) {
-        cells.push(`<span class="wear-cell"><span class="wear-n numeral" data-cu="${Math.round(Number(m.resting_hr)) || 0}">0</span><span class="wear-l lbl">rest hr</span></span>`);
-    }
-    if (m.hrv_ms != null && cells.length < 4) {
-        cells.push(`<span class="wear-cell"><span class="wear-n numeral" data-cu="${Math.round(Number(m.hrv_ms)) || 0}">0</span><span class="wear-l lbl">hrv</span></span>`);
-    }
-    if (m.body_battery_avg != null && cells.length < 4) {
-        cells.push(`<span class="wear-cell"><span class="wear-n numeral" data-cu="${Math.round(Number(m.body_battery_avg)) || 0}">0</span><span class="wear-l lbl">battery</span></span>`);
-    }
-    if (!cells.length)
-        return;
-    slot.innerHTML = `<div class="wearstrip reveal" style="${stagger(0)}">
-      <span class="wear-kicker lbl">Garmin${m.date !== localISO() ? " · yest" : ""}</span>
-      ${cells.join("")}
-    </div>`;
-    runCountUps(slot);
+    await todaySideLoaders.loadWearable(isToday, todaySideLoaderDeps());
 }
-// Today: a one-line pointer to the day's planned meals — deliberately quiet
-// (the full planner lives in Plan → Meals; this is just the shortcut there).
 async function loadTableHint() {
-    const wrap = todayView.querySelector("#tableHint");
-    if (!wrap)
-        return;
-    let plans = [];
-    try {
-        plans = await todayApi("/mealplans?limit=6");
-    }
-    catch {
-        return;
-    }
-    if (todayState.tab !== "today" || !wrap.isConnected)
-        return;
-    const p = (plans || []).find((x) => x.status === "accepted" && x.parsed) ||
-        (plans || []).find((x) => x.status === "draft" && x.parsed);
-    const parsed = p?.parsed;
-    const days = parsed && Array.isArray(parsed.days) ? parsed.days : [];
-    const lbl = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(todayState.logDate + "T12:00:00").getDay()];
-    const day = days.find((d) => String(d.day || "").toLowerCase().startsWith(lbl));
-    const meals = day && Array.isArray(day.meals) ? day.meals : [];
-    if (!meals.length)
-        return;
-    const first = meals[0].name || meals[0].meal || "";
-    wrap.innerHTML = `<button class="tablehint" id="tableHintBtn">
-      <span class="lbl">Table</span> ${escHtml(first)}${meals.length > 1 ? `<span class="tablehint-more"> +${meals.length - 1}</span>` : ""}<span class="tablehint-go">→</span>
-    </button>`;
-    wrap.querySelector("#tableHintBtn").addEventListener("click", () => { todayState.planJump = "meals"; activateTab("plan"); });
+    await todaySideLoaders.loadTableHint(todaySideLoaderDeps());
 }
 // Today context/goal/health rail markup lives in /js/today-context-client.js.
 // This screen keeps API loading, slot liveness checks, and navigation wiring.
 async function loadContextBanner() {
-    const wrap = todayView.querySelector("#ctxEvents");
-    if (!wrap)
-        return;
-    let events = [];
-    try {
-        events = await todayApi("/context-events?active=1");
-    }
-    catch {
-        events = [];
-    }
-    if (todayState.tab !== "today" || !wrap.isConnected)
-        return;
-    wrap.innerHTML = CairnTodayContext.contextBannerHtml(events);
+    await todaySideLoaders.loadContextBanner(todaySideLoaderDeps());
 }
-// Today: react to agentic work — a quiet card when the coach has drafted a plan
-// change waiting for review (a scheduler weekly-review draft, or a chat plan change).
-// Pull, never push: it only appears when a `draft` proposal exists and clears the
-// moment it's applied/discarded in Plan → Coach. Tapping jumps straight there.
 async function loadDraftProposals() {
-    const slot = todayView.querySelector("#draftSlot");
-    if (!slot)
-        return;
-    let plans = [];
-    try {
-        plans = await todayApi("/proposals?limit=8");
-    }
-    catch {
-        return;
-    }
-    if (todayState.tab !== "today" || !slot.isConnected)
-        return;
-    const drafts = (plans || []).filter((p) => p && p.status === "draft");
-    if (!drafts.length) {
-        slot.innerHTML = "";
-        return;
-    }
-    const head = drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting";
-    const raw = String(drafts[0].instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
-    const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Drafted by your coach";
-    slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
-      <span class="draft-ico" aria-hidden="true">✦</span>
-      <span class="draft-body">
-        <span class="draft-h">${escHtml(head)}</span>
-        <span class="draft-sub">${escHtml(sub)} · review</span>
-      </span>
-      <span class="draft-go" aria-hidden="true">→</span>
-    </button>`;
-    slot.querySelector("#draftCard").addEventListener("click", () => { todayState.planJump = "coach"; activateTab("plan"); });
+    await todaySideLoaders.loadDraftProposals(todaySideLoaderDeps());
 }
-// Today: one quiet health-focus line from the latest whole-picture review (first
-// focus title + action), mirroring the context banner. Tap → Me → Health.
-// Renders nothing when there's no review or no focus items — zero noise.
 async function loadHealthFocusBanner() {
-    const wrap = todayView.querySelector("#ctxHealth");
-    if (!wrap)
-        return;
-    // ONE coach voice on Today: lead with the whole-picture synthesis's single lever (the
-    // most holistic, connected line — "trimming body fat lifts lipids, glucose & T at once"),
-    // else the prioritized focus LEAD (freshness-aware + capped server-side, so a stale CRP
-    // or an empty bucket never leads). Both are pull artifacts; /health/synthesis carries
-    // BOTH in one call. Taps through to Me → Health → Read where the full picture lives.
-    let data = null;
-    try {
-        data = await todayApi("/health/synthesis");
-    }
-    catch {
-        data = null;
-    }
-    if (todayState.tab !== "today" || !wrap.isConnected)
-        return;
-    wrap.innerHTML = CairnTodayContext.healthFocusBannerHtml(data);
-    if (!wrap.innerHTML)
-        return;
-    wrap.querySelector("#ctxHealthGo").addEventListener("click", () => {
-        // the synthesis + connected-brain focus now live on Health → Read
-        todayState.meSeg = "health";
-        todayState.healthSeg = "read";
-        todayState.healthSegPicked = true;
-        activateTab("me");
-    });
+    await todaySideLoaders.loadHealthFocusBanner(todaySideLoaderDeps());
 }
 Object.assign(globalThis, {
     postExerciseMode,
