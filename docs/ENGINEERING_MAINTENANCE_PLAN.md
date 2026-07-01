@@ -15,9 +15,9 @@ This tracker records the verified maintenance baseline. The next-stage full fron
 | Wave 2 - Route and screen identity | Complete | deep links round-trip to tabs, subviews, dates, selected records, and chat sessions |
 | Wave 3 - Backend module grouping | Complete | REST/MCP/docs parity still green after domain extraction |
 | Wave 4 - Frontend TypeScript foundation | Complete | client typecheck runs with no new framework and no unnecessary dependencies |
-| Wave 5 - High-risk frontend migration | Mostly complete | generated browser source now lives under `src/client`; large screen-controller modules still need shrinking and final browser workflow smoke |
+| Wave 5 - High-risk frontend migration | Mostly complete | generated browser source now lives under `src/client`; live route-console smoke is green; large screen-controller modules still need shrinking |
 | Wave 6 - Brain and memory hardening | In progress | typed conductor/memory/chat-action spine and deterministic DTO coverage are in place; remaining coach-context slices still need narrower DTOs |
-| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; final automated browser workflow lane is still pending |
+| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; live Chrome route-console smoke is green; final automated browser workflow lane is still pending |
 
 ## Non-Negotiables
 
@@ -276,7 +276,7 @@ Gate:
 
 - Client typecheck green.
 - `npm run verify` green.
-- Automated gates cover client typecheck, route deep links, public-script/cache contracts, built HTTP smoke, and Pi deploy app-shell smoke. Browser workflow smoke for Today log set/skip/cardio, Chat send/stream/reconnect, Health markers, and Settings Data remains a manual release check until a dedicated browser lane is added.
+- Automated gates cover client typecheck, route deep links, public-script/cache contracts, built HTTP smoke, and Pi deploy app-shell smoke. A live Chrome route-console sweep now covers `/`, `/app/today`, `/app/plan/meals`, `/app/progress/energy`, `/app/me/standing`, `/app/me/health/read`, `/app/me/health/records`, `/app/chat`, and `/app/settings/data`. Full browser workflow smoke for Today log set/skip/cardio, Chat send/stream/reconnect, Health markers, and Settings Data remains a manual release check until a dedicated automated browser lane is added.
 
 ## Wave 6 - Brain And Memory Hardening
 

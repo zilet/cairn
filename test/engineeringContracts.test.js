@@ -1161,7 +1161,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(verifyRunner, /const buildJobs = \[/);
   assert.match(verifyRunner, /const postBuildJobs = \[/);
   assert.match(verifyRunner, /await runGroup\("build", buildJobs\);\nawait runGroup\("post-build", postBuildJobs\);/);
+  assert.match(rootTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/server\.tsbuildinfo"/);
   assert.match(rootTsconfig, /"exclude": \["src\/client\/\*\*\/\*\.ts"\]/);
+  assert.match(clientTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/client\.tsbuildinfo"/);
   assert.match(contracts, /export type ClientCoachingFocusDomain = "training" \| "running" \| "nutrition" \| "health" \| "recovery" \| "body"/);
   assert.doesNotMatch(contracts, /domain: ClientCoachingFocusDomain \| string/);
   assert.match(clientTsconfig, /"allowJs": true/);
@@ -2596,6 +2598,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatScreenSource, /async function renderChat\(\): Promise<void>/);
   assert.match(chatScreenSource, /function appendMsg\(/);
   assert.match(chatScreenSource, /chatDayISO: chatScreenDayISO/);
+  assert.match(chatScreenSource, /const resetChatFocusAfterNativePicker = \(\) =>/);
+  assert.match(chatScreenSource, /const settleChatAfterNativePicker = \(\) =>/);
+  assert.match(chatScreenSource, /cairn:keyboard-settle/);
+  assert.match(chatScreenSource, /chatFocusGraceMs: 1200/);
+  assert.match(chatScreenSource, /fileInput\.addEventListener\("change"[\s\S]*resetChatFocusAfterNativePicker\(\)/);
   assert.match(chatScreenSource, /Plan editor and Plan Endurance screen orchestration live in \/js\/plan-editor-client\.js and \/js\/plan-endurance-client\.js/);
   assert.match(planEnduranceSource, /const ENDURANCE_PHASES/);
   assert.match(planEnduranceSource, /type EnduranceGoalRow = import\("\.\.\/contracts\/client-api\.js"\)\.ClientEnduranceGoal/);
@@ -2750,6 +2757,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appMobileViewportSource, /function installMobileViewportGuards\(\): void/);
   assert.match(appMobileViewportSource, /measureChatTop/);
   assert.match(appMobileViewportSource, /window\.visualViewport/);
+  assert.match(appMobileViewportSource, /let chatFocusGraceUntil = 0/);
+  assert.match(appMobileViewportSource, /Date\.now\(\) < chatFocusGraceUntil/);
+  assert.match(appMobileViewportSource, /document\.addEventListener\("cairn:keyboard-settle"/);
+  assert.match(appMobileViewportSource, /Math\.min\(chatFocusGraceMs, 2400\)/);
   assert.match(appServiceWorkerSource, /function registerServiceWorkerLifecycle\(\): void/);
   assert.match(appServiceWorkerSource, /__cairnSwLifecycleStarted/);
   assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);
@@ -3305,8 +3316,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/app-discipline-primer\.js"/);
   assert.match(sw, /"\/js\/app-onboarding\.js"/);
   assert.match(sw, /"\/js\/app-startup\.js"/);
+  assert.match(dockerfile, /ENV NPM_CONFIG_AUDIT=false[\s\S]*NPM_CONFIG_UPDATE_NOTIFIER=false/);
   assert.match(dockerfile, /COPY package\*\.json tsconfig\.json tsconfig\.client\.build\.json \.\//);
+  assert.match(dockerfile, /RUN --mount=type=cache,target=\/root\/\.npm,sharing=locked npm ci/);
   assert.match(dockerfile, /COPY scripts\/build-client\.mjs \.\/scripts\/build-client\.mjs/);
+  assert.match(dockerfile, /RUN --mount=type=cache,target=\/app\/\.tsbuildcache,sharing=locked npm run build/);
   assert.match(dockerfile, /COPY --from=builder \/app\/public\/js \.\/public\/js/);
 });
 
