@@ -902,6 +902,29 @@ declare global {
       }): void;
     };
 
+    CairnSettingsAgents: {
+      agentsSliceHtml(options: {
+        agentStrategy: string;
+        routeSummary: string;
+        routeRowsHtml: string;
+        agentHealthHtml: string;
+        agentActivityHtml: string;
+        noticedHtml: string;
+        coachEnabled: boolean;
+        coachDay: number;
+        coachHour: number;
+        dayNames: string[];
+      }): string;
+      agentListHtml(options: {
+        order: string[];
+        disabled: ReadonlySet<string>;
+        meta: Record<string, (Record<string, unknown> & { name: string }) | undefined>;
+        agentInfo: Record<string, { version: unknown; model_current: unknown; update_available?: boolean } | undefined>;
+        agentModels: Record<string, unknown[] | undefined>;
+        stagger?: (index: number) => string;
+      }): string;
+    };
+
     CairnMarkdown: {
       mdSafeUrl(url: unknown): string | null;
       mdInline(source: string): string;
@@ -1256,6 +1279,7 @@ declare global {
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
+  declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];

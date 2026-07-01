@@ -217,7 +217,6 @@
         // come from `wm`, all writes go back into `wm` + settingsBar.markDirty().
         const slice = () => requiredEl("#setSlice");
         function renderAgentsSlice() {
-            const stratOpt = (v, label) => `<option value="${v}" ${wm.agent_strategy === v ? "selected" : ""}>${label}</option>`;
             const enabledAgents = wm.order
                 .map((n) => meta[n])
                 .filter((a) => !!a && !wm.disabled.has(a.name));
@@ -235,41 +234,18 @@
             const routeRowsHtml = typeof settingsRouteRowsHtml === "function"
                 ? settingsRouteRowsHtml(routeTasks, enabledAgents, wm.routes)
                 : "";
-            slice().innerHTML = `
-      <section class="set-group set-group--flush">
-        <p class="set-group-sub">The agent brain. When you draft without naming an agent (the Coach <b>Auto</b> option and the weekly auto-coach), Cairn rotates across the agents you enable here.</p>
-
-        <div class="field" style="margin-top:14px"><label>Selection strategy</label>
-          <select id="strat">
-            ${stratOpt("round_robin", "Round-robin · even rotation")}
-            ${stratOpt("random", "Random · dice")}
-            ${stratOpt("priority", "Priority · top first, fall back on failure")}
-          </select></div>
-
-        <h1 class="lbl" style="margin:18px 0 8px">Agents</h1>
-        <div id="agentlist"></div>
-        <div class="agent-update">
-          <button id="updateAgentClis" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Update CLI tools</button>
-          <div id="agentCliUpdateStatus" class="sess-line agent-update-status"></div>
-        </div>
-        ${agentHealthHtml}
-        ${agentActivityHtml}
-        ${noticedHtml}
-
-        <details class="route-card">
-          <summary><h1 class="lbl" style="margin:22px 0 8px;display:inline">${escHtml(routeSummary)}</h1></summary>
-          <p class="set-group-sub" style="margin-top:2px">Optional. Pin a specific agent to a task — say chat to one, meal drafts to another. Leave any task on <b>Auto</b> to use the rotation above. Only enabled agents appear.</p>
-          <div id="routelist" class="route-list">${routeRowsHtml}</div>
-        </details>
-
-        <h1 class="lbl" style="margin:22px 0 8px">Weekly auto-coach</h1>
-        <label class="toggle"><input type="checkbox" id="coachEnabled" ${wm.coach_enabled ? "checked" : ""}>
-          <span>Draft a proposal automatically each week</span></label>
-        <div class="logrow" style="margin-top:12px">
-          <select id="coachDay" class="selflex">${dayNames.map((d, i) => `<option value="${i}" ${wm.coach_day === i ? "selected" : ""}>${d}</option>`).join("")}</select>
-          <select id="coachHour" class="selflex">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${wm.coach_hour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select>
-        </div>
-      </section>`;
+            slice().innerHTML = CairnSettingsAgents.agentsSliceHtml({
+                agentStrategy: wm.agent_strategy,
+                routeSummary,
+                routeRowsHtml,
+                agentHealthHtml,
+                agentActivityHtml,
+                noticedHtml,
+                coachEnabled: wm.coach_enabled,
+                coachDay: wm.coach_day,
+                coachHour: wm.coach_hour,
+                dayNames,
+            });
             // strategy + coach fields → working model
             requiredEl("#strat").addEventListener("change", (e) => { wm.agent_strategy = eventSelect(e).value; });
             requiredEl("#coachEnabled").addEventListener("change", (e) => { wm.coach_enabled = eventInput(e).checked; });
@@ -294,43 +270,7 @@
             const wrap = optionalEl("#agentlist");
             if (!wrap)
                 return;
-            wrap.innerHTML = wm.order.map((name, i) => {
-                const a = meta[name] || {};
-                const off = wm.disabled.has(name);
-                const chip = agentChipState(a);
-                const cached = agentInfo[name];
-                const infoLine = cached
-                    ? `CLI ${cached.version ? `v${escHtml(String(cached.version))}` : "version —"} · model: ${escHtml(String(cached.model_current || "—"))}${cached.update_available ? ` · <span class="agent-upd">update available</span>` : ""}`
-                    : "";
-                const models = agentModels[name];
-                const modelsList = Array.isArray(models)
-                    ? (models.length ? models.map((m) => `<li>${escHtml(String(m))}</li>`).join("") : `<li class="agent-models-empty">No models reported.</li>`)
-                    : "";
-                return `<div class="agent-card${off ? " off" : ""} reveal" style="${stagger(i)}">
-        <div class="agent-card-top">
-          <div class="agentmeta">
-            <div class="agentname">${escHtml(name)}</div>
-            <div class="agentdesc">${escHtml(a.description || "")}</div>
-          </div>
-          <span class="agent-chip ${chip.cls}">${chip.label}</span>
-        </div>
-        <div class="agent-card-ctl">
-          <div class="agentctl">
-            <button class="ordbtn" data-up="${escAttr(name)}" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
-            <button class="ordbtn" data-down="${escAttr(name)}" ${i === wm.order.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
-            <button class="togglebtn${off ? "" : " on"}" data-toggle="${escAttr(name)}">${off ? "OFF" : "ON"}</button>
-          </div>
-          <div class="agent-card-actions">
-            ${a.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
-            <button class="agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>
-            ${a.models_list ? `<button class="agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
-          </div>
-        </div>
-        ${a.configured === false ? `<div class="agent-card-note">Not in rotation until connected${a.can_login ? " — tap Connect" : ""}.</div>` : ""}
-        ${infoLine ? `<div class="agent-info-line">${infoLine}</div>` : ""}
-        ${Array.isArray(models) ? `<ul class="agent-models">${modelsList}</ul>` : ""}
-      </div>`;
-            }).join("");
+            wrap.innerHTML = CairnSettingsAgents.agentListHtml({ order: wm.order, disabled: wm.disabled, meta, agentInfo, agentModels, stagger });
             wrap.querySelectorAll("[data-toggle]").forEach((b) => b.addEventListener("click", () => {
                 const n = b.dataset.toggle || "";
                 wm.disabled.has(n) ? wm.disabled.delete(n) : wm.disabled.add(n);
