@@ -282,290 +282,52 @@ function renderCheckinDone(slot: HTMLElement, c: CaptureCheckin): void {
   slot.innerHTML = `<div class="checkin-done chip-in"><span class="checkin-done-mark" aria-hidden="true">✓</span> ${escHtml(parts.join(" · "))}</div>`;
 }
 
-// ---------- quiet Today reads (pull, never push) ----------
-// One fetch of GET /api/insights, split into two calm surfaces under the Brief:
-//   • the WEEKLY READ ("how the week went + the one change") → its own editorial
-//     card (#weeklySlot), so it's never buried by a newer connection;
-//   • the one-at-a-time CONNECTION insight → the smaller aside below (#insightSlot).
-// Each marks itself seen on view; thumbs up/down record feedback. Empty → nothing
-// (no nag); a conservative gated producer fills each surface in the background.
-async function loadTodayReads(): Promise<void> {
-  const wSlot = view.querySelector<HTMLElement>("#weeklySlot");
-  const iSlot = view.querySelector<HTMLElement>("#insightSlot");
-  if (!wSlot && !iSlot) return;
-  let list: CaptureInsight[] = [];
-  try { list = await api("/insights") as CaptureInsight[]; } catch { list = []; }
-  if (state.tab !== "today") return;
-  const arr = Array.isArray(list) ? list : [];
-  // Weekly read — the latest one, on its own card. Pull-only: surface what the
-  // scheduler (or demo seed) wrote; on an empty week, a weekend-gated fallback asks.
-  if (wSlot && wSlot.isConnected) {
-    const weekly = arr.find((i) => i && i.kind === "weekly_read");
-    if (weekly) renderWeeklyInSlot(wSlot, weekly);
-    else { wSlot.innerHTML = ""; maybeGenerateWeekly(); }
-  }
-  // Connection insight — the latest NON-weekly read, so the two surfaces never
-  // collide in one slot. Same ~20h-gated background producer as before.
-  if (iSlot && iSlot.isConnected) {
-    const conn = arr.find((i) => i && i.kind !== "weekly_read");
-    if (conn) renderInsightInSlot(iSlot, conn);
-    else { iSlot.innerHTML = ""; maybeGenerateInsight(); }
-  }
-}
-
-// Render an insight card into a slot + mark it seen (fire-and-forget, only when
-// still new). Shared by the existing-insight path and the background generator's
-// render callback so the card looks identical either way.
-function renderInsightInSlot(slot: HTMLElement, ins: CaptureInsight): void {
-  if (!slot || !ins) return;
-  renderInsightCard(slot, ins);
-  if (ins.status === "new") {
-    api(`/insights/${ins.id}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "seen" }),
-    }).catch(() => {});
-  }
-}
-
-// Opportunistic, gated insight generation — the pull-based producer for the Brief
-// insight card. At most ~once per 20h: the agent "looking" (a real RESULT, ok:true
-// or ok:false) burns the gate; a transport failure (the POST itself never landing)
-// does NOT, so a transient drop retries on the next open. Runs as a durable
-// background job (runOp), fully non-blocking — the card settles in when an insight
-// lands and stays quiet otherwise. Never a push.
-function maybeGenerateInsight(): void {
-  const slot = view.querySelector<HTMLElement>("#insightSlot");
-  if (!slot) return;
-  const last = Number(localStorage.getItem("cairn:lastInsightGen") || 0);
-  if (Date.now() - last < 20 * 3600 * 1000) return;
-  // Don't paint a loading state — an empty insight slot stays silent until (and
-  // unless) a genuine connection lands. The job streams in the background only.
-  const burnGate = () => { try { localStorage.setItem("cairn:lastInsightGen", String(Date.now())); } catch {} };
-  runOp("insight", {}, {
-    path: "/insights/generate",
-    anchor: "#insightSlot",
-    // The slot leaving the DOM (tab switch / re-render) drops the stream; the job
-    // keeps running server-side and re-attaches via jobReconnect.
-    guard: () => !view.querySelector("#insightSlot")?.isConnected,
-    isFail: (r: unknown) => {
-      const result = r as CaptureInsightResult | null;
-      return !result || result.ok === false || !result.insight;
-    },
-    render: (r: unknown) => {
-      const result = r as CaptureInsightResult;
-      burnGate(); // a genuine connection landed — the agent looked
-      if (state.tab !== "today") return;
-      const s = view.querySelector<HTMLElement>("#insightSlot");
-      if (s && result.insight) renderInsightInSlot(s, result.insight);
-    },
-    onFail: (err: unknown) => {
-      // A RESULT-shaped failure (ok:false / no insight) still means the agent looked
-      // → burn the gate. A null err is a transport drop → leave the gate so it
-      // retries next open. The slot stays silent either way (never a nag).
-      if (err) burnGate();
-    },
-  });
-}
-
-// Reconnector: an insight job running across a reload re-attaches and settles its
-// card into #insightSlot when it lands. Stays silent on no-connection / failure —
-// the insight surface is quiet by default. No loading state to rebuild (the slot
-// shows nothing while generating).
-function reconnectInsight(): ClientAgentOpHandlers | null {
-  if (state.tab !== "today") return null; // not on Today — a later renderToday() retries
-  const slot = view.querySelector<HTMLElement>("#insightSlot");
-  if (!slot) return null;
-  const burnGate = () => { try { localStorage.setItem("cairn:lastInsightGen", String(Date.now())); } catch {} };
-  const isFail = (r: CaptureInsightResult | null) => !r || r.ok === false || !r.insight;
-  return {
-    guard: () => !view.querySelector("#insightSlot")?.isConnected,
-    onDone: (r: unknown) => {
-      const result = r as CaptureInsightResult | null;
-      if (isFail(result)) { burnGate(); return; }
-      burnGate();
-      if (state.tab !== "today") return;
-      const s = view.querySelector<HTMLElement>("#insightSlot");
-      if (s && result?.insight) renderInsightInSlot(s, result.insight);
-    },
-    onError: () => {},
-    onCanceled: () => {},
+type CaptureReadsRuntime = {
+  createController(deps: {
+    root: ParentNode;
+    state: Pick<ClientAppState, "tab">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): unknown;
+    toast(message: string): void;
+    collapseEl(el: Element, done?: () => void): void;
+    escapeHtml(value: unknown): string;
+    storage?: Pick<Storage, "getItem" | "setItem"> | null;
+  }): {
+    weekRangeLabel(iso: unknown): string;
+    loadTodayReads(): Promise<void>;
+    reconnectInsight(): ClientAgentOpHandlers | null;
   };
-}
+  weekRangeLabel(iso: unknown): string;
+};
 
-// The card leads with the headline (the one thing to read), renders an optional
-// concrete suggestion as its own scannable line, and tucks the reasoning behind a
-// quiet "why this" disclosure — same calm idiom as the Brief's "tap to see why",
-// so the card is a glance with depth on demand, never a wall of text on open.
-function renderInsightCard(slot: HTMLElement, ins: CaptureInsight): void {
-  const text = escHtml(String(ins.text || ""));
-  const step = String(ins.next_step || "").trim();
-  const why = String(ins.rationale || "").trim();
-  const kicker = ins.kind === "weekly_read" ? "This week" : "A connection worth noting";
-  // Honest uncertainty — a low-confidence / explicitly-tentative read reads soft and
-  // leads with the same "Worth looking into ·" phrasing as a soft directive, so
-  // tentativeness is consistent across every surface (degrades to nothing today —
-  // the insight schema has no such field yet, so this is forward-safe).
-  const soft = ins.uncertain === true || ins.confidence === "low";
-  const lead = soft ? `<span class="insight-soft">Worth looking into · </span>` : "";
-  slot.innerHTML = `<section class="insight-card settle-in${soft ? " insight-card-soft" : ""}">
-      <div class="insight-kicker lbl"><span class="insight-glyph" aria-hidden="true">✦</span> ${kicker}</div>
-      <p class="insight-text">${lead}${text}</p>
-      ${step ? `<p class="insight-step"><span class="insight-step-lbl">Worth trying</span>${escHtml(step)}</p>` : ""}
-      ${why ? `<p class="insight-why" hidden>${escHtml(why)}</p>` : ""}
-      <div class="insight-foot">
-        <div class="insight-acts">
-          <button class="insight-act insight-act-go" data-ifb="up">Got it</button>
-          <button class="insight-act" data-ifb="down">Not useful</button>
-        </div>
-        ${why ? `<button class="insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
-      </div>
-    </section>`;
-  slot.querySelectorAll<HTMLElement>("[data-ifb]").forEach((b) =>
-    b.addEventListener("click", () => insightFeedback(slot, ins, b.dataset.ifb)));
-  const whyBtn = slot.querySelector<HTMLButtonElement>("[data-iwhy]");
-  const whyEl = slot.querySelector<HTMLElement>(".insight-why");
-  if (whyBtn && whyEl) {
-    whyBtn.addEventListener("click", () => {
-      const opening = whyEl.hidden;
-      whyEl.hidden = !opening;
-      if (opening) { whyEl.classList.remove("chip-in"); void whyEl.offsetWidth; whyEl.classList.add("chip-in"); }
-      whyBtn.setAttribute("aria-expanded", String(opening));
-      whyBtn.textContent = opening ? "hide" : "why this";
+let _captureReads: ReturnType<CaptureReadsRuntime["createController"]> | null = null;
+
+function captureReads(): ReturnType<CaptureReadsRuntime["createController"]> {
+  if (!_captureReads) {
+    _captureReads = (globalThis as unknown as { CairnCaptureReads: CaptureReadsRuntime }).CairnCaptureReads.createController({
+      root: view,
+      state,
+      api,
+      runOp,
+      toast,
+      collapseEl,
+      escapeHtml: escHtml,
+      storage: localStorage,
     });
   }
+  return _captureReads;
 }
 
-// Shared by the connection insight and the weekly read (both PUT /api/insights/:id).
-// cardSel is the card element to collapse on dismiss — ".insight-card" by default,
-// ".weekly-card" for the weekly read.
-async function insightFeedback(
-  slot: HTMLElement,
-  ins: CaptureInsight,
-  dir: string | undefined,
-  cardSel = ".insight-card",
-): Promise<void> {
-  // Both actions CLEAR the card — these are momentary surfacings, not a to-do
-  // list, so the positive path needs a graceful exit too (the old up-thumb just
-  // lingered with no way to resolve it). "Got it" records the up-vote AND
-  // dismisses in one PUT (the server writes the text to memory so the brain learns
-  // this kind of connection lands); "Not useful" dismisses with no positive signal.
-  const card = slot.querySelector(cardSel);
-  const body = dir === "up"
-    ? { feedback: "up", status: "dismissed" }
-    : { status: "dismissed" };
-  api(`/insights/${ins.id}`, {
-    method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).catch(() => {});
-  if (dir === "up") toast("Noted — I'll remember");
-  if (card) collapseEl(card, () => { slot.innerHTML = ""; });
-  else slot.innerHTML = "";
-}
-
-// ---------- the weekly read (E3): a calm Sunday card, not a buried insight ----------
-// "How the week went + the one change." Distinct from the connection insight: a
-// sage-mastheaded editorial card whose keystone is the single "One change" — the
-// whole point of a weekly read. Pull-never-push; surfaces only when one is waiting.
-
-// "Jun 9–15" — the Monday→Sunday week containing the read's date. Empty when
-// the date is missing/unparseable (then the masthead shows just "The week").
 function weekRangeLabel(iso: unknown): string {
-  const s = String(iso || "").slice(0, 10);
-  const [y, m, d] = s.split("-").map(Number);
-  if (!y || !m || !d) return "";
-  const date = new Date(y, m - 1, d);
-  if (Number.isNaN(date.getTime())) return "";
-  const dow = (date.getDay() + 6) % 7; // 0 = Monday
-  const mon = new Date(date); mon.setDate(date.getDate() - dow);
-  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-  const long = (dt: Date) => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return mon.getMonth() === sun.getMonth()
-    ? `${mon.toLocaleDateString(undefined, { month: "short" })} ${mon.getDate()}–${sun.getDate()}`
-    : `${long(mon)} – ${long(sun)}`;
+  return (globalThis as unknown as { CairnCaptureReads: CaptureReadsRuntime }).CairnCaptureReads.weekRangeLabel(iso);
 }
 
-// Render the weekly card + mark it seen (fire-and-forget, only when still new).
-function renderWeeklyInSlot(slot: HTMLElement, ins: CaptureInsight): void {
-  if (!slot || !ins) return;
-  renderWeeklyCard(slot, ins);
-  if (ins.status === "new") {
-    api(`/insights/${ins.id}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "seen" }),
-    }).catch(() => {});
-  }
+function loadTodayReads(): Promise<void> {
+  return captureReads().loadTodayReads();
 }
 
-function renderWeeklyCard(slot: HTMLElement, ins: CaptureInsight): void {
-  const text = escHtml(String(ins.text || ""));
-  const change = String(ins.next_step || "").trim();
-  const why = String(ins.rationale || "").trim();
-  const range = weekRangeLabel(ins.created_at);
-  slot.innerHTML = `<section class="weekly-card settle-in">
-      <div class="weekly-head">
-        <span class="weekly-kicker lbl">The week</span>
-        ${range ? `<span class="weekly-range">${escHtml(range)}</span>` : ""}
-      </div>
-      <p class="weekly-text">${text}</p>
-      ${change ? `<div class="weekly-change">
-          <span class="weekly-change-lbl lbl">One change</span>
-          <p class="weekly-change-text">${escHtml(change)}</p>
-        </div>` : ""}
-      ${why ? `<p class="weekly-why" hidden>${escHtml(why)}</p>` : ""}
-      <div class="weekly-foot">
-        <div class="insight-acts">
-          <button class="insight-act insight-act-go" data-ifb="up">Got it</button>
-          <button class="insight-act" data-ifb="down">Not useful</button>
-        </div>
-        ${why ? `<button class="insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
-      </div>
-    </section>`;
-  slot.querySelectorAll<HTMLElement>("[data-ifb]").forEach((b) =>
-    b.addEventListener("click", () => insightFeedback(slot, ins, b.dataset.ifb, ".weekly-card")));
-  const whyBtn = slot.querySelector<HTMLButtonElement>("[data-iwhy]");
-  const whyEl = slot.querySelector<HTMLElement>(".weekly-why");
-  if (whyBtn && whyEl) {
-    whyBtn.addEventListener("click", () => {
-      const opening = whyEl.hidden;
-      whyEl.hidden = !opening;
-      if (opening) { whyEl.classList.remove("chip-in"); void whyEl.offsetWidth; whyEl.classList.add("chip-in"); }
-      whyBtn.setAttribute("aria-expanded", String(opening));
-      whyBtn.textContent = opening ? "hide" : "why this";
-    });
-  }
-}
-
-// Fallback producer for the weekly card: the scheduler precomputes the weekly read
-// on real installs, but when none is waiting we ask the agent ONCE — gated to the
-// back half of the week (Fri–Sun, an end-of-week reflection) and at most once per
-// ~6 days, so it never fires mid-week or repeatedly. Fully background + non-blocking
-// (a durable job), and pull-never-push: the card settles in if a read lands, stays
-// silent otherwise. Never a notification.
-function maybeGenerateWeekly(): void {
-  const slot = view.querySelector<HTMLElement>("#weeklySlot");
-  if (!slot) return;
-  const dow = new Date().getDay(); // 0 Sun … 6 Sat
-  if (!(dow === 0 || dow === 5 || dow === 6)) return; // weekend reflection only
-  const last = Number(localStorage.getItem("cairn:lastWeeklyGen") || 0);
-  if (Date.now() - last < 6 * 24 * 3600 * 1000) return;
-  const burnGate = () => { try { localStorage.setItem("cairn:lastWeeklyGen", String(Date.now())); } catch {} };
-  runOp("weekly_read", { kind: "weekly_read" }, {
-    path: "/insights/generate",
-    anchor: "#weeklySlot",
-    guard: () => !view.querySelector("#weeklySlot")?.isConnected,
-    isFail: (r: unknown) => {
-      const result = r as CaptureInsightResult | null;
-      return !result || result.ok === false || !result.insight;
-    },
-    render: (r: unknown) => {
-      const result = r as CaptureInsightResult;
-      burnGate(); // a genuine weekly read landed — the agent looked
-      if (state.tab !== "today") return;
-      const s = view.querySelector<HTMLElement>("#weeklySlot");
-      if (s && result.insight) renderWeeklyInSlot(s, result.insight);
-    },
-    onFail: (err: unknown) => { if (err) burnGate(); },
-  });
+function reconnectInsight(): ClientAgentOpHandlers | null {
+  return captureReads().reconnectInsight();
 }
 
 // Classic client scripts share one global scope. Keep the cross-file capture API

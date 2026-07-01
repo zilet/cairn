@@ -75,6 +75,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-program-block-client.ts", output: "public/js/progress-program-block-client.js" },
   { source: "src/client/progress-screen.ts", output: "public/js/05-progress.js" },
   { source: "src/client/capture-provenance-client.ts", output: "public/js/capture-provenance-client.js" },
+  { source: "src/client/capture-reads-client.ts", output: "public/js/capture-reads-client.js" },
   { source: "src/client/capture.ts", output: "public/js/04-capture.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },

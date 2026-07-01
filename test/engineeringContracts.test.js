@@ -1088,6 +1088,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressProgramBlockSource = read("src/client/progress-program-block-client.ts");
   const progressScreenSource = read("src/client/progress-screen.ts");
   const captureProvenanceSource = read("src/client/capture-provenance-client.ts");
+  const captureReadsSource = read("src/client/capture-reads-client.ts");
   const captureTypesSource = read("src/client/capture-types.d.ts");
   const captureSource = read("src/client/capture.ts");
   const settingsRoutesSource = read("src/client/settings-routes.ts");
@@ -1216,6 +1217,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressProgramSummaryClient = read("public/js/progress-program-summary-client.js");
   const progressProgramBlockClient = read("public/js/progress-program-block-client.js");
   const captureProvenance = read("public/js/capture-provenance-client.js");
+  const captureReads = read("public/js/capture-reads-client.js");
   const capture = read("public/js/04-capture.js");
   const planEnduranceClient = read("public/js/plan-endurance-client.js");
   const planEditorClient = read("public/js/plan-editor-client.js");
@@ -1755,6 +1757,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/03-today\.js/);
   assert.match(clientBuild, /src\/client\/capture-provenance-client\.ts/);
   assert.match(clientBuild, /public\/js\/capture-provenance-client\.js/);
+  assert.match(clientBuild, /src\/client\/capture-reads-client\.ts/);
+  assert.match(clientBuild, /public\/js\/capture-reads-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
@@ -1797,6 +1801,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-program-summary-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-program-block-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-program-block-client\.js/);
+  assert.match(clientBuild, /src\/client\/capture-reads-client\.ts/);
+  assert.match(clientBuild, /public\/js\/capture-reads-client\.js/);
   assert.match(clientBuild, /src\/client\/capture\.ts/);
   assert.match(clientBuild, /public\/js\/04-capture\.js/);
   assert.match(clientBuild, /src\/client\/settings-routes\.ts/);
@@ -2217,13 +2223,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/capture-provenance-client.js") > index.indexOf("/js/03-today.js") &&
-      index.indexOf("/js/capture-provenance-client.js") < index.indexOf("/js/04-capture.js"),
+      index.indexOf("/js/capture-provenance-client.js") < index.indexOf("/js/capture-reads-client.js"),
     "capture-provenance-client.js must load after Today and before Capture consumers"
   );
   assert.ok(
-    index.indexOf("/js/04-capture.js") > index.indexOf("/js/capture-provenance-client.js") &&
+    index.indexOf("/js/capture-reads-client.js") > index.indexOf("/js/capture-provenance-client.js") &&
+      index.indexOf("/js/capture-reads-client.js") < index.indexOf("/js/04-capture.js"),
+    "capture-reads-client.js must load after Capture provenance and before Capture consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/04-capture.js") > index.indexOf("/js/capture-reads-client.js") &&
       index.indexOf("/js/04-capture.js") < index.indexOf("/js/05-progress.js"),
-    "04-capture.js must load after Capture provenance and before downstream screens"
+    "04-capture.js must load after Capture reads and before downstream screens"
   );
   assert.ok(
     index.indexOf("/js/meal-plan-client.js") > index.indexOf("/js/day-fuel-client.js") &&
@@ -2526,6 +2537,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressPerformanceClient, /\/\/ @ts-check/);
   assert.match(progressProgramAdjustmentsClient, /\/\/ @ts-check/);
   assert.match(progressTestWeekClient, /\/\/ @ts-check/);
+  assert.match(captureReads, /\/\/ @ts-check/);
   assert.match(capture, /\/\/ @ts-check/);
   assert.match(mealRecipeClient, /\/\/ @ts-check/);
   assert.match(mealRecipeController, /\/\/ @ts-check/);
@@ -3144,6 +3156,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureProvenanceSource, /const CAIRN_CAPTURE_PROVENANCE = \{/);
   assert.match(captureProvenanceSource, /CairnCaptureProvenance/);
   assert.doesNotMatch(captureSource, /function provenanceLineHtml|function wireProvenance|function loadTrainingProvenance|function loadMealProvenance/);
+  assert.match(captureReadsSource, /function createCaptureReadsController\(deps: CaptureReadsDeps\): CaptureReadsController/);
+  assert.match(captureReadsSource, /async function loadTodayReads\(\): Promise<void>/);
+  assert.match(captureReadsSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
+  assert.match(captureReadsSource, /CairnCaptureReads/);
+  assert.doesNotMatch(captureSource, /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/);
   assert.match(captureSource, /function loadTodayReads\(\): Promise<void>/);
   assert.match(captureSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
   assert.match(settingsRoutesSource, /function settingsRouteRowsHtml/);
@@ -3929,7 +3946,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureProvenance, /Object\.assign\(globalThis, \{/);
   assert.match(captureProvenance, /CairnCaptureProvenance/);
   assert.match(captureProvenance, /function loadTrainingProvenance/);
+  assert.match(captureReads, /Object\.assign\(globalThis, \{/);
+  assert.match(captureReads, /CairnCaptureReads/);
+  assert.match(captureReads, /function createCaptureReadsController/);
   assert.doesNotMatch(capture, /function loadTrainingProvenance|function provenanceLineHtml/);
+  assert.doesNotMatch(capture, /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/);
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
@@ -4097,6 +4118,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
   assert.match(sw, /"\/js\/meal-planner-controller\.js"/);
   assert.match(sw, /"\/js\/capture-provenance-client\.js"/);
+  assert.match(sw, /"\/js\/capture-reads-client\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
   assert.match(sw, /"\/js\/food-detail-controller\.js"/);
   assert.match(sw, /"\/js\/me-profile-controller\.js"/);
