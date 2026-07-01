@@ -8,10 +8,14 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
+// Reset the whole DB before every test (see test/_isolate.mjs) so a worker's
+// shared DB can't leak state between the files that land in the same shard —
+// making the suite correct regardless of file order or worker count.
+const isolateImport = pathToFileURL(path.join(here, "_isolate.mjs")).href;
 
 const args = process.argv.slice(2);
 const selectedFiles = [];
@@ -37,7 +41,12 @@ const allTestFiles = readdirSync(here)
 //   node test/run.mjs test/dayRead.test.js
 const testFiles = selectedFiles.length ? selectedFiles : allTestFiles;
 const cpuCount = typeof availableParallelism === "function" ? availableParallelism() : 4;
-const defaultWorkers = Math.min(4, Math.max(1, cpuCount), testFiles.length);
+// Leave a core for the orchestrator and cap at 8 — past that the per-worker
+// temp-DB + node-process overhead outweighs the gain (measured: 6→8 workers is
+// already near-flat), and it scales down cleanly on small CI (a 2-core box → 1).
+// Correctness is worker-count-independent (see test/_isolate.mjs), so this knob
+// is purely about speed.
+const defaultWorkers = Math.min(8, Math.max(1, cpuCount - 1), testFiles.length);
 const workers = Math.max(
   1,
   Math.min(
@@ -69,7 +78,7 @@ function partition(files, count) {
 function runShard(files, index, total) {
   const dir = mkdtempSync(path.join(tmpdir(), `cairn-test-${index + 1}-`));
   const start = performance.now();
-  const child = spawn(process.execPath, ["--test", "--test-concurrency=1", `--test-reporter=${reporter}`, ...files], {
+  const child = spawn(process.execPath, ["--import", isolateImport, "--test", "--test-concurrency=1", `--test-reporter=${reporter}`, ...files], {
     cwd: root,
     env: envFor(dir),
     stdio: ["ignore", "pipe", "pipe"],
