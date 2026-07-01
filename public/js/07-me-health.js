@@ -155,6 +155,37 @@
     }
     // ---------- Me: Health — the whole picture (review · markers · records) ----------
     let _hReadSpy = null; // scroll-spy IntersectionObserver for the Read tab's sticky nav
+    function healthReadDeps() {
+        return {
+            root: view,
+            state,
+            api,
+            cachedApi,
+            peekCached,
+            markRefreshing,
+            swrInvalidate,
+            runOp,
+            toast,
+            pollToken: () => pollToken,
+            select: $,
+            escapeAttr: escAttr,
+            escapeHtml: escHtml,
+            relTime,
+            stagger,
+            reducedMotion,
+            switchHealthSeg,
+            isHealthReviewRunning: () => CairnHealthPictureController.isHealthReviewRunning(),
+            loadHealthPicture: (token, docsPromise) => loadHealthPicture(token, docsPromise),
+            paintHealthPicture,
+            setReadSpy: (spy) => { _hReadSpy = spy; },
+            teardownReadSpy: () => {
+                if (_hReadSpy) {
+                    _hReadSpy.disconnect();
+                    _hReadSpy = null;
+                }
+            },
+        };
+    }
     function healthPictureDeps() {
         return {
             root: view,
@@ -463,88 +494,7 @@
     // two-column gutter), capped width on desktop. The targets carry scroll-margin-top so a
     // jump lands below the sticky chrome, and a scroll-spy highlights the section you're in.
     function paintHealthReadTab() {
-        const c = $("#hContent");
-        if (!c)
-            return;
-        if (_hReadSpy) {
-            _hReadSpy.disconnect();
-            _hReadSpy = null;
-        } // drop a prior tab's observer
-        c.innerHTML = `<div class="hread">
-      <nav class="hread-nav" aria-label="Jump to a section">
-        <button type="button" class="hread-chip" data-jump="hSynthesis">The read</button>
-        <button type="button" class="hread-chip" data-jump="hbDirectives">Connections</button>
-        <button type="button" class="hread-chip" data-jump="hRecovery">Recovery</button>
-        <button type="button" class="hread-chip" data-jump="hbMarkers">Markers</button>
-        <button type="button" class="hread-chip" data-jump="hbSupplements">Supplements</button>
-      </nav>
-      <div class="hbrain-intro sess"><div class="sess-line" style="color:var(--muted)">
-        One brain across your whole picture. A finding in your labs can quietly shape your meals, your training, and what to keep an eye on. It's here to inform — never medical advice — and nothing changes your plan on its own.
-      </div></div>
-      <div id="hSynthesis"></div>
-      <div id="hPicture">
-        <div class="hpic hpic-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div>
-      </div>
-      <div id="hbDirectives"><div class="hb-load">Gathering connections…</div></div>
-      <div id="hbSymptomLinks"></div>
-      <div id="hRecovery"></div>
-      <div id="hbMarkers"><div class="hb-load">Reading what matters most…</div></div>
-      <div id="hbSupplements"></div>
-    </div>`;
-        const chips = [...c.querySelectorAll(".hread-chip")];
-        const setActiveChip = (id) => chips.forEach((ch) => ch.classList.toggle("active", ch.dataset.jump === id));
-        // Jump chips: scroll the target slot into view; scroll-margin-top (CSS) keeps it clear
-        // of the sticky seg + nav. Mark it active immediately so the tap reads as a selection.
-        chips.forEach((b) => b.addEventListener("click", () => {
-            const el = b.dataset.jump ? view.querySelector("#" + b.dataset.jump) : null;
-            if (el)
-                el.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
-            setActiveChip(b.dataset.jump);
-        }));
-        // Scroll-spy: highlight the chip for whichever section sits under the sticky nav. The
-        // band (rootMargin) starts below the pinned chrome; the topmost section in it wins.
-        // Sections WITHOUT their own chip (the picture reads under "The read", symptom links
-        // under "Connections") map to the owning chip so no scroll position is left unlit.
-        if ("IntersectionObserver" in window) {
-            const spy = [["hSynthesis", "hSynthesis"], ["hPicture", "hSynthesis"], ["hbDirectives", "hbDirectives"], ["hbSymptomLinks", "hbDirectives"], ["hRecovery", "hRecovery"], ["hbMarkers", "hbMarkers"], ["hbSupplements", "hbSupplements"]];
-            const owner = new Map(spy);
-            const order = spy.map(([id]) => id);
-            const visible = new Set();
-            _hReadSpy = new IntersectionObserver((entries) => {
-                for (const e of entries) {
-                    if (e.isIntersecting)
-                        visible.add(e.target.id);
-                    else
-                        visible.delete(e.target.id);
-                }
-                const top = order.find((id) => visible.has(id));
-                if (top)
-                    setActiveChip(owner.get(top));
-            }, { rootMargin: "-104px 0px -55% 0px", threshold: 0 });
-            const spyObserver = _hReadSpy;
-            order.forEach((id) => { const el = document.getElementById(id); if (el && spyObserver)
-                spyObserver.observe(el); });
-        }
-        loadHealthSynthesis(pollToken);
-        loadRecoverySummary(pollToken, "#hRecovery");
-        loadPriorityMarkers(pollToken);
-        const directivesLoaded = CairnHealthDirectiveLoader.load(pollToken);
-        loadSymptomLinks(pollToken);
-        loadSupplements(pollToken);
-        // A provenance "why" deep-link can ask to land on the referenced directive rather
-        // than the top. The directives rail hydrates async, so wait for it to render, then
-        // scroll it into view. Consumed once; a normal entry never scrolls.
-        if (state.pendingHealthScroll === "hbDirectives") {
-            const token = pollToken;
-            state.pendingHealthScroll = null;
-            void directivesLoaded.then(() => { if (token === pollToken)
-                scrollHealthRailIntoView("#hbDirectives"); });
-        }
-        if (CairnHealthPictureController.isHealthReviewRunning()) {
-            paintHealthPicture();
-            return;
-        } // a run is still cooking
-        loadHealthPicture(pollToken, api("/health-docs"));
+        CairnHealthReadController.paintTab(healthReadDeps());
     }
     // ---- Standing tab: percentiles, signal age, and point-in-time BP ----
     function renderHealthStanding(data) {
@@ -688,299 +638,38 @@
             state.pendingHealthScroll = opts.scroll;
         activateTab("me");
     }
-    // Bring a Standing-tab connected-brain rail target into view once it has real content
-    // (the rail loads async, so wait for its "Gathering…" placeholder to be replaced
-    // before scrolling). pollToken-guarded so switching sub-views cancels it cleanly.
     function scrollHealthRailIntoView(sel) {
-        const token = pollToken;
-        let tries = 0;
-        const onRead = () => state.tab === "me" && state.meSeg === "health" && state.healthSeg === "read";
-        const tick = () => {
-            if (token !== pollToken || !onRead())
-                return;
-            const el = view.querySelector(sel);
-            const ready = el && !el.querySelector(".hb-load"); // directives rendered (placeholder gone)
-            if (ready || tries > 20) {
-                if (el)
-                    el.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
-                return;
-            }
-            tries++;
-            setTimeout(tick, 80);
-        };
-        setTimeout(tick, 80);
-    }
-    // ---- the elite-coach synthesis: the whole picture, read as ONE prioritized story ----
-    // Leads the Read tab as a tight narrative: headline + connected story + the 2-3
-    // priorities + the one change. The deterministic act-now / worth-tracking TIERS it
-    // used to repeat are now carried by the actionable connected-brain list (#hbDirectives)
-    // rendered directly below, so we no longer duplicate them here. Pull: it waits here; a
-    // refresh regenerates it as a streamed job. No scores; informational, never a verdict.
-    function renderHealthSynthesis(data, token) {
-        const wrap = $("#hSynthesis");
-        if (!wrap || !wrap.isConnected || (token != null && token !== pollToken))
-            return;
-        const payload = healthScreenRecord(data);
-        const s = payload.synthesis && typeof payload.synthesis === "object" ? payload.synthesis : null;
-        const focus = healthScreenRecord(payload.focus);
-        const hasFocus = Array.isArray(focus.priorities) && focus.priorities.length;
-        if (!s && !hasFocus) {
-            wrap.innerHTML = "";
-            return;
-        } // nothing to synthesize yet — stay quiet
-        // Newer labs landed since this read was written? Warn calmly, the same way the
-        // review card does — so the narrative never silently contradicts the fresh
-        // connected-brain list below it. Read defensively for both response shapes.
-        const stale = payload.stale ?? (s && s.stale) ?? false;
-        const prios = s && Array.isArray(s.priorities) ? healthScreenRows(s.priorities).filter((p) => p.label || p.the_move) : [];
-        let body;
-        if (s && s.headline) {
-            body = `
-      <h3 class="hsyn-headline">${escHtml(s.headline)}</h3>
-      ${s.story ? `<p class="hsyn-story">${escHtml(s.story)}</p>` : ""}
-      ${prios.length ? `<div class="hsyn-prios">${prios.map((p) => `
-        <div class="hsyn-prio">
-          <span class="hsyn-plabel">${escHtml(p.label || "")}</span>
-          ${p.the_move ? `<span class="hsyn-pmove">${escHtml(p.the_move)}</span>` : ""}
-          ${p.recheck ? `<span class="hsyn-precheck lbl">${escHtml(p.recheck)}</span>` : ""}
-        </div>`).join("")}</div>` : ""}
-      ${s.one_change ? `<div class="hsyn-onechange"><span class="lbl">If you change one thing</span><span>${escHtml(s.one_change)}</span></div>` : ""}
-      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${escHtml(relTime(s.generated_at))}` : ""}</span>${stale
-                ? `<button id="hsynRefresh" class="hpic-refresh hpic-refresh-stale" type="button" title="New results since this read"><span class="hdot hdot-warn"></span>New results — refresh</button>`
-                : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}</div>`;
-        }
-        else {
-            body = `
-      <p class="hsyn-invite">Your labs, training, recovery and nutrition — read as one connected, prioritized picture.</p>
-      <button class="draftbtn hsyn-gen" id="hsynGen" type="button">Read my whole picture</button>`;
-        }
-        wrap.innerHTML = `<div class="hsyn reveal"><div class="hsyn-kicker lbl">Your health — one picture</div>${body}</div>`;
-        $("#hsynRefresh")?.addEventListener("click", triggerHealthSynthesis);
-        $("#hsynGen")?.addEventListener("click", triggerHealthSynthesis);
+        CairnHealthReadController.scrollHealthRailIntoView(healthReadDeps(), sel);
     }
     function loadHealthSynthesis(token) {
-        const wrap = $("#hSynthesis");
-        if (!wrap || !wrap.isConnected)
-            return;
-        api("/health/synthesis")
-            .then((data) => renderHealthSynthesis(data || {}, token))
-            .catch(() => { });
+        CairnHealthReadController.loadSynthesis(healthReadDeps(), token);
     }
-    // Regenerate the synthesis — a streamed background job (reads the whole picture;
-    // can take ~30-90s), reconnects across reloads via runOp.
     function triggerHealthSynthesis() {
-        const wrap = $("#hSynthesis");
-        if (!wrap)
-            return;
-        const card = wrap.querySelector(".hsyn");
-        if (card && !card.querySelector(".job-cap")) {
-            const cap = document.createElement("div");
-            cap.className = "job-cap lbl hsyn-cap";
-            card.appendChild(cap);
-        }
-        runOp("health_synthesis", {}, {
-            path: "/health/synthesis",
-            anchor: "#hSynthesis .hsyn",
-            caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
-            guard: () => !$("#hSynthesis")?.isConnected,
-            render: (result) => {
-                const payload = healthScreenRecord(result);
-                if (payload.synthesis)
-                    renderHealthSynthesis(payload, pollToken);
-                else
-                    loadHealthSynthesis(pollToken);
-                swrInvalidate("plan:coach");
-            },
-            onFail: () => { toast("Couldn't read the picture right now — try again in a bit."); loadHealthSynthesis(pollToken); },
-        });
+        CairnHealthReadController.triggerSynthesis(healthReadDeps());
     }
-    // ---- Supplements: UNDERSTANDING, not a daily log ----
-    // Say it once in plain words ("creatine daily, omega-3, some D, whey occasionally")
-    // → the system approximates each into name · dose · cadence and folds it into the
-    // connected brain. No rows-per-day, no check-offs — just what you're taking.
-    // Symptom ↔ marker connections — a quiet "worth mentioning to your doctor" read when
-    // something the athlete logged (a life event, a check-in note) lines up with an
-    // out-of-range marker. Pull-only, informational, never diagnostic. Renders nothing
-    // when there's no genuine co-occurrence (the common, calm case).
+    function renderHealthSynthesis(data, token) {
+        CairnHealthReadController.renderSynthesis(data, healthReadDeps(), token);
+    }
     async function loadSymptomLinks(token) {
-        const wrap = $("#hbSymptomLinks");
-        if (!wrap || !wrap.isConnected)
-            return;
-        let r = null;
-        try {
-            r = await api("/symptom-links");
-        }
-        catch {
-            r = null;
-        }
-        if ((token != null && token !== pollToken) || !wrap.isConnected)
-            return;
-        const links = healthScreenRows(r?.links);
-        if (!links.length) {
-            wrap.innerHTML = "";
-            return;
-        }
-        const cards = links.slice(0, 3).map((l) => {
-            const mk = Array.isArray(l.markers)
-                ? healthScreenRows(l.markers).map((m) => `${escHtml(m.name)}${m.value != null ? ` ${escHtml(String(m.value))}` : ""}${m.unit ? ` ${escHtml(m.unit)}` : ""}`).join(", ")
-                : "";
-            return `<div class="symlink">
-        <div class="symlink-note">${escHtml(l.note || "")}</div>
-        ${mk ? `<div class="symlink-mk lbl">${mk}</div>` : ""}
-      </div>`;
-        }).join("");
-        wrap.innerHTML = `<div class="hb-section symlink-card reveal">
-      <span class="lbl">Worth mentioning to your doctor</span>
-      <p class="symlink-sub">Something you noted lines up with one of your lab markers. Informational only — a question for your clinician, never a diagnosis.</p>
-      ${cards}
-    </div>`;
+        await CairnHealthReadController.loadSymptomLinks(healthReadDeps(), token);
     }
     function loadSupplements(token) {
-        const wrap = $("#hbSupplements");
-        if (!wrap || !wrap.isConnected)
-            return;
-        const peek = peekCached("supplements");
-        if (peek)
-            renderSupplements(peek.data, token);
-        cachedApi("/supplements", {
-            key: "supplements",
-            onUpgrade: (data, { changed }) => { if (changed || !peek)
-                renderSupplements(data, token); },
-        }).catch(() => { if (!peek)
-            renderSupplements([], token); });
+        CairnHealthReadController.loadSupplements(healthReadDeps(), token);
     }
     function renderSupplements(list, token) {
-        const wrap = $("#hbSupplements");
-        if (!wrap || !wrap.isConnected || (token != null && token !== pollToken))
-            return;
-        const items = healthScreenRows(list);
-        const chips = items.map((s) => {
-            const bits = [s.dose, s.frequency].filter(Boolean).map(escHtml).join(" · ");
-            return `<div class="supp-chip" title="${escAttr(s.note || s.name)}">
-        <span class="supp-name">${escHtml(s.name)}</span>${bits ? `<span class="supp-meta">${bits}</span>` : ""}
-        <button class="supp-x" data-suppx="${s.id}" aria-label="Remove ${escAttr(s.name)}">×</button>
-      </div>`;
-        }).join("");
-        wrap.innerHTML = `<div class="hb-section supp-card reveal" style="${stagger(3)}">
-      <span class="lbl">What you're taking</span>
-      <p class="supp-sub">Say it once in plain words — I'll approximate the rest and fold it into your picture.</p>
-      ${items.length ? `<div class="supp-chips">${chips}</div>` : `<p class="supp-empty">Nothing yet. Tell me below, or just mention it in chat.</p>`}
-      <div class="supp-input">
-        <input id="suppText" type="text" placeholder="e.g. creatine daily, omega-3…" autocomplete="off" />
-        <button id="suppAdd" class="ghostbtn">Add</button>
-      </div>
-    </div>`;
-        const input = $("#suppText");
-        const submit = () => understandSupplementsFromInput();
-        $("#suppAdd")?.addEventListener("click", submit);
-        input?.addEventListener("keydown", (e) => { if (e.key === "Enter") {
-            e.preventDefault();
-            submit();
-        } });
-        wrap.querySelectorAll("[data-suppx]").forEach((b) => b.addEventListener("click", () => removeSupplement(Number(b.dataset.suppx))));
+        CairnHealthReadController.renderSupplements(list, healthReadDeps(), token);
     }
     async function understandSupplementsFromInput() {
-        const input = $("#suppText");
-        const text = (input?.value || "").trim();
-        if (!text)
-            return;
-        const btn = $("#suppAdd");
-        if (btn) {
-            btn.disabled = true;
-            btn.textContent = "Reading…";
-        }
-        try {
-            await api("/supplements/understand", {
-                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
-            });
-            swrInvalidate("supplements");
-            loadSupplements(pollToken);
-        }
-        catch {
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = "Add";
-            }
-        }
+        await CairnHealthReadController.understandSupplementsFromInput(healthReadDeps());
     }
     async function removeSupplement(id) {
-        try {
-            await api(`/supplements/${id}`, { method: "DELETE" });
-            swrInvalidate("supplements");
-            loadSupplements(pollToken);
-        }
-        catch { }
+        await CairnHealthReadController.removeSupplement(id, healthReadDeps());
     }
-    // ---- Recovery (calm, plain-language; never a score) ----
-    // Render a quiet line about how recovery's been over the window. ONE home now: the
-    // top of the Read view (#hRecovery). Bails to nothing / a quiet hint when there's
-    // no wearable or check-in data.
-    // SWR over /recovery?days=14 (key recovery:14): a warm re-entry paints the recovery
-    // read instantly, then revalidates. `sel` targets which slot this call paints.
     function loadRecoverySummary(token, sel) {
-        const wrap = $(sel);
-        if (!wrap || !wrap.isConnected)
-            return;
-        const paint = (r) => {
-            const summary = healthScreenRecord(r);
-            const w = $(sel);
-            if (token !== pollToken || !w || !w.isConnected)
-                return;
-            if (!summary.has_data) {
-                // quiet hint, not a nag — capture is offered, never demanded
-                w.innerHTML = CairnHealthRead.recoveryNoDataHtml();
-                return;
-            }
-            w.innerHTML = CairnHealthRead.recoveryHtml(summary);
-        };
-        const peek = peekCached("recovery:14");
-        if (peek) {
-            paint(peek.data);
-            if (!peek.fresh)
-                markRefreshing(true);
-        }
-        cachedApi("/recovery?days=14", {
-            key: "recovery:14",
-            onUpgrade: (data, { changed }) => { if (peek && !peek.fresh)
-                markRefreshing(false); if (changed || !peek)
-                paint(data); },
-        }).catch(() => { if (peek && !peek.fresh)
-            markRefreshing(false); });
+        CairnHealthReadController.loadRecoverySummary(healthReadDeps(), token, sel);
     }
-    // ---- Priority markers (optimal-zone framing, never a score) ----
-    // Phrase each marker in plain language against its optimal zone: "ApoB — above
-    // optimal", "HbA1c — in your optimal range", "Ferritin — below optimal". Order
-    // comes from the server (impact_score); we NEVER render that number.
-    // SWR over /markers/priority (key shared with the Markers tab): a warm re-entry
-    // into the Health → Read view paints "what matters now" instantly, then revalidates.
     function loadPriorityMarkers(token) {
-        const wrap = $("#hbMarkers");
-        if (!wrap || !wrap.isConnected)
-            return;
-        const paint = (res) => {
-            if (token !== pollToken || !wrap.isConnected)
-                return;
-            const markers = healthScreenRows(healthScreenRecord(res).markers);
-            wrap.innerHTML = CairnHealthRead.priorityMarkersSectionHtml(markers);
-            $("#hbToMarkers")?.addEventListener("click", () => switchHealthSeg("markers"));
-        };
-        const peek = peekCached("markers:priority");
-        if (peek) {
-            paint(peek.data);
-            if (!peek.fresh)
-                markRefreshing(true);
-        }
-        cachedApi("/markers/priority", {
-            key: "markers:priority",
-            onUpgrade: (data, { changed }) => { if (peek && !peek.fresh)
-                markRefreshing(false); if (changed || !peek)
-                paint(data); },
-            // No cached read + a thrown fetch (offline / parse failure): clear the
-            // "Reading what matters most…" placeholder to the calm empty state instead
-            // of leaving the loader stuck forever.
-        }).catch(() => { if (peek && !peek.fresh)
-            markRefreshing(false); if (!peek)
-            paint(null); });
+        CairnHealthReadController.loadPriorityMarkers(healthReadDeps(), token);
     }
     // ---- Cross-domain directives, grouped by domain (the review side) ----
     // Pure directive grouping and card rendering live in health-client.js.

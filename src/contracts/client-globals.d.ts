@@ -230,6 +230,31 @@ declare global {
     storage?: Pick<Storage, "getItem" | "setItem"> | null;
   };
 
+  type ClientHealthReadControllerDeps = {
+    root: ParentNode;
+    state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthScroll">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
+    peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    markRefreshing(on: unknown): void;
+    swrInvalidate(keyOrPrefix: string): void;
+    runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
+    toast(message: string): void;
+    pollToken(): number;
+    select<T extends Element = Element>(selector: string): T | null;
+    escapeAttr(value: unknown): string;
+    escapeHtml(value: unknown): string;
+    relTime(iso: string): string;
+    stagger(index?: number | null): string;
+    reducedMotion(): boolean;
+    switchHealthSeg(seg: ClientHealthSection): void;
+    isHealthReviewRunning(): boolean;
+    loadHealthPicture(token: number, docsPromise: Promise<unknown>): Promise<void>;
+    paintHealthPicture(): void;
+    setReadSpy(spy: IntersectionObserver): void;
+    teardownReadSpy(): void;
+  };
+
   type ClientHealthRecordsControllerDeps = {
     state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthDocId">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
@@ -974,6 +999,21 @@ declare global {
       optimalPhrase(marker: Record<string, unknown> | null | undefined): { word: string; tone: "ok" | "warn" | "watch" };
       priorityMarkerHtml(marker: Record<string, unknown> | null | undefined, index: number): string;
       priorityMarkersSectionHtml(markers: unknown): string;
+    };
+
+    CairnHealthReadController: {
+      paintTab(deps: ClientHealthReadControllerDeps): void;
+      loadSynthesis(deps: ClientHealthReadControllerDeps, token: number): void;
+      renderSynthesis(data: unknown, deps: ClientHealthReadControllerDeps, token?: number | null): void;
+      triggerSynthesis(deps: ClientHealthReadControllerDeps): void;
+      loadSymptomLinks(deps: ClientHealthReadControllerDeps, token: number): Promise<void>;
+      loadSupplements(deps: ClientHealthReadControllerDeps, token: number): void;
+      renderSupplements(list: unknown, deps: ClientHealthReadControllerDeps, token?: number | null): void;
+      understandSupplementsFromInput(deps: ClientHealthReadControllerDeps): Promise<void>;
+      removeSupplement(id: number, deps: ClientHealthReadControllerDeps): Promise<void>;
+      loadRecoverySummary(deps: ClientHealthReadControllerDeps, token: number, selector: string): void;
+      loadPriorityMarkers(deps: ClientHealthReadControllerDeps, token: number): void;
+      scrollHealthRailIntoView(deps: ClientHealthReadControllerDeps, selector: string): void;
     };
 
     CairnFoodNote: {
@@ -1721,6 +1761,7 @@ declare global {
   declare const CairnHealthDirectiveLoader: Window["CairnHealthDirectiveLoader"];
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
+  declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
   declare const CairnMeProfileController: Window["CairnMeProfileController"];
