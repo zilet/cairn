@@ -222,7 +222,7 @@ async function suggestedPlanDayNumber(session: TodayScreenTrainingSession | null
 // ---------- The Brief (day-read) ----------
 // Pure Brief markup lives in /js/today-brief-client.js. Stateful fetch/cache,
 // steer-job, reconnect, and focus-mode wiring live in /js/today-brief-controller.js.
-function todayBriefDeps() {
+function todayBriefDeps(): ClientTodayBriefControllerDeps {
   return {
     root: todayView,
     state: todayState,
@@ -257,23 +257,33 @@ async function reshapeToday() {
   await CairnTodayBriefController.reshapeToday(todayBriefDeps());
 }
 
-function briefHtml(read: any, { showPlan, hasPlanDay, isToday }: any) {
+function briefHtml(
+  read: (Partial<TodayScreenDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
+  { showPlan, hasPlanDay, isToday }: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
+): string {
   return CairnTodayBriefController.briefHtml(read, { showPlan, hasPlanDay, isToday }, todayBriefDeps());
 }
 
-function focusEngaged(date: any, { showPlan, hasLoggedSets, isToday }: any) {
+function focusEngaged(
+  date: unknown,
+  { showPlan, hasLoggedSets, isToday }: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
+): boolean {
   return CairnTodayBriefController.focusEngaged(date, { showPlan, hasLoggedSets, isToday }, todayBriefDeps());
 }
 
-function setFocus(date: any, on: any) {
+function setFocus(date: string, on: boolean): void {
   CairnTodayBriefController.setFocus(date, on, todayBriefDeps());
 }
 
-function focusBarHtml(read: any, day: any, { exDone, exTotal, isToday }: any) {
+function focusBarHtml(
+  read: Partial<TodayScreenDayRead> | null | undefined,
+  day: { name?: unknown } | null | undefined,
+  { exDone, exTotal, isToday }: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
+): string {
   return CairnTodayBriefController.focusBarHtml(read, day, { exDone, exTotal, isToday });
 }
 
-function briefSignalsText(read: any) {
+function briefSignalsText(read: Partial<TodayScreenDayRead> | null | undefined): string {
   return CairnTodayBriefController.briefSignalsText(read);
 }
 
