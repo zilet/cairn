@@ -598,119 +598,46 @@ async function renderToday(opts = {}) {
         }
         catch { }
     }
-    updateHeaderCondense(); // re-render may reset scroll → recompute the pinned-header state
-    // On a warm SWR re-render (a background revalidate found new data) snap the
-    // numerals to their final value — never re-count an already-shown number from 0.
-    runCountUps(view, { snap: soft });
-    const qlBtn = todayView.querySelector("#qlBtn");
-    const qlInput = todayView.querySelector("#qlInput");
-    if (qlBtn)
-        qlBtn.addEventListener("click", quickLog);
-    if (qlInput)
-        qlInput.addEventListener("keydown", (e) => { if (e.key === "Enter")
-            quickLog(); });
-    // "Log this run/ride" on a planned cardio card: prefill the free-text capture with
-    // a sensible sentence and focus it, so logging the effort is one tap + a tweak —
-    // the same activity-log path everything else flows through, never a new logger.
-    todayView.querySelectorAll("[data-cardio-log]").forEach((b) => b.addEventListener("click", () => {
-        const inp = todayView.querySelector("#qlInput");
-        if (!inp)
-            return;
-        inp.value = b.dataset.cardioLog;
-        inp.focus();
-        try {
-            inp.setSelectionRange(inp.value.length, inp.value.length);
-        }
-        catch { }
-        inp.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" });
-    }));
-    // "Sync now" on a run card's freshness line — pull from the watch, then re-render
-    // Today so this morning's run (and its zones/pace) lands in place.
-    wireCardioSync(view, () => renderToday({ soft: true }));
-    // "Apply to my plan" — fold the day's adapted targets into a DRAFT proposal.
-    const rxApplyBtn = todayView.querySelector("#rxApplyBtn");
-    if (rxApplyBtn)
-        rxApplyBtn.addEventListener("click", () => {
-            const d = Number(rxApplyBtn.dataset.rxDay);
-            applyDayProgression(rxApplyBtn, Number.isFinite(d) ? d : todayState.day);
-        });
-    wireBrief(read, { isToday });
-    // If we painted a provisional (cold-cache) read, upgrade it to the agentic read
-    // in place — the filament keeps running until the real read settles in.
-    if (read._provisional)
-        upgradeBriefInPlace(todayState.logDate, isToday);
-    // Connected-brain provenance: a quiet causal line under the Brief on a training
-    // day, if a training/watch directive shaped it ("eased volume — RHR ran high · why").
-    if (!focus && showPlan)
-        loadTrainingProvenance(isToday);
-    loadTableHint();
-    // The chrome — capture row, context banners, insight, frequents, week tier — only
-    // exists outside focus mode; skip its wiring entirely when focused.
-    if (!focus) {
-        setupWeightChip();
-        setupVoiceCapture();
-        loadFrequentFoods();
-        // The Brief-adjacent context surfaces (events / health focus / wearable strip /
-        // morning check-in / a waiting draft) live in .today-main, not the arbitrated
-        // rail, so they load unconditionally as before.
-        loadContextBanner();
-        // The standalone health-lever line is SUBSUMED by the conductor when it leads —
-        // one voice. It only loads (and the ◎ goal line / ✦ draft banner only render)
-        // when the conductor is unavailable, so Today degrades to exactly its prior shape.
-        if (!conductorLeads)
-            loadHealthFocusBanner();
-        loadWearable(isToday);
-        if (isToday) {
-            loadCheckin();
-            loadDraftProposals();
-        }
-        // The RAIL is arbiter-governed: run only the surfaces the agenda surfaced (in its
-        // ranked order, primary + more), plus wire any generic Era-2 cards. When the
-        // agenda is unavailable we fall back to the fixed-rail loaders exactly as before.
-        if (agenda) {
-            CairnTodayRailController.runAgendaRail(agenda, agendaGeneric, todayRailDeps());
-        }
-        else {
-            // Fallback (agenda route unavailable): the other rail cards still load. Fuel is
-            // intentionally NOT loaded here — it has no slot in the fallback rail and surfaces
-            // only via the agenda, so the evaluation-only fuel glance is never a capture nudge.
-            CairnTodayRailController.runFallbackRail(isToday, todayRailDeps());
-        }
-        todayView.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
-    }
-    // Focus toggle — enter (pill above the cards) / exit (slim header), each a smooth
-    // view-transition morph between the full Today and the focused logging todayView.
-    const focusEnterBtn = todayView.querySelector("#focusEnter");
-    if (focusEnterBtn)
-        focusEnterBtn.addEventListener("click", () => {
-            setFocus(todayState.logDate, true);
-            withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
-        });
-    const focusExitBtn = todayView.querySelector("#focusExit");
-    if (focusExitBtn)
-        focusExitBtn.addEventListener("click", () => {
-            setFocus(todayState.logDate, false);
-            withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
-        });
-    const paceOfferBtn = todayView.querySelector("#paceOffer");
-    if (paceOfferBtn)
-        paceOfferBtn.addEventListener("click", () => {
-            todayState.chatPrefill = todayCompass.paceOffer?.ask || "";
-            activateTab("chat");
-        });
-    const backBtn = todayView.querySelector("#backToday");
-    if (backBtn)
-        backBtn.addEventListener("click", () => {
-            todayState.logDate = localISO();
-            todayState.day = null;
-            todayState.dayPicked = false;
-            renderToday();
-        });
-    todayView.querySelectorAll(".daybtn").forEach((b) => b.addEventListener("click", () => {
-        todayState.day = Number(b.dataset.day);
-        todayState.dayPicked = true;
-        renderToday();
-    }));
+    CairnTodayPostRenderWiring.wirePostRender({
+        root: todayView,
+        state: todayState,
+        read,
+        isToday,
+        focus,
+        showPlan,
+        soft,
+        conductorLeads,
+        agenda,
+        agendaGeneric,
+        todayCompass,
+        updateHeaderCondense,
+        runCountUps,
+        quickLog,
+        reducedMotion,
+        wireCardioSync,
+        renderToday,
+        applyDayProgression,
+        wireBrief,
+        upgradeBriefInPlace,
+        loadTrainingProvenance,
+        loadTableHint,
+        setupWeightChip,
+        setupVoiceCapture,
+        loadFrequentFoods,
+        loadContextBanner,
+        loadHealthFocusBanner,
+        loadWearable,
+        loadCheckin,
+        loadDraftProposals,
+        runAgendaRail: CairnTodayRailController.runAgendaRail,
+        runFallbackRail: CairnTodayRailController.runFallbackRail,
+        todayRailDeps,
+        activateTab,
+        setFocus,
+        withViewTransition,
+        viewEnter,
+        localISO,
+    });
     wireGuides(view);
     CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
     setupAddExercise();

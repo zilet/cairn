@@ -2018,6 +2018,58 @@ declare global {
       }>;
     };
 
+    CairnTodayPostRenderWiring: {
+      wirePostRender(deps: {
+        root: HTMLElement;
+        state: {
+          logDate: string;
+          day: number | null;
+          dayPicked?: boolean;
+          chatPrefill?: string;
+        };
+        read: { _provisional?: boolean } | null | undefined;
+        isToday: boolean;
+        focus: boolean;
+        showPlan: boolean;
+        soft: boolean;
+        conductorLeads: boolean;
+        agenda: Partial<ClientTodayAgenda> | null | undefined;
+        agendaGeneric: ClientTodayAgendaCandidate[];
+        todayCompass: { paceOffer?: { ask?: string | null } | null };
+        updateHeaderCondense(): void;
+        runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
+        quickLog(): unknown;
+        reducedMotion(): boolean;
+        wireCardioSync(root: ParentNode, onSync: () => unknown): unknown;
+        renderToday(opts?: Record<string, unknown>): unknown;
+        applyDayProgression(button: Element | null | undefined, day: number | null | undefined): unknown;
+        wireBrief(read: { _provisional?: boolean } | null | undefined, options: { isToday: boolean }): unknown;
+        upgradeBriefInPlace(date: string, isToday: boolean): unknown;
+        loadTrainingProvenance(isToday: boolean): unknown;
+        loadTableHint(): unknown;
+        setupWeightChip(): unknown;
+        setupVoiceCapture(): unknown;
+        loadFrequentFoods(): unknown;
+        loadContextBanner(): unknown;
+        loadHealthFocusBanner(): unknown;
+        loadWearable(isToday: boolean): unknown;
+        loadCheckin(): unknown;
+        loadDraftProposals(): unknown;
+        runAgendaRail(
+          agenda: Partial<ClientTodayAgenda> | null | undefined,
+          genericPending: ClientTodayAgendaCandidate[],
+          deps: ClientTodayRailControllerDeps,
+        ): void;
+        runFallbackRail(isToday: boolean, deps: ClientTodayRailControllerDeps): void;
+        todayRailDeps(): ClientTodayRailControllerDeps;
+        activateTab(tab: string): unknown;
+        setFocus(date: string, on: boolean): unknown;
+        withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+        viewEnter(): void;
+        localISO(): string;
+      }): void;
+    };
+
     CairnTodayTraining: {
       RX_ACTION: Record<string, { word: string; cls: string }>;
       rxTargetText(rx: Partial<ClientPrescription> | null | undefined): string;
@@ -2400,6 +2452,7 @@ declare global {
   declare const CairnTodayRailController: Window["CairnTodayRailController"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
+  declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];

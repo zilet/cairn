@@ -63,6 +63,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-garmin-reconciliation-client.ts", output: "public/js/today-garmin-reconciliation-client.js" },
   { source: "src/client/today-side-loaders.ts", output: "public/js/today-side-loaders.js" },
   { source: "src/client/today-plan-session-preparation.ts", output: "public/js/today-plan-session-preparation.js" },
+  { source: "src/client/today-post-render-wiring.ts", output: "public/js/today-post-render-wiring.js" },
   { source: "src/client/today-screen.ts", output: "public/js/03-today.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
   { source: "src/client/progress-components-client.ts", output: "public/js/progress-components-client.js" },

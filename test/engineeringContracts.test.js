@@ -743,6 +743,8 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/today-context-client\.js"/);
   assert.match(sw, /"\/js\/today-garmin-reconciliation-client\.js"/);
   assert.match(sw, /"\/js\/today-side-loaders\.js"/);
+  assert.match(sw, /"\/js\/today-plan-session-preparation\.js"/);
+  assert.match(sw, /"\/js\/today-post-render-wiring\.js"/);
   assert.match(sw, /"\/js\/meal-plan-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
   assert.match(sw, /"\/js\/meal-swap-controller\.js"/);
@@ -1109,6 +1111,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayCompassSource = read("src/client/today-compass-client.ts");
   const todayGarminReconciliationSource = read("src/client/today-garmin-reconciliation-client.ts");
   const todaySideLoadersSource = read("src/client/today-side-loaders.ts");
+  const todayPlanSessionPreparationSource = read("src/client/today-plan-session-preparation.ts");
+  const todayPostRenderWiringSource = read("src/client/today-post-render-wiring.ts");
   const todayScreenSource = read("src/client/today-screen.ts");
   const progressEnduranceSource = read("src/client/progress-endurance-client.ts");
   const progressComponentsSource = read("src/client/progress-components-client.ts");
@@ -1260,6 +1264,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayCompassClient = read("public/js/today-compass-client.js");
   const todayGarminReconciliationClient = read("public/js/today-garmin-reconciliation-client.js");
   const todaySideLoadersClient = read("public/js/today-side-loaders.js");
+  const todayPlanSessionPreparationClient = read("public/js/today-plan-session-preparation.js");
+  const todayPostRenderWiringClient = read("public/js/today-post-render-wiring.js");
   const progressEnduranceClient = read("public/js/progress-endurance-client.js");
   const progressComponentsClient = read("public/js/progress-components-client.js");
   const progressChartClient = read("public/js/progress-chart-client.js");
@@ -1717,6 +1723,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-week-ahead-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-context-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-side-loaders\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-plan-session-preparation\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-post-render-wiring\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-endurance-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-components-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-chart-client\.js/);
@@ -1875,6 +1883,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-context-client\.js/);
   assert.match(clientBuild, /src\/client\/today-side-loaders\.ts/);
   assert.match(clientBuild, /public\/js\/today-side-loaders\.js/);
+  assert.match(clientBuild, /src\/client\/today-plan-session-preparation\.ts/);
+  assert.match(clientBuild, /public\/js\/today-plan-session-preparation\.js/);
+  assert.match(clientBuild, /src\/client\/today-post-render-wiring\.ts/);
+  assert.match(clientBuild, /public\/js\/today-post-render-wiring\.js/);
   assert.match(clientBuild, /src\/client\/today-screen\.ts/);
   assert.match(clientBuild, /public\/js\/03-today\.js/);
   assert.match(clientBuild, /src\/client\/capture-provenance-client\.ts/);
@@ -2053,6 +2065,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-garmin-reconciliation-client\.js/);
   assert.match(clientBuild, /src\/client\/today-side-loaders\.ts/);
   assert.match(clientBuild, /public\/js\/today-side-loaders\.js/);
+  assert.match(clientBuild, /src\/client\/today-plan-session-preparation\.ts/);
+  assert.match(clientBuild, /public\/js\/today-plan-session-preparation\.js/);
+  assert.match(clientBuild, /src\/client\/today-post-render-wiring\.ts/);
+  assert.match(clientBuild, /public\/js\/today-post-render-wiring\.js/);
   assert.match(clientBuild, /src\/client\/app\/onboarding\.ts/);
   assert.match(clientBuild, /public\/js\/app-onboarding\.js/);
   assert.match(clientBuild, /src\/client\/app\/startup\.ts/);
@@ -2208,6 +2224,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-side-loaders.js must load after Today side-loader dependencies and before 03-today.js"
   );
   assert.ok(
+    index.indexOf("/js/today-plan-session-preparation.js") > index.indexOf("/js/today-side-loaders.js") &&
+      index.indexOf("/js/today-plan-session-preparation.js") < index.indexOf("/js/today-post-render-wiring.js"),
+    "today-plan-session-preparation.js must load after Today side loaders and before post-render wiring"
+  );
+  assert.ok(
+    index.indexOf("/js/today-post-render-wiring.js") > index.indexOf("/js/today-plan-session-preparation.js") &&
+      index.indexOf("/js/today-post-render-wiring.js") < index.indexOf("/js/03-today.js"),
+    "today-post-render-wiring.js must load after Today preparation and before 03-today.js"
+  );
+  assert.ok(
     index.indexOf("/js/today-training-client.js") > index.indexOf("/js/today-plan-selection-client.js") &&
       index.indexOf("/js/today-training-client.js") < index.indexOf("/js/03-today.js"),
     "today-training-client.js must load before 03-today.js"
@@ -2313,9 +2339,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-context-client.js must load after Today week-ahead helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-endurance-client.js") > index.indexOf("/js/today-side-loaders.js") &&
+    index.indexOf("/js/progress-endurance-client.js") > index.indexOf("/js/today-post-render-wiring.js") &&
       index.indexOf("/js/progress-endurance-client.js") < index.indexOf("/js/05-progress.js"),
-    "progress-endurance-client.js must load after Today side-loader helpers and before Progress consumers"
+    "progress-endurance-client.js must load after Today helper wiring and before Progress consumers"
   );
   assert.ok(
     index.indexOf("/js/progress-components-client.js") > index.indexOf("/js/progress-endurance-client.js") &&
@@ -2868,6 +2894,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-context-client\.js/);
   assert.match(clientBuild, /src\/client\/today-side-loaders\.ts/);
   assert.match(clientBuild, /public\/js\/today-side-loaders\.js/);
+  assert.match(clientBuild, /src\/client\/today-plan-session-preparation\.ts/);
+  assert.match(clientBuild, /public\/js\/today-plan-session-preparation\.js/);
+  assert.match(clientBuild, /src\/client\/today-post-render-wiring\.ts/);
+  assert.match(clientBuild, /public\/js\/today-post-render-wiring\.js/);
   assert.match(clientBuild, /src\/client\/today-screen\.ts/);
   assert.match(clientBuild, /public\/js\/03-today\.js/);
   assert.match(clientBuild, /src\/client\/progress-endurance-client\.ts/);
@@ -3278,6 +3308,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySideLoadersSource, /async function loadDraftProposals\(deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /async function loadHealthFocusBanner\(deps: TodaySideLoaderDeps\): Promise<void>/);
   assert.match(todaySideLoadersSource, /CairnTodaySideLoaders/);
+  assert.match(todayPlanSessionPreparationSource, /type TodayPlanSessionPrepDeps = \{/);
+  assert.match(todayPlanSessionPreparationSource, /function groupLoggedSets\(session: TodayPlanSessionPrepSession \| null \| undefined\)/);
+  assert.match(todayPlanSessionPreparationSource, /function matchCardioEfforts\(/);
+  assert.match(todayPlanSessionPreparationSource, /async function preparePlanSession\(deps: TodayPlanSessionPrepDeps\): Promise<TodayPlanSessionPrepResult>/);
+  assert.match(todayPlanSessionPreparationSource, /CairnTodayPlanSessionPreparation/);
+  assert.match(todayPostRenderWiringSource, /type TodayPostRenderWiringDeps = \{/);
+  assert.match(todayPostRenderWiringSource, /function wirePostRender\(deps: TodayPostRenderWiringDeps\): void/);
+  assert.match(todayPostRenderWiringSource, /CairnTodayPostRenderWiring/);
+  assert.match(todayScreenSource, /todayPlanSessionPreparation\.preparePlanSession/);
+  assert.match(todayScreenSource, /CairnTodayPostRenderWiring\.wirePostRender/);
   assert.doesNotMatch(todayScreenSource, /\/garmin\/daily\?limit=1|\/mealplans\?limit=6|\/context-events\?active=1|\/proposals\?limit=8|\/health\/synthesis/);
   assert.doesNotMatch(todayScreenSource, /function collapseEl\(/);
   assert.doesNotMatch(todayScreenSource, /function expandEl\(/);
@@ -3999,6 +4039,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todaySideLoadersClient, /CairnTodaySideLoaders: CAIRN_TODAY_SIDE_LOADERS/);
   assert.match(todaySideLoadersClient, /loadWearable,/);
   assert.match(todaySideLoadersClient, /loadHealthFocusBanner,/);
+  assert.match(todayPlanSessionPreparationClient, /CairnTodayPlanSessionPreparation: CAIRN_TODAY_PLAN_SESSION_PREPARATION/);
+  assert.match(todayPlanSessionPreparationClient, /preparePlanSession,/);
+  assert.match(todayPostRenderWiringClient, /CairnTodayPostRenderWiring: CAIRN_TODAY_POST_RENDER_WIRING/);
+  assert.match(todayPostRenderWiringClient, /wirePostRender/);
   assert.match(agentLoginClient, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);
   assert.match(agentLoginClient, /Object\.assign\(window, \{ openAgentLoginModal \}\)/);
   assert.doesNotMatch(agentLoginClient, /^function\s+xtermWindow|^function\s+loadXtermAssets|^async function\s+openAgentLoginModal/m);
@@ -4541,6 +4585,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/today-week-ahead-client\.js"/);
   assert.match(sw, /"\/js\/today-context-client\.js"/);
   assert.match(sw, /"\/js\/today-side-loaders\.js"/);
+  assert.match(sw, /"\/js\/today-plan-session-preparation\.js"/);
+  assert.match(sw, /"\/js\/today-post-render-wiring\.js"/);
   assert.match(sw, /"\/js\/progress-endurance-client\.js"/);
   assert.match(sw, /"\/js\/progress-components-client\.js"/);
   assert.match(sw, /"\/js\/progress-chart-client\.js"/);
