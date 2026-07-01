@@ -29,6 +29,7 @@ const routes = [
   { path: "/app/me/health/read", tab: "me", expectedState: { meSeg: "health", healthSeg: "read" } },
   { path: "/app/me/health/records", tab: "me", expectedState: { meSeg: "health", healthSeg: "records" } },
   { path: "/app/me/memory", tab: "me", expectedState: { meSeg: "memory" } },
+  { path: "/app/me/family", tab: "me", expectedState: { meSeg: "family" } },
   { path: "/app/chat", tab: "chat" },
   { path: "/app/settings/data", tab: "settings", expectedState: { setSeg: "data" } },
   { path: "/app/settings/agents", tab: "settings", expectedState: { setSeg: "agents" } },

@@ -835,6 +835,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/life-client\.js"/);
   assert.match(sw, /"\/js\/life-controller\.js"/);
   assert.match(sw, /"\/js\/family-client\.js"/);
+  assert.match(sw, /"\/js\/family-controller\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/chat-attachment-client\.js"/);
   assert.match(sw, /"\/js\/chat-composer-focus-client\.js"/);
@@ -1318,6 +1319,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const lifeTimelineActionsSource = read("src/client/life-timeline-actions.ts");
   const lifeControllerSource = read("src/client/life-controller.ts");
   const familySource = read("src/client/family-client.ts");
+  const familyControllerSource = read("src/client/family-controller.ts");
   const meHealthScreenSource = read("src/client/me-health-screen.ts");
   const meHealthScreenCompositionSource = read("src/client/me-health-screen-composition.ts");
   const meRecordsScreenSource = read("src/client/me-records-screen.ts");
@@ -1504,6 +1506,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const lifeTimelineActions = read("public/js/life-timeline-actions.js");
   const lifeController = read("public/js/life-controller.js");
   const familyClient = read("public/js/family-client.js");
+  const familyControllerClient = read("public/js/family-controller.js");
   const healthDocsClient = read("public/js/health-docs-client.js");
   const chatClient = read("public/js/chat-client.js");
   const chatAttachmentClient = read("public/js/chat-attachment-client.js");
@@ -1586,6 +1589,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(smokeBrowser, /expectedState/);
   assert.match(smokeBrowser, /\/app\/me\/memory/);
   assert.match(smokeBrowser, /meSeg: "memory"/);
+  assert.match(smokeBrowser, /\/app\/me\/family/);
+  assert.match(smokeBrowser, /meSeg: "family"/);
   assert.match(smokeBrowser, /progressSeg: "energy"/);
   assert.match(smokeBrowser, /setSeg: "data"/);
   assert.match(smokeBrowser, /async function smokeTodayAddExercise/);
@@ -1891,6 +1896,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /render\(deps: ClientLifeControllerDeps\): Promise<void>/);
   assert.match(clientGlobals, /CairnFamily/);
   assert.match(clientGlobals, /familyCardHtml\(row: Record<string, unknown>, index\?: number\): string/);
+  assert.match(clientGlobals, /type ClientFamilyControllerDeps = \{/);
+  assert.match(clientGlobals, /CairnFamilyController/);
+  assert.match(clientGlobals, /render\(deps: ClientFamilyControllerDeps\): Promise<void>/);
   assert.match(clientGlobals, /CairnMeProfileForm/);
   assert.match(clientGlobals, /html\(\s*deps: MeProfileControllerDeps,\s*profile: MeProfileProfile,\s*goal: MeProfileGoalCheck,\s*context: MeProfileFormContext,/);
   assert.match(clientGlobals, /CairnMeProfileController/);
@@ -2022,6 +2030,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/me-memory-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/life-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/family-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/family-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/07-me-health\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-docs-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
@@ -2388,6 +2397,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/life-controller\.js/);
   assert.match(clientBuild, /src\/client\/family-client\.ts/);
   assert.match(clientBuild, /public\/js\/family-client\.js/);
+  assert.match(clientBuild, /src\/client\/family-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/family-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-health-tabs-controller\.ts/);
   assert.match(clientBuild, /public\/js\/me-health-tabs-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-health-screen\.ts/);
@@ -3096,8 +3107,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/family-client.js") > index.indexOf("/js/life-controller.js") &&
-      index.indexOf("/js/family-client.js") < index.indexOf("/js/08-me-records.js"),
-    "family-client.js must load before Records family consumers"
+      index.indexOf("/js/family-client.js") < index.indexOf("/js/family-controller.js"),
+    "family-client.js must load before the Family controller"
+  );
+  assert.ok(
+    index.indexOf("/js/family-controller.js") > index.indexOf("/js/family-client.js") &&
+      index.indexOf("/js/family-controller.js") < index.indexOf("/js/08-me-records.js"),
+    "family-controller.js must load before Records family consumers"
   );
   assert.ok(
     index.indexOf("/js/chat-client.js") > index.indexOf("/js/08-me-records.js") &&
@@ -3664,6 +3680,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/life-controller\.js/);
   assert.match(clientBuild, /src\/client\/family-client\.ts/);
   assert.match(clientBuild, /public\/js\/family-client\.js/);
+  assert.match(clientBuild, /src\/client\/family-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/family-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-health-screen\.ts/);
   assert.match(clientBuild, /public\/js\/07-me-health\.js/);
   assert.match(clientBuild, /src\/client\/me-records-screen\.ts/);
@@ -4673,6 +4691,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(familySource, /function familyCardHtml\(row: FamilyRow, index\?: number\): string/);
   assert.match(familySource, /function familySwatches\(selected: unknown\): string/);
   assert.match(familySource, /CairnFamily/);
+  assert.match(familyControllerSource, /CairnFamilyController/);
+  assert.match(familyControllerSource, /async function render\(deps: FamilyControllerDeps\): Promise<void>/);
+  assert.match(familyControllerSource, /async function load\(deps: FamilyControllerDeps\): Promise<void>/);
+  assert.match(familyControllerSource, /function startEdit\(card: HTMLElement \| null, deps: FamilyControllerDeps\): void/);
+  assert.match(familyControllerSource, /function startDelete\(btn: Element, deps: FamilyControllerDeps\): void/);
   assert.match(meProfileFormSource, /type MeProfileControllerDeps = \{/);
   assert.match(meProfileFormSource, /function profileHtml\(/);
   assert.match(meProfileFormSource, /function profileGoalMode\(profile: MeProfileProfile, goal: MeProfileGoalCheck\): string/);
@@ -5301,6 +5324,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(familyClient, /Object\.assign\(globalThis, \{ CairnFamily: CAIRN_FAMILY \}\)/);
   assert.match(familyClient, /window\.CairnFamily = CAIRN_FAMILY/);
   assert.doesNotMatch(familyClient, /^const\s+FAMILY_COLORS|^function\s+familyCardHtml/m);
+  assert.match(familyControllerClient, /Object\.assign\(globalThis, \{ CairnFamilyController: CAIRN_FAMILY_CONTROLLER \}\)/);
+  assert.match(familyControllerClient, /CairnFamilyController: CAIRN_FAMILY_CONTROLLER/);
+  assert.match(familyControllerClient, /render,/);
+  assert.match(familyControllerClient, /startEdit,/);
+  assert.match(familyControllerClient, /CairnFamily\.familyCardHtml/);
   assert.match(healthDocsClient, /Object\.assign\(globalThis, \{/);
   assert.match(healthDocsClient, /CairnHealthDocs/);
   assert.match(healthRecordsClient, /Object\.assign\(globalThis, \{ CairnHealthRecords: CAIRN_HEALTH_RECORDS \}\)/);
@@ -5584,9 +5612,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(lifeFormHelpers, /api\("\/context-events"/);
   assert.match(lifeTimelineActions, /api\(`\/context-events\/\$\{id\}`/);
   assert.doesNotMatch(lifeController, /CairnLife\.lifeEventHtml|CairnLife\.lifeFieldsHtml|api\("\/context-events"|api\(`\/context-events\/\$\{id\}`/);
-  assert.doesNotMatch(records, /const\s+FAMILY_COLORS|function\s+familyCardHtml|function\s+familySwatches/);
-  assert.match(records, /CairnFamily\.familyCardHtml/);
-  assert.match(records, /CairnFamily\.familySwatches/);
+  assert.doesNotMatch(records, /const\s+FAMILY_COLORS|function\s+familyCardHtml|function\s+familySwatches|CairnFamily\.familyCardHtml|CairnFamily\.familySwatches/);
+  assert.match(records, /function familyControllerDeps\(\)/);
+  assert.match(records, /CairnFamilyController\.render\(familyControllerDeps\(\)\)/);
+  assert.match(familyControllerSource, /CairnFamily\.familyCardHtml/);
+  assert.match(familyControllerSource, /CairnFamily\.familySwatches/);
+  assert.match(familyControllerClient, /CairnFamily\.familyCardHtml/);
+  assert.match(familyControllerClient, /CairnFamily\.familySwatches/);
   assert.match(chatHistoryClient, /CairnChatClient\.historySessionRow/);
   assert.match(chatHistoryClient, /CairnChatClient\.historyHitRow/);
   assert.match(chatHeaderController, /CairnChatClient\.headerActionsHtml\(\)/);
@@ -5756,6 +5788,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/life-client\.js"/);
   assert.match(sw, /"\/js\/life-controller\.js"/);
   assert.match(sw, /"\/js\/family-client\.js"/);
+  assert.match(sw, /"\/js\/family-controller\.js"/);
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
   assert.match(sw, /"\/js\/chat-attachment-client\.js"/);

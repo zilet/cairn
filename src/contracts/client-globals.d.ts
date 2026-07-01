@@ -200,6 +200,30 @@ declare global {
     mealDayHtml(day: unknown, dayIndex: number, context: ClientMealRowsContext): string;
   };
 
+  type ClientFamilyControllerDeps = {
+    view: HTMLElement;
+    state: {
+      tab?: string;
+      meSeg?: string;
+      _famById?: Record<string, unknown>;
+      [key: string]: unknown;
+    };
+    segments: readonly ClientSegment[];
+    handlers: Record<string, () => unknown>;
+    headerTitle: HTMLElement;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    armDelete(btn: Element, action: () => unknown): void;
+    escapeAttr(value: unknown): string;
+    invalidatePoll(): void;
+    localISO(date?: Date): string;
+    segBar(active: string, segments: readonly ClientSegment[]): string;
+    toast(message: string): void;
+    viewEnter(): void;
+    wireSeg(handlers: Record<string, () => unknown>): void;
+    withViewTransition(fn: () => unknown): unknown;
+    renderLife(): Promise<void>;
+  };
+
   type ClientBriefCache = ContractClientBriefCache;
   type ClientAppState = ContractClientAppState;
 
@@ -2313,6 +2337,14 @@ declare global {
       familySwatches(selected: unknown): string;
     };
 
+    CairnFamilyController: {
+      render(deps: ClientFamilyControllerDeps): Promise<void>;
+      load(deps: ClientFamilyControllerDeps): Promise<void>;
+      startEdit(card: HTMLElement | null, deps: ClientFamilyControllerDeps): void;
+      rewireCard(card: HTMLElement, deps: ClientFamilyControllerDeps): void;
+      startDelete(btn: Element, deps: ClientFamilyControllerDeps): void;
+    };
+
     CairnLife: {
       LIFE_KINDS: readonly (readonly [string, string])[];
       LIFE_ICONS: Record<string, string>;
@@ -3566,6 +3598,7 @@ declare global {
   declare const CairnMemory: Window["CairnMemory"];
   declare const CairnMeMemoryController: Window["CairnMeMemoryController"];
   declare const CairnFamily: Window["CairnFamily"];
+  declare const CairnFamilyController: Window["CairnFamilyController"];
   declare const CairnLife: Window["CairnLife"];
   declare const CairnLifeFormHelpers: Window["CairnLifeFormHelpers"];
   declare const CairnLifeTimelineActions: Window["CairnLifeTimelineActions"];

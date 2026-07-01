@@ -209,6 +209,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/life-timeline-actions.ts", output: "public/js/life-timeline-actions.js" },
   { source: "src/client/life-controller.ts", output: "public/js/life-controller.js" },
   { source: "src/client/family-client.ts", output: "public/js/family-client.js" },
+  { source: "src/client/family-controller.ts", output: "public/js/family-controller.js" },
   { source: "src/client/me-health-screen-composition.ts", output: "public/js/me-health-screen-composition.js" },
   { source: "src/client/me-health-screen.ts", output: "public/js/07-me-health.js" },
   { source: "src/client/me-records-screen.ts", output: "public/js/08-me-records.js" },
