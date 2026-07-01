@@ -347,179 +347,28 @@ function focusBarHtml(read, day, { exDone, exTotal, isToday }) {
 function briefSignalsText(read) {
     return CairnTodayBrief.signalsText(read);
 }
-// Session-suggest render helpers live in /js/today-session-suggest-client.js. This
-// screen keeps the job/reconnect/log-these wiring and delegates pure markup.
-// The shared runOp options for a session-suggest — used by both the live trigger
-// (askForSession) and the reload reconnector, so the render/fail behavior is
-// identical whether the result lands now or after a refresh.
-function sessionSuggestOpOpts() {
+function todaySessionSuggestDeps() {
     return {
-        path: "/session-suggest",
-        anchor: "#sugSlot",
-        caption: "session_suggest",
-        // The slot left the DOM (re-render / tab switch): drop the stream — the job
-        // keeps running server-side and re-attaches via jobReconnect. Release the lock
-        // so a later trigger isn't wedged on a stale in-flight flag.
-        guard: () => { const gone = !todayView.querySelector("#sugSlot")?.isConnected; if (gone)
-            sessionSuggestInFlight = false; return gone; },
-        isFail: (r) => !r || r.ok !== true || !r.session,
-        render: (r) => {
-            sessionSuggestInFlight = false;
-            const s = todayView.querySelector("#sugSlot");
-            if (!s)
-                return;
-            todayState.suggestedSession = r.session;
-            s.innerHTML = CairnTodaySessionSuggest.cardHtml(r.session, r.verified);
-            runCountUps(s);
-            wireSuggestCard(s);
-            s.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" });
-        },
-        onFail: (r) => {
-            sessionSuggestInFlight = false;
-            const s = todayView.querySelector("#sugSlot");
-            if (!s)
-                return;
-            s.innerHTML = CairnTodaySessionSuggest.failureHtml(r);
-            wireSuggestCard(s);
-        },
+        root: todayView,
+        state: todayState,
+        runOp,
+        thinkingCaption,
+        runCountUps,
+        collapseEl,
+        reducedMotion,
+        toast,
+        revealPlanThen,
+        appendOffPlanCard,
     };
 }
-// Reconnector: after a reload mid-run, jobReconnect rebuilds the loading card in
-// #sugSlot and returns the same handlers runOp would have used, so a session that
-// finished (or finishes) while we were away lands in place. The translation from
-// runOp's option shape to raw openJobStream handlers mirrors runOp's internals.
-// Registered at boot (the job-runner registry is defined later in the file).
-function reconnectSessionSuggest() {
-    const slot = todayView.querySelector("#sugSlot");
-    if (!slot)
-        return null; // not on Today — a later renderToday() will retry reconnect
-    sessionSuggestInFlight = true;
-    slot.innerHTML = CairnTodaySessionSuggest.loadingHtml();
-    const o = sessionSuggestOpOpts();
-    let stop = () => { };
-    const capEl = slot.querySelector(".job-cap");
-    if (capEl)
-        stop = thinkingCaption(capEl, o.caption);
-    if (!reducedMotion())
-        slot.classList.add("is-thinking");
-    const clear = () => { stop(); const s = todayView.querySelector("#sugSlot"); if (s) {
-        s.classList.remove("is-thinking", "is-thinking--determinate");
-        s.style.removeProperty("--frac");
-    } };
-    return {
-        guard: o.guard,
-        onDone: (result) => { clear(); if (o.isFail(result))
-            o.onFail(result);
-        else
-            o.render(result); },
-        onError: () => { clear(); o.onFail(null); },
-        onCanceled: () => { clear(); o.onFail(null); },
-    };
+function reconnectSessionSuggest(job) {
+    return CairnTodaySessionSuggestController.reconnectSessionSuggest(job, todaySessionSuggestDeps());
 }
-// Ask the buddy for a session right now. POSTs /session-suggest as a durable
-// background job (server backgrounds it; falls back to an inline result when the
-// toggle is off — runOp handles both). The op streams evolving progress into
-// #sugSlot and reconnects after a reload. Mirrors the meal-swap failure UX:
-// ok:false (or unreachable) surfaces as a gentle inline line, never a hard error.
-let sessionSuggestInFlight = false;
-// Reveal a small free-text composer so the athlete can just SAY what they want —
-// "legs sore from yesterday's run, easier on the legs", "30 min, no barbell",
-// "shoulders fried, upper pull focus". The text rides to /session-suggest as the
-// free-text `constraints`, where the coach reads it like a coach (and gets a swap
-// menu from the variation library to trade movements). Empty → a plain session.
 function revealSessionComposer() {
-    const slot = todayView.querySelector("#sugSlot");
-    if (!slot || sessionSuggestInFlight)
-        return;
-    slot.innerHTML = CairnTodaySessionSuggest.composerHtml();
-    const input = slot.querySelector(".sug-prompt");
-    if (input && !reducedMotion())
-        setTimeout(() => input.focus(), 60);
-    const go = () => { const t = (input?.value || "").trim(); askForSession(t ? { constraints: t } : {}); };
-    slot.querySelector("[data-sugbuild]")?.addEventListener("click", go);
-    slot.querySelector("[data-sugcancel]")?.addEventListener("click", () => { slot.innerHTML = ""; });
-    slot.querySelectorAll("[data-vibe]").forEach((b) => b.addEventListener("click", () => {
-        // A vibe chip seeds the box (append, so they can combine), then they can refine or build.
-        if (!input)
-            return;
-        input.value = input.value.trim() ? `${input.value.trim()}, ${b.dataset.vibe}` : b.dataset.vibe;
-        input.focus();
-    }));
-    input?.addEventListener("keydown", (e) => { if (e.key === "Enter") {
-        e.preventDefault();
-        go();
-    } });
+    CairnTodaySessionSuggestController.revealSessionComposer(todaySessionSuggestDeps());
 }
 async function askForSession(opts = {}) {
-    if (sessionSuggestInFlight) {
-        toast("Already drafting a session…");
-        return;
-    }
-    const slot = todayView.querySelector("#sugSlot");
-    if (!slot)
-        return;
-    sessionSuggestInFlight = true;
-    // The loading card carries a .job-cap for the evolving thinkingCaption; a running
-    // session re-attaches after a reload via its registered reconnector.
-    slot.innerHTML = CairnTodaySessionSuggest.loadingHtml();
-    const body = { date: todayState.logDate };
-    if (opts.minutes != null)
-        body.minutes = opts.minutes;
-    if (opts.focus)
-        body.focus = opts.focus;
-    if (opts.equipment)
-        body.equipment = opts.equipment;
-    if (opts.constraints)
-        body.constraints = opts.constraints; // free-text vibe ("legs sore — easier on the legs")
-    await runOp("session_suggest", body, sessionSuggestOpOpts());
-}
-// Wire the suggest card's actions (log these / dismiss / retry).
-function wireSuggestCard(slot) {
-    slot.querySelectorAll("[data-sugaction]").forEach((b) => b.addEventListener("click", () => {
-        const act = b.dataset.sugaction;
-        const card = slot.querySelector(".sug-card");
-        if (act === "dismiss") {
-            // ease the card out instead of a hard clear
-            todayState.suggestedSession = null;
-            if (card)
-                collapseEl(card, () => { slot.innerHTML = ""; });
-            else
-                slot.innerHTML = "";
-            return;
-        }
-        if (act === "retry") {
-            askForSession();
-            return;
-        }
-        if (act === "log") {
-            const session = todayState.suggestedSession;
-            if (!session || !Array.isArray(session.items))
-                return;
-            // reveal the plan surface so the off-plan cards have somewhere to land,
-            // then drop each suggested item in via the existing add-exercise path.
-            const handoff = () => {
-                revealPlanThen(() => {
-                    for (const it of session.items) {
-                        if (!it || !it.exercise)
-                            continue;
-                        appendOffPlanCard(it.exercise, it.mode === "timed" || it.target_seconds != null ? "timed" : "reps");
-                    }
-                    todayState.suggestedSession = null;
-                    const s = todayView.querySelector("#sugSlot");
-                    if (s)
-                        s.innerHTML = "";
-                    toast("Added to today — log as you go");
-                }, { blank: true });
-            };
-            // when the plan surface is already shown the hand-off happens in place, so
-            // collapse the card first for continuity; otherwise the full re-render
-            // replaces the empty slot and the collapse would be cut short — go straight.
-            if (card && todayView.querySelector(".addex"))
-                collapseEl(card, handoff);
-            else
-                handoff();
-        }
-    }));
+    await CairnTodaySessionSuggestController.askForSession(opts, todaySessionSuggestDeps());
 }
 // Reveal the plan/logging surface for the selected date, then run `after` once the
 // surface exists in the DOM. If it's already shown, run immediately.

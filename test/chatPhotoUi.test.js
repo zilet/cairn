@@ -38,10 +38,13 @@ test("chat photo picker settles keyboard geometry before and after the native pi
 
 test("chat photo composer can refocus the same textarea after the keyboard hides", () => {
   assert.match(chat, /const\s+recoverChatInputFocus\s*=\s*\(\)\s*=>/);
-  assert.match(chat, /document\.body\.classList\.contains\("kb-open"\)/);
-  assert.match(chat, /document\.activeElement\s*!==\s*input/);
-  assert.match(chat, /input\.blur\(\)/);
+  assert.match(chat, /const\s+kbOpen\s*=\s*document\.body\.classList\.contains\("kb-open"\)/);
+  assert.match(chat, /const\s+alreadyFocused\s*=\s*document\.activeElement\s*===\s*input/);
+  assert.match(chat, /if\s*\(!kbOpen\s*&&\s*alreadyFocused\)\s*input\.blur\(\)/);
+  assert.match(chat, /if\s*\(!alreadyFocused\s*\|\|\s*!kbOpen\)\s*\{/);
   assert.match(chat, /input\.focus\(\{\s*preventScroll:\s*true\s*\}\)/);
+  assert.doesNotMatch(chat, /document\.body\.classList\.contains\("kb-open"\)\)\s*return/);
+  assert.doesNotMatch(chat, /document\.activeElement\s*!==\s*input\)\s*return/);
   assert.match(chat, /input\.addEventListener\("pointerdown",\s*recoverChatInputFocus\)/);
   assert.match(chat, /input\.addEventListener\("pointerup"[\s\S]*settleChatViewport/);
 });

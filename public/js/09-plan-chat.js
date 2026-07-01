@@ -449,16 +449,19 @@ async function renderChat() {
                 measureChatTop(); }, d);
     };
     const recoverChatInputFocus = () => {
-        if (!isSoftKeyboardChat() || document.body.classList.contains("kb-open"))
+        if (!isSoftKeyboardChat())
             return;
-        if (document.activeElement !== input)
-            return;
-        input.blur();
-        try {
-            input.focus({ preventScroll: true });
-        }
-        catch {
-            input.focus();
+        const kbOpen = document.body.classList.contains("kb-open");
+        const alreadyFocused = document.activeElement === input;
+        if (!kbOpen && alreadyFocused)
+            input.blur();
+        if (!alreadyFocused || !kbOpen) {
+            try {
+                input.focus({ preventScroll: true });
+            }
+            catch {
+                input.focus();
+            }
         }
         settleChatViewport();
     };

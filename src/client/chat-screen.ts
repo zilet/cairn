@@ -453,11 +453,14 @@ async function renderChat(): Promise<void> {
     for (const d of [80, 160, 260, 380, 520]) setTimeout(() => { if (state.tab === "chat") measureChatTop(); }, d);
   };
   const recoverChatInputFocus = () => {
-    if (!isSoftKeyboardChat() || document.body.classList.contains("kb-open")) return;
-    if (document.activeElement !== input) return;
-    input.blur();
-    try { input.focus({ preventScroll: true }); }
-    catch { input.focus(); }
+    if (!isSoftKeyboardChat()) return;
+    const kbOpen = document.body.classList.contains("kb-open");
+    const alreadyFocused = document.activeElement === input;
+    if (!kbOpen && alreadyFocused) input.blur();
+    if (!alreadyFocused || !kbOpen) {
+      try { input.focus({ preventScroll: true }); }
+      catch { input.focus(); }
+    }
     settleChatViewport();
   };
   input.addEventListener("pointerdown", recoverChatInputFocus);

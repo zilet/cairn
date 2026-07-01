@@ -1238,6 +1238,28 @@ declare global {
       composerHtml(vibes?: readonly string[]): string;
     };
 
+    CairnTodaySessionSuggestController: {
+      askForSession(
+        opts: { minutes?: unknown; focus?: unknown; equipment?: unknown; constraints?: unknown } | undefined,
+        deps: {
+          root: ParentNode;
+          state: { logDate?: string; suggestedSession?: ClientSessionSuggestion | null };
+          runOp(kind: "session_suggest", body: Record<string, unknown>, options: ClientAgentOpHandlers): Promise<unknown>;
+          thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
+          runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
+          collapseEl(el: Element, done?: () => void): void;
+          reducedMotion(): boolean;
+          toast(message: string): void;
+          revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
+          appendOffPlanCard(name: unknown, mode: "timed" | "reps"): unknown;
+        },
+      ): Promise<void>;
+      reconnectSessionSuggest(job: unknown, deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): unknown;
+      revealSessionComposer(deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): void;
+      sessionSuggestOpOpts(deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): ClientAgentOpHandlers;
+      wireSuggestCard(slot: Element, deps: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1]): void;
+    };
+
     CairnTodaySessionStatus: {
       FEEL_FACES: readonly string[];
       setChipHtml(set: Record<string, unknown> | null | undefined, index?: number): string;
@@ -1332,6 +1354,7 @@ declare global {
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnTodayBrief: Window["CairnTodayBrief"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
+  declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];
