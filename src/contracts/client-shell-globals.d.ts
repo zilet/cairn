@@ -2,7 +2,6 @@ export {};
 
 declare global {
   declare let pollToken: number;
-  declare let artEnabled: boolean;
   declare let primaryDiscipline: string;
   declare const PROGRESS_SEG: readonly ClientSegment[];
   declare const PROGRESS_HANDLERS: Record<string, () => unknown>;

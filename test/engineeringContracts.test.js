@@ -703,6 +703,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/api-client\.js"/);
   assert.match(sw, /"\/js\/app-download\.js"/);
   assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
+  assert.match(sw, /"\/js\/art-controller\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
   assert.match(sw, /"\/js\/02-ui\.js"/);
   assert.match(sw, /"\/js\/detail-overlay-client\.js"/);
@@ -1037,6 +1038,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const agentLoginSource = read("src/client/agent-login-client.ts");
   const agentJobClientSource = read("src/client/agent-job-client.ts");
   const coreStateSource = read("src/client/app/state.ts");
+  const artControllerSource = read("src/client/art-controller.ts");
   const uiShellSource = read("src/client/ui-shell.ts");
   const uiShellTypesSource = read("src/client/ui-shell-types.d.ts");
   const pwaInstallSource = read("src/client/pwa-install-coach.ts");
@@ -1169,6 +1171,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const agentLoginClient = read("public/js/agent-login-client.js");
   const agentJobClient = read("public/js/agent-job-client.js");
   const coreState = read("public/js/01-core.js");
+  const artController = read("public/js/art-controller.js");
   const pwaInstall = read("public/js/pwa-install-coach.js");
   const restTimer = read("public/js/rest-timer.js");
   const coachingFocusClient = read("public/js/coaching-focus-client.js");
@@ -1686,6 +1689,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
   assert.match(clientBuild, /src\/client\/app\/state\.ts/);
   assert.match(clientBuild, /public\/js\/01-core\.js/);
+  assert.match(clientBuild, /src\/client\/art-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/art-controller\.js/);
   assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
@@ -1925,6 +1930,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf("/js/app-sw-recovery.js") > index.indexOf("/js/app-download.js") &&
       index.indexOf("/js/app-sw-recovery.js") < index.indexOf("/js/01-core.js"),
     "app-sw-recovery.js must load before app state and fragile feature scripts"
+  );
+  assert.ok(
+    index.indexOf("/js/art-controller.js") > index.indexOf("/js/01-core.js") &&
+      index.indexOf("/js/art-controller.js") < index.indexOf("/js/02-ui.js"),
+    "art-controller.js must load after app state/API helpers and before 02-ui.js"
   );
   assert.ok(
     index.indexOf("/js/pwa-install-coach.js") > index.indexOf("/js/01-core.js") &&
@@ -2471,6 +2481,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiClient, /\/\/ @ts-check/);
   assert.match(appDownload, /\/\/ @ts-check/);
   assert.match(appSwRecovery, /\/\/ @ts-check/);
+  assert.match(artController, /\/\/ @ts-check/);
   assert.match(agentJobClient, /\/\/ @ts-check/);
   assert.match(agentJobClientSource, /function\s+registerJobReconnector/);
   assert.match(agentJobClientSource, /async function\s+enqueueJob/);
@@ -2555,6 +2566,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-download\.js/);
   assert.match(clientBuild, /src\/client\/app\/sw-recovery\.ts/);
   assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
+  assert.match(clientBuild, /src\/client\/art-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/art-controller\.js/);
   assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
@@ -2859,6 +2872,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coreStateSource, /const appHeaderTitle = \(\(\) => \{/);
   assert.match(coreStateSource, /const appState: ClientAppState/);
   assert.match(coreStateSource, /Object\.assign\(globalThis, \{ \$: query, view: appView, headerTitle: appHeaderTitle, state: appState \}\)/);
+  assert.match(artControllerSource, /function artImg\(kind: string, q: unknown/);
+  assert.match(artControllerSource, /async function primeArtManifest\(\): Promise<void>/);
+  assert.match(artControllerSource, /Object\.defineProperty\(globalThis, "artEnabled"/);
+  assert.doesNotMatch(uiShellSource, /const ART_READY_LS|function artPhotoLoaded|function primeArtManifest/);
   assert.match(uiShellTypesSource, /type ToastOptions = \{ action\?: string; onAction\?: \(\) => void \}/);
   assert.match(uiShellTypesSource, /type UiRecord = Record<string, unknown>/);
   assert.match(uiShellSource, /function setTodayHeaderTitle\(\)/);
