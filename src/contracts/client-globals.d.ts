@@ -402,6 +402,17 @@ declare global {
     setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
   };
 
+  type ClientHealthDocUploadControllerDeps = {
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    enrichmentActive(status: unknown): boolean;
+    pollDoc(id: string | number): void;
+    wireDoc(el: HTMLElement | null): void;
+    getHealthPictureCache(): ClientHealthPictureCache | null;
+    setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
+    paintHealthPicture(): void;
+  };
+
   type ClientMeMemoryControllerDeps = {
     view: HTMLElement;
     state: Pick<ClientAppState, "tab" | "meSeg">;
@@ -1428,6 +1439,11 @@ declare global {
       recordsListHtml(docs: unknown): string;
     };
 
+    CairnHealthDocUploadController: {
+      wireUpload(deps: ClientHealthDocUploadControllerDeps): void;
+      refreshPictureAfterUpload(doc: ClientHealthDocument, deps: ClientHealthDocUploadControllerDeps): void;
+    };
+
     CairnHealthRecordsController: {
       render(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
       loadDocs(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
@@ -2038,6 +2054,7 @@ declare global {
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
+  declare const CairnHealthDocUploadController: Window["CairnHealthDocUploadController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsDataController: Window["CairnSettingsDataController"];

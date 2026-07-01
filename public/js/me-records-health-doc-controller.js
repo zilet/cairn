@@ -1,5 +1,6 @@
 (() => {
-// Health Records controller: upload, date edits, re-analysis polling, and delete.
+// Health Records controller: list loading, row actions, re-analysis polling,
+// deep-link scrolling, and delete.
 // Rendering primitives stay in health-records-client.ts and health-docs-client.ts.
 function hrecRecord(value) {
     return value && typeof value === "object" ? value : {};
@@ -14,28 +15,6 @@ function hrecNumber(value) {
 function hrecElement(selector) {
     return $(selector);
 }
-function hrecFileDataUrl(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error("read failed"));
-        reader.readAsDataURL(file);
-    });
-}
-function hrecRefreshPictureAfterUpload(doc, deps) {
-    const pictureCache = deps.getHealthPictureCache();
-    const stamp = doc.created_at || new Date().toISOString();
-    if (pictureCache) {
-        pictureCache.docCount = (pictureCache.docCount || 0) + 1;
-        if (!pictureCache.newestDocAt || stamp > pictureCache.newestDocAt)
-            pictureCache.newestDocAt = stamp;
-        deps.setHealthPictureCache(pictureCache);
-    }
-    else {
-        deps.setHealthPictureCache({ review: null, docCount: 1, newestDocAt: stamp });
-    }
-    deps.paintHealthPicture();
-}
 function hrecRefreshPictureAfterDelete(deps) {
     const pictureCache = deps.getHealthPictureCache();
     const docCount = pictureCache?.docCount || 0;
@@ -45,148 +24,20 @@ function hrecRefreshPictureAfterDelete(deps) {
     deps.setHealthPictureCache(pictureCache);
     deps.paintHealthPicture();
 }
+function healthDocUploadDeps(deps) {
+    return {
+        api: deps.api,
+        toast: deps.toast,
+        enrichmentActive: deps.enrichmentActive,
+        pollDoc: (id) => pollHealthDoc(id, deps),
+        wireDoc: (el) => wireHealthDoc(el, deps),
+        getHealthPictureCache: deps.getHealthPictureCache,
+        setHealthPictureCache: deps.setHealthPictureCache,
+        paintHealthPicture: deps.paintHealthPicture,
+    };
+}
 function wireHealthUpload(deps) {
-    const fileInput = hrecElement("#hFile");
-    const fileName = hrecElement("#hFileName");
-    const uploadBox = hrecElement("#hUploadBox");
-    const textInput = hrecElement("#hText");
-    const uploadBtn = hrecElement("#hUpload");
-    const status = hrecElement("#hStatus");
-    const fileLabel = hrecElement("#hFileLabel");
-    if (!fileInput || !fileName || !uploadBox || !textInput || !uploadBtn || !status || !fileLabel)
-        return;
-    let pendingFile = null;
-    const setUploadReady = () => {
-        const hasText = textInput.value.trim().length > 0;
-        uploadBtn.disabled = !pendingFile && !hasText;
-    };
-    const resetPicker = () => {
-        fileInput.value = "";
-        textInput.value = "";
-        pendingFile = null;
-        fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
-    };
-    const setPendingFile = (file) => {
-        if (!file) {
-            pendingFile = null;
-            fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
-            setUploadReady();
-            return;
-        }
-        if (file.size > CairnHealthClient.MAX_DOC_BYTES) {
-            deps.toast("File too large (max 15MB)");
-            fileInput.value = "";
-            pendingFile = null;
-            fileName.textContent = CairnHealthClient.H_FILE_PROMPT;
-            setUploadReady();
-            return;
-        }
-        pendingFile = file;
-        fileName.textContent = file.name || "Pasted image";
-        setUploadReady();
-    };
-    fileInput.addEventListener("change", () => {
-        const file = fileInput.files && fileInput.files[0];
-        setPendingFile(file || null);
-    });
-    textInput.addEventListener("input", setUploadReady);
-    uploadBox.addEventListener("dragover", (event) => {
-        event.preventDefault();
-        fileLabel.classList.add("dragover");
-    });
-    uploadBox.addEventListener("dragleave", () => fileLabel.classList.remove("dragover"));
-    uploadBox.addEventListener("drop", (event) => {
-        event.preventDefault();
-        fileLabel.classList.remove("dragover");
-        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-        if (file)
-            setPendingFile(file);
-    });
-    uploadBox.addEventListener("paste", (event) => {
-        const files = Array.from(event.clipboardData?.files || []);
-        const image = files.find((file) => (file.type || "").startsWith("image/"));
-        if (image) {
-            event.preventDefault();
-            setPendingFile(image);
-            return;
-        }
-        if (event.target !== textInput) {
-            const text = event.clipboardData && event.clipboardData.getData("text/plain");
-            if (text) {
-                event.preventDefault();
-                textInput.value = text;
-                setUploadReady();
-            }
-        }
-    });
-    uploadBtn.addEventListener("click", async () => {
-        const file = pendingFile;
-        const pastedText = textInput.value.trim();
-        if (!file && !pastedText) {
-            deps.toast("Add a file or text first");
-            return;
-        }
-        if (file && file.size > CairnHealthClient.MAX_DOC_BYTES) {
-            deps.toast("File too large (max 15MB)");
-            return;
-        }
-        if (!file && pastedText.length > CairnHealthClient.MAX_DOC_TEXT) {
-            deps.toast("Text is too long");
-            return;
-        }
-        uploadBtn.disabled = true;
-        status.textContent = "Uploading…";
-        const body = { original_name: "" };
-        if (file) {
-            let dataUrl;
-            try {
-                dataUrl = await hrecFileDataUrl(file);
-            }
-            catch {
-                status.textContent = "Couldn't read that file. Try a different one.";
-                uploadBtn.disabled = false;
-                return;
-            }
-            body.original_name = file.name || "Pasted image";
-            body.mime = CairnHealthClient.guessUploadMime(file);
-            body.data_base64 = String(dataUrl).split(",")[1] || "";
-        }
-        else {
-            body.original_name = "Pasted results";
-            body.text = pastedText;
-        }
-        let row = null;
-        try {
-            row = await deps.api("/health-docs", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-        }
-        catch {
-            status.textContent = "Couldn't upload that — check your connection.";
-            uploadBtn.disabled = false;
-            return;
-        }
-        const doc = hrecRecord(row);
-        if (!doc.id || doc.error) {
-            status.textContent = "Couldn't upload that — try again.";
-            uploadBtn.disabled = false;
-            return;
-        }
-        status.textContent = "";
-        deps.toast("Uploaded");
-        resetPicker();
-        const wrap = hrecElement("#hlist");
-        if (wrap) {
-            wrap.querySelector(".empty")?.remove();
-            wrap.insertAdjacentHTML("afterbegin", CairnHealthDocs.healthDocHtml(doc));
-            wireHealthDoc(wrap.querySelector(`.hdoc[data-hdoc="${doc.id}"]`), deps);
-        }
-        if (doc.id && deps.enrichmentActive(doc.enrichment_status))
-            pollHealthDoc(doc.id, deps);
-        hrecRefreshPictureAfterUpload(doc, deps);
-    });
+    CairnHealthDocUploadController.wireUpload(healthDocUploadDeps(deps));
 }
 function wireHealthDoc(el, deps) {
     if (!el)

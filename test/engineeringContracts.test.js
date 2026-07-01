@@ -773,6 +773,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/health-read-controller\.js"/);
   assert.match(sw, /"\/js\/health-learned-client\.js"/);
   assert.match(sw, /"\/js\/health-records-client\.js"/);
+  assert.match(sw, /"\/js\/health-doc-upload-controller\.js"/);
   assert.match(sw, /"\/js\/memory-client\.js"/);
   assert.match(sw, /"\/js\/me-memory-controller\.js"/);
   assert.match(sw, /"\/js\/life-client\.js"/);
@@ -1140,6 +1141,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthReadControllerSource = read("src/client/health-read-controller.ts");
   const healthLearnedSource = read("src/client/health-learned-client.ts");
   const healthRecordsSource = read("src/client/health-records-client.ts");
+  const healthDocUploadControllerSource = read("src/client/health-doc-upload-controller.ts");
   const meRecordsHealthDocControllerSource = read("src/client/me-records-health-doc-controller.ts");
   const memorySource = read("src/client/memory-client.ts");
   const meMemoryControllerSource = read("src/client/me-memory-controller.ts");
@@ -1259,6 +1261,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthReadController = read("public/js/health-read-controller.js");
   const healthLearnedClient = read("public/js/health-learned-client.js");
   const healthRecordsClient = read("public/js/health-records-client.js");
+  const healthDocUploadController = read("public/js/health-doc-upload-controller.js");
   const meRecordsHealthDocController = read("public/js/me-records-health-doc-controller.js");
   const memoryClient = read("public/js/memory-client.js");
   const meMemoryController = read("public/js/me-memory-controller.js");
@@ -1528,6 +1531,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /priorityMarkersSectionHtml\(/);
   assert.match(clientGlobals, /CairnHealthRecords/);
   assert.match(clientGlobals, /recordsListHtml\(/);
+  assert.match(clientGlobals, /CairnHealthDocUploadController/);
+  assert.match(clientGlobals, /wireUpload\(deps: ClientHealthDocUploadControllerDeps\): void/);
   assert.match(clientGlobals, /CairnHealthRecordsController/);
   assert.match(clientGlobals, /render\(deps: ClientHealthRecordsControllerDeps\): Promise<ClientHealthDocument\[\]>/);
   assert.match(clientGlobals, /CairnFoodNote/);
@@ -1918,6 +1923,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-learned-client\.js/);
   assert.match(clientBuild, /src\/client\/health-records-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-records-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-doc-upload-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/health-doc-upload-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-records-health-doc-controller\.ts/);
   assert.match(clientBuild, /public\/js\/me-records-health-doc-controller\.js/);
   assert.match(clientBuild, /src\/client\/memory-client\.ts/);
@@ -2381,13 +2388,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/health-records-client.js") > index.indexOf("/js/health-learned-client.js") &&
-      index.indexOf("/js/health-records-client.js") < index.indexOf("/js/me-records-health-doc-controller.js"),
-    "health-records-client.js must load after Health learned helpers and before Records tab hydration"
+      index.indexOf("/js/health-records-client.js") < index.indexOf("/js/health-doc-upload-controller.js"),
+    "health-records-client.js must load after Health learned helpers and before Records upload hydration"
   );
   assert.ok(
-    index.indexOf("/js/me-records-health-doc-controller.js") > index.indexOf("/js/health-records-client.js") &&
+    index.indexOf("/js/health-doc-upload-controller.js") > index.indexOf("/js/health-records-client.js") &&
+      index.indexOf("/js/health-doc-upload-controller.js") < index.indexOf("/js/me-records-health-doc-controller.js"),
+    "health-doc-upload-controller.js must load after Records render helpers and before the Records controller"
+  );
+  assert.ok(
+    index.indexOf("/js/me-records-health-doc-controller.js") > index.indexOf("/js/health-doc-upload-controller.js") &&
       index.indexOf("/js/me-records-health-doc-controller.js") < index.indexOf("/js/08-me-records.js"),
-    "me-records-health-doc-controller.js must load after Records render helpers and before the Records screen"
+    "me-records-health-doc-controller.js must load after Records upload hydration and before the Records screen"
   );
   assert.ok(
     index.indexOf("/js/memory-client.js") > index.indexOf("/js/me-records-health-doc-controller.js") &&
@@ -2818,6 +2830,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/07-me-health\.js/);
   assert.match(clientBuild, /src\/client\/me-records-screen\.ts/);
   assert.match(clientBuild, /public\/js\/08-me-records\.js/);
+  assert.match(clientBuild, /src\/client\/health-doc-upload-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/health-doc-upload-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-records-health-doc-controller\.ts/);
   assert.match(clientBuild, /public\/js\/me-records-health-doc-controller\.js/);
   assert.match(clientBuild, /src\/client\/app\/router\.ts/);
@@ -3483,8 +3497,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthRecordsSource, /function recordsUploadHtml\(filePrompt = CairnHealthClient\.H_FILE_PROMPT\): string/);
   assert.match(healthRecordsSource, /function recordsListHtml\(docsInput: unknown\): string/);
   assert.match(healthRecordsSource, /CairnHealthRecords/);
+  assert.match(healthDocUploadControllerSource, /type HealthDocUploadDeps = \{/);
+  assert.match(healthDocUploadControllerSource, /function wireHealthDocUpload\(deps: HealthDocUploadDeps\): void/);
+  assert.match(healthDocUploadControllerSource, /function refreshPictureAfterHealthDocUpload\(doc: HealthDocUploadDocument, deps: HealthDocUploadDeps\): void/);
+  assert.match(healthDocUploadControllerSource, /CairnHealthDocUploadController/);
   assert.match(meRecordsHealthDocControllerSource, /type HealthRecordsControllerDeps = \{/);
-  assert.match(meRecordsHealthDocControllerSource, /function wireHealthUpload\(deps: HealthRecordsControllerDeps\): void/);
+  assert.match(meRecordsHealthDocControllerSource, /function healthDocUploadDeps\(deps: HealthRecordsControllerDeps\): ClientHealthDocUploadControllerDeps/);
+  assert.match(meRecordsHealthDocControllerSource, /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/);
+  assert.doesNotMatch(meRecordsHealthDocControllerSource, /FileReader|readAsDataURL|MAX_DOC_BYTES|MAX_DOC_TEXT|guessUploadMime/);
   assert.match(meRecordsHealthDocControllerSource, /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
   assert.match(meRecordsHealthDocControllerSource, /function renderHealthRecords\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
   assert.match(meRecordsHealthDocControllerSource, /CairnHealthRecordsController/);
@@ -3536,7 +3556,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meRecordsScreenSource, /async function renderFamily\(\)/);
   assert.doesNotMatch(meRecordsScreenSource, /function wireHealthUpload\(\)/);
   assert.doesNotMatch(meRecordsScreenSource, /function loadHealthDocs\(\): Promise<HealthDocument\[\]>/);
-  assert.match(meRecordsHealthDocControllerSource, /function wireHealthUpload\(deps: HealthRecordsControllerDeps\): void/);
+  assert.match(meRecordsHealthDocControllerSource, /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/);
   assert.match(meRecordsHealthDocControllerSource, /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
   assert.match(meRecordsScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(routeStateSource, /type CairnRoute = import\("\.\.\/contracts\/client\.js"\)\.ClientRoute/);
@@ -3975,9 +3995,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthRecordsClient, /recordsTabHtml/);
   assert.match(healthRecordsClient, /recordsListHtml/);
   assert.doesNotMatch(healthRecordsClient, /^function\s+recordsUploadHtml|^function\s+recordsListHtml/m);
+  assert.match(healthDocUploadController, /Object\.assign\(globalThis, \{ CairnHealthDocUploadController: CAIRN_HEALTH_DOC_UPLOAD_CONTROLLER \}\)/);
+  assert.match(healthDocUploadController, /window\.CairnHealthDocUploadController = CAIRN_HEALTH_DOC_UPLOAD_CONTROLLER/);
+  assert.match(healthDocUploadController, /wireHealthDocUpload/);
+  assert.match(healthDocUploadController, /refreshPictureAfterHealthDocUpload/);
   assert.match(meRecordsHealthDocController, /Object\.assign\(globalThis, \{ CairnHealthRecordsController: CAIRN_HEALTH_RECORDS_CONTROLLER \}\)/);
   assert.match(meRecordsHealthDocController, /window\.CairnHealthRecordsController = CAIRN_HEALTH_RECORDS_CONTROLLER/);
-  assert.match(meRecordsHealthDocController, /wireHealthUpload/);
+  assert.match(meRecordsHealthDocController, /CairnHealthDocUploadController\.wireUpload/);
   assert.match(meRecordsHealthDocController, /loadHealthDocs/);
   assert.doesNotMatch(health, /const\s+HEALTH_KINDS|function\s+healthKindLabel|function\s+parsedDoc|function\s+markerFlagClass|function\s+markersTable|function\s+docCollapsible|function\s+healthDocInner|function\s+healthDocHtml/);
   assert.match(chatClient, /Object\.assign\(globalThis, \{ CairnChatClient: CAIRN_CHAT_CLIENT \}\)/);
@@ -4304,6 +4328,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/health-read-controller\.js"/);
   assert.match(sw, /"\/js\/health-learned-client\.js"/);
   assert.match(sw, /"\/js\/health-records-client\.js"/);
+  assert.match(sw, /"\/js\/health-doc-upload-controller\.js"/);
   assert.match(sw, /"\/js\/me-records-health-doc-controller\.js"/);
   assert.match(sw, /"\/js\/memory-client\.js"/);
   assert.match(sw, /"\/js\/me-memory-controller\.js"/);

@@ -263,6 +263,7 @@ function loadController() {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/health-doc-upload-controller.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/me-records-health-doc-controller.js"), "utf8"), context);
   return { context, document, localStorage };
 }
