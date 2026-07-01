@@ -16,6 +16,7 @@ const todayDataLoader = globalThis.CairnTodayDataLoader;
 const todayMainShell = globalThis.CairnTodayMainShell;
 const todayPlanSurface = globalThis.CairnTodayPlanSurface;
 const todayPlanSurfaceRenderer = globalThis.CairnTodayPlanSurfaceRenderer;
+const todayRenderState = globalThis.CairnTodayRenderState;
 function todaySideLoaderDeps() {
     return {
         root: todayView,
@@ -315,10 +316,6 @@ async function renderToday(opts = {}) {
     // The plan/logging surface is revealed when the read says "train", when the
     // user has already logged on this date (they've committed), when they tapped
     // "train anyway"/"log these" (todayState.planReveal), or when reviewing a past date.
-    const hasLoggedSets = !!(session && (session.sets || []).length);
-    const hasPlanDay = (day.items || []).length > 0;
-    const revealOn = todayState.planReveal && todayState.planReveal.date === todayState.logDate && todayState.planReveal.on;
-    const isFinished = !!(session && session.finished_at);
     // Non-blocking Brief: fetch the read in FAST mode — the endpoint returns a warm
     // cached read instantly, so the common case is immediate; a cold cache resolves
     // to a provisional read (painted with the .is-thinking filament) and the real
@@ -326,16 +323,15 @@ async function renderToday(opts = {}) {
     // never waits on agent:"auto". (Honors an active override.)
     const briefOverride = todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
     const read = await loadBrief(todayState.logDate, briefOverride, { fast: true });
-    const hasGarmin = !!(session && session.garmin);
-    const showPlan = !isToday || hasLoggedSets || hasGarmin || revealOn || read.kind === "train";
-    // A finished session reads as a calm "done" card (the work now lives in History),
-    // not the live logging surface — "Log more" reopens it. Only on today: a past date
-    // keeps its full logged surface for review, and history editing has its own tab.
-    const showDone = isFinished && isToday && !revealOn;
-    // Focus mode strips Today to the logging surface (see focusEngaged). Never engages
-    // on a finished session (the done card replaces the surface). Progress for the slim
-    // header: how many of today's exercises have at least one logged set.
-    const focus = !showDone && focusEngaged(todayState.logDate, { showPlan, hasLoggedSets, isToday });
+    const { hasLoggedSets, hasPlanDay, hasGarmin, showPlan, showDone, focus, } = todayRenderState.derive({
+        logDate: todayState.logDate,
+        session,
+        day,
+        read,
+        isToday,
+        planReveal: todayState.planReveal,
+        focusEngaged,
+    });
     // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
     // When the day is about running — cardio prescribed and/or a synced run, with NO
     // strength logged today — the run is the HERO of the plan area, not buried under a

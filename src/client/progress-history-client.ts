@@ -24,6 +24,20 @@ type HistorySession = ProgressHistoryRecord & {
   sets?: ProgressHistorySet[] | null;
 };
 
+type ProgressHistoryExerciseGroup = {
+  exercise: string;
+  sets: ProgressHistorySet[];
+  bestIndex: number;
+};
+
+type ProgressHistorySessionCardModel = {
+  row: HistorySession;
+  weekday: string;
+  groups: ProgressHistoryExerciseGroup[];
+  tonnage: number;
+  setCount: number;
+};
+
 function progressHistoryRows<T extends ProgressHistoryRecord = ProgressHistoryRecord>(value: unknown): T[] {
   return Array.isArray(value) ? value.filter((row): row is T => !!row && typeof row === "object") : [];
 }
@@ -44,29 +58,51 @@ function sessionSetScore(set: ProgressHistorySet): number {
   return weight > 0 && reps ? weight * (1 + reps / 30) : reps || 0;
 }
 
-function sessionCardHtml(session: unknown, index: number): string {
-  const row = (session ?? {}) as HistorySession;
-  const [year, month, day] = String(row.date || "").split("-").map(Number);
-  const weekday = year ? new Date(year, month - 1, day).toLocaleDateString(undefined, { weekday: "long" }) : "";
+function progressHistoryWeekday(date: unknown): string {
+  const [year, month, day] = String(date || "").split("-").map(Number);
+  return year ? new Date(year, month - 1, day).toLocaleDateString(undefined, { weekday: "long" }) : "";
+}
+
+function progressHistoryExerciseGroups(sets: ProgressHistorySet[] | null | undefined): ProgressHistoryExerciseGroup[] {
   const byExercise: Record<string, ProgressHistorySet[]> = {};
-  for (const set of row.sets || []) {
+  for (const set of sets || []) {
     const exercise = String(set.exercise ?? "");
     (byExercise[exercise] ??= []).push(set);
   }
-  const lines = Object.entries(byExercise).map(([exercise, sets]) => {
+  return Object.entries(byExercise).map(([exercise, groupedSets]) => {
     let bestIndex = 0;
-    sets.forEach((set, setIndex) => {
-      if (sessionSetScore(set) > sessionSetScore(sets[bestIndex] ?? {})) bestIndex = setIndex;
+    groupedSets.forEach((set, setIndex) => {
+      if (sessionSetScore(set) > sessionSetScore(groupedSets[bestIndex] ?? {})) bestIndex = setIndex;
     });
+    return { exercise, sets: groupedSets, bestIndex };
+  });
+}
+
+function progressHistorySessionCardModel(session: unknown): ProgressHistorySessionCardModel {
+  const row = (session ?? {}) as HistorySession;
+  return {
+    row,
+    weekday: progressHistoryWeekday(row.date),
+    groups: progressHistoryExerciseGroups(row.sets),
+    tonnage: setsTonnage(row.sets),
+    setCount: (row.sets || []).length,
+  };
+}
+
+function progressHistorySetFigure(set: ProgressHistorySet): string {
+  return set.duration_sec != null ? fmtDur(set.duration_sec) : `${fmtWeight(set.weight)}×${set.reps}`;
+}
+
+function sessionCardHtml(session: unknown, index: number): string {
+  const model = progressHistorySessionCardModel(session);
+  const { row, weekday, tonnage, setCount } = model;
+  const lines = model.groups.map(({ exercise, sets, bestIndex }) => {
     const figures = sets.map((set, setIndex) => {
-      const figure =
-        set.duration_sec != null ? fmtDur(set.duration_sec) : `${fmtWeight(set.weight)}×${set.reps}`;
+      const figure = progressHistorySetFigure(set);
       return `<span class="hist-set${setIndex === bestIndex && sets.length > 1 ? " hist-best" : ""}">${escHtml(figure)}</span>`;
     }).join(`<span class="hist-sep">·</span>`);
     return `<div class="hist-line"><span class="hist-ex">${escHtml(exercise)}</span><span class="hist-sets">${figures}</span></div>`;
   }).join("");
-  const tonnage = setsTonnage(row.sets);
-  const setCount = (row.sets || []).length;
   const chips = [
     tonnage ? `${fmtK(Math.round(tonnage))} lb` : null,
     row.duration_min ? `${row.duration_min} min` : null,

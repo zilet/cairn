@@ -15,11 +15,7 @@ import type {
   ClientRoutesApi,
   ClientSettingsSection as ContractClientSettingsSection,
   ClientTabName as ContractClientTabName,
-  ClientDayIntake,
-  ClientGoalCheck,
-  ClientPlanDay,
   ClientPrescription,
-  ClientSessionSuggestion,
   ClientTodayAgenda,
   ClientTodayAgendaCandidate,
   ClientLearnedItem,
@@ -48,6 +44,10 @@ import type {
   ClientWeekAheadDayKind,
   ClientWeeklyRunPlan,
 } from "./client-api.js";
+import type {
+  ClientAppState as ContractClientAppState,
+  ClientBriefCache as ContractClientBriefCache,
+} from "./client-state.js";
 
 declare global {
   type ClientTabName = ContractClientTabName;
@@ -103,47 +103,8 @@ declare global {
     cacheKey(): string;
   };
 
-  type ClientBriefCache = {
-    date: string;
-    override: string;
-    read: ClientDayRead;
-  };
-
-  type ClientAppState = {
-    tab: ClientTabName;
-    day: number | null;
-    dayPicked: boolean;
-    plan: ClientPlanDay[];
-    today: Record<string, unknown>;
-    logDate: string;
-    planSeg?: ClientPlanSection;
-    planJump?: ClientPlanSection | null;
-    progressSeg?: ClientProgressSection;
-    progressEx?: string;
-    meSeg?: ClientMeSection;
-    healthSeg?: ClientHealthSection;
-    healthSegPicked?: boolean;
-    setSeg?: ClientSettingsSection;
-    pendingChatSession?: string | null;
-    pendingHealthDocId?: string | null;
-    pendingHealthScroll?: "hbDirectives" | string | null;
-    chatPrefill?: string | null;
-    brief?: ClientBriefCache | null;
-    _briefInflight?: { date: string; override: string; promise: Promise<ClientDayRead> } | null;
-    _briefMorph?: boolean;
-    focus?: { date: string; on: boolean };
-    planReveal?: { date: string; on: boolean; blank?: boolean };
-    suggestedSession?: ClientSessionSuggestion | null;
-    exModes?: Record<string, string>;
-    pendingOffPlan?: Record<string, Array<Record<string, unknown>>>;
-    _dayFuel?: ClientDayIntake | null;
-    _goal?: ClientGoalCheck | null;
-    _lifeById?: Record<string, unknown>;
-    _famById?: Record<string, unknown>;
-    _notesById?: Record<string, unknown>;
-    healthReview?: unknown;
-    healthStandingRef?: number;
-  };
+  type ClientBriefCache = ContractClientBriefCache;
+  type ClientAppState = ContractClientAppState;
 
   type ClientTodaySessionControllerDeps = {
     root: HTMLElement;
@@ -507,6 +468,35 @@ declare global {
     getHealthPictureCache(): ClientHealthPictureCache | null;
     setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
     paintHealthPicture(): void;
+  };
+
+  type ClientHealthDocActionsControllerDeps = {
+    state: {
+      tab?: string;
+      meSeg?: string;
+      healthSeg?: string;
+    };
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
+    pollEnrichment(
+      path: string,
+      id: number,
+      options?: {
+        tab?: string;
+        token?: unknown;
+        tries?: number;
+        interval?: number;
+        onUpdate?: (row: Record<string, unknown>) => void;
+      },
+    ): unknown;
+    pollToken(): number;
+    loadHealthMarkers(token: number): void;
+    paintHealthPicture(): void;
+    loadHealthDocs(): Promise<ClientHealthDocument[]>;
+    wireHealthDoc(el: HTMLElement | null): void;
+    getHealthPictureCache(): ClientHealthPictureCache | null;
+    setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
   };
 
   type ClientMeMemoryControllerDeps = {
@@ -1773,6 +1763,12 @@ declare global {
       refreshPictureAfterUpload(doc: ClientHealthDocument, deps: ClientHealthDocUploadControllerDeps): void;
     };
 
+    CairnHealthDocActionsController: {
+      pollDoc(id: string | number, deps: ClientHealthDocActionsControllerDeps): void;
+      refreshPictureAfterDelete(deps: ClientHealthDocActionsControllerDeps): void;
+      wireDoc(el: HTMLElement | null, deps: ClientHealthDocActionsControllerDeps): void;
+    };
+
     CairnHealthRecordsController: {
       render(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
       loadDocs(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
@@ -2783,6 +2779,7 @@ declare global {
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnHealthDocUploadController: Window["CairnHealthDocUploadController"];
+  declare const CairnHealthDocActionsController: Window["CairnHealthDocActionsController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnSettingsSurface: Window["CairnSettingsSurface"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
