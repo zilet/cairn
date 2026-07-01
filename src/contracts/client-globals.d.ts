@@ -477,6 +477,22 @@ declare global {
   declare function mountDetail(html: string, photoSrc?: string | null): HTMLElement;
   declare function wireDetailCommon(): void;
   declare function wireArtZoom(artEl: Element | null | undefined): void;
+  declare function wireGuides(scope?: ParentNode | null): void;
+  declare function exerciseExplanation(exercise: { name?: unknown; muscle_group?: unknown } | null | undefined): {
+    setup?: unknown;
+    move?: unknown;
+    feel?: unknown;
+    avoid?: unknown;
+  };
+  declare function exerciseExplanationHtml(
+    exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
+    explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null,
+  ): string;
+  declare function replaceExerciseExplanation(
+    el: ParentNode,
+    exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
+    explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null,
+  ): void;
   declare function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void>;
   declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
   declare function measureChatTop(): void;
@@ -611,6 +627,31 @@ declare global {
         ok?: unknown;
         explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null;
       } | null | undefined): boolean;
+    };
+
+    CairnExerciseDetailController: {
+      exerciseExplanation(
+        exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
+        deps: ExerciseDetailControllerDeps,
+      ): { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown };
+      exerciseExplanationHtml(
+        exercise: { name?: unknown; muscle_group?: unknown } | null | undefined,
+        explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
+        deps: ExerciseDetailControllerDeps,
+      ): string;
+      hydrateExerciseExplanation(
+        el: ParentNode,
+        exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
+        deps: ExerciseDetailControllerDeps,
+      ): Promise<void>;
+      openExerciseModal(nameInput: unknown, fromTile: Element | null | undefined, deps: ExerciseDetailControllerDeps): Promise<void>;
+      replaceExerciseExplanation(
+        el: ParentNode,
+        exercise: { name?: unknown; muscle_group?: unknown } & Record<string, unknown>,
+        explanation: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null | undefined,
+        deps: ExerciseDetailControllerDeps,
+      ): void;
+      wireGuides(scope: ParentNode | null | undefined, deps: ExerciseDetailControllerDeps): void;
     };
 
     CairnUi: {
@@ -805,6 +846,10 @@ declare global {
       parsedNote(note: Record<string, unknown> | null | undefined): Record<string, unknown> | null;
       noteEntryInner(note: Record<string, unknown>): string;
       noteEntryHtml(note: Record<string, unknown>, index?: number): string;
+    };
+
+    CairnFoodDetailController: {
+      openFoodDetail(note: unknown, fromTile: Element | null | undefined, deps: FoodDetailControllerDeps): Promise<void>;
     };
 
     CairnPlanEndurance: {
@@ -1410,6 +1455,7 @@ declare global {
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
+  declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
@@ -1421,6 +1467,7 @@ declare global {
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
+  declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnDayFuel: Window["CairnDayFuel"];

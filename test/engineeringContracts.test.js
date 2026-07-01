@@ -695,6 +695,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
   assert.match(sw, /"\/js\/02-ui\.js"/);
   assert.match(sw, /"\/js\/detail-overlay-client\.js"/);
+  assert.match(sw, /"\/js\/exercise-detail-controller\.js"/);
   assert.match(sw, /"\/js\/agent-login-client\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
@@ -741,6 +742,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
+  assert.match(sw, /"\/js\/food-detail-controller\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-client\.js"/);
@@ -982,6 +984,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const detailOverlaySource = read("src/client/detail-overlay-client.ts");
   const uiMotionSource = read("src/client/ui-motion-client.ts");
   const exerciseDetailSource = read("src/client/exercise-detail-client.ts");
+  const exerciseDetailControllerSource = read("src/client/exercise-detail-controller.ts");
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
   const appDownloadSource = read("src/client/app/download.ts");
@@ -1052,6 +1055,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const mealRecipeControllerSource = read("src/client/meal-recipe-controller.ts");
   const coachMealsScreenSource = read("src/client/coach-meals-screen.ts");
   const foodNoteSource = read("src/client/food-note-client.ts");
+  const foodDetailControllerSource = read("src/client/food-detail-controller.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const healthReadSource = read("src/client/health-read-client.ts");
   const healthStandingSource = read("src/client/health-standing-client.ts");
@@ -1096,6 +1100,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const detailOverlayClient = read("public/js/detail-overlay-client.js");
   const uiMotionClient = read("public/js/ui-motion-client.js");
   const exerciseDetailClient = read("public/js/exercise-detail-client.js");
+  const exerciseDetailController = read("public/js/exercise-detail-controller.js");
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
   const appDownload = read("public/js/app-download.js");
@@ -1151,6 +1156,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const mealRecipeClient = read("public/js/meal-recipe-client.js");
   const mealRecipeController = read("public/js/meal-recipe-controller.js");
   const foodNoteClient = read("public/js/food-note-client.js");
+  const foodDetailController = read("public/js/food-detail-controller.js");
   const healthClient = read("public/js/health-client.js");
   const healthReadClient = read("public/js/health-read-client.js");
   const healthStandingClient = read("public/js/health-standing-client.js");
@@ -1285,6 +1291,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnExerciseDetail/);
   assert.match(clientGlobals, /explanationHtml\(/);
   assert.match(clientGlobals, /validExplanationPayload\(payload:/);
+  assert.match(clientGlobals, /CairnExerciseDetailController/);
+  assert.match(clientGlobals, /declare function wireGuides\(scope\?: ParentNode \| null\): void/);
+  assert.match(clientGlobals, /declare function replaceExerciseExplanation\(/);
   assert.match(clientGlobals, /installMobileViewportGuards\(\): void/);
   assert.match(clientGlobals, /registerServiceWorkerLifecycle\(\): void/);
   assert.match(clientGlobals, /primeDiscipline\(\): void/);
@@ -1392,6 +1401,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /recordsListHtml\(/);
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
+  assert.match(clientGlobals, /CairnFoodDetailController/);
+  assert.match(clientGlobals, /declare function openFoodDetail\(note: unknown, fromTile\?: Element \| null\): Promise<void>/);
   assert.match(clientGlobals, /CairnPlanEndurance/);
   assert.match(clientGlobals, /CairnPlanEditor/);
   assert.match(clientGlobals, /progDayHtml\(/);
@@ -1454,6 +1465,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/markdown-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/ui-components\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/exercise-detail-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/exercise-detail-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/format-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/api-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-download\.js/);
@@ -1508,6 +1520,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/meal-plan-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/meal-recipe-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/food-note-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/food-detail-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-learned-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/memory-client\.js/);
@@ -1560,6 +1573,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
   assert.match(clientBuild, /public\/js\/detail-overlay-client\.js/);
+  assert.match(clientBuild, /src\/client\/exercise-detail-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/exercise-detail-controller\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/agent-login-client\.ts/);
@@ -1688,6 +1703,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/06-coach-meals\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
   assert.match(clientBuild, /public\/js\/food-note-client\.js/);
+  assert.match(clientBuild, /src\/client\/food-detail-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/food-detail-controller\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/health-read-client\.ts/);
@@ -1812,6 +1829,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
       index.indexOf("/js/detail-overlay-client.js") > index.indexOf("/js/02-ui.js") &&
       index.indexOf("/js/detail-overlay-client.js") < index.indexOf("/js/ui-motion-client.js"),
     "detail-overlay-client.js must load after UI shell and before feature consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/exercise-detail-controller.js") > index.indexOf("/js/ui-motion-client.js") &&
+      index.indexOf("/js/exercise-detail-controller.js") < index.indexOf("/js/agent-login-client.js") &&
+      index.indexOf("/js/exercise-detail-controller.js") < index.indexOf("/js/03-today.js"),
+    "exercise-detail-controller.js must load after detail helpers and before exercise guide consumers"
   );
   assert.ok(
     index.indexOf("/js/02-ui.js") > -1 &&
@@ -2150,6 +2173,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "food-note-client.js must load before Me food-note consumers"
   );
   assert.ok(
+    index.indexOf("/js/food-detail-controller.js") > index.indexOf("/js/food-note-client.js") &&
+      index.indexOf("/js/food-detail-controller.js") < index.indexOf("/js/07-me-health.js"),
+    "food-detail-controller.js must load after food-note helpers and before food detail consumers"
+  );
+  assert.ok(
     index.indexOf("/js/settings-client.js") > index.indexOf("/js/settings-routes.js") &&
       index.indexOf("/js/settings-client.js") < index.indexOf("/js/settings-data-client.js"),
     "settings-client.js must load before Settings Data helpers"
@@ -2224,6 +2252,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(markdownClient, /\/\/ @ts-check/);
   assert.match(uiComponents, /\/\/ @ts-check/);
   assert.match(exerciseDetailClient, /\/\/ @ts-check/);
+  assert.match(exerciseDetailController, /\/\/ @ts-check/);
   assert.match(formatUtils, /\/\/ @ts-check/);
   assert.match(apiClient, /\/\/ @ts-check/);
   assert.match(appDownload, /\/\/ @ts-check/);
@@ -2575,6 +2604,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(exerciseDetailSource, /function exerciseDetailExplanationHtml/);
   assert.match(exerciseDetailSource, /function validExerciseDetailExplanationPayload/);
   assert.match(exerciseDetailSource, /const CAIRN_EXERCISE_DETAIL = \{/);
+  assert.match(exerciseDetailControllerSource, /type ExerciseDetailControllerDeps = \{/);
+  assert.match(exerciseDetailControllerSource, /function wireGuides\(scope: ParentNode \| null \| undefined, deps: ExerciseDetailControllerDeps\): void/);
+  assert.match(exerciseDetailControllerSource, /async function openExerciseModal/);
+  assert.match(exerciseDetailControllerSource, /const CAIRN_EXERCISE_DETAIL_CONTROLLER = \{/);
+  assert.match(uiShellSource, /CairnExerciseDetailController\.wireGuides/);
+  assert.match(uiShellSource, /CairnExerciseDetailController\.exerciseExplanationHtml/);
+  assert.doesNotMatch(uiShellSource, /async function openExerciseModal/);
+  assert.doesNotMatch(uiShellSource, /function hydrateExerciseExplanation/);
   assert.match(formatUtilsSource, /function fmtWeight\(weight: unknown\): string/);
   assert.match(formatUtilsSource, /function formatFoodNum\(value: unknown\): string/);
   assert.match(apiClientSource, /function api<Path extends string>/);
@@ -2921,6 +2958,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(foodNoteSource, /function foodIngredients\(value: unknown\): FoodIngredientRow\[\]/);
   assert.match(foodNoteSource, /function noteEntryHtml\(note: FoodNoteRow, index\?: number\): string/);
   assert.match(foodNoteSource, /CairnFoodNote/);
+  assert.match(foodDetailControllerSource, /type FoodDetailControllerDeps = \{/);
+  assert.match(foodDetailControllerSource, /async function openFoodDetail/);
+  assert.match(foodDetailControllerSource, /const CAIRN_FOOD_DETAIL_CONTROLLER = \{/);
+  assert.match(uiShellSource, /CairnFoodDetailController\.openFoodDetail/);
+  assert.doesNotMatch(uiShellSource, /detail-macros/);
   assert.match(healthClientSource, /type HealthEvidenceRow = \{/);
   assert.match(healthClientSource, /const MAX_DOC_BYTES = 15 \* 1024 \* 1024/);
   assert.match(healthClientSource, /function guessUploadMime\(file: UploadFileLike/);
@@ -3122,6 +3164,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(exerciseDetailClient, /explanationHtml: exerciseDetailExplanationHtml/);
   assert.match(exerciseDetailClient, /validExplanationPayload: validExerciseDetailExplanationPayload/);
   assert.doesNotMatch(exerciseDetailClient, /^function\s+exerciseExplanation|^function\s+exerciseExplanationHtml|^function\s+validExerciseExplanationPayload/m);
+  assert.match(exerciseDetailController, /Object\.assign\(globalThis, \{ CairnExerciseDetailController: CAIRN_EXERCISE_DETAIL_CONTROLLER \}\)/);
+  assert.match(exerciseDetailController, /window\.CairnExerciseDetailController = CAIRN_EXERCISE_DETAIL_CONTROLLER/);
+  assert.match(exerciseDetailController, /openExerciseModal/);
+  assert.match(exerciseDetailController, /wireGuides/);
   assert.match(todayAgendaClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayAgendaClient, /CairnTodayAgenda/);
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
@@ -3321,6 +3367,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(foodNoteClient, /foodIngredients/);
   assert.match(foodNoteClient, /noteEntryHtml/);
   assert.doesNotMatch(foodNoteClient, /^function\s+foodIngredients|^function\s+noteEntryHtml|^function\s+parsedNote/m);
+  assert.match(foodDetailController, /Object\.assign\(globalThis, \{ CairnFoodDetailController: CAIRN_FOOD_DETAIL_CONTROLLER \}\)/);
+  assert.match(foodDetailController, /window\.CairnFoodDetailController = CAIRN_FOOD_DETAIL_CONTROLLER/);
+  assert.match(foodDetailController, /openFoodDetail/);
   assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
   assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
   assert.doesNotMatch(healthClient, /^const\s+MAX_DOC_BYTES|^const\s+H_FILE_PROMPT|^const\s+DIRECTIVE_DOMAINS|^function\s+guessUploadMime|^function\s+directiveHtml/m);
@@ -3425,9 +3474,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appStartup, /window\.startAppShell = startAppShell/);
   assert.match(ui, /function segBar\(active, items\)[\s\S]*CairnUi\.segmentedNavHtml\(\{ active, items \}\)/);
   assert.match(ui, /function loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
-  assert.match(ui, /function exerciseExplanation\(d\)[\s\S]*CairnExerciseDetail\.explanation\(d\)/);
-  assert.match(ui, /function exerciseExplanationHtml\(d, explanation\)[\s\S]*CairnExerciseDetail\.explanationHtml\(d, explanation\)/);
-  assert.match(ui, /function validExerciseExplanationPayload\(r\)[\s\S]*CairnExerciseDetail\.validExplanationPayload\(r\)/);
+  assert.match(ui, /function exerciseExplanation\(d\)[\s\S]*CairnExerciseDetailController\.exerciseExplanation\(d, exerciseDetailDeps\(\)\)/);
+  assert.match(ui, /function exerciseExplanationHtml\(d, explanation\)[\s\S]*CairnExerciseDetailController\.exerciseExplanationHtml\(d, explanation, exerciseDetailDeps\(\)\)/);
+  assert.match(ui, /function replaceExerciseExplanation\(el, d, explanation\)[\s\S]*CairnExerciseDetailController\.replaceExerciseExplanation\(el, d, explanation, exerciseDetailDeps\(\)\)/);
+  assert.doesNotMatch(ui, /function validExerciseExplanationPayload/);
   assert.doesNotMatch(ui, /function\s+closeDetail|function\s+openDetailFrom|function\s+mountDetail|function\s+wireDetailCommon|function\s+wireArtZoom/);
   assert.doesNotMatch(ui, /Front foot far enough forward|function\s+exerciseDetailLine|const\s+line\s*=\s*\(setup/);
   assert.doesNotMatch(ui, /let\s+saveCtx|function\s+mountSaveBar|function\s+hideSaveBar/);
@@ -3617,12 +3667,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
+  assert.match(sw, /"\/js\/exercise-detail-controller\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/meal-plan-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
+  assert.match(sw, /"\/js\/food-detail-controller\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-client\.js"/);

@@ -117,274 +117,64 @@ function armDelete(btn, onConfirm, { label = "remove?" } = {}) {
     const t = setTimeout(reset, 3000);
     target.addEventListener("blur", reset, { once: true });
 }
-// ---------- exercise detail (full-screen overlay, Morsel-style) ----------
-// Wire every [data-guide] in scope + make the card's art tile tappable; both
-// open the exercise detail with a shared-element zoom from the tile.
+// ---------- detail controllers (exercise + food full-screen overlays) ----------
+function exerciseDetailDeps() {
+    return {
+        root: view,
+        state,
+        api,
+        art,
+        artImg,
+        closeDetail,
+        escapeHtml: escHtml,
+        exerciseDetail: CairnExerciseDetail,
+        fmtDur,
+        fmtWeight,
+        gotoChatWith,
+        mountDetail,
+        openDetailFrom,
+        postExerciseMode,
+        renderToday,
+        runCountUps,
+        sparklineSvg,
+        toast,
+        wireDetailCommon,
+    };
+}
 function wireGuides(scope) {
-    (scope || view).querySelectorAll("[data-guide]").forEach((b) => {
-        const btn = b;
-        if (btn._wired)
-            return;
-        btn._wired = true;
-        const name = decodeURIComponent(String(b.dataset.guide || ""));
-        const tileOf = () => b.closest(".ex, .prog-row")?.querySelector(".artile") || null;
-        b.addEventListener("click", () => openExerciseModal(name, tileOf()));
-        const tile = tileOf();
-        if (tile && !tile._wired) {
-            tile._wired = true;
-            tile.style.cursor = "pointer";
-            tile.addEventListener("click", () => openExerciseModal(name, tile));
-        }
-    });
+    CairnExerciseDetailController.wireGuides(scope, exerciseDetailDeps());
 }
 function exerciseExplanation(d) {
-    return CairnExerciseDetail.explanation(d);
+    return CairnExerciseDetailController.exerciseExplanation(d, exerciseDetailDeps());
 }
 function exerciseExplanationHtml(d, explanation) {
-    return CairnExerciseDetail.explanationHtml(d, explanation);
-}
-const exerciseExplainMisses = new Set();
-function validExerciseExplanationPayload(r) {
-    return CairnExerciseDetail.validExplanationPayload(r);
+    return CairnExerciseDetailController.exerciseExplanationHtml(d, explanation, exerciseDetailDeps());
 }
 function replaceExerciseExplanation(el, d, explanation) {
-    const current = el.querySelector("[data-exercise-explain]");
-    if (!current || current.dataset.exercise !== String(d?.name || ""))
-        return;
-    const wrap = document.createElement("template");
-    wrap.innerHTML = exerciseExplanationHtml(d, explanation).trim();
-    const next = wrap.content.firstElementChild;
-    if (next)
-        current.replaceWith(next);
+    CairnExerciseDetailController.replaceExerciseExplanation(el, d, explanation, exerciseDetailDeps());
 }
-async function hydrateExerciseExplanation(el, d) {
-    const key = String(d?.name || "");
-    if (!key || exerciseExplainMisses.has(key))
-        return;
-    try {
-        const cached = await api("/exercise/" + encodeURIComponent(key) + "/explanation");
-        if (validExerciseExplanationPayload(cached)) {
-            replaceExerciseExplanation(el, d, cached.explanation);
-            if (!cached.stale)
-                return;
-        }
-    }
-    catch {
-        return;
-    }
-    try {
-        const generated = await api("/exercise/" + encodeURIComponent(key) + "/explanation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent: "auto" }),
-        });
-        if (validExerciseExplanationPayload(generated)) {
-            replaceExerciseExplanation(el, d, generated.explanation);
-        }
-        else {
-            exerciseExplainMisses.add(key);
-        }
-    }
-    catch {
-        exerciseExplainMisses.add(key);
-    }
+function foodDetailDeps() {
+    return {
+        state,
+        api,
+        art,
+        artEnabled: () => artEnabled,
+        artImg,
+        closeDetail,
+        escapeHtml: escHtml,
+        foodNote: CairnFoodNote,
+        foodNum,
+        formatFoodNum,
+        mountDetail,
+        openDetailFrom,
+        runCountUps,
+        toast,
+        wireDetailCommon,
+        withToken,
+    };
 }
-async function openExerciseModal(nameInput, fromTile) {
-    const name = String(nameInput || "");
-    const d = uiRecord(await api("/exercise/" + encodeURIComponent(name)));
-    const svg = art("exercise", name, d?.muscle_group);
-    if (!d || !d.found) {
-        openDetailFrom(fromTile, () => {
-            mountDetail(`
-        <div class="detail-art"><div class="detail-art-zoom">${artImg("exercise", name, "artile-xl", svg)}</div></div>
-        <h2 class="detail-title">${escHtml(name)}</h2>
-        <div class="empty">No data for this exercise yet.</div>
-        <div class="detail-actions"><button class="pillbtn" data-close>Close</button></div>`);
-            wireDetailCommon();
-        });
-        return;
-    }
-    const recent = uiRows(d.recent);
-    const timed = d.mode === "timed" || recent.some((r) => r.duration_sec != null);
-    const pts = uiRows(d.progress?.points);
-    const latest = pts.slice(-1)[0];
-    const hasPR = recent.some((r) => r.pr);
-    // hero figure: est-1RM for reps work, best duration for timed
-    let heroVal = 0, heroLbl = "", heroTxt = "";
-    let sparkVals = [];
-    if (timed) {
-        const durs = recent.filter((r) => r.duration_sec != null).map((r) => uiNumber(r.duration_sec));
-        const best = durs.length ? Math.max(...durs) : 0;
-        heroVal = best;
-        heroLbl = "best duration";
-        heroTxt = fmtDur(best);
-        sparkVals = durs.slice().reverse(); // recent[] is newest-first
-    }
-    else if (latest) {
-        heroVal = uiNumber(latest.best1rm);
-        heroLbl = `est 1RM · ${escHtml(d.unit || "lb")} · epley`;
-        sparkVals = pts.map((p) => p.best1rm);
-    }
-    const appears = uiRows(d.appears).map((a) => `D${a.day_number} ${escHtml(a.day_name)}`).join(" · ");
-    const recentLines = recent.map((r) => {
-        const fig = r.duration_sec != null ? fmtDur(r.duration_sec) : `${fmtWeight(r.weight)}×${r.reps}${r.rir != null ? ` @${r.rir}` : ""}`;
-        return `<div class="detail-setline"><span>${escHtml(r.date || "")}</span><span class="numeral">${fig}${r.pr ? ` <span class="prbadge">PR</span>` : ""}</span></div>`;
-    }).join("");
-    openDetailFrom(fromTile, () => {
-        const el = mountDetail(`
-      <div class="detail-art"><div class="detail-art-zoom">${artImg("exercise", d.name || name, "artile-xl", svg)}</div></div>
-      <h2 class="detail-title">${escHtml(d.name || name)}</h2>
-      <div class="detail-ctx lbl">${escHtml(d.muscle_group || "exercise")}${hasPR ? ` <span class="prbadge">PR</span>` : ""}</div>
-      ${heroVal ? `<div class="detail-kcal"><span class="numeral detail-num" ${timed ? "" : `data-cu="${heroVal}"`}>${timed ? heroTxt : "0"}</span><span class="detail-unit lbl">${heroLbl}</span></div>` : ""}
-      ${sparkVals.length > 1 ? `<div class="detail-spark">${sparklineSvg(sparkVals)}</div>` : ""}
-      ${d.constraint_note ? `<div class="ex-flag">${escHtml(d.constraint_note)}</div>` : ""}
-      ${exerciseExplanationHtml(d)}
-      ${d.cues ? `<div class="detail-section"><div class="lbl">Form cues</div><div class="detail-body">${escHtml(d.cues)}</div></div>` : ""}
-      ${appears ? `<div class="detail-section"><div class="lbl">In your plan</div><div class="detail-body">${appears}</div></div>` : ""}
-      <div class="detail-section"><div class="lbl">Recent sets</div>
-        ${recentLines || `<div class="detail-body" style="color:var(--muted)">None logged yet.</div>`}</div>
-      <div class="detail-section detail-manage">
-        <div class="lbl">This exercise</div>
-        <div class="manage-row">
-          <button class="pillbtn pill-sm" id="exType">Make ${timed ? "reps-based" : "timed (hold)"}</button>
-          <button class="pillbtn pill-sm pill-warn" id="exDelete">Delete</button>
-        </div>
-      </div>
-      <div class="detail-actions">
-        <button class="pillbtn" id="askForm">Ask coach</button>
-        <button class="pillbtn" data-close>Close</button>
-      </div>`);
-        runCountUps(el);
-        wireDetailCommon();
-        hydrateExerciseExplanation(el, d);
-        const ask = el.querySelector("#askForm");
-        if (ask)
-            ask.addEventListener("click", () => {
-                closeDetail(true);
-                gotoChatWith(`How should I perform ${name} with good form? Flag anything for my injury constraints.`);
-            });
-        // Change an exercise's type (reps ⇄ timed) — upsert-by-name updates the mode.
-        const typeBtn = el.querySelector("#exType");
-        if (typeBtn)
-            typeBtn.addEventListener("click", async () => {
-                typeBtn.disabled = true;
-                const next = timed ? "reps" : "timed";
-                try {
-                    await postExerciseMode(String(d.name || name), next);
-                    if (state.exModes)
-                        state.exModes[String(d.name || name)] = next;
-                    toast(`${d.name || name} is now ${next === "timed" ? "timed (hold)" : "reps-based"}`);
-                    closeDetail(true);
-                    if (state.tab === "today")
-                        renderToday();
-                }
-                catch {
-                    typeBtn.disabled = false;
-                    toast("Couldn't change type — try again");
-                }
-            });
-        // Delete an exercise — refuses (with a reason) if it has logged sets or is in a plan.
-        const delBtn = el.querySelector("#exDelete");
-        if (delBtn)
-            delBtn.addEventListener("click", async () => {
-                delBtn.disabled = true;
-                let r;
-                try {
-                    r = uiRecord(await api("/exercises/" + encodeURIComponent(String(d.name || name)), { method: "DELETE" }));
-                }
-                catch {
-                    delBtn.disabled = false;
-                    toast("Couldn't delete — try again");
-                    return;
-                }
-                if (r && r.ok) {
-                    toast(`Deleted ${d.name || name}`);
-                    closeDetail(true);
-                    if (state.tab === "today")
-                        renderToday();
-                }
-                else {
-                    delBtn.disabled = false;
-                    toast(r && r.error ? `Can't delete ${d.name || name}. ${r.error}` : "Couldn't delete");
-                }
-            });
-    });
-}
-// ---------- food-note detail (tap a note → full-screen) ----------
 async function openFoodDetail(note, fromTile) {
-    const n = uiRecord(note);
-    const pj = CairnFoodNote.parsedNote(n);
-    const text = n.raw || n.raw_text || n.raw_output || "";
-    const title = (pj && pj.summary) || CairnFoodNote.foodTitleFromIngredients(pj) || text || "Food note";
-    const kcal = foodNum(pj?.kcal) || 0;
-    const macros = pj ? [["Protein", pj.protein_g], ["Carbs", pj.carbs_g], ["Fat", pj.fat_g], ["Fiber", pj.fiber_g]]
-        .filter(([, v]) => v != null && v !== "" && !Number.isNaN(Number(v))) : [];
-    const maxG = Math.max(1, ...macros.map(([, v]) => Number(v)));
-    const ingredients = CairnFoodNote.foodIngredients(pj);
-    const items = ingredients.length ? ingredients.map((ing) => CairnFoodNote.ingredientLabel(ing)).join(", ") : CairnFoodNote.foodItemsText(pj);
-    const time = uiString(n.created_at).slice(11, 16);
-    // share of the day's lean-safe target, when we know both numbers
-    if (kcal && !state._goal) {
-        try {
-            state._goal = await api("/goal");
-        }
-        catch {
-            state._goal = null;
-        }
-    }
-    const target = uiNumber(uiRecord(state._goal?.recommended).target_intake_kcal);
-    const ctxBits = [];
-    if (kcal && target)
-        ctxBits.push(`${Math.round((kcal / target) * 100)}% of the day`);
-    if (time)
-        ctxBits.push(time);
-    const q = String(text || title || "Food note");
-    const svg = art("food", q);
-    const photoSrc = artEnabled && q ? withToken(`/api/art?kind=food&q=${encodeURIComponent(String(q).trim().slice(0, 120))}`) : "";
-    openDetailFrom(fromTile, () => {
-        const el = mountDetail(`
-      <div class="detail-art"><div class="detail-art-zoom">${artImg("food", q, "artile-xl", svg)}</div></div>
-      <h2 class="detail-title">${escHtml(title)}</h2>
-      ${items ? `<div class="detail-items">${escHtml(items)}</div>` : ""}
-      ${kcal ? `<div class="detail-kcal"><span class="numeral detail-num" data-cu="${kcal}">0</span><span class="detail-unit lbl">cal</span></div>` : ""}
-      ${ctxBits.length ? `<div class="detail-ctx lbl">${escHtml(ctxBits.join(" · "))}</div>` : ""}
-      ${macros.length ? `<div class="detail-macros">${macros.map(([l, v]) => `
-        <div class="macrobar">
-          <div class="macrobar-top"><span class="lbl">${l}</span><span class="macrobar-val">${escHtml(formatFoodNum(v))}g</span></div>
-          <div class="macrobar-track"><div class="macrobar-fill barfill" style="width:${Math.max(3, Math.round((Number(v) / maxG) * 100))}%"></div></div>
-        </div>`).join("")}</div>` : ""}
-      ${ingredients.length ? `<div class="detail-section"><div class="lbl">Ingredients</div><div class="ing-breakdown">${ingredients.map((ing) => `
-        <div class="ing-row">
-          <div class="ing-main">
-            <span>${escHtml(ing.item)}</span>
-            ${ing.amount ? `<small>${escHtml(ing.amount)}</small>` : ""}
-          </div>
-          <div class="ing-nutri">${escHtml(CairnFoodNote.foodMacroText(ing, { kcal: true, short: true }) || "estimated")}</div>
-        </div>`).join("")}</div></div>` : ""}
-      ${text && text !== title ? `<div class="detail-section"><div class="lbl">As logged</div><div class="detail-body">“${escHtml(text)}”</div></div>` : ""}
-      ${pj?.notes ? `<div class="detail-section"><div class="detail-body" style="color:var(--muted)">${escHtml(pj.notes)}</div></div>` : ""}
-      <div class="detail-actions">
-        <button class="pillbtn pill-warn" data-remove>Remove</button>
-        <button class="pillbtn" data-close>Close</button>
-      </div>`, photoSrc);
-        runCountUps(el);
-        wireDetailCommon();
-        const rm = el.querySelector("[data-remove]");
-        if (rm)
-            rm.addEventListener("click", async () => {
-                try {
-                    const r = uiRecord(await api(`/food-notes/${n.id}`, { method: "DELETE" }));
-                    if (r && r.error)
-                        throw new Error(String(r.error));
-                    toast("Removed");
-                    closeDetail(true);
-                    document.querySelector(`.fnent[data-noteid="${n.id}"]`)?.remove();
-                }
-                catch {
-                    toast("Couldn't remove");
-                }
-            });
-    });
+    return CairnFoodDetailController.openFoodDetail(note, fromTile, foodDetailDeps());
 }
 function gotoChatWith(text) {
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
