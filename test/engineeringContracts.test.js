@@ -2948,6 +2948,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressChartSource, /CairnProgressChart/);
   assert.match(progressHistorySource, /function sessionCardHtml\(session: unknown, index: number\): string/);
   assert.match(progressHistorySource, /function numOrNull\(value: unknown\): number \| null/);
+  assert.match(progressHistorySource, /async function renderHistory\(\)/);
+  assert.match(progressHistorySource, /function paintHistoryBody\(sessions: HistorySession\[\]\)/);
+  assert.match(progressHistorySource, /async function openSessionEdit\(sess: HistorySession, fromEl: Element\)/);
   assert.match(progressHistorySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressHistorySource, /CairnProgressHistory/);
   assert.match(progressRunPlanSource, /function weeklyRunPlanCard\(plan: WeeklyRunPlan \| null \| undefined\): string/);
@@ -3027,9 +3030,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramBlockSource, /function wireProgramBlock\(slot: Element\): void/);
   assert.match(progressProgramBlockSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramBlockSource, /CairnProgressProgramBlock/);
-  assert.match(progressScreenSource, /function renderHistory\(\)/);
   assert.match(progressScreenSource, /function renderProgram\(\)/);
   assert.match(progressScreenSource, /async function renderEnergy\(\)[\s\S]*state\.progressSeg = "energy"/);
+  assert.doesNotMatch(progressScreenSource, /function renderHistory\(\)|function paintHistoryBody|function openSessionEdit/);
   assert.doesNotMatch(progressScreenSource, /function nutritionCheckinOpOpts|function reconnectNutritionCheckin|function renderCheckinProposal|function runNutritionCheckin/);
   assert.match(progressScreenSource, /var _progFocusCard: string \| undefined/);
   assert.match(progressScreenSource, /CairnProgressFocus: PROGRESS_FOCUS_STATE/);
