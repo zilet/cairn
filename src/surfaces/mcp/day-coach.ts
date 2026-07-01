@@ -1,8 +1,6 @@
 import { z } from "zod";
-import { agentStatusFor, suggestSession, weekAheadRead } from "../../coachOps.js";
-import { computeDayRead, localToday } from "../../dayread.js";
-import { dayRead, forwardLook, getCachedDayRead } from "../../domain/brain/index.js";
-import { getTrajectory } from "../../domain/person/index.js";
+import { suggestSession, weekAheadRead } from "../../coachOps.js";
+import { readToday } from "../../domain/brain/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerDayCoachTools(server: McpToolRegistrar) {
@@ -14,43 +12,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
       override: z.string().optional().describe("free-text steer, e.g. 'rough night', 'short on time', 'train anyway'"),
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),
     },
-    async ({ date, override, agent }) => {
-      // Mirror the REST fast path: serve the cached canonical read on a hit
-      // (filled nightly by the scheduler), else compute + cache via the shared
-      // dayread layer. Overrides always recompute and are never cached.
-      const readDate = date || localToday();
-      // Mirror /today-read's withForward: attach the day-ahead `forward` line on every
-      // read (deterministic, current; null on a done day) so MCP and REST never diverge.
-      const withForward = (r: any) => {
-        let arc: string | null = null;
-        try {
-          arc = getTrajectory(readDate)?.line ?? null;
-        } catch {
-          arc = null;
-        }
-        return { ...r, forward: r?.kind === "done" ? null : forwardLook(readDate).text || null, arc };
-      };
-      try {
-        if (!override) {
-          const cached = getCachedDayRead(readDate);
-          if (cached) return asText(withForward({ ...cached, cached: true, agent_status: agentStatusFor(cached) }));
-        }
-        const r: any = await computeDayRead({ date, override, agent });
-        return asText(withForward({ ...r, agent_status: agentStatusFor(r) }));
-      } catch (e: any) {
-        const b = dayRead(date);
-        const headline = b.kind === "done"
-          ? "You're done for today."
-          : b.kind === "rest"
-            ? "Rest today."
-            : b.kind === "easy"
-              ? "Take it easy."
-              : b.focus
-                ? `${b.focus}.`
-                : "Good to train.";
-        return asText(withForward({ ...b, headline, source: "deterministic", error: e.message }));
-      }
-    }
+    async ({ date, override, agent }) => asText(await readToday({ date, override, agent, recordOutcome: true }))
   );
 
   server.tool(

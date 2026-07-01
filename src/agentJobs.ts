@@ -14,7 +14,7 @@ import {
   synthesizeHealth,
   distillChat,
 } from "./coachOps.js";
-import { computeDayRead, localToday } from "./dayread.js";
+import { readToday } from "./domain/brain/day-read-use-case.js";
 
 // Durable, in-process agent-job engine — the GENERALIZATION of chatTurns.ts for
 // the other blocking agentic ops. An op is no longer a request held open for
@@ -182,14 +182,10 @@ async function processAgentJob(id: number): Promise<void> {
         const override = input.override != null ? String(input.override) : undefined;
         onPhase("rereading your day");
         // The `done` result MUST be byte-for-byte what GET /api/today-read?override=
-        // returns (the read object incl. source + the persisted override), so the
-        // PWA reuses its Brief-from-read render unchanged. computeDayRead persists
-        // the steer (no-clobber guard) so it survives a reload.
-        result = await computeDayRead({ date, override, agent });
+        // returns, so the PWA reuses its Brief-from-read render unchanged.
+        result = await readToday({ date, override, agent, recordOutcome: true });
         chosen = result?.agent ?? null;
         ref = { ref_table: "day_reads", ref_id: null };
-        // Outcome learning, mirroring the synchronous handler's fresh-compute path.
-        try { repo.recordSuggestion("day_read", date || localToday(), { kind: result?.kind ?? null, focus: result?.focus ?? null, est_minutes: result?.est_minutes ?? null, override: override ?? null }); } catch { /* never block the job */ }
         break;
       }
       case "chat_distill": {
@@ -253,4 +249,4 @@ export function recoverAgentJobs(): { requeued: number; interrupted: number } {
 }
 
 // Re-export so the scheduler / boot can stamp the local date consistently.
-export { localToday };
+export { localToday } from "./dayread.js";

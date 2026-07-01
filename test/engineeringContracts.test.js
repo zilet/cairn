@@ -386,6 +386,7 @@ test("generated API docs include mounted route modules", () => {
   const chatRoutes = read("src/routes/chat.ts");
   const connectedBrainRoutes = read("src/routes/connected-brain.ts");
   const dayCoachRoutes = read("src/routes/day-coach.ts");
+  const dayReadUseCase = read("src/domain/brain/day-read-use-case.ts");
   const exportRoutes = read("src/routes/exports.ts");
   const garminRoutes = read("src/routes/garmin.ts");
   const healthMetricsRoutes = read("src/routes/health-metrics.ts");
@@ -430,7 +431,9 @@ test("generated API docs include mounted route modules", () => {
   assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/today-read\/reshape"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.post\("\/session-suggest"/);
   assert.match(dayCoachRoutes, /dayCoachRouter\.get\("\/week-ahead"/);
-  assert.match(dayCoachRoutes, /recordDayReadSuggestion/);
+  assert.match(dayCoachRoutes, /readToday\(\{\s*date,\s*override,\s*agent:\s*agentParam,\s*reset,\s*recordOutcome:\s*true\s*\}\)/);
+  assert.match(dayReadUseCase, /recordDayReadSuggestion/);
+  assert.match(dayReadUseCase, /getCachedDayRead/);
   assert.match(dayCoachRoutes, /backgroundOp\(res,\s*"session_suggest"/);
   assert.match(dayCoachRoutes, /createAgentJob\(\{\s*kind:\s*"day_read_override"/);
   assert.match(api, /api\.use\("\/agent-jobs",\s*agentJobsRouter\)/);
