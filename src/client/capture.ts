@@ -9,60 +9,6 @@
 // never a verdict; soft/uncertain directives read tentative.
 // ====================================================================
 
-// Active directives for a domain, newest-first. Short-lived in-memory cache so the
-// Brief + Meals don't double-fetch within one render pass. Always degrades to [].
-type CaptureDirective = import("../contracts/client.js").ClientDirective & {
-  citation?: unknown;
-  directive?: unknown;
-  uncertain?: unknown;
-};
-type CaptureActivity = import("../contracts/client.js").ClientActivity & { error?: string };
-type CaptureFoodNote = import("../contracts/client.js").ClientFoodNote & { error?: string };
-type CaptureFrequentFood = import("../contracts/client.js").ClientFrequentFood & {
-  kcal?: number | string | null;
-};
-type CaptureCheckin = import("../contracts/client.js").ClientCheckin & { error?: string };
-type CaptureInsight = import("../contracts/client.js").ClientInsight & {
-  confidence?: unknown;
-  kind?: string | null;
-  next_step?: unknown;
-  rationale?: unknown;
-  uncertain?: unknown;
-};
-type CaptureInsightResult = {
-  ok?: boolean;
-  insight?: CaptureInsight | null;
-  error?: unknown;
-};
-type CaptureSpeechAlternative = { transcript: string };
-type CaptureSpeechResult = {
-  readonly 0: CaptureSpeechAlternative;
-  isFinal: boolean;
-};
-type CaptureSpeechResultList = {
-  length: number;
-  [index: number]: CaptureSpeechResult;
-};
-type CaptureSpeechEvent = {
-  resultIndex: number;
-  results: CaptureSpeechResultList;
-};
-type CaptureSpeechErrorEvent = {
-  error?: string;
-};
-type CaptureSpeechRecognition = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  maxAlternatives: number;
-  onresult: ((event: CaptureSpeechEvent) => void) | null;
-  onerror: ((event: CaptureSpeechErrorEvent) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-};
-type CaptureSpeechRecognitionCtor = new () => CaptureSpeechRecognition;
-
 let _provCache: { at: number; rows: CaptureDirective[] } | null = null;
 async function activeDirectives(): Promise<CaptureDirective[]> {
   if (_provCache && Date.now() - _provCache.at < 4000) return _provCache.rows;

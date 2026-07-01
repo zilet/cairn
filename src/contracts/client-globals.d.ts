@@ -163,6 +163,26 @@ declare global {
     loadRecentActivities(): unknown;
   };
 
+  type ClientTodayPlanSelectionDay = {
+    id?: number | string | null;
+    day_number: number;
+    items?: Array<{ exercise?: string | null }> | null;
+  };
+
+  type ClientTodayPlanSelectionSession = {
+    date?: string | null;
+    plan_day_id?: number | string | null;
+    sets?: Array<{ exercise?: string | null }> | null;
+  };
+
+  type ClientTodayPlanSelectionDeps = {
+    state: {
+      logDate: string;
+      plan: ClientTodayPlanSelectionDay[];
+    };
+    api(path: string): Promise<unknown>;
+  };
+
   type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
 
   type ClientSettingsDataControllerDeps = {
@@ -288,7 +308,6 @@ declare global {
   declare const SET_SEG: readonly ClientSegment[];
   declare var MEALS_KEY: string;
   declare const MEAL_LABEL: Record<string, string>;
-  declare var _progFocusCard: string | undefined;
 
   declare function skelSwap(fn: () => void): void;
   declare function escHtml(value: unknown): string;
@@ -1284,6 +1303,11 @@ declare global {
       performanceHtml(performance: ClientPerformanceStanding | null | undefined, options?: { suppressLever?: boolean }): string;
     };
 
+    CairnProgressFocus: {
+      cardHtml(): string;
+      hasFocusCard(): boolean;
+    };
+
     CairnProgressProgramAdjustments: {
       PADJ_KIND: Record<string, { glyph: string; cls: string }>;
       loadProgramAdjustments(): Promise<void>;
@@ -1403,6 +1427,22 @@ declare global {
         pending: ClientTodayAgendaCandidate[],
         deps: ClientTodayRailControllerDeps,
       ): void;
+    };
+
+    CairnTodayPlanSelection: {
+      planDayNumberForSession(
+        session: ClientTodayPlanSelectionSession | null | undefined,
+        plan: ClientTodayPlanSelectionDay[] | null | undefined,
+      ): number | null;
+      nextPlanDayNumber(
+        dayNumber: number | null | undefined,
+        plan: ClientTodayPlanSelectionDay[] | null | undefined,
+      ): number | null;
+      suggestedPlanDayNumber(
+        session: ClientTodayPlanSelectionSession | null | undefined,
+        isToday: boolean,
+        deps: ClientTodayPlanSelectionDeps,
+      ): Promise<number>;
     };
 
     CairnTodayTraining: {
@@ -1651,6 +1691,7 @@ declare global {
   declare const CairnProgressMuscleTrajectory: Window["CairnProgressMuscleTrajectory"];
   declare const CairnProgressDexaTargeting: Window["CairnProgressDexaTargeting"];
   declare const CairnProgressPerformance: Window["CairnProgressPerformance"];
+  declare const CairnProgressFocus: Window["CairnProgressFocus"];
   declare const CairnProgressProgramAdjustments: Window["CairnProgressProgramAdjustments"];
   declare const CairnProgressTestWeek: Window["CairnProgressTestWeek"];
   declare const CairnProgressProgramSummary: Window["CairnProgressProgramSummary"];
@@ -1663,6 +1704,7 @@ declare global {
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayRailController: Window["CairnTodayRailController"];
+  declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];

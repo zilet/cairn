@@ -539,7 +539,7 @@ function startFamilyDelete(btn: Element) {
 
 Object.assign(globalThis, {
   healthMarkersEmptyHtml,
-  loadHealthDocs,
+  loadHealthDocs: () => CairnHealthRecordsController.loadDocs(healthRecordsDeps()),
   paintHealthLearnedTab,
   paintHealthMarkersTab,
   paintHealthRecordsTab,

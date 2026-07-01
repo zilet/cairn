@@ -7,6 +7,7 @@
 // failures in a real browser.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { root, serverEntry, sleep, withServer } from "./smoke-server.mjs";
@@ -16,7 +17,7 @@ const DEBUG_PORT_MIN = 25000;
 const DEBUG_PORT_SPAN = 5000;
 const NAV_TIMEOUT_MS = 20000;
 const SETTLE_MS = 600;
-const WORKFLOW_COUNT = 2;
+const WORKFLOW_COUNT = 6;
 
 const routes = [
   { path: "/", tab: "today" },
@@ -81,6 +82,28 @@ function debugPort() {
   return DEBUG_PORT_MIN + Math.floor(Math.random() * DEBUG_PORT_SPAN);
 }
 
+async function freeDebugPort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.on("error", (error) => {
+      // Some locked-down sandboxes reject a throwaway listen() probe even though
+      // Chrome itself can still bind a remote-debugging port. In that case keep
+      // the historical randomized-port fallback instead of failing before Chrome.
+      if (error?.code === "EPERM" || error?.code === "EACCES") resolve(debugPort());
+      else reject(error);
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => {
+        if (port) resolve(port);
+        else reject(new Error("could not allocate a Chrome debug port"));
+      });
+    });
+  });
+}
+
 function tail(log) {
   return String(log || "").split("\n").slice(-20).join("\n");
 }
@@ -106,8 +129,9 @@ async function waitForJson(port, child, logRef, timeoutMs = 10000) {
 async function launchChrome() {
   const bin = chromeBinary();
   let lastError = null;
+  const explicitPort = process.env.SMOKE_CHROME_PORT ? debugPort() : 0;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const port = debugPort() + attempt;
+    const port = explicitPort ? explicitPort + attempt : await freeDebugPort();
     const profileDir = mkdtempSync(path.join(tmpdir(), "cairn-browser-smoke-"));
     const args = [
       `--remote-debugging-port=${port}`,
@@ -167,13 +191,26 @@ class Cdp {
     this.pending = new Map();
     this.waiters = [];
     this.opened = new Promise((resolve, reject) => {
-      this.ws.addEventListener("open", resolve, { once: true });
-      this.ws.addEventListener("error", reject, { once: true });
+      const timer = setTimeout(() => reject(new Error("CDP socket did not open within 10s")), 10000);
+      this.ws.addEventListener("open", () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+      this.ws.addEventListener("error", (event) => {
+        clearTimeout(timer);
+        const message = event && typeof event === "object" && "message" in event ? String(event.message) : "CDP socket error";
+        reject(new Error(message));
+      }, { once: true });
     });
     this.ws.addEventListener("message", (event) => this.onMessage(event.data));
     this.ws.addEventListener("close", () => {
       for (const pending of this.pending.values()) pending.reject(new Error("CDP socket closed"));
       this.pending.clear();
+      for (const waiter of this.waiters) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error("CDP socket closed"));
+      }
+      this.waiters = [];
     });
   }
 
@@ -319,6 +356,11 @@ function describeConsole(args) {
   return (args || []).map((arg) => arg.value ?? arg.description ?? arg.type ?? "").join(" ");
 }
 
+function describeException(detail) {
+  const exception = detail?.exception;
+  return exception?.description || exception?.value || detail?.text || "unknown";
+}
+
 function collectFailures(cdp, base) {
   const failures = [];
   const allowedTypes = new Set(["Document", "Script", "Stylesheet", "Fetch", "XHR"]);
@@ -326,7 +368,7 @@ function collectFailures(cdp, base) {
     const params = msg.params || {};
     if (msg.method === "Runtime.exceptionThrown") {
       const detail = params.exceptionDetails;
-      failures.push(`runtime exception: ${detail?.text || detail?.exception?.description || "unknown"}`);
+      failures.push(`runtime exception: ${describeException(detail)}`);
     } else if (msg.method === "Runtime.consoleAPICalled" && params.type === "error") {
       failures.push(`console error: ${describeConsole(params.args)}`);
     } else if (msg.method === "Log.entryAdded" && params.entry?.level === "error") {
@@ -558,6 +600,241 @@ async function smokeChatAttachmentFocus(cdp, base) {
   }
 }
 
+async function smokeSettingsDataControls(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/settings/data", "settings");
+    await assertGlobals(cdp);
+    const initial = await evaluate(cdp, `(() => {
+      const updateCard = document.querySelector("#updateCard");
+      const toggle = document.querySelector("#updateCheckEnabled");
+      const checkNow = document.querySelector("#updateCheckNow");
+      const json = document.querySelector("#dlJson");
+      const db = document.querySelector("#dlDb");
+      const rerun = document.querySelector("#rerunSetup");
+      const tokenBtn = document.querySelector("#phoneGenToken");
+      if (!updateCard || !toggle || !checkNow || !json || !db || !rerun || !tokenBtn) {
+        return {
+          ok: false,
+          hasUpdateCard: Boolean(updateCard),
+          hasToggle: Boolean(toggle),
+          hasCheckNow: Boolean(checkNow),
+          hasJson: Boolean(json),
+          hasDb: Boolean(db),
+          hasRerun: Boolean(rerun),
+          hasTokenBtn: Boolean(tokenBtn)
+        };
+      }
+      return {
+        ok: true,
+        checked: toggle.checked,
+        checkNowDisplay: getComputedStyle(checkNow).display,
+        href: location.pathname + location.search
+      };
+    })()`);
+    ok(initial?.ok === true, "Settings Data backup/update/setup controls render", JSON.stringify(initial));
+
+    await evaluate(cdp, `(() => {
+      const toggle = document.querySelector("#updateCheckEnabled");
+      if (!toggle) throw new Error("missing update-check toggle");
+      toggle.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Settings Data update toggle rewires the check-now action", `(() => {
+      const toggle = document.querySelector("#updateCheckEnabled");
+      const checkNow = document.querySelector("#updateCheckNow");
+      if (!toggle || !checkNow) return { ok: false, reason: "missing toggle/check-now" };
+      const expectedDisplay = toggle.checked ? "" : "none";
+      return {
+        ok: checkNow.style.display === expectedDisplay,
+        checked: toggle.checked,
+        inlineDisplay: checkNow.style.display,
+        expectedDisplay
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const tokenBtn = document.querySelector("#phoneGenToken");
+      if (!tokenBtn) throw new Error("missing phone token button");
+      tokenBtn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Settings Data phone token helper generates a local token", `(() => {
+      const out = document.querySelector("#phoneTokenOut");
+      const text = out ? out.textContent.trim() : "";
+      return {
+        ok: text.length >= 20,
+        length: text.length,
+        title: out ? out.title : ""
+      };
+    })()`);
+
+    const finalState = await evaluate(cdp, `(() => ({
+      ok: location.pathname === "/app/settings/data" && window.state?.tab === "settings" && window.state?.setSeg === "data",
+      href: location.pathname + location.search,
+      tab: window.state && window.state.tab,
+      setSeg: window.state && window.state.setSeg
+    }))()`);
+    ok(finalState?.ok === true, "Settings Data controls preserve the routed Data slice", JSON.stringify(finalState));
+    ok(failures.length === 0, "/app/settings/data workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeProgressSegmentNavigation(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/progress/energy", "progress");
+    await assertGlobals(cdp);
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="program"]');
+      if (!btn) throw new Error("missing Progress Program segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Progress segment click routes to Program", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="program"]');
+      const view = document.querySelector("#view");
+      return {
+        ok: Boolean(
+          active &&
+          window.state?.tab === "progress" &&
+          window.state?.progressSeg === "program" &&
+          location.pathname === "/app/progress/program" &&
+          view &&
+          view.textContent.trim().length > 0
+        ),
+        href: location.pathname,
+        progressSeg: window.state && window.state.progressSeg,
+        active: active ? active.textContent.trim() : ""
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="energy"]');
+      if (!btn) throw new Error("missing Progress Energy segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Progress segment click returns to Energy", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="energy"]');
+      return {
+        ok: Boolean(active && window.state?.progressSeg === "energy" && location.pathname === "/app/progress/energy" && document.querySelector("#energyCard")),
+        href: location.pathname,
+        progressSeg: window.state && window.state.progressSeg,
+        hasEnergyCard: Boolean(document.querySelector("#energyCard"))
+      };
+    })()`);
+    ok(failures.length === 0, "/app/progress segment workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokePlanSegmentNavigation(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/plan/food", "plan");
+    await assertGlobals(cdp);
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="meals"]');
+      if (!btn) throw new Error("missing Plan Meals segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Plan segment click routes to Meals", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="meals"]');
+      const view = document.querySelector("#view");
+      return {
+        ok: Boolean(
+          active &&
+          window.state?.tab === "plan" &&
+          window.state?.planSeg === "meals" &&
+          location.pathname === "/app/plan/meals" &&
+          view &&
+          view.textContent.trim().length > 0
+        ),
+        href: location.pathname,
+        planSeg: window.state && window.state.planSeg,
+        active: active ? active.textContent.trim() : ""
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="food"]');
+      if (!btn) throw new Error("missing Plan Food segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Plan segment click returns to Food journal", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="food"]');
+      return {
+        ok: Boolean(active && window.state?.planSeg === "food" && location.pathname === "/app/plan/food" && document.querySelector("#dayFuelSlot") && document.querySelector("#energyCard")),
+        href: location.pathname,
+        planSeg: window.state && window.state.planSeg,
+        hasDayFuel: Boolean(document.querySelector("#dayFuelSlot")),
+        hasEnergyCard: Boolean(document.querySelector("#energyCard"))
+      };
+    })()`);
+    ok(failures.length === 0, "/app/plan segment workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeHealthInnerNavigation(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/me/health/read", "me");
+    await assertGlobals(cdp);
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.hseg .segbtn[data-hseg="markers"]');
+      if (!btn) throw new Error("missing Health Markers segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Health inner segment click routes to Markers", `(() => {
+      const active = document.querySelector('.hseg .segbtn.active[data-hseg="markers"]');
+      const content = document.querySelector("#hContent");
+      return {
+        ok: Boolean(
+          active &&
+          window.state?.tab === "me" &&
+          window.state?.meSeg === "health" &&
+          window.state?.healthSeg === "markers" &&
+          location.pathname === "/app/me/health/markers" &&
+          content &&
+          content.textContent.trim().length > 0
+        ),
+        href: location.pathname,
+        healthSeg: window.state && window.state.healthSeg,
+        active: active ? active.textContent.trim() : ""
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.hseg .segbtn[data-hseg="records"]');
+      if (!btn) throw new Error("missing Health Records segment");
+      btn.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Health inner segment click routes to Records upload", `(() => {
+      const active = document.querySelector('.hseg .segbtn.active[data-hseg="records"]');
+      return {
+        ok: Boolean(active && window.state?.healthSeg === "records" && location.pathname === "/app/me/health/records" && document.querySelector("#hUploadBox") && document.querySelector("#hUpload")),
+        href: location.pathname,
+        healthSeg: window.state && window.state.healthSeg,
+        hasUploadBox: Boolean(document.querySelector("#hUploadBox")),
+        hasUploadButton: Boolean(document.querySelector("#hUpload"))
+      };
+    })()`);
+    ok(failures.length === 0, "/app/me/health inner navigation workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
 if (!existsSync(serverEntry)) {
   console.error(`x ${serverEntry} is missing - run \`npm run build\` first (presmoke:browser does this).`);
   process.exit(1);
@@ -579,6 +856,10 @@ try {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
     await smokeTodayAddExercise(cdp, ctx.base);
     await smokeChatAttachmentFocus(cdp, ctx.base);
+    await smokeSettingsDataControls(cdp, ctx.base);
+    await smokeProgressSegmentNavigation(cdp, ctx.base);
+    await smokePlanSegmentNavigation(cdp, ctx.base);
+    await smokeHealthInnerNavigation(cdp, ctx.base);
   });
   console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${WORKFLOW_COUNT} workflow(s) loaded without runtime errors.`);
   exitCode = 0;

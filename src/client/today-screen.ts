@@ -202,44 +202,11 @@ function postExerciseMode(name: string, mode: string) {
   return todayApi("/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, mode }) });
 }
 
-function planDayNumberForSession(session: TodayScreenTrainingSession | null | undefined, plan: TodayScreenPlanDay[]): number | null {
-  if (!session || !(session.sets || []).length) return null;
-  const byId = plan.find((d) => Number(d.id) === Number(session.plan_day_id));
-  if (byId) return byId.day_number;
-
-  const loggedNames = new Set((session.sets || []).map((s) => s.exercise).filter(Boolean));
-  let best: { day_number: number; hits: number } | null = null;
-  for (const d of plan) {
-    const plannedNames = new Set((d.items || []).map((it) => it.exercise));
-    let hits = 0;
-    loggedNames.forEach((name) => { if (plannedNames.has(name)) hits++; });
-    if (hits && (!best || hits > best.hits)) best = { day_number: d.day_number, hits };
-  }
-  return best?.day_number ?? null;
-}
-
-function nextPlanDayNumber(dayNumber: number | null | undefined, plan: TodayScreenPlanDay[]): number | null {
-  const ordered = [...plan].sort((a, b) => a.day_number - b.day_number);
-  if (!ordered.length) return null;
-  const idx = ordered.findIndex((d: any) => d.day_number === dayNumber);
-  return ordered[idx >= 0 ? (idx + 1) % ordered.length : 0].day_number;
-}
-
 async function suggestedPlanDayNumber(session: TodayScreenTrainingSession | null | undefined, isToday: boolean): Promise<number> {
-  const currentLoggedDay = planDayNumberForSession(session, todayState.plan);
-  if (currentLoggedDay) return currentLoggedDay;
-  if (!isToday) return todayState.plan[0]?.day_number ?? 1;
-
-  try {
-    const recent = await todayApi("/sessions?limit=20") as TodayScreenTrainingSession[];
-    const latest = (recent || []).find((s) =>
-      s.date !== todayState.logDate && planDayNumberForSession(s, todayState.plan)
-    );
-    const latestDay = planDayNumberForSession(latest, todayState.plan);
-    return latestDay ? (nextPlanDayNumber(latestDay, todayState.plan) ?? todayState.plan[0]?.day_number ?? 1) : (todayState.plan[0]?.day_number ?? 1);
-  } catch {
-    return todayState.plan[0]?.day_number ?? 1;
-  }
+  return CairnTodayPlanSelection.suggestedPlanDayNumber(session, isToday, {
+    state: todayState,
+    api: todayApi,
+  });
 }
 
 // ---------- The Brief (day-read) ----------

@@ -8,6 +8,10 @@ type PerformanceRenderOptions = {
   suppressLever?: boolean;
 };
 
+function progressFocusCardPresent(): boolean {
+  return !!(typeof window !== "undefined" && window.CairnProgressFocus?.hasFocusCard());
+}
+
 async function loadPerformance(): Promise<void> {
   const slot = view.querySelector("#progPerfSlot");
   if (!slot) return;
@@ -21,7 +25,7 @@ async function loadPerformance(): Promise<void> {
     slot.innerHTML = "";
     return;
   }
-  slot.innerHTML = performanceHtml(performance, { suppressLever: !!_progFocusCard });
+  slot.innerHTML = performanceHtml(performance, { suppressLever: progressFocusCardPresent() });
 }
 
 function pctClamp(value: unknown): number {

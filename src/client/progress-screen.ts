@@ -474,6 +474,7 @@ function paintCalendarBody(data: ProgressRecord) {
 // in-flight nutrition check-in card is never clobbered by a background refresh.
 async function renderEnergy() {
   headerTitle.textContent = "Progress";
+  state.progressSeg = "energy";
   const token = ++pollToken;
   const head = segBar("energy", PROGRESS_SEG);
   const peek = peekCached("progress:energy");
@@ -550,6 +551,16 @@ async function triggerProgramEvolve(btn: Element) {
 // it and collapse the deep sections behind "The full read"; absent → the existing
 // stacked sections, untouched (graceful degradation).
 var _progFocusCard: string | undefined;
+const PROGRESS_FOCUS_STATE = {
+  cardHtml: () => typeof _progFocusCard === "string" ? _progFocusCard : "",
+  hasFocusCard: () => !!_progFocusCard,
+};
+
+Object.assign(globalThis, { CairnProgressFocus: PROGRESS_FOCUS_STATE });
+
+if (typeof window !== "undefined") {
+  window.CairnProgressFocus = PROGRESS_FOCUS_STATE;
+}
 
 async function renderProgram() {
   headerTitle.textContent = "Progress";
@@ -608,7 +619,7 @@ function paintProgramBody(data: ProgressProgramState) {
   if (nGood) heroStats.push(["climbing", nGood]);
   if (nStalled) heroStats.push(["stalled", nStalled]);
 
-  const conductor = (typeof _progFocusCard === "string") ? _progFocusCard : "";
+  const conductor = CairnProgressFocus.cardHtml();
   const hasConductor = !!conductor;
 
   // The deterministic headline — the single most important program sentence. When the

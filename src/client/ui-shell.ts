@@ -259,8 +259,10 @@ function wireSeg(handlers: Record<string, () => unknown>) {
         const idx = [...seg.querySelectorAll<HTMLElement>(".segbtn")].indexOf(b);
         (seg as HTMLElement).style.setProperty("--segi", String(idx));
       }
-      withViewTransition(() => Promise.resolve(f()).then(viewEnter));
-      if (typeof syncRouteFromState === "function") syncRouteFromState();
+      withViewTransition(() => Promise.resolve(f()).then(() => {
+        if (typeof syncRouteFromState === "function") syncRouteFromState();
+        return viewEnter();
+      }));
     })
   );
   view.querySelectorAll(".seg").forEach(fitSeg);

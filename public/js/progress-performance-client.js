@@ -1,6 +1,9 @@
 (() => {
 // @ts-check
 // Progress performance standing presentation helpers.
+function progressFocusCardPresent() {
+    return !!(typeof window !== "undefined" && window.CairnProgressFocus?.hasFocusCard());
+}
 async function loadPerformance() {
     const slot = view.querySelector("#progPerfSlot");
     if (!slot)
@@ -16,7 +19,7 @@ async function loadPerformance() {
         slot.innerHTML = "";
         return;
     }
-    slot.innerHTML = performanceHtml(performance, { suppressLever: !!_progFocusCard });
+    slot.innerHTML = performanceHtml(performance, { suppressLever: progressFocusCardPresent() });
 }
 function pctClamp(value) {
     const numeric = Number(value);
