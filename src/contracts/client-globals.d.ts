@@ -804,6 +804,37 @@ declare global {
       }): void;
     };
 
+    CairnChatComposerFocus: {
+      focusInput(input: HTMLTextAreaElement | HTMLInputElement): void;
+      releaseStaleInputFocus(options: {
+        input: HTMLTextAreaElement | HTMLInputElement;
+        isSoftKeyboard(): boolean;
+        isKeyboardGeometryOpen(): boolean;
+        measure(): void;
+      }): void;
+      recoverInputFocusFromTap(options: {
+        input: HTMLTextAreaElement | HTMLInputElement;
+        isActive(): boolean;
+        isSoftKeyboard(): boolean;
+        measure(): void;
+      }): void;
+      settleViewport(options: {
+        isActive(): boolean;
+        measure(): void;
+      }): void;
+      wireFocus(options: {
+        input: HTMLTextAreaElement | HTMLInputElement;
+        isActive(): boolean;
+        isSoftKeyboard(): boolean;
+        isKeyboardGeometryOpen(): boolean;
+        measure(): void;
+      }): {
+        releaseStaleInputFocus(): void;
+        recoverInputFocusFromTap(): void;
+        settleViewport(): void;
+      };
+    };
+
     CairnExerciseDetail: {
       explanation(exercise: { name?: unknown; muscle_group?: unknown } | null | undefined): {
         setup?: unknown;
@@ -1834,6 +1865,7 @@ declare global {
 
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
+  declare const CairnChatComposerFocus: Window["CairnChatComposerFocus"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];

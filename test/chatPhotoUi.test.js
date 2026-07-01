@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const chat = readFileSync(path.join(root, "public/js/09-plan-chat.js"), "utf8");
 const chatClient = readFileSync(path.join(root, "public/js/chat-client.js"), "utf8");
 const chatAttachment = readFileSync(path.join(root, "public/js/chat-attachment-client.js"), "utf8");
+const chatComposerFocus = readFileSync(path.join(root, "public/js/chat-composer-focus-client.js"), "utf8");
 
 test("chat photo capture compresses under the server upload cap before enqueue", () => {
   assert.match(chatClient, /const\s+CHAT_IMAGE_MAX_BYTES\s*=\s*4\s*\*\s*1024\s*\*\s*1024/);
@@ -39,16 +40,14 @@ test("chat photo picker settles keyboard geometry before and after the native pi
 });
 
 test("chat photo composer can refocus the same textarea after the keyboard hides", () => {
-  assert.match(chat, /const\s+releaseStaleChatInputFocus\s*=\s*\(\)\s*=>/);
-  assert.match(chat, /const\s+recoverChatInputFocus\s*=\s*\(\)\s*=>/);
-  assert.match(chat, /const\s+kbGeometryOpen\s*=\s*document\.body\.classList\.contains\("kb-geometry-open"\)/);
-  assert.match(chat, /const\s+alreadyFocused\s*=\s*document\.activeElement\s*===\s*input/);
-  assert.match(chat, /if\s*\(!kbGeometryOpen\s*&&\s*document\.activeElement\s*===\s*input\)\s*input\.blur\(\)/);
-  assert.match(chat, /if\s*\(!alreadyFocused\s*&&\s*!kbGeometryOpen\)\s*\{/);
-  assert.match(chat, /input\.focus\(\{\s*preventScroll:\s*true\s*\}\)/);
+  assert.match(chat, /CairnChatComposerFocus\.wireFocus/);
+  assert.match(chatComposerFocus, /function\s+chatComposerReleaseStaleInputFocus/);
+  assert.match(chatComposerFocus, /function\s+chatComposerRecoverInputFocusFromTap/);
+  assert.match(chatComposerFocus, /document\.activeElement\s*===\s*options\.input\)\s*options\.input\.blur\(\)/);
+  assert.match(chatComposerFocus, /chatComposerFocusInput\(options\.input\)/);
+  assert.match(chatComposerFocus, /input\.focus\(\{\s*preventScroll:\s*true\s*\}\)/);
+  assert.match(chatComposerFocus, /addEventListener\("pointerup",\s*recoverInputFocusFromTap,\s*\{\s*passive:\s*true\s*\}\)/);
+  assert.match(chatComposerFocus, /addEventListener\("click",\s*recoverInputFocusFromTap\)/);
   assert.doesNotMatch(chat, /document\.body\.classList\.contains\("kb-open"\)/);
-  assert.doesNotMatch(chat, /document\.activeElement\s*!==\s*input\)\s*return/);
-  assert.match(chat, /input\.addEventListener\("pointerdown",\s*releaseStaleChatInputFocus\)/);
-  assert.match(chat, /input\.addEventListener\("pointerup",\s*recoverChatInputFocus/);
-  assert.match(chat, /input\.addEventListener\("click",\s*recoverChatInputFocusAfterClick\)/);
+  assert.doesNotMatch(chatComposerFocus, /setTimeout\(\(\)\s*=>\s*\{\s*[^}]*focus/);
 });

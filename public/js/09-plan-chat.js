@@ -262,14 +262,16 @@ async function renderChat() {
     if (!input || !sendBtn || !fileInput || !attachBtn || !preview)
         return;
     let attached = null;
+    const isChatActive = () => state.tab === "chat";
     const isSoftKeyboardChat = () => !matchMedia("(hover:hover)").matches;
+    const isChatKeyboardGeometryOpen = () => document.body.classList.contains("kb-geometry-open");
     const resetChatFocusAfterNativePicker = () => CairnChatAttachment.resetFocusAfterNativePicker({
         input,
         fileInput,
         isSoftKeyboard: isSoftKeyboardChat,
     });
     const settleChatAfterNativePicker = () => CairnChatAttachment.settleAfterNativePicker({
-        isActive: () => state.tab === "chat",
+        isActive: isChatActive,
         measure: measureChatTop,
         graceMs: 1200,
     });
@@ -409,66 +411,15 @@ async function renderChat() {
             void send();
         }
     });
-    // Re-pin the column across the WHOLE keyboard slide. iOS animates the keyboard
-    // over ~300ms and reports its visual-viewport metrics in steps, so a single
-    // double-rAF (~32ms) catches a transitional offsetTop -- the styled bar and the
-    // real caret desync ("typing in the gap underneath the input"). Re-measure on
-    // a few beats spanning the animation so the dock settles flush to the keyboard,
-    // and once more after it drops to clear any stale gap.
-    const settleChatViewport = () => {
-        measureChatTop();
-        requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
-        for (const d of [80, 160, 260, 380, 520])
-            setTimeout(() => { if (state.tab === "chat")
-                measureChatTop(); }, d);
-    };
-    const releaseStaleChatInputFocus = () => {
-        if (!isSoftKeyboardChat())
-            return;
-        const kbGeometryOpen = document.body.classList.contains("kb-geometry-open");
-        if (!kbGeometryOpen && document.activeElement === input)
-            input.blur();
-        settleChatViewport();
-    };
-    const recoverChatInputFocus = () => {
-        if (!isSoftKeyboardChat())
-            return;
-        setTimeout(() => {
-            if (state.tab !== "chat" || !input.isConnected)
-                return;
-            const kbGeometryOpen = document.body.classList.contains("kb-geometry-open");
-            const alreadyFocused = document.activeElement === input;
-            if (!alreadyFocused && !kbGeometryOpen) {
-                try {
-                    input.focus({ preventScroll: true });
-                }
-                catch {
-                    input.focus();
-                }
-            }
-            settleChatViewport();
-        }, 0);
-    };
-    const recoverChatInputFocusAfterClick = () => {
-        if (!isSoftKeyboardChat())
-            return;
-        setTimeout(() => {
-            if (state.tab !== "chat" || !input.isConnected || document.activeElement === input)
-                return;
-            try {
-                input.focus({ preventScroll: true });
-            }
-            catch {
-                input.focus();
-            }
-            settleChatViewport();
-        }, 80);
-    };
-    input.addEventListener("pointerdown", releaseStaleChatInputFocus);
-    input.addEventListener("pointerup", recoverChatInputFocus, { passive: true });
-    input.addEventListener("click", recoverChatInputFocusAfterClick);
-    for (const ev of ["focus", "blur"])
-        input.addEventListener(ev, settleChatViewport);
+    // Re-pin the column across the whole keyboard slide, and recover stale iOS
+    // textarea focus from the next real tap after a native image picker closes.
+    CairnChatComposerFocus.wireFocus({
+        input,
+        isActive: isChatActive,
+        isSoftKeyboard: isSoftKeyboardChat,
+        isKeyboardGeometryOpen: isChatKeyboardGeometryOpen,
+        measure: measureChatTop,
+    });
     // Persist the unsent draft on every keystroke so it survives a tab switch /
     // reload -- restored below unless a deep-link prefill takes precedence. Re-grow
     // the composer to fit what's typed/pasted.

@@ -86,6 +86,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
   { source: "src/client/chat-attachment-client.ts", output: "public/js/chat-attachment-client.js" },
+  { source: "src/client/chat-composer-focus-client.ts", output: "public/js/chat-composer-focus-client.js" },
   { source: "src/client/chat-message-client.ts", output: "public/js/chat-message-client.js" },
   { source: "src/client/chat-turn-client.ts", output: "public/js/chat-turn-client.js" },
   { source: "src/client/chat-history-client.ts", output: "public/js/chat-history-client.js" },
