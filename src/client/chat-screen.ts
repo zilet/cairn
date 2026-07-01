@@ -1,6 +1,6 @@
 // @ts-check
 // ==== 09-plan-chat.js ====
-// Plan editor and Plan Endurance screen orchestration live in /js/plan-editor-client.js and /js/plan-endurance-client.js.
+// Plan editor orchestration lives in /js/plan-editor-controller.js; Plan Endurance lives in /js/plan-endurance-client.js.
 
 function chatScreenRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};

@@ -1260,6 +1260,11 @@ declare global {
       pdayHtml(day: Record<string, unknown>, dayIndex: number): string;
     };
 
+    CairnPlanEditorController: {
+      render(): Promise<void>;
+      serializeDays(model: Array<{ day_number?: unknown; name?: unknown; focus?: unknown; items: Array<Record<string, unknown>> }>): Array<Record<string, unknown>>;
+    };
+
     CairnDayFuel: {
       MEAL_LABEL: Record<string, string>;
       mealLabelHtml(meal: unknown): string;
@@ -2070,6 +2075,7 @@ declare global {
   declare const CairnMeProfileController: Window["CairnMeProfileController"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
+  declare const CairnPlanEditorController: Window["CairnPlanEditorController"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnDayFuelController: Window["CairnDayFuelController"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
