@@ -6,6 +6,7 @@
 type ChatMessage = import("../contracts/client.js").ClientChatMessage & Record<string, unknown>;
 type ChatTurnRoot = typeof globalThis & {
   CairnChatLayout: ChatLayoutApi;
+  CairnChatTurnMonitor: ChatTurnMonitorApi;
   CairnChatTurnRecords: ChatTurnRecordsApi;
   CairnChatTurnStreamState: ChatTurnStreamStateApi;
   appendMsg?: (message: Partial<ChatMessage> | ChatTurnRecord, noScroll?: boolean, parent?: Element | null, opts?: ChatTurnRecord) => Element | null;
@@ -23,8 +24,6 @@ const turnId = chatTurnRecords.id;
 const parseTurnEvent = chatTurnRecords.event;
 const chatPhaseCaption = chatTurnRecords.phaseCaption;
 
-let chatStream: EventSource | null = null;
-let chatStreamId: number | null = null;
 const chatPendingBubbles = new Map<number, HTMLElement>();
 const chatDoneTurns = new Set<number>();
 const chatTurnStreamState = root.CairnChatTurnStreamState.create({
@@ -36,6 +35,21 @@ const chatTurnStreamState = root.CairnChatTurnStreamState.create({
 const wireChatJump = chatLayout.wireJump;
 const autosizeChatInput = chatLayout.autosizeInput;
 const measureChatTop = chatLayout.measureTop;
+const chatTurnMonitor = root.CairnChatTurnMonitor.create({
+  isActive: () => state.tab === "chat",
+  hasLog: () => !!document.getElementById("chatlog"),
+  pendingIds: () => [...chatPendingBubbles.keys()]
+    .filter((id) => chatPendingBubbles.get(id)?.isConnected),
+  createStream: (id) => new EventSource(withToken(`/api/chat/turns/${id}/stream`)),
+  parse: parseTurnEvent,
+  record: chatTurnRecord,
+  phase: setTurnPhase,
+  progress: setTurnProgress,
+  delta: (id, text) => chatTurnStreamState.appendDelta(id, text),
+  reset: resetStreamingBubble,
+  finish: finalizeTurn,
+  cancel: finalizeCanceled,
+});
 
 function saveChatDraft(value: string): void {
   chatTurnRecords.saveDraft(value);
@@ -90,6 +104,11 @@ function setTurnProgress(id: number, text: unknown): void {
   if (!el || !el.isConnected || el.classList.contains("streaming")) return;
   const clean = String(text || "").trim();
   if (clean) setPendingCaption(el, clean);
+}
+
+function setTurnPhase(id: number, turnValue: unknown): void {
+  const el = chatPendingBubbles.get(id);
+  if (el?.isConnected) setPendingCaption(el, chatPhaseCaption(chatTurnRecord(turnValue) as ChatTurn));
 }
 
 function resetStreamingBubble(id: number): void {
@@ -188,94 +207,19 @@ async function cancelTurn(id: number): Promise<void> {
   let response: unknown = null;
   try { response = await api(`/chat/turns/${id}/cancel`, { method: "POST" }); } catch {}
   finalizeCanceled(chatTurnRecord(response).turn || { id });
-  if (chatStreamId === id) closeChatStream();
+  if (chatTurnMonitor.currentId() === id) chatTurnMonitor.close();
   chatMonitorEnsure();
 }
 
-function closeChatStream(): void {
-  if (chatStream) { try { chatStream.close(); } catch {} }
-  chatStream = null;
-  chatStreamId = null;
-}
-
 function chatTeardownMonitor(): void {
-  closeChatStream();
+  chatTurnMonitor.close();
   chatPendingBubbles.clear();
   chatTurnStreamState.clear();
   chatDoneTurns.clear();
 }
 
 function chatMonitorEnsure(): void {
-  if (chatStream || state.tab !== "chat") return;
-  const ids = [...chatPendingBubbles.keys()]
-    .filter((id) => chatPendingBubbles.get(id)?.isConnected)
-    .sort((a, b) => a - b);
-  if (!ids.length) return;
-  chatOpenStream(ids[0]);
-}
-
-function streamTerminal(es: EventSource): void {
-  if (chatStream === es) closeChatStream();
-  else { try { es.close(); } catch {} }
-  chatMonitorEnsure();
-}
-
-function chatOpenStream(id: number): void {
-  chatStreamId = id;
-  let es: EventSource;
-  try { es = new EventSource(withToken(`/api/chat/turns/${id}/stream`)); }
-  catch { chatStreamId = null; return; }
-  chatStream = es;
-
-  const guard = () => {
-    if (state.tab === "chat" && document.getElementById("chatlog")) return false;
-    if (chatStream === es) closeChatStream();
-    else { try { es.close(); } catch {} }
-    return true;
-  };
-  const phase = (turn: unknown) => {
-    const el = chatPendingBubbles.get(id);
-    if (el?.isConnected) setPendingCaption(el, chatPhaseCaption(chatTurnRecord(turn) as ChatTurn));
-  };
-
-  es.addEventListener("snapshot", (event) => {
-    if (guard()) return;
-    const row = parseTurnEvent(event);
-    if (!row) return;
-    const turn = chatTurnRecord(row.turn);
-    if (turn.status && ["done", "error", "canceled"].includes(String(turn.status))) {
-      if (turn.status === "canceled") finalizeCanceled(turn);
-      else finalizeTurn(turn, row.message);
-      streamTerminal(es);
-      return;
-    }
-    phase(row.turn || row);
-  });
-  es.addEventListener("phase", (event) => { if (!guard()) phase(parseTurnEvent(event)?.turn); });
-  es.addEventListener("progress", (event) => { if (!guard()) setTurnProgress(id, parseTurnEvent(event)?.text); });
-  es.addEventListener("delta", (event) => { if (!guard()) chatTurnStreamState.appendDelta(id, parseTurnEvent(event)?.text); });
-  es.addEventListener("reset", () => { if (!guard()) resetStreamingBubble(id); });
-  es.addEventListener("done", (event) => {
-    if (guard()) return;
-    const row = parseTurnEvent(event);
-    if (!row) return;
-    finalizeTurn(row.turn, row.message);
-    streamTerminal(es);
-  });
-  es.addEventListener("canceled", (event) => {
-    if (guard()) return;
-    finalizeCanceled(parseTurnEvent(event)?.turn);
-    streamTerminal(es);
-  });
-  es.addEventListener("error", (event) => {
-    const data = (event as MessageEvent).data;
-    if (!data) return;
-    if (guard()) return;
-    const row = parseTurnEvent(event);
-    if (!row) return;
-    finalizeTurn(row.turn, row.message);
-    streamTerminal(es);
-  });
+  chatTurnMonitor.ensure();
 }
 
 async function chatReconnect(): Promise<void> {

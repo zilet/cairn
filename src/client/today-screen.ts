@@ -8,9 +8,6 @@
 // score; the server hands us finished plain words (delta_text + why), we just frame
 // them. The whole day's prescriptions become a DRAFT plan proposal via the apply
 // control in the session head — nothing auto-applies.
-type TodayScreenApiResponse<Path extends string> = import("../contracts/client.js").ClientApiResponse<Path>;
-type TodayScreenCachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: { changed: boolean }) => void };
-type TodayScreenSwrPeek<T> = { data: T; fresh: boolean };
 type TodayScreenDayRead = import("../contracts/client.js").ClientDayRead & { _provisional?: boolean; override?: string | null };
 type TodayScreenPlanItem = import("../contracts/client.js").ClientPlanItem & {
   fromPlan?: boolean;
@@ -53,61 +50,18 @@ type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "p
   healthSegPicked?: boolean;
   [key: string]: unknown;
 };
-type TodayScreenSessionSuggestAskOptions = Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[0];
-type TodayScreenCompatibilityBridges = {
-  briefDeps(): ClientTodayBriefControllerDeps;
-  sessionDeps(): ClientTodaySessionControllerDeps;
-  postExerciseMode(name: string, mode: string): Promise<unknown>;
-  reconnectSessionSuggest(job?: unknown): unknown;
-  revealSessionComposer(): void;
-  askForSession(opts?: TodayScreenSessionSuggestAskOptions): Promise<void>;
-  sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
-  wireLogRow(row: Element | null | undefined): void;
-  wireSkips(): void;
-  wireBrief(
-    read: { _provisional?: boolean } | null | undefined,
-    options: { isToday: boolean },
-  ): void;
-  reconnectDayReadOverride(job: unknown): unknown;
-  scheduleRxRefresh(): void;
-  invalidateTodayProgression(): void;
-  refreshAdaptedRx(): Promise<void>;
-  setupAddExercise(): Promise<void>;
-  appendOffPlanCard(name: any, mode: any): Promise<void>;
-  garminSessionCard(value: unknown): string;
-  loadWearable(isToday: unknown): Promise<void>;
-  loadTableHint(): Promise<void>;
-  loadContextBanner(): Promise<void>;
-  loadDraftProposals(): Promise<void>;
-  loadHealthFocusBanner(): Promise<void>;
-};
-type TodayScreenCompatibilityBridgesApi = {
-  create(input: {
-    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
-    dependencies(): ClientTodayDependenciesContext;
-  }): TodayScreenCompatibilityBridges;
-};
-
-function todayApi<Path extends string>(
-  path: Path,
-  opts?: RequestInit & { headers?: Record<string, string> },
-): Promise<TodayScreenApiResponse<Path>> {
-  return api(path, opts);
-}
-
-function todayCachedApi<Path extends string>(
-  path: Path,
-  opts?: TodayScreenCachedApiOptions<TodayScreenApiResponse<Path>>,
-): Promise<TodayScreenApiResponse<Path>> {
-  return cachedApi(path, opts);
-}
-
-function todayPeekCached<T = unknown>(key: string, freshFor?: number): TodayScreenSwrPeek<T> | null {
-  return peekCached<T>(key, freshFor);
-}
 
 const todayState = state as TodayState;
 const todayView = view as HTMLElement & any;
+const todayRuntime = CairnTodayScreenRuntime.create({
+  state: todayState,
+  root: todayView,
+  renderToday,
+});
+const todayApi = todayRuntime.api;
+const todayDeps = todayRuntime.deps;
+const todayPlanSurfaceRendererDeps = todayRuntime.planSurfaceRendererDeps;
+const todayMainShellDeps = todayRuntime.mainShellDeps;
 const todayPlanSessionPreparation = (globalThis as unknown as {
   CairnTodayPlanSessionPreparation: TodayPlanSessionPreparationApi;
 }).CairnTodayPlanSessionPreparation;
@@ -124,116 +78,10 @@ const todayRenderState = (globalThis as unknown as {
   CairnTodayRenderState: TodayRenderStateApi;
 }).CairnTodayRenderState;
 
-function todayMicGlyph(): string {
-  const globals = globalThis as unknown as {
-    MIC_GLYPH?: unknown;
-    CairnCaptureVoice?: { micGlyph?: unknown };
-  };
-  return String(globals.MIC_GLYPH || globals.CairnCaptureVoice?.micGlyph || "");
-}
-
-let todayDepsCache: ClientTodayDependenciesContext | null = null;
-
-function todayDeps(): ClientTodayDependenciesContext {
-  if (!todayDepsCache) {
-    todayDepsCache = CairnTodayDependencies.context({
-      root: todayView,
-      state: todayState,
-      api: todayApi,
-      cachedApi: todayCachedApi as (path: string, opts?: TodayScreenCachedApiOptions<unknown>) => Promise<unknown>,
-      peekCached: todayPeekCached,
-      invalidate: swrInvalidate,
-      renderToday,
-      withViewTransition,
-      runOp,
-      runCountUps,
-      reducedMotion,
-      collapseEl,
-      expandEl,
-      activateTab,
-      toast,
-      localISO,
-      escapeHtml: escHtml,
-      escapeAttr: escAttr,
-      stagger,
-      micGlyph: todayMicGlyph,
-      cardioLabel,
-      cardioPrescription,
-      isCardioItem,
-      cardioPlanCard,
-      cardioEffortMatches,
-      exCard,
-      garminSessionCard,
-      sessionDoneCard,
-      setsTonnage,
-      rxMoveCount: todayRxMoveCount,
-      exRxLineHtml: todayExRxLineHtml,
-      loadTrainingProvenance,
-      revealPlanThen,
-      revealSessionComposer,
-      askForSession,
-      thinkingCaption,
-      appendOffPlanCard,
-      gotoChatWith,
-      loadTodayReads,
-      todaySkeleton,
-      setTodayHeaderTitle,
-      nextPollToken: () => ++pollToken,
-      isCurrentPoll: (token) => token === pollToken,
-      suggestedPlanDayNumber,
-      updateHeaderCondense,
-      quickLog,
-      wireCardioSync,
-      applyDayProgression,
-      wireBrief,
-      upgradeBriefInPlace,
-      loadTableHint,
-      setupWeightChip,
-      setupVoiceCapture,
-      loadFrequentFoods,
-      loadContextBanner,
-      loadHealthFocusBanner,
-      loadWearable,
-      loadCheckin,
-      loadDraftProposals,
-      setFocus,
-      viewEnter,
-      invalidateTodayProgression,
-      scheduleRxRefresh,
-      startRest,
-      stopRest,
-      parseDur,
-      fmtDur,
-      postExerciseMode,
-      wireGuides,
-      wireLogRow,
-      wireSkips,
-    });
-  }
-  return todayDepsCache;
-}
-
-function todayPlanSurfaceRendererDeps() {
-  return todayDeps().planSurfaceRenderer();
-}
-
-function todayMainShellDeps() {
-  return todayDeps().mainShell();
-}
-
-const todayCompatibilityBridges = (globalThis as unknown as {
-  CairnTodayCompatibilityBridges: TodayScreenCompatibilityBridgesApi;
-}).CairnTodayCompatibilityBridges.create({
-  api: todayApi,
-  dependencies: todayDeps,
-});
-
 const {
-  briefDeps: todayBriefDeps,
   sessionDeps: todaySessionDeps,
   revealSessionComposer,
   askForSession,
-  sessionDoneCard,
   wireLogRow,
   wireSkips,
   wireBrief,
@@ -242,104 +90,39 @@ const {
   refreshAdaptedRx,
   setupAddExercise,
   appendOffPlanCard,
-  garminSessionCard,
   loadWearable,
   loadTableHint,
   loadContextBanner,
   loadDraftProposals,
   loadHealthFocusBanner,
-} = todayCompatibilityBridges;
+  postExerciseMode: todayRuntimePostExerciseMode,
+  reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest,
+  reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride,
+  applyDayProgression,
+  loadBrief,
+  upgradeBriefInPlace,
+  reshapeToday: todayRuntimeReshapeToday,
+  briefHtml,
+  focusEngaged,
+  setFocus,
+  focusBarHtml,
+  revealPlanThen,
+} = todayRuntime;
 
-function postExerciseMode(name: string, mode: string) {
-  return todayCompatibilityBridges.postExerciseMode(name, mode);
+function postExerciseMode(name: string, mode: string): Promise<unknown> {
+  return todayRuntimePostExerciseMode(name, mode);
 }
 
-function reconnectSessionSuggest(job?: unknown) {
-  return todayCompatibilityBridges.reconnectSessionSuggest(job);
+function reconnectSessionSuggest(job?: unknown): unknown {
+  return todayRuntimeReconnectSessionSuggest(job);
 }
 
-function reconnectDayReadOverride(job?: unknown) {
-  return todayCompatibilityBridges.reconnectDayReadOverride(job);
+function reconnectDayReadOverride(job?: unknown): unknown {
+  return todayRuntimeReconnectDayReadOverride(job);
 }
 
-// The per-card prescription line. `rx` is one Prescription from the progression
-// engine (or null → renders nothing). Calm, no score, one move + its why. When the
-// move is "switch it up" (action:'vary'), the engine hands a small menu of same-
-// pattern swaps that the card renderer frames as a quiet choice.
-function todayExRxLineHtml(rx: TodayScreenPrescription | null | undefined) {
-  return CairnTodayTraining.exRxLineHtml(rx);
-}
-
-// How many of a day's prescriptions are an actual MOVE (not a plain hold) — drives
-// the "apply these" affordance copy + whether it shows at all.
-function todayRxMoveCount(rxByEx: TodayScreenPrescriptionByExercise) {
-  return CairnTodayTraining.rxMoveCount(rxByEx);
-}
-
-// "Apply these to my plan" — sends the whole day's adapted targets through the
-// propose→apply path (POST /api/program/progression/apply {day}), which lands a
-// DRAFT plan proposal for review. Nothing auto-applies; we deep-link into Plan →
-// Coach where the draft is reviewed/applied, mirroring loadDraftProposals. Calm,
-// honest degradation: an unreachable / not-yet-wired endpoint restores the button.
-async function applyDayProgression(btn: Element | null | undefined, day: number | null | undefined) {
-  if (day == null) return;
-  const restore = btnBusy(btn, "Drafting…");
-  let r = null;
-  try {
-    r = await todayApi("/program/progression/apply", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ day }),
-    });
-  } catch { restore(); toast("Couldn't draft that — check your connection."); return; }
-  if (!r || r.ok === false) { restore(); toast("Couldn't draft that just now — try again in a bit."); return; }
-  // A fresh draft is waiting in Plan → Coach — drop the caches that surface it.
-  swrInvalidate("plan:coach");
-  swrInvalidate("plan:proposals");
-  toast("Drafted — review it in your Plan");
-  todayState.planJump = "coach";
-  activateTab("plan");
-}
-
-function exCard(
-  it: TodayScreenPlanItem,
-  logged: TodayScreenLoggedSet[],
-  prefill: Record<string, unknown>,
-  revealIdx: number | null | undefined,
-  rx: TodayScreenPrescription | null | undefined,
-) {
-  return CairnTodayCards.exerciseCardHtml(it, logged, prefill, revealIdx, rx, {
-    day: todayState.day,
-    exModes: todayState.exModes,
-  });
-}
-
-// Today: a planned cardio effort. A prescription (distance/duration/zone/interval)
-// + a calm "log this" affordance that prefills the free-text capture (it routes
-// through the same activity log as everything else — no separate set-logger). Reuses
-// the .ex card vocabulary so it sits naturally among the strength cards.
-//
-// `done` (optional) = a matched synced cardio effort (a CardioEffort from
-// /api/cardio). When present the card flips to a calm "✓ Easy run — 8.2 km · mostly
-// Z2 · synced from Garmin" read with NO "log this" button — the run already
-// happened, the watch carried it. When absent we keep the prescription, but "Log
-// this run →" is the FALLBACK with a quiet "or it'll sync from your watch" hint,
-// since a synced run is the runner's preferred path. (Sync freshness rides on a
-// separate line only when Garmin is configured.)
-function cardioPlanCard(
-  it: TodayScreenPlanItem,
-  revealIdx: number | null | undefined,
-  done: TodayScreenCardioEffort | null | undefined,
-  syncline: string,
-) {
-  return CairnTodayCards.cardioPlanCardHtml(it, revealIdx, done as Record<string, unknown> | null | undefined, syncline);
-}
-
-// Does a synced cardio effort satisfy a planned cardio item? The bar is deliberately
-// low (per spec): a compatible-type effort logged today is enough to call the
-// prescription done — a runner's plan day is "did a run happen?", not an exact-match
-// audit. Compatibility falls back to "any endurance effort" when neither side names a
-// recognizable verb (so a generic activity still flips a generic cardio prescription).
-function cardioEffortMatches(it: TodayScreenPlanItem, eff: TodayScreenCardioEffort | null | undefined) {
-  return CairnTodayCards.cardioEffortMatches(it, eff as Record<string, unknown> | null | undefined);
+async function reshapeToday(): Promise<void> {
+  await todayRuntimeReshapeToday();
 }
 
 // ---------- sync trust: a quiet freshness line where a runner needs the mileage ----------
@@ -352,69 +135,6 @@ function cardioEffortMatches(it: TodayScreenPlanItem, eff: TodayScreenCardioEffo
 // Session status render helpers live in /js/today-session-status-client.js. They
 // own tonnage, set chips, completion, skip-line, and feedback markup while this
 // screen keeps DOM wiring and persistence.
-
-async function suggestedPlanDayNumber(session: TodayScreenTrainingSession | null | undefined, isToday: boolean): Promise<number> {
-  return CairnTodayPlanSelection.suggestedPlanDayNumber(session, isToday, {
-    state: todayState,
-    api: todayApi,
-  });
-}
-
-// ---------- The Brief (day-read) ----------
-// Pure Brief markup lives in /js/today-brief-client.js. Stateful fetch/cache,
-// steer-job, reconnect, and focus-mode wiring live in /js/today-brief-controller.js.
-async function loadBrief(date: string, override: string, opts: { fast?: boolean } = {}): Promise<TodayScreenDayRead> {
-  return CairnTodayBriefController.loadBrief(date, override, todayBriefDeps(), opts) as Promise<TodayScreenDayRead>;
-}
-
-async function upgradeBriefInPlace(date: string, isToday: boolean) {
-  await CairnTodayBriefController.upgradeBriefInPlace(date, isToday, todayBriefDeps());
-}
-
-async function reshapeToday() {
-  await CairnTodayBriefController.reshapeToday(todayBriefDeps());
-}
-
-function briefHtml(
-  read: (Partial<TodayScreenDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
-  { showPlan, hasPlanDay, isToday }: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
-): string {
-  return CairnTodayBriefController.briefHtml(read, { showPlan, hasPlanDay, isToday }, todayBriefDeps());
-}
-
-function focusEngaged(
-  date: unknown,
-  { showPlan, hasLoggedSets, isToday }: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
-): boolean {
-  return CairnTodayBriefController.focusEngaged(date, { showPlan, hasLoggedSets, isToday }, todayBriefDeps());
-}
-
-function setFocus(date: string, on: boolean): void {
-  CairnTodayBriefController.setFocus(date, on, todayBriefDeps());
-}
-
-function focusBarHtml(
-  read: Partial<TodayScreenDayRead> | null | undefined,
-  day: { name?: unknown } | null | undefined,
-  { exDone, exTotal, isToday }: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
-): string {
-  return CairnTodayBriefController.focusBarHtml(read, day, { exDone, exTotal, isToday });
-}
-
-function briefSignalsText(read: Partial<TodayScreenDayRead> | null | undefined): string {
-  return CairnTodayBriefController.briefSignalsText(read);
-}
-
-// Reveal the plan/logging surface for the selected date, then run `after` once the
-// surface exists in the DOM. If it's already shown, run immediately.
-function revealPlanThen(after: (() => unknown) | null | undefined, opts: { blank?: boolean } = {}) {
-  if (todayView.querySelector(".addex")) { after && after(); return; }
-  // `blank`: reveal a clean logging surface with NO plan day pre-loaded (used by a
-  // logged session suggestion). On a day with nothing planned, this stops Today from
-  // borrowing — and mislabeling the session as — the next rotation day's workout.
-  todayState.planReveal = { date: todayState.logDate, on: true, blank: !!opts.blank };
-  Promise.resolve(renderToday()).then(() => { after && after(); });
-}
 
 // ---------- The Today salience arbiter (Era 2, §12 item 1) ----------
 // Today's rail cards each decide independently whether to render, so a busy day

@@ -404,6 +404,82 @@ declare global {
   type ClientTodayDependenciesApi = {
     context(input: ClientTodayDependenciesContextInput): ClientTodayDependenciesContext;
   };
+  type ClientTodayCompatibilityBridgesContext = {
+    briefDeps(): ClientTodayBriefControllerDeps;
+    sessionDeps(): ClientTodaySessionControllerDeps;
+    postExerciseMode(name: string, mode: string): Promise<unknown>;
+    reconnectSessionSuggest(job?: unknown): unknown;
+    revealSessionComposer(): void;
+    askForSession(opts?: Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[0]): Promise<void>;
+    sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
+    wireLogRow(row: Element | null | undefined): void;
+    wireSkips(): void;
+    wireBrief(read: { _provisional?: boolean } | null | undefined, options: { isToday: boolean }): void;
+    reconnectDayReadOverride(job?: unknown): unknown;
+    scheduleRxRefresh(): void;
+    invalidateTodayProgression(): void;
+    refreshAdaptedRx(): Promise<void>;
+    setupAddExercise(): Promise<void>;
+    appendOffPlanCard(name: any, mode: any): Promise<void>;
+    garminSessionCard(value: unknown): string;
+    loadWearable(isToday: unknown): Promise<void>;
+    loadTableHint(): Promise<void>;
+    loadContextBanner(): Promise<void>;
+    loadDraftProposals(): Promise<void>;
+    loadHealthFocusBanner(): Promise<void>;
+  };
+  type ClientTodayCompatibilityBridgesApi = {
+    create(input: {
+      api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+      dependencies(): ClientTodayDependenciesContext;
+    }): ClientTodayCompatibilityBridgesContext;
+  };
+  type ClientTodayScreenRuntimeState = ClientAppState & Record<string, unknown> & {
+    day: number | null;
+    exModes: Record<string, string>;
+    logDate: string;
+    planJump?: string;
+    planReveal?: { date: string; on: boolean; blank?: boolean };
+  };
+  type ClientTodayScreenRuntimeContext = ClientTodayCompatibilityBridgesContext & {
+    api<Path extends string>(path: Path, opts?: RequestInit & { headers?: Record<string, string> }): Promise<ClientApiResponse<Path>>;
+    cachedApi<Path extends string>(path: Path, opts?: CachedApiOptions<ClientApiResponse<Path>>): Promise<ClientApiResponse<Path>>;
+    peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    deps(): ClientTodayDependenciesContext;
+    planSurfaceRendererDeps(): ReturnType<ClientTodayDependenciesContext["planSurfaceRenderer"]>;
+    mainShellDeps(): ReturnType<ClientTodayDependenciesContext["mainShell"]>;
+    exRxLineHtml(rx: Partial<ClientPrescription> | null | undefined): string;
+    rxMoveCount(rxByEx: Record<string, Partial<ClientPrescription> | null | undefined>): number;
+    applyDayProgression(button: Element | null | undefined, day: number | null | undefined): Promise<void>;
+    exerciseCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
+    cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
+    cardioEffortMatches(item: any, effort: any): boolean;
+    suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+    loadBrief(date: string, override: string, opts?: { fast?: boolean }): Promise<ClientDayRead & { _provisional?: boolean; override?: string | null }>;
+    upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
+    reshapeToday(): Promise<void>;
+    briefHtml(
+      read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
+      options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
+    ): string;
+    focusEngaged(date: unknown, options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown }): boolean;
+    setFocus(date: string, on: boolean): void;
+    focusBarHtml(
+      read: Partial<ClientDayRead> | null | undefined,
+      day: { name?: unknown } | null | undefined,
+      options: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
+    ): string;
+    briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
+    revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
+  };
+  type ClientTodayScreenRuntimeApi = {
+    micGlyph(): string;
+    create(input: {
+      state: ClientTodayScreenRuntimeState;
+      root: HTMLElement;
+      renderToday(): Promise<unknown> | unknown;
+    }): ClientTodayScreenRuntimeContext;
+  };
 
   type ClientTodayPlanSelectionDay = {
     id?: number | string | null;
@@ -2688,6 +2764,8 @@ declare global {
     };
 
     CairnTodayDependencies: ClientTodayDependenciesApi;
+    CairnTodayCompatibilityBridges: ClientTodayCompatibilityBridgesApi;
+    CairnTodayScreenRuntime: ClientTodayScreenRuntimeApi;
 
     CairnTodayTraining: {
       RX_ACTION: Record<string, { word: string; cls: string }>;
@@ -3120,6 +3198,8 @@ declare global {
   declare const CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayDependencies: Window["CairnTodayDependencies"];
+  declare const CairnTodayCompatibilityBridges: Window["CairnTodayCompatibilityBridges"];
+  declare const CairnTodayScreenRuntime: Window["CairnTodayScreenRuntime"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];

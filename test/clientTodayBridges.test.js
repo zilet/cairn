@@ -250,8 +250,10 @@ test("Today compatibility bridge routes legacy wrappers through explicit deps", 
 
 test("Today screen delegates bridge functions while keeping legacy globals", () => {
   const source = readFileSync(join(root, "src/client/today-screen.ts"), "utf8");
+  const runtimeSource = readFileSync(join(root, "src/client/today-screen-runtime.ts"), "utf8");
 
-  assert.match(source, /CairnTodayCompatibilityBridges\.create\(\{\s*api: todayApi,\s*dependencies: todayDeps,\s*\}\)/);
+  assert.match(source, /CairnTodayScreenRuntime\.create\(\{/);
+  assert.match(runtimeSource, /CairnTodayCompatibilityBridges\.create\(\{\s*api: todayScreenRuntimeApi,\s*dependencies: deps,\s*\}\)/);
   assert.match(
     source,
     /Object\.assign\(globalThis,\s*\{[\s\S]*postExerciseMode[\s\S]*reconnectDayReadOverride[\s\S]*reconnectSessionSuggest[\s\S]*renderToday[\s\S]*reshapeToday[\s\S]*\}\)/,

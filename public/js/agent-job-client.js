@@ -9,40 +9,7 @@
     const jobDone = new Set();
     const jobHandlers = new Map();
     const jobReconnectors = new Map();
-    function agentJobRecord(value) {
-        return value && typeof value === "object" ? value : {};
-    }
-    function agentJobRows(value) {
-        return Array.isArray(value) ? value.filter((row) => !!row && typeof row === "object") : [];
-    }
-    function jobKey(jobId) {
-        return String(jobId ?? "");
-    }
-    function agentJob(value) {
-        const row = agentJobRecord(value);
-        return row.id != null ? row : null;
-    }
-    function eventData(event) {
-        const data = event.data;
-        if (typeof data !== "string" || !data)
-            return null;
-        try {
-            const parsed = JSON.parse(data);
-            return agentJobRecord(parsed);
-        }
-        catch {
-            return null;
-        }
-    }
-    function jobStatus(job) {
-        return typeof job?.status === "string" ? job.status : "";
-    }
-    function isTerminal(job) {
-        return ["done", "error", "canceled"].includes(jobStatus(job));
-    }
-    function jobError(row, job) {
-        return row.message ?? job?.error ?? null;
-    }
+    const agentJobRecords = globalThis.CairnAgentJobRecords;
     function registerJobReconnector(kind, factory) {
         if (!kind || typeof factory !== "function")
             return;
@@ -56,7 +23,7 @@
         });
     }
     function openJobStream(jobId, handlers = {}) {
-        const id = jobKey(jobId);
+        const id = agentJobRecords.key(jobId);
         if (!id || jobStreams.has(id))
             return;
         let es;
@@ -100,14 +67,14 @@
         es.addEventListener("snapshot", (event) => {
             if (guard())
                 return;
-            const row = eventData(event);
+            const row = agentJobRecords.event(event);
             if (!row)
                 return;
-            const job = agentJob(row.job) || agentJob(row);
-            if (isTerminal(job)) {
-                if (jobStatus(job) === "done")
+            const job = agentJobRecords.job(row.job) || agentJobRecords.job(row);
+            if (agentJobRecords.isTerminal(job)) {
+                if (agentJobRecords.status(job) === "done")
                     finish(job, row.result != null ? row.result : job?.result);
-                else if (jobStatus(job) === "canceled") {
+                else if (agentJobRecords.status(job) === "canceled") {
                     try {
                         handlers.onCanceled?.(job);
                     }
@@ -115,7 +82,7 @@
                 }
                 else {
                     try {
-                        handlers.onError?.(jobError(row, job), job);
+                        handlers.onError?.(agentJobRecords.error(row, job), job);
                     }
                     catch { }
                 }
@@ -131,31 +98,31 @@
         es.addEventListener("phase", (event) => {
             if (guard())
                 return;
-            const row = eventData(event);
+            const row = agentJobRecords.event(event);
             if (!row)
                 return;
             try {
-                handlers.onPhase?.(agentJob(row.job) || agentJob(row));
+                handlers.onPhase?.(agentJobRecords.job(row.job) || agentJobRecords.job(row));
             }
             catch { }
         });
         es.addEventListener("done", (event) => {
             if (guard())
                 return;
-            const row = eventData(event);
+            const row = agentJobRecords.event(event);
             if (!row)
                 return;
-            finish(agentJob(row.job), row.result);
+            finish(agentJobRecords.job(row.job), row.result);
             terminal();
         });
         es.addEventListener("canceled", (event) => {
             if (guard())
                 return;
-            const row = eventData(event);
+            const row = agentJobRecords.event(event);
             if (!row)
                 return;
             try {
-                handlers.onCanceled?.(agentJob(row.job));
+                handlers.onCanceled?.(agentJobRecords.job(row.job));
             }
             catch { }
             terminal();
@@ -166,12 +133,12 @@
                 return; // native connection blip; let EventSource reconnect.
             if (guard())
                 return;
-            const row = eventData(event);
+            const row = agentJobRecords.event(event);
             if (!row)
                 return;
-            const job = agentJob(row.job);
+            const job = agentJobRecords.job(row.job);
             try {
-                handlers.onError?.(jobError(row, job), job);
+                handlers.onError?.(agentJobRecords.error(row, job), job);
             }
             catch { }
             terminal();
@@ -181,14 +148,14 @@
         let jobs = [];
         try {
             const res = await api("/agent-jobs");
-            const row = agentJobRecord(res);
-            jobs = agentJobRows(row.jobs).map(agentJob).filter((job) => !!job);
+            const row = agentJobRecords.record(res);
+            jobs = agentJobRecords.rows(row.jobs).map(agentJobRecords.job).filter((job) => !!job);
         }
         catch {
             jobs = [];
         }
         for (const job of jobs) {
-            const id = jobKey(job.id);
+            const id = agentJobRecords.key(job.id);
             if (!id || jobStreams.has(id))
                 continue;
             let handlers = jobHandlers.get(id);
@@ -225,7 +192,7 @@
         if (!path)
             return undefined;
         const failCheck = isFail || ((result) => {
-            const row = agentJobRecord(result);
+            const row = agentJobRecords.record(result);
             return !result || row.ok === false;
         });
         const anchorGone = () => (anchor ? !document.querySelector(anchor)?.isConnected : false);
@@ -268,7 +235,7 @@
             fail(null);
             return undefined;
         }
-        const job = agentJob(agentJobRecord(response).job);
+        const job = agentJobRecords.job(agentJobRecords.record(response).job);
         if (!job) {
             renderResult(response);
             return undefined;
@@ -277,8 +244,8 @@
             guard: guardFn,
             onPhase: (phaseJob) => {
                 const h = anchor ? document.querySelector(anchor) : null;
-                const frac = agentJobRecord(agentJobRecord(phaseJob).meta).frac;
-                const fracRow = agentJobRecord(frac);
+                const frac = agentJobRecords.record(agentJobRecords.record(phaseJob).meta).frac;
+                const fracRow = agentJobRecords.record(frac);
                 const total = Number(fracRow.total);
                 const done = Number(fracRow.done);
                 if (h && Number.isFinite(done) && Number.isFinite(total) && total > 0 && !reducedMotion()) {

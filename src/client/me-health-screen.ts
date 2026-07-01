@@ -8,208 +8,151 @@ type HealthReviewRecord = HealthScreenRecord & { created_at?: string; error?: un
 // Standing leads — Me opens to the REVIEW (where you stand + where to focus), not a
 // data-entry form. The lab DATA (Health), identity (Profile), life, family and the
 // curated Memory follow it: review first, entering/updating second.
-const ME_SEG: readonly ClientSegment[] = [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"], ["life", "Life"], ["family", "Family"], ["memory", "Memory"]];
-// Lazy handler refs (arrow-wrapped like PROGRESS_HANDLERS/PLAN_HANDLERS): renderLife and
-// renderFamily live in a later-loaded module, so bare references would resolve at parse
-// time — before that script runs — and throw. Arrows defer resolution to call time, by
-// which point every module is loaded. wireSeg/renderMe call handlers with no args.
-const ME_HANDLERS: Record<ClientMeSection, () => unknown> = { standing: () => renderMeStanding(), profile: () => renderMeProfile(), memory: () => renderMemory(), health: () => renderHealth(), life: () => renderLife(), family: () => renderFamily() };
+const ME_HEALTH_SCREEN = CairnMeHealthScreenComposition.create({
+  root: view,
+  state,
+  document,
+  headerTitle,
+  api,
+  cachedApi,
+  peekCached,
+  markRefreshing,
+  swrInvalidate,
+  runOp,
+  toast,
+  armDelete,
+  activateTab: (tab) => activateTab(tab),
+  escapeAttr: escAttr,
+  escapeHtml: escHtml,
+  invalidatePoll: () => { pollToken++; },
+  mountSaveBar,
+  primaryDiscipline: () => primaryDiscipline,
+  segBar,
+  segSkeleton,
+  setDiscipline,
+  setEnduranceGoalSet,
+  skeletonSwap: skelSwap,
+  wireSeg,
+  fitSeg,
+  syncRouteFromState: () => typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
+  withViewTransition,
+  select: $,
+  relTime,
+  relAge,
+  stagger,
+  reducedMotion,
+  pollToken: () => pollToken,
+  activityEntryHtml: (activity) => actEntryHtml(activity),
+  openFoodDetail,
+  loadDexaTargeting: () => typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
+  loadCoachingFocus: (selector, root) => loadCoachingFocus(selector, root),
+  paintHealthMarkersTab: () => paintHealthMarkersTab(),
+  paintHealthRecordsTab: () => paintHealthRecordsTab(),
+  paintHealthShareTab: () => paintHealthShareTab(),
+  paintHealthLearnedTab: () => paintHealthLearnedTab(),
+  renderLife: () => renderLife(),
+  renderFamily: () => renderFamily(),
+  storage: () => typeof localStorage !== "undefined" ? localStorage : null,
+});
+
+const ME_SEG = ME_HEALTH_SCREEN.segments;
+const ME_HANDLERS = ME_HEALTH_SCREEN.handlers;
+
 function renderMe() {
-  headerTitle.textContent = "Me";
-  pollToken++; // invalidate in-flight enrichment polls
-  if (!state.meSeg) state.meSeg = "standing";
-  return (ME_HANDLERS[state.meSeg] || renderMeStanding)();
+  return ME_HEALTH_SCREEN.renderMe();
 }
 
 // True when the Health → Read depth view is live — the whole-picture loaders
 // (picture/synthesis/recovery/directives/markers/supplements) gate on this so a
 // late async response never paints into a sibling tab.
 function onHealthReadView() {
-  return state.tab === "me" && state.meSeg === "health" && state.healthSeg === "read";
+  return ME_HEALTH_SCREEN.onHealthReadView();
 }
 
 // The Standing review — the FIRST thing Me opens to. It leads with the conductor's
 // whole-athlete "Where to focus" card (the cross-domain lead, tapping through to the
 // plan), then the detailed where-you-stand health read below.
 async function renderMeStanding() {
-  headerTitle.textContent = "Me";
-  state.meSeg = "standing";
-  pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
-  view.innerHTML = segBar("standing", ME_SEG)
-    + `<div class="cfocus-slot cfocus-standing-slot" id="cfocusStandingSlot"></div>`
-    + `<div id="hContent"></div>`;
-  wireSeg(ME_HANDLERS);
-  loadCoachingFocus("#cfocusStandingSlot", view); // the whole-athlete lead → planning
-  paintStandingReview(); // the detailed where-you-stand health read
-}
-
-function meHealthDepsContext(): ClientMeHealthDependenciesContext {
-  return CairnMeHealthDependencies.context({
-    root: view,
-    state,
-    segments: ME_SEG,
-    handlers: ME_HANDLERS as Record<string, () => unknown>,
-    document,
-    headerTitle,
-    api,
-    cachedApi,
-    peekCached,
-    markRefreshing,
-    swrInvalidate,
-    runOp,
-    toast,
-    armDelete,
-    activateTab: (tab) => activateTab(tab),
-    escapeAttr: escAttr,
-    escapeHtml: escHtml,
-    invalidatePoll: () => { pollToken++; },
-    mountSaveBar,
-    primaryDiscipline: () => primaryDiscipline,
-    renderMe,
-    renderProfile: () => renderMeProfile(),
-    segBar,
-    segSkeleton,
-    setDiscipline,
-    setEnduranceGoalSet,
-    skeletonSwap: skelSwap,
-    wireSeg,
-    fitSeg,
-    syncRouteFromState: typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
-    withViewTransition,
-    select: $,
-    relTime,
-    relAge,
-    stagger,
-    reducedMotion,
-    pollToken: () => pollToken,
-    switchHealthSeg,
-    onHealthReadView,
-    loadHealthPicture: (token, docsPromise) => loadHealthPicture(token, docsPromise),
-    paintHealthPicture,
-    healthDocsKnownEmpty,
-    paintRead: paintHealthReadTab,
-    paintMarkers: paintHealthMarkersTab,
-    paintRecords: paintHealthRecordsTab,
-    paintShare: paintHealthShareTab,
-    paintLearned: paintHealthLearnedTab,
-    activityEntryHtml: (activity) => actEntryHtml(activity),
-    openFoodDetail,
-    loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
-    storage: typeof localStorage !== "undefined" ? localStorage : null,
-  });
-}
-
-function meProfileDeps(): MeProfileControllerDeps {
-  return CairnMeHealthDependencies.profile(meHealthDepsContext());
+  await ME_HEALTH_SCREEN.renderMeStanding();
 }
 
 async function renderMeProfile() {
-  return CairnMeProfileController.renderProfile(meProfileDeps());
-}
-
-// Pure food-note parsing/rendering lives in food-note-client.js; the food detail
-// modal is owned by food-detail-controller.js.
-function meHealthLogRenderer(): ClientMeHealthLogRendererApi {
-  return (globalThis as typeof globalThis & { CairnMeHealthLogRenderer: ClientMeHealthLogRendererApi }).CairnMeHealthLogRenderer;
-}
-
-function meHealthLogDeps(): ClientMeHealthLogRendererDeps {
-  return CairnMeHealthDependencies.log(meHealthDepsContext());
+  return ME_HEALTH_SCREEN.renderMeProfile();
 }
 
 // tap a note card → full-screen food detail (zooming from its art tile)
 function wireNoteCard(el: Element): void {
-  meHealthLogRenderer().wireNoteCard(el, meHealthLogDeps());
+  ME_HEALTH_SCREEN.wireNoteCard(el);
 }
 
 function renderNotes(notes: unknown): void {
-  meHealthLogRenderer().renderNotes(notes, meHealthLogDeps());
+  ME_HEALTH_SCREEN.renderNotes(notes);
 }
 
 function renderActs(acts: unknown): void {
-  meHealthLogRenderer().renderActs(acts, meHealthLogDeps());
-}
-
-function meMemoryDeps(): ClientMeMemoryControllerDeps {
-  return CairnMeHealthDependencies.memory(meHealthDepsContext());
+  ME_HEALTH_SCREEN.renderActs(acts);
 }
 
 async function renderMemory() {
-  return CairnMeMemoryController.render(meMemoryDeps());
+  return ME_HEALTH_SCREEN.renderMemory();
 }
 
 // ---------- Me: Health — the whole picture (review · markers · records) ----------
-function healthReadDeps(): ClientHealthReadControllerDeps {
-  return CairnMeHealthDependencies.read(meHealthDepsContext());
-}
-
-function healthPictureDeps(): ClientHealthPictureControllerDeps {
-  return CairnMeHealthDependencies.picture(meHealthDepsContext());
-}
-
 function getHealthPictureCache(): ClientHealthPictureCache | null {
-  return CairnHealthPictureController.getHealthPictureCache();
+  return ME_HEALTH_SCREEN.getHealthPictureCache();
 }
 
 function setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null {
-  return CairnHealthPictureController.setHealthPictureCache(cache);
+  return ME_HEALTH_SCREEN.setHealthPictureCache(cache);
 }
 
 function parsedReview(r: { parsed?: unknown; error?: unknown } | null | undefined): Record<string, unknown> | null {
-  return CairnHealthPicture.parsedReview(r);
+  return ME_HEALTH_SCREEN.parsedReview(r);
 }
 
 function healthDotClass(flag: unknown): string {
-  return CairnHealthPicture.healthDotClass(flag);
+  return ME_HEALTH_SCREEN.healthDotClass(flag);
 }
 
 function reviewBusyHtml(): string {
-  return CairnHealthPicture.reviewBusyHtml();
+  return ME_HEALTH_SCREEN.reviewBusyHtml();
 }
 
 function healthHeroHtml(err: unknown): string {
-  return CairnHealthPicture.healthHeroHtml(err);
+  return ME_HEALTH_SCREEN.healthHeroHtml(err);
 }
 
 function buildPictureHtml(err: unknown, docCount: unknown): string {
-  return CairnHealthPicture.buildPictureHtml(err, docCount);
+  return ME_HEALTH_SCREEN.buildPictureHtml(err, docCount);
 }
 
 function reviewHtml(review: HealthReviewRecord, stale: unknown, err: unknown): string {
-  return CairnHealthPicture.reviewHtml(review, stale, err);
+  return ME_HEALTH_SCREEN.reviewHtml(review, stale, err);
 }
 
 function paintHealthPicture(): void {
-  CairnHealthPictureController.paintHealthPicture(healthPictureDeps());
+  ME_HEALTH_SCREEN.paintHealthPicture();
 }
 
 async function runHealthReview(): Promise<void> {
-  await CairnHealthPictureController.runHealthReview(healthPictureDeps());
+  await ME_HEALTH_SCREEN.runHealthReview();
 }
 
 async function loadHealthPicture(token: number, docsP: Promise<unknown>): Promise<void> {
-  await CairnHealthPictureController.loadHealthPicture(token, docsP, healthPictureDeps());
-}
-
-function healthMarkersDeps(): ClientHealthMarkersControllerDeps {
-  return CairnMeHealthDependencies.markers(meHealthDepsContext());
+  await ME_HEALTH_SCREEN.loadHealthPicture(token, docsP);
 }
 
 function loadHealthMarkers(token: number): void {
-  CairnHealthMarkersController.load(healthMarkersDeps(), token);
+  ME_HEALTH_SCREEN.loadHealthMarkers(token);
 }
 
-const HEALTH_SEG = CairnMeHealthTabsController.HEALTH_SEG;
+const HEALTH_SEG = ME_HEALTH_SCREEN.HEALTH_SEG;
 
 // Health is the lab-DATA + whole-picture-read home. Fold every legacy analysis/brain/
 // standing key onto Read (where that content now lives) so a returning client never
 // lands on a dead inner tab.
 function normalizeHealthSeg(seg: unknown): ClientHealthSection {
-  return CairnMeHealthTabsController.normalizeHealthSeg(seg);
-}
-
-function meHealthTabsDeps(): ClientMeHealthTabsControllerDeps {
-  return CairnMeHealthDependencies.tabs(meHealthDepsContext());
+  return ME_HEALTH_SCREEN.normalizeHealthSeg(seg);
 }
 
 // True when we positively know there are zero health documents — from this session's
@@ -217,7 +160,7 @@ function meHealthTabsDeps(): ClientMeHealthTabsControllerDeps {
 // brand-new user on Records (where they upload) instead of an empty Standing read.
 // Returns false when the count is unknown, so we only override on a confident zero.
 function healthDocsKnownEmpty(): boolean {
-  return CairnHealthPictureController.healthDocsKnownEmpty(healthPictureDeps());
+  return ME_HEALTH_SCREEN.healthDocsKnownEmpty();
 }
 
 // Health is a one-level inner view: the Me seg picks "Health", then a single inner
@@ -225,24 +168,24 @@ function healthDocsKnownEmpty(): boolean {
 // keeps it focused — and the connected brain now lives on the default Read view, so
 // it's reachable in one nav step (Me → Health) instead of buried behind a second seg.
 async function renderHealth(): Promise<void> {
-  await CairnMeHealthTabsController.renderHealth(meHealthTabsDeps());
+  await ME_HEALTH_SCREEN.renderHealth();
 }
 
 // Slide the inner seg thumb + flip the active button to `seg` (no repaint).
 function setHealthSegActive(seg: ClientHealthSection): void {
-  CairnMeHealthTabsController.setHealthSegActive(seg, meHealthTabsDeps());
+  ME_HEALTH_SCREEN.setHealthSegActive(seg);
 }
 
 // Programmatic inner-tab switch from a CTA. openPicker keeps the .click() in the
 // same user gesture (so the file dialog isn't blocked) — hence no view transition.
 function switchHealthSeg(seg: ClientHealthSection, opts: { openPicker?: boolean } = {}): void {
-  CairnMeHealthTabsController.switchHealthSeg(seg, meHealthTabsDeps(), opts);
+  ME_HEALTH_SCREEN.switchHealthSeg(seg, opts);
 }
 
 // Repaint #hContent for the active inner tab. Bumps pollToken so any enrichment
 // poll from the tab we're leaving stops cleanly (Records resumes on return).
 function paintHealthTab(): void {
-  CairnMeHealthTabsController.paintHealthTab(meHealthTabsDeps());
+  ME_HEALTH_SCREEN.paintHealthTab();
 }
 
 // ME → Health → Read: the whole-picture depth that used to balloon the Standing tab.
@@ -252,76 +195,71 @@ function paintHealthTab(): void {
 // two-column gutter), capped width on desktop. The targets carry scroll-margin-top so a
 // jump lands below the sticky chrome, and a scroll-spy highlights the section you're in.
 function paintHealthReadTab(): void {
-  CairnHealthReadController.paintTab(healthReadDeps());
-}
-
-// ---- Standing tab: percentiles, signal age, and point-in-time BP ----
-function healthStandingDeps(): ClientHealthStandingControllerDeps {
-  return CairnMeHealthDependencies.standing(meHealthDepsContext());
+  ME_HEALTH_SCREEN.paintHealthReadTab();
 }
 
 function renderHealthStanding(data: HealthStandingRead | null | undefined): void {
-  CairnHealthStandingController.render(data, healthStandingDeps());
+  ME_HEALTH_SCREEN.renderHealthStanding(data);
 }
 
 function openBpSheet(): void {
-  CairnHealthStandingController.openBpSheet(healthStandingDeps());
+  ME_HEALTH_SCREEN.openBpSheet();
 }
 
 function loadHealthStanding(token: number, refAge: unknown): void {
-  CairnHealthStandingController.load(healthStandingDeps(), token, refAge);
+  ME_HEALTH_SCREEN.loadHealthStanding(token, refAge);
 }
 
 function paintStandingReview(): void {
-  CairnHealthStandingController.paintReview(healthStandingDeps());
+  ME_HEALTH_SCREEN.paintStandingReview();
 }
 
 function openHealthRead(opts: { scroll?: string } = {}): void {
-  CairnHealthStandingController.openRead(healthStandingDeps(), opts);
+  ME_HEALTH_SCREEN.openHealthRead(opts);
 }
 
 function scrollHealthRailIntoView(sel: string): void {
-  CairnHealthReadController.scrollHealthRailIntoView(healthReadDeps(), sel);
+  ME_HEALTH_SCREEN.scrollHealthRailIntoView(sel);
 }
 
 function loadHealthSynthesis(token: number): void {
-  CairnHealthReadController.loadSynthesis(healthReadDeps(), token);
+  ME_HEALTH_SCREEN.loadHealthSynthesis(token);
 }
 
 function triggerHealthSynthesis(): void {
-  CairnHealthReadController.triggerSynthesis(healthReadDeps());
+  ME_HEALTH_SCREEN.triggerHealthSynthesis();
 }
 
 function renderHealthSynthesis(data: unknown, token?: number | null): void {
-  CairnHealthReadController.renderSynthesis(data, healthReadDeps(), token);
+  ME_HEALTH_SCREEN.renderHealthSynthesis(data, token);
 }
 
 async function loadSymptomLinks(token: number): Promise<void> {
-  await CairnHealthReadController.loadSymptomLinks(healthReadDeps(), token);
+  await ME_HEALTH_SCREEN.loadSymptomLinks(token);
 }
 
 function loadSupplements(token: number): void {
-  CairnHealthReadController.loadSupplements(healthReadDeps(), token);
+  ME_HEALTH_SCREEN.loadSupplements(token);
 }
 
 function renderSupplements(list: unknown, token?: number | null): void {
-  CairnHealthReadController.renderSupplements(list, healthReadDeps(), token);
+  ME_HEALTH_SCREEN.renderSupplements(list, token);
 }
 
 async function understandSupplementsFromInput(): Promise<void> {
-  await CairnHealthReadController.understandSupplementsFromInput(healthReadDeps());
+  await ME_HEALTH_SCREEN.understandSupplementsFromInput();
 }
 
 async function removeSupplement(id: number): Promise<void> {
-  await CairnHealthReadController.removeSupplement(id, healthReadDeps());
+  await ME_HEALTH_SCREEN.removeSupplement(id);
 }
 
 function loadRecoverySummary(token: number, sel: string): void {
-  CairnHealthReadController.loadRecoverySummary(healthReadDeps(), token, sel);
+  ME_HEALTH_SCREEN.loadRecoverySummary(token, sel);
 }
 
 function loadPriorityMarkers(token: number): void {
-  CairnHealthReadController.loadPriorityMarkers(healthReadDeps(), token);
+  ME_HEALTH_SCREEN.loadPriorityMarkers(token);
 }
 
 // ---- Cross-domain directives, grouped by domain (the review side) ----
@@ -364,6 +302,7 @@ Object.assign(globalThis, {
   renderSupplements,
   reviewBusyHtml,
   reviewHtml,
+  removeSupplement,
   runHealthReview,
   scrollHealthRailIntoView,
   setHealthSegActive,
