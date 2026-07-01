@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { constraintLimitsLoad, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exercises.js";
+import { invalidateDayRead } from "./intelligence.js";
 
 // ---------- plan ----------
 // LEFT JOIN on exercises (v35): a cardio plan item (kind='cardio') has no
@@ -437,6 +438,9 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
       note: it.note ?? null, warmup_sets: it.warmup_sets ?? null, target_seconds: it.target_seconds ?? null, kind: "strength",
     });
   });
+  // A changed plan day can change what "today" points at (focus/frequency) — refresh
+  // the cached Brief so an applied edit isn't read against the old day from any surface.
+  invalidateDayRead();
   return getPlanDay(day_number);
 }
 
@@ -521,6 +525,9 @@ export function replacePlan(days: { day_number?: number; name?: string; focus?: 
     db.exec("ROLLBACK");
     throw e;
   }
+  // A restructure (new split/frequency) can move what today should be — bust the
+  // cached Brief so a stale "train your old focus" read never survives an apply.
+  invalidateDayRead();
   return getPlan();
 }
 

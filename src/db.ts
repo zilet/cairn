@@ -318,6 +318,24 @@ CREATE TABLE IF NOT EXISTS meal_plans (
   status TEXT DEFAULT 'draft'
 );
 
+-- Accepted adaptive-nutrition targets (the MacroFactor-style loop's OUTPUT, persisted).
+-- When the athlete accepts a nutrition_target proposal, the accepted numbers land here
+-- with an effective_date so the fuel card / goal math / next check-in read the ACCEPTED
+-- target instead of forever re-deriving the formula. History is kept (one row per
+-- acceptance); the active target is the newest row with effective_date <= today.
+CREATE TABLE IF NOT EXISTS nutrition_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  effective_date TEXT NOT NULL,       -- YYYY-MM-DD the accepted target takes effect
+  target_kcal INTEGER,
+  protein_g INTEGER,
+  carbs_g INTEGER,
+  fat_g INTEGER,
+  source TEXT,                        -- 'checkin' | 'manual' | ...
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_targets_eff ON nutrition_targets(effective_date);
+
 CREATE TABLE IF NOT EXISTS food_notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -588,7 +606,9 @@ CREATE TABLE IF NOT EXISTS context_events (
   start_date TEXT,
   end_date TEXT,                      -- nullable (ongoing / open-ended)
   meta_json TEXT,
-  archived INTEGER DEFAULT 0
+  archived INTEGER DEFAULT 0,
+  expected_recovery_days INTEGER,     -- injuries: expected healing window (days from start); NULL = open-ended / non-injury
+  resolved_at TEXT                    -- YYYY-MM-DD an event was explicitly closed (healed); NULL = still open
 );
 
 -- Optional subjective morning check-in (mood/energy/sleep-feel/soreness on a

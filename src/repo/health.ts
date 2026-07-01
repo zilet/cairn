@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
+import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
@@ -1066,14 +1067,37 @@ export interface ContextEventInput {
   end_date?: string | null;
   meta?: any;
   archived?: boolean;
+  expected_recovery_days?: number | null;
+  resolved_at?: string | null;
+}
+
+// Default healing window (days) for an injury with no explicit expected_recovery_days,
+// keyed off self-reported severity. Minor things (a cut, a blister, a tweak) fade in
+// days; a real strain lingers; a tear/fracture lingers for weeks. Conservative and
+// deterministic — an injury with no severity defaults to a short-ish week so a passing
+// niggle stops gating the day-read once it's clearly outlived its window.
+const INJURY_WINDOW_BY_SEVERITY: Record<string, number> = { mild: 5, moderate: 14, severe: 42 };
+const DEFAULT_INJURY_WINDOW_DAYS = 7;
+
+export function defaultInjuryWindow(severity?: string | null): number {
+  const s = String(severity ?? "").trim().toLowerCase();
+  return INJURY_WINDOW_BY_SEVERITY[s] ?? DEFAULT_INJURY_WINDOW_DAYS;
 }
 
 export function addContextEvent(input: ContextEventInput) {
   const kind = input.kind && ["trip", "injury", "life_event", "family_event"].includes(input.kind) ? input.kind : "life_event";
+  // Injuries get an expected healing window so the brain can let them fade: honor an
+  // explicit value, else default from severity. Non-injury events stay open-ended.
+  let erd: number | null = null;
+  if (input.expected_recovery_days != null && Number.isFinite(Number(input.expected_recovery_days))) {
+    erd = Math.max(1, Math.round(Number(input.expected_recovery_days)));
+  } else if (kind === "injury") {
+    erd = defaultInjuryWindow(input.meta?.severity);
+  }
   const info = db
     .prepare(
-      `INSERT INTO context_events (kind, title, detail, start_date, end_date, meta_json, archived)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO context_events (kind, title, detail, start_date, end_date, meta_json, archived, expected_recovery_days, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       kind,
@@ -1082,32 +1106,39 @@ export function addContextEvent(input: ContextEventInput) {
       input.start_date ?? null,
       input.end_date ?? null,
       input.meta != null ? JSON.stringify(input.meta) : null,
-      input.archived ? 1 : 0
+      input.archived ? 1 : 0,
+      erd,
+      input.resolved_at ?? null
     );
+  // A just-added trip/injury/life event shapes TODAY (ease the load / expect worse
+  // sleep / plan around it) — bust the cached Brief so the next open reflects it,
+  // from EVERY surface (REST/MCP/chat), not just the chat path.
+  try { invalidateDayRead(); } catch { /* best-effort */ }
   return getContextEvent(Number(info.lastInsertRowid));
 }
 
 export function listContextEvents(opts: { activeOnly?: boolean } = {}) {
   let rows: any[];
   if (opts.activeOnly) {
-    // Active/upcoming = not archived AND (no end_date OR end_date >= today).
+    // Active/upcoming = not archived, not explicitly resolved, AND (no end_date OR
+    // end_date >= today). A confirmed-healed injury drops out of the active set.
     const today = localDateISO();
     rows = db
       .prepare(
         `SELECT * FROM context_events
-         WHERE archived = 0 AND (end_date IS NULL OR end_date >= ?)
+         WHERE archived = 0 AND (resolved_at IS NULL OR resolved_at > ?) AND (end_date IS NULL OR end_date >= ?)
          ORDER BY (start_date IS NULL), start_date, id`
       )
-      .all(today) as any[];
+      .all(today, today) as any[];
   } else {
     rows = db.prepare(`SELECT * FROM context_events ORDER BY (start_date IS NULL), start_date DESC, id DESC`).all() as any[];
   }
-  return rows.map(hydrateContextEvent);
+  return rows.map((r) => annotateHealing(hydrateContextEvent(r)));
 }
 
 export function getContextEvent(id: number) {
   const row = db.prepare(`SELECT * FROM context_events WHERE id = ?`).get(id) as any;
-  return row ? hydrateContextEvent(row) : null;
+  return row ? annotateHealing(hydrateContextEvent(row)) : null;
 }
 
 export function updateContextEvent(id: number, patch: ContextEventInput) {
@@ -1122,15 +1153,105 @@ export function updateContextEvent(id: number, patch: ContextEventInput) {
     end_date: patch.end_date !== undefined ? patch.end_date : cur.end_date,
     meta_json: patch.meta !== undefined ? (patch.meta != null ? JSON.stringify(patch.meta) : null) : cur.meta_json,
     archived: patch.archived !== undefined ? (patch.archived ? 1 : 0) : cur.archived,
+    expected_recovery_days: patch.expected_recovery_days !== undefined
+      ? (patch.expected_recovery_days == null || !Number.isFinite(Number(patch.expected_recovery_days)) ? null : Math.max(1, Math.round(Number(patch.expected_recovery_days))))
+      : cur.expected_recovery_days,
+    resolved_at: patch.resolved_at !== undefined ? patch.resolved_at : cur.resolved_at,
   };
   db.prepare(
-    `UPDATE context_events SET kind=?, title=?, detail=?, start_date=?, end_date=?, meta_json=?, archived=? WHERE id=?`
-  ).run(merged.kind, merged.title, merged.detail, merged.start_date, merged.end_date, merged.meta_json, merged.archived, id);
+    `UPDATE context_events SET kind=?, title=?, detail=?, start_date=?, end_date=?, meta_json=?, archived=?, expected_recovery_days=?, resolved_at=? WHERE id=?`
+  ).run(merged.kind, merged.title, merged.detail, merged.start_date, merged.end_date, merged.meta_json, merged.archived, merged.expected_recovery_days, merged.resolved_at, id);
+  // An edited event can change what shapes today (a new end date, a resolution) —
+  // refresh the Brief from every surface.
+  try { invalidateDayRead(); } catch { /* best-effort */ }
+  return getContextEvent(id);
+}
+
+// Close a context event as healed/over WITHOUT hard-deleting it: stamp resolved_at so
+// it drops out of the active set (stops gating the day-read/conductor) but stays on the
+// timeline and in exports. `date` defaults to today; returns the hydrated row or null.
+export function resolveContextEvent(id: number, date?: string) {
+  const cur = db.prepare(`SELECT id FROM context_events WHERE id = ?`).get(id) as any;
+  if (!cur) return null;
+  const when = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
+  db.prepare(`UPDATE context_events SET resolved_at = ? WHERE id = ?`).run(when, id);
+  // A resolved injury no longer eases load — the next Brief should reflect that.
+  try { invalidateDayRead(); } catch { /* best-effort */ }
   return getContextEvent(id);
 }
 
 export function deleteContextEvent(id: number) {
-  return { deleted: db.prepare(`DELETE FROM context_events WHERE id = ?`).run(id).changes };
+  const r = { deleted: db.prepare(`DELETE FROM context_events WHERE id = ?`).run(id).changes };
+  try { invalidateDayRead(); } catch { /* best-effort */ }
+  return r;
+}
+
+// ---- injury healing (temporal decay) ----------------------------------------
+// An injury heals over time. Rather than gating training forever on a one-mention
+// niggle, compute a deterministic healing read: past its expected window, with the
+// affected area TRAINED since, and not explicitly resolved → LIKELY-RESOLVED (a soft
+// note, no longer a hard constraint), without ever hard-deleting the record. Pure vs
+// DB is split: `past_window` is computed from the event's own fields (testable
+// offline); `trained_since` reads the log. Re-mention resets the clock naturally —
+// the athlete (or the chat resolve hook) updates start_date / the window.
+export interface ContextEventHealing {
+  resolved: boolean;          // explicitly closed (resolved_at on/before today)
+  past_window: boolean;       // an injury past start_date + expected_recovery_days
+  trained_since: boolean;     // the injured area was trained after the window ended
+  likely_resolved: boolean;   // past_window && trained_since && !resolved → soft, not a gate
+  window_end: string | null;  // YYYY-MM-DD the expected window closes, or null
+}
+
+function addDaysISOLocal(iso: string, days: number): string | null {
+  const t = Date.parse(`${iso}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + days * 864e5).toISOString().slice(0, 10);
+}
+
+// Did the athlete train the injury's affected area on/after `sinceDate`? When the
+// injury maps to known body-areas we require a matching movement to have been logged;
+// when it maps to nothing recognizable (e.g. "foot sole cuts"), ANY logged training
+// after the window is taken as "training resumed" (they're clearly moving through it).
+function trainedAffectedAreaSince(ev: any, sinceDate: string): boolean {
+  const sessions = db
+    .prepare(
+      `SELECT DISTINCT s.id FROM sessions s
+       JOIN logged_sets ls ON ls.session_id = s.id
+       WHERE s.date > ?`
+    )
+    .all(sinceDate) as any[];
+  if (!sessions.length) return false;
+  const areas = injuryAreas(ev);
+  if (!areas.length) return true; // unmappable area → any training after the window counts
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT e.name AS name, e.muscle_group AS muscle_group FROM logged_sets ls
+       JOIN sessions s ON s.id = ls.session_id
+       JOIN exercises e ON e.id = ls.exercise_id
+       WHERE s.date > ?`
+    )
+    .all(sinceDate) as any[];
+  return rows.some((ex) => injuryAffectsExercise(ev, ex, areas));
+}
+
+export function contextEventHealing(ev: any, today = localDateISO()): ContextEventHealing {
+  const resolved = !!(ev?.resolved_at && String(ev.resolved_at).slice(0, 10) <= today);
+  const isInjury = ev?.kind === "injury";
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(ev?.start_date ?? "")) ? String(ev.start_date) : null;
+  const erd = Number(ev?.expected_recovery_days);
+  const window_end = isInjury && start && Number.isFinite(erd) ? addDaysISOLocal(start, erd) : null;
+  const past_window = !!window_end && today > window_end;
+  const trained_since = isInjury && past_window && !resolved ? trainedAffectedAreaSince(ev, window_end!) : false;
+  const likely_resolved = isInjury && !resolved && past_window && trained_since;
+  return { resolved, past_window, trained_since, likely_resolved, window_end };
+}
+
+// Attach the healing read to a hydrated context event (additive, null-safe). Non-injury
+// events get resolved/likely_resolved=false and stay untouched.
+function annotateHealing(ev: any) {
+  if (!ev || typeof ev !== "object") return ev;
+  const h = contextEventHealing(ev);
+  return { ...ev, resolved: h.resolved, past_window: h.past_window, likely_resolved: h.likely_resolved };
 }
 
 // ============================================================================
@@ -1274,7 +1395,9 @@ function suggestSwapsFor(
 //   affected:[{ exercise, muscle_group, mode, constraint_note, days:[{day_number,
 //   day_name}], swaps:[{name,muscle_group,mode,why}] }] }], count }
 export function getInjuryImpacts() {
-  const injuries = (listContextEvents({ activeOnly: true }) as any[]).filter((e) => e.kind === "injury");
+  // A likely-resolved injury (past its window with the area trained since) no longer
+  // gates exercises as a hard constraint — it's downgraded to a soft note elsewhere.
+  const injuries = (listContextEvents({ activeOnly: true }) as any[]).filter((e) => e.kind === "injury" && !e.likely_resolved);
   if (!injuries.length) return { injuries: [], count: 0 };
 
   const allExercises = listExercises() as any[];

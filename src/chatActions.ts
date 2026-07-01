@@ -16,6 +16,7 @@ export const CHAT_ACTION_TYPES = [
   "plan_restructure",
   "log_health",
   "add_context_event",
+  "resolve_context_event",
   "log_supplement",
 ] as const;
 
@@ -138,6 +139,12 @@ export interface AddContextEventAction extends ChatActionBase {
   meta?: unknown;
 }
 
+export interface ResolveContextEventAction extends ChatActionBase {
+  type: "resolve_context_event";
+  id: number | string;
+  date?: unknown;
+}
+
 export interface LogSupplementAction extends ChatActionBase {
   type: "log_supplement";
   items?: ChatActionRecord[];
@@ -159,6 +166,7 @@ export type ChatAction =
   | PlanRestructureAction
   | LogHealthAction
   | AddContextEventAction
+  | ResolveContextEventAction
   | LogSupplementAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
@@ -279,6 +287,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Set start/end dates ONLY when the athlete actually gave them. NEVER guess or approximate a date (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't know. If the exact date matters (e.g. a race they're training for), record the event with null dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.`,
     ],
   },
+  resolve_context_event: {
+    type: "resolve_context_event",
+    applyMode: "immediate",
+    shape: `{ "type": "resolve_context_event", "id": <existing context_event id from DATA.context_events>, "date": "YYYY-MM-DD|null" }`,
+    guidance: [
+      `resolve_context_event closes a healed injury / finished trip / passed life event on their timeline WITHOUT deleting it — it stays on record but stops making the plan work around it. Use it when the athlete confirms an injury/niggle is no longer bothering them (e.g. you gently asked about a past-window injury and they said it's fine). Only emit it for an id that is actually in DATA.context_events, and only when they've confirmed — never guess it's healed.`,
+    ],
+  },
   log_supplement: {
     type: "log_supplement",
     applyMode: "immediate",
@@ -385,6 +401,8 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return nonBlank(value.kind) ? { ...value, type: "log_health", kind: value.kind } : null;
     case "add_context_event":
       return nonBlank(value.kind) ? { ...value, type: "add_context_event", kind: value.kind } : null;
+    case "resolve_context_event":
+      return finiteId(value.id) ? { ...value, type: "resolve_context_event", id: value.id } : null;
     case "log_supplement": {
       const items = Array.isArray(value.items) ? value.items.filter(isRecord) : undefined;
       return items?.length
