@@ -1908,121 +1908,28 @@ function refreshFinishStat() {
   return false;
 }
 
+function todayAddExerciseDeps() {
+  return {
+    root: todayView,
+    state: todayState,
+    api: todayApi,
+    postExerciseMode,
+    exCard,
+    wireGuides,
+    wireLogRow,
+    wireSkips,
+    toast,
+    escapeHtml: escHtml,
+    escapeAttr: escAttr,
+  };
+}
+
 async function setupAddExercise() {
-  const btn = todayView.querySelector("#addExBtn");
-  const form = todayView.querySelector("#addExForm");
-  const input = todayView.querySelector("#addExInput");
-  const go = todayView.querySelector("#addExGo");
-  const datalist = todayView.querySelector("#exOptions");
-  if (!btn || !form) return;
-
-  let mode = "reps";
-  const modeWrap = todayView.querySelector("#addExMode");
-  modeWrap.querySelectorAll("[data-exmode]").forEach((b: any) => b.addEventListener("click", () => {
-    mode = b.dataset.exmode;
-    modeWrap.querySelectorAll(".modebtn").forEach((x: any) => x.classList.toggle("active", x === b));
-  }));
-  const setMode = (m: any) => {
-    mode = m;
-    modeWrap.querySelectorAll(".modebtn").forEach((x: any) => x.classList.toggle("active", x.dataset.exmode === m));
-  };
-
-  btn.addEventListener("click", async () => {
-    form.hidden = false; btn.hidden = true; input.focus();
-    if (!datalist.children.length) {
-      try {
-        const exs = await todayApi("/exercises");
-        todayState.exModes = Object.fromEntries((exs || []).map((e: any) => [e.name, e.mode || "reps"]));
-        datalist.innerHTML = (exs || []).map((e: any) => `<option value="${escAttr(e.name)}">${escHtml(e.muscle_group || "")}</option>`).join("");
-      } catch { /* free-typed names still work */ }
-    }
-  });
-  // picking a known timed exercise flips the toggle automatically
-  input.addEventListener("input", () => {
-    const m = (todayState.exModes || {})[input.value.trim()];
-    if (m) setMode(m);
-  });
-
-  function resetAddForm() { input.value = ""; form.hidden = true; btn.hidden = false; setMode("reps"); }
-  const add = async () => {
-    const name = (input.value || "").trim();
-    if (!name) { input.focus(); return; }
-    // A card for this exercise already on the page. Match on name AND mode — so
-    // re-adding "Dead hang" as Timed when only a Reps card exists is NOT swallowed.
-    const existing = [...todayView.querySelectorAll(".ex[data-card]")]
-      .find((el: any) => el.dataset.card.toLowerCase() === name.toLowerCase());
-    if (existing) {
-      const curMode = existing.dataset.mode || "reps";
-      const hasSets = !!existing.querySelector(".logged .chip");
-      if (curMode === mode || hasSets) {
-        // same type, or it already has logged sets (can't switch type underfoot) —
-        // just bring the card into todayView. Tell them how to change a type that's locked.
-        existing.scrollIntoView({ behavior: "smooth", block: "center" });
-        (existing.querySelector(".in-r") || existing.querySelector(".in-dur"))?.focus();
-        resetAddForm();
-        if (curMode !== mode && hasSets) toast(`${name} already has sets — delete them to change its type`);
-        return;
-      }
-      // type change requested on an empty card → flip the exercise's mode + swap the
-      // card to the new type in place (keeps it on the page, ready to log).
-      try {
-        await postExerciseMode(name, mode);
-        (todayState.exModes ??= {})[name] = mode;
-      } catch { /* fall through — the set itself still carries exercise_mode */ }
-      const tpl = document.createElement("template");
-      tpl.innerHTML = exCard({ exercise: name, fromPlan: false, mode }, [], { weight: null, reps: null, rir: null, duration_sec: null }, null, null).trim();
-      const fresh = tpl.content.firstElementChild as HTMLElement | null;
-      if (!fresh) return;
-      existing.replaceWith(fresh);
-      wireGuides(fresh); wireLogRow(fresh.querySelector(".logrow")); wireSkips();
-      fresh.scrollIntoView({ behavior: "smooth", block: "center" });
-      ((fresh.querySelector(".in-dur") || fresh.querySelector(".in-r")) as HTMLElement | null)?.focus();
-      resetAddForm();
-      return;
-    }
-    // typed a name that's sitting in today's skipped line → restore it instead
-    const skippedBtn = [...todayView.querySelectorAll("#skipLine [data-unskip]")]
-      .find((b: any) => decodeURIComponent(b.dataset.unskip).toLowerCase() === name.toLowerCase());
-    if (skippedBtn) { resetAddForm(); skippedBtn.click(); return; }
-    if (mode === "timed" && (todayState.exModes || {})[name] !== "timed") {
-      // register the exercise as timed so logging + history know its mode
-      try {
-        await postExerciseMode(name, "timed");
-        (todayState.exModes ??= {})[name] = "timed";
-      } catch { /* fall through — the set itself still carries exercise_mode */ }
-    }
-    appendOffPlanCard(name, mode);
-    resetAddForm();
-  };
-  go.addEventListener("click", add);
-  input.addEventListener("keydown", (e: any) => { if (e.key === "Enter") add(); });
+  await CairnTodayAddExerciseController.setupAddExercise(todayAddExerciseDeps());
 }
 
 async function appendOffPlanCard(name: any, mode: any) {
-  // Remember it in state (keyed by date) so a re-render rebuilds it instead of dropping
-  // it — an unlogged off-plan card otherwise lives only in the DOM. Deduped by name.
-  (todayState.pendingOffPlan ??= {});
-  const list = (todayState.pendingOffPlan[todayState.logDate] ??= []);
-  if (!list.some((p: any) => p.name.toLowerCase() === name.toLowerCase())) list.push({ name, mode: mode || "reps" });
-  let prefill: { weight: unknown; reps: unknown; rir: unknown; duration_sec: unknown } = { weight: null, reps: null, rir: null, duration_sec: null };
-  try {
-    const last = await todayApi("/last-set?exercise=" + encodeURIComponent(name)) as Partial<TodayScreenLoggedSet> | null;
-    if (last) prefill = { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };
-  } catch {}
-  const tpl = document.createElement("template");
-  tpl.innerHTML = exCard({ exercise: name, fromPlan: false, mode: mode || null }, [], prefill, null, null).trim();
-  const cardEl = tpl.content.firstElementChild as HTMLElement | null;
-  if (!cardEl) return;
-  // .addex lives inside .plansurface — insert relative to its real parent
-  // (insertBefore requires the ref node to be a direct child of the caller).
-  const addBlock = todayView.querySelector(".addex");
-  if (addBlock) addBlock.before(cardEl);
-  else (todayView.querySelector(".plansurface") || todayView).appendChild(cardEl);
-  wireGuides(cardEl);
-  wireLogRow(cardEl.querySelector(".logrow"));
-  wireSkips(); // wire the off-plan card's remove ✕
-  cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
-  ((cardEl.querySelector(".in-r") || cardEl.querySelector(".in-dur")) as HTMLElement | null)?.focus();
+  await CairnTodayAddExerciseController.appendOffPlanCard(name, mode, todayAddExerciseDeps());
 }
 
 // Today: the "body's reaction" card for a strength session reconciled from Garmin —

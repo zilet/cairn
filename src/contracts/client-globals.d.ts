@@ -1198,6 +1198,27 @@ declare global {
       refreshAdaptedRx(deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]): Promise<void>;
     };
 
+    CairnTodayAddExerciseController: {
+      setupAddExercise(deps: {
+        root: Element;
+        state: {
+          logDate: string;
+          exModes?: Record<string, string>;
+          pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
+        };
+        api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+        postExerciseMode(name: string, mode: string): Promise<unknown>;
+        exCard(item: Record<string, unknown>, logged: Array<Record<string, unknown>>, prefill: Record<string, unknown>, revealIdx: unknown, rx: unknown): string;
+        wireGuides(card: Element): void;
+        wireLogRow(row: Element | null): void;
+        wireSkips(): void;
+        toast(message: string): void;
+        escapeHtml(value: unknown): string;
+        escapeAttr(value: unknown): string;
+      }): Promise<void>;
+      appendOffPlanCard(name: string, mode: string | null | undefined, deps: Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0]): Promise<void>;
+    };
+
     CairnTodayCards: {
       exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
       exerciseCardHtml(
@@ -1392,6 +1413,7 @@ declare global {
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
+  declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];

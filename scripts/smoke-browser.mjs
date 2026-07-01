@@ -16,19 +16,20 @@ const DEBUG_PORT_MIN = 25000;
 const DEBUG_PORT_SPAN = 5000;
 const NAV_TIMEOUT_MS = 20000;
 const SETTLE_MS = 600;
+const WORKFLOW_COUNT = 2;
 
 const routes = [
   { path: "/", tab: "today" },
   { path: "/app/today", tab: "today" },
-  { path: "/app/plan/food", tab: "plan" },
-  { path: "/app/plan/meals", tab: "plan" },
-  { path: "/app/progress/energy", tab: "progress" },
-  { path: "/app/me/standing", tab: "me" },
-  { path: "/app/me/health/read", tab: "me" },
-  { path: "/app/me/health/records", tab: "me" },
+  { path: "/app/plan/food", tab: "plan", expectedState: { planSeg: "food" } },
+  { path: "/app/plan/meals", tab: "plan", expectedState: { planSeg: "meals" } },
+  { path: "/app/progress/energy", tab: "progress", expectedState: { progressSeg: "energy" } },
+  { path: "/app/me/standing", tab: "me", expectedState: { meSeg: "standing" } },
+  { path: "/app/me/health/read", tab: "me", expectedState: { meSeg: "health", healthSeg: "read" } },
+  { path: "/app/me/health/records", tab: "me", expectedState: { meSeg: "health", healthSeg: "records" } },
   { path: "/app/chat", tab: "chat" },
-  { path: "/app/settings/data", tab: "settings" },
-  { path: "/app/settings/agents", tab: "settings" },
+  { path: "/app/settings/data", tab: "settings", expectedState: { setSeg: "data" } },
+  { path: "/app/settings/agents", tab: "settings", expectedState: { setSeg: "agents" } },
 ];
 
 const requiredGlobals = {
@@ -39,8 +40,10 @@ const requiredGlobals = {
   registerJobReconnector: "function",
   registerAppJobReconnectors: "function",
   jobReconnect: "function",
+  installMobileViewportGuards: "function",
   CairnRoutes: "object",
   "CairnRoutes.parseRoute": "function",
+  CairnTodayAddExerciseController: "object",
   CairnChatClient: "object",
   CairnChatAttachment: "object",
   CairnMealRecipeController: "object",
@@ -279,6 +282,20 @@ async function waitForHydration(cdp, expectedTab) {
   throw new Error(`route did not hydrate as ${expectedTab}; last state ${JSON.stringify(last)}`);
 }
 
+async function waitForCondition(cdp, label, expression, timeoutMs = NAV_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await evaluate(cdp, expression);
+    if (last?.ok === true) {
+      ok(true, label);
+      return last;
+    }
+    await sleep(100);
+  }
+  throw new Error(`${label} did not complete; last state ${JSON.stringify(last)}`);
+}
+
 async function assertGlobals(cdp) {
   const globalsJson = JSON.stringify(requiredGlobals);
   const result = await evaluate(cdp, `(() => {
@@ -330,13 +347,7 @@ function collectFailures(cdp, base) {
 async function smokeRoute(cdp, base, route) {
   const { failures, off } = collectFailures(cdp, base);
   try {
-    const url = `${base}${route.path}`;
-    const loaded = cdp.waitFor("Page.loadEventFired");
-    const nav = await cdp.command("Page.navigate", { url });
-    ok(!nav.errorText, `navigate ${route.path}`, nav.errorText || "");
-    await loaded;
-    await waitForHydration(cdp, route.tab);
-    await sleep(SETTLE_MS);
+    await navigateAndHydrate(cdp, base, route.path, route.tab);
     await assertGlobals(cdp);
     const state = await evaluate(cdp, `(() => {
       const view = document.querySelector("#view");
@@ -344,15 +355,172 @@ async function smokeRoute(cdp, base, route) {
         href: location.pathname + location.search,
         tab: window.state && window.state.tab,
         planSeg: window.state && window.state.planSeg,
-        healthSeg: window.healthSeg,
-        settingsSeg: window.settingsSeg,
+        progressSeg: window.state && window.state.progressSeg,
+        meSeg: window.state && window.state.meSeg,
+        healthSeg: window.state && window.state.healthSeg,
+        setSeg: window.state && window.state.setSeg,
         viewTextLength: view ? view.textContent.trim().length : 0,
         scripts: document.scripts.length
       };
     })()`);
     ok(state.tab === route.tab, `${route.path} active tab is ${route.tab}`, JSON.stringify(state));
+    for (const [key, value] of Object.entries(route.expectedState || {})) {
+      ok(state[key] === value, `${route.path} preserves ${key}=${value}`, JSON.stringify(state));
+    }
     ok(state.viewTextLength > 0, `${route.path} hydrated non-empty view`, JSON.stringify(state));
     ok(failures.length === 0, `${route.path} has no browser runtime/load errors`, failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function navigateAndHydrate(cdp, base, path, tab) {
+  const loaded = cdp.waitFor("Page.loadEventFired");
+  const nav = await cdp.command("Page.navigate", { url: `${base}${path}` });
+  ok(!nav.errorText, `navigate ${path}`, nav.errorText || "");
+  await loaded;
+  await waitForHydration(cdp, tab);
+  await sleep(SETTLE_MS);
+}
+
+async function smokeTodayAddExercise(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  const exercise = `Smoke off-plan ${Date.now()}`;
+  const exerciseJson = JSON.stringify(exercise);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/today", "today");
+    await assertGlobals(cdp);
+    const opened = await evaluate(cdp, `(() => {
+      const button = document.querySelector("#addExBtn");
+      if (!button) return { ok: false, reason: "missing #addExBtn" };
+      button.click();
+      const form = document.querySelector("#addExForm");
+      const input = document.querySelector("#addExInput");
+      return {
+        ok: Boolean(form && input && form.hidden === false),
+        formHidden: form ? form.hidden : null,
+        activeId: document.activeElement ? document.activeElement.id : ""
+      };
+    })()`);
+    ok(opened?.ok === true, "Today add exercise form opens", JSON.stringify(opened));
+
+    await evaluate(cdp, `(() => {
+      const input = document.querySelector("#addExInput");
+      const go = document.querySelector("#addExGo");
+      if (!input || !go) throw new Error("missing Today add exercise input/button");
+      input.value = ${exerciseJson};
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      go.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Today adds a custom off-plan card", `(() => {
+      const name = ${exerciseJson};
+      const card = [...document.querySelectorAll(".ex[data-card]")]
+        .find((el) => (el.dataset.card || "").toLowerCase() === name.toLowerCase());
+      const form = document.querySelector("#addExForm");
+      const button = document.querySelector("#addExBtn");
+      const input = card ? card.querySelector(".logrow .in-r, .logrow .in-dur") : null;
+      return {
+        ok: Boolean(
+          card &&
+          card.querySelector(".ex-offplan") &&
+          card.querySelector("[data-remove-card]") &&
+          input &&
+          form?.hidden === true &&
+          button?.hidden === false
+        ),
+        card: card ? card.dataset.card : null,
+        mode: card ? card.dataset.mode : null,
+        hasOffPlanLabel: Boolean(card?.querySelector(".ex-offplan")),
+        hasRemoveButton: Boolean(card?.querySelector("[data-remove-card]")),
+        hasLogInput: Boolean(input),
+        formHidden: form ? form.hidden : null,
+        buttonHidden: button ? button.hidden : null
+      };
+    })()`);
+    ok(failures.length === 0, "/app/today add-exercise workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeChatAttachmentFocus(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/chat", "chat");
+    await assertGlobals(cdp);
+    const result = await evaluate(cdp, `(() => new Promise((resolve) => {
+      const input = document.querySelector("#chatInput");
+      const fileInput = document.querySelector("#chatFile");
+      const attach = document.querySelector("#chatAttach");
+      const preview = document.querySelector("#chatPreview");
+      const attachment = window.CairnChatAttachment;
+      const hasHelpers = Boolean(
+        attachment &&
+        typeof attachment.resetFocusAfterNativePicker === "function" &&
+        typeof attachment.settleAfterNativePicker === "function" &&
+        typeof attachment.compressImage === "function" &&
+        typeof attachment.previewImage === "function"
+      );
+      if (!input || !fileInput || !attach || !preview || !hasHelpers) {
+        resolve({
+          ok: false,
+          reason: "missing chat attachment globals/dom",
+          hasInput: Boolean(input),
+          hasFileInput: Boolean(fileInput),
+          hasAttach: Boolean(attach),
+          hasPreview: Boolean(preview),
+          hasHelpers
+        });
+        return;
+      }
+
+      const events = [];
+      const onSettle = (event) => {
+        events.push({
+          type: event.type,
+          chatFocusGraceMs: event.detail && event.detail.chatFocusGraceMs
+        });
+      };
+      document.addEventListener("cairn:keyboard-settle", onSettle, { once: true });
+
+      input.focus();
+      const focusedBeforeReset = document.activeElement === input;
+      document.body.classList.add("kb-open");
+      attachment.resetFocusAfterNativePicker({ input, fileInput, isSoftKeyboard: () => true });
+
+      let measureCount = 0;
+      attachment.settleAfterNativePicker({
+        isActive: () => window.state && window.state.tab === "chat",
+        measure: () => { measureCount += 1; },
+        graceMs: 1300
+      });
+
+      setTimeout(() => {
+        document.removeEventListener("cairn:keyboard-settle", onSettle);
+        resolve({
+          ok: Boolean(
+            document.body.classList.contains("chat-mode") &&
+            focusedBeforeReset &&
+            document.activeElement !== input &&
+            document.activeElement !== fileInput &&
+            !document.body.classList.contains("kb-open") &&
+            events.length === 1 &&
+            events[0].chatFocusGraceMs === 1300 &&
+            measureCount >= 1
+          ),
+          chatMode: document.body.classList.contains("chat-mode"),
+          focusedBeforeReset,
+          activeId: document.activeElement ? document.activeElement.id : "",
+          kbOpen: document.body.classList.contains("kb-open"),
+          events,
+          measureCount
+        });
+      }, 120);
+    }))()`);
+    ok(result?.ok === true, "Chat attachment focus recovery globals/events work", JSON.stringify(result));
+    ok(failures.length === 0, "/app/chat attachment workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -377,8 +545,10 @@ try {
   cdp = await newPage(chrome);
   await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2 }, async (ctx) => {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
+    await smokeTodayAddExercise(cdp, ctx.base);
+    await smokeChatAttachmentFocus(cdp, ctx.base);
   });
-  console.log(`\nBrowser smoke OK - ${routes.length} route(s) loaded without runtime errors.`);
+  console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${WORKFLOW_COUNT} workflow(s) loaded without runtime errors.`);
   exitCode = 0;
 } catch (error) {
   console.error(`\nx Browser smoke FAILED: ${error.message}`);
