@@ -267,6 +267,21 @@ declare global {
 
   type ClientTodaySessionFeedbackDeps = Pick<ClientTodaySessionControllerDeps, "api" | "sessionStatus" | "state" | "toast">;
   type ClientTodaySessionSkipDeps = Pick<ClientTodaySessionControllerDeps, "api" | "collapseEl" | "expandEl" | "invalidate" | "renderToday" | "root" | "sessionStatus" | "state" | "toast">;
+  type ClientTodaySessionSetPayloadResult =
+    | { ok: true; body: Record<string, unknown> }
+    | { ok: false; message: string; focus?: () => void };
+  type ClientTodaySessionSetModelApi = {
+    responseRecord(value: unknown): Record<string, unknown>;
+    sessionPathId(session: Record<string, unknown>): string;
+    invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
+    invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
+    logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): ClientTodaySessionSetPayloadResult;
+  };
+  type ClientTodaySessionSetActionsApi = {
+    wireDeletes(deps: ClientTodaySessionControllerDeps): void;
+    wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
+    refreshFinishStat(deps: ClientTodaySessionControllerDeps): boolean;
+  };
 
   type ClientTodayBriefControllerDeps = {
     root: HTMLElement;
@@ -2015,6 +2030,61 @@ declare global {
       ): void;
     };
 
+    CairnMealPlannerJobs: {
+      cacheKey(): string;
+      settingsCacheKey(): string;
+      errorMessage(value: unknown): string | undefined;
+      draftFailLine(error?: unknown): string;
+      restoreBusy(value: Element | null | undefined): void;
+      rememberVerified(result: unknown): void;
+      verifiedForPlan(id: unknown): unknown;
+      runCoachMealPlan(agent: string, instruction: string): void;
+      coachMealPlanOpOpts(): ClientAgentOpHandlers & {
+        path: string;
+        anchor: string;
+        caption: string;
+        guard: () => boolean;
+        isFail: (result: unknown) => boolean;
+        render: (result: unknown) => unknown;
+        onFail: (error?: unknown) => unknown;
+      };
+      draftWeeklyMeals(): void;
+      mealPlanDraftOpOpts(): ClientAgentOpHandlers & {
+        path: string;
+        anchor: string;
+        caption: string;
+        guard: () => boolean;
+        isFail: (result: unknown) => boolean;
+        render: (result: unknown) => unknown;
+        onFail: (error?: unknown) => unknown;
+      };
+      reconnectStatusHost(
+        options: ClientAgentOpHandlers & {
+          path: string;
+          anchor: string;
+          caption: string;
+          guard: () => boolean;
+          isFail: (result: unknown) => boolean;
+          render: (result: unknown) => unknown;
+          onFail: (error?: unknown) => unknown;
+        },
+        statusSelector: string,
+        buttonSelector: string | null,
+        ghost: boolean,
+      ): ClientAgentOpHandlers | null;
+      reconnectMealPlan(job?: unknown): ClientAgentOpHandlers | null;
+    };
+
+    CairnMealPlannerActions: {
+      renderMealPlans(plans: unknown, selector?: string, refresh?: (() => unknown) | null): void;
+      wireMealPrefs(): void;
+      wireShoppingChips(currentPlan: Record<string, unknown> & { id: string | number }): void;
+      wireMealPlannerBody(
+        currentPlan: (Record<string, unknown> & { id: string | number }) | null,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+      ): void;
+    };
+
     CairnCoachProposalController: {
       applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown>;
       coachProposalOpOpts(): ClientAgentOpHandlers & {
@@ -2183,6 +2253,19 @@ declare global {
     CairnHealthDocUploadController: {
       wireUpload(deps: ClientHealthDocUploadControllerDeps): void;
       refreshPictureAfterUpload(doc: ClientHealthDocument, deps: ClientHealthDocUploadControllerDeps): void;
+    };
+
+    CairnHealthDocDateActions: {
+      cancelEditor(row: HTMLElement, editBtn: HTMLElement | null): void;
+      openEditor(row: HTMLElement, editBtn: HTMLElement): void;
+      saveDate(id: string | number, deps: ClientHealthDocActionsControllerDeps): Promise<void>;
+    };
+
+    CairnHealthDocLifecycleActions: {
+      pollDoc(id: string | number, deps: ClientHealthDocActionsControllerDeps): void;
+      reanalyze(id: string | number, deps: ClientHealthDocActionsControllerDeps): Promise<void>;
+      refreshPictureAfterDelete(deps: ClientHealthDocActionsControllerDeps): void;
+      startDelete(btn: Element, deps: ClientHealthDocActionsControllerDeps): void;
     };
 
     CairnHealthDocActionsController: {
@@ -2934,18 +3017,6 @@ declare global {
       appendOffPlanCard(name: string, mode: string | null | undefined, deps: Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0]): Promise<void>;
     };
 
-    CairnTodaySessionController: {
-      renderFeedback(
-        slot: Element | null | undefined,
-        session: Record<string, unknown>,
-        deps: ClientTodaySessionControllerDeps,
-      ): void;
-      wireDeletes(deps: ClientTodaySessionControllerDeps): void;
-      wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
-      wireSessionSurface(options: ClientTodaySessionSurfaceOptions, deps: ClientTodaySessionControllerDeps): void;
-      wireSkips(deps: ClientTodaySessionControllerDeps): void;
-    };
-
     CairnTodaySessionFeedback: {
       renderFeedback(
         slot: Element | null | undefined,
@@ -2956,6 +3027,21 @@ declare global {
 
     CairnTodaySessionSkip: {
       wireSkips(deps: ClientTodaySessionSkipDeps): void;
+    };
+
+    CairnTodaySessionSetModel: ClientTodaySessionSetModelApi;
+    CairnTodaySessionSetActions: ClientTodaySessionSetActionsApi;
+
+    CairnTodaySessionController: {
+      renderFeedback(
+        slot: Element | null | undefined,
+        session: Record<string, unknown>,
+        deps: ClientTodaySessionControllerDeps,
+      ): void;
+      wireDeletes(deps: ClientTodaySessionControllerDeps): void;
+      wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
+      wireSessionSurface(options: ClientTodaySessionSurfaceOptions, deps: ClientTodaySessionControllerDeps): void;
+      wireSkips(deps: ClientTodaySessionControllerDeps): void;
     };
 
     CairnTodayCards: {
@@ -3248,6 +3334,8 @@ declare global {
   declare const mealRowHtml: Window["mealRowHtml"];
   declare const mealDayHtml: Window["mealDayHtml"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
+  declare const CairnMealPlannerJobs: Window["CairnMealPlannerJobs"];
+  declare const CairnMealPlannerActions: Window["CairnMealPlannerActions"];
   declare const CairnMealPlannerController: Window["CairnMealPlannerController"];
   declare const CairnCoachProposalController: Window["CairnCoachProposalController"];
   declare const CairnMealSwapData: Window["CairnMealSwapData"];
@@ -3265,6 +3353,8 @@ declare global {
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnHealthDocUploadController: Window["CairnHealthDocUploadController"];
+  declare const CairnHealthDocDateActions: Window["CairnHealthDocDateActions"];
+  declare const CairnHealthDocLifecycleActions: Window["CairnHealthDocLifecycleActions"];
   declare const CairnHealthDocActionsController: Window["CairnHealthDocActionsController"];
   declare const CairnHealthShareController: Window["CairnHealthShareController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
@@ -3339,6 +3429,8 @@ declare global {
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];
   declare const CairnTodaySessionFeedback: Window["CairnTodaySessionFeedback"];
   declare const CairnTodaySessionSkip: Window["CairnTodaySessionSkip"];
+  declare const CairnTodaySessionSetModel: Window["CairnTodaySessionSetModel"];
+  declare const CairnTodaySessionSetActions: Window["CairnTodaySessionSetActions"];
   declare const CairnTodaySessionController: Window["CairnTodaySessionController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];

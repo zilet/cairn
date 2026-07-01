@@ -11,6 +11,7 @@ const todayDataLoader = readFileSync(path.join(root, "src/client/today-data-load
 const todayPlanSessionPreparation = readFileSync(path.join(root, "src/client/today-plan-session-preparation.ts"), "utf8");
 const todayProgressionController = readFileSync(path.join(root, "src/client/today-progression-controller.ts"), "utf8");
 const todaySessionController = readFileSync(path.join(root, "src/client/today-session-controller.ts"), "utf8");
+const todaySessionSetActions = readFileSync(path.join(root, "src/client/today-session-set-actions.ts"), "utf8");
 
 function functionBody(source, name) {
   const start = source.indexOf(`function ${name}`);
@@ -36,11 +37,11 @@ test("Today SWR-caches progression and invalidates it when set truth changes", (
   assert.match(todayBridges, /CairnTodayProgressionController\.invalidateTodayProgression\(progressionDeps\(\)\)/);
   assert.match(todayProgressionController, /function progressionKey\(day: string \| number\): string/);
   assert.match(todayProgressionController, /deps\.invalidate\(progressionKey\(deps\.state\.day\)\)/);
-  assert.ok((todaySessionController.match(/deps\.invalidateTodayProgression\(\);/g) || []).length >= 2, "set create/delete paths invalidate progression");
+  assert.ok((todaySessionSetActions.match(/invalidateSetTruth\(deps\)/g) || []).length >= 2, "set create/delete paths invalidate progression");
 });
 
 test("Today set logging only mutates the card after a successful POST", () => {
-  const body = functionBody(todaySessionController, "wireLogRow");
+  const body = functionBody(todaySessionSetActions, "wireLogRow");
   const apiCall = body.indexOf('deps.api("/sets"');
   const errorGuard = body.indexOf("!result || result.ok === false || result.error || result.id == null");
   const chipAppend = body.indexOf("loggedWrap.appendChild(chipEl)");
