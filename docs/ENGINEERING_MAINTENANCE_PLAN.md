@@ -15,9 +15,9 @@ This tracker records the verified maintenance baseline. The next-stage full fron
 | Wave 2 - Route and screen identity | Complete | deep links round-trip to tabs, subviews, dates, selected records, and chat sessions |
 | Wave 3 - Backend module grouping | Complete | REST/MCP/docs parity still green after domain extraction |
 | Wave 4 - Frontend TypeScript foundation | Complete | client typecheck runs with no new framework and no unnecessary dependencies |
-| Wave 5 - High-risk frontend migration | Mostly complete | critical Today, Chat, Health, Settings, API, SWR, route, cache, and shared motion helpers are typechecked; large screen modules still need shrinking |
-| Wave 6 - Brain and memory hardening | In progress | typed conductor/memory/chat-action spine, deterministic training-brain DTOs, program block/offline guideline/injury-impact DTOs are in place; remaining coach-context slices still need narrower DTOs |
-| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; automated browser workflow smoke is still pending |
+| Wave 5 - High-risk frontend migration | Mostly complete | generated browser source now lives under `src/client`; large screen-controller modules still need shrinking and final browser workflow smoke |
+| Wave 6 - Brain and memory hardening | In progress | typed conductor/memory/chat-action spine and deterministic DTO coverage are in place; remaining coach-context slices still need narrower DTOs |
+| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; final automated browser workflow lane is still pending |
 
 ## Non-Negotiables
 
@@ -268,6 +268,9 @@ Tasks:
 - [x] Migrate the high-risk `10-boot` shell/routing/settings slices after route contracts are stable.
   - [x] Extract Garmin sync status, agent health/activity, noticed learnings, agent state chips, and update-status rendering into typed `public/js/settings-client.js` with VM coverage.
 - [x] Keep `escHtml`/`escAttr` discipline for extracted helper-generated HTML with VM escaping tests and an engineering contract that keeps typed helper scripts in `tsconfig.client.json`, `public/index.html`, and `public/sw.js`.
+- [x] Keep generated browser source under `src/client/**/*.ts`, with `public/js` treated as build output except for the tiny `10-boot.js` shim.
+- [x] Keep the exact client API route map narrow enough that `CLIENT_API_BROAD_RESPONSE_WAIVERS` is empty; deterministic DTO coverage is complete for the current deterministic client surfaces.
+- [ ] Split large typed screen-controller modules into smaller render, data, state, and wiring modules.
 
 Gate:
 

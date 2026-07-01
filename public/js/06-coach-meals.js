@@ -1148,6 +1148,7 @@ function reconnectProposal() {
     return null;
 }
 Object.assign(globalThis, {
+    MEALS_KEY,
     applyProposalById,
     closeMealSheet,
     reconnectMealPlan,

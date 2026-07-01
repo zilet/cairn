@@ -2453,7 +2453,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /Object\.assign\(globalThis,\s*\{[\s\S]*postExerciseMode[\s\S]*reconnectDayReadOverride[\s\S]*reconnectSessionSuggest[\s\S]*renderToday[\s\S]*reshapeToday[\s\S]*\}\)/
   );
   assert.match(todayScreenSource, /CairnTodayGarminReconciliation\.load/);
-  assert.match(todayScreenSource, /const todayState = state as any/);
+  assert.match(todayScreenSource, /type TodayScreenApiResponse<Path extends string> = import\("\.\.\/contracts\/client\.js"\)\.ClientApiResponse<Path>/);
+  assert.match(todayScreenSource, /type TodayState = Omit<typeof state/);
+  assert.match(todayScreenSource, /pendingOffPlan\?: Record<string, Array<\{ name: string; mode\?: string \| null \}>>/);
+  assert.match(todayScreenSource, /const todayState = state as TodayState/);
   assert.match(proposalSource, /function runTargetText\(run: unknown\): string/);
   assert.match(proposalSource, /function coachProposalCardHtml\(proposal: unknown, index: number, lastApplyClamp\?: unknown\): string/);
   assert.match(proposalSource, /function coachProposalListHtml\(proposals: unknown, lastApplyClamp\?: unknown\): string/);

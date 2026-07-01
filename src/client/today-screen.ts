@@ -8,23 +8,115 @@
 // score; the server hands us finished plain words (delta_text + why), we just frame
 // them. The whole day's prescriptions become a DRAFT plan proposal via the apply
 // control in the session head — nothing auto-applies.
-const todayApi = api as (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<any>;
-const todayCachedApi = cachedApi as (path: string, opts?: any) => Promise<any>;
-const todayPeekCached = peekCached as (key: string, freshFor?: number) => { data: any; fresh: boolean } | null;
-const todayState = state as any;
+type TodayScreenApiResponse<Path extends string> = import("../contracts/client.js").ClientApiResponse<Path>;
+type TodayScreenCachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: { changed: boolean }) => void };
+type TodayScreenSwrPeek<T> = { data: T; fresh: boolean };
+type TodayScreenDayRead = import("../contracts/client.js").ClientDayRead & { _provisional?: boolean; override?: string | null };
+type TodayScreenPlanItem = import("../contracts/client.js").ClientPlanItem & {
+  fromPlan?: boolean;
+  muscle_group?: string | null;
+  target_distance_km?: number | null;
+  target_duration_min?: number | null;
+  target_zone?: string | null;
+};
+type TodayScreenPlanDay = {
+  id?: number;
+  day_number: number;
+  name: string;
+  focus?: string | null;
+  items: TodayScreenPlanItem[];
+  [key: string]: unknown;
+};
+type TodayScreenLoggedSet = import("../contracts/client.js").ClientLoggedSet;
+type TodayScreenTrainingSession = import("../contracts/client.js").ClientTrainingSession & {
+  plan_day_id?: number | null;
+  skips?: unknown[];
+};
+type TodayScreenCardioEffort = import("../contracts/client.js").ClientCardioEffort;
+type TodayScreenPrescription = import("../contracts/client.js").ClientPrescription;
+type TodayScreenPrescriptionByExercise = Record<string, TodayScreenPrescription | null | undefined>;
+type TodayScreenExercise = import("../contracts/client.js").ClientExercise;
+type TodayScreenProfile = import("../contracts/client.js").ClientProfile;
+type TodayScreenWeeklyStats = import("../contracts/client.js").ClientWeeklyStats & {
+  goal_mode?: string | null;
+  goal_weight_lb?: number | null;
+  goal_date?: string | null;
+};
+type TodayScreenAgenda = import("../contracts/client.js").ClientTodayAgenda;
+type TodayScreenAgendaCandidate = import("../contracts/client.js").ClientTodayAgendaCandidate;
+type TodayScreenDayIntake = import("../contracts/client.js").ClientDayIntake;
+type TodayScreenProgramAdjustment = import("../contracts/client.js").ClientProgramAdjustment;
+type TodayScreenWeekAheadResponse = import("../contracts/client.js").ClientWeekAheadResponse;
+type TodayScreenMealPlan = Record<string, unknown> & { status?: string; parsed?: { days?: Array<Record<string, unknown> & { meals?: Array<Record<string, unknown>> }> } };
+type TodayScreenContextEvent = Record<string, unknown> & {
+  kind?: string;
+  title?: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  archived?: boolean;
+  meta_json?: unknown;
+};
+type TodayScreenHealthSynthesisBanner = {
+  synthesis?: { one_change?: unknown; headline?: unknown } | null;
+  focus?: {
+    lead?: {
+      group?: unknown;
+      why?: unknown;
+      moves?: { nutrition?: unknown; training?: unknown; watch?: unknown } | null;
+    } | null;
+  } | null;
+};
+type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "pendingOffPlan" | "plan"> & {
+  tab?: string;
+  logDate: string;
+  day: number | null;
+  plan: TodayScreenPlanDay[];
+  exModes: Record<string, string>;
+  focus?: { date: string; on: boolean } | null;
+  brief?: { date: string; override: string; read: TodayScreenDayRead } | null;
+  _briefInflight?: { date: string; override: string; promise: Promise<TodayScreenDayRead> } | null;
+  _briefMorph?: boolean;
+  planJump?: string;
+  chatPrefill?: string;
+  pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
+  meSeg?: string;
+  healthSeg?: string;
+  healthSegPicked?: boolean;
+  [key: string]: unknown;
+};
+
+function todayApi<Path extends string>(
+  path: Path,
+  opts?: RequestInit & { headers?: Record<string, string> },
+): Promise<TodayScreenApiResponse<Path>> {
+  return api(path, opts);
+}
+
+function todayCachedApi<Path extends string>(
+  path: Path,
+  opts?: TodayScreenCachedApiOptions<TodayScreenApiResponse<Path>>,
+): Promise<TodayScreenApiResponse<Path>> {
+  return cachedApi(path, opts);
+}
+
+function todayPeekCached<T = unknown>(key: string, freshFor?: number): TodayScreenSwrPeek<T> | null {
+  return peekCached<T>(key, freshFor);
+}
+
+const todayState = state as TodayState;
 const todayView = view as HTMLElement & any;
 
 // The per-card prescription line. `rx` is one Prescription from the progression
 // engine (or null → renders nothing). Calm, no score, one move + its why. When the
 // move is "switch it up" (action:'vary'), the engine hands a small menu of same-
 // pattern swaps that the card renderer frames as a quiet choice.
-function todayExRxLineHtml(rx: any) {
+function todayExRxLineHtml(rx: TodayScreenPrescription | null | undefined) {
   return CairnTodayTraining.exRxLineHtml(rx);
 }
 
 // How many of a day's prescriptions are an actual MOVE (not a plain hold) — drives
 // the "apply these" affordance copy + whether it shows at all.
-function todayRxMoveCount(rxByEx: any) {
+function todayRxMoveCount(rxByEx: TodayScreenPrescriptionByExercise) {
   return CairnTodayTraining.rxMoveCount(rxByEx);
 }
 
@@ -33,7 +125,7 @@ function todayRxMoveCount(rxByEx: any) {
 // DRAFT plan proposal for review. Nothing auto-applies; we deep-link into Plan →
 // Coach where the draft is reviewed/applied, mirroring loadDraftProposals. Calm,
 // honest degradation: an unreachable / not-yet-wired endpoint restores the button.
-async function applyDayProgression(btn: any, day: any) {
+async function applyDayProgression(btn: Element | null | undefined, day: number | null | undefined) {
   if (day == null) return;
   const restore = btnBusy(btn, "Drafting…");
   let r = null;
@@ -51,7 +143,13 @@ async function applyDayProgression(btn: any, day: any) {
   activateTab("plan");
 }
 
-function exCard(it: any, logged: any, prefill: any, revealIdx: any, rx: any) {
+function exCard(
+  it: TodayScreenPlanItem,
+  logged: TodayScreenLoggedSet[],
+  prefill: Record<string, unknown>,
+  revealIdx: number | null | undefined,
+  rx: TodayScreenPrescription | null | undefined,
+) {
   return CairnTodayCards.exerciseCardHtml(it, logged, prefill, revealIdx, rx, {
     day: todayState.day,
     exModes: todayState.exModes,
@@ -70,8 +168,13 @@ function exCard(it: any, logged: any, prefill: any, revealIdx: any, rx: any) {
 // this run →" is the FALLBACK with a quiet "or it'll sync from your watch" hint,
 // since a synced run is the runner's preferred path. (Sync freshness rides on a
 // separate line only when Garmin is configured.)
-function cardioPlanCard(it: any, revealIdx: any, done: any, syncline: any) {
-  return CairnTodayCards.cardioPlanCardHtml(it, revealIdx, done, syncline);
+function cardioPlanCard(
+  it: TodayScreenPlanItem,
+  revealIdx: number | null | undefined,
+  done: TodayScreenCardioEffort | null | undefined,
+  syncline: string,
+) {
+  return CairnTodayCards.cardioPlanCardHtml(it, revealIdx, done as Record<string, unknown> | null | undefined, syncline);
 }
 
 // Does a synced cardio effort satisfy a planned cardio item? The bar is deliberately
@@ -79,8 +182,8 @@ function cardioPlanCard(it: any, revealIdx: any, done: any, syncline: any) {
 // prescription done — a runner's plan day is "did a run happen?", not an exact-match
 // audit. Compatibility falls back to "any endurance effort" when neither side names a
 // recognizable verb (so a generic activity still flips a generic cardio prescription).
-function cardioEffortMatches(it: any, eff: any) {
-  return CairnTodayCards.cardioEffortMatches(it, eff);
+function cardioEffortMatches(it: TodayScreenPlanItem, eff: TodayScreenCardioEffort | null | undefined) {
+  return CairnTodayCards.cardioEffortMatches(it, eff as Record<string, unknown> | null | undefined);
 }
 
 // ---------- sync trust: a quiet freshness line where a runner needs the mileage ----------
@@ -90,7 +193,7 @@ function cardioEffortMatches(it: any, eff: any) {
 // Cardio sync execution wiring also lives in /js/cardio-sync-client.js. It preserves
 // the wireCardioSync compatibility global used by Today, Progress, and Plan.
 
-function setChip(s: any, i?: any) {
+function setChip(s: (Partial<TodayScreenLoggedSet> & Record<string, unknown>), i?: number) {
   return CairnTodaySessionStatus.setChipHtml(s, i);
 }
 
@@ -99,45 +202,45 @@ function setChip(s: any, i?: any) {
 // screen keeps DOM wiring and persistence.
 
 // Set an exercise's mode by name (upsert-by-name). Returns the todayApi() promise.
-function postExerciseMode(name: any, mode: any) {
+function postExerciseMode(name: string, mode: string) {
   return todayApi("/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, mode }) });
 }
 
-function planDayNumberForSession(session: any, plan: any) {
+function planDayNumberForSession(session: TodayScreenTrainingSession | null | undefined, plan: TodayScreenPlanDay[]): number | null {
   if (!session || !(session.sets || []).length) return null;
-  const byId = plan.find((d: any) => Number(d.id) === Number(session.plan_day_id));
+  const byId = plan.find((d) => Number(d.id) === Number(session.plan_day_id));
   if (byId) return byId.day_number;
 
-  const loggedNames = new Set((session.sets || []).map((s: any) => s.exercise).filter(Boolean));
-  let best = null;
+  const loggedNames = new Set((session.sets || []).map((s) => s.exercise).filter(Boolean));
+  let best: { day_number: number; hits: number } | null = null;
   for (const d of plan) {
-    const plannedNames = new Set((d.items || []).map((it: any) => it.exercise));
+    const plannedNames = new Set((d.items || []).map((it) => it.exercise));
     let hits = 0;
-    loggedNames.forEach((name: any) => { if (plannedNames.has(name)) hits++; });
+    loggedNames.forEach((name) => { if (plannedNames.has(name)) hits++; });
     if (hits && (!best || hits > best.hits)) best = { day_number: d.day_number, hits };
   }
   return best?.day_number ?? null;
 }
 
-function nextPlanDayNumber(dayNumber: any, plan: any) {
-  const ordered = [...plan].sort((a: any, b: any) => a.day_number - b.day_number);
+function nextPlanDayNumber(dayNumber: number | null | undefined, plan: TodayScreenPlanDay[]): number | null {
+  const ordered = [...plan].sort((a, b) => a.day_number - b.day_number);
   if (!ordered.length) return null;
   const idx = ordered.findIndex((d: any) => d.day_number === dayNumber);
   return ordered[idx >= 0 ? (idx + 1) % ordered.length : 0].day_number;
 }
 
-async function suggestedPlanDayNumber(session: any, isToday: any) {
+async function suggestedPlanDayNumber(session: TodayScreenTrainingSession | null | undefined, isToday: boolean): Promise<number> {
   const currentLoggedDay = planDayNumberForSession(session, todayState.plan);
   if (currentLoggedDay) return currentLoggedDay;
   if (!isToday) return todayState.plan[0]?.day_number ?? 1;
 
   try {
-    const recent = await todayApi("/sessions?limit=20");
-    const latest = (recent || []).find((s: any) =>
+    const recent = await todayApi("/sessions?limit=20") as TodayScreenTrainingSession[];
+    const latest = (recent || []).find((s) =>
       s.date !== todayState.logDate && planDayNumberForSession(s, todayState.plan)
     );
     const latestDay = planDayNumberForSession(latest, todayState.plan);
-    return latestDay ? nextPlanDayNumber(latestDay, todayState.plan) : (todayState.plan[0]?.day_number ?? 1);
+    return latestDay ? (nextPlanDayNumber(latestDay, todayState.plan) ?? todayState.plan[0]?.day_number ?? 1) : (todayState.plan[0]?.day_number ?? 1);
   } catch {
     return todayState.plan[0]?.day_number ?? 1;
   }
@@ -161,20 +264,20 @@ async function suggestedPlanDayNumber(session: any, isToday: any) {
 // A bare provisional read used only to paint Today's structure instantly when the
 // agentic read isn't warm yet. Marked _provisional so the background upgrade knows
 // to replace it; it's never cached as the final read.
-function provisionalRead(_date: any) {
+function provisionalRead(_date: string): TodayScreenDayRead {
   return CairnTodayBrief.provisionalRead();
 }
 
-async function loadBrief(date: any, override: any, opts: any = {}) {
+async function loadBrief(date: string, override: string, opts: { fast?: boolean } = {}): Promise<TodayScreenDayRead> {
   const cached = todayState.brief;
   // Reuse a non-provisional cached read for the same date/override.
-  if (cached && cached.date === date && cached.override === (override || "") && !(cached.read as any)._provisional) return cached.read;
-  const fetchRead: Promise<any> = (async () => {
-    let read = null;
+  if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional) return cached.read;
+  const fetchRead: Promise<TodayScreenDayRead> = (async () => {
+    let read: TodayScreenDayRead | null = null;
     try {
       const qs = new URLSearchParams({ date, agent: "auto" });
       if (override) qs.set("override", override);
-      read = await todayApi("/today-read?" + qs.toString());
+      read = await todayApi("/today-read?" + qs.toString()) as TodayScreenDayRead;
     } catch { read = null; }
     if (!read || !read.kind) read = provisionalRead(date);
     return read;
@@ -185,9 +288,9 @@ async function loadBrief(date: any, override: any, opts: any = {}) {
   // paint a provisional read and let the background upgrade swap the real one in.
   if (opts.fast) {
     const TIMEOUT = 1200;
-    const raced: any = await Promise.race([
-      fetchRead.then((r: any) => ({ r })),
-      new Promise((resolve: any) => setTimeout(() => resolve(null), TIMEOUT)),
+    const raced: { r: TodayScreenDayRead } | null = await Promise.race([
+      fetchRead.then((r) => ({ r })),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), TIMEOUT)),
     ]);
     if (raced && raced.r && !raced.r._provisional) {
       // Adopt the server-persisted steer (read.override) on a fresh open/reload —
@@ -217,12 +320,12 @@ async function loadBrief(date: any, override: any, opts: any = {}) {
 // it waits, then swaps the .brief element. No-op if the read was already real,
 // the tab changed, or the date/override moved on. Pull-never-push: it just
 // quietly settles into the better read; nothing nags.
-async function upgradeBriefInPlace(date: any, isToday: any) {
+async function upgradeBriefInPlace(date: string, isToday: boolean) {
   const inflight = todayState._briefInflight;
   if (!inflight || inflight.date !== date) return; // nothing provisional to upgrade
   const briefEl = todayView.querySelector(".brief");
   if (briefEl && !reducedMotion()) briefEl.classList.add("is-thinking");
-  let read: any = null;
+  let read: TodayScreenDayRead | null = null;
   try { read = await inflight.promise; } catch { read = null; }
   // Stale-guard: bail if we navigated away or the date moved while waiting.
   if (todayState.tab !== "today" || todayState.logDate !== date) return;
@@ -234,7 +337,7 @@ async function upgradeBriefInPlace(date: any, isToday: any) {
   if (!live) return;
   // Re-derive showPlan in case the real read flipped train↔rest/easy; only the
   // Brief element is swapped, so the logging surface below is untouched.
-  const day = todayState.plan.find((d: any) => d.day_number === todayState.day) || todayState.plan[0] || { items: [] };
+  const day = todayState.plan.find((d) => d.day_number === todayState.day) || todayState.plan[0] || { items: [] };
   const hasPlanDay = (day.items || []).length > 0;
   const showPlan = !!todayView.querySelector(".plansurface");
   const tmp = document.createElement("div");
@@ -514,9 +617,9 @@ function renderableAgendaBuckets(agenda: any) {
 // Fetch the agenda for a date. Best-effort + null-safe: a 404 during dev (route not
 // wired yet) or any failure returns null, and the caller falls back to the CURRENT
 // fixed rail so Today never breaks while the arbiter is half-integrated.
-async function fetchTodayAgenda(date: any) {
+async function fetchTodayAgenda(date: any): Promise<TodayScreenAgenda | null> {
   try {
-    const a = await todayApi("/today-agenda?date=" + encodeURIComponent(date || todayState.logDate));
+    const a = await todayApi("/today-agenda?date=" + encodeURIComponent(date || todayState.logDate)) as TodayScreenAgenda;
     if (!a || !Array.isArray(a.primary) || !Array.isArray(a.more)) return null;
     return a;
   } catch { return null; }
@@ -681,11 +784,11 @@ async function renderToday(opts: any = {}) {
   const allCardio = (day.items || []).filter(isCardioItem);
   const strengthPlanned = (day.items || []).some((it: any) => !isCardioItem(it) && it.exercise);
   const couldHaveRun = allCardio.length > 0 || (isToday && !strengthPlanned);
-  let cardioEfforts: any[] = [];
+  let cardioEfforts: TodayScreenCardioEffort[] = [];
   let todaySettings = null;
   if (couldHaveRun) {
     [cardioEfforts, todaySettings] = await Promise.all([
-      todayApi("/cardio?date=" + todayState.logDate).catch(() => []),
+      (todayApi("/cardio?date=" + todayState.logDate) as Promise<TodayScreenCardioEffort[]>).catch(() => []),
       todayApi("/settings").then((r: any) => (r && r.settings) || null).catch(() => null),
     ]);
     cardioEfforts = Array.isArray(cardioEfforts) ? cardioEfforts : [];
@@ -729,8 +832,9 @@ async function renderToday(opts: any = {}) {
   // "pending" — it owns a real card, so deleting its sets drops it as before).
   const planLower = new Set([...planNames].map((n: any) => n.toLowerCase()));
   const loggedLower = new Set(Object.keys(loggedByEx).map((n: any) => n.toLowerCase()));
-  const pendingOffPlan = (((todayState.pendingOffPlan || {})[todayState.logDate]) || []).filter(
-    (p: any) => p && p.name && !planLower.has(p.name.toLowerCase()) && !loggedLower.has(p.name.toLowerCase()),
+  const pendingForDate = todayState.pendingOffPlan?.[todayState.logDate] ?? [];
+  const pendingOffPlan: Array<{ name: string; mode?: string | null }> = pendingForDate.filter(
+    (p) => p && p.name && !planLower.has(p.name.toLowerCase()) && !loggedLower.has(p.name.toLowerCase()),
   );
   if (todayState.pendingOffPlan && todayState.pendingOffPlan[todayState.logDate]) todayState.pendingOffPlan[todayState.logDate] = pendingOffPlan;
   const needLast = [...new Set([...planEx, ...pendingOffPlan.map((p: any) => p.name)])].filter((ex: any) => !(loggedByEx[ex] && loggedByEx[ex].length));
@@ -1504,7 +1608,7 @@ function wireBrief(read: any, { isToday }: any) {
     todayState.brief = null;
     try {
       const qs = new URLSearchParams({ date: todayState.logDate, agent: "auto", reset: "1" });
-      const fresh = await todayApi("/today-read?" + qs.toString());
+      const fresh = await todayApi("/today-read?" + qs.toString()) as TodayScreenDayRead;
       todayState.brief = {
         date: todayState.logDate,
         override: fresh && fresh.override ? fresh.override : "",
@@ -2059,9 +2163,9 @@ async function appendOffPlanCard(name: any, mode: any) {
   (todayState.pendingOffPlan ??= {});
   const list = (todayState.pendingOffPlan[todayState.logDate] ??= []);
   if (!list.some((p: any) => p.name.toLowerCase() === name.toLowerCase())) list.push({ name, mode: mode || "reps" });
-  let prefill = { weight: null, reps: null, rir: null, duration_sec: null };
+  let prefill: { weight: unknown; reps: unknown; rir: unknown; duration_sec: unknown } = { weight: null, reps: null, rir: null, duration_sec: null };
   try {
-    const last = await todayApi("/last-set?exercise=" + encodeURIComponent(name));
+    const last = await todayApi("/last-set?exercise=" + encodeURIComponent(name)) as Partial<TodayScreenLoggedSet> | null;
     if (last) prefill = { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };
   } catch {}
   const tpl = document.createElement("template");
@@ -2102,8 +2206,8 @@ function latelyRow(row: any) {
 async function loadRecentActivities() {
   const wrap = todayView.querySelector("#qlRecent");
   if (!wrap) return;
-  let rows = [];
-  try { rows = await todayApi("/recent-training?limit=6"); } catch { rows = []; }
+  let rows: import("../contracts/client.js").ClientRecentTrainingFeedRow[] = [];
+  try { rows = await todayApi("/recent-training?limit=6") as import("../contracts/client.js").ClientRecentTrainingFeedRow[]; } catch { rows = []; }
   if (todayState.tab !== "today" || !wrap.isConnected) return;
   if (!rows || !rows.length) { wrap.innerHTML = ""; return; }
   wrap.innerHTML =
@@ -2177,12 +2281,13 @@ async function loadWearable(isToday: any) {
 async function loadTableHint() {
   const wrap = todayView.querySelector("#tableHint");
   if (!wrap) return;
-  let plans = [];
-  try { plans = await todayApi("/mealplans?limit=6"); } catch { return; }
+  let plans: TodayScreenMealPlan[] = [];
+  try { plans = await todayApi("/mealplans?limit=6") as TodayScreenMealPlan[]; } catch { return; }
   if (todayState.tab !== "today" || !wrap.isConnected) return;
-  const p = (plans || []).find((x: any) => x.status === "accepted" && x.parsed) ||
-            (plans || []).find((x: any) => x.status === "draft" && x.parsed);
-  const days = p && Array.isArray(p.parsed.days) ? p.parsed.days : [];
+  const p = (plans || []).find((x) => x.status === "accepted" && x.parsed) ||
+            (plans || []).find((x) => x.status === "draft" && x.parsed);
+  const parsed = p?.parsed;
+  const days = parsed && Array.isArray(parsed.days) ? parsed.days : [];
   const lbl = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(todayState.logDate + "T12:00:00").getDay()];
   const day = days.find((d: any) => String(d.day || "").toLowerCase().startsWith(lbl));
   const meals = day && Array.isArray(day.meals) ? day.meals : [];
@@ -2249,8 +2354,8 @@ function ctxBannerLine(ev: any) {
 async function loadContextBanner() {
   const wrap = todayView.querySelector("#ctxEvents");
   if (!wrap) return;
-  let events = [];
-  try { events = await todayApi("/context-events?active=1"); } catch { events = []; }
+  let events: TodayScreenContextEvent[] = [];
+  try { events = await todayApi("/context-events?active=1") as TodayScreenContextEvent[]; } catch { events = []; }
   if (todayState.tab !== "today" || !wrap.isConnected) return;
   events = (events || []).filter(isNearTermContext);
   if (!events.length) { wrap.innerHTML = ""; return; }
@@ -2295,7 +2400,7 @@ async function loadDraftProposals() {
   const drafts = (plans || []).filter((p: any) => p && p.status === "draft");
   if (!drafts.length) { slot.innerHTML = ""; return; }
   const head = drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting";
-  const raw = (drafts[0].instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
+  const raw = String(drafts[0].instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
   const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Drafted by your coach";
   slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
       <span class="draft-ico" aria-hidden="true">✦</span>
@@ -2347,7 +2452,7 @@ const WEEK_AHEAD_GLYPH: Record<string, string> = { lift: "◆", run: "➜", mixe
 async function loadWeekAhead() {
   const slot = todayView.querySelector("#weekAheadSlot");
   if (!slot) return;
-  let r = null;
+  let r: TodayScreenWeekAheadResponse | null = null;
   try { r = await todayApi("/week-ahead"); } catch { return; }
   if (todayState.tab !== "today" || !slot.isConnected) return;
   const days = r && r.ok && Array.isArray(r.days) ? r.days : [];
@@ -2364,7 +2469,7 @@ async function loadWeekAhead() {
   slot.innerHTML = `<div class="weekahead reveal" style="--i:0">
       <div class="weekahead-h"><span class="lbl">The week ahead</span></div>
       <div class="weekahead-days">${rows}</div>
-      ${r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
+      ${r && r.ok && r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
     </div>`;
 }
 
@@ -2432,8 +2537,8 @@ async function loadHealthFocusBanner() {
   // else the prioritized focus LEAD (freshness-aware + capped server-side, so a stale CRP
   // or an empty bucket never leads). Both are pull artifacts; /health/synthesis carries
   // BOTH in one call. Taps through to Me → Health → Read where the full picture lives.
-  let data = null;
-  try { data = await todayApi("/health/synthesis"); } catch { data = null; }
+  let data: TodayScreenHealthSynthesisBanner | null = null;
+  try { data = await todayApi("/health/synthesis") as TodayScreenHealthSynthesisBanner; } catch { data = null; }
   if (todayState.tab !== "today" || !wrap.isConnected) return;
   const s = data && data.synthesis;
   const lead = data && data.focus && data.focus.lead;
@@ -2441,7 +2546,7 @@ async function loadHealthFocusBanner() {
   if (s && (s.one_change || s.headline)) line = String(s.one_change || s.headline);
   else if (lead) {
     const mv = lead.moves && (lead.moves.nutrition || lead.moves.training || lead.moves.watch);
-    line = mv ? `${lead.group}: ${mv}` : (lead.why || lead.group);
+    line = mv ? `${String(lead.group || "")}: ${String(mv)}` : String(lead.why || lead.group || "");
   }
   if (!line) { wrap.innerHTML = ""; return; }
   wrap.innerHTML = `<button class="ctxbanner ctxbanner-health" id="ctxHealthGo">

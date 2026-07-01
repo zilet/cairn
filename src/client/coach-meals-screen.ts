@@ -1093,6 +1093,7 @@ function reconnectProposal(): ClientAgentOpHandlers | null {
 }
 
 Object.assign(globalThis, {
+  MEALS_KEY,
   applyProposalById,
   closeMealSheet,
   reconnectMealPlan,

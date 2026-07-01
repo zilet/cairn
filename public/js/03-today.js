@@ -1,17 +1,13 @@
 (() => {
-// ==== 03-today.js ====
-// ---------- Today ----------
-// ---------- Adaptive next-prescription (the loop closes here) ----------
-// On a lift card, render the NEXT session's adapted target straight from the
-// deterministic progression engine (GET /api/program/progression). It reads what
-// you actually logged + the lift's trend and proposes one calm move — overload /
-// hold / deload / rotate a variation / +seconds — with a plain-words "why". NEVER a
-// score; the server hands us finished plain words (delta_text + why), we just frame
-// them. The whole day's prescriptions become a DRAFT plan proposal via the apply
-// control in the session head — nothing auto-applies.
-const todayApi = api;
-const todayCachedApi = cachedApi;
-const todayPeekCached = peekCached;
+function todayApi(path, opts) {
+    return api(path, opts);
+}
+function todayCachedApi(path, opts) {
+    return cachedApi(path, opts);
+}
+function todayPeekCached(key, freshFor) {
+    return peekCached(key, freshFor);
+}
 const todayState = state;
 const todayView = view;
 // The per-card prescription line. `rx` is one Prescription from the progression
@@ -137,7 +133,7 @@ async function suggestedPlanDayNumber(session, isToday) {
         const recent = await todayApi("/sessions?limit=20");
         const latest = (recent || []).find((s) => s.date !== todayState.logDate && planDayNumberForSession(s, todayState.plan));
         const latestDay = planDayNumberForSession(latest, todayState.plan);
-        return latestDay ? nextPlanDayNumber(latestDay, todayState.plan) : (todayState.plan[0]?.day_number ?? 1);
+        return latestDay ? (nextPlanDayNumber(latestDay, todayState.plan) ?? todayState.plan[0]?.day_number ?? 1) : (todayState.plan[0]?.day_number ?? 1);
     }
     catch {
         return todayState.plan[0]?.day_number ?? 1;
@@ -813,7 +809,8 @@ async function renderToday(opts = {}) {
     // "pending" — it owns a real card, so deleting its sets drops it as before).
     const planLower = new Set([...planNames].map((n) => n.toLowerCase()));
     const loggedLower = new Set(Object.keys(loggedByEx).map((n) => n.toLowerCase()));
-    const pendingOffPlan = (((todayState.pendingOffPlan || {})[todayState.logDate]) || []).filter((p) => p && p.name && !planLower.has(p.name.toLowerCase()) && !loggedLower.has(p.name.toLowerCase()));
+    const pendingForDate = todayState.pendingOffPlan?.[todayState.logDate] ?? [];
+    const pendingOffPlan = pendingForDate.filter((p) => p && p.name && !planLower.has(p.name.toLowerCase()) && !loggedLower.has(p.name.toLowerCase()));
     if (todayState.pendingOffPlan && todayState.pendingOffPlan[todayState.logDate])
         todayState.pendingOffPlan[todayState.logDate] = pendingOffPlan;
     const needLast = [...new Set([...planEx, ...pendingOffPlan.map((p) => p.name)])].filter((ex) => !(loggedByEx[ex] && loggedByEx[ex].length));
@@ -2456,7 +2453,8 @@ async function loadTableHint() {
         return;
     const p = (plans || []).find((x) => x.status === "accepted" && x.parsed) ||
         (plans || []).find((x) => x.status === "draft" && x.parsed);
-    const days = p && Array.isArray(p.parsed.days) ? p.parsed.days : [];
+    const parsed = p?.parsed;
+    const days = parsed && Array.isArray(parsed.days) ? parsed.days : [];
     const lbl = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date(todayState.logDate + "T12:00:00").getDay()];
     const day = days.find((d) => String(d.day || "").toLowerCase().startsWith(lbl));
     const meals = day && Array.isArray(day.meals) ? day.meals : [];
@@ -2605,7 +2603,7 @@ async function loadDraftProposals() {
         return;
     }
     const head = drafts.length > 1 ? `${drafts.length} plan changes are waiting` : "A plan change is waiting";
-    const raw = (drafts[0].instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
+    const raw = String(drafts[0].instruction || "").replace(/^(auto|chat):\s*/i, "").trim();
     const sub = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Drafted by your coach";
     slot.innerHTML = `<button class="draft-card reveal" id="draftCard" style="--i:0" type="button">
       <span class="draft-ico" aria-hidden="true">✦</span>
@@ -2692,7 +2690,7 @@ async function loadWeekAhead() {
     slot.innerHTML = `<div class="weekahead reveal" style="--i:0">
       <div class="weekahead-h"><span class="lbl">The week ahead</span></div>
       <div class="weekahead-days">${rows}</div>
-      ${r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
+      ${r && r.ok && r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
     </div>`;
 }
 // Today rail: a calm, self-explaining "what changed" card — the handful of
@@ -2789,7 +2787,7 @@ async function loadHealthFocusBanner() {
         line = String(s.one_change || s.headline);
     else if (lead) {
         const mv = lead.moves && (lead.moves.nutrition || lead.moves.training || lead.moves.watch);
-        line = mv ? `${lead.group}: ${mv}` : (lead.why || lead.group);
+        line = mv ? `${String(lead.group || "")}: ${String(mv)}` : String(lead.why || lead.group || "");
     }
     if (!line) {
         wrap.innerHTML = "";
