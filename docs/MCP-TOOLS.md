@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**176 tools.**
+**179 tools.**
 
 | Tool | Description |
 |---|---|
@@ -44,6 +44,8 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_agent_info` | Read-only 'what's running' for one coaching CLI: installed version and (best-effort) the model it would use. Cheap subprocess probe — no coaching/paid call, no model pinning. ok:false for an unknown agent. |
 | `get_agent_stats` | Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up). |
 | `get_art_stats` | Get generated-artwork spend telemetry: estimated Gemini cost (USD) since artwork was last enabled plus all-time, images generated, generations avoided via semantic reuse (and the estimated savings), and cache size. |
+| `get_body_measurements` | Read logged body measurements + the latest reading + derived indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate) over the window. Indicators are plain-language with optimal framing — no scores. Body-fat is a tape ESTIMATE, not a DEXA. Degrades to a 'set your height' hint when height is unset. |
+| `get_body_metric_trends` | Per-site least-squares trends across the window (waist, hips, chest, arms, …) plus bodyweight — each in plain language ('waist down 0.8 in over 6 weeks') with the raw points for a sparkline. Null-safe: a site with one reading reports no trend yet. |
 | `get_calendar` | Day-by-day training calendar/heatmap data (lifted, tonnage, activity, intensity level) for the last N days (default 84). |
 | `get_cardio` | The day's logged cardio efforts (runs/rides/etc.), each hydrated from the linked Garmin record so a synced effort carries its HR zones + pace. Strength is excluded (it's modeled as a session). Defaults to today; pass date YYYY-MM-DD. [] when there's no cardio that day. |
 | `get_chat_history` | Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the athlete has recently asked or been told. |
@@ -134,6 +136,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_weight` | List bodyweight history (chronological). |
 | `log_activity` | Log a cardio/other session. Pass free text (e.g. 'ran 50 min @5:30/km') and/or structured fields. |
 | `log_blood_pressure` | Record a point-in-time blood pressure reading. Use measured_at for the actual cuff/clinic time (YYYY-MM-DD or YYYY-MM-DDTHH:mm). The reading also appears in marker history as Systolic BP, Diastolic BP, and Pulse when present. |
+| `log_body_measurement` | Log an at-home body measuring session (circumferences, in inches). Any subset of sites — the athlete logs what they measured. Optional height_in updates the profile so BMI / body-fat can compute. Returns the logged row plus fresh plain-language indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate). Nothing auto-applies. |
 | `log_food_note` | Record a meal estimate (e.g. after looking at a plate photo): meal type, description, optional macros. |
 | `log_set` | Log one working set. Uses today's session automatically (creates it if needed). Weight in lb; use negative weight for assisted movements (e.g. -30 = 30lb assist). For timed exercises (plank, dead hang) pass duration_sec instead of weight/reps, with exercise_mode 'timed'. |
 | `log_weight` | Record a bodyweight measurement (lb). Also updates the profile's current weight to the latest entry. |

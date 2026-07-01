@@ -295,13 +295,26 @@ export function getPrimaryDiscipline(): "strength" | "endurance" | "hybrid" {
 
 export function setProfile(p: any) {
   const cur = getProfile() || {};
+  // Height in inches (v59) — mirrors the app's lb/in convention. Same nullable
+  // contract as the other optional fields: '' / null clears, undefined leaves
+  // intact, a value is clamped to a plausible human range. NaN → null.
+  const heightIn: number | null =
+    p.height_in !== undefined
+      ? (p.height_in == null || p.height_in === ""
+          ? null
+          : Math.round(Math.min(108, Math.max(24, Number(p.height_in))) * 10) / 10 || null)
+      : (cur.height_in ?? null);
   const merged = {
     // The athlete's name (optional). Same contract as the free-text fields: an
     // explicit '' clears it, undefined leaves the existing value intact, capped.
     name: p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
     sex: p.sex ?? cur.sex ?? "male",
     age: p.age ?? cur.age ?? null,
-    height_cm: p.height_cm ?? cur.height_cm ?? null,
+    // When only inches were ever provided, derive cm so the existing TDEE /
+    // doctor-report paths (which read height_cm) light up too. An explicit cm
+    // always wins.
+    height_cm: p.height_cm ?? cur.height_cm ?? (heightIn != null ? Math.round(heightIn * 2.54 * 10) / 10 : null),
+    height_in: heightIn,
     weight_lb: p.weight_lb ?? cur.weight_lb ?? null,
     goal_weight_lb: p.goal_weight_lb ?? cur.goal_weight_lb ?? null,
     goal_date: p.goal_date ?? cur.goal_date ?? null,
@@ -331,17 +344,17 @@ export function setProfile(p: any) {
       : (cur.endurance_goal_json ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, goal_weight_lb, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
-       sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, weight_lb=excluded.weight_lb,
+       sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, height_in=excluded.height_in, weight_lb=excluded.weight_lb,
        goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date, goal_mode=excluded.goal_mode,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
-  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
+  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
   return getProfile();
 }
 

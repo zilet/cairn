@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**211 routes** across 84 groups.
+**218 routes** across 85 groups.
 
 ## `/activities`
 
@@ -68,6 +68,18 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/blood-pressure` | A BP reading is point-in-time, not a profile field: home cuffs, MyChart vitals and clinic readings all land as dated observations that also project into the marker history as Systolic BP / Diastolic BP / Pulse. |
 | POST | `/api/blood-pressure` |  |
 | DELETE | `/api/blood-pressure/:id` |  |
+
+## `/body-metrics`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/body-metrics` | The measurements list + latest reading + derived indicators + per-site trends, in one composed payload the PWA renders directly. `?days=` bounds the window. |
+| POST | `/api/body-metrics` | Log a measuring session. Body carries any subset of the sites (inches), plus an optional note/source and — for convenience — height_in (routed to the profile so BMI / body-fat light up from the same call). Values are clamped in the repo. |
+| DELETE | `/api/body-metrics/:id` |  |
+| GET | `/api/body-metrics/:id` | Single-row read — 200 + null on absence (the PWA api() helper resolves to the body regardless of status, so a 404 error-object would read as a truthy hit). |
+| PUT | `/api/body-metrics/:id` |  |
+| POST | `/api/body-metrics/log` | Agentic capture parity with the chat `log_measurement` action, exposed on REST too: "waist 34, chest 42" style free-field body → one clean logged session. |
+| GET | `/api/body-metrics/trends` | Per-site least-squares trends (plain-language + sparkline points), null-safe. |
 
 ## `/bodyweight`
 

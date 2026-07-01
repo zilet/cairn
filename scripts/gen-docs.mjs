@@ -96,6 +96,7 @@ const routes = [
   ...parseApiRoutes(read("src/routes/system.ts"), { receiver: "systemRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/today.ts"), { receiver: "todayRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/training-log.ts"), { receiver: "trainingLogRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/body-metrics.ts"), { receiver: "bodyMetricsRouter", prefix: "" }),
 ];
 const groups = new Map();
 for (const r of routes) {
@@ -146,6 +147,7 @@ const mcpSources = [
   "src/surfaces/mcp/system.ts",
   "src/surfaces/mcp/training-log.ts",
   "src/surfaces/mcp/training-status.ts",
+  "src/surfaces/mcp/body-metrics.ts",
 ];
 const tools = mcpSources.flatMap((file) => parseMcpTools(read(file))).sort((a, b) => a.name.localeCompare(b.name));
 let mcp = `# Cairn MCP tool index

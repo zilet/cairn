@@ -1396,6 +1396,61 @@ export interface ClientDeleteResponse {
   error?: string;
 }
 
+export interface ClientBodyMeasurement {
+  id: number;
+  date: string;
+  waist_in: number | null;
+  hip_in: number | null;
+  chest_in: number | null;
+  shoulder_in: number | null;
+  neck_in: number | null;
+  thigh_in: number | null;
+  upper_arm_in: number | null;
+  calf_in: number | null;
+  forearm_in: number | null;
+  note: string | null;
+  source: string | null;
+  created_at?: string;
+}
+export interface ClientBodyIndicator {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: string;
+  zone: string | null;
+  tone: "ok" | "watch" | "warn" | "info";
+  read: string;
+  estimate?: boolean;
+  needs?: string[];
+}
+export interface ClientBodySiteTrend {
+  key: string;
+  label: string;
+  unit: string;
+  latest: number | null;
+  n: number;
+  points: number[];
+  slope_per_week: number | null;
+  change: number | null;
+  span_days: number | null;
+  direction: "up" | "down" | "steady" | null;
+  text: string;
+}
+export interface ClientBodyMetricTrends {
+  window_days: number | null;
+  sites: ClientBodySiteTrend[];
+  weight: ClientBodySiteTrend;
+}
+export interface ClientBodyMetricsSummary {
+  latest: ClientBodyMeasurement | null;
+  measurements: ClientBodyMeasurement[];
+  indicators: ClientBodyIndicator[];
+  trends: ClientBodyMetricTrends;
+  profile: { height_in: number | null; sex: string; weight_lb: number | null; goal_weight_lb: number | null };
+  needs_height: boolean;
+  sites: { key: string; label: string }[];
+}
+
 export interface ClientApiResponses {
   "/api/health": ClientHealthResponse;
   "/api/version": ClientVersionResponse;
@@ -1410,6 +1465,8 @@ export interface ClientApiResponses {
   "/api/profile": ClientProfile;
   "/api/goal": ClientGoalCheck;
   "/api/bodyweight": ClientWeightRow[];
+  "/api/body-metrics": ClientBodyMetricsSummary;
+  "/api/body-metrics/trends": ClientBodyMetricTrends;
   "/api/blood-pressure": ClientBloodPressureReading[];
   "/api/checkins": ClientCheckin[] | ClientCheckin | null;
   "/api/plan": ClientPlanDay[];

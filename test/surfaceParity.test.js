@@ -37,6 +37,7 @@ const MCP_SOURCE_FILES = [
   "src/surfaces/mcp/system.ts",
   "src/surfaces/mcp/training-log.ts",
   "src/surfaces/mcp/training-status.ts",
+  "src/surfaces/mcp/body-metrics.ts",
 ];
 
 // Normalize a path segment / noun to a comparable token: drop separators, lowercase,
@@ -83,6 +84,7 @@ function restResourceTokens() {
   addRouteTokens(tokens, read("src/routes/system.ts"), "systemRouter");
   addRouteTokens(tokens, read("src/routes/today.ts"), "todayRouter");
   addRouteTokens(tokens, read("src/routes/training-log.ts"), "trainingLogRouter");
+  addRouteTokens(tokens, read("src/routes/body-metrics.ts"), "bodyMetricsRouter");
   return tokens;
 }
 
@@ -125,6 +127,7 @@ function toolCandidates(tool) {
 const ALIAS = {
   weight: "bodyweight",     // log_weight / list_weight ↔ /bodyweight
   marknextstep: "next-step", // mark_next_step ↔ POST /next-step/done|snooze (verb 'mark' + a {done|snooze} action)
+  measurement: "body-metrics", // log_body_measurement / get_body_measurements ↔ /body-metrics
 };
 
 test("every MCP tool maps to a REST resource (MCP ⊆ REST — surfaces stay in sync)", () => {

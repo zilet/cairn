@@ -48,3 +48,4 @@ export * from "./repo/trajectory.js"; // one periodized arc to the goals, today 
 // context-effect: explicit re-export — its local isAcuteMarker would clash with propagation's `export *`
 export { activeContextEffect, markerInTransientWindow, type ActiveContextItem, type ContextEffect } from "./repo/context-effect.js";
 export * from "./repo/next-step.js"; // the one cross-domain next-best-step
+export * from "./repo/body-metrics.js"; // at-home body measurements + derived indicators (BMI/WHtR/WHR/Navy body-fat)

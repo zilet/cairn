@@ -513,6 +513,11 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)`);
     } catch { /* best-effort backfill; future archives stamp session_id directly */ }
   } },
+  // v59: height in inches on profile (mirrors the app's lb/in convention). The
+  // new body_measurements table itself is created via CREATE TABLE IF NOT EXISTS
+  // in db.ts (which runs on every boot), so per the "new tables need no
+  // migration" rule only this column add needs a versioned migration.
+  { version: 59, name: "profile-height-in", up: (db) => addColumn(db, "profile", "height_in REAL") },
 ];
 
 export function runMigrations(db: DatabaseSync) {

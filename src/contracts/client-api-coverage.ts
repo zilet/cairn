@@ -26,6 +26,8 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/profile",
   "/goal",
   "/bodyweight",
+  "/body-metrics",
+  "/body-metrics/trends",
   "/blood-pressure",
   "/checkins",
   "/plan",
