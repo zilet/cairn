@@ -520,6 +520,15 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "context_events", "expected_recovery_days INTEGER");
     addColumn(db, "context_events", "resolved_at TEXT");
   } },
+  // v56–v58 — WT-C (elite training): supersets, a persisted equipment profile.
+  { version: 56, name: "plan-item-superset-group", up: (db) => addColumn(db, "plan_items", "superset_group INTEGER") },
+  { version: 57, name: "profile-equipment", up: (db) => addColumn(db, "profile", "equipment TEXT") },
+  { version: 58, name: "exercise-tenure-first-seen", up: (db) => {
+    // Per-movement TENURE ("14 weeks on this movement") is derived from the first
+    // logged set for an exercise — no dedicated column needed. This migration only
+    // ensures the supporting index exists so the first-seen read stays cheap.
+    try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sets_exercise_session ON logged_sets(exercise_id, session_id)`); } catch { /* index may exist */ }
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

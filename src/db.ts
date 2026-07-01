@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS plan_items (
   target_distance_km REAL,               -- planned distance (cardio), e.g. 12
   target_duration_min REAL,              -- planned moving time in minutes (cardio)
   target_zone TEXT,                      -- HR/effort zone, free text, e.g. 'Z2' | 'tempo' | 'easy'
-  interval_json TEXT                     -- optional interval structure, JSON (e.g. [{reps:6,on:'400m',off:'90s'}])
+  interval_json TEXT,                    -- optional interval structure, JSON (e.g. [{reps:6,on:'400m',off:'90s'}])
+  superset_group INTEGER                 -- optional pairing/superset id: items on the same day sharing a value are done as a superset (v56). NULL = standalone
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

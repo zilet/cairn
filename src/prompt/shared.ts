@@ -836,10 +836,98 @@ export function renderDexaTargeting(ctx: PartialCoachContext, focus: "training" 
 // suggestion-framed words (no scores). Folded into the coach / session /
 // week-ahead prompts so core, grip, mobility and ankle work are treated as
 // first-class, cumulative elbow load is managed, and earned rest is protected.
+// The GENERIC elite-programming block — true for ANY athlete, no personal specifics.
+// buildEliteGuardrails(ctx) below layers this athlete's DERIVED specifics on top
+// (injuries, an endurance goal, flagged labs). Kept as a plain constant because the
+// Brief (day.ts) and health-review (health.ts) prompts embed it without a ctx —
+// they get the correct-for-everyone floor; only the coach prompts personalize it.
 export const ELITE_STRENGTH_GUARDRAILS = `ELITE PROGRAMMING GUARDRAILS (longevity-minded; a complete program, not just the big lifts — all suggestions, never gates, no scores):
 - CORE is first-class: program anti-extension / anti-rotation work (planks, pallof press, dead bugs) and LOADED CARRIES — they build trunk stability, posture and bone density. Don't leave them as an afterthought.
 - GRIP / FOREARM work is first-class too: dead hangs and loaded carries build grip and protect the elbow, and carry over to every pull. If none is programmed, work some in.
-- MOBILITY / ANKLE / calf / tibialis resilience matters here (ankle-fracture + surgery history, and a returning runner building toward a half marathon): a few minutes of ankle + hip prep and direct calf/tibialis work protect the joints under running and lifting. Mobility is tracked but never counts as working volume.
-- MANAGE CUMULATIVE GRIP + ELBOW LOAD as a SHARED BUDGET across RDLs, heavy pulls/rows, and dead hangs (the athlete has cubital-tunnel / elbow sensitivity). Don't stack a heavy pulling day, an RDL session and long hangs back-to-back; use straps on the heaviest pulls when grip is the limiter, and spread elbow-intensive work out.
-- BALANCE CHEST vs SHOULDERS: don't let lateral raises run ~2×/week while chest gets a single movement. Give horizontal pressing (the athlete prefers barbell bench) at least the volume the side delts get.
-- WEIGHT EARNED REST HARDER for this athlete: they tend to override rest and come back flat, and free-T sits low-side. When recovery is drifting or several loading days have stacked, lean toward a genuine rest/deload — frame it as the strong, earned choice, never as falling behind.`;
+- MOBILITY / ANKLE / calf / tibialis resilience matters: a few minutes of ankle + hip prep and direct calf/tibialis work protect the joints under running and lifting. Mobility is tracked but never counts as working volume.
+- MANAGE CUMULATIVE GRIP + ELBOW LOAD as a SHARED BUDGET across RDLs, heavy pulls/rows, and dead hangs. Don't stack a heavy pulling day, an RDL session and long hangs back-to-back; use straps on the heaviest pulls when grip is the limiter, and spread elbow-intensive work out.
+- BALANCE PUSHING vs PULLING and CHEST vs SHOULDERS: don't let lateral raises run ~2×/week while chest gets a single movement. Give horizontal pressing at least the volume the side delts get.
+- WEIGHT EARNED REST as a strong choice: when recovery is drifting or several loading days have stacked, lean toward a genuine rest/deload — frame it as the strong, earned choice, never as falling behind.`;
+
+// Derive THIS athlete's elite guardrails from context — injuries, endurance goal,
+// flagged labs, stated preferences — instead of hard-coding one person's specifics
+// into every committed prompt (which is simply wrong for any OTHER user). Layers the
+// GENERIC block above with the specifics that actually apply. An empty profile yields
+// exactly the generic block; seed data with an ankle history + a half-marathon goal +
+// low free-T surfaces those representative specifics. Constitution: suggestions, no
+// scores; health flags are informational, not medical advice.
+export function buildEliteGuardrails(ctx: any): string {
+  const extra: string[] = [];
+
+  // One lowercased haystack of the free-text context sources that name injuries,
+  // preferences, and flagged findings. Bounded + defensive — any missing key is "".
+  const injuries = injuryText(ctx);
+  const haystack = [
+    injuries,
+    stringifySafe(ctx?.about_me ?? ctx?.profile?.about_me),
+    stringifySafe(ctx?.memory),
+    stringifySafe(ctx?.directives),
+    stringifySafe(ctx?.health),
+    stringifySafe(ctx?.health_review),
+  ].join(" \n ").toLowerCase();
+
+  const has = (...needles: string[]) => needles.some((n) => haystack.includes(n));
+  const injuryHas = (...needles: string[]) => needles.some((n) => injuries.toLowerCase().includes(n));
+
+  // Endurance goal / returning-runner framing (drives the ankle+calf emphasis).
+  const goal = ctx?.endurance_goal ?? null;
+  const disc = String(ctx?.discipline?.primary ?? ctx?.profile?.primary_discipline ?? "").toLowerCase();
+  const enduranceSport = String(ctx?.discipline?.endurance_sport ?? ctx?.profile?.endurance_sport ?? "").toLowerCase();
+  const runningFocus = disc === "endurance" || disc === "hybrid" || /run|jog|marathon/.test(enduranceSport) || (goal && (goal.is_race || goal.event));
+  const raceEvent = goal && goal.event ? String(goal.event).slice(0, 60) : null;
+
+  // Lower-limb / running-joint history → an ankle/calf/tibialis resilience emphasis
+  // that names the actual reason (injury history and/or a running goal).
+  const lowerLimb = injuryHas("ankle", "foot", "achilles", "calf", "shin", "tibial", "plantar");
+  if (lowerLimb || runningFocus) {
+    const why = lowerLimb && runningFocus
+      ? "a lower-limb history and a return to running"
+      : lowerLimb ? "a lower-limb injury history" : "a return to running";
+    const race = raceEvent ? ` toward ${raceEvent}` : "";
+    extra.push(`- ANKLE + CALF/TIBIALIS RESILIENCE is a priority here given ${why}${race}: keep a few minutes of ankle + hip prep and direct calf/tibialis work in every relevant session — it protects the joints under running load.`);
+  }
+
+  // Elbow / cubital-tunnel / wrist sensitivity → tighten the grip+elbow shared-budget.
+  if (injuryHas("elbow", "cubital", "wrist", "forearm", "tendin") || has("cubital", "epicondyl")) {
+    extra.push(`- ELBOW SENSITIVITY on record: treat grip- and elbow-intensive work (RDLs, heavy rows/pulls, long dead hangs) as a shared budget — don't stack them back-to-back, use straps when grip is the limiter, and keep supinated/curl load conservative.`);
+  }
+
+  // Low testosterone / free-T flag → recovery emphasis on top of earned rest.
+  if (has("free t", "free-t", "testosterone", "low t ")) {
+    extra.push(`- RECOVERY MATTERS MORE HERE: testosterone reads on the low side, so protect sleep and earned rest even harder — when in doubt, take the deload; it's the strong choice, not falling behind.`);
+  }
+
+  // A named upper-body preference tailors the balance emphasis (e.g. prefers barbell bench).
+  if (has("barbell bench", "prefers bench", "bench press") && !extra.some((e) => e.includes("BENCH PREFERENCE"))) {
+    // Only when it reads as a genuine preference, not just any mention.
+    if (has("prefer") && has("bench")) {
+      extra.push(`- BENCH PREFERENCE noted: they favour barbell bench — anchor horizontal pressing there, but keep chest volume in balance with the side-delt work rather than letting laterals outpace pressing.`);
+    }
+  }
+
+  if (!extra.length) return ELITE_STRENGTH_GUARDRAILS;
+  return `${ELITE_STRENGTH_GUARDRAILS}\n\nSPECIFIC TO THIS ATHLETE (derived from their context — injuries, goal, labs; informational, not medical advice):\n${extra.join("\n")}`;
+}
+
+// Pull active injury free-text out of context_events (kind:'injury') for the derivation.
+function injuryText(ctx: any): string {
+  const events = Array.isArray(ctx?.context_events) ? ctx.context_events : [];
+  const parts: string[] = [];
+  for (const ev of events) {
+    if (ev?.kind !== "injury") continue;
+    const meta = ev?.meta && typeof ev.meta === "object" ? ev.meta : null;
+    for (const s of [ev?.title, ev?.detail, meta?.area]) if (s) parts.push(String(s));
+  }
+  return parts.join(" ");
+}
+
+function stringifySafe(v: any): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch { return ""; }
+}

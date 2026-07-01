@@ -126,6 +126,12 @@ export function startScheduler() {
     //     leaves it WAITING for review — pull, never push. Only when there's a plan to
     //     evolve; a fresh weekly draft retires the prior unreviewed auto one (no pile-up).
     const evolutionDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "program_evolution_last_slot");
+    // (e') Keep PERIODIZATION LIVE (miss-tolerant, on the coach slot): ensure ONE
+    //      active block exists for a training athlete, and advance an established
+    //      block a week on cadence so its phase actually moves accumulation →
+    //      intensification → deload/realization (the block model was cosmetic before —
+    //      nothing ever advanced the week). Deterministic, no agent.
+    const blockAdvanceDue = weeklySlotDue(now, s.coach_day, s.coach_hour, "block_advance_last_slot");
     // (e) Data-TRIGGERED plan evolution — the reactive half of "both". Checked at
     //     most once/day (cheap deterministic read); skipped on a tick where the
     //     weekly slot is already drafting (that path owns this evolution). The
@@ -133,9 +139,32 @@ export function startScheduler() {
     const triggerCheckDue =
       !evolutionDue && repo.getAppState("program_evolution_trigger_date") !== localToday(now);
 
-    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue && !triggerCheckDue) return;
+    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue && !blockAdvanceDue && !triggerCheckDue) return;
     proactiveBusy = true;
     try {
+      if (blockAdvanceDue) {
+        try {
+          const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+          if (hasPlan) {
+            // Auto-create a sensible block when none is running (idempotent — never
+            // resets one the athlete is mid-way through), then advance it a week —
+            // but NOT a block that was only just created this slot (give it its week).
+            const block = repo.ensureActiveBlock();
+            const startedStamp = String(block.started_at || "").slice(0, 10);
+            const ageDays = startedStamp ? daysBetweenStamps(startedStamp, localToday(now)) : 0;
+            if (ageDays >= 6) {
+              const advanced = repo.advanceBlockWeek();
+              console.log(advanced
+                ? `[proactive] advanced the training block to ${advanced.phase} (week ${advanced.week_index} of ${advanced.total_weeks}).`
+                : `[proactive] no block to advance (calm no-op).`);
+            } else {
+              console.log(`[proactive] ensured an active training block (${block.focus}, week ${block.week_index}).`);
+            }
+          }
+        } catch (e: any) {
+          console.error(`[proactive] block advance failed: ${e?.message ?? e}`);
+        }
+      }
       if (insightDue) {
         repo.setAppState("insight_last_date", localToday(now));
         try {

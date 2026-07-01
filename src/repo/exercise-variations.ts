@@ -1,5 +1,6 @@
 // exercise-variations.ts — deterministic, pure exercise variation/alternatives library.
 // No DB writes, no agent calls. All logic is keyword-based classification + curated data.
+import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
 
 export type Equipment =
   | "barbell"
@@ -23,7 +24,13 @@ export type MovementPattern =
   | "carry"
   | "curl"
   | "triceps"
-  | "lateral-raise";
+  | "lateral-raise"
+  // Previously-unclassifiable families — no swap candidates existed for these, so a
+  // face pull / shrug / rear-delt fly / tibialis raise / hip abduction had no variety.
+  | "rear-delt"
+  | "shrug"
+  | "tibialis"
+  | "abduction";
 
 export interface ExerciseVariation {
   name: string;
@@ -169,6 +176,34 @@ const EXERCISE_MAP: Record<MovementPattern, ExerciseEntry[]> = {
     { name: "Upright Row", equipment: "barbell" },
     { name: "DB Front Raise", equipment: "dumbbell" },
   ],
+  "rear-delt": [
+    { name: "Face Pull", equipment: "cable" },
+    { name: "Reverse Pec Deck", equipment: "machine" },
+    { name: "Rear Delt Fly", equipment: "dumbbell" },
+    { name: "Cable Rear Delt Fly", equipment: "cable" },
+    { name: "Band Pull-Apart", equipment: "bodyweight" },
+    { name: "Prone Rear Delt Raise", equipment: "dumbbell" },
+  ],
+  shrug: [
+    { name: "Barbell Shrug", equipment: "barbell" },
+    { name: "Dumbbell Shrug", equipment: "dumbbell" },
+    { name: "Trap Bar Shrug", equipment: "barbell" },
+    { name: "Cable Shrug", equipment: "cable" },
+    { name: "Machine Shrug", equipment: "machine" },
+  ],
+  tibialis: [
+    { name: "Tibialis Raise", equipment: "bodyweight" },
+    { name: "Weighted Tibialis Raise", equipment: "machine" },
+    { name: "Banded Dorsiflexion", equipment: "bodyweight" },
+    { name: "DB Tibialis Raise", equipment: "dumbbell" },
+  ],
+  abduction: [
+    { name: "Hip Abduction Machine", equipment: "machine" },
+    { name: "Cable Hip Abduction", equipment: "cable" },
+    { name: "Banded Lateral Walk", equipment: "bodyweight" },
+    { name: "Side-Lying Leg Raise", equipment: "bodyweight" },
+    { name: "Seated Band Abduction", equipment: "bodyweight" },
+  ],
 };
 
 // ─── Classification rules ────────────────────────────────────────────────────
@@ -177,6 +212,13 @@ const EXERCISE_MAP: Record<MovementPattern, ExerciseEntry[]> = {
 // Keywords are tested case-insensitively against the full exercise name.
 const PATTERN_RULES: Array<[MovementPattern, RegExp[]]> = [
   // More specific patterns first to avoid false matches
+  // Previously-unmapped families — matched FIRST so a "face pull" / "shrug" /
+  // "tibialis raise" / "hip abduction" resolves to its own family (they used to
+  // fall through to null → no swap candidates).
+  ["rear-delt", [/face pull/i, /rear delt/i, /reverse (pec|fly|flye|delt)/i, /rear (fly|flye)/i, /band pull.?apart/i, /prone (y|t)\b/i]],
+  ["shrug", [/\bshrug/i]],
+  ["tibialis", [/tibialis/i, /\btib raise/i, /dorsiflex/i]],
+  ["abduction", [/abduction/i, /abductor/i, /hip abduct/i, /lateral (band )?walk/i, /side.?lying leg raise/i]],
   ["hip-extension", [/hip thrust/i, /glute bridge/i, /cable kickback/i, /donkey kick/i, /nordic curl/i]],
   ["lunge", [/\blunge\b/i, /bulgarian split squat/i, /split squat/i, /step.?up/i, /lateral lunge/i]],
   ["calf", [/calf raise/i, /donkey calf/i, /calf/i]],
@@ -201,6 +243,8 @@ const PATTERN_RULES: Array<[MovementPattern, RegExp[]]> = [
 const MUSCLE_GROUP_HINTS: Record<string, MovementPattern> = {
   chest: "horizontal-push",
   shoulders: "vertical-push",
+  "rear delts": "rear-delt",
+  "rear delt": "rear-delt",
   back: "horizontal-pull",
   lats: "vertical-pull",
   glutes: "hip-extension",
@@ -211,6 +255,41 @@ const MUSCLE_GROUP_HINTS: Record<string, MovementPattern> = {
   triceps: "triceps",
   core: "core",
   abs: "core",
+};
+
+// ─── equipment / preference ranking ──────────────────────────────────────────
+
+// Free-text equipment/preference profile → the concrete Equipment types available.
+// "full gym" / "commercial" / "everything" → all. Otherwise pick out the tokens that
+// are named. Empty / unrecognized → [] (no constraint — rank neutrally). Pure.
+const ALL_EQUIPMENT: Equipment[] = ["barbell", "dumbbell", "machine", "cable", "kettlebell", "bodyweight"];
+const EQUIPMENT_TOKENS: Array<[Equipment, RegExp]> = [
+  // NB: not a bare "bar" — that's in "pull-up bar" (a bodyweight station), not a barbell.
+  ["barbell", /\bbarbell\b|\bbb\b/i],
+  ["dumbbell", /\bdumbbell|\bdb\b|\bdumbell/i],
+  ["machine", /\bmachine|\bsmith\b|\bhack\b|\bleg press\b|\bcable machine/i],
+  ["cable", /\bcable|\bpulley/i],
+  ["kettlebell", /\bkettlebell|\bkb\b/i],
+  ["bodyweight", /\bbodyweight|\bbw\b|\bcalisthenic|\bpull.?up bar|\bdip station/i],
+];
+export function parseEquipment(text?: string | null): Equipment[] {
+  const s = String(text ?? "").trim();
+  if (!s) return [];
+  if (/\b(full gym|commercial gym|everything|fully equipped|globo|big gym)\b/i.test(s)) return [...ALL_EQUIPMENT];
+  const out = new Set<Equipment>();
+  for (const [eq, re] of EQUIPMENT_TOKENS) if (re.test(s)) out.add(eq);
+  return [...out];
+}
+
+// Loading rank for "bias toward heavier COMPOUND progression" — barbell/machine
+// carry the most progressive load, bodyweight the least. Lower = heavier/compound.
+const EQUIPMENT_LOAD_RANK: Record<Equipment, number> = {
+  barbell: 0,
+  machine: 1,
+  cable: 2,
+  dumbbell: 3,
+  kettlebell: 4,
+  bodyweight: 5,
 };
 
 // ─── Why-string generators ───────────────────────────────────────────────────
@@ -317,6 +396,11 @@ export function suggestAlternatives(
     bodyweightOnly?: boolean;
     injuryAreas?: string[];
     limit?: number;
+    // Ranking (opt-in — omit for the legacy curated order). When provided the passing
+    // candidates are RANKED, then sliced to `limit`, rather than taken in map order.
+    availableEquipment?: Equipment[];  // rank movements the athlete can actually load first
+    preferCompound?: boolean;          // bias toward heavier compound loading (barbell/machine first)
+    excludeNames?: string[];           // movements already in the plan — don't re-suggest them
   },
 ): ExerciseVariation[] {
   const limit = opts?.limit ?? 5;
@@ -327,11 +411,17 @@ export function suggestAlternatives(
   const entries = EXERCISE_MAP[pattern];
   const avoid = new Set<Equipment>(opts?.avoidEquipment ?? []);
   const injuryAreas = opts?.injuryAreas ?? [];
+  const exclude = new Set<string>((opts?.excludeNames ?? []).map((n) => String(n).trim().toLowerCase()));
+  const available = opts?.availableEquipment && opts.availableEquipment.length ? new Set<Equipment>(opts.availableEquipment) : null;
+  const ranking = !!available || !!opts?.preferCompound || exclude.size > 0;
 
   const results: ExerciseVariation[] = [];
   for (const entry of entries) {
     // Exclude the exercise itself
     if (entry.name.toLowerCase() === normalised) continue;
+
+    // Exclude movements already programmed (variety = something NEW), when provided.
+    if (exclude.has(entry.name.toLowerCase())) continue;
 
     // bodyweightOnly filter
     if (opts?.bodyweightOnly && entry.equipment !== "bodyweight") continue;
@@ -362,7 +452,25 @@ export function suggestAlternatives(
       equipment: entry.equipment,
       why: buildAlternativeWhy(exerciseName.trim(), entry, pattern),
     });
-    if (results.length >= limit) break;
+    // Without ranking, keep the cheap early break (legacy behavior). With ranking we
+    // must collect all candidates first, then sort, then slice.
+    if (!ranking && results.length >= limit) break;
+  }
+
+  if (ranking) {
+    results.sort((a, b) => {
+      // Available equipment first (0 = available / no constraint, 1 = unavailable).
+      const aAvail = available ? (available.has(a.equipment) ? 0 : 1) : 0;
+      const bAvail = available ? (available.has(b.equipment) ? 0 : 1) : 0;
+      if (aAvail !== bAvail) return aAvail - bAvail;
+      // Then bias toward heavier compound loading when asked.
+      if (opts?.preferCompound) {
+        const d = EQUIPMENT_LOAD_RANK[a.equipment] - EQUIPMENT_LOAD_RANK[b.equipment];
+        if (d !== 0) return d;
+      }
+      return 0; // otherwise stable (preserve curated order)
+    });
+    return results.slice(0, limit);
   }
   return results;
 }
@@ -374,16 +482,16 @@ export function suggestAlternatives(
 // taxonomy in exercise-canon.ts. Pure + deterministic — no DB, no agent.
 const GROUP_PATTERNS: Record<string, MovementPattern[]> = {
   chest: ["horizontal-push"],
-  shoulders: ["vertical-push", "lateral-raise"],
-  "rear delts": ["lateral-raise", "horizontal-pull"],
+  shoulders: ["vertical-push", "lateral-raise", "shrug"],
+  "rear delts": ["rear-delt", "lateral-raise", "horizontal-pull"],
   triceps: ["triceps"],
-  back: ["horizontal-pull", "vertical-pull"],
+  back: ["horizontal-pull", "vertical-pull", "shrug"],
   biceps: ["curl"],
   forearms: ["carry"],
   quads: ["squat", "lunge"],
   hamstrings: ["hinge"],
-  glutes: ["hip-extension"],
-  calves: ["calf"],
+  glutes: ["hip-extension", "abduction"],
+  calves: ["calf", "tibialis"],
   core: ["core", "carry"],
 };
 
@@ -405,4 +513,103 @@ export function examplesForGroup(group: string, n = 3): string[] {
     }
   }
   return out.slice(0, n);
+}
+
+// ─── honest volume model (ONE truth) ──────────────────────────────────────────
+// The three volume readers (programBalance, muscleVolume, getVolumeByMuscle) used to
+// disagree — some counted warmups as working sets, weighted an RIR-5 set the same as
+// a grinder, gave zero indirect credit, and bypassed the canon taxonomy. This shared,
+// pure aggregator is the ONE effective-volume truth they all fold onto:
+//   - WARMUPS excluded (a ramp-up set well below the day's top working weight),
+//   - proximity-to-failure WEIGHTING (a set left far from failure counts less),
+//   - INDIRECT credit (a movement's secondary muscles earn ~0.5 a set),
+//   - CANON taxonomy (stored group, else classify by name; mobility never counts).
+
+// Effort weight by reps-in-reserve: ≤3 RIR is a real working set; a set left far from
+// failure (RIR 5+) counts less. Null RIR (not logged) is trusted as a full set.
+export function setEffortWeight(rir: number | null | undefined): number {
+  const r = Number(rir);
+  if (rir == null || !Number.isFinite(r)) return 1;
+  if (r <= 3) return 1;
+  if (r < 5) return 0.75;
+  return 0.5;
+}
+
+// Movement pattern → the secondary muscle groups it trains indirectly (a press hits
+// triceps, a row hits biceps, a squat hits glutes). Isolation/neutral patterns carry
+// no meaningful indirect load.
+const INDIRECT_BY_PATTERN: Partial<Record<MovementPattern, MuscleGroup[]>> = {
+  squat: ["glutes"],
+  hinge: ["glutes"],
+  lunge: ["glutes"],
+  "hip-extension": ["hamstrings"],
+  "horizontal-push": ["triceps", "shoulders"],
+  "vertical-push": ["triceps"],
+  "horizontal-pull": ["biceps", "rear delts"],
+  "vertical-pull": ["biceps"],
+};
+
+export function indirectGroupsForExercise(name: string, muscleGroup?: string | null): MuscleGroup[] {
+  const p = classifyPattern(name, muscleGroup ?? undefined);
+  return p && INDIRECT_BY_PATTERN[p] ? INDIRECT_BY_PATTERN[p]! : [];
+}
+
+const INDIRECT_CREDIT = 0.5;   // a secondary muscle earns half a working set
+const WARMUP_FRAC = 0.55;      // a set under 55% of the day's top load is a ramp-up warmup
+
+export interface VolumeSet {
+  date: string;
+  exercise: string;
+  muscle_group: string | null;
+  weight: number | null;
+  reps?: number | null;
+  rir?: number | null;
+}
+
+export interface GroupVolume {
+  sets: number;         // effective working sets (warmups excluded, RIR-weighted, incl. indirect)
+  tonnage: number;      // weight×reps over DIRECT working sets only (never indirect)
+  last_date: string | null;
+}
+
+// Fold logged sets into effective working-set volume per canonical group. Pure.
+export function effectiveVolumeByGroup(sets: VolumeSet[]): Map<MuscleGroup, GroupVolume> {
+  // The day's TOP working weight per (exercise, date), to spot ramp-up warmups.
+  const topByExDate = new Map<string, number>();
+  for (const s of sets) {
+    const w = s.weight != null ? Math.abs(Number(s.weight)) : 0;
+    if (!(w > 0)) continue;
+    const k = `${String(s.exercise).toLowerCase()}|${s.date}`;
+    if (w > (topByExDate.get(k) ?? 0)) topByExDate.set(k, w);
+  }
+
+  const out = new Map<MuscleGroup, GroupVolume>();
+  const bump = (g: MuscleGroup, credit: number, date: string, tonnage: number) => {
+    const cur = out.get(g) ?? { sets: 0, tonnage: 0, last_date: null };
+    cur.sets += credit;
+    cur.tonnage += tonnage;
+    if (!cur.last_date || date > cur.last_date) cur.last_date = date;
+    out.set(g, cur);
+  };
+
+  for (const s of sets) {
+    const primary = canonicalGroup(s.muscle_group) ?? classifyMuscleGroup(s.exercise);
+    if (!primary || isMobility(primary)) continue;
+    // Warmup exclusion: a loaded set well below the day's top load for that lift.
+    const w = s.weight != null ? Math.abs(Number(s.weight)) : 0;
+    if (w > 0) {
+      const top = topByExDate.get(`${String(s.exercise).toLowerCase()}|${s.date}`) ?? 0;
+      if (top > 0 && w < top * WARMUP_FRAC) continue; // ramp-up warmup — not working volume
+    }
+    const effort = setEffortWeight(s.rir);
+    const tonnage = s.weight != null && s.reps != null && Number(s.weight) > 0 && Number(s.reps) > 0
+      ? Number(s.weight) * Number(s.reps)
+      : 0;
+    bump(primary, effort, s.date, tonnage);
+    for (const g of indirectGroupsForExercise(s.exercise, s.muscle_group)) {
+      if (g === primary || isMobility(g)) continue;
+      bump(g, INDIRECT_CREDIT * effort, s.date, 0); // indirect earns half a set, no tonnage
+    }
+  }
+  return out;
 }

@@ -110,17 +110,21 @@ function hydrateBlock(row: any): ProgramBlock | null {
  * Determine the phase for a given week within a block.
  *
  * Deterministic schedule (always a suggestion, never a gate):
- *  - Last week of a multi-week block → deload (earned recovery)
+ *  - Last week of a PEAK block → realization (peak / express the block's work — a
+ *    natural test week; this is the ONLY path that yields 'realization')
+ *  - Last week of any other multi-week block → deload (earned recovery)
  *  - First half-ish → accumulation (build volume)
  *  - Second half-ish → intensification (push intensity)
  *  - Single-week blocks → accumulation
  *
- * This ONLY drives the auto-complete path in advanceBlockWeek. A user-created
- * block can have any phase they set, overriding this default.
+ * This drives the auto-complete path in advanceBlockWeek AND the default phase of a
+ * freshly-created block. A user-created block can still set any phase, overriding it.
  */
-function derivePhase(weekIndex: number, totalWeeks: number): Phase {
+function derivePhase(weekIndex: number, totalWeeks: number, focus?: Focus): Phase {
   if (totalWeeks <= 1) return "accumulation";
-  if (weekIndex >= totalWeeks) return "deload";
+  // A peaking block's last week is REALIZATION (test/express what the block built),
+  // not a deload — this is what makes testWeekDue's realization branch reachable.
+  if (weekIndex >= totalWeeks) return focus === "peak" ? "realization" : "deload";
   if (weekIndex > Math.ceil(totalWeeks / 2)) return "intensification";
   return "accumulation";
 }
@@ -141,7 +145,7 @@ export function createBlock(input: CreateBlockInput = {}): ProgramBlock {
   const focus = clampEnum(input.focus, VALID_FOCUS, "strength");
   const total_weeks = clampTotalWeeks(input.total_weeks);
   const week_index = clampWeekIndex(input.week_index, total_weeks);
-  const phase = clampEnum(input.phase, VALID_PHASE, derivePhase(week_index, total_weeks));
+  const phase = clampEnum(input.phase, VALID_PHASE, derivePhase(week_index, total_weeks, focus));
   const started_at = typeof input.started_at === "string" && input.started_at
     ? input.started_at
     : new Date().toISOString();
@@ -301,7 +305,7 @@ export function advanceBlockWeek(id?: number): ProgramBlock | null {
   if (block.status !== "active") return block; // nothing to advance
 
   const next_week = block.week_index + 1;
-  const auto_phase = derivePhase(next_week, block.total_weeks);
+  const auto_phase = derivePhase(next_week, block.total_weeks, block.focus);
   const is_complete = next_week > block.total_weeks;
 
   db.prepare(`

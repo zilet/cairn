@@ -6,11 +6,14 @@ import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
+  buildProgressionProposal,
   buildRunPlanProposal,
+  buildSwapProposal,
   completeBlock,
   createBlock,
-  createProposal,
+  ensureActiveBlock,
   getActiveBlock,
+  getEquipmentProfile,
   getPlan,
   getProgramState,
   listBlocks,
@@ -21,8 +24,8 @@ import {
   programAdjustments,
   programBalance,
   runZones,
+  setEquipmentProfile,
   setProposalStatus,
-  supersedeAutoProgressionDrafts,
   testWeekDue,
   updateBlock,
   weeklyRunPlan,
@@ -64,11 +67,24 @@ programRouter.post("/program/evolve", async (req, res) => {
   }
 });
 
+// The persisted equipment/preference profile (free text) that RANKS variation
+// suggestions by what the athlete can actually load. GET reads it (+ the parsed
+// equipment types); PUT replaces it (null/'' clears). A plain profile field.
+programRouter.get("/program/equipment", (_req, res) => res.json(getEquipmentProfile()));
+programRouter.put("/program/equipment", (req, res) => {
+  const eq = (req.body ?? {}).equipment;
+  res.json(setEquipmentProfile(eq === undefined ? null : eq));
+});
+
 // Periodization blocks (the mesocycle model the coach periodizes toward).
 programRouter.get("/program/blocks", (req, res) =>
   res.json(listBlocks(req.query.limit ? Number(req.query.limit) : 20))
 );
 programRouter.get("/program/blocks/active", (_req, res) => res.json(getActiveBlock()));
+// Ensure ONE active periodization block exists (auto-create a sensible default aligned
+// to the athlete's goal when none is running; idempotent — never resets an in-progress
+// block). Keeps periodization live without waiting for the scheduler's weekly slot.
+programRouter.post("/program/blocks/ensure", (_req, res) => res.json(ensureActiveBlock()));
 programRouter.post("/program/blocks", (req, res) => res.json(createBlock(req.body ?? {})));
 programRouter.put("/program/blocks/:id", (req, res) => {
   const b = updateBlock(Number(req.params.id), req.body ?? {});
@@ -133,43 +149,18 @@ programRouter.get("/program/adjustments", (_req, res) => res.json(programAdjustm
 // applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the
 // designed-failure signal — nothing wrong at the HTTP level, just nothing to do).
 programRouter.post("/program/progression/apply", (req, res) => {
-  const day = Number((req.body ?? {}).day);
-  if (!Number.isFinite(day)) return res.json({ ok: false, error: "day required" });
-  const prescriptions = planDayProgression(day);
-  // Only lifts whose target actually MOVES (overload/deload/vary) become a change —
-  // a "hold" is by definition no change, so it would apply as a confusing no-op and
-  // inflate the count. Each change carries the full apply payload: day_number (so
-  // applyPlanChange can locate the lift — its absence was the "No plan day NaN" /
-  // "Couldn't apply" bug), the sets/reps for context, and a plain-words `reason`.
-  const changes = prescriptions
-    .filter((p) => p.action !== "hold")
-    .map((p) => {
-      const c: Record<string, any> = {
-        day_number: day,
-        exercise: p.exercise,
-        sets: p.suggested?.sets ?? null,
-        rep_low: p.suggested?.rep_low ?? null,
-        rep_high: p.suggested?.rep_high ?? null,
-        reason: p.why || p.delta_text || null,
-      };
-      if (p.mode === "timed") {
-        if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
-      } else {
-        if (p.suggested.weight !== undefined) c.target_weight = p.suggested.weight;
-      }
-      return c;
-    })
-    .filter((c) => c.target_weight !== undefined || c.target_seconds !== undefined);
-  if (!changes.length) return res.json({ ok: false, error: "nothing to propose for this day" });
-  const parsed = {
-    summary: `Auto-progression for day ${day} — ${changes.length} lift${changes.length === 1 ? "" : "s"}`,
-    changes,
-  };
-  // Retire any prior un-applied auto-progression draft for THIS day so repeated taps
-  // never stack duplicates in the Coach list (the fresh draft reflects the latest logs).
-  supersedeAutoProgressionDrafts(day);
-  const proposal = createProposal("auto-progression", `day ${day} progression`, "", parsed);
-  res.json({ ok: true, proposal });
+  // ONE shared builder (buildProgressionProposal) with MCP so the two never drift. A
+  // "hold" (incl. an autoregulation-braked hold) is dropped; a "vary" becomes a real
+  // {swap:{from,to}} change instead of the old no-op same-exercise write.
+  res.json(buildProgressionProposal(Number((req.body ?? {}).day)));
+});
+
+// Draft a single-exercise SWAP (rotate `from` out for `to` on a day) as a DRAFT
+// proposal via the propose→apply path — behind Today's "rotate one in" chips. Never
+// auto-applied. Returns the designed { ok:false, error } at 200 on bad input.
+programRouter.post("/program/swap", (req, res) => {
+  const { day, from, to } = req.body ?? {};
+  res.json(buildSwapProposal(Number(day), from, to));
 });
 
 programRouter.get("/proposals", (req, res) =>
