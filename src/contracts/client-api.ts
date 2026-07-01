@@ -673,6 +673,132 @@ export interface ClientEnduranceGoal {
   phase?: "base" | "build" | "sharpen" | "taper" | "past" | null;
 }
 
+export type ClientProgramLiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
+export type ClientProgramLiftAction = "overload" | "hold" | "deload" | "vary" | "technique" | "introduce" | null;
+export type ClientProgramMesoPhase = "accumulation" | "intensification" | "deload-due" | "deload" | null;
+
+export interface ClientProgramLiftState {
+  exercise: string;
+  muscle_group: string | null;
+  mode: "reps" | "timed";
+  sessions: number;
+  est_1rm: number | null;
+  best_seconds: number | null;
+  trend_per_wk: number | null;
+  status: ClientProgramLiftStatus;
+  stall_signals: string[];
+  weeks_static: number | null;
+  suggested_action: ClientProgramLiftAction;
+  why: string;
+}
+
+export interface ClientProgramVolumeState {
+  muscle_group: string;
+  weekly_sets: number;
+  band: "low" | "productive" | "high";
+  trend: "rising" | "falling" | "stable" | null;
+}
+
+export interface ClientProgramMesocycleState {
+  weeks_since_deload: number | null;
+  phase: ClientProgramMesoPhase;
+  acute_chronic_ratio: number | null;
+  note: string;
+}
+
+export interface ClientProgramEnduranceState {
+  last_week_km: number | null;
+  acute_chronic_ratio: number | null;
+  longest_km_4wk: number | null;
+  has_quality: boolean;
+  pace_trend: "improving" | "declining" | "stable" | null;
+  status: "building" | "maintaining" | "detraining" | "spiking" | null;
+  suggested_action: "build" | "hold" | "add-quality" | "ease" | null;
+  why: string;
+}
+
+export interface ClientProgramState {
+  generated_for: ISODateString | string;
+  discipline: string;
+  lifts: ClientProgramLiftState[];
+  volume: ClientProgramVolumeState[];
+  mesocycle: ClientProgramMesocycleState;
+  endurance: ClientProgramEnduranceState | null;
+  headline: string;
+  adaptations_due: string[];
+}
+
+export type ClientPerformanceSex = "male" | "female";
+export type ClientPerformanceTone = "strong" | "steady" | "watch" | "missing";
+export type ClientStrengthLevel = "beginner" | "novice" | "intermediate" | "advanced" | "elite";
+
+export interface ClientPerformanceCapacity {
+  key: string;
+  label: string;
+  exercise: string;
+  est_1rm: number;
+  ratio: number;
+  percentile: number;
+  reference_percentile: number;
+  level: ClientStrengthLevel;
+  tone: ClientPerformanceTone;
+  equivalent_age: number;
+  age_band: string;
+  to_next: { level: ClientStrengthLevel; lb: number } | null;
+}
+
+export interface ClientPerformanceImbalance {
+  title: string;
+  why: string;
+  severity: "note" | "watch";
+}
+
+export interface ClientPerformanceTestDue {
+  exercise: string;
+  kind: "strength" | "core" | "grip" | "benchmark" | "endurance" | "test";
+  why: string;
+}
+
+export interface ClientPerformanceLever {
+  headline: string;
+  why: string;
+  target?: string;
+}
+
+export interface ClientPerformanceMomentumChip {
+  kind: string;
+  text: string;
+  dir: "good" | "neutral";
+}
+
+export interface ClientPerformanceEndurance {
+  vo2max: number | null;
+  percentile: number | null;
+  reference_percentile: number | null;
+  equivalent_age: number | null;
+  age_band: string | null;
+  tone: ClientPerformanceTone;
+  trend: string | null;
+  headline: string;
+}
+
+export interface ClientPerformanceStanding {
+  generated_for: ISODateString | string;
+  discipline: string;
+  sex: ClientPerformanceSex;
+  age: number | null;
+  bodyweight_lb: number | null;
+  hero: { headline: string; sub: string };
+  capacities: ClientPerformanceCapacity[];
+  endurance: ClientPerformanceEndurance | null;
+  imbalances: ClientPerformanceImbalance[];
+  lever: ClientPerformanceLever | null;
+  tests_due: ClientPerformanceTestDue[];
+  variety: { note: string; suggestions: string[] } | null;
+  momentum: { chips: ClientPerformanceMomentumChip[] };
+  balance_note: string;
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -1133,8 +1259,8 @@ export interface ClientApiResponses {
   "/api/program/adjustments": ClientProgramAdjustment[];
   "/api/program/blocks": ClientProgramBlock[] | ClientProgramBlock;
   "/api/program/blocks/active": ClientProgramBlock | null;
-  "/api/program-state": ClientJsonObject;
-  "/api/performance": ClientJsonObject;
+  "/api/program-state": ClientProgramState;
+  "/api/performance": ClientPerformanceStanding;
   "/api/run-plan": ClientWeeklyRunPlan;
   "/api/run-zones": ClientRunZones;
   "/api/muscle-trajectory": ClientMuscleGroupTrajectory;

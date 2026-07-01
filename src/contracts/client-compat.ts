@@ -9,7 +9,9 @@ import type { getDayIntake } from "../repo/nutrition.js";
 import type { NextStep } from "../repo/next-step.js";
 import type { DexaTargeting } from "../repo/dexa-targeting.js";
 import type { MuscleGroupTrajectory, TestWeekDue } from "../repo/muscle-trajectory.js";
+import type { PerformanceStanding } from "../repo/performance.js";
 import type { ProgramBlock } from "../repo/program-blocks.js";
+import type { ProgramState } from "../repo/program-state.js";
 import type { getEnduranceGoal } from "../repo/profile.js";
 import type { planDayProgression, ProgramAdjustment, ProgramBalance } from "../repo/progression.js";
 import type { RunZones, WeeklyRunPlan } from "../repo/run-progression.js";
@@ -55,9 +57,11 @@ import type {
   ClientMemory,
   ClientMuscleGroupTrajectory,
   ClientOutcomeLearningsResponse,
+  ClientPerformanceStanding,
   ClientProgramAdjustment,
   ClientProgramBalance,
   ClientProgramBlock,
+  ClientProgramState,
   ClientRecentTrainingFeedRow,
   ClientRunCompliance,
   ClientRunZones,
@@ -81,6 +85,8 @@ export type ProgramProgressionMatchesClientContract = AssertAssignable<
 >;
 export type ProgramBalanceMatchesClientContract = AssertAssignable<ProgramBalance, ClientProgramBalance>;
 export type ProgramAdjustmentsMatchClientContract = AssertAssignable<ProgramAdjustment[], ClientProgramAdjustment[]>;
+export type ProgramStateMatchesClientContract = AssertAssignable<ProgramState, ClientProgramState>;
+export type PerformanceStandingMatchesClientContract = AssertAssignable<PerformanceStanding, ClientPerformanceStanding>;
 export type ProgramBlockMatchesClientContract = AssertAssignable<ProgramBlock, ClientProgramBlock>;
 export type GuidelineEntryMatchesClientContract = AssertAssignable<GuidelineEntry, ClientGuidelineEntry>;
 export type InjuryImpactsMatchClientContract = AssertAssignable<ReturnType<typeof getInjuryImpacts>, ClientInjuryImpactsResponse>;

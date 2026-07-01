@@ -1,36 +1,18 @@
 // @ts-check
 // Progress Program summary renderers: lift rows, volume rows, mesocycle, and adaptations.
 
-type ProgramLift = {
-  exercise?: unknown;
-  status?: unknown;
-  weeks_static?: unknown;
-  trend_per_wk?: unknown;
-  mode?: unknown;
-  best_seconds?: unknown;
-  est_1rm?: unknown;
-  why?: unknown;
-};
+type ProgramStateRead = import("../contracts/client-api.js").ClientProgramState;
+type ProgramLift = ProgramStateRead["lifts"][number];
+type ProgramVolumeRow = ProgramStateRead["volume"][number];
+type ProgramMesocycle = ProgramStateRead["mesocycle"];
 
-type ProgramVolumeRow = {
-  muscle_group?: unknown;
-  weekly_sets?: unknown;
-  band?: unknown;
-  trend?: unknown;
-};
-
-type ProgramMesocycle = {
-  phase?: unknown;
-  weeks_since_deload?: unknown;
-  note?: unknown;
-};
-
-function asProgramLift(lift: unknown): ProgramLift {
-  return (lift ?? {}) as ProgramLift;
+function asProgramLift(lift: ProgramLift | null | undefined): ProgramLift | null {
+  return lift ?? null;
 }
 
-function liftStatusWord(lift: unknown): string {
+function liftStatusWord(lift: ProgramLift | null | undefined): string {
   const row = asProgramLift(lift);
+  if (!row) return "";
   const status = row.status;
   const weeksStatic = row.weeks_static;
   if (status === "progressing") return "climbing";
@@ -45,8 +27,9 @@ function liftStatusWord(lift: unknown): string {
   return "";
 }
 
-function liftTrendFig(lift: unknown): string {
+function liftTrendFig(lift: ProgramLift | null | undefined): string {
   const row = asProgramLift(lift);
+  if (!row) return "";
   const raw = row.trend_per_wk;
   if (raw == null) return "";
   const trend = Number(raw);
@@ -59,14 +42,15 @@ function liftTrendFig(lift: unknown): string {
   return pounds === 0 ? "" : `${trend > 0 ? "+" : "−"}${pounds} lb/wk`;
 }
 
-function liftBestFig(lift: unknown): string {
+function liftBestFig(lift: ProgramLift | null | undefined): string {
   const row = asProgramLift(lift);
+  if (!row) return "";
   if (row.mode === "timed" && row.best_seconds != null) return fmtDur(row.best_seconds);
   if (row.est_1rm != null) return `${Math.round(Number(row.est_1rm))} lb`;
   return "";
 }
 
-function sortLifts(lifts: unknown): ProgramLift[] {
+function sortLifts(lifts: ProgramLift[] | null | undefined): ProgramLift[] {
   const rank = (lift: ProgramLift) => {
     if (lift.status === "plateaued" || lift.status === "regressing") return 0;
     if (lift.status === "progressing") return 1;
@@ -96,8 +80,9 @@ function phaseWord(phase: unknown): string {
   return "";
 }
 
-function liftRowHtml(lift: unknown, index: number): string {
+function liftRowHtml(lift: ProgramLift | null | undefined, index: number): string {
   const row = asProgramLift(lift);
+  if (!row) return "";
   const statusWord = liftStatusWord(row);
   const trendFig = liftTrendFig(row);
   const bestFig = liftBestFig(row);
@@ -115,10 +100,10 @@ function liftRowHtml(lift: unknown, index: number): string {
   </div>`;
 }
 
-function volumeBlockHtml(volume: unknown, startIdx: number): string {
+function volumeBlockHtml(volume: ProgramVolumeRow[] | null | undefined, startIdx: number): string {
   if (!Array.isArray(volume) || !volume.length) return "";
   const rows = volume.map((value, index) => {
-    const row = (value ?? {}) as ProgramVolumeRow;
+    const row = value;
     const bandWord = volBandWord(row.band);
     const glyph = volTrendGlyph(row.trend);
     const bandCls = row.band === "high" ? " pvol-high" : row.band === "low" ? " pvol-low" : " pvol-ok";
@@ -130,9 +115,9 @@ function volumeBlockHtml(volume: unknown, startIdx: number): string {
   return `<div class="pvol-card">${rows}</div>`;
 }
 
-function mesoBlockHtml(meso: unknown, index: number): string {
+function mesoBlockHtml(meso: ProgramMesocycle | null | undefined, index: number): string {
   if (!meso) return "";
-  const row = meso as ProgramMesocycle;
+  const row = meso;
   const phase = phaseWord(row.phase);
   const bits: string[] = [];
   if (phase) bits.push(phase);
@@ -143,7 +128,7 @@ function mesoBlockHtml(meso: unknown, index: number): string {
   </div>`;
 }
 
-function adaptationsHtml(adaptations: unknown, index: number): string {
+function adaptationsHtml(adaptations: string[] | null | undefined, index: number): string {
   if (!Array.isArray(adaptations) || !adaptations.length) return "";
   const items = adaptations.map((adaptation) => `<li class="padapt-item">${escHtml(adaptation)}</li>`).join("");
   return `<div class="padapt reveal" style="${stagger(index)}">

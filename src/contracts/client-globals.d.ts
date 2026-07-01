@@ -29,7 +29,9 @@ import type {
 } from "./client.js";
 import type {
   ClientEnduranceGoal,
+  ClientPerformanceStanding,
   ClientProgramBlock,
+  ClientProgramState,
   ClientRunCompliance,
   ClientSportBests,
   ClientWeeklyRunPlan,
@@ -276,24 +278,24 @@ declare global {
   declare function dexaTargetingHtml(targeting: unknown): string;
   declare function loadPerformance(): Promise<void>;
   declare function pctClamp(value: unknown): number;
-  declare function capacityRowHtml(capacity: unknown, sexWord: unknown): string;
-  declare function performanceHtml(performance: unknown, options?: { suppressLever?: boolean }): string;
+  declare function capacityRowHtml(capacity: ClientPerformanceStanding["capacities"][number], sexWord: string): string;
+  declare function performanceHtml(performance: ClientPerformanceStanding | null | undefined, options?: { suppressLever?: boolean }): string;
   declare const PADJ_KIND: Record<string, { glyph: string; cls: string }>;
   declare function loadProgramAdjustments(): Promise<void>;
   declare function programAdjustmentsHtml(rows: unknown): string;
   declare function loadTestWeek(): Promise<void>;
   declare function testWeekBannerHtml(testWeek: unknown): string;
-  declare function liftStatusWord(lift: unknown): string;
-  declare function liftTrendFig(lift: unknown): string;
-  declare function liftBestFig(lift: unknown): string;
-  declare function sortLifts(lifts: unknown): unknown[];
+  declare function liftStatusWord(lift: ClientProgramState["lifts"][number] | null | undefined): string;
+  declare function liftTrendFig(lift: ClientProgramState["lifts"][number] | null | undefined): string;
+  declare function liftBestFig(lift: ClientProgramState["lifts"][number] | null | undefined): string;
+  declare function sortLifts(lifts: ClientProgramState["lifts"] | null | undefined): ClientProgramState["lifts"];
   declare function volBandWord(band: unknown): string;
   declare function volTrendGlyph(trend: unknown): string;
   declare function phaseWord(phase: unknown): string;
-  declare function liftRowHtml(lift: unknown, index: number): string;
-  declare function volumeBlockHtml(volume: unknown, startIdx: number): string;
-  declare function mesoBlockHtml(meso: unknown, index: number): string;
-  declare function adaptationsHtml(adaptations: unknown, index: number): string;
+  declare function liftRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
+  declare function volumeBlockHtml(volume: ClientProgramState["volume"] | null | undefined, startIdx: number): string;
+  declare function mesoBlockHtml(meso: ClientProgramState["mesocycle"] | null | undefined, index: number): string;
+  declare function adaptationsHtml(adaptations: string[] | null | undefined, index: number): string;
   declare function blockFocusWord(focus: unknown): string;
   declare function activeBlockHtml(block: ClientProgramBlock | null | undefined): string;
   declare function startBlockHtml(): string;
@@ -335,10 +337,7 @@ declare global {
     opts?: { expectingRun?: unknown },
   ): string;
   declare function enduranceStatusWord(status: unknown): string;
-  declare function enduranceBlockHtml(
-    end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
-    idx: number,
-  ): string;
+  declare function enduranceBlockHtml(end: ClientProgramState["endurance"], idx: number): string;
   declare function paceTrendWord(trend: unknown): string;
   declare function zoneBarHtml(zones: unknown): string;
   declare function enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
@@ -978,8 +977,8 @@ declare global {
     CairnProgressPerformance: {
       loadPerformance(): Promise<void>;
       pctClamp(value: unknown): number;
-      capacityRowHtml(capacity: unknown, sexWord: unknown): string;
-      performanceHtml(performance: unknown, options?: { suppressLever?: boolean }): string;
+      capacityRowHtml(capacity: ClientPerformanceStanding["capacities"][number], sexWord: string): string;
+      performanceHtml(performance: ClientPerformanceStanding | null | undefined, options?: { suppressLever?: boolean }): string;
     };
 
     CairnProgressProgramAdjustments: {
@@ -994,17 +993,17 @@ declare global {
     };
 
     CairnProgressProgramSummary: {
-      liftStatusWord(lift: unknown): string;
-      liftTrendFig(lift: unknown): string;
-      liftBestFig(lift: unknown): string;
-      sortLifts(lifts: unknown): unknown[];
+      liftStatusWord(lift: ClientProgramState["lifts"][number] | null | undefined): string;
+      liftTrendFig(lift: ClientProgramState["lifts"][number] | null | undefined): string;
+      liftBestFig(lift: ClientProgramState["lifts"][number] | null | undefined): string;
+      sortLifts(lifts: ClientProgramState["lifts"] | null | undefined): ClientProgramState["lifts"];
       volBandWord(band: unknown): string;
       volTrendGlyph(trend: unknown): string;
       phaseWord(phase: unknown): string;
-      liftRowHtml(lift: unknown, index: number): string;
-      volumeBlockHtml(volume: unknown, startIdx: number): string;
-      mesoBlockHtml(meso: unknown, index: number): string;
-      adaptationsHtml(adaptations: unknown, index: number): string;
+      liftRowHtml(lift: ClientProgramState["lifts"][number] | null | undefined, index: number): string;
+      volumeBlockHtml(volume: ClientProgramState["volume"] | null | undefined, startIdx: number): string;
+      mesoBlockHtml(meso: ClientProgramState["mesocycle"] | null | undefined, index: number): string;
+      adaptationsHtml(adaptations: string[] | null | undefined, index: number): string;
     };
 
     CairnProgressProgramBlock: {
@@ -1046,10 +1045,7 @@ declare global {
 
     CairnProgressEndurance: {
       enduranceStatusWord(status: unknown): string;
-      enduranceBlockHtml(
-        end: { status?: unknown; last_week_km?: unknown; longest_km_4wk?: unknown; why?: unknown } | null | undefined,
-        idx: number,
-      ): string;
+      enduranceBlockHtml(end: ClientProgramState["endurance"], idx: number): string;
       paceTrendWord(trend: unknown): string;
       zoneBarHtml(zones: unknown): string;
       enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;

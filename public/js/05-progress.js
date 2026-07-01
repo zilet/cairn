@@ -822,7 +822,7 @@ async function renderProgram() {
         if (token === pollToken && state.tab === "progress" && state.progressSeg === "program") {
             const cached = peekCached("progress:program");
             if (cached)
-                paintProgramBody(progressRecord(cached.data));
+                paintProgramBody(cached.data);
         }
     }).catch(() => { });
     return paintSWR({
@@ -831,24 +831,24 @@ async function renderProgram() {
         peek: peek,
         token,
         tab: "progress",
-        render: (data) => paintProgramBody(progressRecord(data)),
+        render: (data) => paintProgramBody(data),
     });
 }
 function paintProgramBody(data) {
     const head = segBar("program", PROGRESS_SEG);
-    const lifts = progressRows(data.lifts);
-    const volume = progressRows(data.volume);
+    const lifts = data.lifts;
+    const volume = data.volume;
     const meso = data.mesocycle || null;
     const endurance = data.endurance || null;
     const headline = data.headline || "";
-    const adaptations = progressRows(data.adaptations_due);
+    const adaptations = data.adaptations_due;
     if (!lifts.length && !volume.length && !meso && !endurance) {
         view.innerHTML = head + progressHero("Program", []) +
             emptyStateHtml(art("exercise", "barbell squat"), "Not enough data yet — log a few sessions and your program intelligence will read here.");
         wireSeg(PROGRESS_HANDLERS);
         return;
     }
-    const sorted = sortLifts(lifts).filter(isProgressRecord);
+    const sorted = sortLifts(lifts);
     // Count stalled/regressing for a quiet hero stat (no score — just a direction indicator).
     const nStalled = sorted.filter((l) => l.status === "plateaued" || l.status === "regressing").length;
     const nGood = sorted.filter((l) => l.status === "progressing").length;

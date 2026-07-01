@@ -1,60 +1,8 @@
 // @ts-check
 // Progress performance standing presentation helpers.
 
-type PerformanceCapacity = {
-  tone?: unknown;
-  percentile?: unknown;
-  exercise?: unknown;
-  est_1rm?: unknown;
-  to_next?: { lb?: unknown; level?: unknown } | null;
-  label?: unknown;
-  level?: unknown;
-};
-
-type PerformanceMomentumChip = {
-  dir?: unknown;
-  text?: unknown;
-};
-
-type PerformanceImbalance = {
-  severity?: unknown;
-  title?: unknown;
-  why?: unknown;
-};
-
-type PerformanceTestDue = {
-  exercise?: unknown;
-  why?: unknown;
-};
-
-type PerformanceStanding = {
-  capacities?: PerformanceCapacity[];
-  endurance?: {
-    headline?: unknown;
-    vo2max?: unknown;
-    tone?: unknown;
-  } | null;
-  lever?: {
-    headline?: unknown;
-    why?: unknown;
-    target?: unknown;
-  } | null;
-  hero?: {
-    headline?: unknown;
-    sub?: unknown;
-  } | null;
-  momentum?: {
-    chips?: PerformanceMomentumChip[];
-  } | null;
-  sex?: unknown;
-  imbalances?: PerformanceImbalance[];
-  tests_due?: PerformanceTestDue[];
-  variety?: {
-    note?: unknown;
-    suggestions?: unknown[];
-  } | null;
-  balance_note?: unknown;
-};
+type PerformanceStanding = import("../contracts/client-api.js").ClientPerformanceStanding;
+type PerformanceCapacity = PerformanceStanding["capacities"][number];
 
 type PerformanceRenderOptions = {
   suppressLever?: boolean;
@@ -65,7 +13,7 @@ async function loadPerformance(): Promise<void> {
   if (!slot) return;
   let performance: PerformanceStanding | null = null;
   try {
-    performance = (await api("/performance")) as PerformanceStanding;
+    performance = await api("/performance");
   } catch {
     performance = null;
   }
@@ -81,7 +29,7 @@ function pctClamp(value: unknown): number {
   return Number.isFinite(numeric) ? Math.max(2, Math.min(99, Math.round(numeric))) : 0;
 }
 
-function capacityRowHtml(capacity: PerformanceCapacity, sexWord: unknown): string {
+function capacityRowHtml(capacity: PerformanceCapacity, sexWord: string): string {
   const tone = capacity.tone === "strong" ? "strong" : capacity.tone === "watch" ? "watch" : "steady";
   const pct = pctClamp(capacity.percentile);
   const sub: string[] = [];

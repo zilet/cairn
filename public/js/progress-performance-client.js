@@ -7,7 +7,7 @@ async function loadPerformance() {
         return;
     let performance = null;
     try {
-        performance = (await api("/performance"));
+        performance = await api("/performance");
     }
     catch {
         performance = null;

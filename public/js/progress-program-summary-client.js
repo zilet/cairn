@@ -2,10 +2,12 @@
 // @ts-check
 // Progress Program summary renderers: lift rows, volume rows, mesocycle, and adaptations.
 function asProgramLift(lift) {
-    return (lift ?? {});
+    return lift ?? null;
 }
 function liftStatusWord(lift) {
     const row = asProgramLift(lift);
+    if (!row)
+        return "";
     const status = row.status;
     const weeksStatic = row.weeks_static;
     if (status === "progressing")
@@ -25,6 +27,8 @@ function liftStatusWord(lift) {
 }
 function liftTrendFig(lift) {
     const row = asProgramLift(lift);
+    if (!row)
+        return "";
     const raw = row.trend_per_wk;
     if (raw == null)
         return "";
@@ -40,6 +44,8 @@ function liftTrendFig(lift) {
 }
 function liftBestFig(lift) {
     const row = asProgramLift(lift);
+    if (!row)
+        return "";
     if (row.mode === "timed" && row.best_seconds != null)
         return fmtDur(row.best_seconds);
     if (row.est_1rm != null)
@@ -85,6 +91,8 @@ function phaseWord(phase) {
 }
 function liftRowHtml(lift, index) {
     const row = asProgramLift(lift);
+    if (!row)
+        return "";
     const statusWord = liftStatusWord(row);
     const trendFig = liftTrendFig(row);
     const bestFig = liftBestFig(row);
@@ -105,7 +113,7 @@ function volumeBlockHtml(volume, startIdx) {
     if (!Array.isArray(volume) || !volume.length)
         return "";
     const rows = volume.map((value, index) => {
-        const row = (value ?? {});
+        const row = value;
         const bandWord = volBandWord(row.band);
         const glyph = volTrendGlyph(row.trend);
         const bandCls = row.band === "high" ? " pvol-high" : row.band === "low" ? " pvol-low" : " pvol-ok";

@@ -1,12 +1,7 @@
 // @ts-check
 // Progress endurance helpers shared by the Program read.
 
-type ProgramEnduranceBlock = {
-  status?: unknown;
-  last_week_km?: unknown;
-  longest_km_4wk?: unknown;
-  why?: unknown;
-};
+type ProgramEnduranceBlock = NonNullable<import("../contracts/client-api.js").ClientProgramState["endurance"]>;
 
 type EndurancePaceTrend = {
   dir?: unknown;

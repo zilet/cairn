@@ -154,16 +154,6 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [] as const satisfies readonly ClientA
 
 export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
   {
-    pattern: "/program-state",
-    owner: "Agentic training brain",
-    reason: "Program state is a large coach-context read and needs a shared deterministic DTO.",
-  },
-  {
-    pattern: "/performance",
-    owner: "Agentic training brain",
-    reason: "Performance standing is a large deterministic read and needs a shared client-safe DTO.",
-  },
-  {
     pattern: "/health/standing",
     owner: "Health standing client",
     reason: "Standing combines body composition, BP, age references, and momentum until the Health DTO is split.",

@@ -6,6 +6,7 @@ type ProgressEndurancePRs = import("../contracts/client-api.js").ClientEndurance
 type ProgressRunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
 type ProgressSportBests = import("../contracts/client-api.js").ClientSportBests;
 type ProgressWeeklyRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
+type ProgressProgramState = import("../contracts/client-api.js").ClientProgramState;
 
 type ProgressSet = ProgressRecord & {
   id?: number | string;
@@ -823,7 +824,7 @@ async function renderProgram() {
     if (!card && (prev === undefined || prev === "")) return; // stayed flat — no re-paint
     if (token === pollToken && state.tab === "progress" && state.progressSeg === "program") {
       const cached = peekCached("progress:program");
-      if (cached) paintProgramBody(progressRecord(cached.data));
+      if (cached) paintProgramBody(cached.data as ProgressProgramState);
     }
   }).catch(() => {});
   return paintSWR({
@@ -832,18 +833,18 @@ async function renderProgram() {
     peek: peek as never,
     token,
     tab: "progress",
-    render: (data: unknown) => paintProgramBody(progressRecord(data)),
+    render: (data: ProgressProgramState) => paintProgramBody(data),
   });
 }
 
-function paintProgramBody(data: ProgressRecord) {
+function paintProgramBody(data: ProgressProgramState) {
   const head = segBar("program", PROGRESS_SEG);
-  const lifts = progressRows<ProgressRecord>(data.lifts);
-  const volume = progressRows<ProgressRecord>(data.volume);
+  const lifts = data.lifts;
+  const volume = data.volume;
   const meso = data.mesocycle || null;
   const endurance = data.endurance || null;
   const headline = data.headline || "";
-  const adaptations = progressRows<ProgressRecord>(data.adaptations_due);
+  const adaptations = data.adaptations_due;
 
   if (!lifts.length && !volume.length && !meso && !endurance) {
     view.innerHTML = head + progressHero("Program", []) +
@@ -853,7 +854,7 @@ function paintProgramBody(data: ProgressRecord) {
     return;
   }
 
-  const sorted = sortLifts(lifts).filter(isProgressRecord);
+  const sorted = sortLifts(lifts);
 
   // Count stalled/regressing for a quiet hero stat (no score — just a direction indicator).
   const nStalled = sorted.filter((l) => l.status === "plateaued" || l.status === "regressing").length;
