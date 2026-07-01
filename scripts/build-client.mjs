@@ -66,6 +66,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-data-client.ts", output: "public/js/settings-data-client.js" },
   { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
+  { source: "src/client/chat-attachment-client.ts", output: "public/js/chat-attachment-client.js" },
   { source: "src/client/chat-turn-client.ts", output: "public/js/chat-turn-client.js" },
   { source: "src/client/chat-history-client.ts", output: "public/js/chat-history-client.js" },
   { source: "src/client/plan-endurance-client.ts", output: "public/js/plan-endurance-client.js" },

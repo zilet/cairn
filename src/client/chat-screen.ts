@@ -21,7 +21,6 @@ type ChatScreenDraft = {
   summary?: unknown;
 };
 type ChatScreenImagePayload = { dataUrl: string; base64: string; mime: "image/jpeg"; bytes: number };
-type ChatScreenImageError = Error & { bytes?: number };
 type ChatScreenGroup = { iso: string; msgs: ChatScreenMessage[] };
 type ChatScreenAppendOptions = { readonly?: boolean; before?: Element | null };
 type ChatScreenJobHandlers = {
@@ -74,53 +73,10 @@ function chatScreenHtml<T extends HTMLElement = HTMLElement>(value: Element | nu
   return value instanceof HTMLElement ? value as T : null;
 }
 
-function chatScreenImage(value: Element | null | undefined): HTMLImageElement | null {
-  return value instanceof HTMLImageElement ? value : null;
-}
-
 // ---------- Chat ----------
 // Document-level paste listener for the chat view; swapped on every renderChat.
 let chatPasteHandler: ((event: ClipboardEvent) => void) | null = null;
 let chatFuelContext: ChatScreenMessage[] = [];
-const CHAT_UPLOAD_IMAGE_MAX_BYTES = CairnChatClient.CHAT_IMAGE_MAX_BYTES; // mirrors src/api.ts CHAT_IMAGE_MAX_BYTES
-const CHAT_UPLOAD_IMAGE_EDGE_STEPS = CairnChatClient.CHAT_IMAGE_EDGE_STEPS;
-const CHAT_UPLOAD_IMAGE_QUALITY_STEPS = CairnChatClient.CHAT_IMAGE_QUALITY_STEPS;
-
-// Downscale + re-encode a picked photo to JPEG before upload: phone camera
-// shots are 3-12MB HEIC/JPEG; ~1280px @ q0.82 is plenty for a plate estimate
-// (and Safari decodes HEIC natively, so re-encoding also normalizes the type).
-// If the first pass still exceeds the server cap, step down deterministically
-// instead of letting Express reject the whole JSON body with a generic 413.
-async function compressChatImage(file: File): Promise<ChatScreenImagePayload> {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = () => reject(new Error("Couldn't read that image"));
-      i.src = url;
-    });
-    let last: ChatScreenImagePayload | null = null;
-    for (const maxEdge of CHAT_UPLOAD_IMAGE_EDGE_STEPS) {
-      const scale = Math.min(1, Number(maxEdge) / Math.max(img.naturalWidth, img.naturalHeight));
-      const c = document.createElement("canvas");
-      c.width = Math.max(1, Math.round(img.naturalWidth * scale));
-      c.height = Math.max(1, Math.round(img.naturalHeight * scale));
-      const ctx = c.getContext("2d");
-      if (!ctx) continue;
-      ctx.drawImage(img, 0, 0, c.width, c.height);
-      for (const quality of CHAT_UPLOAD_IMAGE_QUALITY_STEPS) {
-        last = CairnChatClient.imagePayload(c.toDataURL("image/jpeg", quality));
-        if (last.bytes <= CHAT_UPLOAD_IMAGE_MAX_BYTES) return last;
-      }
-    }
-    const err: ChatScreenImageError = new Error("image-too-large");
-    err.bytes = last ? last.bytes : 0;
-    throw err;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
 
 // Convert a SQLite UTC timestamp ("YYYY-MM-DD HH:MM:SS") to a local YYYY-MM-DD
 // for day grouping; falls back to today on anything unparseable.
@@ -365,18 +321,16 @@ async function renderChat(): Promise<void> {
   let attached: ChatScreenImagePayload | null = null;
 
   const isSoftKeyboardChat = () => !matchMedia("(hover:hover)").matches;
-  const resetChatFocusAfterNativePicker = () => {
-    if (!isSoftKeyboardChat()) return;
-    if (document.activeElement === input) input.blur();
-    if (document.activeElement === fileInput) fileInput.blur();
-    document.body.classList.remove("kb-open");
-  };
-  const settleChatAfterNativePicker = () => {
-    document.dispatchEvent(new CustomEvent("cairn:keyboard-settle", { detail: { chatFocusGraceMs: 1200 } }));
-    measureChatTop();
-    requestAnimationFrame(() => requestAnimationFrame(measureChatTop));
-    for (const d of [120, 280, 520, 900]) setTimeout(() => { if (state.tab === "chat") measureChatTop(); }, d);
-  };
+  const resetChatFocusAfterNativePicker = () => CairnChatAttachment.resetFocusAfterNativePicker({
+    input,
+    fileInput,
+    isSoftKeyboard: isSoftKeyboardChat,
+  });
+  const settleChatAfterNativePicker = () => CairnChatAttachment.settleAfterNativePicker({
+    isActive: () => state.tab === "chat",
+    measure: measureChatTop,
+    graceMs: 1200,
+  });
   const clearAttach = () => {
     attached = null;
     fileInput.value = "";
@@ -387,8 +341,8 @@ async function renderChat(): Promise<void> {
   const attachFile = async (f: File | null | undefined) => {
     if (!f) return;
     try {
-      attached = await compressChatImage(f);
-      const img = chatScreenImage(preview.querySelector("img"));
+      attached = await CairnChatAttachment.compressImage(f);
+      const img = CairnChatAttachment.previewImage(preview.querySelector("img"));
       if (img) img.src = attached.dataUrl;
       preview.hidden = false;
       attachBtn.classList.add("has-img");

@@ -741,6 +741,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/life-client\.js"/);
   assert.match(sw, /"\/js\/family-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
+  assert.match(sw, /"\/js\/chat-attachment-client\.js"/);
   assert.match(sw, /"\/js\/chat-turn-client\.js"/);
   assert.match(sw, /"\/js\/chat-history-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
@@ -1015,6 +1016,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsDataSource = read("src/client/settings-data-client.ts");
   const settingsScreenSource = read("src/client/settings-screen.ts");
   const chatClientSource = read("src/client/chat-client.ts");
+  const chatAttachmentSource = read("src/client/chat-attachment-client.ts");
   const chatTurnClientSource = read("src/client/chat-turn-client.ts");
   const chatHistoryClientSource = read("src/client/chat-history-client.ts");
   const chatScreenSource = read("src/client/chat-screen.ts");
@@ -1128,6 +1130,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const familyClient = read("public/js/family-client.js");
   const healthDocsClient = read("public/js/health-docs-client.js");
   const chatClient = read("public/js/chat-client.js");
+  const chatAttachmentClient = read("public/js/chat-attachment-client.js");
   const chatTurnClient = read("public/js/chat-turn-client.js");
   const chatHistoryClient = read("public/js/chat-history-client.js");
   const settingsClient = read("public/js/settings-client.js");
@@ -1210,6 +1213,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function paintSWR<Path extends string>/);
   assert.match(clientGlobals, /declare function measureChatTop\(\): void/);
   assert.match(clientGlobals, /CairnChatClient/);
+  assert.match(clientGlobals, /CairnChatAttachment/);
   assert.match(clientGlobals, /shellHtml\(\): string/);
   assert.match(clientGlobals, /headerActionsHtml\(\): string/);
   assert.match(clientGlobals, /starterChipsHtml\(starters\?: readonly unknown\[\]\): string/);
@@ -1402,6 +1406,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-program-block-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/04-capture\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/chat-attachment-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-turn-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/chat-history-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/plan-endurance-client\.js/);
@@ -1542,6 +1547,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-screen\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
   assert.match(clientBuild, /public\/js\/chat-client\.js/);
+  assert.match(clientBuild, /src\/client\/chat-attachment-client\.ts/);
+  assert.match(clientBuild, /public\/js\/chat-attachment-client\.js/);
   assert.match(clientBuild, /src\/client\/chat-turn-client\.ts/);
   assert.match(clientBuild, /public\/js\/chat-turn-client\.js/);
   assert.match(clientBuild, /src\/client\/chat-history-client\.ts/);
@@ -1933,13 +1940,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/chat-client.js") > index.indexOf("/js/08-me-records.js") &&
-      index.indexOf("/js/chat-client.js") < index.indexOf("/js/09-plan-chat.js"),
-    "chat-client.js must load before 09-plan-chat.js"
+      index.indexOf("/js/chat-client.js") < index.indexOf("/js/chat-attachment-client.js"),
+    "chat-client.js must load before chat attachment helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-turn-client.js") > index.indexOf("/js/chat-client.js") &&
+    index.indexOf("/js/chat-attachment-client.js") > index.indexOf("/js/chat-client.js") &&
+      index.indexOf("/js/chat-attachment-client.js") < index.indexOf("/js/chat-turn-client.js"),
+    "chat-attachment-client.js must load after chat helpers and before chat turn helpers"
+  );
+  assert.ok(
+    index.indexOf("/js/chat-turn-client.js") > index.indexOf("/js/chat-attachment-client.js") &&
       index.indexOf("/js/chat-turn-client.js") < index.indexOf("/js/09-plan-chat.js"),
-    "chat-turn-client.js must load after chat helpers and before 09-plan-chat.js"
+    "chat-turn-client.js must load after chat attachment helpers and before 09-plan-chat.js"
   );
   assert.ok(
     index.indexOf("/js/chat-history-client.js") > index.indexOf("/js/chat-turn-client.js") &&
@@ -2586,6 +2598,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClientSource, /function chatDividerHtml\(iso: unknown, label: unknown\): string/);
   assert.match(chatClientSource, /function chatEarlierBarHtml\(\): string/);
   assert.match(chatClientSource, /const CAIRN_CHAT_CLIENT = \{/);
+  assert.match(chatAttachmentSource, /async function chatAttachmentCompressImage\(file: File\): Promise<ChatAttachmentImagePayload>/);
+  assert.match(chatAttachmentSource, /function chatAttachmentResetFocusAfterNativePicker/);
+  assert.match(chatAttachmentSource, /function chatAttachmentSettleAfterNativePicker/);
+  assert.match(chatAttachmentSource, /Object\.assign\(globalThis,\s*\{ CairnChatAttachment: CAIRN_CHAT_ATTACHMENT \}\)/);
   assert.match(chatTurnClientSource, /function\s+saveChatDraft\(value: string\): void/);
   assert.match(chatTurnClientSource, /async function\s+chatReconnect\(\): Promise<void>/);
   assert.match(chatTurnClientSource, /function\s+chatTeardownMonitor\(\): void/);
@@ -2598,10 +2614,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatScreenSource, /async function renderChat\(\): Promise<void>/);
   assert.match(chatScreenSource, /function appendMsg\(/);
   assert.match(chatScreenSource, /chatDayISO: chatScreenDayISO/);
-  assert.match(chatScreenSource, /const resetChatFocusAfterNativePicker = \(\) =>/);
-  assert.match(chatScreenSource, /const settleChatAfterNativePicker = \(\) =>/);
-  assert.match(chatScreenSource, /cairn:keyboard-settle/);
-  assert.match(chatScreenSource, /chatFocusGraceMs: 1200/);
+  assert.match(chatScreenSource, /CairnChatAttachment\.resetFocusAfterNativePicker/);
+  assert.match(chatScreenSource, /CairnChatAttachment\.settleAfterNativePicker/);
+  assert.match(chatScreenSource, /CairnChatAttachment\.compressImage\(f\)/);
+  assert.match(chatScreenSource, /CairnChatAttachment\.previewImage/);
   assert.match(chatScreenSource, /fileInput\.addEventListener\("change"[\s\S]*resetChatFocusAfterNativePicker\(\)/);
   assert.match(chatScreenSource, /Plan editor and Plan Endurance screen orchestration live in \/js\/plan-editor-client\.js and \/js\/plan-endurance-client\.js/);
   assert.match(planEnduranceSource, /const ENDURANCE_PHASES/);
@@ -3076,6 +3092,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatClient, /starterChipsHtml: chatStarterChipsHtml/);
   assert.match(chatClient, /dividerHtml: chatDividerHtml/);
   assert.match(chatClient, /earlierBarHtml: chatEarlierBarHtml/);
+  assert.match(chatAttachmentClient, /Object\.assign\(globalThis, \{ CairnChatAttachment: CAIRN_CHAT_ATTACHMENT \}\)/);
+  assert.match(chatAttachmentClient, /compressImage: chatAttachmentCompressImage/);
+  assert.match(chatAttachmentClient, /settleAfterNativePicker: chatAttachmentSettleAfterNativePicker/);
   assert.match(chatTurnClient, /saveChatDraft/);
   assert.match(chatTurnClient, /chatReconnect/);
   assert.match(chatTurnClient, /measureChatTop/);
@@ -3217,6 +3236,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chat, /CairnChatClient\.starterChipsHtml\(\)/);
   assert.match(chat, /CairnChatClient\.dividerHtml\(iso, dateLabel\(iso\)\)/);
   assert.match(chat, /CairnChatClient\.earlierBarHtml\(\)/);
+  assert.match(chat, /CairnChatAttachment\.compressImage\(f\)/);
+  assert.match(chat, /CairnChatAttachment\.resetFocusAfterNativePicker/);
+  assert.doesNotMatch(chat, /function\s+compressChatImage|CHAT_UPLOAD_IMAGE_MAX_BYTES|CHAT_UPLOAD_IMAGE_EDGE_STEPS|CHAT_UPLOAD_IMAGE_QUALITY_STEPS/);
   assert.doesNotMatch(chat, /const\s+CHAT_STARTERS|<div class="chatview"|id="hdrHistory"|id="chatJump"|class="chat-earlierbar"/);
   assert.match(chat, /Durable chat turn helpers live in \/js\/chat-turn-client\.js/);
   assert.match(chat, /Chat history\/search helpers live in \/js\/chat-history-client\.js/);
@@ -3293,6 +3315,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/family-client\.js"/);
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
   assert.match(sw, /"\/js\/chat-client\.js"/);
+  assert.match(sw, /"\/js\/chat-attachment-client\.js"/);
   assert.match(sw, /"\/js\/chat-turn-client\.js"/);
   assert.match(sw, /"\/js\/chat-history-client\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);

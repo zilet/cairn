@@ -263,6 +263,7 @@ Tasks:
   - [x] Extract adaptive prescription text, variation-chip rendering, cardio zone reads, cardio verb classification, and cardio log-phrase generation into typed `public/js/today-training-client.js` with VM coverage.
 - [x] Migrate the high-risk `09-plan-chat` behavior slices.
   - [x] Extract chat image payload sizing, food-surface eligibility, fuel-card rendering, search highlighting, and history rows into typed `public/js/chat-client.js` with VM coverage.
+  - [x] Extract chat image compression, preview payloads, and native file-picker focus/keyboard settling into typed `public/js/chat-attachment-client.js` with VM coverage.
 - [x] Migrate the high-risk `07-me-health` and `08-me-records` behavior slices.
   - [x] Extract evidence URL allowlisting, evidence-list rendering, evidence-count mapping, marker empty-state rendering, clinical marker ordering, and LDL assay separation into typed `public/js/health-client.js` with VM coverage.
 - [x] Migrate the high-risk `10-boot` shell/routing/settings slices after route contracts are stable.

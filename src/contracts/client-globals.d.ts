@@ -536,6 +536,21 @@ declare global {
       historyHitRow(hit: Partial<ClientChatSearchHit>, query: unknown, whenLabel: string): string;
     };
 
+    CairnChatAttachment: {
+      compressImage(file: File): Promise<{ dataUrl: string; base64: string; mime: "image/jpeg"; bytes: number }>;
+      previewImage(value: Element | null | undefined): HTMLImageElement | null;
+      resetFocusAfterNativePicker(options: {
+        input: HTMLTextAreaElement;
+        fileInput: HTMLInputElement;
+        isSoftKeyboard(): boolean;
+      }): void;
+      settleAfterNativePicker(options: {
+        isActive(): boolean;
+        measure(): void;
+        graceMs?: number;
+      }): void;
+    };
+
     CairnExerciseDetail: {
       explanation(exercise: { name?: unknown; muscle_group?: unknown } | null | undefined): {
         setup?: unknown;
@@ -1187,6 +1202,7 @@ declare global {
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
+  declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
