@@ -34,6 +34,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/save-bar.ts", output: "public/js/save-bar.js" },
   { source: "src/client/swr-cache.ts", output: "public/js/swr-cache.js" },
   { source: "src/client/today-agenda-client.ts", output: "public/js/today-agenda-client.js" },
+  { source: "src/client/today-rail-controller.ts", output: "public/js/today-rail-controller.js" },
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
   { source: "src/client/today-progression-controller.ts", output: "public/js/today-progression-controller.js" },
   { source: "src/client/today-add-exercise-controller.ts", output: "public/js/today-add-exercise-controller.js" },

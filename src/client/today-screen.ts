@@ -479,95 +479,31 @@ function revealPlanThen(after: any, opts: any = {}) {
 // Which existing rail client_card maps to which loader fn (the loader binds to the
 // slot id; we only move where the slot lives). Generic Era-2 candidates (no
 // client_card — since-last / goal-checkin) render a calm card from their own text.
-const TODAY_RAIL_LOADERS: Record<string, () => Promise<void>> = {
-  fuel: () => loadFuelToday(todayState.logDate),
-  "week-ahead": () => loadWeekAhead(),
-  "program-adjustments": () => loadProgramAdjustmentsBanner(),
-  "weekly-read": () => loadTodayReads(),
-  "connection-insight": () => loadTodayReads(),
-  "garmin-reconcile": () => loadGarminReconcile(),
-  lately: () => loadRecentActivities(),
-};
-function renderableAgendaBuckets(agenda: any) {
-  return window.CairnTodayAgenda.renderableBuckets(agenda);
+function todayRailDeps() {
+  return {
+    root: todayView,
+    state: todayState,
+    api: todayApi,
+    activateTab,
+    gotoChatWith,
+    collapseEl,
+    loadFuelToday,
+    loadWeekAhead,
+    loadProgramAdjustmentsBanner,
+    loadTodayReads,
+    loadGarminReconcile,
+    loadRecentActivities,
+  };
 }
 
-// Fetch the agenda for a date. Best-effort + null-safe: a 404 during dev (route not
-// wired yet) or any failure returns null, and the caller falls back to the CURRENT
-// fixed rail so Today never breaks while the arbiter is half-integrated.
-async function fetchTodayAgenda(date: any): Promise<TodayScreenAgenda | null> {
-  try {
-    const a = await todayApi("/today-agenda?date=" + encodeURIComponent(date || todayState.logDate)) as TodayScreenAgenda;
-    if (!a || !Array.isArray(a.primary) || !Array.isArray(a.more)) return null;
-    return a;
-  } catch { return null; }
+// Build and run the agenda-governed rail through the typed controller. The screen
+// keeps layout ownership; the controller owns fetch/load/action wiring.
+function buildAgendaRailHtml(agenda: TodayScreenAgenda | null | undefined, genericPending: TodayScreenAgendaCandidate[]) {
+  return CairnTodayRailController.railHtml(agenda, genericPending);
 }
 
-// Build the rail HTML from the agenda. Each surfaced candidate is either an EXISTING
-// client card (its slot, ordered) or a generic Era-2 card (rendered inline). The
-// `primary` items lead; the `more` items live inside ONE quiet, collapsed disclosure
-// ("N more" — calm, not a badge). Returns "" when nothing is surfaced (quiet day →
-// just the Brief). `genericPending` collects the generic candidates we drew so the
-// caller can wire them after the innerHTML write.
-function buildAgendaRailHtml(agenda: any, genericPending: any) {
-  return window.CairnTodayAgenda.railHtml(agenda, genericPending);
-}
-
-// Run the rail loaders for every surfaced existing client_card (primary + more) and
-// wire any generic Era-2 cards. Called after the wholesale innerHTML write, like the
-// other Today wiring. De-duped so two candidates that share a loader (weekly-read +
-// connection-insight both call loadTodayReads, which fills both slots in one fetch)
-// fire it once.
-function runAgendaRail(agenda: any, genericPending: any) {
-  const called = new Set();
-  const buckets = renderableAgendaBuckets(agenda);
-  for (const c of [...buckets.primary, ...buckets.more]) {
-    if (!c.client_card) continue;
-    const loader = TODAY_RAIL_LOADERS[c.client_card];
-    if (!loader || called.has(loader)) continue;
-    called.add(loader);
-    try { loader(); } catch {}
-  }
-  wireGenericAgendaCards(genericPending);
-}
-
-// Wire the generic Era-2 cards' action + dismiss controls. The action's `kind`
-// names where it goes (chat:<prefill> → Chat with the prefill; tab:<name> → that
-// tab); a dismiss flips the card away (the producer owns the server-side stamp via
-// its own action, if any — here we just collapse it for this view). Best-effort.
-function wireGenericAgendaCards(pending: any) {
-  if (!pending || !pending.length) return;
-  todayView.querySelectorAll("[data-agenda-act]").forEach((b: any) => {
-    if (b._wired) return; b._wired = true;
-    b.addEventListener("click", () => {
-      const kind = b.getAttribute("data-agenda-act") || "";
-      const id = b.getAttribute("data-agenda-id") || "";
-      const c = pending.find((x: any) => x.id === id);
-      const payload = c && c.action ? c.action.payload : null;
-      if (kind.startsWith("chat")) { gotoChatWith(typeof payload === "string" ? payload : (c && c.title) || ""); return; }
-      if (kind === "plan-coach") { todayState.planJump = "coach"; activateTab("plan"); return; }
-      if (kind === "plan-endurance") { todayState.planJump = "endurance"; activateTab("plan"); return; }
-      // Deep-link into Me → Standing (the whole-athlete review; set the seg state,
-      // then activate the Me tab so it renders the right sub-view).
-      if (kind === "me-health-standing") { todayState.meSeg = "standing"; activateTab("me"); return; }
-      if (kind === "me-health-read") {
-        todayState.meSeg = "health";
-        todayState.healthSeg = "read";
-        todayState.healthSegPicked = true;
-        activateTab("me");
-        return;
-      }
-      if (kind.startsWith("tab:")) { activateTab(kind.slice(4)); return; }
-      // an unrecognized action kind: a calm no-op rather than a broken link.
-    });
-  });
-  todayView.querySelectorAll("[data-agenda-dismiss]").forEach((b: any) => {
-    if (b._wired) return; b._wired = true;
-    b.addEventListener("click", () => {
-      const card = b.closest(".agenda-card");
-      if (card) collapseEl(card, () => card.remove()); else b.remove();
-    });
-  });
+function runAgendaRail(agenda: TodayScreenAgenda | null | undefined, genericPending: TodayScreenAgendaCandidate[]) {
+  CairnTodayRailController.runAgendaRail(agenda, genericPending, todayRailDeps());
 }
 
 async function renderToday(opts: any = {}) {
@@ -915,7 +851,7 @@ async function renderToday(opts: any = {}) {
   let conductor = null;
   if (!focus) {
     [agenda, conductor] = await Promise.all([
-      fetchTodayAgenda(todayState.logDate),
+      CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps()),
       todayApi("/coaching-focus").catch(() => null),
     ]);
   }

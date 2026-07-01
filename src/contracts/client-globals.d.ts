@@ -142,6 +142,27 @@ declare global {
     hasLoggedSets: boolean;
   };
 
+  type ClientTodayRailControllerDeps = {
+    root: ParentNode;
+    state: {
+      logDate: string;
+      planJump?: string | null;
+      meSeg?: string | null;
+      healthSeg?: string | null;
+      healthSegPicked?: boolean;
+    };
+    api(path: string): Promise<unknown>;
+    activateTab(tab: string): unknown;
+    gotoChatWith(text: string): unknown;
+    collapseEl(el: Element, done?: () => void): void;
+    loadFuelToday(date: string): unknown;
+    loadWeekAhead(): unknown;
+    loadProgramAdjustmentsBanner(): unknown;
+    loadTodayReads(): unknown;
+    loadGarminReconcile(): unknown;
+    loadRecentActivities(): unknown;
+  };
+
   type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
 
   type ClientHealthRecordsControllerDeps = {
@@ -1298,6 +1319,23 @@ declare global {
       fuelCardHtml(day: ClientDayIntake | null | undefined): string;
     };
 
+    CairnTodayRailController: {
+      fetchTodayAgenda(
+        date: string,
+        deps: ClientTodayRailControllerDeps,
+      ): Promise<ClientTodayAgenda | null>;
+      railHtml(agenda: Partial<ClientTodayAgenda> | null | undefined, genericPending: ClientTodayAgendaCandidate[]): string;
+      runAgendaRail(
+        agenda: Partial<ClientTodayAgenda> | null | undefined,
+        genericPending: ClientTodayAgendaCandidate[],
+        deps: ClientTodayRailControllerDeps,
+      ): void;
+      wireGenericAgendaCards(
+        pending: ClientTodayAgendaCandidate[],
+        deps: ClientTodayRailControllerDeps,
+      ): void;
+    };
+
     CairnTodayTraining: {
       RX_ACTION: Record<string, { word: string; cls: string }>;
       rxTargetText(rx: Partial<ClientPrescription> | null | undefined): string;
@@ -1552,6 +1590,7 @@ declare global {
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
+  declare const CairnTodayRailController: Window["CairnTodayRailController"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];

@@ -1,0 +1,220 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import vm from "node:vm";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+class FakeElement {
+  constructor(tag = "div", attrs = {}) {
+    this.tag = tag;
+    this.className = attrs.className || "";
+    this.dataset = { ...(attrs.dataset || {}) };
+    this.attributes = { ...(attrs.attributes || {}) };
+    this.children = [];
+    this.parentElement = null;
+    this.listeners = new Map();
+    this.removed = false;
+  }
+
+  appendChild(child) {
+    child.parentElement = this;
+    this.children.push(child);
+    return child;
+  }
+
+  addEventListener(type, handler) {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push(handler);
+  }
+
+  click() {
+    for (const handler of this.listeners.get("click") || []) {
+      handler({ target: this, currentTarget: this });
+    }
+  }
+
+  getAttribute(name) {
+    if (name.startsWith("data-")) {
+      const key = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      return this.dataset[key] ?? null;
+    }
+    return this.attributes[name] ?? null;
+  }
+
+  matches(selector) {
+    if (selector === "[data-agenda-act]") return Object.hasOwn(this.dataset, "agendaAct");
+    if (selector === "[data-agenda-dismiss]") return Object.hasOwn(this.dataset, "agendaDismiss");
+    if (selector === ".agenda-card") return this.className.split(/\s+/).includes("agenda-card");
+    return false;
+  }
+
+  closest(selector) {
+    let node = this;
+    while (node) {
+      if (node.matches(selector)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  remove() {
+    this.removed = true;
+    if (!this.parentElement) return;
+    this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+    this.parentElement = null;
+  }
+
+  querySelectorAll(selector) {
+    const out = [];
+    if (this.matches(selector)) out.push(this);
+    for (const child of this.children) out.push(...child.querySelectorAll(selector));
+    return out;
+  }
+}
+
+function loadController({ buckets } = {}) {
+  const context = {
+    Object,
+    Promise,
+    Set,
+    String,
+    Array,
+    encodeURIComponent,
+    window: null,
+    globalThis: null,
+    CairnTodayAgenda: {
+      renderableBuckets: () => buckets || { primary: [], more: [] },
+      railHtml: (agenda, pending) => {
+        pending.push({ id: "generic", kind: "since-last", tier: "primary", priority: 1, title: "New signal" });
+        return agenda ? `<aside>${agenda.primary.length}</aside>` : "";
+      },
+    },
+  };
+  context.window = context;
+  context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-rail-controller.js"), "utf8"), context);
+  return context.CairnTodayRailController;
+}
+
+function makeDeps(rootEl = new FakeElement("section")) {
+  const calls = [];
+  const deps = {
+    root: rootEl,
+    state: { logDate: "2026-07-01" },
+    api: async (path) => {
+      calls.push(["api", path]);
+      return { hero: {}, primary: [], more: [], total: 0 };
+    },
+    activateTab: (tab) => calls.push(["tab", tab]),
+    gotoChatWith: (text) => calls.push(["chat", text]),
+    collapseEl: (el, done) => {
+      calls.push(["collapse", el]);
+      if (done) done();
+    },
+    loadFuelToday: (date) => calls.push(["fuel", date]),
+    loadWeekAhead: () => calls.push(["week"]),
+    loadProgramAdjustmentsBanner: () => calls.push(["adjust"]),
+    loadTodayReads: () => calls.push(["reads"]),
+    loadGarminReconcile: () => calls.push(["garmin"]),
+    loadRecentActivities: () => calls.push(["lately"]),
+  };
+  return { deps, calls };
+}
+
+test("Today rail controller fetches only valid agenda payloads", async () => {
+  const controller = loadController();
+  const { deps, calls } = makeDeps();
+
+  assert.deepEqual(await controller.fetchTodayAgenda("2026-07-01", deps), {
+    hero: {},
+    primary: [],
+    more: [],
+    total: 0,
+  });
+  assert.deepEqual(calls, [["api", "/today-agenda?date=2026-07-01"]]);
+
+  deps.api = async () => ({ primary: [] });
+  assert.equal(await controller.fetchTodayAgenda("2026-07-02", deps), null);
+});
+
+test("Today rail controller dedupes shared agenda loaders and passes the log date", () => {
+  const controller = loadController({
+    buckets: {
+      primary: [
+        { id: "weekly", client_card: "weekly-read" },
+        { id: "insight", client_card: "connection-insight" },
+        { id: "fuel", client_card: "fuel" },
+      ],
+      more: [
+        { id: "late", client_card: "lately" },
+        { id: "future", client_card: "unknown-card" },
+      ],
+    },
+  });
+  const { deps, calls } = makeDeps();
+
+  controller.runAgendaRail({ primary: [], more: [] }, [], deps);
+
+  assert.deepEqual(calls, [
+    ["reads"],
+    ["fuel", "2026-07-01"],
+    ["lately"],
+  ]);
+});
+
+test("Today rail controller wires generic agenda navigation and dismiss controls", () => {
+  const rootEl = new FakeElement("section");
+  const chatBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "chat", agendaId: "chat" },
+  }));
+  const coachBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "plan-coach", agendaId: "coach" },
+  }));
+  const standingBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "me-health-standing", agendaId: "standing" },
+  }));
+  const readBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "me-health-read", agendaId: "read" },
+  }));
+  const tabBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "tab:progress", agendaId: "tab" },
+  }));
+  const card = rootEl.appendChild(new FakeElement("article", { className: "agenda-card" }));
+  const dismissBtn = card.appendChild(new FakeElement("button", {
+    dataset: { agendaDismiss: "", agendaId: "gone" },
+  }));
+  const { deps, calls } = makeDeps(rootEl);
+  const controller = loadController();
+  const pending = [
+    { id: "chat", title: "Ask", action: { label: "Ask", kind: "chat", payload: "Explain this" } },
+    { id: "coach", action: { label: "Plan", kind: "plan-coach" } },
+    { id: "standing", action: { label: "Standing", kind: "me-health-standing" } },
+    { id: "read", action: { label: "Read", kind: "me-health-read" } },
+    { id: "tab", action: { label: "Progress", kind: "tab:progress" } },
+  ];
+
+  controller.wireGenericAgendaCards(pending, deps);
+  chatBtn.click();
+  coachBtn.click();
+  standingBtn.click();
+  readBtn.click();
+  tabBtn.click();
+  dismissBtn.click();
+
+  assert.deepEqual(calls, [
+    ["chat", "Explain this"],
+    ["tab", "plan"],
+    ["tab", "me"],
+    ["tab", "me"],
+    ["tab", "progress"],
+    ["collapse", card],
+  ]);
+  assert.equal(deps.state.planJump, "coach");
+  assert.equal(deps.state.meSeg, "health");
+  assert.equal(deps.state.healthSeg, "read");
+  assert.equal(deps.state.healthSegPicked, true);
+  assert.equal(card.removed, true);
+});
