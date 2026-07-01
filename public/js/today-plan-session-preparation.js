@@ -3,9 +3,7 @@
 // Today plan/session preparation: selected day, skips, cardio matches, last-set
 // prefill, pending off-plan cards, and adaptive prescriptions.
 (() => {
-    function recordValue(value) {
-        return value && typeof value === "object" ? value : {};
-    }
+    const todayPlanSessionData = globalThis.CairnTodayPlanSessionData;
     function planItems(day) {
         return Array.isArray(day?.items) ? day.items : [];
     }
@@ -49,61 +47,6 @@
             deps.state.pendingOffPlan[deps.state.logDate] = kept;
         return kept;
     }
-    async function loadLastSets(names, loggedByEx, deps) {
-        const needLast = [...new Set(names)].filter((name) => !(loggedByEx[name] && loggedByEx[name].length));
-        const lastSets = {};
-        await Promise.all(needLast.map(async (name) => {
-            const key = "last-set:" + name;
-            const peek = deps.peekCached(key);
-            if (peek) {
-                lastSets[name] = peek.data;
-                deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key }).catch(() => { });
-                return;
-            }
-            try {
-                lastSets[name] = await deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key });
-            }
-            catch {
-                lastSets[name] = null;
-            }
-        }));
-        return lastSets;
-    }
-    async function loadPrescriptions(day, planEx, deps) {
-        const rxByEx = {};
-        if (day == null || !planEx.length)
-            return rxByEx;
-        try {
-            const list = await deps.cachedApi("/program/progression?day=" + encodeURIComponent(day), {
-                key: `program:progression:${day}`,
-                freshFor: 15000,
-            });
-            if (Array.isArray(list)) {
-                for (const raw of list) {
-                    const rx = recordValue(raw);
-                    if (rx.exercise)
-                        rxByEx[String(rx.exercise).toLowerCase()] = rx;
-                }
-            }
-        }
-        catch { }
-        return rxByEx;
-    }
-    async function loadCardioContext(dayItems, isToday, deps) {
-        const allCardio = dayItems.filter(deps.isCardioItem);
-        const strengthPlanned = dayItems.some((item) => !deps.isCardioItem(item) && item.exercise);
-        const couldHaveRun = allCardio.length > 0 || (isToday && !strengthPlanned);
-        let cardioEfforts = [];
-        let todaySettings = null;
-        if (couldHaveRun) {
-            [cardioEfforts, todaySettings] = await Promise.all([
-                deps.api("/cardio?date=" + deps.state.logDate).catch(() => []),
-                deps.api("/settings").then((result) => recordValue(result).settings || null).catch(() => null),
-            ]);
-            cardioEfforts = Array.isArray(cardioEfforts) ? cardioEfforts : [];
-        }
-        return { allCardio, cardioEfforts, todaySettings };
-    }
     async function preparePlanSession(deps) {
         const loggedByEx = groupLoggedSets(deps.session);
         const revealBlank = !!(deps.state.planReveal && deps.state.planReveal.date === deps.state.logDate && deps.state.planReveal.on && deps.state.planReveal.blank);
@@ -118,7 +61,7 @@
         const day = selectedPlanDay(deps.state, revealBlank);
         const items = planItems(day);
         const planNames = new Set(items.filter((item) => !deps.isCardioItem(item) && item.exercise).map((item) => String(item.exercise)));
-        const { allCardio, cardioEfforts, todaySettings } = await loadCardioContext(items, deps.isToday, deps);
+        const { allCardio, cardioEfforts, todaySettings } = await todayPlanSessionData.loadCardioContext(items, deps.isToday, deps);
         const matchedCardio = matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
         const skippedSet = new Set(((deps.session && deps.session.skips) || []).map((name) => String(name).toLowerCase()));
         const isSkipped = (item) => deps.isCardioItem(item)
@@ -131,8 +74,8 @@
         const planEx = activeItems.filter((item) => !deps.isCardioItem(item) && item.exercise).map((item) => String(item.exercise));
         const offPlanEx = Object.keys(loggedByEx).filter((name) => !planNames.has(name));
         const pendingOffPlan = pendingForDate(deps, planNames, loggedByEx);
-        const lastSets = await loadLastSets([...planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps);
-        const rxByEx = await loadPrescriptions(deps.state.day, planEx, deps);
+        const lastSets = await todayPlanSessionData.loadLastSets([...planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps);
+        const rxByEx = await todayPlanSessionData.loadPrescriptions(deps.state.day, planEx, deps);
         const rxFor = (name) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
         const prefillFor = (item) => {
             const exercise = String(item.exercise || "");

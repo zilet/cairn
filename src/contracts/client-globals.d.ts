@@ -2846,6 +2846,36 @@ declare global {
       ): Promise<number>;
     };
 
+    CairnTodayPlanSessionData: {
+      loadLastSets(
+        names: string[],
+        loggedByEx: Record<string, Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }>>,
+        deps: {
+          state: { logDate: string };
+          cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T>;
+          peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
+        },
+      ): Promise<Record<string, Record<string, unknown> | null>>;
+      loadPrescriptions(
+        day: number | null,
+        planEx: string[],
+        deps: { cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T> },
+      ): Promise<Record<string, unknown>>;
+      loadCardioContext(
+        dayItems: Array<Record<string, unknown>>,
+        isToday: boolean,
+        deps: {
+          state: { logDate: string };
+          api(path: string): Promise<unknown>;
+          isCardioItem(item: Record<string, unknown>): boolean;
+        },
+      ): Promise<{
+        allCardio: Array<Record<string, unknown>>;
+        cardioEfforts: Array<Record<string, unknown>>;
+        todaySettings: unknown;
+      }>;
+    };
+
     CairnTodayPlanSessionPreparation: {
       groupLoggedSets(session: { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null } | null | undefined): Record<string, Array<Record<string, unknown>>>;
       matchCardioEfforts(
@@ -3560,6 +3590,7 @@ declare global {
   declare const CairnTodayRailLoaders: Window["CairnTodayRailLoaders"];
   declare const CairnTodaySideLoaders: Window["CairnTodaySideLoaders"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
+  declare const CairnTodayPlanSessionData: Window["CairnTodayPlanSessionData"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];
   declare const CairnTodayMainShell: Window["CairnTodayMainShell"];

@@ -78,6 +78,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-compass-client.ts", output: "public/js/today-compass-client.js" },
   { source: "src/client/today-garmin-reconciliation-client.ts", output: "public/js/today-garmin-reconciliation-client.js" },
   { source: "src/client/today-side-loaders.ts", output: "public/js/today-side-loaders.js" },
+  { source: "src/client/today-plan-session-data-client.ts", output: "public/js/today-plan-session-data-client.js" },
   { source: "src/client/today-plan-session-preparation.ts", output: "public/js/today-plan-session-preparation.js" },
   { source: "src/client/today-data-loader.ts", output: "public/js/today-data-loader.js" },
   { source: "src/client/today-main-shell-client.ts", output: "public/js/today-main-shell-client.js" },

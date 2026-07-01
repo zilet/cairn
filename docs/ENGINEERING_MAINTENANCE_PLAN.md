@@ -15,7 +15,7 @@ This tracker records the verified maintenance baseline. The next-stage full fron
 | Wave 2 - Route and screen identity | Complete | deep links round-trip to tabs, subviews, dates, selected records, and chat sessions |
 | Wave 3 - Backend module grouping | Complete | REST/MCP/docs parity still green after domain extraction |
 | Wave 4 - Frontend TypeScript foundation | Complete | client typecheck runs with no new framework and no unnecessary dependencies |
-| Wave 5 - High-risk frontend migration | Mostly complete | generated browser source now lives under `src/client`; live route-console smoke is green; Today/session, mobile chat, and detail modal controllers are guarded; large screen-controller modules still need shrinking |
+| Wave 5 - High-risk frontend migration | Mostly complete | generated browser source now lives under `src/client`; live route-console smoke is green; Today/session, mobile chat, and detail modal controllers are guarded; Today plan/session data loading is split out; large screen-controller modules still need shrinking |
 | Wave 6 - Brain and memory hardening | In progress | typed conductor/memory/chat-action spine and deterministic DTO coverage are in place; remaining coach-context slices still need narrower DTOs |
 | Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; opt-in Chrome route/global smoke exists with first Today/Chat workflows; deeper Health/Settings/Plan/Progress workflow smoke is still pending |
 

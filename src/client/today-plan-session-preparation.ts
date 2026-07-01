@@ -89,11 +89,28 @@ type TodayPlanSessionPreparationApi = {
   ): Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>;
   preparePlanSession(deps: TodayPlanSessionPrepDeps): Promise<TodayPlanSessionPrepResult>;
 };
+type TodayPlanSessionPrepDataApi = {
+  loadLastSets(
+    names: string[],
+    loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
+    deps: TodayPlanSessionPrepDeps,
+  ): Promise<Record<string, Record<string, unknown> | null>>;
+  loadPrescriptions(
+    day: number | null,
+    planEx: string[],
+    deps: Pick<TodayPlanSessionPrepDeps, "cachedApi">,
+  ): Promise<Record<string, TodayPlanSessionPrepPrescription | null | undefined>>;
+  loadCardioContext(
+    dayItems: TodayPlanSessionPrepPlanItem[],
+    isToday: boolean,
+    deps: TodayPlanSessionPrepDeps,
+  ): Promise<{ allCardio: TodayPlanSessionPrepPlanItem[]; cardioEfforts: TodayPlanSessionPrepCardioEffort[]; todaySettings: unknown }>;
+};
 
 (() => {
-  function recordValue(value: unknown): Record<string, unknown> {
-    return value && typeof value === "object" ? value as Record<string, unknown> : {};
-  }
+  const todayPlanSessionData = (globalThis as unknown as {
+    CairnTodayPlanSessionData: TodayPlanSessionPrepDataApi;
+  }).CairnTodayPlanSessionData;
 
   function planItems(day: TodayPlanSessionPrepPlanDay | null | undefined): TodayPlanSessionPrepPlanItem[] {
     return Array.isArray(day?.items) ? day.items : [];
@@ -144,68 +161,6 @@ type TodayPlanSessionPreparationApi = {
     return kept;
   }
 
-  async function loadLastSets(
-    names: string[],
-    loggedByEx: Record<string, TodayPlanSessionPrepLoggedSet[]>,
-    deps: TodayPlanSessionPrepDeps,
-  ): Promise<Record<string, Record<string, unknown> | null>> {
-    const needLast = [...new Set(names)].filter((name) => !(loggedByEx[name] && loggedByEx[name].length));
-    const lastSets: Record<string, Record<string, unknown> | null> = {};
-    await Promise.all(needLast.map(async (name) => {
-      const key = "last-set:" + name;
-      const peek = deps.peekCached<Record<string, unknown> | null>(key);
-      if (peek) {
-        lastSets[name] = peek.data;
-        deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key }).catch(() => {});
-        return;
-      }
-      try {
-        lastSets[name] = await deps.cachedApi("/last-set?exercise=" + encodeURIComponent(name), { key }) as Record<string, unknown> | null;
-      } catch {
-        lastSets[name] = null;
-      }
-    }));
-    return lastSets;
-  }
-
-  async function loadPrescriptions(day: number | null, planEx: string[], deps: TodayPlanSessionPrepDeps) {
-    const rxByEx: Record<string, TodayPlanSessionPrepPrescription | null | undefined> = {};
-    if (day == null || !planEx.length) return rxByEx;
-    try {
-      const list = await deps.cachedApi("/program/progression?day=" + encodeURIComponent(day), {
-        key: `program:progression:${day}`,
-        freshFor: 15000,
-      }) as unknown[];
-      if (Array.isArray(list)) {
-        for (const raw of list) {
-          const rx = recordValue(raw) as unknown as TodayPlanSessionPrepPrescription;
-          if (rx.exercise) rxByEx[String(rx.exercise).toLowerCase()] = rx;
-        }
-      }
-    } catch {}
-    return rxByEx;
-  }
-
-  async function loadCardioContext(
-    dayItems: TodayPlanSessionPrepPlanItem[],
-    isToday: boolean,
-    deps: TodayPlanSessionPrepDeps,
-  ): Promise<{ allCardio: TodayPlanSessionPrepPlanItem[]; cardioEfforts: TodayPlanSessionPrepCardioEffort[]; todaySettings: unknown }> {
-    const allCardio = dayItems.filter(deps.isCardioItem);
-    const strengthPlanned = dayItems.some((item) => !deps.isCardioItem(item) && item.exercise);
-    const couldHaveRun = allCardio.length > 0 || (isToday && !strengthPlanned);
-    let cardioEfforts: TodayPlanSessionPrepCardioEffort[] = [];
-    let todaySettings: unknown = null;
-    if (couldHaveRun) {
-      [cardioEfforts, todaySettings] = await Promise.all([
-        deps.api("/cardio?date=" + deps.state.logDate).catch(() => []),
-        deps.api("/settings").then((result) => recordValue(result).settings || null).catch(() => null),
-      ]) as [TodayPlanSessionPrepCardioEffort[], unknown];
-      cardioEfforts = Array.isArray(cardioEfforts) ? cardioEfforts : [];
-    }
-    return { allCardio, cardioEfforts, todaySettings };
-  }
-
   async function preparePlanSession(deps: TodayPlanSessionPrepDeps): Promise<TodayPlanSessionPrepResult> {
     const loggedByEx = groupLoggedSets(deps.session);
     const revealBlank = !!(deps.state.planReveal && deps.state.planReveal.date === deps.state.logDate && deps.state.planReveal.on && deps.state.planReveal.blank);
@@ -220,7 +175,7 @@ type TodayPlanSessionPreparationApi = {
     const day = selectedPlanDay(deps.state, revealBlank);
     const items = planItems(day);
     const planNames = new Set(items.filter((item) => !deps.isCardioItem(item) && item.exercise).map((item) => String(item.exercise)));
-    const { allCardio, cardioEfforts, todaySettings } = await loadCardioContext(items, deps.isToday, deps);
+    const { allCardio, cardioEfforts, todaySettings } = await todayPlanSessionData.loadCardioContext(items, deps.isToday, deps);
     const matchedCardio = matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
     const skippedSet = new Set(((deps.session && deps.session.skips) || []).map((name) => String(name).toLowerCase()));
     const isSkipped = (item: TodayPlanSessionPrepPlanItem) =>
@@ -234,8 +189,8 @@ type TodayPlanSessionPreparationApi = {
     const planEx = activeItems.filter((item) => !deps.isCardioItem(item) && item.exercise).map((item) => String(item.exercise));
     const offPlanEx = Object.keys(loggedByEx).filter((name) => !planNames.has(name));
     const pendingOffPlan = pendingForDate(deps, planNames, loggedByEx);
-    const lastSets = await loadLastSets([...planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps);
-    const rxByEx = await loadPrescriptions(deps.state.day, planEx, deps);
+    const lastSets = await todayPlanSessionData.loadLastSets([...planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps);
+    const rxByEx = await todayPlanSessionData.loadPrescriptions(deps.state.day, planEx, deps);
     const rxFor = (name: unknown) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
     const prefillFor = (item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill => {
       const exercise = String(item.exercise || "");

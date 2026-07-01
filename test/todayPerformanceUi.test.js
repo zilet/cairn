@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const today = readFileSync(path.join(root, "src/client/today-screen.ts"), "utf8");
 const todayBridges = readFileSync(path.join(root, "src/client/today-compatibility-bridges.ts"), "utf8");
 const todayDataLoader = readFileSync(path.join(root, "src/client/today-data-loader.ts"), "utf8");
+const todayPlanSessionData = readFileSync(path.join(root, "src/client/today-plan-session-data-client.ts"), "utf8");
 const todayPlanSessionPreparation = readFileSync(path.join(root, "src/client/today-plan-session-preparation.ts"), "utf8");
 const todayProgressionController = readFileSync(path.join(root, "src/client/today-progression-controller.ts"), "utf8");
 const todaySessionController = readFileSync(path.join(root, "src/client/today-session-controller.ts"), "utf8");
@@ -29,8 +30,9 @@ test("Today starts non-dependent summary reads before later render work", () => 
 });
 
 test("Today SWR-caches progression and invalidates it when set truth changes", () => {
-  assert.match(todayPlanSessionPreparation, /deps\.cachedApi\("\/program\/progression\?day="/);
-  assert.match(todayPlanSessionPreparation, /key:\s*`program:progression:\$\{day\}`/);
+  assert.match(todayPlanSessionData, /deps\.cachedApi\("\/program\/progression\?day="/);
+  assert.match(todayPlanSessionData, /key:\s*`program:progression:\$\{day\}`/);
+  assert.match(todayPlanSessionPreparation, /todayPlanSessionData\.loadPrescriptions/);
   assert.match(today, /todayPlanSessionPreparation\.preparePlanSession/);
   assert.match(today, /invalidateTodayProgression/);
   assert.match(todayBridges, /invalidateTodayProgression\(\)/);
