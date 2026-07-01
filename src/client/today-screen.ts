@@ -2443,34 +2443,15 @@ async function loadFuelToday(date: any) {
   runCountUps(slot);
 }
 
-// Today: a calm "week ahead" sketch — lift / run / mixed / rest across the next few
-// days, so the athlete can see roughly when to train and run for their goals. Pull,
-// never push: it waits quietly and is a SUGGESTION to reshape, never a schedule. The
-// endpoint is agentic with a deterministic plan-rotation floor, so it always returns
-// something usable. Renders nothing on an empty result.
-const WEEK_AHEAD_GLYPH: Record<string, string> = { lift: "◆", run: "➜", mixed: "✦", rest: "○" };
+// Today: a calm "week ahead" sketch. Rendering lives in
+// /js/today-week-ahead-client.js; this screen keeps API loading and slot wiring.
 async function loadWeekAhead() {
   const slot = todayView.querySelector("#weekAheadSlot");
   if (!slot) return;
   let r: TodayScreenWeekAheadResponse | null = null;
   try { r = await todayApi("/week-ahead"); } catch { return; }
   if (todayState.tab !== "today" || !slot.isConnected) return;
-  const days = r && r.ok && Array.isArray(r.days) ? r.days : [];
-  if (!days.length) { slot.innerHTML = ""; return; }
-  const rows = days.map((d: any) => {
-    const kind = WEEK_AHEAD_GLYPH[d.kind] ? d.kind : "lift";
-    return `<div class="wa-row wa-${escAttr(kind)}">
-        <span class="wa-glyph" aria-hidden="true">${WEEK_AHEAD_GLYPH[kind]}</span>
-        ${d.day ? `<span class="wa-day lbl">${escHtml(d.day)}</span>` : ""}
-        <span class="wa-label">${escHtml(d.label)}</span>
-        ${d.note ? `<span class="wa-note">${escHtml(d.note)}</span>` : ""}
-      </div>`;
-  }).join("");
-  slot.innerHTML = `<div class="weekahead reveal" style="--i:0">
-      <div class="weekahead-h"><span class="lbl">The week ahead</span></div>
-      <div class="weekahead-days">${rows}</div>
-      ${r && r.ok && r.summary ? `<div class="weekahead-sum">${escHtml(r.summary)}</div>` : ""}
-    </div>`;
+  slot.innerHTML = CairnTodayWeekAhead.cardHtml(r);
 }
 
 // Today rail: a calm, self-explaining "what changed" card — the handful of

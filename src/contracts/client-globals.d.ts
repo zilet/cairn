@@ -41,6 +41,8 @@ import type {
   ClientProgramState,
   ClientRunCompliance,
   ClientSportBests,
+  ClientWeekAheadDay,
+  ClientWeekAheadDayKind,
   ClientWeeklyRunPlan,
 } from "./client-api.js";
 
@@ -1187,6 +1189,14 @@ declare global {
       bannerHtml(rows: unknown): string;
     };
 
+    CairnTodayWeekAhead: {
+      WEEK_AHEAD_GLYPH: Record<ClientWeekAheadDayKind, string>;
+      kind(value: unknown): ClientWeekAheadDayKind;
+      days(value: unknown): ClientWeekAheadDay[];
+      rowHtml(day: unknown): string;
+      cardHtml(read: unknown): string;
+    };
+
     CairnTodayGarminReconciliation: {
       load(options: {
         root: ParentNode | null | undefined;
@@ -1258,5 +1268,6 @@ declare global {
   declare const CairnTodayLately: Window["CairnTodayLately"];
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];
   declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];
+  declare const CairnTodayWeekAhead: Window["CairnTodayWeekAhead"];
   declare const CairnTodayGarminReconciliation: Window["CairnTodayGarminReconciliation"];
 }
