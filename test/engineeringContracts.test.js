@@ -1072,7 +1072,8 @@ test("PWA API calls are covered by shared client contracts or explicit waivers",
 });
 
 test("chat action write contract stays typed and prompt-aligned", () => {
-  const prompt = read("src/prompt.ts");
+  // prompt.ts is a barrel now; the chat prompt + parseChatReply live in the chat module.
+  const prompt = read("src/prompt/chat.ts");
   const chatTurns = read("src/chatTurns.ts");
   const chatActions = read("src/chatActions.ts");
   const actionSchema = renderChatActionSchema();

@@ -1,0 +1,376 @@
+// Nutrition prompts: the weekly meal plan, the adaptive check-in retarget, the
+// single-meal swap, and the per-meal recipe. Owns the household-diet renderer.
+import { todayISO } from "../db.js";
+import * as repo from "../repo.js";
+import type { CoachContext } from "../repo/coach-context.js";
+import {
+  CONTEXT_GUARDRAILS,
+  disciplineOf,
+  renderConnectedBrain,
+  renderDexaTargeting,
+  renderDiscipline,
+  renderEnduranceGoal,
+  renderTodayFuel,
+} from "./shared.js";
+
+const MEAL_SCHEMA = `{
+  "summary": "approach for the week, and the daily kcal / protein target used",
+  "daily_kcal": <number>,
+  "daily_protein_g": <number>,
+  "days": [
+    { "day": "Mon",
+      "note": "<optional one-liner: carb timing / prep hint for this day, e.g. 'training day — carbs front-loaded'>",
+      "meals": [ { "name": "<dish name, e.g. Chicken & rice bowl>", "items": "short ingredient list", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> } ] }
+  ],
+  "shopping": ["item", "item"],
+  "notes": "<flags, swaps, anything the athlete should know>"
+}`;
+
+// Plain-language age from a YYYY-MM-DD birthdate, computed against today.
+// Mirrors the PWA's ageFromBirthdate (public/js/): babies in months, everyone else in
+// years; null/garbage → "" (no age shown). Kept deterministic for the prompt.
+function ageFromBirthdate(bd: any, ref?: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(bd || ""));
+  if (!m) return "";
+  const b = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(b.getTime())) return "";
+  const t = /^(\d{4})-(\d{2})-(\d{2})/.exec(ref || todayISO());
+  const now = t ? new Date(Number(t[1]), Number(t[2]) - 1, Number(t[3])) : new Date();
+  let months = (now.getFullYear() - b.getFullYear()) * 12 + (now.getMonth() - b.getMonth());
+  if (now.getDate() < b.getDate()) months--;
+  if (months < 0) return "";
+  if (months < 24) return `${months} mo`;
+  return `${Math.floor(months / 12)} yr`;
+}
+
+// The household-diet renderer for the meal prompts (Phase: family-nutrition).
+// Compiles, in calm plain language, the ATHLETE's own allergies (HARD safety
+// exclusions — meals MUST exclude these) + dietary restrictions (respected
+// strongly), then each family member's name/age + their allergies/restrictions
+// surfaced as OPTIONAL kid-friendly / household mods. An allergy is a SAFETY
+// hard-exclusion, the one place the constitution allows a hard rule. Returns ""
+// when nothing is declared — quiet by default, like renderConnectedBrain.
+function renderHouseholdDiet(ctx: any): string {
+  const profile: any = ctx?.profile ?? {};
+  const family: any[] = Array.isArray(ctx?.family) ? ctx.family : [];
+  const clean = (v: any) => String(v ?? "").trim();
+  const lines: string[] = [];
+
+  const myAllergies = clean(profile.allergies);
+  const myDiet = clean(profile.dietary_restrictions);
+  const self: string[] = [];
+  if (myAllergies)
+    self.push(`  - ALLERGIES (HARD EXCLUSION — for safety, NEVER include these ingredients in ANY meal, item, recipe, or substitution): ${myAllergies}`);
+  if (myDiet)
+    self.push(`  - DIETARY RESTRICTIONS (respect strongly): ${myDiet}`);
+  if (self.length) {
+    lines.push("ATHLETE'S DIETARY NEEDS:");
+    lines.push(...self);
+  }
+
+  // Family members with anything declared → optional household mods.
+  const memberLines: string[] = [];
+  for (const f of family) {
+    const fa = clean(f?.allergies);
+    const fd = clean(f?.dietary_restrictions);
+    if (!fa && !fd) continue;
+    const name = clean(f?.name) || "a family member";
+    const age = ageFromBirthdate(f?.birthdate);
+    const rel = clean(f?.relationship);
+    const who = [name, age, rel].filter(Boolean).join(", ");
+    const parts: string[] = [];
+    if (fa) parts.push(`allergies: ${fa} (HARD EXCLUSION if this person shares the meal)`);
+    if (fd) parts.push(`diet: ${fd}`);
+    memberLines.push(`  - ${who} — ${parts.join("; ")}`);
+  }
+  if (memberLines.length) {
+    lines.push("HOUSEHOLD (optional kid-friendly / shared-meal mods — plan PRIMARILY for the athlete's own goal & protein target, but where it's EASY, note in that day's \"note\" field a simple mod so ONE base meal can also serve these people; never compromise the athlete's allergens or protein for this):");
+    lines.push(...memberLines);
+  }
+
+  return lines.length ? `\n${lines.join("\n")}\n` : "";
+}
+
+// Longevity + lean guardrails shared by the weekly meal-plan and meal-swap prompts.
+// The journey's SHAPE (v41) → a plain-language fueling instruction that CONDITIONS
+// the deficit / "getting-lean" framing on the actual goal mode, so a maintaining or
+// lean-building athlete is never pushed into a cut. Reads ctx.goal_mode (always set
+// by getCoachContext) and falls back to ctx.goal.goal_mode. Calm, no scores.
+function renderGoalMode(ctx: any): string {
+  const mode = String(ctx?.goal_mode || ctx?.goal?.goal_mode || "maintain");
+  const goal = ctx?.goal && ctx.goal.ok ? ctx.goal : null;
+  const tgt = goal?.recommended?.target_intake_kcal;
+  const protein = goal?.recommended?.protein_g;
+  const anchor = tgt ? ` Anchor daily calories near ~${tgt} kcal with ~${protein} g protein (goal.recommended).` : "";
+  if (mode === "maintain") {
+    return `\nGOAL MODE: MAINTAIN — the athlete is holding steady, NOT losing weight. Do NOT prescribe a deficit or frame food as "getting lean"; fuel to maintenance — enough to support training and recovery, protein-forward, whole-food quality. Only flag intake if the measured weight trend genuinely drifts.${anchor}\n`;
+  }
+  if (mode === "gain") {
+    return `\nGOAL MODE: LEAN GAIN — the athlete is building, so eat in a CONSERVATIVE surplus (slow, muscle-biased — never a dirty bulk). Keep protein high and food quality high; the connected brain's lab directives still gate WHAT the surplus is made of (e.g. cap saturated fat if ApoB is up).${anchor}\n`;
+  }
+  return `\nGOAL MODE: LOSE — a lean-safe deficit toward the goal weight, protein protected, never a crash cut.${anchor}\n`;
+}
+
+// Framing: super-healthy, goal-aware, longevity coach — not just a macro calculator.
+const LONGEVITY_GUARDRAILS = `LONGEVITY GUARDRAILS:
+- Anchor EVERY meal on protein; total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g).
+- 30g+ fiber per day: vegetables, legumes, fruit, whole grains.
+- Build meals from mostly whole, single-ingredient foods; minimize ultra-processed food, added
+  sugar, and alcohol.
+- Oily fish 2-3x/week (salmon, sardines, mackerel) or another omega-3 source.
+- Calorie target follows goal.recommended for the active GOAL MODE (a lean-safe deficit, maintenance,
+  or a conservative surplus) — never a crash deficit and never an aggressive bulk.
+- Keep the last meal of the day moderate, not enormous or very late.`;
+
+// Meal slots are flexible — the plan must bend around the athlete's real training schedule,
+// not assume a textbook pre/post-workout sandwich.
+const MEAL_TIMING_RULES = `MEAL TIMING — slots are FLEXIBLE, schedule around the athlete's stated training times:
+- Meal labels (breakfast/lunch/...) are suggestions, not a fixed template. Adapt count and timing
+  to the USER SCHEDULE & MEAL PREFERENCES section (when present) and the training plan.
+- If the athlete trains FASTED in the morning, do NOT emit a pre-workout meal — give them a
+  substantial post-training breakfast instead.
+- Use each day's "note" field to explain the timing choices for that day.`;
+
+// Goal-aware weekly meal-plan prompt.
+export function buildMealPlanPrompt(userInstruction?: string): string {
+  const ctx = repo.getCoachContext();
+  const prefs = (repo.getSettings().meal_prefs || "").trim();
+  const split = (ctx.plan as any[]).map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`).join("; ");
+  // Make the plan adapt to the athlete's REAL inputs, not just a static goal number:
+  // (1) the foods they actually log, (2) their measured expenditure, (3) current fatigue.
+  const exp = repo.estimateExpenditure(21);
+  const freqMap = new Map<string, any>();
+  for (const h of [8, 13, 19]) for (const f of repo.frequentFoods(h).slice(0, 4)) {
+    const k = String(f.summary).toLowerCase();
+    if (!freqMap.has(k)) freqMap.set(k, f);
+  }
+  const freqList = [...freqMap.values()].sort((a, b) => b.count - a.count).slice(0, 10);
+  const freqBlock = freqList.length
+    ? `\nFREQUENTLY LOGGED FOODS (what the athlete ACTUALLY eats — build around these where they fit; reusing their own staples lifts adherence far more than novel gourmet meals):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}×${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n`
+    : "";
+  const expBlock = exp.tdee != null
+    ? `\nDERIVED EXPENDITURE (real — from logged intake minus the weighted weight trend; confidence ${exp.confidence}): TDEE ≈ ${exp.tdee} kcal/day; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. Anchor daily_kcal to goal.recommended, but SANITY-CHECK it against this measured expenditure — if they diverge a lot, trust the lean-safe target implied by this real TDEE over a stale goal number.\n`
+    : "";
+  const trainingSignals = ctx.training_signals as any;
+  const fatigue = trainingSignals?.autoregulation?.note
+    ? `\nRECOVERY DEBT (recent training feedback): ${trainingSignals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
+    : "";
+  return `You are a super-healthy, goal-aware, longevity-focused nutrition coach building a 7-day
+meal plan that fuels the athlete's CURRENT goal (see GOAL MODE below) while eating for healthspan. The
+athlete's profile, goal check (with computed TDEE and a mode-correct recommended intake), training
+plan, recent activities, and food preferences in memory are in the DATA section.
+${renderGoalMode(ctx)}
+HARD RULES:
+- Anchor daily_kcal to goal.recommended (the mode-correct target — a lean-safe deficit, maintenance,
+  or a conservative surplus per GOAL MODE), NOT an aggressive crash deficit or a dirty bulk, even if
+  the athlete's requested timeline implies more. If their goal is aggressive, build the sustainable
+  plan and say so in notes.
+- Hit the protein target (goal.recommended.protein_g). Protein is the lever that protects muscle.
+- Never propose intake below ~1500 kcal for this athlete regardless of math.
+- Favor whole foods; respect any preferences/constraints in memory.
+- Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.
+
+${LONGEVITY_GUARDRAILS}
+
+${MEAL_TIMING_RULES}
+
+TRAINING SPLIT (plan the week's meals around these training days): ${split || "(no plan days)"}
+${prefs ? `
+USER SCHEDULE & MEAL PREFERENCES (follow these — they override generic templates):
+${prefs}
+` : ""}
+${CONTEXT_GUARDRAILS}
+- TRIPS specifically: for weeks overlapping a trip, lean on portable, travel-friendly meals and
+  flag that the athlete will be eating out.
+- HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
+  the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
+  shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
+${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderDexaTargeting(ctx, "nutrition")}${renderHouseholdDiet(ctx)}
+TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${MEAL_SCHEMA}
+
+DATA:
+${JSON.stringify(ctx)}`;
+}
+
+// ---------- T3: adaptive nutrition check-in (MacroFactor-style retarget) ----------
+// A nutrition target CHANGE, drafted as a PROPOSAL the athlete reviews — never
+// auto-applied. "no_change" is a first-class, common answer: most weeks nothing
+// has really moved and the calm thing is to stay quiet.
+const NUTRITION_CHECKIN_SCHEMA = `{
+  "change": true | false,
+  "summary": "<one or two plain sentences: what the data shows and what you'd suggest — or, if change is false, why staying put is right>",
+  "nutrition": {
+    "target_kcal": <number — the suggested new daily calorie target>,
+    "protein_g": <number — daily protein target, hold or raise; never drop protein under a deficit>,
+    "carbs_g": <number|null>,
+    "fat_g": <number|null>,
+    "prev_target_kcal": <number|null — the target this replaces, if known>,
+    "reason": "<short, kind, trend-grounded reason; never about 'being good' or adherence>"
+  },
+  "notes": "<optional — anything to flag, may be empty>"
+}`;
+
+// Adaptive-nutrition check-in (Phase 3A). Given the real derived expenditure and
+// the current target, ask the agent to either propose a single calm calorie/
+// macro target change OR explicitly decline (change:false) when nothing has
+// meaningfully moved. The caller only ever drafts a proposal when change:true —
+// this prompt is the judgement layer, and the loop is adherence-NEUTRAL: a thin
+// logging week is a reason for LESS confidence, never a target cut and never a
+// scold. Macro floors: protect protein first, then fat, then carbs flex.
+export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDays?: number } = {}): string {
+  const context = ctx ?? repo.getCoachContext();
+  const exp = repo.estimateExpenditure(opts.windowDays ?? 21);
+  const goal: any = (context as any)?.goal ?? repo.computeGoalCheck();
+  const profile: any = (context as any)?.profile ?? repo.getProfile();
+  // The current target the athlete is (notionally) eating to: the requested
+  // deficit target if set, else the lean-safe recommended one.
+  const currentTarget = goal?.ok
+    ? (goal.requested?.target_intake_kcal ?? goal.recommended?.target_intake_kcal ?? null)
+    : null;
+  const proteinTarget = goal?.ok ? (goal.recommended?.protein_g ?? null) : null;
+  return `You are Cairn, the athlete's calm, goal-aware, longevity-focused nutrition buddy running a
+quiet adaptive-nutrition check-in (MacroFactor-style). Their REAL energy expenditure has been derived
+from logged intake and the bodyweight trend, adherence-neutral — it does NOT care whether they "were
+good." Decide whether their calorie/macro target should change, and if so propose ONE calm adjustment
+for them to review. NOTHING is applied automatically — they drive.
+
+THE CONSTITUTION (binding):
+- Adherence-NEUTRAL and kind. NEVER mention logging gaps, willpower, "being good/bad", or guilt. A
+  thin data week is a reason for LOWER confidence, never a target cut.
+- Plain language, no 0-100 scores. Frame food as "remaining", never "consumed"; there are no good or
+  bad foods. Calm, never alarmist.
+- A SUGGESTION, never a verdict. Only propose a change when the trend has GENUINELY moved away from
+  the goal — otherwise set change:false and stay quiet (the common, correct answer most weeks).
+
+DERIVED EXPENDITURE (real TDEE from intake − weighted weight trend):
+${JSON.stringify(exp)}
+
+CURRENT TARGET: ${currentTarget != null ? `~${currentTarget} kcal/day` : "(none set)"}, protein ~${proteinTarget != null ? `${proteinTarget} g/day` : "(unset)"}.
+GOAL CHECK (mode-correct recommendation): ${JSON.stringify(goal)}
+${renderGoalMode(context)}
+WHEN TO PROPOSE A CHANGE (else change:false):
+- Confidence must be at least "medium" AND the trend must have drifted meaningfully off the goal pace
+  FOR THIS GOAL MODE — see below. Otherwise set change:false and stay quiet (the common, correct answer).
+- LOSE: weight flat or rising while the goal is to lose, or losing far faster than the lean-safe ceiling
+  (then a small calorie RAISE keeps it sustainable).
+- MAINTAIN: only when the weight trend has consistently drifted up OR down off steady — nudge back toward
+  maintenance (~the derived TDEE). Never propose a deficit by default; holding steady is success.
+- LEAN GAIN: flag if the trend shows NO gain over time (suggest a small RAISE) or gaining too fast /
+  fat-biased (suggest easing the surplus). Never cut below maintenance.
+- Keep any change SMALL: nudge calories by roughly ±100-250 kcal toward the right pace, never a crash cut.
+  Respect goal.recommended as the floor — never below ~1500 kcal.
+- MACRO FLOORS: protect PROTEIN first (hold or raise — protein_g >= the current protein target), then fat
+  to a healthy minimum, and let CARBS take the adjustment.
+- If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.${disciplineOf(context) !== "strength" ? `
+- ENDURANCE/HYBRID athlete: do NOT propose a deficit unless fat loss is an EXPLICIT goal — the default is
+  to FUEL the training (anchor to maintenance). Protect CARBOHYDRATE; if anything, a sustained calorie
+  deficit while mileage is high is the thing to flag (suggest eating MORE, not less). Carbs are not the
+  adjustment lever to cut here.` : ""}
+
+${CONTEXT_GUARDRAILS}
+${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderDexaTargeting(context, "nutrition")}${renderTodayFuel(context)}
+ATHLETE: profile: ${JSON.stringify(profile)}
+
+OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
+${NUTRITION_CHECKIN_SCHEMA}`;
+}
+
+const SWAP_SCHEMA = `{ "name": "<dish>", "items": "<short ingredient list>", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> }`;
+
+// Agentic single-meal swap: replace ONE meal in an existing drafted plan,
+// honoring an optional free-text hint ("let's go with fish").
+export function buildMealSwapPrompt(args: { plan: any; day: string; mealIndex: number; hint?: string }): string {
+  const { plan, day, mealIndex, hint } = args;
+  const parsed = plan?.parsed ?? {};
+  const dayObj = (Array.isArray(parsed.days) ? parsed.days : []).find(
+    (d: any) => String(d?.day ?? "").trim().toLowerCase() === String(day ?? "").trim().toLowerCase()
+  );
+  const meals = Array.isArray(dayObj?.meals) ? dayObj.meals : [];
+  const current = meals[mealIndex];
+  const profile = repo.getProfile();
+  const goal = repo.computeGoalCheck();
+  const prefs = (repo.getSettings().meal_prefs || "").trim();
+  // The connected brain must reach the swap too — otherwise a flagged marker's
+  // nutrition directive (e.g. "tilt toward fish/poultry, lower saturated fat")
+  // is silently ignored and the replacement can reintroduce a steered-away food.
+  // renderConnectedBrain returns "" when there are no active directives.
+  const ctx = repo.getCoachContext();
+  const dayMeals = meals
+    .map((m: any, i: number) => `${i === mealIndex ? ">>> SWAP THIS ONE >>> " : ""}[${i}] ${m?.name ?? "?"} — ${m?.items ?? ""} (${m?.kcal ?? "?"} kcal, ${m?.protein_g ?? "?"}g protein, ${m?.carbs_g ?? "?"}g carbs, ${m?.fat_g ?? "?"}g fat)`)
+    .join("\n");
+  return `You are a super-healthy, goal-aware, longevity-focused nutrition coach. The athlete wants
+to SWAP one meal in their drafted meal plan for a different dish. Propose exactly ONE replacement.
+
+THE DAY (${dayObj?.day ?? day}) — its meals, with the one to replace marked:
+${dayMeals || "(no meals found)"}
+
+PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?? "?"}g protein per day.
+
+REPLACEMENT RULES:
+- Keep the new meal within ±10% of the replaced meal's kcal (${current?.kcal ?? "?"}) and protein
+  (${current?.protein_g ?? "?"}g) — UNLESS the athlete's hint clearly asks otherwise.
+- It must fit the rest of the day (don't duplicate another meal's main protein/dish).
+
+${LONGEVITY_GUARDRAILS}
+${renderGoalMode(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderHouseholdDiet(ctx)}
+${prefs ? `
+USER SCHEDULE & MEAL PREFERENCES (follow these):
+${prefs}
+` : ""}${hint?.trim() ? `
+ATHLETE'S HINT (honor this): ${hint.trim()}
+` : ""}
+ATHLETE: profile: ${JSON.stringify(profile)}
+goal: ${JSON.stringify(goal)}
+
+OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
+${SWAP_SCHEMA}`;
+}
+
+const RECIPE_SCHEMA = `{ "summary": "<1-2 sentences: how this meal serves the athlete's goal & longevity>",
+  "time_min": <total prep+cook minutes, number>,
+  "servings": <number>,
+  "ingredients": [{"item": "<ingredient>", "qty": "<amount>"}],
+  "steps": ["<ordered, practical step>"],
+  "tips": ["<2-4 prep-ahead / swap / seasoning hints>"] }`;
+
+// Agentic recipe for ONE planned meal — the result is cached on the meal
+// inside the plan's parsed_json (see repo.setMealRecipe).
+export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: number }): string {
+  const { plan, day, mealIndex } = args;
+  const parsed = plan?.parsed ?? {};
+  const dayObj = (Array.isArray(parsed.days) ? parsed.days : []).find(
+    (d: any) => String(d?.day ?? "").trim().toLowerCase() === String(day ?? "").trim().toLowerCase()
+  );
+  const meals = Array.isArray(dayObj?.meals) ? dayObj.meals : [];
+  const current = meals[mealIndex];
+  const profile = repo.getProfile();
+  const goal = repo.computeGoalCheck();
+  const prefs = (repo.getSettings().meal_prefs || "").trim();
+  return `You are a super-healthy, goal-aware, longevity-focused nutrition coach. Write a practical,
+home-cook recipe for ONE meal from the athlete's drafted meal plan.
+
+THE MEAL (${dayObj?.day ?? day}, meal [${mealIndex}]):
+${current ? `${current?.name ?? "?"} — ${current?.items ?? ""} (${current?.kcal ?? "?"} kcal, ${current?.protein_g ?? "?"}g protein, ${current?.carbs_g ?? "?"}g carbs, ${current?.fat_g ?? "?"}g fat)` : "(meal not found)"}
+
+PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?? "?"}g protein per day.
+
+RECIPE RULES:
+- Use EXACTLY the meal's listed items as the base of the recipe (plus pantry staples: oil,
+  salt, pepper, herbs, spices, vinegar, stock).
+- Keep the finished dish consistent with the meal's kcal and macros above.
+- Steps must be ordered and practical for a weeknight home cook.
+
+${LONGEVITY_GUARDRAILS}
+${renderHouseholdDiet({ profile, family: repo.listFamily() })}${prefs ? `
+USER SCHEDULE & MEAL PREFERENCES (respect these):
+${prefs}
+` : ""}
+ATHLETE: profile: ${JSON.stringify(profile)}
+goal: ${JSON.stringify(goal)}
+
+OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
+${RECIPE_SCHEMA}`;
+}
