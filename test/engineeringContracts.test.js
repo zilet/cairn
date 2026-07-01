@@ -1280,7 +1280,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnProgressProgramSummary/);
   assert.match(clientGlobals, /declare function phaseWord\(phase: unknown\): string/);
   assert.match(clientGlobals, /declare function blockFocusWord\(focus: unknown\): string/);
-  assert.match(clientGlobals, /declare function activeBlockHtml\(block: unknown\): string/);
+  assert.match(clientGlobals, /declare function activeBlockHtml\(block: ClientProgramBlock \| null \| undefined\): string/);
   assert.match(clientGlobals, /declare function startBlockHtml\(\): string/);
   assert.match(clientGlobals, /declare function loadProgramBlock\(\): Promise<void>/);
   assert.match(clientGlobals, /declare function wireProgramBlock\(slot: Element\): void/);
@@ -2297,6 +2297,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /AssertAssignable<CoachingFocus, ClientCoachingFocus>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
   assert.match(compat, /ReturnType<typeof planDayProgression>/);
+  assert.match(compat, /AssertAssignable<ProgramBlock, ClientProgramBlock>/);
   assert.match(compat, /Awaited<ReturnType<typeof suggestSession>>/);
   assert.match(compat, /ReturnType<typeof learnedTimeline>/);
   assert.match(compat, /ReturnType<typeof getOutcomeLearnings>/);
@@ -2509,8 +2510,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramSummarySource, /function adaptationsHtml\(adaptations: unknown, index: number\): string/);
   assert.match(progressProgramSummarySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressProgramSummarySource, /CairnProgressProgramSummary/);
-  assert.match(progressProgramBlockSource, /function blockFocusWord\(focus: unknown\): string/);
-  assert.match(progressProgramBlockSource, /function activeBlockHtml\(block: unknown\): string/);
+  assert.match(progressProgramBlockSource, /type ClientProgramBlock = import\("\.\.\/contracts\/client-api\.js"\)\.ClientProgramBlock/);
+  assert.match(progressProgramBlockSource, /function blockFocusWord\(focus: ClientProgramBlockFocus \| unknown\): string/);
+  assert.match(progressProgramBlockSource, /function activeBlockHtml\(block: ClientProgramBlock \| null \| undefined\): string/);
   assert.match(progressProgramBlockSource, /async function loadProgramBlock\(\): Promise<void>/);
   assert.match(progressProgramBlockSource, /function wireProgramBlock\(slot: Element\): void/);
   assert.match(progressProgramBlockSource, /Object\.assign\(globalThis, \{/);

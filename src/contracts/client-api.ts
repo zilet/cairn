@@ -469,6 +469,22 @@ export interface ClientProgramAdjustment {
   programmed?: boolean;
 }
 
+export type ClientProgramBlockFocus = "strength" | "hypertrophy" | "endurance-base" | "peak";
+export type ClientProgramBlockPhase = "accumulation" | "intensification" | "deload" | "realization";
+export type ClientProgramBlockStatus = "active" | "completed" | "abandoned";
+
+export interface ClientProgramBlock {
+  id: number;
+  goal: string;
+  focus: ClientProgramBlockFocus;
+  phase: ClientProgramBlockPhase;
+  week_index: number;
+  total_weeks: number;
+  started_at: string;
+  status: ClientProgramBlockStatus;
+  created_at: string;
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -927,8 +943,8 @@ export interface ClientApiResponses {
   "/api/program/progression/apply": ClientProposalResult;
   "/api/program/balance": ClientProgramBalance;
   "/api/program/adjustments": ClientProgramAdjustment[];
-  "/api/program/blocks": ClientJsonArray;
-  "/api/program/blocks/active": ClientJsonObject | null;
+  "/api/program/blocks": ClientProgramBlock[] | ClientProgramBlock;
+  "/api/program/blocks/active": ClientProgramBlock | null;
   "/api/program-state": ClientJsonObject;
   "/api/performance": ClientJsonObject;
   "/api/run-plan": ClientWeeklyRunPlan;
@@ -997,7 +1013,7 @@ type ClientApiResponseForCleanPath<Path extends string> =
                                         : Path extends `/food-notes/${string}` ? ClientFoodNote | ClientDeleteResponse
                                           : Path extends `/proposals/${string}/apply` ? ClientProposalResult
                                             : Path extends `/proposals/${string}/discard` ? ClientProposal
-                                              : Path extends `/program/blocks/${string}` ? ClientJsonObject
+                                              : Path extends `/program/blocks/${string}` ? ClientProgramBlock
                                                 : Path extends `/directives/${string}` ? { ok: true; directive: ClientDirective }
                                                   : Path extends `/insights/${string}` ? ClientInsight
                                                     : Path extends `/health-docs/${string}/reanalyze` ? ClientHealthDocument

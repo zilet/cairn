@@ -1,16 +1,10 @@
 // @ts-check
 // Progress program-block card and controls.
 
-type ProgramBlock = {
-  id?: unknown;
-  focus?: unknown;
-  phase?: unknown;
-  week_index?: unknown;
-  total_weeks?: unknown;
-  goal?: unknown;
-};
+type ClientProgramBlock = import("../contracts/client-api.js").ClientProgramBlock;
+type ClientProgramBlockFocus = import("../contracts/client-api.js").ClientProgramBlockFocus;
 
-function blockFocusWord(focus: unknown): string {
+function blockFocusWord(focus: ClientProgramBlockFocus | unknown): string {
   if (focus === "strength") return "Strength";
   if (focus === "hypertrophy") return "Hypertrophy";
   if (focus === "endurance-base") return "Endurance base";
@@ -18,8 +12,9 @@ function blockFocusWord(focus: unknown): string {
   return focus ? String(focus) : "";
 }
 
-function activeBlockHtml(block: unknown): string {
-  const b = (block ?? {}) as ProgramBlock;
+function activeBlockHtml(block: ClientProgramBlock | null | undefined): string {
+  if (!block) return "";
+  const b = block;
   const meta = [blockFocusWord(b.focus), phaseWord(b.phase)].filter(Boolean).join(" · ");
   return `<div class="pblock pblock-active">
     <div class="pblock-head">
@@ -58,9 +53,9 @@ function startBlockHtml(): string {
 async function loadProgramBlock(): Promise<void> {
   const slot = view.querySelector("#progBlockSlot");
   if (!slot) return;
-  let block: ProgramBlock | null = null;
+  let block: ClientProgramBlock | null = null;
   try {
-    block = (await api("/program/blocks/active")) as ProgramBlock | null;
+    block = await api("/program/blocks/active");
   } catch {
     return;
   }
@@ -105,7 +100,7 @@ function wireProgramBlock(slot: Element): void {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ goal: goal || "Training block", focus, total_weeks }),
-      })) as { id?: unknown } | null;
+      })) as ClientProgramBlock | null;
       if (result?.id) {
         toast("Block started — the coach will periodize toward it");
         refresh();

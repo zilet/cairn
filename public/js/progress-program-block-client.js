@@ -13,7 +13,9 @@ function blockFocusWord(focus) {
     return focus ? String(focus) : "";
 }
 function activeBlockHtml(block) {
-    const b = (block ?? {});
+    if (!block)
+        return "";
+    const b = block;
     const meta = [blockFocusWord(b.focus), phaseWord(b.phase)].filter(Boolean).join(" · ");
     return `<div class="pblock pblock-active">
     <div class="pblock-head">
@@ -53,7 +55,7 @@ async function loadProgramBlock() {
         return;
     let block = null;
     try {
-        block = (await api("/program/blocks/active"));
+        block = await api("/program/blocks/active");
     }
     catch {
         return;

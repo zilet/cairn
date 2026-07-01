@@ -27,6 +27,7 @@ import type {
   ClientMemory,
   ClientMemoryKind,
 } from "./client.js";
+import type { ClientProgramBlock } from "./client-api.js";
 
 declare global {
   type ClientTabName = ContractClientTabName;
@@ -288,7 +289,7 @@ declare global {
   declare function mesoBlockHtml(meso: unknown, index: number): string;
   declare function adaptationsHtml(adaptations: unknown, index: number): string;
   declare function blockFocusWord(focus: unknown): string;
-  declare function activeBlockHtml(block: unknown): string;
+  declare function activeBlockHtml(block: ClientProgramBlock | null | undefined): string;
   declare function startBlockHtml(): string;
   declare function loadProgramBlock(): Promise<void>;
   declare function wireProgramBlock(slot: Element): void;
@@ -997,7 +998,7 @@ declare global {
 
     CairnProgressProgramBlock: {
       blockFocusWord(focus: unknown): string;
-      activeBlockHtml(block: unknown): string;
+      activeBlockHtml(block: ClientProgramBlock | null | undefined): string;
       startBlockHtml(): string;
       loadProgramBlock(): Promise<void>;
       wireProgramBlock(slot: Element): void;

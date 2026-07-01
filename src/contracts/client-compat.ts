@@ -6,6 +6,7 @@ import type { getDayIntake } from "../repo/nutrition.js";
 import type { NextStep } from "../repo/next-step.js";
 import type { DexaTargeting } from "../repo/dexa-targeting.js";
 import type { MuscleGroupTrajectory, TestWeekDue } from "../repo/muscle-trajectory.js";
+import type { ProgramBlock } from "../repo/program-blocks.js";
 import type { planDayProgression, ProgramAdjustment, ProgramBalance } from "../repo/progression.js";
 import type { RunZones, WeeklyRunPlan } from "../repo/run-progression.js";
 import type { TodayAgenda } from "../repo/today-agenda.js";
@@ -45,6 +46,7 @@ import type {
   ClientOutcomeLearningsResponse,
   ClientProgramAdjustment,
   ClientProgramBalance,
+  ClientProgramBlock,
   ClientRunZones,
   ClientSessionSuggestResponse,
   ClientTestWeekDue,
@@ -65,6 +67,7 @@ export type ProgramProgressionMatchesClientContract = AssertAssignable<
 >;
 export type ProgramBalanceMatchesClientContract = AssertAssignable<ProgramBalance, ClientProgramBalance>;
 export type ProgramAdjustmentsMatchClientContract = AssertAssignable<ProgramAdjustment[], ClientProgramAdjustment[]>;
+export type ProgramBlockMatchesClientContract = AssertAssignable<ProgramBlock, ClientProgramBlock>;
 export type RunZonesMatchClientContract = AssertAssignable<RunZones, ClientRunZones>;
 export type WeeklyRunPlanMatchesClientContract = AssertAssignable<WeeklyRunPlan, ClientWeeklyRunPlan>;
 export type MuscleTrajectoryMatchesClientContract = AssertAssignable<

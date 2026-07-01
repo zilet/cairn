@@ -194,16 +194,6 @@ export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
     reason: "Guideline packs are keyed records of trusted references and need a client-safe map DTO.",
   },
   {
-    pattern: "/program/blocks",
-    owner: "Program block client",
-    reason: "Block history rows are still rendered as backend records and need a narrow block summary DTO.",
-  },
-  {
-    pattern: "/program/blocks/active",
-    owner: "Program block client",
-    reason: "The active block read mirrors a backend row until block lifecycle DTOs are extracted.",
-  },
-  {
     pattern: "/program-state",
     owner: "Agentic training brain",
     reason: "Program state is a large coach-context read and needs a shared deterministic DTO.",
