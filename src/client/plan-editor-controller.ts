@@ -35,13 +35,6 @@ type PlanEditorControllerModelDay = {
   items: PlanEditorControllerItem[];
 };
 
-type PlanEditorControllerSaveDay = {
-  day_number: number;
-  name: string;
-  focus: unknown;
-  items: Array<Record<string, unknown>>;
-};
-
 type PlanEditorControllerHelpers = {
   blankStrength(): PlanEditorControllerItem;
   blankCardio(): PlanEditorControllerItem;
@@ -52,7 +45,13 @@ type PlanEditorControllerHelpers = {
   pdayHtml(day: PlanEditorControllerDay, dayIndex: number): string;
 };
 
-type PlanEditorControllerInput = HTMLInputElement | HTMLTextAreaElement;
+type PlanEditorControllerForm = {
+  dayNumber(day: PlanEditorControllerModelDay): number;
+  datasetNumber(el: HTMLElement, key: string): number;
+  datasetPair(value: string | undefined): [number, number];
+  syncModel(model: PlanEditorControllerModelDay[], root: ParentNode): void;
+  serializeDays(model: PlanEditorControllerModelDay[]): Array<Record<string, unknown>>;
+};
 
 declare function wireGuides(scope?: ParentNode | null): void;
 
@@ -61,82 +60,17 @@ function planHelpers(): PlanEditorControllerHelpers {
   return CairnPlanEditor as unknown as PlanEditorControllerHelpers;
 }
 
-function planInput(el: Element | null | undefined): PlanEditorControllerInput | null {
-  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el : null;
-}
-
-function planText(root: ParentNode, selector: string): string {
-  return planInput(root.querySelector(selector))?.value || "";
-}
-
-function planNumber(root: ParentNode, selector: string): number | null {
-  const value = planText(root, selector);
-  return value === "" ? null : Number(value);
-}
-
-function planDayNumber(day: PlanEditorControllerModelDay): number {
-  return Number(day.day_number) || 0;
-}
-
-function planDatasetNumber(el: HTMLElement, key: string): number {
-  return Number(el.dataset[key]) || 0;
-}
-
-function planDatasetPair(value: string | undefined): [number, number] {
-  const [day, item] = String(value || "").split(":").map(Number);
-  return [Number.isFinite(day) ? day : -1, Number.isFinite(item) ? item : -1];
+function planForm(): PlanEditorControllerForm {
+  return CairnPlanEditorForm as unknown as PlanEditorControllerForm;
 }
 
 function planEditorRoot(): HTMLElement | null {
   return $("#planedit");
 }
 
-function serializePlanDays(model: PlanEditorControllerModelDay[]): PlanEditorControllerSaveDay[] {
-  return model.map((day, index) => ({
-    day_number: index + 1,
-    name: String(day.name || `Day ${index + 1}`),
-    focus: day.focus || null,
-    items: day.items
-      .filter((item) => {
-        if (isCardioItem(item)) {
-          const note = String(item.note || "").trim();
-          const zone = String(item.target_zone || "").trim();
-          return !!note || item.target_distance_km != null || item.target_duration_min != null || !!zone;
-        }
-        return !!String(item.exercise || "").trim();
-      })
-      .map((item) => {
-        if (isCardioItem(item)) {
-          const intervalNote = String(item.interval_note || "").trim();
-          const note = String(item.note || "").trim();
-          const zone = String(item.target_zone || "").trim();
-          return {
-            kind: "cardio",
-            note: note || null,
-            target_distance_km: item.target_distance_km ?? null,
-            target_duration_min: item.target_duration_min ?? null,
-            target_zone: zone || null,
-            interval: intervalNote ? { note: intervalNote } : null,
-          };
-        }
-        const note = String(item.note || "").trim();
-        return {
-          kind: "strength",
-          exercise: String(item.exercise || "").trim(),
-          sets: item.sets,
-          rep_low: item.rep_low,
-          rep_high: item.rep_high,
-          target_weight: item.target_weight,
-          note: note || null,
-          warmup_sets: item.warmup_sets ?? null,
-          target_seconds: item.target_seconds ?? null,
-        };
-      }),
-  }));
-}
-
 async function renderPlanEditor(): Promise<void> {
   const helpers = planHelpers();
+  const form = planForm();
   headerTitle.textContent = "Plan";
   state.planSeg = "edit";
   const token = ++pollToken;
@@ -172,32 +106,7 @@ async function renderPlanEditor(): Promise<void> {
   }
 
   function sync(): void {
-    view.querySelectorAll<HTMLElement>(".pday").forEach((dayEl) => {
-      const day = model[planDatasetNumber(dayEl, "d")];
-      if (!day) return;
-      day.name = planText(dayEl, ".pday-name");
-      day.focus = planText(dayEl, ".pday-focus");
-    });
-    view.querySelectorAll<HTMLElement>(".pitem").forEach((itEl) => {
-      const day = model[planDatasetNumber(itEl, "d")];
-      const item = day && day.items[planDatasetNumber(itEl, "i")];
-      if (!item) return;
-      if (itEl.dataset.kind === "cardio") {
-        item.note = planText(itEl, ".pi-ex");
-        item.target_distance_km = planNumber(itEl, ".pi-km");
-        item.target_duration_min = planNumber(itEl, ".pi-min");
-        item.target_zone = (planText(itEl, ".pi-zone") || "").trim() || null;
-        item.interval_note = (planText(itEl, ".pi-ivl") || "").trim();
-        return;
-      }
-      item.exercise = planText(itEl, ".pi-ex");
-      item.sets = planNumber(itEl, ".pi-sets") ?? 3;
-      item.rep_low = planNumber(itEl, ".pi-lo");
-      item.rep_high = planNumber(itEl, ".pi-hi");
-      item.target_weight = planNumber(itEl, ".pi-tw");
-      item.warmup_sets = planNumber(itEl, ".pi-wu");
-      item.note = planText(itEl, ".pi-note");
-    });
+    form.syncModel(model, view);
   }
 
   function draw(): void {
@@ -208,17 +117,17 @@ async function renderPlanEditor(): Promise<void> {
 
     view.querySelectorAll<HTMLElement>("[data-editday]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      editing.add(planDatasetNumber(button, "editday"));
+      editing.add(form.datasetNumber(button, "editday"));
       draw();
     }));
     view.querySelectorAll<HTMLElement>("[data-doneday]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      editing.delete(planDatasetNumber(button, "doneday"));
+      editing.delete(form.datasetNumber(button, "doneday"));
       draw();
     }));
     view.querySelectorAll<HTMLElement>("[data-delday]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      const deleted = planDatasetNumber(button, "delday");
+      const deleted = form.datasetNumber(button, "delday");
       model.splice(deleted, 1);
       const keep = [...editing].filter((index) => index !== deleted).map((index) => (index > deleted ? index - 1 : index));
       editing.clear();
@@ -228,7 +137,7 @@ async function renderPlanEditor(): Promise<void> {
     }));
     view.querySelectorAll<HTMLElement>("[data-delitem]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      const [dayIndex, itemIndex] = planDatasetPair(button.dataset.delitem);
+      const [dayIndex, itemIndex] = form.datasetPair(button.dataset.delitem);
       const day = model[dayIndex];
       if (day && itemIndex >= 0) {
         day.items.splice(itemIndex, 1);
@@ -238,7 +147,7 @@ async function renderPlanEditor(): Promise<void> {
     }));
     view.querySelectorAll<HTMLElement>("[data-additem]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      const day = model[planDatasetNumber(button, "additem")];
+      const day = model[form.datasetNumber(button, "additem")];
       if (!day) return;
       day.items.push(helpers.blankStrength());
       markDirty();
@@ -246,7 +155,7 @@ async function renderPlanEditor(): Promise<void> {
     }));
     view.querySelectorAll<HTMLElement>("[data-addcardio]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      const day = model[planDatasetNumber(button, "addcardio")];
+      const day = model[form.datasetNumber(button, "addcardio")];
       if (!day) return;
       day.items.push(helpers.blankCardio());
       markDirty();
@@ -270,7 +179,7 @@ async function renderPlanEditor(): Promise<void> {
     }));
     view.querySelectorAll<HTMLElement>("[data-upitem]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      const [dayIndex, itemIndex] = planDatasetPair(button.dataset.upitem);
+      const [dayIndex, itemIndex] = form.datasetPair(button.dataset.upitem);
       const items = model[dayIndex]?.items;
       if (items && itemIndex > 0) {
         [items[itemIndex - 1], items[itemIndex]] = [items[itemIndex], items[itemIndex - 1]];
@@ -280,7 +189,7 @@ async function renderPlanEditor(): Promise<void> {
     }));
     view.querySelectorAll<HTMLElement>("[data-downitem]").forEach((button) => button.addEventListener("click", () => {
       sync();
-      const [dayIndex, itemIndex] = planDatasetPair(button.dataset.downitem);
+      const [dayIndex, itemIndex] = form.datasetPair(button.dataset.downitem);
       const items = model[dayIndex]?.items;
       if (items && itemIndex >= 0 && itemIndex < items.length - 1) {
         [items[itemIndex + 1], items[itemIndex]] = [items[itemIndex], items[itemIndex + 1]];
@@ -292,7 +201,7 @@ async function renderPlanEditor(): Promise<void> {
 
   $("#addDay")?.addEventListener("click", () => {
     sync();
-    const next = model.reduce((max, day) => Math.max(max, planDayNumber(day)), 0) + 1;
+    const next = model.reduce((max, day) => Math.max(max, form.dayNumber(day)), 0) + 1;
     model.push({ day_number: next, name: `Day ${next}`, focus: "", items: [] });
     editing.add(model.length - 1);
     markDirty();
@@ -301,7 +210,7 @@ async function renderPlanEditor(): Promise<void> {
 
   const persistPlan = async (): Promise<boolean> => {
     sync();
-    const days = serializePlanDays(model);
+    const days = form.serializeDays(model);
     const status = $("#planstatus");
     if (!days.length) {
       if (status) status.textContent = "Add at least one day before saving.";
@@ -332,7 +241,7 @@ async function renderPlanEditor(): Promise<void> {
 
 const CAIRN_PLAN_EDITOR_CONTROLLER = {
   render: renderPlanEditor,
-  serializeDays: serializePlanDays,
+  serializeDays: (model: PlanEditorControllerModelDay[]) => planForm().serializeDays(model),
 };
 
 Object.assign(globalThis, {

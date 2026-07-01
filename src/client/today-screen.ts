@@ -110,6 +110,9 @@ const todayPlanSessionPreparation = (globalThis as unknown as {
 const todayDataLoader = (globalThis as unknown as {
   CairnTodayDataLoader: Window["CairnTodayDataLoader"];
 }).CairnTodayDataLoader;
+const todayPlanSurface = (globalThis as unknown as {
+  CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
+}).CairnTodayPlanSurface;
 
 function todaySideLoaderDeps(): TodayScreenSideLoaderDeps {
   return {
@@ -121,6 +124,19 @@ function todaySideLoaderDeps(): TodayScreenSideLoaderDeps {
     escapeHtml: escHtml,
     localISO,
     stagger,
+  };
+}
+
+function todayPlanSurfaceDeps() {
+  return {
+    escapeHtml: escHtml,
+    escapeAttr: escAttr,
+    stagger,
+    cardioLabel,
+    cardioPrescription,
+    rxMoveCount: todayRxMoveCount,
+    setsTonnage,
+    trainGlyph: CairnTodayBrief.BRIEF_KIND.train.glyph,
   };
 }
 
@@ -556,43 +572,28 @@ async function renderToday(opts: any = {}) {
       // a cardio card hiding inside. No focus pill (there's no set-by-set logging to
       // focus into). Otherwise the strength session leads exactly as before.
       if (isRunDay) {
-        const lead = cardioItems[0] || null;
-        const rName = lead ? cardioLabel(lead) : "Today's run";
-        const rPres = lead ? cardioPrescription(lead) : "";
-        html += `<div class="session-head session-head-run">
-          <div class="session-head-main">
-            <div class="session-kicker lbl">${isToday ? "TODAY · A RUN" : "A RUN"}</div>
-            <h2 class="session-title">${escHtml(rName)}${rPres ? `<span class="session-focus"> · ${escHtml(rPres)}</span>` : ""}</h2>
-          </div>
-        </div>`;
+        html += todayPlanSurface.sessionHeadHtml({
+          isRunDay,
+          isToday,
+          cardioItems,
+          day,
+          exDone,
+          exTotal,
+          hasSyncedCardioToday,
+        }, todayPlanSurfaceDeps());
       } else {
-        const sName = day && day.name ? day.name : "Today's session";
-        // Describe the plan day actually being logged (its own focus) — the Brief's
-        // suggested focus lives in the card above and can name a different day.
-        const sFocus = (day && day.focus) ? day.focus : "";
-        // A MIXED day (strength + a prescribed/synced run) reads as "LIFT + RUN" so a
-        // hybrid athlete sees both at a glance — the run cards float up right below.
-        const mixed = cardioItems.length > 0 || hasSyncedCardioToday;
-        const kicker = mixed
-          ? (isToday ? "TODAY · LIFT + RUN" : "LIFT + RUN")
-          : (isToday ? "TODAY'S SESSION" : "SESSION");
-        html += `<div class="session-head">
-          <div class="session-head-main">
-            <div class="session-kicker lbl">${kicker}</div>
-            <h2 class="session-title">${escHtml(sName)}${sFocus ? `<span class="session-focus"> · ${escHtml(sFocus)}</span>` : ""}</h2>
-          </div>
-          <div class="session-head-side">
-            ${exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${exDone}</b><span class="session-prog-sep">/</span>${exTotal}</span>` : ""}
-            <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${CairnTodayBrief.BRIEF_KIND.train.glyph} Focus</button>
-          </div>
-        </div>`;
+        html += todayPlanSurface.sessionHeadHtml({
+          isRunDay,
+          isToday,
+          cardioItems,
+          day,
+          exDone,
+          exTotal,
+          hasSyncedCardioToday,
+        }, todayPlanSurfaceDeps());
       }
     }
-    html += `<div class="day-switch">`;
-    for (const d of todayState.plan) {
-      html += `<button class="daybtn ${d.day_number === todayState.day ? "active" : ""}" data-day="${d.day_number}">${d.day_number} · ${escHtml(d.name)}</button>`;
-    }
-    html += `</div><div id="tableHint"></div>`;
+    html += todayPlanSurface.daySwitchHtml(todayState.plan, todayState.day, todayPlanSurfaceDeps());
 
     // ---- "It followed your logs" — one calm banner + an apply control ----
     // When the progression engine has actual MOVES for this day (anything past a
@@ -601,17 +602,7 @@ async function renderToday(opts: any = {}) {
     // detail lives on each card (ex-rx); this is just the at-a-glance + the apply.
     // Pull, never push — a hold-only day shows nothing. Goes through propose→apply,
     // so "Apply to my plan" lands a DRAFT for review, never an auto-change.
-    const rxMoves = todayRxMoveCount(rxByEx);
-    if (rxMoves > 0) {
-      const word = rxMoves === 1 ? "One lift has a new target" : `${rxMoves} lifts have new targets`;
-      html += `<div class="rx-banner reveal" style="${stagger(0)}">
-        <div class="rx-banner-text">
-          <span class="rx-banner-ico" aria-hidden="true">✦</span>
-          <span class="rx-banner-h">${escHtml(word)} from what you logged</span>
-        </div>
-        <button class="rx-banner-apply draftbtn" id="rxApplyBtn" type="button" data-rx-day="${escAttr(String(todayState.day))}">Apply to my plan</button>
-      </div>`;
-    }
+    html += todayPlanSurface.rxBannerHtml(rxByEx, todayState.day, todayPlanSurfaceDeps());
 
     // Garmin "body's reaction" card — the strength session's physiology layer
     // (HR / zones / calories / training effect), reconciled from a synced watch.
@@ -655,30 +646,9 @@ async function renderToday(opts: any = {}) {
         : { weight: null, reps: null, rir: null, duration_sec: null };
       html += exCard({ exercise: p.name, fromPlan: false, mode: p.mode || null }, [], prefill, cardIdx++, rxFor(p.name));
     }
-    html += `<div class="addex">
-      <button id="addExBtn" class="ghostbtn addex-btn">+ Add exercise</button>
-      <div id="addExForm" class="addex-form" hidden>
-        <div class="addex-row">
-          <input id="addExInput" type="text" autocomplete="off" placeholder="Search or type an exercise" list="exOptions">
-          <datalist id="exOptions"></datalist>
-          <button id="addExGo" class="logbtn">+</button>
-        </div>
-        <div class="addex-mode" id="addExMode" role="group" aria-label="Exercise type">
-          <button class="modebtn active" data-exmode="reps">Reps</button>
-          <button class="modebtn" data-exmode="timed">Timed</button>
-        </div>
-      </div>
-    </div>`;
+    html += todayPlanSurface.addExerciseFormHtml();
     if (hasLoggedSets) {
-      const tonnage = setsTonnage(session.sets);
-      html += `<div class="finish">
-        <div class="finish-stat" data-finishstat>${session.sets.length} sets · ${Math.round(tonnage).toLocaleString()} lb ${isToday ? "logged today" : "on " + todayState.logDate}</div>
-        <div id="feedbackSlot" class="feedback-slot"></div>
-        <div class="logrow" style="margin-top:8px">
-          <input id="sessNotes" type="text" placeholder="Session notes (optional)" value="${escAttr(session.notes || "")}" style="text-align:left">
-          <button id="finishBtn" class="logbtn" style="width:auto;padding:0 16px;font-size:.82rem;letter-spacing:.04em">FINISH</button>
-        </div>
-      </div>`;
+      html += todayPlanSurface.finishHtml(session, { isToday, logDate: todayState.logDate }, todayPlanSurfaceDeps());
     }
     // Skipped exercises live on as one slim, muted line at the very bottom —
     // recoverable later in the day (tap a name to restore), never buried.

@@ -4,14 +4,6 @@ type HealthScreenRecord = Record<string, unknown>;
 type HealthStandingRead = import("../contracts/client-api.js").ClientHealthStanding;
 type HealthReviewRecord = HealthScreenRecord & { created_at?: string; error?: unknown };
 
-function healthInput(selector: string, root: ParentNode = document): HTMLInputElement | null {
-  return root.querySelector<HTMLInputElement>(selector);
-}
-
-function healthInputValue(selector: string, root: ParentNode = document): string {
-  return healthInput(selector, root)?.value ?? "";
-}
-
 // ---------- Me (segmented: Profile / Memory / Health / Life) ----------
 // Standing leads — Me opens to the REVIEW (where you stand + where to focus), not a
 // data-entry form. The lab DATA (Health), identity (Profile), life, family and the
@@ -51,32 +43,27 @@ async function renderMeStanding() {
   paintStandingReview(); // the detailed where-you-stand health read
 }
 
-function healthNumberValue(selector: string, root: ParentNode = document): number | null {
-  const raw = healthInputValue(selector, root);
-  if (!raw) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function healthTextAreaValue(selector: string, root: ParentNode = document): string {
-  return root.querySelector<HTMLTextAreaElement>(selector)?.value ?? "";
-}
-
-function meProfileDeps(): MeProfileControllerDeps {
+function meHealthDepsContext(): ClientMeHealthDependenciesContext {
   return {
     root: view,
     state,
     segments: ME_SEG,
     handlers: ME_HANDLERS as Record<string, () => unknown>,
+    document,
     headerTitle,
     api,
-    activateTab,
+    cachedApi,
+    peekCached,
+    markRefreshing,
+    swrInvalidate,
+    runOp,
+    toast,
+    armDelete,
+    activateTab: (tab) => activateTab(tab),
     escapeAttr: escAttr,
     escapeHtml: escHtml,
-    inputValue: healthInputValue,
     invalidatePoll: () => { pollToken++; },
     mountSaveBar,
-    numberValue: healthNumberValue,
     primaryDiscipline: () => primaryDiscipline,
     renderMe,
     renderProfile: () => renderMeProfile(),
@@ -85,12 +72,35 @@ function meProfileDeps(): MeProfileControllerDeps {
     setDiscipline,
     setEnduranceGoalSet,
     skeletonSwap: skelSwap,
-    swrInvalidate,
-    textAreaValue: healthTextAreaValue,
-    toast,
     wireSeg,
+    fitSeg,
+    syncRouteFromState: typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
+    withViewTransition,
     select: $,
+    relTime,
+    relAge,
+    stagger,
+    reducedMotion,
+    pollToken: () => pollToken,
+    switchHealthSeg,
+    onHealthReadView,
+    loadHealthPicture: (token, docsPromise) => loadHealthPicture(token, docsPromise),
+    paintHealthPicture,
+    healthDocsKnownEmpty,
+    paintRead: paintHealthReadTab,
+    paintMarkers: paintHealthMarkersTab,
+    paintRecords: paintHealthRecordsTab,
+    paintShare: paintHealthShareTab,
+    paintLearned: paintHealthLearnedTab,
+    activityEntryHtml: (activity) => actEntryHtml(activity),
+    openFoodDetail,
+    loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
+    storage: typeof localStorage !== "undefined" ? localStorage : null,
   };
+}
+
+function meProfileDeps(): MeProfileControllerDeps {
+  return CairnMeHealthDependencies.profile(meHealthDepsContext());
 }
 
 async function renderMeProfile() {
@@ -104,13 +114,7 @@ function meHealthLogRenderer(): ClientMeHealthLogRendererApi {
 }
 
 function meHealthLogDeps(): ClientMeHealthLogRendererDeps {
-  return {
-    state,
-    select: $,
-    noteEntryHtml: (note, index) => CairnFoodNote.noteEntryHtml(note, index),
-    activityEntryHtml: (activity) => actEntryHtml(activity),
-    openFoodDetail,
-  };
+  return CairnMeHealthDependencies.log(meHealthDepsContext());
 }
 
 // tap a note card → full-screen food detail (zooming from its art tile)
@@ -127,20 +131,7 @@ function renderActs(acts: unknown): void {
 }
 
 function meMemoryDeps(): ClientMeMemoryControllerDeps {
-  return {
-    view,
-    state,
-    segments: ME_SEG,
-    handlers: ME_HANDLERS as Record<string, () => unknown>,
-    headerTitle,
-    api,
-    armDelete,
-    escapeAttr: escAttr,
-    invalidatePoll: () => { pollToken++; },
-    segBar,
-    toast,
-    wireSeg,
-  };
+  return CairnMeHealthDependencies.memory(meHealthDepsContext());
 }
 
 async function renderMemory() {
@@ -148,52 +139,12 @@ async function renderMemory() {
 }
 
 // ---------- Me: Health — the whole picture (review · markers · records) ----------
-let _hReadSpy: IntersectionObserver | null = null;    // scroll-spy IntersectionObserver for the Read tab's sticky nav
-
 function healthReadDeps(): ClientHealthReadControllerDeps {
-  return {
-    root: view,
-    state,
-    api,
-    cachedApi,
-    peekCached,
-    markRefreshing,
-    swrInvalidate,
-    runOp,
-    toast,
-    pollToken: () => pollToken,
-    select: $,
-    escapeAttr: escAttr,
-    escapeHtml: escHtml,
-    relTime,
-    stagger,
-    reducedMotion,
-    switchHealthSeg,
-    isHealthReviewRunning: () => CairnHealthPictureController.isHealthReviewRunning(),
-    loadHealthPicture: (token, docsPromise) => loadHealthPicture(token, docsPromise),
-    paintHealthPicture,
-    setReadSpy: (spy) => { _hReadSpy = spy; },
-    teardownReadSpy: () => {
-      if (_hReadSpy) {
-        _hReadSpy.disconnect();
-        _hReadSpy = null;
-      }
-    },
-  };
+  return CairnMeHealthDependencies.read(meHealthDepsContext());
 }
 
 function healthPictureDeps(): ClientHealthPictureControllerDeps {
-  return {
-    root: view,
-    state,
-    api,
-    toast,
-    switchHealthSeg,
-    onHealthReadView,
-    pollToken: () => pollToken,
-    escapeHtml: escHtml,
-    storage: typeof localStorage !== "undefined" ? localStorage : null,
-  };
+  return CairnMeHealthDependencies.picture(meHealthDepsContext());
 }
 
 function getHealthPictureCache(): ClientHealthPictureCache | null {
@@ -241,18 +192,7 @@ async function loadHealthPicture(token: number, docsP: Promise<unknown>): Promis
 }
 
 function healthMarkersDeps(): ClientHealthMarkersControllerDeps {
-  return {
-    root: view,
-    cachedApi,
-    peekCached,
-    markRefreshing,
-    pollToken: () => pollToken,
-    relAge,
-    select: $,
-    stagger,
-    switchHealthSeg,
-    escapeHtml: escHtml,
-  };
+  return CairnMeHealthDependencies.markers(meHealthDepsContext());
 }
 
 function loadHealthMarkers(token: number): void {
@@ -269,26 +209,7 @@ function normalizeHealthSeg(seg: unknown): ClientHealthSection {
 }
 
 function meHealthTabsDeps(): ClientMeHealthTabsControllerDeps {
-  return {
-    root: view,
-    state,
-    segments: ME_SEG,
-    handlers: ME_HANDLERS as Record<string, () => unknown>,
-    headerTitle,
-    segBar,
-    wireSeg,
-    fitSeg,
-    syncRouteFromState: typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
-    withViewTransition,
-    select: $,
-    healthDocsKnownEmpty,
-    invalidatePoll: () => { pollToken++; },
-    paintRead: paintHealthReadTab,
-    paintMarkers: paintHealthMarkersTab,
-    paintRecords: paintHealthRecordsTab,
-    paintShare: paintHealthShareTab,
-    paintLearned: paintHealthLearnedTab,
-  };
+  return CairnMeHealthDependencies.tabs(meHealthDepsContext());
 }
 
 // True when we positively know there are zero health documents — from this session's
@@ -336,19 +257,7 @@ function paintHealthReadTab(): void {
 
 // ---- Standing tab: percentiles, signal age, and point-in-time BP ----
 function healthStandingDeps(): ClientHealthStandingControllerDeps {
-  return {
-    root: view,
-    document,
-    state,
-    api,
-    swrInvalidate,
-    toast,
-    activateTab,
-    pollToken: () => pollToken,
-    select: $,
-    escapeAttr: escAttr,
-    loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
-  };
+  return CairnMeHealthDependencies.standing(meHealthDepsContext());
 }
 
 function renderHealthStanding(data: HealthStandingRead | null | undefined): void {

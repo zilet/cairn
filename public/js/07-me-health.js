@@ -1,12 +1,6 @@
 (() => {
 // ==== 07-me-health.js ====
 {
-    function healthInput(selector, root = document) {
-        return root.querySelector(selector);
-    }
-    function healthInputValue(selector, root = document) {
-        return healthInput(selector, root)?.value ?? "";
-    }
     // ---------- Me (segmented: Profile / Memory / Health / Life) ----------
     // Standing leads — Me opens to the REVIEW (where you stand + where to focus), not a
     // data-entry form. The lab DATA (Health), identity (Profile), life, family and the
@@ -44,31 +38,27 @@
         loadCoachingFocus("#cfocusStandingSlot", view); // the whole-athlete lead → planning
         paintStandingReview(); // the detailed where-you-stand health read
     }
-    function healthNumberValue(selector, root = document) {
-        const raw = healthInputValue(selector, root);
-        if (!raw)
-            return null;
-        const value = Number(raw);
-        return Number.isFinite(value) ? value : null;
-    }
-    function healthTextAreaValue(selector, root = document) {
-        return root.querySelector(selector)?.value ?? "";
-    }
-    function meProfileDeps() {
+    function meHealthDepsContext() {
         return {
             root: view,
             state,
             segments: ME_SEG,
             handlers: ME_HANDLERS,
+            document,
             headerTitle,
             api,
-            activateTab,
+            cachedApi,
+            peekCached,
+            markRefreshing,
+            swrInvalidate,
+            runOp,
+            toast,
+            armDelete,
+            activateTab: (tab) => activateTab(tab),
             escapeAttr: escAttr,
             escapeHtml: escHtml,
-            inputValue: healthInputValue,
             invalidatePoll: () => { pollToken++; },
             mountSaveBar,
-            numberValue: healthNumberValue,
             primaryDiscipline: () => primaryDiscipline,
             renderMe,
             renderProfile: () => renderMeProfile(),
@@ -77,12 +67,34 @@
             setDiscipline,
             setEnduranceGoalSet,
             skeletonSwap: skelSwap,
-            swrInvalidate,
-            textAreaValue: healthTextAreaValue,
-            toast,
             wireSeg,
+            fitSeg,
+            syncRouteFromState: typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
+            withViewTransition,
             select: $,
+            relTime,
+            relAge,
+            stagger,
+            reducedMotion,
+            pollToken: () => pollToken,
+            switchHealthSeg,
+            onHealthReadView,
+            loadHealthPicture: (token, docsPromise) => loadHealthPicture(token, docsPromise),
+            paintHealthPicture,
+            healthDocsKnownEmpty,
+            paintRead: paintHealthReadTab,
+            paintMarkers: paintHealthMarkersTab,
+            paintRecords: paintHealthRecordsTab,
+            paintShare: paintHealthShareTab,
+            paintLearned: paintHealthLearnedTab,
+            activityEntryHtml: (activity) => actEntryHtml(activity),
+            openFoodDetail,
+            loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
+            storage: typeof localStorage !== "undefined" ? localStorage : null,
         };
+    }
+    function meProfileDeps() {
+        return CairnMeHealthDependencies.profile(meHealthDepsContext());
     }
     async function renderMeProfile() {
         return CairnMeProfileController.renderProfile(meProfileDeps());
@@ -93,13 +105,7 @@
         return globalThis.CairnMeHealthLogRenderer;
     }
     function meHealthLogDeps() {
-        return {
-            state,
-            select: $,
-            noteEntryHtml: (note, index) => CairnFoodNote.noteEntryHtml(note, index),
-            activityEntryHtml: (activity) => actEntryHtml(activity),
-            openFoodDetail,
-        };
+        return CairnMeHealthDependencies.log(meHealthDepsContext());
     }
     // tap a note card → full-screen food detail (zooming from its art tile)
     function wireNoteCard(el) {
@@ -112,69 +118,17 @@
         meHealthLogRenderer().renderActs(acts, meHealthLogDeps());
     }
     function meMemoryDeps() {
-        return {
-            view,
-            state,
-            segments: ME_SEG,
-            handlers: ME_HANDLERS,
-            headerTitle,
-            api,
-            armDelete,
-            escapeAttr: escAttr,
-            invalidatePoll: () => { pollToken++; },
-            segBar,
-            toast,
-            wireSeg,
-        };
+        return CairnMeHealthDependencies.memory(meHealthDepsContext());
     }
     async function renderMemory() {
         return CairnMeMemoryController.render(meMemoryDeps());
     }
     // ---------- Me: Health — the whole picture (review · markers · records) ----------
-    let _hReadSpy = null; // scroll-spy IntersectionObserver for the Read tab's sticky nav
     function healthReadDeps() {
-        return {
-            root: view,
-            state,
-            api,
-            cachedApi,
-            peekCached,
-            markRefreshing,
-            swrInvalidate,
-            runOp,
-            toast,
-            pollToken: () => pollToken,
-            select: $,
-            escapeAttr: escAttr,
-            escapeHtml: escHtml,
-            relTime,
-            stagger,
-            reducedMotion,
-            switchHealthSeg,
-            isHealthReviewRunning: () => CairnHealthPictureController.isHealthReviewRunning(),
-            loadHealthPicture: (token, docsPromise) => loadHealthPicture(token, docsPromise),
-            paintHealthPicture,
-            setReadSpy: (spy) => { _hReadSpy = spy; },
-            teardownReadSpy: () => {
-                if (_hReadSpy) {
-                    _hReadSpy.disconnect();
-                    _hReadSpy = null;
-                }
-            },
-        };
+        return CairnMeHealthDependencies.read(meHealthDepsContext());
     }
     function healthPictureDeps() {
-        return {
-            root: view,
-            state,
-            api,
-            toast,
-            switchHealthSeg,
-            onHealthReadView,
-            pollToken: () => pollToken,
-            escapeHtml: escHtml,
-            storage: typeof localStorage !== "undefined" ? localStorage : null,
-        };
+        return CairnMeHealthDependencies.picture(meHealthDepsContext());
     }
     function getHealthPictureCache() {
         return CairnHealthPictureController.getHealthPictureCache();
@@ -210,18 +164,7 @@
         await CairnHealthPictureController.loadHealthPicture(token, docsP, healthPictureDeps());
     }
     function healthMarkersDeps() {
-        return {
-            root: view,
-            cachedApi,
-            peekCached,
-            markRefreshing,
-            pollToken: () => pollToken,
-            relAge,
-            select: $,
-            stagger,
-            switchHealthSeg,
-            escapeHtml: escHtml,
-        };
+        return CairnMeHealthDependencies.markers(meHealthDepsContext());
     }
     function loadHealthMarkers(token) {
         CairnHealthMarkersController.load(healthMarkersDeps(), token);
@@ -234,26 +177,7 @@
         return CairnMeHealthTabsController.normalizeHealthSeg(seg);
     }
     function meHealthTabsDeps() {
-        return {
-            root: view,
-            state,
-            segments: ME_SEG,
-            handlers: ME_HANDLERS,
-            headerTitle,
-            segBar,
-            wireSeg,
-            fitSeg,
-            syncRouteFromState: typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
-            withViewTransition,
-            select: $,
-            healthDocsKnownEmpty,
-            invalidatePoll: () => { pollToken++; },
-            paintRead: paintHealthReadTab,
-            paintMarkers: paintHealthMarkersTab,
-            paintRecords: paintHealthRecordsTab,
-            paintShare: paintHealthShareTab,
-            paintLearned: paintHealthLearnedTab,
-        };
+        return CairnMeHealthDependencies.tabs(meHealthDepsContext());
     }
     // True when we positively know there are zero health documents — from this session's
     // last load (cache.docCount) or this device's last visit (persisted). Used to open a
@@ -294,19 +218,7 @@
     }
     // ---- Standing tab: percentiles, signal age, and point-in-time BP ----
     function healthStandingDeps() {
-        return {
-            root: view,
-            document,
-            state,
-            api,
-            swrInvalidate,
-            toast,
-            activateTab,
-            pollToken: () => pollToken,
-            select: $,
-            escapeAttr: escAttr,
-            loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
-        };
+        return CairnMeHealthDependencies.standing(meHealthDepsContext());
     }
     function renderHealthStanding(data) {
         CairnHealthStandingController.render(data, healthStandingDeps());

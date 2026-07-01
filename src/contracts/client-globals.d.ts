@@ -1467,6 +1467,8 @@ declare global {
       renderActs(activities: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
     };
 
+    CairnMeHealthDependencies: ClientMeHealthDependenciesApi;
+
     CairnMeHealthTabsController: {
       HEALTH_SEG: readonly (readonly [ClientHealthSection, string])[];
       normalizeHealthSeg(seg: unknown): ClientHealthSection;
@@ -1478,6 +1480,18 @@ declare global {
 
     CairnFoodDetailController: {
       openFoodDetail(note: unknown, fromTile: Element | null | undefined, deps: FoodDetailControllerDeps): Promise<void>;
+    };
+
+    CairnMeProfileForm: {
+      record(value: unknown): Record<string, unknown>;
+      goalMode(profile: MeProfileProfile, goal: MeProfileGoalCheck): string;
+      enduranceGoal(profile: MeProfileProfile): MeProfileEnduranceGoalDraft;
+      html(
+        deps: MeProfileControllerDeps,
+        profile: MeProfileProfile,
+        goal: MeProfileGoalCheck,
+        context: MeProfileFormContext,
+      ): string;
     };
 
     CairnMeProfileController: {
@@ -1499,6 +1513,14 @@ declare global {
       progDayHtml(day: Record<string, unknown>, dayIndex: number): string;
       pitemHtml(item: Record<string, unknown>, dayIndex: number, itemIndex: number, lastIndex: number): string;
       pdayHtml(day: Record<string, unknown>, dayIndex: number): string;
+    };
+
+    CairnPlanEditorForm: {
+      dayNumber(day: Record<string, unknown>): number;
+      datasetNumber(el: HTMLElement, key: string): number;
+      datasetPair(value: string | undefined): [number, number];
+      syncModel(model: Array<Record<string, unknown> & { items: Array<Record<string, unknown>> }>, root: ParentNode): void;
+      serializeDays(model: Array<Record<string, unknown> & { items: Array<Record<string, unknown>> }>): Array<Record<string, unknown>>;
     };
 
     CairnPlanEditorController: {
@@ -2214,6 +2236,51 @@ declare global {
       ): void;
     };
 
+    CairnTodayPlanSurface: {
+      sessionHeadHtml(
+        options: {
+          isRunDay: boolean;
+          isToday: boolean;
+          cardioItems: Array<Record<string, unknown>>;
+          day: Record<string, unknown> | null | undefined;
+          exDone: number;
+          exTotal: number;
+          hasSyncedCardioToday: boolean;
+        },
+        deps: {
+          escapeHtml(value: unknown): string;
+          escapeAttr(value: unknown): string;
+          stagger(index?: number | null): string;
+          cardioLabel(item: Record<string, unknown>): string;
+          cardioPrescription(item: Record<string, unknown>): string;
+          rxMoveCount(rxByEx: Record<string, unknown>): number;
+          setsTonnage(sets: unknown): number;
+          trainGlyph: string;
+        },
+      ): string;
+      daySwitchHtml(
+        plan: Array<Record<string, unknown>>,
+        activeDay: unknown,
+        deps: { escapeHtml(value: unknown): string },
+      ): string;
+      rxBannerHtml(
+        rxByEx: Record<string, unknown>,
+        day: unknown,
+        deps: {
+          escapeAttr(value: unknown): string;
+          escapeHtml(value: unknown): string;
+          rxMoveCount(rxByEx: Record<string, unknown>): number;
+          stagger(index?: number | null): string;
+        },
+      ): string;
+      addExerciseFormHtml(): string;
+      finishHtml(
+        session: { sets?: unknown[] | null; notes?: unknown },
+        options: { isToday: boolean; logDate: string },
+        deps: { escapeAttr(value: unknown): string; setsTonnage(sets: unknown): number },
+      ): string;
+    };
+
     CairnTodayPostRenderWiring: {
       wirePostRender(deps: {
         root: HTMLElement;
@@ -2586,11 +2653,14 @@ declare global {
   declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnMeHealthLogRenderer: Window["CairnMeHealthLogRenderer"];
+  declare const CairnMeHealthDependencies: Window["CairnMeHealthDependencies"];
   declare const CairnMeHealthTabsController: Window["CairnMeHealthTabsController"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
+  declare const CairnMeProfileForm: Window["CairnMeProfileForm"];
   declare const CairnMeProfileController: Window["CairnMeProfileController"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
+  declare const CairnPlanEditorForm: Window["CairnPlanEditorForm"];
   declare const CairnPlanEditorController: Window["CairnPlanEditorController"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnDayFuelController: Window["CairnDayFuelController"];
@@ -2656,6 +2726,7 @@ declare global {
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];
+  declare const CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
