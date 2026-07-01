@@ -1,31 +1,6 @@
 (() => {
 // @ts-check
 // Plan -> Meals row interactions: log planned meals, swap/reorder rows, and reconnect durable swap jobs.
-function mealSwapControllerRecord(value) {
-    return value && typeof value === "object" ? value : {};
-}
-function mealSwapControllerRows(value) {
-    return Array.isArray(value)
-        ? value.filter((row) => !!row && typeof row === "object")
-        : [];
-}
-function mealSwapControllerPlan(value) {
-    return mealSwapControllerRecord(value);
-}
-function mealSwapControllerPlans(value) {
-    return mealSwapControllerRows(value);
-}
-function mealSwapControllerParsed(value) {
-    return mealSwapControllerRecord(value);
-}
-function mealSwapControllerDays(plan) {
-    const parsed = mealSwapControllerParsed(plan.parsed);
-    return Array.isArray(parsed.days) ? parsed.days : [];
-}
-function mealSwapControllerErrorMessage(value) {
-    const error = mealSwapControllerRecord(value).error;
-    return typeof error === "string" ? error : undefined;
-}
 function mealSwapControllerHtmlElement(value) {
     return value instanceof HTMLElement ? value : null;
 }
@@ -38,12 +13,9 @@ function mealSwapControllerRestoreBusy(value) {
 function mealSwapControllerEventElement(event) {
     return event.target instanceof Element ? event.target : null;
 }
-function mealSwapControllerCacheKey() {
-    return typeof MEALS_KEY === "string" && MEALS_KEY ? MEALS_KEY : "meals:plans";
-}
 function rerenderMealDay(current, dayIndex, ctx, settleMealIndex = null) {
     const section = view.querySelector(`.mealday[data-mday="${dayIndex}"]`);
-    const day = mealSwapControllerDays(current)[dayIndex];
+    const day = CairnMealSwapData.days(current)[dayIndex];
     if (!section || !day)
         return;
     const tmp = document.createElement("div");
@@ -59,7 +31,7 @@ function rerenderMealDay(current, dayIndex, ctx, settleMealIndex = null) {
         fresh.querySelector(`.meal-row[data-mi="${settleMealIndex}"]`)?.classList.add("meal-settled");
 }
 async function submitMealSwap(current, ctx, dayIndex, mealIndex, panel) {
-    const day = mealSwapControllerDays(current)[dayIndex];
+    const day = CairnMealSwapData.days(current)[dayIndex];
     if (!day)
         return;
     const row = mealSwapControllerHtmlElement(panel.previousElementSibling);
@@ -91,21 +63,21 @@ function mealSwapOpOpts(current, ctx, dayIndex, mealIndex) {
         caption: "meal_swap",
         guard: () => !view.querySelector(rowSel)?.isConnected,
         isFail: (result) => {
-            const row = mealSwapControllerRecord(result);
-            const plan = mealSwapControllerPlan(row.plan);
+            const row = CairnMealSwapData.record(result);
+            const plan = CairnMealSwapData.plan(row.plan);
             return row.ok !== true || !(plan.parsed || row.meal);
         },
         render: (result) => {
-            const row = mealSwapControllerRecord(result);
-            const plan = mealSwapControllerPlan(row.plan);
+            const row = CairnMealSwapData.record(result);
+            const plan = CairnMealSwapData.plan(row.plan);
             if (plan.parsed)
-                current.parsed = mealSwapControllerParsed(plan.parsed);
+                current.parsed = CairnMealSwapData.parsed(plan.parsed);
             else {
-                const day = mealSwapControllerDays(current)[dayIndex];
+                const day = CairnMealSwapData.days(current)[dayIndex];
                 if (day?.meals)
-                    day.meals[mealIndex] = mealSwapControllerRecord(row.meal);
+                    day.meals[mealIndex] = CairnMealSwapData.record(row.meal);
             }
-            swrInvalidate(mealSwapControllerCacheKey());
+            swrInvalidate(CairnMealSwapData.cacheKey());
             rerenderMealDay(current, dayIndex, ctx, mealIndex);
             toast("Meal swapped");
         },
@@ -130,13 +102,13 @@ function mealSwapOpOpts(current, ctx, dayIndex, mealIndex) {
     };
 }
 function reconnectMealSwap(job) {
-    const input = mealSwapControllerRecord(mealSwapControllerRecord(job).input);
+    const input = CairnMealSwapData.record(CairnMealSwapData.record(job).input);
     const planId = Number(input.id);
-    const cached = mealSwapControllerPlans(peekCached(mealSwapControllerCacheKey())?.data || []);
+    const cached = CairnMealSwapData.plans(peekCached(CairnMealSwapData.cacheKey())?.data || []);
     const current = cached.find((plan) => Number(plan.id) === planId);
-    if (!current || !mealSwapControllerDays(current).length)
+    if (!current || !CairnMealSwapData.days(current).length)
         return null;
-    const dayIndex = mealSwapControllerDays(current).findIndex((day) => String(day?.day ?? "").trim().toLowerCase() === String(input.day ?? "").trim().toLowerCase());
+    const dayIndex = CairnMealSwapData.days(current).findIndex((day) => String(day?.day ?? "").trim().toLowerCase() === String(input.day ?? "").trim().toLowerCase());
     const mealIndex = Number(input.meal_index);
     if (dayIndex < 0 || !Number.isFinite(mealIndex))
         return null;
@@ -183,7 +155,7 @@ function reconnectMealSwap(job) {
     };
 }
 async function moveMealRow(current, ctx, dayIndex, mealIndex, direction) {
-    const days = mealSwapControllerDays(current);
+    const days = CairnMealSwapData.days(current);
     const meals = days[dayIndex]?.meals;
     const nextIndex = mealIndex + direction;
     if (!meals || mealIndex < 0 || mealIndex >= meals.length || nextIndex < 0 || nextIndex >= meals.length)
@@ -196,9 +168,9 @@ async function moveMealRow(current, ctx, dayIndex, mealIndex, direction) {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ days }),
         });
-        if (mealSwapControllerErrorMessage(result))
-            throw new Error(mealSwapControllerErrorMessage(result));
-        swrInvalidate(mealSwapControllerCacheKey());
+        if (CairnMealSwapData.errorMessage(result))
+            throw new Error(CairnMealSwapData.errorMessage(result));
+        swrInvalidate(CairnMealSwapData.cacheKey());
     }
     catch {
         [meals[mealIndex], meals[nextIndex]] = [meals[nextIndex], meals[mealIndex]];
@@ -212,7 +184,7 @@ function wireMealRows(scope, current, ctx) {
     scope.querySelectorAll("[data-mlog]").forEach((button) => button.addEventListener("click", async () => {
         let payload;
         try {
-            payload = mealSwapControllerRecord(JSON.parse(button.dataset.mlog || "{}"));
+            payload = CairnMealSwapData.record(JSON.parse(button.dataset.mlog || "{}"));
         }
         catch {
             return;

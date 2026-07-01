@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const today = readFileSync(path.join(root, "src/client/today-screen.ts"), "utf8");
+const todayDataLoader = readFileSync(path.join(root, "src/client/today-data-loader.ts"), "utf8");
 const todayPlanSessionPreparation = readFileSync(path.join(root, "src/client/today-plan-session-preparation.ts"), "utf8");
 const todayProgressionController = readFileSync(path.join(root, "src/client/today-progression-controller.ts"), "utf8");
 const todaySessionController = readFileSync(path.join(root, "src/client/today-session-controller.ts"), "utf8");
@@ -18,10 +19,11 @@ function functionBody(source, name) {
 }
 
 test("Today starts non-dependent summary reads before later render work", () => {
-  assert.match(today, /const\s+statsPromise\s*=/);
-  assert.match(today, /const\s+profilePromise\s*=/);
-  assert.match(today, /const\s+exercisesPromise\s*=/);
-  assert.match(today, /Promise\.all\(\[statsPromise,\s*profilePromise,\s*exercisesPromise\]\)/);
+  assert.match(todayDataLoader, /const\s+statsPromise\s*=/);
+  assert.match(todayDataLoader, /const\s+profilePromise\s*=/);
+  assert.match(todayDataLoader, /const\s+exercisesPromise\s*=/);
+  assert.match(todayDataLoader, /Promise\.all\(\[statsPromise,\s*profilePromise,\s*exercisesPromise\]\)/);
+  assert.match(today, /todayDataLoader\.load/);
 });
 
 test("Today SWR-caches progression and invalidates it when set truth changes", () => {

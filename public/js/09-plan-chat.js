@@ -2,21 +2,13 @@
 // @ts-check
 // ==== 09-plan-chat.js ====
 // Plan editor orchestration lives in /js/plan-editor-controller.js; Plan Endurance lives in /js/plan-endurance-client.js.
-function chatScreenRecord(value) {
-    return value && typeof value === "object" ? value : {};
-}
 function chatScreenRows(value) {
     return Array.isArray(value) ? value.filter((row) => !!row && typeof row === "object") : [];
 }
 function chatScreenMessages(value) {
     return chatScreenRows(value);
 }
-function chatScreenString(value) {
-    return value == null ? "" : String(value);
-}
 // ---------- Chat ----------
-// Document-level paste listener for the chat view; swapped on every renderChat.
-let chatPasteHandler = null;
 let chatFuelContext = [];
 // Starter chips shown while the conversation is empty (fresh chat / after a
 // fresh start); tapping one prefills the input and sends through the normal
@@ -163,185 +155,26 @@ async function renderChat() {
     const preview = $("#chatPreview");
     if (!input || !sendBtn || !fileInput || !attachBtn || !preview)
         return;
-    let attached = null;
-    const isChatActive = () => state.tab === "chat";
-    const isSoftKeyboardChat = () => !matchMedia("(hover:hover)").matches;
-    const isChatKeyboardGeometryOpen = () => document.body.classList.contains("kb-geometry-open");
-    const resetChatFocusAfterNativePicker = () => CairnChatAttachment.resetFocusAfterNativePicker({
+    CairnChatComposerController.wire({
+        token,
+        state,
         input,
+        sendBtn,
         fileInput,
-        isSoftKeyboard: isSoftKeyboardChat,
-    });
-    const settleChatAfterNativePicker = () => CairnChatAttachment.settleAfterNativePicker({
-        isActive: isChatActive,
+        attachBtn,
+        preview,
+        api,
+        toast,
+        appendMsg,
+        rememberFuelContext: rememberChatFuelContext,
+        loadFuel: loadChatFuel,
+        saveDraft: saveChatDraft,
+        loadDraft: loadChatDraft,
+        autosizeInput: autosizeChatInput,
         measure: measureChatTop,
-        graceMs: 1200,
+        spawnPendingBubble,
+        ensureMonitor: chatMonitorEnsure,
     });
-    const clearAttach = () => {
-        attached = null;
-        fileInput.value = "";
-        preview.hidden = true;
-        attachBtn.classList.remove("has-img");
-        settleChatAfterNativePicker();
-    };
-    const attachFile = async (f) => {
-        if (!f)
-            return;
-        try {
-            attached = await CairnChatAttachment.compressImage(f);
-            const img = CairnChatAttachment.previewImage(preview.querySelector("img"));
-            if (img)
-                img.src = attached.dataUrl;
-            preview.hidden = false;
-            attachBtn.classList.add("has-img");
-        }
-        catch (e) {
-            const tooLarge = e instanceof Error && e.message === "image-too-large";
-            toast(tooLarge ? "That photo is too large — try a closer crop." : "Couldn't read that image — try another.");
-            clearAttach();
-        }
-        finally {
-            settleChatAfterNativePicker();
-        }
-    };
-    // One "+" control. On iOS a file input with no `capture` opens the native
-    // sheet (Take Photo / Photo Library / Choose File); desktop opens the file
-    // dialog. Attaching is occasional, so this keeps the bar to input + send.
-    attachBtn.addEventListener("click", () => {
-        resetChatFocusAfterNativePicker();
-        settleChatAfterNativePicker();
-        fileInput.click();
-    });
-    $("#chatPreviewX")?.addEventListener("click", clearAttach);
-    fileInput.addEventListener("change", () => {
-        resetChatFocusAfterNativePicker();
-        const f = fileInput.files && fileInput.files[0];
-        if (f)
-            void attachFile(f);
-        else
-            settleChatAfterNativePicker();
-    });
-    // Paste-an-image support (desktop screenshots, iOS "Copy Photo"). One live
-    // handler at a time: re-renders swap it out, and it bails when chat isn't
-    // the active tab so it never touches a stale DOM.
-    if (chatPasteHandler)
-        document.removeEventListener("paste", chatPasteHandler);
-    chatPasteHandler = (e) => {
-        if (state.tab !== "chat" || !input.isConnected)
-            return;
-        const items = e.clipboardData && e.clipboardData.items;
-        if (!items)
-            return;
-        for (let i = 0; i < items.length; i++) {
-            const it = items[i];
-            if (it && it.kind === "file" && it.type.startsWith("image/")) {
-                const f = it.getAsFile();
-                if (f) {
-                    e.preventDefault();
-                    void attachFile(f);
-                }
-                return;
-            }
-        }
-    };
-    document.addEventListener("paste", chatPasteHandler);
-    // Send = enqueue a durable turn and return immediately; the input never blocks,
-    // so a follow-up typed while the coach is thinking simply queues (its own turn,
-    // drained serially server-side). The monitor streams real progress + finalizes.
-    const send = async () => {
-        const text = input.value.trim();
-        const img = attached;
-        if (!text && !img)
-            return;
-        input.value = "";
-        autosizeChatInput(input); // collapse the composer back to one line
-        saveChatDraft("");
-        clearAttach();
-        // Optimistic user bubble lands instantly (the server persists it too; a full
-        // re-render later draws from server truth, so no duplicate).
-        const userMsg = { role: "user", content: text || "(photo)", meta: img ? { image: img.dataUrl } : null };
-        const userBubble = appendMsg(userMsg);
-        rememberChatFuelContext(userMsg);
-        void loadChatFuel(token);
-        try {
-            const body = { message: text };
-            if (img) {
-                body.image_base64 = img.base64;
-                body.image_mime = img.mime;
-            }
-            const r = chatScreenRecord(await api("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
-            if (r.turn) {
-                spawnPendingBubble(r.turn);
-                chatMonitorEnsure();
-            }
-            else
-                appendMsg({ role: "assistant", content: chatScreenString(r.error) || "(no reply)" });
-        }
-        catch {
-            // Couldn't even enqueue (offline): roll the optimistic bubble back and put
-            // the text back in the composer so nothing is lost -- the offline banner says why.
-            userBubble?.remove();
-            if (!input.value) {
-                input.value = text;
-                saveChatDraft(text);
-                autosizeChatInput(input);
-            }
-            toast("Couldn't send — check your connection");
-        }
-        finally {
-            if (matchMedia("(hover:hover)").matches)
-                input.focus();
-        }
-    };
-    // Tapping send must NOT blur the textarea (that just dismisses the keyboard,
-    // and as the layout reflows the button slides out from under your finger so
-    // the first tap never sends). preventDefault on pointerdown keeps the input
-    // focused -- but on iOS WebKit that ALSO suppresses the synthesized click, so
-    // we send on pointerup instead (fires on both touch and mouse). The click
-    // handler stays for keyboard activation (Enter/Space on the focused button);
-    // send()'s empty-input guard makes any second call a no-op, so pointer
-    // devices never double-send. (The "+" is left alone -- it opens a file picker.)
-    sendBtn.addEventListener("pointerdown", (e) => e.preventDefault());
-    sendBtn.addEventListener("pointerup", () => { void send(); });
-    sendBtn.addEventListener("click", () => { void send(); });
-    // Desktop: Enter sends, Shift+Enter drops a newline. Touch keyboards keep
-    // Enter as a newline (so multi-line capture -- pasting findings, describing a
-    // meal -- just works) and send via the arrow button.
-    input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey && matchMedia("(hover:hover)").matches) {
-            e.preventDefault();
-            void send();
-        }
-    });
-    // Re-pin the column across the whole keyboard slide, and recover stale iOS
-    // textarea focus from the next real tap after a native image picker closes.
-    CairnChatComposerFocus.wireFocus({
-        input,
-        isActive: isChatActive,
-        isSoftKeyboard: isSoftKeyboardChat,
-        isKeyboardGeometryOpen: isChatKeyboardGeometryOpen,
-        measure: measureChatTop,
-    });
-    // Persist the unsent draft on every keystroke so it survives a tab switch /
-    // reload -- restored below unless a deep-link prefill takes precedence. Re-grow
-    // the composer to fit what's typed/pasted.
-    input.addEventListener("input", () => { saveChatDraft(input.value); autosizeChatInput(input); });
-    // Deep links (e.g. the compass nudge) arrive with the question pre-written --
-    // leave it editable rather than auto-sending. Otherwise restore the saved draft.
-    if (state.chatPrefill) {
-        input.value = state.chatPrefill;
-        state.chatPrefill = null;
-        saveChatDraft(input.value);
-    }
-    else {
-        const d = loadChatDraft();
-        if (d)
-            input.value = d;
-    }
-    autosizeChatInput(input); // fit a restored multi-line draft
-    // desktop only -- on mobile, auto-focus pops the keyboard over half the view
-    if (matchMedia("(hover:hover)").matches)
-        input.focus();
     // Hydrate the log in the background -- the shell above is already interactive.
     let msgs = [];
     try {

@@ -38,6 +38,7 @@ import type {
   ClientHealthStandingDimension,
   ClientHealthStandingMeasure,
   ClientHealthDocument,
+  ClientMealPlan,
   ClientPerformanceStanding,
   ClientProgramBlock,
   ClientProgramState,
@@ -58,6 +59,39 @@ declare global {
   type ClientSegment = readonly [string, string];
   type ClientSettingsRouteTask = readonly [string, string];
   type ClientSaveBar = { markDirty(): void; save(): Promise<void> };
+
+  type ClientMealSwapRecord = Record<string, unknown>;
+  type ClientMealSwapPlan = ClientMealPlan & {
+    id: number | string;
+    parsed?: ClientMealSwapParsed;
+  };
+  type ClientMealSwapParsed = ClientMealSwapRecord & {
+    days?: ClientMealSwapDay[];
+  };
+  type ClientMealSwapDay = ClientMealSwapRecord & {
+    day?: unknown;
+    meals?: ClientMealSwapMeal[];
+  };
+  type ClientMealSwapMeal = ClientMealSwapRecord & {
+    name?: unknown;
+    meal?: unknown;
+    items?: unknown;
+    kcal?: unknown;
+    protein_g?: unknown;
+    carbs_g?: unknown;
+    fat_g?: unknown;
+    recipe?: unknown;
+  };
+  type ClientMealSwapData = {
+    record(value: unknown): ClientMealSwapRecord;
+    rows<T extends ClientMealSwapRecord = ClientMealSwapRecord>(value: unknown): T[];
+    plan(value: unknown): ClientMealSwapPlan;
+    plans(value: unknown): ClientMealSwapPlan[];
+    parsed(value: unknown): ClientMealSwapParsed;
+    days(plan: { parsed?: unknown }): ClientMealSwapDay[];
+    errorMessage(value: unknown): string | undefined;
+    cacheKey(): string;
+  };
 
   type ClientBriefCache = {
     date: string;
@@ -339,6 +373,11 @@ declare global {
     invalidate(keyOrPrefix: string): void;
     runCountUps(root: ParentNode): void;
     renderSelf(): unknown;
+  };
+
+  type ClientProgressRouteDeps = {
+    endurance(renderSelf: () => unknown): ClientProgressEnduranceControllerDeps;
+    program(renderSelf: () => unknown): ClientProgressProgramControllerDeps;
   };
 
   type ClientHealthPictureControllerDeps = {
@@ -916,6 +955,36 @@ declare global {
   declare function jobReconnect(): Promise<void>;
   declare function startAppShell(): void;
 
+  type ChatComposerControllerMessage = Partial<ClientChatMessage> &
+    Record<string, unknown> & {
+      pending?: boolean;
+      meta?: unknown;
+    };
+  type ChatComposerControllerHandle = {
+    send(): Promise<void>;
+    clearAttachment(): void;
+  };
+  type ChatComposerControllerDeps = {
+    token: number;
+    state: Pick<ClientAppState, "tab" | "chatPrefill">;
+    input: HTMLTextAreaElement;
+    sendBtn: HTMLButtonElement;
+    fileInput: HTMLInputElement;
+    attachBtn: HTMLButtonElement;
+    preview: HTMLElement;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    appendMsg(message: Partial<ChatComposerControllerMessage>): HTMLElement | null;
+    rememberFuelContext(...messages: Array<Partial<ChatComposerControllerMessage> | null | undefined>): ChatComposerControllerMessage[];
+    loadFuel(token: number, messages?: Partial<ChatComposerControllerMessage>[]): Promise<void>;
+    saveDraft(value: string): void;
+    loadDraft(): string;
+    autosizeInput(input: HTMLTextAreaElement | HTMLInputElement): void;
+    measure(): void;
+    spawnPendingBubble(turnValue: unknown): Element | null;
+    ensureMonitor(): void;
+  };
+
   interface Window {
     activateTab(name: unknown, opts?: { replace?: boolean; syncRoute?: boolean }): void;
     applyRouteState(route: ClientRoute | null | undefined): ClientTabName;
@@ -1015,6 +1084,11 @@ declare global {
         recoverInputFocusFromTap(): void;
         settleViewport(): void;
       };
+    };
+
+    CairnChatComposerController: {
+      wire(deps: ChatComposerControllerDeps): ChatComposerControllerHandle;
+      clearPasteHandler(): void;
     };
 
     CairnChatTurnRecords: {
@@ -1544,6 +1618,8 @@ declare global {
       ): void;
     };
 
+    CairnMealSwapData: ClientMealSwapData;
+
     CairnMealRecipe: {
       ctaHtml(): string;
       recipeHtml(recipe: unknown): string;
@@ -1936,6 +2012,8 @@ declare global {
       tidyExerciseNames(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void>;
     };
 
+    CairnProgressRouteDeps: ClientProgressRouteDeps;
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -2094,6 +2172,46 @@ declare global {
         isRunDay: boolean;
         expectingRun: boolean;
       }>;
+    };
+
+    CairnTodayDataLoader: {
+      load(
+        opts: { soft?: unknown } | null | undefined,
+        deps: {
+          root: HTMLElement;
+          state: { logDate: string; plan: unknown[]; tab?: string };
+          api(path: string): Promise<unknown>;
+          cachedApi(path: string, options?: { key?: string; freshFor?: number; onUpgrade?: (data: unknown, meta: { changed: boolean }) => void }): Promise<unknown>;
+          peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
+          localISO(date?: Date): string;
+          todaySkeleton(): string;
+          setTodayHeaderTitle(): void;
+          nextPollToken(): number;
+        },
+      ): Promise<{
+        soft: boolean;
+        token: number;
+        isToday: boolean;
+        session: unknown;
+        stats: unknown;
+        profile: unknown;
+        exercises: unknown;
+        revalidations: Array<Promise<unknown>>;
+        changed(): boolean;
+      }>;
+      scheduleSoftRepaint(
+        result: {
+          token: number;
+          revalidations: Array<Promise<unknown>>;
+          changed(): boolean;
+        },
+        deps: {
+          root: HTMLElement;
+          state: { tab?: string };
+          isCurrentPoll(token: number): boolean;
+          renderToday(opts?: { soft?: boolean }): unknown;
+        },
+      ): void;
     };
 
     CairnTodayPostRenderWiring: {
@@ -2441,6 +2559,7 @@ declare global {
   declare const CairnChatHeaderController: Window["CairnChatHeaderController"];
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnChatComposerFocus: Window["CairnChatComposerFocus"];
+  declare const CairnChatComposerController: Window["CairnChatComposerController"];
   declare const CairnChatTurnRecords: Window["CairnChatTurnRecords"];
   declare const CairnChatTurnStreamState: Window["CairnChatTurnStreamState"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
@@ -2477,6 +2596,7 @@ declare global {
   declare const CairnDayFuelController: Window["CairnDayFuelController"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnMealPlannerController: Window["CairnMealPlannerController"];
+  declare const CairnMealSwapData: Window["CairnMealSwapData"];
   declare const CairnMealSwapController: Window["CairnMealSwapController"];
   declare const CairnMealRecipe: Window["CairnMealRecipe"];
   declare const CairnMealRecipeController: Window["CairnMealRecipeController"];
@@ -2524,6 +2644,7 @@ declare global {
   declare const CairnProgressProgramSummary: Window["CairnProgressProgramSummary"];
   declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
   declare const CairnProgressProgramController: Window["CairnProgressProgramController"];
+  declare const CairnProgressRouteDeps: Window["CairnProgressRouteDeps"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnCardioSync: Window["CairnCardioSync"];
@@ -2534,6 +2655,7 @@ declare global {
   declare const CairnTodayRailController: Window["CairnTodayRailController"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
+  declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];

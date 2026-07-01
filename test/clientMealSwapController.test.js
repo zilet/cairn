@@ -161,6 +161,7 @@ function loadMealSwapController(overrides = {}) {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/meal-swap-data-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/meal-swap-controller.js"), "utf8"), context);
   return { context, view, renderedDays, invalidations, toasts, countUps, requests };
 }

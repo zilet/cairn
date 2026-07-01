@@ -1,28 +1,7 @@
 // @ts-check
 // Plan -> Meals row interactions: log planned meals, swap/reorder rows, and reconnect durable swap jobs.
 
-type MealSwapControllerRecord = Record<string, unknown>;
-type MealSwapControllerPlan = import("../contracts/client-api.js").ClientMealPlan & {
-  id: number | string;
-  parsed?: MealSwapControllerParsed;
-};
-type MealSwapControllerParsed = MealSwapControllerRecord & {
-  days?: MealSwapControllerDay[];
-};
-type MealSwapControllerDay = MealSwapControllerRecord & {
-  day?: unknown;
-  meals?: MealSwapControllerMeal[];
-};
-type MealSwapControllerMeal = MealSwapControllerRecord & {
-  name?: unknown;
-  meal?: unknown;
-  items?: unknown;
-  kcal?: unknown;
-  protein_g?: unknown;
-  carbs_g?: unknown;
-  fat_g?: unknown;
-  recipe?: unknown;
-};
+type MealSwapControllerPlan = ClientMealSwapPlan;
 type MealSwapControllerContext = { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null;
 type MealSwapControllerOpOptions = ClientAgentOpHandlers & {
   path: string;
@@ -34,38 +13,6 @@ type MealSwapControllerOpOptions = ClientAgentOpHandlers & {
   onFail: (error?: unknown) => void;
 };
 type MealSwapControllerBusyElement<T extends Element = HTMLElement> = T & { _busyRestore?: () => void };
-
-function mealSwapControllerRecord(value: unknown): MealSwapControllerRecord {
-  return value && typeof value === "object" ? value as MealSwapControllerRecord : {};
-}
-
-function mealSwapControllerRows<T extends MealSwapControllerRecord = MealSwapControllerRecord>(value: unknown): T[] {
-  return Array.isArray(value)
-    ? value.filter((row): row is T => !!row && typeof row === "object")
-    : [];
-}
-
-function mealSwapControllerPlan(value: unknown): MealSwapControllerPlan {
-  return mealSwapControllerRecord(value) as MealSwapControllerPlan;
-}
-
-function mealSwapControllerPlans(value: unknown): MealSwapControllerPlan[] {
-  return mealSwapControllerRows<MealSwapControllerPlan>(value);
-}
-
-function mealSwapControllerParsed(value: unknown): MealSwapControllerParsed {
-  return mealSwapControllerRecord(value) as MealSwapControllerParsed;
-}
-
-function mealSwapControllerDays(plan: MealSwapControllerPlan): MealSwapControllerDay[] {
-  const parsed = mealSwapControllerParsed(plan.parsed);
-  return Array.isArray(parsed.days) ? parsed.days : [];
-}
-
-function mealSwapControllerErrorMessage(value: unknown): string | undefined {
-  const error = mealSwapControllerRecord(value).error;
-  return typeof error === "string" ? error : undefined;
-}
 
 function mealSwapControllerHtmlElement<T extends HTMLElement = HTMLElement>(value: Element | null | undefined): T | null {
   return value instanceof HTMLElement ? value as T : null;
@@ -83,10 +30,6 @@ function mealSwapControllerEventElement(event: Event): Element | null {
   return event.target instanceof Element ? event.target : null;
 }
 
-function mealSwapControllerCacheKey(): string {
-  return typeof MEALS_KEY === "string" && MEALS_KEY ? MEALS_KEY : "meals:plans";
-}
-
 function rerenderMealDay(
   current: MealSwapControllerPlan,
   dayIndex: number,
@@ -94,7 +37,7 @@ function rerenderMealDay(
   settleMealIndex: number | null = null,
 ): void {
   const section = view.querySelector<HTMLElement>(`.mealday[data-mday="${dayIndex}"]`);
-  const day = mealSwapControllerDays(current)[dayIndex];
+  const day = CairnMealSwapData.days(current)[dayIndex];
   if (!section || !day) return;
   const tmp = document.createElement("div");
   tmp.innerHTML = CairnMealPlan.mealDayHtml(day, dayIndex, ctx || {});
@@ -114,7 +57,7 @@ async function submitMealSwap(
   mealIndex: number,
   panel: HTMLElement,
 ): Promise<void> {
-  const day = mealSwapControllerDays(current)[dayIndex];
+  const day = CairnMealSwapData.days(current)[dayIndex];
   if (!day) return;
   const row = mealSwapControllerHtmlElement(panel.previousElementSibling);
   if (row && row.classList.contains("meal-busy")) { toast("A swap is already running"); return; }
@@ -148,19 +91,19 @@ function mealSwapOpOpts(
     caption: "meal_swap",
     guard: () => !view.querySelector(rowSel)?.isConnected,
     isFail: (result: unknown) => {
-      const row = mealSwapControllerRecord(result);
-      const plan = mealSwapControllerPlan(row.plan);
+      const row = CairnMealSwapData.record(result);
+      const plan = CairnMealSwapData.plan(row.plan);
       return row.ok !== true || !(plan.parsed || row.meal);
     },
     render: (result: unknown) => {
-      const row = mealSwapControllerRecord(result);
-      const plan = mealSwapControllerPlan(row.plan);
-      if (plan.parsed) current.parsed = mealSwapControllerParsed(plan.parsed);
+      const row = CairnMealSwapData.record(result);
+      const plan = CairnMealSwapData.plan(row.plan);
+      if (plan.parsed) current.parsed = CairnMealSwapData.parsed(plan.parsed);
       else {
-        const day = mealSwapControllerDays(current)[dayIndex];
-        if (day?.meals) day.meals[mealIndex] = mealSwapControllerRecord(row.meal) as MealSwapControllerMeal;
+        const day = CairnMealSwapData.days(current)[dayIndex];
+        if (day?.meals) day.meals[mealIndex] = CairnMealSwapData.record(row.meal) as ClientMealSwapMeal;
       }
-      swrInvalidate(mealSwapControllerCacheKey());
+      swrInvalidate(CairnMealSwapData.cacheKey());
       rerenderMealDay(current, dayIndex, ctx, mealIndex);
       toast("Meal swapped");
     },
@@ -182,12 +125,12 @@ function mealSwapOpOpts(
 }
 
 function reconnectMealSwap(job?: unknown): ClientAgentOpHandlers | null {
-  const input = mealSwapControllerRecord(mealSwapControllerRecord(job).input);
+  const input = CairnMealSwapData.record(CairnMealSwapData.record(job).input);
   const planId = Number(input.id);
-  const cached = mealSwapControllerPlans(peekCached<MealSwapControllerPlan[]>(mealSwapControllerCacheKey())?.data || []);
+  const cached = CairnMealSwapData.plans(peekCached<MealSwapControllerPlan[]>(CairnMealSwapData.cacheKey())?.data || []);
   const current = cached.find((plan) => Number(plan.id) === planId);
-  if (!current || !mealSwapControllerDays(current).length) return null;
-  const dayIndex = mealSwapControllerDays(current).findIndex(
+  if (!current || !CairnMealSwapData.days(current).length) return null;
+  const dayIndex = CairnMealSwapData.days(current).findIndex(
     (day) => String(day?.day ?? "").trim().toLowerCase() === String(input.day ?? "").trim().toLowerCase()
   );
   const mealIndex = Number(input.meal_index);
@@ -237,7 +180,7 @@ async function moveMealRow(
   mealIndex: number,
   direction: number,
 ): Promise<void> {
-  const days = mealSwapControllerDays(current);
+  const days = CairnMealSwapData.days(current);
   const meals = days[dayIndex]?.meals;
   const nextIndex = mealIndex + direction;
   if (!meals || mealIndex < 0 || mealIndex >= meals.length || nextIndex < 0 || nextIndex >= meals.length) return;
@@ -249,8 +192,8 @@ async function moveMealRow(
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ days }),
     });
-    if (mealSwapControllerErrorMessage(result)) throw new Error(mealSwapControllerErrorMessage(result));
-    swrInvalidate(mealSwapControllerCacheKey());
+    if (CairnMealSwapData.errorMessage(result)) throw new Error(CairnMealSwapData.errorMessage(result));
+    swrInvalidate(CairnMealSwapData.cacheKey());
   } catch {
     [meals[mealIndex], meals[nextIndex]] = [meals[nextIndex], meals[mealIndex]];
     if (token === pollToken) {
@@ -263,8 +206,8 @@ async function moveMealRow(
 function wireMealRows(scope: ParentNode, current: MealSwapControllerPlan, ctx: MealSwapControllerContext): void {
   scope.querySelectorAll<HTMLElement>("[data-mlog]").forEach((button) =>
     button.addEventListener("click", async () => {
-      let payload: MealSwapControllerRecord;
-      try { payload = mealSwapControllerRecord(JSON.parse(button.dataset.mlog || "{}")); } catch { return; }
+      let payload: ClientMealSwapRecord;
+      try { payload = CairnMealSwapData.record(JSON.parse(button.dataset.mlog || "{}")); } catch { return; }
       const htmlButton = mealSwapControllerButtonElement(button);
       if (htmlButton) htmlButton.disabled = true;
       const generic = /^(breakfast|lunch|dinner|snack|pre[- ]?workout|post[- ]?workout)$/i.test(String(payload.name || "").trim());

@@ -12,6 +12,7 @@ const todayState = state;
 const todayView = view;
 const todaySideLoaders = globalThis.CairnTodaySideLoaders;
 const todayPlanSessionPreparation = globalThis.CairnTodayPlanSessionPreparation;
+const todayDataLoader = globalThis.CairnTodayDataLoader;
 function todaySideLoaderDeps() {
     return {
         root: todayView,
@@ -230,57 +231,19 @@ function todayRailDeps() {
     };
 }
 async function renderToday(opts = {}) {
-    // `soft:true` marks a warm SWR re-render (a background revalidate found new data):
-    // numerals snap to their final value instead of re-counting from zero. Passed
-    // explicitly (not a shared flag) so re-entrant renders never race over it.
-    const soft = !!opts.soft;
-    pollToken++; // invalidate any in-flight enrichment polls from a previous render
-    if (!todayState.logDate)
-        todayState.logDate = localISO();
-    setTodayHeaderTitle();
-    // Skeleton-first: paint the shell synchronously so a tab switch never leaves the
-    // previous tab frozen during the data/agent awaits below. The real render swaps
-    // todayView.innerHTML wholesale once the data is in hand. Skip when re-rendering
-    // in-place (the Brief is already on screen — a skeleton flash would be jarring).
-    // SWR data load: when every input is warm in cache, Today paints REAL content
-    // instantly (no skeleton, no network wait) and a single background revalidate
-    // upgrades it in place only if something changed. A cold input keeps the existing
-    // skeleton + await. The Brief self-SWRs (loadBrief), so it's left untouched.
-    // `changed` accumulates from each revalidate; once any input differs we softly
-    // re-render Today (guarded against clobbering active logging). `warm` drives the
-    // count-up snap so already-shown numerals never re-count from zero.
-    const sessKey = "today:session:" + todayState.logDate;
-    const peeks = {
-        plan: todayState.plan.length ? { data: todayState.plan, fresh: true } : todayPeekCached("plan"),
-        session: todayPeekCached(sessKey),
-        stats: todayPeekCached("stats"),
-        profile: todayPeekCached("profile"),
-        exercises: todayPeekCached("exercises"),
-    };
-    const statsPromise = peeks.stats ? Promise.resolve(peeks.stats.data) : todayApi("/stats");
-    const profilePromise = peeks.profile ? Promise.resolve(peeks.profile.data) : todayApi("/profile").catch(() => null);
-    const exercisesPromise = peeks.exercises ? Promise.resolve(peeks.exercises.data) : todayApi("/exercises").catch(() => []);
-    const warm = Object.values(peeks).every(Boolean);
-    const myToken = pollToken; // staleness guard for the background revalidate tail
-    let _todayChanged = false;
-    const revals = [];
-    // Background revalidations; each writes its cache tier and flags a change. Only the
-    // 5 primary inputs feed the soft-repaint decision (last-set prefills don't).
-    const reval = (path, key) => { revals.push(todayCachedApi(path, { key, onUpgrade: (_d, { changed }) => { if (changed)
-            _todayChanged = true; } }).catch(() => { })); };
-    // Cold + no existing surface → skeleton-first (the old frozen-tab guard). Warm
-    // skips the skeleton entirely: the prior content stays until the synchronous
-    // render below swaps in the real today-wrap, so there's no blank/skeleton flash.
-    if (!warm && !todayView.querySelector(".today-wrap"))
-        todayView.innerHTML = todaySkeleton();
-    // /plan
-    if (!todayState.plan.length)
-        todayState.plan = (peeks.plan ? peeks.plan.data : await todayApi("/plan"));
-    reval("/plan", "plan");
-    const isToday = todayState.logDate === localISO();
-    // session for the selected date (single object or null)
-    const session = peeks.session ? peeks.session.data : await todayApi("/sessions?date=" + todayState.logDate);
-    reval("/sessions?date=" + todayState.logDate, sessKey);
+    const todayData = await todayDataLoader.load(opts, {
+        root: todayView,
+        state: todayState,
+        api: todayApi,
+        cachedApi: todayCachedApi,
+        peekCached: todayPeekCached,
+        localISO,
+        todaySkeleton,
+        setTodayHeaderTitle,
+        nextPollToken: () => ++pollToken,
+    });
+    const { soft, isToday } = todayData;
+    const session = todayData.session;
     const { day, loggedByEx, cardioEfforts, todaySettings, matchedCardio, activeItems, skippedItems, cardioItems, strengthItems, planEx, offPlanEx, pendingOffPlan, lastSets, rxByEx, rxFor, prefillFor, exDone, exTotal, hasSyncedCardioToday, isRunDay, expectingRun, } = await todayPlanSessionPreparation.preparePlanSession({
         state: todayState,
         session,
@@ -293,14 +256,11 @@ async function renderToday(opts = {}) {
         cardioLabel,
         cardioEffortMatches,
     });
-    const [stats, profile, exercises] = await Promise.all([statsPromise, profilePromise, exercisesPromise]);
+    const [stats, profile, exercises] = [todayData.stats, todayData.profile, todayData.exercises];
     if (profile) {
         setDiscipline(profile.primary_discipline);
         setEnduranceGoalSet(!!profile.endurance_goal_json);
     } // keep the emphasis globals warm for Progress/Today/Plan
-    reval("/stats", "stats");
-    reval("/profile", "profile");
-    reval("/exercises", "exercises");
     // exercise → mode map ('reps'|'timed'), used by exCard + the add-exercise flow
     todayState.exModes = Object.fromEntries((exercises || []).map((e) => [e.name, e.mode || "reps"]));
     const curW = stats.weight_lb ?? (profile && profile.weight_lb != null ? profile.weight_lb : null);
@@ -641,24 +601,12 @@ async function renderToday(opts = {}) {
     wireGuides(view);
     CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
     setupAddExercise();
-    // SWR tail: once the background revalidations settle, if any of the 5 primary
-    // inputs actually changed, softly re-render Today in place (numerals SNAP, never
-    // re-count). Guarded so a refresh never clobbers what the athlete is doing: bail
-    // if we navigated away / the date moved (pollToken), if a logging input is
-    // focused, or if the Brief is mid-reshape.
-    if (revals.length)
-        Promise.all(revals).then(() => {
-            if (!_todayChanged)
-                return;
-            if (myToken !== pollToken || todayState.tab !== "today")
-                return; // moved on / a newer render superseded us
-            const ae = document.activeElement;
-            if (ae && (ae.closest?.(".ex") || ae.closest?.(".quicklog") || ae.closest?.(".addex") || ae.closest?.(".wt-inline")))
-                return; // mid-entry
-            if (todayView.querySelector(".brief.is-thinking"))
-                return; // a steer reshape is in flight
-            renderToday({ soft: true });
-        });
+    todayDataLoader.scheduleSoftRepaint(todayData, {
+        root: todayView,
+        state: todayState,
+        isCurrentPoll: (token) => token === pollToken,
+        renderToday,
+    });
 }
 // A finished workout's calm wrap-up: a quiet checkmark, the day, the numbers that
 // matter, the "how did that feel?" slot, and two soft ways forward (log more /

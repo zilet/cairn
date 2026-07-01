@@ -210,27 +210,8 @@ async function loadVolumeBalance() {
 }
 
 // ---------- Progress: Endurance (runner/cyclist-first read) ----------
-function progressEnduranceDeps(): ClientProgressEnduranceControllerDeps {
-  return {
-    view,
-    headerTitle,
-    state,
-    api,
-    nextToken: () => ++pollToken,
-    isCurrent: (token) => token === pollToken,
-    segmentHtml: (active) => segBar(active, PROGRESS_SEG),
-    wireSegments: () => wireSeg(PROGRESS_HANDLERS),
-    loading: loadingState,
-    empty: emptyStateHtml,
-    hero: progressHero,
-    art,
-    runCountUps,
-    renderSelf: () => renderEndurance(),
-  };
-}
-
 async function renderEndurance() {
-  await CairnProgressEnduranceController.render(progressEnduranceDeps());
+  await CairnProgressEnduranceController.render(CairnProgressRouteDeps.endurance(() => renderEndurance()));
 }
 
 function paintEnduranceBody(
@@ -241,7 +222,15 @@ function paintEnduranceBody(
   settings: unknown,
   runPlan: import("../contracts/client-api.js").ClientWeeklyRunPlan | null,
 ) {
-  CairnProgressEnduranceController.paint(end, prs, goal, compliance, settings, runPlan, progressEnduranceDeps());
+  CairnProgressEnduranceController.paint(
+    end,
+    prs,
+    goal,
+    compliance,
+    settings,
+    runPlan,
+    CairnProgressRouteDeps.endurance(() => renderEndurance()),
+  );
 }
 
 // SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its
@@ -343,34 +332,9 @@ async function renderEnergy() {
 
 // ---------- Progress: Program (adaptive program intelligence) ----------
 // The controller owns Program SWR orchestration, conductor state, DOM composition,
-// and actions. This screen only adapts Progress' route shell and token ownership.
-function progressProgramDeps(): ClientProgressProgramControllerDeps {
-  return {
-    view,
-    headerTitle,
-    state,
-    api,
-    runOp,
-    nextToken: () => ++pollToken,
-    isCurrent: (token) => token === pollToken,
-    peekCached,
-    paintSWR: paintSWR as ClientProgressProgramControllerDeps["paintSWR"],
-    segmentHtml: (active) => segBar(active, PROGRESS_SEG),
-    skeletonHtml: (active, cards) => segSkeleton(active, PROGRESS_SEG, cards),
-    wireSegments: () => wireSeg(PROGRESS_HANDLERS),
-    hero: progressHero,
-    empty: emptyStateHtml,
-    art,
-    busy: btnBusy,
-    toast,
-    invalidate: swrInvalidate,
-    runCountUps,
-    renderSelf: () => renderProgram(),
-  };
-}
-
+// and actions. The shared route dependency adapter lives in progress-route-deps-client.
 async function renderProgram() {
-  return CairnProgressProgramController.render(progressProgramDeps());
+  return CairnProgressProgramController.render(CairnProgressRouteDeps.program(() => renderProgram()));
 }
 
 Object.assign(globalThis, {
