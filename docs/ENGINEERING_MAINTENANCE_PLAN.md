@@ -298,7 +298,7 @@ Tasks:
 
 - [x] Add internal brain contract files for memory, context events, day intake, directives, recovery, program state, and coaching focus using TypeScript only: `as const`, `satisfies`, and small pure type guards.
 - [x] Extract a shared `readToday({ date, override, agent, reset, recordOutcome })` so REST, MCP, and durable day-read override jobs cannot drift.
-- [ ] Generate the chat action prompt schema from `chatActions.ts` instead of maintaining field prose separately in `prompt.ts`.
+- [x] Generate the chat action prompt schema from `chatActions.ts` instead of maintaining field prose separately in `prompt.ts`. (Done — commit `8c919a89`: `CHAT_ACTION_PROMPT_SPECS` + `renderChatActionSchema`/`renderChatActionPromptProse` in `src/chatActions.ts` are the single source; `prompt.ts` just calls the renderer.)
 - [ ] Split `getCoachContext()` into typed slice builders (`person`, `training`, `health`, `life`, `running`) with equality-style tests against the current envelope.
 - [ ] Split prompt renderers such as coaching focus, program state, today fuel, and connected brain into a prompt-renderer module before splitting full prompt builders.
 - [ ] Normalize memory/context write inputs through shared DTO helpers before replacing route/MCP imports with domain service facades.

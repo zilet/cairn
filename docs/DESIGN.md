@@ -99,7 +99,7 @@ see `body[data-tab="today"] header.condensed` in styles.css).
 Tab bar `.tabbar` / `.tab` / `.tab.active` (markup unchanged; restyled: cream blur bar,
 ink icons, terracotta active with a small dot indicator; desktop ≥960px → left sidebar as today).
 
-New/changed components (CSS must implement, app.js must emit):
+New/changed components (CSS must implement, the client JS must emit):
 
 - `.artile` — illustration tile: `display:grid;place-items:center`, transparent (art carries its
   own circle). Sizes: `.artile-lg` (96px), `.artile-md` (64px), `.artile-sm` (44px).
@@ -160,7 +160,7 @@ New/changed components (CSS must implement, app.js must emit):
 - `public/` stays dependency-free vanilla JS — no build step, no frameworks, no external images.
 - All server-supplied strings rendered into `innerHTML` go through `escHtml`/`escAttr`.
 - Don't break behavior: every element id, `data-*` attribute, and event-wiring pattern in
-  `app.js` is functional. Polling (`pollToken`), rest timer, day switcher, editor, onboarding —
+  the client JS is functional. Polling (`pollToken`), rest timer, day switcher, editor, onboarding —
   all must keep working.
 - Light theme only. `color-scheme: light` (date inputs etc. follow).
 - **Dates read human, never raw.** Don't surface bare `YYYY-MM-DD` in UI copy. Three date helpers,
@@ -202,7 +202,7 @@ One easing family, three speeds — defined in `:root`, used everywhere. Nothing
 
 The motion vocabulary on top of the existing `.reveal` stagger:
 
-- **Count-up numerals** — `countUp(el, target)` in app.js eases big figures from 0
+- **Count-up numerals** — `countUp(el, target)` in the client JS eases big figures from 0
   (cubic ease-out, ~750ms). Markup contract: `data-cu="<number>"` (+ optional
   `data-cufmt="k"` for humanized `12.4k`) and a `runCountUps(scope)` call after render.
 - **Bars grow to width** — give any `.volbar-fill`/`.macrobar-fill` the `.barfill` class;
@@ -243,7 +243,7 @@ The motion vocabulary on top of the existing `.reveal` stagger:
 
 Reached for by **every** surface where an operation can exceed ~400ms (agent
 calls, day-reads, drafts, reviews, history fetches), so "working" always reads
-the same warm way. Defined in `styles.css` + `app.js` helpers; never hand-roll a
+the same warm way. Defined in `styles.css` + the client JS helpers; never hand-roll a
 one-off spinner. Motion is slow and legible under `prefers-reduced-motion`.
 
 - **`.aspin`** — the calm spinner ring; size via `--asz` or `.aspin-sm` / `.aspin-xs`,

@@ -462,7 +462,7 @@ metrics, family, chat, Garmin sync, life-context events, and settings. A represe
 `get_plan`, `log_set`, `get_day_read`, `suggest_session`, `draft_plan_update`, `apply_proposal`,
 `draft_meal_plan`, `swap_meal`, `get_recovery`, `get_priority_markers`, `list_directives`,
 `generate_insight`, `log_activity`, `log_food_note`, `set_profile`, `sync_garmin`. Use your MCP
-client's tool listing for the full, current set (defined in `src/mcp.ts`).
+client's tool listing for the full, current set (defined in `src/surfaces/mcp/*`, registered by `src/mcp.ts`).
 
 There are also packaged Claude Code and Codex skills at `.claude/skills/cairn/` and
 `.agents/skills/cairn/` that map everyday phrases ("log my ride", "update my plan",
@@ -498,7 +498,7 @@ Ops                GET /settings  GET /export  GET /health
 ```
 
 See [`docs/API.md`](docs/API.md) for the authoritative grouped list and
-[`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) for the parallel MCP surface (162 tools).
+[`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) for the parallel MCP surface (176 tools).
 
 ## Notes
 - Assisted lifts: negative weight. Bodyweight: null. Est-1RM = Epley on best set/day.
