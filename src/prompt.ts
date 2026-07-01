@@ -1,6 +1,11 @@
 import * as repo from "./repo.js";
 import { extractJson } from "./agents.js";
-import { normalizeChatActions, type ChatAction } from "./chatActions.js";
+import {
+  normalizeChatActions,
+  renderChatActionPromptProse,
+  renderChatActionSchema,
+  type ChatAction,
+} from "./chatActions.js";
 import { todayISO } from "./db.js";
 import { HEALTH_DOCUMENT_KIND_SCHEMA } from "./healthDocumentKinds.js";
 import type { CoachContext, PartialCoachContext } from "./repo/coach-context.js";
@@ -1218,56 +1223,6 @@ export function parseChatReply(text: string): { reply: string; actions: ChatActi
   return { reply, actions: normalizeChatActions(actions) };
 }
 
-const CHAT_ACTIONS_SCHEMA = `[
-    // zero or more — ONLY when the athlete clearly asked to log or change something.
-    { "type": "log_activity", "text": "ran 50 min @ 5:30/km" },
-    { "type": "log_set", "exercise": "Back Squat", "weight": 195, "reps": 8, "rir": 2, "day_number": 1 },
-    { "type": "log_set", "exercise": "Dead Hang", "duration_sec": 45, "exercise_mode": "timed" },
-    { "type": "set_profile", "weight_lb": 176 },
-    // The endurance OBJECTIVE (running goal), orthogonal to the lifting plan. Use mode
-    // "race" for a dated event (the coach periodizes a ramp + taper), or "standing" for
-    // an ongoing readiness target with NO date (e.g. "stay 10k-ready"). Set this when the
-    // athlete states a running goal ("I want to run the Cambridge Half on Nov 1", "keep me
-    // able to run a 10k anytime"). Distinct from primary_discipline (set via set_profile).
-    { "type": "set_endurance_goal", "mode": "race",
-      "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",
-      "label": "<readiness label, e.g. '10k-ready' — standing mode>",
-      "distance_km": <number|null>, "target": "<e.g. 'sub-1:45'|null>", "weekly_km": <number|null>, "weekly_sessions": <number|null> },
-    { "type": "add_memory", "content": "Prefers morning training", "kind": "preference" },
-    { "type": "update_memory", "id": <existing memory id from DATA.memory>, "content": "<corrected fact>", "kind": "preference|constraint|decision|injury|milestone|goal|observation" },
-    { "type": "supersede_memory", "id": <id of the now-WRONG memory from DATA.memory>, "reason": "<what changed>", "replacement": "<optional new fact to remember instead>" },
-    { "type": "log_food", "meal": "breakfast|lunch|dinner|snack", "summary": "<clean dish name>",
-      "items": ["<component>"], "ingredients": [
-        { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
-      "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null> },
-    { "type": "update_food_note", "id": <existing id from DATA.day_intake.entries>,
-      "meal": "breakfast|lunch|dinner|snack|meal", "summary": "<corrected dish name>",
-      "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null>, "fiber_g": <number|null>, "notes": <string|null> },
-    { "type": "plan_update", "summary": "...", "changes": [
-      { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
-      { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
-      // ADD a movement: a change whose exercise isn't on that day yet is ADDED to it.
-      // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
-      { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] },
-    { "type": "plan_restructure", "summary": "move to 5 days", "days": [
-      { "day_number": 1, "name": "Lower A", "focus": "Quad", "items": [
-        { "exercise": "Back Squat", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 190, "note": "" },
-        { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed", "note": "" } ] } ] },
-    { "type": "log_health", "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}", "doc_date": "YYYY-MM-DD|null",
-      "summary": "<plain-language 1-2 sentence read on the results>",
-      "markers": [ { "name": "Ferritin", "value": 45, "unit": "ng/mL", "flag": "low|high|normal|null" } ] },
-    { "type": "add_context_event", "kind": "trip|injury|life_event|family_event", "title": "<short>",
-      "detail": "<optional>", "start_date": "YYYY-MM-DD|null", "end_date": "YYYY-MM-DD|null",
-      "meta": { "area": "<injuries: knee / lower back>", "severity": "mild|moderate|severe", "location": "<trips>", "member": "<family_event: who>", "recurrence": "<family_event: e.g. Tue 17:00>" } },
-    // Supplement UNDERSTANDING (not a daily log). When the athlete mentions what they take
-    // ("I take creatine daily, omega-3, some D, whey occasionally"), capture it ONCE and
-    // approximate sensibly. Prefer structured "items" (you fill canonical name + typical
-    // dose + cadence + the markers it touches); or pass "text" for the server to approximate.
-    { "type": "log_supplement", "items": [
-      { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] },
-      { "name": "Vitamin D3", "dose": "2000 IU", "frequency": "daily", "category": "vitamin", "related_markers": ["Vitamin D"] } ] }
-]`;
-
 // Conversational coach. Sees all data; may emit actions the server applies/drafts.
 // imagePath: absolute path of a photo the athlete attached this turn — the agent
 // CLIs (Claude Code / Codex) can open local files, same trick as health docs.
@@ -1325,42 +1280,7 @@ GUARDRAILS:
 
 ${CONTEXT_GUARDRAILS}
 
-ACTIONS — only when the athlete clearly asks to log or change something:
-- log_activity, log_set, set_profile, set_endurance_goal, add_memory, update_memory, supersede_memory, log_food, update_food_note, log_health, add_context_event, log_supplement are APPLIED immediately.
-- When you log_set or otherwise name an exercise, use a CLEAN canonical name (e.g. "Incline DB Press",
-  "Romanian Deadlift") — not a descriptive/throwaway phrase ("incline db press 3x10 lol") — and reuse
-  an existing KNOWN-EXERCISE name when it matches, so the same movement stays one entry.
-- log_food records a meal estimate (food note) — use it when the athlete reports something they
-  ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.
-  BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today,
-  reference it instead of logging a duplicate. If the athlete is correcting that row, emit
-  update_food_note with the existing id.
-- log_health records lab/bloodwork/DEXA/ECG results the athlete reports in chat — transcribe EVERY
-  marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short
-  plain-language summary. Do NOT curate to "the interesting ones": an in-range/normal/boring marker
-  (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every
-  hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands
-  straight in their Health records (Me → Health) and feeds the marker trends. Never invent a value.
-  Preserve source units exactly as reported; do not convert US/SI/EU units yourself.
-  Informational, not medical advice. NOTE: for a big pasted panel (dozens of markers), the Health
-  tab's "paste results" box is the more reliable, complete path — you may mention it in passing.
-- add_context_event records a trip, injury/niggle, major life event, or family commitment onto their
-  timeline (Me → Life) so the plan adapts around it — ease off an injured area, plan travel-friendly
-  weeks, dial volume back during a stressful stretch, keep family days shorter/more flexible. Use
-  "injury" for any pain/niggle they mention, "trip" for travel, "family_event" for a recurring
-  family/kids commitment (meta {member, recurrence}, e.g. "Tue 17:00 soccer"), "life_event" otherwise.
-  Set start/end dates ONLY when the athlete actually gave them. NEVER guess or approximate a date
-  (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't
-  know. If the exact date matters (e.g. a race they're training for), record the event with null
-  dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.
-- plan_update (target tweaks AND adding/swapping a movement on an existing day) and plan_restructure
-  (changing the split or days-per-week) are saved as a DRAFT for the athlete to review and apply —
-  never assume they're live. A plan_update change whose exercise is already on that day TWEAKS it; a
-  change whose exercise is NOT on that day yet ADDS it (include sets + rep_low/rep_high so it lands
-  complete). Use plan_update to add ONE or a few movements to days that exist; use plan_restructure
-  only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible
-  exercises that honor their constraints and carrying over weights where it makes sense.
-- If they're just asking a question, write ONLY the prose reply — no actions block at all.
+${renderChatActionPromptProse()}
 ${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}${renderNextStep(ctx)}
 Keep the reply short and human; confirm what you logged or drafted. When the athlete says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
@@ -1379,7 +1299,7 @@ ${CHAT_ACTION_SENTINEL}
    If there is nothing to log or change, STOP after the prose — do NOT write the marker or any JSON.
 
 ACTION SHAPES (each item inside the "actions" array):
-${CHAT_ACTIONS_SCHEMA}
+${renderChatActionSchema()}
 ${photoBlock}
 CONVERSATION SO FAR:
 ${convo || "(new conversation)"}

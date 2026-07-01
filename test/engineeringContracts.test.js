@@ -7,7 +7,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLIENT_OUTPUTS } from "../scripts/build-client.mjs";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
-import { CHAT_ACTION_TYPES } from "../dist/chatActions.js";
+import {
+  CHAT_ACTION_PROMPT_SPECS,
+  CHAT_ACTION_TYPES,
+  chatActionPromptSpecs,
+  draftChatActionTypes,
+  immediateChatActionTypes,
+  renderChatActionPromptProse,
+  renderChatActionSchema,
+} from "../dist/chatActions.js";
 import {
   CLIENT_API_BROAD_RESPONSE_WAIVERS,
   CLIENT_API_CONTRACT_PATHS,
@@ -957,16 +965,38 @@ test("chat action write contract stays typed and prompt-aligned", () => {
   const prompt = read("src/prompt.ts");
   const chatTurns = read("src/chatTurns.ts");
   const chatActions = read("src/chatActions.ts");
+  const actionSchema = renderChatActionSchema();
+  const actionProse = renderChatActionPromptProse();
+  const draftActions = draftChatActionTypes();
+  const immediateActions = immediateChatActionTypes();
 
   assert.match(prompt, /normalizeChatActions/);
+  assert.match(prompt, /renderChatActionPromptProse/);
+  assert.match(prompt, /renderChatActionSchema/);
+  assert.doesNotMatch(prompt, /const CHAT_ACTIONS_SCHEMA/);
   assert.match(prompt, /actions: ChatAction\[\]/);
   assert.doesNotMatch(prompt, /actions:\s*any\[\]/);
   assert.match(chatTurns, /normalizeChatActions/);
   assert.doesNotMatch(chatTurns, /parsed:\s*any/);
+  assert.match(chatActions, /CHAT_ACTION_PROMPT_SPECS/);
+  assert.deepEqual(Object.keys(CHAT_ACTION_PROMPT_SPECS), [...CHAT_ACTION_TYPES]);
+  assert.deepEqual(
+    chatActionPromptSpecs().map((spec) => spec.type),
+    [...CHAT_ACTION_TYPES]
+  );
+  assert.deepEqual(draftActions, ["plan_update", "plan_restructure"]);
+  assert.equal(immediateActions.includes("plan_update"), false);
+  assert.equal(immediateActions.includes("plan_restructure"), false);
+  assert.match(actionProse, /APPLIED immediately/);
+  assert.match(actionProse, /DRAFTS for the athlete to review and apply/);
 
   for (const actionType of CHAT_ACTION_TYPES) {
     assert.match(chatActions, new RegExp(`"${actionType}"`), `${actionType} should be owned by chatActions.ts`);
-    assert.match(prompt, new RegExp(`\\b${actionType}\\b`), `${actionType} should be described in the prompt action schema`);
+    assert.match(
+      actionSchema,
+      new RegExp(`"type": "${escapeRegExp(actionType)}"`),
+      `${actionType} should be described in the generated prompt action schema`
+    );
     assert.match(chatTurns, new RegExp(`case "${actionType}"`), `${actionType} should be handled by applyChatActions`);
   }
 });

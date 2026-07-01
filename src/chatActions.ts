@@ -1,3 +1,5 @@
+import { HEALTH_DOCUMENT_KIND_SCHEMA } from "./healthDocumentKinds.js";
+
 type ChatActionRecord = Record<string, unknown>;
 
 export const CHAT_ACTION_TYPES = [
@@ -18,6 +20,16 @@ export const CHAT_ACTION_TYPES = [
 ] as const;
 
 export type ChatActionType = typeof CHAT_ACTION_TYPES[number];
+
+export type ChatActionApplyMode = "immediate" | "draft";
+
+export type ChatActionPromptSpec<T extends ChatActionType = ChatActionType> = {
+  type: T;
+  applyMode: ChatActionApplyMode;
+  summary?: string;
+  shape: string;
+  guidance?: readonly string[];
+};
 
 interface ChatActionBase {
   type: ChatActionType;
@@ -150,6 +162,170 @@ export type ChatAction =
   | LogSupplementAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
+
+export const CHAT_ACTION_PROMPT_SPECS = {
+  log_activity: {
+    type: "log_activity",
+    applyMode: "immediate",
+    shape: `{ "type": "log_activity", "text": "ran 50 min @ 5:30/km" }`,
+  },
+  log_set: {
+    type: "log_set",
+    applyMode: "immediate",
+    shape: `{ "type": "log_set", "exercise": "Back Squat", "weight": 195, "reps": 8, "rir": 2, "day_number": 1 },
+    { "type": "log_set", "exercise": "Dead Hang", "duration_sec": 45, "exercise_mode": "timed" }`,
+    guidance: [
+      `When you log_set or otherwise name an exercise, use a CLEAN canonical name (e.g. "Incline DB Press", "Romanian Deadlift") — not a descriptive/throwaway phrase ("incline db press 3x10 lol") — and reuse an existing KNOWN-EXERCISE name when it matches, so the same movement stays one entry.`,
+    ],
+  },
+  set_profile: {
+    type: "set_profile",
+    applyMode: "immediate",
+    shape: `{ "type": "set_profile", "weight_lb": 176 }`,
+  },
+  set_endurance_goal: {
+    type: "set_endurance_goal",
+    applyMode: "immediate",
+    shape: `// The endurance OBJECTIVE (running goal), orthogonal to the lifting plan. Use mode
+    // "race" for a dated event (the coach periodizes a ramp + taper), or "standing" for
+    // an ongoing readiness target with NO date (e.g. "stay 10k-ready"). Set this when the
+    // athlete states a running goal ("I want to run the Cambridge Half on Nov 1", "keep me
+    // able to run a 10k anytime"). Distinct from primary_discipline (set via set_profile).
+    { "type": "set_endurance_goal", "mode": "race",
+      "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",
+      "label": "<readiness label, e.g. '10k-ready' — standing mode>",
+      "distance_km": <number|null>, "target": "<e.g. 'sub-1:45'|null>", "weekly_km": <number|null>, "weekly_sessions": <number|null> }`,
+  },
+  add_memory: {
+    type: "add_memory",
+    applyMode: "immediate",
+    shape: `{ "type": "add_memory", "content": "Prefers morning training", "kind": "preference" }`,
+  },
+  update_memory: {
+    type: "update_memory",
+    applyMode: "immediate",
+    shape: `{ "type": "update_memory", "id": <existing memory id from DATA.memory>, "content": "<corrected fact>", "kind": "preference|constraint|decision|injury|milestone|goal|observation" }`,
+  },
+  supersede_memory: {
+    type: "supersede_memory",
+    applyMode: "immediate",
+    shape: `{ "type": "supersede_memory", "id": <id of the now-WRONG memory from DATA.memory>, "reason": "<what changed>", "replacement": "<optional new fact to remember instead>" }`,
+  },
+  log_food: {
+    type: "log_food",
+    applyMode: "immediate",
+    shape: `{ "type": "log_food", "meal": "breakfast|lunch|dinner|snack", "summary": "<clean dish name>",
+      "items": ["<component>"], "ingredients": [
+        { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
+      "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null> }`,
+    guidance: [
+      `log_food records a meal estimate (food note) — use it when the athlete reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
+      `BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today, reference it instead of logging a duplicate. If the athlete is correcting that row, emit update_food_note with the existing id.`,
+    ],
+  },
+  update_food_note: {
+    type: "update_food_note",
+    applyMode: "immediate",
+    shape: `{ "type": "update_food_note", "id": <existing id from DATA.day_intake.entries>,
+      "meal": "breakfast|lunch|dinner|snack|meal", "summary": "<corrected dish name>",
+      "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null>, "fiber_g": <number|null>, "notes": <string|null> }`,
+  },
+  plan_update: {
+    type: "plan_update",
+    applyMode: "draft",
+    shape: `{ "type": "plan_update", "summary": "...", "changes": [
+      { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
+      { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
+      // ADD a movement: a change whose exercise isn't on that day yet is ADDED to it.
+      // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
+      { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] }`,
+    guidance: [
+      `plan_update (target tweaks AND adding/swapping a movement on an existing day) is saved as a DRAFT for the athlete to review and apply — never assume it's live. A plan_update change whose exercise is already on that day TWEAKS it; a change whose exercise is NOT on that day yet ADDS it (include sets + rep_low/rep_high so it lands complete). Use plan_update to add ONE or a few movements to days that exist.`,
+    ],
+  },
+  plan_restructure: {
+    type: "plan_restructure",
+    applyMode: "draft",
+    shape: `{ "type": "plan_restructure", "summary": "move to 5 days", "days": [
+      { "day_number": 1, "name": "Lower A", "focus": "Quad", "items": [
+        { "exercise": "Back Squat", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 190, "note": "" },
+        { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed", "note": "" } ] } ] }`,
+    guidance: [
+      `plan_restructure (changing the split or days-per-week) is saved as a DRAFT for the athlete to review and apply — never assume it's live. Use plan_restructure only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible exercises that honor their constraints and carrying over weights where it makes sense.`,
+    ],
+  },
+  log_health: {
+    type: "log_health",
+    applyMode: "immediate",
+    shape: `{ "type": "log_health", "kind": "${HEALTH_DOCUMENT_KIND_SCHEMA}", "doc_date": "YYYY-MM-DD|null",
+      "summary": "<plain-language 1-2 sentence read on the results>",
+      "markers": [ { "name": "Ferritin", "value": 45, "unit": "ng/mL", "flag": "low|high|normal|null" } ] }`,
+    guidance: [
+      `log_health records lab/bloodwork/DEXA/ECG results the athlete reports in chat — transcribe EVERY marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short plain-language summary.`,
+      `Do NOT curate to "the interesting ones": an in-range/normal/boring marker (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands straight in their Health records (Me → Health) and feeds the marker trends. Never invent a value.`,
+      `Preserve source units exactly as reported; do not convert US/SI/EU units yourself. Informational, not medical advice.`,
+      `NOTE: for a big pasted panel (dozens of markers), the Health tab's "paste results" box is the more reliable, complete path — you may mention it in passing.`,
+    ],
+  },
+  add_context_event: {
+    type: "add_context_event",
+    applyMode: "immediate",
+    shape: `{ "type": "add_context_event", "kind": "trip|injury|life_event|family_event", "title": "<short>",
+      "detail": "<optional>", "start_date": "YYYY-MM-DD|null", "end_date": "YYYY-MM-DD|null",
+      "meta": { "area": "<injuries: knee / lower back>", "severity": "mild|moderate|severe", "location": "<trips>", "member": "<family_event: who>", "recurrence": "<family_event: e.g. Tue 17:00>" } }`,
+    guidance: [
+      `add_context_event records a trip, injury/niggle, major life event, or family commitment onto their timeline (Me → Life) so the plan adapts around it — ease off an injured area, plan travel-friendly weeks, dial volume back during a stressful stretch, keep family days shorter/more flexible.`,
+      `Use "injury" for any pain/niggle they mention, "trip" for travel, "family_event" for a recurring family/kids commitment (meta {member, recurrence}, e.g. "Tue 17:00 soccer"), "life_event" otherwise.`,
+      `Set start/end dates ONLY when the athlete actually gave them. NEVER guess or approximate a date (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't know. If the exact date matters (e.g. a race they're training for), record the event with null dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.`,
+    ],
+  },
+  log_supplement: {
+    type: "log_supplement",
+    applyMode: "immediate",
+    shape: `// Supplement UNDERSTANDING (not a daily log). When the athlete mentions what they take
+    // ("I take creatine daily, omega-3, some D, whey occasionally"), capture it ONCE and
+    // approximate sensibly. Prefer structured "items" (you fill canonical name + typical
+    // dose + cadence + the markers it touches); or pass "text" for the server to approximate.
+    { "type": "log_supplement", "items": [
+      { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] },
+      { "name": "Vitamin D3", "dose": "2000 IU", "frequency": "daily", "category": "vitamin", "related_markers": ["Vitamin D"] } ] }`,
+  },
+} as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
+
+export function chatActionPromptSpecs(): ChatActionPromptSpec[] {
+  return CHAT_ACTION_TYPES.map((type) => CHAT_ACTION_PROMPT_SPECS[type]);
+}
+
+export function immediateChatActionTypes(): ChatActionType[] {
+  return chatActionPromptSpecs().filter((spec) => spec.applyMode === "immediate").map((spec) => spec.type);
+}
+
+export function draftChatActionTypes(): ChatActionType[] {
+  return chatActionPromptSpecs().filter((spec) => spec.applyMode === "draft").map((spec) => spec.type);
+}
+
+function renderActionGuidance(types: readonly ChatActionType[]): string {
+  return types
+    .flatMap((type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).guidance ?? [])
+    .map((line) => `- ${line}`)
+    .join("\n");
+}
+
+export function renderChatActionSchema(): string {
+  return `[
+    // zero or more — ONLY when the athlete clearly asked to log or change something.
+    ${chatActionPromptSpecs().map((spec) => spec.shape).join(",\n    ")}
+]`;
+}
+
+export function renderChatActionPromptProse(): string {
+  return `ACTIONS — only when the athlete clearly asks to log or change something:
+- ${immediateChatActionTypes().join(", ")} are APPLIED immediately.
+${renderActionGuidance(immediateChatActionTypes())}
+- ${draftChatActionTypes().join(" and ")} are saved as DRAFTS for the athlete to review and apply — never assume they're live.
+${renderActionGuidance(draftChatActionTypes())}
+- If they're just asking a question, write ONLY the prose reply — no actions block at all.`;
+}
 
 function isRecord(value: unknown): value is ChatActionRecord {
   return !!value && typeof value === "object" && !Array.isArray(value);
