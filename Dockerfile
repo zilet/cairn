@@ -13,7 +13,13 @@ COPY package*.json tsconfig.json tsconfig.client.build.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
 COPY scripts/build-client.mjs ./scripts/build-client.mjs
 COPY src ./src
-RUN --mount=type=cache,target=/app/.tsbuildcache,sharing=locked npm run build
+# NO tsbuildcache mount here. tsc is `incremental` with tsBuildInfoFile under
+# .tsbuildcache/. A persisted cache mount would carry that .tsbuildinfo across
+# builds while `dist/` (in the image layer) starts fresh each time — so tsc,
+# trusting the stale buildinfo, skips re-emitting "unchanged" files and ships a
+# PARTIAL dist/ (missing e.g. dist/repo/exercises.js → runtime crash loop). A
+# clean, full emit every build is deterministic and only costs ~5s of tsc.
+RUN npm run build
 
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
