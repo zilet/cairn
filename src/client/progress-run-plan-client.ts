@@ -1,43 +1,10 @@
 // @ts-check
 // Progress Endurance run-plan presentation helpers.
 
-type RunPlanRun = {
-  kind_label?: unknown;
-  label?: unknown;
-  target_distance_km?: unknown;
-  target_duration_min?: unknown;
-  target_zone?: unknown;
-  interval?: unknown;
-  note?: unknown;
-};
-
-type WeeklyRunPlan = {
-  available?: boolean;
-  runs?: RunPlanRun[];
-  rationale?: unknown[];
-  why?: unknown;
-  mix_summary?: unknown;
-  quality_focus?: unknown;
-};
-
-type EnduranceGoal = {
-  mode?: unknown;
-  days_to_race?: number | null;
-  weeks_to_race?: unknown;
-  phase?: string;
-  distance_km?: unknown;
-  target?: unknown;
-  date?: string | null;
-  event?: unknown;
-  weekly_km?: unknown;
-  label?: unknown;
-};
-
-type RunCompliance = {
-  in_words?: unknown;
-  prescribed_sessions?: unknown;
-  actual_sessions?: unknown;
-};
+type WeeklyRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
+type RunPlanRun = import("../contracts/client-api.js").ClientRunPlanPrescription;
+type EnduranceGoal = import("../contracts/client-api.js").ClientEnduranceGoal;
+type RunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
 
 function runKindClass(kind: unknown): string {
   if (kind === "quality") return "wrun-quality";
@@ -52,7 +19,7 @@ function runKindLabel(kind: unknown): string {
 }
 
 function weeklyRunPlanCard(plan: WeeklyRunPlan | null | undefined): string {
-  if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length) return "";
+  if (!plan || plan.available === false || !plan.runs.length) return "";
   const runs = plan.runs
     .map((run) => {
       const prescription = cardioPrescription({
@@ -74,7 +41,7 @@ function weeklyRunPlanCard(plan: WeeklyRunPlan | null | undefined): string {
       </div>`;
     })
     .join("");
-  const rationale = Array.isArray(plan.rationale) ? plan.rationale.filter(Boolean) : [];
+  const rationale = plan.rationale.filter(Boolean);
   const whyBits = [plan.why, ...rationale].filter(Boolean);
   return `<div class="wrun-card reveal" style="${stagger(0)}">
       <div class="wrun-head">
@@ -101,7 +68,14 @@ function enduranceGoalCard(goal: EnduranceGoal | null | undefined): string {
             : days <= 14
               ? `${days} day${days === 1 ? "" : "s"} to go`
               : `${goal.weeks_to_race} weeks to go`;
-    const phaseLabel = { base: "Base building", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Race done" }[goal.phase || ""] || "";
+    const phaseLabels: Record<NonNullable<EnduranceGoal["phase"]>, string> = {
+      base: "Base building",
+      build: "Building",
+      sharpen: "Sharpening",
+      taper: "Tapering",
+      past: "Race done",
+    };
+    const phaseLabel = goal.phase ? phaseLabels[goal.phase] : "";
     const sub = [goal.distance_km ? `${goal.distance_km} km` : null, goal.target ? `target ${goal.target}` : null, goal.date ? absDate(goal.date) : null].filter(Boolean).join(" · ");
     return `<div class="end-goal reveal" style="${stagger(0)}">
         <div class="end-goal-head"><span class="lbl">Race goal</span>${phaseLabel ? `<span class="end-goal-phase">${escHtml(phaseLabel)}</span>` : ""}</div>

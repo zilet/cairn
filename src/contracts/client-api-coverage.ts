@@ -159,31 +159,6 @@ export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
     reason: "Agent merge details are operator-facing and still need a narrow reconciliation result DTO.",
   },
   {
-    pattern: "/recent-training",
-    owner: "Training log client",
-    reason: "Recent training feeds mixed session/activity summaries until the Training client owns a typed union.",
-  },
-  {
-    pattern: "/endurance-prs",
-    owner: "Endurance progress client",
-    reason: "PR buckets are grouped by distance and need a dedicated endurance records DTO.",
-  },
-  {
-    pattern: "/run-compliance",
-    owner: "Endurance progress client",
-    reason: "Compliance summary still mirrors the broad backend read until the run-plan screen narrows it.",
-  },
-  {
-    pattern: "/cardio",
-    owner: "Cardio planning client",
-    reason: "Cardio rows include planned and logged variants that should become a typed discriminated union.",
-  },
-  {
-    pattern: "/endurance-goal",
-    owner: "Endurance progress client",
-    reason: "Goal metadata is broad while discipline-specific target fields are still evolving.",
-  },
-  {
     pattern: "/week-ahead",
     owner: "Day coach client",
     reason: "Week-ahead combines deterministic and agent text until the day-coach payload is narrowed.",

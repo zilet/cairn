@@ -16,7 +16,7 @@ function runKindLabel(kind) {
     return "Easy";
 }
 function weeklyRunPlanCard(plan) {
-    if (!plan || plan.available === false || !Array.isArray(plan.runs) || !plan.runs.length)
+    if (!plan || plan.available === false || !plan.runs.length)
         return "";
     const runs = plan.runs
         .map((run) => {
@@ -39,7 +39,7 @@ function weeklyRunPlanCard(plan) {
       </div>`;
     })
         .join("");
-    const rationale = Array.isArray(plan.rationale) ? plan.rationale.filter(Boolean) : [];
+    const rationale = plan.rationale.filter(Boolean);
     const whyBits = [plan.why, ...rationale].filter(Boolean);
     return `<div class="wrun-card reveal" style="${stagger(0)}">
       <div class="wrun-head">
@@ -65,7 +65,14 @@ function enduranceGoalCard(goal) {
                     : days <= 14
                         ? `${days} day${days === 1 ? "" : "s"} to go`
                         : `${goal.weeks_to_race} weeks to go`;
-        const phaseLabel = { base: "Base building", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Race done" }[goal.phase || ""] || "";
+        const phaseLabels = {
+            base: "Base building",
+            build: "Building",
+            sharpen: "Sharpening",
+            taper: "Tapering",
+            past: "Race done",
+        };
+        const phaseLabel = goal.phase ? phaseLabels[goal.phase] : "";
         const sub = [goal.distance_km ? `${goal.distance_km} km` : null, goal.target ? `target ${goal.target}` : null, goal.date ? absDate(goal.date) : null].filter(Boolean).join(" · ");
         return `<div class="end-goal reveal" style="${stagger(0)}">
         <div class="end-goal-head"><span class="lbl">Race goal</span>${phaseLabel ? `<span class="end-goal-phase">${escHtml(phaseLabel)}</span>` : ""}</div>

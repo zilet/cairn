@@ -1,10 +1,8 @@
 // @ts-check
 // Plan -> Endurance renderers plus the running-plan screen orchestration.
 
-type EnduranceGoalRow = {
-  mode?: unknown;
-  phase?: unknown;
-};
+type EnduranceGoalRow = import("../contracts/client-api.js").ClientEnduranceGoal;
+type EnduranceComplianceRow = import("../contracts/client-api.js").ClientRunCompliance;
 
 type EnduranceProposalRun = {
   day_number?: unknown;
@@ -106,11 +104,6 @@ function endurancePlanRows(value: unknown): EndurancePlanDay[] {
   return Array.isArray(value) ? value.filter((row): row is EndurancePlanDay => !!row && typeof row === "object") : [];
 }
 
-function enduranceGoalRecord(value: unknown): (EnduranceGoalRow & Record<string, unknown>) | null {
-  const row = enduranceRecord(value) as EnduranceGoalRow & Record<string, unknown>;
-  return row.mode ? row : null;
-}
-
 function enduranceRuns(plan: unknown): EnduranceRunRow[] {
   const runs: EnduranceRunRow[] = [];
   for (const day of endurancePlanRows(plan)) {
@@ -128,8 +121,8 @@ async function renderPlanEndurance(): Promise<void> {
   view.innerHTML = segBar("endurance", planSeg()) + `<div id="endPlanBody">${loadingState("Reading your running…")}</div>`;
   wireSeg(PLAN_HANDLERS);
   const token = ++pollToken;
-  let goal: unknown = null;
-  let compliance: unknown = null;
+  let goal: EnduranceGoalRow | null = null;
+  let compliance: EnduranceComplianceRow | null = null;
   let plan: unknown = [];
   let settings: Record<string, unknown> | null = null;
   try {
@@ -144,12 +137,17 @@ async function renderPlanEndurance(): Promise<void> {
   paintPlanEndurance(goal, compliance, plan, settings);
 }
 
-function paintPlanEndurance(goalValue: unknown, compliance: unknown, plan: unknown, settings: Record<string, unknown> | null): void {
+function paintPlanEndurance(
+  goalValue: EnduranceGoalRow | null,
+  compliance: EnduranceComplianceRow | null,
+  plan: unknown,
+  settings: Record<string, unknown> | null,
+): void {
   const body = view.querySelector("#endPlanBody");
   if (!body) return;
   _endDrafting = false;
 
-  const goal = enduranceGoalRecord(goalValue);
+  const goal = goalValue;
   const goalHtml = goal
     ? enduranceGoalCard(goal)
     : `<div class="end-goal reveal" style="${stagger(0)}">
@@ -223,7 +221,7 @@ function paintPlanEndurance(goalValue: unknown, compliance: unknown, plan: unkno
   });
 }
 
-function rampHtmlForGoal(goal: (EnduranceGoalRow & Record<string, unknown>) | null): string {
+function rampHtmlForGoal(goal: EnduranceGoalRow | null): string {
   return enduranceRampHtml(goal);
 }
 

@@ -27,7 +27,13 @@ import type {
   ClientMemory,
   ClientMemoryKind,
 } from "./client.js";
-import type { ClientProgramBlock } from "./client-api.js";
+import type {
+  ClientEnduranceGoal,
+  ClientProgramBlock,
+  ClientRunCompliance,
+  ClientSportBests,
+  ClientWeeklyRunPlan,
+} from "./client-api.js";
 
 declare global {
   type ClientTabName = ContractClientTabName;
@@ -248,10 +254,10 @@ declare global {
   declare function runKindLabel(kind: unknown): string;
   declare function sessionCardHtml(session: unknown, index: number): string;
   declare function numOrNull(value: unknown): number | null;
-  declare function weeklyRunPlanCard(plan: unknown): string;
-  declare function enduranceGoalCard(goal: unknown): string;
-  declare function runComplianceLine(compliance: unknown): string;
-  declare function enduranceCoachLine(plan: unknown): string;
+  declare function weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
+  declare function enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
+  declare function runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
+  declare function enduranceCoachLine(plan: ClientWeeklyRunPlan | null | undefined): string;
   declare function capWord(input: unknown): string;
   declare function volBalanceHtml(balance: unknown): string;
   declare const CONF_WORD: Record<string, string>;
@@ -335,8 +341,8 @@ declare global {
   ): string;
   declare function paceTrendWord(trend: unknown): string;
   declare function zoneBarHtml(zones: unknown): string;
-  declare function enduranceBestRows(group: unknown): unknown[];
-  declare function enduranceSportCardHtml(group: unknown, idx: number): string;
+  declare function enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
+  declare function enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
   declare const HR_ZONE_COLORS: string[] | undefined;
   declare function reshapeToday(): Promise<void>;
   declare function setDiscipline(discipline: unknown): string;
@@ -352,7 +358,12 @@ declare global {
   declare function paintEnergyBody(exp: unknown): void;
   declare function applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown>;
   declare function renderPlanEndurance(): unknown;
-  declare function paintPlanEndurance(goalValue: unknown, compliance: unknown, plan: unknown, settings: Record<string, unknown> | null): void;
+  declare function paintPlanEndurance(
+    goalValue: ClientEnduranceGoal | null,
+    compliance: ClientRunCompliance | null,
+    plan: unknown,
+    settings: Record<string, unknown> | null,
+  ): void;
   declare function gotoChatWith(text: string): void;
   declare function enduranceComposerLock(): void;
   declare function enduranceComposerRestore(): void;
@@ -719,8 +730,8 @@ declare global {
 
     CairnPlanEndurance: {
       ENDURANCE_PHASES: readonly Record<string, string>[];
-      rampHtml(goal: Record<string, unknown> | null | undefined): string;
-      presets(goal: Record<string, unknown> | null | undefined): Array<{ t: string; i: string }>;
+      rampHtml(goal: ClientEnduranceGoal | null | undefined): string;
+      presets(goal: ClientEnduranceGoal | null | undefined): Array<{ t: string; i: string }>;
       draftCardHtml(proposal: Record<string, unknown>): string;
     };
 
@@ -920,10 +931,10 @@ declare global {
     CairnProgressRunPlan: {
       runKindClass(kind: unknown): string;
       runKindLabel(kind: unknown): string;
-      weeklyRunPlanCard(plan: unknown): string;
-      enduranceGoalCard(goal: unknown): string;
-      runComplianceLine(compliance: unknown): string;
-      enduranceCoachLine(plan: unknown): string;
+      weeklyRunPlanCard(plan: ClientWeeklyRunPlan | null | undefined): string;
+      enduranceGoalCard(goal: ClientEnduranceGoal | null | undefined): string;
+      runComplianceLine(compliance: ClientRunCompliance | null | undefined): string;
+      enduranceCoachLine(plan: ClientWeeklyRunPlan | null | undefined): string;
     };
 
     CairnProgressVolume: {
@@ -1041,8 +1052,8 @@ declare global {
       ): string;
       paceTrendWord(trend: unknown): string;
       zoneBarHtml(zones: unknown): string;
-      enduranceBestRows(group: unknown): unknown[];
-      enduranceSportCardHtml(group: unknown, idx: number): string;
+      enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
+      enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
     };
 
     CairnTodayActivity: {

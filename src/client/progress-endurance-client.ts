@@ -14,20 +14,13 @@ type EndurancePaceTrend = {
   prev_min_per_km?: unknown;
 };
 
-type EnduranceBestPoint = {
-  label?: unknown;
-  val?: unknown;
-  date?: unknown;
-  type?: unknown;
-};
+type EnduranceSportGroup = import("../contracts/client-api.js").ClientSportBests;
 
-type EnduranceSportGroup = {
-  label?: unknown;
-  paced?: unknown;
-  longest_km?: { value?: unknown; date?: unknown; type?: unknown } | null;
-  longest_min?: { value?: unknown; date?: unknown; type?: unknown } | null;
-  best_pace?: Array<{ distance_km?: unknown; min_per_km?: unknown; date?: unknown; type?: unknown }> | null;
-  best_speed_kmh?: { value?: unknown; date?: unknown; type?: unknown } | null;
+type EnduranceBestPoint = {
+  label: string;
+  val: string;
+  date: string;
+  type: string;
 };
 
 function enduranceStatusWord(status: unknown): string {
@@ -88,8 +81,9 @@ function zoneBarHtml(zones: unknown): string {
     </div>`;
 }
 
-function enduranceBestRows(group: unknown): EnduranceBestPoint[] {
-  const sport = (group ?? {}) as EnduranceSportGroup;
+function enduranceBestRows(group: EnduranceSportGroup | null | undefined): EnduranceBestPoint[] {
+  if (!group) return [];
+  const sport = group;
   const rows: EnduranceBestPoint[] = [];
   if (sport.longest_km) {
     rows.push({
@@ -127,9 +121,10 @@ function enduranceBestRows(group: unknown): EnduranceBestPoint[] {
   return rows;
 }
 
-function enduranceSportCardHtml(group: unknown, idx: number): string {
-  const sport = (group ?? {}) as EnduranceSportGroup;
-  const rows = enduranceBestRows(sport) as EnduranceBestPoint[];
+function enduranceSportCardHtml(group: EnduranceSportGroup | null | undefined, idx: number): string {
+  if (!group) return "";
+  const sport = group;
+  const rows = enduranceBestRows(sport);
   if (!rows.length) return "";
   const body = rows.map((row, index) => `
     <div class="end-pr reveal" style="${stagger(idx + index)}">

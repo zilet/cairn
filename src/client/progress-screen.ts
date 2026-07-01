@@ -1,6 +1,11 @@
 // ==== 05-progress.js ====
 type ProgressRecord = Record<string, unknown>;
 type ProgressStat = readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }];
+type ProgressEnduranceGoal = import("../contracts/client-api.js").ClientEnduranceGoal;
+type ProgressEndurancePRs = import("../contracts/client-api.js").ClientEndurancePRs;
+type ProgressRunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
+type ProgressSportBests = import("../contracts/client-api.js").ClientSportBests;
+type ProgressWeeklyRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
 
 type ProgressSet = ProgressRecord & {
   id?: number | string;
@@ -380,7 +385,12 @@ async function renderEndurance() {
   // Reads in parallel: the weekly endurance block (off /stats), the PRs, the endurance
   // goal (race countdown / standing target), the run compliance ("32 of 40 km this
   // week"), and /settings for Garmin sync freshness.
-  let stats: unknown = null, prs: unknown = null, goal: unknown = null, compliance: unknown = null, settings: unknown = null, runPlan: unknown = null;
+  let stats: unknown = null;
+  let prs: ProgressEndurancePRs | null = null;
+  let goal: ProgressEnduranceGoal | null = null;
+  let compliance: ProgressRunCompliance | null = null;
+  let settings: unknown = null;
+  let runPlan: ProgressWeeklyRunPlan | null = null;
   try {
     [stats, prs, goal, compliance, settings, runPlan] = await Promise.all([
       api("/stats"),
@@ -396,11 +406,17 @@ async function renderEndurance() {
   paintEnduranceBody(statsRow.endurance || null, prs, goal, compliance, settings, runPlan);
 }
 
-function paintEnduranceBody(end: unknown, prs: unknown, goal: unknown, compliance: unknown, settings: unknown, runPlan: unknown) {
+function paintEnduranceBody(
+  end: unknown,
+  prs: ProgressEndurancePRs | null,
+  goal: ProgressEnduranceGoal | null,
+  compliance: ProgressRunCompliance | null,
+  settings: unknown,
+  runPlan: ProgressWeeklyRunPlan | null,
+) {
   const body = view.querySelector("#endBody");
   if (!body) return;
   const endRow = progressRecord(end);
-  const prRow = progressRecord(prs);
   const goalHtml = enduranceGoalCard(goal);
   const complianceHtml = runComplianceLine(compliance);
   const runPlanHtml = weeklyRunPlanCard(runPlan);
@@ -413,11 +429,11 @@ function paintEnduranceBody(end: unknown, prs: unknown, goal: unknown, complianc
     endRow.longest_km != null ||
     endRow.longest_min != null
   );
-  const hasPRs = isProgressRecord(prs) && (
-    progressRows(prRow.sports).length > 0 ||
-    prRow.longest_km != null ||
-    prRow.longest_min != null ||
-    progressRows(prRow.best_pace).length > 0
+  const hasPRs = !!prs && (
+    prs.sports.length > 0 ||
+    prs.longest_km != null ||
+    prs.longest_min != null ||
+    prs.best_pace.length > 0
   );
   if (!hasWeek && !hasPRs) {
     body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + runPlanHtml + syncHtml +
@@ -478,13 +494,19 @@ function paintEnduranceBody(end: unknown, prs: unknown, goal: unknown, complianc
   if (hasPRs) {
     // Prefer the server's per-sport grouping; fall back to a single synthesized group
     // from the flat fields for an older API response.
-    let groups: ProgressRecord[] = progressRows<ProgressRecord>(prRow.sports)
+    let groups: ProgressSportBests[] = prs.sports
       .map((g) => ({ ...g }))
       .filter((g) => enduranceBestRows(g).length);
     if (!groups.length) {
       groups = [{
-        sport: prRow.primary_sport || "run", label: "", paced: true,
-        longest_km: prRow.longest_km, longest_min: prRow.longest_min, best_pace: prRow.best_pace || [], best_speed_kmh: null,
+        sport: prs.primary_sport || "run",
+        label: "",
+        count: 0,
+        paced: true,
+        longest_km: prs.longest_km,
+        longest_min: prs.longest_min,
+        best_pace: prs.best_pace,
+        best_speed_kmh: null,
       }].filter((g) => enduranceBestRows(g).length);
     }
     if (groups.length) {

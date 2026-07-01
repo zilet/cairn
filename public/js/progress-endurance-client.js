@@ -66,7 +66,9 @@ function zoneBarHtml(zones) {
     </div>`;
 }
 function enduranceBestRows(group) {
-    const sport = (group ?? {});
+    if (!group)
+        return [];
+    const sport = group;
     const rows = [];
     if (sport.longest_km) {
         rows.push({
@@ -105,7 +107,9 @@ function enduranceBestRows(group) {
     return rows;
 }
 function enduranceSportCardHtml(group, idx) {
-    const sport = (group ?? {});
+    if (!group)
+        return "";
+    const sport = group;
     const rows = enduranceBestRows(sport);
     if (!rows.length)
         return "";

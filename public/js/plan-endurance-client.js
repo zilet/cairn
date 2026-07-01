@@ -62,10 +62,6 @@
     function endurancePlanRows(value) {
         return Array.isArray(value) ? value.filter((row) => !!row && typeof row === "object") : [];
     }
-    function enduranceGoalRecord(value) {
-        const row = enduranceRecord(value);
-        return row.mode ? row : null;
-    }
     function enduranceRuns(plan) {
         const runs = [];
         for (const day of endurancePlanRows(plan)) {
@@ -105,7 +101,7 @@
         if (!body)
             return;
         _endDrafting = false;
-        const goal = enduranceGoalRecord(goalValue);
+        const goal = goalValue;
         const goalHtml = goal
             ? enduranceGoalCard(goal)
             : `<div class="end-goal reveal" style="${stagger(0)}">

@@ -534,6 +534,96 @@ export interface ClientInjuryImpactsResponse {
   count: number;
 }
 
+export interface ClientRecentTrainingMovement {
+  name: string;
+  sets: number;
+  best: string;
+}
+
+export interface ClientRecentTrainingFeedRow {
+  kind: "strength" | "activity";
+  id: number;
+  date: ISODateString | string;
+  at: string | null;
+  title: string;
+  stats: string;
+  note: string | null;
+  source: string | null;
+  meta: Record<string, unknown>;
+  detail: Record<string, unknown> | null;
+  movements?: ClientRecentTrainingMovement[];
+}
+
+export interface ClientEnduranceBestValue {
+  value: number;
+  date: ISODateString | string;
+  type: string;
+}
+
+export interface ClientEnduranceBestPace {
+  distance_km: number;
+  min_per_km: number;
+  date: ISODateString | string;
+  type: string;
+}
+
+export interface ClientSportBests {
+  sport: string;
+  label: string;
+  count: number;
+  paced: boolean;
+  longest_km: ClientEnduranceBestValue | null;
+  longest_min: ClientEnduranceBestValue | null;
+  best_pace: ClientEnduranceBestPace[];
+  best_speed_kmh: ClientEnduranceBestValue | null;
+}
+
+export interface ClientEndurancePRs {
+  type: string | null;
+  primary_sport: string | null;
+  sports: ClientSportBests[];
+  longest_km: ClientEnduranceBestValue | null;
+  longest_min: ClientEnduranceBestValue | null;
+  best_pace: ClientEnduranceBestPace[];
+}
+
+export interface ClientRunCompliance {
+  prescribed_sessions: number;
+  prescribed_km: number;
+  prescribed_min: number;
+  actual_sessions: number;
+  actual_km: number;
+  actual_min: number;
+  pct_km: number | null;
+  in_words: string;
+}
+
+export interface ClientCardioEffort {
+  type: string;
+  name: string;
+  distance_km: number | null;
+  duration_min: number | null;
+  pace: string | null;
+  avg_hr: number | null;
+  source: string | null;
+  zones: unknown[] | null;
+}
+
+export interface ClientEnduranceGoal {
+  mode: "race" | "standing";
+  event?: string | null;
+  date?: ISODateString | string | null;
+  label?: string | null;
+  distance_km?: number | null;
+  target?: string | null;
+  weekly_km?: number | null;
+  weekly_sessions?: number | null;
+  is_race: boolean;
+  days_to_race?: number | null;
+  weeks_to_race?: number | null;
+  phase?: "base" | "build" | "sharpen" | "taper" | "past" | null;
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -962,12 +1052,12 @@ export interface ClientApiResponses {
   "/api/garmin/unreconciled": ClientGarminActivity[];
   "/api/garmin/reconcile": ClientGarminReconcileResponse;
   "/api/garmin/sync": ClientGarminSyncResponse;
-  "/api/recent-training": ClientJsonArray;
+  "/api/recent-training": ClientRecentTrainingFeedRow[];
   "/api/stats": ClientWeeklyStats;
-  "/api/endurance-prs": ClientJsonObject;
-  "/api/run-compliance": ClientJsonObject;
-  "/api/cardio": ClientJsonArray;
-  "/api/endurance-goal": ClientJsonObject | null;
+  "/api/endurance-prs": ClientEndurancePRs;
+  "/api/run-compliance": ClientRunCompliance;
+  "/api/cardio": ClientCardioEffort[];
+  "/api/endurance-goal": ClientEnduranceGoal | null;
   "/api/volume": ClientVolumeByMuscleResponse;
   "/api/calendar": ClientTrainingCalendarResponse;
   "/api/today-read": ClientDayRead;

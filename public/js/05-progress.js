@@ -385,7 +385,12 @@ async function renderEndurance() {
     // Reads in parallel: the weekly endurance block (off /stats), the PRs, the endurance
     // goal (race countdown / standing target), the run compliance ("32 of 40 km this
     // week"), and /settings for Garmin sync freshness.
-    let stats = null, prs = null, goal = null, compliance = null, settings = null, runPlan = null;
+    let stats = null;
+    let prs = null;
+    let goal = null;
+    let compliance = null;
+    let settings = null;
+    let runPlan = null;
     try {
         [stats, prs, goal, compliance, settings, runPlan] = await Promise.all([
             api("/stats"),
@@ -409,7 +414,6 @@ function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
     if (!body)
         return;
     const endRow = progressRecord(end);
-    const prRow = progressRecord(prs);
     const goalHtml = enduranceGoalCard(goal);
     const complianceHtml = runComplianceLine(compliance);
     const runPlanHtml = weeklyRunPlanCard(runPlan);
@@ -420,10 +424,10 @@ function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
         progressNumber(endRow.week_moving_min) > 0 ||
         endRow.longest_km != null ||
         endRow.longest_min != null);
-    const hasPRs = isProgressRecord(prs) && (progressRows(prRow.sports).length > 0 ||
-        prRow.longest_km != null ||
-        prRow.longest_min != null ||
-        progressRows(prRow.best_pace).length > 0);
+    const hasPRs = !!prs && (prs.sports.length > 0 ||
+        prs.longest_km != null ||
+        prs.longest_min != null ||
+        prs.best_pace.length > 0);
     if (!hasWeek && !hasPRs) {
         body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + runPlanHtml + syncHtml +
             emptyStateHtml(art("activity", "run"), goalHtml
@@ -481,13 +485,19 @@ function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
     if (hasPRs) {
         // Prefer the server's per-sport grouping; fall back to a single synthesized group
         // from the flat fields for an older API response.
-        let groups = progressRows(prRow.sports)
+        let groups = prs.sports
             .map((g) => ({ ...g }))
             .filter((g) => enduranceBestRows(g).length);
         if (!groups.length) {
             groups = [{
-                    sport: prRow.primary_sport || "run", label: "", paced: true,
-                    longest_km: prRow.longest_km, longest_min: prRow.longest_min, best_pace: prRow.best_pace || [], best_speed_kmh: null,
+                    sport: prs.primary_sport || "run",
+                    label: "",
+                    count: 0,
+                    paced: true,
+                    longest_km: prs.longest_km,
+                    longest_min: prs.longest_min,
+                    best_pace: prs.best_pace,
+                    best_speed_kmh: null,
                 }].filter((g) => enduranceBestRows(g).length);
         }
         if (groups.length) {

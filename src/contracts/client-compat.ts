@@ -2,6 +2,7 @@ import type { DayRead, ExpenditureEstimate } from "../repo/intelligence.js";
 import type { ArchivedChatSession, ChatSearchHit } from "../repo/chat.js";
 import type { suggestSession } from "../coachOps.js";
 import type { GuidelineEntry } from "../guidelines.js";
+import type { CardioEffort, FeedRow, getCardioForDate } from "../repo/activities.js";
 import type { CoachingFocus } from "../repo/coaching-focus.js";
 import type { getInjuryImpacts } from "../repo/health.js";
 import type { getDayIntake } from "../repo/nutrition.js";
@@ -9,8 +10,10 @@ import type { NextStep } from "../repo/next-step.js";
 import type { DexaTargeting } from "../repo/dexa-targeting.js";
 import type { MuscleGroupTrajectory, TestWeekDue } from "../repo/muscle-trajectory.js";
 import type { ProgramBlock } from "../repo/program-blocks.js";
+import type { getEnduranceGoal } from "../repo/profile.js";
 import type { planDayProgression, ProgramAdjustment, ProgramBalance } from "../repo/progression.js";
 import type { RunZones, WeeklyRunPlan } from "../repo/run-progression.js";
+import type { EndurancePRs, getRunCompliance, RunCompliance } from "../repo/sessions.js";
 import type { TodayAgenda } from "../repo/today-agenda.js";
 import type {
   computeGoalCheck,
@@ -42,6 +45,9 @@ import type {
 } from "./client.js";
 import type {
   ClientDexaTargeting,
+  ClientCardioEffort,
+  ClientEnduranceGoal,
+  ClientEndurancePRs,
   ClientGuidelineEntry,
   ClientInjuryImpactsResponse,
   ClientLearnedTimeline,
@@ -51,6 +57,8 @@ import type {
   ClientProgramAdjustment,
   ClientProgramBalance,
   ClientProgramBlock,
+  ClientRecentTrainingFeedRow,
+  ClientRunCompliance,
   ClientRunZones,
   ClientSessionSuggestResponse,
   ClientTestWeekDue,
@@ -74,6 +82,16 @@ export type ProgramAdjustmentsMatchClientContract = AssertAssignable<ProgramAdju
 export type ProgramBlockMatchesClientContract = AssertAssignable<ProgramBlock, ClientProgramBlock>;
 export type GuidelineEntryMatchesClientContract = AssertAssignable<GuidelineEntry, ClientGuidelineEntry>;
 export type InjuryImpactsMatchClientContract = AssertAssignable<ReturnType<typeof getInjuryImpacts>, ClientInjuryImpactsResponse>;
+export type RecentTrainingFeedMatchesClientContract = AssertAssignable<FeedRow, ClientRecentTrainingFeedRow>;
+export type EndurancePrsMatchClientContract = AssertAssignable<EndurancePRs, ClientEndurancePRs>;
+export type RunComplianceMatchesClientContract = AssertAssignable<RunCompliance, ClientRunCompliance>;
+export type RunComplianceReturnMatchesClientContract = AssertAssignable<ReturnType<typeof getRunCompliance>, ClientRunCompliance>;
+export type CardioEffortMatchesClientContract = AssertAssignable<CardioEffort, ClientCardioEffort>;
+export type CardioEffortReturnMatchesClientContract = AssertAssignable<
+  ReturnType<typeof getCardioForDate>,
+  ClientCardioEffort[]
+>;
+export type EnduranceGoalMatchesClientContract = AssertAssignable<ReturnType<typeof getEnduranceGoal>, ClientEnduranceGoal | null>;
 export type RunZonesMatchClientContract = AssertAssignable<RunZones, ClientRunZones>;
 export type WeeklyRunPlanMatchesClientContract = AssertAssignable<WeeklyRunPlan, ClientWeeklyRunPlan>;
 export type MuscleTrajectoryMatchesClientContract = AssertAssignable<
