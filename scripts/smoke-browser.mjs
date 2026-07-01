@@ -17,7 +17,7 @@ const DEBUG_PORT_MIN = 25000;
 const DEBUG_PORT_SPAN = 5000;
 const NAV_TIMEOUT_MS = 20000;
 const SETTLE_MS = 600;
-const WORKFLOW_COUNT = 9;
+const WORKFLOW_COUNT = 13;
 
 const routes = [
   { path: "/", tab: "today" },
@@ -1248,6 +1248,480 @@ async function smokeHealthInnerNavigation(cdp, base) {
   }
 }
 
+async function smokeFamilyCrud(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  const addedName = `Smoke Guardian ${Date.now()}`;
+  const addedNameJson = JSON.stringify(addedName);
+  const editedNote = `Edited note ${Date.now()}`;
+  const editedNoteJson = JSON.stringify(editedNote);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/me/family", "me");
+    await assertGlobals(cdp);
+
+    await waitForCondition(cdp, "Family renders the seeded roster", `(() => {
+      const names = [...document.querySelectorAll("#flist .fam-card .fam-name")].map((el) => el.textContent.trim());
+      const seeded = ["Maya", "Leo", "Iris"];
+      return { ok: seeded.every((name) => names.includes(name)), names };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const name = document.querySelector("#fName");
+      const rel = document.querySelector("#fRel");
+      const add = document.querySelector("#fAdd");
+      if (!name || !rel || !add) throw new Error("missing Family add-member form controls");
+      name.value = ${addedNameJson};
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      rel.value = "friend";
+      rel.dispatchEvent(new Event("input", { bubbles: true }));
+      add.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Family adds a new member through the form", `(() => {
+      const name = ${addedNameJson};
+      const card = [...document.querySelectorAll("#flist .fam-card")]
+        .find((el) => el.querySelector(".fam-name")?.textContent?.trim() === name);
+      return { ok: Boolean(card), found: Boolean(card) };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const name = ${addedNameJson};
+      const card = [...document.querySelectorAll("#flist .fam-card")]
+        .find((el) => el.querySelector(".fam-name")?.textContent?.trim() === name);
+      const editBtn = card ? card.querySelector("[data-fedit]") : null;
+      if (!card || !editBtn) throw new Error("missing new family member edit control");
+      editBtn.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Family edit form opens for the new member", `(() => {
+      const name = ${addedNameJson};
+      const card = [...document.querySelectorAll("#flist .fam-card")]
+        .find((el) => el.querySelector(".fe-name")?.value === name);
+      return { ok: Boolean(card && card.querySelector(".fe-notes")) };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const name = ${addedNameJson};
+      const card = [...document.querySelectorAll("#flist .fam-card")]
+        .find((el) => el.querySelector(".fe-name")?.value === name);
+      const notes = card ? card.querySelector(".fe-notes") : null;
+      const save = card ? card.querySelector(".fe-save") : null;
+      if (!card || !notes || !save) throw new Error("missing family edit notes/save controls");
+      notes.value = ${editedNoteJson};
+      notes.dispatchEvent(new Event("input", { bubbles: true }));
+      save.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Family edit persists the updated note", `(() => {
+      const name = ${addedNameJson};
+      const note = ${editedNoteJson};
+      const card = [...document.querySelectorAll("#flist .fam-card")]
+        .find((el) => el.querySelector(".fam-name")?.textContent?.trim() === name);
+      const line = card ? card.querySelector(".fam-notes") : null;
+      return { ok: Boolean(line && line.textContent.trim() === note), text: line ? line.textContent.trim() : null };
+    })()`);
+
+    const afterEdit = await apiJson(base, "/family");
+    const editedMember = Array.isArray(afterEdit) ? afterEdit.find((m) => m.name === addedName) : null;
+    ok(Boolean(editedMember) && editedMember.notes === editedNote, "API reflects the edited family member's note", JSON.stringify(editedMember));
+
+    await evaluate(cdp, `(() => {
+      const name = ${addedNameJson};
+      const card = [...document.querySelectorAll("#flist .fam-card")]
+        .find((el) => el.querySelector(".fam-name")?.textContent?.trim() === name);
+      const del = card ? card.querySelector("[data-fdel]") : null;
+      if (!card || !del) throw new Error("missing family delete control");
+      del.click();
+      del.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Family delete removes the member from the roster", `(() => {
+      const name = ${addedNameJson};
+      const names = [...document.querySelectorAll("#flist .fam-card .fam-name")].map((el) => el.textContent.trim());
+      const seeded = ["Maya", "Leo", "Iris"];
+      return { ok: !names.includes(name) && seeded.every((n) => names.includes(n)), names };
+    })()`);
+
+    const afterDelete = await apiJson(base, "/family");
+    ok(
+      Array.isArray(afterDelete) && !afterDelete.some((m) => m.name === addedName),
+      "API confirms the family member was deleted",
+      JSON.stringify(afterDelete?.map((m) => m.name)),
+    );
+
+    ok(failures.length === 0, "/app/me/family workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokePlanEditorSaveAndMealRecipe(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  const NEW_WEIGHT = "199";
+  const newWeightJson = JSON.stringify(NEW_WEIGHT);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/plan/edit", "plan");
+    await assertGlobals(cdp);
+
+    await waitForCondition(cdp, "Plan editor renders Day 1 with an Edit-day control", `(() => {
+      const day = document.querySelector('.prog-day[data-pd="0"]');
+      const editBtn = day ? day.querySelector("[data-editday]") : null;
+      return { ok: Boolean(day && editBtn), name: day ? day.querySelector(".prog-name")?.textContent?.trim() : null };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const day = document.querySelector('.prog-day[data-pd="0"]');
+      const editBtn = day ? day.querySelector("[data-editday]") : null;
+      if (!editBtn) throw new Error("missing Plan editor Edit-day button");
+      editBtn.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Plan editor Day 1 opens with an editable target-weight field", `(() => {
+      const day = document.querySelector('.pday[data-d="0"]');
+      const item = day ? day.querySelector('.pitem[data-i="0"]') : null;
+      const input = item ? item.querySelector(".pi-tw") : null;
+      return { ok: Boolean(input), value: input ? input.value : null };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const day = document.querySelector('.pday[data-d="0"]');
+      const item = day ? day.querySelector('.pitem[data-i="0"]') : null;
+      const input = item ? item.querySelector(".pi-tw") : null;
+      if (!input) throw new Error("missing target-weight input");
+      input.value = ${newWeightJson};
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Plan editor shows unsaved changes after editing a target weight", `(() => ({
+      ok: Boolean(document.querySelector(".savebar.show"))
+    }))()`);
+
+    await evaluate(cdp, `(() => {
+      const save = document.querySelector(".savebar-save");
+      if (!save) throw new Error("missing plan editor save button");
+      save.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Plan editor save persists the edited target weight", `(() => {
+      const day = document.querySelector('.prog-day[data-pd="0"]');
+      const row = day ? day.querySelector(".prog-row") : null;
+      const wt = row ? row.querySelector(".prog-row-wt") : null;
+      const text = wt ? wt.textContent.trim() : null;
+      return { ok: Boolean(text && text.includes(${newWeightJson})), text };
+    })()`, 15000);
+
+    const savedPlan = await apiJson(base, "/plan");
+    const day1 = Array.isArray(savedPlan) ? savedPlan.find((d) => Number(d.day_number) === 1) : null;
+    const squat = day1?.items?.find((it) => it.exercise === "Back Squat");
+    ok(Number(squat?.target_weight) === Number(NEW_WEIGHT), "API plan reflects the saved target weight", JSON.stringify(squat));
+
+    await navigateAndHydrate(cdp, base, "/app/plan/meals", "plan");
+    await assertGlobals(cdp);
+
+    await waitForCondition(cdp, "Meals renders Monday's Dinner row with a cached recipe", `(() => {
+      const row = document.querySelector('.meal-row[data-di="0"][data-mi="3"]');
+      const name = row ? row.querySelector(".meal-name")?.textContent?.trim() : null;
+      return { ok: Boolean(row && name === "Dinner"), name };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const row = document.querySelector('.meal-row[data-di="0"][data-mi="3"]');
+      if (!row) throw new Error("missing Monday dinner meal row");
+      row.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Meals opens the cached recipe sheet for Monday dinner", `(() => {
+      const sheet = document.querySelector(".sheet");
+      const recipe = sheet ? sheet.querySelector("[data-recipe]") : null;
+      const steps = recipe ? recipe.querySelectorAll(".recipe-steps li").length : 0;
+      const hasCta = Boolean(recipe && recipe.querySelector("[data-getrecipe]"));
+      return {
+        ok: Boolean(sheet && document.body.classList.contains("sheet-open") && steps > 0 && !hasCta),
+        steps,
+        hasCta
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const close = document.querySelector(".sheet .sheet-x");
+      if (!close) throw new Error("missing recipe sheet close button");
+      close.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Meals recipe sheet closes", `(() => ({
+      ok: !document.querySelector(".sheet") && !document.body.classList.contains("sheet-open")
+    }))()`);
+
+    ok(failures.length === 0, "/app/plan editor-save + meal-recipe workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeHealthRecordActions(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/me/health/records", "me");
+    await assertGlobals(cdp);
+
+    await waitForCondition(cdp, "Health Records renders the seeded bloodwork/DEXA documents", `(() => {
+      const rows = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")];
+      return { ok: rows.length >= 5, count: rows.length };
+    })()`);
+
+    const collapsed = await evaluate(cdp, `(() => {
+      const row = document.querySelector("#hlist .hdoc.hdoc-collapsed[data-hdoc]");
+      return { id: row ? row.dataset.hdoc : null };
+    })()`);
+    ok(Boolean(collapsed?.id), "Health Records has at least one initially-collapsed record", JSON.stringify(collapsed));
+    const collapsedIdJson = JSON.stringify(collapsed.id);
+
+    await evaluate(cdp, `(() => {
+      const id = ${collapsedIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      const toggle = row ? row.querySelector("[data-hdoc-toggle]") : null;
+      if (!row || !toggle) throw new Error("missing collapsed-record toggle control");
+      toggle.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Health Records expands a collapsed record's detail", `(() => {
+      const id = ${collapsedIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      return { ok: Boolean(row && !row.classList.contains("hdoc-collapsed")) };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const id = ${collapsedIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      const toggle = row ? row.querySelector("[data-hdoc-toggle]") : null;
+      if (!row || !toggle) throw new Error("missing record toggle control (re-collapse)");
+      toggle.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Health Records re-collapses the record", `(() => {
+      const id = ${collapsedIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      return { ok: Boolean(row && row.classList.contains("hdoc-collapsed")) };
+    })()`);
+
+    const first = await evaluate(cdp, `(() => {
+      const row = document.querySelector("#hlist .hdoc[data-hdoc]");
+      const dateInput = row ? row.querySelector("[data-hdate]") : null;
+      return {
+        ok: Boolean(row && !row.classList.contains("hdoc-collapsed") && dateInput),
+        id: row ? row.dataset.hdoc : null,
+        date: dateInput ? dateInput.value : null
+      };
+    })()`);
+    ok(first?.ok === true, "Health Records' first record is expanded with a result-date field", JSON.stringify(first));
+    const firstIdJson = JSON.stringify(first.id);
+
+    const newDate = await evaluate(cdp, `(() => {
+      const current = ${JSON.stringify(first.date)};
+      const d = new Date((current || new Date().toISOString().slice(0, 10)) + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d.toISOString().slice(0, 10);
+    })()`);
+    const newDateJson = JSON.stringify(newDate);
+
+    await evaluate(cdp, `(() => {
+      const id = ${firstIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      const editBtn = row ? row.querySelector("[data-hdate-edit]") : null;
+      if (!row || !editBtn) throw new Error("missing result-date edit button");
+      editBtn.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Health Records opens the result-date editor", `(() => {
+      const id = ${firstIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      const editor = row ? row.querySelector("[data-hdate-editor]") : null;
+      return { ok: Boolean(editor && editor.hidden === false) };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const id = ${firstIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      const input = row ? row.querySelector("[data-hdate]") : null;
+      const save = row ? row.querySelector("[data-hdate-save]") : null;
+      if (!input || !save) throw new Error("missing result-date input/save controls");
+      input.value = ${newDateJson};
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      save.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Health Records saves the edited result date", `(() => {
+      const id = ${firstIdJson};
+      const row = [...document.querySelectorAll("#hlist .hdoc[data-hdoc]")].find((el) => el.dataset.hdoc === id);
+      const val = row ? row.querySelector(".hdoc-date-val") : null;
+      const text = val ? val.textContent.trim() : null;
+      return { ok: text === ${newDateJson}, text };
+    })()`);
+
+    const savedDoc = await apiJson(base, `/health-docs/${first.id}`);
+    ok(savedDoc?.doc_date === newDate, "API reflects the edited result date", JSON.stringify(savedDoc?.doc_date));
+
+    ok(failures.length === 0, "/app/me/health/records workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeSettingsAgentsSourcesAutomation(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/settings/agents", "settings");
+    await assertGlobals(cdp);
+
+    const agentCard = await evaluate(cdp, `(() => {
+      const cards = [...document.querySelectorAll("#agentlist .agent-card")];
+      const card = cards.find((el) => el.querySelector(".agentname")?.textContent?.trim() === "chat_smoke");
+      const chip = card ? card.querySelector(".agent-chip") : null;
+      return {
+        ok: Boolean(card && chip && !chip.className.includes("agent-chip-absent")),
+        count: cards.length,
+        chipClass: chip ? chip.className : null,
+        chipLabel: chip ? chip.textContent.trim() : null
+      };
+    })()`);
+    ok(agentCard?.ok === true, "Settings Agents renders the smoke agent card as installed/usable", JSON.stringify(agentCard));
+
+    await evaluate(cdp, `(() => {
+      const cards = [...document.querySelectorAll("#agentlist .agent-card")];
+      const card = cards.find((el) => el.querySelector(".agentname")?.textContent?.trim() === "chat_smoke");
+      const detail = card ? card.querySelector("[data-detail]") : null;
+      if (!card || !detail) throw new Error("missing agent detail/check control");
+      detail.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Settings Agents detail check reports CLI info for the smoke agent", `(() => {
+      const cards = [...document.querySelectorAll("#agentlist .agent-card")];
+      const card = cards.find((el) => el.querySelector(".agentname")?.textContent?.trim() === "chat_smoke");
+      const detail = card ? card.querySelector("[data-detail]") : null;
+      const infoLine = card ? card.querySelector(".agent-info-line") : null;
+      return {
+        ok: Boolean(detail && detail.textContent.trim() === "details" && infoLine),
+        detailText: detail ? detail.textContent.trim() : null,
+        infoLine: infoLine ? infoLine.textContent.trim() : null
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const toggle = document.querySelector("#coachEnabled");
+      if (!toggle) throw new Error("missing weekly auto-coach toggle");
+      if (toggle.checked) throw new Error("expected coachEnabled to start unchecked from the seeded settings");
+      toggle.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Settings Agents toggle shows unsaved changes", `(() => ({
+      ok: Boolean(document.querySelector(".savebar.show")),
+      checked: document.querySelector("#coachEnabled")?.checked
+    }))()`);
+
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="sources"]');
+      if (!btn) throw new Error("missing Settings Sources segment");
+      btn.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Settings Sources renders the Garmin connector controls", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="sources"]');
+      const status = document.querySelector("#garminStatus");
+      return {
+        ok: Boolean(
+          active &&
+          window.state?.setSeg === "sources" &&
+          location.pathname === "/app/settings/sources" &&
+          document.querySelector("#garminUsername") &&
+          status && status.textContent.includes("Never synced")
+        ),
+        href: location.pathname,
+        setSeg: window.state && window.state.setSeg,
+        statusText: status ? status.textContent.trim() : null
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector("#garminSyncBtn");
+      if (!btn) throw new Error("missing Garmin sync button");
+      btn.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Settings Sources Garmin sync reports a real credential-less failure", `(() => {
+      const status = document.querySelector("#garminStatus");
+      const btn = document.querySelector("#garminSyncBtn");
+      const text = status ? status.textContent.trim() : "";
+      return {
+        ok: Boolean(btn && !btn.disabled && btn.textContent.trim() === "Sync now" && /sync failed/i.test(text)),
+        text,
+        btnText: btn ? btn.textContent.trim() : null
+      };
+    })()`, 15000);
+
+    await evaluate(cdp, `(() => {
+      const btn = document.querySelector('.segbtn[data-seg="automation"]');
+      if (!btn) throw new Error("missing Settings Automation segment");
+      btn.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Settings Automation renders the background-touch toggles", `(() => {
+      const active = document.querySelector('.segbtn.active[data-seg="automation"]');
+      return {
+        ok: Boolean(
+          active &&
+          window.state?.setSeg === "automation" &&
+          location.pathname === "/app/settings/automation" &&
+          document.querySelector("#enrichEnabled") &&
+          document.querySelector("#artEnabled") &&
+          document.querySelector("#researchEnabled")
+        ),
+        href: location.pathname,
+        setSeg: window.state && window.state.setSeg
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const save = document.querySelector(".savebar-save");
+      if (!save) throw new Error("missing Settings save button");
+      save.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Settings save completes for the pinned weekly auto-coach change", `(() => ({
+      ok: !document.querySelector(".savebar.busy")
+    }))()`, 10000);
+
+    const savedSettings = await apiJson(base, "/settings");
+    ok(savedSettings?.settings?.coach_enabled === true, "API reflects the saved weekly auto-coach toggle", JSON.stringify(savedSettings?.settings?.coach_enabled));
+    ok(
+      /^failed:/.test(String(savedSettings?.settings?.garmin_last_sync_status || "")),
+      "API reflects the real credential-less Garmin sync failure",
+      String(savedSettings?.settings?.garmin_last_sync_status),
+    );
+
+    ok(failures.length === 0, "/app/settings agents/sources/automation workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
 if (!existsSync(serverEntry)) {
   console.error(`x ${serverEntry} is missing - run \`npm run build\` first (presmoke:browser does this).`);
   process.exit(1);
@@ -1278,6 +1752,10 @@ try {
     await smokeProgressSegmentNavigation(cdp, ctx.base);
     await smokePlanSegmentNavigation(cdp, ctx.base);
     await smokeHealthInnerNavigation(cdp, ctx.base);
+    await smokeFamilyCrud(cdp, ctx.base);
+    await smokePlanEditorSaveAndMealRecipe(cdp, ctx.base);
+    await smokeHealthRecordActions(cdp, ctx.base);
+    await smokeSettingsAgentsSourcesAutomation(cdp, ctx.base);
   });
   console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${WORKFLOW_COUNT} workflow(s) loaded without runtime errors.`);
   exitCode = 0;
