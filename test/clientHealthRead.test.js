@@ -27,6 +27,7 @@ function loadHealthRead() {
     "public/js/date-utils.js",
     "public/js/html-utils.js",
     "public/js/health-evidence-client.js",
+    "public/js/health-marker-order-client.js",
     "public/js/health-client.js",
     "public/js/health-read-client.js",
   ]) {

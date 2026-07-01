@@ -9,42 +9,26 @@ function uiString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-// ---------- header date control (Today) ----------
-// On the Today tab the big header title IS the date control — change the date to
-// review OR log a past workout. A REAL full-size (transparent) date input overlays
-// the title, so a genuine tap opens the native picker on every browser (the old
-// showPicker()-over-a-1px-hidden-input failed silently where showPicker throws).
-// Other tabs set headerTitle via textContent, which removes this input automatically.
+function todayHeaderDeps() {
+  return {
+    headerTitle,
+    state,
+    dateLabel,
+    escapeHtml: escHtml,
+    localISO,
+    syncRouteFromState: () => { if (typeof syncRouteFromState === "function") syncRouteFromState(); },
+    renderToday: () => renderToday(),
+  };
+}
+
 function setTodayHeaderTitle() {
-  headerTitle.innerHTML =
-    `${escHtml(dateLabel(state.logDate))}<span class="hdr-chev" aria-hidden="true">▾</span>` +
-    `<input type="date" class="hdr-datepick" aria-label="Choose a date to view or log a past workout">`;
-  headerTitle.classList.add("hdr-tappable");
-  const inp = headerTitle.querySelector<HTMLInputElement>(".hdr-datepick");
-  if (!inp) return;
-  inp.value = state.logDate || localISO();
-  inp.max = localISO();
-  // Desktop: a click on a date input only focuses it (the calendar indicator is
-  // hidden by appearance:none) — showPicker opens the calendar. Mobile taps open
-  // the native picker on their own. Either way the change handler reloads Today.
-  inp.addEventListener("click", () => { try { inp.showPicker?.(); } catch { /* unsupported → native focus */ } });
-  inp.addEventListener("change", () => {
-    if (!inp.value) return;
-    state.logDate = inp.value;
-    state.day = null;
-    state.dayPicked = false;
-    if (typeof syncRouteFromState === "function") syncRouteFromState();
-    renderToday();
-  });
+  CairnUiHeader.setTodayHeaderTitle(todayHeaderDeps());
 }
-// On Today the header pins to the top so the date control is always reachable.
-// At rest it's the full editorial header; once the page scrolls past a few px it
-// condenses into a slim blurred band (CSS scoped to body[data-tab="today"]).
+
 function updateHeaderCondense() {
-  const on = state.tab === "today" && window.scrollY > 6;
-  document.querySelector("header")?.classList.toggle("condensed", on);
+  CairnUiHeader.updateHeaderCondense(todayHeaderDeps());
 }
-window.addEventListener("scroll", updateHeaderCondense, { passive: true });
+CairnUiHeader.installHeaderCondenseScroll(todayHeaderDeps);
 
 function toast(msg: unknown, opts: ToastOptions = {}): void {
   CairnUiActions.toast(msg, opts);

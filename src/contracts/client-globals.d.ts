@@ -584,6 +584,21 @@ declare global {
     escapeHtml(value: unknown): string;
   };
 
+  type ClientHealthShareControllerDeps = {
+    root: ParentNode;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
+    peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    swrInvalidate(keyOrPrefix: string): void;
+    toast(message: string): void;
+    btnBusy(btn: Element | null | undefined, label?: unknown, options?: { ghost?: boolean }): () => void;
+    downloadFile(href: string): void;
+    select<T extends Element = Element>(selector: string): T | null;
+    stagger(index?: number | null): string;
+    switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
+    withToken(url: string): string;
+  };
+
   type ClientHealthStandingControllerDeps = {
     root: ParentNode;
     document: Document;
@@ -1433,6 +1448,20 @@ declare global {
       ): void;
     };
 
+    CairnUiHeader: {
+      setTodayHeaderTitle(deps: {
+        headerTitle: HTMLElement;
+        state: { tab?: unknown; logDate?: string; day?: unknown; dayPicked?: boolean };
+        escapeHtml(value: unknown): string;
+        dateLabel(iso: string): string;
+        localISO(date?: Date): string;
+        syncRouteFromState(): unknown;
+        renderToday(): unknown;
+      }): void;
+      updateHeaderCondense(deps: { state: { tab?: unknown } }): void;
+      installHeaderCondenseScroll(depsFor: () => { state: { tab?: unknown } }): void;
+    };
+
     CairnUiViewTransitions: {
       create(deps: {
         view: HTMLElement;
@@ -1478,7 +1507,21 @@ declare global {
       ): string;
     };
 
-    CairnHealthClient: Window["CairnHealthEvidence"] & {
+    CairnHealthMarkerOrder: {
+      isDirectLdlMarker(name: unknown): boolean;
+      isStandardLdlMarker(name: unknown): boolean;
+      markerRank(groupKey: unknown, name: unknown): number;
+      lipidRank(name: unknown): number;
+      lipidSubgroup(name: unknown): string | null;
+      markerSubgroup(groupKey: unknown, name: unknown): string | null;
+      orderMarkersForDisplay<T extends { name?: unknown; key?: unknown }>(groupKey: unknown, list: T[] | null | undefined): T[];
+      lipidGroupNoteHtml(
+        list: Array<{ name?: unknown; key?: unknown; latest?: { date?: unknown } }> | null | undefined,
+        options?: { relAge?: (date: string) => string },
+      ): string;
+    };
+
+    CairnHealthClient: Window["CairnHealthEvidence"] & Window["CairnHealthMarkerOrder"] & {
       MAX_DOC_BYTES: number;
       MAX_DOC_TEXT: number;
       H_FILE_PROMPT: string;
@@ -1492,17 +1535,6 @@ declare global {
         trend?: { dir?: unknown; span_days?: unknown } | null;
         points?: Array<{ value?: unknown; date?: unknown }> | null;
       } | null | undefined): string;
-      isDirectLdlMarker(name: unknown): boolean;
-      isStandardLdlMarker(name: unknown): boolean;
-      markerRank(groupKey: unknown, name: unknown): number;
-      lipidRank(name: unknown): number;
-      lipidSubgroup(name: unknown): string | null;
-      markerSubgroup(groupKey: unknown, name: unknown): string | null;
-      orderMarkersForDisplay<T extends { name?: unknown; key?: unknown }>(groupKey: unknown, list: T[] | null | undefined): T[];
-      lipidGroupNoteHtml(
-        list: Array<{ name?: unknown; key?: unknown; latest?: { date?: unknown } }> | null | undefined,
-        options?: { relAge?: (date: string) => string },
-      ): string;
     };
 
     CairnHealthPicture: {
@@ -1946,6 +1978,10 @@ declare global {
       loadDocs(deps: ClientHealthRecordsControllerDeps): Promise<ClientHealthDocument[]>;
       wireDoc(el: HTMLElement | null, deps: ClientHealthRecordsControllerDeps): void;
       wireUpload(deps: ClientHealthRecordsControllerDeps): void;
+    };
+
+    CairnHealthShareController: {
+      render(deps: ClientHealthShareControllerDeps): void;
     };
 
     CairnSettingsClient: {
@@ -2924,10 +2960,12 @@ declare global {
   declare const CairnUi: Window["CairnUi"];
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
   declare const CairnUiActions: Window["CairnUiActions"];
+  declare const CairnUiHeader: Window["CairnUiHeader"];
   declare const CairnUiViewTransitions: Window["CairnUiViewTransitions"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthEvidence: Window["CairnHealthEvidence"];
+  declare const CairnHealthMarkerOrder: Window["CairnHealthMarkerOrder"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthPictureController: Window["CairnHealthPictureController"];
@@ -2978,6 +3016,7 @@ declare global {
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnHealthDocUploadController: Window["CairnHealthDocUploadController"];
   declare const CairnHealthDocActionsController: Window["CairnHealthDocActionsController"];
+  declare const CairnHealthShareController: Window["CairnHealthShareController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnSettingsSurface: Window["CairnSettingsSurface"];
   declare const CairnSettingsData: Window["CairnSettingsData"];

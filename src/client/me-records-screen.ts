@@ -31,86 +31,25 @@ function paintHealthMarkersTab() {
 }
 
 // ---- Share tab: clinician report + data portability ----
-function openDoctorReportTab() {
-  const url = withToken("/api/health-report");
-  const tab = window.open("about:blank", "_blank");
-  if (!tab) {
-    toast("Allow pop-ups to open the doctor report in a new tab");
-    return;
-  }
-  try { tab.opener = null; } catch {}
-  tab.location.href = url;
+function healthShareDeps(): ClientHealthShareControllerDeps {
+  return {
+    root: view,
+    api,
+    cachedApi,
+    peekCached,
+    swrInvalidate,
+    toast,
+    btnBusy,
+    downloadFile,
+    select: $,
+    stagger,
+    switchHealthSeg,
+    withToken,
+  };
 }
 
 function paintHealthShareTab() {
-  const c = $("#hContent");
-  if (!c) return;
-  const render = (res: unknown) => {
-    const row = screenRecord(res);
-    const markers = screenRows(row.markers);
-    const groups = screenRows(row.groups);
-    const count = markers.length;
-    if (!count) {
-      c.innerHTML = `<div class="empty-state reveal" style="${stagger(0)}">
-        <div class="empty-state-line">Nothing to share yet</div>
-        <div class="hpic-hero-sub">Add a lab report or DEXA scan first. The report will stay grouped by clinical panel once markers exist.</div>
-        <button id="hShareToRecords" class="logbtn hpic-cta-btn">ADD A DOCUMENT</button>
-      </div>`;
-      $("#hShareToRecords")?.addEventListener("click", () => switchHealthSeg("records", { openPicker: true }));
-      return;
-    }
-    c.innerHTML = `<div class="hshare">
-      <section class="hshare-card hshare-card-main reveal" style="${stagger(0)}">
-        <div>
-          <div class="lbl hshare-kicker">For your doctor</div>
-          <h2 class="hshare-title">Clinical marker report</h2>
-          <p class="hshare-copy">Grouped by clinical panel, with findings first, dated history, DEXA body composition when available, and a MyChart-ready copy view.</p>
-          <div class="hshare-meta">${count} marker${count === 1 ? "" : "s"} · ${groups.length || 1} panel${(groups.length || 1) === 1 ? "" : "s"}</div>
-        </div>
-        <div class="hshare-actions">
-          <button id="hReportBtn" class="logbtn">Open doctor report</button>
-        </div>
-      </section>
-      <div class="hshare-grid">
-        <section class="hshare-card reveal" style="${stagger(1)}">
-          <div class="lbl hshare-kicker">Portable data</div>
-          <h3 class="hshare-subtitle">Structured health export</h3>
-          <p class="hshare-copy">A JSON snapshot for another tool: marker observations, history, supplements, and active connected-brain directives.</p>
-          <button id="hExportBtn" class="ghostbtn">Download JSON</button>
-        </section>
-        <section class="hshare-card reveal" style="${stagger(2)}">
-          <div class="lbl hshare-kicker">Data hygiene</div>
-          <h3 class="hshare-subtitle">Align lab names</h3>
-          <p class="hshare-copy">Merge obvious duplicate marker names from different labs so each trend stays one line.</p>
-          <button id="hAlignBtn" class="ghostbtn">Align lab names</button>
-        </section>
-      </div>
-    </div>`;
-    $("#hReportBtn")?.addEventListener("click", openDoctorReportTab);
-    $("#hExportBtn")?.addEventListener("click", () => {
-      downloadFile(withToken("/api/health-export"));
-      toast("Structured data downloaded");
-    });
-    $("#hAlignBtn")?.addEventListener("click", async (e) => {
-      const btn = e.currentTarget instanceof Element ? e.currentTarget : null;
-      const restore = btnBusy(btn, "aligning…");
-      let r: unknown = null;
-      try { r = await api("/markers/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { r = null; }
-      restore();
-      const out = screenRecord(r);
-      const aligned = Number(out.aligned) || 0;
-      if (!out || out.ok === false) { toast("Couldn't align right now — try again in a bit."); return; }
-      toast(aligned ? `Merged ${aligned} duplicate marker${aligned === 1 ? "" : "s"}` : "Already aligned");
-      if (aligned) swrInvalidate("markers:priority");
-    });
-  };
-  const peek = peekCached("markers:priority");
-  if (peek) render(peek.data);
-  else c.innerHTML = `<div class="hshare">${skelLines(4)}</div>`;
-  cachedApi("/markers/priority", {
-    key: "markers:priority",
-    onUpgrade: (data, { changed }) => { if (changed || !peek) render(data); },
-  }).catch(() => { if (!peek) render(null); });
+  CairnHealthShareController.render(healthShareDeps());
 }
 
 function healthMarkersEmptyHtml() {

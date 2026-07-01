@@ -26,6 +26,7 @@ function loadHealthPicture() {
     "public/js/html-utils.js",
     "public/js/ui-components.js",
     "public/js/health-evidence-client.js",
+    "public/js/health-marker-order-client.js",
     "public/js/health-client.js",
     "public/js/health-picture-client.js",
   ]) {

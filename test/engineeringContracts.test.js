@@ -710,6 +710,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
   assert.match(sw, /"\/js\/art-controller\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
+  assert.match(sw, /"\/js\/ui-header-client\.js"/);
   assert.match(sw, /"\/js\/02-ui\.js"/);
   assert.match(sw, /"\/js\/detail-overlay-client\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-controller\.js"/);
@@ -788,6 +789,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/me-profile-controller\.js"/);
   assert.match(sw, /"\/js\/me-health-tabs-controller\.js"/);
   assert.match(sw, /"\/js\/me-health-dependencies\.js"/);
+  assert.match(sw, /"\/js\/health-marker-order-client\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-primitives-client\.js"/);
@@ -1217,6 +1219,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const meProfileFormSource = read("src/client/me-profile-form-client.ts");
   const meProfileControllerSource = read("src/client/me-profile-controller.ts");
   const healthEvidenceSource = read("src/client/health-evidence-client.ts");
+  const healthMarkerOrderSource = read("src/client/health-marker-order-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const healthReadSource = read("src/client/health-read-client.ts");
   const healthStandingPrimitivesSource = read("src/client/health-standing-primitives-client.ts");
@@ -1235,6 +1238,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthDocUploadControllerSource = read("src/client/health-doc-upload-controller.ts");
   const healthDocActionsControllerSource = read("src/client/health-doc-actions-controller.ts");
   const meRecordsHealthDocControllerSource = read("src/client/me-records-health-doc-controller.ts");
+  const healthShareControllerSource = read("src/client/health-share-controller.ts");
   const meHealthDependenciesSource = read("src/client/me-health-dependencies.ts");
   const memorySource = read("src/client/memory-client.ts");
   const meMemoryControllerSource = read("src/client/me-memory-controller.ts");
@@ -1287,6 +1291,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const coreState = read("public/js/01-core.js");
   const artController = read("public/js/art-controller.js");
   const pwaInstall = read("public/js/pwa-install-coach.js");
+  const uiHeader = read("public/js/ui-header-client.js");
   const restTimer = read("public/js/rest-timer.js");
   const coachingFocusClient = read("public/js/coaching-focus-client.js");
   const todayActivityClient = read("public/js/today-activity-client.js");
@@ -1372,6 +1377,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const meHealthDependencies = read("public/js/me-health-dependencies.js");
   const meHealthTabsController = read("public/js/me-health-tabs-controller.js");
   const healthEvidenceClient = read("public/js/health-evidence-client.js");
+  const healthMarkerOrderClient = read("public/js/health-marker-order-client.js");
   const healthClient = read("public/js/health-client.js");
   const healthReadClient = read("public/js/health-read-client.js");
   const healthStandingPrimitivesClient = read("public/js/health-standing-primitives-client.js");
@@ -1390,6 +1396,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthDocUploadController = read("public/js/health-doc-upload-controller.js");
   const healthDocActionsController = read("public/js/health-doc-actions-controller.js");
   const meRecordsHealthDocController = read("public/js/me-records-health-doc-controller.js");
+  const healthShareController = read("public/js/health-share-controller.js");
   const memoryClient = read("public/js/memory-client.js");
   const meMemoryController = read("public/js/me-memory-controller.js");
   const lifeClient = read("public/js/life-client.js");
@@ -1657,6 +1664,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function healthDocHtml\(doc: unknown, index\?: number\): string/);
   assert.match(clientGlobals, /CairnHealthDocs/);
   assert.match(clientGlobals, /CairnHealthEvidence/);
+  assert.match(clientGlobals, /CairnHealthMarkerOrder/);
+  assert.match(clientGlobals, /orderMarkersForDisplay<T extends \{ name\?: unknown; key\?: unknown \}>/);
   assert.match(clientGlobals, /H_FILE_PROMPT: string/);
   assert.match(clientGlobals, /guessUploadMime/);
   assert.match(clientGlobals, /directiveHtml/);
@@ -1691,6 +1700,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /wireUpload\(deps: ClientHealthDocUploadControllerDeps\): void/);
   assert.match(clientGlobals, /CairnHealthRecordsController/);
   assert.match(clientGlobals, /render\(deps: ClientHealthRecordsControllerDeps\): Promise<ClientHealthDocument\[\]>/);
+  assert.match(clientGlobals, /type ClientHealthShareControllerDeps = \{/);
+  assert.match(clientGlobals, /CairnHealthShareController/);
+  assert.match(clientGlobals, /render\(deps: ClientHealthShareControllerDeps\): void/);
   assert.match(clientGlobals, /CairnFoodNote/);
   assert.match(clientGlobals, /noteEntryHtml\(note: Record<string, unknown>, index\?: number\): string/);
   assert.match(clientGlobals, /CairnFoodDetailController/);
@@ -1773,6 +1785,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function reshapeToday\(\): Promise<void>/);
   assert.match(clientGlobals, /declare function renderToday\(\): unknown/);
   assert.match(clientGlobals, /declare function updateHeaderCondense\(\): void/);
+  assert.match(clientGlobals, /CairnUiHeader/);
+  assert.match(clientGlobals, /setTodayHeaderTitle\(deps: \{/);
   assert.match(clientGlobals, /declare function setDiscipline\(discipline: unknown\): string/);
   assert.match(clientGlobals, /CairnTodayRailController/);
   assert.match(clientGlobals, /type ClientTodayRailControllerDeps = \{/);
@@ -1932,6 +1946,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/01-core\.js/);
   assert.match(clientBuild, /src\/client\/art-controller\.ts/);
   assert.match(clientBuild, /public\/js\/art-controller\.js/);
+  assert.match(clientBuild, /src\/client\/ui-header-client\.ts/);
+  assert.match(clientBuild, /public\/js\/ui-header-client\.js/);
   assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
@@ -2168,6 +2184,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/me-health-tabs-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-health-dependencies\.ts/);
   assert.match(clientBuild, /public\/js\/me-health-dependencies\.js/);
+  assert.match(clientBuild, /src\/client\/health-marker-order-client\.ts/);
+  assert.match(clientBuild, /public\/js\/health-marker-order-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/health-read-client\.ts/);
@@ -2196,6 +2214,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-doc-actions-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-records-health-doc-controller\.ts/);
   assert.match(clientBuild, /public\/js\/me-records-health-doc-controller\.js/);
+  assert.match(clientBuild, /src\/client\/health-share-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/health-share-controller\.js/);
   assert.match(clientBuild, /src\/client\/memory-client\.ts/);
   assert.match(clientBuild, /public\/js\/memory-client\.js/);
   assert.match(clientBuild, /src\/client\/me-memory-controller\.ts/);
@@ -2289,6 +2309,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf("/js/pwa-install-coach.js") > index.indexOf("/js/01-core.js") &&
       index.indexOf("/js/pwa-install-coach.js") < index.indexOf("/js/02-ui.js"),
     "pwa-install-coach.js must load early, after app state and before feature consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/ui-header-client.js") > index.indexOf("/js/pwa-install-coach.js") &&
+      index.indexOf("/js/ui-header-client.js") < index.indexOf("/js/02-ui.js"),
+    "ui-header-client.js must load after app state helpers and before 02-ui.js"
   );
   assert.ok(
     index.indexOf("/js/agent-login-client.js") > index.indexOf("/js/02-ui.js") &&
@@ -2742,6 +2767,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "health-docs-client.js must load before Health and Records document consumers"
   );
   assert.ok(
+    index.indexOf("/js/health-marker-order-client.js") > index.indexOf("/js/health-evidence-client.js") &&
+      index.indexOf("/js/health-marker-order-client.js") < index.indexOf("/js/health-client.js"),
+    "health-marker-order-client.js must load after Health evidence helpers and before shared Health helpers"
+  );
+  assert.ok(
     index.indexOf("/js/health-client.js") > index.indexOf("/js/07-me-health.js") &&
       index.indexOf("/js/health-client.js") < index.indexOf("/js/08-me-records.js"),
     "health-client.js must load after Health view definitions and before Records view hydration"
@@ -3057,6 +3087,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appDownload, /\/\/ @ts-check/);
   assert.match(appSwRecovery, /\/\/ @ts-check/);
   assert.match(artController, /\/\/ @ts-check/);
+  assert.match(uiHeader, /\/\/ @ts-check/);
   assert.match(agentJobClient, /\/\/ @ts-check/);
   assert.match(agentJobClientSource, /function\s+registerJobReconnector/);
   assert.match(agentJobClientSource, /async function\s+enqueueJob/);
@@ -3153,6 +3184,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
   assert.match(clientBuild, /src\/client\/art-controller\.ts/);
   assert.match(clientBuild, /public\/js\/art-controller\.js/);
+  assert.match(clientBuild, /src\/client\/ui-header-client\.ts/);
+  assert.match(clientBuild, /public\/js\/ui-header-client\.js/);
   assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
   assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
@@ -3347,6 +3380,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/06-coach-meals\.js/);
   assert.match(clientBuild, /src\/client\/food-note-client\.ts/);
   assert.match(clientBuild, /public\/js\/food-note-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-marker-order-client\.ts/);
+  assert.match(clientBuild, /public\/js\/health-marker-order-client\.js/);
   assert.match(clientBuild, /src\/client\/health-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/health-directives-loader-client\.ts/);
@@ -3377,6 +3412,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-doc-actions-controller\.js/);
   assert.match(clientBuild, /src\/client\/me-records-health-doc-controller\.ts/);
   assert.match(clientBuild, /public\/js\/me-records-health-doc-controller\.js/);
+  assert.match(clientBuild, /src\/client\/health-share-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/health-share-controller\.js/);
   assert.match(clientBuild, /src\/client\/app\/router\.ts/);
   assert.match(clientBuild, /public\/js\/app-router\.js/);
   assert.match(clientBuild, /src\/client\/app\/route-sync\.ts/);
@@ -3537,10 +3574,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(artControllerSource, /function artImg\(kind: string, q: unknown/);
   assert.match(artControllerSource, /async function primeArtManifest\(\): Promise<void>/);
   assert.match(artControllerSource, /Object\.defineProperty\(globalThis, "artEnabled"/);
+  assert.match(uiHeader, /CairnUiHeader/);
+  assert.match(uiHeader, /function setTodayHeaderTitle/);
+  assert.match(uiHeader, /function updateHeaderCondense/);
   assert.doesNotMatch(uiShellSource, /const ART_READY_LS|function artPhotoLoaded|function primeArtManifest/);
   assert.match(uiShellTypesSource, /type ToastOptions = \{ action\?: string; onAction\?: \(\) => void \}/);
   assert.match(uiShellTypesSource, /type UiRecord = Record<string, unknown>/);
   assert.match(uiShellSource, /function setTodayHeaderTitle\(\)/);
+  assert.match(uiShellSource, /CairnUiHeader\.setTodayHeaderTitle/);
   assert.match(uiShellSource, /function toast\(msg: unknown, opts: ToastOptions = \{\}\): void/);
   assert.match(uiShellSource, /CairnUiActions\.toast/);
   assert.match(uiShellSource, /CairnUiActions\.armDelete/);
@@ -4113,8 +4154,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     healthClientSource,
     /function markerTrendWord\(marker: HealthMarkerTrendRow \| null \| undefined\): string/
   );
-  assert.match(healthClientSource, /const HEALTH_MARKER_ORDER: Record<string, Array<\[number, RegExp\]>>/);
-  assert.match(healthClientSource, /function orderMarkersForDisplay<T extends HealthMarkerRow>/);
+  assert.match(healthMarkerOrderSource, /const HEALTH_MARKER_ORDER: Record<string, Array<\[number, RegExp\]>>/);
+  assert.match(healthMarkerOrderSource, /function orderMarkersForDisplay<T extends HealthMarkerOrderRow>/);
+  assert.match(healthMarkerOrderSource, /CairnHealthMarkerOrder/);
+  assert.match(healthClientSource, /CairnHealthMarkerOrder\.orderMarkersForDisplay/);
+  assert.doesNotMatch(healthClientSource, /const HEALTH_MARKER_ORDER|function orderMarkersForDisplay<T extends/);
   assert.match(healthPictureSource, /type HealthPictureReview = \{/);
   assert.match(healthPictureSource, /function parsedReview\(review: HealthPictureReview/);
   assert.match(healthPictureSource, /function reviewHtml\(review: HealthPictureReview/);
@@ -4216,6 +4260,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meRecordsHealthDocControllerSource, /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
   assert.match(meRecordsHealthDocControllerSource, /function renderHealthRecords\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
   assert.match(meRecordsHealthDocControllerSource, /CairnHealthRecordsController/);
+  assert.match(healthShareControllerSource, /type HealthShareControllerResponse = \{/);
+  assert.match(healthShareControllerSource, /function renderHealthShare\(deps: ClientHealthShareControllerDeps\): void/);
+  assert.match(healthShareControllerSource, /deps\.cachedApi\("\/markers\/priority"/);
+  assert.match(healthShareControllerSource, /deps\.switchHealthSeg\("records", \{ openPicker: true \}\)/);
+  assert.match(healthShareControllerSource, /deps\.api\("\/markers\/reconcile"/);
+  assert.match(healthShareControllerSource, /function openDoctorReportTab\(deps: ClientHealthShareControllerDeps\): void/);
+  assert.match(healthShareControllerSource, /CairnHealthShareController/);
   assert.match(memorySource, /const MEM_KINDS/);
   assert.match(memorySource, /type ClientMemory = import\("\.\.\/contracts\/client-api\.js"\)\.ClientMemory/);
   assert.match(memorySource, /function memoryKindOptionsHtml\(selected: ClientMemoryKind \| null \| undefined = ""\): string/);
@@ -4285,6 +4336,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meHealthScreenSource, /CairnHealthPictureController\.loadHealthPicture/);
   assert.doesNotMatch(meHealthScreenSource, /let\s+_hReviewRun|let\s+_hReviewErr|function\s+healthPictureCacheRoot/);
   assert.match(meRecordsScreenSource, /function healthRecordsDeps\(\)/);
+  assert.match(meRecordsScreenSource, /function healthShareDeps\(\): ClientHealthShareControllerDeps/);
+  assert.match(meRecordsScreenSource, /CairnHealthShareController\.render\(healthShareDeps\(\)\)/);
   assert.match(meRecordsScreenSource, /getHealthPictureCache/);
   assert.match(meRecordsScreenSource, /setHealthPictureCache/);
   assert.doesNotMatch(meRecordsScreenSource, /\b_hPic\b/);
@@ -4293,6 +4346,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meRecordsScreenSource, /async function renderFamily\(\)/);
   assert.doesNotMatch(meRecordsScreenSource, /function wireHealthUpload\(\)/);
   assert.doesNotMatch(meRecordsScreenSource, /function loadHealthDocs\(\): Promise<HealthDocument\[\]>/);
+  assert.doesNotMatch(meRecordsScreenSource, /function openDoctorReportTab|api\("\/markers\/reconcile"|cachedApi\("\/markers\/priority"|downloadFile\(withToken\("\/api\/health-export"\)\)/);
   assert.match(meRecordsHealthDocControllerSource, /CairnHealthDocUploadController\.wireUpload\(healthDocUploadDeps\(deps\)\)/);
   assert.match(meRecordsHealthDocControllerSource, /async function loadHealthDocs\(deps: HealthRecordsControllerDeps\): Promise<HealthDocument\[\]>/);
   assert.match(meRecordsScreenSource, /Object\.assign\(globalThis, \{/);
@@ -4731,9 +4785,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthEvidenceClient, /window\.CairnHealthEvidence = CAIRN_HEALTH_EVIDENCE/);
   assert.match(healthEvidenceClient, /directiveHtml/);
   assert.doesNotMatch(healthEvidenceClient, /^const\s+DIRECTIVE_DOMAINS|^function\s+evidenceListHtml|^function\s+directiveHtml/m);
+  assert.match(healthMarkerOrderClient, /Object\.assign\(globalThis, \{ CairnHealthMarkerOrder: CAIRN_HEALTH_MARKER_ORDER \}\)/);
+  assert.match(healthMarkerOrderClient, /window\.CairnHealthMarkerOrder = CAIRN_HEALTH_MARKER_ORDER/);
+  assert.match(healthMarkerOrderClient, /orderMarkersForDisplay/);
   assert.match(healthClient, /Object\.assign\(globalThis, \{ CairnHealthClient: CAIRN_HEALTH_CLIENT \}\)/);
   assert.match(healthClient, /window\.CairnHealthClient = CAIRN_HEALTH_CLIENT/);
   assert.match(healthClient, /CairnHealthEvidence\.directiveHtml/);
+  assert.match(healthClient, /CairnHealthMarkerOrder\.orderMarkersForDisplay/);
   assert.doesNotMatch(healthClient, /^const\s+MAX_DOC_BYTES|^const\s+H_FILE_PROMPT|^const\s+DIRECTIVE_DOMAINS|^function\s+guessUploadMime|^function\s+evidenceListHtml|^function\s+directiveHtml/m);
   assert.match(healthPictureClient, /Object\.assign\(globalThis, \{ CairnHealthPicture: CAIRN_HEALTH_PICTURE \}\)/);
   assert.match(healthPictureClient, /window\.CairnHealthPicture = CAIRN_HEALTH_PICTURE/);
@@ -4831,6 +4889,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(meRecordsHealthDocController, /window\.CairnHealthRecordsController = CAIRN_HEALTH_RECORDS_CONTROLLER/);
   assert.match(meRecordsHealthDocController, /CairnHealthDocUploadController\.wireUpload/);
   assert.match(meRecordsHealthDocController, /loadHealthDocs/);
+  assert.match(healthShareController, /Object\.assign\(globalThis, \{ CairnHealthShareController: CAIRN_HEALTH_SHARE_CONTROLLER \}\)/);
+  assert.match(healthShareController, /window\.CairnHealthShareController = CAIRN_HEALTH_SHARE_CONTROLLER/);
+  assert.match(healthShareController, /deps\.api\("\/markers\/reconcile"/);
+  assert.match(healthShareController, /deps\.cachedApi\("\/markers\/priority"/);
   assert.doesNotMatch(health, /const\s+HEALTH_KINDS|function\s+healthKindLabel|function\s+parsedDoc|function\s+markerFlagClass|function\s+markersTable|function\s+docCollapsible|function\s+healthDocInner|function\s+healthDocHtml/);
   assert.match(chatClient, /Object\.assign\(globalThis, \{ CairnChatClient: CAIRN_CHAT_CLIENT \}\)/);
   assert.match(chatClient, /window\.CairnChatClient = CAIRN_CHAT_CLIENT/);
@@ -5061,9 +5123,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthClient, /CairnUi\.emptyStateHtml/);
   assert.match(records, /CairnHealthRecordsController\.render\(healthRecordsDeps\(\)\)/);
   assert.match(records, /function healthRecordsDeps\(\)/);
+  assert.match(records, /CairnHealthShareController\.render\(healthShareDeps\(\)\)/);
+  assert.match(records, /function healthShareDeps\(\)/);
   assert.doesNotMatch(records, /CairnHealthClient\.H_FILE_PROMPT|CairnHealthClient\.guessUploadMime/);
   assert.doesNotMatch(records, /CairnHealthRecords\.recordsTabHtml|CairnHealthRecords\.recordsListHtml|CairnHealthRecords\.recordsEmptyHtml/);
   assert.doesNotMatch(records, /CairnHealthDocs\.healthDocHtml|CairnHealthDocs\.healthDocInner/);
+  assert.doesNotMatch(records, /function openDoctorReportTab|api\("\/markers\/reconcile"|cachedApi\("\/markers\/priority"|downloadFile\(withToken\("\/api\/health-export"\)\)/);
   assert.doesNotMatch(records, /<div class="hupload"|docs\.map\(\(d, i\) => healthDocHtml|(^|[^.])healthDocHtml\(|(^|[^.])healthDocInner\(/m);
   assert.doesNotMatch(records, /function\s+loadDirectives|function\s+deriveDirectives|api\("\/directives"\)|CairnHealthDirectives\.directivesSectionHtml/);
   assert.doesNotMatch(records, /const\s+H_FILE_PROMPT|const\s+HEALTH_HERO_ART|const\s+DIRECTIVE_DOMAINS|function\s+guessUploadMime|function\s+directiveHtml|CairnHealthClient\.directiveHtml|CairnHealthClient\.DIRECTIVE_DOMAINS/);
@@ -5211,6 +5276,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/me-profile-form-client\.js"/);
   assert.match(sw, /"\/js\/me-profile-controller\.js"/);
   assert.match(sw, /"\/js\/me-health-tabs-controller\.js"/);
+  assert.match(sw, /"\/js\/health-marker-order-client\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-primitives-client\.js"/);
