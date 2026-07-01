@@ -1,0 +1,65 @@
+// @ts-check
+// ==== chat-layout-client.js ====
+// Chat viewport measurement, jump-to-latest wiring, and composer autosize.
+
+(() => {
+function wireChatJump(log: HTMLElement | null, jump: HTMLElement | null): void {
+  if (!log || !jump) return;
+  const update = () => {
+    const off = log.scrollHeight - log.scrollTop - log.clientHeight;
+    jump.hidden = off < 120;
+  };
+  log.addEventListener("scroll", update, { passive: true });
+  jump.addEventListener("click", () =>
+    log.scrollTo({ top: log.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" }));
+  update();
+}
+
+function autosizeChatInput(el: HTMLTextAreaElement | HTMLInputElement | null): void {
+  if (!el) return;
+  const max = 140;
+  if (!el.value) {
+    el.style.height = "";
+    el.style.overflowY = "hidden";
+    return;
+  }
+  el.style.height = "auto";
+  el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+  el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+}
+
+function measureChatTop(): void {
+  const cv = document.querySelector<HTMLElement>(".chatview");
+  if (!cv) return;
+  if (cv.style.height) cv.style.height = "";
+  const header = document.querySelector<HTMLElement>("header");
+  const tab = document.querySelector<HTMLElement>(".tabbar");
+  const vv = window.visualViewport;
+  const vh = vv ? vv.height : window.innerHeight;
+  const offTop = vv ? vv.offsetTop : 0;
+  const rootEl = document.documentElement;
+  if (matchMedia("(min-width:960px)").matches) {
+    const headerBottom = header ? header.getBoundingClientRect().bottom : 0;
+    rootEl.style.setProperty("--cvt", "0px");
+    rootEl.style.setProperty("--chat-top", "0px");
+    rootEl.style.setProperty("--chat-h", `${Math.max(220, vh - headerBottom - 18)}px`);
+    return;
+  }
+  const headerH = header ? header.getBoundingClientRect().height : 0;
+  rootEl.style.setProperty("--cvt", `${Math.round(offTop)}px`);
+  rootEl.style.setProperty("--chat-top", `${Math.round(headerH)}px`);
+  if (tab) rootEl.style.setProperty("--tabbar-h", `${Math.round(tab.getBoundingClientRect().height)}px`);
+}
+
+const CAIRN_CHAT_LAYOUT: ChatLayoutApi = {
+  wireJump: wireChatJump,
+  autosizeInput: autosizeChatInput,
+  measureTop: measureChatTop,
+};
+
+Object.assign(globalThis, { CairnChatLayout: CAIRN_CHAT_LAYOUT });
+
+if (typeof window !== "undefined") {
+  Object.assign(window, { CairnChatLayout: CAIRN_CHAT_LAYOUT });
+}
+})();

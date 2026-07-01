@@ -1,32 +1,4 @@
 // ==== 05-progress.js ====
-type ProgressRecord = Record<string, unknown>;
-
-type ProgressExercise = ProgressRecord & { name: string };
-type ProgressWeightRow = ProgressRecord & { date?: string; weight_lb?: number | null };
-type ProgressVolumeGroup = ProgressRecord & { muscle_group?: string; sets?: number | null; tonnage?: number | null };
-type ProgressCalendarCell = ProgressRecord & { date?: string; lifted?: unknown; activity?: unknown };
-
-function isProgressRecord(value: unknown): value is ProgressRecord {
-  return !!value && typeof value === "object";
-}
-
-function progressRecord(value: unknown): ProgressRecord {
-  return isProgressRecord(value) ? value : {};
-}
-
-function progressRows<T extends ProgressRecord = ProgressRecord>(value: unknown): T[] {
-  return Array.isArray(value) ? value.filter(isProgressRecord) as T[] : [];
-}
-
-function progressString(value: unknown): string {
-  return typeof value === "string" ? value : value == null ? "" : String(value);
-}
-
-function progressNumber(value: unknown, fallback = 0): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 // ---------- Progress: est-1RM trend ----------
 // SWR over /exercises (key progress:exercises): the 1RM seg paints its exercise
 // picker + chart shell instantly on a warm re-entry, then revalidates.
@@ -42,7 +14,7 @@ async function renderProgress() {
     peek: peek as never,
     token,
     tab: "progress",
-    render: (exercises: unknown) => paintProgressBody(progressRows<ProgressExercise>(exercises)),
+    render: (exercises: unknown) => paintProgressBody(CairnProgressData.rows<ProgressExercise>(exercises)),
   });
 }
 
@@ -71,7 +43,7 @@ async function renderWeight() {
   if (!peekRows) view.innerHTML = segSkeleton("weight", PROGRESS_SEG, 1); // cold: skeleton-first
   const paint = (rows: unknown, profile: unknown) => {
     if (token !== pollToken || state.tab !== "progress") return;
-    paintWeightBody(progressRows<ProgressWeightRow>(rows), progressRecord(profile));
+    paintWeightBody(CairnProgressData.rows<ProgressWeightRow>(rows), CairnProgressData.record(profile));
   };
   // Profile rides along (peeked + revalidated under its shared key); the weight
   // rows are the SWR-keyed surface that actually changes here.
@@ -86,14 +58,14 @@ async function renderWeight() {
 
 function paintWeightBody(rows: ProgressWeightRow[], profile: ProgressRecord) {
   const head = segBar("weight", PROGRESS_SEG);
-  const pts = rows.map((p) => ({ date: progressString(p.date), v: progressNumber(p.weight_lb) }));
+  const pts = rows.map((p) => ({ date: CairnProgressData.string(p.date), v: CairnProgressData.number(p.weight_lb) }));
   if (!pts.length) {
     view.innerHTML = head + progressHero("Bodyweight", []) +
       emptyStateHtml(art("activity", "walk"), "No weigh-ins yet — log one from the Today strip.");
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
-  const goalW = profile.goal_weight_lb != null ? progressNumber(profile.goal_weight_lb) : null;
+  const goalW = profile.goal_weight_lb != null ? CairnProgressData.number(profile.goal_weight_lb) : null;
   const first = pts[0].v, last = pts[pts.length - 1].v;
   const delta = Math.round((last - first) * 10) / 10;
   const toGoal = goalW != null ? Math.round((last - goalW) * 10) / 10 : null;
@@ -111,10 +83,13 @@ function paintWeightBody(rows: ProgressWeightRow[], profile: ProgressRecord) {
 
 async function drawProgress(name: string) {
   const data = await api("/progress/" + encodeURIComponent(name));
-  const row = progressRecord(data);
+  const row = CairnProgressData.record(data);
   const canvas = $<HTMLCanvasElement>("#chart"), stats = $<HTMLElement>("#pstats"), heroWrap = $<HTMLElement>("#trendHero");
   if (!canvas || !canvas.isConnected) return; // navigated away mid-fetch
-  const pts = progressRows<ProgressRecord>(row.points).map((p) => ({ date: progressString(p.date), v: progressNumber(p.best1rm) }));
+  const pts = CairnProgressData.rows<ProgressRecord>(row.points).map((p) => ({
+    date: CairnProgressData.string(p.date),
+    v: CairnProgressData.number(p.best1rm),
+  }));
   if (!pts.length) {
     if (heroWrap) heroWrap.innerHTML = progressHero("Estimated 1RM", []);
     canvas.style.display = "none";
@@ -151,22 +126,22 @@ async function renderVolume() {
     peek: peek as never,
     token,
     tab: "progress",
-    render: (data: unknown) => paintVolumeBody(progressRecord(data)),
+    render: (data: unknown) => paintVolumeBody(CairnProgressData.record(data)),
   });
 }
 
 function paintVolumeBody(data: ProgressRecord) {
-  const groups = progressRows<ProgressVolumeGroup>(data.by_muscle).slice()
-    .sort((a, b) => progressNumber(b.sets) - progressNumber(a.sets));
+  const groups = CairnProgressData.rows<ProgressVolumeGroup>(data.by_muscle).slice()
+    .sort((a, b) => CairnProgressData.number(b.sets) - CairnProgressData.number(a.sets));
   const head = segBar("volume", PROGRESS_SEG);
   if (!groups.length) {
     view.innerHTML = head + progressHero("Volume", []) +
-      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${progressNumber(data.days, 30)} days.`);
+      emptyStateHtml(art("exercise", "barbell row"), `Nothing logged in the last ${CairnProgressData.number(data.days, 30)} days.`);
     wireSeg(PROGRESS_HANDLERS);
     return;
   }
-  const totalSets = groups.reduce((t, g) => t + progressNumber(g.sets), 0);
-  const maxSets = Math.max(1, ...groups.map((g) => progressNumber(g.sets)));
+  const totalSets = groups.reduce((t, g) => t + CairnProgressData.number(g.sets), 0);
+  const maxSets = Math.max(1, ...groups.map((g) => CairnProgressData.number(g.sets)));
   const hero = progressHero("Volume", [
     ["sets · 30d", totalSets],
     ["lb moved · 30d", data.total_tonnage || 0, { k: true }],
@@ -176,13 +151,13 @@ function paintVolumeBody(data: ProgressRecord) {
     <div class="volrow reveal" style="${stagger(i + 2)}">
       <div class="volrow-top">
         <span class="volrow-name">${escHtml(g.muscle_group)}</span>
-        <span class="volrow-meta"><b>${progressNumber(g.sets)}</b> set${progressNumber(g.sets) === 1 ? "" : "s"} · ${progressNumber(g.tonnage).toLocaleString()} lb</span>
+        <span class="volrow-meta"><b>${CairnProgressData.number(g.sets)}</b> set${CairnProgressData.number(g.sets) === 1 ? "" : "s"} · ${CairnProgressData.number(g.tonnage).toLocaleString()} lb</span>
       </div>
-      <div class="volbar"><div class="volbar-fill barfill" style="width:${Math.max(3, Math.round((progressNumber(g.sets) / maxSets) * 100))}%"></div></div>
+      <div class="volbar"><div class="volbar-fill barfill" style="width:${Math.max(3, Math.round((CairnProgressData.number(g.sets) / maxSets) * 100))}%"></div></div>
     </div>`).join("");
   view.innerHTML = head + hero +
     `<div id="volBalanceSlot" class="vol-balance-slot reveal" style="${stagger(1)}"></div>` +
-    `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${progressNumber(data.days, 30)} days · ranked by sets</div>` + rows;
+    `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${CairnProgressData.number(data.days, 30)} days · ranked by sets</div>` + rows;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // The balance read settles in above the bars (best-effort, async) — the engine
@@ -247,12 +222,12 @@ async function renderCalendar() {
     peek: peek as never,
     token,
     tab: "progress",
-    render: (data: unknown) => paintCalendarBody(progressRecord(data)),
+    render: (data: unknown) => paintCalendarBody(CairnProgressData.record(data)),
   });
 }
 
 function paintCalendarBody(data: ProgressRecord) {
-  const cells = progressRows<ProgressCalendarCell>(data.cells);
+  const cells = CairnProgressData.rows<ProgressCalendarCell>(data.cells);
   const head = segBar("calendar", PROGRESS_SEG);
   if (!cells.length) {
     view.innerHTML = head + progressHero("Calendar", []) +
@@ -261,7 +236,7 @@ function paintCalendarBody(data: ProgressRecord) {
     return;
   }
   const todayIso = localISO();
-  const byDate = new Map(cells.map((c) => [progressString(c.date), c]));
+  const byDate = new Map(cells.map((c) => [CairnProgressData.string(c.date), c]));
   const ym = todayIso.slice(0, 7);
   const monthSessions = cells.filter((c) => (c.date || "").slice(0, 7) === ym && c.lifted).length;
   const activeDays = cells.filter((c) => c.lifted || c.activity).length;
@@ -275,7 +250,7 @@ function paintCalendarBody(data: ProgressRecord) {
     ["sessions · 12wk", windowSessions],
     ["active days · 84d", activeDays],
   ]);
-  const months = [...new Set(cells.map((c) => progressString(c.date).slice(0, 7)))].filter(Boolean).reverse();
+  const months = [...new Set(cells.map((c) => CairnProgressData.string(c.date).slice(0, 7)))].filter(Boolean).reverse();
   const grids = months.map((mo, i) => calMonthHtml(mo, byDate, todayIso, i + 1)).join("");
   const legend = `<div class="cal-legend"><span>Less</span><i class="cl0"></i><i class="cl1"></i><i class="cl2"></i><i class="cl3"></i><i class="cl4"></i><span>More</span></div>`;
   view.innerHTML = head + hero + grids + legend;

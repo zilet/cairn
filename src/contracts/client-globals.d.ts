@@ -59,6 +59,16 @@ declare global {
   type ClientSegment = readonly [string, string];
   type ClientSettingsRouteTask = readonly [string, string];
   type ClientSaveBar = { markDirty(): void; save(): Promise<void> };
+  type ProgressRecord = Record<string, unknown>;
+  type ProgressExercise = ProgressRecord & { name: string };
+  type ProgressWeightRow = ProgressRecord & { date?: string; weight_lb?: number | null };
+  type ProgressVolumeGroup = ProgressRecord & { muscle_group?: string; sets?: number | null; tonnage?: number | null };
+  type ProgressCalendarCell = ProgressRecord & { date?: string; lifted?: unknown; activity?: unknown };
+  type ChatLayoutApi = {
+    wireJump(log: HTMLElement | null, jump: HTMLElement | null): void;
+    autosizeInput(input: HTMLTextAreaElement | HTMLInputElement | null): void;
+    measureTop(): void;
+  };
 
   type ClientMealSwapRecord = Record<string, unknown>;
   type ClientMealSwapPlan = ClientMealPlan & {
@@ -1091,6 +1101,8 @@ declare global {
       clearPasteHandler(): void;
     };
 
+    CairnChatLayout: ChatLayoutApi;
+
     CairnChatTurnRecords: {
       event(event: Event): Record<string, unknown> | null;
       id(value: unknown): number | null;
@@ -1874,6 +1886,14 @@ declare global {
       stopRest(): void;
     };
 
+    CairnProgressData: {
+      isRecord(value: unknown): value is ProgressRecord;
+      record(value: unknown): ProgressRecord;
+      rows<T extends ProgressRecord = ProgressRecord>(value: unknown): T[];
+      string(value: unknown): string;
+      number(value: unknown, fallback?: number): number;
+    };
+
     CairnProgressComponents: {
       fmtShortDate(iso: unknown): string;
       progressHero(
@@ -2281,6 +2301,52 @@ declare global {
       ): string;
     };
 
+    CairnTodayPlanSurfaceRenderer: {
+      buildHtml(
+        options: {
+          showDone: boolean;
+          showPlan: boolean;
+          focus: boolean;
+          session: Record<string, unknown> | null | undefined;
+          day: Record<string, unknown>;
+          isToday: boolean;
+          plan: Array<Record<string, unknown>>;
+          activeDay: unknown;
+          logDate: string;
+          cardioItems: Array<Record<string, unknown>>;
+          strengthItems: Array<Record<string, unknown>>;
+          activeItems: Array<Record<string, unknown>>;
+          skippedItems: Array<Record<string, unknown>>;
+          matchedCardio: Map<Record<string, unknown>, unknown>;
+          syncedLine: string;
+          loggedByEx: Record<string, unknown[]>;
+          offPlanEx: string[];
+          pendingOffPlan: Array<{ name: string; mode?: string | null }>;
+          lastSets: Record<string, Record<string, unknown> | null | undefined>;
+          rxByEx: Record<string, unknown>;
+          exDone: number;
+          exTotal: number;
+          hasSyncedCardioToday: boolean;
+          hasLoggedSets: boolean;
+          hasGarmin: boolean;
+          isRunDay: boolean;
+          prefillFor(item: Record<string, unknown>): { weight?: unknown; reps?: unknown; rir?: unknown; duration_sec?: unknown };
+          rxFor(name: unknown): unknown;
+        },
+        deps: {
+          planSurface: Window["CairnTodayPlanSurface"];
+          planSurfaceDeps(): Parameters<Window["CairnTodayPlanSurface"]["sessionHeadHtml"]>[1];
+          isCardioItem(item: Record<string, unknown>): boolean;
+          cardioLabel(item: Record<string, unknown>): string;
+          cardioPlanCard(item: Record<string, unknown>, index: number, matched?: unknown, syncLine?: string): string;
+          exCard(item: Record<string, unknown>, logged: unknown[], prefill: Record<string, unknown>, index: number, rx: unknown): string;
+          garminSessionCard(value: unknown): string;
+          sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
+          skipLineHtml(labels: string[]): string;
+        },
+      ): string;
+    };
+
     CairnTodayPostRenderWiring: {
       wirePostRender(deps: {
         root: HTMLElement;
@@ -2629,6 +2695,7 @@ declare global {
   declare const CairnChatComposerController: Window["CairnChatComposerController"];
   declare const CairnChatTurnRecords: Window["CairnChatTurnRecords"];
   declare const CairnChatTurnStreamState: Window["CairnChatTurnStreamState"];
+  declare const CairnChatLayout: Window["CairnChatLayout"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
@@ -2696,6 +2763,7 @@ declare global {
   declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
+  declare const CairnProgressData: Window["CairnProgressData"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressLineChartModel: Window["CairnProgressLineChartModel"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
@@ -2727,6 +2795,7 @@ declare global {
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];
   declare const CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
+  declare const CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];

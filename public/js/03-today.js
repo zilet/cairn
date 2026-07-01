@@ -14,6 +14,7 @@ const todaySideLoaders = globalThis.CairnTodaySideLoaders;
 const todayPlanSessionPreparation = globalThis.CairnTodayPlanSessionPreparation;
 const todayDataLoader = globalThis.CairnTodayDataLoader;
 const todayPlanSurface = globalThis.CairnTodayPlanSurface;
+const todayPlanSurfaceRenderer = globalThis.CairnTodayPlanSurfaceRenderer;
 function todaySideLoaderDeps() {
     return {
         root: todayView,
@@ -36,6 +37,19 @@ function todayPlanSurfaceDeps() {
         rxMoveCount: todayRxMoveCount,
         setsTonnage,
         trainGlyph: CairnTodayBrief.BRIEF_KIND.train.glyph,
+    };
+}
+function todayPlanSurfaceRendererDeps() {
+    return {
+        planSurface: todayPlanSurface,
+        planSurfaceDeps: todayPlanSurfaceDeps,
+        isCardioItem,
+        cardioLabel,
+        cardioPlanCard,
+        exCard,
+        garminSessionCard,
+        sessionDoneCard,
+        skipLineHtml: (labels) => CairnTodaySessionStatus.skipLineHtml(labels),
     };
 }
 // The per-card prescription line. `rx` is one Prescription from the progression
@@ -396,105 +410,36 @@ async function renderToday(opts = {}) {
       <div id="freqFoods" class="freq-foods"></div>
       ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
     </div>`;
-    // ---- A finished workout: calm "done" card, the live surface put away ----
-    if (showDone) {
-        html += sessionDoneCard(session, day, { isToday });
-    }
-    else if (showPlan) {
-        // ---- Plan / logging surface — the launchpad, shown when the day calls for it ----
-        html += `<div class="plansurface reveal" style="--i:2">`;
-        // A designed break between the analysis above (Brief + capture) and the logging
-        // surface below — the eye lands on "here begins the work" instead of one flat,
-        // undifferentiated scroll. Focus mode has its own slim sticky header, so skip it there.
-        if (!focus) {
-            // On a run day (cardio-led, no strength), the head names the RUN — its label +
-            // prescription — so the day reads as "today is a run", not a strength shell with
-            // a cardio card hiding inside. No focus pill (there's no set-by-set logging to
-            // focus into). Otherwise the strength session leads exactly as before.
-            if (isRunDay) {
-                html += todayPlanSurface.sessionHeadHtml({
-                    isRunDay,
-                    isToday,
-                    cardioItems,
-                    day,
-                    exDone,
-                    exTotal,
-                    hasSyncedCardioToday,
-                }, todayPlanSurfaceDeps());
-            }
-            else {
-                html += todayPlanSurface.sessionHeadHtml({
-                    isRunDay,
-                    isToday,
-                    cardioItems,
-                    day,
-                    exDone,
-                    exTotal,
-                    hasSyncedCardioToday,
-                }, todayPlanSurfaceDeps());
-            }
-        }
-        html += todayPlanSurface.daySwitchHtml(todayState.plan, todayState.day, todayPlanSurfaceDeps());
-        // ---- "It followed your logs" — one calm banner + an apply control ----
-        // When the progression engine has actual MOVES for this day (anything past a
-        // plain hold), surface ONE quiet line above the cards: the day's targets have
-        // adapted to what you logged, and you can fold them into your plan. The per-lift
-        // detail lives on each card (ex-rx); this is just the at-a-glance + the apply.
-        // Pull, never push — a hold-only day shows nothing. Goes through propose→apply,
-        // so "Apply to my plan" lands a DRAFT for review, never an auto-change.
-        html += todayPlanSurface.rxBannerHtml(rxByEx, todayState.day, todayPlanSurfaceDeps());
-        // Garmin "body's reaction" card — the strength session's physiology layer
-        // (HR / zones / calories / training effect), reconciled from a synced watch.
-        if (hasGarmin)
-            html += garminSessionCard(session.garmin);
-        let cardIdx = 0;
-        // The sync-freshness line rides on the first UNMATCHED cardio card (where a runner
-        // looks to trust this morning's mileage). A matched run is already "done" — no line.
-        let syncLineUsed = false;
-        // On a run/mixed day float the cardio prescription(s) to the top of the surface so
-        // the run is the hero, not the tail. A pure lifting day preserves plan order.
-        const surfaceItems = (isRunDay || cardioItems.length > 1 || (cardioItems.length && strengthItems.length))
-            ? [...activeItems.filter(isCardioItem), ...activeItems.filter((it) => !isCardioItem(it))]
-            : activeItems;
-        for (const it of surfaceItems) {
-            // A planned cardio effort is a prescription + a "log this" affordance (it routes
-            // through the free-text capture), not the set-by-set logger. A matched synced run
-            // flips it to a calm "done" card; an unmatched one keeps the prescription + a
-            // quiet "or it'll sync from your watch" fallback and (once) the freshness line.
-            if (isCardioItem(it)) {
-                const matched = matchedCardio.get(it) || null;
-                const line = (!matched && !syncLineUsed) ? syncline : "";
-                if (line)
-                    syncLineUsed = true;
-                html += cardioPlanCard(it, cardIdx++, matched, line);
-                continue;
-            }
-            const exerciseName = String(it.exercise || "");
-            html += exCard({ ...it, fromPlan: true }, loggedByEx[exerciseName] || [], prefillFor(it), cardIdx++, rxFor(exerciseName));
-        }
-        for (const ex of offPlanEx) {
-            const logged = loggedByEx[ex];
-            const s = logged[logged.length - 1];
-            html += exCard({ exercise: ex, fromPlan: false }, logged, { weight: s.weight, reps: s.reps, rir: s.rir }, cardIdx++, rxFor(ex));
-        }
-        // Pending off-plan cards (added but not yet logged) — rebuilt so a re-render never
-        // drops a freshly-added exercise before its first set lands. Prefill from last-set.
-        for (const p of pendingOffPlan) {
-            const last = lastSets[p.name];
-            const prefill = last
-                ? { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null }
-                : { weight: null, reps: null, rir: null, duration_sec: null };
-            html += exCard({ exercise: p.name, fromPlan: false, mode: p.mode || null }, [], prefill, cardIdx++, rxFor(p.name));
-        }
-        html += todayPlanSurface.addExerciseFormHtml();
-        if (hasLoggedSets) {
-            html += todayPlanSurface.finishHtml(session, { isToday, logDate: todayState.logDate }, todayPlanSurfaceDeps());
-        }
-        // Skipped exercises live on as one slim, muted line at the very bottom —
-        // recoverable later in the day (tap a name to restore), never buried.
-        html += CairnTodaySessionStatus.skipLineHtml(skippedItems.map((it) => (isCardioItem(it) ? cardioLabel(it) : it.exercise)));
-        html += `</div>`; // .plansurface
-    }
+    html += todayPlanSurfaceRenderer.buildHtml({
+        showDone,
+        showPlan,
+        focus,
+        session,
+        day,
+        isToday,
+        plan: todayState.plan,
+        activeDay: todayState.day,
+        logDate: todayState.logDate,
+        cardioItems,
+        strengthItems,
+        activeItems,
+        skippedItems,
+        matchedCardio,
+        syncedLine: syncline,
+        loggedByEx,
+        offPlanEx,
+        pendingOffPlan,
+        lastSets,
+        rxByEx,
+        exDone,
+        exTotal,
+        hasSyncedCardioToday,
+        hasLoggedSets,
+        hasGarmin,
+        isRunDay,
+        prefillFor,
+        rxFor,
+    }, todayPlanSurfaceRendererDeps());
     // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
     if (!focus) {
         html += `${todayCompass.paceOfferHtml}
