@@ -186,6 +186,7 @@ function loadController() {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-override-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-controller.js"), "utf8"), context);
 
   const deps = {

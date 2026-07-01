@@ -274,6 +274,7 @@ function loadController({ apiImpl } = {}) {
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-feedback-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-skip-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-controller.js"), "utf8"), context);
 
   const rootEl = new FakeElement("section");

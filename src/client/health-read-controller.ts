@@ -11,13 +11,6 @@ type HealthReadMarkerRow = HealthReadControllerRecord & {
 type HealthReadSymptomMarker = HealthReadControllerRecord & { name?: string; value?: unknown; unit?: string };
 type HealthReadSymptomLink = HealthReadControllerRecord & { note?: string; markers?: HealthReadSymptomMarker[] };
 type HealthReadRecoverySummary = HealthReadControllerRecord & { has_data?: unknown };
-type HealthReadSupplement = HealthReadControllerRecord & {
-  id?: number | string;
-  name?: string;
-  dose?: string | null;
-  frequency?: string | null;
-  note?: string | null;
-};
 
 (() => {
   function controllerRecord(value: unknown): HealthReadControllerRecord {
@@ -149,85 +142,19 @@ type HealthReadSupplement = HealthReadControllerRecord & {
   }
 
   function loadSupplements(deps: ClientHealthReadControllerDeps, token: number): void {
-    const wrap = select<HTMLElement>(deps, "#hbSupplements");
-    if (!wrap || !wrap.isConnected) return;
-    const peek = deps.peekCached("supplements");
-    if (peek) renderSupplements(peek.data, deps, token);
-    deps.cachedApi("/supplements", {
-      key: "supplements",
-      onUpgrade: (data, { changed }) => {
-        if (changed || !peek) renderSupplements(data, deps, token);
-      },
-    }).catch(() => {
-      if (!peek) renderSupplements([], deps, token);
-    });
+    CairnHealthReadSupplements.load(deps, token);
   }
 
   function renderSupplements(list: unknown, deps: ClientHealthReadControllerDeps, token?: number | null): void {
-    const wrap = select<HTMLElement>(deps, "#hbSupplements");
-    if (!wrap || !wrap.isConnected || (token != null && token !== deps.pollToken())) return;
-    const items = controllerRows<HealthReadSupplement>(list);
-    const chips = items.map((supplement) => {
-      const bits = [supplement.dose, supplement.frequency].filter(Boolean).map(deps.escapeHtml).join(" · ");
-      return `<div class="supp-chip" title="${deps.escapeAttr(supplement.note || supplement.name)}">
-        <span class="supp-name">${deps.escapeHtml(supplement.name)}</span>${bits ? `<span class="supp-meta">${bits}</span>` : ""}
-        <button class="supp-x" data-suppx="${supplement.id}" aria-label="Remove ${deps.escapeAttr(supplement.name)}">×</button>
-      </div>`;
-    }).join("");
-    wrap.innerHTML = `<div class="hb-section supp-card reveal" style="${deps.stagger(3)}">
-      <span class="lbl">What you're taking</span>
-      <p class="supp-sub">Say it once in plain words — I'll approximate the rest and fold it into your picture.</p>
-      ${items.length ? `<div class="supp-chips">${chips}</div>` : `<p class="supp-empty">Nothing yet. Tell me below, or just mention it in chat.</p>`}
-      <div class="supp-input">
-        <input id="suppText" type="text" placeholder="e.g. creatine daily, omega-3…" autocomplete="off" />
-        <button id="suppAdd" class="ghostbtn">Add</button>
-      </div>
-    </div>`;
-    const input = select<HTMLInputElement>(deps, "#suppText");
-    const submit = () => { void understandSupplementsFromInput(deps); };
-    select(deps, "#suppAdd")?.addEventListener("click", submit);
-    input?.addEventListener("keydown", (event: KeyboardEvent) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        submit();
-      }
-    });
-    wrap.querySelectorAll<HTMLElement>("[data-suppx]").forEach((button) =>
-      button.addEventListener("click", () => { void removeSupplement(Number(button.dataset.suppx), deps); })
-    );
+    CairnHealthReadSupplements.render(list, deps, token);
   }
 
   async function understandSupplementsFromInput(deps: ClientHealthReadControllerDeps): Promise<void> {
-    const input = select<HTMLInputElement>(deps, "#suppText");
-    const text = (input?.value || "").trim();
-    if (!text) return;
-    const btn = select<HTMLButtonElement>(deps, "#suppAdd");
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Reading…";
-    }
-    try {
-      await deps.api("/supplements/understand", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      deps.swrInvalidate("supplements");
-      loadSupplements(deps, deps.pollToken());
-    } catch {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "Add";
-      }
-    }
+    await CairnHealthReadSupplements.understandFromInput(deps);
   }
 
   async function removeSupplement(id: number, deps: ClientHealthReadControllerDeps): Promise<void> {
-    try {
-      await deps.api(`/supplements/${id}`, { method: "DELETE" });
-      deps.swrInvalidate("supplements");
-      loadSupplements(deps, deps.pollToken());
-    } catch {}
+    await CairnHealthReadSupplements.remove(id, deps);
   }
 
   function loadRecoverySummary(deps: ClientHealthReadControllerDeps, token: number, selector: string): void {

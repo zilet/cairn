@@ -144,6 +144,7 @@ declare global {
   };
 
   type ClientTodaySessionFeedbackDeps = Pick<ClientTodaySessionControllerDeps, "api" | "sessionStatus" | "state" | "toast">;
+  type ClientTodaySessionSkipDeps = Pick<ClientTodaySessionControllerDeps, "api" | "collapseEl" | "expandEl" | "invalidate" | "renderToday" | "root" | "sessionStatus" | "state" | "toast">;
 
   type ClientTodayBriefControllerDeps = {
     root: HTMLElement;
@@ -166,6 +167,30 @@ declare global {
     loadTrainingProvenance(isToday?: boolean): unknown;
     revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
     revealSessionComposer(): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+  };
+
+  type ClientTodayBriefOverrideRunOptions = ClientAgentOpHandlers & {
+    path: "/today-read/reshape";
+    anchor: ".brief";
+    guard: () => boolean;
+    isFail: (result: unknown) => boolean;
+    render: (result: unknown) => void;
+    onFail: (error: unknown) => void;
+  };
+
+  type ClientTodayBriefOverrideDeps = {
+    root: HTMLElement;
+    state: {
+      tab?: string;
+      logDate: string;
+      brief?: unknown;
+      _briefMorph?: boolean;
+    };
+    renderToday(opts?: Record<string, unknown>): unknown;
+    withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+    reducedMotion(): boolean;
+    escapeHtml(value: unknown): string;
     askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
   };
 
@@ -1250,6 +1275,13 @@ declare global {
       trigger(deps: ClientHealthReadControllerDeps): void;
     };
 
+    CairnHealthReadSupplements: {
+      load(deps: ClientHealthReadControllerDeps, token: number): void;
+      render(list: unknown, deps: ClientHealthReadControllerDeps, token?: number | null): void;
+      understandFromInput(deps: ClientHealthReadControllerDeps): Promise<void>;
+      remove(id: number, deps: ClientHealthReadControllerDeps): Promise<void>;
+    };
+
     CairnHealthReadController: {
       paintTab(deps: ClientHealthReadControllerDeps): void;
       loadSynthesis(deps: ClientHealthReadControllerDeps, token: number): void;
@@ -1965,6 +1997,10 @@ declare global {
       ): void;
     };
 
+    CairnTodaySessionSkip: {
+      wireSkips(deps: ClientTodaySessionSkipDeps): void;
+    };
+
     CairnTodayCards: {
       exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
       exerciseCardHtml(
@@ -2008,6 +2044,12 @@ declare global {
       }): string;
       focusBarHtml(read: Partial<ClientDayRead> | null | undefined, day: { name?: unknown } | null | undefined, options?: { exDone?: unknown; exTotal?: unknown; isToday?: boolean }): string;
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
+    };
+
+    CairnTodayBriefOverrideClient: {
+      paintBriefReshaping(brief: Element, chip: HTMLElement | null, deps: ClientTodayBriefOverrideDeps): void;
+      dayReadOverrideOpOpts(args: { intent?: string; prevFocus?: unknown } | undefined, deps: ClientTodayBriefOverrideDeps): ClientTodayBriefOverrideRunOptions;
+      reconnectDayReadOverride(job: unknown, deps: ClientTodayBriefOverrideDeps): ClientAgentOpHandlers | null;
     };
 
     CairnTodayBriefController: {
@@ -2200,6 +2242,7 @@ declare global {
   declare const CairnHealthStandingController: Window["CairnHealthStandingController"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnHealthReadSynthesis: Window["CairnHealthReadSynthesis"];
+  declare const CairnHealthReadSupplements: Window["CairnHealthReadSupplements"];
   declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
@@ -2235,6 +2278,7 @@ declare global {
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnTodayBrief: Window["CairnTodayBrief"];
+  declare const CairnTodayBriefOverrideClient: Window["CairnTodayBriefOverrideClient"];
   declare const CairnTodayBriefController: Window["CairnTodayBriefController"];
   declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
@@ -2269,6 +2313,7 @@ declare global {
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];
   declare const CairnTodaySessionFeedback: Window["CairnTodaySessionFeedback"];
+  declare const CairnTodaySessionSkip: Window["CairnTodaySessionSkip"];
   declare const CairnTodaySessionController: Window["CairnTodaySessionController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];
