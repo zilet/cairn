@@ -195,7 +195,7 @@ function healthReadDeps(): ClientHealthReadControllerDeps {
   };
 }
 
-function healthPictureDeps() {
+function healthPictureDeps(): ClientHealthPictureControllerDeps {
   return {
     root: view,
     state,
