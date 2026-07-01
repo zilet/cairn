@@ -280,6 +280,257 @@ function nextPlanDayNumber(read: any): number | null {
   return days[0].day_number;
 }
 
+// ---------- per-domain assemblers for getCoachContext ----------
+// getCoachContext computes a handful of EXPENSIVE signals exactly once (the Garmin
+// summary + unified recovery, the day-read, the deterministic program-state snapshot,
+// the volume balance / acute load, and the CONDUCTOR's per-domain reads) and threads
+// them into several context keys. To keep that compute-once discipline while splitting
+// the ~50-key assembly into cohesive per-domain slices, the ORCHESTRATOR does all the
+// shared computation and passes the results in here via `signals` — no slice re-derives
+// a shared value (that would both regress performance and risk a different read). Each
+// builder returns its slice of the context; the orchestrator spreads them together.
+interface CoachContextSignals {
+  today: string;
+  profile: any;
+  garmin: any;
+  recovery: any;
+  recentSessions: any[];
+  dayReadView: any;
+  programBal: any;
+  recentLoad: any;
+  fullProgramState: ProgramState;
+  runZonesView: any;
+  runPlanView: any;
+  dexaTargetingView: any;
+  testWeekView: any;
+  healthFocusView: any;
+  performanceView: any;
+  programAdjustmentsView: any;
+  groupsTrajectoryView: any;
+  runVarietyView: any;
+  enduranceTestsView: any;
+  trajectoryView: any;
+  coachingFocusView: any;
+}
+
+// Identity / person model: who the athlete is, what the coach remembers, the people
+// and life-context it plans around. Cheap per-key reads; `profile` is threaded in.
+function buildPersonSlice(
+  signals: CoachContextSignals
+): Pick<CoachContext, "now" | "profile" | "discipline" | "memory" | "learnings" | "context_events" | "family" | "checkins" | "reaction_model" | "context_today"> {
+  const { profile } = signals;
+  return {
+    // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
+    // EVERY plan-shaping prompt knows the time of day — without it the agent is
+    // temporally blind (it would ask about "last night's dinner" at 5 PM). The
+    // chat/day-read prompts also surface it as an explicit "RIGHT NOW" line.
+    now: nowContext(),
+    profile,
+    // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
+    // framing without digging into profile. Defaults to 'strength' (today's
+    // behavior); endurance/hybrid make endurance progression a first-class driver.
+    discipline: {
+      primary: (profile?.primary_discipline as string) || "strength",
+      endurance_sport: profile?.endurance_sport ?? null,
+    },
+    // Ranked retrieval (Stream 2): always the load-bearing person-model
+    // (constraints/injuries/preferences/decisions) + recent observations, with
+    // superseded rows hidden. Replaces the raw recency dump and stamps
+    // last_referenced_at so consolidation can tell live facts from stale ones.
+    memory: memoryForCoach(40),
+    // Durable learnings drawn from suggestion → actual reconciliation (e.g.
+    // "tolerates higher frequency than the read assumed"). Suggestion-not-a-gate:
+    // these inform tone/defaults, never enforce.
+    learnings: recentLearnings(6),
+    context_events: listContextEvents({ activeOnly: true }),
+    family: listFamily(),                     // family roster the coach plans around
+    checkins: listCheckins(7),                // optional subjective morning check-ins
+    // How THIS athlete actually reacts, learned from their own logged history (deficit→
+    // weight rate, hs-CRP↔training-load, late-event→sleep, adherence, a data-gap signal so
+    // the coach never fabricates recovery). The personalization spine every brain reads.
+    reaction_model: reactionModelForCoach(),
+    // Active life-context effect (a late concert / travel / illness mentioned once) →
+    // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
+    context_today: activeContextEffect(),
+  };
+}
+
+// Nutrition goal + today's fuel. Both goal reads reuse the already-fetched profile.
+function buildNutritionSlice(
+  signals: CoachContextSignals
+): Pick<CoachContext, "goal" | "goal_mode" | "day_intake"> {
+  const { profile } = signals;
+  return {
+    goal: computeGoalCheck(profile), // reuse the profile already fetched above
+    // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
+    // the profile is too thin for goal math), so every prompt and the PWA agree on
+    // the framing: a deficit for 'lose', anchor-to-TDEE for 'maintain', a lean
+    // surplus for 'gain'. Drives renderGoalMode and the fuel-card target.
+    goal_mode: effectiveGoalMode(profile),
+    // Today's persisted food log. This is independent of the live chat thread, so
+    // a breakfast logged before "Fresh start" still shapes the next nutrition turn.
+    day_intake: dayIntakeForCoach(),
+  };
+}
+
+// The training brain: plan/sessions, the deterministic program-state read, capacity /
+// balance / adjustments, and the DEXA-driven targeting. Reuses the precomputed
+// program-state, recovery, balance, acute load, day-read and conductor domain reads.
+function buildTrainingSlice(
+  signals: CoachContextSignals
+): Pick<CoachContext, "plan" | "recent_sessions" | "recent_activities" | "training_signals" | "garmin" | "program_block" | "program_state" | "performance" | "program_balance" | "recent_load" | "progression" | "program_adjustments" | "groups_trajectory" | "test_week" | "dexa_targeting" | "trajectory"> {
+  const {
+    garmin, recentSessions, dayReadView, programBal, recentLoad, fullProgramState,
+    performanceView, programAdjustmentsView, groupsTrajectoryView, testWeekView,
+    dexaTargetingView, trajectoryView,
+  } = signals;
+  return {
+    plan: getPlan(),
+    recent_sessions: recentSessions,
+    recent_activities: listActivities(15),
+    // Deterministic progression-readiness + autoregulation rollup computed from the
+    // athlete's own recent sets + 1-tap feedback — so logged performance VISIBLY
+    // steers the next recommendation instead of being inferred from a raw array.
+    training_signals: trainingSignals(recentSessions),
+    garmin,
+    // Active periodization block (goal / phase / week N of M) so the coach
+    // periodizes against the current mesocycle instead of progressing blindly.
+    // Null when no block is running — then the deterministic mesocycle read in
+    // program-state still gives deload timing. Additive, never a gate.
+    program_block: blockForCoach(),
+    // The elite program brain (deterministic floor): per-lift status/trend +
+    // stall detection, volume bands, mesocycle position, endurance trends, and
+    // the "what to evolve next" list — so EVERY plan-shaping prompt sees the
+    // program's actual trajectory, not just raw sessions. Bounded; no scores.
+    program_state: programStateForCoach(fullProgramState),
+    // The TRAINING-INTELLIGENCE read (capacity, not just trajectory): where each
+    // benchmark lift sits as a sex/age percentile against proven strength standards,
+    // VO2max-for-age, the strength IMBALANCES, the single biggest lever, lifts worth
+    // re-TESTING, and a variety nudge. So the coach measures WHERE THE ATHLETE STANDS
+    // and balances development — not just whether last week went up. Reuses the same
+    // program-state + recovery + balance computed above. Percentile/level framing
+    // (the recognized reference reads the athlete asked to keep), never a 0-100 score.
+    performance: performanceView,
+    // Volume balance per canonical muscle group over the last 2 weeks (bands +
+    // which groups are DUE / running HIGH, in plain words). Mobility excluded.
+    program_balance: programBal,
+    // ACUTE recovery: which muscle groups got hammered in the last day or two —
+    // folding ENDURANCE (a long ride/run never touches logged_sets) in with recent
+    // strength. Lets the coach plan AROUND smoked muscles instead of recommending a
+    // group the athlete just torched. Plain words, no score.
+    recent_load: [...recentLoad.values()],
+    // The next session's auto-progression — the adapted target per strength lift
+    // on the day this read points at ("+5 lb", "hold 50 — stalled", "−10%"), so
+    // the plan visibly FOLLOWS what was logged. Bounded to the active day. [] when
+    // there's no plan day / it's a cardio day.
+    progression: (() => {
+      const dn = nextPlanDayNumber(dayReadView);
+      return dn == null ? [] : planDayProgression(dn).slice(0, 12);
+    })(),
+    // The calm "what changed & why" digest — the handful of concrete adaptations
+    // due right now (lifts to push/hold/deload, groups due, missing-pattern gaps).
+    program_adjustments: programAdjustmentsView,
+    // ---- per-muscle-group advance/stall + cadenced strength test week ----
+    // The athlete's own mental model: which canonical groups are advancing vs
+    // stalling, with a vary-options menu for the stalled ones. Reuses program_state.
+    groups_trajectory: groupsTrajectoryView,
+    // Is a cadenced strength test week due (block realization phase / ~7-week
+    // cadence)? Names the benchmark lifts to re-test. due:false for a new athlete.
+    test_week: testWeekView,
+    // ---- DEXA-driven targeting (the body scan → training + nutrition targets) ----
+    // Maps the regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral fat)
+    // to concrete muscle-group biases + moves + a "path to the next scan", and one
+    // nutrition target (visceral/central fat → Z2 + lean-safe deficit). {available:false}
+    // with no DEXA. healthStanding() is read lazily inside (computed once).
+    dexa_targeting: dexaTargetingView,
+    // One periodized arc to the goals, with today framed as the next step on it (null line
+    // when there's no goal/block/race). So coaching is forward-looking, not just "today".
+    trajectory: trajectoryView,
+  };
+}
+
+// The running brain (the endurance counterpart to the program-state read): the goal,
+// compliance, HR-zone bands and this week's periodized mix. Reuses the precomputed
+// zones / plan / variety / test reads built once from the shared recovery+state+block.
+function buildRunningSlice(
+  signals: CoachContextSignals
+): Pick<CoachContext, "endurance_goal" | "run_compliance" | "run_zones" | "run_plan" | "run_variety" | "endurance_tests"> {
+  const { runZonesView, runPlanView, runVarietyView, enduranceTestsView } = signals;
+  return {
+    // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
+    // (no date, maintain readiness), with race timing/phase pre-computed. Null when
+    // unset. Orthogonal to discipline: a strength-first athlete can hold a standing
+    // running goal ("running on the side"). The coach prescribes runs accordingly.
+    endurance_goal: getEnduranceGoal(),
+    // Runner loop (closing): prescribed plan cardio vs this week's logged efforts,
+    // in plain words ("32 of 40 km this week") — so the coach can speak to run
+    // adherence the way week_done/week_planned covers lifting. Never a 0-100 score.
+    run_compliance: getRunCompliance(),
+    // The athlete's real HR-zone bpm bands (max-HR + resting HR) so runs are
+    // prescribed to an actual pulse, not a vague effort. {available:false} with no
+    // age AND no Garmin HR.
+    run_zones: runZonesView,
+    // This week's periodized run mix (N easy Z2 + 1 long + 1 rotated quality), each
+    // with a bpm-bearing zone + interval structure. Reuses the recovery/programState/
+    // block/zones already computed so nothing recomputes. {available:false} for a
+    // pure strength athlete with no running.
+    run_plan: runPlanView,
+    // Mono-stimulus running flag (all-easy / one-distance-on-repeat) → the missing
+    // stimulus. null when there's not enough running to read variety honestly.
+    run_variety: runVarietyView,
+    // Running re-tests (no hard effort in ~4 weeks → a time-trial; a stale VO2max
+    // reading → a max-effort run). [] for a non-runner.
+    endurance_tests: enduranceTestsView,
+  };
+}
+
+// The health / connected-brain slice: bounded lab summaries, cross-domain directives,
+// the tiered focus, symptom links, the synthesis narrative, and the unified recovery
+// view (threaded in — the same recovery the day-read/program-state already read).
+function buildHealthSlice(
+  signals: CoachContextSignals
+): Pick<CoachContext, "health" | "health_review" | "directives" | "health_focus" | "symptom_links" | "health_synthesis" | "directive_feedback" | "recovery" | "supplements"> {
+  const { recovery, healthFocusView } = signals;
+  return {
+    health: healthForCoach(),
+    health_review: healthReviewForCoach(),
+    directives: directivesForCoach(),         // cross-domain consequences of flagged findings (condensed, bounded)
+    health_focus: healthFocusView,            // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
+    symptom_links: (() => { try { return symptomMarkerLinks(); } catch { return []; } })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
+    health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
+    directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
+    recovery,                                 // unified Garmin + Apple/other recovery view
+    supplements: supplementsForCoach(),       // understood supplement regimen (markers/protein it touches)
+  };
+}
+
+// The brain slice: the CONDUCTOR's single sequenced focus, the day-read Brief, recent
+// quiet insights, and the one highest-leverage next step. Conductor + day-read are
+// threaded in (computed once); insights + next-step are cheap per-key reads.
+function buildBrainSlice(
+  signals: CoachContextSignals
+): Pick<CoachContext, "coaching_focus" | "day_read" | "insights" | "next_step"> {
+  const { coachingFocusView, dayReadView } = signals;
+  return {
+    // THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus (lead + parallel +
+    // later + connections + one batched retest) arbitrated across training, running,
+    // DEXA, health, nutrition and recovery. The brain leads with this; the rest is
+    // evidence, not a checklist.
+    coaching_focus: coachingFocusView,
+    // The persisted read carries the agentic sentence AND the athlete's steer
+    // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
+    // actually looking at; the deterministic floor backs it when nothing's cached.
+    // Keyed by the server's LOCAL date to match the day_reads cache (saveDayRead).
+    day_read: dayReadView,
+    // Recent quiet cross-domain insights (bounded) so the chat/coach brain can
+    // reference and build on connections it has already surfaced — closing the
+    // "one brain" loop instead of re-deriving them each turn.
+    insights: listVisibleInsights(5).map((i: any) => ({ text: i.text, kind: i.kind, rationale: i.rationale, next_step: i.next_step })),
+    // The single highest-leverage next action across all domains (or null on a quiet day).
+    next_step: nextBestStep(),
+  };
+}
+
 export function getCoachContext(): CoachContext {
   const today = localDateISO();
   // Compute the Garmin summary and the unified recovery view ONCE, then thread
@@ -350,163 +601,40 @@ export function getCoachContext(): CoachContext {
       return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null };
     }
   })();
-  return {
-    // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
-    // EVERY plan-shaping prompt knows the time of day — without it the agent is
-    // temporally blind (it would ask about "last night's dinner" at 5 PM). The
-    // chat/day-read prompts also surface it as an explicit "RIGHT NOW" line.
-    now: nowContext(),
+  const signals: CoachContextSignals = {
+    today,
     profile,
-    // Top-level discipline echo (v35) so every plan-shaping prompt can branch its
-    // framing without digging into profile. Defaults to 'strength' (today's
-    // behavior); endurance/hybrid make endurance progression a first-class driver.
-    discipline: {
-      primary: (profile?.primary_discipline as string) || "strength",
-      endurance_sport: profile?.endurance_sport ?? null,
-    },
-    // The endurance OBJECTIVE (v37) — race (dated, periodized + taper) or standing
-    // (no date, maintain readiness), with race timing/phase pre-computed. Null when
-    // unset. Orthogonal to discipline: a strength-first athlete can hold a standing
-    // running goal ("running on the side"). The coach prescribes runs accordingly.
-    endurance_goal: getEnduranceGoal(),
-    goal: computeGoalCheck(profile), // reuse the profile already fetched above
-    // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
-    // the profile is too thin for goal math), so every prompt and the PWA agree on
-    // the framing: a deficit for 'lose', anchor-to-TDEE for 'maintain', a lean
-    // surplus for 'gain'. Drives renderGoalMode and the fuel-card target.
-    goal_mode: effectiveGoalMode(profile),
-    // Today's persisted food log. This is independent of the live chat thread, so
-    // a breakfast logged before "Fresh start" still shapes the next nutrition turn.
-    day_intake: dayIntakeForCoach(),
-    plan: getPlan(),
-    recent_sessions: recentSessions,
-    recent_activities: listActivities(15),
-    // Deterministic progression-readiness + autoregulation rollup computed from the
-    // athlete's own recent sets + 1-tap feedback — so logged performance VISIBLY
-    // steers the next recommendation instead of being inferred from a raw array.
-    training_signals: trainingSignals(recentSessions),
     garmin,
-    // Ranked retrieval (Stream 2): always the load-bearing person-model
-    // (constraints/injuries/preferences/decisions) + recent observations, with
-    // superseded rows hidden. Replaces the raw recency dump and stamps
-    // last_referenced_at so consolidation can tell live facts from stale ones.
-    memory: memoryForCoach(40),
-    // Durable learnings drawn from suggestion → actual reconciliation (e.g.
-    // "tolerates higher frequency than the read assumed"). Suggestion-not-a-gate:
-    // these inform tone/defaults, never enforce.
-    learnings: recentLearnings(6),
-    health: healthForCoach(),
-    health_review: healthReviewForCoach(),
-    context_events: listContextEvents({ activeOnly: true }),
-    // Vision build (the connected brain + understanding): new keys are ADDITIVE
-    // — every existing consumer keeps working untouched.
-    directives: directivesForCoach(),         // cross-domain consequences of flagged findings (condensed, bounded)
-    health_focus: healthFocusView,            // the TIERED, deduped priorities (act-now/track) — so coaching leads with what matters most, not a flat directive flood
-    // THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus (lead + parallel +
-    // later + connections + one batched retest) arbitrated across training, running,
-    // DEXA, health, nutrition and recovery. The brain leads with this; the rest is
-    // evidence, not a checklist.
-    coaching_focus: coachingFocusView,
-    symptom_links: (() => { try { return symptomMarkerLinks(); } catch { return []; } })(), // symptom the athlete noted ↔ an out-of-range marker — informational "mention to your doctor" connections
-
-    health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
-    directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
-    recovery,                                 // unified Garmin + Apple/other recovery view
-    checkins: listCheckins(7),                // optional subjective morning check-ins
-    family: listFamily(),                     // family roster the coach plans around
-    supplements: supplementsForCoach(),       // understood supplement regimen (markers/protein it touches)
-    // Runner loop (closing): prescribed plan cardio vs this week's logged efforts,
-    // in plain words ("32 of 40 km this week") — so the coach can speak to run
-    // adherence the way week_done/week_planned covers lifting. Never a 0-100 score.
-    run_compliance: getRunCompliance(),
-    // Active periodization block (goal / phase / week N of M) so the coach
-    // periodizes against the current mesocycle instead of progressing blindly.
-    // Null when no block is running — then the deterministic mesocycle read in
-    // program-state still gives deload timing. Additive, never a gate.
-    program_block: blockForCoach(),
-    // The elite program brain (deterministic floor): per-lift status/trend +
-    // stall detection, volume bands, mesocycle position, endurance trends, and
-    // the "what to evolve next" list — so EVERY plan-shaping prompt sees the
-    // program's actual trajectory, not just raw sessions. Bounded; no scores.
-    program_state: programStateForCoach(fullProgramState),
-    // The TRAINING-INTELLIGENCE read (capacity, not just trajectory): where each
-    // benchmark lift sits as a sex/age percentile against proven strength standards,
-    // VO2max-for-age, the strength IMBALANCES, the single biggest lever, lifts worth
-    // re-TESTING, and a variety nudge. So the coach measures WHERE THE ATHLETE STANDS
-    // and balances development — not just whether last week went up. Reuses the same
-    // program-state + recovery + balance computed above. Percentile/level framing
-    // (the recognized reference reads the athlete asked to keep), never a 0-100 score.
-    performance: performanceView,
-    // Volume balance per canonical muscle group over the last 2 weeks (bands +
-    // which groups are DUE / running HIGH, in plain words). Mobility excluded.
-    program_balance: programBal,
-    // ACUTE recovery: which muscle groups got hammered in the last day or two —
-    // folding ENDURANCE (a long ride/run never touches logged_sets) in with recent
-    // strength. Lets the coach plan AROUND smoked muscles instead of recommending a
-    // group the athlete just torched. Plain words, no score.
-    recent_load: [...recentLoad.values()],
-    // The next session's auto-progression — the adapted target per strength lift
-    // on the day this read points at ("+5 lb", "hold 50 — stalled", "−10%"), so
-    // the plan visibly FOLLOWS what was logged. Bounded to the active day. [] when
-    // there's no plan day / it's a cardio day.
-    progression: (() => {
-      const dn = nextPlanDayNumber(dayReadView);
-      return dn == null ? [] : planDayProgression(dn).slice(0, 12);
-    })(),
-    // The calm "what changed & why" digest — the handful of concrete adaptations
-    // due right now (lifts to push/hold/deload, groups due, missing-pattern gaps).
-    program_adjustments: programAdjustmentsView,
-    // ---- the RUNNING brain (deterministic floor the agent refines) ----
-    // The athlete's real HR-zone bpm bands (max-HR + resting HR) so runs are
-    // prescribed to an actual pulse, not a vague effort. {available:false} with no
-    // age AND no Garmin HR.
-    run_zones: runZonesView,
-    // This week's periodized run mix (N easy Z2 + 1 long + 1 rotated quality), each
-    // with a bpm-bearing zone + interval structure. Reuses the recovery/programState/
-    // block/zones already computed so nothing recomputes. {available:false} for a
-    // pure strength athlete with no running.
-    run_plan: runPlanView,
-    // Mono-stimulus running flag (all-easy / one-distance-on-repeat) → the missing
-    // stimulus. null when there's not enough running to read variety honestly.
-    run_variety: runVarietyView,
-    // Running re-tests (no hard effort in ~4 weeks → a time-trial; a stale VO2max
-    // reading → a max-effort run). [] for a non-runner.
-    endurance_tests: enduranceTestsView,
-    // ---- per-muscle-group advance/stall + cadenced strength test week ----
-    // The athlete's own mental model: which canonical groups are advancing vs
-    // stalling, with a vary-options menu for the stalled ones. Reuses program_state.
-    groups_trajectory: groupsTrajectoryView,
-    // Is a cadenced strength test week due (block realization phase / ~7-week
-    // cadence)? Names the benchmark lifts to re-test. due:false for a new athlete.
-    test_week: testWeekView,
-    // ---- DEXA-driven targeting (the body scan → training + nutrition targets) ----
-    // Maps the regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral fat)
-    // to concrete muscle-group biases + moves + a "path to the next scan", and one
-    // nutrition target (visceral/central fat → Z2 + lean-safe deficit). {available:false}
-    // with no DEXA. healthStanding() is read lazily inside (computed once).
-    dexa_targeting: dexaTargetingView,
-    // The persisted read carries the agentic sentence AND the athlete's steer
-    // ("rough night" / "easy day") so chat/coach/meals echo the Brief the user is
-    // actually looking at; the deterministic floor backs it when nothing's cached.
-    // Keyed by the server's LOCAL date to match the day_reads cache (saveDayRead).
-    day_read: dayReadView,
-    // Recent quiet cross-domain insights (bounded) so the chat/coach brain can
-    // reference and build on connections it has already surfaced — closing the
-    // "one brain" loop instead of re-deriving them each turn.
-    insights: listVisibleInsights(5).map((i: any) => ({ text: i.text, kind: i.kind, rationale: i.rationale, next_step: i.next_step })),
-    // ---- the "knows-me" layer (the personal coaching team) — all additive, null-safe ----
-    // How THIS athlete actually reacts, learned from their own logged history (deficit→
-    // weight rate, hs-CRP↔training-load, late-event→sleep, adherence, a data-gap signal so
-    // the coach never fabricates recovery). The personalization spine every brain reads.
-    reaction_model: reactionModelForCoach(),
-    // One periodized arc to the goals, with today framed as the next step on it (null line
-    // when there's no goal/block/race). So coaching is forward-looking, not just "today".
-    trajectory: trajectoryView,
-    // Active life-context effect (a late concert / travel / illness mentioned once) →
-    // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
-    context_today: activeContextEffect(),
-    // The single highest-leverage next action across all domains (or null on a quiet day).
-    next_step: nextBestStep(),
+    recovery,
+    recentSessions,
+    dayReadView,
+    programBal,
+    recentLoad,
+    fullProgramState,
+    runZonesView,
+    runPlanView,
+    dexaTargetingView,
+    testWeekView,
+    healthFocusView,
+    performanceView,
+    programAdjustmentsView,
+    groupsTrajectoryView,
+    runVarietyView,
+    enduranceTestsView,
+    trajectoryView,
+    coachingFocusView,
+  };
+  // Compose the context from cohesive per-domain slices. Every EXPENSIVE signal above
+  // (garmin/recovery/day-read/program-state/volume balance/acute load + the conductor's
+  // domain reads) is computed exactly once and threaded in via `signals`, so no slice
+  // re-derives one — the assembled CoachContext is what the single inline object was.
+  return {
+    ...buildPersonSlice(signals),
+    ...buildNutritionSlice(signals),
+    ...buildTrainingSlice(signals),
+    ...buildRunningSlice(signals),
+    ...buildHealthSlice(signals),
+    ...buildBrainSlice(signals),
   };
 }
 
