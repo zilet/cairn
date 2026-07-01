@@ -17,7 +17,7 @@ const DEBUG_PORT_MIN = 25000;
 const DEBUG_PORT_SPAN = 5000;
 const NAV_TIMEOUT_MS = 20000;
 const SETTLE_MS = 600;
-const WORKFLOW_COUNT = 6;
+const WORKFLOW_COUNT = 7;
 
 const routes = [
   { path: "/", tab: "today" },
@@ -336,6 +336,79 @@ async function waitForCondition(cdp, label, expression, timeoutMs = NAV_TIMEOUT_
   throw new Error(`${label} did not complete; last state ${JSON.stringify(last)}`);
 }
 
+async function apiJson(base, pathName, opts = {}) {
+  const headers = {
+    ...(opts.body != null ? { "Content-Type": "application/json" } : {}),
+    ...(opts.headers || {}),
+  };
+  const res = await fetch(`${base}/api${pathName}`, { ...opts, headers });
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch {}
+  ok(res.ok && !(body && body.error), `API ${opts.method || "GET"} ${pathName}`, body?.error || `status ${res.status}`);
+  return body;
+}
+
+function planItemForSave(item) {
+  if (item?.kind === "cardio") {
+    const label = String(item.note || item.exercise || "").trim();
+    return {
+      kind: "cardio",
+      exercise: label,
+      note: label || null,
+      sets: item.sets ?? 1,
+      target_distance_km: item.target_distance_km ?? null,
+      target_duration_min: item.target_duration_min ?? null,
+      target_zone: item.target_zone ?? null,
+      interval: item.interval ?? null,
+    };
+  }
+  return {
+    kind: "strength",
+    exercise: item.exercise,
+    sets: item.sets,
+    rep_low: item.rep_low,
+    rep_high: item.rep_high,
+    target_weight: item.target_weight,
+    note: item.note,
+    warmup_sets: item.warmup_sets,
+    target_seconds: item.target_seconds,
+    mode: item.mode,
+  };
+}
+
+async function addSmokeCardioToPlanDay(base, dayNumber, label) {
+  const plan = await apiJson(base, "/plan");
+  const day = Array.isArray(plan) ? plan.find((row) => Number(row.day_number) === Number(dayNumber)) : null;
+  ok(day, `smoke plan day ${dayNumber} exists`);
+  const withoutPriorSmoke = (Array.isArray(day.items) ? day.items : [])
+    .filter((item) => String(item.note || item.exercise || "") !== label)
+    .map(planItemForSave);
+  const items = [
+    ...withoutPriorSmoke,
+    {
+      kind: "cardio",
+      exercise: label,
+      note: label,
+      sets: 1,
+      target_distance_km: 4.8,
+      target_duration_min: 32,
+      target_zone: "Z2",
+    },
+  ];
+  const saved = await apiJson(base, `/plan/${encodeURIComponent(dayNumber)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      name: day.name || `Day ${dayNumber}`,
+      focus: day.focus ?? null,
+      items,
+    }),
+  });
+  const savedLabels = (Array.isArray(saved?.items) ? saved.items : [])
+    .map((item) => String(item.note || item.exercise || ""));
+  ok(savedLabels.includes(label), `API saved smoke cardio on plan day ${dayNumber}`, JSON.stringify(savedLabels));
+}
+
 async function assertGlobals(cdp) {
   const globalsJson = JSON.stringify(requiredGlobals);
   const result = await evaluate(cdp, `(() => {
@@ -513,6 +586,103 @@ async function smokeTodayAddExercise(cdp, base) {
       };
     })()`);
     ok(failures.length === 0, "/app/today add-exercise workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeTodayCardioSkip(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  const label = `Smoke easy run ${Date.now()}`;
+  const labelJson = JSON.stringify(label);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/today", "today");
+    await assertGlobals(cdp);
+    const dayState = await evaluate(cdp, `(() => ({
+      day: window.state && window.state.day,
+      logDate: window.state && window.state.logDate,
+      href: location.pathname + location.search
+    }))()`);
+    ok(Number.isFinite(Number(dayState?.day)), "Today has a selected plan day for the cardio smoke", JSON.stringify(dayState));
+    await addSmokeCardioToPlanDay(base, Number(dayState.day), label);
+
+    await evaluate(cdp, `(() => {
+      if (typeof swrInvalidate === "function") swrInvalidate("plan");
+      if (window.state) window.state.plan = [];
+      if (typeof renderToday !== "function") throw new Error("missing renderToday");
+      return Promise.resolve(renderToday());
+    })()`);
+    await waitForCondition(cdp, "Today renders a planned cardio card", `(() => {
+      const label = ${labelJson};
+      const card = [...document.querySelectorAll(".ex-cardio")]
+        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
+      const skip = card?.querySelector(".ex-skip[data-skip]");
+      const log = card?.querySelector("[data-cardio-log]");
+      return {
+        ok: Boolean(card && skip && log && location.pathname === "/app/today"),
+        label,
+        found: Boolean(card),
+        hasSkip: Boolean(skip),
+        hasLog: Boolean(log),
+        stateDay: window.state && window.state.day,
+        planLabels: ((window.state && Array.isArray(window.state.plan)) ? window.state.plan : [])
+          .find((day) => Number(day.day_number) === Number(window.state && window.state.day))
+          ?.items?.map((item) => item.note || item.exercise || item.kind) || [],
+        renderedCardioLabels: [...document.querySelectorAll(".ex-cardio .cardio-name-txt")]
+          .map((el) => el.textContent?.trim()),
+        hasPlanSurface: Boolean(document.querySelector(".plansurface")),
+        href: location.pathname + location.search,
+        tab: window.state && window.state.tab
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const label = ${labelJson};
+      const card = [...document.querySelectorAll(".ex-cardio")]
+        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
+      const skip = card?.querySelector(".ex-skip[data-skip]");
+      if (!card || !skip) throw new Error("missing planned cardio skip button");
+      skip.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Today skips a planned cardio card into the skipped line", `(() => {
+      const label = ${labelJson};
+      const card = [...document.querySelectorAll(".ex-cardio")]
+        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
+      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
+        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
+      return {
+        ok: Boolean(!card && unskip && !document.querySelector("#skipLine")?.classList.contains("skipline-empty")),
+        cardPresent: Boolean(card),
+        hasUnskip: Boolean(unskip),
+        skipLineEmpty: Boolean(document.querySelector("#skipLine")?.classList.contains("skipline-empty")),
+        href: location.pathname + location.search
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const label = ${labelJson};
+      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
+        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
+      if (!unskip) throw new Error("missing planned cardio restore button");
+      unskip.click();
+      return true;
+    })()`);
+    await waitForCondition(cdp, "Today restores a skipped planned cardio card", `(() => {
+      const label = ${labelJson};
+      const card = [...document.querySelectorAll(".ex-cardio")]
+        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
+      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
+        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
+      return {
+        ok: Boolean(card && !unskip && location.pathname === "/app/today" && window.state?.tab === "today"),
+        cardPresent: Boolean(card),
+        hasUnskip: Boolean(unskip),
+        href: location.pathname + location.search,
+        tab: window.state && window.state.tab
+      };
+    })()`);
+    ok(failures.length === 0, "/app/today planned-cardio skip workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -857,6 +1027,7 @@ try {
   await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2 }, async (ctx) => {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
     await smokeTodayAddExercise(cdp, ctx.base);
+    await smokeTodayCardioSkip(cdp, ctx.base);
     await smokeChatAttachmentFocus(cdp, ctx.base);
     await smokeSettingsDataControls(cdp, ctx.base);
     await smokeProgressSegmentNavigation(cdp, ctx.base);
