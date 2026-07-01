@@ -11,7 +11,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     sideLoaders() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         api: input.api,
         activateTab: input.activateTab,
         runCountUps: input.runCountUps,
@@ -58,7 +58,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     brief() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         api: input.api,
         invalidate: input.invalidate,
         renderToday: input.renderToday,
@@ -81,7 +81,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     sessionSuggest() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         runOp: input.runOp,
         thinkingCaption: input.thinkingCaption,
         runCountUps: input.runCountUps,
@@ -96,7 +96,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     rail() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         api: input.api,
         activateTab: input.activateTab,
         gotoChatWith: input.gotoChatWith,
@@ -113,7 +113,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     dataLoad() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         api: input.api,
         cachedApi: input.cachedApi,
         peekCached: input.peekCached,
@@ -127,7 +127,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     dataRefresh() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         isCurrentPoll: input.isCurrentPoll,
         renderToday: input.renderToday,
       };
@@ -135,8 +135,8 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
 
     planSession(session: unknown, isToday: boolean) {
       return {
-        state: input.state as any,
-        session: session as any,
+        state: input.state,
+        session,
         isToday,
         api: input.api,
         cachedApi: input.cachedApi,
@@ -151,7 +151,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     postRender(renderInput: ClientTodayDependenciesPostRenderInput) {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         read: renderInput.read,
         isToday: renderInput.isToday,
         focus: renderInput.focus,
@@ -194,7 +194,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     session() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         api: input.api,
         invalidate: input.invalidate,
         invalidateTodayProgression: input.invalidateTodayProgression,
@@ -218,7 +218,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
 
     progression() {
       return {
-        state: input.state as any,
+        state: input.state,
         root: input.root,
         cachedApi: input.cachedApi,
         invalidate: input.invalidate,
@@ -231,7 +231,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
     addExercise() {
       return {
         root: input.root,
-        state: input.state as any,
+        state: input.state,
         api: input.api,
         postExerciseMode: input.postExerciseMode,
         exCard: input.exCard,

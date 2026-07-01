@@ -6,7 +6,7 @@ type TodayPostRenderState = {
   logDate: string;
   day: number | null;
   dayPicked?: boolean;
-  chatPrefill?: string;
+  chatPrefill?: string | null;
 };
 
 type TodayPostRenderRead = {

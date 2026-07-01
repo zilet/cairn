@@ -44,7 +44,7 @@ export type ClientAppState = {
   planReveal?: { date: string; on: boolean; blank?: boolean };
   suggestedSession?: ClientSessionSuggestion | null;
   exModes?: Record<string, string>;
-  pendingOffPlan?: Record<string, Array<Record<string, unknown>>>;
+  pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
   _dayFuel?: ClientDayIntake | null;
   _goal?: ClientGoalCheck | null;
   _lifeById?: Record<string, unknown>;

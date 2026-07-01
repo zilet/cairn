@@ -436,7 +436,7 @@ declare global {
 
   type ClientTodayDependenciesContextInput = {
     root: HTMLElement;
-    state: ClientAppState & Record<string, unknown>;
+    state: ClientTodayScreenRuntimeState;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
     peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
@@ -3167,7 +3167,7 @@ declare global {
           logDate: string;
           day: number | null;
           dayPicked?: boolean;
-          chatPrefill?: string;
+          chatPrefill?: string | null;
         };
         read: { _provisional?: boolean } | null | undefined;
         isToday: boolean;

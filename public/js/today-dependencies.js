@@ -127,7 +127,7 @@ function makeTodayDependencies(input) {
         planSession(session, isToday) {
             return {
                 state: input.state,
-                session: session,
+                session,
                 isToday,
                 api: input.api,
                 cachedApi: input.cachedApi,
