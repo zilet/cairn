@@ -1,4 +1,4 @@
-// Erased declarations for settings-screen.js. Keep Settings execution code in settings-screen.ts.
+// Erased declarations for Settings shell/controllers. Keep execution code in src/client/settings-*.ts.
 
 type SettingsScreenAgent = {
   name: string;

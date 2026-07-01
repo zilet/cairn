@@ -1,0 +1,285 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import vm from "node:vm";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+function escHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escAttr(value) {
+  return escHtml(value).replace(/"/g, "&quot;");
+}
+
+class FakeElement {
+  constructor(id = "") {
+    this.id = id;
+    this.dataset = {};
+    this.disabled = false;
+    this.checked = false;
+    this.isConnected = true;
+    this.listeners = new Map();
+    this.style = {};
+    this.textContent = "";
+    this.value = "";
+    this.html = "";
+  }
+
+  set innerHTML(value) {
+    this.html = value;
+  }
+
+  get innerHTML() {
+    return this.html;
+  }
+
+  addEventListener(type, handler) {
+    this.listeners.set(type, handler);
+  }
+
+  async click() {
+    const handler = this.listeners.get("click");
+    if (handler) await handler({ currentTarget: this });
+  }
+
+  change() {
+    const handler = this.listeners.get("change");
+    if (handler) handler({ currentTarget: this });
+  }
+
+  querySelector() {
+    return null;
+  }
+
+  querySelectorAll() {
+    return [];
+  }
+}
+
+class FakeAgentList extends FakeElement {
+  set innerHTML(value) {
+    this.html = value;
+    this.buttons = [];
+    const buttonRe = /<button[^>]+data-(toggle|up|down|connect|detail|models)="([^"]*)"/g;
+    for (let match = buttonRe.exec(value); match; match = buttonRe.exec(value)) {
+      const button = new FakeElement();
+      button.dataset[match[1]] = match[2];
+      this.buttons.push(button);
+    }
+  }
+
+  get innerHTML() {
+    return this.html;
+  }
+
+  querySelectorAll(selector) {
+    const key = selector.match(/\[data-([^\]]+)\]/)?.[1];
+    return key ? this.buttons.filter((button) => button.dataset[key] !== undefined) : [];
+  }
+
+  button(key, value) {
+    const button = this.buttons.find((candidate) => candidate.dataset[key] === value);
+    assert.ok(button, `expected [data-${key}="${value}"]`);
+    return button;
+  }
+}
+
+class FakeRoot extends FakeElement {
+  set innerHTML(value) {
+    this.html = value;
+    this.children = new Map();
+    this.routeSelects = [];
+
+    for (const id of ["strat", "coachEnabled", "coachDay", "coachHour", "updateAgentClis", "agentCliUpdateStatus"]) {
+      this.children.set(`#${id}`, new FakeElement(id));
+    }
+    this.children.set("#agentlist", new FakeAgentList("agentlist"));
+
+    const routeRe = /<select[^>]+data-route="([^"]*)"/g;
+    for (let match = routeRe.exec(value); match; match = routeRe.exec(value)) {
+      const select = new FakeElement();
+      select.dataset.route = match[1];
+      this.routeSelects.push(select);
+    }
+  }
+
+  get innerHTML() {
+    return this.html;
+  }
+
+  querySelector(selector) {
+    return this.children.get(selector) || null;
+  }
+
+  querySelectorAll(selector) {
+    if (selector === "[data-route]") return this.routeSelects;
+    return [];
+  }
+}
+
+function loadSettingsAgentsController() {
+  const context = {
+    Object,
+    Array,
+    Set,
+    String,
+    Date,
+    encodeURIComponent,
+    escHtml,
+    escAttr,
+    CairnSettingsClient: {
+      agentChipState(agent) {
+        if (agent.configured === true) return { cls: "agent-chip-ok", label: "Connected" };
+        if (agent.configured === false) return { cls: "agent-chip-connect", label: "Connect" };
+        return { cls: "agent-chip-installed", label: "Installed" };
+      },
+    },
+  };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-agents-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-agents-controller.js"), "utf8"), context);
+  return context.CairnSettingsAgentsController;
+}
+
+function makeDeps(overrides = {}) {
+  const rootEl = new FakeRoot("root");
+  const wm = {
+    agent_strategy: "round_robin",
+    order: ["claude", "codex"],
+    disabled: new Set(["codex"]),
+    routes: { chat: "missing", meal_plan: "claude" },
+    coach_enabled: false,
+    coach_day: 1,
+    coach_hour: 8,
+  };
+  const agentInfo = {};
+  const agentModels = {};
+  const calls = [];
+  let dirty = 0;
+  let connected = "";
+  const toasts = [];
+  let cliGets = 0;
+
+  const deps = {
+    root: rootEl,
+    workingModel: wm,
+    meta: {
+      claude: { name: "claude", enabled: true, configured: true, can_login: true, models_list: true },
+      codex: { name: "codex", enabled: true, configured: false, can_login: false, models_list: false },
+    },
+    routeTasks: [["chat", "Chat"], ["meal_plan", "Meal plan"]],
+    agentInfo,
+    agentModels,
+    agentHealthHtml: "",
+    agentActivityHtml: "",
+    noticedHtml: "",
+    dayNames: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    api: async (path, opts = {}) => {
+      calls.push([path, opts.method || "GET"]);
+      if (path === "/agent-clis/update") {
+        if (opts.method === "POST") return { ok: true };
+        cliGets += 1;
+        return cliGets === 1 ? { status: "idle" } : { status: "succeeded", finished_at: "2026-07-01T10:30:00Z" };
+      }
+      if (path === "/agents/claude/info") return { ok: true, version: "1.2.3", model_current: "sonnet", update_available: true };
+      if (path === "/agents/claude/models") return { ok: true, models: ["sonnet", "opus"] };
+      return { ok: true };
+    },
+    toast: (message) => toasts.push(message),
+    sleep: async () => {},
+    stagger: (index) => `--d:${index}ms`,
+    markDirty: () => { dirty += 1; },
+    pruneRoutes(routes, routeTasks, enabledAgents) {
+      const taskKeys = new Set(routeTasks.map(([key]) => key));
+      const agentNames = new Set(enabledAgents.map((agent) => agent.name));
+      return Object.fromEntries(Object.entries(routes).filter(([task, agent]) => taskKeys.has(task) && agentNames.has(agent)));
+    },
+    routeRowsHtml(routeTasks, _enabledAgents, routes) {
+      return routeTasks.map(([key]) => `<select data-route="${escAttr(key)}"><option value="${escAttr(routes[key] || "")}"></option></select>`).join("");
+    },
+    openAgentLoginModal: () => (agentName) => { connected = agentName; },
+    ...overrides,
+  };
+  return {
+    deps,
+    get dirty() { return dirty; },
+    get connected() { return connected; },
+    calls,
+    toasts,
+  };
+}
+
+test("settings agents controller owns route pins and agent card actions", async () => {
+  const controller = loadSettingsAgentsController();
+  const harness = makeDeps();
+  const { deps } = harness;
+
+  controller.render(deps);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(deps.workingModel.routes, { meal_plan: "claude" });
+  assert.match(deps.root.innerHTML, /1 pinned/);
+
+  const strat = deps.root.querySelector("#strat");
+  strat.value = "priority";
+  strat.change();
+  assert.equal(deps.workingModel.agent_strategy, "priority");
+
+  const route = deps.root.routeSelects.find((select) => select.dataset.route === "chat");
+  route.value = "claude";
+  route.change();
+  assert.equal(deps.workingModel.routes.chat, "claude");
+  route.value = "";
+  route.change();
+  assert.equal(deps.workingModel.routes.chat, undefined);
+
+  const list = deps.root.querySelector("#agentlist");
+  await list.button("toggle", "codex").click();
+  assert.equal(deps.workingModel.disabled.has("codex"), false);
+  assert.equal(harness.dirty, 1);
+
+  await list.button("up", "codex").click();
+  assert.deepEqual(deps.workingModel.order, ["codex", "claude"]);
+  assert.equal(harness.dirty, 2);
+
+  await list.button("connect", "claude").click();
+  assert.equal(harness.connected, "claude");
+
+  await list.button("detail", "claude").click();
+  assert.equal(deps.agentInfo.claude.version, "1.2.3");
+  assert.equal(deps.agentInfo.claude.model_current, "sonnet");
+  assert.equal(deps.agentInfo.claude.update_available, true);
+
+  await list.button("models", "claude").click();
+  assert.deepEqual([...deps.agentModels.claude], ["sonnet", "opus"]);
+  await list.button("models", "claude").click();
+  assert.equal(deps.agentModels.claude, undefined);
+});
+
+test("settings agents controller owns CLI update polling", async () => {
+  const controller = loadSettingsAgentsController();
+  const harness = makeDeps();
+  const { deps } = harness;
+
+  controller.render(deps);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  await deps.root.querySelector("#updateAgentClis").click();
+
+  assert.deepEqual(harness.calls.filter(([path]) => path === "/agent-clis/update"), [
+    ["/agent-clis/update", "GET"],
+    ["/agent-clis/update", "POST"],
+    ["/agent-clis/update", "GET"],
+  ]);
+  assert.equal(deps.root.querySelector("#agentCliUpdateStatus").textContent, "Updated 2026-07-01 10:30");
+  assert.deepEqual(harness.toasts, ["CLI update finished"]);
+});

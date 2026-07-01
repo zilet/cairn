@@ -646,17 +646,18 @@ test("generated API docs include mounted route modules", () => {
 test("Settings route helper exposes stale-route pruning", () => {
   const helper = read("public/js/settings-routes.js");
   const source = read("src/client/settings-routes.ts");
-  const settingsScreen = read("public/js/settings-screen.js");
+  const settingsAgentsController = read("public/js/settings-agents-controller.js");
   const index = read("public/index.html");
   assert.match(source, /function\s+settingsPruneRoutes/);
   assert.match(source, /type SettingsRouteTask = \[string, string\]/);
   assert.match(helper, /function\s+settingsPruneRoutes/);
   assert.doesNotMatch(helper, /\bescHtml\b|\bescAttr\b/);
-  assert.match(settingsScreen, /settingsPruneRoutes\(wm\.routes,\s*routeTasks,\s*enabledAgents\)/);
+  assert.match(settingsAgentsController, /deps\.pruneRoutes\(deps\.workingModel\.routes,\s*deps\.routeTasks,\s*enabledAgents\)/);
   assert.ok(
     index.indexOf("/js/settings-routes.js") > -1 &&
-      index.indexOf("/js/settings-routes.js") < index.indexOf("/js/settings-screen.js"),
-    "settings-routes.js must load before settings-screen.js"
+      index.indexOf("/js/settings-routes.js") < index.indexOf("/js/settings-agents-controller.js") &&
+      index.indexOf("/js/settings-agents-controller.js") < index.indexOf("/js/settings-screen.js"),
+    "settings-routes.js must load before the Settings Agents controller and Settings screen"
   );
 });
 
@@ -789,6 +790,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/settings-data-client\.js"/);
   assert.match(sw, /"\/js\/settings-data-controller\.js"/);
   assert.match(sw, /"\/js\/settings-agents-client\.js"/);
+  assert.match(sw, /"\/js\/settings-agents-controller\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/route-state\.js"/);
   assert.match(sw, /"\/js\/app-router\.js"/);
@@ -1100,6 +1102,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsDataSource = read("src/client/settings-data-client.ts");
   const settingsDataControllerSource = read("src/client/settings-data-controller.ts");
   const settingsAgentsSource = read("src/client/settings-agents-client.ts");
+  const settingsAgentsControllerSource = read("src/client/settings-agents-controller.ts");
   const settingsScreenSource = read("src/client/settings-screen.ts");
   const settingsScreenTypesSource = read("src/client/settings-screen-types.d.ts");
   const chatClientSource = read("src/client/chat-client.ts");
@@ -1267,6 +1270,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsData = read("public/js/settings-data-client.js");
   const settingsDataController = read("public/js/settings-data-controller.js");
   const settingsAgents = read("public/js/settings-agents-client.js");
+  const settingsAgentsController = read("public/js/settings-agents-controller.js");
   const settingsScreen = read("public/js/settings-screen.js");
   const todayCardsClient = read("public/js/today-cards-client.js");
   const publicScriptCheck = read("scripts/check-public-scripts.mjs");
@@ -1673,6 +1677,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-data-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-data-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-agents-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/settings-agents-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-screen\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/app-router\.js/);
@@ -1839,6 +1844,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-data-controller\.js/);
   assert.match(clientBuild, /src\/client\/settings-agents-client\.ts/);
   assert.match(clientBuild, /public\/js\/settings-agents-client\.js/);
+  assert.match(clientBuild, /src\/client\/settings-agents-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/settings-agents-controller\.js/);
   assert.match(clientBuild, /src\/client\/settings-screen\.ts/);
   assert.match(clientBuild, /public\/js\/settings-screen\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
@@ -2467,11 +2474,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/settings-agents-client.js") > index.indexOf("/js/settings-data-controller.js") &&
-      index.indexOf("/js/settings-agents-client.js") < index.indexOf("/js/settings-screen.js"),
-    "settings-agents-client.js must load before settings-screen.js"
+      index.indexOf("/js/settings-agents-client.js") < index.indexOf("/js/settings-agents-controller.js"),
+    "settings-agents-client.js must load before Settings Agents controller"
   );
   assert.ok(
-    index.indexOf("/js/settings-screen.js") > index.indexOf("/js/settings-agents-client.js") &&
+    index.indexOf("/js/settings-agents-controller.js") > index.indexOf("/js/settings-agents-client.js") &&
+      index.indexOf("/js/settings-agents-controller.js") < index.indexOf("/js/settings-screen.js"),
+    "settings-agents-controller.js must load before settings-screen.js"
+  );
+  assert.ok(
+    index.indexOf("/js/settings-screen.js") > index.indexOf("/js/settings-agents-controller.js") &&
       index.indexOf("/js/settings-screen.js") < index.indexOf("/js/route-state.js"),
     "settings-screen.js must load after Settings helpers and before route-state.js"
   );
@@ -2729,6 +2741,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-data-controller\.js/);
   assert.match(clientBuild, /src\/client\/settings-agents-client\.ts/);
   assert.match(clientBuild, /public\/js\/settings-agents-client\.js/);
+  assert.match(clientBuild, /src\/client\/settings-agents-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/settings-agents-controller\.js/);
   assert.match(clientBuild, /src\/client\/settings-screen\.ts/);
   assert.match(clientBuild, /public\/js\/settings-screen\.js/);
   assert.match(clientBuild, /src\/client\/chat-client\.ts/);
@@ -3237,12 +3251,19 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsDataControllerSource, /CairnSettingsDataController/);
   assert.match(settingsAgentsSource, /function settingsAgentsSliceHtml/);
   assert.match(settingsAgentsSource, /function settingsAgentListHtml/);
+  assert.match(settingsAgentsControllerSource, /function renderSettingsAgents\(deps: ClientSettingsAgentsControllerDeps\): void/);
+  assert.match(settingsAgentsControllerSource, /function renderSettingsAgentList\(deps: ClientSettingsAgentsControllerDeps\): void/);
+  assert.match(settingsAgentsControllerSource, /function wireSettingsCliUpdate\(deps: ClientSettingsAgentsControllerDeps\): void/);
+  assert.match(settingsAgentsControllerSource, /CairnSettingsAgentsController/);
   assert.match(settingsScreenTypesSource, /type SettingsScreenWorkingModel = \{/);
   assert.match(settingsScreenSource, /async function renderSettings\(\): Promise<void>/);
+  assert.match(settingsScreenSource, /function settingsAgentsDeps\(\): ClientSettingsAgentsControllerDeps/);
+  assert.match(settingsScreenSource, /CairnSettingsAgentsController\.render\(settingsAgentsDeps\(\)\)/);
   assert.match(settingsScreenSource, /function settingsDataDeps\(\): ClientSettingsDataControllerDeps/);
   assert.match(settingsScreenSource, /CairnSettingsDataController\.render\(settingsDataDeps\(\)\)/);
-  assert.match(settingsScreenSource, /CairnSettingsAgents\.agentsSliceHtml/);
-  assert.match(settingsScreenSource, /CairnSettingsAgents\.agentListHtml/);
+  assert.doesNotMatch(settingsScreenSource, /CairnSettingsAgents\.agentsSliceHtml/);
+  assert.doesNotMatch(settingsScreenSource, /CairnSettingsAgents\.agentListHtml/);
+  assert.doesNotMatch(settingsScreenSource, /function wireSettingsCliUpdate|function renderAgentList/);
   assert.doesNotMatch(settingsScreenSource, /function phoneAccessCardHtml/);
   assert.doesNotMatch(settingsScreenSource, /function wirePhoneAccessCard/);
   assert.doesNotMatch(settingsScreenSource, /id="updateCheckNow"|id="dlJson"|id="rerunSetup"/);
@@ -3955,6 +3976,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsDataController, /render: renderSettingsData/);
   assert.match(settingsAgents, /\/\/ @ts-check/);
   assert.match(settingsAgents, /CairnSettingsAgents/);
+  assert.match(settingsAgentsController, /\/\/ @ts-check/);
+  assert.match(settingsAgentsController, /CairnSettingsAgentsController/);
+  assert.match(settingsAgentsController, /render: renderSettingsAgents/);
   assert.match(todayCardsSource, /function exerciseCardHtml/);
   assert.match(todayCardsSource, /function cardioPlanCardHtml/);
   assert.match(todayCardsClient, /CairnTodayCards/);
@@ -4254,6 +4278,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/settings-data-client\.js"/);
   assert.match(sw, /"\/js\/settings-data-controller\.js"/);
   assert.match(sw, /"\/js\/settings-agents-client\.js"/);
+  assert.match(sw, /"\/js\/settings-agents-controller\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/app-download\.js"/);
   assert.match(sw, /"\/js\/app-sw-recovery\.js"/);

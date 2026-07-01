@@ -201,6 +201,53 @@ declare global {
     inStandaloneApp?: boolean;
   };
 
+  type ClientSettingsAgentsControllerWorkingModel = {
+    agent_strategy: string;
+    order: string[];
+    disabled: Set<string>;
+    routes: Record<string, string>;
+    coach_enabled: boolean;
+    coach_day: number;
+    coach_hour: number;
+  };
+
+  type ClientSettingsAgentsControllerAgent = Record<string, unknown> & { name: string };
+
+  type ClientSettingsAgentsControllerInfo = {
+    version: unknown;
+    model_current: unknown;
+    update_available: boolean;
+  };
+
+  type ClientSettingsAgentsControllerDeps = {
+    root: HTMLElement;
+    workingModel: ClientSettingsAgentsControllerWorkingModel;
+    meta: Record<string, ClientSettingsAgentsControllerAgent | undefined>;
+    routeTasks: readonly ClientSettingsRouteTask[];
+    agentInfo: Record<string, ClientSettingsAgentsControllerInfo | undefined>;
+    agentModels: Record<string, unknown[] | undefined>;
+    agentHealthHtml: string;
+    agentActivityHtml: string;
+    noticedHtml: string;
+    dayNames: string[];
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    sleep(ms: number): Promise<void>;
+    stagger?(index: number): string;
+    markDirty(): void;
+    pruneRoutes?(
+      routes: Record<string, string>,
+      routeTasks: readonly ClientSettingsRouteTask[],
+      enabledAgents: readonly ClientSettingsAgentsControllerAgent[],
+    ): Record<string, string>;
+    routeRowsHtml?(
+      routeTasks: readonly ClientSettingsRouteTask[],
+      enabledAgents: readonly ClientSettingsAgentsControllerAgent[],
+      routes: Record<string, string>,
+    ): string;
+    openAgentLoginModal?(): ((agentName: string) => unknown) | undefined;
+  };
+
   type ClientProgressEnduranceControllerDeps = {
     view: HTMLElement;
     headerTitle: HTMLElement;
@@ -1393,6 +1440,11 @@ declare global {
       }): string;
     };
 
+    CairnSettingsAgentsController: {
+      render(deps: ClientSettingsAgentsControllerDeps): void;
+      renderList(deps: ClientSettingsAgentsControllerDeps): void;
+    };
+
     CairnMarkdown: {
       mdSafeUrl(url: unknown): string | null;
       mdInline(source: string): string;
@@ -1906,6 +1958,7 @@ declare global {
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsDataController: Window["CairnSettingsDataController"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
+  declare const CairnSettingsAgentsController: Window["CairnSettingsAgentsController"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];

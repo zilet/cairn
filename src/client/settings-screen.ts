@@ -48,10 +48,6 @@ function eventInput(event: Event): HTMLInputElement {
   return event.currentTarget as HTMLInputElement;
 }
 
-function eventSelect(event: Event): HTMLSelectElement {
-  return event.currentTarget as HTMLSelectElement;
-}
-
 function routeEligible(data: SettingsScreenData): { eligible?: boolean; reason?: string } | null {
   const eligible = data.research_auto_eligible;
   if (!eligible || typeof eligible !== "object") return null;
@@ -231,142 +227,31 @@ async function renderSettings(): Promise<void> {
   // come from `wm`, all writes go back into `wm` + settingsBar.markDirty().
   const slice = (): HTMLElement => requiredEl<HTMLElement>("#setSlice");
 
-  function renderAgentsSlice() {
-    const enabledAgents = wm.order
-      .map((n) => meta[n])
-      .filter((a): a is SettingsScreenAgent => !!a && !wm.disabled.has(a.name));
-    // Silently reconcile pins to agents/tasks that no longer exist so the selects
-    // and pinned-count render clean. This runs on every full-slice render (mount,
-    // sub-tab switch, discard) — NOT on a user edit — so it must NOT markDirty,
-    // or opening Settings would spuriously show "Unsaved changes". A genuine route
-    // edit dirties via the select's change handler below; the server also drops
-    // stale pins on save, so a benign leftover never persists past the next save.
-    if (typeof settingsPruneRoutes === "function") {
-      wm.routes = settingsPruneRoutes(wm.routes, routeTasks, enabledAgents);
-    }
-    const pinnedRouteCount = Object.keys(wm.routes || {}).length;
-    const routeSummary = `Route tasks to agents${pinnedRouteCount ? ` · ${pinnedRouteCount} pinned` : ""}`;
-    const routeRowsHtml = typeof settingsRouteRowsHtml === "function"
-      ? settingsRouteRowsHtml(routeTasks, enabledAgents, wm.routes)
-      : "";
-
-    slice().innerHTML = CairnSettingsAgents.agentsSliceHtml({
-      agentStrategy: wm.agent_strategy,
-      routeSummary,
-      routeRowsHtml,
+  function settingsAgentsDeps(): ClientSettingsAgentsControllerDeps {
+    return {
+      root: slice(),
+      workingModel: wm,
+      meta,
+      routeTasks,
+      agentInfo,
+      agentModels,
       agentHealthHtml,
       agentActivityHtml,
       noticedHtml,
-      coachEnabled: wm.coach_enabled,
-      coachDay: wm.coach_day,
-      coachHour: wm.coach_hour,
       dayNames,
-    });
-
-    // strategy + coach fields → working model
-    requiredEl<HTMLSelectElement>("#strat").addEventListener("change", (e) => { wm.agent_strategy = eventSelect(e).value; });
-    requiredEl<HTMLInputElement>("#coachEnabled").addEventListener("change", (e) => { wm.coach_enabled = eventInput(e).checked; });
-    requiredEl<HTMLSelectElement>("#coachDay").addEventListener("change", (e) => { wm.coach_day = +eventSelect(e).value; });
-    requiredEl<HTMLSelectElement>("#coachHour").addEventListener("change", (e) => { wm.coach_hour = +eventSelect(e).value; });
-    // per-task routing selects (mirror into the model; empty clears the pin → Auto)
-    slice().querySelectorAll<HTMLSelectElement>("[data-route]").forEach((sel) => sel.addEventListener("change", () => {
-      const task = sel.dataset.route || ""; const v = sel.value;
-      if (v) wm.routes[task] = v; else delete wm.routes[task];
-    }));
-
-    renderAgentList();
-    wireCliUpdate();
+      api,
+      toast,
+      sleep,
+      stagger,
+      markDirty: () => settingsBar.markDirty(),
+      pruneRoutes: typeof settingsPruneRoutes === "function" ? settingsPruneRoutes : undefined,
+      routeRowsHtml: typeof settingsRouteRowsHtml === "function" ? settingsRouteRowsHtml : undefined,
+      openAgentLoginModal: () => (globalThis as { openAgentLoginModal?: (agentName: string) => unknown }).openAgentLoginModal,
+    };
   }
 
-  // Agent connect-cards: enable/disable + ordering (as before) PLUS a state chip, a
-  // Connect button (when can_login), a lazily-fetched info line, and a "view models"
-  // disclosure (when models_list). All visibility-only — no model picker; defaults rule.
-  function renderAgentList() {
-    const wrap = optionalEl<HTMLElement>("#agentlist");
-    if (!wrap) return;
-    wrap.innerHTML = CairnSettingsAgents.agentListHtml({ order: wm.order, disabled: wm.disabled, meta, agentInfo, agentModels, stagger });
-
-    wrap.querySelectorAll<HTMLButtonElement>("[data-toggle]").forEach((b) => b.addEventListener("click", () => {
-      const n = b.dataset.toggle || "";
-      wm.disabled.has(n) ? wm.disabled.delete(n) : wm.disabled.add(n);
-      settingsBar.markDirty(); renderAgentList();
-    }));
-    wrap.querySelectorAll<HTMLButtonElement>("[data-up]").forEach((b) => b.addEventListener("click", () => {
-      const i = wm.order.indexOf(b.dataset.up || "");
-      if (i > 0) { [wm.order[i - 1], wm.order[i]] = [wm.order[i], wm.order[i - 1]]; settingsBar.markDirty(); renderAgentList(); }
-    }));
-    wrap.querySelectorAll<HTMLButtonElement>("[data-down]").forEach((b) => b.addEventListener("click", () => {
-      const i = wm.order.indexOf(b.dataset.down || "");
-      if (i < wm.order.length - 1) { [wm.order[i + 1], wm.order[i]] = [wm.order[i], wm.order[i + 1]]; settingsBar.markDirty(); renderAgentList(); }
-    }));
-    // Connect → hand off to the login modal provided by another module (guarded: it
-    // exists after integration; until then the button is a calm no-op).
-    wrap.querySelectorAll<HTMLButtonElement>("[data-connect]").forEach((b) => b.addEventListener("click", () => {
-      const n = b.dataset.connect || "";
-      const loginModal = (globalThis as { openAgentLoginModal?: (agentName: string) => unknown }).openAgentLoginModal;
-      if (loginModal) loginModal(n);
-      else toast("Agent connect is unavailable here");
-    }));
-    // Lazy detail (NOT fetched on paint — only on tap): version / current model /
-    // update-available. Cached, so re-renders are free.
-    wrap.querySelectorAll<HTMLButtonElement>("[data-detail]").forEach((b) => b.addEventListener("click", async () => {
-      const n = b.dataset.detail || "";
-      if (agentInfo[n]) return; // already shown
-      b.disabled = true; b.textContent = "checking…";
-      try {
-        const r = await api(`/agents/${encodeURIComponent(n)}/info`) as SettingsScreenAgentInfoResponse;
-        if (r.ok) agentInfo[n] = { version: r.version ?? null, model_current: r.model_current ?? null, update_available: !!r.update_available };
-        else agentInfo[n] = { version: null, model_current: null, update_available: false };
-      } catch { agentInfo[n] = { version: null, model_current: null, update_available: false }; }
-      renderAgentList();
-    }));
-    // "view models" disclosure (lazy, cached) — a plain list, no picker.
-    wrap.querySelectorAll<HTMLButtonElement>("[data-models]").forEach((b) => b.addEventListener("click", async () => {
-      const n = b.dataset.models || "";
-      if (Array.isArray(agentModels[n])) { delete agentModels[n]; renderAgentList(); return; } // toggle off
-      b.disabled = true; b.textContent = "loading…";
-      try {
-        const r = await api(`/agents/${encodeURIComponent(n)}/models`) as SettingsScreenAgentModelsResponse;
-        agentModels[n] = r && r.ok && Array.isArray(r.models) ? r.models : [];
-      } catch { agentModels[n] = []; }
-      renderAgentList();
-    }));
-  }
-
-  // "Update CLI tools" — unchanged behavior, just wired from inside the Agents slice.
-  function wireCliUpdate() {
-    const renderCliStatus = (r: SettingsScreenCliUpdateStatus | null) => {
-      const el = optionalEl<HTMLElement>("#agentCliUpdateStatus");
-      if (!el || !r) return;
-      if (r.status === "running") el.textContent = `Updating since ${(r.started_at || "").replace("T", " ").slice(0, 16)}`;
-      else if (r.status === "succeeded") el.textContent = `Updated ${(r.finished_at || "").replace("T", " ").slice(0, 16)}`;
-      else if (r.status === "failed") el.textContent = `Update failed${r.error ? `: ${r.error}` : ""}`;
-      else el.textContent = "";
-    };
-    const pollCliStatus = async () => {
-      const btn = optionalEl<HTMLButtonElement>("#updateAgentClis");
-      if (!btn) return;
-      let r = (await api("/agent-clis/update")) as SettingsScreenCliUpdateStatus;
-      renderCliStatus(r);
-      if (!btn.isConnected) return;
-      btn.disabled = r.status === "running";
-      while (r.status === "running") {
-        await sleep(2000);
-        r = (await api("/agent-clis/update")) as SettingsScreenCliUpdateStatus;
-        if (!optionalEl("#agentCliUpdateStatus")) return; // slice swapped away
-        renderCliStatus(r);
-        const b2 = optionalEl<HTMLButtonElement>("#updateAgentClis"); if (b2) b2.disabled = r.status === "running";
-      }
-    };
-    requiredEl<HTMLButtonElement>("#updateAgentClis").addEventListener("click", async () => {
-      const btn = requiredEl<HTMLButtonElement>("#updateAgentClis");
-      btn.disabled = true;
-      renderCliStatus({ status: "running", started_at: new Date().toISOString() });
-      await api("/agent-clis/update", { method: "POST" });
-      await pollCliStatus();
-      toast("CLI update finished");
-    });
-    pollCliStatus().catch(() => {});
+  function renderAgentsSlice() {
+    CairnSettingsAgentsController.render(settingsAgentsDeps());
   }
 
   function renderSourcesSlice() {
