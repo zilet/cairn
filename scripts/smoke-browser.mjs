@@ -545,6 +545,23 @@ async function smokeTodayAddExercise(cdp, base) {
   try {
     await navigateAndHydrate(cdp, base, "/app/today", "today");
     await assertGlobals(cdp);
+
+    // Set-by-set logging (add-exercise, log rows) now lives in the isolated
+    // Session destination, opened from Today via the #sessLaunch card rather than
+    // inline on the Brief. Enter it before exercising the add-exercise workflow.
+    const launched = await evaluate(cdp, `(() => {
+      const launch = document.querySelector("#sessLaunch");
+      if (!launch) return { ok: false, reason: "missing #sessLaunch" };
+      launch.click();
+      return { ok: true };
+    })()`);
+    ok(launched?.ok === true, "Today opens the Session destination", JSON.stringify(launched));
+    await waitForCondition(cdp, "Session destination renders the add-exercise control", `(() => {
+      const dest = document.querySelector(".sess-dest");
+      const button = document.querySelector("#addExBtn");
+      return { ok: Boolean(dest && button), hasDest: Boolean(dest), hasBtn: Boolean(button) };
+    })()`);
+
     const opened = await evaluate(cdp, `(() => {
       const button = document.querySelector("#addExBtn");
       if (!button) return { ok: false, reason: "missing #addExBtn" };
@@ -621,7 +638,7 @@ async function smokeTodayAddExercise(cdp, base) {
         hasSkip: Boolean(skip)
       };
     })()`);
-    ok(failures.length === 0, "/app/today add-exercise workflow has no browser runtime/load errors", failures.join("\n"));
+    ok(failures.length === 0, "Session destination add-exercise workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -649,17 +666,21 @@ async function smokeTodayCardioSkip(cdp, base) {
         window.state.day = Number(${JSON.stringify(dayState.day)});
         window.state.dayPicked = true;
       }
-      if (typeof renderToday !== "function") throw new Error("missing renderToday");
-      return Promise.resolve(renderToday());
+      // The planned-cardio card + skip line now live in the isolated Session
+      // destination (opened from Today), not inline on the Brief. openSession()
+      // sets planReveal, pushes /app/session, and renders the plan surface.
+      if (typeof openSession !== "function") throw new Error("missing openSession");
+      openSession();
+      return true;
     })()`);
-    await waitForCondition(cdp, "Today renders a planned cardio card", `(() => {
+    await waitForCondition(cdp, "Session destination renders a planned cardio card", `(() => {
       const label = ${labelJson};
       const card = [...document.querySelectorAll(".ex-cardio")]
         .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
       const skip = card?.querySelector(".ex-skip[data-skip]");
       const log = card?.querySelector("[data-cardio-log]");
       return {
-        ok: Boolean(card && skip && log && location.pathname === "/app/today"),
+        ok: Boolean(card && skip && log && location.pathname === "/app/session"),
         label,
         found: Boolean(card),
         hasSkip: Boolean(skip),
@@ -708,21 +729,21 @@ async function smokeTodayCardioSkip(cdp, base) {
       unskip.click();
       return true;
     })()`);
-    await waitForCondition(cdp, "Today restores a skipped planned cardio card", `(() => {
+    await waitForCondition(cdp, "Session destination restores a skipped planned cardio card", `(() => {
       const label = ${labelJson};
       const card = [...document.querySelectorAll(".ex-cardio")]
         .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
       const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
         .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
       return {
-        ok: Boolean(card && !unskip && location.pathname === "/app/today" && window.state?.tab === "today"),
+        ok: Boolean(card && !unskip && location.pathname === "/app/session" && window.state?.tab === "session"),
         cardPresent: Boolean(card),
         hasUnskip: Boolean(unskip),
         href: location.pathname + location.search,
         tab: window.state && window.state.tab
       };
     })()`);
-    ok(failures.length === 0, "/app/today planned-cardio skip workflow has no browser runtime/load errors", failures.join("\n"));
+    ok(failures.length === 0, "Session destination planned-cardio skip workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -746,11 +767,13 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
     await evaluate(cdp, `(() => {
       if (typeof swrInvalidate === "function") swrInvalidate("plan");
       if (window.state) window.state.plan = [];
-      if (typeof renderToday !== "function") throw new Error("missing renderToday");
-      return Promise.resolve(renderToday());
+      // Planned cardio + skip line live in the isolated Session destination now.
+      if (typeof openSession !== "function") throw new Error("missing openSession");
+      openSession();
+      return true;
     })()`);
 
-    await waitForCondition(cdp, "Today renders a planned synced-cardio candidate", `(() => {
+    await waitForCondition(cdp, "Session destination renders a planned synced-cardio candidate", `(() => {
       const label = ${labelJson};
       const card = [...document.querySelectorAll(".ex-cardio")]
         .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
@@ -801,8 +824,9 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
         window.state.day = Number(${JSON.stringify(dayState.day)});
         window.state.dayPicked = true;
       }
-      if (typeof renderToday !== "function") throw new Error("missing renderToday");
-      return Promise.resolve(renderToday({ soft: true }));
+      // Already inside the Session destination — re-render it, not the Brief.
+      if (typeof renderSession !== "function") throw new Error("missing renderSession");
+      return Promise.resolve(renderSession({ soft: true }));
     })()`);
 
     await waitForCondition(cdp, "Synced cardio overrides the skipped planned card", `(async () => {
@@ -817,7 +841,7 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
       const activePlanDay = ((window.state && Array.isArray(window.state.plan)) ? window.state.plan : [])
         .find((day) => Number(day.day_number) === Number(window.state && window.state.day));
       return {
-        ok: Boolean(done && done.querySelector(".garmin-tag") && !unskip && location.pathname === "/app/today"),
+        ok: Boolean(done && done.querySelector(".garmin-tag") && !unskip && location.pathname === "/app/session"),
         done: Boolean(done),
         hasGarminTag: Boolean(done?.querySelector(".garmin-tag")),
         hasUnskip: Boolean(unskip),
@@ -830,7 +854,7 @@ async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
         skipTexts: [...document.querySelectorAll("#skipLine [data-unskip]")].map((button) => decodeURIComponent(button.dataset.unskip || ""))
       };
     })()`);
-    ok(failures.length === 0, "/app/today synced-cardio override workflow has no browser runtime/load errors", failures.join("\n"));
+    ok(failures.length === 0, "Session destination synced-cardio override workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
