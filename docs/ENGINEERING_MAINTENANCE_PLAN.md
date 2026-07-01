@@ -274,7 +274,7 @@ Tasks:
 - [x] Keep generated browser source under `src/client/**/*.ts`, with `public/js` treated as build output except for the tiny `10-boot.js` shim.
 - [x] Keep the exact client API route map narrow enough that `CLIENT_API_BROAD_RESPONSE_WAIVERS` is empty; deterministic DTO coverage is complete for the current deterministic client surfaces.
 - [ ] Split large typed screen-controller modules into smaller render, data, state, and wiring modules.
-  - [x] Recent reductions: Today Week Ahead, Today context/goal/health rail, Progress Energy surface, Chat attachment handling, Settings Agents render helpers, Day Fuel load/edit controller, and Meal Recipe sheet/job controller.
+  - [x] Recent reductions: Today Week Ahead, Today context/goal/health rail, Progress Energy surface, Chat attachment handling, Settings Agents render helpers, Day Fuel load/edit controller, Meal Recipe sheet/job controller, and shared Detail Overlay scaffold.
 
 Gate:
 

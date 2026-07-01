@@ -310,22 +310,6 @@ async function openExerciseModal(nameInput, fromTile) {
             });
     });
 }
-// shared detail wiring: zoomable art + close pills + parallax drift on scroll
-function wireDetailCommon() {
-    const el = document.querySelector(".detail");
-    if (!el)
-        return;
-    wireArtZoom(el.querySelector(".detail-art"));
-    el.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => closeDetail()));
-    const scroller = el.querySelector(".detail-scroll");
-    const artEl = el.querySelector(".detail-art");
-    if (scroller && artEl && !reducedMotion()) {
-        scroller.addEventListener("scroll", () => {
-            artEl.style.translate = `0 ${Math.min(40, scroller.scrollTop * 0.35)}px`;
-            artEl.style.opacity = String(Math.max(0.25, 1 - scroller.scrollTop / 420));
-        }, { passive: true });
-    }
-}
 // ---------- food-note detail (tap a note → full-screen) ----------
 async function openFoodDetail(note, fromTile) {
     const n = uiRecord(note);
@@ -902,110 +886,6 @@ function sparklineSvg(vals, w = 132, h = 30) {
       <circle cx="${x(v.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3" fill="currentColor"/>
     </svg>`;
 }
-// ---------- full-screen detail overlay (Morsel-style) ----------
-let _detailOrigin = null; // the tapped tile, for the reverse shared-element zoom
-function closeDetail(instant) {
-    const d = document.querySelector(".detail");
-    if (!d)
-        return;
-    const origin = _detailOrigin;
-    _detailOrigin = null;
-    if (instant || !document.startViewTransition || reducedMotion()) {
-        if (origin && origin.isConnected)
-            origin.style.viewTransitionName = "";
-        d.remove();
-        return;
-    }
-    // old state: overlay art carries the name; new state: the originating tile does —
-    // the photo glides back into its list tile, then the name is released.
-    withViewTransition(() => {
-        d.remove();
-        if (origin && origin.isConnected) {
-            origin.style.viewTransitionName = "detail-art";
-            setTimeout(() => { origin.style.viewTransitionName = ""; }, 450);
-        }
-    });
-}
-// Open a detail overlay with a shared-element zoom from `tile` (an .artile in the list).
-function openDetailFrom(tile, build) {
-    closeDetail(true);
-    const origin = tile instanceof HTMLElement ? tile : null;
-    _detailOrigin = origin;
-    if (origin && document.startViewTransition && !reducedMotion()) {
-        origin.style.viewTransitionName = "detail-art";
-        try {
-            const t = document.startViewTransition(() => { origin.style.viewTransitionName = ""; build(); });
-            t.finished.catch(() => { });
-            return;
-        }
-        catch {
-            origin.style.viewTransitionName = "";
-        }
-    }
-    build();
-}
-document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape")
-        return;
-    if (document.querySelector(".sheet")) {
-        closeMealSheet();
-        return;
-    }
-    closeDetail();
-});
-// Mount the overlay scaffold; returns the .detail element. Caller fills .detail-scroll.
-function mountDetail(inner, photoSrc) {
-    const d = document.createElement("div");
-    d.className = "detail";
-    d.innerHTML = `<div class="detail-bg">${photoSrc ? `<img alt="" src="${escAttr(photoSrc)}" data-remove-on-error="1">` : ""}</div>
-    <button class="detail-x" aria-label="Close">✕</button>
-    <div class="detail-scroll">${inner}</div>`;
-    document.body.appendChild(d);
-    d.querySelector(".detail-x")?.addEventListener("click", () => closeDetail());
-    d.addEventListener("click", (e) => { if (e.target === d)
-        closeDetail(); });
-    return d;
-}
-// "Lean in": wheel / pinch zoom on the detail art, CSS transform clamped 1–2.2.
-function wireArtZoom(artEl) {
-    if (!artEl)
-        return;
-    const host = artEl;
-    const inner = (host.firstElementChild || host);
-    let scale = 1;
-    const apply = () => { inner.style.transform = `scale(${scale})`; };
-    host.addEventListener("wheel", (e) => {
-        e.preventDefault();
-        scale = Math.min(2.2, Math.max(1, scale - e.deltaY * 0.0028));
-        apply();
-    }, { passive: false });
-    const touches = new Map();
-    let pinchBase = 0, pinchScale = 1;
-    const dist = () => {
-        const [a, b] = [...touches.values()];
-        return Math.hypot(a.x - b.x, a.y - b.y);
-    };
-    host.addEventListener("pointerdown", (e) => {
-        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (touches.size === 2) {
-            pinchBase = dist();
-            pinchScale = scale;
-        }
-    });
-    host.addEventListener("pointermove", (e) => {
-        if (!touches.has(e.pointerId))
-            return;
-        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (touches.size === 2 && pinchBase > 0) {
-            scale = Math.min(2.2, Math.max(1, pinchScale * (dist() / pinchBase)));
-            apply();
-        }
-    });
-    const lift = (e) => { touches.delete(e.pointerId); if (touches.size < 2)
-        pinchBase = 0; };
-    host.addEventListener("pointerup", lift);
-    host.addEventListener("pointercancel", lift);
-}
 // ---------- background enrichment (poll a row until its status settles) ----------
 // pollToken is bumped on every full re-render so in-flight polls can detect a stale tab and bail.
 let pollToken = 0;
@@ -1108,11 +988,6 @@ const CAIRN_UI_SHELL_GLOBALS = {
     primeArtManifest,
     artImg,
     sparklineSvg,
-    closeDetail,
-    openDetailFrom,
-    mountDetail,
-    wireDetailCommon,
-    wireArtZoom,
     setPollTokenForClassicScripts,
     enrichmentActive,
     pollEnrichment,

@@ -22,6 +22,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/app/sw-recovery.ts", output: "public/js/app-sw-recovery.js" },
   { source: "src/client/app/state.ts", output: "public/js/01-core.js" },
   { source: "src/client/ui-shell.ts", output: "public/js/02-ui.js" },
+  { source: "src/client/detail-overlay-client.ts", output: "public/js/detail-overlay-client.js" },
   { source: "src/client/ui-motion-client.ts", output: "public/js/ui-motion-client.js" },
   { source: "src/client/agent-login-client.ts", output: "public/js/agent-login-client.js" },
   { source: "src/client/agent-job-client.ts", output: "public/js/agent-job-client.js" },

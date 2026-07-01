@@ -693,6 +693,8 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/app-download\.js"/);
   assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
   assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
+  assert.match(sw, /"\/js\/02-ui\.js"/);
+  assert.match(sw, /"\/js\/detail-overlay-client\.js"/);
   assert.match(sw, /"\/js\/agent-login-client\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
@@ -973,6 +975,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const htmlUtilsSource = read("src/client/html-utils.ts");
   const markdownSource = read("src/client/markdown-client.ts");
   const uiComponentsSource = read("src/client/ui-components.ts");
+  const detailOverlaySource = read("src/client/detail-overlay-client.ts");
   const uiMotionSource = read("src/client/ui-motion-client.ts");
   const exerciseDetailSource = read("src/client/exercise-detail-client.ts");
   const formatUtilsSource = read("src/client/format-utils.ts");
@@ -1082,6 +1085,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const htmlUtils = read("public/js/html-utils.js");
   const markdownClient = read("public/js/markdown-client.js");
   const uiComponents = read("public/js/ui-components.js");
+  const detailOverlayClient = read("public/js/detail-overlay-client.js");
   const uiMotionClient = read("public/js/ui-motion-client.js");
   const exerciseDetailClient = read("public/js/exercise-detail-client.js");
   const formatUtils = read("public/js/format-utils.js");
@@ -1517,6 +1521,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/01-core\.js/);
   assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
+  assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
+  assert.match(clientBuild, /public\/js\/detail-overlay-client\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/agent-login-client\.ts/);
@@ -1755,6 +1761,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.ok(
     index.indexOf("/js/format-utils.js") > -1 && index.indexOf("/js/format-utils.js") < index.indexOf("/js/02-ui.js"),
     "format-utils.js must load before 02-ui.js and feature modules"
+  );
+  assert.ok(
+    index.indexOf("/js/02-ui.js") > -1 &&
+      index.indexOf("/js/detail-overlay-client.js") > index.indexOf("/js/02-ui.js") &&
+      index.indexOf("/js/detail-overlay-client.js") < index.indexOf("/js/ui-motion-client.js"),
+    "detail-overlay-client.js must load after UI shell and before feature consumers"
   );
   assert.ok(
     index.indexOf("/js/02-ui.js") > -1 &&
@@ -2237,6 +2249,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/app-sw-recovery\.js/);
   assert.match(clientBuild, /src\/client\/ui-shell\.ts/);
   assert.match(clientBuild, /public\/js\/02-ui\.js/);
+  assert.match(clientBuild, /src\/client\/detail-overlay-client\.ts/);
+  assert.match(clientBuild, /public\/js\/detail-overlay-client\.js/);
   assert.match(clientBuild, /src\/client\/pwa-install-coach\.ts/);
   assert.match(clientBuild, /public\/js\/pwa-install-coach\.js/);
   assert.match(clientBuild, /src\/client\/agent-login-client\.ts/);
@@ -2478,6 +2492,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponentsSource, /function jobCaptionHtml\(options: JobCaptionOptions = \{\}\): string/);
   assert.match(uiComponentsSource, /function sheetChipHtml\(options: SheetChipOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
+  assert.match(detailOverlaySource, /function closeDetail\(instant\?: boolean\): void/);
+  assert.match(detailOverlaySource, /function openDetailFrom\(tile: Element \| null \| undefined, build: \(\) => unknown\): void/);
+  assert.match(detailOverlaySource, /function mountDetail\(inner: string, photoSrc\?: string \| null\): HTMLElement/);
+  assert.match(detailOverlaySource, /const CAIRN_DETAIL_OVERLAY = \{/);
   assert.match(uiMotionSource, /function collapseEl\(input: Element \| null \| undefined/);
   assert.match(uiMotionSource, /function expandEl\(input: Element \| null \| undefined\): void/);
   assert.match(uiMotionSource, /const CAIRN_UI_MOTION = \{/);
@@ -2997,6 +3015,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /segmentedNavHtml/);
   assert.match(uiComponents, /jobCaptionHtml/);
   assert.match(uiComponents, /sheetChipHtml/);
+  assert.match(detailOverlayClient, /CairnDetailOverlay: CAIRN_DETAIL_OVERLAY/);
+  assert.match(detailOverlayClient, /closeDetail/);
+  assert.match(detailOverlayClient, /openDetailFrom/);
+  assert.match(detailOverlayClient, /mountDetail/);
   assert.match(uiMotionClient, /CairnUiMotion: CAIRN_UI_MOTION/);
   assert.match(uiMotionClient, /collapseEl/);
   assert.match(uiMotionClient, /expandEl/);
@@ -3298,6 +3320,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(ui, /function exerciseExplanation\(d\)[\s\S]*CairnExerciseDetail\.explanation\(d\)/);
   assert.match(ui, /function exerciseExplanationHtml\(d, explanation\)[\s\S]*CairnExerciseDetail\.explanationHtml\(d, explanation\)/);
   assert.match(ui, /function validExerciseExplanationPayload\(r\)[\s\S]*CairnExerciseDetail\.validExplanationPayload\(r\)/);
+  assert.doesNotMatch(ui, /function\s+closeDetail|function\s+openDetailFrom|function\s+mountDetail|function\s+wireDetailCommon|function\s+wireArtZoom/);
   assert.doesNotMatch(ui, /Front foot far enough forward|function\s+exerciseDetailLine|const\s+line\s*=\s*\(setup/);
   assert.doesNotMatch(ui, /let\s+saveCtx|function\s+mountSaveBar|function\s+hideSaveBar/);
   assert.match(today, /window\.CairnTodayAgenda\.renderableBuckets/);

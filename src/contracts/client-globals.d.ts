@@ -432,8 +432,9 @@ declare global {
   declare function thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
   declare function btnBusy(btn: Element | null | undefined, text: string, options?: { ghost?: boolean }): () => void;
   declare function openDetailFrom(fromEl: Element | null | undefined, build: () => unknown): void;
-  declare function mountDetail(html: string): HTMLElement;
+  declare function mountDetail(html: string, photoSrc?: string | null): HTMLElement;
   declare function wireDetailCommon(): void;
+  declare function wireArtZoom(artEl: Element | null | undefined): void;
   declare function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void>;
   declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
   declare function measureChatTop(): void;
@@ -621,6 +622,14 @@ declare global {
         style?: string;
         bodyClassName?: string;
       }): string;
+    };
+
+    CairnDetailOverlay: {
+      closeDetail(instant?: boolean): void;
+      openDetailFrom(fromEl: Element | null | undefined, build: () => unknown): void;
+      mountDetail(html: string, photoSrc?: string | null): HTMLElement;
+      wireDetailCommon(): void;
+      wireArtZoom(artEl: Element | null | undefined): void;
     };
 
     CairnUiMotion: {
@@ -1291,6 +1300,7 @@ declare global {
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnUi: Window["CairnUi"];
+  declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
