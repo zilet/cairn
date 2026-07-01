@@ -806,6 +806,19 @@ declare global {
       loadingHtml(): string;
     };
 
+    CairnMealRecipeController: {
+      closeMealSheet(instant?: boolean): void;
+      openMealSheet(current: Record<string, unknown> & { id: string | number }, dayIndex: number, mealIndex: number): void;
+      recipeOpOpts(
+        current: Record<string, unknown> & { id: string | number },
+        dayLabel: string,
+        dayIndex: number,
+        mealIndex: number,
+        key: string | undefined,
+      ): ClientAgentOpHandlers;
+      reconnectRecipe(job?: unknown): ClientAgentOpHandlers | null;
+    };
+
     CairnProposal: {
       statusBadge(status: unknown): string;
       applyResultMessage(result: unknown): { failed: boolean; message: string };
@@ -1270,6 +1283,7 @@ declare global {
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnMealRecipe: Window["CairnMealRecipe"];
+  declare const CairnMealRecipeController: Window["CairnMealRecipeController"];
   declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];

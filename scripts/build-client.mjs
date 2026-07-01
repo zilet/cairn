@@ -79,6 +79,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/day-fuel-client.ts", output: "public/js/day-fuel-client.js" },
   { source: "src/client/meal-plan-client.ts", output: "public/js/meal-plan-client.js" },
   { source: "src/client/meal-recipe-client.ts", output: "public/js/meal-recipe-client.js" },
+  { source: "src/client/meal-recipe-controller.ts", output: "public/js/meal-recipe-controller.js" },
   { source: "src/client/coach-meals-screen.ts", output: "public/js/06-coach-meals.js" },
   { source: "src/client/food-note-client.ts", output: "public/js/food-note-client.js" },
   { source: "src/client/health-client.ts", output: "public/js/health-client.js" },
