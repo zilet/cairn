@@ -10,6 +10,7 @@ import {
   listContextEvents,
   listFamily,
   listSupplements,
+  resolveContextEvent,
   understandSupplements,
   updateContextEvent,
   updateFamily,
@@ -57,8 +58,15 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
   );
 
   server.tool(
+    "resolve_context_event",
+    "Close a life-timeline event as healed/over (e.g. an injury the athlete confirms is no longer bothering them) WITHOUT deleting it — it stays on the timeline and in exports but stops gating the day-read/coach as a hard constraint. Use this instead of delete when a niggle/injury has passed. `date` defaults to today.",
+    { id: z.number().int(), date: z.string().nullable().optional().describe("YYYY-MM-DD healed-on date; defaults to today") },
+    async ({ id, date }) => asText(resolveContextEvent(id, date ?? undefined) ?? { error: "not found", id })
+  );
+
+  server.tool(
     "delete_context_event",
-    "Delete a life-timeline event by id.",
+    "Delete a life-timeline event by id. To close a healed injury while KEEPING the record, prefer resolve_context_event.",
     { id: z.number().int() },
     async ({ id }) => asText(deleteContextEvent(id))
   );

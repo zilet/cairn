@@ -1,6 +1,8 @@
 import { db } from "../db.js";
 import { findExercise } from "./exercises.js";
 import { lsqSlopePerDay } from "./health.js";
+import { invalidateDayRead } from "./intelligence.js";
+import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getProgress } from "./sessions.js";
 import { LB_PER_KG, localDateISO } from "./shared.js";
@@ -185,11 +187,26 @@ export function applyProposal(id: number) {
   // is clamped to lean-safe kcal/protein floors and any adjustment is reported.
   if (p.parsed.kind === "nutrition_target") {
     const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition);
+    // Close the loop: PERSIST the accepted (clamped, lean-safe) target so the fuel
+    // card, goal math and next check-in read THIS number instead of re-deriving the
+    // formula. Effective from today. Failure to persist never blocks the ack.
+    let accepted: any = null;
+    try {
+      accepted = setNutritionTarget({
+        target_kcal: nutrition.target_kcal,
+        protein_g: nutrition.protein_g,
+        carbs_g: nutrition.carbs_g,
+        fat_g: nutrition.fat_g,
+        source: "checkin",
+        note: nutrition.reason ?? null,
+      });
+    } catch { accepted = null; }
     setProposalStatus(id, "applied");
     return {
       ok: true,
       id, applied: [], nutrition,
-      note: "advisory nutrition target — no plan changes to apply",
+      note: "advisory nutrition target — saved as your active target",
+      ...(accepted ? { accepted } : {}),
       ...(clamped.length ? { clamped } : {}),
     };
   }
@@ -260,6 +277,9 @@ export function applyProposal(id: number) {
   }
   setProposalStatus(id, "applied");
   supersedeSiblingTrainingDrafts(id);
+  // An applied target tweak / added movement / week of runs can change today's read —
+  // bust the cached Brief so the next open reflects the change, not the stale plan.
+  invalidateDayRead();
   return { ok: true, id, applied, added, skipped, ...(runs ? { runs: runs.applied } : {}), ...(clamped.length ? { clamped } : {}) };
 }
 
@@ -588,12 +608,41 @@ export function computeGoalCheck(prof?: any) {
   // never a score. Null/silent when there isn't enough scale data or no goal.
   const goalPace = projectGoalPace(p, lbsToLose);
 
+  // ---- the EFFECTIVE target the surfaces read (accepted > formula) ----------
+  // If the athlete has ACCEPTED an adaptive-nutrition target, that number wins over
+  // the re-derived formula (closing the loop — the accepted target is persisted, not
+  // recomputed each time). The formula stays the fallback AND the lean-safe floor:
+  // protein never drops below the recommended protein floor. `accepted` is null-safe.
+  let accepted: any = null;
+  try { accepted = getActiveNutritionTarget(); } catch { accepted = null; }
+  const effective_target = accepted && accepted.target_kcal != null
+    ? {
+        target_kcal: Math.round(accepted.target_kcal),
+        protein_g: Math.max(Math.round(accepted.protein_g ?? 0), Math.round(recommended.protein_g || 0)),
+        carbs_g: accepted.carbs_g != null ? Math.round(accepted.carbs_g) : null,
+        fat_g: accepted.fat_g != null ? Math.round(accepted.fat_g) : null,
+        source: "accepted" as const,
+        effective_date: accepted.effective_date,
+      }
+    : {
+        target_kcal: Math.round(recommended.target_intake_kcal),
+        protein_g: Math.round(recommended.protein_g || 0),
+        carbs_g: null,
+        fat_g: null,
+        source: "formula" as const,
+        effective_date: null,
+      };
+
   return {
     ok: true, bmr: Math.round(bmr), tdee, lbs_to_lose: lbsToLose,
     // The effective journey shape (v41) — drives the day-intake target framing,
     // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
     goal_mode: mode,
     safe_max_rate_lb: safeMaxRate, requested, recommended, message,
+    // The persisted accepted target (or null) + the EFFECTIVE target every surface
+    // should read (accepted wins, formula is the fallback/floor). Additive.
+    accepted_target: accepted,
+    effective_target,
     // Additive (older consumers ignore): the measured-trend forecast.
     trend_lb_wk: goalPace.trend_lb_wk,
     projected_goal_date: goalPace.projected_goal_date,

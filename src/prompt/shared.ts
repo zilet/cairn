@@ -452,7 +452,8 @@ export function renderTrajectory(ctx: any): string {
 // LIFE CONTEXT — a one-mention event shaping today, then fading. Never a forced rest.
 export function renderActiveContext(ctx: any): string {
   const c = ctx?.context_today;
-  if (!c || !c.any) return "";
+  if (!c) return "";
+  const out: string[] = [];
   const items = Array.isArray(c.active) ? c.active : [];
   const bits = items.slice(0, 3).map((a: any) => String(a.reason || a.title || "").trim()).filter(Boolean);
   const flags: string[] = [];
@@ -460,8 +461,20 @@ export function renderActiveContext(ctx: any): string {
   if (c.transient_inflammation) flags.push("a transient inflammation bump is likely — do NOT alarm on an acute marker or cap training for it");
   if (c.reduce_load) flags.push("ease the load a touch");
   if (c.fueling_disrupted) flags.push("fueling/scale may be disrupted — lean conservative, don't re-target on noise");
-  if (!bits.length && !flags.length) return "";
-  return `\nLIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.\n`;
+  if (c.any && (bits.length || flags.length)) {
+    out.push(`LIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.`);
+  }
+  // A past-window injury that hasn't been confirmed healed → invite ONE gentle
+  // confirm (pull, never nag). If it's already likely-resolved, say so softly; a
+  // "yes it's healed" closes it (resolve_context_event) in one tap/one sentence.
+  const rc = Array.isArray(c.resolve_candidates) ? c.resolve_candidates : [];
+  if (rc.length) {
+    const cand = rc[0];
+    const healed = cand.likely_resolved ? " (it looks healed from the training since)" : "";
+    out.push(`HEALING CHECK (informational, ask at most ONCE, never a nag): the "${String(cand.title).trim()}" injury is past its expected recovery window${healed}. If it comes up naturally, gently confirm whether it's still bothering them — if they say it's fine, mark it resolved (resolve_context_event) so the plan stops working around it. Do NOT keep programming around it as a hard constraint.`);
+  }
+  if (!out.length) return "";
+  return `\n${out.join("\n")}\n`;
 }
 
 export function renderTodayFuel(ctx: any): string {
@@ -550,7 +563,7 @@ export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: bo
   if (!cf || !cf.available || !cf.lead) return "";
   const lead = cf.lead;
   if (opts.brief) {
-    return `THIS BLOCK'S ONE FOCUS: ${lead.title} — ${lead.why}${lead.move ? ` (${lead.move})` : ""}\n`;
+    return `THIS BLOCK'S ONE FOCUS: ${lead.title} — ${lead.why}${lead.move ? ` (${lead.move})` : ""}${cf.caveat ? `\nEASE AROUND (injury/soreness): ${cf.caveat}` : ""}\n`;
   }
   const lines: string[] = [];
   lines.push("THIS BLOCK — THE FOCUS (the conductor; LEAD with this — everything below it is evidence, not a checklist):");
@@ -558,6 +571,9 @@ export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: bo
   for (const p of cf.parallel || []) lines.push(`  ▸ ALONGSIDE (${p.domain}, handled via a different lever): ${p.title} — ${p.why}${p.move ? ` ${p.move}` : ""}`);
   if ((cf.later || []).length) lines.push(`  ▸ LATER (say it's deferred — do NOT act on it yet): ${cf.later.map((l: any) => l.title).join("; ")}`);
   for (const c of cf.connections || []) lines.push(`  ▸ CONNECT: ${c}`);
+  // The life/soreness caveat: a training lever that loads an injured/sore area is
+  // worked AROUND, never pushed through — plain words, a suggestion not a gate.
+  if (cf.caveat) lines.push(`  ▸ EASE AROUND (injury/soreness): ${cf.caveat}`);
   if (cf.retest) lines.push(`  ▸ NEXT CHECK-IN${cf.retest.in_weeks === 0 ? " (due now)" : ""}: re-test ${cf.retest.focus.join(", ")} — ${cf.retest.why}`);
   return `${lines.join("\n")}\n\n`;
 }

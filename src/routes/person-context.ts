@@ -11,6 +11,7 @@ import {
   listContextEvents,
   listFamily,
   listSupplements,
+  resolveContextEvent,
   understandSupplements,
   updateContextEvent,
   updateFamily,
@@ -51,6 +52,14 @@ personContextRouter.put("/context-events/:id", (req, res) => {
   });
   if (!updated) return res.status(404).json({ error: "not found" });
   res.json(updated);
+});
+
+// Close a context event as healed/over (one-tap resolve) without hard-deleting it —
+// it stays on the timeline and in exports but stops gating the day-read/conductor.
+personContextRouter.post("/context-events/:id/resolve", (req, res) => {
+  const resolved = resolveContextEvent(Number(req.params.id), (req.body ?? {}).date);
+  if (!resolved) return res.status(404).json({ error: "not found" });
+  res.json(resolved);
 });
 
 personContextRouter.delete("/context-events/:id", (req, res) =>

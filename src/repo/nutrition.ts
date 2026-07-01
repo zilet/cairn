@@ -1,18 +1,177 @@
 import { db, todayISO } from "../db.js";
+import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck } from "./profile.js";
 import { getSettings } from "./settings.js";
 import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
 
+// ---------- accepted nutrition targets (adaptive-nutrition loop OUTPUT) ----------
+// Persist an accepted target so the fuel card / goal math / next check-in read the
+// ACCEPTED number, not a re-derived formula each time. History is kept; the active
+// target is the newest row effective on/before the given date.
+export interface AcceptedNutritionTarget {
+  id: number;
+  effective_date: string;
+  target_kcal: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  source: string | null;
+  note: string | null;
+}
+
+export function setNutritionTarget(input: {
+  target_kcal?: number | null;
+  protein_g?: number | null;
+  carbs_g?: number | null;
+  fat_g?: number | null;
+  source?: string | null;
+  note?: string | null;
+  effective_date?: string | null;
+}): AcceptedNutritionTarget | null {
+  const eff = input.effective_date && /^\d{4}-\d{2}-\d{2}$/.test(input.effective_date) ? input.effective_date : localDateISO();
+  const int = (v: any, max: number): number | null => {
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(max, Math.max(0, Math.round(n))) : null;
+  };
+  const kcal = int(input.target_kcal, 10000);
+  const protein = int(input.protein_g, 500);
+  // Nothing usable → don't persist an empty target row.
+  if (kcal == null && protein == null) return null;
+  const info = db
+    .prepare(
+      `INSERT INTO nutrition_targets (effective_date, target_kcal, protein_g, carbs_g, fat_g, source, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(eff, kcal, protein, int(input.carbs_g, 2000), int(input.fat_g, 1000), input.source ? String(input.source).slice(0, 40) : null, input.note ? capStr(input.note, 300) : null);
+  return getNutritionTarget(Number(info.lastInsertRowid));
+}
+
+export function getNutritionTarget(id: number): AcceptedNutritionTarget | null {
+  const row = db.prepare(`SELECT * FROM nutrition_targets WHERE id = ?`).get(id) as any;
+  return row ? { id: row.id, effective_date: row.effective_date, target_kcal: row.target_kcal, protein_g: row.protein_g, carbs_g: row.carbs_g, fat_g: row.fat_g, source: row.source, note: row.note } : null;
+}
+
+// The active accepted target: the newest row effective on/before `date` (today).
+// Null when nothing has been accepted yet → callers fall back to the formula.
+export function getActiveNutritionTarget(date?: string): AcceptedNutritionTarget | null {
+  const d = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDateISO();
+  const row = db
+    .prepare(`SELECT * FROM nutrition_targets WHERE effective_date <= ? ORDER BY effective_date DESC, id DESC LIMIT 1`)
+    .get(d) as any;
+  return row ? { id: row.id, effective_date: row.effective_date, target_kcal: row.target_kcal, protein_g: row.protein_g, carbs_g: row.carbs_g, fat_g: row.fat_g, source: row.source, note: row.note } : null;
+}
+
 // ---------- meal plans ----------
+// The newest upstream source (a health directive / lab / weigh-in) a nutrition
+// artifact should reflect. Stamped onto a meal plan at draft time; if the CURRENT max
+// later exceeds the stamp, the plan is "outrun" (worth re-drafting). Mirrors the
+// health-synthesis staleness pattern (source_doc_at vs newestHealthDocDate). Null-safe.
+export function maxUpstreamNutritionSource(): string | null {
+  const cands: string[] = [];
+  try {
+    const d = db.prepare(`SELECT MAX(trigger_date) AS d FROM health_directives WHERE status = 'active' AND (domain = 'nutrition' OR domain = 'watch')`).get() as any;
+    if (d?.d) cands.push(String(d.d).slice(0, 10));
+  } catch { /* table may lag on an old DB */ }
+  try { const doc = newestHealthDocDate(); if (doc) cands.push(String(doc).slice(0, 10)); } catch { /* ignore */ }
+  try {
+    const w = db.prepare(`SELECT MAX(date) AS d FROM bodyweight_log`).get() as any;
+    if (w?.d) cands.push(String(w.d).slice(0, 10));
+  } catch { /* ignore */ }
+  return cands.length ? cands.sort().at(-1)! : null;
+}
+
+// Is a drafted/accepted meal plan outrun by newer upstream data since it was stamped?
+// Compares the plan's stamped source_ts (fallback: its created_at day) against the
+// current max upstream source. Quiet by default: stale:false when there's nothing
+// newer or nothing to compare.
+export function mealPlanFreshness(plan: any): { stale: boolean; reason: string | null; source_ts: string | null } {
+  const parsed = plan?.parsed && typeof plan.parsed === "object" ? plan.parsed : null;
+  const stamped = parsed?.source_ts
+    ? String(parsed.source_ts).slice(0, 10)
+    : (plan?.created_at ? String(plan.created_at).slice(0, 10) : null);
+  const now = maxUpstreamNutritionSource();
+  if (!stamped || !now || now <= stamped) return { stale: false, reason: null, source_ts: stamped };
+  return {
+    stale: true,
+    reason: "A newer lab or health directive has landed since this plan was drafted — worth re-drafting so meals reflect it.",
+    source_ts: stamped,
+  };
+}
+
 export function createMealPlan(agent: string, raw: string, parsed: any) {
+  // Stamp the max upstream source at draft time so freshness can later tell whether a
+  // newer lipid/health directive has outrun this plan.
+  const stamped = parsed && typeof parsed === "object" ? { ...parsed, source_ts: maxUpstreamNutritionSource() } : parsed;
   const info = db.prepare(
     `INSERT INTO meal_plans (week_of, agent, raw_output, parsed_json) VALUES (?, ?, ?, ?)`
-  ).run(todayISO(), agent, raw || "", parsed ? JSON.stringify(parsed) : null);
+  ).run(todayISO(), agent, raw || "", stamped ? JSON.stringify(stamped) : null);
   return hydrate(db.prepare(`SELECT * FROM meal_plans WHERE id = ?`).get(info.lastInsertRowid));
 }
 
+// The current (non-discarded/non-superseded) meal plan, newest first. Null when none.
+export function currentMealPlan() {
+  const row = db.prepare(`SELECT * FROM meal_plans WHERE status NOT IN ('discarded', 'superseded') ORDER BY id DESC LIMIT 1`).get();
+  return row ? hydrate(row) : null;
+}
+
+const WEEKDAY_ABBR = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+function weekdayAbbr(iso: string): string {
+  const t = Date.parse(`${iso}T00:00:00Z`);
+  return Number.isFinite(t) ? WEEKDAY_ABBR[new Date(t).getUTCDay()] : "";
+}
+function addDaysISO(iso: string, n: number): string {
+  const t = Date.parse(`${iso}T00:00:00Z`);
+  return Number.isFinite(t) ? new Date(t + n * 864e5).toISOString().slice(0, 10) : iso;
+}
+
+// A BOUNDED view of the current meal plan for the coach brain: today's + tomorrow's
+// meals + the daily targets + a freshness flag. So chat / the day-read / insights can
+// reference the ACTUAL planned food ("you've got salmon planned tonight") instead of
+// being blind to it. Null when there's no live plan. Deterministic, no scores.
+export function mealPlanForCoach() {
+  const plan = currentMealPlan();
+  if (!plan || !plan.parsed) return null;
+  const parsed = plan.parsed;
+  const days = Array.isArray(parsed.days) ? parsed.days : [];
+  const today = localDateISO();
+  const pick = (iso: string, label: string) => {
+    const abbr = weekdayAbbr(iso);
+    const d = days.find((x: any) => String(x?.day ?? "").trim().toLowerCase().startsWith(abbr));
+    if (!d) return null;
+    const meals = (Array.isArray(d.meals) ? d.meals : []).slice(0, 6).map((m: any) => ({
+      name: capStr(m?.name, 80),
+      kcal: m?.kcal ?? null,
+      protein_g: m?.protein_g ?? null,
+    }));
+    return { label, day: String(d.day ?? "").trim(), note: d?.note ? capStr(d.note, 200) : null, meals };
+  };
+  const freshness = mealPlanFreshness(plan);
+  return {
+    id: plan.id,
+    status: plan.status,
+    week_of: plan.week_of,
+    daily_kcal: parsed.daily_kcal ?? null,
+    daily_protein_g: parsed.daily_protein_g ?? null,
+    today: pick(today, "today"),
+    tomorrow: pick(addDaysISO(today, 1), "tomorrow"),
+    stale: freshness.stale,
+    stale_reason: freshness.reason,
+  };
+}
+
 export function listMealPlans(limit = 10) {
-  return (db.prepare(`SELECT * FROM meal_plans ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map(hydrate);
+  return (db.prepare(`SELECT * FROM meal_plans ORDER BY id DESC LIMIT ?`).all(limit) as any[]).map((row) => {
+    const plan = hydrate(row);
+    // Additive freshness flag so the PWA can show a quiet "worth re-drafting" chip on
+    // a live plan that a newer lab/directive has outrun. Only meaningful for a live
+    // (draft/accepted) plan; a discarded one is history.
+    if (plan.status === "draft" || plan.status === "accepted") {
+      const f = mealPlanFreshness(plan);
+      return { ...plan, stale: f.stale, stale_reason: f.reason };
+    }
+    return plan;
+  });
 }
 
 export function setMealPlanStatus(id: number, status: string) {
@@ -244,16 +403,21 @@ export function getDayIntake(date?: string) {
 
   // Target framing: a gentle target/remaining ONLY when the profile is complete
   // enough to derive one. Incomplete profile → descriptive-only (target null).
-  let target: { kcal: number; protein_g: number; mode: string } | null = null;
+  let target: { kcal: number; protein_g: number; mode: string; source: string } | null = null;
   let remaining: { kcal: number; protein_g: number } | null = null;
   try {
     const goal: any = computeGoalCheck();
-    const tk = Number(goal?.recommended?.target_intake_kcal);
+    // Prefer the ACCEPTED target (effective_target) — the persisted output of the
+    // adaptive-nutrition loop — over the re-derived formula, so the fuel card shows
+    // the number the athlete actually accepted. Falls back to the formula.
+    const eff = goal?.effective_target;
+    const tk = Number(eff?.target_kcal ?? goal?.recommended?.target_intake_kcal);
     if (goal?.ok && Number.isFinite(tk)) {
       target = {
         kcal: Math.round(tk),
-        protein_g: Math.round(Number(goal.recommended?.protein_g) || 0),
+        protein_g: Math.round(Number(eff?.protein_g ?? goal.recommended?.protein_g) || 0),
         mode: String(goal.goal_mode || "maintain"),
+        source: String(eff?.source ?? "formula"),
       };
       remaining = { kcal: target.kcal - totals.kcal, protein_g: target.protein_g - totals.protein_g };
     }

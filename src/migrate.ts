@@ -513,6 +513,13 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)`);
     } catch { /* best-effort backfill; future archives stamp session_id directly */ }
   } },
+  { version: 53, name: "context-event-healing", up: (db) => {
+    // Injuries heal over time: give context_events an expected recovery window and
+    // an explicit resolved stamp so a minor injury stops gating the day-read/conductor
+    // once it's past its window (or is confirmed healed), without hard-deleting it.
+    addColumn(db, "context_events", "expected_recovery_days INTEGER");
+    addColumn(db, "context_events", "resolved_at TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

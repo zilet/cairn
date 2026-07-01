@@ -465,6 +465,9 @@ export function applyChatActions(
           break;
         }
         case "add_context_event":
+          // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
+          // the active-context effect; addContextEvent busts the cached Brief at the
+          // repo layer now (so EVERY surface reacts, not just chat).
           applied.push({ type: a.type, result: repo.addContextEvent({
             kind: a.kind,
             title: stringOrUndefined(a.title),
@@ -473,11 +476,11 @@ export function applyChatActions(
             end_date: stringOrUndefined(a.end_date),
             meta: a.meta,
           }) });
-          // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
-          // the active-context effect — bust the cached Brief so the next open reflects
-          // it (expect-worse-sleep / don't-alarm-on-CRP / ease the load) instead of a
-          // stale read written before the athlete said anything.
-          try { repo.invalidateDayRead(); } catch { /* best-effort */ }
+          break;
+        case "resolve_context_event":
+          // Confirmed healed / over → close it (keeps the record); resolveContextEvent
+          // busts the Brief at the repo layer.
+          applied.push({ type: a.type, result: repo.resolveContextEvent(Number(a.id), stringOrUndefined(a.date)) ?? { error: "not found", id: a.id } });
           break;
         case "log_supplement": {
           // Supplement UNDERSTANDING (not a daily log): the athlete mentioned what

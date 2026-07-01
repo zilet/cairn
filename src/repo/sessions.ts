@@ -155,6 +155,9 @@ export function setSessionFeedback(
     vals.push(session.id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   }
+  // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling
+  // addCheckin already busts the Brief) — refresh so today's read reflects it.
+  invalidateDayRead(date || localDateISO());
   return getSessionDetail(session.id);
 }
 
