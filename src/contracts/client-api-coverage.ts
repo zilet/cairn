@@ -154,16 +154,6 @@ export const CLIENT_API_UNKNOWN_WAIVERS = [] as const satisfies readonly ClientA
 
 export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
   {
-    pattern: "/exercises/reconcile-names",
-    owner: "Plan exercise reconciliation",
-    reason: "Agent merge details are operator-facing and still need a narrow reconciliation result DTO.",
-  },
-  {
-    pattern: "/week-ahead",
-    owner: "Day coach client",
-    reason: "Week-ahead combines deterministic and agent text until the day-coach payload is narrowed.",
-  },
-  {
     pattern: "/program-state",
     owner: "Agentic training brain",
     reason: "Program state is a large coach-context read and needs a shared deterministic DTO.",

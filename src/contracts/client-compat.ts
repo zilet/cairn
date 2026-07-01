@@ -1,6 +1,6 @@
 import type { DayRead, ExpenditureEstimate } from "../repo/intelligence.js";
 import type { ArchivedChatSession, ChatSearchHit } from "../repo/chat.js";
-import type { suggestSession } from "../coachOps.js";
+import type { reconcileExercises, suggestSession, weekAheadRead } from "../coachOps.js";
 import type { GuidelineEntry } from "../guidelines.js";
 import type { CardioEffort, FeedRow, getCardioForDate } from "../repo/activities.js";
 import type { CoachingFocus } from "../repo/coaching-focus.js";
@@ -48,6 +48,7 @@ import type {
   ClientCardioEffort,
   ClientEnduranceGoal,
   ClientEndurancePRs,
+  ClientExerciseNameReconcileResponse,
   ClientGuidelineEntry,
   ClientInjuryImpactsResponse,
   ClientLearnedTimeline,
@@ -62,6 +63,7 @@ import type {
   ClientRunZones,
   ClientSessionSuggestResponse,
   ClientTestWeekDue,
+  ClientWeekAheadResponse,
   ClientWeeklyRunPlan,
 } from "./client-api.js";
 
@@ -92,6 +94,14 @@ export type CardioEffortReturnMatchesClientContract = AssertAssignable<
   ClientCardioEffort[]
 >;
 export type EnduranceGoalMatchesClientContract = AssertAssignable<ReturnType<typeof getEnduranceGoal>, ClientEnduranceGoal | null>;
+export type WeekAheadMatchesClientContract = AssertAssignable<
+  Awaited<ReturnType<typeof weekAheadRead>>,
+  ClientWeekAheadResponse
+>;
+export type ExerciseNameReconcileMatchesClientContract = AssertAssignable<
+  Awaited<ReturnType<typeof reconcileExercises>>,
+  ClientExerciseNameReconcileResponse
+>;
 export type RunZonesMatchClientContract = AssertAssignable<RunZones, ClientRunZones>;
 export type WeeklyRunPlanMatchesClientContract = AssertAssignable<WeeklyRunPlan, ClientWeeklyRunPlan>;
 export type MuscleTrajectoryMatchesClientContract = AssertAssignable<

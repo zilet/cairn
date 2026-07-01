@@ -534,6 +534,55 @@ export interface ClientInjuryImpactsResponse {
   count: number;
 }
 
+export type ClientExerciseNameReconcileResponse =
+  | {
+    ok: true;
+    aligned: number;
+    applied: number;
+    candidates: number;
+    agent?: string | null;
+    tried?: unknown;
+    agent_status?: string | null;
+  }
+  | {
+    ok: false;
+    error?: string;
+    agent?: string | null;
+    tried?: unknown;
+    agent_status?: string | null;
+  };
+
+export type ClientWeekAheadDayKind = "lift" | "run" | "mixed" | "rest";
+
+export interface ClientWeekAheadDay {
+  day: string | null;
+  kind: ClientWeekAheadDayKind;
+  label: string;
+  note?: string | null;
+}
+
+export type ClientWeekAheadResponse =
+  | {
+    ok: true;
+    days: ClientWeekAheadDay[];
+    summary: string;
+    source: "deterministic";
+    cached: false;
+  }
+  | {
+    ok: true;
+    days: ClientWeekAheadDay[];
+    summary: string;
+    source: "agent";
+    cached: boolean;
+    stale?: boolean;
+    agent?: string | null;
+  }
+  | {
+    ok: false;
+    error?: string;
+  };
+
 export interface ClientRecentTrainingMovement {
   name: string;
   sets: number;
@@ -1041,7 +1090,7 @@ export interface ClientApiResponses {
   "/api/checkins": ClientCheckin[] | ClientCheckin | null;
   "/api/plan": ClientPlanDay[];
   "/api/exercises": ClientExercise[];
-  "/api/exercises/reconcile-names": ClientOkResponse & ClientJsonObject;
+  "/api/exercises/reconcile-names": ClientExerciseNameReconcileResponse;
   "/api/sessions": ClientTrainingSession[] | ClientTrainingSession | null;
   "/api/sessions/skip": ClientOkResponse;
   "/api/sets": ClientLoggedSet;
@@ -1063,7 +1112,7 @@ export interface ClientApiResponses {
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;
-  "/api/week-ahead": ClientJsonObject;
+  "/api/week-ahead": ClientWeekAheadResponse;
   "/api/today-agenda": ClientTodayAgenda;
   "/api/learned-timeline": ClientLearnedTimeline;
   "/api/since-last": ClientTodayAgendaCandidate | null;

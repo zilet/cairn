@@ -2288,6 +2288,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(apiContracts, /"\/api\/chat\/sessions": ClientChatSessionSummary\[\]/);
   assert.match(apiContracts, /"\/api\/session-suggest": ClientSessionSuggestResponse/);
+  assert.match(apiContracts, /"\/api\/exercises\/reconcile-names": ClientExerciseNameReconcileResponse/);
+  assert.match(apiContracts, /"\/api\/week-ahead": ClientWeekAheadResponse/);
   assert.match(apiContracts, /"\/api\/recent-training": ClientRecentTrainingFeedRow\[\]/);
   assert.match(apiContracts, /"\/api\/endurance-prs": ClientEndurancePRs/);
   assert.match(apiContracts, /"\/api\/run-compliance": ClientRunCompliance/);
@@ -2303,6 +2305,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /AssertAssignable<CoachingFocus, ClientCoachingFocus>/);
   assert.match(compat, /ReturnType<typeof getDayIntake>/);
   assert.match(compat, /ReturnType<typeof planDayProgression>/);
+  assert.match(compat, /ReturnType<typeof weekAheadRead>/);
+  assert.match(compat, /ReturnType<typeof reconcileExercises>/);
   assert.match(compat, /AssertAssignable<ProgramBlock, ClientProgramBlock>/);
   assert.match(compat, /AssertAssignable<GuidelineEntry, ClientGuidelineEntry>/);
   assert.match(compat, /ReturnType<typeof getInjuryImpacts>/);
