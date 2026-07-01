@@ -134,127 +134,24 @@
         }
         wrap.innerHTML = rows.map((a) => actEntryHtml(a)).join("");
     }
-    // ---------- Me: Memory (what the coach remembers) ----------
-    // Pure Memory option and row renderers live in memory-client.js.
+    function meMemoryDeps() {
+        return {
+            view,
+            state,
+            segments: ME_SEG,
+            handlers: ME_HANDLERS,
+            headerTitle,
+            api,
+            armDelete,
+            escapeAttr: escAttr,
+            invalidatePoll: () => { pollToken++; },
+            segBar,
+            toast,
+            wireSeg,
+        };
+    }
     async function renderMemory() {
-        headerTitle.textContent = "Me";
-        state.meSeg = "memory";
-        pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
-        view.innerHTML = segBar("memory", ME_SEG) + `
-    <div class="sess"><div class="sess-line" style="color:var(--muted)">
-      Facts and preferences the coach carries between sessions. Edit or remove anything that's stale.
-    </div></div>
-    <h1 class="lbl" style="margin:20px 0 8px">What the coach remembers</h1>
-    <div class="memadd">
-      <select id="memKind">${CairnMemory.memoryKindOptionsHtml()}</select>
-      <input id="memInput" type="text" placeholder="Add something to remember…">
-      <button id="memAdd" class="logbtn">+</button>
-    </div>
-    <div id="memlist" style="margin-top:12px"></div>`;
-        wireSeg(ME_HANDLERS);
-        const addBtn = $("#memAdd"), input = $("#memInput");
-        const kindSelect = $("#memKind");
-        if (!addBtn || !input || !kindSelect)
-            return;
-        const add = async () => {
-            const content = input.value.trim();
-            if (!content) {
-                input.focus();
-                return;
-            }
-            const kind = kindSelect.value;
-            input.value = "";
-            try {
-                await api("/memory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, kind }) });
-            }
-            catch {
-                toast("Couldn't save that — try again.");
-                return;
-            }
-            toast("Remembered");
-            loadMemory();
-        };
-        addBtn.addEventListener("click", add);
-        input.addEventListener("keydown", (e) => { if (e.key === "Enter")
-            add(); });
-        loadMemory();
-    }
-    async function loadMemory() {
-        const wrap = $("#memlist");
-        if (!wrap)
-            return;
-        let items = [];
-        try {
-            const data = await api("/memory");
-            items = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
-        }
-        catch {
-            items = [];
-        }
-        if (state.tab !== "me" || state.meSeg !== "memory" || !wrap.isConnected)
-            return;
-        if (!items || !items.length) {
-            wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter — they'll gather here.</div>`;
-            return;
-        }
-        wrap.innerHTML = items.map((m, i) => CairnMemory.memoryRowHtml(m, i)).join("");
-        wrap.querySelectorAll("[data-memedit]").forEach((b) => b.addEventListener("click", () => startMemEdit(b.closest(".memrow"))));
-        wrap.querySelectorAll("[data-memdel]").forEach((b) => b.addEventListener("click", () => startMemDelete(b)));
-    }
-    // inline edit: swap the content line for an input + save/cancel
-    function startMemEdit(row) {
-        if (!row || row.querySelector(".memedit-box"))
-            return;
-        const id = row.dataset.mem;
-        const contentEl = row.querySelector("[data-memcontent]");
-        if (!id || !contentEl)
-            return;
-        const current = contentEl.textContent;
-        contentEl.hidden = true;
-        const box = document.createElement("div");
-        box.className = "memedit-box";
-        box.innerHTML = `<input class="memedit-in" type="text" value="${escAttr(current)}">
-    <button class="iconbtn memok" title="save">✓</button>
-    <button class="iconbtn" data-memcancel title="cancel">×</button>`;
-        contentEl.after(box);
-        const inp = box.querySelector(".memedit-in");
-        if (!inp)
-            return;
-        inp.focus();
-        inp.setSelectionRange(current.length, current.length);
-        const cancel = () => { box.remove(); contentEl.hidden = false; };
-        const save = async () => {
-            const content = inp.value.trim();
-            if (!content) {
-                inp.focus();
-                return;
-            }
-            try {
-                await api(`/memory/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) });
-            }
-            catch {
-                toast("Couldn't save that — try again.");
-                return;
-            }
-            toast("Updated");
-            loadMemory();
-        };
-        box.querySelector(".memok")?.addEventListener("click", save);
-        box.querySelector("[data-memcancel]")?.addEventListener("click", cancel);
-        inp.addEventListener("keydown", (e) => { if (e.key === "Enter")
-            save();
-        else if (e.key === "Escape")
-            cancel(); });
-    }
-    // two-tap armed × — the one destructive-confirm pattern (see armDelete in 02-ui.js)
-    function startMemDelete(btn) {
-        const row = btn.closest(".memrow");
-        const id = row?.dataset.mem;
-        if (!id)
-            return;
-        armDelete(btn, () => {
-            api(`/memory/${id}`, { method: "DELETE" }).then(() => { toast("Removed"); loadMemory(); }).catch(() => toast("Couldn't remove that — try again."));
-        });
+        return CairnMeMemoryController.render(meMemoryDeps());
     }
     // ---------- Me: Health — the whole picture (review · markers · records) ----------
     let _hReadSpy = null; // scroll-spy IntersectionObserver for the Read tab's sticky nav
@@ -1139,8 +1036,6 @@
         setHealthSegActive,
         setHealthPictureCache,
         sparkDateLabel,
-        startMemDelete,
-        startMemEdit,
         switchHealthSeg,
         triggerHealthSynthesis,
         understandSupplementsFromInput,

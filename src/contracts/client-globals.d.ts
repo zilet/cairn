@@ -251,6 +251,21 @@ declare global {
     setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
   };
 
+  type ClientMeMemoryControllerDeps = {
+    view: HTMLElement;
+    state: Pick<ClientAppState, "tab" | "meSeg">;
+    segments: readonly ClientSegment[];
+    handlers: Record<string, () => unknown>;
+    headerTitle: HTMLElement;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
+    escapeAttr(value: unknown): string;
+    invalidatePoll(): void;
+    segBar(active: string, items: readonly ClientSegment[]): string;
+    toast(message: string): void;
+    wireSeg(handlers: Record<string, () => unknown>): void;
+  };
+
   type ClientAgentOpHandlers = {
     path?: string;
     anchor?: string;
@@ -1084,6 +1099,13 @@ declare global {
       memoryRowHtml(row: ClientMemory, index?: number): string;
     };
 
+    CairnMeMemoryController: {
+      render(deps: ClientMeMemoryControllerDeps): Promise<void>;
+      load(deps: ClientMeMemoryControllerDeps): Promise<void>;
+      startEdit(row: HTMLElement | null, deps: ClientMeMemoryControllerDeps): void;
+      startDelete(button: Element, deps: ClientMeMemoryControllerDeps): void;
+    };
+
     CairnFamily: {
       FAMILY_COLORS: readonly { v: string; l: string }[];
       FAMILY_DEFAULT_COLOR: string;
@@ -1665,6 +1687,7 @@ declare global {
   declare const CairnProposal: Window["CairnProposal"];
   declare const CairnHealthLearned: Window["CairnHealthLearned"];
   declare const CairnMemory: Window["CairnMemory"];
+  declare const CairnMeMemoryController: Window["CairnMeMemoryController"];
   declare const CairnFamily: Window["CairnFamily"];
   declare const CairnLife: Window["CairnLife"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];

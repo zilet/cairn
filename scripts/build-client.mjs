@@ -107,6 +107,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/health-records-client.ts", output: "public/js/health-records-client.js" },
   { source: "src/client/me-records-health-doc-controller.ts", output: "public/js/me-records-health-doc-controller.js" },
   { source: "src/client/memory-client.ts", output: "public/js/memory-client.js" },
+  { source: "src/client/me-memory-controller.ts", output: "public/js/me-memory-controller.js" },
   { source: "src/client/life-client.ts", output: "public/js/life-client.js" },
   { source: "src/client/family-client.ts", output: "public/js/family-client.js" },
   { source: "src/client/me-health-screen.ts", output: "public/js/07-me-health.js" },

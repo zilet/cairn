@@ -28,6 +28,7 @@ const routes = [
   { path: "/app/me/standing", tab: "me", expectedState: { meSeg: "standing" } },
   { path: "/app/me/health/read", tab: "me", expectedState: { meSeg: "health", healthSeg: "read" } },
   { path: "/app/me/health/records", tab: "me", expectedState: { meSeg: "health", healthSeg: "records" } },
+  { path: "/app/me/memory", tab: "me", expectedState: { meSeg: "memory" } },
   { path: "/app/chat", tab: "chat" },
   { path: "/app/settings/data", tab: "settings", expectedState: { setSeg: "data" } },
   { path: "/app/settings/agents", tab: "settings", expectedState: { setSeg: "agents" } },
@@ -50,6 +51,7 @@ const requiredGlobals = {
   CairnChatAttachment: "object",
   CairnMealRecipeController: "object",
   CairnDayFuelController: "object",
+  CairnMeMemoryController: "object",
   CairnSettingsAgents: "object",
 };
 
