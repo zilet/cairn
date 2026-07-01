@@ -1,75 +1,6 @@
 // @ts-check
 // ==== settings-screen.js ====
 {
-type SettingsAgent = {
-  name: string;
-  description?: string;
-  enabled?: boolean;
-  configured?: boolean;
-  can_login?: boolean;
-  models_list?: boolean;
-} & Record<string, unknown>;
-
-type SettingsData = {
-  settings: Record<string, unknown>;
-  agents: SettingsAgent[];
-  research_auto_eligible?: boolean | { eligible?: boolean; reason?: string };
-};
-
-type SettingsWorkingModel = {
-  agent_strategy: string;
-  order: string[];
-  disabled: Set<string>;
-  routes: Record<string, string>;
-  enrich_enabled: boolean;
-  art_enabled: boolean;
-  research_enabled: boolean;
-  gemini_api_key: string;
-  garmin_username: string;
-  garmin_password: string;
-  coach_enabled: boolean;
-  coach_day: number;
-  coach_hour: number;
-  update_check_enabled: boolean;
-};
-
-type SettingsPersistBody = {
-  agent_strategy: string;
-  agent_order: string[];
-  disabled_agents: string[];
-  enrich_enabled: boolean;
-  art_enabled: boolean;
-  research_enabled: boolean;
-  garmin_username: string;
-  coach_enabled: boolean;
-  coach_day: number;
-  coach_hour: number;
-  agent_routes: Record<string, string>;
-  update_check_enabled: boolean;
-  gemini_api_key?: string;
-  garmin_password?: string;
-};
-
-type AgentInfo = {
-  version: unknown;
-  model_current: unknown;
-  update_available: boolean;
-};
-
-type CliUpdateStatus = {
-  status?: string;
-  started_at?: string;
-  finished_at?: string;
-  error?: string;
-};
-
-type AgentInfoResponse = import("../contracts/client-api.js").ClientAgentProbeResponse;
-type AgentModelsResponse = import("../contracts/client-api.js").ClientAgentModelsResponse;
-type ArtStats = import("../contracts/client-api.js").ClientArtStatsResponse;
-type GarminSyncResponse = import("../contracts/client-api.js").ClientGarminSyncResponse;
-
-type SettingsSliceKey = ClientSettingsSection;
-
 function settingsScreenRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
@@ -87,10 +18,10 @@ function settingsBool(value: unknown, fallback = false): boolean {
   return value == null ? fallback : !!value;
 }
 
-function settingsData(value: unknown): SettingsData {
+function settingsData(value: unknown): SettingsScreenData {
   const row = settingsScreenRecord(value);
   const agents = Array.isArray(row.agents)
-    ? row.agents.map((agent) => settingsScreenRecord(agent)).filter((agent): agent is SettingsAgent => typeof agent.name === "string")
+    ? row.agents.map((agent) => settingsScreenRecord(agent)).filter((agent): agent is SettingsScreenAgent => typeof agent.name === "string")
     : [];
   const eligible = row.research_auto_eligible;
   return {
@@ -98,7 +29,7 @@ function settingsData(value: unknown): SettingsData {
     agents,
     research_auto_eligible:
       typeof eligible === "boolean" || (eligible && typeof eligible === "object")
-        ? (eligible as SettingsData["research_auto_eligible"])
+        ? (eligible as SettingsScreenData["research_auto_eligible"])
         : undefined,
   };
 }
@@ -121,7 +52,7 @@ function eventSelect(event: Event): HTMLSelectElement {
   return event.currentTarget as HTMLSelectElement;
 }
 
-function routeEligible(data: SettingsData): { eligible?: boolean; reason?: string } | null {
+function routeEligible(data: SettingsScreenData): { eligible?: boolean; reason?: string } | null {
   const eligible = data.research_auto_eligible;
   if (!eligible || typeof eligible !== "object") return null;
   return eligible;
@@ -190,7 +121,7 @@ async function renderSettings(): Promise<void> {
     api("/learnings").catch(() => null),   // F2: outcome learnings → "What Cairn has noticed"; absent on an older backend
   ]);
   const data = settingsData(rawData);
-  const artStats = rawArtStats ? (rawArtStats as ArtStats) : null;
+  const artStats = rawArtStats ? (rawArtStats as SettingsScreenArtStats) : null;
   const s = data.settings;
   const agents = data.agents; // ordered: {name, description, env_ok, enabled, configured?, present?, version?, can_login?, models_list?, usable?}
 
@@ -198,7 +129,7 @@ async function renderSettings(): Promise<void> {
   // mirrors into this on change; persistSettings() serializes from HERE (never from
   // DOM elements, which may not be mounted in the active slice). Switching sub-tabs
   // re-renders a slice FROM the model — no refetch, no lost edits.
-  const wm: SettingsWorkingModel = {
+  const wm: SettingsScreenWorkingModel = {
     agent_strategy: settingsString(s.agent_strategy, "round_robin"),
     order: agents.map((a) => a.name),
     disabled: new Set(agents.filter((a) => !a.enabled).map((a) => a.name)),
@@ -214,10 +145,10 @@ async function renderSettings(): Promise<void> {
     coach_hour: settingsNumber(s.coach_hour),
     update_check_enabled: settingsBool(s.update_check_enabled, true),
   };
-  const meta: Record<string, SettingsAgent> = Object.fromEntries(agents.map((a) => [a.name, a])); // name → declarative fields
+  const meta: Record<string, SettingsScreenAgent> = Object.fromEntries(agents.map((a) => [a.name, a])); // name → declarative fields
   // lazily-fetched per-agent detail (version/model/update + models list), cached so a
   // re-render of the Agents slice doesn't re-hit the network for what we already have.
-  const agentInfo: Record<string, AgentInfo> = {};   // name → {version, model_current, update_available}
+  const agentInfo: Record<string, SettingsScreenAgentInfo> = {};   // name → {version, model_current, update_available}
   const agentModels: Record<string, unknown[]> = {}; // name → [..]
 
   // Side cards (built once; folded into the Agents slice). All degrade to "" when the
@@ -265,7 +196,7 @@ async function renderSettings(): Promise<void> {
 
   // ---- Persist EVERYTHING from the working model, regardless of the visible slice.
   const persistSettings = async (): Promise<boolean> => {
-    const body: SettingsPersistBody = {
+    const body: SettingsScreenPersistBody = {
       agent_strategy: wm.agent_strategy,
       agent_order: wm.order,
       disabled_agents: [...wm.disabled],
@@ -303,7 +234,7 @@ async function renderSettings(): Promise<void> {
   function renderAgentsSlice() {
     const enabledAgents = wm.order
       .map((n) => meta[n])
-      .filter((a): a is SettingsAgent => !!a && !wm.disabled.has(a.name));
+      .filter((a): a is SettingsScreenAgent => !!a && !wm.disabled.has(a.name));
     // Silently reconcile pins to agents/tasks that no longer exist so the selects
     // and pinned-count render clean. This runs on every full-slice render (mount,
     // sub-tab switch, discard) — NOT on a user edit — so it must NOT markDirty,
@@ -383,7 +314,7 @@ async function renderSettings(): Promise<void> {
       if (agentInfo[n]) return; // already shown
       b.disabled = true; b.textContent = "checking…";
       try {
-        const r = await api(`/agents/${encodeURIComponent(n)}/info`) as AgentInfoResponse;
+        const r = await api(`/agents/${encodeURIComponent(n)}/info`) as SettingsScreenAgentInfoResponse;
         if (r.ok) agentInfo[n] = { version: r.version ?? null, model_current: r.model_current ?? null, update_available: !!r.update_available };
         else agentInfo[n] = { version: null, model_current: null, update_available: false };
       } catch { agentInfo[n] = { version: null, model_current: null, update_available: false }; }
@@ -395,7 +326,7 @@ async function renderSettings(): Promise<void> {
       if (Array.isArray(agentModels[n])) { delete agentModels[n]; renderAgentList(); return; } // toggle off
       b.disabled = true; b.textContent = "loading…";
       try {
-        const r = await api(`/agents/${encodeURIComponent(n)}/models`) as AgentModelsResponse;
+        const r = await api(`/agents/${encodeURIComponent(n)}/models`) as SettingsScreenAgentModelsResponse;
         agentModels[n] = r && r.ok && Array.isArray(r.models) ? r.models : [];
       } catch { agentModels[n] = []; }
       renderAgentList();
@@ -404,7 +335,7 @@ async function renderSettings(): Promise<void> {
 
   // "Update CLI tools" — unchanged behavior, just wired from inside the Agents slice.
   function wireCliUpdate() {
-    const renderCliStatus = (r: CliUpdateStatus | null) => {
+    const renderCliStatus = (r: SettingsScreenCliUpdateStatus | null) => {
       const el = optionalEl<HTMLElement>("#agentCliUpdateStatus");
       if (!el || !r) return;
       if (r.status === "running") el.textContent = `Updating since ${(r.started_at || "").replace("T", " ").slice(0, 16)}`;
@@ -415,13 +346,13 @@ async function renderSettings(): Promise<void> {
     const pollCliStatus = async () => {
       const btn = optionalEl<HTMLButtonElement>("#updateAgentClis");
       if (!btn) return;
-      let r = (await api("/agent-clis/update")) as CliUpdateStatus;
+      let r = (await api("/agent-clis/update")) as SettingsScreenCliUpdateStatus;
       renderCliStatus(r);
       if (!btn.isConnected) return;
       btn.disabled = r.status === "running";
       while (r.status === "running") {
         await sleep(2000);
-        r = (await api("/agent-clis/update")) as CliUpdateStatus;
+        r = (await api("/agent-clis/update")) as SettingsScreenCliUpdateStatus;
         if (!optionalEl("#agentCliUpdateStatus")) return; // slice swapped away
         renderCliStatus(r);
         const b2 = optionalEl<HTMLButtonElement>("#updateAgentClis"); if (b2) b2.disabled = r.status === "running";
@@ -485,7 +416,7 @@ async function renderSettings(): Promise<void> {
       const status = requiredEl<HTMLElement>("#garminStatus");
       btn.disabled = true; btn.textContent = "Syncing…";
       status.innerHTML = garminStatusLine(null, true);
-      let r: GarminSyncResponse | null = null;
+      let r: SettingsScreenGarminSyncResponse | null = null;
       try { r = await api("/garmin/sync", { method: "POST" }); } catch {}
       let fresh: unknown = s;
       try { fresh = settingsData(await api("/settings")).settings; } catch {}
@@ -565,7 +496,7 @@ async function renderSettings(): Promise<void> {
     CairnSettingsDataController.render(settingsDataDeps());
   }
 
-  const SLICES: Record<SettingsSliceKey, () => void> = { agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
+  const SLICES: Record<SettingsScreenSliceKey, () => void> = { agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
   const paintSlice = (key: ClientSettingsSection | undefined): void => (SLICES[key || "agents"] || renderAgentsSlice)();
 
   // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no

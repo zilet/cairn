@@ -1,4 +1,6 @@
 (() => {
+// @ts-check
+// ==== 02-ui.js ====
 function uiRecord(value) {
     return value && typeof value === "object" ? value : {};
 }
