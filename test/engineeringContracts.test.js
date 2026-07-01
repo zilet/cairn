@@ -5832,7 +5832,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(dockerfile, /COPY package\*\.json tsconfig\.json tsconfig\.client\.build\.json \.\//);
   assert.match(dockerfile, /RUN --mount=type=cache,target=\/root\/\.npm,sharing=locked npm ci/);
   assert.match(dockerfile, /COPY scripts\/build-client\.mjs \.\/scripts\/build-client\.mjs/);
-  assert.match(dockerfile, /RUN --mount=type=cache,target=\/app\/\.tsbuildcache,sharing=locked npm run build/);
+  // The builder deliberately runs `npm run build` WITHOUT a tsbuildcache mount:
+  // a persisted .tsbuildinfo carried across builds desyncs from the fresh dist/
+  // image layer and ships a PARTIAL dist/ (see commit f0838ee6). Lock that in.
+  assert.match(dockerfile, /\nRUN npm run build\n/);
+  assert.doesNotMatch(dockerfile, /--mount=type=cache,target=\/app\/\.tsbuildcache[^\n]*npm run build/);
   assert.match(dockerfile, /COPY --from=builder \/app\/public\/js \.\/public\/js/);
 });
 
