@@ -4,7 +4,12 @@ const todayView = view;
 const todayRuntime = CairnTodayScreenRuntime.create({
     state: todayState,
     root: todayView,
-    renderToday,
+    // Mode-aware re-render: the shared session/data wiring re-renders whichever
+    // training surface is live. On the Today tab that's the full Brief screen; on
+    // the isolated "session" destination it's the calm logging surface only. This
+    // one lever threads through the whole deps graph, so delete/finish/reopen and
+    // add-exercise all re-render the correct surface.
+    renderToday: (opts) => rerenderTraining(opts),
 });
 const todayApi = todayRuntime.api;
 const todayDeps = todayRuntime.deps;
@@ -89,7 +94,7 @@ async function renderToday(opts = {}) {
     // never waits on agent:"auto". (Honors an active override.)
     const briefOverride = todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
     const read = await loadBrief(todayState.logDate, briefOverride, { fast: true });
-    const { hasLoggedSets, hasPlanDay, hasGarmin, showPlan, showDone, focus, } = todayRenderState.derive({
+    const { hasLoggedSets, hasPlanDay, hasGarmin, showPlan, showDone, } = todayRenderState.derive({
         logDate: todayState.logDate,
         session,
         day,
@@ -98,6 +103,9 @@ async function renderToday(opts = {}) {
         planReveal: todayState.planReveal,
         focusEngaged,
     });
+    // Focus mode is superseded by the isolated Session destination: on Today the
+    // plan area is always the calm launch card, never an inline focus surface.
+    const focus = false;
     // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
     // When the day is about running — cardio prescribed and/or a synced run, with NO
     // strength logged today — the run is the HERO of the plan area, not buried under a
@@ -166,36 +174,41 @@ async function renderToday(opts = {}) {
         goalLineHtml: CairnTodayContext.goalLineHtml(stats, curW, isToday),
         currentWeight: curW,
     }, todayMainShellDeps());
-    html += todayPlanSurfaceRenderer.buildHtml({
-        showDone,
-        showPlan,
-        focus,
-        session,
-        day,
-        isToday,
-        plan: todayState.plan,
-        activeDay: todayState.day,
-        logDate: todayState.logDate,
-        cardioItems,
-        strengthItems,
-        activeItems,
-        skippedItems,
-        matchedCardio,
-        syncedLine: syncline,
-        loggedByEx,
-        offPlanEx,
-        pendingOffPlan,
-        lastSets,
-        rxByEx,
-        exDone,
-        exTotal,
-        hasSyncedCardioToday,
-        hasLoggedSets,
-        hasGarmin,
-        isRunDay,
-        prefillFor,
-        rxFor,
-    }, todayPlanSurfaceRendererDeps());
+    // On Today, the plan area is a calm launch card into the isolated Session
+    // destination (logging no longer lives inline here). The done card still shows
+    // inline; a rare persisted focus-mode still falls through to the old surface.
+    html += (showPlan && !showDone && !focus)
+        ? sessionLaunchCardHtml({ day, exDone, exTotal, isToday, hasLoggedSets, isRunDay, read })
+        : todayPlanSurfaceRenderer.buildHtml({
+            showDone,
+            showPlan,
+            focus,
+            session,
+            day,
+            isToday,
+            plan: todayState.plan,
+            activeDay: todayState.day,
+            logDate: todayState.logDate,
+            cardioItems,
+            strengthItems,
+            activeItems,
+            skippedItems,
+            matchedCardio,
+            syncedLine: syncline,
+            loggedByEx,
+            offPlanEx,
+            pendingOffPlan,
+            lastSets,
+            rxByEx,
+            exDone,
+            exTotal,
+            hasSyncedCardioToday,
+            hasLoggedSets,
+            hasGarmin,
+            isRunDay,
+            prefillFor,
+            rxFor,
+        }, todayPlanSurfaceRendererDeps());
     // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
     if (!focus) {
         html += todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps());
@@ -206,6 +219,8 @@ async function renderToday(opts = {}) {
     // (.today-rail) sits beside it on wide screens (section 36) and stacks under it
     // on mobile/tablet. Focus mode is a single centered column — no rail.
     todayView.innerHTML = todayMainShell.wrapHtml(html, { focus, railHtml });
+    // The lead entry: one tap opens the isolated Session destination.
+    todayView.querySelector("#sessLaunch")?.addEventListener("click", () => openSession());
     // Calm, dismissible "add to home screen" coach — appended to the primary column AFTER
     // the wholesale innerHTML write above (mounting before it would be silently wiped).
     // Pull, not push: it waits below the Brief, hidden in standalone mode and after dismissal.
@@ -233,18 +248,199 @@ async function renderToday(opts = {}) {
     setupAddExercise();
     todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
 }
+// ---------- The focused Session destination (its own route, isolated from Today) ----------
+// All set logging lives HERE, OUT of Today's re-render cycle. Because state.tab
+// is "session" (not "today") whenever this renders, every background "brain"
+// path self-gates off — the soft-SWR repaint, the day-read override job, the
+// agenda/conductor rail, the adapted-Rx patcher all check `tab === "today"` and
+// no-op. So nothing rebuilds the surface under your fingers while you enter a
+// workout. We deliberately REUSE Today's exact data-prep (preparePlanSession),
+// card/surface renderers (buildHtml), and session wiring (wireSessionSurface,
+// setupAddExercise); the only differences are: (a) no Brief/rail/capture chrome,
+// (b) a calm sticky top bar, (c) the finish bar is ALWAYS present so logging the
+// first set never forces a full rebuild, (d) the "apply to plan" banner is
+// dropped (the brain's proposals stay on Today), and (e) scroll is PRESERVED
+// across the surgical re-renders (delete/finish), reset only on a fresh open or
+// a day switch. Entered via openSession(); left via the ← close (or the browser
+// back button, which the router handles for free since openSession pushes a URL).
+let sessionFreshNext = false;
+function openSession(date) {
+    if (date)
+        todayState.logDate = date;
+    todayState.planReveal = { date: todayState.logDate, on: true };
+    sessionFreshNext = true;
+    try {
+        window.scrollTo(0, 0);
+    }
+    catch { }
+    activateTab("session");
+}
+function rerenderTraining(opts) {
+    return todayState.tab === "session" ? renderSession(opts) : renderToday(opts);
+}
+// The Today "lead entry": instead of the full set-by-set logging surface living
+// inline on Today (where the brain's background re-renders used to yank it), the
+// plan area shows one calm tap-card that opens the isolated Session destination.
+// Suggestion, never a gate — the Brief still leads above it.
+function sessionLaunchCardHtml(opts) {
+    const name = opts.day && opts.day.name ? String(opts.day.name) : (opts.isRunDay ? "Today's run" : "Today's session");
+    const focus = opts.day && opts.day.focus ? String(opts.day.focus) : "";
+    const started = opts.exDone > 0 || opts.hasLoggedSets;
+    const sub = opts.exTotal
+        ? (started ? `${opts.exDone} of ${opts.exTotal} logged` : `${opts.exTotal} lift${opts.exTotal === 1 ? "" : "s"}`)
+        : "";
+    const est = opts.read && opts.read.est_minutes ? `~${Number(opts.read.est_minutes)} min` : "";
+    const meta = [sub, est].filter(Boolean).join("  ·  ");
+    const cta = started ? "Continue" : "Start";
+    return `<button class="sess-launch reveal" style="--i:2" type="button" id="sessLaunch">
+      <div class="sess-launch-body">
+        <div class="sess-launch-kicker lbl">${opts.isToday ? "TODAY'S SESSION" : "SESSION"}</div>
+        <div class="sess-launch-title">${escHtml(name)}${focus ? `<span class="sess-launch-focus"> · ${escHtml(focus)}</span>` : ""}</div>
+        ${meta ? `<div class="sess-launch-meta">${escHtml(meta)}</div>` : ""}
+      </div>
+      <span class="sess-launch-cta">${cta} <span class="sess-launch-arrow" aria-hidden="true">→</span></span>
+    </button>`;
+}
+function sessionShellHtml(inner, meta) {
+    const capped = Math.min(meta.exTotal, 12);
+    const dots = meta.exTotal
+        ? `<div class="sess-dots" aria-hidden="true">${Array.from({ length: capped }, (_v, i) => `<span class="sess-dot${i < meta.exDone ? " on" : ""}"></span>`).join("")}</div>`
+        : "";
+    const prog = meta.exTotal
+        ? `<span class="sess-prog"><b>${meta.exDone}</b><span class="sess-prog-sep"> of </span>${meta.exTotal}</span>`
+        : "";
+    return `<div class="sess-dest${meta.fresh ? " sess-fresh" : ""}">
+    <div class="sess-topbar">
+      <button class="sess-close" id="sessClose" type="button" aria-label="Back to today">←</button>
+      <div class="sess-topbar-mid">
+        <div class="sess-kicker lbl">${escHtml(meta.kicker)}</div>
+        <div class="sess-dayname">${escHtml(meta.dayName)}${meta.dayFocus ? `<span class="sess-focus"> · ${escHtml(meta.dayFocus)}</span>` : ""}</div>
+      </div>
+      <div class="sess-topbar-side">${prog}</div>
+    </div>
+    ${dots}
+    <div class="sess-body">${inner}</div>
+  </div>`;
+}
+function wireSessionDestination() {
+    const close = view.querySelector("#sessClose");
+    if (close && !close.dataset.wired) {
+        close.dataset.wired = "1";
+        close.addEventListener("click", () => { todayState.planReveal = undefined; activateTab("today"); });
+    }
+    view.querySelectorAll(".sess-dest .daybtn").forEach((btn) => {
+        if (btn.dataset.wired)
+            return;
+        btn.dataset.wired = "1";
+        btn.addEventListener("click", () => {
+            todayState.day = Number(btn.dataset.day);
+            todayState.dayPicked = true;
+            sessionFreshNext = true;
+            void renderSession();
+        });
+    });
+}
+async function renderSession(opts = {}) {
+    const hadSurface = !!todayView.querySelector(".sess-dest");
+    const fresh = !hadSurface || sessionFreshNext || !!opts.fresh;
+    sessionFreshNext = false;
+    const prevY = typeof window !== "undefined" ? window.scrollY : 0;
+    const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
+    const { isToday } = todayData;
+    const session = todayData.session;
+    const prep = await todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday));
+    const profile = todayData.profile;
+    const exercises = todayData.exercises || [];
+    if (profile) {
+        setDiscipline(profile.primary_discipline);
+        setEnduranceGoalSet(!!profile.endurance_goal_json);
+    }
+    todayState.exModes = Object.fromEntries(exercises.map((e) => [e.name, e.mode || "reps"]));
+    const day = prep.day;
+    const hasLoggedSets = !!(session && (session.sets || []).length);
+    const hasGarmin = !!(session && session.garmin);
+    const isFinished = !!(session && session.finished_at);
+    const revealOn = !!(todayState.planReveal && todayState.planReveal.date === todayState.logDate && todayState.planReveal.on);
+    const showDone = isFinished && !revealOn;
+    const showPlan = !showDone;
+    const surface = todayPlanSurfaceRenderer.buildHtml({
+        showDone,
+        showPlan,
+        focus: true,
+        session,
+        day,
+        isToday,
+        plan: todayState.plan,
+        activeDay: todayState.day,
+        logDate: todayState.logDate,
+        cardioItems: prep.cardioItems,
+        strengthItems: prep.strengthItems,
+        activeItems: prep.activeItems,
+        skippedItems: prep.skippedItems,
+        matchedCardio: prep.matchedCardio,
+        syncedLine: "",
+        loggedByEx: prep.loggedByEx,
+        offPlanEx: prep.offPlanEx,
+        pendingOffPlan: prep.pendingOffPlan,
+        lastSets: prep.lastSets,
+        rxByEx: prep.rxByEx,
+        exDone: prep.exDone,
+        exTotal: prep.exTotal,
+        hasSyncedCardioToday: prep.hasSyncedCardioToday,
+        hasLoggedSets: true,
+        hasGarmin,
+        isRunDay: prep.isRunDay,
+        prefillFor: prep.prefillFor,
+        rxFor: prep.rxFor,
+    }, todayPlanSurfaceRendererDeps());
+    const dayName = day && day.name ? String(day.name) : (prep.isRunDay ? "Today's run" : "Session");
+    const dayFocus = day && day.focus ? String(day.focus) : "";
+    const kicker = isToday ? "TODAY · SESSION" : (typeof humanDate === "function" ? humanDate(todayState.logDate) : todayState.logDate);
+    todayView.innerHTML = sessionShellHtml(surface, {
+        fresh,
+        kicker,
+        dayName,
+        dayFocus,
+        exDone: prep.exDone,
+        exTotal: prep.exTotal,
+    });
+    // Calm: no mid-workout "apply these targets to my plan" banner in the focused
+    // surface — the brain's proposals stay on Today. (Per-lift adapted target lines
+    // still render; refreshAdaptedRx is already a no-op here since tab !== "today".)
+    todayView.querySelector(".sess-dest .rx-banner")?.remove();
+    CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
+    setupAddExercise();
+    wireGuides(view);
+    wireSessionDestination();
+    if (fresh) {
+        try {
+            window.scrollTo(0, 0);
+        }
+        catch { }
+    }
+    else {
+        try {
+            window.scrollTo(0, prevY);
+        }
+        catch { }
+    }
+}
 Object.assign(globalThis, {
+    openSession,
     postExerciseMode,
     reconnectDayReadOverride,
     reconnectSessionSuggest,
+    renderSession,
     renderToday,
     reshapeToday,
 });
 if (typeof window !== "undefined") {
     Object.assign(window, {
+        openSession,
         postExerciseMode,
         reconnectDayReadOverride,
         reconnectSessionSuggest,
+        renderSession,
         renderToday,
         reshapeToday,
     });

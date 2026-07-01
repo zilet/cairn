@@ -158,6 +158,7 @@ function loadController() {
   const trainingProvenance = [];
   const reveals = [];
   const asks = [];
+  const openSessions = [];
   let composerCount = 0;
   const rootEl = new FakeElement("section");
   const context = {
@@ -168,6 +169,7 @@ function loadController() {
     URLSearchParams,
     HTMLElement: FakeElement,
     HTMLButtonElement: FakeElement,
+    openSession: () => { openSessions.push(true); },
     window: null,
     globalThis: null,
     document: {
@@ -252,6 +254,7 @@ function loadController() {
     trainingProvenance,
     reveals,
     asks,
+    openSessions,
     get composerCount() { return composerCount; },
   };
 }
@@ -302,8 +305,10 @@ test("Today Brief controller preserves redirect wiring and override reconnect be
   chip.click();
 
   assert.equal(harness.composerCount, 1);
-  assert.deepEqual(harness.reveals, [null]);
-  assert.deepEqual(plain(surface.scrolls), [{ behavior: "auto", block: "start" }]);
+  // start-session now opens the isolated Session destination (no inline reveal/scroll).
+  assert.deepEqual(harness.openSessions, [true]);
+  assert.deepEqual(harness.reveals, []);
+  assert.deepEqual(plain(surface.scrolls), []);
   assert.equal(harness.runOps[0].kind, "day_read_override");
   assert.deepEqual(plain(harness.runOps[0].body), { date: "2026-07-01", override: "short on time", agent: "auto" });
   assert.equal(brief.attributes.get("aria-busy"), "true");

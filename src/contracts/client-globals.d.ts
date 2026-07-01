@@ -1244,6 +1244,8 @@ declare global {
   declare function defaultProgressSeg(): string;
   declare function renderTab(tab: string): unknown;
   declare function renderToday(): unknown;
+  declare function renderSession(opts?: Record<string, unknown>): unknown;
+  declare function openSession(date?: string | null): void;
   declare function renderFoodJournal(): unknown;
   declare function renderMeals(): unknown;
   declare function renderCoach(): unknown;

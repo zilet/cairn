@@ -56,6 +56,10 @@
             if (state.logDate)
                 route.date = state.logDate;
         }
+        else if (tab === "session") {
+            if (state.logDate)
+                route.date = state.logDate;
+        }
         else if (tab === "plan") {
             const section = routeKey(state.planJump || state.planSeg, options.planSections, "edit");
             route.section = section;
