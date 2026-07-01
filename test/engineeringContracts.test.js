@@ -703,6 +703,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/swr-cache\.js"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
+  assert.match(sw, /"\/js\/today-progression-controller\.js"/);
   assert.match(sw, /"\/js\/today-brief-client\.js"/);
   assert.match(sw, /"\/js\/cardio-plan-client\.js"/);
   assert.match(sw, /"\/js\/cardio-sync-client\.js"/);
@@ -995,6 +996,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const swrCacheSource = read("src/client/swr-cache.ts");
   const todayAgendaSource = read("src/client/today-agenda-client.ts");
   const todayTrainingSource = read("src/client/today-training-client.ts");
+  const todayProgressionControllerSource = read("src/client/today-progression-controller.ts");
   const todayBriefSource = read("src/client/today-brief-client.ts");
   const cardioPlanSource = read("src/client/cardio-plan-client.ts");
   const cardioSyncSource = read("src/client/cardio-sync-client.ts");
@@ -1105,6 +1107,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const swrCache = read("public/js/swr-cache.js");
   const todayAgendaClient = read("public/js/today-agenda-client.js");
   const todayTrainingClient = read("public/js/today-training-client.js");
+  const todayProgressionController = read("public/js/today-progression-controller.js");
   const todayBriefClient = read("public/js/today-brief-client.js");
   const cardioPlanClient = read("public/js/cardio-plan-client.js");
   const cardioSyncClient = read("public/js/cardio-sync-client.js");
@@ -1422,6 +1425,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function renderToday\(\): unknown/);
   assert.match(clientGlobals, /declare function updateHeaderCondense\(\): void/);
   assert.match(clientGlobals, /declare function setDiscipline\(discipline: unknown\): string/);
+  assert.match(clientGlobals, /CairnTodayProgressionController/);
+  assert.match(clientGlobals, /refreshAdaptedRx\(deps: Parameters<Window\["CairnTodayProgressionController"\]\["scheduleRxRefresh"\]>\[0\]\): Promise<void>/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/date-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/html-utils\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/markdown-client\.js/);
@@ -1441,6 +1446,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/swr-cache\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-agenda-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-training-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-progression-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-brief-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/cardio-plan-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/cardio-sync-client\.js/);
@@ -1548,6 +1554,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-agenda-client\.js/);
   assert.match(clientBuild, /src\/client\/today-training-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-training-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-progression-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/today-progression-controller\.js/);
   assert.match(clientBuild, /src\/client\/today-brief-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-brief-client\.js/);
   assert.match(clientBuild, /src\/client\/cardio-plan-client\.ts/);
@@ -1822,9 +1830,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-training-client.js must load before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/today-brief-client.js") > index.indexOf("/js/today-training-client.js") &&
+    index.indexOf("/js/today-progression-controller.js") > index.indexOf("/js/today-training-client.js") &&
+      index.indexOf("/js/today-progression-controller.js") < index.indexOf("/js/03-today.js"),
+    "today-progression-controller.js must load after training helpers and before Today"
+  );
+  assert.ok(
+    index.indexOf("/js/today-brief-client.js") > index.indexOf("/js/today-progression-controller.js") &&
       index.indexOf("/js/today-brief-client.js") < index.indexOf("/js/03-today.js"),
-    "today-brief-client.js must load before 03-today.js"
+    "today-brief-client.js must load after Today progression controller and before 03-today.js"
   );
   assert.ok(
     index.indexOf("/js/cardio-plan-client.js") > index.indexOf("/js/today-brief-client.js") &&
@@ -2201,6 +2214,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(swrCache, /\/\/ @ts-check/);
   assert.match(todayAgendaClient, /\/\/ @ts-check/);
   assert.match(todayTrainingClient, /\/\/ @ts-check/);
+  assert.match(todayProgressionController, /\/\/ @ts-check/);
   assert.match(todayBriefClient, /\/\/ @ts-check/);
   assert.match(cardioPlanClient, /\/\/ @ts-check/);
   assert.match(todaySessionSuggestClient, /\/\/ @ts-check/);
@@ -2284,6 +2298,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-agenda-client\.js/);
   assert.match(clientBuild, /src\/client\/today-training-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-training-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-progression-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/today-progression-controller\.js/);
   assert.match(clientBuild, /src\/client\/today-brief-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-brief-client\.js/);
   assert.match(clientBuild, /src\/client\/cardio-plan-client\.ts/);
@@ -2581,6 +2597,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /type ClientPrescription = import\("\.\.\/contracts\/client\.js"\)\.ClientPrescription/
   );
   assert.match(todayTrainingSource, /const TODAY_RX_ACTION: Record<ClientProgressionAction, ClientProgressionMeta>/);
+  assert.match(todayProgressionControllerSource, /type TodayProgressionDeps = \{/);
+  assert.match(todayProgressionControllerSource, /function scheduleRxRefresh\(deps: TodayProgressionDeps\): void/);
+  assert.match(todayProgressionControllerSource, /async function refreshAdaptedRx\(deps: TodayProgressionDeps\): Promise<void>/);
+  assert.match(todayProgressionControllerSource, /CairnTodayProgressionController/);
   assert.match(todayBriefSource, /type ClientDayRead = import\("\.\.\/contracts\/client\.js"\)\.ClientDayRead/);
   assert.match(todayBriefSource, /function todayBriefHtml\(read: TodayBriefRead \| null \| undefined/);
   assert.match(todayBriefSource, /function todayFocusBarHtml/);
@@ -3058,6 +3078,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayTrainingClient, /Object\.assign\(globalThis, \{/);
   assert.match(todayTrainingClient, /CairnTodayTraining/);
   assert.match(todayTrainingClient, /CairnUi\.textChipHtml/);
+  assert.match(todayProgressionController, /CairnTodayProgressionController: CAIRN_TODAY_PROGRESSION_CONTROLLER/);
+  assert.match(todayProgressionController, /refreshAdaptedRx/);
+  assert.match(todayProgressionController, /scheduleRxRefresh/);
   assert.match(todayBriefClient, /Object\.assign\(globalThis, \{ CairnTodayBrief: CAIRN_TODAY_BRIEF \}\)/);
   assert.match(todayBriefClient, /window\.CairnTodayBrief = CAIRN_TODAY_BRIEF/);
   assert.match(todayBriefClient, /briefHtml: todayBriefHtml/);
@@ -3357,6 +3380,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
   assert.match(today, /coachingFocusThreadHtml\(conductor\)/);
   assert.match(today, /CairnTodayTraining\.exRxLineHtml/);
+  assert.match(today, /CairnTodayProgressionController\.scheduleRxRefresh/);
+  assert.match(today, /CairnTodayProgressionController\.invalidateTodayProgression/);
+  assert.match(today, /CairnTodayProgressionController\.refreshAdaptedRx/);
+  assert.doesNotMatch(today, /let _rxRefreshTimer/);
+  assert.doesNotMatch(today, /function refreshAdaptedRx\(\)\s*\{[\s\S]*const rxByEx/);
   assert.match(today, /CairnTodayBrief\.briefHtml/);
   assert.match(today, /CairnTodayBrief\.focusBarHtml/);
   assert.match(today, /CairnTodayBrief\.signalsText/);
@@ -3491,6 +3519,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(boot, /window\.addEventListener\("popstate"/);
   assert.match(sw, /"\/js\/today-agenda-client\.js"/);
   assert.match(sw, /"\/js\/today-training-client\.js"/);
+  assert.match(sw, /"\/js\/today-progression-controller\.js"/);
   assert.match(sw, /"\/js\/today-brief-client\.js"/);
   assert.match(sw, /"\/js\/cardio-plan-client\.js"/);
   assert.match(sw, /"\/js\/cardio-sync-client\.js"/);

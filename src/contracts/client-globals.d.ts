@@ -1184,6 +1184,20 @@ declare global {
       cardioLogPhrase(item: Record<string, unknown>): string;
     };
 
+    CairnTodayProgressionController: {
+      scheduleRxRefresh(deps: {
+        state: { tab?: string; day?: string | number | null; logDate?: string };
+        root: ParentNode;
+        cachedApi(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
+        invalidate(keyOrPrefix: string): void;
+        exRxLineHtml(rx: unknown): string;
+        moveCount(rxByEx: Record<string, unknown>): number;
+        loadProgramAdjustmentsBanner(): unknown;
+      }): void;
+      invalidateTodayProgression(deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]): void;
+      refreshAdaptedRx(deps: Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0]): Promise<void>;
+    };
+
     CairnTodayCards: {
       exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
       exerciseCardHtml(
@@ -1377,6 +1391,7 @@ declare global {
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
+  declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];

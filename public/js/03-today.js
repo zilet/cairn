@@ -1809,87 +1809,25 @@ function wireSkips() {
 // empty day; for every later set we instead REFRESH the prescription cheaply, in
 // place. Debounced (rapid taps coalesce into one fetch) + best-effort: a failed fetch
 // leaves the last paint, exactly like the initial progression load.
-let _rxRefreshTimer = null;
+function todayProgressionDeps() {
+    return {
+        state: todayState,
+        root: todayView,
+        cachedApi: todayCachedApi,
+        invalidate: swrInvalidate,
+        exRxLineHtml: todayExRxLineHtml,
+        moveCount: todayRxMoveCount,
+        loadProgramAdjustmentsBanner,
+    };
+}
 function scheduleRxRefresh() {
-    if (todayState.day == null)
-        return; // a pure run/rest day has no per-lift progression
-    if (_rxRefreshTimer != null)
-        clearTimeout(_rxRefreshTimer);
-    _rxRefreshTimer = setTimeout(() => { refreshAdaptedRx(); }, 600);
+    CairnTodayProgressionController.scheduleRxRefresh(todayProgressionDeps());
 }
 function invalidateTodayProgression() {
-    if (todayState.day != null)
-        swrInvalidate("program:progression:" + todayState.day);
+    CairnTodayProgressionController.invalidateTodayProgression(todayProgressionDeps());
 }
 async function refreshAdaptedRx() {
-    if (todayState.tab !== "today" || todayState.day == null)
-        return;
-    const day = todayState.day, date = todayState.logDate;
-    let list = null;
-    try {
-        list = await todayCachedApi("/program/progression?day=" + encodeURIComponent(day), {
-            key: `program:progression:${day}`,
-            freshFor: 15000,
-        });
-    }
-    catch {
-        return;
-    } // calm: leave the last-painted prescription as-is
-    // Bail if the surface moved out from under the in-flight fetch (tab/day/date change).
-    if (todayState.tab !== "today" || todayState.day !== day || todayState.logDate !== date)
-        return;
-    if (!Array.isArray(list))
-        return;
-    const rxByEx = {};
-    for (const rx of list) {
-        if (rx && rx.exercise)
-            rxByEx[String(rx.exercise).toLowerCase()] = rx;
-    }
-    // Re-render each lift card's prescription line in place. A now-complete card drops
-    // its line (mirrors exCard's `!complete ? todayExRxLineHtml(rx)`); an active one shows the
-    // freshly-adapted move.
-    todayView.querySelectorAll(".ex[data-card]").forEach((card) => {
-        const name = (card.dataset.card || "").toLowerCase();
-        const rx = name ? rxByEx[name] || null : null;
-        const complete = card.classList.contains("ex-complete");
-        const existing = card.querySelector(".ex-rx");
-        const html = complete ? "" : todayExRxLineHtml(rx);
-        if (existing) {
-            if (!html) {
-                existing.remove();
-                return;
-            }
-            const tpl = document.createElement("template");
-            tpl.innerHTML = html.trim();
-            existing.replaceWith(tpl.content.firstChild);
-        }
-        else if (html) {
-            // No line yet (e.g. it was complete and a set was deleted, or the engine had
-            // nothing earlier) — insert it where exCard places it: before the logged chips.
-            const tpl = document.createElement("template");
-            tpl.innerHTML = html.trim();
-            const loggedWrap = card.querySelector("[data-logged]");
-            if (loggedWrap)
-                card.insertBefore(tpl.content.firstChild, loggedWrap);
-        }
-    });
-    // Keep the at-a-glance "N lifts have new targets" banner honest: update its count or
-    // hide it when nothing's left to apply. (We don't synthesize a missing banner mid-
-    // session — that's a rare transition the first-set renderToday already covers.)
-    const banner = todayView.querySelector(".rx-banner");
-    if (banner) {
-        const moves = todayRxMoveCount(rxByEx);
-        if (moves === 0)
-            banner.remove();
-        else {
-            const h = banner.querySelector(".rx-banner-h");
-            if (h)
-                h.textContent = `${moves === 1 ? "One lift has a new target" : `${moves} lifts have new targets`} from what you logged`;
-        }
-    }
-    // The "what changed" digest reads the same engine — refresh it cheaply (its own
-    // loader is null-safe + scoped to #adjustSlot, and degrades on its own).
-    loadProgramAdjustmentsBanner();
+    await CairnTodayProgressionController.refreshAdaptedRx(todayProgressionDeps());
 }
 // Log one set from a card's logrow; update the card inline without a full re-render.
 function wireLogRow(row) {
