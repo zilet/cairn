@@ -13,6 +13,7 @@ function setHealthPictureCache(cache: HealthPictureCache | null): HealthPictureC
 }
 {
 type HealthScreenRecord = Record<string, unknown>;
+type HealthStandingRead = import("../contracts/client-api.js").ClientHealthStanding;
 type HealthMemory = import("../contracts/client-api.js").ClientMemory;
 type HealthProfile = import("../contracts/client-api.js").ClientProfile & {
   age?: number | string | null;
@@ -937,10 +938,10 @@ function paintHealthReadTab(): void {
 }
 
 // ---- Standing tab: percentiles, signal age, and point-in-time BP ----
-function renderHealthStanding(data: unknown): void {
+function renderHealthStanding(data: HealthStandingRead | null | undefined): void {
   const wrap = $<HTMLElement>("#hStanding");
   if (!wrap) return;
-  wrap.innerHTML = CairnHealthStanding.renderHealthStandingHtml(healthScreenRecord(data), { referenceAge: state.healthStandingRef });
+  wrap.innerHTML = CairnHealthStanding.renderHealthStandingHtml(data, { referenceAge: state.healthStandingRef });
 
   // Don't stack two competing "single most important thing" surfaces: if the conductor's
   // "Where to focus" card already led above, drop this health "one lever" section (the
@@ -1022,7 +1023,7 @@ function loadHealthStanding(token: number, refAge: unknown): void {
   const ref = Number(refAge || state.healthStandingRef || 20);
   state.healthStandingRef = ref;
   api(`/health/standing?reference_age=${encodeURIComponent(String(ref))}`)
-    .then((data) => { if (token === pollToken) renderHealthStanding(data || {}); })
+    .then((data) => { if (token === pollToken) renderHealthStanding(data || null); })
     .catch(() => {
       if (token !== pollToken) return;
       const wrap = $<HTMLElement>("#hStanding");

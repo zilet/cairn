@@ -1302,7 +1302,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnHealthDirectiveLoader/);
   assert.match(clientGlobals, /load\(token: number\): Promise<void>/);
   assert.match(clientGlobals, /CairnHealthStanding/);
-  assert.match(clientGlobals, /renderHealthStandingHtml\(/);
+  assert.match(clientGlobals, /ClientHealthStanding/);
+  assert.match(clientGlobals, /renderHealthStandingHtml\(data: ClientHealthStanding \| null \| undefined/);
   assert.match(clientGlobals, /CairnHealthRead/);
   assert.match(clientGlobals, /priorityMarkersSectionHtml\(/);
   assert.match(clientGlobals, /CairnHealthRecords/);
@@ -2299,6 +2300,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(apiContracts, /"\/api\/endurance-goal": ClientEnduranceGoal \| null/);
   assert.match(apiContracts, /"\/api\/program-state": ClientProgramState/);
   assert.match(apiContracts, /"\/api\/performance": ClientPerformanceStanding/);
+  assert.match(apiContracts, /"\/api\/health\/standing": ClientHealthStanding/);
   assert.match(apiContracts, /ClientAgentJobEnvelope/);
   assert.match(apiContracts, /"\/api\/chat\/sessions\/:sessionId": ClientChatMessage\[\]/);
   assert.match(apiContracts, /export type ClientApiResponse<Path extends string>/);
@@ -2313,6 +2315,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(compat, /ReturnType<typeof reconcileExercises>/);
   assert.match(compat, /AssertAssignable<ProgramState, ClientProgramState>/);
   assert.match(compat, /AssertAssignable<PerformanceStanding, ClientPerformanceStanding>/);
+  assert.match(compat, /ReturnType<typeof healthStanding>/);
   assert.match(compat, /AssertAssignable<ProgramBlock, ClientProgramBlock>/);
   assert.match(compat, /AssertAssignable<GuidelineEntry, ClientGuidelineEntry>/);
   assert.match(compat, /ReturnType<typeof getInjuryImpacts>/);
@@ -2671,7 +2674,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthReadSource, /function priorityMarkersSectionHtml\(markersInput: unknown/);
   assert.match(healthReadSource, /function optimalPhrase\(marker: HealthReadMarker/);
   assert.match(healthReadSource, /CairnHealthRead/);
-  assert.match(healthStandingSource, /type HealthStandingRead = \{/);
+  assert.match(healthStandingSource, /type HealthStandingRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/);
   assert.match(healthStandingSource, /function renderHealthStandingHtml\(data: HealthStandingRead/);
   assert.match(healthStandingSource, /function hstandBpCardHtml/);
   assert.match(healthStandingSource, /function hstandBodyCompHtml/);

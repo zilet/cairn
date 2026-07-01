@@ -28,7 +28,14 @@ import type {
   ClientMemoryKind,
 } from "./client.js";
 import type {
+  ClientBloodPressureReading,
   ClientEnduranceGoal,
+  ClientHealthStanding,
+  ClientHealthStandingBloodPressure,
+  ClientHealthStandingBodyComp,
+  ClientHealthStandingComparison,
+  ClientHealthStandingDimension,
+  ClientHealthStandingMeasure,
   ClientPerformanceStanding,
   ClientProgramBlock,
   ClientProgramState,
@@ -697,14 +704,19 @@ declare global {
       localDateTimeInputValue(date?: Date): string;
       hstandTone(tone: unknown): string;
       hstandBandTone(percentile: unknown): string;
-      hstandMeasureHtml(measure: Record<string, unknown> | null | undefined): string;
-      hstandCompHtml(comparison: Record<string, unknown>, sexWord: string, calendarAge: unknown): string;
-      hstandRefSummaryHtml(comparisons: Array<Record<string, unknown>> | null | undefined, referenceAge: unknown, actualDecade: number | null, sexWord: string): string;
-      hstandDimensionHtml(dimension: Record<string, unknown>, index: number): string;
-      hstandBpRows(rows: Array<Record<string, unknown>> | null | undefined): string;
-      hstandBodyCompHtml(bodyComp: Record<string, unknown> | null | undefined): string;
-      hstandBpCardHtml(bp: Record<string, unknown> | null | undefined): string;
-      renderHealthStandingHtml(data: Record<string, unknown> | null | undefined, options?: { referenceAge?: unknown }): string;
+      hstandMeasureHtml(measure: ClientHealthStandingMeasure | null | undefined): string;
+      hstandCompHtml(comparison: ClientHealthStandingComparison, sexWord: string, calendarAge: unknown): string;
+      hstandRefSummaryHtml(
+        comparisons: ClientHealthStandingComparison[] | null | undefined,
+        referenceAge: unknown,
+        actualDecade: number | null,
+        sexWord: string,
+      ): string;
+      hstandDimensionHtml(dimension: ClientHealthStandingDimension, index: number): string;
+      hstandBpRows(rows: ClientBloodPressureReading[] | null | undefined): string;
+      hstandBodyCompHtml(bodyComp: ClientHealthStandingBodyComp | null | undefined): string;
+      hstandBpCardHtml(bp: ClientHealthStandingBloodPressure | null | undefined): string;
+      renderHealthStandingHtml(data: ClientHealthStanding | null | undefined, options?: { referenceAge?: unknown }): string;
     };
 
     CairnHealthRead: {

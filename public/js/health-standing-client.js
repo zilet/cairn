@@ -168,7 +168,15 @@
   </div>`;
     }
     function hstandBpCardHtml(bp) {
-        const data = bp || {};
+        if (!bp) {
+            return `<div class="hstand-panel hstand-bp">
+      <div class="hstand-panel-head"><span class="lbl">Blood pressure</span></div>
+      <div class="hstand-empty">Log a couple of resting home readings and Cairn can read the pattern.</div>
+      <div class="bp-recent">${hstandBpRows([])}</div>
+      <button class="ghostbtn hstand-bp-log" type="button" id="bpLogOpen">+ Log a reading</button>
+    </div>`;
+        }
+        const data = bp;
         const recent = Array.isArray(data.recent) ? data.recent : [];
         const category = data.category;
         const categoryLabel = category === "optimal" ? "Optimal" :
@@ -188,9 +196,12 @@
   </div>`;
     }
     function renderHealthStandingHtml(data, options = {}) {
-        const standing = data || {};
-        const subject = standing.subject || {};
-        const hero = standing.hero || {};
+        if (!data) {
+            return `<div class="hstand hstand-panel"><div class="empty">Health standing will appear once the read is available.</div></div>`;
+        }
+        const standing = data;
+        const subject = standing.subject ?? {};
+        const hero = standing.hero ?? {};
         const ageNumber = Number(subject.age);
         const hasAge = Number.isFinite(ageNumber);
         const actualDecade = hasAge ? hstandDecade(ageNumber) : null;
@@ -212,7 +223,7 @@
             ? `<span class="hstand-deltachip ${Number(delta) < 0 ? "is-younger" : "is-older"}">${Number(delta) < 0 ? "−" : "+"}${deltaRounded} yr${deltaRounded === 1 ? "" : "s"}</span>`
             : "";
         const confidence = standing.confidence ? `<span class="hstand-conf">${escHtml(standing.confidence)} confidence</span>` : "";
-        const momentum = standing.momentum || {};
+        const momentum = standing.momentum ?? {};
         const momentumHtml = momentum.has_momentum && Array.isArray(momentum.chips) && momentum.chips.length
             ? `<section class="hstand-momentum reveal" style="${stagger(0)}">
         <span class="lbl">This quarter — moving the right way</span>

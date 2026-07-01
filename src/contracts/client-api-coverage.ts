@@ -152,10 +152,4 @@ export const CLIENT_API_CONTRACT_PATHS = [
 
 export const CLIENT_API_UNKNOWN_WAIVERS = [] as const satisfies readonly ClientApiUnknownWaiver[];
 
-export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
-  {
-    pattern: "/health/standing",
-    owner: "Health standing client",
-    reason: "Standing combines body composition, BP, age references, and momentum until the Health DTO is split.",
-  },
-] as const satisfies readonly ClientApiBroadResponseWaiver[];
+export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [] as const satisfies readonly ClientApiBroadResponseWaiver[];

@@ -953,7 +953,7 @@ function setHealthPictureCache(cache) {
         const wrap = $("#hStanding");
         if (!wrap)
             return;
-        wrap.innerHTML = CairnHealthStanding.renderHealthStandingHtml(healthScreenRecord(data), { referenceAge: state.healthStandingRef });
+        wrap.innerHTML = CairnHealthStanding.renderHealthStandingHtml(data, { referenceAge: state.healthStandingRef });
         // Don't stack two competing "single most important thing" surfaces: if the conductor's
         // "Where to focus" card already led above, drop this health "one lever" section (the
         // Program view de-dupes the same way via suppressLever). Order-independent — the
@@ -1048,7 +1048,7 @@ function setHealthPictureCache(cache) {
         state.healthStandingRef = ref;
         api(`/health/standing?reference_age=${encodeURIComponent(String(ref))}`)
             .then((data) => { if (token === pollToken)
-            renderHealthStanding(data || {}); })
+            renderHealthStanding(data || null); })
             .catch(() => {
             if (token !== pollToken)
                 return;

@@ -1,114 +1,13 @@
 // @ts-check
 // Pure Health Standing renderer for the vanilla PWA.
 
-type HealthStandingMeasure = {
-  label?: unknown;
-  value?: unknown;
-  unit?: unknown;
-};
-
-type HealthStandingNextTarget = {
-  direction?: unknown;
-  delta?: unknown;
-  label?: unknown;
-  equivalent_age?: unknown;
-};
-
-type HealthStandingComparison = {
-  key?: unknown;
-  label?: unknown;
-  value?: unknown;
-  unit?: unknown;
-  percentile?: unknown;
-  reference_percentile?: unknown;
-  reference_age_band?: unknown;
-  actual_age_band?: unknown;
-  equivalent_age?: unknown;
-  estimated?: unknown;
-  verb?: unknown;
-  source?: unknown;
-  next?: HealthStandingNextTarget | null;
-  reading?: {
-    source?: unknown;
-    date?: unknown;
-  } | null;
-};
-
-type HealthStandingDimension = {
-  id?: unknown;
-  tone?: unknown;
-  label?: unknown;
-  headline?: unknown;
-  body?: unknown;
-  measures?: HealthStandingMeasure[];
-};
-
-type HealthStandingBpReading = {
-  systolic?: unknown;
-  diastolic?: unknown;
-  pulse?: unknown;
-  measured_at?: unknown;
-  position?: unknown;
-  source?: unknown;
-};
-
-type HealthStandingBloodPressure = {
-  latest?: unknown;
-  category?: unknown;
-  tone?: unknown;
-  read?: unknown;
-  note?: unknown;
-  trajectory?: {
-    dir?: unknown;
-    from?: { systolic?: unknown; diastolic?: unknown } | null;
-    to?: { systolic?: unknown; diastolic?: unknown } | null;
-  } | null;
-  recent?: HealthStandingBpReading[];
-};
-
-type HealthStandingBodyComp = {
-  estimated?: { value?: unknown } | null;
-  measured?: { value?: unknown; date?: unknown } | null;
-  fat_mass?: { delta_lbs?: unknown } | null;
-  trunk_fat_pct?: unknown;
-  note?: unknown;
-  regional?: {
-    notes?: Array<{ tone?: unknown; text?: unknown }>;
-  } | null;
-};
-
-type HealthStandingRead = {
-  subject?: {
-    age?: unknown;
-    sex?: unknown;
-    reference_age?: unknown;
-  } | null;
-  hero?: {
-    headline?: unknown;
-    calendar_age?: unknown;
-    biological_age?: unknown;
-    biological_age_source?: unknown;
-    biological_age_delta?: unknown;
-    direction?: unknown;
-  } | null;
-  headline?: unknown;
-  confidence?: unknown;
-  momentum?: {
-    has_momentum?: unknown;
-    chips?: Array<{ dir?: unknown; text?: unknown }>;
-  } | null;
-  lead_lever?: {
-    uncertain?: unknown;
-    group?: unknown;
-    why?: unknown;
-    move?: unknown;
-  } | null;
-  comparisons?: HealthStandingComparison[];
-  dimensions?: HealthStandingDimension[];
-  body_comp?: HealthStandingBodyComp | null;
-  blood_pressure?: HealthStandingBloodPressure | null;
-  balance?: unknown;
-};
+type HealthStandingRead = import("../contracts/client-api.js").ClientHealthStanding;
+type HealthStandingMeasure = import("../contracts/client-api.js").ClientHealthStandingMeasure;
+type HealthStandingComparison = import("../contracts/client-api.js").ClientHealthStandingComparison;
+type HealthStandingDimension = import("../contracts/client-api.js").ClientHealthStandingDimension;
+type HealthStandingBpReading = import("../contracts/client-api.js").ClientBloodPressureReading;
+type HealthStandingBloodPressure = import("../contracts/client-api.js").ClientHealthStandingBloodPressure;
+type HealthStandingBodyComp = import("../contracts/client-api.js").ClientHealthStandingBodyComp;
 
 type HealthStandingRenderOptions = {
   referenceAge?: unknown;
@@ -294,7 +193,15 @@ function hstandBodyCompHtml(bodyComp: HealthStandingBodyComp | null | undefined)
 }
 
 function hstandBpCardHtml(bp: HealthStandingBloodPressure | null | undefined): string {
-  const data = bp || {};
+  if (!bp) {
+    return `<div class="hstand-panel hstand-bp">
+      <div class="hstand-panel-head"><span class="lbl">Blood pressure</span></div>
+      <div class="hstand-empty">Log a couple of resting home readings and Cairn can read the pattern.</div>
+      <div class="bp-recent">${hstandBpRows([])}</div>
+      <button class="ghostbtn hstand-bp-log" type="button" id="bpLogOpen">+ Log a reading</button>
+    </div>`;
+  }
+  const data = bp;
   const recent = Array.isArray(data.recent) ? data.recent : [];
   const category = data.category;
   const categoryLabel =
@@ -316,9 +223,12 @@ function hstandBpCardHtml(bp: HealthStandingBloodPressure | null | undefined): s
 }
 
 function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, options: HealthStandingRenderOptions = {}): string {
-  const standing = data || {};
-  const subject = standing.subject || {};
-  const hero = standing.hero || {};
+  if (!data) {
+    return `<div class="hstand hstand-panel"><div class="empty">Health standing will appear once the read is available.</div></div>`;
+  }
+  const standing: Partial<HealthStandingRead> = data;
+  const subject: Partial<HealthStandingRead["subject"]> = standing.subject ?? {};
+  const hero: Partial<HealthStandingRead["hero"]> = standing.hero ?? {};
   const ageNumber = Number(subject.age);
   const hasAge = Number.isFinite(ageNumber);
   const actualDecade = hasAge ? hstandDecade(ageNumber) : null;
@@ -342,7 +252,7 @@ function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, o
     : "";
   const confidence = standing.confidence ? `<span class="hstand-conf">${escHtml(standing.confidence)} confidence</span>` : "";
 
-  const momentum = standing.momentum || {};
+  const momentum: Partial<HealthStandingRead["momentum"]> = standing.momentum ?? {};
   const momentumHtml = momentum.has_momentum && Array.isArray(momentum.chips) && momentum.chips.length
     ? `<section class="hstand-momentum reveal" style="${stagger(0)}">
         <span class="lbl">This quarter — moving the right way</span>

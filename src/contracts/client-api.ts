@@ -839,6 +839,161 @@ export interface ClientBloodPressureReading {
   [key: string]: unknown;
 }
 
+export type ClientHealthStandingTone = "strong" | "steady" | "watch" | "missing";
+export type ClientHealthStandingDirection = "younger" | "older" | "aligned" | "unknown";
+
+export interface ClientHealthStandingMeasure {
+  label: string;
+  value: number | string | null;
+  unit: string;
+}
+
+export interface ClientHealthStandingNextTarget {
+  direction: "up" | "down";
+  delta: number;
+  label: string;
+  equivalent_age: number;
+  target_pct?: number;
+  target_value?: number;
+}
+
+export interface ClientHealthStandingComparison {
+  key: string;
+  label: string;
+  value: number;
+  unit: string;
+  percentile: number;
+  reference_percentile: number;
+  actual_age_band: string;
+  reference_age_band: string;
+  median?: number;
+  reference_median?: number;
+  equivalent_age: number;
+  direction?: "higher" | "lower";
+  verb?: string;
+  source?: string;
+  next: ClientHealthStandingNextTarget | null;
+  reading?: { source?: string | null; date?: ISODateString | string | null } | null;
+  estimated?: boolean;
+  measured_value?: number | null;
+  as_of?: string | null;
+}
+
+export interface ClientHealthStandingDimension {
+  id: string;
+  tone: ClientHealthStandingTone | string;
+  label: string;
+  headline: string;
+  body: string;
+  measures: Array<ClientHealthStandingMeasure | null>;
+}
+
+export interface ClientHealthStandingRegionalNote {
+  kind?: string;
+  tone?: ClientHealthStandingTone | string;
+  text: string;
+}
+
+export interface ClientHealthStandingBodyComp {
+  measured: { value: number; date: ISODateString | string | null };
+  estimated: { value: number; as_of: string } | null;
+  fat_mass: { dexa: number | null; est_now: number | null; delta_lbs: number | null } | null;
+  trunk_fat_pct: number | null;
+  weight?: { current: number | null; at_scan: number | null };
+  trend?: string | null;
+  note: string;
+  regional: {
+    visceral_fat_lbs?: number | null;
+    almi?: number | null;
+    ffmi?: number | null;
+    bmd_total?: number | null;
+    t_score?: number | null;
+    z_score?: number | null;
+    android_gynoid?: number | null;
+    fat?: Record<string, number | null>;
+    lean?: Record<string, number | null>;
+    notes?: ClientHealthStandingRegionalNote[];
+    [key: string]: unknown;
+  } | null;
+  effective?: number;
+}
+
+export interface ClientHealthStandingBloodPressurePoint {
+  systolic: number;
+  diastolic: number;
+  at?: string | null;
+}
+
+export interface ClientHealthStandingBloodPressure {
+  latest: ClientBloodPressureReading | null;
+  recent: ClientBloodPressureReading[];
+  category: "optimal" | "elevated" | "high" | "low" | null;
+  label: string;
+  tone: "strong" | "steady" | "watch";
+  trajectory: {
+    from: ClientHealthStandingBloodPressurePoint;
+    to: ClientHealthStandingBloodPressurePoint;
+    dir: "improving" | "rising" | "holding";
+  } | null;
+  read: string;
+  note: string;
+}
+
+export interface ClientHealthStandingBiologicalAge {
+  value: number;
+  delta: number | null;
+  source: string;
+  date: ISODateString | string | null;
+}
+
+export interface ClientHealthStandingLeadLever {
+  headline: string;
+  group: string;
+  why: string;
+  move: string | null;
+  markers: unknown[];
+  marker: unknown | null;
+  tier?: unknown;
+  uncertain: boolean;
+}
+
+export interface ClientHealthStandingMomentum {
+  has_momentum: boolean;
+  chips: Array<{ kind: string; text: string; dir: string }>;
+  summary: string;
+}
+
+export interface ClientHealthStanding {
+  generated_at: string;
+  subject: {
+    age: number | null;
+    sex: "male" | "female";
+    reference_age: number;
+    reference_age_band: string;
+  };
+  headline: string;
+  hero: {
+    calendar_age: number | null;
+    biological_age: number | null;
+    biological_age_source: string;
+    biological_age_delta: number | null;
+    direction: ClientHealthStandingDirection | string;
+    headline: string;
+  };
+  biological_age: ClientHealthStandingBiologicalAge | null;
+  momentum: ClientHealthStandingMomentum;
+  lead_lever: ClientHealthStandingLeadLever | null;
+  body_comp: ClientHealthStandingBodyComp | null;
+  balance: string;
+  signal_age: number | null;
+  signal_age_label: string | null;
+  confidence: string;
+  comparisons: ClientHealthStandingComparison[];
+  dimensions: ClientHealthStandingDimension[];
+  blood_pressure: ClientHealthStandingBloodPressure;
+  sources: string[];
+}
+
 export interface ClientFoodNote {
   id: number;
   meal?: string | null;
@@ -1270,7 +1425,7 @@ export interface ClientApiResponses {
   "/api/coaching-focus": ClientCoachingFocus;
   "/api/health/markers": ClientHealthMarker[];
   "/api/markers/priority": ClientPriorityMarkersResponse;
-  "/api/health/standing": ClientJsonObject;
+  "/api/health/standing": ClientHealthStanding;
   "/api/health/review": ClientHealthReview | null;
   "/api/health/synthesis": ClientHealthSynthesisResponse;
   "/api/directives": ClientDirectivesResponse;

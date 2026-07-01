@@ -15,6 +15,7 @@ import type { ProgramState } from "../repo/program-state.js";
 import type { getEnduranceGoal } from "../repo/profile.js";
 import type { planDayProgression, ProgramAdjustment, ProgramBalance } from "../repo/progression.js";
 import type { RunZones, WeeklyRunPlan } from "../repo/run-progression.js";
+import type { healthStanding } from "../repo/standing.js";
 import type { EndurancePRs, getRunCompliance, RunCompliance } from "../repo/sessions.js";
 import type { TodayAgenda } from "../repo/today-agenda.js";
 import type {
@@ -52,6 +53,7 @@ import type {
   ClientEndurancePRs,
   ClientExerciseNameReconcileResponse,
   ClientGuidelineEntry,
+  ClientHealthStanding,
   ClientInjuryImpactsResponse,
   ClientLearnedTimeline,
   ClientMemory,
@@ -87,6 +89,7 @@ export type ProgramBalanceMatchesClientContract = AssertAssignable<ProgramBalanc
 export type ProgramAdjustmentsMatchClientContract = AssertAssignable<ProgramAdjustment[], ClientProgramAdjustment[]>;
 export type ProgramStateMatchesClientContract = AssertAssignable<ProgramState, ClientProgramState>;
 export type PerformanceStandingMatchesClientContract = AssertAssignable<PerformanceStanding, ClientPerformanceStanding>;
+export type HealthStandingMatchesClientContract = AssertAssignable<ReturnType<typeof healthStanding>, ClientHealthStanding>;
 export type ProgramBlockMatchesClientContract = AssertAssignable<ProgramBlock, ClientProgramBlock>;
 export type GuidelineEntryMatchesClientContract = AssertAssignable<GuidelineEntry, ClientGuidelineEntry>;
 export type InjuryImpactsMatchClientContract = AssertAssignable<ReturnType<typeof getInjuryImpacts>, ClientInjuryImpactsResponse>;
