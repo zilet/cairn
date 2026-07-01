@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS profile (
   sex TEXT DEFAULT 'male',
   age INTEGER,
   height_cm REAL,
+  height_in REAL,                        -- height in inches (v59) — mirrors the app's lb/in convention; source-of-truth for BMI/WHtR/Navy body-fat. NULL = unset (BMI degrades to a "set your height" hint)
   weight_lb REAL,
   goal_weight_lb REAL,
   goal_date TEXT,
@@ -357,6 +358,29 @@ CREATE TABLE IF NOT EXISTS bodyweight_log (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bw_date ON bodyweight_log(date);
+
+-- At-home body measurements (circumferences, in inches — mirrors the app's
+-- lb/in convention). One row per measuring session; every site is nullable so
+-- the athlete can log only what they measured that day. These feed the derived,
+-- deterministic indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat %)
+-- so an at-home tape gives a reliable read between DEXA scans (which go stale).
+CREATE TABLE IF NOT EXISTS body_measurements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,                       -- YYYY-MM-DD (local day)
+  waist_in REAL,
+  hip_in REAL,
+  chest_in REAL,
+  shoulder_in REAL,
+  neck_in REAL,
+  thigh_in REAL,
+  upper_arm_in REAL,
+  calf_in REAL,
+  forearm_in REAL,
+  note TEXT,
+  source TEXT DEFAULT 'manual',            -- manual | chat | shortcut | other
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_body_measurements_date ON body_measurements(date);
 
 -- Home / clinic blood-pressure readings. Unlike labs, these are point-in-time
 -- measurements; the exact timestamp matters for repeated home averages and for
