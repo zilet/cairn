@@ -8,23 +8,6 @@ type HealthReadMarkerRow = HealthReadControllerRecord & {
   name?: string;
   key?: string;
 };
-type HealthReadSynthesisPriority = HealthReadControllerRecord & {
-  label?: string;
-  the_move?: string;
-  recheck?: string;
-};
-type HealthReadSynthesisPayload = HealthReadControllerRecord & {
-  synthesis?: (HealthReadControllerRecord & {
-    headline?: string;
-    story?: string;
-    priorities?: HealthReadSynthesisPriority[];
-    one_change?: string;
-    generated_at?: string;
-    stale?: unknown;
-  }) | null;
-  focus?: HealthReadControllerRecord & { priorities?: unknown[] };
-  stale?: unknown;
-};
 type HealthReadSymptomMarker = HealthReadControllerRecord & { name?: string; value?: unknown; unit?: string };
 type HealthReadSymptomLink = HealthReadControllerRecord & { note?: string; markers?: HealthReadSymptomMarker[] };
 type HealthReadRecoverySummary = HealthReadControllerRecord & { has_data?: unknown };
@@ -75,7 +58,7 @@ type HealthReadSupplement = HealthReadControllerRecord & {
       <div id="hbSupplements"></div>
     </div>`;
     wireReadNav(deps, c);
-    loadHealthSynthesis(deps, deps.pollToken());
+    CairnHealthReadSynthesis.load(deps, deps.pollToken());
     loadRecoverySummary(deps, deps.pollToken(), "#hRecovery");
     loadPriorityMarkers(deps, deps.pollToken());
     const directivesLoaded = CairnHealthDirectiveLoader.load(deps.pollToken());
@@ -129,81 +112,6 @@ type HealthReadSupplement = HealthReadControllerRecord & {
     order.forEach((id) => {
       const el = document.getElementById(id);
       if (el) readSpy.observe(el);
-    });
-  }
-
-  function renderHealthSynthesis(data: unknown, deps: ClientHealthReadControllerDeps, token?: number | null): void {
-    const wrap = select<HTMLElement>(deps, "#hSynthesis");
-    if (!wrap || !wrap.isConnected || (token != null && token !== deps.pollToken())) return;
-    const payload = controllerRecord(data) as HealthReadSynthesisPayload;
-    const s = payload.synthesis && typeof payload.synthesis === "object" ? payload.synthesis : null;
-    const focus = controllerRecord(payload.focus);
-    const hasFocus = Array.isArray(focus.priorities) && focus.priorities.length;
-    if (!s && !hasFocus) {
-      wrap.innerHTML = "";
-      return;
-    }
-    const stale = payload.stale ?? (s && s.stale) ?? false;
-    const prios = s && Array.isArray(s.priorities)
-      ? controllerRows<HealthReadSynthesisPriority>(s.priorities).filter((p) => p.label || p.the_move)
-      : [];
-    let body: string;
-    if (s && s.headline) {
-      body = `
-      <h3 class="hsyn-headline">${deps.escapeHtml(s.headline)}</h3>
-      ${s.story ? `<p class="hsyn-story">${deps.escapeHtml(s.story)}</p>` : ""}
-      ${prios.length ? `<div class="hsyn-prios">${prios.map((p) => `
-        <div class="hsyn-prio">
-          <span class="hsyn-plabel">${deps.escapeHtml(p.label || "")}</span>
-          ${p.the_move ? `<span class="hsyn-pmove">${deps.escapeHtml(p.the_move)}</span>` : ""}
-          ${p.recheck ? `<span class="hsyn-precheck lbl">${deps.escapeHtml(p.recheck)}</span>` : ""}
-        </div>`).join("")}</div>` : ""}
-      ${s.one_change ? `<div class="hsyn-onechange"><span class="lbl">If you change one thing</span><span>${deps.escapeHtml(s.one_change)}</span></div>` : ""}
-      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${deps.escapeHtml(deps.relTime(s.generated_at))}` : ""}</span>${stale
-        ? `<button id="hsynRefresh" class="hpic-refresh hpic-refresh-stale" type="button" title="New results since this read"><span class="hdot hdot-warn"></span>New results — refresh</button>`
-        : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}</div>`;
-    } else {
-      body = `
-      <p class="hsyn-invite">Your labs, training, recovery and nutrition — read as one connected, prioritized picture.</p>
-      <button class="draftbtn hsyn-gen" id="hsynGen" type="button">Read my whole picture</button>`;
-    }
-    wrap.innerHTML = `<div class="hsyn reveal"><div class="hsyn-kicker lbl">Your health — one picture</div>${body}</div>`;
-    select(deps, "#hsynRefresh")?.addEventListener("click", () => triggerHealthSynthesis(deps));
-    select(deps, "#hsynGen")?.addEventListener("click", () => triggerHealthSynthesis(deps));
-  }
-
-  function loadHealthSynthesis(deps: ClientHealthReadControllerDeps, token: number): void {
-    const wrap = select<HTMLElement>(deps, "#hSynthesis");
-    if (!wrap || !wrap.isConnected) return;
-    deps.api("/health/synthesis")
-      .then((data) => renderHealthSynthesis(data || {}, deps, token))
-      .catch(() => { /* leave quiet */ });
-  }
-
-  function triggerHealthSynthesis(deps: ClientHealthReadControllerDeps): void {
-    const wrap = select<HTMLElement>(deps, "#hSynthesis");
-    if (!wrap) return;
-    const card = wrap.querySelector(".hsyn");
-    if (card && !card.querySelector(".job-cap")) {
-      const cap = document.createElement("div");
-      cap.className = "job-cap lbl hsyn-cap";
-      card.appendChild(cap);
-    }
-    void deps.runOp("health_synthesis", {}, {
-      path: "/health/synthesis",
-      anchor: "#hSynthesis .hsyn",
-      caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
-      guard: () => !select(deps, "#hSynthesis")?.isConnected,
-      render: (result) => {
-        const payload = controllerRecord(result) as HealthReadSynthesisPayload;
-        if (payload.synthesis) renderHealthSynthesis(payload, deps, deps.pollToken());
-        else loadHealthSynthesis(deps, deps.pollToken());
-        deps.swrInvalidate("plan:coach");
-      },
-      onFail: () => {
-        deps.toast("Couldn't read the picture right now — try again in a bit.");
-        loadHealthSynthesis(deps, deps.pollToken());
-      },
     });
   }
 
@@ -398,13 +306,13 @@ type HealthReadSupplement = HealthReadControllerRecord & {
     loadRecoverySummary,
     loadSupplements,
     loadSymptomLinks,
-    loadSynthesis: loadHealthSynthesis,
+    loadSynthesis: CairnHealthReadSynthesis.load,
     paintTab: paintHealthReadTab,
     removeSupplement,
     renderSupplements,
-    renderSynthesis: renderHealthSynthesis,
+    renderSynthesis: CairnHealthReadSynthesis.render,
     scrollHealthRailIntoView,
-    triggerSynthesis: triggerHealthSynthesis,
+    triggerSynthesis: CairnHealthReadSynthesis.trigger,
     understandSupplementsFromInput,
   };
 

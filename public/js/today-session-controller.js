@@ -12,68 +12,6 @@
         deps.invalidate("today:session:" + deps.state.logDate);
         deps.invalidate("history:sessions");
     }
-    function renderFeedbackDone(slot, session, deps) {
-        if (!slot)
-            return;
-        const html = deps.sessionStatus.feedbackDoneHtml(session);
-        if (!html) {
-            slot.innerHTML = "";
-            return;
-        }
-        slot.innerHTML = html;
-        slot.querySelector("#feedbackEdit")?.addEventListener("click", () => renderFeedbackForm(slot, session, deps));
-    }
-    function renderFeedback(slot, session, deps) {
-        if (!slot)
-            return;
-        if (deps.sessionStatus.hasFeedback(session)) {
-            renderFeedbackDone(slot, session, deps);
-            return;
-        }
-        slot.innerHTML = deps.sessionStatus.feedbackOpenHtml();
-        slot.querySelector("#feedbackOpen")?.addEventListener("click", () => renderFeedbackForm(slot, session, deps));
-    }
-    function renderFeedbackForm(slot, session, deps) {
-        slot.innerHTML = deps.sessionStatus.feedbackFormHtml(session);
-        const date = String(session.date || deps.state.logDate);
-        const picked = {};
-        const save = async () => {
-            const joint = slot.querySelector("#feedbackJoint");
-            const jointVal = joint ? joint.value.trim() : "";
-            try {
-                const saved = await deps.api(`/sessions/${date}/feedback`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        soreness: picked.soreness,
-                        performance: picked.performance,
-                        joint_pain: jointVal || null,
-                    }),
-                });
-                const row = responseRecord(saved);
-                if (!row.error)
-                    Object.assign(session, row);
-            }
-            catch { }
-        };
-        slot.querySelectorAll(".feel-dot").forEach((button) => button.addEventListener("click", async () => {
-            const kind = String(button.dataset.feel || "");
-            const val = Number(button.dataset.val);
-            picked[kind] = val;
-            slot.querySelectorAll(`.feel-dot[data-feel="${kind}"]`).forEach((dot) => dot.classList.toggle("feel-dot-on", Number(dot.dataset.val) <= val));
-            await save();
-            deps.toast("Noted");
-        }));
-        const joint = slot.querySelector("#feedbackJoint");
-        if (joint)
-            joint.addEventListener("change", () => {
-                if (picked.soreness || picked.performance || joint.value.trim())
-                    void save();
-            });
-        slot.querySelector("#feedbackDismiss")?.addEventListener("click", () => {
-            slot.innerHTML = "";
-        });
-    }
     function wireFinishControls(session, deps) {
         const finishBtn = deps.root.querySelector("#finishBtn");
         if (finishBtn && !finishBtn.dataset.wired) {
@@ -202,6 +140,8 @@
         deps.collapseEl(card, () => {
             card.remove();
             addSkipName(exercise, deps);
+            if (deps.state.tab === "today")
+                void deps.renderToday({ soft: true });
         });
         deps.toast(`${exercise} skipped today`, { action: "Undo", onAction: () => { void undoSkip(card, anchor, exercise, deps); } });
     }
@@ -428,10 +368,10 @@
         wireFinishControls(session, deps);
         deps.root.querySelectorAll(".ex .logrow").forEach((row) => wireLogRow(row, deps));
         if (options.hasLoggedSets)
-            renderFeedback(deps.root.querySelector("#feedbackSlot"), session, deps);
+            CairnTodaySessionFeedback.renderFeedback(deps.root.querySelector("#feedbackSlot"), session, deps);
     }
     const CAIRN_TODAY_SESSION_CONTROLLER = {
-        renderFeedback,
+        renderFeedback: CairnTodaySessionFeedback.renderFeedback,
         wireDeletes,
         wireLogRow,
         wireSessionSurface,

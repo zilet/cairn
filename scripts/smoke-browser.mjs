@@ -6,7 +6,7 @@
 // cannot: syntax errors, broken script order, missing globals, and route boot
 // failures in a real browser.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,7 +17,7 @@ const DEBUG_PORT_MIN = 25000;
 const DEBUG_PORT_SPAN = 5000;
 const NAV_TIMEOUT_MS = 20000;
 const SETTLE_MS = 600;
-const WORKFLOW_COUNT = 7;
+const WORKFLOW_COUNT = 8;
 
 const routes = [
   { path: "/", tab: "today" },
@@ -108,6 +108,38 @@ async function freeDebugPort() {
 
 function tail(log) {
   return String(log || "").split("\n").slice(-20).join("\n");
+}
+
+function createSmokeAgentsConfig() {
+  const dir = mkdtempSync(path.join(tmpdir(), "cairn-browser-smoke-agents-"));
+  const file = path.join(dir, "agents.json");
+  const streamCommand = [
+    "sleep 0.4",
+    "printf '%s\\n' '{\"type\":\"thought\",\"data\":\"checking the training context\"}'",
+    "sleep 0.2",
+    "printf '%s\\n' '{\"type\":\"text\",\"data\":\"Smoke chat stream\"}'",
+    "sleep 0.5",
+    "printf '%s\\n' '{\"type\":\"text\",\"data\":\" complete.\"}'",
+  ].join("; ");
+  writeFileSync(file, JSON.stringify({
+    chat_smoke: {
+      command: "sh",
+      args: ["-c", "printf '%s' 'Smoke chat fallback complete.'"],
+      input: "arg",
+      description: "Offline streaming browser-smoke agent.",
+      env_required: [],
+      login: null,
+      status_check: null,
+      auth_state: null,
+      models_list: null,
+      model_flag: ["--model", "{model}"],
+      stream: {
+        format: "grok",
+        args: ["-c", streamCommand],
+      },
+    },
+  }, null, 2));
+  return { dir, file };
 }
 
 async function waitForJson(port, child, logRef, timeoutMs = 10000) {
@@ -772,6 +804,99 @@ async function smokeChatAttachmentFocus(cdp, base) {
   }
 }
 
+async function smokeChatSendStreamReconnect(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  const message = `Smoke stream check ${Date.now()}`;
+  const messageJson = JSON.stringify(message);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/chat", "chat");
+    await assertGlobals(cdp);
+    await waitForCondition(cdp, "Chat composer hydrates before send", `(() => {
+      const input = document.querySelector("#chatInput");
+      const send = document.querySelector("#chatSend");
+      const log = document.querySelector("#chatlog");
+      return {
+        ok: Boolean(input && send && log && !log.querySelector(".loadstate")),
+        hasInput: Boolean(input),
+        hasSend: Boolean(send),
+        hasLog: Boolean(log),
+        loading: Boolean(log?.querySelector(".loadstate")),
+        href: location.pathname + location.search
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const input = document.querySelector("#chatInput");
+      const send = document.querySelector("#chatSend");
+      if (!input || !send) throw new Error("missing Chat input/send controls");
+      input.value = ${messageJson};
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      send.click();
+      return { value: input.value, activeId: document.activeElement ? document.activeElement.id : "" };
+    })()`);
+
+    await waitForCondition(cdp, "Chat send creates the user bubble", `(() => {
+      const message = ${messageJson};
+      const userBubble = [...document.querySelectorAll(".bubble.user .bubble-text")]
+        .find((el) => el.textContent?.includes(message));
+      return {
+        ok: Boolean(userBubble && location.pathname === "/app/chat" && window.state?.tab === "chat"),
+        found: Boolean(userBubble),
+        href: location.pathname + location.search,
+        tab: window.state && window.state.tab
+      };
+    })()`);
+
+    await waitForCondition(cdp, "Chat stream opens a live assistant bubble", `(() => {
+      const live = [...document.querySelectorAll(".bubble.assistant.pending, .bubble.assistant.streaming")];
+      const captions = live.map((el) => el.textContent?.trim() || "");
+      return {
+        ok: live.length === 1,
+        count: live.length,
+        captions,
+        classes: live.map((el) => el.className)
+      };
+    })()`, 10000);
+
+    const reconnected = await evaluate(cdp, `(() => Promise.resolve(window.chatReconnect?.()).then(() => {
+      const live = [...document.querySelectorAll(".bubble.assistant.pending, .bubble.assistant.streaming")];
+      return {
+        ok: live.length <= 1,
+        count: live.length,
+        classes: live.map((el) => el.className)
+      };
+    }).catch((error) => ({ ok: false, error: error?.message || String(error) })))()`);
+    ok(reconnected?.ok === true, "Chat reconnect runs without duplicate live bubbles", JSON.stringify(reconnected));
+
+    await waitForCondition(cdp, "Chat stream reaches a terminal assistant reply", `(async () => {
+      const turnsRes = await fetch("/api/chat/turns");
+      const turns = turnsRes.ok ? await turnsRes.json() : [];
+      const final = [...document.querySelectorAll(".bubble.assistant:not(.pending):not(.streaming) .bubble-text")]
+        .map((el) => el.textContent?.replace(/\\s+/g, " ").trim() || "")
+        .find((text) => text.includes("Smoke chat stream complete."));
+      const live = [...document.querySelectorAll(".bubble.assistant.pending, .bubble.assistant.streaming")];
+      return {
+        ok: Boolean(
+          final &&
+          Array.isArray(turns) &&
+          turns.length === 0 &&
+          live.length === 0 &&
+          location.pathname === "/app/chat" &&
+          window.state?.tab === "chat"
+        ),
+        final: final || "",
+        liveCount: live.length,
+        turns: Array.isArray(turns) ? turns.map((turn) => ({ id: turn.id, status: turn.status, phase: turn.phase })) : turns,
+        href: location.pathname + location.search,
+        tab: window.state && window.state.tab
+      };
+    })()`, 30000);
+    ok(failures.length === 0, "/app/chat send/stream/reconnect workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
 async function smokeSettingsDataControls(cdp, base) {
   const { failures, off } = collectFailures(cdp, base);
   try {
@@ -1020,15 +1145,18 @@ if (typeof WebSocket !== "function") {
 let exitCode = 1;
 let chrome = null;
 let cdp = null;
+let smokeAgents = null;
 try {
+  smokeAgents = createSmokeAgentsConfig();
   chrome = await launchChrome();
   console.log(`Cairn browser smoke: using ${chrome.bin}`);
   cdp = await newPage(chrome);
-  await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2 }, async (ctx) => {
+  await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2, extraEnv: { AGENTS_CONFIG: smokeAgents.file } }, async (ctx) => {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
     await smokeTodayAddExercise(cdp, ctx.base);
     await smokeTodayCardioSkip(cdp, ctx.base);
     await smokeChatAttachmentFocus(cdp, ctx.base);
+    await smokeChatSendStreamReconnect(cdp, ctx.base);
     await smokeSettingsDataControls(cdp, ctx.base);
     await smokeProgressSegmentNavigation(cdp, ctx.base);
     await smokePlanSegmentNavigation(cdp, ctx.base);
@@ -1048,6 +1176,9 @@ try {
   }
   exitCode = 1;
 } finally {
+  if (smokeAgents?.dir) {
+    try { rmSync(smokeAgents.dir, { recursive: true, force: true }); } catch {}
+  }
   if (cdp) cdp.close();
   await stopChrome(chrome);
 }

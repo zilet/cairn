@@ -143,6 +143,8 @@ declare global {
     hasLoggedSets: boolean;
   };
 
+  type ClientTodaySessionFeedbackDeps = Pick<ClientTodaySessionControllerDeps, "api" | "sessionStatus" | "state" | "toast">;
+
   type ClientTodayBriefControllerDeps = {
     root: HTMLElement;
     state: Pick<ClientAppState, "tab" | "logDate" | "brief" | "_briefInflight" | "_briefMorph" | "focus" | "plan" | "planReveal" | "progressSeg"> & {
@@ -1242,6 +1244,12 @@ declare global {
       priorityMarkersSectionHtml(markers: unknown): string;
     };
 
+    CairnHealthReadSynthesis: {
+      load(deps: ClientHealthReadControllerDeps, token: number): void;
+      render(data: unknown, deps: ClientHealthReadControllerDeps, token?: number | null): void;
+      trigger(deps: ClientHealthReadControllerDeps): void;
+    };
+
     CairnHealthReadController: {
       paintTab(deps: ClientHealthReadControllerDeps): void;
       loadSynthesis(deps: ClientHealthReadControllerDeps, token: number): void;
@@ -1949,6 +1957,14 @@ declare global {
       wireSkips(deps: ClientTodaySessionControllerDeps): void;
     };
 
+    CairnTodaySessionFeedback: {
+      renderFeedback(
+        slot: Element | null | undefined,
+        session: Record<string, unknown>,
+        deps: ClientTodaySessionFeedbackDeps,
+      ): void;
+    };
+
     CairnTodayCards: {
       exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
       exerciseCardHtml(
@@ -2183,6 +2199,7 @@ declare global {
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
   declare const CairnHealthStandingController: Window["CairnHealthStandingController"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
+  declare const CairnHealthReadSynthesis: Window["CairnHealthReadSynthesis"];
   declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
@@ -2251,6 +2268,7 @@ declare global {
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];
+  declare const CairnTodaySessionFeedback: Window["CairnTodaySessionFeedback"];
   declare const CairnTodaySessionController: Window["CairnTodaySessionController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];

@@ -273,6 +273,7 @@ function loadController({ apiImpl } = {}) {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-feedback-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-controller.js"), "utf8"), context);
 
   const rootEl = new FakeElement("section");
@@ -410,6 +411,7 @@ test("Today session controller skips, undoes, and removes off-plan cards", async
   assert.equal(plan.isConnected, false);
   assert.equal(names.querySelectorAll("[data-unskip]").length, 1);
   assert.equal(line.classList.contains("skipline-empty"), false);
+  assert.deepEqual(plain(harness.renders), [{ soft: true }]);
   assert.equal(harness.toasts.at(-1).options.action, "Undo");
 
   harness.toasts.at(-1).options.onAction();
