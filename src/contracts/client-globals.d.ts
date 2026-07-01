@@ -165,6 +165,18 @@ declare global {
 
   type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
 
+  type ClientHealthPictureControllerDeps = {
+    root: ParentNode;
+    state: Pick<ClientAppState, "healthReview">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
+    onHealthReadView(): boolean;
+    pollToken(): number;
+    escapeHtml(value: unknown): string;
+    storage?: Pick<Storage, "getItem" | "setItem"> | null;
+  };
+
   type ClientHealthRecordsControllerDeps = {
     state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthDocId">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
@@ -823,6 +835,16 @@ declare global {
         stale: unknown,
         errorHtml: unknown,
       ): string;
+    };
+
+    CairnHealthPictureController: {
+      getHealthPictureCache(): ClientHealthPictureCache | null;
+      setHealthPictureCache(cache: ClientHealthPictureCache | null): ClientHealthPictureCache | null;
+      healthDocsKnownEmpty(deps?: Partial<ClientHealthPictureControllerDeps>): boolean;
+      isHealthReviewRunning(): boolean;
+      paintHealthPicture(deps: ClientHealthPictureControllerDeps): void;
+      runHealthReview(deps: ClientHealthPictureControllerDeps): Promise<void>;
+      loadHealthPicture(token: number, docsPromise: Promise<unknown>, deps: ClientHealthPictureControllerDeps): Promise<void>;
     };
 
     CairnHealthMarkers: {
@@ -1537,6 +1559,7 @@ declare global {
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
+  declare const CairnHealthPictureController: Window["CairnHealthPictureController"];
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
   declare const CairnHealthDirectiveLoader: Window["CairnHealthDirectiveLoader"];

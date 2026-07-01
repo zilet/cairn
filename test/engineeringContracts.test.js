@@ -759,6 +759,8 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-client\.js"/);
+  assert.match(sw, /"\/js\/health-picture-client\.js"/);
+  assert.match(sw, /"\/js\/health-picture-controller\.js"/);
   assert.match(sw, /"\/js\/health-directives-loader-client\.js"/);
   assert.match(sw, /"\/js\/health-learned-client\.js"/);
   assert.match(sw, /"\/js\/health-records-client\.js"/);
@@ -1098,6 +1100,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthReadSource = read("src/client/health-read-client.ts");
   const healthStandingSource = read("src/client/health-standing-client.ts");
   const healthPictureSource = read("src/client/health-picture-client.ts");
+  const healthPictureControllerSource = read("src/client/health-picture-controller.ts");
   const healthMarkersSource = read("src/client/health-markers-client.ts");
   const healthDirectivesSource = read("src/client/health-directives-client.ts");
   const healthDirectiveLoaderSource = read("src/client/health-directives-loader-client.ts");
@@ -1202,6 +1205,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthReadClient = read("public/js/health-read-client.js");
   const healthStandingClient = read("public/js/health-standing-client.js");
   const healthPictureClient = read("public/js/health-picture-client.js");
+  const healthPictureController = read("public/js/health-picture-controller.js");
   const healthMarkersClient = read("public/js/health-markers-client.js");
   const healthDirectivesClient = read("public/js/health-directives-client.js");
   const healthDirectiveLoaderClient = read("public/js/health-directives-loader-client.js");
@@ -1429,6 +1433,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /directiveHtml/);
   assert.match(clientGlobals, /CairnHealthPicture/);
   assert.match(clientGlobals, /reviewHtml\(/);
+  assert.match(clientGlobals, /ClientHealthPictureControllerDeps/);
+  assert.match(clientGlobals, /CairnHealthPictureController/);
+  assert.match(clientGlobals, /loadHealthPicture\(token: number, docsPromise: Promise<unknown>/);
   assert.match(clientGlobals, /CairnHealthMarkers/);
   assert.match(clientGlobals, /hmkRowHtml\(/);
   assert.match(clientGlobals, /CairnHealthDirectives/);
@@ -1766,6 +1773,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-read-client\.js/);
   assert.match(clientBuild, /src\/client\/health-standing-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-standing-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-picture-client\.ts/);
+  assert.match(clientBuild, /public\/js\/health-picture-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-picture-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/health-picture-controller\.js/);
   assert.match(clientBuild, /src\/client\/health-directives-loader-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-directives-loader-client\.js/);
   assert.match(clientBuild, /src\/client\/health-learned-client\.ts/);
@@ -2150,7 +2161,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "health-picture-client.js must load after Health Standing helpers and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-markers-client.js") > index.indexOf("/js/health-picture-client.js") &&
+    index.indexOf("/js/health-picture-controller.js") > index.indexOf("/js/health-picture-client.js") &&
+      index.indexOf("/js/health-picture-controller.js") < index.indexOf("/js/08-me-records.js"),
+    "health-picture-controller.js must load after Health Picture renderer and before Records view hydration"
+  );
+  assert.ok(
+    index.indexOf("/js/health-markers-client.js") > index.indexOf("/js/health-picture-controller.js") &&
       index.indexOf("/js/health-markers-client.js") < index.indexOf("/js/08-me-records.js"),
     "health-markers-client.js must load after Health picture helpers and before Records view hydration"
   );
@@ -3063,6 +3079,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthPictureSource, /function parsedReview\(review: HealthPictureReview/);
   assert.match(healthPictureSource, /function reviewHtml\(review: HealthPictureReview/);
   assert.match(healthPictureSource, /CairnHealthPicture/);
+  assert.match(healthPictureControllerSource, /type HealthPictureControllerDeps = \{/);
+  assert.match(healthPictureControllerSource, /function getHealthPictureCache\(\): HealthPictureCache \| null/);
+  assert.match(healthPictureControllerSource, /function paintHealthPicture\(deps: HealthPictureControllerDeps\): void/);
+  assert.match(healthPictureControllerSource, /async function runHealthReview\(deps: HealthPictureControllerDeps\): Promise<void>/);
+  assert.match(healthPictureControllerSource, /async function loadHealthPicture\(token: number, docsPromise: Promise<unknown>, deps: HealthPictureControllerDeps\): Promise<void>/);
+  assert.match(healthPictureControllerSource, /CairnHealthPictureController/);
   assert.match(healthMarkersSource, /type HealthMarkersPoint = \{/);
   assert.match(healthMarkersSource, /function markerChartSvg\(marker: HealthMarkersRow/);
   assert.match(healthMarkersSource, /function wireMarkerChart\(svg: SVGElement/);
@@ -3133,8 +3155,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(meHealthScreenSource, /id="profFields"/);
   assert.match(meHealthScreenSource, /function renderHealthSynthesis\(data: unknown, token\?: number \| null\): void/);
   assert.match(meHealthScreenSource, /function switchHealthSeg\(seg: ClientHealthSection, opts: \{ openPicker\?: boolean \} = \{\}\): void/);
-  assert.match(meHealthScreenSource, /function getHealthPictureCache\(\): HealthPictureCache \| null/);
-  assert.match(meHealthScreenSource, /function setHealthPictureCache\(cache: HealthPictureCache \| null\): HealthPictureCache \| null/);
+  assert.match(meHealthScreenSource, /function healthPictureDeps\(\)/);
+  assert.match(meHealthScreenSource, /CairnHealthPictureController\.getHealthPictureCache/);
+  assert.match(meHealthScreenSource, /CairnHealthPictureController\.setHealthPictureCache/);
+  assert.match(meHealthScreenSource, /CairnHealthPictureController\.paintHealthPicture/);
+  assert.match(meHealthScreenSource, /CairnHealthPictureController\.loadHealthPicture/);
+  assert.doesNotMatch(meHealthScreenSource, /let\s+_hReviewRun|let\s+_hReviewErr|function\s+healthPictureCacheRoot/);
   assert.match(meRecordsScreenSource, /function healthRecordsDeps\(\)/);
   assert.match(meRecordsScreenSource, /getHealthPictureCache/);
   assert.match(meRecordsScreenSource, /setHealthPictureCache/);
@@ -3485,6 +3511,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthPictureClient, /reviewBusyHtml/);
   assert.match(healthPictureClient, /reviewHtml/);
   assert.doesNotMatch(healthPictureClient, /^function\s+parsedReview|^function\s+reviewHtml/m);
+  assert.match(healthPictureController, /CairnHealthPictureController: CAIRN_HEALTH_PICTURE_CONTROLLER/);
+  assert.match(healthPictureController, /getHealthPictureCache/);
+  assert.match(healthPictureController, /loadHealthPicture/);
   assert.match(healthMarkersClient, /Object\.assign\(globalThis, \{ CairnHealthMarkers: CAIRN_HEALTH_MARKERS \}\)/);
   assert.match(healthMarkersClient, /window\.CairnHealthMarkers = CAIRN_HEALTH_MARKERS/);
   assert.match(healthMarkersClient, /markerChartSvg/);
@@ -3666,6 +3695,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(health, /CairnHealthPicture\.parsedReview/);
   assert.match(health, /CairnHealthPicture\.healthHeroHtml/);
   assert.match(health, /CairnHealthPicture\.reviewHtml/);
+  assert.match(health, /CairnHealthPictureController\.paintHealthPicture/);
+  assert.match(health, /CairnHealthPictureController\.runHealthReview/);
+  assert.match(health, /CairnHealthPictureController\.loadHealthPicture/);
   assert.match(health, /CairnHealthStanding\.renderHealthStandingHtml/);
   assert.match(health, /CairnHealthStanding\.localDateTimeInputValue/);
   assert.match(health, /CairnHealthRead\.recoveryNoDataHtml/);
@@ -3791,6 +3823,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-client\.js"/);
+  assert.match(sw, /"\/js\/health-picture-client\.js"/);
+  assert.match(sw, /"\/js\/health-picture-controller\.js"/);
   assert.match(sw, /"\/js\/health-directives-loader-client\.js"/);
   assert.match(sw, /"\/js\/health-learned-client\.js"/);
   assert.match(sw, /"\/js\/health-records-client\.js"/);

@@ -1,14 +1,5 @@
 (() => {
-function healthPictureCacheRoot() {
-    return globalThis;
-}
-function getHealthPictureCache() {
-    return healthPictureCacheRoot()._hPic ?? null;
-}
-function setHealthPictureCache(cache) {
-    healthPictureCacheRoot()._hPic = cache;
-    return cache;
-}
+// ==== 07-me-health.js ====
 {
     function healthScreenRecord(value) {
         return value && typeof value === "object" ? value : {};
@@ -266,13 +257,26 @@ function setHealthPictureCache(cache) {
         });
     }
     // ---------- Me: Health — the whole picture (review · markers · records) ----------
-    // The shared health-picture cache keeps Records and Health coordinated across
-    // generated IIFEs; the in-flight
-    // review run lives at module level so it survives sub-view re-renders (the POST can
-    // take minutes — an agent CLI run) and quietly lands wherever the user is.
-    let _hReviewRun = null; // in-flight POST /health/review promise
-    let _hReviewErr = null; // gentle inline message after a failed run
     let _hReadSpy = null; // scroll-spy IntersectionObserver for the Read tab's sticky nav
+    function healthPictureDeps() {
+        return {
+            root: view,
+            state,
+            api,
+            toast,
+            switchHealthSeg,
+            onHealthReadView,
+            pollToken: () => pollToken,
+            escapeHtml: escHtml,
+            storage: typeof localStorage !== "undefined" ? localStorage : null,
+        };
+    }
+    function getHealthPictureCache() {
+        return CairnHealthPictureController.getHealthPictureCache();
+    }
+    function setHealthPictureCache(cache) {
+        return CairnHealthPictureController.setHealthPictureCache(cache);
+    }
     function parsedReview(r) {
         return CairnHealthPicture.parsedReview(r);
     }
@@ -291,101 +295,14 @@ function setHealthPictureCache(cache) {
     function reviewHtml(review, stale, err) {
         return CairnHealthPicture.reviewHtml(review, stale, err);
     }
-    // Paint #hPicture from the shared cache + the in-flight run state. Safe to call anytime —
-    // bails unless the Health sub-view is live.
     function paintHealthPicture() {
-        const wrap = $("#hPicture");
-        if (!wrap || !onHealthReadView() || !wrap.isConnected)
-            return;
-        if (_hReviewRun) {
-            wrap.innerHTML = reviewBusyHtml();
-            return;
-        }
-        const pic = getHealthPictureCache() ?? {};
-        const err = _hReviewErr ? `<div class="hpic-err">${escHtml(_hReviewErr)}</div>` : "";
-        const p = parsedReview(pic.review);
-        if (!p && !((pic.docCount ?? 0) > 0)) {
-            // nothing shared yet → inviting hero; CTA jumps to the Records tab + file picker
-            wrap.innerHTML = healthHeroHtml(err);
-            const b = $("#hHeroShare");
-            if (b)
-                b.addEventListener("click", () => switchHealthSeg("records", { openPicker: true }));
-            return;
-        }
-        if (!p) {
-            // records exist but no review yet → primary "build" action
-            wrap.innerHTML = buildPictureHtml(err, pic.docCount ?? 0);
-            const b = $("#hRevBtn");
-            if (b)
-                b.addEventListener("click", runHealthReview);
-            return;
-        }
-        const review = (pic.review || {});
-        const rT = Date.parse(String(review.created_at || "")) || 0;
-        const dT = Date.parse(pic.newestDocAt || "") || 0;
-        wrap.innerHTML = reviewHtml(review, rT > 0 && dT > rT, err);
-        const b = $("#hRevBtn");
-        if (b)
-            b.addEventListener("click", runHealthReview);
+        CairnHealthPictureController.paintHealthPicture(healthPictureDeps());
     }
-    // POST /api/health/review — an agent run that can take minutes. One in-flight run
-    // max; the shimmer card holds the slot, and ok:false lands as a gentle inline note.
     async function runHealthReview() {
-        if (_hReviewRun)
-            return;
-        _hReviewErr = null;
-        _hReviewRun = api("/health/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-            .then((res) => (res && typeof res === "object" ? res : null))
-            .catch(() => null);
-        paintHealthPicture();
-        const res = await _hReviewRun;
-        _hReviewRun = null;
-        if (res && res.ok && res.review) {
-            state.healthReview = res.review;
-            setHealthPictureCache({ ...(getHealthPictureCache() || {}), review: res.review });
-            toast("Your picture is ready");
-        }
-        else {
-            _hReviewErr = res && res.error
-                ? `The review didn't finish: ${res.error}`
-                : "The review didn't come back — give it another try in a bit.";
-        }
-        paintHealthPicture();
+        await CairnHealthPictureController.runHealthReview(healthPictureDeps());
     }
     async function loadHealthPicture(token, docsP) {
-        let review = null, docs = [], docsOk = false;
-        try {
-            const rawReview = await api("/health/review");
-            review = rawReview && typeof rawReview === "object" ? rawReview : null;
-        }
-        catch {
-            review = null;
-        }
-        try {
-            docs = healthScreenRows(await docsP);
-            docsOk = true;
-        }
-        catch {
-            docs = [];
-        }
-        if (review && review.error)
-            review = null;
-        if (review)
-            state.healthReview = review;
-        if (token !== pollToken)
-            return; // navigated away / re-rendered
-        const newest = docs.reduce((m, d) => (d.created_at && (!m || d.created_at > m) ? d.created_at : m), null);
-        setHealthPictureCache({ review, docCount: docs.length, newestDocAt: newest });
-        // Persist the count so a returning new-user (a fresh page load resets the cache) still
-        // opens Health on Records until they've added a document — see healthDocsKnownEmpty.
-        // Only on a real fetch: a transient offline [] must never cache a false zero.
-        if (docsOk) {
-            try {
-                localStorage.setItem("cairn:healthDocCount", String(docs.length));
-            }
-            catch { }
-        }
-        paintHealthPicture();
+        await CairnHealthPictureController.loadHealthPicture(token, docsP, healthPictureDeps());
     }
     // ---- markers (trends) ----
     function fmtMkNum(v) {
@@ -548,16 +465,7 @@ function setHealthPictureCache(cache) {
     // brand-new user on Records (where they upload) instead of an empty Standing read.
     // Returns false when the count is unknown, so we only override on a confident zero.
     function healthDocsKnownEmpty() {
-        const pic = getHealthPictureCache();
-        if (pic && Number.isFinite(pic.docCount))
-            return pic.docCount === 0;
-        try {
-            const cached = localStorage.getItem("cairn:healthDocCount");
-            if (cached != null)
-                return Number(cached) === 0;
-        }
-        catch { }
-        return false;
+        return CairnHealthPictureController.healthDocsKnownEmpty(healthPictureDeps());
     }
     // Health is a one-level inner view: the Me seg picks "Health", then a single inner
     // seg picks Read / Markers / Records / Share. Splitting these bounds each view's scroll and
@@ -735,7 +643,7 @@ function setHealthPictureCache(cache) {
             void directivesLoaded.then(() => { if (token === pollToken)
                 scrollHealthRailIntoView("#hbDirectives"); });
         }
-        if (_hReviewRun) {
+        if (CairnHealthPictureController.isHealthReviewRunning()) {
             paintHealthPicture();
             return;
         } // a run is still cooking
