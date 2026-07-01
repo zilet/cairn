@@ -777,6 +777,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-data-client\.js"/);
+  assert.match(sw, /"\/js\/settings-data-controller\.js"/);
   assert.match(sw, /"\/js\/settings-agents-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/route-state\.js"/);
@@ -1078,6 +1079,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const settingsRoutesSource = read("src/client/settings-routes.ts");
   const settingsClientSource = read("src/client/settings-client.ts");
   const settingsDataSource = read("src/client/settings-data-client.ts");
+  const settingsDataControllerSource = read("src/client/settings-data-controller.ts");
   const settingsAgentsSource = read("src/client/settings-agents-client.ts");
   const settingsScreenSource = read("src/client/settings-screen.ts");
   const chatClientSource = read("src/client/chat-client.ts");
@@ -1222,6 +1224,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const chatHistoryClient = read("public/js/chat-history-client.js");
   const settingsClient = read("public/js/settings-client.js");
   const settingsData = read("public/js/settings-data-client.js");
+  const settingsDataController = read("public/js/settings-data-controller.js");
   const settingsAgents = read("public/js/settings-agents-client.js");
   const settingsScreen = read("public/js/settings-screen.js");
   const todayCardsClient = read("public/js/today-cards-client.js");
@@ -1588,6 +1591,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/health-docs-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-data-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/settings-data-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-agents-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/settings-screen\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/route-state\.js/);
@@ -1731,6 +1735,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-client\.js/);
   assert.match(clientBuild, /src\/client\/settings-data-client\.ts/);
   assert.match(clientBuild, /public\/js\/settings-data-client\.js/);
+  assert.match(clientBuild, /src\/client\/settings-data-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/settings-data-controller\.js/);
   assert.match(clientBuild, /src\/client\/settings-agents-client\.ts/);
   assert.match(clientBuild, /public\/js\/settings-agents-client\.js/);
   assert.match(clientBuild, /src\/client\/settings-screen\.ts/);
@@ -2272,11 +2278,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/settings-data-client.js") > index.indexOf("/js/settings-client.js") &&
-      index.indexOf("/js/settings-data-client.js") < index.indexOf("/js/settings-agents-client.js"),
-    "settings-data-client.js must load before Settings Agents helpers"
+      index.indexOf("/js/settings-data-client.js") < index.indexOf("/js/settings-data-controller.js"),
+    "settings-data-client.js must load before Settings Data controller"
   );
   assert.ok(
-    index.indexOf("/js/settings-agents-client.js") > index.indexOf("/js/settings-data-client.js") &&
+    index.indexOf("/js/settings-data-controller.js") > index.indexOf("/js/settings-data-client.js") &&
+      index.indexOf("/js/settings-data-controller.js") < index.indexOf("/js/settings-agents-client.js"),
+    "settings-data-controller.js must load before Settings Agents helpers"
+  );
+  assert.ok(
+    index.indexOf("/js/settings-agents-client.js") > index.indexOf("/js/settings-data-controller.js") &&
       index.indexOf("/js/settings-agents-client.js") < index.indexOf("/js/settings-screen.js"),
     "settings-agents-client.js must load before settings-screen.js"
   );
@@ -2524,6 +2535,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/settings-client\.js/);
   assert.match(clientBuild, /src\/client\/settings-data-client\.ts/);
   assert.match(clientBuild, /public\/js\/settings-data-client\.js/);
+  assert.match(clientBuild, /src\/client\/settings-data-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/settings-data-controller\.js/);
   assert.match(clientBuild, /src\/client\/settings-agents-client\.ts/);
   assert.match(clientBuild, /public\/js\/settings-agents-client\.js/);
   assert.match(clientBuild, /src\/client\/settings-screen\.ts/);
@@ -2958,16 +2971,23 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsClientSource, /function updateCardHtml/);
   assert.match(settingsDataSource, /function phoneAccessCardHtml/);
   assert.match(settingsDataSource, /function wirePhoneAccessCard/);
+  assert.match(settingsDataControllerSource, /type SettingsDataControllerDeps = \{/);
+  assert.match(settingsDataControllerSource, /let updateStatusCache: Record<string, unknown> \| null = null/);
+  assert.match(settingsDataControllerSource, /function renderSettingsData\(deps: SettingsDataControllerDeps\): void/);
+  assert.match(settingsDataControllerSource, /CairnSettingsData\.phoneAccessCardHtml/);
+  assert.match(settingsDataControllerSource, /CairnSettingsData\.wirePhoneAccessCard/);
+  assert.match(settingsDataControllerSource, /CairnSettingsDataController/);
   assert.match(settingsAgentsSource, /function settingsAgentsSliceHtml/);
   assert.match(settingsAgentsSource, /function settingsAgentListHtml/);
   assert.match(settingsScreenSource, /type SettingsWorkingModel = \{/);
   assert.match(settingsScreenSource, /async function renderSettings\(\): Promise<void>/);
-  assert.match(settingsScreenSource, /CairnSettingsData\.phoneAccessCardHtml/);
-  assert.match(settingsScreenSource, /CairnSettingsData\.wirePhoneAccessCard/);
+  assert.match(settingsScreenSource, /function settingsDataDeps\(\): ClientSettingsDataControllerDeps/);
+  assert.match(settingsScreenSource, /CairnSettingsDataController\.render\(settingsDataDeps\(\)\)/);
   assert.match(settingsScreenSource, /CairnSettingsAgents\.agentsSliceHtml/);
   assert.match(settingsScreenSource, /CairnSettingsAgents\.agentListHtml/);
   assert.doesNotMatch(settingsScreenSource, /function phoneAccessCardHtml/);
   assert.doesNotMatch(settingsScreenSource, /function wirePhoneAccessCard/);
+  assert.doesNotMatch(settingsScreenSource, /id="updateCheckNow"|id="dlJson"|id="rerunSetup"/);
   assert.match(settingsScreenSource, /Object\.assign\(globalThis, \{/);
   assert.match(settingsScreenSource, /SET_SEG/);
   assert.match(
@@ -3586,6 +3606,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsClient, /CairnSettingsClient/);
   assert.match(settingsData, /\/\/ @ts-check/);
   assert.match(settingsData, /CairnSettingsData/);
+  assert.match(settingsDataController, /\/\/ @ts-check/);
+  assert.match(settingsDataController, /CairnSettingsDataController/);
+  assert.match(settingsDataController, /render: renderSettingsData/);
   assert.match(settingsAgents, /\/\/ @ts-check/);
   assert.match(settingsAgents, /CairnSettingsAgents/);
   assert.match(todayCardsSource, /function exerciseCardHtml/);
@@ -3846,6 +3869,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-data-client\.js"/);
+  assert.match(sw, /"\/js\/settings-data-controller\.js"/);
   assert.match(sw, /"\/js\/settings-agents-client\.js"/);
   assert.match(sw, /"\/js\/settings-screen\.js"/);
   assert.match(sw, /"\/js\/app-download\.js"/);

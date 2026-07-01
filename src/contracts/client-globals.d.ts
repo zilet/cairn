@@ -165,6 +165,19 @@ declare global {
 
   type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
 
+  type ClientSettingsDataControllerDeps = {
+    root: ParentNode;
+    workingModel: { update_check_enabled: boolean };
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    markDirty(): void;
+    updateCardHtml(status: unknown): string;
+    withToken(path: string): string;
+    downloadFile(path: string): void;
+    reload(): void;
+    inStandaloneApp?: boolean;
+  };
+
   type ClientHealthPictureControllerDeps = {
     root: ParentNode;
     state: Pick<ClientAppState, "healthReview">;
@@ -1114,6 +1127,10 @@ declare global {
       }): void;
     };
 
+    CairnSettingsDataController: {
+      render(deps: ClientSettingsDataControllerDeps): void;
+    };
+
     CairnSettingsAgents: {
       agentsSliceHtml(options: {
         agentStrategy: string;
@@ -1585,6 +1602,7 @@ declare global {
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
+  declare const CairnSettingsDataController: Window["CairnSettingsDataController"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];

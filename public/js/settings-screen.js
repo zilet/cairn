@@ -134,7 +134,6 @@
         // re-render of the Agents slice doesn't re-hit the network for what we already have.
         const agentInfo = {}; // name → {version, model_current, update_available}
         const agentModels = {}; // name → [..]
-        let updateStatusCache = null; // {current, latest, update_available, html_url, checked_at, enabled, error}; lazily fetched in the Data slice
         // Side cards (built once; folded into the Agents slice). All degrade to "" when the
         // backing endpoint is absent/empty.
         const agentHealthHtml = agentHealthCard(agentStats);
@@ -505,68 +504,22 @@
         function updateCardHtml(st) {
             return CairnSettingsClient.updateCardHtml(st, { updateCheckEnabled: wm.update_check_enabled });
         }
+        function settingsDataDeps() {
+            return {
+                root: slice(),
+                workingModel: wm,
+                api,
+                toast,
+                markDirty: () => settingsBar.markDirty(),
+                updateCardHtml,
+                withToken,
+                downloadFile,
+                reload: () => location.reload(),
+                inStandaloneApp,
+            };
+        }
         function renderDataSlice() {
-            slice().innerHTML = `
-      <section class="set-group set-group--flush">
-        <p class="set-group-sub">Keep an offline copy of everything, check for new versions, or start the first-time setup over.</p>
-        ${CairnSettingsData.phoneAccessCardHtml({ inStandaloneApp })}
-
-        <h1 class="lbl" style="margin:14px 0 8px">Cairn version</h1>
-        <div id="updateCard" class="sess">${updateCardHtml(updateStatusCache)}</div>
-        <label class="toggle" style="margin-top:12px"><input type="checkbox" id="updateCheckEnabled" ${wm.update_check_enabled ? "checked" : ""}>
-          <span>Check for new Cairn releases</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">A quiet daily check against the public GitHub Releases page — pull, never a notification. It sends nothing but an anonymous request; no data leaves your instance. Off keeps Cairn fully offline.</div>
-        <button id="updateCheckNow" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:10px;${wm.update_check_enabled ? "" : "display:none"}">Check now</button>
-
-        <h1 class="lbl" style="margin:22px 0 8px">Data &amp; backup</h1>
-        <button id="dlJson" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Download JSON backup</button>
-        <button id="dlDb" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">Download SQLite snapshot</button>
-
-        <h1 class="lbl" style="margin:22px 0 8px">Setup</h1>
-        <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>
-      </section>`;
-            CairnSettingsData.wirePhoneAccessCard({ api, toast });
-            const refreshUpdateCard = () => { const el = optionalEl("#updateCard"); if (el)
-                el.innerHTML = updateCardHtml(updateStatusCache); };
-            requiredEl("#updateCheckEnabled").addEventListener("change", (e) => {
-                wm.update_check_enabled = eventInput(e).checked;
-                settingsBar.markDirty();
-                const btn = optionalEl("#updateCheckNow");
-                if (btn)
-                    btn.style.display = wm.update_check_enabled ? "" : "none";
-                refreshUpdateCard();
-            });
-            requiredEl("#updateCheckNow").addEventListener("click", async () => {
-                const btn = requiredEl("#updateCheckNow");
-                btn.disabled = true;
-                btn.textContent = "Checking…";
-                try {
-                    updateStatusCache = settingsScreenRecord(await api("/update-check", { method: "POST" }));
-                }
-                catch { /* leave the prior status; updateCardHtml shows what we have */ }
-                if (!btn.isConnected)
-                    return; // slice/tab swapped away while we waited
-                refreshUpdateCard();
-                btn.disabled = false;
-                btn.textContent = "Check now";
-            });
-            requiredEl("#dlJson").addEventListener("click", () => downloadFile(withToken("/api/export")));
-            requiredEl("#dlDb").addEventListener("click", () => downloadFile(withToken("/api/export/db")));
-            requiredEl("#rerunSetup").addEventListener("click", async () => {
-                await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ onboarded: false }) });
-                location.reload();
-            });
-            // Lazy: pull the cached status (no network on the server side) on first entry
-            // into the Data slice, then fill the card in place. Cached for re-entry.
-            if (!updateStatusCache) {
-                api("/update-status").then((st) => {
-                    if (!st)
-                        return;
-                    updateStatusCache = settingsScreenRecord(st);
-                    if (optionalEl("#updateCard"))
-                        refreshUpdateCard();
-                }).catch(() => { });
-            }
+            CairnSettingsDataController.render(settingsDataDeps());
         }
         const SLICES = { agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
         const paintSlice = (key) => (SLICES[key || "agents"] || renderAgentsSlice)();
