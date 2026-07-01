@@ -44,6 +44,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-session-suggest-client.ts", output: "public/js/today-session-suggest-client.js" },
   { source: "src/client/today-session-suggest-controller.ts", output: "public/js/today-session-suggest-controller.js" },
   { source: "src/client/today-session-status-client.ts", output: "public/js/today-session-status-client.js" },
+  { source: "src/client/today-session-controller.ts", output: "public/js/today-session-controller.js" },
   { source: "src/client/today-cards-client.ts", output: "public/js/today-cards-client.js" },
   { source: "src/client/today-program-adjustments-client.ts", output: "public/js/today-program-adjustments-client.js" },
   { source: "src/client/today-week-ahead-client.ts", output: "public/js/today-week-ahead-client.js" },

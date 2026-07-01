@@ -99,6 +99,48 @@ declare global {
     healthStandingRef?: number;
   };
 
+  type ClientTodaySessionControllerDeps = {
+    root: HTMLElement;
+    state: {
+      tab?: string;
+      logDate: string;
+      brief?: unknown;
+      planReveal?: { date: string; on: boolean; blank?: boolean } | null;
+      pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
+    };
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    invalidate(key: string): void;
+    invalidateTodayProgression(): void;
+    scheduleRxRefresh(): void;
+    renderToday(opts?: Record<string, unknown>): unknown;
+    activateTab(tab: string): void;
+    withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+    viewEnter(): void;
+    reducedMotion(): boolean;
+    startRest(): void;
+    stopRest(): void;
+    toast(message: string, options?: { action?: string; onAction?: () => void }): void;
+    parseDur(value: string): number | null;
+    fmtDur(seconds: number): string;
+    collapseEl(el: Element, done?: () => void): void;
+    expandEl(el: Element): void;
+    localISO(): string;
+    sessionStatus: {
+      feedbackDoneHtml(session: Record<string, unknown> | null | undefined): string;
+      feedbackFormHtml(session: Record<string, unknown> | null | undefined): string;
+      feedbackOpenHtml(): string;
+      hasFeedback(session: Record<string, unknown> | null | undefined): boolean;
+      setChipHtml(set: Record<string, unknown>, index?: number | null | undefined): string;
+      skipLineHtml(names: unknown): string;
+      skipNameHtml(name: unknown): string;
+    };
+  };
+
+  type ClientTodaySessionSurfaceOptions = {
+    session: Record<string, unknown>;
+    hasLoggedSets: boolean;
+  };
+
   type ClientAgentOpHandlers = {
     path?: string;
     anchor?: string;
@@ -1219,6 +1261,18 @@ declare global {
       appendOffPlanCard(name: string, mode: string | null | undefined, deps: Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0]): Promise<void>;
     };
 
+    CairnTodaySessionController: {
+      renderFeedback(
+        slot: Element | null | undefined,
+        session: Record<string, unknown>,
+        deps: ClientTodaySessionControllerDeps,
+      ): void;
+      wireDeletes(deps: ClientTodaySessionControllerDeps): void;
+      wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void;
+      wireSessionSurface(options: ClientTodaySessionSurfaceOptions, deps: ClientTodaySessionControllerDeps): void;
+      wireSkips(deps: ClientTodaySessionControllerDeps): void;
+    };
+
     CairnTodayCards: {
       exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
       exerciseCardHtml(
@@ -1414,6 +1468,7 @@ declare global {
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];
+  declare const CairnTodaySessionController: Window["CairnTodaySessionController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];
   declare const CairnTodayLately: Window["CairnTodayLately"];
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];

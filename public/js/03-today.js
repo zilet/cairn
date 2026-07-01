@@ -88,9 +88,6 @@ function cardioEffortMatches(it, eff) {
 // the cardioSyncLine compatibility global used by Today, Progress, and Plan.
 // Cardio sync execution wiring also lives in /js/cardio-sync-client.js. It preserves
 // the wireCardioSync compatibility global used by Today, Progress, and Plan.
-function setChip(s, i) {
-    return CairnTodaySessionStatus.setChipHtml(s, i);
-}
 // Session status render helpers live in /js/today-session-status-client.js. They
 // own tonnage, set chips, completion, skip-line, and feedback markup while this
 // screen keeps DOM wiring and persistence.
@@ -1055,7 +1052,7 @@ async function renderToday(opts = {}) {
         }
         // Skipped exercises live on as one slim, muted line at the very bottom —
         // recoverable later in the day (tap a name to restore), never buried.
-        html += skipLineHtml(skippedItems.map((it) => (isCardioItem(it) ? cardioLabel(it) : it.exercise)));
+        html += CairnTodaySessionStatus.skipLineHtml(skippedItems.map((it) => (isCardioItem(it) ? cardioLabel(it) : it.exercise)));
         html += `</div>`; // .plansurface
     }
     // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
@@ -1245,72 +1242,8 @@ async function renderToday(opts = {}) {
         todayState.dayPicked = true;
         renderToday();
     }));
-    wireDeletes();
-    wireSkips();
     wireGuides(view);
-    const finishBtn = todayView.querySelector("#finishBtn");
-    if (finishBtn)
-        finishBtn.addEventListener("click", async () => {
-            finishBtn.disabled = true;
-            const notes = todayView.querySelector("#sessNotes").value.trim();
-            let r;
-            try {
-                r = await todayApi(`/sessions/${session.id}/finish`, {
-                    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes }),
-                });
-            }
-            catch {
-                finishBtn.disabled = false;
-                toast("Couldn't finish — check your connection");
-                return;
-            }
-            const sm = r.summary || {};
-            // finishing stamps the session (Today flips to the done card) and lands it in
-            // History — invalidate so renderToday + History read the finished todayState.
-            todayState.brief = null;
-            swrInvalidate("today:session:" + todayState.logDate);
-            swrInvalidate("history:sessions");
-            swrInvalidate("stats");
-            stopRest();
-            // Elite micro-exit: the logging surface lifts away, then Today re-renders to the
-            // calm "done" card (which reveals in). The workout now lives in your history.
-            const surface = todayView.querySelector(".plansurface");
-            const settle = () => {
-                if (todayState.tab !== "today")
-                    return; // user navigated away during the exit animation
-                toast(`Done · ${sm.sets || 0} sets · ${(sm.tonnage || 0).toLocaleString()} lb`);
-                renderToday();
-            };
-            if (surface && !reducedMotion()) {
-                surface.classList.add("slide-out");
-                setTimeout(settle, 300);
-            }
-            else {
-                settle();
-            }
-        });
-    // Done card: reopen to keep logging, or jump to the session in History.
-    const reopenBtn = todayView.querySelector("#reopenBtn");
-    if (reopenBtn)
-        reopenBtn.addEventListener("click", async () => {
-            reopenBtn.disabled = true;
-            try {
-                await todayApi(`/sessions/${session.id}/reopen`, { method: "POST" });
-            }
-            catch { }
-            // reopening clears finished_at — Today returns to the live surface; refresh caches.
-            todayState.brief = null;
-            swrInvalidate("today:session:" + todayState.logDate);
-            swrInvalidate("history:sessions");
-            todayState.planReveal = { date: todayState.logDate, on: true };
-            withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
-        });
-    const toHistoryBtn = todayView.querySelector("#toHistoryBtn");
-    if (toHistoryBtn)
-        toHistoryBtn.addEventListener("click", () => activateTab("progress"));
-    todayView.querySelectorAll(".ex .logrow").forEach((row) => wireLogRow(row));
-    if (hasLoggedSets)
-        renderFeedback(todayView.querySelector("#feedbackSlot"), session);
+    CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
     setupAddExercise();
     // SWR tail: once the background revalidations settle, if any of the 5 primary
     // inputs actually changed, softly re-render Today in place (numerals SNAP, never
@@ -1337,75 +1270,35 @@ async function renderToday(opts = {}) {
 function sessionDoneCard(session, day, { isToday }) {
     return CairnTodaySessionStatus.sessionDoneCardHtml(session, day, { isToday });
 }
-// ---------- Autoregulation: gentle 1-tap "how did that feel?" ----------
-// Optional, calm, dismissible. A 1-5 soreness + 1-5 performance tap and an
-// optional joint/area field, on a session that already has logged sets. The
-// session object (from GET /api/sessions?date=) already carries any prior
-// answer, so we render it as recorded when it's set. Recovery INFORMS the
-// coach — it never auto-changes a plan (you drive).
-function hasFeedback(session) {
-    return CairnTodaySessionStatus.hasFeedback(session);
-}
-function renderFeedback(slot, session) {
-    if (!slot)
-        return;
-    if (hasFeedback(session)) {
-        renderFeedbackDone(slot, session);
-        return;
-    }
-    // collapsed by default — one quiet line, opt-in
-    slot.innerHTML = CairnTodaySessionStatus.feedbackOpenHtml();
-    const open = slot.querySelector("#feedbackOpen");
-    if (open)
-        open.addEventListener("click", () => renderFeedbackForm(slot, session));
-}
-function renderFeedbackForm(slot, session) {
-    slot.innerHTML = CairnTodaySessionStatus.feedbackFormHtml(session);
-    const date = session.date || todayState.logDate;
-    const picked = {};
-    const save = async () => {
-        const joint = slot.querySelector("#feedbackJoint");
-        const jointVal = joint ? joint.value.trim() : "";
-        try {
-            const saved = await todayApi(`/sessions/${date}/feedback`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    soreness: picked.soreness, performance: picked.performance,
-                    joint_pain: jointVal || null,
-                }),
-            });
-            if (saved && !saved.error) {
-                Object.assign(session, saved);
-            }
-        }
-        catch { /* silent — it's optional */ }
+function todaySessionDeps() {
+    return {
+        root: todayView,
+        state: todayState,
+        api: todayApi,
+        invalidate: swrInvalidate,
+        invalidateTodayProgression,
+        scheduleRxRefresh,
+        renderToday,
+        activateTab,
+        withViewTransition,
+        viewEnter,
+        reducedMotion,
+        startRest,
+        stopRest,
+        toast,
+        parseDur,
+        fmtDur,
+        collapseEl,
+        expandEl,
+        localISO,
+        sessionStatus: CairnTodaySessionStatus,
     };
-    slot.querySelectorAll(".feel-dot").forEach((b) => b.addEventListener("click", async () => {
-        const kind = b.dataset.feel, val = Number(b.dataset.val);
-        picked[kind] = val;
-        slot.querySelectorAll(`.feel-dot[data-feel="${kind}"]`).forEach((d) => d.classList.toggle("feel-dot-on", Number(d.dataset.val) <= val));
-        await save();
-        toast("Noted");
-    }));
-    // a joint/area entered on its own is still worth recording
-    const joint = slot.querySelector("#feedbackJoint");
-    if (joint)
-        joint.addEventListener("change", () => { if (picked.soreness || picked.performance || joint.value.trim())
-            save(); });
-    const dismiss = slot.querySelector("#feedbackDismiss");
-    if (dismiss)
-        dismiss.addEventListener("click", () => { slot.innerHTML = ""; });
 }
-function renderFeedbackDone(slot, session) {
-    const html = CairnTodaySessionStatus.feedbackDoneHtml(session);
-    if (!html) {
-        slot.innerHTML = "";
-        return;
-    }
-    slot.innerHTML = html;
-    const edit = slot.querySelector("#feedbackEdit");
-    if (edit)
-        edit.addEventListener("click", () => renderFeedbackForm(slot, session));
+function wireLogRow(row) {
+    CairnTodaySessionController.wireLogRow(row, todaySessionDeps());
+}
+function wireSkips() {
+    CairnTodaySessionController.wireSkips(todaySessionDeps());
 }
 // Wire the Brief's launchpad: override chips reshape the read; redirects open the
 // rest of Today (train anyway / pull in plan / ask for a session). Nothing here is
@@ -1641,167 +1534,6 @@ function reconnectDayReadOverride(job) {
         onCanceled: () => { clearBusy(); o.onFail(null); },
     };
 }
-// delete wiring (re-callable after inline chip inserts; guards against double-binding)
-function wireDeletes() {
-    todayView.querySelectorAll("[data-del]").forEach((b) => {
-        if (b._wired)
-            return;
-        b._wired = true;
-        b.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            await todayApi(`/sets/${b.dataset.del}`, { method: "DELETE" });
-            // a removed set changes this date's session + stats + History — invalidate so
-            // the wholesale renderToday below (and other surfaces) read truth.
-            todayState.brief = null;
-            swrInvalidate("today:session:" + todayState.logDate);
-            swrInvalidate("stats");
-            swrInvalidate("history:sessions");
-            swrInvalidate("progress:volume");
-            invalidateTodayProgression();
-            // refresh from server so set numbers + counts stay correct
-            renderToday();
-        });
-    });
-}
-// ---------- skip an exercise for the day ("not today") ----------
-// collapseEl / expandEl live in ui-motion-client.ts and stay compatibility globals
-// for Today, Capture, Progress, and Health directive cards.
-// The slim "Skipped: …" line at the very bottom of Today. Hidden while empty.
-function skipNameHtml(name) {
-    return CairnTodaySessionStatus.skipNameHtml(name);
-}
-function skipLineHtml(names) {
-    return CairnTodaySessionStatus.skipLineHtml(names);
-}
-function addSkipName(name) {
-    const line = todayView.querySelector("#skipLine");
-    if (!line)
-        return;
-    const names = line.querySelector(".skipline-names");
-    const dup = [...names.querySelectorAll("[data-unskip]")]
-        .some((b) => decodeURIComponent(b.dataset.unskip).toLowerCase() === name.toLowerCase());
-    if (!dup) {
-        const tpl = document.createElement("template");
-        tpl.innerHTML = skipNameHtml(name).trim();
-        const el = tpl.content.firstElementChild;
-        if (!el || !names)
-            return;
-        el.classList.add("chip-in");
-        names.appendChild(el);
-    }
-    line.classList.remove("skipline-empty");
-}
-function removeSkipName(name) {
-    const line = todayView.querySelector("#skipLine");
-    if (!line)
-        return;
-    [...line.querySelectorAll("[data-unskip]")]
-        .filter((b) => decodeURIComponent(b.dataset.unskip).toLowerCase() === name.toLowerCase())
-        .forEach((b) => b.remove());
-    if (!line.querySelector("[data-unskip]"))
-        line.classList.add("skipline-empty");
-}
-async function skipFromCard(card, exercise) {
-    let res;
-    try {
-        res = await todayApi("/sessions/skip", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ date: todayState.logDate, exercise }),
-        });
-    }
-    catch {
-        toast("Couldn't skip — try again");
-        return;
-    }
-    if (!res || res.ok !== true) {
-        toast(res && res.error ? "Sets already logged — delete them first" : "Couldn't skip — try again");
-        return;
-    }
-    swrInvalidate("today:session:" + todayState.logDate); // the session's skips changed
-    // remember where the card sat so UNDO can put it back in place, wiring intact
-    const anchor = card.nextElementSibling;
-    collapseEl(card, () => { card.remove(); addSkipName(exercise); });
-    toast(`${exercise} skipped today`, { action: "Undo", onAction: () => undoSkip(card, anchor, exercise) });
-}
-async function undoSkip(card, anchor, exercise) {
-    try {
-        await todayApi("/sessions/skip", {
-            method: "DELETE", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ date: todayState.logDate, exercise }),
-        });
-    }
-    catch {
-        toast("Couldn't restore — try again");
-        return;
-    }
-    swrInvalidate("today:session:" + todayState.logDate); // the session's skips changed
-    if (todayState.tab !== "today")
-        return;
-    removeSkipName(exercise);
-    if (!card.isConnected) {
-        // the detached card kept all its listeners — slot it back where it was.
-        // Insert relative to the ref node's own parent (.plansurface), since
-        // insertBefore needs the ref to be a direct child of the caller.
-        const before = anchor && anchor.isConnected ? anchor : todayView.querySelector(".addex");
-        if (!before || !before.parentNode) {
-            renderToday();
-            return;
-        }
-        before.parentNode.insertBefore(card, before);
-    }
-    expandEl(card);
-}
-// An off-plan card with no logged sets isn't persisted anywhere — it's a transient
-// DOM card from appendOffPlanCard — so removing it is a pure in-flow collapse, no API.
-function removeOffPlanCard(card) {
-    if (!card)
-        return;
-    // drop it from the pending list too, so a later re-render doesn't bring it back.
-    const name = card.dataset && card.dataset.card;
-    if (name && todayState.pendingOffPlan && todayState.pendingOffPlan[todayState.logDate]) {
-        todayState.pendingOffPlan[todayState.logDate] = todayState.pendingOffPlan[todayState.logDate].filter((p) => p.name.toLowerCase() !== name.toLowerCase());
-    }
-    collapseEl(card, () => card.remove());
-}
-function wireSkips() {
-    todayView.querySelectorAll(".ex-skip").forEach((b) => {
-        if (b._wired)
-            return;
-        b._wired = true;
-        b.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const card = b.closest(".ex");
-            if (b.hasAttribute("data-remove-card")) {
-                removeOffPlanCard(card);
-                return;
-            }
-            skipFromCard(card, decodeURIComponent(b.dataset.skip));
-        });
-    });
-    const line = todayView.querySelector("#skipLine");
-    if (line && !line._wired) {
-        line._wired = true;
-        line.addEventListener("click", async (e) => {
-            const b = e.target.closest("[data-unskip]");
-            if (!b)
-                return;
-            const exercise = decodeURIComponent(b.dataset.unskip);
-            try {
-                await todayApi("/sessions/skip", {
-                    method: "DELETE", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ date: todayState.logDate, exercise }),
-                });
-            }
-            catch {
-                toast("Couldn't restore — try again");
-                return;
-            }
-            swrInvalidate("today:session:" + todayState.logDate); // the session's skips changed
-            toast(`${exercise} is back on`);
-            renderToday(); // full refresh rebuilds the card in its plan position
-        });
-    }
-}
 // ---- Keep the adapted prescription in step with the sets being logged ----
 // The per-lift "next up / hold / ease off" line (exRxLineHtml) is the visible proof
 // the plan FOLLOWS what you logged — so it must not stay frozen at render-time after
@@ -1828,152 +1560,6 @@ function invalidateTodayProgression() {
 }
 async function refreshAdaptedRx() {
     await CairnTodayProgressionController.refreshAdaptedRx(todayProgressionDeps());
-}
-// Log one set from a card's logrow; update the card inline without a full re-render.
-function wireLogRow(row) {
-    if (!row)
-        return;
-    const logBtn = row.querySelector(".logbtn");
-    if (!logBtn || logBtn._wired)
-        return;
-    logBtn._wired = true;
-    logBtn.addEventListener("click", async () => {
-        if (logBtn.disabled)
-            return;
-        const timed = row.dataset.mode === "timed";
-        let body;
-        if (timed) {
-            const durEl = row.querySelector(".in-dur");
-            const sec = parseDur(durEl.value);
-            if (sec == null || sec <= 0) {
-                toast("Time? e.g. 1:30 or 90");
-                durEl.focus();
-                return;
-            }
-            durEl.value = fmtDur(sec); // normalise the display for the next tap
-            body = {
-                exercise: decodeURIComponent(row.dataset.ex),
-                weight: null, reps: null, rir: null,
-                duration_sec: sec, exercise_mode: "timed",
-                day_number: Number(row.dataset.day),
-                date: todayState.logDate,
-            };
-        }
-        else {
-            const wEl = row.querySelector(".in-w"), rEl = row.querySelector(".in-r"), rirEl = row.querySelector(".in-rir");
-            const w = wEl.value, r = rEl.value, rir = rirEl.value;
-            if (r === "") {
-                toast("Reps?");
-                rEl.focus();
-                return;
-            }
-            body = {
-                exercise: decodeURIComponent(row.dataset.ex),
-                weight: w === "" ? null : Number(w),
-                reps: Number(r),
-                rir: rir === "" ? null : Number(rir),
-                day_number: Number(row.dataset.day),
-                date: todayState.logDate,
-            };
-        }
-        logBtn.disabled = true;
-        let res;
-        try {
-            res = await todayApi("/sets", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-        }
-        catch {
-            logBtn.disabled = false;
-            toast("Couldn't log that set — check your connection.");
-            return;
-        }
-        logBtn.disabled = false;
-        if (!res || res.ok === false || res.error || res.id == null) {
-            toast(res && res.error ? res.error : "Couldn't log that set.");
-            return;
-        }
-        todayState.brief = null; // a logged set reshapes today — the next Today render re-reads the Brief
-        // a logged set changes this date's session, the weekly stats, and the History
-        // list — drop their SWR caches so every surface revalidates to truth.
-        swrInvalidate("today:session:" + todayState.logDate);
-        swrInvalidate("stats");
-        swrInvalidate("history:sessions");
-        swrInvalidate("progress:volume"); // muscle-group volume shifts too
-        invalidateTodayProgression();
-        // inline: append chip, tick progress, keep inputs populated for the next tap
-        const card = row.closest(".ex");
-        const loggedWrap = card.querySelector("[data-logged]");
-        const tpl = document.createElement("template");
-        tpl.innerHTML = setChip({ id: res.id, set_number: res.set_number, weight: res.weight, reps: res.reps, rir: res.rir, duration_sec: res.duration_sec ?? null }).trim();
-        const chipEl = tpl.content.firstElementChild;
-        if (!card || !loggedWrap || !chipEl)
-            return;
-        chipEl.classList.add("chip-in");
-        loggedWrap.appendChild(chipEl);
-        wireDeletes();
-        bumpProgress(card);
-        const skipCtl = card.querySelector(".ex-skip");
-        if (skipCtl)
-            skipCtl.remove(); // a logged set makes the card no longer skippable
-        if (res.pr) {
-            toast("🏆 New PR!");
-            if (navigator.vibrate)
-                navigator.vibrate([60, 40, 120]);
-        }
-        else
-            toast("Set logged");
-        startRest();
-        // refreshFinishStat returns true when it fired a full re-render (first set of an
-        // empty date) — that path already re-fetches progression + repaints every card, so
-        // we only schedule the standalone, debounced prescription refresh otherwise. This
-        // is what keeps the adapted "next up / hold / ease off" line in step with the sets.
-        if (!refreshFinishStat())
-            scheduleRxRefresh();
-    });
-}
-function bumpProgress(card) {
-    const prog = card.querySelector("[data-prog]");
-    if (!prog)
-        return;
-    const done = card.querySelectorAll("[data-logged] .chip").length;
-    const m = (prog.textContent.match(/\/\s*(\d+)/) || [])[1];
-    const goal = m ? Number(m) : 0;
-    prog.innerHTML = `${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span>`;
-    const complete = goal && done >= goal;
-    prog.classList.toggle("done", !!complete);
-    card.classList.toggle("ex-complete", !!complete);
-}
-// Returns true iff it triggered a FULL re-render (first set of an empty date) — the
-// caller skips the standalone prescription refresh in that case (renderToday already
-// re-fetches progression and repaints every card, so a second fetch would be wasteful).
-function refreshFinishStat() {
-    const chips = todayView.querySelectorAll(".ex [data-logged] .chip");
-    if (!chips.length)
-        return false;
-    const stat = todayView.querySelector("[data-finishstat]");
-    if (!stat) {
-        // first set on a previously empty date — re-render to bring in the FINISH block.
-        // This is also where focus mode auto-engages (hasLoggedSets just flipped true),
-        // so morph through a view transition: Today gently collapses into the focus todayView.
-        withViewTransition(() => Promise.resolve(renderToday()).then(viewEnter));
-        return true;
-    }
-    let sets = 0, tonnage = 0;
-    chips.forEach((c) => {
-        sets++;
-        const mm = c.textContent.match(/(-?\d+(?:\.\d+)?)\s*×\s*(\d+)/);
-        if (mm) {
-            const wt = Number(mm[1]), reps = Number(mm[2]);
-            if (wt > 0)
-                tonnage += wt * reps;
-        }
-    });
-    const isToday = todayState.logDate === localISO();
-    stat.textContent = `${sets} sets · ${Math.round(tonnage).toLocaleString()} lb ${isToday ? "logged today" : "on " + todayState.logDate}`;
-    return false;
 }
 function todayAddExerciseDeps() {
     return {

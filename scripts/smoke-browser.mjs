@@ -44,6 +44,7 @@ const requiredGlobals = {
   CairnRoutes: "object",
   "CairnRoutes.parseRoute": "function",
   CairnTodayAddExerciseController: "object",
+  CairnTodaySessionController: "object",
   CairnChatClient: "object",
   CairnChatAttachment: "object",
   CairnMealRecipeController: "object",
@@ -363,6 +364,7 @@ async function smokeRoute(cdp, base, route) {
         scripts: document.scripts.length
       };
     })()`);
+    ok(state.href === route.path, `${route.path} preserves path URL after hydration`, JSON.stringify(state));
     ok(state.tab === route.tab, `${route.path} active tab is ${route.tab}`, JSON.stringify(state));
     for (const [key, value] of Object.entries(route.expectedState || {})) {
       ok(state[key] === value, `${route.path} preserves ${key}=${value}`, JSON.stringify(state));
@@ -437,6 +439,33 @@ async function smokeTodayAddExercise(cdp, base) {
         hasLogInput: Boolean(input),
         formHidden: form ? form.hidden : null,
         buttonHidden: button ? button.hidden : null
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const name = ${exerciseJson};
+      const card = [...document.querySelectorAll(".ex[data-card]")]
+        .find((el) => (el.dataset.card || "").toLowerCase() === name.toLowerCase());
+      const reps = card && card.querySelector(".logrow .in-r");
+      const log = card && card.querySelector(".logbtn");
+      if (!card || !reps || !log) throw new Error("missing off-plan set logging controls");
+      reps.value = "5";
+      reps.dispatchEvent(new Event("input", { bubbles: true }));
+      log.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Today logs a set through the session controller", `(() => {
+      const name = ${exerciseJson};
+      const card = [...document.querySelectorAll(".ex[data-card]")]
+        .find((el) => (el.dataset.card || "").toLowerCase() === name.toLowerCase());
+      const chip = card && card.querySelector("[data-logged] .chip");
+      const skip = card && card.querySelector(".ex-skip");
+      return {
+        ok: Boolean(card && chip && !skip),
+        card: card ? card.dataset.card : null,
+        hasChip: Boolean(chip),
+        hasSkip: Boolean(skip)
       };
     })()`);
     ok(failures.length === 0, "/app/today add-exercise workflow has no browser runtime/load errors", failures.join("\n"));
