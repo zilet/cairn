@@ -259,25 +259,36 @@ function loadHealthMarkers(token: number): void {
   CairnHealthMarkersController.load(healthMarkersDeps(), token);
 }
 
-// Health's inner views. The whole-picture DEPTH (synthesis + connected brain) used to
-// be inlined under the top-level Standing review, ballooning it to ~8 screens. It now
-// lives here as its own "Read" sub-tab, one tap from the review, with an in-page jump
-// nav so you can land on what you want instead of scrolling the whole story:
-//   • read    — "Read": the whole-picture synthesis + the connected-brain directives,
-//               recovery, what-matters-now markers, symptom links and supplements,
-//               with a jump-chip nav across them.
-//   • markers — "Markers": the rich trends catalog (the ONE detailed markers home).
-//   • records — "Records": upload + the document list.
-//   • share   — "Share": doctor report, structured export, and data-alignment actions.
-//   • learned — "Learned": the quiet record of what Cairn has come to understand.
-const HEALTH_SEG: readonly (readonly [ClientHealthSection, string])[] = [["read", "Read"], ["markers", "Markers"], ["records", "Records"], ["share", "Share"], ["learned", "Learned"]];
+const HEALTH_SEG = CairnMeHealthTabsController.HEALTH_SEG;
 
 // Health is the lab-DATA + whole-picture-read home. Fold every legacy analysis/brain/
 // standing key onto Read (where that content now lives) so a returning client never
 // lands on a dead inner tab.
 function normalizeHealthSeg(seg: unknown): ClientHealthSection {
-  if (seg === "analysis" || seg === "brain" || seg === "standing") return "read";
-  return typeof seg === "string" && HEALTH_SEG.some(([k]) => k === seg) ? (seg as ClientHealthSection) : "read";
+  return CairnMeHealthTabsController.normalizeHealthSeg(seg);
+}
+
+function meHealthTabsDeps(): ClientMeHealthTabsControllerDeps {
+  return {
+    root: view,
+    state,
+    segments: ME_SEG,
+    handlers: ME_HANDLERS as Record<string, () => unknown>,
+    headerTitle,
+    segBar,
+    wireSeg,
+    fitSeg,
+    syncRouteFromState: typeof syncRouteFromState === "function" ? syncRouteFromState : undefined,
+    withViewTransition,
+    select: $,
+    healthDocsKnownEmpty,
+    invalidatePoll: () => { pollToken++; },
+    paintRead: paintHealthReadTab,
+    paintMarkers: paintHealthMarkersTab,
+    paintRecords: paintHealthRecordsTab,
+    paintShare: paintHealthShareTab,
+    paintLearned: paintHealthLearnedTab,
+  };
 }
 
 // True when we positively know there are zero health documents — from this session's
@@ -293,85 +304,24 @@ function healthDocsKnownEmpty(): boolean {
 // keeps it focused — and the connected brain now lives on the default Read view, so
 // it's reachable in one nav step (Me → Health) instead of buried behind a second seg.
 async function renderHealth(): Promise<void> {
-  headerTitle.textContent = "Me";
-  state.meSeg = "health";
-  state.healthSeg = normalizeHealthSeg(state.healthSeg);
-  // New user with nothing uploaded yet → open on Records (where you add a document),
-  // not the Read view that can only say "this will sharpen". Respect any explicit
-  // tab choice made this session, and only override on a confident zero doc count.
-  if (!state.healthSegPicked && state.healthSeg === "read" && healthDocsKnownEmpty()) {
-    state.healthSeg = "records";
-  }
-  pollToken++; // invalidate in-flight enrichment polls from a sibling sub-view
-  const idx = Math.max(0, HEALTH_SEG.findIndex(([k]) => k === state.healthSeg));
-  view.innerHTML = segBar("health", ME_SEG)
-    + `<div class="segwrap hsegwrap"><div class="seg seg-sliding hseg" style="--segn:${HEALTH_SEG.length};--segi:${idx}">`
-    +   `<span class="seg-thumb"></span>`
-    +   HEALTH_SEG.map(([k, l]) => `<button class="segbtn${k === state.healthSeg ? " active" : ""}" data-hseg="${k}">${l}</button>`).join("")
-    + `</div></div>`
-    + `<div id="hContent"></div>`;
-  wireSeg(ME_HANDLERS);
-  const hseg = view.querySelector<HTMLElement>(".hseg");
-  if (!hseg) return;
-  hseg.querySelectorAll<HTMLButtonElement>(".segbtn").forEach((b) => b.addEventListener("click", () => {
-    const next = normalizeHealthSeg(b.dataset.hseg);
-    if (next === state.healthSeg) return;
-    setHealthSegActive(next);
-    if (typeof syncRouteFromState === "function") syncRouteFromState();
-    withViewTransition(() => paintHealthTab());
-  }));
-  paintHealthTab();
+  await CairnMeHealthTabsController.renderHealth(meHealthTabsDeps());
 }
 
 // Slide the inner seg thumb + flip the active button to `seg` (no repaint).
 function setHealthSegActive(seg: ClientHealthSection): void {
-  state.healthSeg = seg;
-  state.healthSegPicked = true; // a deliberate tab choice — don't auto-default to Records again
-  const hseg = view.querySelector<HTMLElement>(".hseg");
-  if (!hseg) return;
-  const btns = [...hseg.querySelectorAll<HTMLButtonElement>(".segbtn")];
-  const target = btns.find((b) => b.dataset.hseg === seg);
-  if (!target) return;
-  hseg.style.setProperty("--segi", String(btns.indexOf(target)));
-  btns.forEach((x) => x.classList.toggle("active", x === target));
-  fitSeg(hseg); // keep the active pill centered when the bar is in scroll mode
+  CairnMeHealthTabsController.setHealthSegActive(seg, meHealthTabsDeps());
 }
 
 // Programmatic inner-tab switch from a CTA. openPicker keeps the .click() in the
 // same user gesture (so the file dialog isn't blocked) — hence no view transition.
 function switchHealthSeg(seg: ClientHealthSection, opts: { openPicker?: boolean } = {}): void {
-  if (state.tab !== "me" || state.meSeg !== "health") return;
-  setHealthSegActive(seg);
-  if (typeof syncRouteFromState === "function") syncRouteFromState();
-  if (opts.openPicker) {
-    paintHealthTab();
-    const f = $<HTMLInputElement>("#hFile"); if (f) f.click();
-  } else {
-    withViewTransition(() => paintHealthTab());
-  }
+  CairnMeHealthTabsController.switchHealthSeg(seg, meHealthTabsDeps(), opts);
 }
 
 // Repaint #hContent for the active inner tab. Bumps pollToken so any enrichment
 // poll from the tab we're leaving stops cleanly (Records resumes on return).
 function paintHealthTab(): void {
-  pollToken++;
-  if (state.healthSeg === "records") {
-    paintHealthRecordsTab();
-    return;
-  }
-  if (state.healthSeg === "share") {
-    paintHealthShareTab();
-    return;
-  }
-  if (state.healthSeg === "learned") {
-    paintHealthLearnedTab();
-    return;
-  }
-  if (state.healthSeg === "markers") {
-    paintHealthMarkersTab();
-    return;
-  }
-  paintHealthReadTab();
+  CairnMeHealthTabsController.paintHealthTab(meHealthTabsDeps());
 }
 
 // ME → Health → Read: the whole-picture depth that used to balloon the Standing tab.

@@ -3,83 +3,41 @@
 // Durable chat turns: queue monitor, SSE streaming markdown, cancellation,
 // reconnect, jump-to-latest, draft storage, and chat viewport sizing.
 
-type ChatTurnRecord = Record<string, unknown>;
-type ChatTurn = ChatTurnRecord & {
-  id: number;
-  status?: string;
-  phase?: string | null;
-  image_url?: string | null;
-  user_message_id?: number | string | null;
-  reply?: string | null;
-  error?: string | null;
-  meta?: { drafts?: unknown[]; [key: string]: unknown } | null;
-  finished_at?: string | null;
-  assistant_message_id?: number | string | null;
-};
 type ChatMessage = import("../contracts/client.js").ClientChatMessage & Record<string, unknown>;
 type ChatTurnRoot = typeof globalThis & {
+  CairnChatTurnRecords: ChatTurnRecordsApi;
+  CairnChatTurnStreamState: ChatTurnStreamStateApi;
   appendMsg?: (message: Partial<ChatMessage> | ChatTurnRecord, noScroll?: boolean, parent?: Element | null, opts?: ChatTurnRecord) => Element | null;
   rememberChatFuelContext?: (...messages: unknown[]) => unknown;
   loadChatFuel?: (token: number, messages?: unknown[]) => Promise<void>;
 };
 
 (() => {
-const CHAT_DRAFT_KEY = "cairn.chat.draft";
 const root = globalThis as ChatTurnRoot;
+const chatTurnRecords = root.CairnChatTurnRecords;
+const chatTurnRecord = chatTurnRecords.record;
+const chatTurnRows = chatTurnRecords.rows;
+const turnId = chatTurnRecords.id;
+const parseTurnEvent = chatTurnRecords.event;
+const chatPhaseCaption = chatTurnRecords.phaseCaption;
 
 let chatStream: EventSource | null = null;
 let chatStreamId: number | null = null;
 const chatPendingBubbles = new Map<number, HTMLElement>();
 const chatDoneTurns = new Set<number>();
-const chatTurnStreamState = (globalThis as unknown as { CairnChatTurnStreamState: ChatTurnStreamStateApi })
-  .CairnChatTurnStreamState.create({
+const chatTurnStreamState = root.CairnChatTurnStreamState.create({
     getBubble: (id) => chatPendingBubbles.get(id) || null,
     ensureStreamingBubble,
     markdownToHtml: mdToHtml,
     getLog: () => $<HTMLElement>("#chatlog"),
   });
 
-function chatTurnRecord(value: unknown): ChatTurnRecord {
-  return value && typeof value === "object" ? value as ChatTurnRecord : {};
-}
-
-function chatTurnRows(value: unknown): ChatTurn[] {
-  return Array.isArray(value)
-    ? value.filter((row) => !!row && typeof row === "object" && Number.isFinite(Number((row as ChatTurnRecord).id))) as ChatTurn[]
-    : [];
-}
-
-function turnId(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function parseTurnEvent(event: Event): ChatTurnRecord | null {
-  const data = (event as MessageEvent).data;
-  if (typeof data !== "string" || !data) return null;
-  try {
-    const parsed: unknown = JSON.parse(data);
-    return chatTurnRecord(parsed);
-  } catch {
-    return null;
-  }
-}
-
 function saveChatDraft(value: string): void {
-  try {
-    value ? localStorage.setItem(CHAT_DRAFT_KEY, value) : localStorage.removeItem(CHAT_DRAFT_KEY);
-  } catch {}
+  chatTurnRecords.saveDraft(value);
 }
 
 function loadChatDraft(): string {
-  try { return localStorage.getItem(CHAT_DRAFT_KEY) || ""; } catch { return ""; }
-}
-
-function chatPhaseCaption(turn: ChatTurn | null | undefined): string {
-  if (!turn) return "Thinking…";
-  if (turn.status === "queued") return "Queued";
-  if (turn.phase === "applying") return "Saving…";
-  return turn.image_url ? "Reading your plate…" : "Thinking…";
+  return chatTurnRecords.loadDraft();
 }
 
 function makePendingBubble(turn: ChatTurn): HTMLElement {

@@ -35,21 +35,6 @@ function drawLineChart(canvas, pts, opts = {}) {
     const count = points.length;
     if (!count)
         return;
-    const vals = points.map((point) => Number(point.v));
-    const allValues = opts.goal != null ? [...vals, Number(opts.goal)] : vals;
-    let min = Math.min(...allValues);
-    let max = Math.max(...allValues);
-    if (max === min) {
-        max += 1;
-        min -= 1;
-    }
-    const spread = max - min;
-    min -= spread * 0.14;
-    max += spread * 0.2;
-    const padL = 36;
-    const padR = 16;
-    const padT = 30;
-    const padB = 28;
     const fmtVal = opts.fmt || ((value) => String(Math.round(value)));
     const dpr = window.devicePixelRatio || 1;
     const width = chartCanvas.clientWidth;
@@ -60,37 +45,13 @@ function drawLineChart(canvas, pts, opts = {}) {
     if (!ctx)
         return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const x = (index) => count === 1 ? (padL + width - padR) / 2 : padL + (index * (width - padL - padR)) / (count - 1);
-    const y = (value) => height - padB - ((value - min) / (max - min)) * (height - padT - padB);
-    const xs = vals.map((_, index) => x(index));
-    const ys = vals.map((value) => y(value));
+    const model = CairnProgressLineChartModel.buildModel(points, { goal: opts.goal, width, height });
+    if (!model)
+        return;
+    const { values: vals, min, max, xs, ys, slopes, padding, peakIndex } = model;
+    const { left: padL, right: padR, top: padT, bottom: padB } = padding;
+    const y = model.y;
     chartCanvas._chartXs = xs;
-    const slopes = new Array(count).fill(0);
-    if (count > 1) {
-        const deltas = [];
-        for (let index = 0; index < count - 1; index++) {
-            deltas.push((ys[index + 1] - ys[index]) / (xs[index + 1] - xs[index]));
-        }
-        slopes[0] = deltas[0];
-        slopes[count - 1] = deltas[count - 2];
-        for (let index = 1; index < count - 1; index++) {
-            slopes[index] = deltas[index - 1] * deltas[index] <= 0 ? 0 : (deltas[index - 1] + deltas[index]) / 2;
-        }
-        for (let index = 0; index < count - 1; index++) {
-            if (deltas[index] === 0) {
-                slopes[index] = 0;
-                slopes[index + 1] = 0;
-                continue;
-            }
-            const a = slopes[index] / deltas[index];
-            const b = slopes[index + 1] / deltas[index];
-            const hyp = Math.hypot(a, b);
-            if (hyp > 3) {
-                slopes[index] = ((3 * a) / hyp) * deltas[index];
-                slopes[index + 1] = ((3 * b) / hyp) * deltas[index];
-            }
-        }
-    }
     const drawBase = () => {
         ctx.clearRect(0, 0, width, height);
         ctx.font = "10px system-ui, sans-serif";
@@ -155,11 +116,6 @@ function drawLineChart(canvas, pts, opts = {}) {
             }
         }
         if (opts.peak && count > 1) {
-            let peakIndex = 0;
-            vals.forEach((value, index) => {
-                if (value > vals[peakIndex])
-                    peakIndex = index;
-            });
             if (peakIndex !== count - 1) {
                 ctx.fillStyle = colors.gold;
                 ctx.font = "10px system-ui, sans-serif";
@@ -273,20 +229,9 @@ function drawLineChart(canvas, pts, opts = {}) {
         let touchActive = false;
         const idxFromEvent = (event) => {
             const axis = chartCanvas._chartXs;
-            if (!axis || !axis.length)
-                return null;
             const rect = chartCanvas.getBoundingClientRect();
             const px = event.clientX - rect.left;
-            let index = 0;
-            let best = Infinity;
-            for (let candidate = 0; candidate < axis.length; candidate++) {
-                const distance = Math.abs(axis[candidate] - px);
-                if (distance < best) {
-                    best = distance;
-                    index = candidate;
-                }
-            }
-            return index;
+            return CairnProgressLineChartModel.nearestIndex(axis, px);
         };
         const show = (event) => {
             const index = idxFromEvent(event);

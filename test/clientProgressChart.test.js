@@ -24,6 +24,7 @@ function loadProgressChart(tokens = {}) {
     cancelAnimationFrame: () => {},
   };
   context.window = Object.assign(context.window, context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-line-chart-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-chart-client.js"), "utf8"), context);
   return context.CairnProgressChart;
 }

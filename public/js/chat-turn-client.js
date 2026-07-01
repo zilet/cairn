@@ -4,65 +4,28 @@
 // Durable chat turns: queue monitor, SSE streaming markdown, cancellation,
 // reconnect, jump-to-latest, draft storage, and chat viewport sizing.
 (() => {
-    const CHAT_DRAFT_KEY = "cairn.chat.draft";
     const root = globalThis;
+    const chatTurnRecords = root.CairnChatTurnRecords;
+    const chatTurnRecord = chatTurnRecords.record;
+    const chatTurnRows = chatTurnRecords.rows;
+    const turnId = chatTurnRecords.id;
+    const parseTurnEvent = chatTurnRecords.event;
+    const chatPhaseCaption = chatTurnRecords.phaseCaption;
     let chatStream = null;
     let chatStreamId = null;
     const chatPendingBubbles = new Map();
     const chatDoneTurns = new Set();
-    const chatTurnStreamState = globalThis
-        .CairnChatTurnStreamState.create({
+    const chatTurnStreamState = root.CairnChatTurnStreamState.create({
         getBubble: (id) => chatPendingBubbles.get(id) || null,
         ensureStreamingBubble,
         markdownToHtml: mdToHtml,
         getLog: () => $("#chatlog"),
     });
-    function chatTurnRecord(value) {
-        return value && typeof value === "object" ? value : {};
-    }
-    function chatTurnRows(value) {
-        return Array.isArray(value)
-            ? value.filter((row) => !!row && typeof row === "object" && Number.isFinite(Number(row.id)))
-            : [];
-    }
-    function turnId(value) {
-        const n = Number(value);
-        return Number.isFinite(n) ? n : null;
-    }
-    function parseTurnEvent(event) {
-        const data = event.data;
-        if (typeof data !== "string" || !data)
-            return null;
-        try {
-            const parsed = JSON.parse(data);
-            return chatTurnRecord(parsed);
-        }
-        catch {
-            return null;
-        }
-    }
     function saveChatDraft(value) {
-        try {
-            value ? localStorage.setItem(CHAT_DRAFT_KEY, value) : localStorage.removeItem(CHAT_DRAFT_KEY);
-        }
-        catch { }
+        chatTurnRecords.saveDraft(value);
     }
     function loadChatDraft() {
-        try {
-            return localStorage.getItem(CHAT_DRAFT_KEY) || "";
-        }
-        catch {
-            return "";
-        }
-    }
-    function chatPhaseCaption(turn) {
-        if (!turn)
-            return "Thinking…";
-        if (turn.status === "queued")
-            return "Queued";
-        if (turn.phase === "applying")
-            return "Saving…";
-        return turn.image_url ? "Reading your plate…" : "Thinking…";
+        return chatTurnRecords.loadDraft();
     }
     function makePendingBubble(turn) {
         const el = document.createElement("div");

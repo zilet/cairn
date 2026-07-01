@@ -455,6 +455,27 @@ declare global {
     wireSeg(handlers: Record<string, () => unknown>): void;
   };
 
+  type ClientMeHealthTabsControllerDeps = {
+    root: HTMLElement;
+    state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "healthSegPicked">;
+    segments: readonly ClientSegment[];
+    handlers: Record<string, () => unknown>;
+    headerTitle: HTMLElement;
+    segBar(active: string, items: readonly ClientSegment[]): string;
+    wireSeg(handlers: Record<string, () => unknown>): void;
+    fitSeg(el: HTMLElement): void;
+    syncRouteFromState?(): void;
+    withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+    select<T extends Element = Element>(selector: string): T | null;
+    healthDocsKnownEmpty(): boolean;
+    invalidatePoll(): void;
+    paintRead(): void;
+    paintMarkers(): void;
+    paintRecords(): void;
+    paintShare(): void;
+    paintLearned(): void;
+  };
+
   type ClientLifeControllerForm = {
     kind: string;
     title: string | null;
@@ -996,6 +1017,20 @@ declare global {
       };
     };
 
+    CairnChatTurnRecords: {
+      event(event: Event): Record<string, unknown> | null;
+      id(value: unknown): number | null;
+      loadDraft(): string;
+      phaseCaption(turn: (Record<string, unknown> & {
+        status?: string;
+        phase?: string | null;
+        image_url?: string | null;
+      }) | null | undefined): string;
+      record(value: unknown): Record<string, unknown>;
+      rows(value: unknown): Array<Record<string, unknown> & { id: number }>;
+      saveDraft(value: string): void;
+    };
+
     CairnChatTurnStreamState: {
       create(deps: {
         getBubble(id: number): HTMLElement | null;
@@ -1137,6 +1172,18 @@ declare global {
         onConfirm: () => unknown,
         options?: { label?: string },
       ): void;
+    };
+
+    CairnUiViewTransitions: {
+      create(deps: {
+        view: HTMLElement;
+        reducedMotion(): boolean;
+      }): {
+        viewEnter(): void;
+        withViewTransition(fn: () => unknown): Promise<unknown>;
+        skelSwap(fn: () => unknown): Promise<unknown>;
+      };
+      isViewTransitionAbort(error: unknown): boolean;
     };
 
     CairnDetailOverlay: {
@@ -1344,6 +1391,15 @@ declare global {
       }): void;
       renderNotes(notes: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
       renderActs(activities: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
+    };
+
+    CairnMeHealthTabsController: {
+      HEALTH_SEG: readonly (readonly [ClientHealthSection, string])[];
+      normalizeHealthSeg(seg: unknown): ClientHealthSection;
+      renderHealth(deps: ClientMeHealthTabsControllerDeps): Promise<void>;
+      setHealthSegActive(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps): void;
+      switchHealthSeg(seg: ClientHealthSection, deps: ClientMeHealthTabsControllerDeps, opts?: { openPicker?: boolean }): void;
+      paintHealthTab(deps: ClientMeHealthTabsControllerDeps): void;
     };
 
     CairnFoodDetailController: {
@@ -1727,6 +1783,28 @@ declare global {
         stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }] | null | undefined | false>,
       ): string;
       emptyStateHtml(svg: string | null | undefined, line: unknown): string;
+    };
+
+    CairnProgressLineChartModel: {
+      buildModel(pts: Array<{ date: string; v: number }> | null | undefined, options: {
+        width: number;
+        height: number;
+        goal?: number | null;
+        padding?: Partial<{ left: number; right: number; top: number; bottom: number }> | null;
+      }): {
+        points: Array<{ date: string; v: number }>;
+        values: number[];
+        min: number;
+        max: number;
+        xs: number[];
+        ys: number[];
+        slopes: number[];
+        padding: { left: number; right: number; top: number; bottom: number };
+        peakIndex: number;
+        x(index: number): number;
+        y(value: number): number;
+      } | null;
+      nearestIndex(axis: readonly number[] | null | undefined, pixelX: number): number | null;
     };
 
     CairnProgressChart: {
@@ -2363,12 +2441,14 @@ declare global {
   declare const CairnChatHeaderController: Window["CairnChatHeaderController"];
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnChatComposerFocus: Window["CairnChatComposerFocus"];
+  declare const CairnChatTurnRecords: Window["CairnChatTurnRecords"];
   declare const CairnChatTurnStreamState: Window["CairnChatTurnStreamState"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
   declare const CairnUiActions: Window["CairnUiActions"];
+  declare const CairnUiViewTransitions: Window["CairnUiViewTransitions"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthEvidence: Window["CairnHealthEvidence"];
@@ -2387,6 +2467,7 @@ declare global {
   declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
   declare const CairnMeHealthLogRenderer: Window["CairnMeHealthLogRenderer"];
+  declare const CairnMeHealthTabsController: Window["CairnMeHealthTabsController"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
   declare const CairnMeProfileController: Window["CairnMeProfileController"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
@@ -2426,6 +2507,7 @@ declare global {
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
+  declare const CairnProgressLineChartModel: Window["CairnProgressLineChartModel"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];

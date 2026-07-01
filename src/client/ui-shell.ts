@@ -5,17 +5,8 @@ function uiRecord(value: unknown): UiRecord {
   return value && typeof value === "object" ? value as UiRecord : {};
 }
 
-function uiRows<T extends UiRecord = UiRecord>(value: unknown): T[] {
-  return Array.isArray(value) ? value.filter((row): row is T => !!row && typeof row === "object") : [];
-}
-
 function uiString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
-}
-
-function uiNumber(value: unknown, fallback = 0): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
 }
 
 // ---------- header date control (Today) ----------
@@ -205,62 +196,10 @@ function planSeg(): readonly UiSegment[] {
 const PLAN_HANDLERS: Record<string, () => unknown> = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), food: () => renderFoodJournal(), meals: () => renderMeals(), coach: () => renderCoach() };
 
 // ---------- view transition utilities ----------
-// Subtle fade+rise re-triggered whenever #view's content is swapped wholesale
-// (tab switches + segmented sub-view swaps). No-op under reduced motion.
-function viewEnter(): void {
-  if (reducedMotion()) return;
-  view.classList.remove("view-in");
-  void view.offsetWidth; // force reflow so the animation restarts
-  view.classList.add("view-in");
-}
-
-// Soft fade for the skeleton→content swap: replace the busy skeleton with real
-// content inside a view transition so the skeleton crossfades out as the content
-// fades in, instead of a hard pop. Falls back to an instant swap when view
-// transitions aren't supported or under reduced motion — exactly today's behavior.
-// `fn` performs the actual `view.innerHTML = …` swap. When this render is ALREADY
-// running inside a transition (a seg-tap wraps the handler in one, and finishes with
-// viewEnter()), we DON'T nest a second one — stacking startViewTransition() aborts the
-// outer and flickers. We just swap and let the surrounding fade carry it.
-function skelSwap(fn: () => unknown): Promise<unknown> {
-  if (_vtActive) { return Promise.resolve(fn()); }
-  return withViewTransition(fn);
-}
-
-// Run a DOM-swapping fn inside a shared-element view transition when supported.
-// `_vtActive` guards against accidentally nesting a transition inside another
-// (which the browser would resolve by aborting the outer one).
-let _vtActive = false;
-function isViewTransitionAbort(err: unknown): boolean {
-  const row = err instanceof Error ? { name: err.name, message: err.message } : uiRecord(err);
-  const name = String(row.name || "");
-  const msg = String(row.message || err || "");
-  return name === "AbortError" || (name === "InvalidStateError" && /transition/i.test(msg));
-}
-function withViewTransition(fn: () => unknown): Promise<unknown> {
-  const run = () => {
-    try { return Promise.resolve(fn()); }
-    catch (err) { return Promise.reject(err); }
-  };
-  const quietTransitionPromise = (promise: Promise<unknown>) => Promise.resolve(promise).catch((err) => {
-    if (!isViewTransitionAbort(err)) throw err;
-  });
-  const quietSecondaryTransitionPromise = (promise: Promise<unknown>) => Promise.resolve(promise).catch((err) => {
-    if (!isViewTransitionAbort(err)) setTimeout(() => { throw err; }, 0);
-  });
-  if (document.startViewTransition && !reducedMotion() && !_vtActive) {
-    try {
-      _vtActive = true;
-      const tx = document.startViewTransition(run);
-      const done = tx.updateCallbackDone || tx.finished || Promise.resolve();
-      if (tx.ready) quietSecondaryTransitionPromise(tx.ready);
-      if (tx.finished && tx.finished !== done) quietSecondaryTransitionPromise(tx.finished);
-      return quietTransitionPromise(done)
-        .finally(() => { _vtActive = false; });
-    } catch { _vtActive = false; /* fall through */ }
-  }
-  return Promise.resolve(run());
-}
+const uiViewTransitions = CairnUiViewTransitions.create({ view, reducedMotion });
+function viewEnter(): void { uiViewTransitions.viewEnter(); }
+function withViewTransition(fn: () => unknown): Promise<unknown> { return uiViewTransitions.withViewTransition(fn); }
+function skelSwap(fn: () => unknown): Promise<unknown> { return uiViewTransitions.skelSwap(fn); }
 
 // Primary training discipline ('strength'|'endurance'|'hybrid'), read once from the
 // profile and used for a GENTLE emphasis reframe — never to hide a surface. Default
