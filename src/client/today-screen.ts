@@ -80,6 +80,8 @@ type TodayScreenSideLoaders = {
   loadDraftProposals(deps: TodayScreenSideLoaderDeps): Promise<void>;
   loadHealthFocusBanner(deps: TodayScreenSideLoaderDeps): Promise<void>;
 };
+type TodayScreenSessionSuggestDeps = Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1];
+type TodayScreenSessionSuggestAskOptions = Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[0];
 
 function todayApi<Path extends string>(
   path: Path,
@@ -287,7 +289,7 @@ function briefSignalsText(read: Partial<TodayScreenDayRead> | null | undefined):
   return CairnTodayBriefController.briefSignalsText(read);
 }
 
-function todaySessionSuggestDeps() {
+function todaySessionSuggestDeps(): TodayScreenSessionSuggestDeps {
   return {
     root: todayView,
     state: todayState,
@@ -310,13 +312,13 @@ function revealSessionComposer() {
   CairnTodaySessionSuggestController.revealSessionComposer(todaySessionSuggestDeps());
 }
 
-async function askForSession(opts: any = {}) {
+async function askForSession(opts: TodayScreenSessionSuggestAskOptions = {}) {
   await CairnTodaySessionSuggestController.askForSession(opts, todaySessionSuggestDeps());
 }
 
 // Reveal the plan/logging surface for the selected date, then run `after` once the
 // surface exists in the DOM. If it's already shown, run immediately.
-function revealPlanThen(after: any, opts: any = {}) {
+function revealPlanThen(after: (() => unknown) | null | undefined, opts: { blank?: boolean } = {}) {
   if (todayView.querySelector(".addex")) { after && after(); return; }
   // `blank`: reveal a clean logging surface with NO plan day pre-loaded (used by a
   // logged session suggestion). On a day with nothing planned, this stops Today from
