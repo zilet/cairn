@@ -1,6 +1,5 @@
 // @ts-check
 // Health Read synthesis card rendering and background job orchestration.
-{
 type HealthReadSynthesisRecord = Record<string, unknown>;
 type HealthReadSynthesisPriority = HealthReadSynthesisRecord & {
   label?: string;
@@ -120,4 +119,3 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
     window.CairnHealthReadSynthesis = CAIRN_HEALTH_READ_SYNTHESIS;
   }
 })();
-}

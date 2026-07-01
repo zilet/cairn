@@ -97,7 +97,7 @@ function loadProgramController() {
   return context;
 }
 
-function depsFor(context, overrides = {}) {
+function depsFor(_context, overrides = {}) {
   const view = overrides.view || {
     innerHTML: "",
     querySelector() {

@@ -1,6 +1,5 @@
 // @ts-check
 // Health Markers orchestration: SWR loading, grouped catalog wiring, and chart handoff.
-{
 type HealthMarkersControllerRecord = Record<string, unknown>;
 type HealthMarkersControllerGroup = {
   key: string;
@@ -158,4 +157,3 @@ type HealthMarkersControllerResponse = {
     window.CairnHealthMarkersController = CAIRN_HEALTH_MARKERS_CONTROLLER;
   }
 })();
-}

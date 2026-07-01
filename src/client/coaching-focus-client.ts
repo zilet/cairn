@@ -133,7 +133,7 @@ function cfocusDomainRoute(domain: ClientCoachingFocusDomain): void {
       return;
   }
   const _exhaustive: never = domain;
-  return _exhaustive;
+  void _exhaustive;
 }
 
 function cfocusRoute(go: unknown): void {

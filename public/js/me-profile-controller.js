@@ -7,7 +7,7 @@
             element.classList.toggle("active", element === active);
         });
     }
-    function wireProfileForm(deps, profile, enduranceGoal, initial) {
+    function wireProfileForm(deps, enduranceGoal, initial) {
         let pickedDisc = String(initial.discipline || "strength");
         let pickedEgMode = String(initial.enduranceMode || "none");
         let pickedGoalMode = String(initial.goalMode || "maintain");
@@ -126,7 +126,7 @@
             deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode });
         });
         deps.wireSeg(deps.handlers);
-        wireProfileForm(deps, profile, enduranceGoal, { discipline, enduranceMode, goalMode });
+        wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode });
     }
     const CAIRN_ME_PROFILE_CONTROLLER = {
         renderProfile,

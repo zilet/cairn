@@ -899,7 +899,6 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const healthComposition = read("public/js/me-health-screen-composition.js");
   const dayFuelController = read("public/js/day-fuel-controller.js");
   const health = read("public/js/07-me-health.js");
-  const records = read("public/js/08-me-records.js");
   const recordsHealthDocController = read("public/js/me-records-health-doc-controller.js");
   const chat = read("public/js/09-plan-chat.js");
   const chatHeader = read("public/js/chat-header-controller.js");
@@ -1356,10 +1355,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const detailOverlayClient = read("public/js/detail-overlay-client.js");
   const uiMotionClient = read("public/js/ui-motion-client.js");
   const exerciseDetailClient = read("public/js/exercise-detail-client.js");
-  const exerciseDetailDataClient = read("public/js/exercise-detail-data-client.js");
-  const exerciseDetailExplanationClient = read("public/js/exercise-detail-explanation-client.js");
-  const exerciseDetailRenderClient = read("public/js/exercise-detail-render-client.js");
-  const exerciseDetailActionsClient = read("public/js/exercise-detail-actions-client.js");
   const exerciseDetailController = read("public/js/exercise-detail-controller.js");
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
@@ -1400,8 +1395,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todaySessionStatusClient = read("public/js/today-session-status-client.js");
   const todaySessionFeedbackClient = read("public/js/today-session-feedback-client.js");
   const todaySessionSkipClient = read("public/js/today-session-skip-client.js");
-  const todaySessionSetModelClient = read("public/js/today-session-set-model.js");
-  const todaySessionSetActionsClient = read("public/js/today-session-set-actions.js");
   const todaySessionController = read("public/js/today-session-controller.js");
   const todayProgramAdjustmentsClient = read("public/js/today-program-adjustments-client.js");
   const todayWeekAheadClient = read("public/js/today-week-ahead-client.js");
@@ -1423,7 +1416,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressDataClient = read("public/js/progress-data-client.js");
   const progressEnduranceClient = read("public/js/progress-endurance-client.js");
   const progressComponentsClient = read("public/js/progress-components-client.js");
-  const progressLineChartModelClient = read("public/js/progress-line-chart-model.js");
   const progressChartScrubClient = read("public/js/progress-chart-scrub-client.js");
   const progressChartDrawingClient = read("public/js/progress-chart-drawing-client.js");
   const progressChartClient = read("public/js/progress-chart-client.js");
@@ -1496,7 +1488,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthLearnedClient = read("public/js/health-learned-client.js");
   const healthRecordsClient = read("public/js/health-records-client.js");
   const healthDocUploadController = read("public/js/health-doc-upload-controller.js");
-  const healthDocActionsController = read("public/js/health-doc-actions-controller.js");
   const meRecordsHealthDocController = read("public/js/me-records-health-doc-controller.js");
   const healthShareController = read("public/js/health-share-controller.js");
   const memoryClient = read("public/js/memory-client.js");

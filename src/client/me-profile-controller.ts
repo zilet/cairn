@@ -10,7 +10,6 @@
 
   function wireProfileForm(
     deps: MeProfileControllerDeps,
-    profile: MeProfileProfile,
     enduranceGoal: MeProfileEnduranceGoalDraft,
     initial: { discipline: string; enduranceMode: string; goalMode: string },
   ): void {
@@ -141,7 +140,7 @@
       deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode });
     });
     deps.wireSeg(deps.handlers);
-    wireProfileForm(deps, profile, enduranceGoal, { discipline, enduranceMode, goalMode });
+    wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode });
   }
 
   const CAIRN_ME_PROFILE_CONTROLLER = {

@@ -24,14 +24,6 @@ type TodayScreenPlanDay = {
   items: TodayScreenPlanItem[];
   [key: string]: unknown;
 };
-type TodayScreenLoggedSet = import("../contracts/client.js").ClientLoggedSet;
-type TodayScreenTrainingSession = import("../contracts/client.js").ClientTrainingSession & {
-  plan_day_id?: number | null;
-  skips?: unknown[];
-};
-type TodayScreenCardioEffort = import("../contracts/client.js").ClientCardioEffort;
-type TodayScreenPrescription = import("../contracts/client.js").ClientPrescription;
-type TodayScreenPrescriptionByExercise = Record<string, TodayScreenPrescription | null | undefined>;
 type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "pendingOffPlan" | "plan"> & {
   tab?: string;
   logDate: string;

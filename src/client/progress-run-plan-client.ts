@@ -2,7 +2,6 @@
 // Progress Endurance run-plan presentation helpers.
 
 type WeeklyRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
-type RunPlanRun = import("../contracts/client-api.js").ClientRunPlanPrescription;
 type EnduranceGoal = import("../contracts/client-api.js").ClientEnduranceGoal;
 type RunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
 

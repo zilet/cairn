@@ -1,7 +1,6 @@
 // @ts-check
 // Health Read orchestration: jump nav, async loaders, synthesis job, symptom links,
 // supplements, recovery, and priority-marker rails.
-{
 type HealthReadControllerRecord = Record<string, unknown>;
 type HealthReadMarkerPriorityResponse = { markers?: HealthReadMarkerRow[] };
 type HealthReadMarkerRow = HealthReadControllerRecord & {
@@ -249,4 +248,3 @@ type HealthReadRecoverySummary = HealthReadControllerRecord & { has_data?: unkno
     window.CairnHealthReadController = CAIRN_HEALTH_READ_CONTROLLER;
   }
 })();
-}

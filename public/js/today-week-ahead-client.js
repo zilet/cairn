@@ -13,7 +13,7 @@
     }
     function todayWeekAheadKind(value) {
         const kind = typeof value === "string" ? value : "";
-        return Object.prototype.hasOwnProperty.call(TODAY_WEEK_AHEAD_GLYPH, kind) ? kind : "lift";
+        return Object.hasOwn(TODAY_WEEK_AHEAD_GLYPH, kind) ? kind : "lift";
     }
     function todayWeekAheadDays(value) {
         const read = todayWeekAheadRecord(value);

@@ -101,7 +101,7 @@ class FakeElement {
 
   matches(selector) {
     if (selector.startsWith(".")) return this.className.split(/\s+/).includes(selector.slice(1));
-    if (selector === "[data-close]") return Object.prototype.hasOwnProperty.call(this.dataset, "close");
+    if (selector === "[data-close]") return Object.hasOwn(this.dataset, "close");
     return false;
   }
 

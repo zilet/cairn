@@ -19,7 +19,7 @@ type TodayWeekAheadResponse = import("../contracts/client.js").ClientWeekAheadRe
 
   function todayWeekAheadKind(value: unknown): TodayWeekAheadDayKind {
     const kind = typeof value === "string" ? value : "";
-    return Object.prototype.hasOwnProperty.call(TODAY_WEEK_AHEAD_GLYPH, kind) ? kind as TodayWeekAheadDayKind : "lift";
+    return Object.hasOwn(TODAY_WEEK_AHEAD_GLYPH, kind) ? kind as TodayWeekAheadDayKind : "lift";
   }
 
   function todayWeekAheadDays(value: unknown): TodayWeekAheadDay[] {

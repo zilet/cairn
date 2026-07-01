@@ -11,7 +11,6 @@ const todayDataLoader = readFileSync(path.join(root, "src/client/today-data-load
 const todayPlanSessionData = readFileSync(path.join(root, "src/client/today-plan-session-data-client.ts"), "utf8");
 const todayPlanSessionPreparation = readFileSync(path.join(root, "src/client/today-plan-session-preparation.ts"), "utf8");
 const todayProgressionController = readFileSync(path.join(root, "src/client/today-progression-controller.ts"), "utf8");
-const todaySessionController = readFileSync(path.join(root, "src/client/today-session-controller.ts"), "utf8");
 const todaySessionSetActions = readFileSync(path.join(root, "src/client/today-session-set-actions.ts"), "utf8");
 
 function functionBody(source, name) {

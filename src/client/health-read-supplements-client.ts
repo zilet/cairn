@@ -1,6 +1,5 @@
 // @ts-check
 // Health Read supplement card rendering and input/delete wiring.
-{
 type HealthReadSupplementsRecord = Record<string, unknown>;
 type HealthReadSupplementRow = HealthReadSupplementsRecord & {
   id?: number | string;
@@ -114,4 +113,3 @@ type HealthReadSupplementRow = HealthReadSupplementsRecord & {
     window.CairnHealthReadSupplements = CAIRN_HEALTH_READ_SUPPLEMENTS;
   }
 })();
-}

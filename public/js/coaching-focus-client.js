@@ -127,7 +127,7 @@ function cfocusDomainRoute(domain) {
             return;
     }
     const _exhaustive = domain;
-    return _exhaustive;
+    void _exhaustive;
 }
 function cfocusRoute(go) {
     switch (String(go || "")) {

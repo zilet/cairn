@@ -1,6 +1,5 @@
 // @ts-check
 // Health Standing orchestration: review fetch/paint, age-band toggles, and BP capture.
-{
 type HealthStandingControllerRead = import("../contracts/client-api.js").ClientHealthStanding;
 
 (() => {
@@ -173,4 +172,3 @@ type HealthStandingControllerRead = import("../contracts/client-api.js").ClientH
     window.CairnHealthStandingController = CAIRN_HEALTH_STANDING_CONTROLLER;
   }
 })();
-}
