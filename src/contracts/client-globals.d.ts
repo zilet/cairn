@@ -2846,6 +2846,52 @@ declare global {
       ): Promise<number>;
     };
 
+    CairnTodayPlanSessionModel: {
+      planItems(day: (Record<string, unknown> & { items?: Array<Record<string, unknown>> | null }) | null | undefined): Array<Record<string, unknown>>;
+      groupLoggedSets(session: { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null } | null | undefined): Record<string, Array<Record<string, unknown>>>;
+      selectedPlanDay(
+        state: {
+          day: number | null;
+          plan: Array<Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null }>;
+        },
+        revealBlank: boolean,
+      ): Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null };
+      matchCardioEfforts(
+        items: Array<Record<string, unknown>>,
+        efforts: Array<Record<string, unknown>>,
+        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean,
+      ): Map<Record<string, unknown>, Record<string, unknown>>;
+      itemGroups(params: {
+        items: Array<Record<string, unknown>>;
+        loggedByEx: Record<string, Array<Record<string, unknown>>>;
+        matchedCardio: Map<Record<string, unknown>, Record<string, unknown>>;
+        skips: unknown[];
+        isCardioItem(item: Record<string, unknown>): boolean;
+        cardioLabel(item: Record<string, unknown>): string;
+      }): {
+        planNames: Set<string>;
+        activeItems: Array<Record<string, unknown>>;
+        skippedItems: Array<Record<string, unknown>>;
+        cardioItems: Array<Record<string, unknown>>;
+        strengthItems: Array<Record<string, unknown>>;
+        planEx: string[];
+        offPlanEx: string[];
+      };
+      prunePendingOffPlan(
+        state: {
+          logDate: string;
+          pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
+        },
+        planNames: Set<string>,
+        loggedByEx: Record<string, Array<Record<string, unknown>>>,
+      ): Array<{ name: string; mode?: string | null }>;
+      prefillFor(
+        item: Record<string, unknown>,
+        loggedByEx: Record<string, Array<Record<string, unknown>>>,
+        lastSets: Record<string, Record<string, unknown> | null>,
+      ): Record<string, unknown>;
+    };
+
     CairnTodayPlanSessionData: {
       loadLastSets(
         names: string[],
@@ -3590,6 +3636,7 @@ declare global {
   declare const CairnTodayRailLoaders: Window["CairnTodayRailLoaders"];
   declare const CairnTodaySideLoaders: Window["CairnTodaySideLoaders"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
+  declare const CairnTodayPlanSessionModel: Window["CairnTodayPlanSessionModel"];
   declare const CairnTodayPlanSessionData: Window["CairnTodayPlanSessionData"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];

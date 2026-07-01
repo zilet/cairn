@@ -26,10 +26,52 @@ function loadPreparation() {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-session-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-session-data-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-session-preparation.js"), "utf8"), context);
   return context;
 }
+
+test("Today plan/session model groups sets, matches cardio once, prunes pending off-plan, and chooses prefill", () => {
+  const context = loadPreparation();
+  const model = context.CairnTodayPlanSessionModel;
+  const session = {
+    skips: ["Easy run", "Squat"],
+    sets: [
+      { exercise: "Bench", set_number: 2, weight: 190, reps: 4, rir: 1 },
+      { exercise: "Bench", set_number: 1, weight: 185, reps: 5, rir: 2 },
+      { exercise: "Curl", set_number: 1, weight: 30, reps: 12, rir: 2 },
+    ],
+  };
+  const loggedByEx = model.groupLoggedSets(session);
+  assert.deepEqual(plain(loggedByEx.Bench.map((set) => set.set_number)), [1, 2]);
+
+  const items = [
+    { exercise: "Bench" },
+    { exercise: "Squat" },
+    { kind: "cardio", label: "Easy run" },
+  ];
+  const efforts = [{ label: "Easy run" }, { label: "Easy run" }];
+  const matchedCardio = model.matchCardioEfforts(items.filter((item) => item.kind === "cardio"), efforts, (item, effort) => item.label === effort?.label);
+  assert.equal(matchedCardio.size, 1);
+  const groups = model.itemGroups({
+    items,
+    loggedByEx,
+    matchedCardio,
+    skips: session.skips,
+    isCardioItem: (item) => item.kind === "cardio",
+    cardioLabel: (item) => item.label || "Cardio",
+  });
+  assert.deepEqual(plain(groups.planEx), ["Bench"]);
+  assert.deepEqual(plain(groups.offPlanEx), ["Curl"]);
+  assert.deepEqual(plain(groups.skippedItems), [{ exercise: "Squat" }]);
+
+  const state = { logDate: "2026-06-30", day: 1, plan: [{ day_number: 1, items }], pendingOffPlan: { "2026-06-30": [{ name: "Curl" }, { name: "Lateral raise" }] } };
+  assert.deepEqual(plain(model.prunePendingOffPlan(state, groups.planNames, loggedByEx)), [{ name: "Lateral raise" }]);
+  assert.deepEqual(plain(state.pendingOffPlan["2026-06-30"]), [{ name: "Lateral raise" }]);
+  assert.deepEqual(plain(model.prefillFor({ exercise: "Bench", target_weight: 180, rep_low: 5 }, loggedByEx, {})), { weight: 190, reps: 4, rir: 1, duration_sec: null });
+  assert.deepEqual(plain(model.selectedPlanDay({ day: 9, plan: [{ day_number: 2, name: "Fallback" }] }, false)), { day_number: 2, name: "Fallback" });
+});
 
 test("Today plan/session data helper loads cached last sets and refreshes stale data", async () => {
   const context = loadPreparation();
