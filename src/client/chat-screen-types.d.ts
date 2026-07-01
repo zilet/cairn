@@ -33,6 +33,14 @@ type ChatScreenHeaderButtons = { freshBtn: HTMLElement | null; historyBtn: HTMLE
 declare function enqueueJob(path: string, body?: Record<string, unknown>): Promise<unknown>;
 declare function openJobStream(jobId: string | number, handlers?: ChatScreenJobHandlers): void;
 declare function openChatHistory(options?: { session?: string | null }): void;
+declare function appendMsg(
+  message: Partial<ChatScreenMessage>,
+  noScroll?: boolean,
+  parent?: Element | null,
+  opts?: ChatScreenAppendOptions,
+): HTMLElement | null;
+declare function chatDayISO(timestamp: unknown): string;
+declare function chatDivider(iso: string): Element;
 declare function saveChatDraft(value: string): void;
 declare function loadChatDraft(): string;
 declare function spawnPendingBubble(turnValue: unknown): Element | null;

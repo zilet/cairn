@@ -40,7 +40,7 @@ function loadChatFuelGate() {
   vm.runInNewContext(`
     let chatFuelContext = [];
     function localISO() { return "2026-06-25"; }
-    function chatScreenDayISO() { return "2026-06-25"; }
+    function chatDayISO() { return "2026-06-25"; }
     ${chat.slice(start, end)}
     globalThis.chatFuelGate = { chatWantsFuelSurface: chatScreenWantsFuelSurface };
   `, context);
