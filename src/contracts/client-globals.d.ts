@@ -779,6 +779,28 @@ declare global {
       dayFuelHtml(day: Record<string, unknown> | null | undefined): string;
     };
 
+    CairnDayFuelController: {
+      loadDayFuel(
+        token: number,
+        options?: {
+          root?: ParentNode | null | undefined;
+          isCurrent?: (token: number) => boolean;
+          onRerender?: () => unknown;
+          onAsk?: () => unknown;
+        },
+      ): Promise<void>;
+      openFoodEdit(
+        id: number,
+        fromEl: Element,
+        options?: {
+          root?: ParentNode | null | undefined;
+          isCurrent?: (token: number) => boolean;
+          onRerender?: () => unknown;
+          onAsk?: () => unknown;
+        },
+      ): void;
+    };
+
     CairnMealPlan: {
       MEAL_HINT_CHIPS: string[];
       MEAL_PREFS_PLACEHOLDER: string;
@@ -1281,6 +1303,7 @@ declare global {
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
+  declare const CairnDayFuelController: Window["CairnDayFuelController"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnMealRecipe: Window["CairnMealRecipe"];
   declare const CairnMealRecipeController: Window["CairnMealRecipeController"];

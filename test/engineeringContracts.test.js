@@ -733,6 +733,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/progress-program-block-client\.js"/);
   assert.match(sw, /"\/js\/health-docs-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
@@ -750,6 +751,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
   assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/settings-client\.js"/);
   assert.match(sw, /"\/js\/settings-data-client\.js"/);
   assert.match(sw, /"\/js\/settings-agents-client\.js"/);
@@ -788,6 +790,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const appRouter = read("public/js/app-router.js");
   const ui = read("public/js/02-ui.js");
   const meals = read("public/js/06-coach-meals.js");
+  const dayFuelController = read("public/js/day-fuel-controller.js");
   const health = read("public/js/07-me-health.js");
   const records = read("public/js/08-me-records.js");
   const chat = read("public/js/09-plan-chat.js");
@@ -808,7 +811,8 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(ui, /\["energy", "Energy"\]/, "Progress Energy must remain a routable segment");
   assert.match(ui, /energy:\s*\(\)\s*=>\s*renderEnergy\(\)/, "Progress Energy must have a segment handler");
   assert.match(ui, /syncRouteFromState\(\)/, "shared UI events should notify route sync");
-  assert.match(meals, /api\("\/nutrition\/day"\s*\+\s*qs\)/, "Plan Food must fetch the routed local day");
+  assert.match(dayFuelController, /api\("\/nutrition\/day"\s*\+\s*qs\)/, "Plan Food must fetch the routed local day");
+  assert.match(meals, /CairnDayFuelController\.loadDayFuel/, "Plan Food must use the routed day-fuel controller");
   assert.match(health, /const next = normalizeHealthSeg\(b\.dataset\.hseg\)[\s\S]*setHealthSegActive\(next\)[\s\S]*syncRouteFromState\(\)/);
   assert.match(records, /state\.pendingHealthDocId[\s\S]*scrollIntoView/);
   assert.match(appRouter, /state\.pendingChatSession\s*=\s*route\.session\s*\|\|\s*null/);
@@ -1031,6 +1035,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const planEnduranceSource = read("src/client/plan-endurance-client.ts");
   const planEditorSource = read("src/client/plan-editor-client.ts");
   const dayFuelSource = read("src/client/day-fuel-client.ts");
+  const dayFuelControllerSource = read("src/client/day-fuel-controller.ts");
   const mealPlanSource = read("src/client/meal-plan-client.ts");
   const mealRecipeSource = read("src/client/meal-recipe-client.ts");
   const mealRecipeControllerSource = read("src/client/meal-recipe-controller.ts");
@@ -1125,6 +1130,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const planEnduranceClient = read("public/js/plan-endurance-client.js");
   const planEditorClient = read("public/js/plan-editor-client.js");
   const dayFuelClient = read("public/js/day-fuel-client.js");
+  const dayFuelController = read("public/js/day-fuel-controller.js");
   const mealPlanClient = read("public/js/meal-plan-client.js");
   const mealRecipeClient = read("public/js/meal-recipe-client.js");
   const mealRecipeController = read("public/js/meal-recipe-controller.js");
@@ -1343,6 +1349,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnPlanEditor/);
   assert.match(clientGlobals, /progDayHtml\(/);
   assert.match(clientGlobals, /CairnDayFuel/);
+  assert.match(clientGlobals, /CairnDayFuelController/);
+  assert.match(clientGlobals, /loadDayFuel\(\s*token: number,/);
   assert.match(clientGlobals, /declare function dayFuelHtml\(day: Record<string, unknown> \| null \| undefined\): string/);
   assert.match(clientGlobals, /declare const MEAL_LABEL: Record<string, string>/);
   assert.match(clientGlobals, /CairnMealPlan/);
@@ -1600,6 +1608,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/09-plan-chat\.js/);
   assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
   assert.match(clientBuild, /public\/js\/day-fuel-client\.js/);
+  assert.match(clientBuild, /src\/client\/day-fuel-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/day-fuel-controller\.js/);
   assert.match(clientBuild, /src\/client\/meal-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
@@ -1925,6 +1935,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "meal-plan-client.js must load after fuel helpers and before Meals screen consumers"
   );
   assert.ok(
+    index.indexOf("/js/day-fuel-controller.js") > index.indexOf("/js/day-fuel-client.js") &&
+      index.indexOf("/js/day-fuel-controller.js") < index.indexOf("/js/06-coach-meals.js"),
+    "day-fuel-controller.js must load after fuel helpers and before Meals screen consumers"
+  );
+  assert.ok(
     index.indexOf("/js/meal-recipe-client.js") > index.indexOf("/js/meal-plan-client.js") &&
       index.indexOf("/js/meal-recipe-client.js") < index.indexOf("/js/meal-recipe-controller.js"),
     "meal-recipe-client.js must load before the Meal Recipe controller"
@@ -2034,6 +2049,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf("/js/day-fuel-client.js") > index.indexOf("/js/05-progress.js") &&
       index.indexOf("/js/day-fuel-client.js") < index.indexOf("/js/06-coach-meals.js"),
     "day-fuel-client.js must load before Meals day-fuel consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/day-fuel-controller.js") > index.indexOf("/js/day-fuel-client.js") &&
+      index.indexOf("/js/day-fuel-controller.js") < index.indexOf("/js/06-coach-meals.js"),
+    "day-fuel-controller.js must load before Meals day-fuel controller consumers"
   );
   assert.ok(
     index.indexOf("/js/food-note-client.js") > index.indexOf("/js/06-coach-meals.js") &&
@@ -2298,6 +2318,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/09-plan-chat\.js/);
   assert.match(clientBuild, /src\/client\/day-fuel-client\.ts/);
   assert.match(clientBuild, /public\/js\/day-fuel-client\.js/);
+  assert.match(clientBuild, /src\/client\/day-fuel-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/day-fuel-controller\.js/);
   assert.match(clientBuild, /src\/client\/meal-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
@@ -2738,6 +2760,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(dayFuelSource, /const MEAL_LABEL: Record<string, string>/);
   assert.match(dayFuelSource, /function dayFuelHtml\(day: DayFuelData \| null \| undefined\): string/);
   assert.match(dayFuelSource, /CairnDayFuel/);
+  assert.match(dayFuelControllerSource, /function loadDayFuel\(token: number, options: DayFuelControllerOptions = \{\}\): Promise<void>/);
+  assert.match(dayFuelControllerSource, /function openFoodEdit\(id: number, fromEl: Element, options: DayFuelControllerOptions = \{\}\): void/);
+  assert.match(dayFuelControllerSource, /CairnDayFuelController/);
   assert.match(mealPlanSource, /function mealSlotFor\(name: unknown, index: unknown\): string/);
   assert.match(mealPlanSource, /function currentMealPlan\(plans: unknown\): MealRecord \| null/);
   assert.match(mealPlanSource, /function mealsCtxFor\(plan: unknown, now\?: unknown\): MealPlannerContext/);
@@ -3115,6 +3140,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(dayFuelClient, /MEAL_LABEL/);
   assert.match(dayFuelClient, /dayFuelHtml/);
   assert.doesNotMatch(dayFuelClient, /^const\s+MEAL_LABEL|^function\s+dayFuelHtml/m);
+  assert.match(dayFuelController, /Object\.assign\(globalThis, \{ CairnDayFuelController: CAIRN_DAY_FUEL_CONTROLLER \}\)/);
+  assert.match(dayFuelController, /loadDayFuel/);
+  assert.match(dayFuelController, /openFoodEdit/);
   assert.match(mealPlanClient, /Object\.assign\(globalThis, \{/);
   assert.match(mealPlanClient, /CairnMealPlan/);
   assert.match(mealPlanClient, /mealPlanListHtml/);
@@ -3132,9 +3160,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(mealRecipeController, /CairnMealRecipeController/);
   assert.match(mealRecipeController, /closeMealSheet/);
   assert.match(mealRecipeController, /reconnectRecipe/);
-  assert.doesNotMatch(meals, /const\s+MEAL_LABEL|function\s+dayFuelHtml|const\s+MEAL_HINT_CHIPS|const\s+MEAL_PREFS_PLACEHOLDER|function\s+mealPrefsHtml|function\s+mealsCtxFor|function\s+mealRowHtml|function\s+mealSlotFor|function\s+mealDayHtml|const\s+mealCardHtml/);
+  assert.doesNotMatch(meals, /const\s+MEAL_LABEL|function\s+dayFuelHtml|function\s+loadDayFuel|function\s+openFoodEdit|const\s+MEAL_HINT_CHIPS|const\s+MEAL_PREFS_PLACEHOLDER|function\s+mealPrefsHtml|function\s+mealsCtxFor|function\s+mealRowHtml|function\s+mealSlotFor|function\s+mealDayHtml|const\s+mealCardHtml/);
   assert.doesNotMatch(meals, /function\s+mealRecipeCtaHtml|function\s+mealRecipeHtml|function\s+mealRecipeLoadingHtml|function\s+openMealSheet|function\s+recipeOpOpts|function\s+reconnectRecipe|recipe-ings.*ingredients\.map/s);
-  assert.match(meals, /day-fuel-client\.js/);
+  assert.match(dayFuelController, /CairnDayFuel/);
+  assert.match(meals, /CairnDayFuelController\.loadDayFuel/);
   assert.match(meals, /meal-plan-client\.js/);
   assert.match(meals, /CairnMealRecipeController\.openMealSheet/);
   assert.match(meals, /CairnMealPlan\.mealPlanListHtml\(plans\)/);
@@ -3429,6 +3458,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/ui-components\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/meal-plan-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
@@ -3450,6 +3480,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
   assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);
+  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
   assert.match(sw, /"\/js\/meal-plan-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
