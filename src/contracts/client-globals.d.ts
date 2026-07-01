@@ -178,6 +178,23 @@ declare global {
     inStandaloneApp?: boolean;
   };
 
+  type ClientProgressEnduranceControllerDeps = {
+    view: HTMLElement;
+    headerTitle: HTMLElement;
+    state: Pick<ClientAppState, "tab" | "progressSeg">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    nextToken(): number;
+    isCurrent(token: number): boolean;
+    segmentHtml(active: ClientProgressSection): string;
+    wireSegments(): void;
+    loading(message: string): string;
+    empty(image: string, message: string): string;
+    hero(title: string, stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }]>): string;
+    art(kind: string, label: string): string;
+    runCountUps(root: ParentNode): void;
+    renderSelf(): unknown;
+  };
+
   type ClientHealthPictureControllerDeps = {
     root: ParentNode;
     state: Pick<ClientAppState, "healthReview">;
@@ -1338,6 +1355,19 @@ declare global {
       enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
     };
 
+    CairnProgressEnduranceController: {
+      render(deps: ClientProgressEnduranceControllerDeps): Promise<void>;
+      paint(
+        end: unknown,
+        prs: ClientEndurancePRs | null,
+        goal: ClientEnduranceGoal | null,
+        compliance: ClientRunCompliance | null,
+        settings: unknown,
+        runPlan: ClientWeeklyRunPlan | null,
+        deps: ClientProgressEnduranceControllerDeps,
+      ): void;
+    };
+
     CairnTodayActivity: {
       ACT_ART_PHRASE: Record<string, string>;
       actArtText(activity: ClientActivity & Record<string, unknown>): string;
@@ -1629,6 +1659,7 @@ declare global {
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnCardioSync: Window["CairnCardioSync"];
   declare const CairnProgressEndurance: Window["CairnProgressEndurance"];
+  declare const CairnProgressEnduranceController: Window["CairnProgressEnduranceController"];
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayRailController: Window["CairnTodayRailController"];

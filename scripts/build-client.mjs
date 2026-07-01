@@ -58,6 +58,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-chart-client.ts", output: "public/js/progress-chart-client.js" },
   { source: "src/client/progress-history-client.ts", output: "public/js/progress-history-client.js" },
   { source: "src/client/progress-run-plan-client.ts", output: "public/js/progress-run-plan-client.js" },
+  { source: "src/client/progress-endurance-controller.ts", output: "public/js/progress-endurance-controller.js" },
   { source: "src/client/progress-volume-client.ts", output: "public/js/progress-volume-client.js" },
   { source: "src/client/progress-energy-client.ts", output: "public/js/progress-energy-client.js" },
   { source: "src/client/progress-energy-surface-client.ts", output: "public/js/progress-energy-surface-client.js" },

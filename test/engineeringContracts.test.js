@@ -739,6 +739,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/progress-chart-client\.js"/);
   assert.match(sw, /"\/js\/progress-history-client\.js"/);
   assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
+  assert.match(sw, /"\/js\/progress-endurance-controller\.js"/);
   assert.match(sw, /"\/js\/progress-volume-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-surface-client\.js"/);
@@ -1063,6 +1064,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressChartSource = read("src/client/progress-chart-client.ts");
   const progressHistorySource = read("src/client/progress-history-client.ts");
   const progressRunPlanSource = read("src/client/progress-run-plan-client.ts");
+  const progressEnduranceControllerSource = read("src/client/progress-endurance-controller.ts");
   const progressVolumeSource = read("src/client/progress-volume-client.ts");
   const progressEnergySource = read("src/client/progress-energy-client.ts");
   const progressEnergySurfaceSource = read("src/client/progress-energy-surface-client.ts");
@@ -1181,6 +1183,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressChartClient = read("public/js/progress-chart-client.js");
   const progressHistoryClient = read("public/js/progress-history-client.js");
   const progressRunPlanClient = read("public/js/progress-run-plan-client.js");
+  const progressEnduranceControllerClient = read("public/js/progress-endurance-controller.js");
   const progressVolumeClient = read("public/js/progress-volume-client.js");
   const progressEnergyClient = read("public/js/progress-energy-client.js");
   const progressEnergySurfaceClient = read("public/js/progress-energy-surface-client.js");
@@ -1320,6 +1323,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function enduranceBestRows\(group: ClientSportBests \| null \| undefined\): Array<\{ label: string; val: string; date: string; type: string \}>/);
   assert.match(clientGlobals, /declare function enduranceSportCardHtml\(group: ClientSportBests \| null \| undefined, idx: number\): string/);
   assert.match(clientGlobals, /CairnProgressEndurance/);
+  assert.match(clientGlobals, /type ClientProgressEnduranceControllerDeps = \{/);
+  assert.match(clientGlobals, /CairnProgressEnduranceController/);
   assert.match(clientGlobals, /declare function withToken\(url: string\): string/);
   assert.match(clientGlobals, /declare function downloadFile\(href: string\): void/);
   assert.match(clientGlobals, /declare function api<Path extends string>/);
@@ -1559,6 +1564,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-chart-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-history-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-run-plan-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/progress-endurance-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-volume-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-energy-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-energy-surface-client\.js/);
@@ -1705,6 +1711,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-history-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-run-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-run-plan-client\.js/);
+  assert.match(clientBuild, /src\/client\/progress-endurance-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/progress-endurance-controller\.js/);
   assert.match(clientBuild, /src\/client\/progress-volume-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-volume-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-energy-client\.ts/);
@@ -2056,11 +2064,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/progress-run-plan-client.js") > index.indexOf("/js/progress-history-client.js") &&
-      index.indexOf("/js/progress-run-plan-client.js") < index.indexOf("/js/05-progress.js"),
+      index.indexOf("/js/progress-run-plan-client.js") < index.indexOf("/js/progress-endurance-controller.js"),
     "progress-run-plan-client.js must load before Progress Endurance consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-volume-client.js") > index.indexOf("/js/progress-run-plan-client.js") &&
+    index.indexOf("/js/progress-endurance-controller.js") > index.indexOf("/js/progress-run-plan-client.js") &&
+      index.indexOf("/js/progress-endurance-controller.js") < index.indexOf("/js/progress-volume-client.js"),
+    "progress-endurance-controller.js must load after Progress Endurance helpers and before sibling Progress helpers"
+  );
+  assert.ok(
+    index.indexOf("/js/progress-volume-client.js") > index.indexOf("/js/progress-endurance-controller.js") &&
       index.indexOf("/js/progress-volume-client.js") < index.indexOf("/js/05-progress.js"),
     "progress-volume-client.js must load before Progress Volume consumers"
   );
@@ -2505,6 +2518,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-history-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-run-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-run-plan-client\.js/);
+  assert.match(clientBuild, /src\/client\/progress-endurance-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/progress-endurance-controller\.js/);
   assert.match(clientBuild, /src\/client\/progress-volume-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-volume-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-energy-client\.ts/);
@@ -2894,6 +2909,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressRunPlanSource, /function enduranceCoachLine\(plan: WeeklyRunPlan \| null \| undefined\): string/);
   assert.match(progressRunPlanSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressRunPlanSource, /CairnProgressRunPlan/);
+  assert.match(progressEnduranceControllerSource, /type ProgressEnduranceControllerDeps = \{/);
+  assert.match(progressEnduranceControllerSource, /async function renderProgressEndurance\(deps: ProgressEnduranceControllerDeps\): Promise<void>/);
+  assert.match(progressEnduranceControllerSource, /function paintProgressEnduranceBody\(/);
+  assert.match(progressEnduranceControllerSource, /deps\.api\("\/endurance-prs"\)/);
+  assert.match(progressEnduranceControllerSource, /CairnProgressEnduranceController/);
   assert.match(progressVolumeSource, /function capWord\(input: unknown\): string/);
   assert.match(progressVolumeSource, /function volBalanceHtml\(balance: VolumeBalance \| null \| undefined\): string/);
   assert.match(progressVolumeSource, /Object\.assign\(globalThis, \{/);
@@ -3415,7 +3435,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(ui, /function\s+cardioPrescription|function\s+cardioLabel|function\s+isCardioItem/);
   assert.match(progressEnduranceClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnduranceClient, /CairnProgressEndurance/);
+  assert.match(progressEnduranceControllerClient, /CairnProgressEnduranceController/);
+  assert.match(progressEnduranceControllerClient, /render: renderProgressEndurance/);
   assert.doesNotMatch(progress, /function\s+enduranceStatusWord|function\s+enduranceBlockHtml|function\s+paceTrendWord|function\s+zoneBarHtml|function\s+enduranceBestRows|function\s+enduranceSportCardHtml/);
+  assert.match(progress, /CairnProgressEnduranceController\.render/);
+  assert.match(progress, /CairnProgressEnduranceController\.paint/);
+  assert.doesNotMatch(progress, /api\("\/endurance-prs"\)|function\s+paintProgressEnduranceBody/);
   assert.match(progressComponentsClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressComponentsClient, /CairnProgressComponents/);
   assert.doesNotMatch(progress, /function\s+progressHero|function\s+emptyStateHtml|const\s+fmtShortDate/);
@@ -3816,6 +3841,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/progress-chart-client\.js"/);
   assert.match(sw, /"\/js\/progress-history-client\.js"/);
   assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
+  assert.match(sw, /"\/js\/progress-endurance-controller\.js"/);
   assert.match(sw, /"\/js\/progress-volume-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-surface-client\.js"/);

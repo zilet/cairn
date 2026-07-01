@@ -1,11 +1,6 @@
 // ==== 05-progress.js ====
 type ProgressRecord = Record<string, unknown>;
 type ProgressStat = readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }];
-type ProgressEnduranceGoal = import("../contracts/client-api.js").ClientEnduranceGoal;
-type ProgressEndurancePRs = import("../contracts/client-api.js").ClientEndurancePRs;
-type ProgressRunCompliance = import("../contracts/client-api.js").ClientRunCompliance;
-type ProgressSportBests = import("../contracts/client-api.js").ClientSportBests;
-type ProgressWeeklyRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
 type ProgressProgramState = import("../contracts/client-api.js").ClientProgramState;
 
 type ProgressSet = ProgressRecord & {
@@ -373,181 +368,38 @@ async function loadVolumeBalance() {
 }
 
 // ---------- Progress: Endurance (runner/cyclist-first read) ----------
-// The endurance analogue to the 1RM view: this week's mileage + moving time, the
-// longest single effort, a calm time-in-HR-zone bar, the pace trend in plain words
-// (never a grade), and endurance PRs (longest distance + best pace by distance).
-// Fed by /api/stats `.endurance` + /api/endurance-prs. No 0–100 scores anywhere.
+function progressEnduranceDeps(): ClientProgressEnduranceControllerDeps {
+  return {
+    view,
+    headerTitle,
+    state,
+    api,
+    nextToken: () => ++pollToken,
+    isCurrent: (token) => token === pollToken,
+    segmentHtml: (active) => segBar(active, PROGRESS_SEG),
+    wireSegments: () => wireSeg(PROGRESS_HANDLERS),
+    loading: loadingState,
+    empty: emptyStateHtml,
+    hero: progressHero,
+    art,
+    runCountUps,
+    renderSelf: () => renderEndurance(),
+  };
+}
+
 async function renderEndurance() {
-  headerTitle.textContent = "Progress";
-  state.progressSeg = "endurance";
-  const token = ++pollToken;
-  view.innerHTML = segBar("endurance", PROGRESS_SEG) + `<div id="endBody">${loadingState("Reading your week…")}</div>`;
-  wireSeg(PROGRESS_HANDLERS);
-  // Reads in parallel: the weekly endurance block (off /stats), the PRs, the endurance
-  // goal (race countdown / standing target), the run compliance ("32 of 40 km this
-  // week"), and /settings for Garmin sync freshness.
-  let stats: unknown = null;
-  let prs: ProgressEndurancePRs | null = null;
-  let goal: ProgressEnduranceGoal | null = null;
-  let compliance: ProgressRunCompliance | null = null;
-  let settings: unknown = null;
-  let runPlan: ProgressWeeklyRunPlan | null = null;
-  try {
-    [stats, prs, goal, compliance, settings, runPlan] = await Promise.all([
-      api("/stats"),
-      api("/endurance-prs").catch(() => null),
-      api("/endurance-goal").catch(() => null),
-      api("/run-compliance").catch(() => null),
-      api("/settings").then((r) => (r && r.settings) || null).catch(() => null),
-      api("/run-plan").catch(() => null),
-    ]);
-  } catch { stats = null; }
-  if (token !== pollToken || !view.querySelector("#endBody")) return;
-  const statsRow = progressRecord(stats);
-  paintEnduranceBody(statsRow.endurance || null, prs, goal, compliance, settings, runPlan);
+  await CairnProgressEnduranceController.render(progressEnduranceDeps());
 }
 
 function paintEnduranceBody(
   end: unknown,
-  prs: ProgressEndurancePRs | null,
-  goal: ProgressEnduranceGoal | null,
-  compliance: ProgressRunCompliance | null,
+  prs: import("../contracts/client-api.js").ClientEndurancePRs | null,
+  goal: import("../contracts/client-api.js").ClientEnduranceGoal | null,
+  compliance: import("../contracts/client-api.js").ClientRunCompliance | null,
   settings: unknown,
-  runPlan: ProgressWeeklyRunPlan | null,
+  runPlan: import("../contracts/client-api.js").ClientWeeklyRunPlan | null,
 ) {
-  const body = view.querySelector("#endBody");
-  if (!body) return;
-  const endRow = progressRecord(end);
-  const goalHtml = enduranceGoalCard(goal);
-  const complianceHtml = runComplianceLine(compliance);
-  const runPlanHtml = weeklyRunPlanCard(runPlan);
-  // Sync trust: a quiet "synced 2h ago · Sync now" line, only when Garmin is
-  // configured (cardioSyncLine returns "" otherwise). Shared with Today's run card.
-  const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(progressRecord(settings), {}) : "";
-  const hasWeek = isProgressRecord(end) && (
-    progressNumber(endRow.week_km) > 0 ||
-    progressNumber(endRow.week_moving_min) > 0 ||
-    endRow.longest_km != null ||
-    endRow.longest_min != null
-  );
-  const hasPRs = !!prs && (
-    prs.sports.length > 0 ||
-    prs.longest_km != null ||
-    prs.longest_min != null ||
-    prs.best_pace.length > 0
-  );
-  if (!hasWeek && !hasPRs) {
-    body.innerHTML = progressHero("Endurance", []) + goalHtml + complianceHtml + runPlanHtml + syncHtml +
-      emptyStateHtml(art("activity", "run"),
-        goalHtml
-          ? "No runs logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your weekly runs build toward this."
-          : "No runs or rides logged yet — log one on Today (a phrase like “ran 8 km easy” is plenty) and your mileage, zones, and pace will read here.");
-    if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderEndurance());
-    return;
-  }
-
-  // Hero: this week's mileage + moving time + longest effort.
-  const heroStats: ProgressStat[] = [];
-  if (isProgressRecord(end)) {
-    heroStats.push(["km · this week", endRow.week_km || 0]);
-    if (endRow.week_moving_min != null) heroStats.push(["moving min · wk", Math.round(progressNumber(endRow.week_moving_min))]);
-    if (endRow.longest_km != null) heroStats.push(["longest · km", endRow.longest_km, { text: true }]);
-    else if (endRow.longest_min != null) heroStats.push(["longest · min", Math.round(progressNumber(endRow.longest_min)), { text: true }]);
-  }
-
-  // Lead: hero + the coach's one line + the persistent goal/compliance anchors + the
-  // week's run plan (Endurance is its home). The deep stats collapse below.
-  const coachLineHtml = enduranceCoachLine(runPlan);
-  const leadHtml = progressHero("Endurance", heroStats) + coachLineHtml + goalHtml + complianceHtml + runPlanHtml;
-  const hasLead = !!(runPlanHtml || goalHtml || coachLineHtml);
-
-  // Deep read — longest effort, pace trend, time-in-zone, personal bests, and the
-  // Garmin sync line. Collapses behind one "The full read" disclosure when there's a
-  // lead; otherwise stacks beneath the hero (graceful degradation).
-  let deep = "";
-
-  if (isProgressRecord(end) && (endRow.longest_km != null || endRow.longest_min != null)) {
-    const lbits: string[] = [];
-    if (endRow.longest_km != null) lbits.push(`${fmtKm(endRow.longest_km)} km`);
-    if (endRow.longest_min != null) lbits.push(`${Math.round(progressNumber(endRow.longest_min))} min`);
-    const tlabel = endRow.longest_type ? `${escHtml(endRow.longest_type)} · ` : "";
-    deep += `<div class="end-line reveal" style="${stagger(1)}"><span class="lbl">Longest this week</span><span class="end-line-v">${tlabel}${lbits.join(" · ")}</span></div>`;
-  }
-
-  // Pace trend, in plain words (never a grade).
-  const paceTrend = progressRecord(endRow.pace_trend);
-  const word = paceTrendWord(isProgressRecord(end) ? paceTrend : null);
-  if (word) {
-    deep += `<div class="end-pace reveal" style="${stagger(2)}">
-        <span class="lbl">Pace</span>
-        <span class="end-pace-read">${escHtml(word.charAt(0).toUpperCase() + word.slice(1))}.</span>
-        ${paceTrend.this_min_per_km != null ? `<span class="end-pace-num numeral">${fmtPaceKm(paceTrend.this_min_per_km)}<span class="end-pace-unit">/km</span></span>` : ""}
-      </div>`;
-  }
-
-  // Time-in-zone bar.
-  deep += zoneBarHtml(isProgressRecord(end) ? endRow.time_in_zone : null);
-
-  // Endurance PRs — the endurance analogue of the est-1RM view, GROUPED BY SPORT so
-  // a best is read in its own modality: running pace leads (the athlete's sport),
-  // cross-training (cycling/MTB/swim) sits in a quiet disclosure with distance /
-  // duration / speed — never a min/km "pace", which only makes sense on foot.
-  if (hasPRs) {
-    // Prefer the server's per-sport grouping; fall back to a single synthesized group
-    // from the flat fields for an older API response.
-    let groups: ProgressSportBests[] = prs.sports
-      .map((g) => ({ ...g }))
-      .filter((g) => enduranceBestRows(g).length);
-    if (!groups.length) {
-      groups = [{
-        sport: prs.primary_sport || "run",
-        label: "",
-        count: 0,
-        paced: true,
-        longest_km: prs.longest_km,
-        longest_min: prs.longest_min,
-        best_pace: prs.best_pace,
-        best_speed_kmh: null,
-      }].filter((g) => enduranceBestRows(g).length);
-    }
-    if (groups.length) {
-      // With a single sport, the bests are unambiguous — drop the redundant label.
-      if (groups.length === 1) groups[0] = { ...groups[0], label: "" };
-      const lead = groups[0];
-      const others = groups.slice(1);
-      const otherHtml = others.length
-        ? `<details class="end-pr-more">
-            <summary>Cross-training bests</summary>
-            <div class="end-pr-more-body">${others.map((g, gi) => enduranceSportCardHtml(g, 5 + gi)).join("")}</div>
-          </details>`
-        : "";
-      deep += `<div class="end-prs">
-          <div class="lbl end-prs-head reveal" style="${stagger(3)}">Personal bests</div>
-          ${enduranceSportCardHtml(lead, 4)}
-          ${otherHtml}
-        </div>`;
-    }
-  }
-
-  // The Garmin sync-trust line lives at the foot of the deep read.
-  deep += syncHtml;
-
-  let html = "";
-  if (hasLead && deep.trim()) {
-    html = leadHtml +
-      `<details class="full-read reveal" style="${stagger(3)}">
-        <summary>The full read</summary>
-        <div class="full-read-body">${deep}</div>
-      </details>`;
-  } else {
-    // No lead (non-runner, no plan/goal) — keep the stats stacked beneath the hero.
-    html = leadHtml + deep;
-  }
-
-  body.innerHTML = html;
-  runCountUps(body);
-  // "Sync now" on the freshness line → pull, then re-read the endurance view in place.
-  if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderEndurance());
+  CairnProgressEnduranceController.paint(end, prs, goal, compliance, settings, runPlan, progressEnduranceDeps());
 }
 
 // SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its
