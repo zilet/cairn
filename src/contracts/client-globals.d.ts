@@ -428,6 +428,30 @@ declare global {
     wireSeg(handlers: Record<string, () => unknown>): void;
   };
 
+  type ClientLifeControllerForm = {
+    kind: string;
+    title: string | null;
+    detail: string | null;
+    start_date: string | null;
+    end_date: string | null;
+    meta: Record<string, unknown>;
+  };
+
+  type ClientLifeControllerDeps = {
+    view: HTMLElement;
+    state: Pick<ClientAppState, "tab" | "meSeg" | "_lifeById">;
+    segments: readonly ClientSegment[];
+    handlers: Record<string, () => unknown>;
+    headerTitle: HTMLElement;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
+    escapeAttr(value: unknown): string;
+    invalidatePoll(): void;
+    segBar(active: string, items: readonly ClientSegment[]): string;
+    toast(message: string): void;
+    wireSeg(handlers: Record<string, () => unknown>): void;
+  };
+
   type ClientAgentOpHandlers = {
     path?: string;
     anchor?: string;
@@ -1463,6 +1487,17 @@ declare global {
       ): string;
     };
 
+    CairnLifeController: {
+      collectForm(): ClientLifeControllerForm;
+      drawFields(kind: unknown): void;
+      load(deps: ClientLifeControllerDeps): Promise<void>;
+      render(deps: ClientLifeControllerDeps): Promise<void>;
+      rewireCard(card: HTMLElement, deps: ClientLifeControllerDeps): void;
+      startDelete(button: Element, deps: ClientLifeControllerDeps): void;
+      startEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps): void;
+      submit(deps: ClientLifeControllerDeps): Promise<void>;
+    };
+
     CairnHealthDocs: {
       healthKindLabel(kind: unknown): string;
       parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
@@ -2096,6 +2131,7 @@ declare global {
   declare const CairnMeMemoryController: Window["CairnMeMemoryController"];
   declare const CairnFamily: Window["CairnFamily"];
   declare const CairnLife: Window["CairnLife"];
+  declare const CairnLifeController: Window["CairnLifeController"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
