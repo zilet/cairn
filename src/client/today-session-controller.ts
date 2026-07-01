@@ -32,7 +32,7 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         deps.stopRest();
 
         const settle = () => {
-          if (deps.state.tab !== "today") return;
+          if (deps.state.tab !== "today" && deps.state.tab !== "session") return;
           deps.toast(`Done · ${Number(summary.sets || 0)} sets · ${Number(summary.tonnage || 0).toLocaleString()} lb`);
           deps.renderToday();
         };

@@ -30,22 +30,14 @@
             deps.activateTab("progress");
             return;
         }
-        if (action === "start-session") {
-            deps.revealPlanThen(() => {
-                const surface = deps.root.querySelector(".plansurface") || deps.root.querySelector(".addex");
-                surface?.scrollIntoView({ behavior: deps.reducedMotion() ? "auto" : "smooth", block: "start" });
-            });
-            return;
-        }
-        if (action === "reveal-plan") {
-            deps.state.planReveal = { date: deps.state.logDate, on: true };
-            deps.renderToday();
+        if (action === "start-session" || action === "reveal-plan") {
+            // Logging lives in the isolated Session destination now, not inline on Today.
+            openSession();
             return;
         }
         if (action === "pull-plan") {
-            deps.state.planReveal = { date: deps.state.logDate, on: true };
             deps.state.dayPicked = true;
-            deps.renderToday();
+            openSession();
         }
     }
     async function resetBriefRead(brief, steerReset, deps) {

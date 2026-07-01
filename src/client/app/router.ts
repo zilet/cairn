@@ -96,6 +96,8 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     const route: Partial<AppRoute> = { tab };
     if (tab === "today") {
       if (state.logDate) route.date = state.logDate;
+    } else if (tab === "session") {
+      if (state.logDate) route.date = state.logDate;
     } else if (tab === "plan") {
       const section = routeKey(state.planJump || state.planSeg, options.planSections, "edit");
       route.section = section as AppRoute["section"];

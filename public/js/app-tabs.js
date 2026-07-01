@@ -15,7 +15,7 @@
         return isEndurance() ? "endurance" : "sessions";
     }
     function tabSkeleton(tab) {
-        if (tab === "today")
+        if (tab === "today" || tab === "session")
             return todaySkeleton();
         if (tab === "progress") {
             const seg = defaultProgressSeg();
@@ -39,7 +39,7 @@
         return "";
     }
     function primaryKeyFor(tab) {
-        if (tab === "today")
+        if (tab === "today" || tab === "session")
             return "plan";
         if (tab === "progress")
             return defaultProgressSeg() === "sessions" ? "history:sessions" : null;

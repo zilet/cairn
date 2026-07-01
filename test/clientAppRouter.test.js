@@ -27,7 +27,7 @@ const deps = {
 
 test("app router derives tab names from the route contract", () => {
   const router = loadRouter();
-  assert.deepEqual(plain(router.ROUTE_TABS), ["today", "plan", "progress", "chat", "me", "settings"]);
+  assert.deepEqual(plain(router.ROUTE_TABS), ["today", "session", "plan", "progress", "chat", "me", "settings"]);
 });
 
 test("app router applies canonical route state without rendering", () => {

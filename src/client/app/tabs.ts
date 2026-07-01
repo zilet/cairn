@@ -21,7 +21,7 @@ type TabSwitchOptions = {
   }
 
   function tabSkeleton(tab: ClientTabName): string {
-    if (tab === "today") return todaySkeleton();
+    if (tab === "today" || tab === "session") return todaySkeleton();
     if (tab === "progress") {
       const seg = defaultProgressSeg();
       return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3);
@@ -44,7 +44,7 @@ type TabSwitchOptions = {
   }
 
   function primaryKeyFor(tab: ClientTabName): string | null {
-    if (tab === "today") return "plan";
+    if (tab === "today" || tab === "session") return "plan";
     if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
     if (tab === "plan") {
       const activePlan = state.planJump || state.planSeg;
