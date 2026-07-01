@@ -1048,7 +1048,7 @@ async function renderToday(opts = {}) {
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${briefHtml(read, { showPlan, hasPlanDay, isToday })}
     ${conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
-    ${conductorLeads ? "" : goalLineHtml(stats, curW, isToday)}
+    ${conductorLeads ? "" : CairnTodayContext.goalLineHtml(stats, curW, isToday)}
     <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
     <div class="capture-row reveal" style="--i:1">
@@ -2466,72 +2466,8 @@ async function loadTableHint() {
     </button>`;
     wrap.querySelector("#tableHintBtn").addEventListener("click", () => { todayState.planJump = "meals"; activateTab("plan"); });
 }
-// Today: a subtle banner summarising NEAR-TERM context (active injuries, ongoing or
-// imminent trips/events). A far-future life event (a race months out) is deliberately
-// NOT pinned here — Today stays focused on what's near; the event still lives in Plan
-// and Me → Life. Dated context gains a calm countdown as it draws closer.
-const CTX_ICONS = { trip: "✈", injury: "🤕", life_event: "◆", family_event: "◆" };
-const CTX_NEAR_DAYS = 21; // an upcoming dated event surfaces on Today only within this window
-function daysUntil(startISO) {
-    if (!startISO)
-        return null;
-    const d = new Date(startISO + "T00:00:00"), now = new Date(localISO() + "T00:00:00");
-    return Math.round((d.getTime() - now.getTime()) / 86400000);
-}
-function eventCountdown(days) {
-    if (days == null)
-        return "";
-    if (days <= 0)
-        return "today";
-    if (days === 1)
-        return "tomorrow";
-    if (days <= 14)
-        return `in ${days} days`;
-    return `in ${Math.round(days / 7)} weeks`;
-}
-// Near-term = an active injury (always shapes today), an ongoing event, or a dated
-// event within CTX_NEAR_DAYS. A far-future OR undated non-injury event is hidden from
-// Today (it keeps living in Plan / Me → Life) — so a race months out, or one with no
-// date yet, never dominates the top of Today.
-function isNearTermContext(ev) {
-    if (ev.archived)
-        return false;
-    if (ev.kind === "injury")
-        return true; // an active injury always shapes today
-    const today = localISO();
-    const start = ev.start_date, end = ev.end_date;
-    if (start && start <= today && (!end || end >= today))
-        return true; // ongoing
-    if (start && start > today)
-        return (daysUntil(start) ?? Infinity) <= CTX_NEAR_DAYS; // imminent
-    return false; // undated or far-future non-injury → not on Today
-}
-function ctxBannerLine(ev) {
-    let meta = ev.meta_json;
-    if (typeof meta === "string") {
-        try {
-            meta = JSON.parse(meta);
-        }
-        catch {
-            meta = null;
-        }
-    }
-    meta = meta || {};
-    const icon = CTX_ICONS[ev.kind] || "◆";
-    const title = ev.title || ev.kind;
-    if (ev.kind === "injury") {
-        return `${icon} ${escHtml(title)}${meta.area && !String(title).toLowerCase().includes(String(meta.area).toLowerCase()) ? ` (${escHtml(meta.area)})` : ""} — go easy`;
-    }
-    // trips / life / family events — title (+ trip destination) + a calm countdown / "now"
-    const today = localISO();
-    let when = "";
-    if (ev.start_date && ev.start_date > today)
-        when = ` · ${eventCountdown(daysUntil(ev.start_date))}`;
-    else if (ev.start_date && (!ev.end_date || ev.end_date >= today))
-        when = " · now";
-    const where = ev.kind === "trip" && meta.location ? ` to ${escHtml(meta.location)}` : "";
-    return `${icon} ${escHtml(title)}${where}${escHtml(when)}`;
-}
+// Today context/goal/health rail markup lives in /js/today-context-client.js.
+// This screen keeps API loading, slot liveness checks, and navigation wiring.
 async function loadContextBanner() {
     const wrap = todayView.querySelector("#ctxEvents");
     if (!wrap)
@@ -2545,40 +2481,7 @@ async function loadContextBanner() {
     }
     if (todayState.tab !== "today" || !wrap.isConnected)
         return;
-    events = (events || []).filter(isNearTermContext);
-    if (!events.length) {
-        wrap.innerHTML = "";
-        return;
-    }
-    const lines = events.slice(0, 3).map(ctxBannerLine);
-    wrap.innerHTML = `<div class="ctxbanner">${lines.join('<span class="ctxbanner-sep">·</span>')}</div>`;
-}
-// Today: a calm near-term goal anchor under the Brief — "Toward 164 lb · ~11 weeks".
-// The nearer-term arc (recomp by the goal date) is what Today should keep in view,
-// not a score; tapping opens Progress. Renders nothing without a weight goal + a
-// future goal date, and never on a past-date todayView.
-function goalLineHtml(stats, curW, isToday) {
-    if (!isToday || !stats)
-        return "";
-    // Maintain: no "toward X lb" destination line — holding steady isn't somewhere
-    // you're heading. The compass + fuel card carry the picture; keep Today calm.
-    if ((stats.goal_mode || "lose") === "maintain")
-        return "";
-    const gw = stats.goal_weight_lb != null ? Number(stats.goal_weight_lb) : null;
-    const gd = stats.goal_date || null;
-    if (gw == null || !gd)
-        return "";
-    const days = daysUntil(gd);
-    if (days == null || days < 0)
-        return ""; // goal date passed → don't nag
-    const when = days <= 7 ? "this week" : days <= 112 ? `~${Math.round(days / 7)} wk` : `~${Math.round(days / 30)} mo`;
-    const from = curW != null && Number(curW) !== gw ? ` <span class="goalline-from">from ${escHtml(String(curW))}</span>` : "";
-    const verb = (stats.goal_mode || "lose") === "gain" ? "Building toward" : "Toward";
-    return `<button class="goalline reveal" id="goalLine" style="--i:0" type="button">
-      <span class="goalline-ico" aria-hidden="true">◎</span>
-      <span class="goalline-txt">${verb} <b>${gw} lb</b>${from} · ${escHtml(when)}</span>
-      <span class="goalline-go" aria-hidden="true">→</span>
-    </button>`;
+    wrap.innerHTML = CairnTodayContext.contextBannerHtml(events);
 }
 // Today: react to agentic work — a quiet card when the coach has drafted a plan
 // change waiting for review (a scheduler weekly-review draft, or a chat plan change).
@@ -2758,23 +2661,9 @@ async function loadHealthFocusBanner() {
     }
     if (todayState.tab !== "today" || !wrap.isConnected)
         return;
-    const s = data && data.synthesis;
-    const lead = data && data.focus && data.focus.lead;
-    let line = "";
-    if (s && (s.one_change || s.headline))
-        line = String(s.one_change || s.headline);
-    else if (lead) {
-        const mv = lead.moves && (lead.moves.nutrition || lead.moves.training || lead.moves.watch);
-        line = mv ? `${String(lead.group || "")}: ${String(mv)}` : String(lead.why || lead.group || "");
-    }
-    if (!line) {
-        wrap.innerHTML = "";
+    wrap.innerHTML = CairnTodayContext.healthFocusBannerHtml(data);
+    if (!wrap.innerHTML)
         return;
-    }
-    wrap.innerHTML = `<button class="ctxbanner ctxbanner-health" id="ctxHealthGo">
-      <span class="ctxbanner-health-line">✦ ${escHtml(line)}</span>
-      <span class="ctxbanner-go" aria-hidden="true">→</span>
-    </button>`;
     wrap.querySelector("#ctxHealthGo").addEventListener("click", () => {
         // the synthesis + connected-brain focus now live on Health → Read
         todayState.meSeg = "health";

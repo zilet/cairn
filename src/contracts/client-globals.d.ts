@@ -1202,6 +1202,19 @@ declare global {
       cardHtml(read: unknown): string;
     };
 
+    CairnTodayContext: {
+      CONTEXT_ICONS: Record<string, string>;
+      CONTEXT_NEAR_DAYS: number;
+      daysUntil(startISO: unknown, todayISO?: string): number | null;
+      eventCountdown(days: unknown): string;
+      isNearTermContext(event: unknown, todayISO?: string): boolean;
+      contextBannerLine(event: unknown, todayISO?: string): string;
+      contextBannerHtml(events: unknown, todayISO?: string): string;
+      goalLineHtml(stats: unknown, currentWeight: unknown, isToday: unknown, todayISO?: string): string;
+      healthFocusLine(data: unknown): string;
+      healthFocusBannerHtml(data: unknown): string;
+    };
+
     CairnTodayGarminReconciliation: {
       load(options: {
         root: ParentNode | null | undefined;
@@ -1275,5 +1288,6 @@ declare global {
   declare const CairnTodaySessionStatus: Window["CairnTodaySessionStatus"];
   declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];
   declare const CairnTodayWeekAhead: Window["CairnTodayWeekAhead"];
+  declare const CairnTodayContext: Window["CairnTodayContext"];
   declare const CairnTodayGarminReconciliation: Window["CairnTodayGarminReconciliation"];
 }
