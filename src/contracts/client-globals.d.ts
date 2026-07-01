@@ -187,6 +187,26 @@ declare global {
     hasLoggedSets: boolean;
   };
 
+  type ClientHealthStandingPrimitivesApi = {
+    hstandDecade(age: unknown): number;
+    hstandPct(value: unknown): number | null;
+    localDateTimeInputValue(date?: Date): string;
+    hstandTone(tone: unknown): string;
+    hstandBandTone(percentile: unknown): string;
+    hstandMeasureHtml(measure: ClientHealthStandingMeasure | null | undefined): string;
+    hstandCompHtml(comparison: ClientHealthStandingComparison, sexWord: string, calendarAge: unknown): string;
+    hstandRefSummaryHtml(
+      comparisons: ClientHealthStandingComparison[] | null | undefined,
+      referenceAge: unknown,
+      actualDecade: number | null,
+      sexWord: string,
+    ): string;
+    hstandDimensionHtml(dimension: ClientHealthStandingDimension, index: number): string;
+    hstandBpRows(rows: ClientBloodPressureReading[] | null | undefined): string;
+    hstandBodyCompHtml(bodyComp: ClientHealthStandingBodyComp | null | undefined): string;
+    hstandBpCardHtml(bp: ClientHealthStandingBloodPressure | null | undefined): string;
+  };
+
   type ClientTodaySessionFeedbackDeps = Pick<ClientTodaySessionControllerDeps, "api" | "sessionStatus" | "state" | "toast">;
   type ClientTodaySessionSkipDeps = Pick<ClientTodaySessionControllerDeps, "api" | "collapseEl" | "expandEl" | "invalidate" | "renderToday" | "root" | "sessionStatus" | "state" | "toast">;
 
@@ -1389,24 +1409,9 @@ declare global {
       load(token: number): Promise<void>;
     };
 
-    CairnHealthStanding: {
-      hstandDecade(age: unknown): number;
-      hstandPct(value: unknown): number | null;
-      localDateTimeInputValue(date?: Date): string;
-      hstandTone(tone: unknown): string;
-      hstandBandTone(percentile: unknown): string;
-      hstandMeasureHtml(measure: ClientHealthStandingMeasure | null | undefined): string;
-      hstandCompHtml(comparison: ClientHealthStandingComparison, sexWord: string, calendarAge: unknown): string;
-      hstandRefSummaryHtml(
-        comparisons: ClientHealthStandingComparison[] | null | undefined,
-        referenceAge: unknown,
-        actualDecade: number | null,
-        sexWord: string,
-      ): string;
-      hstandDimensionHtml(dimension: ClientHealthStandingDimension, index: number): string;
-      hstandBpRows(rows: ClientBloodPressureReading[] | null | undefined): string;
-      hstandBodyCompHtml(bodyComp: ClientHealthStandingBodyComp | null | undefined): string;
-      hstandBpCardHtml(bp: ClientHealthStandingBloodPressure | null | undefined): string;
+    CairnHealthStandingPrimitives: ClientHealthStandingPrimitivesApi;
+
+    CairnHealthStanding: ClientHealthStandingPrimitivesApi & {
       renderHealthStandingHtml(data: ClientHealthStanding | null | undefined, options?: { referenceAge?: unknown }): string;
     };
 
@@ -2256,6 +2261,30 @@ declare global {
       ): void;
     };
 
+    CairnTodayMainShell: {
+      leadHtml(
+        options: {
+          focus: boolean;
+          focusHtml: string;
+          isToday: boolean;
+          briefHtml: string;
+          conductorHtml: string;
+          conductorLeads: boolean;
+          goalLineHtml: string;
+          currentWeight: unknown;
+        },
+        deps: {
+          escapeHtml(value: unknown): string;
+          micGlyph: string;
+        },
+      ): string;
+      weekFoldHtml(
+        compass: { paceOfferHtml?: string; weekRecap?: string | null; cellsHtml?: string },
+        deps: { escapeHtml(value: unknown): string },
+      ): string;
+      wrapHtml(content: string, options: { focus: boolean; railHtml: string }): string;
+    };
+
     CairnTodayPlanSurface: {
       sessionHeadHtml(
         options: {
@@ -2565,6 +2594,11 @@ declare global {
       loadMealProvenance(): Promise<void>;
     };
 
+    CairnCaptureVoice: {
+      micGlyph: string;
+      setup(deps: { root: ParentNode; quickLog(): Promise<void> }): void;
+    };
+
     CairnTodaySessionSuggest: {
       SESSION_VIBES: string[];
       itemHtml(item: Partial<ClientSessionSuggestion["items"][number]> | null | undefined, index?: number): string;
@@ -2713,6 +2747,7 @@ declare global {
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
   declare const CairnHealthDirectiveLoader: Window["CairnHealthDirectiveLoader"];
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
+  declare const CairnHealthStandingPrimitives: Window["CairnHealthStandingPrimitives"];
   declare const CairnHealthStandingController: Window["CairnHealthStandingController"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnHealthReadSynthesis: Window["CairnHealthReadSynthesis"];
@@ -2761,6 +2796,7 @@ declare global {
   declare const CairnTodayBriefOverrideClient: Window["CairnTodayBriefOverrideClient"];
   declare const CairnTodayBriefController: Window["CairnTodayBriefController"];
   declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
+  declare const CairnCaptureVoice: Window["CairnCaptureVoice"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
   declare const CairnProgressData: Window["CairnProgressData"];
@@ -2794,6 +2830,7 @@ declare global {
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];
+  declare const CairnTodayMainShell: Window["CairnTodayMainShell"];
   declare const CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
   declare const CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];

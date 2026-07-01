@@ -13,6 +13,7 @@ const todayView = view;
 const todaySideLoaders = globalThis.CairnTodaySideLoaders;
 const todayPlanSessionPreparation = globalThis.CairnTodayPlanSessionPreparation;
 const todayDataLoader = globalThis.CairnTodayDataLoader;
+const todayMainShell = globalThis.CairnTodayMainShell;
 const todayPlanSurface = globalThis.CairnTodayPlanSurface;
 const todayPlanSurfaceRenderer = globalThis.CairnTodayPlanSurfaceRenderer;
 function todaySideLoaderDeps() {
@@ -50,6 +51,12 @@ function todayPlanSurfaceRendererDeps() {
         garminSessionCard,
         sessionDoneCard,
         skipLineHtml: (labels) => CairnTodaySessionStatus.skipLineHtml(labels),
+    };
+}
+function todayMainShellDeps() {
+    return {
+        escapeHtml: escHtml,
+        micGlyph: MIC_GLYPH,
     };
 }
 // The per-card prescription line. `rx` is one Prescription from the progression
@@ -387,29 +394,16 @@ async function renderToday(opts = {}) {
     const railHtml = focus
         ? ""
         : (agenda ? CairnTodayRailController.railHtml(agenda, agendaGeneric) : CairnTodayRailController.fallbackRailHtml(isToday));
-    let html = focus
-        ? focusBarHtml(read, day, { exDone, exTotal, isToday })
-        : `${isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
-    <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
-    ${briefHtml(read, { showPlan, hasPlanDay, isToday })}
-    ${conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
-    ${conductorLeads ? "" : CairnTodayContext.goalLineHtml(stats, curW, isToday)}
-    <div id="draftSlot" class="draft-slot"></div>
-    <div id="sugSlot" class="sug-slot"></div>
-    <div class="capture-row reveal" style="--i:1">
-      <div class="wt-inline" id="wtInline" hidden>
-        <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
-        <button id="wtInlineGo" class="logbtn">+</button>
-      </div>
-      <div class="quicklog">
-        <input id="qlInput" type="text" placeholder="Log a ride, run, meal, or weight…">
-        <button id="qlMic" class="qlmic" type="button" hidden aria-label="Dictate" title="Say it out loud">${MIC_GLYPH}</button>
-        <button id="qlBtn" class="logbtn">↵</button>
-        <button id="wtChipMini" class="wt-mini" title="Log bodyweight">${curW != null ? `${curW}<span class="wt-mini-unit">lb</span>` : "weight"}<span class="stat-plus">+</span></button>
-      </div>
-      <div id="freqFoods" class="freq-foods"></div>
-      ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
-    </div>`;
+    let html = todayMainShell.leadHtml({
+        focus,
+        focusHtml: focusBarHtml(read, day, { exDone, exTotal, isToday }),
+        isToday,
+        briefHtml: briefHtml(read, { showPlan, hasPlanDay, isToday }),
+        conductorHtml,
+        conductorLeads,
+        goalLineHtml: CairnTodayContext.goalLineHtml(stats, curW, isToday),
+        currentWeight: curW,
+    }, todayMainShellDeps());
     html += todayPlanSurfaceRenderer.buildHtml({
         showDone,
         showPlan,
@@ -442,23 +436,14 @@ async function renderToday(opts = {}) {
     }, todayPlanSurfaceRendererDeps());
     // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
     if (!focus) {
-        html += `${todayCompass.paceOfferHtml}
-    <details class="weekfold" id="weekFold">
-      <summary class="weekfold-sum"><span class="lbl">This week</span>${todayCompass.weekRecap ? `<span class="weekfold-recap">${escHtml(todayCompass.weekRecap)}</span>` : ""}<span class="weekfold-chev" aria-hidden="true">▾</span></summary>
-      <div class="statstrip statstrip-compass">
-        ${todayCompass.cellsHtml}
-      </div>
-      <div id="wearStrip"></div>
-    </details>`;
+        html += todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps());
     }
     // Scope the focus class to this render via a wrapper, so a tab switch (which
     // replaces #view wholesale) can never leave the class stranded. The primary
     // column (.today-main) holds the Brief, capture, and logging surface; the rail
     // (.today-rail) sits beside it on wide screens (section 36) and stacks under it
     // on mobile/tablet. Focus mode is a single centered column — no rail.
-    todayView.innerHTML = focus
-        ? `<div class="today-wrap today-focus">${html}</div>`
-        : `<div class="today-wrap"><div class="today-main">${html}</div>${railHtml}</div>`;
+    todayView.innerHTML = todayMainShell.wrapHtml(html, { focus, railHtml });
     // Calm, dismissible "add to home screen" coach — appended to the primary column AFTER
     // the wholesale innerHTML write above (mounting before it would be silently wiped).
     // Pull, not push: it waits below the Brief, hidden in standalone mode and after dismissal.

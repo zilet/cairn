@@ -109,95 +109,12 @@ function setupWeightChip() {
         save(); });
 }
 // ---------- effortless capture: voice (Web Speech), frequents, check-in ----------
-// Inline mic glyph — static SVG, no caller text, safe for innerHTML.
-const MIC_GLYPH = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="9" y1="21" x2="15" y2="21"/></svg>`;
-// Feature-detect once. Absent (e.g. Firefox/older Safari) → the mic stays hidden.
-const SpeechRec = window.SpeechRecognition
-    || window.webkitSpeechRecognition
-    || null;
-let _voiceRec = null; // live recognition instance while listening
-// Press-to-talk dictation into #qlInput. The transcript (interim + final) flows
-// through the SAME quicklog routing as typed text — say "ran 50 easy" and it
-// logs exactly like typing it. Degrades to text-only where speech is absent.
+function captureVoice() {
+    return globalThis.CairnCaptureVoice;
+}
+const MIC_GLYPH = globalThis.CairnCaptureVoice?.micGlyph ?? "";
 function setupVoiceCapture() {
-    const mic = view.querySelector("#qlMic");
-    const inp = view.querySelector("#qlInput");
-    if (!mic || !inp)
-        return;
-    if (!SpeechRec) {
-        mic.hidden = true;
-        return;
-    } // no API → no broken control
-    mic.hidden = false;
-    const stop = () => {
-        if (_voiceRec) {
-            try {
-                _voiceRec.stop();
-            }
-            catch { }
-            _voiceRec = null;
-        }
-        mic.classList.remove("qlmic-live");
-    };
-    mic.addEventListener("click", () => {
-        if (_voiceRec) {
-            stop();
-            return;
-        } // tap again to stop early
-        let rec;
-        try {
-            rec = new SpeechRec();
-        }
-        catch {
-            mic.hidden = true;
-            return;
-        }
-        rec.lang = navigator.language || "en-US";
-        rec.interimResults = true;
-        rec.continuous = false;
-        rec.maxAlternatives = 1;
-        // remember what was already typed so dictation appends, never clobbers
-        const base = inp.value.trim();
-        let finalText = "";
-        let heard = false; // only auto-log when speech was actually captured
-        rec.onresult = (e) => {
-            let interim = "";
-            for (let i = e.resultIndex; i < e.results.length; i++) {
-                const t = e.results[i][0].transcript;
-                if (e.results[i].isFinal)
-                    finalText += t;
-                else
-                    interim += t;
-            }
-            const said = (finalText + interim).trim();
-            if (said)
-                heard = true;
-            inp.value = (base ? base + " " : "") + said;
-        };
-        rec.onerror = (e) => {
-            // permission denial / no-speech / network — all handled quietly, no toast spam
-            if (e && (e.error === "not-allowed" || e.error === "service-not-allowed")) {
-                mic.hidden = true; // user said no; don't keep offering a control that won't work
-            }
-            heard = false; // an error means nothing usable was dictated
-            stop();
-        };
-        rec.onend = () => {
-            mic.classList.remove("qlmic-live");
-            _voiceRec = null;
-            // a finished phrase logs through the normal path, just like Enter
-            if (heard && inp.value.trim())
-                quickLog();
-        };
-        _voiceRec = rec;
-        mic.classList.add("qlmic-live");
-        try {
-            rec.start();
-        }
-        catch {
-            stop();
-        }
-    });
+    captureVoice().setup({ root: view, quickLog });
 }
 // hour → meal slot, used both to label the re-logged food and to query frequents
 function mealForHour(h) {

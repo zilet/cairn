@@ -746,6 +746,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/today-side-loaders\.js"/);
   assert.match(sw, /"\/js\/today-plan-session-preparation\.js"/);
   assert.match(sw, /"\/js\/today-data-loader\.js"/);
+  assert.match(sw, /"\/js\/today-main-shell-client\.js"/);
   assert.match(sw, /"\/js\/today-plan-surface-client\.js"/);
   assert.match(sw, /"\/js\/today-plan-surface-renderer\.js"/);
   assert.match(sw, /"\/js\/today-post-render-wiring\.js"/);
@@ -784,6 +785,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/me-health-dependencies\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
+  assert.match(sw, /"\/js\/health-standing-primitives-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-client\.js"/);
   assert.match(sw, /"\/js\/health-picture-client\.js"/);
   assert.match(sw, /"\/js\/health-picture-controller\.js"/);
@@ -1132,6 +1134,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todaySideLoadersSource = read("src/client/today-side-loaders.ts");
   const todayPlanSessionPreparationSource = read("src/client/today-plan-session-preparation.ts");
   const todayDataLoaderSource = read("src/client/today-data-loader.ts");
+  const todayMainShellSource = read("src/client/today-main-shell-client.ts");
   const todayPlanSurfaceSource = read("src/client/today-plan-surface-client.ts");
   const todayPlanSurfaceRendererSource = read("src/client/today-plan-surface-renderer.ts");
   const todayPostRenderWiringSource = read("src/client/today-post-render-wiring.ts");
@@ -1160,6 +1163,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressScreenSource = read("src/client/progress-screen.ts");
   const captureProvenanceSource = read("src/client/capture-provenance-client.ts");
   const captureReadsSource = read("src/client/capture-reads-client.ts");
+  const captureVoiceSource = read("src/client/capture-voice-client.ts");
   const captureTypesSource = read("src/client/capture-types.d.ts");
   const captureSource = read("src/client/capture.ts");
   const settingsRoutesSource = read("src/client/settings-routes.ts");
@@ -1202,6 +1206,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthEvidenceSource = read("src/client/health-evidence-client.ts");
   const healthClientSource = read("src/client/health-client.ts");
   const healthReadSource = read("src/client/health-read-client.ts");
+  const healthStandingPrimitivesSource = read("src/client/health-standing-primitives-client.ts");
   const healthStandingSource = read("src/client/health-standing-client.ts");
   const healthStandingControllerSource = read("src/client/health-standing-controller.ts");
   const healthPictureSource = read("src/client/health-picture-client.ts");
@@ -1300,6 +1305,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todaySideLoadersClient = read("public/js/today-side-loaders.js");
   const todayPlanSessionPreparationClient = read("public/js/today-plan-session-preparation.js");
   const todayDataLoaderClient = read("public/js/today-data-loader.js");
+  const todayMainShellClient = read("public/js/today-main-shell-client.js");
   const todayPlanSurfaceClient = read("public/js/today-plan-surface-client.js");
   const todayPlanSurfaceRendererClient = read("public/js/today-plan-surface-renderer.js");
   const todayPostRenderWiringClient = read("public/js/today-post-render-wiring.js");
@@ -1326,6 +1332,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressProgramControllerClient = read("public/js/progress-program-controller.js");
   const captureProvenance = read("public/js/capture-provenance-client.js");
   const captureReads = read("public/js/capture-reads-client.js");
+  const captureVoice = read("public/js/capture-voice-client.js");
   const capture = read("public/js/04-capture.js");
   const planEnduranceClient = read("public/js/plan-endurance-client.js");
   const planEditorClient = read("public/js/plan-editor-client.js");
@@ -1348,6 +1355,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const healthEvidenceClient = read("public/js/health-evidence-client.js");
   const healthClient = read("public/js/health-client.js");
   const healthReadClient = read("public/js/health-read-client.js");
+  const healthStandingPrimitivesClient = read("public/js/health-standing-primitives-client.js");
   const healthStandingClient = read("public/js/health-standing-client.js");
   const healthStandingController = read("public/js/health-standing-controller.js");
   const healthPictureClient = read("public/js/health-picture-client.js");
@@ -1639,6 +1647,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /directivesSectionHtml\(/);
   assert.match(clientGlobals, /CairnHealthDirectiveLoader/);
   assert.match(clientGlobals, /load\(token: number\): Promise<void>/);
+  assert.match(clientGlobals, /CairnHealthStandingPrimitives/);
+  assert.match(clientGlobals, /ClientHealthStandingPrimitivesApi/);
   assert.match(clientGlobals, /CairnHealthStanding/);
   assert.match(clientGlobals, /ClientHealthStanding/);
   assert.match(clientGlobals, /renderHealthStandingHtml\(data: ClientHealthStanding \| null \| undefined/);
@@ -1788,6 +1798,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-side-loaders\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-plan-session-preparation\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-data-loader\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-main-shell-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-plan-surface-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-plan-surface-renderer\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-post-render-wiring\.js/);
@@ -1962,6 +1973,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-plan-session-preparation\.js/);
   assert.match(clientBuild, /src\/client\/today-data-loader\.ts/);
   assert.match(clientBuild, /public\/js\/today-data-loader\.js/);
+  assert.match(clientBuild, /src\/client\/today-main-shell-client\.ts/);
+  assert.match(clientBuild, /public\/js\/today-main-shell-client\.js/);
   assert.match(clientBuild, /src\/client\/today-plan-surface-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-plan-surface-client\.js/);
   assert.match(clientBuild, /src\/client\/today-plan-surface-renderer\.ts/);
@@ -1974,6 +1987,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/capture-provenance-client\.js/);
   assert.match(clientBuild, /src\/client\/capture-reads-client\.ts/);
   assert.match(clientBuild, /public\/js\/capture-reads-client\.js/);
+  assert.match(clientBuild, /src\/client\/capture-voice-client\.ts/);
+  assert.match(clientBuild, /public\/js\/capture-voice-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
@@ -2030,6 +2045,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-program-controller\.js/);
   assert.match(clientBuild, /src\/client\/capture-reads-client\.ts/);
   assert.match(clientBuild, /public\/js\/capture-reads-client\.js/);
+  assert.match(clientBuild, /src\/client\/capture-voice-client\.ts/);
+  assert.match(clientBuild, /public\/js\/capture-voice-client\.js/);
   assert.match(clientBuild, /src\/client\/capture\.ts/);
   assert.match(clientBuild, /public\/js\/04-capture\.js/);
   assert.match(clientBuild, /src\/client\/settings-routes\.ts/);
@@ -2110,6 +2127,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/health-client\.js/);
   assert.match(clientBuild, /src\/client\/health-read-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-read-client\.js/);
+  assert.match(clientBuild, /src\/client\/health-standing-primitives-client\.ts/);
+  assert.match(clientBuild, /public\/js\/health-standing-primitives-client\.js/);
   assert.match(clientBuild, /src\/client\/health-standing-client\.ts/);
   assert.match(clientBuild, /public\/js\/health-standing-client\.js/);
   assert.match(clientBuild, /src\/client\/health-picture-client\.ts/);
@@ -2176,6 +2195,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-plan-session-preparation\.js/);
   assert.match(clientBuild, /src\/client\/today-data-loader\.ts/);
   assert.match(clientBuild, /public\/js\/today-data-loader\.js/);
+  assert.match(clientBuild, /src\/client\/today-main-shell-client\.ts/);
+  assert.match(clientBuild, /public\/js\/today-main-shell-client\.js/);
   assert.match(clientBuild, /src\/client\/today-plan-surface-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-plan-surface-client\.js/);
   assert.match(clientBuild, /src\/client\/today-plan-surface-renderer\.ts/);
@@ -2350,13 +2371,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/today-data-loader.js") > index.indexOf("/js/today-plan-session-preparation.js") &&
-      index.indexOf("/js/today-data-loader.js") < index.indexOf("/js/today-plan-surface-client.js"),
-    "today-data-loader.js must load after Today preparation and before plan-surface helpers"
+      index.indexOf("/js/today-data-loader.js") < index.indexOf("/js/today-main-shell-client.js"),
+    "today-data-loader.js must load after Today preparation and before main shell helpers"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-surface-client.js") > index.indexOf("/js/today-data-loader.js") &&
+    index.indexOf("/js/today-main-shell-client.js") > index.indexOf("/js/today-data-loader.js") &&
+      index.indexOf("/js/today-main-shell-client.js") < index.indexOf("/js/today-plan-surface-client.js"),
+    "today-main-shell-client.js must load after Today data loading and before plan-surface helpers"
+  );
+  assert.ok(
+    index.indexOf("/js/today-plan-surface-client.js") > index.indexOf("/js/today-main-shell-client.js") &&
       index.indexOf("/js/today-plan-surface-client.js") < index.indexOf("/js/today-plan-surface-renderer.js"),
-    "today-plan-surface-client.js must load after Today data loading and before plan-surface rendering"
+    "today-plan-surface-client.js must load after Today main shell helpers and before plan-surface rendering"
   );
   assert.ok(
     index.indexOf("/js/today-plan-surface-renderer.js") > index.indexOf("/js/today-plan-surface-client.js") &&
@@ -2587,13 +2613,18 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     index.indexOf("/js/capture-reads-client.js") > index.indexOf("/js/capture-provenance-client.js") &&
-      index.indexOf("/js/capture-reads-client.js") < index.indexOf("/js/04-capture.js"),
+      index.indexOf("/js/capture-reads-client.js") < index.indexOf("/js/capture-voice-client.js"),
     "capture-reads-client.js must load after Capture provenance and before Capture consumers"
   );
   assert.ok(
-    index.indexOf("/js/04-capture.js") > index.indexOf("/js/capture-reads-client.js") &&
+    index.indexOf("/js/capture-voice-client.js") > index.indexOf("/js/capture-reads-client.js") &&
+      index.indexOf("/js/capture-voice-client.js") < index.indexOf("/js/04-capture.js"),
+    "capture-voice-client.js must load after Capture reads and before Capture consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/04-capture.js") > index.indexOf("/js/capture-voice-client.js") &&
       index.indexOf("/js/04-capture.js") < index.indexOf("/js/05-progress.js"),
-    "04-capture.js must load after Capture reads and before downstream screens"
+    "04-capture.js must load after Capture helpers and before downstream screens"
   );
   assert.ok(
     index.indexOf("/js/meal-plan-client.js") > index.indexOf("/js/day-fuel-client.js") &&
@@ -2647,9 +2678,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "health-read-client.js must load after shared Health helpers and before boot can render Health Read"
   );
   assert.ok(
-    index.indexOf("/js/health-standing-client.js") > index.indexOf("/js/health-read-client.js") &&
+    index.indexOf("/js/health-standing-primitives-client.js") > index.indexOf("/js/health-read-client.js") &&
+      index.indexOf("/js/health-standing-primitives-client.js") < index.indexOf("/js/health-standing-client.js"),
+    "health-standing-primitives-client.js must load after Health Read helpers and before Standing renderer"
+  );
+  assert.ok(
+    index.indexOf("/js/health-standing-client.js") > index.indexOf("/js/health-standing-primitives-client.js") &&
       index.indexOf("/js/health-standing-client.js") < index.indexOf("/js/08-me-records.js"),
-    "health-standing-client.js must load after Health Read helpers and before boot can render Standing"
+    "health-standing-client.js must load after Health Standing primitives and before boot can render Standing"
   );
   assert.ok(
     index.indexOf("/js/health-picture-client.js") > index.indexOf("/js/health-standing-client.js") &&
@@ -3099,6 +3135,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-plan-session-preparation\.js/);
   assert.match(clientBuild, /src\/client\/today-data-loader\.ts/);
   assert.match(clientBuild, /public\/js\/today-data-loader\.js/);
+  assert.match(clientBuild, /src\/client\/today-main-shell-client\.ts/);
+  assert.match(clientBuild, /public\/js\/today-main-shell-client\.js/);
   assert.match(clientBuild, /src\/client\/today-plan-surface-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-plan-surface-client\.js/);
   assert.match(clientBuild, /src\/client\/today-plan-surface-renderer\.ts/);
@@ -3546,6 +3584,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayDataLoaderSource, /async function loadInner\(/);
   assert.match(todayDataLoaderSource, /function scheduleSoftRepaint\(result: TodayDataLoadResult, deps: TodayDataRefreshDeps\): void/);
   assert.match(todayDataLoaderSource, /CairnTodayDataLoader/);
+  assert.match(todayMainShellSource, /type TodayMainShellLeadOptions = \{/);
+  assert.match(todayMainShellSource, /function leadHtml\(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps\): string/);
+  assert.match(todayMainShellSource, /function weekFoldHtml\(compass: TodayMainShellCompass/);
+  assert.match(todayMainShellSource, /function wrapHtml\(content: string, options: \{ focus: boolean; railHtml: string \}\): string/);
+  assert.match(todayMainShellSource, /CairnTodayMainShell/);
   assert.match(todayPlanSurfaceSource, /type TodayPlanSurfaceDeps = \{/);
   assert.match(todayPlanSurfaceSource, /function sessionHeadHtml\(/);
   assert.match(todayPlanSurfaceSource, /function daySwitchHtml\(/);
@@ -3562,6 +3605,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayScreenSource, /todayPlanSessionPreparation\.preparePlanSession/);
   assert.match(todayScreenSource, /todayDataLoader\.load/);
   assert.match(todayScreenSource, /todayDataLoader\.scheduleSoftRepaint/);
+  assert.match(todayScreenSource, /todayMainShell\.leadHtml/);
+  assert.match(todayScreenSource, /todayMainShell\.weekFoldHtml/);
+  assert.match(todayScreenSource, /todayMainShell\.wrapHtml/);
   assert.match(todayScreenSource, /todayPlanSurfaceRenderer\.buildHtml/);
   assert.doesNotMatch(todayScreenSource, /todayPlanSurface\.sessionHeadHtml|todayPlanSurface\.daySwitchHtml|todayPlanSurface\.rxBannerHtml|todayPlanSurface\.addExerciseFormHtml/);
   assert.match(todayScreenSource, /CairnTodayPostRenderWiring\.wirePostRender/);
@@ -3747,6 +3793,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureReadsSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
   assert.match(captureReadsSource, /CairnCaptureReads/);
   assert.doesNotMatch(captureSource, /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/);
+  assert.match(captureVoiceSource, /const CAPTURE_MIC_GLYPH =/);
+  assert.match(captureVoiceSource, /function setupCaptureVoice\(deps: CaptureVoiceDeps\): void/);
+  assert.match(captureVoiceSource, /CairnCaptureVoice/);
+  assert.doesNotMatch(captureSource, /const SpeechRec|let _voiceRec|rec\.onresult|rec\.onerror|rec\.onend/);
+  assert.match(captureSource, /function setupVoiceCapture\(\): void/);
   assert.match(captureSource, /function loadTodayReads\(\): Promise<void>/);
   assert.match(captureSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
   assert.match(settingsRoutesSource, /function settingsRouteRowsHtml/);
@@ -4003,10 +4054,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthReadControllerSource, /CairnHealthReadSupplements\.understandFromInput/);
   assert.match(healthReadControllerSource, /CairnHealthReadSupplements\.remove/);
   assert.match(healthReadControllerSource, /CairnHealthReadController/);
+  assert.match(healthStandingPrimitivesSource, /type HealthStandingPrimitiveComparison = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStandingComparison/);
+  assert.match(healthStandingPrimitivesSource, /function hstandCompHtml\(comparison: HealthStandingPrimitiveComparison/);
+  assert.match(healthStandingPrimitivesSource, /function hstandBpCardHtml/);
+  assert.match(healthStandingPrimitivesSource, /function hstandBodyCompHtml/);
+  assert.match(healthStandingPrimitivesSource, /CairnHealthStandingPrimitives/);
   assert.match(healthStandingSource, /type HealthStandingRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/);
+  assert.match(healthStandingSource, /const \{\s*hstandDecade,/);
   assert.match(healthStandingSource, /function renderHealthStandingHtml\(data: HealthStandingRead/);
-  assert.match(healthStandingSource, /function hstandBpCardHtml/);
-  assert.match(healthStandingSource, /function hstandBodyCompHtml/);
+  assert.match(healthStandingSource, /\} = CairnHealthStandingPrimitives/);
   assert.match(healthStandingSource, /CairnHealthStanding/);
   assert.match(healthStandingControllerSource, /type HealthStandingControllerRead = import\("\.\.\/contracts\/client-api\.js"\)\.ClientHealthStanding/);
   assert.match(healthStandingControllerSource, /function render\(data: HealthStandingControllerRead \| null \| undefined, deps: ClientHealthStandingControllerDeps\): void/);
@@ -4366,6 +4422,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayPlanSessionPreparationClient, /preparePlanSession,/);
   assert.match(todayDataLoaderClient, /CairnTodayDataLoader: CAIRN_TODAY_DATA_LOADER/);
   assert.match(todayDataLoaderClient, /scheduleSoftRepaint/);
+  assert.match(todayMainShellClient, /CairnTodayMainShell: CAIRN_TODAY_MAIN_SHELL/);
+  assert.match(todayMainShellClient, /leadHtml/);
+  assert.match(todayMainShellClient, /weekFoldHtml/);
   assert.match(todayPlanSurfaceClient, /CairnTodayPlanSurface: CAIRN_TODAY_PLAN_SURFACE/);
   assert.match(todayPlanSurfaceClient, /sessionHeadHtml/);
   assert.match(todayPlanSurfaceClient, /addExerciseFormHtml/);
@@ -4590,11 +4649,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthReadController, /CairnHealthRead\.priorityMarkersSectionHtml/);
   assert.match(healthReadController, /CairnHealthReadSupplements\.load/);
   assert.match(healthReadController, /CairnHealthReadSupplements\.render/);
+  assert.match(healthStandingPrimitivesClient, /Object\.assign\(globalThis, \{ CairnHealthStandingPrimitives: CAIRN_HEALTH_STANDING_PRIMITIVES \}\)/);
+  assert.match(healthStandingPrimitivesClient, /window\.CairnHealthStandingPrimitives = CAIRN_HEALTH_STANDING_PRIMITIVES/);
+  assert.match(healthStandingPrimitivesClient, /function hstandBpCardHtml/);
+  assert.match(healthStandingPrimitivesClient, /function hstandBodyCompHtml/);
   assert.match(healthStandingClient, /Object\.assign\(globalThis, \{ CairnHealthStanding: CAIRN_HEALTH_STANDING \}\)/);
   assert.match(healthStandingClient, /window\.CairnHealthStanding = CAIRN_HEALTH_STANDING/);
   assert.match(healthStandingClient, /renderHealthStandingHtml/);
-  assert.match(healthStandingClient, /hstandBpCardHtml/);
-  assert.match(healthStandingClient, /hstandBodyCompHtml/);
+  assert.match(healthStandingClient, /CairnHealthStandingPrimitives\.hstandBpCardHtml/);
+  assert.match(healthStandingClient, /CairnHealthStandingPrimitives\.hstandBodyCompHtml/);
   assert.doesNotMatch(healthStandingClient, /^function\s+renderHealthStandingHtml|^function\s+hstandBpCardHtml|^function\s+hstandBodyCompHtml/m);
   assert.match(healthStandingController, /Object\.assign\(globalThis, \{ CairnHealthStandingController: CAIRN_HEALTH_STANDING_CONTROLLER \}\)/);
   assert.match(healthStandingController, /window\.CairnHealthStandingController = CAIRN_HEALTH_STANDING_CONTROLLER/);
@@ -4798,8 +4861,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureReads, /Object\.assign\(globalThis, \{/);
   assert.match(captureReads, /CairnCaptureReads/);
   assert.match(captureReads, /function createCaptureReadsController/);
+  assert.match(captureVoice, /Object\.assign\(globalThis, \{/);
+  assert.match(captureVoice, /CairnCaptureVoice/);
+  assert.match(captureVoice, /function setupCaptureVoice/);
   assert.doesNotMatch(capture, /function loadTrainingProvenance|function provenanceLineHtml/);
   assert.doesNotMatch(capture, /function renderInsightCard|function renderWeeklyCard|function maybeGenerateInsight|function maybeGenerateWeekly/);
+  assert.doesNotMatch(capture, /CAPTURE_SPEECH_REC|function setupCaptureVoice/);
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
@@ -4951,6 +5018,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/today-side-loaders\.js"/);
   assert.match(sw, /"\/js\/today-plan-session-preparation\.js"/);
   assert.match(sw, /"\/js\/today-data-loader\.js"/);
+  assert.match(sw, /"\/js\/today-main-shell-client\.js"/);
   assert.match(sw, /"\/js\/today-plan-surface-client\.js"/);
   assert.match(sw, /"\/js\/today-plan-surface-renderer\.js"/);
   assert.match(sw, /"\/js\/today-post-render-wiring\.js"/);
@@ -4996,6 +5064,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/meal-planner-controller\.js"/);
   assert.match(sw, /"\/js\/capture-provenance-client\.js"/);
   assert.match(sw, /"\/js\/capture-reads-client\.js"/);
+  assert.match(sw, /"\/js\/capture-voice-client\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
   assert.match(sw, /"\/js\/food-detail-controller\.js"/);
   assert.match(sw, /"\/js\/me-profile-form-client\.js"/);
@@ -5003,6 +5072,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/me-health-tabs-controller\.js"/);
   assert.match(sw, /"\/js\/health-client\.js"/);
   assert.match(sw, /"\/js\/health-read-client\.js"/);
+  assert.match(sw, /"\/js\/health-standing-primitives-client\.js"/);
   assert.match(sw, /"\/js\/health-standing-client\.js"/);
   assert.match(sw, /"\/js\/health-picture-client\.js"/);
   assert.match(sw, /"\/js\/health-picture-controller\.js"/);
