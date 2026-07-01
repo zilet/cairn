@@ -23,6 +23,23 @@ export interface ClientOkResponse {
   error?: string;
 }
 
+// One failed agent attempt recorded by the propose→apply loop (`runAgentWithFallback`
+// → `runChosen`): every agentic op that can fall through a rotation carries this as
+// its `tried` list so a surface can say which CLIs were attempted before giving up.
+export interface ClientAgentAttempt {
+  agent: string;
+  error: string;
+}
+
+// The optional post-draft guardrail check (`runVerify`): present when an agentic
+// draft was re-run against the non-negotiable floors, `null`/absent when verification
+// was unavailable and the draft shipped as-is. `adjustments` is empty when nothing
+// needed fixing.
+export interface ClientAgentVerification {
+  checked: boolean;
+  adjustments: string[];
+}
+
 export interface ClientAgentJobEnvelope {
   ok: true;
   job: ClientAgentJob;
@@ -110,7 +127,6 @@ export interface ClientAgentCliUpdateStatus {
   finished_at?: string | null;
   error?: string | null;
   result?: unknown;
-  [key: string]: unknown;
 }
 
 export interface ClientAgentProbeResponse extends ClientOkResponse {
@@ -118,7 +134,6 @@ export interface ClientAgentProbeResponse extends ClientOkResponse {
   version?: string | null;
   model_current?: string | null;
   update_available?: boolean | null;
-  [key: string]: unknown;
 }
 
 export interface ClientAgentModelsResponse extends ClientOkResponse {
@@ -161,7 +176,7 @@ export interface ClientProfile {
   goal_date?: string | null;
   goal_mode?: "lose" | "maintain" | "gain" | null;
   primary_discipline?: "strength" | "endurance" | "hybrid" | string | null;
-  endurance_goal?: unknown;
+  endurance_goal?: ClientEnduranceGoal | null;
   about_me?: string | null;
   family_prefs?: string | null;
   [key: string]: unknown;
@@ -219,7 +234,6 @@ export interface ClientExerciseExplanation {
   explanation?: string | null;
   text?: string | null;
   error?: string | null;
-  [key: string]: unknown;
 }
 
 export interface ClientLoggedSet {
@@ -256,6 +270,15 @@ export interface ClientActivity {
   [key: string]: unknown;
 }
 
+// One time-in-HR-zone bucket parsed from Garmin's `hr_zones_json`
+// (`[{zone,secs,low_hr}]`) — the shape summed by `mergeHrZones` and rendered by the
+// Today cardio/lately zone bars.
+export interface ClientHrZone {
+  zone: string;
+  secs: number;
+  low_hr?: number | null;
+}
+
 export interface ClientGarminActivity {
   id: number;
   source_id?: number | null;
@@ -276,8 +299,8 @@ export interface ClientGarminActivity {
   avg_power?: number | null;
   vo2max?: number | null;
   session_id?: number | null;
-  hr_zones?: unknown;
-  exercise_sets?: unknown;
+  hr_zones?: ClientHrZone[] | null;
+  exercise_sets?: Array<Record<string, unknown>> | null;
   [key: string]: unknown;
 }
 
@@ -541,14 +564,14 @@ export type ClientExerciseNameReconcileResponse =
     applied: number;
     candidates: number;
     agent?: string | null;
-    tried?: unknown;
+    tried?: ClientAgentAttempt[] | null;
     agent_status?: string | null;
   }
   | {
     ok: false;
     error?: string;
     agent?: string | null;
-    tried?: unknown;
+    tried?: ClientAgentAttempt[] | null;
     agent_status?: string | null;
   };
 
@@ -655,7 +678,7 @@ export interface ClientCardioEffort {
   pace: string | null;
   avg_hr: number | null;
   source: string | null;
-  zones: unknown[] | null;
+  zones: ClientHrZone[] | null;
 }
 
 export interface ClientEnduranceGoal {
@@ -1044,15 +1067,13 @@ export interface ClientProposalResult {
   proposal?: ClientProposal;
   applied?: unknown;
   error?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientMealPlanDraftResponse extends ClientOkResponse {
   ok: boolean;
   plan?: ClientMealPlan;
-  verified?: unknown;
+  verified?: ClientAgentVerification | null;
   agent_status?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientMealSwapResponse extends ClientOkResponse {
@@ -1060,7 +1081,6 @@ export interface ClientMealSwapResponse extends ClientOkResponse {
   plan?: ClientMealPlan;
   meal?: unknown;
   agent_status?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientMealRecipeResponse extends ClientOkResponse {
@@ -1068,7 +1088,6 @@ export interface ClientMealRecipeResponse extends ClientOkResponse {
   recipe?: unknown;
   cached?: boolean;
   agent_status?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientHealthDocument {
@@ -1106,10 +1125,17 @@ export interface ClientDirective {
   [key: string]: unknown;
 }
 
+// One present marker group (`presentGroups`): the canonical health-group key + its
+// display label, in the conventional clinical-review order the catalog renders.
+export interface ClientMarkerGroupSummary {
+  key: string;
+  label: string;
+}
+
 export interface ClientPriorityMarkersResponse {
   flagged_count?: number;
   markers: ClientHealthMarker[];
-  groups?: unknown[];
+  groups?: ClientMarkerGroupSummary[];
 }
 
 export interface ClientRecoverySummary {
@@ -1141,6 +1167,26 @@ export interface ClientRecoverySummary {
 
 export interface ClientDirectivesResponse {
   directives: ClientDirective[];
+}
+
+// One co-occurring off-marker a symptom link points at (`SymptomLinkMarker`) — the
+// lab's own reading, never invented.
+export interface ClientSymptomLinkMarker {
+  name: string;
+  value: number | string | null;
+  side: string;
+  unit: string | null;
+  flag: string | null;
+}
+
+// A plausible, non-alarmist symptom → off-marker connection (`symptomMarkerLinks`).
+export interface ClientSymptomMarkerLink {
+  symptom: string;
+  symptom_text: string;
+  symptom_source: "context_event" | "checkin" | string;
+  symptom_source_date: string | null;
+  markers: ClientSymptomLinkMarker[];
+  note: string;
 }
 
 export interface ClientEvidenceRow {
@@ -1276,7 +1322,6 @@ export interface ClientInsightGenerateResponse extends ClientOkResponse {
   found?: boolean;
   insight?: ClientInsight;
   agent_status?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientAgentJob {
@@ -1296,17 +1341,17 @@ export type ClientSessionSuggestResponse =
   | {
     ok: true;
     session: ClientSessionSuggestion;
-    verified?: unknown;
+    verified?: ClientAgentVerification;
     agent?: string | null;
-    tried?: unknown;
-    agent_status?: unknown;
+    tried?: ClientAgentAttempt[] | null;
+    agent_status?: string;
   }
   | {
     ok: false;
     error?: string;
     agent?: string | null;
-    tried?: unknown;
-    agent_status?: unknown;
+    tried?: ClientAgentAttempt[] | null;
+    agent_status?: string;
   }
   | ClientAgentJobEnvelope;
 
@@ -1331,7 +1376,6 @@ export interface ClientChatTurn {
   error?: string | null;
   created_at?: string;
   updated_at?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientChatPostResponse {
@@ -1350,7 +1394,6 @@ export interface ClientDeleteResponse {
   deleted?: number;
   removed?: number;
   error?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientApiResponses {
@@ -1432,7 +1475,7 @@ export interface ClientApiResponses {
   "/api/directives/derive": ClientDirectivesResponse & { ok: true; derived: number };
   "/api/markers/reconcile": ClientOkResponse & { merges?: unknown[] };
   "/api/recovery": ClientRecoverySummary;
-  "/api/symptom-links": { links: unknown[] };
+  "/api/symptom-links": { links: ClientSymptomMarkerLink[] };
   "/api/evidence": ClientEvidenceRow[];
   "/api/evidence/summary": ClientEvidenceSummary;
   "/api/insights": ClientInsight[];
