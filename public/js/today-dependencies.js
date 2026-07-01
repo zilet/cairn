@@ -148,6 +148,7 @@ function makeTodayDependencies(input) {
                 showPlan: renderInput.showPlan,
                 soft: renderInput.soft,
                 conductorLeads: renderInput.conductorLeads,
+                deferRail: renderInput.deferRail,
                 agenda: renderInput.agenda,
                 agendaGeneric: renderInput.agendaGeneric,
                 todayCompass: renderInput.todayCompass,

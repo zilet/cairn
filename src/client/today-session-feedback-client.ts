@@ -45,7 +45,9 @@ type TodaySessionFeedbackDeps = {
     slot.innerHTML = deps.sessionStatus.feedbackFormHtml(session);
     const date = String(session.date || deps.state.logDate);
     const picked: Record<string, number | undefined> = {};
-    const save = async () => {
+    // A save is confirmed only when the server accepts it (no {error}, no network
+    // throw). Returning that truth lets the tap handler avoid a lying "Noted".
+    const save = async (): Promise<boolean> => {
       const joint = slot.querySelector<HTMLInputElement>("#feedbackJoint");
       const jointVal = joint ? joint.value.trim() : "";
       try {
@@ -59,10 +61,17 @@ type TodaySessionFeedbackDeps = {
           }),
         });
         const row = responseRecord(saved);
-        if (!row.error) Object.assign(session, row);
-      } catch {}
+        if (row.error) return false;
+        Object.assign(session, row);
+        return true;
+      } catch {
+        return false;
+      }
     };
 
+    // Confirm once, and only on a real save — this is optional signal, so a failed
+    // write stays silent rather than nagging or (worse) faking a "Noted".
+    let notified = false;
     slot.querySelectorAll<HTMLElement>(".feel-dot").forEach((button) =>
       button.addEventListener("click", async () => {
         const kind = String(button.dataset.feel || "");
@@ -70,8 +79,11 @@ type TodaySessionFeedbackDeps = {
         picked[kind] = val;
         slot.querySelectorAll<HTMLElement>(`.feel-dot[data-feel="${kind}"]`).forEach((dot) =>
           dot.classList.toggle("feel-dot-on", Number(dot.dataset.val) <= val));
-        await save();
-        deps.toast("Noted");
+        const ok = await save();
+        if (ok && !notified) {
+          notified = true;
+          deps.toast("Noted");
+        }
       }));
 
     const joint = slot.querySelector<HTMLInputElement>("#feedbackJoint");

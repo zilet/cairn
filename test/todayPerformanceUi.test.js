@@ -51,5 +51,10 @@ test("Today set logging only mutates the card after a successful POST", () => {
   assert.ok(chipAppend > errorGuard, "wireLogRow appends the chip only after the error guard");
   assert.match(body, /if\s*\(logBtn\.disabled\)\s*return;/);
   assert.match(body, /logBtn\.disabled\s*=\s*true;/);
-  assert.match(body, /catch\s*\{\s*logBtn\.disabled\s*=\s*false;\s*deps\.toast\("Couldn't log that set/);
+  // On a network failure the set is NOT dropped: the button re-enables and the exact
+  // POST is queued in the offline outbox to replay on reconnect, with an honest
+  // "will sync" toast instead of a false "logged".
+  assert.match(body, /catch\s*\{[\s\S]*?logBtn\.disabled\s*=\s*false;/);
+  assert.match(body, /outboxEnqueue\?\.\("set",\s*"\/sets",\s*payload\.body\)/);
+  assert.match(body, /deps\.toast\("Set saved — will sync/);
 });

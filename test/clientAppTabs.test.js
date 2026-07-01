@@ -15,12 +15,22 @@ function tabElement(tab, calls) {
   const listeners = new Map();
   return {
     dataset: { tab },
+    attrs: {},
     addEventListener: (type, handler) => {
       listeners.set(type, handler);
       calls.push(["addEventListener", tab, type]);
     },
     classList: {
       toggle: (name, on) => calls.push(["toggle", tab, name, on]),
+    },
+    setAttribute(name, value) {
+      this.attrs[name] = String(value);
+    },
+    removeAttribute(name) {
+      delete this.attrs[name];
+    },
+    getAttribute(name) {
+      return Object.hasOwn(this.attrs, name) ? this.attrs[name] : null;
     },
     click: () => listeners.get("click")?.(),
   };
@@ -166,4 +176,7 @@ test("tab controller registers tabbar clicks and normalizes invalid tabs", async
     ["closeMealSheet", true],
     ["toggle", "today", "active", false],
   ]);
+  // aria-current="page" names the live tab; only the active tab carries it.
+  assert.equal(env.tabs.find((t) => t.dataset.tab === "settings").getAttribute("aria-current"), "page");
+  assert.equal(env.tabs.find((t) => t.dataset.tab === "today").getAttribute("aria-current"), null);
 });

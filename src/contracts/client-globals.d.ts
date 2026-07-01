@@ -429,6 +429,7 @@ declare global {
     showPlan: boolean;
     soft: boolean;
     conductorLeads: boolean;
+    deferRail?: boolean;
     agenda: Partial<ClientTodayAgenda> | null | undefined;
     agendaGeneric: ClientTodayAgendaCandidate[];
     todayCompass: { paceOffer?: { ask?: string | null } | null };
@@ -1067,6 +1068,35 @@ declare global {
     opts?: RequestInit & { headers?: Record<string, string> },
   ): Promise<ClientApiResponse<Path>>;
   declare function setOffline(on: unknown): void;
+
+  // Offline outbox — a durable localStorage queue that replays failed capture /
+  // set-log POSTs when Cairn is reachable again (see api-client.ts).
+  type ClientOutboxItem = { id: string; ts: number; kind: string; path: string; body: unknown };
+  type ClientOutboxController = {
+    enqueue(entry: { kind: string; path: string; body: unknown }): ClientOutboxItem;
+    list(): ClientOutboxItem[];
+    count(): number;
+    remove(id: string): void;
+    clear(): void;
+    drain(send: (item: ClientOutboxItem) => Promise<unknown>): Promise<{ sent: number; remaining: number }>;
+  };
+  type ClientOutboxApi = {
+    createOutbox(opts: {
+      storage: Pick<Storage, "getItem" | "setItem">;
+      now?: () => number;
+      key?: string;
+      max?: number;
+    }): ClientOutboxController;
+    enqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
+    flush(): Promise<void>;
+    count(): number;
+    renderBar(): void;
+  };
+  declare const CairnOutbox: ClientOutboxApi;
+  declare function outboxEnqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
+  declare function flushOutbox(): Promise<void>;
+  declare function outboxCount(): number;
+
   type SwrPeek<T> = { data: T; fresh: boolean };
   type SwrUpgradeMeta = { changed: boolean };
   type CachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: SwrUpgradeMeta) => void };
@@ -1446,6 +1476,10 @@ declare global {
     openOnboarding(): void;
     startAppShell(): void;
     CairnAppRouter: ClientAppRouterApi;
+    CairnOutbox: ClientOutboxApi;
+    outboxEnqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
+    flushOutbox(): Promise<void>;
+    outboxCount(): number;
 
     CairnChatClient: {
       CHAT_IMAGE_MAX_BYTES: number;
