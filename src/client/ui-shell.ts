@@ -249,12 +249,7 @@ function planSeg(): readonly UiSegment[] {
 }
 const PLAN_HANDLERS: Record<string, () => unknown> = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), food: () => renderFoodJournal(), meals: () => renderMeals(), coach: () => renderCoach() };
 
-// staggered entrance delay for `.reveal` cards; index capped so long lists don't crawl in
-const stagger = (i?: number | null): string => `--i:${Math.min(i ?? 0, 12)}`;
-
-// ---------- motion utilities ----------
-const reducedMotion = (): boolean => "matchMedia" in window && matchMedia("(prefers-reduced-motion: reduce)").matches;
-
+// ---------- view transition utilities ----------
 // Subtle fade+rise re-triggered whenever #view's content is swapped wholesale
 // (tab switches + segmented sub-view swaps). No-op under reduced motion.
 function viewEnter(): void {
@@ -310,160 +305,6 @@ function withViewTransition(fn: () => unknown): Promise<unknown> {
     } catch { _vtActive = false; /* fall through */ }
   }
   return Promise.resolve(run());
-}
-
-// Put a button into a calm "working" state for the length of an agentic call:
-// swap its label for a quiet ring + working text, disable it, and pin the current
-// width so the footprint never jumps. Returns restore() — call it in `finally`.
-// `label` defaults to the button's current text; `ghost` uses a light ring (for
-// dark/accent buttons). Safe on a null button.
-function btnBusy(btn: HTMLButtonElement | null | undefined, label?: unknown, { ghost = false }: { ghost?: boolean } = {}): () => void {
-  if (!btn) return () => {};
-  const busyBtn = btn as BusyButton;
-  if (busyBtn._busyRestore) return busyBtn._busyRestore; // already working — don't stack
-  const html = btn.innerHTML;
-  const wasDisabled = btn.disabled;
-  const minW = btn.style.minWidth;
-  const text = label != null ? label : (btn.textContent || "").trim();
-  btn.style.minWidth = btn.offsetWidth + "px"; // freeze footprint before swap
-  btn.disabled = true;
-  btn.setAttribute("aria-busy", "true");
-  btn.classList.add("btn-busy");
-  btn.innerHTML = `<span class="btn-working"><span class="aspin aspin-sm${ghost ? " aspin-ghost" : ""}"></span>${escHtml(text)}</span>`;
-  const restore = () => {
-    if (busyBtn._busyRestore !== restore) return;
-    busyBtn._busyRestore = null;
-    btn.innerHTML = html;
-    btn.disabled = wasDisabled;
-    btn.removeAttribute("aria-busy");
-    btn.classList.remove("btn-busy");
-    btn.style.minWidth = minW;
-  };
-  busyBtn._busyRestore = restore;
-  return restore;
-}
-
-// Count a numeral up from 0 → target. Respects prefers-reduced-motion (snaps).
-function countUp(el: Element | null | undefined, target: unknown, { dur = 750, fmt = (v: number) => Math.round(v).toLocaleString() }: { dur?: number; fmt?: (value: number) => string } = {}): void {
-  if (!el) return;
-  const t = Number(target) || 0;
-  if (reducedMotion() || !t) { el.textContent = fmt(t); return; }
-  const t0 = performance.now();
-  const tick = (now: number) => {
-    const p = Math.min(1, (now - t0) / dur);
-    const eased = 1 - (1 - p) ** 3; // settle, don't snap
-    el.textContent = fmt(t * eased);
-    if (p < 1 && el.isConnected) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-}
-
-// Full-area working state: the house .aspin ring + an italic label, centered in
-// a region that's fetching/thinking (chat log hydrating, history overlay). The
-// inline button-busy / typing-dots / filament cases live in btnBusy + the
-// .aspin/.typing/.is-thinking CSS — see docs/DESIGN.md › Loading & progress.
-function loadingState(label: unknown): string {
-  return CairnUi.loadingStateHtml({ label });
-}
-
-// Curated, op-specific "an agent is thinking" scripts — calm, Atelier-voiced, a
-// few lines each so a long wait reads as quiet motion rather than a frozen line.
-// thinkingCaption() crossfades through these (~2.6s/line) and loops the tail.
-const THINKING_SCRIPTS: Record<string, string[]> = {
-  session_suggest: ["Reading your week…", "Weighing recovery…", "Shaping today's session…", "Choosing the right load…"],
-  proposal: ["Reading your training…", "Weighing your recent sessions…", "Drafting next week's targets…", "Keeping the progression honest…"],
-  endurance_runs: ["Reading your running…", "Checking your mileage and goal…", "Shaping this week's runs…", "Keeping it aerobic and conservative…"],
-  meal_plan: ["Reading your week…", "Balancing the macros…", "Plating the days…", "Checking the protein floor…"],
-  meal_swap: ["Reading the meal…", "Finding a match…", "Holding the macros…", "Plating the swap…"],
-  recipe: ["Opening the kitchen…", "Sourcing the ingredients…", "Writing the steps…", "Tasting as it goes…"],
-  nutrition_checkin: ["Reading your intake…", "Tracing the trend…", "Weighing the drift…", "Settling on a number…"],
-  day_read_override: ["Hearing you…", "Re-reading the day…", "Reshaping the brief…"],
-  chat_distill: ["Looking back over the thread…", "Keeping what matters…", "Tidying the rest away…"],
-  onboard: ["Hearing you out…", "Folding it into your picture…", "Noting what matters…", "Setting things up…"],
-  insight: ["Connecting the dots…", "Crossing the domains…", "Listening for one real thread…"],
-};
-
-// Rotate an op's script through `el` with a gentle crossfade (reusing the chat
-// `.typing-cap` / capfade vocabulary), ~2.6s a line, looping the tail. Under
-// reduced motion it shows line 1 statically. Returns stop() — call it when the
-// op settles. Safe on a null element / unknown op (falls back to a calm line).
-function thinkingCaption(el: HTMLElement | null | undefined, op: unknown): () => void {
-  if (!el) return () => {};
-  const lines = THINKING_SCRIPTS[String(op)] || ["Thinking…"];
-  const paint = (txt: string) => {
-    el.textContent = txt;
-    if (!reducedMotion()) { el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
-  };
-  el.classList.add("typing-cap");
-  paint(lines[0]);
-  if (reducedMotion() || lines.length < 2) return () => {};
-  let i = 0;
-  const timer = setInterval(() => {
-    if (!el.isConnected) { clearInterval(timer); return; }
-    i = i + 1 >= lines.length ? Math.max(1, lines.length - 2) : i + 1; // loop the tail, never restart at the intro
-    paint(lines[i]);
-  }, 2600);
-  return () => clearInterval(timer);
-}
-
-// Calm fallback when a tab's (possibly agentic) render rejects — e.g. a network
-// blip during a skeleton-first paint. Replaces the stranded shimmer with a quiet
-// retry instead of freezing on the skeleton. No nag, just an option.
-function tabErrorState(tab: unknown): void {
-  view.innerHTML = `<div class="loadstate" role="alert">
-    <div class="loadstate-label">Couldn't load this view — check your connection.</div>
-    <button class="ghostbtn" data-tabretry style="margin-top:10px">Try again</button>
-  </div>`;
-  const btn = view.querySelector("[data-tabretry]");
-  if (btn) btn.addEventListener("click", () => switchTab(tab));
-}
-
-// Skeleton-first paint helpers — reuse the .hshimmer shimmer primitive so every
-// tab paints its shape instantly, then hydrates. Never invent a one-off spinner;
-// these mirror the loading vocabulary in docs/DESIGN.md. `aria-hidden` because the
-// real content carries its own labels once it lands.
-function skelLines(n = 3): string {
-  let s = `<div class="skel-card" aria-hidden="true"><div class="hshimmer hshimmer-lg"></div>`;
-  for (let i = 0; i < n; i++) s += `<div class="hshimmer${i === n - 1 ? " hshimmer-sm" : ""}"></div>`;
-  return s + `</div>`;
-}
-// Today: a Brief-shaped block + a couple of card silhouettes.
-function todaySkeleton(): string {
-  return `<div class="today-wrap today-skel" aria-busy="true">
-    <div class="skel-brief" aria-hidden="true">
-      <div class="hshimmer hshimmer-sm" style="width:34%"></div>
-      <div class="hshimmer hshimmer-lg" style="width:64%;height:26px"></div>
-      <div class="hshimmer"></div>
-    </div>
-    ${skelLines(2)}
-    ${skelLines(3)}
-  </div>`;
-}
-// A seg-bar tab (Progress / Plan / Me sub-views) — paint the REAL segmented
-// control synchronously (it's constant, no await) so the thumb sits where the
-// user tapped, then a hero + a couple of card silhouettes shimmer below until the
-// data lands. The seg is already wired by the real render that follows.
-function segSkeleton(active: string, seg: readonly UiSegment[], cards = 2): string {
-  let s = segBar(active, seg) + `<div class="skel-region" aria-busy="true">${skelLines(2)}`;
-  for (let i = 0; i < cards; i++) s += skelLines(3);
-  return s + `</div>`;
-}
-
-// humanized big numbers: 12450 → "12.4k"
-const fmtK = (n: unknown): string => {
-  const v = Number(n) || 0;
-  return v >= 10000 ? `${Math.round(v / 100) / 10}k` : Math.round(v).toLocaleString();
-};
-
-// Run count-ups for every [data-cu] numeral in scope (data-cufmt="k" → humanized).
-// `snap:true` writes the final value with no animation — used when a warm SWR
-// re-render replaces already-shown numerals, so they don't re-count from zero.
-function runCountUps(scope?: ParentNode | null, { snap = false }: { snap?: boolean } = {}): void {
-  (scope || view).querySelectorAll<HTMLElement>("[data-cu]").forEach((el) => {
-    const fmt = el.dataset.cufmt === "k" ? fmtK : (x: number) => Math.round(x).toLocaleString();
-    if (snap) { el.textContent = fmt(Number(el.dataset.cu) || 0); return; }
-    countUp(el, Number(el.dataset.cu) || 0, { fmt });
-  });
 }
 
 // Primary training discipline ('strength'|'endurance'|'hybrid'), read once from the
@@ -583,21 +424,9 @@ const CAIRN_UI_SHELL_GLOBALS = {
   PROGRESS_HANDLERS,
   planSeg,
   PLAN_HANDLERS,
-  stagger,
-  reducedMotion,
   viewEnter,
   withViewTransition,
   skelSwap,
-  btnBusy,
-  countUp,
-  fmtK,
-  runCountUps,
-  loadingState,
-  thinkingCaption,
-  tabErrorState,
-  skelLines,
-  todaySkeleton,
-  segSkeleton,
   setDiscipline,
   isEndurance,
   isHybrid,

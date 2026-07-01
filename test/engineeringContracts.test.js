@@ -699,6 +699,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/html-utils\.js"/);
   assert.match(sw, /"\/js\/markdown-client\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
+  assert.match(sw, /"\/js\/ui-feedback-client\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
   assert.match(sw, /"\/js\/format-utils\.js"/);
   assert.match(sw, /"\/js\/api-client\.js"/);
@@ -1034,6 +1035,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const htmlUtilsSource = read("src/client/html-utils.ts");
   const markdownSource = read("src/client/markdown-client.ts");
   const uiComponentsSource = read("src/client/ui-components.ts");
+  const uiFeedbackSource = read("src/client/ui-feedback-client.ts");
   const detailOverlaySource = read("src/client/detail-overlay-client.ts");
   const uiMotionSource = read("src/client/ui-motion-client.ts");
   const exerciseDetailSource = read("src/client/exercise-detail-client.ts");
@@ -1176,6 +1178,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const htmlUtils = read("public/js/html-utils.js");
   const markdownClient = read("public/js/markdown-client.js");
   const uiComponents = read("public/js/ui-components.js");
+  const uiFeedback = read("public/js/ui-feedback-client.js");
   const detailOverlayClient = read("public/js/detail-overlay-client.js");
   const uiMotionClient = read("public/js/ui-motion-client.js");
   const exerciseDetailClient = read("public/js/exercise-detail-client.js");
@@ -1719,6 +1722,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/markdown-client\.js/);
   assert.match(clientBuild, /src\/client\/ui-components\.ts/);
   assert.match(clientBuild, /public\/js\/ui-components\.js/);
+  assert.match(clientBuild, /src\/client\/ui-feedback-client\.ts/);
+  assert.match(clientBuild, /public\/js\/ui-feedback-client\.js/);
   assert.match(clientBuild, /src\/client\/exercise-detail-client\.ts/);
   assert.match(clientBuild, /public\/js\/exercise-detail-client\.js/);
   assert.match(clientBuild, /src\/client\/format-utils\.ts/);
@@ -2028,6 +2033,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     index.indexOf("/js/ui-components.js") > index.indexOf("/js/html-utils.js") &&
       index.indexOf("/js/ui-components.js") < index.indexOf("/js/health-client.js"),
     "ui-components.js must load after escaping helpers and before component consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/ui-feedback-client.js") > index.indexOf("/js/ui-components.js") &&
+      index.indexOf("/js/ui-feedback-client.js") < index.indexOf("/js/02-ui.js"),
+    "ui-feedback-client.js must load after shared UI components and before the UI shell"
   );
   assert.ok(
     index.indexOf("/js/ui-components.js") > index.indexOf("/js/html-utils.js") &&
@@ -3667,6 +3677,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /segmentedNavHtml/);
   assert.match(uiComponents, /jobCaptionHtml/);
   assert.match(uiComponents, /sheetChipHtml/);
+  assert.match(uiFeedbackSource, /const\s+CAIRN_UI_FEEDBACK/);
+  assert.match(uiFeedback, /CairnUiFeedback: CAIRN_UI_FEEDBACK/);
+  assert.match(uiFeedback, /loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
+  assert.match(uiFeedback, /function\s+btnBusy/);
+  assert.match(uiFeedback, /function\s+thinkingCaption/);
+  assert.doesNotMatch(ui, /function\s+btnBusy|function\s+thinkingCaption|function\s+runCountUps/);
   assert.match(detailOverlayClient, /CairnDetailOverlay: CAIRN_DETAIL_OVERLAY/);
   assert.match(detailOverlayClient, /closeDetail/);
   assert.match(detailOverlayClient, /openDetailFrom/);
@@ -4061,7 +4077,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appStartup, /Object\.assign\(globalThis, \{ startAppShell \}\)/);
   assert.match(appStartup, /window\.startAppShell = startAppShell/);
   assert.match(ui, /function segBar\(active, items\)[\s\S]*CairnUi\.segmentedNavHtml\(\{ active, items \}\)/);
-  assert.match(ui, /function loadingState\(label\)[\s\S]*CairnUi\.loadingStateHtml\(\{ label \}\)/);
+  assert.doesNotMatch(ui, /function loadingState/);
   assert.match(ui, /withViewTransition\(\(\) => Promise\.resolve\(f\(\)\)\.then\(\(\) => \{[\s\S]*syncRouteFromState\(\)[\s\S]*return viewEnter\(\)/);
   assert.match(ui, /function exerciseExplanation\(d\)[\s\S]*CairnExerciseDetailController\.exerciseExplanation\(d, exerciseDetailDeps\(\)\)/);
   assert.match(ui, /function exerciseExplanationHtml\(d, explanation\)[\s\S]*CairnExerciseDetailController\.exerciseExplanationHtml\(d, explanation, exerciseDetailDeps\(\)\)/);
@@ -4305,6 +4321,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/agent-login-client\.js"/);
   assert.match(sw, /"\/js\/rest-timer\.js"/);
   assert.match(sw, /"\/js\/ui-components\.js"/);
+  assert.match(sw, /"\/js\/ui-feedback-client\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
   assert.match(sw, /"\/js\/exercise-detail-controller\.js"/);
   assert.match(sw, /"\/js\/day-fuel-client\.js"/);

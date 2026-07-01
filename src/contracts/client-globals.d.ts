@@ -561,7 +561,14 @@ declare global {
   declare function segBar(active: string, items: readonly ClientSegment[]): string;
   declare function wireSeg(handlers: Record<string, () => unknown>): void;
   declare function fitSeg(seg: Element): void;
-  declare function loadingState(label: string): string;
+  declare function stagger(index?: number | null): string;
+  declare function reducedMotion(): boolean;
+  declare function loadingState(label: unknown): string;
+  declare function countUp(
+    element: Element | null | undefined,
+    target: unknown,
+    options?: { dur?: number; fmt?: (value: number) => string },
+  ): void;
   declare function isStandalonePWA(): boolean;
   declare function getInstallGuidance(): { mode: string } | null;
   declare function phoneCoachContent(mode: string): string;
@@ -580,6 +587,7 @@ declare global {
     peak?: boolean;
   }): void;
   declare function runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
+  declare function fmtK(value: unknown): string;
   declare function chartColors(): {
     accent: string;
     sage: string;
@@ -759,8 +767,8 @@ declare global {
   declare function closeDetail(instant?: boolean): void;
   declare function closeMealSheet(instant?: boolean): void;
   declare function hideSaveBar(): void;
-  declare function thinkingCaption(el: Element, op?: string | readonly string[]): () => void;
-  declare function btnBusy(btn: Element | null | undefined, text: string, options?: { ghost?: boolean }): () => void;
+  declare function thinkingCaption(el: Element | null | undefined, op?: unknown): () => void;
+  declare function btnBusy(btn: Element | null | undefined, text?: unknown, options?: { ghost?: boolean }): () => void;
   declare function openDetailFrom(fromEl: Element | null | undefined, build: () => unknown): void;
   declare function mountDetail(html: string, photoSrc?: string | null): HTMLElement;
   declare function wireDetailCommon(): void;
@@ -1024,6 +1032,29 @@ declare global {
         style?: string;
         bodyClassName?: string;
       }): string;
+    };
+
+    CairnUiFeedback: {
+      stagger(index?: number | null): string;
+      reducedMotion(): boolean;
+      btnBusy(
+        btn: Element | null | undefined,
+        label?: unknown,
+        options?: { ghost?: boolean },
+      ): () => void;
+      countUp(
+        element: Element | null | undefined,
+        target: unknown,
+        options?: { dur?: number; fmt?: (value: number) => string },
+      ): void;
+      fmtK(value: unknown): string;
+      runCountUps(scope?: ParentNode | null, options?: { snap?: boolean }): void;
+      loadingState(label: unknown): string;
+      thinkingCaption(el: Element | null | undefined, op?: unknown): () => void;
+      tabErrorState(tab: unknown): void;
+      skelLines(count?: number): string;
+      todaySkeleton(): string;
+      segSkeleton(active: string, seg: readonly ClientSegment[], cards?: number): string;
     };
 
     CairnDetailOverlay: {
@@ -2020,6 +2051,7 @@ declare global {
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
+  declare const CairnUiFeedback: Window["CairnUiFeedback"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
