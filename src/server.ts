@@ -40,7 +40,13 @@ process.on("uncaughtException", (err) => {
 // recordAgentRun is itself failure-safe.
 setAgentRunSink((r) => repo.recordAgentRun(r));
 
-if (seedIfEmpty()) console.log("Database was empty — seeded with the default plan.");
+if (await seedIfEmpty()) {
+  console.log(
+    process.env.CAIRN_SEED_DEMO === "1"
+      ? "Database was empty — seeded with the full-coverage demo dataset (CAIRN_SEED_DEMO=1)."
+      : "Database was empty — seeded with the default plan."
+  );
+}
 
 const app = express();
 app.disable("x-powered-by");

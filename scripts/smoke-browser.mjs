@@ -1267,7 +1267,7 @@ try {
   chrome = await launchChrome();
   console.log(`Cairn browser smoke: using ${chrome.bin}`);
   cdp = await newPage(chrome);
-  await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2, extraEnv: { AGENTS_CONFIG: smokeAgents.file } }, async (ctx) => {
+  await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2, extraEnv: { AGENTS_CONFIG: smokeAgents.file, CAIRN_SEED_DEMO: "1" } }, async (ctx) => {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
     await smokeTodayAddExercise(cdp, ctx.base);
     await smokeTodayCardioSkip(cdp, ctx.base);

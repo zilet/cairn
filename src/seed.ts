@@ -126,7 +126,7 @@ export function seed() {
   ).run(goalDate);
 }
 
-export function seedIfEmpty(): boolean {
+export async function seedIfEmpty(): Promise<boolean> {
   // "Empty" must mean a pristine, never-initialized DB — NOT merely "no plan
   // days." A user can delete every plan day in-app (deletePlanDay is a feature),
   // and an exercise catalog persists independently; keying only on plan_days
@@ -135,6 +135,17 @@ export function seedIfEmpty(): boolean {
   const days = db.prepare(`SELECT COUNT(*) AS c FROM plan_days`).get() as any;
   const exs = db.prepare(`SELECT COUNT(*) AS c FROM exercises`).get() as any;
   if (days.c > 0 || exs.c > 0) return false;
+  if (process.env.CAIRN_SEED_DEMO === "1") {
+    // Full-coverage fixture for smoke/dev use only (never a real deploy default):
+    // family roster, an active meal plan, dated health documents/directives,
+    // memory, life-context events, and a connected Garmin source, so browser
+    // workflow smoke can exercise Family/Plan/Health/Settings against real rows
+    // instead of the sparse default plan. Lazy import avoids a module cycle,
+    // since demoSeed.ts itself imports seed() from here.
+    const { seedDemo } = await import("./demoSeed.js");
+    seedDemo();
+    return true;
+  }
   seed();
   // Drop in any pre-baked studio photos that match the seeded exercises, so a
   // fresh install renders real art (not just SVGs) with no Gemini key. Offline,
@@ -149,6 +160,6 @@ export function seedIfEmpty(): boolean {
 
 // CLI entry: `npm run seed`
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const did = seedIfEmpty();
+  const did = await seedIfEmpty();
   console.log(did ? `Seeded 5 days, ${exercises.length} exercises.` : "Already seeded. Use `npm run reset` to rebuild.");
 }
