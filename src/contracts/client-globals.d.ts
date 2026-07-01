@@ -2820,6 +2820,14 @@ declare global {
       ): void;
     };
 
+    CairnTodayRailLoaders: {
+      loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadWeekAhead(deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadRecentActivities(deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadGarminReconcile(deps: ClientTodayRailControllerDeps): Promise<void>;
+    };
+
     CairnTodaySideLoaders: ClientTodaySideLoaders;
 
     CairnTodayPlanSelection: {
@@ -3549,6 +3557,7 @@ declare global {
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayRailController: Window["CairnTodayRailController"];
+  declare const CairnTodayRailLoaders: Window["CairnTodayRailLoaders"];
   declare const CairnTodaySideLoaders: Window["CairnTodaySideLoaders"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];

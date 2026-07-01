@@ -120,6 +120,7 @@ function loadController({ buckets } = {}) {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-rail-loaders-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-rail-controller.js"), "utf8"), context);
   return context.CairnTodayRailController;
 }
