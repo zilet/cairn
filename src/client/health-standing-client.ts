@@ -41,16 +41,22 @@ function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, o
     return `<button type="button" class="hstand-refbtn${age === referenceAge ? " active" : ""}" data-refage="${age}">${escHtml(label)}</button>`;
   }).join("");
 
-  const calendarAge = hero.calendar_age != null ? escHtml(String(hero.calendar_age)) : subject.age != null ? escHtml(String(subject.age)) : "—";
-  const biologicalAge = hero.biological_age != null ? escHtml(String(hero.biological_age)) : "—";
-  const biologicalSource = hero.biological_age_source === "lab" ? "biological age" : "Cairn read";
   const direction = hero.direction || "unknown";
   const arrow = direction === "younger" ? "↓" : direction === "older" ? "↑" : "≈";
-  const directionWord = direction === "younger" ? "younger" : direction === "older" ? "older" : "in line";
-  const delta = hero.biological_age_delta;
-  const deltaRounded = delta != null ? Math.abs(Math.round(Number(delta))) : null;
-  const deltaChip = delta != null && deltaRounded != null && deltaRounded >= 1
-    ? `<span class="hstand-deltachip ${Number(delta) < 0 ? "is-younger" : "is-older"}">${Number(delta) < 0 ? "−" : "+"}${deltaRounded} yr${deltaRounded === 1 ? "" : "s"}</span>`
+  const directionWord = direction === "younger" ? "trending younger" : direction === "older" ? "reading older" : "in line";
+  // Plain-language biological-age read — the hero renders THIS, never a raw bio-age
+  // number (constitution: no score on the athlete). Prefer the server's `bio_read`;
+  // else phrase from direction when a REAL measure (lab / PhenoAge) backs it.
+  const heroRead = typeof hero.bio_read === "string" && hero.bio_read.trim() ? hero.bio_read.trim() : "";
+  const hasRealBio = hero.biological_age_source === "lab" || hero.biological_age_source === "phenoage";
+  const fallbackRead = hasRealBio
+    ? (direction === "younger" ? "Your biological age is reading younger than your calendar age."
+      : direction === "older" ? "Your biological age is reading older than your calendar age — the movable kind."
+      : direction === "aligned" ? "Your biological age is right in line with your calendar age." : "")
+    : "";
+  const bioReadText = heroRead || fallbackRead;
+  const directionLine = direction && direction !== "unknown"
+    ? `<p class="hstand-heroline hstand-heroline-${escAttr(String(direction))}"><span class="hstand-heroarrow" aria-hidden="true">${arrow}</span> <span class="hstand-heroword">${escHtml(directionWord)}</span>${bioReadText ? ` — <span class="hstand-heroread">${escHtml(bioReadText)}</span>` : ""}</p>`
     : "";
   const confidence = standing.confidence ? `<span class="hstand-conf">${escHtml(standing.confidence)} confidence</span>` : "";
 
@@ -88,21 +94,12 @@ function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, o
     : "";
 
   return `<div class="hstand">
-      <section class="hstand-hero hstand-hero-${escAttr(direction)}">
+      <section class="hstand-hero hstand-hero-${escAttr(String(direction))}">
         <div class="hstand-hero-main">
           <span class="lbl">Health standing</span>
           <h2>${escHtml(hero.headline || standing.headline || "Your standing read will sharpen as data lands.")}</h2>
-          <div class="hstand-ages">
-            <span class="hstand-age"><b>${calendarAge}</b><em>calendar</em></span>
-            <span class="hstand-age-mid"><span class="hstand-age-arrow">${arrow}</span><em>${directionWord}</em></span>
-            <span class="hstand-age hstand-age-bio"><b>${biologicalAge}</b><em>${escHtml(biologicalSource)}</em>${deltaChip}</span>
-          </div>
+          ${directionLine}
           ${confidence}
-        </div>
-        <div class="hstand-ref">
-          <span class="lbl">Compare against</span>
-          <div class="hstand-refgrid">${referenceButtons}</div>
-          ${primitives.hstandRefSummaryHtml(standing.comparisons, referenceAge, actualDecade, sexWord)}
         </div>
       </section>
       ${momentumHtml}
@@ -110,6 +107,11 @@ function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, o
       <details class="full-read">
         <summary>Full standing</summary>
         <div class="full-read-body">
+          <section class="hstand-ref">
+            <span class="lbl">Compare against</span>
+            <div class="hstand-refgrid">${referenceButtons}</div>
+            ${primitives.hstandRefSummaryHtml(standing.comparisons, referenceAge, actualDecade, sexWord)}
+          </section>
           <section class="hstand-grid">
             ${primitives.hstandBodyCompHtml(standing.body_comp)}
             ${primitives.hstandBpCardHtml(standing.blood_pressure)}

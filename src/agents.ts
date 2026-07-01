@@ -27,6 +27,7 @@ export interface AgentDef {
   input?: "arg" | "stdin";        // how the prompt reaches the CLI (default: arg)
   description?: string;
   env_required?: string[];        // env vars that indicate this agent is usable
+  web_access?: boolean;           // declares this CLI can browse the live web (drives research routing)
   // Declarative login / connected-state fields (Agent Connect). Every argv array is
   // APPENDED to `command` (like `args`). None of these change how a coaching run is
   // built — they drive the login flow, the connected-state probe, and read-only
@@ -63,6 +64,8 @@ export function listAgents() {
     name,
     description: def.description || "",
     env_required: def.env_required || [],
+    // whether this CLI declares live web access (drives web-capable-first research routing)
+    web_access: def.web_access === true,
     // usable if no env requirement (subscription/cred-based) OR the env var is present
     env_ok: !def.env_required?.length || def.env_required.every((k) => !!process.env[k]),
     // whether the agent's CLI binary is actually installed/on PATH (cached probe)

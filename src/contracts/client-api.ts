@@ -1002,8 +1002,13 @@ export interface ClientHealthStanding {
     biological_age_delta: number | null;
     direction: ClientHealthStandingDirection | string;
     headline: string;
+    // Plain-language biological-age read (a direction sentence, no number) — the hero
+    // renders THIS, never the raw figure (constitution: no scores on the athlete).
+    bio_read?: string | null;
   };
   biological_age: ClientHealthStandingBiologicalAge | null;
+  // Deterministic Levine PhenoAge from the panel (plain-language surfaces only), else null.
+  pheno_age?: { value: number; delta: number; direction: string; note: string } | null;
   momentum: ClientHealthStandingMomentum;
   lead_lever: ClientHealthStandingLeadLever | null;
   body_comp: ClientHealthStandingBodyComp | null;

@@ -3276,6 +3276,14 @@ body.swr-busy::after{
   padding:2px 7px;border-radius:999px;width:max-content}
 .hstand-deltachip.is-younger{background:var(--sage-bg);color:var(--sage)}
 .hstand-deltachip.is-older{background:var(--warn-bg);color:var(--warn)}
+/* Plain-language biological-age read: the hero leads with DIRECTION, never a number. */
+.hstand-heroline{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:10px 0 0;
+  font-size:.95rem;line-height:1.5;color:var(--ink)}
+.hstand-heroarrow{font-family:var(--font-display);font-size:1.25rem;line-height:1;color:var(--muted)}
+.hstand-heroword{font-weight:640;letter-spacing:-.01em}
+.hstand-heroread{color:var(--muted)}
+.hstand-hero-younger .hstand-heroarrow,.hstand-hero-younger .hstand-heroword{color:var(--sage)}
+.hstand-hero-older .hstand-heroarrow,.hstand-hero-older .hstand-heroword{color:var(--accent)}
 .hstand-eq-est{color:var(--accent-deep);font-weight:600}
 
 /* this-quarter momentum chips — the wins in motion */

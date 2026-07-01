@@ -7,6 +7,7 @@ import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from ".
 import { canonicalMarker } from "./marker-canon.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
+import { getProfile } from "./profile.js";
 import { type OptimalZone, applyReviewDirectives, isNonClinicalMarker, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
@@ -602,6 +603,16 @@ interface MarkerForecast {
   crossing: "entering" | "leaving" | null; // projected to cross the optimal edge
 }
 
+// Some markers are genetically fixed / set-for-life — Lp(a), ApoE genotype, MTHFR —
+// so a "trend" or an ETA drawn across a couple of noisy readings is meaningless and
+// actively misleading (a real n=2 Lp(a) once read "falling, ~3 weeks to optimal" off
+// two dots). These never carry a confident direction or projection; the honest read
+// is 'stable'. Matched on the display name, substring, case-insensitive.
+export function isNonTrendingMarker(name?: string | null): boolean {
+  if (!name) return false;
+  return /lp\s?\(a\)|lipoprotein\s?\(a\)|apo\s?e\b|apolipoprotein e|mthfr|\bgenotype\b|\bgenetic\b|\bhla\b/i.test(String(name));
+}
+
 // Ordinary least-squares slope (value per DAY) over ascending (date,value)
 // points. Returns null with <2 points or a degenerate (single-day) span.
 export function lsqSlopePerDay(points: { date: string; value: number }[]): number | null {
@@ -720,6 +731,13 @@ export function getMarkerHistory() {
        ORDER BY COALESCE(doc_date, substr(created_at,1,10)) ASC, id ASC`
     )
     .all() as any[];
+  // Personalize the sex/age-dependent optimal bands (testosterone, ferritin, eGFR, …)
+  // so the trend/forecast reads "toward optimal" against the athlete's OWN band, not
+  // the male/generic default. Null-safe: a fresh DB profile yields the default.
+  const zoneProfile = (() => {
+    try { const p = getProfile(); return p ? { sex: p.sex ?? null, age: p.age ?? null } : null; }
+    catch { return null; }
+  })();
 
   interface Reading {
     date: string;
@@ -862,7 +880,7 @@ export function getMarkerHistory() {
     // series' own spread (so a marker that barely moved doesn't read as a trend),
     // else 'rising'/'falling'. No score — just direction + raw change + span.
     const n = points.length;
-    const zone = last.unit_mismatch ? null : matchOptimalZone(last.name);
+    const zone = last.unit_mismatch ? null : matchOptimalZone(last.name, zoneProfile);
     let trend: {
       dir: "rising" | "falling" | "stable" | null;
       change: number | null;
@@ -897,13 +915,24 @@ export function getMarkerHistory() {
             : weekly > 0 ? "rising" : weekly < 0 ? "falling" : "stable";
       // Forecast vs the OPTIMAL band — plain-language projection + eta direction.
       forecast = forecastMarker(points, slope, zone);
+      // Don't project a confident trend the data can't support:
+      //  • genetically-fixed markers (Lp(a), ApoE, MTHFR) don't "trend" — the honest
+      //    read is 'stable', with no ETA.
+      //  • n<3 readings can't sustain a projection (an n=2 Lp(a) once read "falling,
+      //    ~3 weeks to optimal" off two dots) — keep the raw direction, drop the ETA.
+      //  • an implausibly steep slope (>50%/week of the value) won't hold — drop the ETA.
+      const nonTrending = isNonTrendingMarker(last.name);
+      const implausibleSlope = weekly != null && Number.isFinite(lastP.value) && lastP.value !== 0 && Math.abs(weekly) > Math.abs(lastP.value) * 0.5;
+      const suppressProjection = nonTrending || n < 3 || implausibleSlope;
+      if (nonTrending) forecast = { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
+      else if (suppressProjection) forecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
       trend = {
-        dir,
+        dir: nonTrending ? "stable" : dir,
         change,
         span_days,
         n,
         slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000,
-        projection: forecast.eta_text,
+        projection: suppressProjection ? null : forecast.eta_text,
       };
     }
     const grp = markerGroup(last.name);

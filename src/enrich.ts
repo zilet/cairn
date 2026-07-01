@@ -473,7 +473,10 @@ async function processReviewJob(): Promise<void> {
   reviewQueued = false; // a health doc finishing while we run may queue the next refresh
   const settings = repo.getSettings();
   if (!settings.enrich_enabled) return;
-  const order = repo.pickAgentOrder();
+  // Faithful clinical reading matters more than spreading load: default the whole-picture
+  // health review to the Claude-first health order (an explicit `health` pin still wins),
+  // NOT the round-robin rotation.
+  const order = repo.pickHealthAgentOrder();
   if (!order.length) return;
 
   const prompt = buildHealthReviewPrompt();
