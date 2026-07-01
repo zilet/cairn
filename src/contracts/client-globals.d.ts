@@ -364,6 +364,20 @@ declare global {
     escapeHtml(value: unknown): string;
   };
 
+  type ClientHealthStandingControllerDeps = {
+    root: ParentNode;
+    document: Document;
+    state: Pick<ClientAppState, "healthStandingRef" | "meSeg" | "healthSeg" | "healthSegPicked" | "pendingHealthScroll">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    swrInvalidate(keyOrPrefix: string): void;
+    toast(message: string): void;
+    activateTab(tab: string): unknown;
+    pollToken(): number;
+    select<T extends Element = Element>(selector: string): T | null;
+    escapeAttr(value: unknown): string;
+    loadDexaTargeting?(slotId: string): Promise<void> | void;
+  };
+
   type ClientHealthRecordsControllerDeps = {
     state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthDocId">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
@@ -1134,6 +1148,14 @@ declare global {
       hstandBodyCompHtml(bodyComp: ClientHealthStandingBodyComp | null | undefined): string;
       hstandBpCardHtml(bp: ClientHealthStandingBloodPressure | null | undefined): string;
       renderHealthStandingHtml(data: ClientHealthStanding | null | undefined, options?: { referenceAge?: unknown }): string;
+    };
+
+    CairnHealthStandingController: {
+      load(deps: ClientHealthStandingControllerDeps, token: number, refAge?: unknown): void;
+      openBpSheet(deps: ClientHealthStandingControllerDeps): void;
+      openRead(deps: ClientHealthStandingControllerDeps, opts?: { scroll?: string }): void;
+      paintReview(deps: ClientHealthStandingControllerDeps): void;
+      render(data: ClientHealthStanding | null | undefined, deps: ClientHealthStandingControllerDeps): void;
     };
 
     CairnHealthRead: {
@@ -1992,6 +2014,7 @@ declare global {
   declare const CairnHealthDirectives: Window["CairnHealthDirectives"];
   declare const CairnHealthDirectiveLoader: Window["CairnHealthDirectiveLoader"];
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
+  declare const CairnHealthStandingController: Window["CairnHealthStandingController"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];

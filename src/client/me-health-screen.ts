@@ -398,130 +398,40 @@ function paintHealthReadTab(): void {
 }
 
 // ---- Standing tab: percentiles, signal age, and point-in-time BP ----
-function renderHealthStanding(data: HealthStandingRead | null | undefined): void {
-  const wrap = $<HTMLElement>("#hStanding");
-  if (!wrap) return;
-  wrap.innerHTML = CairnHealthStanding.renderHealthStandingHtml(data, { referenceAge: state.healthStandingRef });
-
-  // Don't stack two competing "single most important thing" surfaces: if the conductor's
-  // "Where to focus" card already led above, drop this health "one lever" section (the
-  // Program view de-dupes the same way via suppressLever). Order-independent — the
-  // conductor loader does the mirror removal if it lands after this paint.
-  if (view.querySelector("#cfocusStandingSlot .cfocus")) wrap.querySelector(".hstand-lever")?.remove();
-
-  wrap.querySelectorAll<HTMLElement>("[data-refage]").forEach((b) => b.addEventListener("click", () => {
-    state.healthStandingRef = Number(b.dataset.refage || 20);
-    loadHealthStanding(pollToken, state.healthStandingRef);
-  }));
-  // This lever lives on the top-level Standing tab (meSeg="standing"), so switchHealthSeg
-  // would bail (it guards meSeg==="health"). Route into Health → Markers directly.
-  wrap.querySelector("[data-lever-go]")?.addEventListener("click", () => {
-    state.meSeg = "health"; state.healthSeg = "markers"; state.healthSegPicked = true; activateTab("me");
-  });
-  $("#bpLogOpen")?.addEventListener("click", () => openBpSheet());
-  // "From your DEXA — what to focus on next", co-located with the regional read.
-  // Shared renderer defined in 05-progress.js (loaded earlier); null-safe + quiet.
-  if (typeof loadDexaTargeting === "function") loadDexaTargeting("hDexaSlot");
+function healthStandingDeps(): ClientHealthStandingControllerDeps {
+  return {
+    root: view,
+    document,
+    state,
+    api,
+    swrInvalidate,
+    toast,
+    activateTab,
+    pollToken: () => pollToken,
+    select: $,
+    escapeAttr: escAttr,
+    loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
+  };
 }
 
-// The relocated BP capture: a compact sheet behind a tap, so the Standing read stays a
-// reading surface (the user's "why am I entering BP in the analysis view?"). Reuses the
-// same POST /blood-pressure wiring as before.
+function renderHealthStanding(data: HealthStandingRead | null | undefined): void {
+  CairnHealthStandingController.render(data, healthStandingDeps());
+}
+
 function openBpSheet(): void {
-  if (document.getElementById("bpSheetOv")) return;
-  const ov = document.createElement("div");
-  ov.id = "bpSheetOv";
-  ov.className = "bpsheet-ov";
-  ov.innerHTML = `<div class="bpsheet" role="dialog" aria-modal="true" aria-label="Log blood pressure">
-      <div class="bpsheet-hd"><h3>Log a reading</h3><button class="bpsheet-x" type="button" aria-label="Close">✕</button></div>
-      <form id="bpSheetForm" class="bpsheet-form">
-        <div class="bpsheet-row">
-          <label>Systolic<input id="bpSys" class="form-input" type="number" inputmode="numeric" min="60" max="260" placeholder="120" required></label>
-          <label>Diastolic<input id="bpDia" class="form-input" type="number" inputmode="numeric" min="35" max="160" placeholder="80" required></label>
-          <label>Pulse<input id="bpPulse" class="form-input" type="number" inputmode="numeric" min="25" max="240" placeholder="60"></label>
-        </div>
-        <label class="bpsheet-when">When<input id="bpAt" class="form-input" type="datetime-local" value="${escAttr(CairnHealthStanding.localDateTimeInputValue())}"></label>
-        <div class="bpsheet-row">
-          <label>Position<input id="bpPosition" class="form-input" type="text" maxlength="40" placeholder="Seated"></label>
-          <label>Note<input id="bpNote" class="form-input" type="text" maxlength="240" placeholder="Optional"></label>
-        </div>
-        <div class="bpsheet-ft"><button class="ghostbtn" type="button" data-close>Cancel</button><button class="logbtn" type="submit">Save</button></div>
-      </form>
-    </div>`;
-  document.body.appendChild(ov);
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") teardown(); };
-  const teardown = () => { document.removeEventListener("keydown", onKey); ov.remove(); };
-  document.addEventListener("keydown", onKey);
-  ov.querySelector(".bpsheet-x")?.addEventListener("click", teardown);
-  ov.querySelector("[data-close]")?.addEventListener("click", teardown);
-  ov.addEventListener("click", (e) => { if (e.target === ov) teardown(); });
-  $<HTMLFormElement>("#bpSheetForm")?.addEventListener("submit", async (e: SubmitEvent) => {
-    e.preventDefault();
-    const form = e.currentTarget instanceof HTMLFormElement ? e.currentTarget : null;
-    const submit = form?.querySelector<HTMLButtonElement>("button[type='submit']") || null;
-    if (submit) submit.disabled = true;
-    const payload = {
-      systolic: healthInputValue("#bpSys"), diastolic: healthInputValue("#bpDia"), pulse: healthInputValue("#bpPulse"),
-      measured_at: healthInputValue("#bpAt"), position: healthInputValue("#bpPosition"), note: healthInputValue("#bpNote"), source: "manual",
-    };
-    try {
-      const res = await api("/blood-pressure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }) as unknown as { error?: string } | null;
-      if (!res || res.error) { toast(res?.error || "Couldn't log BP"); if (submit) submit.disabled = false; return; }
-      toast("BP logged");
-      swrInvalidate("markers:");
-      teardown();
-      loadHealthStanding(pollToken, state.healthStandingRef || 20);
-    } catch {
-      toast("Couldn't log BP");
-      if (submit) submit.disabled = false;
-    }
-  });
-  setTimeout(() => $<HTMLInputElement>("#bpSys")?.focus(), 30);
+  CairnHealthStandingController.openBpSheet(healthStandingDeps());
 }
 
 function loadHealthStanding(token: number, refAge: unknown): void {
-  const ref = Number(refAge || state.healthStandingRef || 20);
-  state.healthStandingRef = ref;
-  api(`/health/standing?reference_age=${encodeURIComponent(String(ref))}`)
-    .then((data) => { if (token === pollToken) renderHealthStanding(data || null); })
-    .catch(() => {
-      if (token !== pollToken) return;
-      const wrap = $<HTMLElement>("#hStanding");
-      if (wrap) wrap.innerHTML = `<div class="hstand hstand-panel"><div class="empty">Couldn't load health standing right now.</div></div>`;
-    });
+  CairnHealthStandingController.load(healthStandingDeps(), token, refAge);
 }
 
-// The Standing tab is the calm REVIEW — where you stand + where to focus. It stays
-// short and scannable: the conductor "Where to focus" (rendered above #hContent), then
-// the momentum-led structured read (#hStanding — hero, momentum, the one lever, and the
-// collapsed Full standing: live body comp, BP, percentiles). The whole-picture depth
-// (synthesis, recovery, picture, the connected-brain directives/markers/supplements)
-// now lives one tap away in Health → Read, reachable from the jump-off below — so this
-// page no longer stacks ~8 screens of analysis on top of the review.
 function paintStandingReview(): void {
-  const c = $<HTMLElement>("#hContent");
-  if (!c) return;
-  c.innerHTML = `<div id="hStanding"><div class="hstand hstand-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div></div>
-    <button type="button" class="hread-jump" id="hStandingToRead">
-      <span class="hread-jump-main">
-        <span class="lbl">Your whole picture</span>
-        <span class="hread-jump-title">The full health read</span>
-        <span class="hread-jump-sub">Synthesis, the connected-brain list, recovery, markers and supplements — read as one story.</span>
-      </span>
-      <span class="hread-jump-arrow" aria-hidden="true">→</span>
-    </button>`;
-  loadHealthStanding(pollToken, state.healthStandingRef || 20);
-  $("#hStandingToRead")?.addEventListener("click", () => openHealthRead());
+  CairnHealthStandingController.paintReview(healthStandingDeps());
 }
 
-// Jump from the Standing review into the relocated depth (Health → Read). Switches the
-// Me seg to Health and the inner seg to Read in one step, then paints.
 function openHealthRead(opts: { scroll?: string } = {}): void {
-  state.meSeg = "health";
-  state.healthSeg = "read";
-  state.healthSegPicked = true;
-  if (opts.scroll) state.pendingHealthScroll = opts.scroll;
-  activateTab("me");
+  CairnHealthStandingController.openRead(healthStandingDeps(), opts);
 }
 
 function scrollHealthRailIntoView(sel: string): void {
