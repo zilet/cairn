@@ -324,6 +324,7 @@ declare global {
   declare const HEALTH_SEG: readonly ClientSegment[];
   declare const SET_SEG: readonly ClientSegment[];
   declare var MEALS_KEY: string;
+  declare var MEALS_SETTINGS_KEY: string;
   declare const MEAL_LABEL: Record<string, string>;
 
   declare function skelSwap(fn: () => void): void;
@@ -1058,6 +1059,33 @@ declare global {
       mealDayHtml(day: unknown, dayIndex: number, context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown }): string;
     };
 
+    CairnMealPlannerController: {
+      draftWeeklyMeals(): void;
+      reconnectMealPlan(job?: unknown): ClientAgentOpHandlers | null;
+      reconnectMealSwap(job?: unknown): ClientAgentOpHandlers | null;
+      reconnectStatusHost(
+        options: ClientAgentOpHandlers & {
+          path: string;
+          anchor: string;
+          caption: string;
+          guard: () => boolean;
+          isFail: (result: unknown) => boolean;
+          render: (result: unknown) => unknown;
+          onFail: (error?: unknown) => unknown;
+        },
+        statusSelector: string,
+        buttonSelector: string | null,
+        ghost: boolean,
+      ): ClientAgentOpHandlers | null;
+      renderMealPlans(plans: unknown, selector?: string, refresh?: (() => unknown) | null): void;
+      runCoachMealPlan(agent: string, instruction: string): void;
+      verifiedForPlan(id: unknown): unknown;
+      wireMealPlannerBody(
+        currentPlan: (Record<string, unknown> & { id: string | number }) | null,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+      ): void;
+    };
+
     CairnMealRecipe: {
       ctaHtml(): string;
       recipeHtml(recipe: unknown): string;
@@ -1691,6 +1719,7 @@ declare global {
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnDayFuelController: Window["CairnDayFuelController"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
+  declare const CairnMealPlannerController: Window["CairnMealPlannerController"];
   declare const CairnMealRecipe: Window["CairnMealRecipe"];
   declare const CairnMealRecipeController: Window["CairnMealRecipeController"];
   declare const CairnProposal: Window["CairnProposal"];
