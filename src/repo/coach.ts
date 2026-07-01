@@ -13,6 +13,7 @@ import { coachingFocus } from "./coaching-focus.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
+import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
@@ -661,6 +662,7 @@ export function getCoachContext(): CoachContext {
     ...buildRunningSlice(signals),
     ...buildHealthSlice(signals),
     ...buildBrainSlice(signals),
+    body_metrics: (() => { try { return bodyMetricsContextSlice(); } catch { return null; } })(),
   };
 }
 

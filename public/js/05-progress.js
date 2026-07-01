@@ -53,6 +53,17 @@ async function renderWeight() {
     }).catch(() => { if (peekRows && !peekRows.fresh)
         markRefreshing(false); });
 }
+// ---------- Progress: body measurements + indicators ----------
+// The Body group's second leaf: at-home tape measurements + derived indicators
+// (BMI / waist-to-height / Navy body-fat) and per-site trends. The seg bar keeps the
+// two-level Progress nav; the self-contained body-metrics client paints into the mount.
+async function renderMeasurements() {
+    headerTitle.textContent = "Progress";
+    state.progressSeg = "measurements";
+    view.innerHTML = segBar("measurements", PROGRESS_SEG) + `<div id="bodyMetricsMount"></div>`;
+    wireSeg(PROGRESS_HANDLERS);
+    renderBodyMetrics(document.getElementById("bodyMetricsMount"));
+}
 // ---------- Progress: volume by muscle group ----------
 // SWR over /volume?days=30 (key progress:volume): the Volume seg paints the
 // per-muscle bars instantly on a warm re-entry, then revalidates.
@@ -254,5 +265,6 @@ Object.assign(globalThis, {
     renderProgress,
     renderVolume,
     renderWeight,
+    renderMeasurements,
 });
 })();

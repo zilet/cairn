@@ -505,6 +505,11 @@ export function applyChatActions(
           }
           break;
         }
+        case "log_measurement":
+          // At-home body measurements ("waist 34, chest 42, arms 15") apply immediately —
+          // a safe capture like log_food; returns the row + fresh indicators.
+          applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
+          break;
         case "plan_update":
           drafts.push(repo.createProposal(ctx.agent, "chat: plan update", "", { summary: a.summary, changes: a.changes }));
           break;

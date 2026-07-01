@@ -18,6 +18,7 @@ export const CHAT_ACTION_TYPES = [
   "add_context_event",
   "resolve_context_event",
   "log_supplement",
+  "log_measurement",
 ] as const;
 
 export type ChatActionType = typeof CHAT_ACTION_TYPES[number];
@@ -152,6 +153,11 @@ export interface LogSupplementAction extends ChatActionBase {
   summary?: unknown;
 }
 
+export interface LogMeasurementAction extends ChatActionBase {
+  type: "log_measurement";
+  [key: string]: unknown;
+}
+
 export type ChatAction =
   | LogActivityAction
   | LogSetAction
@@ -167,7 +173,8 @@ export type ChatAction =
   | LogHealthAction
   | AddContextEventAction
   | ResolveContextEventAction
-  | LogSupplementAction;
+  | LogSupplementAction
+  | LogMeasurementAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
 
@@ -306,6 +313,16 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] },
       { "name": "Vitamin D3", "dose": "2000 IU", "frequency": "daily", "category": "vitamin", "related_markers": ["Vitamin D"] } ] }`,
   },
+  log_measurement: {
+    type: "log_measurement",
+    applyMode: "immediate",
+    shape: `{ "type": "log_measurement", "date": "YYYY-MM-DD|null", "waist_in": 34, "chest_in": 42, "upper_arm_in": 15,
+      "hip_in": 40, "neck_in": 15.5, "shoulder_in": 50, "thigh_in": 24, "calf_in": 16, "forearm_in": 12,
+      "height_in": 70, "note": "<optional>", "source": "chat" }`,
+    guidance: [
+      `log_measurement records at-home body measurements (tape/circumference, in inches) so the body picture — waist trend, BMI, waist-to-height, Navy body-fat estimate — stays current. Include only the sites they actually gave; the user can just say "waist 34, chest 42, arms 15" and it logs. "upper_arm_in" is the arm/bicep; only send "height_in" if they tell you their height (it updates the profile so BMI/body-fat light up). Leave date null unless they name one.`,
+    ],
+  },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
 
 export function chatActionPromptSpecs(): ChatActionPromptSpec[] {
@@ -366,6 +383,22 @@ function arrayOrEmpty(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+// The measurable inputs of a log_measurement action (the tape sites + height). Kept
+// literal here so chatActions stays free of a repo import; the repo's pickSites is the
+// authority on which of these actually persist.
+const MEASUREMENT_ACTION_FIELDS = [
+  "neck_in",
+  "shoulder_in",
+  "chest_in",
+  "waist_in",
+  "hip_in",
+  "thigh_in",
+  "calf_in",
+  "upper_arm_in",
+  "forearm_in",
+  "height_in",
+] as const;
+
 export function normalizeChatAction(value: unknown): ChatAction | null {
   if (!isRecord(value) || !isKnownType(value.type)) return null;
   switch (value.type) {
@@ -409,6 +442,12 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         ? { ...value, type: "log_supplement", items }
         : { ...value, type: "log_supplement" };
     }
+    case "log_measurement":
+      // Keep it only when at least one measurable field (a *_in site or height) is present —
+      // an empty measurement is a no-op the apply path would just record as ok:false.
+      return MEASUREMENT_ACTION_FIELDS.some((k) => value[k] != null && value[k] !== "")
+        ? { ...value, type: "log_measurement" }
+        : null;
   }
   const _exhaustive: never = value.type;
   return _exhaustive;

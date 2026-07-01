@@ -1309,6 +1309,8 @@ declare global {
   declare function renderHistory(): unknown;
   declare function renderProgress(): unknown;
   declare function renderWeight(): unknown;
+  declare function renderMeasurements(): unknown;
+  declare function renderBodyMetrics(mount: HTMLElement | null): void;
   declare function renderVolume(): unknown;
   declare function renderEndurance(): unknown;
   declare function renderCalendar(): unknown;

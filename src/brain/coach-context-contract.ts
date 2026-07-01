@@ -174,6 +174,7 @@ export interface CoachContextEnvelope {
   recovery: CoachRecoveryContext;
   checkins: CoachCheckin[];
   family: CoachFamilyMember[];
+  body_metrics: CoachRecord | null;
   supplements: CoachSupplement[];
   run_compliance: CoachRecord | null;
   program_block: CoachRecord | null;

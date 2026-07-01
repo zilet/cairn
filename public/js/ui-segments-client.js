@@ -7,6 +7,7 @@ const UI_PROGRESS_SEGMENTS = [
     ["volume", "Volume"],
     ["endurance", "Endurance"],
     ["weight", "Weight"],
+    ["measurements", "Measurements"],
     ["calendar", "Calendar"],
     ["program", "Program"],
     ["energy", "Energy"],
@@ -27,7 +28,7 @@ const UI_PROGRESS_GROUP_LEAVES = {
     train: ["sessions", "trend", "volume", "endurance", "calendar"],
     performance: ["program"],
     fuel: ["energy"],
-    body: ["weight"],
+    body: ["weight", "measurements"],
 };
 const UI_PROGRESS_LEAF_GROUP = (() => {
     const map = {};
@@ -175,6 +176,7 @@ function createUiSegments(deps) {
         volume: () => deps.renderVolume(),
         endurance: () => deps.renderEndurance(),
         weight: () => deps.renderWeight(),
+        measurements: () => deps.renderMeasurements(),
         calendar: () => deps.renderCalendar(),
         sessions: () => deps.renderHistory(),
         program: () => deps.renderProgram(),

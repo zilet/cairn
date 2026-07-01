@@ -161,6 +161,31 @@ test("applyChatActions can correct an existing food note instead of duplicating 
   assert.equal(rows[0].parsed.protein_g, 52);
 });
 
+test("applyChatActions logs at-home body measurements immediately", () => {
+  const { applied, drafts } = applyChatActions({
+    actions: [
+      { type: "log_measurement", waist_in: 34, chest_in: 42, upper_arm_in: 15, source: "chat" },
+    ],
+  }, { agent: "stub" });
+  assert.equal(drafts.length, 0, "a measurement is a safe capture, not a draft");
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0].type, "log_measurement");
+  assert.ok(applied[0].result?.ok, "the measurement applied");
+  const latest = repo.latestBodyMeasurement();
+  assert.equal(latest.waist_in, 34);
+  assert.equal(latest.chest_in, 42);
+  assert.equal(latest.upper_arm_in, 15);
+});
+
+test("applyChatActions drops an empty log_measurement before any repo write", () => {
+  const { applied, drafts } = applyChatActions({
+    actions: [{ type: "log_measurement", note: "no numbers", source: "chat" }],
+  }, { agent: "stub" });
+  assert.deepEqual(applied, [], "nothing measurable → dropped by normalize");
+  assert.deepEqual(drafts, []);
+  assert.equal(repo.latestBodyMeasurement(), null);
+});
+
 test("photo food placeholder is created only for food-intent photo turns", () => {
   assert.equal(shouldCreatePhotoFoodPlaceholder(""), true, "photo-only keeps the plate-capture path");
   assert.equal(shouldCreatePhotoFoodPlaceholder("Lunch plate for today"), true);
