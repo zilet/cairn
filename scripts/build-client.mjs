@@ -93,6 +93,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/chat-message-client.ts", output: "public/js/chat-message-client.js" },
   { source: "src/client/chat-turn-client.ts", output: "public/js/chat-turn-client.js" },
   { source: "src/client/chat-history-client.ts", output: "public/js/chat-history-client.js" },
+  { source: "src/client/chat-header-controller.ts", output: "public/js/chat-header-controller.js" },
   { source: "src/client/plan-endurance-client.ts", output: "public/js/plan-endurance-client.js" },
   { source: "src/client/plan-editor-client.ts", output: "public/js/plan-editor-client.js" },
   { source: "src/client/plan-editor-controller.ts", output: "public/js/plan-editor-controller.js" },

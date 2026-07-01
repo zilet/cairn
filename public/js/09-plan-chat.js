@@ -14,9 +14,6 @@ function chatScreenMessages(value) {
 function chatScreenString(value) {
     return value == null ? "" : String(value);
 }
-function chatScreenHtml(value) {
-    return value instanceof HTMLElement ? value : null;
-}
 // ---------- Chat ----------
 // Document-level paste listener for the chat view; swapped on every renderChat.
 let chatPasteHandler = null;
@@ -104,112 +101,6 @@ function expandChatEarlier(log, bar, block) {
     };
     requestAnimationFrame(step);
 }
-// Fresh-start affordance in the global header (sparkle, two-tap confirm).
-// Re-created idempotently on every renderChat; renderTab removes it when the
-// athlete leaves the Chat tab -- no listeners outlive their element.
-// Header affordances for Chat: a history/search button + the fresh-start
-// (distill & archive) button, in one flex cluster anchored to the header.
-// Re-created idempotently per renderChat; renderTab removes the cluster when
-// the athlete leaves Chat -- no listeners outlive their elements.
-function ensureChatHeaderBtns() {
-    document.getElementById("hdrChatActions")?.remove();
-    const template = document.createElement("template");
-    template.innerHTML = CairnChatClient.headerActionsHtml().trim();
-    const wrap = template.content.firstElementChild;
-    const hist = chatScreenHtml(wrap?.querySelector("#hdrHistory"));
-    const b = chatScreenHtml(wrap?.querySelector("#hdrFresh"));
-    if (!wrap || !hist || !b)
-        return { freshBtn: null, historyBtn: null };
-    hist.addEventListener("click", () => openChatHistory());
-    // fresh start (sparkle, two-tap confirm) -- unchanged behavior.
-    let disarm = 0;
-    b.addEventListener("click", () => {
-        if (!b.classList.contains("armed")) {
-            b.classList.add("armed");
-            clearTimeout(disarm);
-            disarm = window.setTimeout(() => b.classList.remove("armed"), 4000);
-            return;
-        }
-        clearTimeout(disarm);
-        b.classList.remove("armed");
-        void chatFreshStart();
-    });
-    document.querySelector("header").appendChild(wrap);
-    return { freshBtn: b, historyBtn: hist };
-}
-// POST /api/chat/reset -- non-blocking fresh start. The server ARCHIVES the live
-// conversation at once (so the composer is usable instantly -- never disabled) and
-// distills durable facts into memory in the BACKGROUND as a chat_distill job. We
-// optimistically clear the log to an empty, fully-enabled composer, then settle a
-// quiet "✓ N remembered" / "Fresh start" pill when the distill job lands. A message
-// typed during the distill just queues as a normal chat turn (the server orders
-// archive-before-turn). bg_ops OFF -> the response carries `distilled` inline.
-async function chatFreshStart() {
-    const log = $("#chatlog");
-    if (!log || state.tab !== "chat")
-        return;
-    const token = pollToken; // any full re-render bumps this -- treat as stale
-    const fresh = document.getElementById("hdrFresh");
-    if (fresh)
-        fresh.hidden = true; // the thread is empty now
-    // Optimistic clear -- empty state + chips, composer stays fully enabled & focused.
-    chatFuelContext = [];
-    drawChat([]);
-    const fuelSlot = $("#chatFuelSlot");
-    if (fuelSlot)
-        fuelSlot.innerHTML = "";
-    const input = $("#chatInput");
-    if (input && matchMedia("(hover:hover)").matches)
-        input.focus();
-    let r = null;
-    try {
-        r = chatScreenRecord(await enqueueJob("/chat/reset", {}));
-    }
-    catch {
-        /* the archive happens server-side; a blip just means no pill */
-        return;
-    }
-    if (token !== pollToken || state.tab !== "chat")
-        return;
-    // bg_ops OFF (legacy): the distilled count is already on the response -- settle now.
-    if (!r || !r.distilling) {
-        settleFreshPill(r && r.ok ? r.distilled : 0, token);
-        return;
-    }
-    // bg_ops ON: stream the distill job; settle the pill on done. The job lives
-    // server-side, so it survives a reload (a re-render's chatReconnect leaves the
-    // turn stream alone; this pill is best-effort and simply won't reappear).
-    const distilling = r.distilling;
-    if (typeof distilling !== "string" && typeof distilling !== "number")
-        return;
-    openJobStream(distilling, {
-        guard: () => state.tab !== "chat" || token !== pollToken,
-        onDone: (result) => settleFreshPill(chatScreenRecord(result).ok ? chatScreenRecord(result).distilled : 0, token),
-        onError: () => { },
-        onCanceled: () => { },
-    });
-}
-// A quiet, self-dismissing "✓ N remembered" / "Fresh start" pill in the chat header
-// actions row -- stale-guarded on token + tab so it never lands on a navigated-away
-// view. Replaces any prior pill so a fast double fresh-start doesn't stack.
-function settleFreshPill(distilled, token) {
-    if (token !== pollToken || state.tab !== "chat")
-        return;
-    const host = document.getElementById("hdrChatActions");
-    if (!host)
-        return;
-    const n = Number(distilled) || 0;
-    host.querySelector(".fresh-pill")?.remove();
-    const pill = document.createElement("span");
-    pill.className = "fresh-pill";
-    pill.innerHTML = CairnChatClient.freshPillHtml(n);
-    host.prepend(pill);
-    requestAnimationFrame(() => pill.classList.add("fresh-pill-in"));
-    setTimeout(() => {
-        pill.classList.remove("fresh-pill-in");
-        setTimeout(() => pill.remove(), 360);
-    }, 2600);
-}
 function chatScreenFuelHtml(d) {
     return CairnChatClient.fuelHtml(d);
 }
@@ -236,12 +127,23 @@ async function loadChatFuel(token, messages = chatFuelContext) {
     if (card)
         card.addEventListener("click", () => { state.planJump = "food"; activateTab("plan"); });
 }
+function chatHeaderDeps() {
+    return {
+        state,
+        currentToken: () => pollToken,
+        clearFuelContext: () => { chatFuelContext = []; },
+        drawEmptyChat: () => drawChat([]),
+        enqueueJob,
+        openJobStream,
+        openChatHistory,
+    };
+}
 async function renderChat() {
     headerTitle.textContent = "Chat";
     document.body.classList.add("chat-mode"); // the chat column owns the viewport; drop body's tab-bar padding
     chatTeardownMonitor(); // the log is about to be rebuilt -- drop the old stream + bubble map
     const token = ++pollToken; // bump so the async hydrate below can detect a stale tab
-    const { freshBtn } = ensureChatHeaderBtns();
+    const { freshBtn } = CairnChatHeaderController.ensureChatHeaderBtns(chatHeaderDeps());
     chatFuelContext = [];
     // Paint the shell FIRST so the composer is usable instantly; the log hydrates
     // in the background. The flex viewport column keeps the composer pinned above

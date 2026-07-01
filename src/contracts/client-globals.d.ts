@@ -893,6 +893,12 @@ declare global {
       historyHitRow(hit: Partial<ClientChatSearchHit>, query: unknown, whenLabel: string): string;
     };
 
+    CairnChatHeaderController: {
+      ensureChatHeaderBtns(deps: ChatHeaderControllerDeps): ChatScreenHeaderButtons;
+      chatFreshStart(deps: ChatHeaderControllerDeps): Promise<void>;
+      settleFreshPill(distilled: unknown, token: number, deps: ChatHeaderControllerDeps): void;
+    };
+
     CairnChatAttachment: {
       compressImage(file: File): Promise<{ dataUrl: string; base64: string; mime: "image/jpeg"; bytes: number }>;
       previewImage(value: Element | null | undefined): HTMLImageElement | null;
@@ -2051,6 +2057,7 @@ declare global {
   }
 
   declare const CairnChatClient: Window["CairnChatClient"];
+  declare const CairnChatHeaderController: Window["CairnChatHeaderController"];
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnChatComposerFocus: Window["CairnChatComposerFocus"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];

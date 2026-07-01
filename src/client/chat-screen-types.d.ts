@@ -29,6 +29,15 @@ type ChatScreenJobHandlers = {
   onCanceled?: () => unknown;
 };
 type ChatScreenHeaderButtons = { freshBtn: HTMLElement | null; historyBtn: HTMLElement | null };
+type ChatHeaderControllerDeps = {
+  state: { tab?: string };
+  currentToken(): number;
+  clearFuelContext(): void;
+  drawEmptyChat(): void;
+  enqueueJob(path: string, body?: Record<string, unknown>): Promise<unknown>;
+  openJobStream(jobId: string | number, handlers?: ChatScreenJobHandlers): void;
+  openChatHistory(options?: { session?: string | null }): void;
+};
 
 declare function enqueueJob(path: string, body?: Record<string, unknown>): Promise<unknown>;
 declare function openJobStream(jobId: string | number, handlers?: ChatScreenJobHandlers): void;

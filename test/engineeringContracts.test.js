@@ -785,6 +785,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/chat-message-client\.js"/);
   assert.match(sw, /"\/js\/chat-turn-client\.js"/);
   assert.match(sw, /"\/js\/chat-history-client\.js"/);
+  assert.match(sw, /"\/js\/chat-header-controller\.js"/);
   assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
   assert.match(sw, /"\/js\/plan-editor-client\.js"/);
   assert.match(sw, /"\/js\/plan-editor-controller\.js"/);
@@ -835,6 +836,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const records = read("public/js/08-me-records.js");
   const recordsHealthDocController = read("public/js/me-records-health-doc-controller.js");
   const chat = read("public/js/09-plan-chat.js");
+  const chatHeader = read("public/js/chat-header-controller.js");
   const chatClient = read("public/js/chat-client.js");
   const chatHistoryClient = read("public/js/chat-history-client.js");
   assert.ok(
@@ -860,6 +862,15 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(chatClient, /session\.session_id\s*\|\|\s*session\.archived_at/);
   assert.match(chatClient, /hit\.session_id\s*\|\|\s*hit\.archived_at/);
   assert.match(chat, /openChatHistory/);
+  assert.ok(
+    index.indexOf("/js/chat-history-client.js") > -1 &&
+      index.indexOf("/js/chat-history-client.js") < index.indexOf("/js/chat-header-controller.js") &&
+      index.indexOf("/js/chat-header-controller.js") < index.indexOf("/js/09-plan-chat.js"),
+    "chat-header-controller.js must load after chat history and before the Chat screen"
+  );
+  assert.match(chatHeader, /function ensureChatHeaderBtns/);
+  assert.match(chatHeader, /function chatFreshStart/);
+  assert.match(chat, /CairnChatHeaderController\.ensureChatHeaderBtns/);
   assert.match(chatHistoryClient, /function openChatHistory\(options/);
   assert.match(chatHistoryClient, /state\.pendingChatSession\s*=\s*sessionId[\s\S]*syncRouteFromState\(\)/);
   assert.match(chatHistoryClient, /api\("\/chat\/sessions\/"\s*\+\s*encodeURIComponent\(sessionId\)\)/);
@@ -1117,6 +1128,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const chatMessageSource = read("src/client/chat-message-client.ts");
   const chatTurnClientSource = read("src/client/chat-turn-client.ts");
   const chatHistoryClientSource = read("src/client/chat-history-client.ts");
+  const chatHeaderControllerSource = read("src/client/chat-header-controller.ts");
   const chatScreenSource = read("src/client/chat-screen.ts");
   const planEnduranceSource = read("src/client/plan-endurance-client.ts");
   const planEditorSource = read("src/client/plan-editor-client.ts");
@@ -1280,6 +1292,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const chatMessageClient = read("public/js/chat-message-client.js");
   const chatTurnClient = read("public/js/chat-turn-client.js");
   const chatHistoryClient = read("public/js/chat-history-client.js");
+  const chatHeaderController = read("public/js/chat-header-controller.js");
   const settingsClient = read("public/js/settings-client.js");
   const settingsData = read("public/js/settings-data-client.js");
   const settingsDataController = read("public/js/settings-data-controller.js");
@@ -4059,6 +4072,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(chatHistoryClient, /function openChatHistory/);
   assert.match(chatHistoryClient, /historySessionRow/);
   assert.match(chatHistoryClient, /openChatHistory/);
+  assert.match(chatHeaderControllerSource, /CairnChatClient\.headerActionsHtml\(\)/);
+  assert.match(chatHeaderControllerSource, /function ensureChatHeaderBtns/);
+  assert.match(chatHeaderControllerSource, /function chatFreshStart/);
+  assert.match(chatHeaderControllerSource, /function settleFreshPill/);
   assert.match(settingsClient, /Object\.assign\(globalThis, \{/);
   assert.match(settingsClient, /CairnSettingsClient/);
   assert.match(settingsData, /\/\/ @ts-check/);
@@ -4252,8 +4269,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(records, /CairnFamily\.familySwatches/);
   assert.match(chatHistoryClient, /CairnChatClient\.historySessionRow/);
   assert.match(chatHistoryClient, /CairnChatClient\.historyHitRow/);
+  assert.match(chatHeaderController, /CairnChatClient\.headerActionsHtml\(\)/);
+  assert.match(chatHeaderController, /function ensureChatHeaderBtns/);
+  assert.match(chatHeaderController, /function chatFreshStart/);
+  assert.match(chatHeaderController, /function settleFreshPill/);
   assert.match(chat, /CairnChatClient\.shellHtml\(\)/);
-  assert.match(chat, /CairnChatClient\.headerActionsHtml\(\)/);
   assert.match(chat, /CairnChatClient\.starterChipsHtml\(\)/);
   assert.match(chat, /CairnChatClient\.earlierBarHtml\(\)/);
   assert.match(chat, /CairnChatAttachment\.compressImage\(f\)/);
