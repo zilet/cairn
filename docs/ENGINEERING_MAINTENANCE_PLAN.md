@@ -296,7 +296,7 @@ Agent teams:
 
 Tasks:
 
-- [ ] Add internal brain contract files for memory, context events, day intake, directives, recovery, program state, and coaching focus using TypeScript only: `as const`, `satisfies`, and small pure type guards.
+- [x] Add internal brain contract files for memory, context events, day intake, directives, recovery, program state, and coaching focus using TypeScript only: `as const`, `satisfies`, and small pure type guards.
 - [ ] Extract a shared `getDayReadOp({ date, override, agent, reset, recordOutcome })` so REST and MCP day-read surfaces cannot drift.
 - [ ] Generate the chat action prompt schema from `chatActions.ts` instead of maintaining field prose separately in `prompt.ts`.
 - [ ] Split `getCoachContext()` into typed slice builders (`person`, `training`, `health`, `life`, `running`) with equality-style tests against the current envelope.

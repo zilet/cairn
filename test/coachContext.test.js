@@ -2,6 +2,11 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, localDaysAgo, resetTables } from "./_seed.js";
 import { buildDayReadPrompt } from "../dist/prompt.js";
+import {
+  COACH_CONTEXT_ARRAY_KEYS,
+  COACH_CONTEXT_REQUIRED_KEYS,
+  isCoachContextEnvelope,
+} from "../dist/brain/coach-context-contract.js";
 
 function reset() {
   resetTables(
@@ -64,6 +69,19 @@ test("getCoachContext returns the stable prompt envelope", () => {
   assert.ok(Array.isArray(ctx.program_state.lifts));
   assert.ok(Array.isArray(ctx.program_adjustments));
   assert.ok(Array.isArray(ctx.progression));
+});
+
+test("coach context contract recognizes the current prompt envelope", () => {
+  const ctx = repo.getCoachContext();
+  assert.equal(isCoachContextEnvelope(ctx), true);
+  assert.ok(COACH_CONTEXT_REQUIRED_KEYS.includes("coaching_focus"));
+  assert.ok(COACH_CONTEXT_REQUIRED_KEYS.includes("recovery"));
+  for (const key of COACH_CONTEXT_REQUIRED_KEYS) {
+    assert.ok(Object.hasOwn(ctx, key), `required coach-context key missing from envelope: ${key}`);
+  }
+  for (const key of COACH_CONTEXT_ARRAY_KEYS) {
+    assert.ok(Array.isArray(ctx[key]), `coach-context array contract failed for ${key}`);
+  }
 });
 
 test("coach context prompt arrays stay bounded", () => {
