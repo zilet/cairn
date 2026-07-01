@@ -48,6 +48,10 @@ function eventInput(event: Event): HTMLInputElement {
   return event.currentTarget as HTMLInputElement;
 }
 
+function settingsDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function routeEligible(data: SettingsScreenData): { eligible?: boolean; reason?: string } | null {
   const eligible = data.research_auto_eligible;
   if (!eligible || typeof eligible !== "object") return null;
@@ -241,7 +245,7 @@ async function renderSettings(): Promise<void> {
       dayNames,
       api,
       toast,
-      sleep,
+      sleep: settingsDelay,
       stagger,
       markDirty: () => settingsBar.markDirty(),
       pruneRoutes: typeof settingsPruneRoutes === "function" ? settingsPruneRoutes : undefined,

@@ -41,6 +41,9 @@
     function eventInput(event) {
         return event.currentTarget;
     }
+    function settingsDelay(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
     function routeEligible(data) {
         const eligible = data.research_auto_eligible;
         if (!eligible || typeof eligible !== "object")
@@ -226,7 +229,7 @@
                 dayNames,
                 api,
                 toast,
-                sleep,
+                sleep: settingsDelay,
                 stagger,
                 markDirty: () => settingsBar.markDirty(),
                 pruneRoutes: typeof settingsPruneRoutes === "function" ? settingsPruneRoutes : undefined,
