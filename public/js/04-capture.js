@@ -1,99 +1,6 @@
 (() => {
 // @ts-check
 // ==== capture.ts ====
-// ====================================================================
-// Connected-brain provenance — make the product's deepest differentiator
-// FELT at the point of consumption. When a flagged lab marker shaped a meal
-// plan or the day's training (via a cross-domain directive), surface ONE quiet
-// causal line right where the consequence lands ("tilted toward fish — ApoB
-// came back high · why"), deep-linking to Me → Health → Read. Informational,
-// never a verdict; soft/uncertain directives read tentative.
-// ====================================================================
-let _provCache = null;
-async function activeDirectives() {
-    if (_provCache && Date.now() - _provCache.at < 4000)
-        return _provCache.rows;
-    let rows = [];
-    try {
-        const res = await api("/directives");
-        rows = (res && Array.isArray(res.directives) ? res.directives : []).filter((d) => !d.status || d.status === "active");
-    }
-    catch {
-        rows = [];
-    }
-    _provCache = { at: Date.now(), rows };
-    return rows;
-}
-// Build the quiet causal line for one directive. The "consequence" half comes from
-// the directive text (already plain-language); the "because" half is the marker.
-// Returns {html} or null when there's nothing worth saying.
-function provenanceLineHtml(d, label) {
-    if (!d)
-        return null;
-    const consequence = String(d.directive || "").trim();
-    if (!consequence)
-        return null;
-    const soft = d.uncertain && !d.citation;
-    const because = d.marker ? `<span class="prov-marker">${escHtml(String(d.marker))}</span>` : "";
-    const lead = soft ? `<span class="prov-soft">Worth looking into · </span>` : "";
-    // The whole line is the deep-link to Me → Health → Read (where the directive lives).
-    return `<button class="prov-line" data-prov aria-label="${escAttr(label + ": " + consequence)}">
-      <span class="prov-glyph" aria-hidden="true">✦</span>
-      <span class="prov-text">${lead}${escHtml(consequence)}${because ? ` — ${because}` : ""}</span>
-      <span class="prov-why" aria-hidden="true">why</span>
-    </button>`;
-}
-// Wire any rendered provenance line to deep-link into Me → Health → Read, landing on
-// the connected-brain directives list (the whole-picture depth now lives on the Read
-// sub-tab). We stash a scroll target so it brings the referenced directive into view
-// instead of opening at the top.
-function wireProvenance(scope) {
-    (scope || view).querySelectorAll("[data-prov]").forEach((b) => b.addEventListener("click", () => {
-        state.meSeg = "health";
-        state.healthSeg = "read"; // the connected-brain directives live on Health → Read
-        state.healthSegPicked = true;
-        state.pendingHealthScroll = "hbDirectives"; // scroll the list into view once it has rendered
-        activateTab("me");
-    }));
-}
-// Today's Brief: the training/watch directive shaping the day, rendered under the why.
-async function loadTrainingProvenance(_isToday) {
-    const slot = view.querySelector("#briefProvenance");
-    if (!slot)
-        return;
-    const rows = await activeDirectives();
-    if (state.tab !== "today" || !slot.isConnected)
-        return;
-    // training first (it's what shapes the session), then a watch item. Skip STALE acute
-    // findings (e.g. a 2-week-old hs-CRP) — they no longer represent today, so they must
-    // not pose as the line shaping the session (the server flags them `stale`).
-    const d = rows.find((x) => (x.domain || "watch") === "training" && !x.stale)
-        || rows.find((x) => (x.domain || "watch") === "watch" && !x.stale);
-    const html = provenanceLineHtml(d, "Training shaped by your labs");
-    if (!html) {
-        slot.innerHTML = "";
-        return;
-    }
-    slot.innerHTML = html;
-    wireProvenance(slot);
-}
-// Meals: the nutrition directive that tilted the plan, rendered under the hero.
-async function loadMealProvenance() {
-    const slot = view.querySelector("#mealProvenance");
-    if (!slot)
-        return;
-    const rows = await activeDirectives();
-    if (state.tab !== "plan" || !slot.isConnected)
-        return;
-    const d = rows.find((x) => (x.domain || "watch") === "nutrition" && !x.stale);
-    const html = provenanceLineHtml(d, "Meals shaped by your labs");
-    if (!html) {
-        slot.innerHTML = "";
-        return;
-    }
-    slot.innerHTML = html;
-    wireProvenance(slot);
-}
 async function quickLog() {
     const inp = document.querySelector("#qlInput");
     if (!inp)
@@ -780,11 +687,8 @@ function maybeGenerateWeekly() {
 // explicit while this surface is migrated incrementally to TypeScript.
 Object.assign(globalThis, {
     MIC_GLYPH,
-    provenanceLineHtml,
     weekRangeLabel,
     quickLog,
-    loadTrainingProvenance,
-    loadMealProvenance,
     setupWeightChip,
     setupVoiceCapture,
     loadFrequentFoods,

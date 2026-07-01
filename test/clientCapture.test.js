@@ -28,6 +28,7 @@ function loadCapture() {
     escAttr: (v) => escHtml(v).replace(/"/g, "&quot;"),
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/capture-provenance-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/04-capture.js"), "utf8"), context);
   return context;
 }

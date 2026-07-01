@@ -1,6 +1,7 @@
 import type {
   ClientActivity,
   ClientDayRead,
+  ClientDirective,
   ClientChatMessage,
   ClientChatSearchHit,
   ClientChatSessionSummary,
@@ -531,6 +532,7 @@ declare global {
   declare function renderMeals(): unknown;
   declare function renderCoach(): unknown;
   declare function rerenderFoodSurface(): void;
+  declare function loadTrainingProvenance(isToday?: boolean): unknown;
   declare function loadMealProvenance(): unknown;
   declare function paintEnergyBody(exp: unknown): void;
   declare function applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown>;
@@ -1607,6 +1609,14 @@ declare global {
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
     };
 
+    CairnCaptureProvenance: {
+      activeDirectives(): Promise<ClientDirective[]>;
+      provenanceLineHtml(directive: (ClientDirective & { citation?: unknown; directive?: unknown; uncertain?: unknown }) | null | undefined, label: string): string | null;
+      wireProvenance(scope?: ParentNode | null): void;
+      loadTrainingProvenance(isToday?: boolean): Promise<void>;
+      loadMealProvenance(): Promise<void>;
+    };
+
     CairnTodaySessionSuggest: {
       SESSION_VIBES: string[];
       itemHtml(item: Partial<ClientSessionSuggestion["items"][number]> | null | undefined, index?: number): string;
@@ -1739,6 +1749,7 @@ declare global {
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnTodayBrief: Window["CairnTodayBrief"];
+  declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];

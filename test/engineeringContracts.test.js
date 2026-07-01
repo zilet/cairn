@@ -1081,6 +1081,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressProgramSummarySource = read("src/client/progress-program-summary-client.ts");
   const progressProgramBlockSource = read("src/client/progress-program-block-client.ts");
   const progressScreenSource = read("src/client/progress-screen.ts");
+  const captureProvenanceSource = read("src/client/capture-provenance-client.ts");
   const captureTypesSource = read("src/client/capture-types.d.ts");
   const captureSource = read("src/client/capture.ts");
   const settingsRoutesSource = read("src/client/settings-routes.ts");
@@ -1204,6 +1205,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressTestWeekClient = read("public/js/progress-test-week-client.js");
   const progressProgramSummaryClient = read("public/js/progress-program-summary-client.js");
   const progressProgramBlockClient = read("public/js/progress-program-block-client.js");
+  const captureProvenance = read("public/js/capture-provenance-client.js");
   const capture = read("public/js/04-capture.js");
   const planEnduranceClient = read("public/js/plan-endurance-client.js");
   const planEditorClient = read("public/js/plan-editor-client.js");
@@ -1515,6 +1517,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function verifiedBadgeHtml\(verified: unknown\): string/);
   assert.match(clientGlobals, /declare function strengthChangeHtml\(change: unknown\): string/);
   assert.match(clientGlobals, /runTargetText\(run: Record<string, unknown>\): string/);
+  assert.match(clientGlobals, /CairnCaptureProvenance/);
+  assert.match(clientGlobals, /loadTrainingProvenance\(isToday\?: boolean\): Promise<void>/);
   assert.match(clientGlobals, /CairnTodaySessionSuggest/);
   assert.match(clientGlobals, /CairnTodaySessionSuggestController/);
   assert.match(clientGlobals, /suggestedSession\?: ClientSessionSuggestion \| null/);
@@ -1731,6 +1735,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-context-client\.js/);
   assert.match(clientBuild, /src\/client\/today-screen\.ts/);
   assert.match(clientBuild, /public\/js\/03-today\.js/);
+  assert.match(clientBuild, /src\/client\/capture-provenance-client\.ts/);
+  assert.match(clientBuild, /public\/js\/capture-provenance-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/meal-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/meal-recipe-client\.ts/);
@@ -2176,9 +2182,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "progress-program-block-client.js must load before Progress program-block consumers"
   );
   assert.ok(
-    index.indexOf("/js/04-capture.js") > index.indexOf("/js/03-today.js") &&
+    index.indexOf("/js/capture-provenance-client.js") > index.indexOf("/js/03-today.js") &&
+      index.indexOf("/js/capture-provenance-client.js") < index.indexOf("/js/04-capture.js"),
+    "capture-provenance-client.js must load after Today and before Capture consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/04-capture.js") > index.indexOf("/js/capture-provenance-client.js") &&
       index.indexOf("/js/04-capture.js") < index.indexOf("/js/05-progress.js"),
-    "04-capture.js must load after Today and before downstream screens"
+    "04-capture.js must load after Capture provenance and before downstream screens"
   );
   assert.ok(
     index.indexOf("/js/meal-plan-client.js") > index.indexOf("/js/day-fuel-client.js") &&
@@ -3061,6 +3072,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(captureTypesSource, /type CaptureActivity = import\("\.\.\/contracts\/client\.js"\)\.ClientActivity/);
   assert.match(captureTypesSource, /type CaptureSpeechRecognitionCtor = new \(\) => CaptureSpeechRecognition/);
   assert.doesNotMatch(captureSource, /type CaptureDirective = import|type CaptureSpeechRecognitionCtor = new/);
+  assert.match(captureProvenanceSource, /function provenanceLineHtml\(directive: CaptureDirective \| null \| undefined, label: string\): string \| null/);
+  assert.match(captureProvenanceSource, /async function loadTrainingProvenance\(_isToday\?: boolean\): Promise<void>/);
+  assert.match(captureProvenanceSource, /const CAIRN_CAPTURE_PROVENANCE = \{/);
+  assert.match(captureProvenanceSource, /CairnCaptureProvenance/);
+  assert.doesNotMatch(captureSource, /function provenanceLineHtml|function wireProvenance|function loadTrainingProvenance|function loadMealProvenance/);
   assert.match(captureSource, /function loadTodayReads\(\): Promise<void>/);
   assert.match(captureSource, /function reconnectInsight\(\): ClientAgentOpHandlers \| null/);
   assert.match(settingsRoutesSource, /function settingsRouteRowsHtml/);
@@ -3823,7 +3839,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayRailController, /CairnTodayGarminReconciliation\.load/);
   assert.doesNotMatch(today, /CairnTodayGarminReconciliation\.load/);
   assert.doesNotMatch(today, /\/garmin\/unreconciled|\/garmin\/reconcile|garmin-reconcile chip-in|function\s+reconcilePromptHtml/);
-  assert.match(capture, /function loadTrainingProvenance/);
+  assert.match(captureProvenance, /Object\.assign\(globalThis, \{/);
+  assert.match(captureProvenance, /CairnCaptureProvenance/);
+  assert.match(captureProvenance, /function loadTrainingProvenance/);
+  assert.doesNotMatch(capture, /function loadTrainingProvenance|function provenanceLineHtml/);
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
@@ -3980,6 +3999,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
   assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
   assert.match(sw, /"\/js\/meal-planner-controller\.js"/);
+  assert.match(sw, /"\/js\/capture-provenance-client\.js"/);
   assert.match(sw, /"\/js\/food-note-client\.js"/);
   assert.match(sw, /"\/js\/food-detail-controller\.js"/);
   assert.match(sw, /"\/js\/me-profile-controller\.js"/);
