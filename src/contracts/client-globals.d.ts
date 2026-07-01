@@ -1121,7 +1121,6 @@ declare global {
     CairnMealPlannerController: {
       draftWeeklyMeals(): void;
       reconnectMealPlan(job?: unknown): ClientAgentOpHandlers | null;
-      reconnectMealSwap(job?: unknown): ClientAgentOpHandlers | null;
       reconnectStatusHost(
         options: ClientAgentOpHandlers & {
           path: string;
@@ -1141,6 +1140,43 @@ declare global {
       verifiedForPlan(id: unknown): unknown;
       wireMealPlannerBody(
         currentPlan: (Record<string, unknown> & { id: string | number }) | null,
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+      ): void;
+    };
+
+    CairnMealSwapController: {
+      mealSwapOpOpts(
+        current: Record<string, unknown> & { id: string | number },
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+        dayIndex: number,
+        mealIndex: number,
+      ): ClientAgentOpHandlers & {
+        path: string;
+        anchor: string;
+        caption: string;
+        guard: () => boolean;
+        isFail: (result: unknown) => boolean;
+        render: (result: unknown) => void;
+        onFail: (error?: unknown) => void;
+      };
+      moveMealRow(
+        current: Record<string, unknown> & { id: string | number },
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+        dayIndex: number,
+        mealIndex: number,
+        direction: number,
+      ): Promise<void>;
+      reconnectMealSwap(job?: unknown): ClientAgentOpHandlers | null;
+      submitMealSwap(
+        current: Record<string, unknown> & { id: string | number },
+        context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
+        dayIndex: number,
+        mealIndex: number,
+        panel: HTMLElement,
+      ): Promise<void>;
+      wireMealRows(
+        scope: ParentNode,
+        current: Record<string, unknown> & { id: string | number },
         context: { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown } | null,
       ): void;
     };
@@ -1789,6 +1825,7 @@ declare global {
   declare const CairnDayFuelController: Window["CairnDayFuelController"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnMealPlannerController: Window["CairnMealPlannerController"];
+  declare const CairnMealSwapController: Window["CairnMealSwapController"];
   declare const CairnMealRecipe: Window["CairnMealRecipe"];
   declare const CairnMealRecipeController: Window["CairnMealRecipeController"];
   declare const CairnProposal: Window["CairnProposal"];
