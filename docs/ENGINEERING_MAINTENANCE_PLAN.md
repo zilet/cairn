@@ -355,3 +355,15 @@ Gate:
 - If a public UI file changes, check the service-worker cache contract.
 - If a route module moves, update docs generation and surface parity tests in the same change.
 - If a test uses real time, make that dependence explicit and stable.
+
+## Build & Test Performance (validated tooling decisions)
+
+The dev/agentic loop's cost is the server `tsc` build, the per-file client transpile, the client typecheck, and the test suite — all already incremental (`.tsbuildcache/*`) and parallel (`scripts/run-verify.mjs` runs independent lanes in staged groups; `test/run.mjs` shards test files across worker processes). Measured warm on a 14-core box: `npm run build` ~2.4s, `npm run verify` ~9.7s (the test lane ~5.3s dominates), full test suite ~4.7s at 8 workers.
+
+Alternatives were evaluated empirically so the question doesn't get re-litigated:
+
+- **Turborepo / Nx** — not applicable. Cairn is a single npm package, not a monorepo, so there is no multi-package task graph to cache. The equivalent — parallel independent gates + incremental `tsc` + a sharded test runner — is already hand-rolled here and dependency-free.
+- **bun as the runtime or test runner** — impossible. Cairn is built on `node:sqlite` (the unflagged Node 24 built-in); bun does not provide it (`node:sqlite FAILED: No such built-in module`), so the app and its tests can only run under Node.
+- **pnpm** — marginal here. ~11 direct deps / ~117 packages / ~128M `node_modules`; install is not a bottleneck, and switching only churns the lockfile for a single-dev, single-package repo with no offsetting win. Keep npm + `package-lock.json`.
+
+The real wins were structural, not tooling swaps: the test suite now wipes the DB per-test (`test/_isolate.mjs`, injected via `--import`) so correctness is independent of worker count and file order, and the worker default scales with cores (`min(8, cores-1)`) instead of a hardcoded 4 (~35% faster tests, ~15% faster `verify`). This honors the "dependency-light / no new deps unless a gate needs one" non-negotiable above.
