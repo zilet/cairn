@@ -55,57 +55,12 @@ function updateHeaderCondense() {
 }
 window.addEventListener("scroll", updateHeaderCondense, { passive: true });
 
-// toast(msg) — fire-and-forget pill. toast(msg, {action, onAction}) — actionable
-// variant (e.g. UNDO) that lingers longer and accepts one tap.
-let _toastTimer: ReturnType<typeof setTimeout> | null = null;
 function toast(msg: unknown, opts: ToastOptions = {}): void {
-  let t = document.querySelector(".toast");
-  if (!t) { t = document.createElement("div"); t.className = "toast"; document.body.appendChild(t); }
-  if (_toastTimer) clearTimeout(_toastTimer);
-  if (opts.action) {
-    t.textContent = "";
-    const span = document.createElement("span");
-    span.textContent = String(msg);
-    const btn = document.createElement("button");
-    btn.className = "toast-act";
-    btn.textContent = opts.action;
-    btn.addEventListener("click", () => {
-      if (_toastTimer) clearTimeout(_toastTimer);
-      t.classList.remove("show", "toast-actionable");
-      opts.onAction && opts.onAction();
-    });
-    t.append(span, btn);
-    t.classList.add("toast-actionable");
-  } else {
-    t.textContent = String(msg);
-    t.classList.remove("toast-actionable");
-  }
-  t.classList.add("show");
-  _toastTimer = setTimeout(() => t.classList.remove("show", "toast-actionable"), opts.action ? 5000 : 1400);
+  CairnUiActions.toast(msg, opts);
 }
 
-// ---------- one destructive-confirm pattern: the two-tap armed × ----------
-// Every delete in the app uses THIS: first tap arms the × into a "remove?" chip,
-// a second tap (within ~3s, or until blur) confirms; otherwise it disarms. One
-// idiom across Memory / Life / Family / Health docs / session-set edits — never a
-// blocking dialog, never an immediate destructive click. `onConfirm` runs on the
-// confirming tap; it owns the actual delete + any toast/UI update.
 function armDelete(btn: Element | null | undefined, onConfirm: () => unknown, { label = "remove?" }: { label?: string } = {}): void {
-  if (!btn) return;
-  const target = btn as HTMLElement;
-  if (target.dataset.armed) { onConfirm(); return; }
-  if (!target.dataset.restGlyph) target.dataset.restGlyph = target.textContent || "×";
-  target.dataset.armed = "1";
-  target.classList.add("armed");
-  target.textContent = label;
-  const reset = () => {
-    delete target.dataset.armed;
-    target.classList.remove("armed");
-    target.textContent = target.dataset.restGlyph || "×";
-    clearTimeout(t);
-  };
-  const t = setTimeout(reset, 3000);
-  target.addEventListener("blur", reset, { once: true });
+  CairnUiActions.armDelete(btn, onConfirm, { label });
 }
 
 // ---------- detail controllers (exercise + food full-screen overlays) ----------

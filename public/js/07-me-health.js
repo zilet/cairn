@@ -1,12 +1,6 @@
 (() => {
 // ==== 07-me-health.js ====
 {
-    function healthScreenRecord(value) {
-        return value && typeof value === "object" ? value : {};
-    }
-    function healthScreenRows(value) {
-        return Array.isArray(value) ? value.filter((row) => !!row && typeof row === "object") : [];
-    }
     function healthInput(selector, root = document) {
         return root.querySelector(selector);
     }
@@ -95,44 +89,27 @@
     }
     // Pure food-note parsing/rendering lives in food-note-client.js; the food detail
     // modal is owned by food-detail-controller.js.
+    function meHealthLogRenderer() {
+        return globalThis.CairnMeHealthLogRenderer;
+    }
+    function meHealthLogDeps() {
+        return {
+            state,
+            select: $,
+            noteEntryHtml: (note, index) => CairnFoodNote.noteEntryHtml(note, index),
+            activityEntryHtml: (activity) => actEntryHtml(activity),
+            openFoodDetail,
+        };
+    }
     // tap a note card → full-screen food detail (zooming from its art tile)
     function wireNoteCard(el) {
-        const card = el;
-        if (!card || card._wired)
-            return;
-        card._wired = true;
-        card.addEventListener("click", (e) => {
-            const target = e.target instanceof Element ? e.target : null;
-            if (target?.closest("button, a, input"))
-                return;
-            const n = (state._notesById || {})[card.dataset.noteid || ""];
-            if (n)
-                openFoodDetail(n, card.querySelector(".artile"));
-        });
+        meHealthLogRenderer().wireNoteCard(el, meHealthLogDeps());
     }
     function renderNotes(notes) {
-        const wrap = $("#notelist");
-        if (!wrap)
-            return;
-        const rows = healthScreenRows(notes);
-        if (!rows.length) {
-            wrap.innerHTML = `<div class="empty">Nothing logged yet. Snap a plate or jot a meal in Chat and it shows up here.</div>`;
-            return;
-        }
-        state._notesById = Object.fromEntries(rows.map((n) => [String(n.id), n]));
-        wrap.innerHTML = rows.map((n, i) => CairnFoodNote.noteEntryHtml(n, i)).join("");
-        wrap.querySelectorAll(".fnent").forEach(wireNoteCard);
+        meHealthLogRenderer().renderNotes(notes, meHealthLogDeps());
     }
     function renderActs(acts) {
-        const wrap = $("#actlist");
-        if (!wrap)
-            return;
-        const rows = healthScreenRows(acts);
-        if (!rows.length) {
-            wrap.innerHTML = `<div class="empty">Nothing logged yet. Log a ride, run, or walk on Today and it lands here.</div>`;
-            return;
-        }
-        wrap.innerHTML = rows.map((a) => actEntryHtml(a)).join("");
+        meHealthLogRenderer().renderActs(acts, meHealthLogDeps());
     }
     function meMemoryDeps() {
         return {

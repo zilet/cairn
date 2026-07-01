@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const today = readFileSync(path.join(root, "src/client/today-screen.ts"), "utf8");
+const todayPlanSessionPreparation = readFileSync(path.join(root, "src/client/today-plan-session-preparation.ts"), "utf8");
 const todayProgressionController = readFileSync(path.join(root, "src/client/today-progression-controller.ts"), "utf8");
 const todaySessionController = readFileSync(path.join(root, "src/client/today-session-controller.ts"), "utf8");
 
@@ -24,8 +25,9 @@ test("Today starts non-dependent summary reads before later render work", () => 
 });
 
 test("Today SWR-caches progression and invalidates it when set truth changes", () => {
-  assert.match(today, /todayCachedApi\("\/program\/progression\?day="/);
-  assert.match(today, /key:\s*`program:progression:\$\{todayState\.day\}`/);
+  assert.match(todayPlanSessionPreparation, /deps\.cachedApi\("\/program\/progression\?day="/);
+  assert.match(todayPlanSessionPreparation, /key:\s*`program:progression:\$\{day\}`/);
+  assert.match(today, /todayPlanSessionPreparation\.preparePlanSession/);
   assert.match(today, /function\s+invalidateTodayProgression/);
   assert.match(today, /CairnTodayProgressionController\.invalidateTodayProgression\(todayProgressionDeps\(\)\)/);
   assert.match(todayProgressionController, /function progressionKey\(day: string \| number\): string/);

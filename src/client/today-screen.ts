@@ -104,6 +104,9 @@ function todayPeekCached<T = unknown>(key: string, freshFor?: number): TodayScre
 const todayState = state as TodayState;
 const todayView = view as HTMLElement & any;
 const todaySideLoaders = (globalThis as unknown as { CairnTodaySideLoaders: TodayScreenSideLoaders }).CairnTodaySideLoaders;
+const todayPlanSessionPreparation = (globalThis as unknown as {
+  CairnTodayPlanSessionPreparation: TodayPlanSessionPreparationApi;
+}).CairnTodayPlanSessionPreparation;
 
 function todaySideLoaderDeps(): TodayScreenSideLoaderDeps {
   return {
@@ -407,138 +410,40 @@ async function renderToday(opts: any = {}) {
   // session for the selected date (single object or null)
   const session: any = peeks.session ? peeks.session.data : await todayApi("/sessions?date=" + todayState.logDate);
   reval("/sessions?date=" + todayState.logDate, sessKey);
-  const loggedByEx: Record<string, any[]> = {};
-  if (session) for (const s of session.sets) (loggedByEx[s.exercise] ??= []).push(s);
-  for (const k of Object.keys(loggedByEx)) loggedByEx[k].sort((a: any, b: any) => (a.set_number ?? 0) - (b.set_number ?? 0));
-
-  // A blank reveal (a logged session suggestion on a day with nothing planned): don't
-  // auto-pick a rotation day — leave the session unlinked and the surface clean, so
-  // only the suggested/off-plan cards show. The day-switch still lets the athlete pull
-  // a real plan day in (which sets dayPicked and exits this branch).
-  const revealBlank = !!(todayState.planReveal && todayState.planReveal.date === todayState.logDate && todayState.planReveal.on && todayState.planReveal.blank);
-  const hasSelectedDay = todayState.plan.some((d: any) => d.day_number === todayState.day);
-  if (revealBlank && !todayState.dayPicked) {
-    todayState.day = null;
-  } else if (!todayState.dayPicked || todayState.day === null || !hasSelectedDay) {
-    todayState.day = await suggestedPlanDayNumber(session, isToday);
-    todayState.dayPicked = false;
-  }
-
-  const day: any = (revealBlank && todayState.day === null)
-    ? { items: [] }
-    : (todayState.plan.find((d: any) => d.day_number === todayState.day) || todayState.plan[0] || { items: [] });
-  // Cardio plan items (kind:'cardio') carry NO loaded exercise — they're a prescription
-  // logged through the free-text capture, not the set logger. Keep them out of the
-  // name/prefill plumbing (all keyed on a strength exercise name); skips DO cover cardio,
-  // keyed by the display label instead (see isSkipped below).
-  const planNames = new Set((day.items || []).filter((it: any) => !isCardioItem(it) && it.exercise).map((it: any) => it.exercise));
-
-  // ---- Runner loop: synced cardio + sync freshness ----
-  // Pull the day's logged cardio efforts ONCE (GET /api/cardio?date=) so each
-  // prescription can flip to a calm "done" card on a matched synced run, and pull
-  // /settings ONCE for Garmin sync freshness. Both are best-effort + null-safe. We
-  // pay for these reads only when the day is plausibly about running — it prescribes
-  // cardio, OR (it's today and the plan day has no strength to log, a likely run /
-  // rest day where a synced run IS the day's training). A pure lifting day pays
-  // nothing. These are a per-render read (always-fresh), not SWR-cached.
-  //
-  // Matched BEFORE the skip filter, over EVERY cardio item (skipped or not), so a run
-  // that synced from the watch still claims its prescription even if it had been marked
-  // "not today" — the done card then wins over a stale skip, mirroring how a logged
-  // strength set overrides a skip below.
-  const allCardio = (day.items || []).filter(isCardioItem);
-  const strengthPlanned = (day.items || []).some((it: any) => !isCardioItem(it) && it.exercise);
-  const couldHaveRun = allCardio.length > 0 || (isToday && !strengthPlanned);
-  let cardioEfforts: TodayScreenCardioEffort[] = [];
-  let todaySettings = null;
-  if (couldHaveRun) {
-    [cardioEfforts, todaySettings] = await Promise.all([
-      (todayApi("/cardio?date=" + todayState.logDate) as Promise<TodayScreenCardioEffort[]>).catch(() => []),
-      todayApi("/settings").then((r: any) => (r && r.settings) || null).catch(() => null),
-    ]);
-    cardioEfforts = Array.isArray(cardioEfforts) ? cardioEfforts : [];
-  }
-  // Match each prescription to a synced effort (presence of a compatible run is
-  // enough). One effort satisfies at most one prescription (consume as matched).
-  const matchedCardio = new Map<any, any>(); // plan item ref → CardioEffort
-  if (allCardio.length && cardioEfforts.length) {
-    const pool = [...cardioEfforts];
-    for (const it of allCardio) {
-      const i = pool.findIndex((eff: any) => cardioEffortMatches(it, eff));
-      if (i >= 0) matchedCardio.set(it, pool.splice(i, 1)[0]);
-    }
-  }
-
-  // "Not today" skips for this session. A skip only holds while the work has no result
-  // yet: a strength exercise wins once a set is logged (e.g. via chat/MCP), and a cardio
-  // prescription wins once a synced run satisfies it (the done card returns). A cardio
-  // item carries no loaded exercise, so its skip is keyed by its display label — the same
-  // string the skip line shows and POSTs back to restore.
-  const skippedSet = new Set(((session && session.skips) || []).map((n: any) => String(n).toLowerCase()));
-  const isSkipped = (it: any) =>
-    isCardioItem(it)
-      ? skippedSet.has(cardioLabel(it).toLowerCase()) && !matchedCardio.has(it)
-      : !!it.exercise && skippedSet.has(it.exercise.toLowerCase()) && !(loggedByEx[it.exercise] || []).length;
-  const activeItems = (day.items || []).filter((it: any) => !isSkipped(it));
-  const skippedItems = (day.items || []).filter(isSkipped);
-  const cardioItems = activeItems.filter(isCardioItem);
-
-  // prefill: for plan exercises with no set yet this session, fetch most-recent-ever
-  // once. Cache-first per exercise so a warm Today never waits on these either; cold
-  // ones are fetched (and cached) in parallel as before.
-  const planEx = activeItems.filter((it: any) => !isCardioItem(it) && it.exercise).map((it: any) => it.exercise);
-  const offPlanEx = Object.keys(loggedByEx).filter((ex: any) => !planNames.has(ex));
-  // Pending off-plan cards: exercises added on the fly ("+ Add exercise" or a logged
-  // session suggestion) that have NO set yet, so they live only in todayState. A full
-  // re-render — e.g. the first set on a previously-empty day brings in the FINISH
-  // block via refreshFinishStat — would otherwise drop them, since off-plan cards are
-  // rebuilt from loggedByEx alone. Re-materialize any not already covered by the plan
-  // or a logged set, and prune the rest (a now-logged/planned exercise is no longer
-  // "pending" — it owns a real card, so deleting its sets drops it as before).
-  const planLower = new Set([...planNames].map((n: any) => n.toLowerCase()));
-  const loggedLower = new Set(Object.keys(loggedByEx).map((n: any) => n.toLowerCase()));
-  const pendingForDate = todayState.pendingOffPlan?.[todayState.logDate] ?? [];
-  const pendingOffPlan: Array<{ name: string; mode?: string | null }> = pendingForDate.filter(
-    (p) => p && p.name && !planLower.has(p.name.toLowerCase()) && !loggedLower.has(p.name.toLowerCase()),
-  );
-  if (todayState.pendingOffPlan && todayState.pendingOffPlan[todayState.logDate]) todayState.pendingOffPlan[todayState.logDate] = pendingOffPlan;
-  const needLast = [...new Set([...planEx, ...pendingOffPlan.map((p: any) => p.name)])].filter((ex: any) => !(loggedByEx[ex] && loggedByEx[ex].length));
-  const lastSets: Record<string, any> = {};
-  await Promise.all(needLast.map(async (ex: any) => {
-    const lk = "last-set:" + ex;
-    const pk = todayPeekCached(lk);
-    if (pk) { lastSets[ex] = pk.data; todayCachedApi("/last-set?exercise=" + encodeURIComponent(ex), { key: lk }).catch(() => {}); return; }
-    try { lastSets[ex] = await todayCachedApi("/last-set?exercise=" + encodeURIComponent(ex), { key: lk }); } catch { lastSets[ex] = null; }
-  }));
-
-  // ---- Adaptive progression: the next session's adapted target per lift ----
-  // The real-time "it follows what I logged" surface. Best-effort + null-safe: the
-  // SURFACE endpoint may not be live yet (404) — guard like every other optional
-  // fetch, so Today is unchanged if it's missing. Keyed by canonical plan day.
-  // Only paid for on a strength-bearing plan day (a pure run/rest day skips it).
-  let rxByEx: Record<string, any> = {};
-  if (todayState.day != null && planEx.length) {
-    try {
-      const list = await todayCachedApi("/program/progression?day=" + encodeURIComponent(todayState.day), {
-        key: `program:progression:${todayState.day}`,
-        freshFor: 15000,
-      });
-      if (Array.isArray(list)) {
-        for (const rx of list) {
-          if (rx && rx.exercise) rxByEx[String(rx.exercise).toLowerCase()] = rx;
-        }
-      }
-    } catch { rxByEx = {}; }
-  }
-  const rxFor = (name: any) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
-
-  function prefillFor(it: any) {
-    const logged = loggedByEx[it.exercise] || [];
-    if (logged.length) { const s = logged[logged.length - 1]; return { weight: s.weight, reps: s.reps, rir: s.rir, duration_sec: s.duration_sec ?? null }; }
-    const last = lastSets[it.exercise];
-    if (last) return { weight: last.weight, reps: last.reps, rir: last.rir, duration_sec: last.duration_sec ?? null };
-    return { weight: it.target_weight ?? null, reps: it.rep_low ?? null, rir: null, duration_sec: it.target_seconds ?? null };
-  }
+  const {
+    day,
+    loggedByEx,
+    cardioEfforts,
+    todaySettings,
+    matchedCardio,
+    activeItems,
+    skippedItems,
+    cardioItems,
+    strengthItems,
+    planEx,
+    offPlanEx,
+    pendingOffPlan,
+    lastSets,
+    rxByEx,
+    rxFor,
+    prefillFor,
+    exDone,
+    exTotal,
+    hasSyncedCardioToday,
+    isRunDay,
+    expectingRun,
+  } = await todayPlanSessionPreparation.preparePlanSession({
+    state: todayState,
+    session,
+    isToday,
+    api: todayApi,
+    cachedApi: todayCachedApi,
+    peekCached: todayPeekCached,
+    suggestedPlanDayNumber,
+    isCardioItem,
+    cardioLabel,
+    cardioEffortMatches,
+  });
 
   const [stats, profile, exercises]: any[] = await Promise.all([statsPromise, profilePromise, exercisesPromise]);
   if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); } // keep the emphasis globals warm for Progress/Today/Plan
@@ -587,11 +492,6 @@ async function renderToday(opts: any = {}) {
   // on a finished session (the done card replaces the surface). Progress for the slim
   // header: how many of today's exercises have at least one logged set.
   const focus = !showDone && focusEngaged(todayState.logDate, { showPlan, hasLoggedSets, isToday });
-  // The "n / m exercises logged" progress is a strength-logging count — cardio items
-  // are logged through the activity feed, not the set logger, so they don't count here.
-  const strengthItems = activeItems.filter((it: any) => !isCardioItem(it));
-  const exDone = strengthItems.filter((it: any) => (loggedByEx[it.exercise] || []).length).length;
-  const exTotal = strengthItems.length;
 
   // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
   // When the day is about running — cardio prescribed and/or a synced run, with NO
@@ -600,15 +500,11 @@ async function renderToday(opts: any = {}) {
   // run's name + prescription, and (b) order the cardio card(s) FIRST in the surface.
   // A mixed day (both lift + cardio) keeps the lift-led head but still floats cardio
   // up so it's never lost at the bottom. Pure lifting is unchanged.
-  const hasSyncedCardioToday = cardioEfforts.length > 0;
-  const isRunDay = (cardioItems.length > 0 || hasSyncedCardioToday) && exTotal === 0;
   // Sync freshness: only when Garmin is configured. The stale "this morning's run not
   // synced yet?" nudge fires when a run is prescribed today but no synced effort has
   // landed AND the last sync is stale (see cardioSyncLine). One shared line under the
   // run card (and on the Endurance view).
-  const expectingRun = isToday && cardioItems.length > 0
-    && !cardioItems.some((it: any) => matchedCardio.has(it)); // a prescribed run with nothing matched yet
-  const syncline = cardioItems.length ? cardioSyncLine(todaySettings, { expectingRun }) : "";
+  const syncline = cardioItems.length ? cardioSyncLine(todaySettings as Record<string, unknown> | null | undefined, { expectingRun }) : "";
 
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
@@ -778,7 +674,8 @@ async function renderToday(opts: any = {}) {
         html += cardioPlanCard(it, cardIdx++, matched, line);
         continue;
       }
-      html += exCard({ ...it, fromPlan: true }, loggedByEx[it.exercise] || [], prefillFor(it), cardIdx++, rxFor(it.exercise));
+      const exerciseName = String(it.exercise || "");
+      html += exCard({ ...it, fromPlan: true }, loggedByEx[exerciseName] || [], prefillFor(it), cardIdx++, rxFor(exerciseName));
     }
     for (const ex of offPlanEx) {
       const logged = loggedByEx[ex];

@@ -996,6 +996,22 @@ declare global {
       };
     };
 
+    CairnChatTurnStreamState: {
+      create(deps: {
+        getBubble(id: number): HTMLElement | null;
+        ensureStreamingBubble(id: number): HTMLElement | null;
+        markdownToHtml(text: string): string;
+        getLog(): HTMLElement | null;
+        requestFrame?: typeof requestAnimationFrame;
+        document?: Document;
+      }): {
+        appendDelta(id: number, text: unknown): void;
+        clear(): void;
+        deleteTurn(id: number): void;
+        reset(id: number): void;
+      };
+    };
+
     CairnExerciseDetail: {
       explanation(exercise: { name?: unknown; muscle_group?: unknown } | null | undefined): {
         setup?: unknown;
@@ -1112,6 +1128,15 @@ declare global {
       skelLines(count?: number): string;
       todaySkeleton(): string;
       segSkeleton(active: string, seg: readonly ClientSegment[], cards?: number): string;
+    };
+
+    CairnUiActions: {
+      toast(message: unknown, options?: { action?: string; onAction?: () => void }): void;
+      armDelete(
+        btn: Element | null | undefined,
+        onConfirm: () => unknown,
+        options?: { label?: string },
+      ): void;
     };
 
     CairnDetailOverlay: {
@@ -1306,6 +1331,19 @@ declare global {
       parsedNote(note: Record<string, unknown> | null | undefined): Record<string, unknown> | null;
       noteEntryInner(note: Record<string, unknown>): string;
       noteEntryHtml(note: Record<string, unknown>, index?: number): string;
+    };
+
+    CairnMeHealthLogRenderer: {
+      healthLogRows<T extends Record<string, unknown> = Record<string, unknown>>(value: unknown): T[];
+      wireNoteCard(el: Element, deps: {
+        state: Pick<ClientAppState, "_notesById">;
+        select<T extends Element = Element>(selector: string): T | null;
+        noteEntryHtml(note: Record<string, unknown>, index?: number): string;
+        activityEntryHtml(activity: ClientActivity & Record<string, unknown>): string;
+        openFoodDetail(note: unknown, fromTile?: Element | null): unknown;
+      }): void;
+      renderNotes(notes: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
+      renderActs(activities: unknown, deps: Parameters<Window["CairnMeHealthLogRenderer"]["wireNoteCard"]>[1]): void;
     };
 
     CairnFoodDetailController: {
@@ -1931,6 +1969,55 @@ declare global {
       ): Promise<number>;
     };
 
+    CairnTodayPlanSessionPreparation: {
+      groupLoggedSets(session: { sets?: Array<Record<string, unknown> & { exercise?: string; set_number?: number | null }> | null } | null | undefined): Record<string, Array<Record<string, unknown>>>;
+      matchCardioEfforts(
+        items: Array<Record<string, unknown>>,
+        efforts: Array<Record<string, unknown>>,
+        matches: (item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined) => boolean,
+      ): Map<Record<string, unknown>, Record<string, unknown>>;
+      preparePlanSession(deps: {
+        state: {
+          logDate: string;
+          day: number | null;
+          dayPicked?: boolean;
+          plan: Array<Record<string, unknown> & { day_number: number; items?: Array<Record<string, unknown>> | null }>;
+          planReveal?: { date: string; on: boolean; blank?: boolean } | null;
+          pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
+        };
+        session: Record<string, unknown> | null | undefined;
+        isToday: boolean;
+        api(path: string): Promise<unknown>;
+        cachedApi<T = unknown>(path: string, options?: { key?: string; freshFor?: number }): Promise<T>;
+        peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
+        suggestedPlanDayNumber(session: Record<string, unknown> | null | undefined, isToday: boolean): Promise<number>;
+        isCardioItem(item: Record<string, unknown>): boolean;
+        cardioLabel(item: Record<string, unknown>): string;
+        cardioEffortMatches(item: Record<string, unknown>, effort: Record<string, unknown> | null | undefined): boolean;
+      }): Promise<Record<string, unknown> & {
+        day: Record<string, unknown>;
+        loggedByEx: Record<string, Array<Record<string, unknown>>>;
+        cardioEfforts: Array<Record<string, unknown>>;
+        matchedCardio: Map<Record<string, unknown>, Record<string, unknown>>;
+        activeItems: Array<Record<string, unknown>>;
+        skippedItems: Array<Record<string, unknown>>;
+        cardioItems: Array<Record<string, unknown>>;
+        strengthItems: Array<Record<string, unknown>>;
+        planEx: string[];
+        offPlanEx: string[];
+        pendingOffPlan: Array<{ name: string; mode?: string | null }>;
+        lastSets: Record<string, Record<string, unknown> | null>;
+        rxByEx: Record<string, unknown>;
+        rxFor(name: unknown): unknown;
+        prefillFor(item: Record<string, unknown>): Record<string, unknown>;
+        exDone: number;
+        exTotal: number;
+        hasSyncedCardioToday: boolean;
+        isRunDay: boolean;
+        expectingRun: boolean;
+      }>;
+    };
+
     CairnTodayTraining: {
       RX_ACTION: Record<string, { word: string; cls: string }>;
       rxTargetText(rx: Partial<ClientPrescription> | null | undefined): string;
@@ -2224,10 +2311,12 @@ declare global {
   declare const CairnChatHeaderController: Window["CairnChatHeaderController"];
   declare const CairnChatAttachment: Window["CairnChatAttachment"];
   declare const CairnChatComposerFocus: Window["CairnChatComposerFocus"];
+  declare const CairnChatTurnStreamState: Window["CairnChatTurnStreamState"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnExerciseDetailController: Window["CairnExerciseDetailController"];
   declare const CairnUi: Window["CairnUi"];
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
+  declare const CairnUiActions: Window["CairnUiActions"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthEvidence: Window["CairnHealthEvidence"];
@@ -2245,6 +2334,7 @@ declare global {
   declare const CairnHealthReadSupplements: Window["CairnHealthReadSupplements"];
   declare const CairnHealthReadController: Window["CairnHealthReadController"];
   declare const CairnFoodNote: Window["CairnFoodNote"];
+  declare const CairnMeHealthLogRenderer: Window["CairnMeHealthLogRenderer"];
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
   declare const CairnMeProfileController: Window["CairnMeProfileController"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
@@ -2309,6 +2399,7 @@ declare global {
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayRailController: Window["CairnTodayRailController"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
+  declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];

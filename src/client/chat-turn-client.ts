@@ -30,10 +30,14 @@ const root = globalThis as ChatTurnRoot;
 let chatStream: EventSource | null = null;
 let chatStreamId: number | null = null;
 const chatPendingBubbles = new Map<number, HTMLElement>();
-const chatStreamText = new Map<number, string>();
-const chatStreamRenderQueued = new Set<number>();
-const chatStreamRenderVersion = new Map<number, number>();
 const chatDoneTurns = new Set<number>();
+const chatTurnStreamState = (globalThis as unknown as { CairnChatTurnStreamState: ChatTurnStreamStateApi })
+  .CairnChatTurnStreamState.create({
+    getBubble: (id) => chatPendingBubbles.get(id) || null,
+    ensureStreamingBubble,
+    markdownToHtml: mdToHtml,
+    getLog: () => $<HTMLElement>("#chatlog"),
+  });
 
 function chatTurnRecord(value: unknown): ChatTurnRecord {
   return value && typeof value === "object" ? value as ChatTurnRecord : {};
@@ -118,42 +122,6 @@ function ensureStreamingBubble(id: number): HTMLElement | null {
   return el;
 }
 
-function renderStreamMarkdown(id: number): void {
-  const el = chatPendingBubbles.get(id);
-  if (!el || !el.isConnected || !el.classList.contains("streaming") || !chatStreamText.has(id)) return;
-  const body = el.querySelector(".stream-text");
-  if (!(body instanceof HTMLElement)) return;
-  body.innerHTML = mdToHtml(chatStreamText.get(id) || "");
-  const caret = document.createElement("span");
-  caret.className = "stream-caret";
-  caret.setAttribute("aria-hidden", "true");
-  const last = body.lastElementChild;
-  const inlineish = last && /^(P|H3|H4|H5|H6|LI|BLOCKQUOTE)$/i.test(last.tagName);
-  (inlineish ? last : body).appendChild(caret);
-}
-
-function scheduleStreamMarkdown(id: number): void {
-  if (chatStreamRenderQueued.has(id)) return;
-  const version = chatStreamRenderVersion.get(id) || 0;
-  chatStreamRenderQueued.add(id);
-  requestAnimationFrame(() => {
-    chatStreamRenderQueued.delete(id);
-    if ((chatStreamRenderVersion.get(id) || 0) !== version) return;
-    renderStreamMarkdown(id);
-  });
-}
-
-function appendStreamDelta(id: number, text: unknown): void {
-  const chunk = typeof text === "string" ? text : "";
-  if (!chunk) return;
-  const el = ensureStreamingBubble(id);
-  if (!el) return;
-  chatStreamText.set(id, (chatStreamText.get(id) || "") + chunk);
-  scheduleStreamMarkdown(id);
-  const log = $<HTMLElement>("#chatlog");
-  if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 200) log.scrollTop = log.scrollHeight;
-}
-
 function setTurnProgress(id: number, text: unknown): void {
   const el = chatPendingBubbles.get(id);
   if (!el || !el.isConnected || el.classList.contains("streaming")) return;
@@ -162,9 +130,7 @@ function setTurnProgress(id: number, text: unknown): void {
 }
 
 function resetStreamingBubble(id: number): void {
-  chatStreamText.delete(id);
-  chatStreamRenderQueued.delete(id);
-  chatStreamRenderVersion.set(id, (chatStreamRenderVersion.get(id) || 0) + 1);
+  chatTurnStreamState.reset(id);
   const el = chatPendingBubbles.get(id);
   if (!el || !el.isConnected) return;
   el.classList.remove("streaming");
@@ -217,7 +183,7 @@ function finalizeTurn(turnValue: unknown, messageValue?: unknown): void {
   const el = id == null ? null : chatPendingBubbles.get(id);
   if (id != null) {
     chatPendingBubbles.delete(id);
-    chatStreamText.delete(id);
+    chatTurnStreamState.deleteTurn(id);
   }
   const message = messageValue && typeof messageValue === "object"
     ? messageValue as ChatTurnRecord
@@ -245,7 +211,7 @@ function finalizeCanceled(turnValue: unknown): void {
   const el = id == null ? null : chatPendingBubbles.get(id);
   if (id != null) {
     chatPendingBubbles.delete(id);
-    chatStreamText.delete(id);
+    chatTurnStreamState.deleteTurn(id);
   }
   if (el && el.isConnected) {
     el.classList.remove("pending");
@@ -272,9 +238,7 @@ function closeChatStream(): void {
 function chatTeardownMonitor(): void {
   closeChatStream();
   chatPendingBubbles.clear();
-  chatStreamText.clear();
-  chatStreamRenderQueued.clear();
-  chatStreamRenderVersion.clear();
+  chatTurnStreamState.clear();
   chatDoneTurns.clear();
 }
 
@@ -326,7 +290,7 @@ function chatOpenStream(id: number): void {
   });
   es.addEventListener("phase", (event) => { if (!guard()) phase(parseTurnEvent(event)?.turn); });
   es.addEventListener("progress", (event) => { if (!guard()) setTurnProgress(id, parseTurnEvent(event)?.text); });
-  es.addEventListener("delta", (event) => { if (!guard()) appendStreamDelta(id, parseTurnEvent(event)?.text); });
+  es.addEventListener("delta", (event) => { if (!guard()) chatTurnStreamState.appendDelta(id, parseTurnEvent(event)?.text); });
   es.addEventListener("reset", () => { if (!guard()) resetStreamingBubble(id); });
   es.addEventListener("done", (event) => {
     if (guard()) return;

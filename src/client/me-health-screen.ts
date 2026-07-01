@@ -3,15 +3,6 @@
 type HealthScreenRecord = Record<string, unknown>;
 type HealthStandingRead = import("../contracts/client-api.js").ClientHealthStanding;
 type HealthReviewRecord = HealthScreenRecord & { created_at?: string; error?: unknown };
-type WiredHealthElement<T extends HTMLElement = HTMLElement> = T & { _wired?: boolean };
-
-function healthScreenRecord(value: unknown): HealthScreenRecord {
-  return value && typeof value === "object" ? (value as HealthScreenRecord) : {};
-}
-
-function healthScreenRows<T extends HealthScreenRecord = HealthScreenRecord>(value: unknown): T[] {
-  return Array.isArray(value) ? (value.filter((row) => !!row && typeof row === "object") as T[]) : [];
-}
 
 function healthInput(selector: string, root: ParentNode = document): HTMLInputElement | null {
   return root.querySelector<HTMLInputElement>(selector);
@@ -108,35 +99,31 @@ async function renderMeProfile() {
 
 // Pure food-note parsing/rendering lives in food-note-client.js; the food detail
 // modal is owned by food-detail-controller.js.
+function meHealthLogRenderer(): ClientMeHealthLogRendererApi {
+  return (globalThis as typeof globalThis & { CairnMeHealthLogRenderer: ClientMeHealthLogRendererApi }).CairnMeHealthLogRenderer;
+}
+
+function meHealthLogDeps(): ClientMeHealthLogRendererDeps {
+  return {
+    state,
+    select: $,
+    noteEntryHtml: (note, index) => CairnFoodNote.noteEntryHtml(note, index),
+    activityEntryHtml: (activity) => actEntryHtml(activity),
+    openFoodDetail,
+  };
+}
 
 // tap a note card → full-screen food detail (zooming from its art tile)
 function wireNoteCard(el: Element): void {
-  const card = el as WiredHealthElement;
-  if (!card || card._wired) return; card._wired = true;
-  card.addEventListener("click", (e: MouseEvent) => {
-    const target = e.target instanceof Element ? e.target : null;
-    if (target?.closest("button, a, input")) return;
-    const n = (state._notesById || {})[card.dataset.noteid || ""];
-    if (n) openFoodDetail(n, card.querySelector(".artile"));
-  });
+  meHealthLogRenderer().wireNoteCard(el, meHealthLogDeps());
 }
 
 function renderNotes(notes: unknown): void {
-  const wrap = $<HTMLElement>("#notelist");
-  if (!wrap) return;
-  const rows = healthScreenRows(notes);
-  if (!rows.length) { wrap.innerHTML = `<div class="empty">Nothing logged yet. Snap a plate or jot a meal in Chat and it shows up here.</div>`; return; }
-  state._notesById = Object.fromEntries(rows.map((n) => [String(n.id), n]));
-  wrap.innerHTML = rows.map((n, i) => CairnFoodNote.noteEntryHtml(n, i)).join("");
-  wrap.querySelectorAll(".fnent").forEach(wireNoteCard);
+  meHealthLogRenderer().renderNotes(notes, meHealthLogDeps());
 }
 
 function renderActs(acts: unknown): void {
-  const wrap = $<HTMLElement>("#actlist");
-  if (!wrap) return;
-  const rows = healthScreenRows(acts) as Array<import("../contracts/client.js").ClientActivity & HealthScreenRecord>;
-  if (!rows.length) { wrap.innerHTML = `<div class="empty">Nothing logged yet. Log a ride, run, or walk on Today and it lands here.</div>`; return; }
-  wrap.innerHTML = rows.map((a) => actEntryHtml(a)).join("");
+  meHealthLogRenderer().renderActs(acts, meHealthLogDeps());
 }
 
 function meMemoryDeps(): ClientMeMemoryControllerDeps {

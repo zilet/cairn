@@ -9,10 +9,14 @@
     let chatStream = null;
     let chatStreamId = null;
     const chatPendingBubbles = new Map();
-    const chatStreamText = new Map();
-    const chatStreamRenderQueued = new Set();
-    const chatStreamRenderVersion = new Map();
     const chatDoneTurns = new Set();
+    const chatTurnStreamState = globalThis
+        .CairnChatTurnStreamState.create({
+        getBubble: (id) => chatPendingBubbles.get(id) || null,
+        ensureStreamingBubble,
+        markdownToHtml: mdToHtml,
+        getLog: () => $("#chatlog"),
+    });
     function chatTurnRecord(value) {
         return value && typeof value === "object" ? value : {};
     }
@@ -99,46 +103,6 @@
         }
         return el;
     }
-    function renderStreamMarkdown(id) {
-        const el = chatPendingBubbles.get(id);
-        if (!el || !el.isConnected || !el.classList.contains("streaming") || !chatStreamText.has(id))
-            return;
-        const body = el.querySelector(".stream-text");
-        if (!(body instanceof HTMLElement))
-            return;
-        body.innerHTML = mdToHtml(chatStreamText.get(id) || "");
-        const caret = document.createElement("span");
-        caret.className = "stream-caret";
-        caret.setAttribute("aria-hidden", "true");
-        const last = body.lastElementChild;
-        const inlineish = last && /^(P|H3|H4|H5|H6|LI|BLOCKQUOTE)$/i.test(last.tagName);
-        (inlineish ? last : body).appendChild(caret);
-    }
-    function scheduleStreamMarkdown(id) {
-        if (chatStreamRenderQueued.has(id))
-            return;
-        const version = chatStreamRenderVersion.get(id) || 0;
-        chatStreamRenderQueued.add(id);
-        requestAnimationFrame(() => {
-            chatStreamRenderQueued.delete(id);
-            if ((chatStreamRenderVersion.get(id) || 0) !== version)
-                return;
-            renderStreamMarkdown(id);
-        });
-    }
-    function appendStreamDelta(id, text) {
-        const chunk = typeof text === "string" ? text : "";
-        if (!chunk)
-            return;
-        const el = ensureStreamingBubble(id);
-        if (!el)
-            return;
-        chatStreamText.set(id, (chatStreamText.get(id) || "") + chunk);
-        scheduleStreamMarkdown(id);
-        const log = $("#chatlog");
-        if (log && log.scrollHeight - log.scrollTop - log.clientHeight < 200)
-            log.scrollTop = log.scrollHeight;
-    }
     function setTurnProgress(id, text) {
         const el = chatPendingBubbles.get(id);
         if (!el || !el.isConnected || el.classList.contains("streaming"))
@@ -148,9 +112,7 @@
             setPendingCaption(el, clean);
     }
     function resetStreamingBubble(id) {
-        chatStreamText.delete(id);
-        chatStreamRenderQueued.delete(id);
-        chatStreamRenderVersion.set(id, (chatStreamRenderVersion.get(id) || 0) + 1);
+        chatTurnStreamState.reset(id);
         const el = chatPendingBubbles.get(id);
         if (!el || !el.isConnected)
             return;
@@ -208,7 +170,7 @@
         const el = id == null ? null : chatPendingBubbles.get(id);
         if (id != null) {
             chatPendingBubbles.delete(id);
-            chatStreamText.delete(id);
+            chatTurnStreamState.deleteTurn(id);
         }
         const message = messageValue && typeof messageValue === "object"
             ? messageValue
@@ -241,7 +203,7 @@
         const el = id == null ? null : chatPendingBubbles.get(id);
         if (id != null) {
             chatPendingBubbles.delete(id);
-            chatStreamText.delete(id);
+            chatTurnStreamState.deleteTurn(id);
         }
         if (el && el.isConnected) {
             el.classList.remove("pending");
@@ -274,9 +236,7 @@
     function chatTeardownMonitor() {
         closeChatStream();
         chatPendingBubbles.clear();
-        chatStreamText.clear();
-        chatStreamRenderQueued.clear();
-        chatStreamRenderVersion.clear();
+        chatTurnStreamState.clear();
         chatDoneTurns.clear();
     }
     function chatMonitorEnsure() {
@@ -351,7 +311,7 @@
         es.addEventListener("progress", (event) => { if (!guard())
             setTurnProgress(id, parseTurnEvent(event)?.text); });
         es.addEventListener("delta", (event) => { if (!guard())
-            appendStreamDelta(id, parseTurnEvent(event)?.text); });
+            chatTurnStreamState.appendDelta(id, parseTurnEvent(event)?.text); });
         es.addEventListener("reset", () => { if (!guard())
             resetStreamingBubble(id); });
         es.addEventListener("done", (event) => {
