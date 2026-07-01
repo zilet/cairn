@@ -1,7 +1,5 @@
 // ==== 05-progress.js ====
 type ProgressRecord = Record<string, unknown>;
-type ProgressStat = readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }];
-type ProgressProgramState = import("../contracts/client-api.js").ClientProgramState;
 
 type ProgressExercise = ProgressRecord & { name: string };
 type ProgressWeightRow = ProgressRecord & { date?: string; weight_lb?: number | null };
@@ -344,218 +342,35 @@ async function renderEnergy() {
 // implementation. This screen keeps only the route/SWR shell above.
 
 // ---------- Progress: Program (adaptive program intelligence) ----------
-// Renders GET /api/program-state as a calm editorial read of how the athlete's
-// program is evolving. No 0–100 scores. Constitution: calm, suggestion-not-a-gate,
-// pull-never-push. Skeleton-first paint; empty state when lifts is empty.
-
-// "Evolve my plan" button — POSTs to /api/program/evolve. Degrades gracefully
-// if the endpoint 404s (not yet wired). ok:false at 200 = designed failure signal.
-// Evolve the plan — a durable background job (streams an evolving caption, survives
-// a reload), exactly like session-suggest. runOp transparently handles the stream
-// (bg on) or the inline result (bg off). The draft lands in the Plan proposals for
-// review — nothing auto-applies.
-async function triggerProgramEvolve(btn: Element) {
-  const foot = btn.closest(".prog-evolve-foot") || btn.parentElement;
-  const restore = btnBusy(btn, "Drafting your plan…");
-  // A caption line runOp animates while the coach thinks.
-  let cap = foot && foot.querySelector(".prog-evolve-cap");
-  if (foot && !cap) {
-    cap = document.createElement("div");
-    cap.className = "prog-evolve-cap job-cap lbl";
-    foot.appendChild(cap);
-  }
-  const cleanup = () => { restore(); cap?.remove(); };
-  await runOp("evolve_program", {}, {
-    path: "/program/evolve",
-    anchor: ".prog-evolve-foot",
-    caption: [
-      "reading how your lifts are trending",
-      "spotting what's stalled",
-      "drafting how your plan should evolve",
-      "checking it against your constraints",
-    ],
-    guard: () => !document.querySelector(".prog-evolve-foot")?.isConnected,
-    render: () => {
-      cleanup();
-      toast("Drafted — review it in your Plan");
-      swrInvalidate("progress:program");
-      swrInvalidate("plan:coach");
-      swrInvalidate("plan:proposals");
-      if (state.tab === "progress") renderProgram();
-    },
-    onFail: () => { cleanup(); toast("Couldn't draft right now — try again in a bit."); },
-  });
-}
-
-// SWR over /program-state (key progress:program). Skeleton-first on cold;
-// paints the full program read instantly on warm re-entry, then revalidates.
-// The conductor lead for Progress→Program — the cross-domain "one block focus" card
-// (GET /api/coaching-focus → coachingFocusCardHtml). Cached as a rendered HTML string
-// ("" when unavailable) so paintProgramBody can branch its layout: present → lead with
-// it and collapse the deep sections behind "The full read"; absent → the existing
-// stacked sections, untouched (graceful degradation).
-var _progFocusCard: string | undefined;
-const PROGRESS_FOCUS_STATE = {
-  cardHtml: () => typeof _progFocusCard === "string" ? _progFocusCard : "",
-  hasFocusCard: () => !!_progFocusCard,
-};
-
-Object.assign(globalThis, { CairnProgressFocus: PROGRESS_FOCUS_STATE });
-
-if (typeof window !== "undefined") {
-  window.CairnProgressFocus = PROGRESS_FOCUS_STATE;
+// The controller owns Program SWR orchestration, conductor state, DOM composition,
+// and actions. This screen only adapts Progress' route shell and token ownership.
+function progressProgramDeps(): ClientProgressProgramControllerDeps {
+  return {
+    view,
+    headerTitle,
+    state,
+    api,
+    runOp,
+    nextToken: () => ++pollToken,
+    isCurrent: (token) => token === pollToken,
+    peekCached,
+    paintSWR: paintSWR as ClientProgressProgramControllerDeps["paintSWR"],
+    segmentHtml: (active) => segBar(active, PROGRESS_SEG),
+    skeletonHtml: (active, cards) => segSkeleton(active, PROGRESS_SEG, cards),
+    wireSegments: () => wireSeg(PROGRESS_HANDLERS),
+    hero: progressHero,
+    empty: emptyStateHtml,
+    art,
+    busy: btnBusy,
+    toast,
+    invalidate: swrInvalidate,
+    runCountUps,
+    renderSelf: () => renderProgram(),
+  };
 }
 
 async function renderProgram() {
-  headerTitle.textContent = "Progress";
-  state.progressSeg = "program";
-  const token = ++pollToken;
-  const peek = peekCached("progress:program");
-  if (!peek) view.innerHTML = segSkeleton("program", PROGRESS_SEG, 3);
-  // Fetch the conductor in parallel (own try/catch → never throws). When it lands or
-  // its presence changes, re-paint from the cached program-state so the layout can
-  // collapse the pile. Never blocks the warm paint below.
-  api("/coaching-focus").then((f) => {
-    const card = (typeof coachingFocusCardHtml === "function") ? coachingFocusCardHtml(f) : "";
-    const prev = _progFocusCard;
-    _progFocusCard = card;
-    if (card === prev) return;
-    if (!card && (prev === undefined || prev === "")) return; // stayed flat — no re-paint
-    if (token === pollToken && state.tab === "progress" && state.progressSeg === "program") {
-      const cached = peekCached("progress:program");
-      if (cached) paintProgramBody(cached.data as ProgressProgramState);
-    }
-  }).catch(() => {});
-  return paintSWR({
-    key: "progress:program",
-    path: "/program-state",
-    peek: peek as never,
-    token,
-    tab: "progress",
-    render: (data: ProgressProgramState) => paintProgramBody(data),
-  });
-}
-
-function paintProgramBody(data: ProgressProgramState) {
-  const head = segBar("program", PROGRESS_SEG);
-  const lifts = data.lifts;
-  const volume = data.volume;
-  const meso = data.mesocycle || null;
-  const endurance = data.endurance || null;
-  const headline = data.headline || "";
-  const adaptations = data.adaptations_due;
-
-  if (!lifts.length && !volume.length && !meso && !endurance) {
-    view.innerHTML = head + progressHero("Program", []) +
-      emptyStateHtml(art("exercise", "barbell squat"),
-        "Not enough data yet — log a few sessions and your program intelligence will read here.");
-    wireSeg(PROGRESS_HANDLERS);
-    return;
-  }
-
-  const sorted = sortLifts(lifts);
-
-  // Count stalled/regressing for a quiet hero stat (no score — just a direction indicator).
-  const nStalled = sorted.filter((l) => l.status === "plateaued" || l.status === "regressing").length;
-  const nGood = sorted.filter((l) => l.status === "progressing").length;
-  const heroStats: ProgressStat[] = [];
-  if (lifts.length) heroStats.push(["lifts tracked", lifts.length]);
-  if (nGood) heroStats.push(["climbing", nGood]);
-  if (nStalled) heroStats.push(["stalled", nStalled]);
-
-  const conductor = CairnProgressFocus.cardHtml();
-  const hasConductor = !!conductor;
-
-  // The deterministic headline — the single most important program sentence. When the
-  // conductor leads it's redundant (the conductor states the through-line), so it tucks
-  // into the disclosure with the rest of the deep read.
-  const headlineHtml = headline ? `<div class="prog-headline reveal" style="${stagger(1)}">${escHtml(headline)}</div>` : "";
-
-  // The async slots (loaded after paint): a "test week due" banner, the capacity
-  // benchmark, the periodization block, the "what changed & why" digest, the muscle
-  // advance/stall strip, and DEXA targeting. Each renders nothing until it has data.
-  const testSlot = `<div id="progTestSlot" class="ptest-slot reveal" style="${stagger(1)}"></div>`;
-  const perfSlot = `<div id="progPerfSlot" class="pperf-slot reveal" style="${stagger(2)}"></div>`;
-  const blockSlot = `<div id="progBlockSlot" class="pblock-slot reveal" style="${stagger(2)}"></div>`;
-  const adjustSlot = `<div id="progAdjustSlot" class="padj-slot reveal" style="${stagger(3)}"></div>`;
-  const muscleSlot = `<div id="progMuscleSlot" class="pmus-slot reveal" style="${stagger(3)}"></div>`;
-  const dexaSlot = `<div id="progDexaSlot" class="pdexa-slot reveal" style="${stagger(3)}"></div>`;
-  const adaptHtml = adaptations.length ? adaptationsHtml(adaptations, 4) : "";
-
-  // Lift rows — the per-lift trajectory, kept visible beneath the lead.
-  let liftsHtml = "";
-  if (sorted.length) {
-    liftsHtml += `<div class="prow-section-head lbl reveal" style="${stagger(5)}">Lifts</div>`;
-    liftsHtml += sorted.map((lift, i) => liftRowHtml(lift, 6 + i)).join("");
-  }
-
-  const volumeHtml = volume.length
-    ? `<div class="pvol-head lbl reveal" style="${stagger(2)}">Weekly volume by muscle</div>` + volumeBlockHtml(volume, 3)
-    : "";
-  const mesoHtml = meso ? mesoBlockHtml(meso, 4) : "";
-  const endHtml = endurance ? enduranceBlockHtml(endurance, 5) : "";
-
-  const evolveFoot = `<div class="prog-evolve-foot reveal" style="${stagger(7)}">
-    <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Evolve my plan</button>
-    <span class="prog-evolve-note lbl">asks the coach to draft an updated plan — you review before anything changes</span>
-    <button id="progTidyBtn" class="ghostbtn" style="width:100%;text-align:center;padding:9px;margin-top:11px" type="button">Tidy exercise names</button>
-    <span class="prog-evolve-note lbl">Different logs name the same lift differently — Cairn merges duplicates so each one tracks as one line. Runs automatically as you log.</span>
-  </div>`;
-
-  let html = "";
-  if (hasConductor) {
-    // Conductor leads. Lift rows stay visible beneath it; the rest of the deep read —
-    // the deterministic headline, capacity benchmark, DEXA targeting, muscle strip,
-    // weekly volume, mesocycle, and the adaptations digest — collapses behind ONE "The
-    // full read" disclosure. The lever is de-triplicated: the conductor is the one lever
-    // now (performance's standalone .pperf-lever is suppressed in loadPerformance).
-    html = head + progressHero("Program", heroStats) + conductor + liftsHtml +
-      `<details class="full-read reveal" style="${stagger(6)}">
-        <summary>The full read</summary>
-        <div class="full-read-body">${
-          headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
-          adaptHtml + volumeHtml + mesoHtml + endHtml
-        }</div>
-      </details>` + evolveFoot;
-  } else {
-    // No conductor — the existing stacked layout, untouched (graceful degradation).
-    html = head + progressHero("Program", heroStats) +
-      headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
-      adaptHtml + liftsHtml + volumeHtml + mesoHtml + endHtml + evolveFoot;
-  }
-
-  view.innerHTML = html;
-  wireSeg(PROGRESS_HANDLERS);
-  runCountUps(view);
-
-  const btn = view.querySelector("#progEvolveBtn");
-  if (btn) btn.addEventListener("click", () => triggerProgramEvolve(btn));
-
-  const tidyBtn = view.querySelector("#progTidyBtn");
-  if (tidyBtn) tidyBtn.addEventListener("click", () => tidyExerciseNames(tidyBtn));
-
-  loadPerformance(); // the "where you stand" capacity benchmark hero
-  loadProgramBlock(); // periodization block card (active) or a "start a block" affordance
-  loadProgramAdjustments(); // the "what changed & why" digest
-  loadTestWeek(); // the "a test week is about due" banner
-  loadMuscleTrajectory(); // per-muscle-group advancing/stalling strip
-  loadDexaTargeting("progDexaSlot"); // "from your DEXA, what to focus on next"
-}
-
-// "Tidy exercise names" — the exercise-canon analogue to Health's "Align lab names".
-// Merges duplicate movements (e.g. "Dead hang" / "Dead hang timed") so each lift
-// tracks as one line. Calm, low-friction; degrades calmly on failure. Refreshes the
-// program read on success so the merged history shows immediately.
-async function tidyExerciseNames(btn: Element) {
-  const restore = btnBusy(btn, "tidying…");
-  let r: unknown = null;
-  try { r = await api("/exercises/reconcile-names", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } catch { r = null; }
-  restore();
-  const row = progressRecord(r);
-  if (!isProgressRecord(r) || row.ok === false) { toast("Couldn't tidy names — try again."); return; }
-  const n = Number(row.aligned ?? row.applied) || 0;
-  toast(n ? `Tidied ${n} exercise name${n === 1 ? "" : "s"}` : "Names already tidy");
-  if (n) { swrInvalidate("progress:program"); renderProgram(); }
+  return CairnProgressProgramController.render(progressProgramDeps());
 }
 
 Object.assign(globalThis, {

@@ -73,6 +73,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-test-week-client.ts", output: "public/js/progress-test-week-client.js" },
   { source: "src/client/progress-program-summary-client.ts", output: "public/js/progress-program-summary-client.js" },
   { source: "src/client/progress-program-block-client.ts", output: "public/js/progress-program-block-client.js" },
+  { source: "src/client/progress-program-controller.ts", output: "public/js/progress-program-controller.js" },
   { source: "src/client/progress-screen.ts", output: "public/js/05-progress.js" },
   { source: "src/client/capture-provenance-client.ts", output: "public/js/capture-provenance-client.js" },
   { source: "src/client/capture-reads-client.ts", output: "public/js/capture-reads-client.js" },

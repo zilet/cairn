@@ -218,6 +218,31 @@ declare global {
     renderSelf(): unknown;
   };
 
+  type ClientProgressProgramControllerDeps = {
+    view: HTMLElement;
+    headerTitle: HTMLElement;
+    state: Pick<ClientAppState, "tab" | "progressSeg">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
+    nextToken(): number;
+    isCurrent(token: number): boolean;
+    peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    paintSWR<Path extends string>(
+      options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path },
+    ): Promise<ClientApiResponse<Path> | undefined>;
+    segmentHtml(active: ClientProgressSection): string;
+    skeletonHtml(active: ClientProgressSection, cards?: number): string;
+    wireSegments(): void;
+    hero(title: string, stats: Array<readonly [unknown, unknown] | readonly [unknown, unknown, { text?: boolean; k?: boolean }]>): string;
+    empty(image: string, message: string): string;
+    art(kind: string, label: string): string;
+    busy(btn: Element | null | undefined, text: string, options?: { ghost?: boolean }): () => void;
+    toast(message: string): void;
+    invalidate(keyOrPrefix: string): void;
+    runCountUps(root: ParentNode): void;
+    renderSelf(): unknown;
+  };
+
   type ClientHealthPictureControllerDeps = {
     root: ParentNode;
     state: Pick<ClientAppState, "healthReview">;
@@ -1488,6 +1513,14 @@ declare global {
       wireProgramBlock(slot: Element): void;
     };
 
+    CairnProgressProgramController: {
+      focus: Window["CairnProgressFocus"];
+      render(deps: ClientProgressProgramControllerDeps): Promise<unknown>;
+      paint(data: ClientProgramState, deps: ClientProgressProgramControllerDeps): void;
+      triggerProgramEvolve(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void>;
+      tidyExerciseNames(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void>;
+    };
+
     CairnCoachingFocus: {
       CFOCUS_DOMAIN_LABEL: Record<string, string>;
       cfocusDomainTag(domain: unknown): string;
@@ -1864,6 +1897,7 @@ declare global {
   declare const CairnProgressTestWeek: Window["CairnProgressTestWeek"];
   declare const CairnProgressProgramSummary: Window["CairnProgressProgramSummary"];
   declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
+  declare const CairnProgressProgramController: Window["CairnProgressProgramController"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
   declare const CairnCardioSync: Window["CairnCardioSync"];
