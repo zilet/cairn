@@ -224,52 +224,7 @@ function drawLineChart(canvas, pts, opts = {}) {
         if (!chartCanvas._raf)
             chartCanvas._raf = requestAnimationFrame(tick);
     };
-    if (!chartCanvas._scrubWired) {
-        chartCanvas._scrubWired = true;
-        let touchActive = false;
-        const idxFromEvent = (event) => {
-            const axis = chartCanvas._chartXs;
-            const rect = chartCanvas.getBoundingClientRect();
-            const px = event.clientX - rect.left;
-            return CairnProgressLineChartModel.nearestIndex(axis, px);
-        };
-        const show = (event) => {
-            const index = idxFromEvent(event);
-            if (index != null)
-                chartCanvas._setTarget?.(index, true);
-        };
-        const rest = () => {
-            chartCanvas._setTarget?.(null, false);
-        };
-        chartCanvas.addEventListener("pointerdown", (event) => {
-            if (event.pointerType !== "mouse") {
-                touchActive = true;
-                try {
-                    chartCanvas.setPointerCapture(event.pointerId);
-                }
-                catch { }
-            }
-            show(event);
-        });
-        chartCanvas.addEventListener("pointermove", (event) => {
-            if (event.pointerType === "mouse" || touchActive)
-                show(event);
-        });
-        chartCanvas.addEventListener("pointerup", (event) => {
-            if (event.pointerType !== "mouse") {
-                touchActive = false;
-                rest();
-            }
-        });
-        chartCanvas.addEventListener("pointercancel", () => {
-            touchActive = false;
-            rest();
-        });
-        chartCanvas.addEventListener("pointerleave", (event) => {
-            if (event.pointerType === "mouse")
-                rest();
-        });
-    }
+    CairnProgressChartScrub.wire(chartCanvas);
     render();
 }
 const CAIRN_PROGRESS_CHART = {

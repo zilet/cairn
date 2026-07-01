@@ -35,15 +35,6 @@ type TodayScreenTrainingSession = import("../contracts/client.js").ClientTrainin
 type TodayScreenCardioEffort = import("../contracts/client.js").ClientCardioEffort;
 type TodayScreenPrescription = import("../contracts/client.js").ClientPrescription;
 type TodayScreenPrescriptionByExercise = Record<string, TodayScreenPrescription | null | undefined>;
-type TodayScreenExercise = import("../contracts/client.js").ClientExercise;
-type TodayScreenProfile = import("../contracts/client.js").ClientProfile;
-type TodayScreenWeeklyStats = import("../contracts/client.js").ClientWeeklyStats & {
-  goal_mode?: string | null;
-  goal_weight_lb?: number | null;
-  goal_date?: string | null;
-};
-type TodayScreenAgenda = import("../contracts/client.js").ClientTodayAgenda;
-type TodayScreenDayIntake = import("../contracts/client.js").ClientDayIntake;
 type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "pendingOffPlan" | "plan"> & {
   tab?: string;
   logDate: string;
@@ -61,24 +52,6 @@ type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "p
   healthSeg?: string;
   healthSegPicked?: boolean;
   [key: string]: unknown;
-};
-type TodayScreenSideLoaderDeps = {
-  root: ParentNode;
-  state: TodayState;
-  api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
-  activateTab(tab: string): unknown;
-  runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
-  escapeHtml(value: unknown): string;
-  localISO(date?: Date): string;
-  stagger(index?: number | null): string;
-};
-type TodayScreenSideLoaders = {
-  garminSessionCard(value: unknown): string;
-  loadWearable(isToday: unknown, deps: TodayScreenSideLoaderDeps): Promise<void>;
-  loadTableHint(deps: TodayScreenSideLoaderDeps): Promise<void>;
-  loadContextBanner(deps: TodayScreenSideLoaderDeps): Promise<void>;
-  loadDraftProposals(deps: TodayScreenSideLoaderDeps): Promise<void>;
-  loadHealthFocusBanner(deps: TodayScreenSideLoaderDeps): Promise<void>;
 };
 type TodayScreenSessionSuggestDeps = Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1];
 type TodayScreenSessionSuggestAskOptions = Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[0];
@@ -103,7 +76,6 @@ function todayPeekCached<T = unknown>(key: string, freshFor?: number): TodayScre
 
 const todayState = state as TodayState;
 const todayView = view as HTMLElement & any;
-const todaySideLoaders = (globalThis as unknown as { CairnTodaySideLoaders: TodayScreenSideLoaders }).CairnTodaySideLoaders;
 const todayPlanSessionPreparation = (globalThis as unknown as {
   CairnTodayPlanSessionPreparation: TodayPlanSessionPreparationApi;
 }).CairnTodayPlanSessionPreparation;
@@ -113,9 +85,6 @@ const todayDataLoader = (globalThis as unknown as {
 const todayMainShell = (globalThis as unknown as {
   CairnTodayMainShell: Window["CairnTodayMainShell"];
 }).CairnTodayMainShell;
-const todayPlanSurface = (globalThis as unknown as {
-  CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
-}).CairnTodayPlanSurface;
 const todayPlanSurfaceRenderer = (globalThis as unknown as {
   CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
 }).CairnTodayPlanSurfaceRenderer;
@@ -123,51 +92,105 @@ const todayRenderState = (globalThis as unknown as {
   CairnTodayRenderState: TodayRenderStateApi;
 }).CairnTodayRenderState;
 
-function todaySideLoaderDeps(): TodayScreenSideLoaderDeps {
-  return {
-    root: todayView,
-    state: todayState,
-    api: todayApi,
-    activateTab,
-    runCountUps,
-    escapeHtml: escHtml,
-    localISO,
-    stagger,
+function todayMicGlyph(): string {
+  const globals = globalThis as unknown as {
+    MIC_GLYPH?: unknown;
+    CairnCaptureVoice?: { micGlyph?: unknown };
   };
+  return String(globals.MIC_GLYPH || globals.CairnCaptureVoice?.micGlyph || "");
 }
 
-function todayPlanSurfaceDeps() {
-  return {
-    escapeHtml: escHtml,
-    escapeAttr: escAttr,
-    stagger,
-    cardioLabel,
-    cardioPrescription,
-    rxMoveCount: todayRxMoveCount,
-    setsTonnage,
-    trainGlyph: CairnTodayBrief.BRIEF_KIND.train.glyph,
-  };
+let todayDepsCache: ClientTodayDependenciesContext | null = null;
+
+function todayDeps(): ClientTodayDependenciesContext {
+  if (!todayDepsCache) {
+    todayDepsCache = CairnTodayDependencies.context({
+      root: todayView,
+      state: todayState,
+      api: todayApi,
+      cachedApi: todayCachedApi as (path: string, opts?: TodayScreenCachedApiOptions<unknown>) => Promise<unknown>,
+      peekCached: todayPeekCached,
+      invalidate: swrInvalidate,
+      renderToday,
+      withViewTransition,
+      runOp,
+      runCountUps,
+      reducedMotion,
+      collapseEl,
+      expandEl,
+      activateTab,
+      toast,
+      localISO,
+      escapeHtml: escHtml,
+      escapeAttr: escAttr,
+      stagger,
+      micGlyph: todayMicGlyph,
+      cardioLabel,
+      cardioPrescription,
+      isCardioItem,
+      cardioPlanCard,
+      cardioEffortMatches,
+      exCard,
+      garminSessionCard,
+      sessionDoneCard,
+      setsTonnage,
+      rxMoveCount: todayRxMoveCount,
+      exRxLineHtml: todayExRxLineHtml,
+      loadTrainingProvenance,
+      revealPlanThen,
+      revealSessionComposer,
+      askForSession,
+      thinkingCaption,
+      appendOffPlanCard,
+      gotoChatWith,
+      loadTodayReads,
+      todaySkeleton,
+      setTodayHeaderTitle,
+      nextPollToken: () => ++pollToken,
+      isCurrentPoll: (token) => token === pollToken,
+      suggestedPlanDayNumber,
+      updateHeaderCondense,
+      quickLog,
+      wireCardioSync,
+      applyDayProgression,
+      wireBrief,
+      upgradeBriefInPlace,
+      loadTableHint,
+      setupWeightChip,
+      setupVoiceCapture,
+      loadFrequentFoods,
+      loadContextBanner,
+      loadHealthFocusBanner,
+      loadWearable,
+      loadCheckin,
+      loadDraftProposals,
+      setFocus,
+      viewEnter,
+      invalidateTodayProgression,
+      scheduleRxRefresh,
+      startRest,
+      stopRest,
+      parseDur,
+      fmtDur,
+      postExerciseMode,
+      wireGuides,
+      wireLogRow,
+      wireSkips,
+    });
+  }
+  return todayDepsCache;
+}
+
+function todaySideLoaderDeps() {
+  return todayDeps().sideLoaders();
 }
 
 function todayPlanSurfaceRendererDeps() {
-  return {
-    planSurface: todayPlanSurface,
-    planSurfaceDeps: todayPlanSurfaceDeps,
-    isCardioItem,
-    cardioLabel,
-    cardioPlanCard,
-    exCard,
-    garminSessionCard,
-    sessionDoneCard,
-    skipLineHtml: (labels: string[]) => CairnTodaySessionStatus.skipLineHtml(labels),
-  };
+  return todayDeps().planSurfaceRenderer();
 }
 
 function todayMainShellDeps() {
-  return {
-    escapeHtml: escHtml,
-    micGlyph: MIC_GLYPH,
-  };
+  return todayDeps().mainShell();
 }
 
 // The per-card prescription line. `rx` is one Prescription from the progression
@@ -277,26 +300,7 @@ async function suggestedPlanDayNumber(session: TodayScreenTrainingSession | null
 // Pure Brief markup lives in /js/today-brief-client.js. Stateful fetch/cache,
 // steer-job, reconnect, and focus-mode wiring live in /js/today-brief-controller.js.
 function todayBriefDeps(): ClientTodayBriefControllerDeps {
-  return {
-    root: todayView,
-    state: todayState,
-    api: todayApi,
-    invalidate: swrInvalidate,
-    renderToday,
-    withViewTransition,
-    runOp,
-    runCountUps,
-    reducedMotion,
-    collapseEl,
-    activateTab,
-    toast,
-    localISO,
-    escapeHtml: escHtml,
-    loadTrainingProvenance: (isToday?: boolean) => loadTrainingProvenance(isToday),
-    revealPlanThen,
-    revealSessionComposer,
-    askForSession,
-  };
+  return todayDeps().brief();
 }
 
 async function loadBrief(date: string, override: string, opts: { fast?: boolean } = {}): Promise<TodayScreenDayRead> {
@@ -342,18 +346,7 @@ function briefSignalsText(read: Partial<TodayScreenDayRead> | null | undefined):
 }
 
 function todaySessionSuggestDeps(): TodayScreenSessionSuggestDeps {
-  return {
-    root: todayView,
-    state: todayState,
-    runOp,
-    thinkingCaption,
-    runCountUps,
-    collapseEl,
-    reducedMotion,
-    toast,
-    revealPlanThen,
-    appendOffPlanCard,
-  };
+  return todayDeps().sessionSuggest();
 }
 
 function reconnectSessionSuggest(job?: unknown) {
@@ -393,47 +386,22 @@ function revealPlanThen(after: (() => unknown) | null | undefined, opts: { blank
 // slot id; we only move where the slot lives). Generic Era-2 candidates (no
 // client_card — since-last / goal-checkin) render a calm card from their own text.
 function todayRailDeps() {
-  return {
-    root: todayView,
-    state: todayState,
-    api: todayApi,
-    activateTab,
-    gotoChatWith,
-    collapseEl,
-    loadTodayReads,
-    runCountUps,
-    escapeHtml: escHtml,
-    toast,
-    invalidate: swrInvalidate,
-    refreshToday: renderToday,
-  };
+  return todayDeps().rail();
 }
 
 async function renderToday(opts: any = {}) {
-  const todayData = await todayDataLoader.load(opts, {
-    root: todayView,
-    state: todayState,
-    api: todayApi as (path: string) => Promise<unknown>,
-    cachedApi: todayCachedApi as (path: string, opts?: TodayScreenCachedApiOptions<unknown>) => Promise<unknown>,
-    peekCached: todayPeekCached,
-    localISO,
-    todaySkeleton,
-    setTodayHeaderTitle,
-    nextPollToken: () => ++pollToken,
-  });
+  const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
   const { soft, isToday } = todayData;
   const session: any = todayData.session;
   const {
     day,
     loggedByEx,
-    cardioEfforts,
     todaySettings,
     matchedCardio,
     activeItems,
     skippedItems,
     cardioItems,
     strengthItems,
-    planEx,
     offPlanEx,
     pendingOffPlan,
     lastSets,
@@ -445,18 +413,7 @@ async function renderToday(opts: any = {}) {
     hasSyncedCardioToday,
     isRunDay,
     expectingRun,
-  } = await todayPlanSessionPreparation.preparePlanSession({
-    state: todayState,
-    session,
-    isToday,
-    api: todayApi,
-    cachedApi: todayCachedApi,
-    peekCached: todayPeekCached,
-    suggestedPlanDayNumber,
-    isCardioItem,
-    cardioLabel,
-    cardioEffortMatches,
-  });
+  } = await todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday));
 
   const [stats, profile, exercises]: any[] = [todayData.stats, todayData.profile, todayData.exercises];
   if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); } // keep the emphasis globals warm for Progress/Today/Plan
@@ -629,9 +586,7 @@ async function renderToday(opts: any = {}) {
     } catch {}
   }
 
-  CairnTodayPostRenderWiring.wirePostRender({
-    root: todayView,
-    state: todayState,
+  CairnTodayPostRenderWiring.wirePostRender(todayDeps().postRender({
     read,
     isToday,
     focus,
@@ -641,34 +596,7 @@ async function renderToday(opts: any = {}) {
     agenda,
     agendaGeneric,
     todayCompass,
-    updateHeaderCondense,
-    runCountUps,
-    quickLog,
-    reducedMotion,
-    wireCardioSync,
-    renderToday,
-    applyDayProgression,
-    wireBrief,
-    upgradeBriefInPlace,
-    loadTrainingProvenance,
-    loadTableHint,
-    setupWeightChip,
-    setupVoiceCapture,
-    loadFrequentFoods,
-    loadContextBanner,
-    loadHealthFocusBanner,
-    loadWearable,
-    loadCheckin,
-    loadDraftProposals,
-    runAgendaRail: CairnTodayRailController.runAgendaRail,
-    runFallbackRail: CairnTodayRailController.runFallbackRail,
-    todayRailDeps,
-    activateTab,
-    setFocus,
-    withViewTransition,
-    viewEnter,
-    localISO,
-  });
+  }));
 
   wireGuides(view);
 
@@ -676,12 +604,7 @@ async function renderToday(opts: any = {}) {
 
   setupAddExercise();
 
-  todayDataLoader.scheduleSoftRepaint(todayData, {
-    root: todayView,
-    state: todayState,
-    isCurrentPoll: (token) => token === pollToken,
-    renderToday,
-  });
+  todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
 }
 
 // A finished workout's calm wrap-up: a quiet checkmark, the day, the numbers that
@@ -692,28 +615,7 @@ function sessionDoneCard(session: any, day: any, { isToday }: any) {
 }
 
 function todaySessionDeps() {
-  return {
-    root: todayView,
-    state: todayState,
-    api: todayApi,
-    invalidate: swrInvalidate,
-    invalidateTodayProgression,
-    scheduleRxRefresh,
-    renderToday,
-    activateTab,
-    withViewTransition,
-    viewEnter,
-    reducedMotion,
-    startRest,
-    stopRest,
-    toast,
-    parseDur,
-    fmtDur,
-    collapseEl,
-    expandEl,
-    localISO,
-    sessionStatus: CairnTodaySessionStatus,
-  };
+  return todayDeps().session();
 }
 
 function wireLogRow(row: Element | null | undefined) {
@@ -740,15 +642,7 @@ function reconnectDayReadOverride(job: any) {
 // place. Debounced (rapid taps coalesce into one fetch) + best-effort: a failed fetch
 // leaves the last paint, exactly like the initial progression load.
 function todayProgressionDeps() {
-  return {
-    state: todayState,
-    root: todayView,
-    cachedApi: todayCachedApi,
-    invalidate: swrInvalidate,
-    exRxLineHtml: todayExRxLineHtml,
-    moveCount: todayRxMoveCount,
-    loadProgramAdjustmentsBanner: () => CairnTodayRailController.loadProgramAdjustmentsBanner(todayRailDeps()),
-  };
+  return todayDeps().progression();
 }
 
 function scheduleRxRefresh() {
@@ -764,19 +658,7 @@ async function refreshAdaptedRx() {
 }
 
 function todayAddExerciseDeps() {
-  return {
-    root: todayView,
-    state: todayState,
-    api: todayApi,
-    postExerciseMode,
-    exCard,
-    wireGuides,
-    wireLogRow,
-    wireSkips,
-    toast,
-    escapeHtml: escHtml,
-    escapeAttr: escAttr,
-  };
+  return todayDeps().addExercise();
 }
 
 async function setupAddExercise() {
@@ -788,29 +670,29 @@ async function appendOffPlanCard(name: any, mode: any) {
 }
 
 function garminSessionCard(g: any) {
-  return todaySideLoaders.garminSessionCard(g);
+  return CairnTodaySideLoaders.garminSessionCard(g);
 }
 
 async function loadWearable(isToday: any) {
-  await todaySideLoaders.loadWearable(isToday, todaySideLoaderDeps());
+  await CairnTodaySideLoaders.loadWearable(isToday, todaySideLoaderDeps());
 }
 
 async function loadTableHint() {
-  await todaySideLoaders.loadTableHint(todaySideLoaderDeps());
+  await CairnTodaySideLoaders.loadTableHint(todaySideLoaderDeps());
 }
 
 // Today context/goal/health rail markup lives in /js/today-context-client.js.
 // This screen keeps API loading, slot liveness checks, and navigation wiring.
 async function loadContextBanner() {
-  await todaySideLoaders.loadContextBanner(todaySideLoaderDeps());
+  await CairnTodaySideLoaders.loadContextBanner(todaySideLoaderDeps());
 }
 
 async function loadDraftProposals() {
-  await todaySideLoaders.loadDraftProposals(todaySideLoaderDeps());
+  await CairnTodaySideLoaders.loadDraftProposals(todaySideLoaderDeps());
 }
 
 async function loadHealthFocusBanner() {
-  await todaySideLoaders.loadHealthFocusBanner(todaySideLoaderDeps());
+  await CairnTodaySideLoaders.loadHealthFocusBanner(todaySideLoaderDeps());
 }
 
 Object.assign(globalThis, {

@@ -102,6 +102,18 @@ declare global {
     errorMessage(value: unknown): string | undefined;
     cacheKey(): string;
   };
+  type ClientMealRowsContext = { weekOf?: unknown; targetKcal?: unknown; todayName?: unknown };
+  type ClientMealRowsPlannerContext = { weekOf: string; targetKcal: number; todayName: string };
+  type ClientMealRowsApi = {
+    MEAL_HINT_CHIPS: string[];
+    record(value: unknown): Record<string, unknown>;
+    itemsText(value: unknown): string;
+    mealSlotFor(name: unknown, index: unknown): string;
+    todayNameFor(now?: unknown): string;
+    mealsCtxFor(plan: unknown, now?: unknown): ClientMealRowsPlannerContext;
+    mealRowHtml(meal: unknown, mealIndex?: number, options?: { di?: number; count?: number }): string;
+    mealDayHtml(day: unknown, dayIndex: number, context: ClientMealRowsContext): string;
+  };
 
   type ClientBriefCache = ContractClientBriefCache;
   type ClientAppState = ContractClientAppState;
@@ -264,6 +276,133 @@ declare global {
     toast(message: string): void;
     invalidate(key: string): void;
     refreshToday(options: { soft: boolean }): unknown;
+  };
+
+  type ClientTodaySideLoaderDeps = {
+    root: ParentNode;
+    state: ClientAppState & Record<string, unknown>;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    activateTab(tab: string): unknown;
+    runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
+    escapeHtml(value: unknown): string;
+    localISO(date?: Date): string;
+    stagger(index?: number | null): string;
+  };
+
+  type ClientTodaySideLoaders = {
+    garminSessionCard(value: unknown): string;
+    loadWearable(isToday: unknown, deps: ClientTodaySideLoaderDeps): Promise<void>;
+    loadTableHint(deps: ClientTodaySideLoaderDeps): Promise<void>;
+    loadContextBanner(deps: ClientTodaySideLoaderDeps): Promise<void>;
+    loadDraftProposals(deps: ClientTodaySideLoaderDeps): Promise<void>;
+    loadHealthFocusBanner(deps: ClientTodaySideLoaderDeps): Promise<void>;
+  };
+
+  type ClientTodayDependenciesPostRenderInput = {
+    read: { _provisional?: boolean } | null | undefined;
+    isToday: boolean;
+    focus: boolean;
+    showPlan: boolean;
+    soft: boolean;
+    conductorLeads: boolean;
+    agenda: Partial<ClientTodayAgenda> | null | undefined;
+    agendaGeneric: ClientTodayAgendaCandidate[];
+    todayCompass: { paceOffer?: { ask?: string | null } | null };
+  };
+
+  type ClientTodayDependenciesContextInput = {
+    root: HTMLElement;
+    state: ClientAppState & Record<string, unknown>;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
+    peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    invalidate(keyOrPrefix: string): void;
+    renderToday(opts?: Record<string, unknown>): unknown;
+    withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+    runOp(kind: "day_read_override" | "session_suggest" | string, body: Record<string, unknown>, options: ClientAgentOpHandlers): Promise<unknown>;
+    runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
+    reducedMotion(): boolean;
+    collapseEl(el: Element, done?: () => void): void;
+    expandEl(el: Element): void;
+    activateTab(tab: string): unknown;
+    toast(message: string): void;
+    localISO(date?: Date): string;
+    escapeHtml(value: unknown): string;
+    escapeAttr(value: unknown): string;
+    stagger(index?: number | null): string;
+    micGlyph: string | (() => string);
+    cardioLabel(item: Record<string, unknown> | null | undefined): string;
+    cardioPrescription(item: Record<string, unknown> | null | undefined): string;
+    isCardioItem(item: unknown): boolean;
+    cardioPlanCard(item: any, index: any, matched?: any, syncLine?: string): string;
+    cardioEffortMatches(item: any, effort: any): boolean;
+    exCard(item: any, logged: any[], prefill: Record<string, unknown>, index: any, rx: any): string;
+    garminSessionCard(value: unknown): string;
+    sessionDoneCard(session: unknown, day: unknown, options: { isToday: boolean }): string;
+    setsTonnage(sets: unknown): number;
+    rxMoveCount(rxByEx: Record<string, unknown>): number;
+    exRxLineHtml(rx: unknown): string;
+    loadTrainingProvenance(isToday?: boolean): unknown;
+    revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
+    revealSessionComposer(): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown; equipment?: unknown; constraints?: unknown }): unknown;
+    thinkingCaption(el: Element | null | undefined, op: unknown): () => void;
+    appendOffPlanCard(name: any, mode: any): unknown;
+    gotoChatWith(text: string): unknown;
+    loadTodayReads(): unknown;
+    todaySkeleton(): string;
+    setTodayHeaderTitle(): void;
+    nextPollToken(): number;
+    isCurrentPoll(token: number): boolean;
+    suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
+    updateHeaderCondense(): void;
+    quickLog(): unknown;
+    wireCardioSync(root: ParentNode, onSync: () => unknown): unknown;
+    applyDayProgression(button: Element | null | undefined, day: number | null | undefined): unknown;
+    wireBrief(read: { _provisional?: boolean } | null | undefined, options: { isToday: boolean }): unknown;
+    upgradeBriefInPlace(date: string, isToday: boolean): unknown;
+    loadTableHint(): unknown;
+    setupWeightChip(): unknown;
+    setupVoiceCapture(): unknown;
+    loadFrequentFoods(): unknown;
+    loadContextBanner(): unknown;
+    loadHealthFocusBanner(): unknown;
+    loadWearable(isToday: boolean): unknown;
+    loadCheckin(): unknown;
+    loadDraftProposals(): unknown;
+    setFocus(date: string, on: boolean): unknown;
+    viewEnter(): void;
+    invalidateTodayProgression(): void;
+    scheduleRxRefresh(): void;
+    startRest(): void;
+    stopRest(): void;
+    parseDur(value: string): number | null;
+    fmtDur(seconds: number): string;
+    postExerciseMode(name: string, mode: string): Promise<unknown>;
+    wireGuides(card: Element): void;
+    wireLogRow(row: Element | null): void;
+    wireSkips(): void;
+  };
+
+  type ClientTodayDependenciesContext = {
+    sideLoaders(): ClientTodaySideLoaderDeps;
+    planSurface(): Parameters<Window["CairnTodayPlanSurface"]["sessionHeadHtml"]>[1];
+    planSurfaceRenderer(): Parameters<Window["CairnTodayPlanSurfaceRenderer"]["buildHtml"]>[1];
+    mainShell(): Parameters<Window["CairnTodayMainShell"]["leadHtml"]>[1];
+    brief(): ClientTodayBriefControllerDeps;
+    sessionSuggest(): Parameters<Window["CairnTodaySessionSuggestController"]["askForSession"]>[1];
+    rail(): ClientTodayRailControllerDeps;
+    dataLoad(): Parameters<Window["CairnTodayDataLoader"]["load"]>[1];
+    dataRefresh(): Parameters<Window["CairnTodayDataLoader"]["scheduleSoftRepaint"]>[1];
+    planSession(session: unknown, isToday: boolean): any;
+    postRender(input: ClientTodayDependenciesPostRenderInput): Parameters<Window["CairnTodayPostRenderWiring"]["wirePostRender"]>[0];
+    session(): ClientTodaySessionControllerDeps;
+    progression(): Parameters<Window["CairnTodayProgressionController"]["scheduleRxRefresh"]>[0];
+    addExercise(): Parameters<Window["CairnTodayAddExerciseController"]["setupAddExercise"]>[0];
+  };
+
+  type ClientTodayDependenciesApi = {
+    context(input: ClientTodayDependenciesContextInput): ClientTodayDependenciesContext;
   };
 
   type ClientTodayPlanSelectionDay = {
@@ -1591,6 +1730,11 @@ declare global {
       ): void;
     };
 
+    CairnMealRows: ClientMealRowsApi;
+    mealSlotFor: ClientMealRowsApi["mealSlotFor"];
+    mealRowHtml: ClientMealRowsApi["mealRowHtml"];
+    mealDayHtml: ClientMealRowsApi["mealDayHtml"];
+
     CairnMealPlan: {
       MEAL_HINT_CHIPS: string[];
       MEAL_PREFS_PLACEHOLDER: string;
@@ -1954,6 +2098,14 @@ declare global {
       nearestIndex(axis: readonly number[] | null | undefined, pixelX: number): number | null;
     };
 
+    CairnProgressChartScrub: {
+      wire(canvas: HTMLCanvasElement & {
+        _chartXs?: number[];
+        _setTarget?: (idx: number | null, scrubbing: boolean) => void;
+        _scrubWired?: boolean;
+      }): void;
+    };
+
     CairnProgressChart: {
       withAlpha(hex: unknown, alpha: number): string;
       drawLineChart(canvas: HTMLCanvasElement | null | undefined, pts: Array<{ date: string; v: number }>, opts?: {
@@ -2179,6 +2331,8 @@ declare global {
         deps: ClientTodayRailControllerDeps,
       ): void;
     };
+
+    CairnTodaySideLoaders: ClientTodaySideLoaders;
 
     CairnTodayPlanSelection: {
       planDayNumberForSession(
@@ -2451,6 +2605,8 @@ declare global {
         localISO(): string;
       }): void;
     };
+
+    CairnTodayDependencies: ClientTodayDependenciesApi;
 
     CairnTodayTraining: {
       RX_ACTION: Record<string, { word: string; cls: string }>;
@@ -2800,6 +2956,10 @@ declare global {
   declare const CairnPlanEditorController: Window["CairnPlanEditorController"];
   declare const CairnDayFuel: Window["CairnDayFuel"];
   declare const CairnDayFuelController: Window["CairnDayFuelController"];
+  declare const CairnMealRows: Window["CairnMealRows"];
+  declare const mealSlotFor: Window["mealSlotFor"];
+  declare const mealRowHtml: Window["mealRowHtml"];
+  declare const mealDayHtml: Window["mealDayHtml"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnMealPlannerController: Window["CairnMealPlannerController"];
   declare const CairnMealSwapData: Window["CairnMealSwapData"];
@@ -2838,6 +2998,7 @@ declare global {
   declare const CairnProgressData: Window["CairnProgressData"];
   declare const CairnProgressComponents: Window["CairnProgressComponents"];
   declare const CairnProgressLineChartModel: Window["CairnProgressLineChartModel"];
+  declare const CairnProgressChartScrub: Window["CairnProgressChartScrub"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];
@@ -2863,6 +3024,7 @@ declare global {
   declare const CairnTodayActivity: Window["CairnTodayActivity"];
   declare const CairnTodayAgenda: Window["CairnTodayAgenda"];
   declare const CairnTodayRailController: Window["CairnTodayRailController"];
+  declare const CairnTodaySideLoaders: Window["CairnTodaySideLoaders"];
   declare const CairnTodayPlanSelection: Window["CairnTodayPlanSelection"];
   declare const CairnTodayPlanSessionPreparation: Window["CairnTodayPlanSessionPreparation"];
   declare const CairnTodayDataLoader: Window["CairnTodayDataLoader"];
@@ -2870,6 +3032,7 @@ declare global {
   declare const CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
   declare const CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
+  declare const CairnTodayDependencies: Window["CairnTodayDependencies"];
   declare const CairnTodayTraining: Window["CairnTodayTraining"];
   declare const CairnTodayProgressionController: Window["CairnTodayProgressionController"];
   declare const CairnTodayAddExerciseController: Window["CairnTodayAddExerciseController"];

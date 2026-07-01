@@ -10,55 +10,102 @@ function todayPeekCached(key, freshFor) {
 }
 const todayState = state;
 const todayView = view;
-const todaySideLoaders = globalThis.CairnTodaySideLoaders;
 const todayPlanSessionPreparation = globalThis.CairnTodayPlanSessionPreparation;
 const todayDataLoader = globalThis.CairnTodayDataLoader;
 const todayMainShell = globalThis.CairnTodayMainShell;
-const todayPlanSurface = globalThis.CairnTodayPlanSurface;
 const todayPlanSurfaceRenderer = globalThis.CairnTodayPlanSurfaceRenderer;
 const todayRenderState = globalThis.CairnTodayRenderState;
-function todaySideLoaderDeps() {
-    return {
-        root: todayView,
-        state: todayState,
-        api: todayApi,
-        activateTab,
-        runCountUps,
-        escapeHtml: escHtml,
-        localISO,
-        stagger,
-    };
+function todayMicGlyph() {
+    const globals = globalThis;
+    return String(globals.MIC_GLYPH || globals.CairnCaptureVoice?.micGlyph || "");
 }
-function todayPlanSurfaceDeps() {
-    return {
-        escapeHtml: escHtml,
-        escapeAttr: escAttr,
-        stagger,
-        cardioLabel,
-        cardioPrescription,
-        rxMoveCount: todayRxMoveCount,
-        setsTonnage,
-        trainGlyph: CairnTodayBrief.BRIEF_KIND.train.glyph,
-    };
+let todayDepsCache = null;
+function todayDeps() {
+    if (!todayDepsCache) {
+        todayDepsCache = CairnTodayDependencies.context({
+            root: todayView,
+            state: todayState,
+            api: todayApi,
+            cachedApi: todayCachedApi,
+            peekCached: todayPeekCached,
+            invalidate: swrInvalidate,
+            renderToday,
+            withViewTransition,
+            runOp,
+            runCountUps,
+            reducedMotion,
+            collapseEl,
+            expandEl,
+            activateTab,
+            toast,
+            localISO,
+            escapeHtml: escHtml,
+            escapeAttr: escAttr,
+            stagger,
+            micGlyph: todayMicGlyph,
+            cardioLabel,
+            cardioPrescription,
+            isCardioItem,
+            cardioPlanCard,
+            cardioEffortMatches,
+            exCard,
+            garminSessionCard,
+            sessionDoneCard,
+            setsTonnage,
+            rxMoveCount: todayRxMoveCount,
+            exRxLineHtml: todayExRxLineHtml,
+            loadTrainingProvenance,
+            revealPlanThen,
+            revealSessionComposer,
+            askForSession,
+            thinkingCaption,
+            appendOffPlanCard,
+            gotoChatWith,
+            loadTodayReads,
+            todaySkeleton,
+            setTodayHeaderTitle,
+            nextPollToken: () => ++pollToken,
+            isCurrentPoll: (token) => token === pollToken,
+            suggestedPlanDayNumber,
+            updateHeaderCondense,
+            quickLog,
+            wireCardioSync,
+            applyDayProgression,
+            wireBrief,
+            upgradeBriefInPlace,
+            loadTableHint,
+            setupWeightChip,
+            setupVoiceCapture,
+            loadFrequentFoods,
+            loadContextBanner,
+            loadHealthFocusBanner,
+            loadWearable,
+            loadCheckin,
+            loadDraftProposals,
+            setFocus,
+            viewEnter,
+            invalidateTodayProgression,
+            scheduleRxRefresh,
+            startRest,
+            stopRest,
+            parseDur,
+            fmtDur,
+            postExerciseMode,
+            wireGuides,
+            wireLogRow,
+            wireSkips,
+        });
+    }
+    return todayDepsCache;
+}
+function todaySideLoaderDeps() {
+    return todayDeps().sideLoaders();
 }
 function todayPlanSurfaceRendererDeps() {
-    return {
-        planSurface: todayPlanSurface,
-        planSurfaceDeps: todayPlanSurfaceDeps,
-        isCardioItem,
-        cardioLabel,
-        cardioPlanCard,
-        exCard,
-        garminSessionCard,
-        sessionDoneCard,
-        skipLineHtml: (labels) => CairnTodaySessionStatus.skipLineHtml(labels),
-    };
+    return todayDeps().planSurfaceRenderer();
 }
 function todayMainShellDeps() {
-    return {
-        escapeHtml: escHtml,
-        micGlyph: MIC_GLYPH,
-    };
+    return todayDeps().mainShell();
 }
 // The per-card prescription line. `rx` is one Prescription from the progression
 // engine (or null → renders nothing). Calm, no score, one move + its why. When the
@@ -155,26 +202,7 @@ async function suggestedPlanDayNumber(session, isToday) {
 // Pure Brief markup lives in /js/today-brief-client.js. Stateful fetch/cache,
 // steer-job, reconnect, and focus-mode wiring live in /js/today-brief-controller.js.
 function todayBriefDeps() {
-    return {
-        root: todayView,
-        state: todayState,
-        api: todayApi,
-        invalidate: swrInvalidate,
-        renderToday,
-        withViewTransition,
-        runOp,
-        runCountUps,
-        reducedMotion,
-        collapseEl,
-        activateTab,
-        toast,
-        localISO,
-        escapeHtml: escHtml,
-        loadTrainingProvenance: (isToday) => loadTrainingProvenance(isToday),
-        revealPlanThen,
-        revealSessionComposer,
-        askForSession,
-    };
+    return todayDeps().brief();
 }
 async function loadBrief(date, override, opts = {}) {
     return CairnTodayBriefController.loadBrief(date, override, todayBriefDeps(), opts);
@@ -201,18 +229,7 @@ function briefSignalsText(read) {
     return CairnTodayBriefController.briefSignalsText(read);
 }
 function todaySessionSuggestDeps() {
-    return {
-        root: todayView,
-        state: todayState,
-        runOp,
-        thinkingCaption,
-        runCountUps,
-        collapseEl,
-        reducedMotion,
-        toast,
-        revealPlanThen,
-        appendOffPlanCard,
-    };
+    return todayDeps().sessionSuggest();
 }
 function reconnectSessionSuggest(job) {
     return CairnTodaySessionSuggestController.reconnectSessionSuggest(job, todaySessionSuggestDeps());
@@ -250,47 +267,13 @@ function revealPlanThen(after, opts = {}) {
 // slot id; we only move where the slot lives). Generic Era-2 candidates (no
 // client_card — since-last / goal-checkin) render a calm card from their own text.
 function todayRailDeps() {
-    return {
-        root: todayView,
-        state: todayState,
-        api: todayApi,
-        activateTab,
-        gotoChatWith,
-        collapseEl,
-        loadTodayReads,
-        runCountUps,
-        escapeHtml: escHtml,
-        toast,
-        invalidate: swrInvalidate,
-        refreshToday: renderToday,
-    };
+    return todayDeps().rail();
 }
 async function renderToday(opts = {}) {
-    const todayData = await todayDataLoader.load(opts, {
-        root: todayView,
-        state: todayState,
-        api: todayApi,
-        cachedApi: todayCachedApi,
-        peekCached: todayPeekCached,
-        localISO,
-        todaySkeleton,
-        setTodayHeaderTitle,
-        nextPollToken: () => ++pollToken,
-    });
+    const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
     const { soft, isToday } = todayData;
     const session = todayData.session;
-    const { day, loggedByEx, cardioEfforts, todaySettings, matchedCardio, activeItems, skippedItems, cardioItems, strengthItems, planEx, offPlanEx, pendingOffPlan, lastSets, rxByEx, rxFor, prefillFor, exDone, exTotal, hasSyncedCardioToday, isRunDay, expectingRun, } = await todayPlanSessionPreparation.preparePlanSession({
-        state: todayState,
-        session,
-        isToday,
-        api: todayApi,
-        cachedApi: todayCachedApi,
-        peekCached: todayPeekCached,
-        suggestedPlanDayNumber,
-        isCardioItem,
-        cardioLabel,
-        cardioEffortMatches,
-    });
+    const { day, loggedByEx, todaySettings, matchedCardio, activeItems, skippedItems, cardioItems, strengthItems, offPlanEx, pendingOffPlan, lastSets, rxByEx, rxFor, prefillFor, exDone, exTotal, hasSyncedCardioToday, isRunDay, expectingRun, } = await todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday));
     const [stats, profile, exercises] = [todayData.stats, todayData.profile, todayData.exercises];
     if (profile) {
         setDiscipline(profile.primary_discipline);
@@ -451,9 +434,7 @@ async function renderToday(opts = {}) {
         }
         catch { }
     }
-    CairnTodayPostRenderWiring.wirePostRender({
-        root: todayView,
-        state: todayState,
+    CairnTodayPostRenderWiring.wirePostRender(todayDeps().postRender({
         read,
         isToday,
         focus,
@@ -463,43 +444,11 @@ async function renderToday(opts = {}) {
         agenda,
         agendaGeneric,
         todayCompass,
-        updateHeaderCondense,
-        runCountUps,
-        quickLog,
-        reducedMotion,
-        wireCardioSync,
-        renderToday,
-        applyDayProgression,
-        wireBrief,
-        upgradeBriefInPlace,
-        loadTrainingProvenance,
-        loadTableHint,
-        setupWeightChip,
-        setupVoiceCapture,
-        loadFrequentFoods,
-        loadContextBanner,
-        loadHealthFocusBanner,
-        loadWearable,
-        loadCheckin,
-        loadDraftProposals,
-        runAgendaRail: CairnTodayRailController.runAgendaRail,
-        runFallbackRail: CairnTodayRailController.runFallbackRail,
-        todayRailDeps,
-        activateTab,
-        setFocus,
-        withViewTransition,
-        viewEnter,
-        localISO,
-    });
+    }));
     wireGuides(view);
     CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
     setupAddExercise();
-    todayDataLoader.scheduleSoftRepaint(todayData, {
-        root: todayView,
-        state: todayState,
-        isCurrentPoll: (token) => token === pollToken,
-        renderToday,
-    });
+    todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
 }
 // A finished workout's calm wrap-up: a quiet checkmark, the day, the numbers that
 // matter, the "how did that feel?" slot, and two soft ways forward (log more /
@@ -508,28 +457,7 @@ function sessionDoneCard(session, day, { isToday }) {
     return CairnTodaySessionStatus.sessionDoneCardHtml(session, day, { isToday });
 }
 function todaySessionDeps() {
-    return {
-        root: todayView,
-        state: todayState,
-        api: todayApi,
-        invalidate: swrInvalidate,
-        invalidateTodayProgression,
-        scheduleRxRefresh,
-        renderToday,
-        activateTab,
-        withViewTransition,
-        viewEnter,
-        reducedMotion,
-        startRest,
-        stopRest,
-        toast,
-        parseDur,
-        fmtDur,
-        collapseEl,
-        expandEl,
-        localISO,
-        sessionStatus: CairnTodaySessionStatus,
-    };
+    return todayDeps().session();
 }
 function wireLogRow(row) {
     CairnTodaySessionController.wireLogRow(row, todaySessionDeps());
@@ -551,15 +479,7 @@ function reconnectDayReadOverride(job) {
 // place. Debounced (rapid taps coalesce into one fetch) + best-effort: a failed fetch
 // leaves the last paint, exactly like the initial progression load.
 function todayProgressionDeps() {
-    return {
-        state: todayState,
-        root: todayView,
-        cachedApi: todayCachedApi,
-        invalidate: swrInvalidate,
-        exRxLineHtml: todayExRxLineHtml,
-        moveCount: todayRxMoveCount,
-        loadProgramAdjustmentsBanner: () => CairnTodayRailController.loadProgramAdjustmentsBanner(todayRailDeps()),
-    };
+    return todayDeps().progression();
 }
 function scheduleRxRefresh() {
     CairnTodayProgressionController.scheduleRxRefresh(todayProgressionDeps());
@@ -571,19 +491,7 @@ async function refreshAdaptedRx() {
     await CairnTodayProgressionController.refreshAdaptedRx(todayProgressionDeps());
 }
 function todayAddExerciseDeps() {
-    return {
-        root: todayView,
-        state: todayState,
-        api: todayApi,
-        postExerciseMode,
-        exCard,
-        wireGuides,
-        wireLogRow,
-        wireSkips,
-        toast,
-        escapeHtml: escHtml,
-        escapeAttr: escAttr,
-    };
+    return todayDeps().addExercise();
 }
 async function setupAddExercise() {
     await CairnTodayAddExerciseController.setupAddExercise(todayAddExerciseDeps());
@@ -592,24 +500,24 @@ async function appendOffPlanCard(name, mode) {
     await CairnTodayAddExerciseController.appendOffPlanCard(name, mode, todayAddExerciseDeps());
 }
 function garminSessionCard(g) {
-    return todaySideLoaders.garminSessionCard(g);
+    return CairnTodaySideLoaders.garminSessionCard(g);
 }
 async function loadWearable(isToday) {
-    await todaySideLoaders.loadWearable(isToday, todaySideLoaderDeps());
+    await CairnTodaySideLoaders.loadWearable(isToday, todaySideLoaderDeps());
 }
 async function loadTableHint() {
-    await todaySideLoaders.loadTableHint(todaySideLoaderDeps());
+    await CairnTodaySideLoaders.loadTableHint(todaySideLoaderDeps());
 }
 // Today context/goal/health rail markup lives in /js/today-context-client.js.
 // This screen keeps API loading, slot liveness checks, and navigation wiring.
 async function loadContextBanner() {
-    await todaySideLoaders.loadContextBanner(todaySideLoaderDeps());
+    await CairnTodaySideLoaders.loadContextBanner(todaySideLoaderDeps());
 }
 async function loadDraftProposals() {
-    await todaySideLoaders.loadDraftProposals(todaySideLoaderDeps());
+    await CairnTodaySideLoaders.loadDraftProposals(todaySideLoaderDeps());
 }
 async function loadHealthFocusBanner() {
-    await todaySideLoaders.loadHealthFocusBanner(todaySideLoaderDeps());
+    await CairnTodaySideLoaders.loadHealthFocusBanner(todaySideLoaderDeps());
 }
 Object.assign(globalThis, {
     postExerciseMode,
