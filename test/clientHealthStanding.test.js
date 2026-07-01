@@ -27,6 +27,7 @@ function loadHealthStanding() {
     "public/js/ui-components.js",
     "public/js/health-evidence-client.js",
     "public/js/health-client.js",
+    "public/js/health-standing-primitives-client.js",
     "public/js/health-standing-client.js",
   ]) {
     vm.runInNewContext(readFileSync(join(root, file), "utf8"), context);

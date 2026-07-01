@@ -206,6 +206,7 @@ function loadPlanEditorController(plan) {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-form-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-controller.js"), "utf8"), context);
   return {
     context,

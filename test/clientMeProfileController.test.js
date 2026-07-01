@@ -163,6 +163,7 @@ function loadController() {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/me-profile-form-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/me-profile-controller.js"), "utf8"), context);
   return { context, rootEl };
 }
