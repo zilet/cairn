@@ -26,6 +26,7 @@ function loadHealthRead() {
   for (const file of [
     "public/js/date-utils.js",
     "public/js/html-utils.js",
+    "public/js/health-evidence-client.js",
     "public/js/health-client.js",
     "public/js/health-read-client.js",
   ]) {

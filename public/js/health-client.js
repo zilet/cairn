@@ -13,11 +13,6 @@
   <polyline points="18,54 32,54 38,40 47,66 54,44 59,54 70,54" fill="none" stroke="#211d17" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="74" cy="54" r="4" fill="#b4552d"/>
 </svg>`;
-    const DIRECTIVE_DOMAINS = [
-        ["nutrition", "Nutrition", "❧"],
-        ["training", "Training", "◇"],
-        ["watch", "Watch", "◉"],
-    ];
     // Browsers leave file.type empty for many .zip/.xml picks — infer from the name
     // so the server's MIME allowlist accepts it. Unknown → octet-stream (rejected).
     function guessUploadMime(file) {
@@ -36,74 +31,6 @@
         if (name.endsWith(".txt"))
             return "text/plain";
         return "application/octet-stream";
-    }
-    function evidenceSafeUrl(value) {
-        const url = String(value ?? "").trim();
-        return /^https?:\/\//i.test(url) ? url.replace(/"/g, "&quot;") : null;
-    }
-    function truncateEvidenceBody(text) {
-        const body = String(text || "").trim();
-        return body.length > 240 ? `${body.slice(0, 237).trimEnd()}…` : body;
-    }
-    function evidenceRow(value) {
-        return value && typeof value === "object" ? value : {};
-    }
-    function evidenceListHtml(evidence) {
-        const rows = (Array.isArray(evidence) ? evidence : [])
-            .map(evidenceRow)
-            .filter((row) => row.source_title || row.source_url || row.claim || row.body)
-            .slice(0, 6);
-        if (!rows.length) {
-            return `<div class="hb-ev-empty">No researched source on file yet — the citation above is the basis for now.</div>`;
-        }
-        return rows
-            .map((row) => {
-            const url = evidenceSafeUrl(row.source_url);
-            const title = String(row.source_title || row.claim || "Source").trim();
-            const titleHtml = url
-                ? `<a class="hb-ev-link" href="${url}" target="_blank" rel="noopener noreferrer">${escHtml(title)}</a>`
-                : `<span class="hb-ev-title">${escHtml(title)}</span>`;
-            const claim = row.claim && row.claim !== title ? `<div class="hb-ev-claim">${escHtml(String(row.claim))}</div>` : "";
-            const bodyText = truncateEvidenceBody(row.body);
-            const body = bodyText ? `<div class="hb-ev-body">${escHtml(bodyText)}</div>` : "";
-            const conf = row.confidence ? `<span class="hb-ev-conf">${escHtml(String(row.confidence))} confidence</span>` : "";
-            return `<div class="hb-ev-row">${titleHtml}${claim}${body}${conf ? `<div class="hb-ev-meta">${conf}</div>` : ""}</div>`;
-        })
-            .join("");
-    }
-    function evidenceCountMap(summary) {
-        const map = new Map();
-        const rows = summary && Array.isArray(summary.by_marker) ? summary.by_marker : [];
-        for (const row of rows) {
-            if (!row || !row.marker)
-                continue;
-            map.set(String(row.marker).toLowerCase(), Number(row.count) || 0);
-        }
-        return map;
-    }
-    function directiveHtml(d, i = 0, evMap = null) {
-        const soft = d.uncertain && !d.citation;
-        const marker = d.marker ? `<span class="hb-dmarker">${escHtml(d.marker)}</span>` : "";
-        const lead = soft ? `<span class="hb-dsoft">Worth looking into · </span>` : "";
-        const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
-        const evCount = d.marker && evMap ? (evMap.get(String(d.marker).toLowerCase()) || 0) : 0;
-        const evidence = d.marker && (d.citation || evCount > 0)
-            ? `<button class="hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
-       <div class="hb-evbox" hidden></div>`
-            : "";
-        return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">
-    <div class="hb-dmain">
-      ${marker}
-      <p class="hb-dtext">${lead}${escHtml(d.directive || "")}</p>
-      ${d.rationale ? `<p class="hb-drat">${escHtml(d.rationale)}</p>` : ""}
-      ${cite}
-      ${evidence}
-    </div>
-    <div class="hb-dctl">
-      <button class="hb-dbtn hb-ddone" data-ddone="${escAttr(d.id)}" title="Mark handled; the coach will stop carrying this unless new results change">Done</button>
-      <button class="hb-dbtn hb-ddismiss" data-ddismiss="${escAttr(d.id)}" title="Dismiss; the coach will avoid repeating this unless the marker materially changes">Dismiss</button>
-    </div>
-  </div>`;
     }
     function healthMarkersEmptyHtml(heroArt = "") {
         return CairnUi.emptyStateHtml({
@@ -363,13 +290,13 @@
         MAX_DOC_TEXT,
         H_FILE_PROMPT,
         HEALTH_HERO_ART,
-        DIRECTIVE_DOMAINS,
+        DIRECTIVE_DOMAINS: CairnHealthEvidence.DIRECTIVE_DOMAINS,
         guessUploadMime,
-        evidenceSafeUrl,
-        truncateEvidenceBody,
-        evidenceListHtml,
-        evidenceCountMap,
-        directiveHtml,
+        evidenceSafeUrl: CairnHealthEvidence.evidenceSafeUrl,
+        truncateEvidenceBody: CairnHealthEvidence.truncateEvidenceBody,
+        evidenceListHtml: CairnHealthEvidence.evidenceListHtml,
+        evidenceCountMap: CairnHealthEvidence.evidenceCountMap,
+        directiveHtml: CairnHealthEvidence.directiveHtml,
         markersEmptyHtml: healthMarkersEmptyHtml,
         formatMarkerNumber,
         sparkDateLabel,

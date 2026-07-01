@@ -27,12 +27,14 @@ function loadHealthClient() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/health-evidence-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-client.js"), "utf8"), context);
   return context.CairnHealthClient;
 }
 
 test("health evidence URLs are http-only and quote-safe", () => {
   const health = loadHealthClient();
+  assert.equal(typeof health.evidenceListHtml, "function");
   assert.equal(health.evidenceSafeUrl("https://example.com/a?x=1"), "https://example.com/a?x=1");
   assert.equal(health.evidenceSafeUrl(`http://example.com/"quote"`), "http://example.com/&quot;quote&quot;");
   assert.equal(health.evidenceSafeUrl("javascript:alert(1)"), null);

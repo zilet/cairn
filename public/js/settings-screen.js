@@ -2,33 +2,6 @@
 // @ts-check
 // ==== settings-screen.js ====
 {
-    function settingsScreenRecord(value) {
-        return value && typeof value === "object" ? value : {};
-    }
-    function settingsString(value, fallback = "") {
-        return typeof value === "string" ? value : fallback;
-    }
-    function settingsNumber(value, fallback = 0) {
-        const n = Number(value);
-        return Number.isFinite(n) ? n : fallback;
-    }
-    function settingsBool(value, fallback = false) {
-        return value == null ? fallback : !!value;
-    }
-    function settingsData(value) {
-        const row = settingsScreenRecord(value);
-        const agents = Array.isArray(row.agents)
-            ? row.agents.map((agent) => settingsScreenRecord(agent)).filter((agent) => typeof agent.name === "string")
-            : [];
-        const eligible = row.research_auto_eligible;
-        return {
-            settings: settingsScreenRecord(row.settings),
-            agents,
-            research_auto_eligible: typeof eligible === "boolean" || (eligible && typeof eligible === "object")
-                ? eligible
-                : undefined,
-        };
-    }
     function requiredEl(selector) {
         const el = $(selector);
         if (!el)
@@ -44,59 +17,9 @@
     function settingsDelay(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
-    function routeEligible(data) {
-        const eligible = data.research_auto_eligible;
-        if (!eligible || typeof eligible !== "object")
-            return null;
-        return eligible;
-    }
-    // ---------- Settings (agent rotation + auto-coach) ----------
-    // Garmin sync status line: colored dot + relative time + the short result the
-    // server recorded ("ok: 12 activities · 14 daily" / "failed: …").
-    const garminStatusLine = (s, syncing) => {
-        return CairnSettingsClient.garminStatusLine(s, syncing, { relTime });
-    };
-    // Agent-health card — a small, calm read on the coaching brain's reliability:
-    // overall ok-rate + per-agent latency, mirroring the art-spend card's ledger
-    // style. NO scores, just plain words. Returns "" when the endpoint is absent or
-    // empty (Stream 1's GET /api/agent-stats may 404 on an older backend → silent).
-    const agentHealthCard = (st) => {
-        return CairnSettingsClient.agentHealthCard(st);
-    };
-    // Plain-language label for an agentic op key (from agent_runs.op) — the activity
-    // log reads in human words, never an internal token. Falls back to a tidied key.
-    const agentOpLabel = (op) => {
-        return CairnSettingsClient.agentOpLabel(op);
-    };
-    // "What Cairn did" — a calm activity log of recent agentic runs, built from
-    // GET /api/agent-stats recent[]. Transparency, NEVER a grade/score: each line is
-    // op · agent · relative time · "clean" or "needed a retry" (a fall-through to the
-    // next agent, or output that needed a repair). Renders nothing when empty/absent.
-    const agentActivityCard = (st) => {
-        return CairnSettingsClient.agentActivityCard(st, { relTime, absDate });
-    };
-    // "What Cairn has noticed" (F2) — the durable learnings drawn from comparing what
-    // the Brief / a session suggestion / a nutrition check-in PROPOSED against what
-    // actually happened (e.g. "tolerates higher training frequency than the read
-    // assumed"). Gentle observations only — pull-never-push, no scores, never a gate;
-    // they just season the coach's defaults. Renders nothing when there's nothing yet.
-    const noticedCard = (data) => {
-        return CairnSettingsClient.noticedCard(data, { relTime, absDate });
-    };
-    // Settings sub-nav: the long single-scroll tab is split into four calm sections,
-    // using the SAME sliding-thumb segmented switcher the Me/Progress/Plan tabs use
-    // (segBar/fitSeg). The slices read from ONE in-memory working model (built once on
-    // entry) so switching sub-tabs never refetches /settings and never loses an unsaved
-    // edit; the floating save bar (mounted once on a stable sentinel) persists the whole
-    // model regardless of which slice is on screen.
-    const SET_SEG = [["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
-    // A state chip for an agent connect-card, derived from the declarative fields the
-    // settings endpoint now supplies (present/configured/can_login/…). Calm, never
-    // alarming: "Not installed" when the CLI binary is missing; otherwise the connection
-    // state — Connected / Connect → / Installed. Returns {cls, label}.
-    const agentChipState = (a) => {
-        return CairnSettingsClient.agentChipState(a || {});
-    };
+    const SET_SEG = CairnSettingsSurface.SET_SEG;
+    const settingsStatus = CairnSettingsSurface.statusHelpers({ relTime, absDate });
+    const { garminStatusLine, agentHealthCard, agentOpLabel, agentActivityCard, noticedCard, agentChipState } = settingsStatus;
     async function renderSettings() {
         headerTitle.textContent = "Settings";
         const [rawData, rawArtStats, agentStats, learnings] = await Promise.all([
@@ -105,7 +28,7 @@
             api("/agent-stats").catch(() => null), // 404s on a backend without telemetry → degrade silently
             api("/learnings").catch(() => null), // F2: outcome learnings → "What Cairn has noticed"; absent on an older backend
         ]);
-        const data = settingsData(rawData);
+        const data = CairnSettingsSurface.settingsData(rawData);
         const artStats = rawArtStats ? rawArtStats : null;
         const s = data.settings;
         const agents = data.agents; // ordered: {name, description, env_ok, enabled, configured?, present?, version?, can_login?, models_list?, usable?}
@@ -113,22 +36,7 @@
         // mirrors into this on change; persistSettings() serializes from HERE (never from
         // DOM elements, which may not be mounted in the active slice). Switching sub-tabs
         // re-renders a slice FROM the model — no refetch, no lost edits.
-        const wm = {
-            agent_strategy: settingsString(s.agent_strategy, "round_robin"),
-            order: agents.map((a) => a.name),
-            disabled: new Set(agents.filter((a) => !a.enabled).map((a) => a.name)),
-            routes: { ...settingsScreenRecord(s.agent_routes) },
-            enrich_enabled: settingsBool(s.enrich_enabled),
-            art_enabled: settingsBool(s.art_enabled, true),
-            research_enabled: settingsBool(s.research_enabled),
-            gemini_api_key: "", // blank = preserve existing; only a typed value is sent
-            garmin_username: settingsString(s.garmin_username),
-            garmin_password: "", // blank = preserve existing
-            coach_enabled: settingsBool(s.coach_enabled),
-            coach_day: settingsNumber(s.coach_day),
-            coach_hour: settingsNumber(s.coach_hour),
-            update_check_enabled: settingsBool(s.update_check_enabled, true),
-        };
+        const wm = CairnSettingsSurface.workingModel(data);
         const meta = Object.fromEntries(agents.map((a) => [a.name, a])); // name → declarative fields
         // lazily-fetched per-agent detail (version/model/update + models list), cached so a
         // re-render of the Agents slice doesn't re-hit the network for what we already have.
@@ -139,18 +47,7 @@
         const agentHealthHtml = agentHealthCard(agentStats);
         const agentActivityHtml = agentActivityCard(agentStats);
         const noticedHtml = noticedCard(learnings);
-        let artSpendHtml = "";
-        if (artStats) {
-            const money = (v) => { const n = Number(v) || 0; return "$" + (n && n < 0.005 ? n.toFixed(4) : n.toFixed(2)); };
-            const t = artStats.since_enabled || {};
-            const a = artStats.all_time || {};
-            const since = artStats.enabled_at ? `since ${escHtml(String(artStats.enabled_at).slice(0, 10))}` : "all-time";
-            artSpendHtml = `
-    <div class="sess" style="margin-top:10px">
-      <div class="sess-line"><b>${money(t.est_cost_usd)}</b> est. spend ${since} · ${t.images_generated} image${t.images_generated === 1 ? "" : "s"} generated · ${t.reused} reused (~${money(t.est_saved_usd)} saved)</div>
-      <div class="sess-line" style="color:var(--muted)">All-time: ${money(a.est_cost_usd)} spent · ${a.images_generated} images · ${artStats.cached_assets} cached, served from cache forever after.</div>
-    </div>`;
-        }
+        const artSpendHtml = artStats ? CairnSettingsSurface.artSpendCardHtml(artStats) : "";
         const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         const routeTasks = typeof settingsRouteTasks === "function" ? settingsRouteTasks(data) : [];
         const inStandaloneApp = (() => {
@@ -241,41 +138,7 @@
             CairnSettingsAgentsController.render(settingsAgentsDeps());
         }
         function renderSourcesSlice() {
-            slice().innerHTML = `
-      <section class="set-group set-group--flush">
-        <p class="set-group-sub">Where your recovery and activity data come in. Both are optional and gracefully absent.</p>
-
-        <h1 class="lbl" style="margin:14px 0 8px">Garmin Connect</h1>
-        <div class="field"><label>Garmin email</label>
-          <input id="garminUsername" type="email" autocomplete="username" value="${escAttr(wm.garmin_username)}" placeholder="you@example.com">
-        </div>
-        <div class="field"><label>Garmin password</label>
-          <input id="garminPassword" type="password" autocomplete="current-password" placeholder="${s.garmin_password_configured ? `Configured via ${escAttr(s.garmin_credentials_source)}` : "Optional: GARMIN_PASSWORD"}">
-        </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings credentials override GARMIN_USERNAME / GARMIN_PASSWORD. Garmin remains an input source for coaching context.</div>
-        <div class="syncrow">
-          <div class="syncstatus" id="garminStatus">${garminStatusLine(s, false)}</div>
-          <button id="garminSyncBtn" class="ghostbtn syncbtn">Sync now</button>
-        </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Once configured, Cairn syncs automatically every ~6 hours.</div>
-
-        <h1 class="lbl" style="margin:22px 0 8px">Apple Health (steps, sleep, recovery)</h1>
-        <div class="sess-line" style="color:var(--muted)">
-          An iOS Shortcut can post daily metrics straight to Cairn. Missing fields are fine; Cairn
-          keeps working without wearable data.
-        </div>
-        <div class="ah-fields">
-          <span>date</span><span>steps</span><span>sleep_min</span><span>resting_hr</span><span>hrv_ms</span><span>active_calories</span>
-        </div>
-        <div class="field" style="margin-top:12px"><label>POST URL</label>
-          <div class="ah-url"><code id="ahUrl"></code><button id="ahUrlCopy" class="ghostbtn ah-copy" type="button">Copy</button></div>
-        </div>
-        <div class="ah-example">
-          <span class="ah-example-lbl">Shortcut body</span>
-          <code>[{"date":"2026-06-13","steps":8421,"resting_hr":52}]</code>
-        </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:8px">Full Shortcut recipe: <code>docs/APPLE_HEALTH.md</code></div>
-      </section>`;
+            slice().innerHTML = CairnSettingsSurface.sourcesSliceHtml({ workingModel: wm, settings: s, garminStatusHtml: garminStatusLine(s, false) });
             requiredEl("#garminUsername").addEventListener("input", (e) => { wm.garmin_username = eventInput(e).value; });
             requiredEl("#garminPassword").addEventListener("input", (e) => { wm.garmin_password = eventInput(e).value; });
             // Manual Garmin sync: pulse while the connector runs, then re-pull /settings so the
@@ -293,7 +156,7 @@
                 catch { }
                 let fresh = s;
                 try {
-                    fresh = settingsData(await api("/settings")).settings;
+                    fresh = CairnSettingsSurface.settingsData(await api("/settings")).settings;
                 }
                 catch { }
                 if (!btn.isConnected)
@@ -322,31 +185,8 @@
                 });
         }
         function renderAutomationSlice() {
-            const researchEligible = routeEligible(data);
-            slice().innerHTML = `
-      <section class="set-group set-group--flush">
-        <p class="set-group-sub">Background touches that make logging effortless. Both fall back gracefully when off.</p>
-
-        <h1 class="lbl" style="margin:14px 0 8px">Agentic enrichment</h1>
-        <label class="toggle"><input type="checkbox" id="enrichEnabled" ${wm.enrich_enabled ? "checked" : ""}>
-          <span>Refine free-text logs &amp; capture coaching notes via an agent</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Logs stay instant; an agent upgrades them in the background. Falls back to offline parsing when off.</div>
-
-        <h1 class="lbl" style="margin:22px 0 8px">Artwork generation</h1>
-        <label class="toggle"><input type="checkbox" id="artEnabled" ${wm.art_enabled ? "checked" : ""}>
-          <span>Generate studio photos for foods, exercises &amp; activities</span></label>
-        <div class="field" style="margin-top:10px"><label>Gemini API key</label>
-          <input id="geminiApiKey" type="password" autocomplete="off" placeholder="${s.gemini_api_key_configured ? `Configured via ${escAttr(s.gemini_api_key_source)}` : "Optional: GOOGLE_AI_KEY / GEMINI_API_KEY"}">
-        </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Settings key overrides GOOGLE_AI_KEY / GEMINI_API_KEY from the server environment. Blank preserves the current key.</div>
-        ${artSpendHtml}
-
-        <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
-        <label class="toggle"><input type="checkbox" id="researchEnabled" ${wm.research_enabled ? "checked" : ""}>
-          <span>Let Cairn research your findings and cite real sources</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” in <b>Me → Health → Read</b>. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
-        ${(!wm.research_enabled && researchEligible?.eligible) ? `<div class="sess-line" id="researchSuggest" style="margin-top:6px">✦ ${researchEligible.reason === "web_agent_connected" ? "Your coach agent can browse — turn this on for live, cited research." : "An agent is connected — you can try live evidence research."}</div>` : ""}
-      </section>`;
+            const researchEligible = CairnSettingsSurface.routeEligible(data);
+            slice().innerHTML = CairnSettingsSurface.automationSliceHtml({ workingModel: wm, settings: s, artSpendHtml, researchEligible });
             requiredEl("#enrichEnabled").addEventListener("change", (e) => { wm.enrich_enabled = eventInput(e).checked; });
             requiredEl("#artEnabled").addEventListener("change", (e) => { wm.art_enabled = eventInput(e).checked; });
             requiredEl("#researchEnabled").addEventListener("change", (e) => { wm.research_enabled = eventInput(e).checked; });

@@ -33,6 +33,7 @@ function loadHealthDirectives() {
   for (const file of [
     "public/js/html-utils.js",
     "public/js/ui-components.js",
+    "public/js/health-evidence-client.js",
     "public/js/health-client.js",
     "public/js/health-directives-client.js",
   ]) {

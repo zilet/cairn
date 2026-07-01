@@ -548,70 +548,19 @@ async function renderToday(opts: any = {}) {
   // exercise → mode map ('reps'|'timed'), used by exCard + the add-exercise flow
   todayState.exModes = Object.fromEntries((exercises || []).map((e: any) => [e.name, e.mode || "reps"]));
   const curW = stats.weight_lb ?? (profile && profile.weight_lb != null ? profile.weight_lb : null);
-  // Compass strip: adherence to this week's plan + weight-trend pace vs the
-  // goal — the two numbers that actually steer the week (raw tonnage/sets/
-  // streak live on in the Progress hero bands).
-  const planned = stats.week_planned || 0, done = stats.week_done || 0;
-  const dots = planned
-    ? `<div class="stat-dots">${Array.from({ length: planned }, (_: any, i: any) => `<span class="stat-dot${i < done ? " on" : ""}"></span>`).join("")}</div>`
-    : "";
-  const fmtPace = (v: any) => (v > 0 ? "+" : "") + (Math.round(v * 10) / 10);
-  // Pace verdict reads in the LANGUAGE of the goal mode — never "behind" when you're
-  // just maintaining (the constitution: kind, never anxious). Plain words, no score.
-  const goalMode = stats.goal_mode || "lose";
-  const PACE_WORDS: any = {
-    lose: { on: "on pace", behind: "behind", fast: "too fast" },
-    gain: { on: "building", behind: "not building yet", fast: "building fast" },
-    maintain: { holding: "holding steady", drifting_up: "drifting up", drifting_down: "easing down" },
-  };
-  const paceWord = (PACE_WORDS[goalMode] || PACE_WORDS.lose)[stats.pace_status] || "";
-  let paceTile = "";
-  if (stats.trend_lb_wk == null) {
-    paceTile = `<div class="stat stat-pace"><div class="stat-n numeral stat-dim">—</div><div class="stat-l lbl">pace · log weigh-ins</div></div>`;
-  } else if (stats.needed_lb_wk == null) {
-    paceTile = `<div class="stat stat-pace"><div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div><div class="stat-l lbl">lb/wk · set a goal</div></div>`;
-  } else {
-    // maintain → just the plain-words state (no "need", no pressure); lose/gain → state + needed pace.
-    const sub = goalMode === "maintain"
-      ? paceWord
-      : `${paceWord}${stats.needed_lb_wk ? ` · need ${fmtPace(stats.needed_lb_wk)}` : ""}`;
-    const title = goalMode === "maintain"
-      ? `Weight trend ${fmtPace(stats.trend_lb_wk)} lb/wk — ${paceWord || "holding steady"}`
-      : `Trend ${fmtPace(stats.trend_lb_wk)} lb/wk over recent weigh-ins${stats.goal_weight_lb != null ? ` · need ${fmtPace(stats.needed_lb_wk)} ${goalMode === "gain" ? "to build toward" : "to reach"} ${stats.goal_weight_lb} lb${stats.goal_date ? ` by ${stats.goal_date}` : ""}` : ""}`;
-    paceTile = `<div class="stat stat-pace pace-${stats.pace_status || "on"}" title="${escAttr(title)}">
-        <div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div>
-        <div class="stat-sub">${escHtml(sub)}</div>
-        <div class="stat-l lbl">lb / week</div>
-      </div>`;
-  }
-  // Pace offer: a calm OPTIONAL line into Chat when the trend genuinely deviates —
-  // a low signal is information, never a verdict. SUPPRESSED entirely in MAINTAIN
-  // mode (holding steady is success — no nudge). Gain offers fuel-up / ease-surplus.
-  const maxSafe = curW != null ? Math.round(curW * 0.01 * 10) / 10 : null;
-  const PACE_OFFER: any = goalMode === "maintain" ? {}
-    : goalMode === "gain" ? {
-        behind: {
-          line: "Not building yet — want to look at fueling together?",
-          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I'm aiming for a lean gain of about ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk. Should we add some calories to build lean mass?`,
-        },
-        fast: {
-          line: "Building a little fast — want to ease the surplus?",
-          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk, faster than my lean-gain pace (~${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk). Should we trim calories so it stays muscle, not fat?`,
-        },
-      }
-    : {
-        fast: {
-          line: "Trending a bit fast — want to look at your pace together?",
-          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but the lean-safe ceiling for me is about -${maxSafe} lb/wk (needed pace ${fmtPace(stats.needed_lb_wk ?? 0)}). Should we add calories or adjust the plan to protect lean mass?`,
-        },
-        behind: {
-          line: "A little behind your goal pace — want to look together?",
-          ask: `My weight trend is ${fmtPace(stats.trend_lb_wk ?? 0)} lb/wk but I need ${fmtPace(stats.needed_lb_wk ?? 0)} lb/wk to hit ${stats.goal_weight_lb} lb by ${stats.goal_date}. What should we tighten — meals, cardio, or the timeline?`,
-        },
-      };
-  const paceOffer = isToday && PACE_OFFER[stats.pace_status]
-    ? `<button class="pace-offer pace-offer-${stats.pace_status}" id="paceOffer">${escHtml(PACE_OFFER[stats.pace_status].line)} · <span class="pace-offer-cta">ask the coach →</span></button>`
-    : "";
+  // Compass strip: adherence to this week's plan + weight-trend pace vs the goal.
+  // The pure helper owns the mode wording and week recap markup; Today keeps
+  // placement and the click into Chat.
+  const todayCompass = CairnTodayCompass.build(stats, {
+    escapeHtml: escHtml,
+    escapeAttr: escAttr,
+    formatKm: fmtKm,
+  }, {
+    currentWeight: curW,
+    isToday,
+    isEndurance: isEndurance(),
+    isHybrid: isHybrid(),
+  });
 
   // ---- The Brief: the day-read leads. A suggestion, never a gate. ----
   // The plan/logging surface is revealed when the read says "train", when the
@@ -878,45 +827,11 @@ async function renderToday(opts: any = {}) {
 
   // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
   if (!focus) {
-    // Discipline-aware emphasis (gentle): an endurance athlete leads with mileage,
-    // a hybrid shows lifts + mileage side by side, a lifter is unchanged. Never
-    // hides a surface — only reorders which number the week opens with.
-    const end = stats.endurance || {};
-    const weekKm = Number(end.week_km) || 0;
-    const mileageTile = `<div class="stat" title="Distance logged this week">
-        <div class="stat-n numeral"><span data-cu="${weekKm}">0</span><span class="stat-frac">km</span></div>
-        <div class="stat-l lbl">this week${end.week_moving_min ? ` · ${Math.round(end.week_moving_min)} min` : ""}</div>
-      </div>`;
-    const adherenceTile = `<div class="stat" title="Training sessions logged this week vs your plan">
-        <div class="stat-n numeral"><span data-cu="${done}">0</span><span class="stat-frac">/${planned || "—"}</span></div>
-        ${dots}
-        <div class="stat-l lbl">this week</div>
-      </div>`;
-    const wtTile = `<button class="stat stat-wt" id="wtChip" title="Log bodyweight">
-        <div class="stat-n numeral" data-wtval>${curW != null ? curW : "—"}<span class="stat-plus">+</span></div>
-        <div class="stat-l lbl">${stats.goal_weight_lb != null ? `lb → ${escHtml(String(stats.goal_weight_lb))}` : "weight · lb"}</div>
-      </button>`;
-    // Compass cells per mode: endurance leads mileage; hybrid pairs lifts+mileage;
-    // strength keeps the original adherence + pace + weight.
-    let compassCells = "";
-    if (isEndurance()) compassCells = `${mileageTile}${paceTile}${wtTile}`;
-    else if (isHybrid()) compassCells = `${adherenceTile}${mileageTile}${wtTile}`;
-    else compassCells = `${adherenceTile}${paceTile}${wtTile}`;
-
-    // Collapsed-state recap: speak to BOTH modalities, ordering by the active
-    // discipline so the summary opens with what the athlete trains for.
-    const liftBit = done ? `${done} lift${done === 1 ? "" : "s"}` : "";
-    const cardioBits = [];
-    if (stats.week_cardio) cardioBits.push(`${stats.week_cardio} cardio`);
-    if (weekKm) cardioBits.push(`${fmtKm(weekKm)} km`);
-    const cardioBit = cardioBits.join(" · ");
-    const recapBits = (isEndurance() ? [cardioBit, liftBit] : [liftBit, cardioBit]).filter(Boolean);
-    const weekRecap = recapBits.join(" · ");
-    html += `${paceOffer}
+    html += `${todayCompass.paceOfferHtml}
     <details class="weekfold" id="weekFold">
-      <summary class="weekfold-sum"><span class="lbl">This week</span>${weekRecap ? `<span class="weekfold-recap">${escHtml(weekRecap)}</span>` : ""}<span class="weekfold-chev" aria-hidden="true">▾</span></summary>
+      <summary class="weekfold-sum"><span class="lbl">This week</span>${todayCompass.weekRecap ? `<span class="weekfold-recap">${escHtml(todayCompass.weekRecap)}</span>` : ""}<span class="weekfold-chev" aria-hidden="true">▾</span></summary>
       <div class="statstrip statstrip-compass">
-        ${compassCells}
+        ${todayCompass.cellsHtml}
       </div>
       <div id="wearStrip"></div>
     </details>`;
@@ -1026,7 +941,7 @@ async function renderToday(opts: any = {}) {
 
   const paceOfferBtn = todayView.querySelector("#paceOffer");
   if (paceOfferBtn) paceOfferBtn.addEventListener("click", () => {
-    todayState.chatPrefill = PACE_OFFER[stats.pace_status]?.ask || "";
+    todayState.chatPrefill = todayCompass.paceOffer?.ask || "";
     activateTab("chat");
   });
 

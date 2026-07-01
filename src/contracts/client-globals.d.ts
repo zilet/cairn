@@ -1100,13 +1100,8 @@ declare global {
       expandEl(el: Element | null | undefined): void;
     };
 
-    CairnHealthClient: {
-      MAX_DOC_BYTES: number;
-      MAX_DOC_TEXT: number;
-      H_FILE_PROMPT: string;
-      HEALTH_HERO_ART: string;
+    CairnHealthEvidence: {
       DIRECTIVE_DOMAINS: readonly (readonly [string, string, string])[];
-      guessUploadMime(file: { type?: unknown; name?: unknown } | null | undefined): string;
       evidenceSafeUrl(value: unknown): string | null;
       truncateEvidenceBody(text: unknown): string;
       evidenceListHtml(evidence: unknown): string;
@@ -1123,6 +1118,14 @@ declare global {
         index?: number,
         evidenceMap?: Map<string, number> | null,
       ): string;
+    };
+
+    CairnHealthClient: Window["CairnHealthEvidence"] & {
+      MAX_DOC_BYTES: number;
+      MAX_DOC_TEXT: number;
+      H_FILE_PROMPT: string;
+      HEALTH_HERO_ART: string;
+      guessUploadMime(file: { type?: unknown; name?: unknown } | null | undefined): string;
       markersEmptyHtml(heroArt?: string): string;
       formatMarkerNumber(value: unknown): string;
       sparkDateLabel(value: unknown): string;
@@ -1537,6 +1540,40 @@ declare global {
       noticedCard(data: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string;
       agentChipState(agent: Record<string, unknown>): { cls: string; label: string };
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
+    };
+
+    CairnSettingsSurface: {
+      SET_SEG: readonly ClientSegment[];
+      record(value: unknown): Record<string, unknown>;
+      string(value: unknown, fallback?: string): string;
+      number(value: unknown, fallback?: number): number;
+      bool(value: unknown, fallback?: boolean): boolean;
+      settingsData(value: unknown): SettingsScreenData;
+      workingModel(data: SettingsScreenData): SettingsScreenWorkingModel;
+      routeEligible(data: SettingsScreenData): { eligible?: boolean; reason?: string } | null;
+      statusHelpers(options?: {
+        relTime?: (value: string) => string;
+        absDate?: (value: string) => string;
+      }): {
+        garminStatusLine(settings: unknown, syncing: boolean): string;
+        agentHealthCard(stats: unknown): string;
+        agentOpLabel(op: unknown): string;
+        agentActivityCard(stats: unknown): string;
+        noticedCard(data: unknown): string;
+        agentChipState(agent: Record<string, unknown> | null | undefined): { cls: string; label: string };
+      };
+      artSpendCardHtml(stats: unknown): string;
+      sourcesSliceHtml(options: {
+        workingModel: Pick<SettingsScreenWorkingModel, "garmin_username">;
+        settings: Record<string, unknown>;
+        garminStatusHtml: string;
+      }): string;
+      automationSliceHtml(options: {
+        workingModel: Pick<SettingsScreenWorkingModel, "enrich_enabled" | "art_enabled" | "research_enabled">;
+        settings: Record<string, unknown>;
+        artSpendHtml: string;
+        researchEligible: { eligible?: boolean; reason?: string } | null;
+      }): string;
     };
 
     CairnSettingsData: {
@@ -2077,6 +2114,40 @@ declare global {
       healthFocusBannerHtml(data: unknown): string;
     };
 
+    CairnTodayCompass: {
+      fmtPace(value: unknown): string;
+      paceWord(stats: unknown): string;
+      paceTileHtml(stats: unknown, deps: {
+        escapeHtml(value: unknown): string;
+        escapeAttr(value: unknown): string;
+        formatKm(value: unknown): string;
+      }): string;
+      paceOffer(stats: unknown, currentWeight: unknown): { status: string; line: string; ask: string } | null;
+      paceOfferHtml(offer: { status: string; line: string; ask: string } | null, deps: {
+        escapeHtml(value: unknown): string;
+        escapeAttr(value: unknown): string;
+        formatKm(value: unknown): string;
+      }): string;
+      build(stats: unknown, deps: {
+        escapeHtml(value: unknown): string;
+        escapeAttr(value: unknown): string;
+        formatKm(value: unknown): string;
+      }, options?: {
+        currentWeight?: unknown;
+        isToday?: unknown;
+        isEndurance?: unknown;
+        isHybrid?: unknown;
+      }): {
+        planned: number;
+        done: number;
+        weekKm: number;
+        cellsHtml: string;
+        paceOfferHtml: string;
+        paceOffer: { status: string; line: string; ask: string } | null;
+        weekRecap: string;
+      };
+    };
+
     CairnTodayGarminReconciliation: {
       load(options: {
         root: ParentNode | null | undefined;
@@ -2101,6 +2172,7 @@ declare global {
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
   declare const CairnDetailOverlay: Window["CairnDetailOverlay"];
   declare const CairnUiMotion: Window["CairnUiMotion"];
+  declare const CairnHealthEvidence: Window["CairnHealthEvidence"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthPictureController: Window["CairnHealthPictureController"];
@@ -2137,6 +2209,7 @@ declare global {
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];
   declare const CairnHealthDocUploadController: Window["CairnHealthDocUploadController"];
   declare const CairnSettingsClient: Window["CairnSettingsClient"];
+  declare const CairnSettingsSurface: Window["CairnSettingsSurface"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsDataController: Window["CairnSettingsDataController"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
@@ -2185,5 +2258,6 @@ declare global {
   declare const CairnTodayProgramAdjustments: Window["CairnTodayProgramAdjustments"];
   declare const CairnTodayWeekAhead: Window["CairnTodayWeekAhead"];
   declare const CairnTodayContext: Window["CairnTodayContext"];
+  declare const CairnTodayCompass: Window["CairnTodayCompass"];
   declare const CairnTodayGarminReconciliation: Window["CairnTodayGarminReconciliation"];
 }
