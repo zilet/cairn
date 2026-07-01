@@ -145,22 +145,24 @@ declare global {
   type ClientTodayRailControllerDeps = {
     root: ParentNode;
     state: {
+      tab?: string;
       logDate: string;
       planJump?: string | null;
+      chatPrefill?: string | null;
       meSeg?: string | null;
       healthSeg?: string | null;
       healthSegPicked?: boolean;
     };
-    api(path: string): Promise<unknown>;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     activateTab(tab: string): unknown;
     gotoChatWith(text: string): unknown;
     collapseEl(el: Element, done?: () => void): void;
-    loadFuelToday(date: string): unknown;
-    loadWeekAhead(): unknown;
-    loadProgramAdjustmentsBanner(): unknown;
     loadTodayReads(): unknown;
-    loadGarminReconcile(): unknown;
-    loadRecentActivities(): unknown;
+    runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
+    escapeHtml(value: unknown): string;
+    toast(message: string): void;
+    invalidate(key: string): void;
+    refreshToday(options: { soft: boolean }): unknown;
   };
 
   type ClientTodayPlanSelectionDay = {
@@ -1440,11 +1442,18 @@ declare global {
         deps: ClientTodayRailControllerDeps,
       ): Promise<ClientTodayAgenda | null>;
       railHtml(agenda: Partial<ClientTodayAgenda> | null | undefined, genericPending: ClientTodayAgendaCandidate[]): string;
+      fallbackRailHtml(isToday: boolean): string;
       runAgendaRail(
         agenda: Partial<ClientTodayAgenda> | null | undefined,
         genericPending: ClientTodayAgendaCandidate[],
         deps: ClientTodayRailControllerDeps,
       ): void;
+      runFallbackRail(isToday: boolean, deps: ClientTodayRailControllerDeps): void;
+      loadFuelToday(date: string, deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadWeekAhead(deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadRecentActivities(deps: ClientTodayRailControllerDeps): Promise<void>;
+      loadGarminReconcile(deps: ClientTodayRailControllerDeps): Promise<void>;
       wireGenericAgendaCards(
         pending: ClientTodayAgendaCandidate[],
         deps: ClientTodayRailControllerDeps,

@@ -7,6 +7,10 @@ import vm from "node:vm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+function flushRailLoaders() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 class FakeElement {
   constructor(tag = "div", attrs = {}) {
     this.tag = tag;
@@ -17,6 +21,8 @@ class FakeElement {
     this.parentElement = null;
     this.listeners = new Map();
     this.removed = false;
+    this.isConnected = true;
+    this.innerHTML = "";
   }
 
   appendChild(child) {
@@ -45,6 +51,7 @@ class FakeElement {
   }
 
   matches(selector) {
+    if (selector.startsWith("#")) return this.attributes.id === selector.slice(1);
     if (selector === "[data-agenda-act]") return Object.hasOwn(this.dataset, "agendaAct");
     if (selector === "[data-agenda-dismiss]") return Object.hasOwn(this.dataset, "agendaDismiss");
     if (selector === ".agenda-card") return this.className.split(/\s+/).includes("agenda-card");
@@ -73,6 +80,10 @@ class FakeElement {
     for (const child of this.children) out.push(...child.querySelectorAll(selector));
     return out;
   }
+
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] || null;
+  }
 }
 
 function loadController({ buckets } = {}) {
@@ -91,6 +102,20 @@ function loadController({ buckets } = {}) {
         pending.push({ id: "generic", kind: "since-last", tier: "primary", priority: 1, title: "New signal" });
         return agenda ? `<aside>${agenda.primary.length}</aside>` : "";
       },
+      fuelCardHtml: () => `<button id="fuelCard"></button>`,
+    },
+    CairnTodayWeekAhead: {
+      cardHtml: () => `<div class="weekahead"></div>`,
+    },
+    CairnTodayProgramAdjustments: {
+      extraCount: () => 0,
+      bannerHtml: () => `<div class="adjust-card"></div>`,
+    },
+    CairnTodayLately: {
+      rowHtml: () => `<div class="lately-row"></div>`,
+    },
+    CairnTodayGarminReconciliation: {
+      load: async () => {},
     },
   };
   context.window = context;
@@ -106,6 +131,12 @@ function makeDeps(rootEl = new FakeElement("section")) {
     state: { logDate: "2026-07-01" },
     api: async (path) => {
       calls.push(["api", path]);
+      if (String(path).startsWith("/nutrition/day")) {
+        return { count: 1, totals: { kcal: 350, protein_g: 28 } };
+      }
+      if (path === "/recent-training?limit=6") {
+        return [{ kind: "cardio", title: "Run", date: "2026-07-01" }];
+      }
       return { hero: {}, primary: [], more: [], total: 0 };
     },
     activateTab: (tab) => calls.push(["tab", tab]),
@@ -114,12 +145,12 @@ function makeDeps(rootEl = new FakeElement("section")) {
       calls.push(["collapse", el]);
       if (done) done();
     },
-    loadFuelToday: (date) => calls.push(["fuel", date]),
-    loadWeekAhead: () => calls.push(["week"]),
-    loadProgramAdjustmentsBanner: () => calls.push(["adjust"]),
     loadTodayReads: () => calls.push(["reads"]),
-    loadGarminReconcile: () => calls.push(["garmin"]),
-    loadRecentActivities: () => calls.push(["lately"]),
+    runCountUps: (el) => calls.push(["countups", el.attributes?.id || el.tag]),
+    escapeHtml: (value) => String(value ?? ""),
+    toast: (message) => calls.push(["toast", message]),
+    invalidate: (key) => calls.push(["invalidate", key]),
+    refreshToday: (options) => calls.push(["refresh", options]),
   };
   return { deps, calls };
 }
@@ -140,7 +171,7 @@ test("Today rail controller fetches only valid agenda payloads", async () => {
   assert.equal(await controller.fetchTodayAgenda("2026-07-02", deps), null);
 });
 
-test("Today rail controller dedupes shared agenda loaders and passes the log date", () => {
+test("Today rail controller dedupes shared agenda loaders and owns rail slot loaders", async () => {
   const controller = loadController({
     buckets: {
       primary: [
@@ -154,14 +185,43 @@ test("Today rail controller dedupes shared agenda loaders and passes the log dat
       ],
     },
   });
-  const { deps, calls } = makeDeps();
+  const rootEl = new FakeElement("section");
+  rootEl.appendChild(new FakeElement("div", { attributes: { id: "fuelSlot" } }));
+  rootEl.appendChild(new FakeElement("div", { attributes: { id: "qlRecent" } }));
+  const { deps, calls } = makeDeps(rootEl);
 
   controller.runAgendaRail({ primary: [], more: [] }, [], deps);
+  await flushRailLoaders();
 
-  assert.deepEqual(calls, [
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ["reads"],
-    ["fuel", "2026-07-01"],
-    ["lately"],
+    ["api", "/nutrition/day?date=2026-07-01"],
+    ["api", "/recent-training?limit=6"],
+    ["countups", "fuelSlot"],
+  ]);
+});
+
+test("Today rail controller fallback rail omits fuel and runs non-fuel fallback loaders", async () => {
+  const controller = loadController();
+  const html = controller.fallbackRailHtml(true);
+  assert.match(html, /weekAheadSlot/);
+  assert.match(html, /adjustSlot/);
+  assert.doesNotMatch(html, /fuelSlot/);
+
+  const rootEl = new FakeElement("section");
+  rootEl.appendChild(new FakeElement("div", { attributes: { id: "weekAheadSlot" } }));
+  rootEl.appendChild(new FakeElement("div", { attributes: { id: "adjustSlot" } }));
+  rootEl.appendChild(new FakeElement("div", { attributes: { id: "qlRecent" } }));
+  const { deps, calls } = makeDeps(rootEl);
+
+  controller.runFallbackRail(true, deps);
+  await flushRailLoaders();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ["api", "/recent-training?limit=6"],
+    ["reads"],
+    ["api", "/week-ahead"],
+    ["api", "/program/adjustments"],
   ]);
 });
 

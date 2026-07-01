@@ -2911,7 +2911,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     todayScreenSource,
     /Object\.assign\(globalThis,\s*\{[\s\S]*postExerciseMode[\s\S]*reconnectDayReadOverride[\s\S]*reconnectSessionSuggest[\s\S]*renderToday[\s\S]*reshapeToday[\s\S]*\}\)/
   );
-  assert.match(todayScreenSource, /CairnTodayGarminReconciliation\.load/);
+  assert.match(todayRailControllerSource, /CairnTodayGarminReconciliation\.load/);
+  assert.doesNotMatch(todayScreenSource, /CairnTodayGarminReconciliation\.load/);
   assert.match(todayScreenSource, /CairnTodaySessionSuggestController\.reconnectSessionSuggest/);
   assert.match(todayScreenSource, /CairnTodaySessionSuggestController\.revealSessionComposer/);
   assert.match(todayScreenSource, /CairnTodaySessionSuggestController\.askForSession/);
@@ -3444,7 +3445,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayLatelyClient, /garminSessionCard/);
   assert.match(todayLatelyClient, /rowHtml: latelyRow/);
   assert.match(today, /CairnTodayLately\.garminSessionCard/);
-  assert.match(today, /CairnTodayLately\.rowHtml/);
+  assert.match(todayRailControllerSource, /CairnTodayLately\.rowHtml/);
+  assert.doesNotMatch(today, /CairnTodayLately\.rowHtml/);
   assert.doesNotMatch(today, /function\s+garminSessionCard\(g\) \{[\s\S]*const\s+tiles\s*=\s*\[\]/);
   assert.doesNotMatch(today, /function\s+latelyRow\(row\) \{[\s\S]*const\s+isStrength\s*=\s*row\.kind/);
   assert.match(proposalClient, /Object\.assign\(globalThis, \{/);
@@ -3750,7 +3752,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /CairnTodayRailController\.fetchTodayAgenda/);
   assert.match(today, /CairnTodayRailController\.railHtml/);
   assert.match(today, /CairnTodayRailController\.runAgendaRail/);
-  assert.match(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
+  assert.match(today, /CairnTodayRailController\.fallbackRailHtml/);
+  assert.match(today, /CairnTodayRailController\.runFallbackRail/);
+  assert.match(todayRailControllerSource, /CairnTodayAgenda\.fuelCardHtml/);
+  assert.doesNotMatch(today, /window\.CairnTodayAgenda\.fuelCardHtml/);
   assert.doesNotMatch(today, /function\s+wireGenericAgendaCards|const\s+TODAY_RAIL_LOADERS|function\s+renderableAgendaBuckets/);
   assert.match(today, /CairnTodayPlanSelection\.suggestedPlanDayNumber/);
   assert.doesNotMatch(today, /function\s+planDayNumberForSession|function\s+nextPlanDayNumber/);
@@ -3780,16 +3785,19 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(today, /CairnTodaySessionController\.wireSkips/);
   assert.doesNotMatch(today, /CairnTodaySessionStatus\.setChipHtml|CairnTodaySessionStatus\.feedbackOpenHtml|CairnTodaySessionStatus\.feedbackFormHtml|CairnTodaySessionStatus\.feedbackDoneHtml/);
   assert.doesNotMatch(today, /function\s+setsTonnage|function\s+feelScale|function\s+renderFeedback|function\s+wireDeletes|function\s+bumpProgress|function\s+refreshFinishStat|function\s+removeOffPlanCard|async function\s+skipFromCard|class="sessiondone reveal"|id="feedbackOpen"|id="feedbackDismiss"|class="skipline/);
-  assert.match(today, /CairnTodayProgramAdjustments\.extraCount/);
-  assert.match(today, /CairnTodayProgramAdjustments\.bannerHtml/);
+  assert.match(todayRailControllerSource, /CairnTodayProgramAdjustments\.extraCount/);
+  assert.match(todayRailControllerSource, /CairnTodayProgramAdjustments\.bannerHtml/);
+  assert.doesNotMatch(today, /CairnTodayProgramAdjustments\.extraCount|CairnTodayProgramAdjustments\.bannerHtml/);
   assert.doesNotMatch(today, /const\s+ADJUST_GLYPH|function\s+adjustPlanRequest|class="adjust-card reveal"|class="adjust-sugs"|data-req="\$\{escAttr\(adjustPlanRequest/);
-  assert.match(today, /CairnTodayWeekAhead\.cardHtml/);
+  assert.match(todayRailControllerSource, /CairnTodayWeekAhead\.cardHtml/);
+  assert.doesNotMatch(today, /CairnTodayWeekAhead\.cardHtml/);
   assert.doesNotMatch(today, /const\s+WEEK_AHEAD_GLYPH|class="weekahead reveal"|class="wa-row/);
   assert.match(today, /CairnTodayContext\.goalLineHtml/);
   assert.match(today, /CairnTodayContext\.contextBannerHtml/);
   assert.match(today, /CairnTodayContext\.healthFocusBannerHtml/);
   assert.doesNotMatch(today, /const\s+CTX_ICONS|function\s+daysUntil|function\s+eventCountdown|function\s+isNearTermContext|function\s+ctxBannerLine|function\s+goalLineHtml/);
-  assert.match(today, /CairnTodayGarminReconciliation\.load/);
+  assert.match(todayRailController, /CairnTodayGarminReconciliation\.load/);
+  assert.doesNotMatch(today, /CairnTodayGarminReconciliation\.load/);
   assert.doesNotMatch(today, /\/garmin\/unreconciled|\/garmin\/reconcile|garmin-reconcile chip-in|function\s+reconcilePromptHtml/);
   assert.match(capture, /function loadTrainingProvenance/);
   assert.match(capture, /function loadTodayReads/);

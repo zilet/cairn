@@ -366,21 +366,13 @@ function todayRailDeps() {
         activateTab,
         gotoChatWith,
         collapseEl,
-        loadFuelToday,
-        loadWeekAhead,
-        loadProgramAdjustmentsBanner,
         loadTodayReads,
-        loadGarminReconcile,
-        loadRecentActivities,
+        runCountUps,
+        escapeHtml: escHtml,
+        toast,
+        invalidate: swrInvalidate,
+        refreshToday: renderToday,
     };
-}
-// Build and run the agenda-governed rail through the typed controller. The screen
-// keeps layout ownership; the controller owns fetch/load/action wiring.
-function buildAgendaRailHtml(agenda, genericPending) {
-    return CairnTodayRailController.railHtml(agenda, genericPending);
-}
-function runAgendaRail(agenda, genericPending) {
-    CairnTodayRailController.runAgendaRail(agenda, genericPending, todayRailDeps());
 }
 async function renderToday(opts = {}) {
     // `soft:true` marks a warm SWR re-render (a background revalidate found new data):
@@ -707,8 +699,8 @@ async function renderToday(opts = {}) {
     // Desktop two-column model (≥1100px): the Brief + capture + logging surface are
     // the PRIMARY column (.today-main); the week-ahead / weekly-read / connection-
     // insight / garmin-reconcile / "lately" are the secondary RIGHT RAIL (.today-rail).
-    // The rail slots keep their stable ids — every loader (loadWeekAhead, loadTodayReads,
-    // loadRecentActivities, loadGarminReconcile) binds to them exactly as before. On
+    // The rail slots keep their stable ids — the rail controller binds each loader to
+    // the same slot ids as before. On
     // mobile/tablet the two wrappers stack (single column): the rail flows right after
     // the capture row, where the week-ahead/reads naturally sat before.
     //
@@ -723,14 +715,6 @@ async function renderToday(opts = {}) {
     // through the agenda (which omits it when nothing's logged), so there is no path,
     // even on a 404/offline fallback, that can render the old "Nothing logged yet"
     // capture nudge. The other rail cards keep a fallback for graceful degradation.
-    const fixedRailHtml = `<aside class="today-rail">
-    ${isToday ? `<div id="weekAheadSlot" class="weekahead-slot"></div>` : ""}
-    ${isToday ? `<div id="adjustSlot" class="adjust-slot"></div>` : ""}
-    <div id="weeklySlot" class="weekly-slot"></div>
-    <div id="insightSlot" class="insight-slot"></div>
-    ${isToday ? `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>` : ""}
-    <div id="qlRecent" class="ql-recent lately-slot"></div>
-  </aside>`;
     let agenda = null;
     const agendaGeneric = []; // generic Era-2 cards we drew (wired after the write)
     // The CONDUCTOR — one sequenced whole-athlete focus (GET /api/coaching-focus), the
@@ -755,7 +739,7 @@ async function renderToday(opts = {}) {
     const conductorLeads = !!conductorHtml; // the thread has something to lead with
     const railHtml = focus
         ? ""
-        : (agenda ? buildAgendaRailHtml(agenda, agendaGeneric) : fixedRailHtml);
+        : (agenda ? CairnTodayRailController.railHtml(agenda, agendaGeneric) : CairnTodayRailController.fallbackRailHtml(isToday));
     let html = focus
         ? focusBarHtml(read, day, { exDone, exTotal, isToday })
         : `${isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
@@ -1061,19 +1045,13 @@ async function renderToday(opts = {}) {
         // ranked order, primary + more), plus wire any generic Era-2 cards. When the
         // agenda is unavailable we fall back to the fixed-rail loaders exactly as before.
         if (agenda) {
-            runAgendaRail(agenda, agendaGeneric);
+            CairnTodayRailController.runAgendaRail(agenda, agendaGeneric, todayRailDeps());
         }
         else {
             // Fallback (agenda route unavailable): the other rail cards still load. Fuel is
-            // intentionally NOT loaded here — it has no slot in fixedRailHtml and surfaces
+            // intentionally NOT loaded here — it has no slot in the fallback rail and surfaces
             // only via the agenda, so the evaluation-only fuel glance is never a capture nudge.
-            loadRecentActivities();
-            if (isToday) {
-                loadTodayReads();
-                loadGarminReconcile();
-                loadWeekAhead();
-                loadProgramAdjustmentsBanner();
-            }
+            CairnTodayRailController.runFallbackRail(isToday, todayRailDeps());
         }
         todayView.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
     }
@@ -1417,7 +1395,7 @@ function todayProgressionDeps() {
         invalidate: swrInvalidate,
         exRxLineHtml: todayExRxLineHtml,
         moveCount: todayRxMoveCount,
-        loadProgramAdjustmentsBanner,
+        loadProgramAdjustmentsBanner: () => CairnTodayRailController.loadProgramAdjustmentsBanner(todayRailDeps()),
     };
 }
 function scheduleRxRefresh() {
@@ -1455,60 +1433,6 @@ async function appendOffPlanCard(name, mode) {
 // one-line read. All server strings via escHtml; numbers coerced. "" without data.
 function garminSessionCard(g) {
     return CairnTodayLately.garminSessionCard(g);
-}
-// ---------- Today: the unified "Lately" feed ----------
-// One timeline of what you actually did — finished strength sessions AND cardio
-// merged (the old "Recent" strip read only the activities table, so it was blind
-// to lifting). Each row carries a real relative time, and a Garmin-synced row taps
-// open to its body-reaction (HR zones, effort, VO2, temp) — the same physiology a
-// strength session already shows. Fed by GET /api/recent-training (FeedRow[]).
-// One row of the Lately feed — strength or cardio, normalized.
-function latelyRow(row) {
-    return CairnTodayLately.rowHtml(row);
-}
-async function loadRecentActivities() {
-    const wrap = todayView.querySelector("#qlRecent");
-    if (!wrap)
-        return;
-    let rows = [];
-    try {
-        rows = await todayApi("/recent-training?limit=6");
-    }
-    catch {
-        rows = [];
-    }
-    if (todayState.tab !== "today" || !wrap.isConnected)
-        return;
-    if (!rows || !rows.length) {
-        wrap.innerHTML = "";
-        return;
-    }
-    wrap.innerHTML =
-        `<div class="lately-h"><span class="ql-recent-h lbl">Lately</span>` +
-            `<button class="lately-all lbl" id="latelyAll" type="button">see all →</button></div>` +
-            rows.map(latelyRow).join("");
-    const allBtn = wrap.querySelector("#latelyAll");
-    if (allBtn)
-        allBtn.addEventListener("click", () => activateTab("progress")); // lands on History
-    wrap.querySelectorAll('.lately-head[role="button"]').forEach((h) => {
-        const toggle = () => {
-            const r = h.closest(".lately-row");
-            const det = r && r.querySelector(".lately-detail");
-            if (!det)
-                return;
-            const open = det.hidden;
-            det.hidden = !open;
-            r.classList.toggle("lately-open", open);
-            h.setAttribute("aria-expanded", open ? "true" : "false");
-        };
-        h.addEventListener("click", toggle);
-        h.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggle();
-            }
-        });
-    });
 }
 // Today: slim Garmin wearable strip under the compass — steps · sleep · resting
 // HR (· HRV) from the most recent garmin_daily_metrics row. Renders nothing at
@@ -1643,128 +1567,6 @@ async function loadDraftProposals() {
     </button>`;
     slot.querySelector("#draftCard").addEventListener("click", () => { todayState.planJump = "coach"; activateTab("plan"); });
 }
-// Today rail: a calm "today's fuel" glance — what's logged today + (only when a
-// real target exists) a gentle "remaining". Never a score, "remaining" not
-// "consumed", never red. Capture stays in Chat — this card is purely a REVIEW that
-// taps through to the full editable day (Plan → Food).
-//
-// The fuel surface is an EVALUATION glance, NEVER a "log something" prompt: over
-// time people log food less and just evaluate occasionally as the habit builds, so
-// an empty day surfaces NOTHING here (the salience arbiter already omits the `fuel`
-// candidate when count <= 0). This function is only ever called with logged food;
-// it returns "" defensively if handed an empty day so no capture nudge can render.
-function fuelCardHtml(d) {
-    return window.CairnTodayAgenda.fuelCardHtml(d);
-}
-async function loadFuelToday(date) {
-    const slot = todayView.querySelector("#fuelSlot");
-    if (!slot)
-        return;
-    let d = null;
-    try {
-        d = await todayApi(`/nutrition/day?date=${encodeURIComponent(date || todayState.logDate)}`);
-    }
-    catch {
-        return;
-    }
-    if (todayState.tab !== "today" || !slot.isConnected)
-        return;
-    // Empty / nothing logged → render nothing (no capture prompt — capture is Chat-only).
-    if (!d || typeof d !== "object" || !(Number(d.count) > 0)) {
-        slot.innerHTML = "";
-        return;
-    }
-    slot.innerHTML = fuelCardHtml(d);
-    const card = slot.querySelector("#fuelCard");
-    // The card only renders with logged food now, so it always taps through to the
-    // editable day review (Plan → Food) — never into a "log something" chat prompt.
-    if (card)
-        card.addEventListener("click", () => { todayState.planJump = "food"; activateTab("plan"); });
-    runCountUps(slot);
-}
-// Today: a calm "week ahead" sketch. Rendering lives in
-// /js/today-week-ahead-client.js; this screen keeps API loading and slot wiring.
-async function loadWeekAhead() {
-    const slot = todayView.querySelector("#weekAheadSlot");
-    if (!slot)
-        return;
-    let r = null;
-    try {
-        r = await todayApi("/week-ahead");
-    }
-    catch {
-        return;
-    }
-    if (todayState.tab !== "today" || !slot.isConnected)
-        return;
-    slot.innerHTML = CairnTodayWeekAhead.cardHtml(r);
-}
-// Today rail: a calm, self-explaining "what changed" card — the handful of
-// adaptations the program engine noticed (a lift to push/deload, a group that's
-// due, a missing pattern). Each row TAPS OPEN in place to reveal the plain-words
-// WHY plus concrete movements to do about it ("Try Back Squat · Walking Lunge")
-// and a "Plan it →" that hands the coach a tailored request (a DRAFT proposal,
-// never auto-applied). So the athlete sees WHAT changed, WHY, and HAS something to
-// do. The card is ACUTE-recovery aware: a group you just torched (a long ride/run
-// or a heavy session) is held back and reframed ("Quads — recovering"), never put
-// up as the next move. "+N more" expands the rest IN PLACE (no yank to a charts
-// screen); the header "My plan →" opens the actual plan. Pull, never push: it waits
-// quietly and renders NOTHING when there's nothing to say. Best-effort + null-safe.
-// Today program-adjustment rail markup lives in /js/today-program-adjustments-client.js.
-// This screen keeps API loading, tab navigation, and expand/collapse wiring.
-async function loadProgramAdjustmentsBanner() {
-    const slot = todayView.querySelector("#adjustSlot");
-    if (!slot)
-        return;
-    let rows = null;
-    try {
-        rows = await todayApi("/program/adjustments");
-    }
-    catch {
-        rows = null;
-    }
-    if (todayState.tab !== "today" || !slot.isConnected)
-        return;
-    rows = Array.isArray(rows) ? rows : [];
-    if (!rows.length) {
-        slot.innerHTML = "";
-        return;
-    }
-    const more = CairnTodayProgramAdjustments.extraCount(rows);
-    slot.innerHTML = CairnTodayProgramAdjustments.bannerHtml(rows);
-    const card = slot.querySelector(".adjust-card");
-    if (!card)
-        return;
-    card.addEventListener("click", (e) => {
-        const act = e.target.closest(".adjust-act");
-        if (act) {
-            todayState.chatPrefill = act.getAttribute("data-req") || "";
-            activateTab("chat");
-            return;
-        }
-        // "My plan →" opens the actual plan (where changes land), not the charts/history.
-        if (e.target.closest("#adjustAll")) {
-            activateTab("plan");
-            return;
-        }
-        // "+N more" / "Show less" reveals the rest of the adaptations IN PLACE.
-        const moreBtn = e.target.closest("#adjustMore");
-        if (moreBtn) {
-            const open = card.classList.toggle("adjust-open");
-            moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
-            moreBtn.textContent = open ? "Show less" : `+${more} more in your program`;
-            return;
-        }
-        const item = e.target.closest(".adjust-item");
-        if (item) {
-            const open = item.getAttribute("aria-expanded") === "true";
-            item.setAttribute("aria-expanded", open ? "false" : "true");
-            const detail = item.parentElement.querySelector(".adjust-detail");
-            if (detail)
-                detail.hidden = open;
-        }
-    });
-}
 // Today: one quiet health-focus line from the latest whole-picture review (first
 // focus title + action), mirroring the context banner. Tap → Me → Health.
 // Renders nothing when there's no review or no focus items — zero noise.
@@ -1795,25 +1597,6 @@ async function loadHealthFocusBanner() {
         todayState.healthSeg = "read";
         todayState.healthSegPicked = true;
         activateTab("me");
-    });
-}
-// Today: a calm "Garmin logged a lift that isn't in Cairn yet — reconcile?" card.
-// Pull, never push: it waits quietly when the watch synced a strength activity that
-// hasn't been linked to a session (session_id null), and renders NOTHING otherwise —
-// so it never appears unless Garmin is configured AND there's an unlinked lift. The
-// single Reconcile action runs the deterministic physiology merge (POST /garmin/
-// reconcile), then refreshes Today so the reconciled garminSessionCard / Lately row
-// replaces this. Degrades silently: a failed fetch → empty slot.
-async function loadGarminReconcile() {
-    await CairnTodayGarminReconciliation.load({
-        root: todayView,
-        date: todayState.logDate,
-        isCurrentToday: () => todayState.tab === "today",
-        api: todayApi,
-        escapeHtml: escHtml,
-        toast,
-        invalidate: swrInvalidate,
-        refreshToday: renderToday,
     });
 }
 Object.assign(globalThis, {
