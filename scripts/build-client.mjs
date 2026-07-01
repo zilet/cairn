@@ -52,6 +52,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-run-plan-client.ts", output: "public/js/progress-run-plan-client.js" },
   { source: "src/client/progress-volume-client.ts", output: "public/js/progress-volume-client.js" },
   { source: "src/client/progress-energy-client.ts", output: "public/js/progress-energy-client.js" },
+  { source: "src/client/progress-energy-surface-client.ts", output: "public/js/progress-energy-surface-client.js" },
   { source: "src/client/progress-calendar-client.ts", output: "public/js/progress-calendar-client.js" },
   { source: "src/client/progress-muscle-trajectory-client.ts", output: "public/js/progress-muscle-trajectory-client.js" },
   { source: "src/client/progress-dexa-targeting-client.ts", output: "public/js/progress-dexa-targeting-client.js" },

@@ -634,122 +634,9 @@ async function renderEnergy() {
     }).catch(() => { if (peek && !peek.fresh)
         markRefreshing(false); });
 }
-// Fill the Energy Balance hero + card from a derived-expenditure payload. Leaves
-// #checkinResult untouched (the check-in renders there independently). Idempotent.
-function paintEnergyBody(exp) {
-    const rendered = CairnProgressEnergy.energyBodyHtml(exp);
-    const heroWrap = view.querySelector("#energyHero");
-    if (heroWrap) {
-        heroWrap.innerHTML = rendered.heroHtml;
-        runCountUps(heroWrap);
-    }
-    const card = view.querySelector("#energyCard");
-    if (!card)
-        return;
-    card.innerHTML = rendered.cardHtml;
-    const btn = view.querySelector("#runCheckin");
-    if (btn)
-        btn.addEventListener("click", () => runNutritionCheckin(btn));
-}
-// Nutrition check-in: a REVIEWED recommendation, never auto-applied. The common
-// case is "no change needed". When the trend has genuinely moved, the agent
-// drafts a target the user can take into their meal plan — advisory, dismissible.
-// Run the nutrition check-in as a durable background job (POST /nutrition/checkin),
-// so a long agentic read survives a tab switch / reload mid-run and streams its
-// evolving caption into #checkinResult. runOp renders the inline result at once
-// when background ops are off. The render mirrors the old await path exactly:
-// no-change card on r.change===false, the advisory proposal otherwise; ok:false
-// (or unreachable) is the gentle failure line.
-function runNutritionCheckin(btn) {
-    const out = view.querySelector("#checkinResult");
-    if (!out)
-        return;
-    const restore = btnBusy(btn, "Checking…");
-    // A .job-cap carries the evolving thinkingCaption while the agent reads.
-    out.innerHTML = CairnProgressEnergy.nutritionCheckinLoadingHtml();
-    runOp("nutrition_checkin", { window: 21 }, nutritionCheckinOpOpts(restore));
-}
-// Shared runOp options for the nutrition check-in — used by the live trigger and
-// the reload reconnector, so the render/fail behavior is identical either way.
-function nutritionCheckinOpOpts(restore) {
-    const done = () => { try {
-        restore && restore();
-    }
-    catch { } };
-    return {
-        path: "/nutrition/checkin",
-        anchor: "#checkinResult",
-        caption: "nutrition_checkin",
-        guard: () => { const gone = !view.querySelector("#checkinResult")?.isConnected; if (gone)
-            done(); return gone; },
-        isFail: (r) => {
-            const row = progressRecord(r);
-            return !isProgressRecord(r) || row.ok === false || !!row.error;
-        },
-        render: (r) => {
-            const row = progressRecord(r);
-            done();
-            const out = view.querySelector("#checkinResult");
-            if (!out)
-                return;
-            if (!row.change) {
-                out.innerHTML = CairnProgressEnergy.nutritionCheckinOkHtml(row);
-                return;
-            }
-            renderCheckinProposal(out, row);
-        },
-        onFail: () => {
-            done();
-            const out = view.querySelector("#checkinResult");
-            if (out)
-                out.innerHTML = CairnProgressEnergy.nutritionCheckinFailHtml();
-        },
-    };
-}
-// Reconnector: after a reload mid-check-in, rebuild the loading line in
-// #checkinResult and return the handlers runOp would have used.
-function reconnectNutritionCheckin() {
-    const out = view.querySelector("#checkinResult");
-    if (!out)
-        return null; // not on Energy — a later renderEnergy() retries reconnect
-    out.innerHTML = CairnProgressEnergy.nutritionCheckinLoadingHtml();
-    const o = nutritionCheckinOpOpts(null);
-    let stop = () => { };
-    const capEl = out.querySelector(".job-cap");
-    if (capEl)
-        stop = thinkingCaption(capEl, o.caption);
-    return {
-        guard: o.guard,
-        onDone: (result) => { stop(); if (o.isFail(result))
-            o.onFail(result);
-        else
-            o.render(result); },
-        onError: () => { stop(); o.onFail(null); },
-        onCanceled: () => { stop(); o.onFail(null); },
-    };
-}
-// A calm, reviewable advisory card. NOT applied — there's no apply endpoint for
-// this; calories live in the meal plan's daily_kcal. The user takes the read
-// into a meal-plan regenerate, or just acknowledges it.
-function renderCheckinProposal(out, r) {
-    out.innerHTML = CairnProgressEnergy.nutritionCheckinProposalHtml(r);
-    runCountUps(out);
-    const go = out.querySelector("#ckGoMeals");
-    if (go)
-        go.addEventListener("click", () => {
-            state.planJump = "meals";
-            activateTab("plan");
-        });
-    const dismiss = out.querySelector("#ckDismiss");
-    if (dismiss)
-        dismiss.addEventListener("click", () => {
-            const card = out.querySelector(".eb-proposal");
-            if (card)
-                collapseEl(card, () => { out.innerHTML = ""; });
-            else
-                out.innerHTML = "";
-        });
-}
+// Energy Balance DOM painting and durable nutrition check-in reconnect live in
+// /js/progress-energy-surface-client.js so Progress and Plan Food share one
+// implementation. This screen keeps only the route/SWR shell above.
 // ---------- Progress: Program (adaptive program intelligence) ----------
 // Renders GET /api/program-state as a calm editorial read of how the athlete's
 // program is evolving. No 0–100 scores. Constitution: calm, suggestion-not-a-gate,
@@ -955,7 +842,6 @@ async function tidyExerciseNames(btn) {
     }
 }
 Object.assign(globalThis, {
-    reconnectNutritionCheckin,
     renderCalendar,
     renderEnergy,
     renderEndurance,

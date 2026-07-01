@@ -983,6 +983,11 @@ declare global {
       nutritionCheckinProposalHtml(result: unknown): string;
     };
 
+    CairnProgressEnergySurface: {
+      paintEnergyBody(exp: unknown): void;
+      reconnectNutritionCheckin(): ClientAgentOpHandlers | null;
+    };
+
     CairnProgressCalendar: {
       calMonthHtml(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number): string;
     };
@@ -1249,6 +1254,7 @@ declare global {
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];
   declare const CairnProgressVolume: Window["CairnProgressVolume"];
   declare const CairnProgressEnergy: Window["CairnProgressEnergy"];
+  declare const CairnProgressEnergySurface: Window["CairnProgressEnergySurface"];
   declare const CairnProgressCalendar: Window["CairnProgressCalendar"];
   declare const CairnProgressMuscleTrajectory: Window["CairnProgressMuscleTrajectory"];
   declare const CairnProgressDexaTargeting: Window["CairnProgressDexaTargeting"];

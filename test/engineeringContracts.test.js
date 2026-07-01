@@ -721,6 +721,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
   assert.match(sw, /"\/js\/progress-volume-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-client\.js"/);
+  assert.match(sw, /"\/js\/progress-energy-surface-client\.js"/);
   assert.match(sw, /"\/js\/progress-calendar-client\.js"/);
   assert.match(sw, /"\/js\/progress-muscle-trajectory-client\.js"/);
   assert.match(sw, /"\/js\/progress-dexa-targeting-client\.js"/);
@@ -1003,6 +1004,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressRunPlanSource = read("src/client/progress-run-plan-client.ts");
   const progressVolumeSource = read("src/client/progress-volume-client.ts");
   const progressEnergySource = read("src/client/progress-energy-client.ts");
+  const progressEnergySurfaceSource = read("src/client/progress-energy-surface-client.ts");
   const progressCalendarSource = read("src/client/progress-calendar-client.ts");
   const progressMuscleTrajectorySource = read("src/client/progress-muscle-trajectory-client.ts");
   const progressDexaTargetingSource = read("src/client/progress-dexa-targeting-client.ts");
@@ -1104,6 +1106,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const progressRunPlanClient = read("public/js/progress-run-plan-client.js");
   const progressVolumeClient = read("public/js/progress-volume-client.js");
   const progressEnergyClient = read("public/js/progress-energy-client.js");
+  const progressEnergySurfaceClient = read("public/js/progress-energy-surface-client.js");
   const progressCalendarClient = read("public/js/progress-calendar-client.js");
   const progressMuscleTrajectoryClient = read("public/js/progress-muscle-trajectory-client.js");
   const progressDexaTargetingClient = read("public/js/progress-dexa-targeting-client.js");
@@ -1265,6 +1268,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function kcalFmt\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function energyRead\(exp: unknown\)/);
   assert.match(clientGlobals, /CairnProgressEnergy/);
+  assert.match(clientGlobals, /CairnProgressEnergySurface/);
+  assert.match(clientGlobals, /reconnectNutritionCheckin\(\): ClientAgentOpHandlers \| null/);
   assert.match(clientGlobals, /energyBodyHtml\(exp: unknown\): \{ heroHtml: string; cardHtml: string \}/);
   assert.match(clientGlobals, /nutritionCheckinProposalHtml\(result: unknown\): string/);
   assert.match(clientGlobals, /declare function calMonthHtml\(ym: string, byDate: Map<string, unknown>, todayIso: string, idx: number\): string/);
@@ -1403,6 +1408,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-run-plan-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-volume-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-energy-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/progress-energy-surface-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-calendar-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-muscle-trajectory-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/progress-dexa-targeting-client\.js/);
@@ -1528,6 +1534,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-volume-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-energy-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-energy-client\.js/);
+  assert.match(clientBuild, /src\/client\/progress-energy-surface-client\.ts/);
+  assert.match(clientBuild, /public\/js\/progress-energy-surface-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-calendar-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-calendar-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-muscle-trajectory-client\.ts/);
@@ -1832,7 +1840,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "progress-energy-client.js must load before Progress Energy consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-calendar-client.js") > index.indexOf("/js/progress-energy-client.js") &&
+    index.indexOf("/js/progress-energy-surface-client.js") > index.indexOf("/js/progress-energy-client.js") &&
+      index.indexOf("/js/progress-energy-surface-client.js") < index.indexOf("/js/05-progress.js") &&
+      index.indexOf("/js/progress-energy-surface-client.js") < index.indexOf("/js/06-coach-meals.js"),
+    "progress-energy-surface-client.js must load before Progress and Meals energy consumers"
+  );
+  assert.ok(
+    index.indexOf("/js/progress-calendar-client.js") > index.indexOf("/js/progress-energy-surface-client.js") &&
       index.indexOf("/js/progress-calendar-client.js") < index.indexOf("/js/05-progress.js"),
     "progress-calendar-client.js must load before Progress Calendar consumers"
   );
@@ -2098,6 +2112,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressRunPlanClient, /\/\/ @ts-check/);
   assert.match(progressVolumeClient, /\/\/ @ts-check/);
   assert.match(progressEnergyClient, /\/\/ @ts-check/);
+  assert.match(progressEnergySurfaceClient, /\/\/ @ts-check/);
   assert.match(progressCalendarClient, /\/\/ @ts-check/);
   assert.match(progressMuscleTrajectoryClient, /\/\/ @ts-check/);
   assert.match(progressDexaTargetingClient, /\/\/ @ts-check/);
@@ -2198,6 +2213,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/progress-volume-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-energy-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-energy-client\.js/);
+  assert.match(clientBuild, /src\/client\/progress-energy-surface-client\.ts/);
+  assert.match(clientBuild, /public\/js\/progress-energy-surface-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-calendar-client\.ts/);
   assert.match(clientBuild, /public\/js\/progress-calendar-client\.js/);
   assert.match(clientBuild, /src\/client\/progress-muscle-trajectory-client\.ts/);
@@ -2540,6 +2557,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnergySource, /function nutritionCheckinProposalHtml\(result: NutritionCheckinResult \| null \| undefined\): string/);
   assert.match(progressEnergySource, /Object\.assign\(globalThis, \{/);
   assert.match(progressEnergySource, /CairnProgressEnergy/);
+  assert.match(progressEnergySurfaceSource, /function paintEnergyBody\(exp: unknown\): void/);
+  assert.match(progressEnergySurfaceSource, /function nutritionCheckinOpOpts\(restore: \(\(\) => void\) \| null\)/);
+  assert.match(progressEnergySurfaceSource, /function reconnectNutritionCheckin\(\): ClientAgentOpHandlers \| null/);
+  assert.match(progressEnergySurfaceSource, /function renderCheckinProposal\(out: Element, result: unknown\): void/);
+  assert.match(progressEnergySurfaceSource, /CairnProgressEnergySurface/);
   assert.match(progressCalendarSource, /function calMonthHtml\(ym: string, byDate: Map<string, CalendarCell>, todayIso: string, idx: number\): string/);
   assert.match(progressCalendarSource, /Object\.assign\(globalThis, \{/);
   assert.match(progressCalendarSource, /CairnProgressCalendar/);
@@ -2588,7 +2610,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramBlockSource, /CairnProgressProgramBlock/);
   assert.match(progressScreenSource, /function renderHistory\(\)/);
   assert.match(progressScreenSource, /function renderProgram\(\)/);
-  assert.match(progressScreenSource, /function nutritionCheckinOpOpts\(restore: \(\(\) => void\) \| null\)/);
+  assert.doesNotMatch(progressScreenSource, /function nutritionCheckinOpOpts|function reconnectNutritionCheckin|function renderCheckinProposal|function runNutritionCheckin/);
   assert.match(progressScreenSource, /var _progFocusCard: string \| undefined/);
   assert.match(captureSource, /type CaptureDirective = import\("\.\.\/contracts\/client\.js"\)\.ClientDirective/);
   assert.match(captureSource, /function loadTodayReads\(\): Promise<void>/);
@@ -2978,12 +3000,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressEnergyClient, /nutritionCheckinLoadingHtml/);
   assert.match(progressEnergyClient, /nutritionCheckinProposalHtml/);
   assert.doesNotMatch(progressEnergyClient, /^const\s+ENERGY_CONF_WORD|^function\s+kcalFmt/m);
+  assert.match(progressEnergySurfaceClient, /Object\.assign\(globalThis,\s*\{[\s\S]*CairnProgressEnergySurface: CAIRN_PROGRESS_ENERGY_SURFACE/);
+  assert.match(progressEnergySurfaceClient, /paintEnergyBody,/);
+  assert.match(progressEnergySurfaceClient, /reconnectNutritionCheckin,/);
+  assert.match(progressEnergySurfaceClient, /runOp\("nutrition_checkin", \{ window: 21 \}, nutritionCheckinOpOpts\(restore\)\)/);
   assert.doesNotMatch(progress, /const\s+kcalFmt|function\s+energyRead|const\s+CONF_WORD|const\s+macroBits|prev_target_kcal|eb-checkin-ok settle-in|eb-checkin-quiet/);
-  assert.match(progress, /CairnProgressEnergy\.energyBodyHtml\(exp\)/);
-  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinLoadingHtml\(\)/);
-  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinOkHtml\(row\)/);
-  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinFailHtml\(\)/);
-  assert.match(progress, /CairnProgressEnergy\.nutritionCheckinProposalHtml\(r\)|CairnProgressEnergy\.nutritionCheckinProposalHtml\(row\)/);
+  assert.match(progressEnergySurfaceClient, /CairnProgressEnergy\.energyBodyHtml\(exp\)/);
+  assert.match(progress, /paintEnergyBody\(exp\)/);
+  assert.match(meals, /paintEnergyBody\(exp\)/);
+  assert.doesNotMatch(progress, /CairnProgressEnergy\.nutritionCheckinLoadingHtml\(\)|CairnProgressEnergy\.nutritionCheckinOkHtml|CairnProgressEnergy\.nutritionCheckinFailHtml|CairnProgressEnergy\.nutritionCheckinProposalHtml/);
   assert.match(progressCalendarClient, /Object\.assign\(globalThis, \{/);
   assert.match(progressCalendarClient, /CairnProgressCalendar/);
   assert.doesNotMatch(progress, /function\s+calMonthHtml/);
@@ -3311,6 +3336,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
   assert.match(sw, /"\/js\/progress-volume-client\.js"/);
   assert.match(sw, /"\/js\/progress-energy-client\.js"/);
+  assert.match(sw, /"\/js\/progress-energy-surface-client\.js"/);
   assert.match(sw, /"\/js\/progress-calendar-client\.js"/);
   assert.match(sw, /"\/js\/progress-muscle-trajectory-client\.js"/);
   assert.match(sw, /"\/js\/progress-dexa-targeting-client\.js"/);
