@@ -4768,12 +4768,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appMobileViewportSource, /function installMobileViewportGuards\(\): void/);
   assert.match(appMobileViewportSource, /measureChatTop/);
   assert.match(appMobileViewportSource, /window\.visualViewport/);
-  assert.match(appMobileViewportSource, /let chatFocusGraceUntil = 0/);
   assert.match(appMobileViewportSource, /classList\.toggle\("kb-geometry-open", geometryOpen\)/);
-  assert.match(appMobileViewportSource, /const scheduleStaleChatFocusRelease = \(\) =>/);
-  assert.match(appMobileViewportSource, /Date\.now\(\) < chatFocusGraceUntil/);
+  // Recovery is refocus-only — the guard never blurs the composer by heuristic;
+  // vvMax is re-baselined on resume only when no text input is focused (keyboard down).
+  assert.doesNotMatch(appMobileViewportSource, /\.blur\(\)/);
+  assert.match(appMobileViewportSource, /const reseedAndResync = \(\) => \{ if \(!focusedTextInput\(\)\) vvMax = vv\.height/);
+  assert.match(appMobileViewportSource, /Math\.round\(Math\.max\(0, rawVvb\)\)/);
   assert.match(appMobileViewportSource, /document\.addEventListener\("cairn:keyboard-settle"/);
-  assert.match(appMobileViewportSource, /Math\.min\(chatFocusGraceMs, 2400\)/);
+  assert.match(appMobileViewportSource, /Math\.min\(nativePickerSuppressMs, 1800\)/);
   assert.match(appServiceWorkerSource, /function registerServiceWorkerLifecycle\(\): void/);
   assert.match(appServiceWorkerSource, /__cairnSwLifecycleStarted/);
   assert.match(appServiceWorkerSource, /navigator\.serviceWorker\.addEventListener\("controllerchange"/);

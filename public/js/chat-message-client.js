@@ -97,6 +97,10 @@ function appendMsg(m, noScroll = false, parent = null, opts = {}) {
     const host = parent || log;
     if (!host)
         return null; // log torn down (tab switch mid-stream) -- bail safely
+    // Follow to the bottom only when the reader is already near it (measured BEFORE
+    // any DOM mutation below grows the log). A turn finalizing while someone scrolled
+    // up to re-read must not yank them down (D6 · 200px proximity rule).
+    const stickBottom = !log || log.scrollHeight - log.scrollTop - log.clientHeight < 200;
     const readonly = !!opts.readonly;
     // Optional position-preserving insert: a streaming turn finalizes in place even
     // when a queued follow-up's pending bubble already sits below it.
@@ -139,7 +143,7 @@ function appendMsg(m, noScroll = false, parent = null, opts = {}) {
         const lead = content && content !== "…" ? `${escHtml(content)} ` : "";
         el.innerHTML = `<div class="bubble-text"><span class="typing-cap">${lead}</span><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span></div>`;
         host.appendChild(el);
-        if (!noScroll && log)
+        if (!noScroll && log && stickBottom)
             log.scrollTop = log.scrollHeight;
         return el;
     }
@@ -224,7 +228,7 @@ function appendMsg(m, noScroll = false, parent = null, opts = {}) {
         el.querySelector(".bubble-copy")?.addEventListener("click", () => copyText(m.content));
         attachLongPressCopy(el, m.content);
     }
-    if (!noScroll && log && (!before || before === host.lastElementChild))
+    if (!noScroll && log && stickBottom && (!before || before === host.lastElementChild))
         log.scrollTop = log.scrollHeight;
     return el;
 }

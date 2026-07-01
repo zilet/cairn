@@ -12,11 +12,13 @@ type ChatTurnMonitorDeps = {
   hasLog(): boolean;
   pendingIds(): number[];
   createStream(id: number): ChatTurnMonitorSource | null;
+  poll(id: number): Promise<ChatTurnMonitorRow | null>;
   parse(event: Event): ChatTurnMonitorRow | null;
   record(value: unknown): ChatTurnMonitorRow;
   phase(id: number, turnValue: unknown): void;
   progress(id: number, text: unknown): void;
   delta(id: number, text: unknown): void;
+  replace(id: number, text: unknown): void;
   reset(id: number): void;
   finish(turnValue: unknown, messageValue?: unknown): void;
   cancel(turnValue: unknown): void;
@@ -34,16 +36,24 @@ type ChatTurnMonitorApi = {
 function createChatTurnMonitor(deps: ChatTurnMonitorDeps): ChatTurnMonitor {
   let stream: ChatTurnMonitorSource | null = null;
   let streamId: number | null = null;
+  let polling = false;
+  let pollTimer: ReturnType<typeof setTimeout> | 0 = 0;
 
   function closeSource(source: ChatTurnMonitorSource | null): void {
     if (!source) return;
     try { source.close(); } catch {}
   }
 
+  function stopPolling(): void {
+    polling = false;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = 0; }
+  }
+
   function close(): void {
     const source = stream;
     stream = null;
     streamId = null;
+    stopPolling();
     closeSource(source);
   }
 
@@ -59,7 +69,7 @@ function createChatTurnMonitor(deps: ChatTurnMonitorDeps): ChatTurnMonitor {
   }
 
   function ensure(): void {
-    if (stream || !deps.isActive()) return;
+    if (stream || polling || !deps.isActive()) return;
     const ids = deps.pendingIds()
       .filter((id) => Number.isFinite(id))
       .sort((a, b) => a - b);
@@ -84,18 +94,47 @@ function createChatTurnMonitor(deps: ChatTurnMonitorDeps): ChatTurnMonitor {
     return ["done", "error", "canceled"].includes(String(status || ""));
   }
 
+  // Poll fallback — used when EventSource can't be constructed (unsupported/blocked).
+  // GET /chat/turns/:id carries the turn's status/phase + the reply prose streamed
+  // so far, so a poll-driven client fills the bubble and finalizes just like SSE
+  // (minus token-level deltas). Stops itself the moment Chat is torn down.
+  function startPolling(id: number): void {
+    polling = true;
+    streamId = id;
+    const schedule = () => { pollTimer = setTimeout(tick, 1400); };
+    const tick = async (): Promise<void> => {
+      if (!polling) return;
+      if (!deps.isActive() || !deps.hasLog()) { close(); return; }
+      let row: ChatTurnMonitorRow | null = null;
+      try { row = await deps.poll(id); } catch { /* transient — retry */ }
+      if (!polling) return;
+      if (!row) { schedule(); return; }
+      if (row.partial_reply) deps.replace(id, row.partial_reply);
+      if (isTerminalStatus(row.status)) {
+        if (String(row.status || "") === "canceled") deps.cancel(row);
+        else deps.finish(row, row.message);
+        close();
+        ensure();
+        return;
+      }
+      deps.phase(id, row);
+      schedule();
+    };
+    void tick();
+  }
+
   function open(id: number): void {
-    if (stream) return;
+    if (stream || polling) return;
     streamId = id;
     let source: ChatTurnMonitorSource | null = null;
     try {
       source = deps.createStream(id);
     } catch {
-      streamId = null;
-      return;
+      source = null;
     }
     if (!source) {
       streamId = null;
+      startPolling(id); // no EventSource → drive the turn by polling instead
       return;
     }
     stream = source;
@@ -112,6 +151,9 @@ function createChatTurnMonitor(deps: ChatTurnMonitorDeps): ChatTurnMonitor {
         terminal(source);
         return;
       }
+      // Fill the bubble from the streamed-so-far prose BEFORE the phase, so an
+      // "applying" snapshot lands its "Saving…" state on the now-streaming bubble.
+      if (row.partial_reply) deps.replace(id, row.partial_reply);
       deps.phase(id, row.turn || row);
     });
 

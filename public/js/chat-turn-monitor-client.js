@@ -5,6 +5,8 @@
 function createChatTurnMonitor(deps) {
     let stream = null;
     let streamId = null;
+    let polling = false;
+    let pollTimer = 0;
     function closeSource(source) {
         if (!source)
             return;
@@ -13,10 +15,18 @@ function createChatTurnMonitor(deps) {
         }
         catch { }
     }
+    function stopPolling() {
+        polling = false;
+        if (pollTimer) {
+            clearTimeout(pollTimer);
+            pollTimer = 0;
+        }
+    }
     function close() {
         const source = stream;
         stream = null;
         streamId = null;
+        stopPolling();
         closeSource(source);
     }
     function closeFor(source) {
@@ -32,7 +42,7 @@ function createChatTurnMonitor(deps) {
         return true;
     }
     function ensure() {
-        if (stream || !deps.isActive())
+        if (stream || polling || !deps.isActive())
             return;
         const ids = deps.pendingIds()
             .filter((id) => Number.isFinite(id))
@@ -54,8 +64,50 @@ function createChatTurnMonitor(deps) {
     function isTerminalStatus(status) {
         return ["done", "error", "canceled"].includes(String(status || ""));
     }
+    // Poll fallback — used when EventSource can't be constructed (unsupported/blocked).
+    // GET /chat/turns/:id carries the turn's status/phase + the reply prose streamed
+    // so far, so a poll-driven client fills the bubble and finalizes just like SSE
+    // (minus token-level deltas). Stops itself the moment Chat is torn down.
+    function startPolling(id) {
+        polling = true;
+        streamId = id;
+        const schedule = () => { pollTimer = setTimeout(tick, 1400); };
+        const tick = async () => {
+            if (!polling)
+                return;
+            if (!deps.isActive() || !deps.hasLog()) {
+                close();
+                return;
+            }
+            let row = null;
+            try {
+                row = await deps.poll(id);
+            }
+            catch { /* transient — retry */ }
+            if (!polling)
+                return;
+            if (!row) {
+                schedule();
+                return;
+            }
+            if (row.partial_reply)
+                deps.replace(id, row.partial_reply);
+            if (isTerminalStatus(row.status)) {
+                if (String(row.status || "") === "canceled")
+                    deps.cancel(row);
+                else
+                    deps.finish(row, row.message);
+                close();
+                ensure();
+                return;
+            }
+            deps.phase(id, row);
+            schedule();
+        };
+        void tick();
+    }
     function open(id) {
-        if (stream)
+        if (stream || polling)
             return;
         streamId = id;
         let source = null;
@@ -63,11 +115,11 @@ function createChatTurnMonitor(deps) {
             source = deps.createStream(id);
         }
         catch {
-            streamId = null;
-            return;
+            source = null;
         }
         if (!source) {
             streamId = null;
+            startPolling(id); // no EventSource → drive the turn by polling instead
             return;
         }
         stream = source;
@@ -87,6 +139,10 @@ function createChatTurnMonitor(deps) {
                 terminal(source);
                 return;
             }
+            // Fill the bubble from the streamed-so-far prose BEFORE the phase, so an
+            // "applying" snapshot lands its "Saving…" state on the now-streaming bubble.
+            if (row.partial_reply)
+                deps.replace(id, row.partial_reply);
             deps.phase(id, row.turn || row);
         });
         source.addEventListener("phase", (event) => {
