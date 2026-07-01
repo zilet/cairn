@@ -440,6 +440,23 @@ declare global {
     inStandaloneApp?: boolean;
   };
 
+  type ClientSettingsSourcesAutomationControllerDeps = {
+    root: HTMLElement;
+    workingModel: Pick<
+      SettingsScreenWorkingModel,
+      "garmin_username" | "garmin_password" | "enrich_enabled" | "art_enabled" | "research_enabled" | "gemini_api_key"
+    >;
+    settings: Record<string, unknown>;
+    data: SettingsScreenData;
+    artSpendHtml: string;
+    garminStatusLine(settings: unknown, syncing: boolean): string;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    toast(message: string): void;
+    locationOrigin?: string;
+    clipboard?: Pick<Clipboard, "writeText"> | null;
+    setTimeout?: typeof setTimeout;
+  };
+
   type ClientSettingsAgentsControllerWorkingModel = {
     agent_strategy: string;
     order: string[];
@@ -1814,6 +1831,23 @@ declare global {
       ): void;
     };
 
+    CairnCoachProposalController: {
+      applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown>;
+      coachProposalOpOpts(): ClientAgentOpHandlers & {
+        path: string;
+        anchor: string;
+        caption: string;
+        guard: () => boolean;
+        isFail: (result: unknown) => boolean;
+        render: (result: unknown) => unknown;
+        onFail: (error?: unknown) => unknown;
+      };
+      reconnectProposal(job?: unknown): ClientAgentOpHandlers | null;
+      refreshProposals(): Promise<void>;
+      renderProposals(proposals: unknown): void;
+      runCoachProposal(agent: string, instruction: string): void;
+    };
+
     CairnMealSwapController: {
       mealSwapOpOpts(
         current: Record<string, unknown> & { id: string | number },
@@ -2046,6 +2080,11 @@ declare global {
       render(deps: ClientSettingsDataControllerDeps): void;
     };
 
+    CairnSettingsSourcesAutomationController: {
+      renderSources(deps: ClientSettingsSourcesAutomationControllerDeps): void;
+      renderAutomation(deps: ClientSettingsSourcesAutomationControllerDeps): void;
+    };
+
     CairnSettingsAgents: {
       agentsSliceHtml(options: {
         agentStrategy: string;
@@ -2159,6 +2198,12 @@ declare global {
         line2: string;
         label: string;
       };
+    };
+
+    CairnProgressTrendWeight: {
+      paintProgressBody(exercises: ProgressExercise[]): void;
+      paintWeightBody(rows: ProgressWeightRow[], profile: ProgressRecord): void;
+      drawProgress(name: string): Promise<void>;
     };
 
     CairnProgressHistory: {
@@ -3000,6 +3045,7 @@ declare global {
   declare const mealDayHtml: Window["mealDayHtml"];
   declare const CairnMealPlan: Window["CairnMealPlan"];
   declare const CairnMealPlannerController: Window["CairnMealPlannerController"];
+  declare const CairnCoachProposalController: Window["CairnCoachProposalController"];
   declare const CairnMealSwapData: Window["CairnMealSwapData"];
   declare const CairnMealSwapController: Window["CairnMealSwapController"];
   declare const CairnMealRecipe: Window["CairnMealRecipe"];
@@ -3021,6 +3067,7 @@ declare global {
   declare const CairnSettingsSurface: Window["CairnSettingsSurface"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsDataController: Window["CairnSettingsDataController"];
+  declare const CairnSettingsSourcesAutomationController: Window["CairnSettingsSourcesAutomationController"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
   declare const CairnSettingsAgentsController: Window["CairnSettingsAgentsController"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
@@ -3039,6 +3086,7 @@ declare global {
   declare const CairnProgressLineChartModel: Window["CairnProgressLineChartModel"];
   declare const CairnProgressChartScrub: Window["CairnProgressChartScrub"];
   declare const CairnProgressChart: Window["CairnProgressChart"];
+  declare const CairnProgressTrendWeight: Window["CairnProgressTrendWeight"];
   declare const CairnProgressHistory: Window["CairnProgressHistory"];
   declare const CairnProgressRunPlan: Window["CairnProgressRunPlan"];
   declare const CairnProgressVolume: Window["CairnProgressVolume"];

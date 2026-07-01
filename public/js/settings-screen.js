@@ -11,9 +11,6 @@
     function optionalEl(selector) {
         return $(selector);
     }
-    function eventInput(event) {
-        return event.currentTarget;
-    }
     function settingsDelay(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
@@ -137,60 +134,23 @@
         function renderAgentsSlice() {
             CairnSettingsAgentsController.render(settingsAgentsDeps());
         }
+        function settingsSourcesAutomationDeps() {
+            return {
+                root: slice(),
+                workingModel: wm,
+                settings: s,
+                data,
+                artSpendHtml,
+                garminStatusLine,
+                api,
+                toast,
+            };
+        }
         function renderSourcesSlice() {
-            slice().innerHTML = CairnSettingsSurface.sourcesSliceHtml({ workingModel: wm, settings: s, garminStatusHtml: garminStatusLine(s, false) });
-            requiredEl("#garminUsername").addEventListener("input", (e) => { wm.garmin_username = eventInput(e).value; });
-            requiredEl("#garminPassword").addEventListener("input", (e) => { wm.garmin_password = eventInput(e).value; });
-            // Manual Garmin sync: pulse while the connector runs, then re-pull /settings so the
-            // status line shows exactly what the server recorded.
-            requiredEl("#garminSyncBtn").addEventListener("click", async () => {
-                const btn = requiredEl("#garminSyncBtn");
-                const status = requiredEl("#garminStatus");
-                btn.disabled = true;
-                btn.textContent = "Syncing…";
-                status.innerHTML = garminStatusLine(null, true);
-                let r = null;
-                try {
-                    r = await api("/garmin/sync", { method: "POST" });
-                }
-                catch { }
-                let fresh = s;
-                try {
-                    fresh = CairnSettingsSurface.settingsData(await api("/settings")).settings;
-                }
-                catch { }
-                if (!btn.isConnected)
-                    return; // slice/tab swapped while we waited
-                status.innerHTML = garminStatusLine(fresh, false);
-                btn.disabled = false;
-                btn.textContent = "Sync now";
-                toast(r && r.ok ? `Garmin synced · ${r.activities} activit${r.activities === 1 ? "y" : "ies"}` : "Garmin sync failed");
-            });
-            // Apple Health: page-origin POST URL + one-tap copy.
-            const ahUrl = optionalEl("#ahUrl");
-            if (ahUrl)
-                ahUrl.textContent = location.origin + "/api/health-metrics";
-            const ahCopy = optionalEl("#ahUrlCopy");
-            if (ahCopy)
-                ahCopy.addEventListener("click", async () => {
-                    const url = location.origin + "/api/health-metrics";
-                    try {
-                        await navigator.clipboard.writeText(url);
-                        ahCopy.textContent = "Copied";
-                    }
-                    catch {
-                        ahCopy.textContent = "Copy failed";
-                    }
-                    setTimeout(() => { ahCopy.textContent = "Copy"; }, 1600);
-                });
+            CairnSettingsSourcesAutomationController.renderSources(settingsSourcesAutomationDeps());
         }
         function renderAutomationSlice() {
-            const researchEligible = CairnSettingsSurface.routeEligible(data);
-            slice().innerHTML = CairnSettingsSurface.automationSliceHtml({ workingModel: wm, settings: s, artSpendHtml, researchEligible });
-            requiredEl("#enrichEnabled").addEventListener("change", (e) => { wm.enrich_enabled = eventInput(e).checked; });
-            requiredEl("#artEnabled").addEventListener("change", (e) => { wm.art_enabled = eventInput(e).checked; });
-            requiredEl("#researchEnabled").addEventListener("change", (e) => { wm.research_enabled = eventInput(e).checked; });
-            requiredEl("#geminiApiKey").addEventListener("input", (e) => { wm.gemini_api_key = eventInput(e).value; });
+            CairnSettingsSourcesAutomationController.renderAutomation(settingsSourcesAutomationDeps());
         }
         // The update card body, built from a fetched status + the (possibly unsaved) toggle.
         // Calm, operator-facing, copy-first. No version number is ever framed as a score.

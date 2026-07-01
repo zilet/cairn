@@ -1,27 +1,10 @@
 // ==== 06-coach-meals.js ====
 type CoachAgent = import("../contracts/client-api.js").ClientAgentInfo & { name?: string };
 type CoachMealPlan = import("../contracts/client-api.js").ClientMealPlan;
-type CoachProposalResult = import("../contracts/client-api.js").ClientProposalResult & {
-  clamped?: unknown[];
-};
 type CoachMealRecord = Record<string, unknown>;
-type BusyElement<T extends Element = HTMLElement> = T & { _busyRestore?: () => void };
-type CoachMealOpOptions = ClientAgentOpHandlers & {
-  path: string;
-  anchor: string;
-  caption: string;
-  guard: () => boolean;
-  isFail: (result: unknown) => boolean;
-  render: (result: unknown) => unknown;
-  onFail: (error?: unknown) => unknown;
-};
 
 function isCoachMealRecord(value: unknown): value is CoachMealRecord {
   return !!value && typeof value === "object";
-}
-
-function coachMealRecord(value: unknown): CoachMealRecord {
-  return isCoachMealRecord(value) ? value : {};
 }
 
 function coachMealRows<T extends CoachMealRecord = CoachMealRecord>(value: unknown): T[] {
@@ -30,10 +13,6 @@ function coachMealRows<T extends CoachMealRecord = CoachMealRecord>(value: unkno
 
 function htmlElement<T extends HTMLElement = HTMLElement>(value: Element | null | undefined): T | null {
   return value instanceof HTMLElement ? value as T : null;
-}
-
-function restoreBusy(value: Element | null | undefined): void {
-  (value as BusyElement | null | undefined)?._busyRestore?.();
 }
 
 function agentName(agent: CoachAgent): string {
@@ -81,9 +60,11 @@ async function renderCoach(): Promise<void> {
     const target = e.target instanceof HTMLSelectElement ? e.target : null;
     if (wrap) wrap.style.display = target?.value === "custom" ? "block" : "none";
   });
-  $("#runbtn")?.addEventListener("click", runCoach);
+  $("#runbtn")?.addEventListener("click", () => {
+    CairnCoachProposalController.runCoachProposal($<HTMLSelectElement>("#agentsel")?.value || "auto", instructionValue());
+  });
   $("#mealbtn")?.addEventListener("click", runMealPlan);
-  renderProposals(proposals);
+  CairnCoachProposalController.renderProposals(proposals);
   CairnMealPlannerController.renderMealPlans(await api("/mealplans?limit=8"));
 }
 
@@ -93,108 +74,10 @@ function instructionValue(): string {
   return preset;
 }
 
-// Draft a plan-update proposal from the Coach sub-view (#runbtn). Runs as a durable
-// background job so a long draft survives a reload mid-run, streaming its evolving
-// caption + filament into #runstatus; when background ops are off, runOp renders the
-// inline result immediately. On done we refresh the proposals list in place.
-function runCoach(): void {
-  const agent = $<HTMLSelectElement>("#agentsel")?.value || "auto";
-  const status = $("#runstatus");
-  const btn = $("#runbtn");
-  if (btn) btnBusy(btn, "Drafting\u2026");
-  if (status) status.innerHTML = CairnUi.jobCaptionHtml();
-  runOp("proposal", { agent, instruction: instructionValue() }, coachProposalOpOpts());
-}
-
-// Plain-words failure line for a proposal draft \u2014 honest about cause (no agent vs
-// agent failed vs unreachable), mirroring mealDraftFailLine.
-function proposalDraftFailLine(err: unknown): string {
-  if (coachMealRecord(err).agent_status === "unconfigured") return "Drafting a plan needs a coaching agent \u2014 connect one in Settings.";
-  if (err) return "The coach replied but didn't return a plan \u2014 try again, or pick another agent in Settings.";
-  return "Couldn't reach the coach \u2014 check your connection.";
-}
-
-// Shared runOp options for a Coach-view proposal draft \u2014 used by the trigger and the
-// reload reconnector so render/fail behavior is identical. A draft always persists as
-// a row, so we refresh the proposals list on BOTH paths (the raw row shows even on a
-// no-plan reply, exactly as before).
-function coachProposalOpOpts(): CoachMealOpOptions {
-  return {
-    path: "/agent/run",
-    anchor: "#runstatus",
-    caption: "proposal",
-    guard: () => !$("#runstatus")?.isConnected,
-    isFail: (r: unknown) => coachMealRecord(r).ok !== true,
-    render: async () => {
-      const status = $("#runstatus");
-      if (status) status.textContent = "Draft ready \u2014 review below.";
-      const btn = $("#runbtn");
-      restoreBusy(btn);
-      try { renderProposals(await api("/proposals?limit=10")); } catch {}
-    },
-    onFail: async (err?: unknown) => {
-      const status = $("#runstatus");
-      if (status) status.textContent = proposalDraftFailLine(err);
-      const btn = $("#runbtn");
-      restoreBusy(btn);
-      try { renderProposals(await api("/proposals?limit=10")); } catch {}
-    },
-  };
-}
-
-// Clamp transparency from the most recent apply, keyed by proposal id, so a light
-// re-render of the list can still surface the "adjusted to a safe step" note on the
-// card that was just applied (the clamp detail isn't persisted on the row).
-// Shared proposal render helpers live in /js/proposal-client.js.
-const lastApplyClamp: Record<string, unknown[]> = {};
-
-// Apply one proposal by id — the single apply path shared by the Coach list and the
-// Plan → Endurance "shape your running" composer. Flips the draft to 'applied'
-// server-side (surgical for run prescriptions), remembers any safe-step clamp so the
-// re-render can surface the honest note, toasts, and invalidates the stale plan cache.
-// Returns the apply response (or null on transport failure). Callers re-render.
-async function applyProposalById(id: string | number | undefined, btn?: Element | null): Promise<unknown> {
-  if (btn) btnBusy(btn, "Applying…");
-  let r: CoachProposalResult | null = null;
-  try { r = await api(`/proposals/${id}/apply`, { method: "POST" }); } catch { r = null; }
-  // Honest failure: the caller re-renders, so the draft stays actionable.
-  const m = applyResultMessage(r);
-  if (m.failed) { toast(m.message); return r; }
-  if (Array.isArray(r?.clamped) && r.clamped.length) lastApplyClamp[String(id)] = r.clamped;
-  toast(m.message);
-  state.plan = []; swrInvalidate("plan"); // applied targets — the plan cache is stale
-  return r;
-}
-
-// Light refresh of just the proposals list — re-fetch + re-render, no skeleton/full
-// view rebuild (keeps scroll, and the apply transition reads cleanly).
-async function refreshProposals(): Promise<void> {
-  try { renderProposals(await api("/proposals?limit=10")); } catch { /* keep last paint */ }
-}
-
-
-function renderProposals(proposals: unknown): void {
-  const wrap = $("#proplist");
-  if (!wrap) return;
-  wrap.innerHTML = CairnProposal.coachProposalListHtml(proposals, lastApplyClamp);
-
-  wrap.querySelectorAll<HTMLElement>("[data-apply]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      await applyProposalById(b.dataset.apply, b);
-      refreshProposals();
-    })
-  );
-  wrap.querySelectorAll<HTMLElement>("[data-discard]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      try { await api(`/proposals/${b.dataset.discard}/discard`, { method: "POST" }); } catch {}
-      refreshProposals();
-    })
-  );
-}
-
 // ---------- meal plans ----------
-// Planner operations/reconnectors live in /js/meal-planner-controller.js; this
-// screen owns only the visible Coach/Plan routing and paint sequence.
+// Planner operations/reconnectors live in /js/meal-planner-controller.js;
+// proposal orchestration lives in /js/coach-proposal-controller.js. This screen
+// owns only the visible Coach/Plan routing and paint sequence.
 function runMealPlan(): void {
   const agent = $<HTMLSelectElement>("#agentsel")?.value || "auto";
   CairnMealPlannerController.runCoachMealPlan(agent, instructionValue());
@@ -309,25 +192,7 @@ function loadMealsEnergy(token: number): void {
   }).catch(() => { if (peek && !peek.fresh) markRefreshing(false); });
 }
 
-// The single registered reconnector for `proposal` jobs: both the Coach draft
-// (#runstatus) and the Plan → Endurance composer (#endDraftStatus) enqueue the same
-// `proposal` kind, so this picks whichever surface is currently mounted. When neither
-// is (the user navigated elsewhere), the draft still persisted server-side and shows
-// on the next render — so a null reconnector is safe, no work is lost.
-function reconnectProposal(): ClientAgentOpHandlers | null {
-  if (view.querySelector("#endDraftStatus")) {
-    enduranceComposerLock(); // re-lock chips + the in-flight flag, not just the button
-    return CairnMealPlannerController.reconnectStatusHost(enduranceProposalOpOpts() as CoachMealOpOptions, "#endDraftStatus", "#endDraftBtn", false);
-  }
-  if (view.querySelector("#runstatus")) {
-    return CairnMealPlannerController.reconnectStatusHost(coachProposalOpOpts(), "#runstatus", "#runbtn", false);
-  }
-  return null;
-}
-
 Object.assign(globalThis, {
-  applyProposalById,
-  reconnectProposal,
   renderCoach,
   renderFoodJournal,
   renderMeals,
