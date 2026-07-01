@@ -1818,51 +1818,8 @@ function wireDeletes() {
     });
 }
 // ---------- skip an exercise for the day ("not today") ----------
-// Smooth in-flow collapse: the element's box (height/padding/margin) eases to
-// zero with a fade, then done() fires. Cancellable — expandEl() on the same
-// element mid-flight reverses from wherever it is (the done callback is
-// suppressed via the _collapsed flag). House motion tokens, reduced-motion safe.
-function collapseEl(el, done) {
-    el._collapsed = true;
-    clearTimeout(el._animTimer);
-    if (reducedMotion()) {
-        done && done();
-        return;
-    }
-    el._h = el.offsetHeight;
-    el.style.height = el._h + "px";
-    el.style.overflow = "hidden";
-    void el.offsetHeight; // commit the measured start state
-    el.style.transition = "height var(--dur-2) var(--ease),opacity var(--dur-1) ease,margin var(--dur-2) var(--ease),padding var(--dur-2) var(--ease),transform var(--dur-2) var(--ease)";
-    el.style.height = "0px";
-    el.style.opacity = "0";
-    el.style.transform = "scale(.97)";
-    el.style.marginBottom = "0px";
-    el.style.paddingTop = "0px";
-    el.style.paddingBottom = "0px";
-    el._animTimer = setTimeout(() => { if (el._collapsed && done)
-        done(); }, 380);
-}
-function expandEl(el) {
-    clearTimeout(el._animTimer);
-    el._collapsed = false;
-    const clear = () => {
-        ["height", "overflow", "transition", "opacity", "transform", "margin-bottom", "padding-top", "padding-bottom"]
-            .forEach((p) => el.style.removeProperty(p));
-    };
-    if (reducedMotion()) {
-        clear();
-        return;
-    }
-    void el.offsetHeight;
-    el.style.height = (el._h || el.scrollHeight) + "px";
-    el.style.opacity = "";
-    el.style.transform = "";
-    el.style.marginBottom = "";
-    el.style.paddingTop = "";
-    el.style.paddingBottom = "";
-    el._animTimer = setTimeout(clear, 380);
-}
+// collapseEl / expandEl live in ui-motion-client.ts and stay compatibility globals
+// for Today, Capture, Progress, and Health directive cards.
 // The slim "Skipped: …" line at the very bottom of Today. Hidden while empty.
 function skipNameHtml(name) {
     return CairnTodaySessionStatus.skipNameHtml(name);
@@ -2870,7 +2827,6 @@ async function loadGarminReconcile() {
     });
 }
 Object.assign(globalThis, {
-    collapseEl,
     postExerciseMode,
     reconnectDayReadOverride,
     reconnectSessionSuggest,
@@ -2879,7 +2835,6 @@ Object.assign(globalThis, {
 });
 if (typeof window !== "undefined") {
     Object.assign(window, {
-        collapseEl,
         postExerciseMode,
         reconnectDayReadOverride,
         reconnectSessionSuggest,

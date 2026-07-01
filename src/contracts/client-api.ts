@@ -339,6 +339,136 @@ export interface ClientTrainingCalendarResponse {
   cells: ClientTrainingCalendarCell[];
 }
 
+export type ClientRunZoneKey = "Z1" | "Z2" | "Z3" | "Z4" | "Z5";
+
+export interface ClientRunZone {
+  zone: ClientRunZoneKey;
+  label: string;
+  low_bpm: number;
+  high_bpm: number;
+  feel: string;
+}
+
+export interface ClientRunZones {
+  available: boolean;
+  max_hr: number | null;
+  rest_hr: number | null;
+  method: "explicit" | "age" | "garmin-observed" | "garmin-zones" | null;
+  reserve: boolean;
+  zones: ClientRunZone[];
+  note: string;
+}
+
+export interface ClientIntervalRep {
+  reps: number;
+  on: string;
+  off: string;
+  zone: ClientRunZoneKey;
+}
+
+export interface ClientRunPlanPrescription {
+  day_number: number;
+  label?: string | null;
+  kind_label: "easy" | "long" | "quality";
+  target_distance_km?: number | null;
+  target_duration_min?: number | null;
+  target_zone?: string | null;
+  note?: string | null;
+  day_name?: string | null;
+  focus?: string | null;
+  interval?: ClientIntervalRep[] | null;
+}
+
+export interface ClientWeeklyRunPlan {
+  available: boolean;
+  week_start: ISODateString | string;
+  runs: ClientRunPlanPrescription[];
+  rationale: string[];
+  quality_focus: string | null;
+  mix_summary: string;
+  why: string;
+}
+
+export type ClientGroupVerdict = "advancing" | "stalling" | "building" | "maintaining";
+export type ClientMuscleVolumeBand = "low" | "productive" | "high";
+export type ClientMuscleTrend = "rising" | "falling" | "stable" | null;
+
+export interface ClientGroupVaryOption {
+  name: string;
+  why: string;
+}
+
+export interface ClientMuscleGroupRead {
+  group: string;
+  label: string;
+  verdict: ClientGroupVerdict;
+  lead_lift: string | null;
+  stalled_signal: string | null;
+  vary_options: ClientGroupVaryOption[];
+  volume_band: ClientMuscleVolumeBand | null;
+  trend: ClientMuscleTrend;
+  note: string;
+}
+
+export interface ClientMuscleGroupTrajectory {
+  available: boolean;
+  headline: string;
+  groups: ClientMuscleGroupRead[];
+}
+
+export interface ClientTestWeekDue {
+  due: boolean;
+  why: string;
+  key_lifts: string[];
+  cadence_weeks: number;
+  last_test_week: ISODateString | string | null;
+}
+
+export interface ClientDexaTarget {
+  area: string;
+  signal: string;
+  bias: string;
+  moves: string[];
+  domain: "training" | "nutrition";
+  path: string;
+  groups: string[];
+  informational: boolean;
+}
+
+export interface ClientDexaTargeting {
+  available: boolean;
+  targets: ClientDexaTarget[];
+  lead: ClientDexaTarget | null;
+  next_dexa_focus: string | null;
+}
+
+export interface ClientProgramGroupBalance {
+  group: string;
+  sets: number;
+  band: ClientMuscleVolumeBand;
+  last_trained: ISODateString | string | null;
+  status: "due" | "ok" | "high";
+}
+
+export interface ClientProgramBalance {
+  groups: ClientProgramGroupBalance[];
+  due: string[];
+  over: string[];
+  summary: string;
+  broad_low: boolean;
+}
+
+export interface ClientProgramAdjustment {
+  kind: "progression" | "balance" | "deload" | "gap" | "cardio" | "dexa" | "test";
+  title: string;
+  why: string;
+  exercise?: string;
+  group?: string;
+  suggestions?: string[];
+  recovering?: boolean;
+  programmed?: boolean;
+}
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -795,17 +925,17 @@ export interface ClientApiResponses {
   "/api/program/evolve": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/program/progression": ClientPrescription[];
   "/api/program/progression/apply": ClientProposalResult;
-  "/api/program/balance": ClientJsonObject;
-  "/api/program/adjustments": ClientJsonObject | ClientJsonArray;
+  "/api/program/balance": ClientProgramBalance;
+  "/api/program/adjustments": ClientProgramAdjustment[];
   "/api/program/blocks": ClientJsonArray;
   "/api/program/blocks/active": ClientJsonObject | null;
   "/api/program-state": ClientJsonObject;
   "/api/performance": ClientJsonObject;
-  "/api/run-plan": ClientJsonObject;
-  "/api/run-zones": ClientJsonObject;
-  "/api/muscle-trajectory": ClientJsonObject;
-  "/api/test-week": ClientJsonObject;
-  "/api/dexa-targeting": ClientJsonObject;
+  "/api/run-plan": ClientWeeklyRunPlan;
+  "/api/run-zones": ClientRunZones;
+  "/api/muscle-trajectory": ClientMuscleGroupTrajectory;
+  "/api/test-week": ClientTestWeekDue;
+  "/api/dexa-targeting": ClientDexaTargeting;
   "/api/program/run-plan/apply": ClientProposalResult;
   "/api/coaching-focus": ClientCoachingFocus;
   "/api/health/markers": ClientHealthMarker[];

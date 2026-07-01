@@ -449,6 +449,7 @@ declare global {
   declare function updateActEntry(el: Element, row: ClientActivity & Record<string, unknown>): void;
   declare function runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
   declare function collapseEl(el: Element, done?: () => void): void;
+  declare function expandEl(el: Element): void;
   declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
   declare function registerAppJobReconnectors(): void;
   declare function installMobileViewportGuards(): void;
@@ -585,6 +586,11 @@ declare global {
         style?: string;
         bodyClassName?: string;
       }): string;
+    };
+
+    CairnUiMotion: {
+      collapseEl(el: Element | null | undefined, done?: () => void): void;
+      expandEl(el: Element | null | undefined): void;
     };
 
     CairnHealthClient: {
@@ -1163,6 +1169,7 @@ declare global {
   declare const CairnChatClient: Window["CairnChatClient"];
   declare const CairnExerciseDetail: Window["CairnExerciseDetail"];
   declare const CairnUi: Window["CairnUi"];
+  declare const CairnUiMotion: Window["CairnUiMotion"];
   declare const CairnHealthClient: Window["CairnHealthClient"];
   declare const CairnHealthPicture: Window["CairnHealthPicture"];
   declare const CairnHealthMarkers: Window["CairnHealthMarkers"];

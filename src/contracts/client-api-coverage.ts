@@ -194,16 +194,6 @@ export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
     reason: "Guideline packs are keyed records of trusted references and need a client-safe map DTO.",
   },
   {
-    pattern: "/program/balance",
-    owner: "Program progress client",
-    reason: "Program balance is a rich deterministic read and should be narrowed with the Program surface.",
-  },
-  {
-    pattern: "/program/adjustments",
-    owner: "Program progress client",
-    reason: "Adjustment rows mix due groups and lift changes until the Program surface owns a typed union.",
-  },
-  {
     pattern: "/program/blocks",
     owner: "Program block client",
     reason: "Block history rows are still rendered as backend records and need a narrow block summary DTO.",
@@ -222,31 +212,6 @@ export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
     pattern: "/performance",
     owner: "Agentic training brain",
     reason: "Performance standing is a large deterministic read and needs a shared client-safe DTO.",
-  },
-  {
-    pattern: "/run-plan",
-    owner: "Agentic running brain",
-    reason: "Weekly run plan structure should be shared from the run-progression domain before narrowing.",
-  },
-  {
-    pattern: "/run-zones",
-    owner: "Agentic running brain",
-    reason: "Run-zone bands should be shared from the run-progression domain before narrowing.",
-  },
-  {
-    pattern: "/muscle-trajectory",
-    owner: "Agentic training brain",
-    reason: "Muscle trajectory groups and variation options need a shared domain DTO.",
-  },
-  {
-    pattern: "/test-week",
-    owner: "Agentic training brain",
-    reason: "Test-week cadence data needs a shared deterministic DTO before client narrowing.",
-  },
-  {
-    pattern: "/dexa-targeting",
-    owner: "Agentic body-composition brain",
-    reason: "DEXA targets are broad while scan-domain DTOs are still backend-owned.",
   },
   {
     pattern: "/health/standing",

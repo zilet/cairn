@@ -964,6 +964,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const htmlUtilsSource = read("src/client/html-utils.ts");
   const markdownSource = read("src/client/markdown-client.ts");
   const uiComponentsSource = read("src/client/ui-components.ts");
+  const uiMotionSource = read("src/client/ui-motion-client.ts");
   const exerciseDetailSource = read("src/client/exercise-detail-client.ts");
   const formatUtilsSource = read("src/client/format-utils.ts");
   const apiClientSource = read("src/client/api-client.ts");
@@ -1065,6 +1066,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const htmlUtils = read("public/js/html-utils.js");
   const markdownClient = read("public/js/markdown-client.js");
   const uiComponents = read("public/js/ui-components.js");
+  const uiMotionClient = read("public/js/ui-motion-client.js");
   const exerciseDetailClient = read("public/js/exercise-detail-client.js");
   const formatUtils = read("public/js/format-utils.js");
   const apiClient = read("public/js/api-client.js");
@@ -2313,6 +2315,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponentsSource, /function jobCaptionHtml\(options: JobCaptionOptions = \{\}\): string/);
   assert.match(uiComponentsSource, /function sheetChipHtml\(options: SheetChipOptions\): string/);
   assert.match(uiComponentsSource, /const CAIRN_UI = \{/);
+  assert.match(uiMotionSource, /function collapseEl\(input: Element \| null \| undefined/);
+  assert.match(uiMotionSource, /function expandEl\(input: Element \| null \| undefined\): void/);
+  assert.match(uiMotionSource, /const CAIRN_UI_MOTION = \{/);
+  assert.match(uiMotionSource, /CairnUiMotion: CAIRN_UI_MOTION/);
   assert.match(exerciseDetailSource, /function exerciseDetailExplanation\(exercise: ExerciseDetailLike \| null \| undefined\): ExerciseExplanation/);
   assert.match(exerciseDetailSource, /function exerciseDetailExplanationHtml/);
   assert.match(exerciseDetailSource, /function validExerciseDetailExplanationPayload/);
@@ -2411,9 +2417,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayGarminReconciliationSource, /function reconcilePromptHtml\(count: number/);
   assert.match(todayGarminReconciliationSource, /async function load\(options: TodayGarminReconcileOptions\): Promise<void>/);
   assert.match(todayGarminReconciliationSource, /CairnTodayGarminReconciliation/);
+  assert.doesNotMatch(todayScreenSource, /function collapseEl\(/);
+  assert.doesNotMatch(todayScreenSource, /function expandEl\(/);
   assert.match(
     todayScreenSource,
-    /Object\.assign\(globalThis,\s*\{[\s\S]*collapseEl[\s\S]*postExerciseMode[\s\S]*reconnectDayReadOverride[\s\S]*reconnectSessionSuggest[\s\S]*renderToday[\s\S]*reshapeToday[\s\S]*\}\)/
+    /Object\.assign\(globalThis,\s*\{[\s\S]*postExerciseMode[\s\S]*reconnectDayReadOverride[\s\S]*reconnectSessionSuggest[\s\S]*renderToday[\s\S]*reshapeToday[\s\S]*\}\)/
   );
   assert.match(todayScreenSource, /CairnTodayGarminReconciliation\.load/);
   assert.match(todayScreenSource, /const todayState = state as any/);
@@ -2779,6 +2787,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(uiComponents, /segmentedNavHtml/);
   assert.match(uiComponents, /jobCaptionHtml/);
   assert.match(uiComponents, /sheetChipHtml/);
+  assert.match(uiMotionClient, /CairnUiMotion: CAIRN_UI_MOTION/);
+  assert.match(uiMotionClient, /collapseEl/);
+  assert.match(uiMotionClient, /expandEl/);
   assert.match(exerciseDetailClient, /Object\.assign\(globalThis, \{ CairnExerciseDetail: CAIRN_EXERCISE_DETAIL \}\)/);
   assert.match(exerciseDetailClient, /window\.CairnExerciseDetail = CAIRN_EXERCISE_DETAIL/);
   assert.match(exerciseDetailClient, /explanation: exerciseDetailExplanation/);
