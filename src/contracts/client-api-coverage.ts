@@ -189,11 +189,6 @@ export const CLIENT_API_BROAD_RESPONSE_WAIVERS = [
     reason: "Week-ahead combines deterministic and agent text until the day-coach payload is narrowed.",
   },
   {
-    pattern: "/guidelines",
-    owner: "Connected-brain evidence",
-    reason: "Guideline packs are keyed records of trusted references and need a client-safe map DTO.",
-  },
-  {
     pattern: "/program-state",
     owner: "Agentic training brain",
     reason: "Program state is a large coach-context read and needs a shared deterministic DTO.",

@@ -485,6 +485,19 @@ export interface ClientProgramBlock {
   created_at: string;
 }
 
+export interface ClientGuidelineEntry {
+  key: string;
+  keys: string[];
+  body: string;
+  source: string;
+  url: string;
+  year?: number;
+}
+
+export type ClientGuidelinesResponse =
+  | { guidelines: ClientGuidelineEntry[] }
+  | { marker: string; guideline: ClientGuidelineEntry | null };
+
 export interface ClientWeeklyStats {
   week_sets?: number;
   week_cardio?: number;
@@ -928,7 +941,7 @@ export interface ClientApiResponses {
   "/api/today-agenda": ClientTodayAgenda;
   "/api/learned-timeline": ClientLearnedTimeline;
   "/api/since-last": ClientTodayAgendaCandidate | null;
-  "/api/guidelines": ClientJsonObject;
+  "/api/guidelines": ClientGuidelinesResponse;
   "/api/nutrition/day": ClientDayIntake;
   "/api/next-step": ClientNextStep | null;
   "/api/nutrition/expenditure": ClientExpenditureEstimate;

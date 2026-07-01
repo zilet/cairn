@@ -1,6 +1,7 @@
 import type { DayRead, ExpenditureEstimate } from "../repo/intelligence.js";
 import type { ArchivedChatSession, ChatSearchHit } from "../repo/chat.js";
 import type { suggestSession } from "../coachOps.js";
+import type { GuidelineEntry } from "../guidelines.js";
 import type { CoachingFocus } from "../repo/coaching-focus.js";
 import type { getDayIntake } from "../repo/nutrition.js";
 import type { NextStep } from "../repo/next-step.js";
@@ -40,6 +41,7 @@ import type {
 } from "./client.js";
 import type {
   ClientDexaTargeting,
+  ClientGuidelineEntry,
   ClientLearnedTimeline,
   ClientMemory,
   ClientMuscleGroupTrajectory,
@@ -68,6 +70,7 @@ export type ProgramProgressionMatchesClientContract = AssertAssignable<
 export type ProgramBalanceMatchesClientContract = AssertAssignable<ProgramBalance, ClientProgramBalance>;
 export type ProgramAdjustmentsMatchClientContract = AssertAssignable<ProgramAdjustment[], ClientProgramAdjustment[]>;
 export type ProgramBlockMatchesClientContract = AssertAssignable<ProgramBlock, ClientProgramBlock>;
+export type GuidelineEntryMatchesClientContract = AssertAssignable<GuidelineEntry, ClientGuidelineEntry>;
 export type RunZonesMatchClientContract = AssertAssignable<RunZones, ClientRunZones>;
 export type WeeklyRunPlanMatchesClientContract = AssertAssignable<WeeklyRunPlan, ClientWeeklyRunPlan>;
 export type MuscleTrajectoryMatchesClientContract = AssertAssignable<
