@@ -703,6 +703,15 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
 }
 .segwrap .seg{margin:0}
 
+/* Progress two-level nav: a top group bar (Train/Performance/Fuel/Body) over an
+   optional leaf sub-bar. When both are present the group bar scrolls with the
+   content and the leaf sub-bar is the pinned one (same model as the Me → Health
+   sub-nav), so the view switcher stays one tap away. A single-view group has no
+   sub-bar, so its group bar stays sticky. Gated on :has() like the Health nav. */
+.prog-subwrap{margin-top:-6px;z-index:29}
+.segwrap:has(+ .prog-subwrap){position:static}
+.segwrap:has(+ .prog-subwrap) + .prog-subwrap{top:env(safe-area-inset-top,0px)}
+
 /* -------------------------------------------------------------------
    11 · Program gallery (Plan tab)
    ------------------------------------------------------------------- */
@@ -1662,6 +1671,28 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
    over the page rather than crashing into the header edge. Information, never alarm. */
 .offline-bar{box-shadow:0 2px 10px rgba(72,58,35,.10)}
 
+/* offline outbox — a calm "N to sync" line while the queue replays failed
+   captures / set-logs back to the server once Cairn is reachable again. A sage
+   "work in progress" voice, deliberately distinct from the .offline-bar warn
+   band: it means your logs are held and syncing, never an alarm. Persistent
+   while anything is pending, never a modal, taps pass through. */
+.outbox-bar{
+  position:fixed;left:50%;bottom:calc(118px + var(--vvb,0px));
+  transform:translate(-50%,10px);opacity:0;
+  display:flex;align-items:center;gap:8px;
+  padding:8px 15px;border-radius:999px;
+  background:var(--sage-bg);color:var(--ink-2);
+  border:1px solid var(--line-2);
+  font-family:var(--font-ui);font-weight:600;font-size:.74rem;letter-spacing:.01em;
+  box-shadow:var(--shadow-sm);
+  transition:opacity var(--dur-2) var(--ease),transform var(--dur-2) var(--ease);
+  pointer-events:none;z-index:49;
+}
+.outbox-bar.show{opacity:1;transform:translate(-50%,0)}
+.outbox-dot{width:6px;height:6px;border-radius:50%;background:var(--sage);
+  flex:0 0 auto;animation:offlinepulse 1.8s var(--ease) infinite}
+@media (min-width:960px){ .outbox-bar{left:calc(50% + 124px)} }
+
 /* -------------------------------------------------------------------
    23b · Floating unsaved-changes save bar (docks above the tab bar)
    ------------------------------------------------------------------- */
@@ -1743,6 +1774,9 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   margin-top:2px;transition:background .15s}
 .tab.active{color:var(--accent)}
 .tab.active::after{background:var(--accent)}
+/* non-color active affordance: the dot appears AND the label bolds, so the live
+   tab reads without relying on the terracotta tint alone (colour-blind safe). */
+.tab.active .tab-lbl{font-weight:700}
 .brand{display:none}
 
 /* -------------------------------------------------------------------

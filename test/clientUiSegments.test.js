@@ -181,3 +181,77 @@ test("UI segments delegate rendering, click routing, resize fitting, and handler
   controller.planHandlers.endurance();
   assert.ok(calls.some((call) => call[0] === "renderPlanEndurance"));
 });
+
+test("Progress nav groups the 8 views into 4 top groups with leaf sub-tabs", () => {
+  const context = loadSegments();
+  const { controller } = createController(context);
+  const PROGRESS_SEG = context.CairnUiSegments.PROGRESS_SEG;
+
+  // Leaf → group mapping surfaces the two flagship reads as their own top slots.
+  assert.equal(context.CairnUiSegments.progressGroupOf("sessions"), "train");
+  assert.equal(context.CairnUiSegments.progressGroupOf("program"), "performance");
+  assert.equal(context.CairnUiSegments.progressGroupOf("energy"), "fuel");
+  assert.equal(context.CairnUiSegments.progressGroupOf("weight"), "body");
+
+  // A multi-leaf group (Train) renders a top group bar + a leaf sub-bar; the
+  // Endurance leaf is hidden for a strength athlete.
+  context.CairnUiSegments.setDiscipline("strength");
+  const trainNav = controller.segBar("volume", PROGRESS_SEG);
+  assert.match(trainNav, /data-proggroup="train"[^>]*aria-pressed="true"/);
+  assert.match(trainNav, /class="segwrap prog-subwrap"/);
+  assert.match(trainNav, /data-seg="volume"[^>]*aria-pressed="true"/);
+  assert.match(trainNav, /data-seg="sessions"/);
+  assert.doesNotMatch(trainNav, /data-seg="endurance"/);
+
+  // A single-view flagship group (Fuel) is just the top bar — no sub-bar clutter.
+  const fuelNav = controller.segBar("energy", PROGRESS_SEG);
+  assert.match(fuelNav, /data-proggroup="fuel"[^>]*aria-pressed="true"/);
+  assert.doesNotMatch(fuelNav, /prog-subwrap/);
+
+  // A non-Progress seg-set is untouched (still the flat sliding bar).
+  assert.equal(controller.segBar("trend", [["trend", "1RM"]]), `<seg data-active="trend" data-items="1"></seg>`);
+});
+
+test("Progress endurance leaf appears for an endurance athlete or when it's active", () => {
+  const context = loadSegments();
+  const { controller } = createController(context);
+  const PROGRESS_SEG = context.CairnUiSegments.PROGRESS_SEG;
+
+  context.CairnUiSegments.setDiscipline("endurance");
+  const nav = controller.segBar("endurance", PROGRESS_SEG);
+  assert.match(nav, /data-proggroup="train"[^>]*aria-pressed="true"/);
+  assert.match(nav, /data-seg="endurance"[^>]*aria-pressed="true"/);
+
+  // A strength athlete deep-linked to Endurance still sees the tab (never stranded).
+  context.CairnUiSegments.setDiscipline("strength");
+  assert.match(controller.segBar("endurance", PROGRESS_SEG), /data-seg="endurance"/);
+});
+
+test("Progress top-group buttons route to the group's default leaf", async () => {
+  const context = loadSegments();
+  const groupBtn = {
+    classList: classList(),
+    dataset: { proggroup: "performance" },
+    listeners: {},
+    addEventListener(type, fn) { this.listeners[type] = fn; },
+    closest() { return seg; },
+  };
+  const seg = {
+    style: { setProperty() {} },
+    querySelectorAll() { return [groupBtn]; },
+  };
+  const view = {
+    querySelectorAll(selector) {
+      if (selector === ".segbtn[data-proggroup]") return [groupBtn];
+      if (selector === ".seg") return [];
+      return [];
+    },
+  };
+  const { calls, controller } = createController(context, { view });
+  controller.wireSeg(controller.progressHandlers);
+  groupBtn.listeners.click();
+  await flush();
+
+  assert.ok(calls.some((call) => call[0] === "renderProgram"), "Performance group opens the Program standing read");
+  assert.ok(calls.some((call) => call[0] === "syncRouteFromState"));
+});

@@ -28,7 +28,7 @@
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${options.briefHtml}
     ${options.conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${options.conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
-    ${options.conductorLeads ? "" : options.goalLineHtml}
+    <div id="goalSlot">${options.conductorLeads ? "" : options.goalLineHtml}</div>
     <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
     ${captureRowHtml(options.isToday, options.currentWeight, deps)}`;
