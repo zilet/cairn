@@ -219,6 +219,30 @@ declare global {
     askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
   };
 
+  type ClientTodayBriefActionsDeps = {
+    root: HTMLElement;
+    state: {
+      tab?: string;
+      logDate: string;
+      brief?: unknown;
+      _briefMorph?: boolean;
+      planReveal?: { date: string; on: boolean; blank?: boolean } | null;
+      progressSeg?: string;
+      dayPicked?: boolean;
+    };
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    renderToday(opts?: Record<string, unknown>): unknown;
+    withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+    runOp(kind: "day_read_override", body: Record<string, unknown>, options: ClientAgentOpHandlers): Promise<unknown>;
+    reducedMotion(): boolean;
+    collapseEl(el: Element, done?: () => void): void;
+    activateTab(tab: string): unknown;
+    escapeHtml(value: unknown): string;
+    revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
+    revealSessionComposer(): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+  };
+
   type ClientTodayRailControllerDeps = {
     root: ParentNode;
     state: {
@@ -1505,12 +1529,16 @@ declare global {
       renderProfile(deps: MeProfileControllerDeps): Promise<void>;
     };
 
-    CairnPlanEndurance: {
+    CairnPlanEnduranceModel: {
       ENDURANCE_PHASES: readonly Record<string, string>[];
       rampHtml(goal: ClientEnduranceGoal | null | undefined): string;
       presets(goal: ClientEnduranceGoal | null | undefined): Array<{ t: string; i: string }>;
       draftCardHtml(proposal: Record<string, unknown>): string;
+      record(value: unknown): Record<string, unknown>;
+      runs(plan: unknown): Array<{ it: Record<string, unknown>; day_number: unknown }>;
     };
+
+    CairnPlanEndurance: Window["CairnPlanEnduranceModel"];
 
     CairnPlanEditor: {
       blankStrength(): Record<string, unknown>;
@@ -2545,6 +2573,15 @@ declare global {
       reconnectDayReadOverride(job: unknown, deps: ClientTodayBriefOverrideDeps): ClientAgentOpHandlers | null;
     };
 
+    CairnTodayBriefActionsClient: {
+      offlineDismissed(): boolean;
+      wireBriefActions(
+        read: Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown },
+        options: { isToday?: boolean },
+        deps: ClientTodayBriefActionsDeps,
+      ): void;
+    };
+
     CairnTodayBriefController: {
       provisionalRead(date: string): ClientDayRead & { _provisional: boolean };
       loadBrief(
@@ -2756,6 +2793,7 @@ declare global {
   declare const CairnFoodDetailController: Window["CairnFoodDetailController"];
   declare const CairnMeProfileForm: Window["CairnMeProfileForm"];
   declare const CairnMeProfileController: Window["CairnMeProfileController"];
+  declare const CairnPlanEnduranceModel: Window["CairnPlanEnduranceModel"];
   declare const CairnPlanEndurance: Window["CairnPlanEndurance"];
   declare const CairnPlanEditor: Window["CairnPlanEditor"];
   declare const CairnPlanEditorForm: Window["CairnPlanEditorForm"];
@@ -2791,6 +2829,7 @@ declare global {
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnTodayBrief: Window["CairnTodayBrief"];
   declare const CairnTodayBriefOverrideClient: Window["CairnTodayBriefOverrideClient"];
+  declare const CairnTodayBriefActionsClient: Window["CairnTodayBriefActionsClient"];
   declare const CairnTodayBriefController: Window["CairnTodayBriefController"];
   declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
   declare const CairnCaptureVoice: Window["CairnCaptureVoice"];

@@ -1,5 +1,5 @@
 // @ts-check
-// Stateful Today Brief controller: fetch/cache, steer jobs, focus state, and reconnect wiring.
+// Stateful Today Brief controller: fetch/cache, focus state, and reconnect wiring.
 
 type TodayBriefControllerDayRead = import("../contracts/client.js").ClientDayRead & {
   _provisional?: boolean;
@@ -55,8 +55,6 @@ type TodayBriefControllerDeps = {
 };
 
 (() => {
-  let agentOfflineDismissed = false;
-
   function provisionalRead(_date: string): TodayBriefControllerDayRead {
     return CairnTodayBrief.provisionalRead();
   }
@@ -162,16 +160,6 @@ type TodayBriefControllerDeps = {
     }
   }
 
-  function wireAgentOffline(scope: ParentNode | null | undefined, deps: TodayBriefControllerDeps): void {
-    (scope || deps.root).querySelectorAll("[data-agentoffx]").forEach((button) =>
-      button.addEventListener("click", () => {
-        agentOfflineDismissed = true;
-        const el = button.closest(".agent-offline");
-        if (el) deps.collapseEl(el, () => el.remove());
-        else button.remove();
-      }));
-  }
-
   function briefHtml(
     read: TodayBriefControllerDayRead | null | undefined,
     options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown } = {},
@@ -184,7 +172,7 @@ type TodayBriefControllerDeps = {
       activeOverride,
       morph: !!deps.state._briefMorph,
       reducedMotion: deps.reducedMotion(),
-      offlineDismissed: agentOfflineDismissed,
+      offlineDismissed: CairnTodayBriefActionsClient.offlineDismissed(),
     });
   }
 
@@ -220,110 +208,7 @@ type TodayBriefControllerDeps = {
     options: { isToday?: boolean },
     deps: TodayBriefControllerDeps,
   ): void {
-    const brief = deps.root.querySelector(".brief");
-    if (!brief) return;
-    wireAgentOffline(brief, deps);
-
-    brief.querySelectorAll<HTMLElement>("[data-override]").forEach((button) =>
-      button.addEventListener("click", () => {
-        const intent = button.dataset.override || "";
-        if (brief.classList.contains("is-thinking")) return;
-        paintBriefReshaping(brief, button, deps);
-        deps.state.brief = null;
-        deps.runOp("day_read_override", { date: deps.state.logDate, override: intent, agent: "auto" },
-          dayReadOverrideOpOpts({ intent, prevFocus: read.focus }, deps));
-      })
-    );
-
-    brief.querySelectorAll<HTMLElement>("[data-redirect]").forEach((button) =>
-      button.addEventListener("click", () => {
-        const action = button.dataset.redirect;
-        if (action === "ask-session") {
-          deps.revealSessionComposer();
-          return;
-        }
-        if (action === "view-week") {
-          deps.activateTab("plan");
-          return;
-        }
-        if (action === "view-program") {
-          deps.state.progressSeg = "program";
-          deps.activateTab("progress");
-          return;
-        }
-        if (action === "start-session") {
-          deps.revealPlanThen(() => {
-            const surface = deps.root.querySelector(".plansurface") || deps.root.querySelector(".addex");
-            surface?.scrollIntoView({ behavior: deps.reducedMotion() ? "auto" : "smooth", block: "start" });
-          });
-          return;
-        }
-        if (action === "reveal-plan") {
-          deps.state.planReveal = { date: deps.state.logDate, on: true };
-          deps.renderToday();
-          return;
-        }
-        if (action === "pull-plan") {
-          deps.state.planReveal = { date: deps.state.logDate, on: true };
-          (deps.state as { dayPicked?: boolean }).dayPicked = true;
-          deps.renderToday();
-        }
-      })
-    );
-
-    const steerReset = brief.querySelector<HTMLElement>("[data-steerreset]");
-    if (steerReset) steerReset.addEventListener("click", async () => {
-      if (brief.classList.contains("is-thinking")) return;
-      brief.querySelectorAll<HTMLButtonElement>(".brief-steer-opt").forEach((chip) => { chip.disabled = true; });
-      if (steerReset instanceof HTMLButtonElement) steerReset.disabled = true;
-      steerReset.innerHTML = `<span class="aspin aspin-xs"></span>back to today's read`;
-      brief.classList.add("is-thinking");
-      const note = document.createElement("div");
-      note.className = "athinking-note chip-in";
-      note.textContent = "Reading the day again...";
-      (steerReset.closest(".brief-steer") || steerReset.parentElement)?.after(note);
-      deps.state.brief = null;
-      try {
-        const qs = new URLSearchParams({ date: deps.state.logDate, agent: "auto", reset: "1" });
-        const fresh = await deps.api("/today-read?" + qs.toString()) as TodayBriefControllerDayRead;
-        deps.state.brief = {
-          date: deps.state.logDate,
-          override: fresh && fresh.override ? fresh.override : "",
-          read: fresh && fresh.kind ? fresh : { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic" },
-        };
-      } catch {
-        deps.state.brief = null;
-      }
-      if (deps.state.tab !== "today") return;
-      const morph = !deps.reducedMotion();
-      if (morph) {
-        brief.classList.add("brief-morph");
-        deps.state._briefMorph = true;
-      }
-      try {
-        await deps.withViewTransition(() => deps.renderToday());
-      } finally {
-        deps.state._briefMorph = false;
-        deps.root.querySelector(".brief")?.classList.remove("brief-morph");
-      }
-    });
-
-    const whyBtn = brief.querySelector<HTMLElement>("[data-briefwhy]");
-    if (whyBtn && read.signals && Object.keys(read.signals).length) {
-      whyBtn.hidden = false;
-      whyBtn.addEventListener("click", () => {
-        if (brief.querySelector(".brief-signals")) {
-          brief.querySelector(".brief-signals")?.remove();
-          whyBtn.textContent = "tap to see why";
-          return;
-        }
-        const sig = document.createElement("p");
-        sig.className = "brief-signals chip-in";
-        sig.textContent = briefSignalsText(read);
-        whyBtn.before(sig);
-        whyBtn.textContent = "hide";
-      });
-    }
+    CairnTodayBriefActionsClient.wireBriefActions(read, options, deps);
   }
 
   function paintBriefReshaping(brief: Element, chip: HTMLElement | null, deps: TodayBriefControllerDeps): void {

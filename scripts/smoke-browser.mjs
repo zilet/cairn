@@ -17,7 +17,7 @@ const DEBUG_PORT_MIN = 25000;
 const DEBUG_PORT_SPAN = 5000;
 const NAV_TIMEOUT_MS = 20000;
 const SETTLE_MS = 600;
-const WORKFLOW_COUNT = 8;
+const WORKFLOW_COUNT = 9;
 
 const routes = [
   { path: "/", tab: "today" },
@@ -414,7 +414,10 @@ async function addSmokeCardioToPlanDay(base, dayNumber, label) {
   const day = Array.isArray(plan) ? plan.find((row) => Number(row.day_number) === Number(dayNumber)) : null;
   ok(day, `smoke plan day ${dayNumber} exists`);
   const withoutPriorSmoke = (Array.isArray(day.items) ? day.items : [])
-    .filter((item) => String(item.note || item.exercise || "") !== label)
+    .filter((item) => {
+      const itemLabel = String(item.note || item.exercise || "");
+      return itemLabel !== label && !/^Smoke (easy|synced) run \d+$/.test(itemLabel);
+    })
     .map(planItemForSave);
   const items = [
     ...withoutPriorSmoke,
@@ -640,7 +643,11 @@ async function smokeTodayCardioSkip(cdp, base) {
 
     await evaluate(cdp, `(() => {
       if (typeof swrInvalidate === "function") swrInvalidate("plan");
-      if (window.state) window.state.plan = [];
+      if (window.state) {
+        window.state.plan = [];
+        window.state.day = Number(${JSON.stringify(dayState.day)});
+        window.state.dayPicked = true;
+      }
       if (typeof renderToday !== "function") throw new Error("missing renderToday");
       return Promise.resolve(renderToday());
     })()`);
@@ -715,6 +722,114 @@ async function smokeTodayCardioSkip(cdp, base) {
       };
     })()`);
     ok(failures.length === 0, "/app/today planned-cardio skip workflow has no browser runtime/load errors", failures.join("\n"));
+  } finally {
+    off();
+  }
+}
+
+async function smokeTodaySyncedCardioOverridesSkip(cdp, base) {
+  const { failures, off } = collectFailures(cdp, base);
+  const label = `Smoke synced run ${Date.now()}`;
+  const labelJson = JSON.stringify(label);
+  try {
+    await navigateAndHydrate(cdp, base, "/app/today", "today");
+    await assertGlobals(cdp);
+    const dayState = await evaluate(cdp, `(() => ({
+      day: window.state && window.state.day,
+      logDate: window.state && window.state.logDate,
+      href: location.pathname + location.search
+    }))()`);
+    ok(Number.isFinite(Number(dayState?.day)) && dayState?.logDate, "Today has a selected plan day for the synced-cardio smoke", JSON.stringify(dayState));
+    await addSmokeCardioToPlanDay(base, Number(dayState.day), label);
+
+    await evaluate(cdp, `(() => {
+      if (typeof swrInvalidate === "function") swrInvalidate("plan");
+      if (window.state) window.state.plan = [];
+      if (typeof renderToday !== "function") throw new Error("missing renderToday");
+      return Promise.resolve(renderToday());
+    })()`);
+
+    await waitForCondition(cdp, "Today renders a planned synced-cardio candidate", `(() => {
+      const label = ${labelJson};
+      const card = [...document.querySelectorAll(".ex-cardio")]
+        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
+      return {
+        ok: Boolean(card && card.querySelector(".ex-skip[data-skip]")),
+        found: Boolean(card),
+        href: location.pathname + location.search
+      };
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      const label = ${labelJson};
+      const card = [...document.querySelectorAll(".ex-cardio")]
+        .find((el) => el.querySelector(".cardio-name-txt")?.textContent?.trim() === label);
+      const skip = card?.querySelector(".ex-skip[data-skip]");
+      if (!card || !skip) throw new Error("missing planned synced-cardio skip button");
+      skip.click();
+      return true;
+    })()`);
+
+    await waitForCondition(cdp, "Today initially skips the synced-cardio candidate", `(() => {
+      const label = ${labelJson};
+      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
+        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
+      return { ok: Boolean(unskip), hasUnskip: Boolean(unskip) };
+    })()`);
+
+    await apiJson(base, "/activities", {
+      method: "POST",
+      body: JSON.stringify({
+        date: dayState.logDate,
+        type: "run",
+        text: label,
+        duration_min: 31,
+        distance_km: 5.1,
+        source: "garmin",
+        external_id: `browser-smoke-${Date.now()}`,
+        enrichment_status: "done",
+      }),
+    });
+
+    await evaluate(cdp, `(() => {
+      if (typeof swrInvalidate === "function") {
+        swrInvalidate("today:session:" + window.state.logDate);
+        swrInvalidate("plan");
+      }
+      if (window.state) {
+        window.state.day = Number(${JSON.stringify(dayState.day)});
+        window.state.dayPicked = true;
+      }
+      if (typeof renderToday !== "function") throw new Error("missing renderToday");
+      return Promise.resolve(renderToday({ soft: true }));
+    })()`);
+
+    await waitForCondition(cdp, "Synced cardio overrides the skipped planned card", `(async () => {
+      const label = ${labelJson};
+      const date = ${JSON.stringify(dayState.logDate)};
+      let apiCardio = null;
+      try { apiCardio = await fetch("/api/cardio?date=" + encodeURIComponent(date)).then((r) => r.json()); } catch (error) { apiCardio = { error: String(error) }; }
+      const done = [...document.querySelectorAll(".ex-cardio-done")]
+        .find((el) => el.textContent.includes(label));
+      const unskip = [...document.querySelectorAll("#skipLine [data-unskip]")]
+        .find((button) => decodeURIComponent(button.dataset.unskip || "") === label);
+      const activePlanDay = ((window.state && Array.isArray(window.state.plan)) ? window.state.plan : [])
+        .find((day) => Number(day.day_number) === Number(window.state && window.state.day));
+      return {
+        ok: Boolean(done && done.querySelector(".garmin-tag") && !unskip && location.pathname === "/app/today"),
+        done: Boolean(done),
+        hasGarminTag: Boolean(done?.querySelector(".garmin-tag")),
+        hasUnskip: Boolean(unskip),
+        href: location.pathname + location.search,
+        stateDay: window.state && window.state.day,
+        stateDayPicked: window.state && window.state.dayPicked,
+        activePlanLabels: (activePlanDay?.items || []).map((item) => item.note || item.exercise || item.kind),
+        apiCardio,
+        doneTexts: [...document.querySelectorAll(".ex-cardio-done")].map((el) => el.textContent.trim()),
+        skipTexts: [...document.querySelectorAll("#skipLine [data-unskip]")].map((button) => decodeURIComponent(button.dataset.unskip || ""))
+      };
+    })()`);
+    ok(failures.length === 0, "/app/today synced-cardio override workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -1155,6 +1270,7 @@ try {
     for (const route of routes) await smokeRoute(cdp, ctx.base, route);
     await smokeTodayAddExercise(cdp, ctx.base);
     await smokeTodayCardioSkip(cdp, ctx.base);
+    await smokeTodaySyncedCardioOverridesSkip(cdp, ctx.base);
     await smokeChatAttachmentFocus(cdp, ctx.base);
     await smokeChatSendStreamReconnect(cdp, ctx.base);
     await smokeSettingsDataControls(cdp, ctx.base);

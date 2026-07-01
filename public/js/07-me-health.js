@@ -39,7 +39,7 @@
         paintStandingReview(); // the detailed where-you-stand health read
     }
     function meHealthDepsContext() {
-        return {
+        return CairnMeHealthDependencies.context({
             root: view,
             state,
             segments: ME_SEG,
@@ -91,7 +91,7 @@
             openFoodDetail,
             loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
             storage: typeof localStorage !== "undefined" ? localStorage : null,
-        };
+        });
     }
     function meProfileDeps() {
         return CairnMeHealthDependencies.profile(meHealthDepsContext());

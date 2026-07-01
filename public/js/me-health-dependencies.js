@@ -19,6 +19,61 @@ function healthTextAreaValue(selector, root = document) {
     return root.querySelector(selector)?.value ?? "";
 }
 let healthReadSpy = null;
+function makeMeHealthDependenciesContext(input) {
+    return {
+        root: input.root,
+        state: input.state,
+        segments: input.segments,
+        handlers: input.handlers,
+        document: input.document,
+        headerTitle: input.headerTitle,
+        api: input.api,
+        cachedApi: input.cachedApi,
+        peekCached: input.peekCached,
+        markRefreshing: input.markRefreshing,
+        swrInvalidate: input.swrInvalidate,
+        runOp: input.runOp,
+        toast: input.toast,
+        armDelete: input.armDelete,
+        activateTab: input.activateTab,
+        escapeAttr: input.escapeAttr,
+        escapeHtml: input.escapeHtml,
+        invalidatePoll: input.invalidatePoll,
+        mountSaveBar: input.mountSaveBar,
+        primaryDiscipline: input.primaryDiscipline,
+        renderMe: input.renderMe,
+        renderProfile: input.renderProfile,
+        segBar: input.segBar,
+        segSkeleton: input.segSkeleton,
+        setDiscipline: input.setDiscipline,
+        setEnduranceGoalSet: input.setEnduranceGoalSet,
+        skeletonSwap: input.skeletonSwap,
+        wireSeg: input.wireSeg,
+        fitSeg: input.fitSeg,
+        syncRouteFromState: input.syncRouteFromState,
+        withViewTransition: input.withViewTransition,
+        select: input.select,
+        relTime: input.relTime,
+        relAge: input.relAge,
+        stagger: input.stagger,
+        reducedMotion: input.reducedMotion,
+        pollToken: input.pollToken,
+        switchHealthSeg: input.switchHealthSeg,
+        onHealthReadView: input.onHealthReadView,
+        loadHealthPicture: input.loadHealthPicture,
+        paintHealthPicture: input.paintHealthPicture,
+        healthDocsKnownEmpty: input.healthDocsKnownEmpty,
+        paintRead: input.paintRead,
+        paintMarkers: input.paintMarkers,
+        paintRecords: input.paintRecords,
+        paintShare: input.paintShare,
+        paintLearned: input.paintLearned,
+        activityEntryHtml: input.activityEntryHtml,
+        openFoodDetail: input.openFoodDetail,
+        loadDexaTargeting: input.loadDexaTargeting,
+        storage: input.storage,
+    };
+}
 function makeMeProfileDeps(ctx) {
     return {
         root: ctx.root,
@@ -170,6 +225,7 @@ function makeHealthStandingDeps(ctx) {
     };
 }
 const CAIRN_ME_HEALTH_DEPENDENCIES = {
+    context: makeMeHealthDependenciesContext,
     inputValue: healthInputValue,
     numberValue: healthNumberValue,
     textAreaValue: healthTextAreaValue,

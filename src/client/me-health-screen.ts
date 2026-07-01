@@ -44,7 +44,7 @@ async function renderMeStanding() {
 }
 
 function meHealthDepsContext(): ClientMeHealthDependenciesContext {
-  return {
+  return CairnMeHealthDependencies.context({
     root: view,
     state,
     segments: ME_SEG,
@@ -96,7 +96,7 @@ function meHealthDepsContext(): ClientMeHealthDependenciesContext {
     openFoodDetail,
     loadDexaTargeting: typeof loadDexaTargeting === "function" ? loadDexaTargeting : undefined,
     storage: typeof localStorage !== "undefined" ? localStorage : null,
-  };
+  });
 }
 
 function meProfileDeps(): MeProfileControllerDeps {

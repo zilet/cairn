@@ -62,6 +62,7 @@ type ClientMeHealthDependenciesContext = {
 };
 
 type ClientMeHealthDependenciesApi = {
+  context(input: ClientMeHealthDependenciesContextInput): ClientMeHealthDependenciesContext;
   inputValue(selector: string, root?: ParentNode): string;
   numberValue(selector: string, root?: ParentNode): number | null;
   textAreaValue(selector: string, root?: ParentNode): string;
@@ -73,6 +74,60 @@ type ClientMeHealthDependenciesApi = {
   markers(ctx: ClientMeHealthDependenciesContext): ClientHealthMarkersControllerDeps;
   tabs(ctx: ClientMeHealthDependenciesContext): ClientMeHealthTabsControllerDeps;
   standing(ctx: ClientMeHealthDependenciesContext): ClientHealthStandingControllerDeps;
+};
+
+type ClientMeHealthDependenciesContextInput = {
+  root: HTMLElement;
+  state: ClientAppState;
+  segments: readonly ClientSegment[];
+  handlers: Record<string, () => unknown>;
+  document: Document;
+  headerTitle: HTMLElement;
+  api: ClientMeHealthDependenciesContext["api"];
+  cachedApi: ClientMeHealthDependenciesContext["cachedApi"];
+  peekCached: ClientMeHealthDependenciesContext["peekCached"];
+  markRefreshing: ClientMeHealthDependenciesContext["markRefreshing"];
+  swrInvalidate: ClientMeHealthDependenciesContext["swrInvalidate"];
+  runOp: ClientMeHealthDependenciesContext["runOp"];
+  toast: ClientMeHealthDependenciesContext["toast"];
+  armDelete: ClientMeHealthDependenciesContext["armDelete"];
+  activateTab: ClientMeHealthDependenciesContext["activateTab"];
+  escapeAttr: ClientMeHealthDependenciesContext["escapeAttr"];
+  escapeHtml: ClientMeHealthDependenciesContext["escapeHtml"];
+  invalidatePoll: ClientMeHealthDependenciesContext["invalidatePoll"];
+  mountSaveBar: ClientMeHealthDependenciesContext["mountSaveBar"];
+  primaryDiscipline: ClientMeHealthDependenciesContext["primaryDiscipline"];
+  renderMe: ClientMeHealthDependenciesContext["renderMe"];
+  renderProfile: ClientMeHealthDependenciesContext["renderProfile"];
+  segBar: ClientMeHealthDependenciesContext["segBar"];
+  segSkeleton: ClientMeHealthDependenciesContext["segSkeleton"];
+  setDiscipline: ClientMeHealthDependenciesContext["setDiscipline"];
+  setEnduranceGoalSet: ClientMeHealthDependenciesContext["setEnduranceGoalSet"];
+  skeletonSwap: ClientMeHealthDependenciesContext["skeletonSwap"];
+  wireSeg: ClientMeHealthDependenciesContext["wireSeg"];
+  fitSeg: ClientMeHealthDependenciesContext["fitSeg"];
+  syncRouteFromState?: ClientMeHealthDependenciesContext["syncRouteFromState"];
+  withViewTransition: ClientMeHealthDependenciesContext["withViewTransition"];
+  select: ClientMeHealthDependenciesContext["select"];
+  relTime: ClientMeHealthDependenciesContext["relTime"];
+  relAge: ClientMeHealthDependenciesContext["relAge"];
+  stagger: ClientMeHealthDependenciesContext["stagger"];
+  reducedMotion: ClientMeHealthDependenciesContext["reducedMotion"];
+  pollToken: ClientMeHealthDependenciesContext["pollToken"];
+  switchHealthSeg: ClientMeHealthDependenciesContext["switchHealthSeg"];
+  onHealthReadView: ClientMeHealthDependenciesContext["onHealthReadView"];
+  loadHealthPicture: ClientMeHealthDependenciesContext["loadHealthPicture"];
+  paintHealthPicture: ClientMeHealthDependenciesContext["paintHealthPicture"];
+  healthDocsKnownEmpty: ClientMeHealthDependenciesContext["healthDocsKnownEmpty"];
+  paintRead: ClientMeHealthDependenciesContext["paintRead"];
+  paintMarkers: ClientMeHealthDependenciesContext["paintMarkers"];
+  paintRecords: ClientMeHealthDependenciesContext["paintRecords"];
+  paintShare: ClientMeHealthDependenciesContext["paintShare"];
+  paintLearned: ClientMeHealthDependenciesContext["paintLearned"];
+  activityEntryHtml: ClientMeHealthDependenciesContext["activityEntryHtml"];
+  openFoodDetail: ClientMeHealthDependenciesContext["openFoodDetail"];
+  loadDexaTargeting?: ClientMeHealthDependenciesContext["loadDexaTargeting"];
+  storage?: ClientMeHealthDependenciesContext["storage"];
 };
 
 function healthInput(selector: string, root: ParentNode = document): HTMLInputElement | null {
@@ -95,6 +150,62 @@ function healthTextAreaValue(selector: string, root: ParentNode = document): str
 }
 
 let healthReadSpy: IntersectionObserver | null = null;
+
+function makeMeHealthDependenciesContext(input: ClientMeHealthDependenciesContextInput): ClientMeHealthDependenciesContext {
+  return {
+    root: input.root,
+    state: input.state,
+    segments: input.segments,
+    handlers: input.handlers,
+    document: input.document,
+    headerTitle: input.headerTitle,
+    api: input.api,
+    cachedApi: input.cachedApi,
+    peekCached: input.peekCached,
+    markRefreshing: input.markRefreshing,
+    swrInvalidate: input.swrInvalidate,
+    runOp: input.runOp,
+    toast: input.toast,
+    armDelete: input.armDelete,
+    activateTab: input.activateTab,
+    escapeAttr: input.escapeAttr,
+    escapeHtml: input.escapeHtml,
+    invalidatePoll: input.invalidatePoll,
+    mountSaveBar: input.mountSaveBar,
+    primaryDiscipline: input.primaryDiscipline,
+    renderMe: input.renderMe,
+    renderProfile: input.renderProfile,
+    segBar: input.segBar,
+    segSkeleton: input.segSkeleton,
+    setDiscipline: input.setDiscipline,
+    setEnduranceGoalSet: input.setEnduranceGoalSet,
+    skeletonSwap: input.skeletonSwap,
+    wireSeg: input.wireSeg,
+    fitSeg: input.fitSeg,
+    syncRouteFromState: input.syncRouteFromState,
+    withViewTransition: input.withViewTransition,
+    select: input.select,
+    relTime: input.relTime,
+    relAge: input.relAge,
+    stagger: input.stagger,
+    reducedMotion: input.reducedMotion,
+    pollToken: input.pollToken,
+    switchHealthSeg: input.switchHealthSeg,
+    onHealthReadView: input.onHealthReadView,
+    loadHealthPicture: input.loadHealthPicture,
+    paintHealthPicture: input.paintHealthPicture,
+    healthDocsKnownEmpty: input.healthDocsKnownEmpty,
+    paintRead: input.paintRead,
+    paintMarkers: input.paintMarkers,
+    paintRecords: input.paintRecords,
+    paintShare: input.paintShare,
+    paintLearned: input.paintLearned,
+    activityEntryHtml: input.activityEntryHtml,
+    openFoodDetail: input.openFoodDetail,
+    loadDexaTargeting: input.loadDexaTargeting,
+    storage: input.storage,
+  };
+}
 
 function makeMeProfileDeps(ctx: ClientMeHealthDependenciesContext): MeProfileControllerDeps {
   return {
@@ -255,6 +366,7 @@ function makeHealthStandingDeps(ctx: ClientMeHealthDependenciesContext): ClientH
 }
 
 const CAIRN_ME_HEALTH_DEPENDENCIES: ClientMeHealthDependenciesApi = {
+  context: makeMeHealthDependenciesContext,
   inputValue: healthInputValue,
   numberValue: healthNumberValue,
   textAreaValue: healthTextAreaValue,

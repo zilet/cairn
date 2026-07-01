@@ -2,77 +2,7 @@
 // @ts-check
 // Plan -> Endurance renderers plus the running-plan screen orchestration.
 (() => {
-    const ENDURANCE_PHASES = [
-        { key: "base", label: "Base", when: "11+ weeks out", desc: "Build aerobic volume — easy, conversational running." },
-        { key: "build", label: "Build", when: "5–10 weeks out", desc: "Add tempo and longer runs; raise the ceiling." },
-        { key: "sharpen", label: "Sharpen", when: "3–4 weeks out", desc: "Race-pace work as volume trims back." },
-        { key: "taper", label: "Taper", when: "final 2 weeks", desc: "Freshen up — let the training surface." },
-    ];
-    function enduranceRampHtml(goal) {
-        if (!goal || goal.mode !== "race" || !goal.phase || goal.phase === "past")
-            return "";
-        const curIdx = ENDURANCE_PHASES.findIndex((phase) => phase.key === goal.phase);
-        if (curIdx < 0)
-            return "";
-        const steps = ENDURANCE_PHASES.map((phase, index) => {
-            const cls = index < curIdx ? "is-done" : index === curIdx ? "is-current" : "is-next";
-            const here = index === curIdx ? `<span class="ramp-here lbl">You're here</span>` : "";
-            return `<li class="ramp-step ${cls}">
-        <span class="ramp-dot" aria-hidden="true"></span>
-        <div class="ramp-body">
-          <div class="ramp-top"><span class="ramp-name">${escHtml(phase.label)}</span><span class="ramp-when lbl">${escHtml(phase.when)}</span>${here}</div>
-          <div class="ramp-desc">${escHtml(phase.desc)}</div>
-        </div>
-      </li>`;
-        }).join("");
-        return `<div class="end-ramp reveal" style="${stagger(1)}">
-      <div class="end-ramp-h"><span class="lbl">The ramp to race day</span></div>
-      <ol class="ramp-list">${steps}</ol>
-      <p class="end-ramp-cap">A typical arc — the coach adapts each phase to the running you've actually banked, not a fixed schedule.</p>
-    </div>`;
-    }
-    function endurancePresets(goal) {
-        const out = [{ t: "Plan this week's runs", i: "Plan my runs for this coming week toward my running goal — concrete sessions (easy / long / tempo or intervals) on specific days, conservative and aerobic-first." }];
-        if (goal && goal.mode === "race") {
-            out.push({ t: "Progress my long run", i: "Gently progress my long run this week toward my race, keeping it easy and aerobic — no more than about a 10% step up." });
-            out.push({ t: "Ease back — feeling flat", i: "I'm feeling flat and a bit run-down. Ease my running this week — hold or reduce volume, keep it easy, protect recovery." });
-        }
-        else {
-            out.push({ t: "Keep me race-ready", i: "Plan a steady week of running that keeps me ready for my standing distance goal — maintain, don't peak." });
-            out.push({ t: "Ease back this week", i: "Ease my running this week — keep it light and easy, I want to recover." });
-        }
-        return out;
-    }
-    function endDraftCardHtml(proposal) {
-        const cardio = proposal.parsed && Array.isArray(proposal.parsed.cardio) ? proposal.parsed.cardio : [];
-        const rows = cardio.map((run) => `<div class="sess-line run-line"><span class="run-pin" aria-hidden="true">▸</span><b>D${escHtml(run.day_number)} ${escHtml(run.label || run.exercise || "Run")}</b> <span class="numeral">${escHtml(runTargetText(run))}</span>${(run.reason || run.note) ? ` <span style="color:var(--muted)">(${escHtml(run.reason || run.note)})</span>` : ""}</div>`).join("");
-        return `<div class="mp-card end-draft-card reveal">
-      <div class="mp-hero"><span class="lbl">Proposed runs · ${escHtml(proposal.agent)} · #${escHtml(proposal.id)}</span></div>
-      ${proposal.parsed && proposal.parsed.summary ? `<div class="sess-line">${escHtml(proposal.parsed.summary)}</div>` : ""}
-      ${rows}
-      <div class="logrow" style="margin-top:10px">
-        <button class="logbtn" style="width:auto;padding:0 16px;font-size:.85rem" data-egapply="${escAttr(proposal.id)}">APPLY TO MY PLAN</button>
-        <button class="ghostbtn" style="width:auto;padding:0 14px" data-egdiscard="${escAttr(proposal.id)}">DISCARD</button>
-      </div>
-    </div>`;
-    }
-    function enduranceRecord(value) {
-        return value && typeof value === "object" ? value : {};
-    }
-    function endurancePlanRows(value) {
-        return Array.isArray(value) ? value.filter((row) => !!row && typeof row === "object") : [];
-    }
-    function enduranceRuns(plan) {
-        const runs = [];
-        for (const day of endurancePlanRows(plan)) {
-            const items = Array.isArray(day.items) ? day.items : [];
-            for (const item of items) {
-                if (isCardioItem(item))
-                    runs.push({ it: item, day_number: day.day_number });
-            }
-        }
-        return runs;
-    }
+    const enduranceModel = () => CairnPlanEnduranceModel;
     async function renderPlanEndurance() {
         headerTitle.textContent = "Plan";
         state.planSeg = "endurance";
@@ -88,7 +18,7 @@
                 api("/endurance-goal").catch(() => null),
                 api("/run-compliance").catch(() => null),
                 api("/plan").catch(() => []),
-                api("/settings").then((response) => enduranceRecord(response).settings || null).catch(() => null),
+                api("/settings").then((response) => enduranceModel().record(response).settings || null).catch(() => null),
             ]);
         }
         catch { /* paint with whatever resolved */ }
@@ -113,7 +43,7 @@
         const standingNote = goal && goal.mode === "standing"
             ? `<div class="end-ramp-note reveal" style="${stagger(1)}"><span class="lbl">Steady readiness</span> — no race to peak for, so the plan holds a sustainable rhythm rather than ramping.${goal.weekly_km ? ` Target around <b>${escHtml(goal.weekly_km)} km/wk</b>.` : ""}</div>`
             : "";
-        const runs = enduranceRuns(plan);
+        const runs = enduranceModel().runs(plan);
         const totalKm = runs.reduce((sum, { it }) => sum + (Number(it.target_distance_km) || 0), 0);
         const totalMin = runs.reduce((sum, { it }) => sum + (Number(it.target_duration_min) || 0), 0);
         let volumeText = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
@@ -146,7 +76,7 @@
          <div class="lbl">This week's runs</div>
          <p>No runs in your plan yet. Ask the coach below to build your week — each run lands on its day and keeps your lifts intact.</p>
        </div>${complianceHtml}${syncHtml}`;
-        const presets = endurancePresets(goal);
+        const presets = enduranceModel().presets(goal);
         const chips = presets.map((preset, index) => `<button class="end-chip" data-egi="${index}">${escHtml(preset.t)}</button>`).join("");
         const composer = `<div class="end-shape reveal" style="${stagger(3)}">
       <div class="end-shape-h"><span class="lbl">Shape your running</span></div>
@@ -175,7 +105,7 @@
         });
     }
     function rampHtmlForGoal(goal) {
-        return enduranceRampHtml(goal);
+        return enduranceModel().rampHtml(goal);
     }
     let _endDrafting = false;
     function enduranceComposerLock() {
@@ -209,17 +139,17 @@
             caption: "endurance_runs",
             guard: () => !view.querySelector("#endDraftStatus")?.isConnected,
             isFail: (result) => {
-                const row = enduranceRecord(result);
-                const proposal = enduranceRecord(row.proposal);
+                const row = enduranceModel().record(result);
+                const proposal = enduranceModel().record(row.proposal);
                 return !result || row.ok === false || !row.proposal || !proposal.parsed;
             },
-            render: (result) => renderEnduranceDraftResult(enduranceRecord(result).proposal),
+            render: (result) => renderEnduranceDraftResult(enduranceModel().record(result).proposal),
             onFail: (error) => {
                 enduranceComposerRestore();
                 const status = view.querySelector("#endDraftStatus");
                 if (!status)
                     return;
-                status.textContent = enduranceRecord(error).agent_status === "unconfigured"
+                status.textContent = enduranceModel().record(error).agent_status === "unconfigured"
                     ? "Drafting runs needs a coaching agent — connect one in Settings. You can still edit runs in Training."
                     : "The coach couldn't finish — try again, or pick another agent in Settings.";
             },
@@ -231,7 +161,7 @@
         const draftWrap = view.querySelector("#endDraft");
         if (!status || !draftWrap)
             return;
-        const p = enduranceRecord(proposal);
+        const p = enduranceModel().record(proposal);
         const cardio = p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
         if (!cardio.length) {
             status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
@@ -239,7 +169,7 @@
             return;
         }
         status.textContent = "";
-        draftWrap.innerHTML = endDraftCardHtml(p);
+        draftWrap.innerHTML = enduranceModel().draftCardHtml(p);
         draftWrap.querySelector("[data-egapply]")?.addEventListener("click", async (event) => {
             const button = event.currentTarget instanceof Element ? event.currentTarget : null;
             if (!button)
@@ -257,12 +187,7 @@
             status.textContent = "Discarded.";
         });
     }
-    const CAIRN_PLAN_ENDURANCE = {
-        ENDURANCE_PHASES,
-        rampHtml: enduranceRampHtml,
-        presets: endurancePresets,
-        draftCardHtml: endDraftCardHtml,
-    };
+    const CAIRN_PLAN_ENDURANCE = enduranceModel();
     Object.assign(globalThis, { CairnPlanEndurance: CAIRN_PLAN_ENDURANCE });
     Object.assign(globalThis, {
         renderPlanEndurance,
