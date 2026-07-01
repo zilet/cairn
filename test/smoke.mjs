@@ -16,28 +16,12 @@
 // asserted endpoint is deterministic and agent-independent (today-read falls back
 // to its deterministic floor when no agent is reachable), so the smoke run stays
 // offline. Exits non-zero on the first failed assertion or a boot timeout.
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { serverEntry, withServer } from "../scripts/smoke-server.mjs";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, "..");
-const serverEntry = path.join(root, "dist", "server.js");
-
-// Use a random high loopback port by default so smoke can run beside a dev
-// server or another smoke run. Avoid a pre-bind "find free port" probe: some
-// sandboxes deny listen(0), while the server under test can still bind a normal
-// explicit port. SMOKE_PORT stays available for deterministic debugging.
-const requestedPort = process.env.SMOKE_PORT ? Number(process.env.SMOKE_PORT) : 0;
-const usedPorts = new Set();
 const AUTH_TOKEN = "cairn-smoke-auth-token";
-const RANDOM_PORT_MIN = 18000;
-const RANDOM_PORT_SPAN = 7000; // 18000-24999: avoids upper loopback ports blocked by some sandboxes.
 
 let passed = 0;
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function ok(cond, label, detail) {
   if (cond) {
@@ -46,24 +30,6 @@ function ok(cond, label, detail) {
   } else {
     throw new Error(`assertion failed: ${label}${detail ? ` — ${detail}` : ""}`);
   }
-}
-
-function pickPort(offset = 0, attempt = 0) {
-  if (requestedPort) {
-    const port = requestedPort + offset + attempt;
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new Error(`invalid SMOKE_PORT-derived port: ${port}`);
-    }
-    return port;
-  }
-  for (let i = 0; i < 100; i++) {
-    const port = RANDOM_PORT_MIN + Math.floor(Math.random() * RANDOM_PORT_SPAN);
-    if (!usedPorts.has(port)) {
-      usedPorts.add(port);
-      return port;
-    }
-  }
-  throw new Error("could not choose a unique smoke port");
 }
 
 async function getJson(base, p, init) {
@@ -76,103 +42,6 @@ async function getJson(base, p, init) {
 async function getText(base, p, init) {
   const res = await fetch(`${base}${p}`, init);
   return { status: res.status, headers: res.headers, text: await res.text() };
-}
-
-// Poll GET /api/health until the server is listening (or give up).
-async function waitForHealth(ctx, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastFetchError = "";
-  while (Date.now() < deadline) {
-    const log = ctx.serverLog();
-    if (/EADDRINUSE|EACCES/.test(log)) return { ok: false, retryable: true };
-    try {
-      const res = await fetch(`${ctx.base}/api/health`);
-      if (res.ok) return { ok: true };
-    } catch (error) {
-      lastFetchError = error?.cause?.code || error?.cause?.message || error?.message || String(error);
-      // not up yet — keep polling
-    }
-    await sleep(log.includes("Cairn running:") ? 100 : 250);
-  }
-  return { ok: false, retryable: false, error: lastFetchError };
-}
-
-async function stopServer(ctx) {
-  try {
-    if (ctx.child.exitCode == null && ctx.child.signalCode == null) {
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 2000);
-        ctx.child.once("exit", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        ctx.child.kill("SIGKILL");
-      });
-    }
-  } finally {
-    try { rmSync(ctx.dir, { recursive: true, force: true }); } catch {}
-  }
-}
-
-async function startBuiltServer({ label, authToken = "", portOffset = 0 }) {
-  let lastLog = "";
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const port = pickPort(portOffset, attempt);
-    const base = `http://127.0.0.1:${port}`;
-    // Fresh, empty temp DB per server — boots through the full migration ladder
-    // and gets auto-seeded with the default plan by seedIfEmpty() at startup.
-    const dir = mkdtempSync(path.join(tmpdir(), `cairn-smoke-${label}-`));
-    const env = {
-      ...process.env,
-      PORT: String(port),
-      HOST: "127.0.0.1",
-      DATA_DIR: dir,
-      DB_PATH: path.join(dir, "cairn-smoke.db"),
-      // Auth is explicit per smoke pass. Rate limiting is off so auth-gate
-      // assertions cannot be masked by per-IP fixed-window state.
-      CAIRN_AUTH_TOKEN: authToken,
-      CAIRN_RATE_LIMIT: "0",
-      GEMINI_API_KEY: "",
-      GOOGLE_AI_KEY: "",
-      GARMIN_USERNAME: "",
-      GARMIN_PASSWORD: "",
-      // Keep the scheduler quiet during the short-lived smoke boot.
-      COACH_ENABLED: "0",
-    };
-
-    const child = spawn(process.execPath, [serverEntry], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-
-    let serverLog = "";
-    child.stdout.on("data", (d) => { serverLog += d.toString(); });
-    child.stderr.on("data", (d) => { serverLog += d.toString(); });
-
-    const ctx = { label, port, base, dir, child, serverLog: () => serverLog };
-    const ready = await waitForHealth(ctx);
-    if (ready.ok) return ctx;
-
-    lastLog = serverLog;
-    await stopServer(ctx);
-    if (!ready.retryable) {
-      if (ready.error) lastLog += `\n[smoke] last readiness fetch error: ${ready.error}\n`;
-      break;
-    }
-  }
-
-  const tail = lastLog.trim() ? `\n--- server output (tail) ---\n${lastLog.split("\n").slice(-20).join("\n")}` : "";
-  throw new Error(`${label} server did not become healthy within the timeout${tail}`);
-}
-
-async function withServer(opts, fn) {
-  const ctx = await startBuiltServer(opts);
-  try {
-    console.log(`Cairn smoke: ${ctx.label} server up on ${ctx.base} (temp DB at ${ctx.dir})`);
-    await fn(ctx);
-  } catch (e) {
-    e.serverLog = ctx.serverLog();
-    throw e;
-  } finally {
-    await stopServer(ctx);
-  }
 }
 
 async function runOpenSmoke(ctx) {

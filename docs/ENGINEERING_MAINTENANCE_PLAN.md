@@ -17,7 +17,7 @@ This tracker records the verified maintenance baseline. The next-stage full fron
 | Wave 4 - Frontend TypeScript foundation | Complete | client typecheck runs with no new framework and no unnecessary dependencies |
 | Wave 5 - High-risk frontend migration | Mostly complete | generated browser source now lives under `src/client`; live route-console smoke is green; large screen-controller modules still need shrinking |
 | Wave 6 - Brain and memory hardening | In progress | typed conductor/memory/chat-action spine and deterministic DTO coverage are in place; remaining coach-context slices still need narrower DTOs |
-| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; live Chrome route-console smoke is green; final automated browser workflow lane is still pending |
+| Wave 7 - Final consolidation | In progress | `npm run verify` green; built/Pi HTTP app-shell smoke exists; opt-in Chrome route/global smoke exists; deeper browser workflow smoke is still pending |
 
 ## Non-Negotiables
 
@@ -274,13 +274,13 @@ Tasks:
 - [x] Keep generated browser source under `src/client/**/*.ts`, with `public/js` treated as build output except for the tiny `10-boot.js` shim.
 - [x] Keep the exact client API route map narrow enough that `CLIENT_API_BROAD_RESPONSE_WAIVERS` is empty; deterministic DTO coverage is complete for the current deterministic client surfaces.
 - [ ] Split large typed screen-controller modules into smaller render, data, state, and wiring modules.
-  - [x] Recent reductions: Today Week Ahead, Today context/goal/health rail, Progress Energy surface, Chat attachment handling, Settings Agents render helpers, and Meal Recipe sheet/job controller.
+  - [x] Recent reductions: Today Week Ahead, Today context/goal/health rail, Progress Energy surface, Chat attachment handling, Settings Agents render helpers, Day Fuel load/edit controller, and Meal Recipe sheet/job controller.
 
 Gate:
 
 - Client typecheck green.
 - `npm run verify` green.
-- Automated gates cover client typecheck, route deep links, public-script/cache contracts, built HTTP smoke, and Pi deploy app-shell smoke. A live Chrome route-console sweep now covers `/`, `/app/today`, `/app/plan/meals`, `/app/progress/energy`, `/app/me/standing`, `/app/me/health/read`, `/app/me/health/records`, `/app/chat`, and `/app/settings/data`. Full browser workflow smoke for Today log set/skip/cardio, Chat send/stream/reconnect, Health markers, and Settings Data remains a manual release check until a dedicated automated browser lane is added.
+- Automated gates cover client typecheck, route deep links, public-script/cache contracts, built HTTP smoke, and Pi deploy app-shell smoke. `npm run smoke:browser` now runs an opt-in Chrome/CDP route/global smoke for `/`, `/app/today`, `/app/plan/food`, `/app/plan/meals`, `/app/progress/energy`, `/app/me/standing`, `/app/me/health/read`, `/app/me/health/records`, `/app/chat`, `/app/settings/data`, and `/app/settings/agents`, with runtime/console/network error capture and critical app-global assertions. Full browser workflow smoke for Today log set/skip/cardio, Chat send/stream/reconnect, Health markers, and Settings Data remains a future release-check expansion.
 
 ## Wave 6 - Brain And Memory Hardening
 

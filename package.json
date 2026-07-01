@@ -45,9 +45,13 @@
     "presmoke": "npm run build",
     "smoke": "node test/smoke.mjs",
     "smoke:built": "node test/smoke.mjs",
+    "presmoke:browser": "npm run build",
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:browser:built": "node scripts/smoke-browser.mjs",
     "launch:check": "node scripts/check-launch-safety.mjs",
     "verify": "node scripts/run-verify.mjs",
-    "verify:full": "npm run verify && npm run smoke:built"
+    "verify:full": "npm run verify && npm run smoke:built",
+    "release:check": "npm run verify && npm run smoke:built && npm run smoke:browser:built"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
