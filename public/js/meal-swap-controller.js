@@ -4,14 +4,8 @@
 function mealSwapControllerHtmlElement(value) {
     return value instanceof HTMLElement ? value : null;
 }
-function mealSwapControllerButtonElement(value) {
-    return value instanceof HTMLButtonElement ? value : null;
-}
 function mealSwapControllerRestoreBusy(value) {
     value?._busyRestore?.();
-}
-function mealSwapControllerEventElement(event) {
-    return event.target instanceof Element ? event.target : null;
 }
 function rerenderMealDay(current, dayIndex, ctx, settleMealIndex = null) {
     const section = view.querySelector(`.mealday[data-mday="${dayIndex}"]`);
@@ -181,94 +175,16 @@ async function moveMealRow(current, ctx, dayIndex, mealIndex, direction) {
     }
 }
 function wireMealRows(scope, current, ctx) {
-    scope.querySelectorAll("[data-mlog]").forEach((button) => button.addEventListener("click", async () => {
-        let payload;
-        try {
-            payload = CairnMealSwapData.record(JSON.parse(button.dataset.mlog || "{}"));
-        }
-        catch {
-            return;
-        }
-        const htmlButton = mealSwapControllerButtonElement(button);
-        if (htmlButton)
-            htmlButton.disabled = true;
-        const generic = /^(breakfast|lunch|dinner|snack|pre[- ]?workout|post[- ]?workout)$/i.test(String(payload.name || "").trim());
-        const title = generic && payload.items ? payload.items : (payload.name || payload.items || "Planned meal");
-        try {
-            await api("/food-notes", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    meal: CairnMealPlan.mealSlotFor(payload.name, payload.i),
-                    raw: "",
-                    parsed: {
-                        summary: title,
-                        items: payload.items || "",
-                        kcal: payload.kcal,
-                        protein_g: payload.protein_g,
-                        carbs_g: payload.carbs_g,
-                        fat_g: payload.fat_g,
-                    },
-                }),
-            });
-            button.textContent = "✓ Logged";
-            button.classList.add("meal-log-done");
-            toast(`${payload.name || "Meal"} logged`);
-        }
-        catch {
-            if (htmlButton)
-                htmlButton.disabled = false;
-            toast("Couldn't log meal");
-        }
-    }));
-    scope.querySelectorAll("[data-mswap]").forEach((button) => button.addEventListener("click", () => {
-        const row = mealSwapControllerHtmlElement(button.closest(".meal-row"));
-        const panel = mealSwapControllerHtmlElement(row?.nextElementSibling);
-        if (!row || !panel || !panel.classList.contains("meal-swap") || row.classList.contains("meal-busy"))
-            return;
-        panel.hidden = !panel.hidden;
-        if (!panel.hidden)
-            panel.querySelector(".meal-swap-hint")?.focus();
-    }));
-    scope.querySelectorAll(".meal-swap-cancel").forEach((button) => button.addEventListener("click", () => {
-        const panel = mealSwapControllerHtmlElement(button.closest(".meal-swap"));
-        if (panel)
-            panel.hidden = true;
-    }));
-    scope.querySelectorAll(".hintchip").forEach((chip) => chip.addEventListener("click", () => {
-        const panel = mealSwapControllerHtmlElement(chip.closest(".meal-swap"));
-        const input = panel?.querySelector(".meal-swap-hint");
-        if (!panel || !input)
-            return;
-        const on = chip.classList.contains("on");
-        panel.querySelectorAll(".hintchip").forEach((other) => other.classList.remove("on"));
-        chip.classList.toggle("on", !on);
-        input.value = on ? "" : chip.dataset.hint || "";
-    }));
-    scope.querySelectorAll(".meal-swap-hint").forEach((input) => input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-            event.preventDefault();
-            input.closest(".meal-swap")?.querySelector(".meal-swap-go")?.click();
-        }
-    }));
-    scope.querySelectorAll(".meal-swap-go").forEach((button) => button.addEventListener("click", () => {
-        const panel = mealSwapControllerHtmlElement(button.closest(".meal-swap"));
-        if (!panel)
-            return;
-        submitMealSwap(current, ctx, Number(panel.dataset.di), Number(panel.dataset.mi), panel);
-    }));
-    scope.querySelectorAll(".meal-mv").forEach((button) => button.addEventListener("click", () => {
-        const row = mealSwapControllerHtmlElement(button.closest(".meal-row"));
-        if (!row || row.classList.contains("meal-busy"))
-            return;
-        moveMealRow(current, ctx, Number(row.dataset.di), Number(row.dataset.mi), Number(button.dataset.mv));
-    }));
-    scope.querySelectorAll(".meal-row[data-di]").forEach((row) => row.addEventListener("click", (event) => {
-        if (mealSwapControllerEventElement(event)?.closest("button, input, a, .meal-swap"))
-            return;
-        if (row.classList.contains("meal-busy"))
-            return;
-        CairnMealRecipeController.openMealSheet(current, Number(row.dataset.di), Number(row.dataset.mi));
-    }));
+    const rowActions = globalThis.CairnMealSwapRowActionsController;
+    rowActions?.wireMealRows(scope, current, ctx, {
+        data: CairnMealSwapData,
+        mealPlan: CairnMealPlan,
+        recipeController: CairnMealRecipeController,
+        api,
+        toast,
+        submitMealSwap,
+        moveMealRow,
+    });
 }
 const CAIRN_MEAL_SWAP_CONTROLLER = {
     mealSwapOpOpts,

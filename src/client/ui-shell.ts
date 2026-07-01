@@ -116,68 +116,58 @@ function gotoChatWith(text: string): void {
   });
 }
 
-// segmented sub-nav: items = [[key,label]]; handlers = {key: renderFn}
-// Emits a sliding ink thumb (.seg-thumb) behind the active button; sub-view swaps
-// go through a view transition so the thumb glides between renders. Wrapped in a
-// sticky .segwrap band so the sub-nav stays pinned to the top while you scroll a
-// long sub-view — one tap back to another section, never lost from focus.
-function segBar(active: unknown, items: ReadonlyArray<UiSegment>): string {
-  return CairnUi.segmentedNavHtml({ active, items });
-}
-function wireSeg(handlers: Record<string, () => unknown>) {
-  view.querySelectorAll<HTMLElement>(".segbtn").forEach((b, _i) =>
-    b.addEventListener("click", () => {
-      const f = handlers[String(b.dataset.seg || "")]; if (!f) return;
-      // slide the thumb immediately, then swap the sub-view inside a transition
-      const seg = b.closest(".seg");
-      if (seg) {
-        const idx = [...seg.querySelectorAll<HTMLElement>(".segbtn")].indexOf(b);
-        (seg as HTMLElement).style.setProperty("--segi", String(idx));
-      }
-      withViewTransition(() => Promise.resolve(f()).then(() => {
-        if (typeof syncRouteFromState === "function") syncRouteFromState();
-        return viewEnter();
-      }));
-    })
-  );
-  view.querySelectorAll(".seg").forEach(fitSeg);
+function uiSegmentsApi(): UiSegmentsApi {
+  return (globalThis as unknown as { CairnUiSegments: UiSegmentsApi }).CairnUiSegments;
 }
 
-// Pill / segment bars stay on ONE line and SCROLL when they don't fit, rather than
-// clipping the last pill (e.g. "Calendar" on a narrow phone). Measure with
-// content-width pills (the .seg-scroll layout); if that overflows, keep scroll mode
-// — the sliding ink thumb assumes equal-width segments, so it yields to the solid
-// active-pill background — and center the active pill. Otherwise drop back to the
-// equal-width thumb. Adapts per-bar and per-viewport; no fixed breakpoint.
+function uiSegmentsDeps(): UiSegmentsDeps {
+  return {
+    root: view,
+    state,
+    segmentedNavHtml: (options) => CairnUi.segmentedNavHtml(options),
+    withViewTransition,
+    viewEnter,
+    syncRouteFromState: () => { if (typeof syncRouteFromState === "function") return syncRouteFromState(); },
+    requestAnimationFrame: (callback) => requestAnimationFrame(callback),
+    cancelAnimationFrame: (handle) => cancelAnimationFrame(handle),
+    addResizeListener: (listener) => window.addEventListener("resize", listener),
+    renderProgress: () => renderProgress(),
+    renderVolume: () => renderVolume(),
+    renderEndurance: () => renderEndurance(),
+    renderWeight: () => renderWeight(),
+    renderCalendar: () => renderCalendar(),
+    renderHistory: () => renderHistory(),
+    renderProgram: () => renderProgram(),
+    renderEnergy: () => renderEnergy(),
+    renderPlanEditor: () => renderPlanEditor(),
+    renderPlanEndurance: () => renderPlanEndurance(),
+    renderFoodJournal: () => renderFoodJournal(),
+    renderMeals: () => renderMeals(),
+    renderCoach: () => renderCoach(),
+  };
+}
+
+let _uiSegments: UiSegmentsController | null = null;
+function uiSegments(): UiSegmentsController {
+  _uiSegments ??= uiSegmentsApi().create(uiSegmentsDeps());
+  return _uiSegments;
+}
+
+function segBar(active: unknown, items: ReadonlyArray<UiSegment>): string {
+  return uiSegments().segBar(active, items);
+}
+function wireSeg(handlers: Record<string, () => unknown>): void {
+  uiSegments().wireSeg(handlers);
+}
 function fitSeg(seg: Element | null | undefined): void {
-  if (!seg) return;
-  const el = seg as HTMLElement;
-  el.classList.add("seg-scroll");
-  const overflow = el.scrollWidth > el.clientWidth + 1;
-  seg.classList.toggle("seg-scroll", overflow);
-  if (overflow) {
-    const active = el.querySelector<HTMLElement>(".segbtn.active");
-    if (active) el.scrollLeft = active.offsetLeft - (el.clientWidth - active.offsetWidth) / 2;
-  }
+  uiSegments().fitSeg(seg);
 }
-let _segFitRaf = 0;
-window.addEventListener("resize", () => {
-  cancelAnimationFrame(_segFitRaf);
-  _segFitRaf = requestAnimationFrame(() => view.querySelectorAll(".seg").forEach(fitSeg));
-});
-const PROGRESS_SEG: readonly UiSegment[] = [["sessions", "History"], ["trend", "1RM"], ["volume", "Volume"], ["endurance", "Endurance"], ["weight", "Weight"], ["calendar", "Calendar"], ["program", "Program"], ["energy", "Energy"]];
-const PROGRESS_HANDLERS: Record<string, () => unknown> = { trend: () => renderProgress(), volume: () => renderVolume(), endurance: () => renderEndurance(), weight: () => renderWeight(), calendar: () => renderCalendar(), sessions: () => renderHistory(), program: () => renderProgram(), energy: () => renderEnergy() };
-// The Plan sub-nav is dynamic: a runner/hybrid (or anyone with an endurance goal)
-// gets a dedicated ENDURANCE tab — the home for the periodized ramp, this week's
-// prescribed runs, and shaping the running plan. A pure strength athlete with no
-// running goal never sees it (calm, no empty surface).
+const PROGRESS_SEG: readonly UiSegment[] = uiSegmentsApi().PROGRESS_SEG;
+const PROGRESS_HANDLERS: Record<string, () => unknown> = uiSegments().progressHandlers;
 function planSeg(): readonly UiSegment[] {
-  const routedToEndurance = state.planSeg === "endurance" || state.planJump === "endurance";
-  return showEnduranceTab() || routedToEndurance
-    ? [["edit", "Training"], ["endurance", "Endurance"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]]
-    : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]];
+  return uiSegments().planSeg();
 }
-const PLAN_HANDLERS: Record<string, () => unknown> = { edit: () => renderPlanEditor(), endurance: () => renderPlanEndurance(), food: () => renderFoodJournal(), meals: () => renderMeals(), coach: () => renderCoach() };
+const PLAN_HANDLERS: Record<string, () => unknown> = uiSegments().planHandlers;
 
 // ---------- view transition utilities ----------
 const uiViewTransitions = CairnUiViewTransitions.create({ view, reducedMotion });
@@ -185,36 +175,13 @@ function viewEnter(): void { uiViewTransitions.viewEnter(); }
 function withViewTransition(fn: () => unknown): Promise<unknown> { return uiViewTransitions.withViewTransition(fn); }
 function skelSwap(fn: () => unknown): Promise<unknown> { return uiViewTransitions.skelSwap(fn); }
 
-// Primary training discipline ('strength'|'endurance'|'hybrid'), read once from the
-// profile and used for a GENTLE emphasis reframe — never to hide a surface. Default
-// 'strength' so a profile that never set it behaves exactly as before. Refreshed by
-// the profile loader (renderToday/renderMeProfile) and on a profile save.
-let primaryDiscipline: string = "strength";
-Object.defineProperty(globalThis, "primaryDiscipline", {
-  configurable: true,
-  get: () => primaryDiscipline,
-  set: (value) => { primaryDiscipline = String(value || "strength"); },
-});
 function setDiscipline(d: unknown): string {
-  primaryDiscipline = d === "endurance" || d === "hybrid" ? d : "strength";
-  return primaryDiscipline;
+  return uiSegmentsApi().setDiscipline(d);
 }
-const isEndurance = (): boolean => primaryDiscipline === "endurance";
-const isHybrid = (): boolean => primaryDiscipline === "hybrid";
-
-// Whether the athlete has an endurance OBJECTIVE on file (a race or a standing
-// readiness target). Primed from the profile alongside the discipline (warm-load +
-// on save). Used to surface the Plan → Endurance tab even when the discipline label
-// is 'strength' — setting a running goal is a clear signal you want a running plan.
-let enduranceGoalSet: boolean = false;
-Object.defineProperty(globalThis, "enduranceGoalSet", {
-  configurable: true,
-  get: () => enduranceGoalSet,
-  set: (value) => { enduranceGoalSet = !!value; },
-});
-function setEnduranceGoalSet(present: unknown): boolean { enduranceGoalSet = !!present; return enduranceGoalSet; }
-// A runner home is warranted when the athlete trains endurance OR has set a goal.
-const showEnduranceTab = (): boolean => isEndurance() || isHybrid() || enduranceGoalSet;
+const isEndurance = (): boolean => uiSegmentsApi().isEndurance();
+const isHybrid = (): boolean => uiSegmentsApi().isHybrid();
+function setEnduranceGoalSet(present: unknown): boolean { return uiSegmentsApi().setEnduranceGoalSet(present); }
+const showEnduranceTab = (): boolean => uiSegmentsApi().showEnduranceTab();
 
 // tiny inline sparkline (numbers only — safe for innerHTML)
 function sparklineSvg(vals: unknown, w = 132, h = 30): string {

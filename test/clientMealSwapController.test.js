@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
+import ts from "typescript";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -22,6 +23,13 @@ class FakeClassList {
 
   contains(name) {
     return this.items.has(name);
+  }
+
+  toggle(name, force) {
+    const next = force == null ? !this.items.has(name) : Boolean(force);
+    if (next) this.items.add(name);
+    else this.items.delete(name);
+    return next;
   }
 }
 
@@ -166,6 +174,126 @@ function loadMealSwapController(overrides = {}) {
   return { context, view, renderedDays, invalidations, toasts, countUps, requests };
 }
 
+function runClientSource(context, file) {
+  const source = readFileSync(join(root, file), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      alwaysStrict: false,
+      module: ts.ModuleKind.None,
+      moduleDetection: ts.ModuleDetectionKind.Legacy,
+      target: ts.ScriptTarget.ES2022,
+    },
+    fileName: file,
+  }).outputText;
+  vm.runInNewContext(`(() => {\n${output.trimEnd()}\n})();`, context);
+}
+
+class RowActionElement {
+  constructor(tag = "div") {
+    this.tag = tag;
+    this.children = [];
+    this.dataset = {};
+    this.parentElement = null;
+    this.previousElementSibling = null;
+    this.nextElementSibling = null;
+    this.classList = new FakeClassList();
+    this.listeners = new Map();
+    this.matchesBySelector = new Map();
+    this.hidden = false;
+    this.disabled = false;
+    this.focused = false;
+    this.textContent = "";
+    this.value = "";
+  }
+
+  set className(value) {
+    this.classList = new FakeClassList(value);
+  }
+
+  get className() {
+    return [...this.classList.items].join(" ");
+  }
+
+  addEventListener(type, handler) {
+    const listeners = this.listeners.get(type) || [];
+    listeners.push(handler);
+    this.listeners.set(type, listeners);
+  }
+
+  async fire(type, event = {}) {
+    const listeners = this.listeners.get(type) || [];
+    const evt = {
+      target: this,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      ...event,
+    };
+    for (const handler of listeners) await handler(evt);
+    return evt;
+  }
+
+  click() {
+    return this.fire("click");
+  }
+
+  focus() {
+    this.focused = true;
+  }
+
+  closest(selector) {
+    for (let node = this; node; node = node.parentElement) {
+      if (node.matches(selector)) return node;
+    }
+    return null;
+  }
+
+  matches(selector) {
+    return selector.split(",").some((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return false;
+      if (trimmed.startsWith(".")) return this.classList.contains(trimmed.slice(1));
+      return this.tag === trimmed;
+    });
+  }
+
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] || null;
+  }
+
+  querySelectorAll(selector) {
+    return this.matchesBySelector.get(selector) || [];
+  }
+
+  setQuery(selector, elements) {
+    this.matchesBySelector.set(selector, elements);
+    elements.forEach((element) => {
+      if (!element.parentElement) element.parentElement = this;
+    });
+  }
+}
+
+function loadMealSwapRowActionsController() {
+  const context = {
+    Array,
+    Boolean,
+    JSON,
+    Number,
+    Object,
+    Promise,
+    String,
+    Element: RowActionElement,
+    HTMLElement: RowActionElement,
+    HTMLButtonElement: RowActionElement,
+    window: null,
+    globalThis: null,
+  };
+  context.window = context;
+  context.globalThis = context;
+  runClientSource(context, "src/client/meal-swap-row-actions-controller.ts");
+  return context;
+}
+
 test("meal swap controller applies swap result in-place and rerenders the day", () => {
   const harness = loadMealSwapController();
   const current = {
@@ -207,4 +335,129 @@ test("meal swap controller persists optimistic meal reordering", async () => {
   assert.deepEqual(JSON.parse(harness.requests[0].opts.body).days[0].meals.map((meal) => meal.name), ["Lunch", "Breakfast", "Dinner"]);
   assert.deepEqual(harness.invalidations, ["meals:plans"]);
   assert.equal(harness.countUps.length, 1);
+});
+
+test("meal swap row actions wire log, swap, hint, move, and sheet events", async () => {
+  const context = loadMealSwapRowActionsController();
+  const current = { id: "plan-1" };
+  const ctx = { targetKcal: 2400 };
+  const apiCalls = [];
+  const toasts = [];
+  const submittedSwaps = [];
+  const movedRows = [];
+  const openedSheets = [];
+
+  const scope = new RowActionElement("section");
+  const logButton = new RowActionElement("button");
+  logButton.dataset.mlog = JSON.stringify({
+    name: "Lunch",
+    i: 1,
+    items: "Rice bowl",
+    kcal: 520,
+    protein_g: 36,
+    carbs_g: 62,
+    fat_g: 14,
+  });
+  const row = new RowActionElement("div");
+  row.className = "meal-row";
+  row.dataset.di = "0";
+  row.dataset.mi = "1";
+  const panel = new RowActionElement("div");
+  panel.className = "meal-swap";
+  panel.hidden = true;
+  panel.dataset.di = "0";
+  panel.dataset.mi = "1";
+  row.nextElementSibling = panel;
+  panel.previousElementSibling = row;
+
+  const swapButton = new RowActionElement("button");
+  swapButton.dataset.mswap = "1";
+  swapButton.parentElement = row;
+  const moveButton = new RowActionElement("button");
+  moveButton.className = "meal-mv";
+  moveButton.dataset.mv = "-1";
+  moveButton.parentElement = row;
+  const hintInput = new RowActionElement("input");
+  hintInput.className = "meal-swap-hint";
+  const swapGo = new RowActionElement("button");
+  swapGo.className = "meal-swap-go";
+  const cancelButton = new RowActionElement("button");
+  cancelButton.className = "meal-swap-cancel";
+  const hintChip = new RowActionElement("button");
+  hintChip.className = "hintchip";
+  hintChip.dataset.hint = "more protein";
+  panel.setQuery(".meal-swap-hint", [hintInput]);
+  panel.setQuery(".meal-swap-go", [swapGo]);
+  panel.setQuery(".hintchip", [hintChip]);
+
+  scope.setQuery("[data-mlog]", [logButton]);
+  scope.setQuery("[data-mswap]", [swapButton]);
+  scope.setQuery(".meal-swap-cancel", [cancelButton]);
+  scope.setQuery(".hintchip", [hintChip]);
+  scope.setQuery(".meal-swap-hint", [hintInput]);
+  scope.setQuery(".meal-swap-go", [swapGo]);
+  scope.setQuery(".meal-mv", [moveButton]);
+  scope.setQuery(".meal-row[data-di]", [row]);
+
+  context.CairnMealSwapRowActionsController.wireMealRows(scope, current, ctx, {
+    data: { record: (value) => value },
+    mealPlan: { mealSlotFor: (name, index) => `${String(name).toLowerCase()}:${index}` },
+    recipeController: { openMealSheet: (...args) => openedSheets.push(args) },
+    api: async (path, opts) => {
+      apiCalls.push({ path, opts });
+      return { ok: true };
+    },
+    toast: (message) => toasts.push(message),
+    submitMealSwap: (...args) => {
+      submittedSwaps.push(args);
+      return Promise.resolve();
+    },
+    moveMealRow: (...args) => {
+      movedRows.push(args);
+      return Promise.resolve();
+    },
+  });
+
+  await logButton.click();
+  assert.equal(apiCalls[0].path, "/food-notes");
+  assert.equal(JSON.parse(apiCalls[0].opts.body).meal, "lunch:1");
+  assert.equal(logButton.textContent, "✓ Logged");
+  assert.equal(logButton.classList.contains("meal-log-done"), true);
+  assert.equal(toasts.at(-1), "Lunch logged");
+
+  await swapButton.click();
+  assert.equal(panel.hidden, false);
+  assert.equal(hintInput.focused, true);
+
+  await hintChip.click();
+  assert.equal(hintInput.value, "more protein");
+  assert.equal(hintChip.classList.contains("on"), true);
+  await hintChip.click();
+  assert.equal(hintInput.value, "");
+  assert.equal(hintChip.classList.contains("on"), false);
+
+  const enterEvent = await hintInput.fire("keydown", { key: "Enter" });
+  assert.equal(enterEvent.defaultPrevented, true);
+  assert.deepEqual(submittedSwaps[0], [current, ctx, 0, 1, panel]);
+
+  await moveButton.click();
+  assert.deepEqual(movedRows[0], [current, ctx, 0, 1, -1]);
+
+  await row.click();
+  assert.deepEqual(openedSheets[0], [current, 0, 1]);
+});
+
+test("meal swap controller keeps compatibility shim while row handlers live in row-actions module", () => {
+  const controller = readFileSync(join(root, "src/client/meal-swap-controller.ts"), "utf8");
+  const rowActions = readFileSync(join(root, "src/client/meal-swap-row-actions-controller.ts"), "utf8");
+
+  assert.match(controller, /function wireMealRows\(scope: ParentNode, current: MealSwapControllerPlan, ctx: MealSwapControllerContext\): void/);
+  assert.match(controller, /CairnMealSwapRowActionsController/);
+  assert.match(controller, /submitMealSwap/);
+  assert.match(controller, /moveMealRow/);
+  assert.doesNotMatch(controller, /querySelectorAll<HTMLElement>\("\[data-mlog\]"\)/);
+  assert.match(rowActions, /function mealSwapRowActionsWireMealRows\(/);
+  assert.match(rowActions, /\[data-mlog\]/);
+  assert.match(rowActions, /\[data-mswap\]/);
+  assert.match(rowActions, /CairnMealSwapRowActionsController/);
 });

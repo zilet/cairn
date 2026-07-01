@@ -7,13 +7,15 @@ const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf
 
 test("logged food has a dedicated Plan Food tab and shortcuts land there", () => {
   const ui = file("public/js/02-ui.js");
+  const uiSegments = file("public/js/ui-segments-client.js");
   const meals = file("public/js/06-coach-meals.js");
   const todayRail = file("src/client/today-rail-controller.ts");
   const chat = file("public/js/09-plan-chat.js");
   const appRenderDispatch = file("public/js/app-render-dispatch.js");
 
-  assert.match(ui, /\["food", "Food"\]/, "Plan segment includes Food");
-  assert.match(ui, /food: \(\) => renderFoodJournal\(\)/, "Food segment is wired to the journal renderer");
+  assert.match(uiSegments, /\["food",\s*"Food"\]/, "Plan segment includes Food");
+  assert.match(uiSegments, /food: \(\) => deps\.renderFoodJournal\(\)/, "Food segment is wired to the journal renderer");
+  assert.match(ui, /planSeg\(\) \{[\s\S]*uiSegments\(\)\.planSeg\(\)/, "UI shell delegates Plan segments");
   assert.match(meals, /segBar\("food", planSeg\(\)\)/, "daily journal renders as the active Food segment");
   assert.match(meals, /class="meal-energy food-journal"/, "Food tab owns the daily journal and energy surface");
   assert.match(todayRail, /deps\.state\.planJump = "food"; deps\.activateTab\("plan"\)/, "Today logged-fuel card opens Food");

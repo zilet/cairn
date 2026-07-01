@@ -98,14 +98,25 @@ function todayDeps() {
     }
     return todayDepsCache;
 }
-function todaySideLoaderDeps() {
-    return todayDeps().sideLoaders();
-}
 function todayPlanSurfaceRendererDeps() {
     return todayDeps().planSurfaceRenderer();
 }
 function todayMainShellDeps() {
     return todayDeps().mainShell();
+}
+const todayCompatibilityBridges = globalThis.CairnTodayCompatibilityBridges.create({
+    api: todayApi,
+    dependencies: todayDeps,
+});
+const { briefDeps: todayBriefDeps, sessionDeps: todaySessionDeps, revealSessionComposer, askForSession, sessionDoneCard, wireLogRow, wireSkips, wireBrief, scheduleRxRefresh, invalidateTodayProgression, refreshAdaptedRx, setupAddExercise, appendOffPlanCard, garminSessionCard, loadWearable, loadTableHint, loadContextBanner, loadDraftProposals, loadHealthFocusBanner, } = todayCompatibilityBridges;
+function postExerciseMode(name, mode) {
+    return todayCompatibilityBridges.postExerciseMode(name, mode);
+}
+function reconnectSessionSuggest(job) {
+    return todayCompatibilityBridges.reconnectSessionSuggest(job);
+}
+function reconnectDayReadOverride(job) {
+    return todayCompatibilityBridges.reconnectDayReadOverride(job);
 }
 // The per-card prescription line. `rx` is one Prescription from the progression
 // engine (or null → renders nothing). Calm, no score, one move + its why. When the
@@ -188,10 +199,6 @@ function cardioEffortMatches(it, eff) {
 // Session status render helpers live in /js/today-session-status-client.js. They
 // own tonnage, set chips, completion, skip-line, and feedback markup while this
 // screen keeps DOM wiring and persistence.
-// Set an exercise's mode by name (upsert-by-name). Returns the todayApi() promise.
-function postExerciseMode(name, mode) {
-    return todayApi("/exercises", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, mode }) });
-}
 async function suggestedPlanDayNumber(session, isToday) {
     return CairnTodayPlanSelection.suggestedPlanDayNumber(session, isToday, {
         state: todayState,
@@ -201,9 +208,6 @@ async function suggestedPlanDayNumber(session, isToday) {
 // ---------- The Brief (day-read) ----------
 // Pure Brief markup lives in /js/today-brief-client.js. Stateful fetch/cache,
 // steer-job, reconnect, and focus-mode wiring live in /js/today-brief-controller.js.
-function todayBriefDeps() {
-    return todayDeps().brief();
-}
 async function loadBrief(date, override, opts = {}) {
     return CairnTodayBriefController.loadBrief(date, override, todayBriefDeps(), opts);
 }
@@ -227,18 +231,6 @@ function focusBarHtml(read, day, { exDone, exTotal, isToday }) {
 }
 function briefSignalsText(read) {
     return CairnTodayBriefController.briefSignalsText(read);
-}
-function todaySessionSuggestDeps() {
-    return todayDeps().sessionSuggest();
-}
-function reconnectSessionSuggest(job) {
-    return CairnTodaySessionSuggestController.reconnectSessionSuggest(job, todaySessionSuggestDeps());
-}
-function revealSessionComposer() {
-    CairnTodaySessionSuggestController.revealSessionComposer(todaySessionSuggestDeps());
-}
-async function askForSession(opts = {}) {
-    await CairnTodaySessionSuggestController.askForSession(opts, todaySessionSuggestDeps());
 }
 // Reveal the plan/logging surface for the selected date, then run `after` once the
 // surface exists in the DOM. If it's already shown, run immediately.
@@ -449,75 +441,6 @@ async function renderToday(opts = {}) {
     CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets }, todaySessionDeps());
     setupAddExercise();
     todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
-}
-// A finished workout's calm wrap-up: a quiet checkmark, the day, the numbers that
-// matter, the "how did that feel?" slot, and two soft ways forward (log more /
-// see it in history). No score, no verdict — just "that's done, well played".
-function sessionDoneCard(session, day, { isToday }) {
-    return CairnTodaySessionStatus.sessionDoneCardHtml(session, day, { isToday });
-}
-function todaySessionDeps() {
-    return todayDeps().session();
-}
-function wireLogRow(row) {
-    CairnTodaySessionController.wireLogRow(row, todaySessionDeps());
-}
-function wireSkips() {
-    CairnTodaySessionController.wireSkips(todaySessionDeps());
-}
-function wireBrief(read, { isToday }) {
-    CairnTodayBriefController.wireBrief(read, { isToday }, todayBriefDeps());
-}
-function reconnectDayReadOverride(job) {
-    return CairnTodayBriefController.reconnectDayReadOverride(job, todayBriefDeps());
-}
-// ---- Keep the adapted prescription in step with the sets being logged ----
-// The per-lift "next up / hold / ease off" line (exRxLineHtml) is the visible proof
-// the plan FOLLOWS what you logged — so it must not stay frozen at render-time after
-// the first set. A full renderToday() only fires on the FIRST set of a previously-
-// empty day; for every later set we instead REFRESH the prescription cheaply, in
-// place. Debounced (rapid taps coalesce into one fetch) + best-effort: a failed fetch
-// leaves the last paint, exactly like the initial progression load.
-function todayProgressionDeps() {
-    return todayDeps().progression();
-}
-function scheduleRxRefresh() {
-    CairnTodayProgressionController.scheduleRxRefresh(todayProgressionDeps());
-}
-function invalidateTodayProgression() {
-    CairnTodayProgressionController.invalidateTodayProgression(todayProgressionDeps());
-}
-async function refreshAdaptedRx() {
-    await CairnTodayProgressionController.refreshAdaptedRx(todayProgressionDeps());
-}
-function todayAddExerciseDeps() {
-    return todayDeps().addExercise();
-}
-async function setupAddExercise() {
-    await CairnTodayAddExerciseController.setupAddExercise(todayAddExerciseDeps());
-}
-async function appendOffPlanCard(name, mode) {
-    await CairnTodayAddExerciseController.appendOffPlanCard(name, mode, todayAddExerciseDeps());
-}
-function garminSessionCard(g) {
-    return CairnTodaySideLoaders.garminSessionCard(g);
-}
-async function loadWearable(isToday) {
-    await CairnTodaySideLoaders.loadWearable(isToday, todaySideLoaderDeps());
-}
-async function loadTableHint() {
-    await CairnTodaySideLoaders.loadTableHint(todaySideLoaderDeps());
-}
-// Today context/goal/health rail markup lives in /js/today-context-client.js.
-// This screen keeps API loading, slot liveness checks, and navigation wiring.
-async function loadContextBanner() {
-    await CairnTodaySideLoaders.loadContextBanner(todaySideLoaderDeps());
-}
-async function loadDraftProposals() {
-    await CairnTodaySideLoaders.loadDraftProposals(todaySideLoaderDeps());
-}
-async function loadHealthFocusBanner() {
-    await CairnTodaySideLoaders.loadHealthFocusBanner(todaySideLoaderDeps());
 }
 Object.assign(globalThis, {
     postExerciseMode,

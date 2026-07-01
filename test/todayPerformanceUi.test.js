@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const today = readFileSync(path.join(root, "src/client/today-screen.ts"), "utf8");
+const todayBridges = readFileSync(path.join(root, "src/client/today-compatibility-bridges.ts"), "utf8");
 const todayDataLoader = readFileSync(path.join(root, "src/client/today-data-loader.ts"), "utf8");
 const todayPlanSessionPreparation = readFileSync(path.join(root, "src/client/today-plan-session-preparation.ts"), "utf8");
 const todayProgressionController = readFileSync(path.join(root, "src/client/today-progression-controller.ts"), "utf8");
@@ -30,8 +31,9 @@ test("Today SWR-caches progression and invalidates it when set truth changes", (
   assert.match(todayPlanSessionPreparation, /deps\.cachedApi\("\/program\/progression\?day="/);
   assert.match(todayPlanSessionPreparation, /key:\s*`program:progression:\$\{day\}`/);
   assert.match(today, /todayPlanSessionPreparation\.preparePlanSession/);
-  assert.match(today, /function\s+invalidateTodayProgression/);
-  assert.match(today, /CairnTodayProgressionController\.invalidateTodayProgression\(todayProgressionDeps\(\)\)/);
+  assert.match(today, /invalidateTodayProgression/);
+  assert.match(todayBridges, /invalidateTodayProgression\(\)/);
+  assert.match(todayBridges, /CairnTodayProgressionController\.invalidateTodayProgression\(progressionDeps\(\)\)/);
   assert.match(todayProgressionController, /function progressionKey\(day: string \| number\): string/);
   assert.match(todayProgressionController, /deps\.invalidate\(progressionKey\(deps\.state\.day\)\)/);
   assert.ok((todaySessionController.match(/deps\.invalidateTodayProgression\(\);/g) || []).length >= 2, "set create/delete paths invalidate progression");
