@@ -41,6 +41,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-progression-controller.ts", output: "public/js/today-progression-controller.js" },
   { source: "src/client/today-add-exercise-controller.ts", output: "public/js/today-add-exercise-controller.js" },
   { source: "src/client/today-brief-client.ts", output: "public/js/today-brief-client.js" },
+  { source: "src/client/today-brief-controller.ts", output: "public/js/today-brief-controller.js" },
   { source: "src/client/cardio-plan-client.ts", output: "public/js/cardio-plan-client.js" },
   { source: "src/client/cardio-sync-client.ts", output: "public/js/cardio-sync-client.js" },
   { source: "src/client/today-lately-client.ts", output: "public/js/today-lately-client.js" },

@@ -143,6 +143,30 @@ declare global {
     hasLoggedSets: boolean;
   };
 
+  type ClientTodayBriefControllerDeps = {
+    root: HTMLElement;
+    state: Pick<ClientAppState, "tab" | "logDate" | "brief" | "_briefInflight" | "_briefMorph" | "focus" | "plan" | "planReveal" | "progressSeg"> & {
+      day?: number | null;
+      dayPicked?: boolean;
+    };
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    invalidate(key: string): void;
+    renderToday(opts?: Record<string, unknown>): unknown;
+    withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
+    runOp(kind: "day_read_override", body: Record<string, unknown>, options: ClientAgentOpHandlers): Promise<unknown>;
+    runCountUps(root?: ParentNode | null, options?: { snap?: boolean }): void;
+    reducedMotion(): boolean;
+    collapseEl(el: Element, done?: () => void): void;
+    activateTab(tab: string): unknown;
+    toast(message: string): void;
+    localISO(date?: Date): string;
+    escapeHtml(value: unknown): string;
+    loadTrainingProvenance(isToday?: boolean): unknown;
+    revealPlanThen(after: () => unknown, opts?: { blank?: boolean }): unknown;
+    revealSessionComposer(): unknown;
+    askForSession(opts?: { minutes?: unknown; focus?: unknown }): unknown;
+  };
+
   type ClientTodayRailControllerDeps = {
     root: ParentNode;
     state: {
@@ -1818,6 +1842,43 @@ declare global {
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
     };
 
+    CairnTodayBriefController: {
+      provisionalRead(date: string): ClientDayRead & { _provisional: boolean };
+      loadBrief(
+        date: string,
+        override: string,
+        deps: ClientTodayBriefControllerDeps,
+        opts?: { fast?: boolean },
+      ): Promise<ClientDayRead & { _provisional?: boolean; override?: string | null }>;
+      upgradeBriefInPlace(date: string, isToday: boolean, deps: ClientTodayBriefControllerDeps): Promise<void>;
+      reshapeToday(deps: ClientTodayBriefControllerDeps): Promise<void>;
+      briefHtml(
+        read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
+        options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
+        deps: ClientTodayBriefControllerDeps,
+      ): string;
+      focusEngaged(
+        date: unknown,
+        options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
+        deps: ClientTodayBriefControllerDeps,
+      ): boolean;
+      setFocus(date: string, on: boolean, deps: ClientTodayBriefControllerDeps): void;
+      focusBarHtml(
+        read: Partial<ClientDayRead> | null | undefined,
+        day: { name?: unknown } | null | undefined,
+        options?: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
+      ): string;
+      briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
+      wireBrief(
+        read: Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown },
+        options: { isToday?: boolean },
+        deps: ClientTodayBriefControllerDeps,
+      ): void;
+      paintBriefReshaping(brief: Element, chip: HTMLElement | null, deps: ClientTodayBriefControllerDeps): void;
+      dayReadOverrideOpOpts(args: { intent?: string; prevFocus?: unknown } | undefined, deps: ClientTodayBriefControllerDeps): ClientAgentOpHandlers;
+      reconnectDayReadOverride(job: unknown, deps: ClientTodayBriefControllerDeps): ClientAgentOpHandlers | null;
+    };
+
     CairnCaptureProvenance: {
       activeDirectives(): Promise<ClientDirective[]>;
       provenanceLineHtml(directive: (ClientDirective & { citation?: unknown; directive?: unknown; uncertain?: unknown }) | null | undefined, label: string): string | null;
@@ -1963,6 +2024,7 @@ declare global {
   declare const CairnPwaInstall: Window["CairnPwaInstall"];
   declare const CairnRestTimer: Window["CairnRestTimer"];
   declare const CairnTodayBrief: Window["CairnTodayBrief"];
+  declare const CairnTodayBriefController: Window["CairnTodayBriefController"];
   declare const CairnCaptureProvenance: Window["CairnCaptureProvenance"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];

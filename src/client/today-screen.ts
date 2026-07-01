@@ -220,189 +220,61 @@ async function suggestedPlanDayNumber(session: TodayScreenTrainingSession | null
 }
 
 // ---------- The Brief (day-read) ----------
-// Phase 1: Today opens with a calm day-read — rest / easy / train — fetched from
-// GET /api/today-read. It's a SUGGESTION, never a gate: every read carries one-tap
-// redirects (train anyway · ask for a session · pull in your plan) so the rest of
-// the surface is always one move away. The read is cached per-date on todayState.brief
-// (keyed by date+override) so re-renders that don't change the day don't re-fetch.
-
-// Brief/focus-bar render helpers live in /js/today-brief-client.js. This screen
-// keeps the stateful fetch/cache/job wiring and passes render context into the
-// typed pure helpers.
-
-// Fetch (or reuse) the day-read for the selected date. Always resolves to a read
-// object — the endpoint is always 200 (agentic or deterministic fallback). On a
-// hard network failure we synthesize a minimal "train" read so the launchpad still
-// works; the Brief never blocks the rest of Today.
-// A bare provisional read used only to paint Today's structure instantly when the
-// agentic read isn't warm yet. Marked _provisional so the background upgrade knows
-// to replace it; it's never cached as the final read.
-function provisionalRead(_date: string): TodayScreenDayRead {
-  return CairnTodayBrief.provisionalRead();
+// Pure Brief markup lives in /js/today-brief-client.js. Stateful fetch/cache,
+// steer-job, reconnect, and focus-mode wiring live in /js/today-brief-controller.js.
+function todayBriefDeps() {
+  return {
+    root: todayView,
+    state: todayState,
+    api: todayApi,
+    invalidate: swrInvalidate,
+    renderToday,
+    withViewTransition,
+    runOp,
+    runCountUps,
+    reducedMotion,
+    collapseEl,
+    activateTab,
+    toast,
+    localISO,
+    escapeHtml: escHtml,
+    loadTrainingProvenance: (isToday?: boolean) => loadTrainingProvenance(isToday),
+    revealPlanThen,
+    revealSessionComposer,
+    askForSession,
+  };
 }
 
 async function loadBrief(date: string, override: string, opts: { fast?: boolean } = {}): Promise<TodayScreenDayRead> {
-  const cached = todayState.brief;
-  // Reuse a non-provisional cached read for the same date/override.
-  if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional) return cached.read;
-  const fetchRead: Promise<TodayScreenDayRead> = (async () => {
-    let read: TodayScreenDayRead | null = null;
-    try {
-      const qs = new URLSearchParams({ date, agent: "auto" });
-      if (override) qs.set("override", override);
-      read = await todayApi("/today-read?" + qs.toString()) as TodayScreenDayRead;
-    } catch { read = null; }
-    if (!read || !read.kind) read = provisionalRead(date);
-    return read;
-  })();
-  // Fast mode (first paint): never block more than ~the timeout. The endpoint
-  // returns a cached read instantly, so the common case resolves immediately;
-  // only a cold cache (first-ever agentic compute) hits the timeout, where we
-  // paint a provisional read and let the background upgrade swap the real one in.
-  if (opts.fast) {
-    const TIMEOUT = 1200;
-    const raced: { r: TodayScreenDayRead } | null = await Promise.race([
-      fetchRead.then((r) => ({ r })),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), TIMEOUT)),
-    ]);
-    if (raced && raced.r && !raced.r._provisional) {
-      // Adopt the server-persisted steer (read.override) on a fresh open/reload —
-      // the warm-cache reload hits this fast path, so the steer must survive here.
-      todayState.brief = { date, override: override || raced.r.override || "", read: raced.r };
-      return raced.r;
-    }
-    // timed out (or only got a provisional) — keep the real fetch alive so the
-    // upgrade can await the SAME promise instead of firing a second request.
-    todayState._briefInflight = { date, override: override || "", promise: fetchRead };
-    const prov = (raced && raced.r) || provisionalRead(date);
-    todayState.brief = { date, override: override || "", read: prov };
-    return prov;
-  }
-  todayState._briefInflight = null; // a non-fast (deliberate) load supersedes any pending upgrade
-  const read = await fetchRead;
-  // The server PERSISTS the athlete's steer on the read (read.override). When we
-  // didn't request one explicitly (a fresh open / reload), adopt the persisted steer
-  // so the chips filter correctly and the active-steer styling shows — this is what
-  // makes "Easy day instead" survive a reload instead of snapping back to canonical.
-  todayState.brief = { date, override: override || read.override || "", read };
-  return read;
+  return CairnTodayBriefController.loadBrief(date, override, todayBriefDeps(), opts) as Promise<TodayScreenDayRead>;
 }
 
-// Upgrade a provisionally-painted Brief to the real (agentic) read in place,
-// without re-rendering the rest of Today. Runs the .is-thinking filament while
-// it waits, then swaps the .brief element. No-op if the read was already real,
-// the tab changed, or the date/override moved on. Pull-never-push: it just
-// quietly settles into the better read; nothing nags.
 async function upgradeBriefInPlace(date: string, isToday: boolean) {
-  const inflight = todayState._briefInflight;
-  if (!inflight || inflight.date !== date) return; // nothing provisional to upgrade
-  const briefEl = todayView.querySelector(".brief");
-  if (briefEl && !reducedMotion()) briefEl.classList.add("is-thinking");
-  let read: TodayScreenDayRead | null = null;
-  try { read = await inflight.promise; } catch { read = null; }
-  // Stale-guard: bail if we navigated away or the date moved while waiting.
-  if (todayState.tab !== "today" || todayState.logDate !== date) return;
-  if (todayState._briefInflight === inflight) todayState._briefInflight = null;
-  if (!read || read._provisional) { briefEl?.classList.remove("is-thinking"); return; }
-  // Adopt the server-persisted steer when the real read settles (cold-cache path).
-  todayState.brief = { date, override: inflight.override || read.override || "", read };
-  const live = todayView.querySelector(".brief");
-  if (!live) return;
-  // Re-derive showPlan in case the real read flipped train↔rest/easy; only the
-  // Brief element is swapped, so the logging surface below is untouched.
-  const day = todayState.plan.find((d) => d.day_number === todayState.day) || todayState.plan[0] || { items: [] };
-  const hasPlanDay = (day.items || []).length > 0;
-  const showPlan = !!todayView.querySelector(".plansurface");
-  const tmp = document.createElement("div");
-  tmp.innerHTML = briefHtml(read, { showPlan, hasPlanDay, isToday });
-  const fresh = tmp.firstElementChild;
-  if (!fresh) { live.classList.remove("is-thinking"); return; }
-  fresh.classList.add(reducedMotion() ? "" : "brief-settle");
-  live.replaceWith(fresh);
-  wireBrief(read, { isToday });
-  runCountUps(fresh);
-  if (showPlan) loadTrainingProvenance(isToday); // re-attach the causal line after the swap
+  await CairnTodayBriefController.upgradeBriefInPlace(date, isToday, todayBriefDeps());
 }
 
-// A relevant log just reshaped today (an activity, a check-in) — drop the cached
-// Brief so it re-fetches the server-recomputed read, and if Today is the live
-// surface, re-render it with the hero morph so the change shows immediately. A
-// logged set doesn't need this: the first set already re-renders Today, and
-// nulling todayState.brief there lets that render pick up the fresh read.
 async function reshapeToday() {
-  todayState.brief = null;
-  // A relevant log (activity / food / weight / check-in) can shift the day's
-  // session, weekly stats, and energy read — drop their SWR caches so the
-  // re-render below reads truth instead of a stale warm peek.
-  swrInvalidate("today:session:" + todayState.logDate);
-  swrInvalidate("stats");
-  swrInvalidate("progress:energy");
-  if (todayState.tab !== "today") return;
-  // Re-fetch the read BEFORE the transition so renderToday's loadBrief hits the
-  // warm cache and the DOM update is instant — running the (slow, agentic) fetch
-  // inside withViewTransition trips its ~4s timeout and aborts the morph. This
-  // mirrors the override-chip path. The fetch can take a few seconds; the "Logged"
-  // toast already gave feedback, and the old read stays put until the flip lands.
-  await loadBrief(todayState.logDate, "");
-  if (todayState.tab !== "today") return; // navigated away during the await
-  const morph = !reducedMotion();
-  if (morph) { todayView.querySelector(".brief")?.classList.add("brief-morph"); todayState._briefMorph = true; }
-  try {
-    await withViewTransition(() => renderToday());
-  } finally {
-    todayState._briefMorph = false;
-    todayView.querySelector(".brief")?.classList.remove("brief-morph");
-  }
+  await CairnTodayBriefController.reshapeToday(todayBriefDeps());
 }
 
-// Honest degradation: one calm line when coaching is offline. The typed helper
-// renders the notice; this screen owns the session-only dismissal state and collapse.
-let _agentOfflineDismissed = false;
-function wireAgentOffline(scope: any) {
-  (scope || view).querySelectorAll("[data-agentoffx]").forEach((b: any) =>
-    b.addEventListener("click", () => {
-      _agentOfflineDismissed = true;
-      const el = b.closest(".agent-offline");
-      if (el) collapseEl(el, () => el.remove()); else b.remove();
-    }));
+function briefHtml(read: any, { showPlan, hasPlanDay, isToday }: any) {
+  return CairnTodayBriefController.briefHtml(read, { showPlan, hasPlanDay, isToday }, todayBriefDeps());
 }
 
-function briefHtml(read: any, { showPlan, isToday }: any) {
-  const activeOverride = todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
-  return CairnTodayBrief.briefHtml(read, {
-    showPlan,
-    isToday,
-    activeOverride,
-    morph: !!todayState._briefMorph,
-    reducedMotion: reducedMotion(),
-    offlineDismissed: _agentOfflineDismissed,
-  });
-}
-
-// ---- Focus mode: a distraction-free logging view for a training day ----
-// Per the constitution it's a calm OPTION, never forced: it auto-engages once you've
-// logged a set today (you've committed to the work), you can toggle it on/off any
-// time, and an explicit choice for the date always wins over the auto rule. When on,
-// Today sheds the Brief/insight/capture/week chrome and keeps just a slim sticky
-// header (day · progress · one-line read · exit) above the logging cards.
 function focusEngaged(date: any, { showPlan, hasLoggedSets, isToday }: any) {
-  if (!showPlan) return false;
-  const f = todayState.focus;
-  if (f && f.date === date) return f.on;   // the athlete's explicit choice for this date
-  return !!(isToday && hasLoggedSets);      // auto: engage once logging is underway
+  return CairnTodayBriefController.focusEngaged(date, { showPlan, hasLoggedSets, isToday }, todayBriefDeps());
 }
-function setFocus(date: any, on: any) { todayState.focus = { date, on }; }
 
-// The slim sticky header shown in focus mode — day name, sets-of-exercises progress,
-// the one-line Brief read for context, and a one-tap exit back to the full Today.
+function setFocus(date: any, on: any) {
+  CairnTodayBriefController.setFocus(date, on, todayBriefDeps());
+}
+
 function focusBarHtml(read: any, day: any, { exDone, exTotal, isToday }: any) {
-  return CairnTodayBrief.focusBarHtml(read, day, { exDone, exTotal, isToday });
+  return CairnTodayBriefController.focusBarHtml(read, day, { exDone, exTotal, isToday });
 }
 
-// The optional "tap to see why" detail — plain-language signals, never raw numbers
-// as a verdict. Built lazily into a toast-like inline expander under the Brief.
 function briefSignalsText(read: any) {
-  return CairnTodayBrief.signalsText(read);
+  return CairnTodayBriefController.briefSignalsText(read);
 }
 
 function todaySessionSuggestDeps() {
@@ -1223,204 +1095,12 @@ function wireSkips() {
   CairnTodaySessionController.wireSkips(todaySessionDeps());
 }
 
-// Wire the Brief's launchpad: override chips reshape the read; redirects open the
-// rest of Today (train anyway / pull in plan / ask for a session). Nothing here is
-// a gate — each control is one tap to a different path through the day.
 function wireBrief(read: any, { isToday }: any) {
-  const brief = todayView.querySelector(".brief");
-  if (!brief) return;
-  wireAgentOffline(brief); // dismiss ✕ on the "coaching offline" notice, when present
-
-  // Steer options → reshape the read agentically (POST /today-read/reshape) as a
-  // durable background job, so a steer survives a tab switch / reload / restart
-  // like the other ops. runOp streams the wait into the Brief; the `done` result
-  // is the raw read object, which the op's render adopts + morphs into place.
-  brief.querySelectorAll("[data-override]").forEach((b: any) =>
-    b.addEventListener("click", () => {
-      const intent = b.dataset.override;
-      if (brief.classList.contains("is-thinking")) return; // a reshape is already in flight
-      // Visible "thinking" state for the (slow, agentic) reshape: the tapped option
-      // carries a ring, the rest freeze, a filament sweeps the card, and a quiet line
-      // makes the wait read as intentional rather than stalled.
-      paintBriefReshaping(brief, b);
-      // bust the per-date cache so the next plain render re-reads the steered Brief
-      todayState.brief = null;
-      runOp("day_read_override", { date: todayState.logDate, override: intent, agent: "auto" },
-        dayReadOverrideOpOpts({ intent, isToday, prevFocus: read.focus }));
-    })
-  );
-
-  // Redirects: start the session (reveal + scroll), reveal the plan, pull in a
-  // plan day, or ask for a session. None is a gate — each is one tap to a path.
-  brief.querySelectorAll("[data-redirect]").forEach((b: any) =>
-    b.addEventListener("click", () => {
-      const action = b.dataset.redirect;
-      if (action === "ask-session") { revealSessionComposer(); return; }
-      if (action === "view-week") { activateTab("plan"); return; } // the day-ahead → the full plan/week
-      if (action === "view-program") { todayState.progressSeg = "program"; activateTab("progress"); return; } // the arc → the program/periodization view
-      if (action === "start-session") {
-        // the day's primary on a train day: make sure the logging surface exists,
-        // then bring its first card into view so "start" lands you in the work.
-        revealPlanThen(() => {
-          const surface = todayView.querySelector(".plansurface") || todayView.querySelector(".addex");
-          surface?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
-        });
-        return;
-      }
-      if (action === "reveal-plan") {
-        todayState.planReveal = { date: todayState.logDate, on: true };
-        renderToday();
-        return;
-      }
-      if (action === "pull-plan") {
-        // surface the planned day's logging cards (the day switcher + cards)
-        todayState.planReveal = { date: todayState.logDate, on: true };
-        todayState.dayPicked = true;
-        renderToday();
-        return;
-      }
-    })
-  );
-
-  // "Back to today's read" — clear a persisted steer and recompute the canonical
-  // read (?reset=1 invalidates the cached steer server-side). The athlete is never
-  // trapped in an override they changed their mind about.
-  const steerReset = brief.querySelector("[data-steerreset]");
-  if (steerReset) steerReset.addEventListener("click", async () => {
-    if (brief.classList.contains("is-thinking")) return;
-    brief.querySelectorAll(".brief-steer-opt").forEach((c: any) => { c.disabled = true; });
-    steerReset.disabled = true;
-    steerReset.innerHTML = `<span class="aspin aspin-xs"></span>back to today's read`;
-    brief.classList.add("is-thinking");
-    const note = document.createElement("div");
-    note.className = "athinking-note chip-in";
-    note.textContent = "Reading the day again…";
-    (steerReset.closest(".brief-steer") || steerReset.parentElement).after(note);
-    todayState.brief = null;
-    try {
-      const qs = new URLSearchParams({ date: todayState.logDate, agent: "auto", reset: "1" });
-      const fresh = await todayApi("/today-read?" + qs.toString()) as TodayScreenDayRead;
-      todayState.brief = {
-        date: todayState.logDate,
-        override: fresh && fresh.override ? fresh.override : "",
-        read: fresh && fresh.kind ? fresh : { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic" },
-      };
-    } catch { todayState.brief = null; }
-    if (todayState.tab !== "today") return;
-    const morph = !reducedMotion();
-    if (morph) { brief.classList.add("brief-morph"); todayState._briefMorph = true; }
-    try { await withViewTransition(() => renderToday()); }
-    finally { todayState._briefMorph = false; todayView.querySelector(".brief")?.classList.remove("brief-morph"); }
-  });
-
-  // "Tap to see why" — plain-language signals (never raw numbers as a verdict),
-  // shown only on a deliberate tap, in a quiet inline line under the headline.
-  const whyBtn = brief.querySelector("[data-briefwhy]");
-  if (whyBtn && read.signals && Object.keys(read.signals).length) {
-    whyBtn.hidden = false;
-    whyBtn.addEventListener("click", () => {
-      if (brief.querySelector(".brief-signals")) {
-        brief.querySelector(".brief-signals").remove();
-        whyBtn.textContent = "tap to see why";
-        return;
-      }
-      const sig = document.createElement("p");
-      sig.className = "brief-signals chip-in";
-      sig.textContent = briefSignalsText(read);
-      whyBtn.before(sig);
-      whyBtn.textContent = "hide";
-    });
-  }
+  CairnTodayBriefController.wireBrief(read, { isToday }, todayBriefDeps());
 }
 
-// Paint the Brief's "reshaping" state when a steer chip is tapped: the chosen
-// option carries a ring, the rest freeze, the card gets the filament, and a quiet
-// "Reading the day again…" line makes the wait read as intentional. Reused by the
-// reload reconnector so a mid-flight reshape shows the same state after a refresh.
-function paintBriefReshaping(brief: any, chip: any) {
-  const chipLabel = chip ? (chip.textContent || "").trim() : "";
-  brief.querySelectorAll(".brief-steer-opt").forEach((c: any) => {
-    c.classList.toggle("brief-steer-active", c === chip);
-    if (c !== chip) c.disabled = true;
-  });
-  const resetBtn = brief.querySelector("[data-steerreset]");
-  if (resetBtn) resetBtn.disabled = true;
-  if (chip) {
-    chip.classList.add("brief-steer-busy");
-    chip.innerHTML = `<span class="aspin aspin-xs"></span>${escHtml(chipLabel)}`;
-  }
-  if (!reducedMotion()) brief.classList.add("is-thinking");
-  brief.setAttribute("aria-busy", "true"); // screen readers hear "busy" while the read reshapes
-  if (!brief.querySelector(".athinking-note")) {
-    const note = document.createElement("div");
-    note.className = "athinking-note chip-in";
-    note.setAttribute("role", "status");
-    note.textContent = "Reading the day again…";
-    const anchor = brief.querySelector(".brief-steer") || brief;
-    anchor.after ? anchor.after(note) : brief.appendChild(note);
-  }
-}
-
-// The shared runOp options for a Brief override reshape — used by both the live
-// chip tap and the reload reconnector, so the morph/fail behavior is identical
-// whether the read lands now or after a refresh. The job's `done` result is the
-// raw read object (byte-for-byte what GET /api/today-read?override= returns).
-function dayReadOverrideOpOpts({ intent, prevFocus }: any = {}) {
-  return {
-    path: "/today-read/reshape",
-    anchor: ".brief",
-    // No .job-cap inside the Brief — the chip + athinking-note carry the wait, so
-    // skip runOp's caption (it still drives the filament + reconnect via the host).
-    guard: () => !todayView.querySelector(".brief")?.isConnected,
-    isFail: (r: any) => !r || !r.kind,
-    render: (read: any) => {
-      if (todayState.tab !== "today") { todayState.brief = null; return; }
-      // Adopt the reshaped read exactly like loadBrief: carry the persisted steer.
-      todayState.brief = { date: todayState.logDate, override: intent || read.override || "", read };
-      // The re-render runs inside a view transition so the hero (brief-hero shared
-      // element) morphs to its reshaped read fluidly instead of popping.
-      const morph = !reducedMotion();
-      if (morph) { todayView.querySelector(".brief")?.classList.add("brief-morph"); todayState._briefMorph = true; }
-      Promise.resolve(withViewTransition(() => renderToday())).finally(() => {
-        todayState._briefMorph = false;
-        todayView.querySelector(".brief")?.classList.remove("brief-morph");
-      });
-      // "short on time" also offers a shorter session straight away.
-      if (/short on time/i.test(intent || "")) askForSession({ minutes: 30, focus: read.focus || prevFocus || undefined });
-    },
-    onFail: (_err: any) => {
-      // designed failure (no read) or unreachable — fall back to the canonical read.
-      // A null err means the POST itself failed; either way, clear the steer and let
-      // Today re-read the calm cached Brief so the chip never stays stuck "thinking".
-      todayState.brief = null;
-      const live = todayView.querySelector(".brief");
-      if (live) { live.classList.remove("is-thinking"); live.removeAttribute("aria-busy"); live.querySelector(".athinking-note")?.remove(); }
-      if (todayState.tab === "today") renderToday();
-    },
-  };
-}
-
-// Reconnector: after a reload mid-reshape, jobReconnect rebuilds the Brief's
-// thinking state and returns the handlers runOp would have used, so a steer that
-// finished (or finishes) while we were away lands in place. Mirrors the
-// session-suggest reconnector's option→handler translation.
 function reconnectDayReadOverride(job: any) {
-  if (todayState.tab !== "today") return null; // not on Today — a later renderToday() retries
-  const brief = todayView.querySelector(".brief");
-  if (!brief) return null;
-  const intent = (job && job.input && job.input.override) || "";
-  // Mark the active chip (best-effort) and paint the reshaping todayState.
-  const chip = [...brief.querySelectorAll(".brief-steer-opt")].find((c: any) => c.dataset.override === intent) || null;
-  todayState.brief = null;
-  paintBriefReshaping(brief, chip);
-  const o = dayReadOverrideOpOpts({ intent, isToday: todayState.logDate === localISO(), prevFocus: null });
-  const clearBusy = () => { const b = todayView.querySelector(".brief"); if (b) b.classList.remove("is-thinking", "is-thinking--determinate"); };
-  return {
-    guard: o.guard,
-    onDone: (result: any) => { clearBusy(); if (o.isFail(result)) o.onFail(result); else o.render(result); },
-    onError: () => { clearBusy(); o.onFail(null); },
-    onCanceled: () => { clearBusy(); o.onFail(null); },
-  };
+  return CairnTodayBriefController.reconnectDayReadOverride(job, todayBriefDeps());
 }
 
 // ---- Keep the adapted prescription in step with the sets being logged ----

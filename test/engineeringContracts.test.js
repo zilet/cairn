@@ -722,6 +722,7 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /"\/js\/today-progression-controller\.js"/);
   assert.match(sw, /"\/js\/today-add-exercise-controller\.js"/);
   assert.match(sw, /"\/js\/today-brief-client\.js"/);
+  assert.match(sw, /"\/js\/today-brief-controller\.js"/);
   assert.match(sw, /"\/js\/cardio-plan-client\.js"/);
   assert.match(sw, /"\/js\/cardio-sync-client\.js"/);
   assert.match(sw, /"\/js\/today-lately-client\.js"/);
@@ -1059,6 +1060,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayProgressionControllerSource = read("src/client/today-progression-controller.ts");
   const todayAddExerciseControllerSource = read("src/client/today-add-exercise-controller.ts");
   const todayBriefSource = read("src/client/today-brief-client.ts");
+  const todayBriefControllerSource = read("src/client/today-brief-controller.ts");
   const cardioPlanSource = read("src/client/cardio-plan-client.ts");
   const cardioSyncSource = read("src/client/cardio-sync-client.ts");
   const todayLatelySource = read("src/client/today-lately-client.ts");
@@ -1196,6 +1198,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const todayProgressionController = read("public/js/today-progression-controller.js");
   const todayAddExerciseController = read("public/js/today-add-exercise-controller.js");
   const todayBriefClient = read("public/js/today-brief-client.js");
+  const todayBriefController = read("public/js/today-brief-controller.js");
   const cardioPlanClient = read("public/js/cardio-plan-client.js");
   const cardioSyncClient = read("public/js/cardio-sync-client.js");
   const todayLatelyClient = read("public/js/today-lately-client.js");
@@ -1621,6 +1624,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-progression-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-add-exercise-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/today-brief-client\.js/);
+  assert.doesNotMatch(clientTsconfig, /public\/js\/today-brief-controller\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/cardio-plan-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/cardio-sync-client\.js/);
   assert.doesNotMatch(clientTsconfig, /public\/js\/proposal-client\.js/);
@@ -1752,6 +1756,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-add-exercise-controller\.js/);
   assert.match(clientBuild, /src\/client\/today-brief-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-brief-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-brief-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/today-brief-controller\.js/);
   assert.match(clientBuild, /src\/client\/cardio-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/cardio-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/cardio-sync-client\.ts/);
@@ -2111,9 +2117,14 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-brief-client.js must load after Today add-exercise controller and before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/cardio-plan-client.js") > index.indexOf("/js/today-brief-client.js") &&
+    index.indexOf("/js/today-brief-controller.js") > index.indexOf("/js/today-brief-client.js") &&
+      index.indexOf("/js/today-brief-controller.js") < index.indexOf("/js/03-today.js"),
+    "today-brief-controller.js must load after Today brief helpers and before 03-today.js"
+  );
+  assert.ok(
+    index.indexOf("/js/cardio-plan-client.js") > index.indexOf("/js/today-brief-controller.js") &&
       index.indexOf("/js/cardio-plan-client.js") < index.indexOf("/js/03-today.js"),
-    "cardio-plan-client.js must load after Today brief helpers and before screen consumers"
+    "cardio-plan-client.js must load after Today brief controller and before screen consumers"
   );
   assert.ok(
     index.indexOf("/js/cardio-sync-client.js") > index.indexOf("/js/cardio-plan-client.js") &&
@@ -2665,6 +2676,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /public\/js\/today-add-exercise-controller\.js/);
   assert.match(clientBuild, /src\/client\/today-brief-client\.ts/);
   assert.match(clientBuild, /public\/js\/today-brief-client\.js/);
+  assert.match(clientBuild, /src\/client\/today-brief-controller\.ts/);
+  assert.match(clientBuild, /public\/js\/today-brief-controller\.js/);
   assert.match(clientBuild, /src\/client\/cardio-plan-client\.ts/);
   assert.match(clientBuild, /public\/js\/cardio-plan-client\.js/);
   assert.match(clientBuild, /src\/client\/cardio-sync-client\.ts/);
@@ -4033,10 +4046,23 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(today, /let _rxRefreshTimer/);
   assert.doesNotMatch(today, /function refreshAdaptedRx\(\)\s*\{[\s\S]*const rxByEx/);
   assert.doesNotMatch(today, /function resetAddForm|const datalist = todayView\.querySelector\("#exOptions"\)|const skippedBtn = \[\.\.\.todayView\.querySelectorAll/);
-  assert.match(today, /CairnTodayBrief\.briefHtml/);
-  assert.match(today, /CairnTodayBrief\.focusBarHtml/);
-  assert.match(today, /CairnTodayBrief\.signalsText/);
+  assert.match(todayBriefControllerSource, /CairnTodayBrief\.briefHtml/);
+  assert.match(todayBriefControllerSource, /CairnTodayBrief\.focusBarHtml/);
+  assert.match(todayBriefControllerSource, /CairnTodayBrief\.signalsText/);
   assert.doesNotMatch(today, /const\s+BRIEF_KIND\s*=\s*\{|const\s+BRIEF_OVERRIDES\s*=\s*\[|function\s+briefRedirect|function\s+visibleBriefOverrides|function\s+agentOfflineNoticeHtml/);
+  assert.match(todayBriefControllerSource, /function loadBrief\(/);
+  assert.match(todayBriefControllerSource, /function upgradeBriefInPlace\(/);
+  assert.match(todayBriefControllerSource, /function reshapeToday\(/);
+  assert.match(todayBriefControllerSource, /function wireBrief\(/);
+  assert.match(todayBriefControllerSource, /function reconnectDayReadOverride\(/);
+  assert.match(todayBriefController, /CairnTodayBriefController: CAIRN_TODAY_BRIEF_CONTROLLER/);
+  assert.match(todayBriefController, /loadBrief,/);
+  assert.match(todayBriefController, /wireBrief,/);
+  assert.match(todayBriefController, /reconnectDayReadOverride,/);
+  assert.match(today, /CairnTodayBriefController\.loadBrief/);
+  assert.match(today, /CairnTodayBriefController\.wireBrief/);
+  assert.match(today, /CairnTodayBriefController\.reconnectDayReadOverride/);
+  assert.doesNotMatch(today, /function\s+paintBriefReshaping|function\s+dayReadOverrideOpOpts\([^)]*\)\s*\{[\s\S]*path:\s*"\/today-read\/reshape"|let\s+_agentOfflineDismissed/);
   assert.match(today, /CairnTodaySessionSuggestController\.reconnectSessionSuggest/);
   assert.match(today, /CairnTodaySessionSuggestController\.revealSessionComposer/);
   assert.match(today, /CairnTodaySessionSuggestController\.askForSession/);
