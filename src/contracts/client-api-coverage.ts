@@ -90,6 +90,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/program/evolve",
   "/program/progression",
   "/program/progression/apply",
+  "/program/swap",
   "/program/balance",
   "/program/adjustments",
   "/program/blocks",

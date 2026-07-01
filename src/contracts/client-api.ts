@@ -1453,6 +1453,7 @@ export interface ClientApiResponses {
   "/api/program/evolve": ClientProposalResult | ClientAgentJobEnvelope;
   "/api/program/progression": ClientPrescription[];
   "/api/program/progression/apply": ClientProposalResult;
+  "/api/program/swap": ClientProposalResult;
   "/api/program/balance": ClientProgramBalance;
   "/api/program/adjustments": ClientProgramAdjustment[];
   "/api/program/blocks": ClientProgramBlock[] | ClientProgramBlock;

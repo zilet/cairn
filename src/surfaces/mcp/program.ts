@@ -6,10 +6,13 @@ import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
+  buildProgressionProposal,
   buildRunPlanProposal,
+  buildSwapProposal,
   createBlock,
-  createProposal,
+  ensureActiveBlock,
   getActiveBlock,
+  getEquipmentProfile,
   getPlan,
   getProgramState,
   listBlocks,
@@ -20,8 +23,8 @@ import {
   programAdjustments,
   programBalance,
   runZones,
+  setEquipmentProfile,
   setProposalStatus,
-  supersedeAutoProgressionDrafts,
   testWeekDue,
   updateBlock,
   weeklyRunPlan,
@@ -84,6 +87,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
   );
 
   server.tool(
+    "ensure_active_block",
+    "Ensure ONE active periodization block exists — auto-creates a sensible default aligned to the athlete's goal (strength base, or an endurance-base/peak block sized to an approaching race) when none is running. Idempotent: returns the existing active block untouched if the athlete is mid-block. Keeps periodization live.",
+    {},
+    async () => asText(ensureActiveBlock())
+  );
+
+  server.tool(
     "create_block",
     "Start a periodization block (a mesocycle with a goal, focus, phase, and week count) so progression is structured rather than random.",
     {
@@ -116,6 +126,20 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "Advance a block to its next week — bumps week_index, transitions the phase per the deload schedule, and auto-completes past the last week. Omit id to advance the active block.",
     { id: z.number().int().optional() },
     async ({ id }) => asText(advanceBlockWeek(id) ?? { error: "no block", id: id ?? null })
+  );
+
+  server.tool(
+    "get_equipment",
+    "The athlete's persisted equipment/preference profile (free text) + the parsed equipment types. Variation/swap suggestions rank by what they can actually load.",
+    {},
+    async () => asText(getEquipmentProfile())
+  );
+
+  server.tool(
+    "set_equipment",
+    "Set the athlete's available equipment / training-preference free text (e.g. 'full gym', 'dumbbells + pull-up bar at home'). Variation suggestions rank by it. Pass empty to clear.",
+    { equipment: z.string().nullable().optional() },
+    async ({ equipment }) => asText(setEquipmentProfile(equipment ?? null))
   );
 
   server.tool(
@@ -162,38 +186,20 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "apply_progression",
-    "Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression) via the existing propose→apply path — never auto-applied, never a gate. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose).",
+    "Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression) via the existing propose→apply path — never auto-applied, never a gate. A stalled lift's 'vary' becomes a real swap change; an autoregulation-braked hold is dropped. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose).",
     { day: z.number().int().describe("the plan day number to build prescriptions for") },
-    async ({ day }) => {
-      const prescriptions = planDayProgression(day);
-      const changes = prescriptions
-        .filter((prescription: any) => prescription.action !== "hold")
-        .map((prescription: any) => {
-          const change: Record<string, any> = {
-            day_number: day,
-            exercise: prescription.exercise,
-            sets: prescription.suggested?.sets ?? null,
-            rep_low: prescription.suggested?.rep_low ?? null,
-            rep_high: prescription.suggested?.rep_high ?? null,
-            reason: prescription.why || prescription.delta_text || null,
-          };
-          if (prescription.mode === "timed") {
-            if (prescription.suggested?.seconds != null) change.target_seconds = prescription.suggested.seconds;
-          } else if (prescription.suggested?.weight !== undefined) {
-            change.target_weight = prescription.suggested.weight;
-          }
-          return change;
-        })
-        .filter((change: any) => change.target_weight !== undefined || change.target_seconds !== undefined);
-      if (!changes.length) return asText({ ok: false, error: "nothing to propose for this day" });
-      const parsed = {
-        summary: `Auto-progression for day ${day} — ${changes.length} lift${changes.length === 1 ? "" : "s"}`,
-        changes,
-      };
-      supersedeAutoProgressionDrafts(day);
-      const proposal = createProposal("auto-progression", `day ${day} progression`, "", parsed);
-      return asText({ ok: true, proposal });
-    }
+    async ({ day }) => asText(buildProgressionProposal(day))
+  );
+
+  server.tool(
+    "swap_exercise",
+    "Draft a single-exercise SWAP — rotate `from` out for a same-pattern `to` IN PLACE on a plan day — as a DRAFT proposal via the propose→apply path. Never auto-applies (review then apply_proposal). Returns { ok:true, proposal } or { ok:false, error } at 200.",
+    {
+      day: z.number().int().describe("the plan day number"),
+      from: z.string().describe("the exact current exercise to rotate out"),
+      to: z.string().describe("the same-pattern movement to rotate in"),
+    },
+    async ({ day, from, to }) => asText(buildSwapProposal(day, from, to))
   );
 
   server.tool(

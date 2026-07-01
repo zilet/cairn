@@ -292,7 +292,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-log\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
-  assert.equal(tools.length, 176, "tool count should stay stable while modularizing MCP");
+  assert.equal(tools.length, 180, "tool count should stay stable while modularizing MCP");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -558,7 +558,9 @@ test("generated API docs include mounted route modules", () => {
   assert.match(programRoutes, /backgroundOp\(res,\s*"proposal"/);
   assert.match(programRoutes, /backgroundOp\(res,\s*"evolve_program"/);
   assert.match(programRoutes, /localToday\(\)/);
-  assert.match(programRoutes, /supersedeAutoProgressionDrafts/);
+  // The auto-progression apply now routes through the shared buildProgressionProposal
+  // (supersede + createProposal moved into it so REST + MCP can't drift).
+  assert.match(programRoutes, /buildProgressionProposal/);
   assert.match(api, /api\.use\("\/",\s*trainingLogRouter\)/);
   assert.doesNotMatch(
     api,

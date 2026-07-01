@@ -15,7 +15,8 @@
 import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getRecoverySummary } from "./coach.js";
-import { canonicalGroup, isMobility, MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { getPrimaryDiscipline, getProfile } from "./profile.js";
 import { getProgress } from "./sessions.js";
 import { activitySportWhere, enduranceSportPatterns } from "./endurance-sports.js";
@@ -277,32 +278,27 @@ function muscleVolume(date: string, weeks = 3): MuscleVolumeState[] {
   const start = isoDaysAgo(date, weeks * 7 - 1);
   const half = isoDaysAgo(date, Math.floor((weeks * 7) / 2));
   const rows = db.prepare(
-    `SELECT e.muscle_group AS mg, e.name AS name,
-            SUM(CASE WHEN s.date >= ? THEN 1 ELSE 0 END) AS recent_sets,
-            COUNT(*) AS total_sets
+    `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
+            ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
-      WHERE s.date >= ? AND s.date <= ?
-      GROUP BY e.id ORDER BY total_sets DESC`
-  ).all(half, start, date) as any[];
+      WHERE s.date >= ? AND s.date <= ?`
+  ).all(start, date) as any[];
 
-  // Fold the per-exercise rows onto canonical groups (mobility dropped).
-  const tally = new Map<string, { total: number; recent: number }>();
-  for (const r of rows) {
-    const g = canonicalGroup(r.mg) ?? canonicalGroup(r.name);
-    if (!g || isMobility(g)) continue; // mobility never counts toward volume
-    const cur = tally.get(g) ?? { total: 0, recent: 0 };
-    cur.total += Number(r.total_sets) || 0;
-    cur.recent += Number(r.recent_sets) || 0;
-    tally.set(g, cur);
-  }
+  // ONE honest-volume truth (shared with programBalance / getVolumeByMuscle): warmups
+  // excluded, RIR-weighted, indirect credit, canon taxonomy (mobility never counts).
+  // Effective volume over the FULL window + the RECENT half → the rising/falling trend.
+  const full = effectiveVolumeByGroup(rows as VolumeSet[]);
+  const recentMap = effectiveVolumeByGroup((rows as VolumeSet[]).filter((r) => String(r.date) >= half));
 
-  return [...tally.entries()]
+  return [...full.entries()]
     .map(([group, v]) => {
-      const weekly = Math.round((v.total / weeks) * 10) / 10;
-      const firstHalf = v.total - v.recent;
+      const total = v.sets;
+      const recent = recentMap.get(group)?.sets ?? 0;
+      const weekly = Math.round((total / weeks) * 10) / 10;
+      const firstHalf = total - recent;
       const trend: MuscleVolumeState["trend"] =
-        v.recent > firstHalf * 1.2 ? "rising" : v.recent < firstHalf * 0.8 ? "falling" : "stable";
+        recent > firstHalf * 1.2 ? "rising" : recent < firstHalf * 0.8 ? "falling" : "stable";
       const lm = MUSCLE_LANDMARKS[group];
       const lo = lm?.low ?? 6;
       const hi = lm?.high ?? 20;
@@ -325,6 +321,11 @@ export function weeklyTonnage(date: string, weekBack: number): number {
   return Math.round(Number(row?.t ?? 0));
 }
 
+// Consecutive loaded weeks with no reset before a deload reads "about due". A reset
+// every ~4-6 weeks is the norm; string 6 loaded weeks together and a deload is due —
+// EVEN for an athlete who has NEVER deloaded (the exact case that most needs one).
+const DELOAD_DUE_CONSECUTIVE_WEEKS = 6;
+
 function mesocycle(date: string, recovery?: any): MesocycleState {
   // A "deload week" = a COMPLETED week whose tonnage fell well below the trailing
   // base. Start at w=1 (the current week is in-progress — a half-logged week early
@@ -336,6 +337,17 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
     const chronic = base.reduce((a, b) => a + b, 0) / base.length;
     if (chronic > 0 && here > 0 && here < chronic * 0.6) { weeksSince = w; break; }
   }
+  // Consecutive COMPLETED loaded weeks (from w=1) with no reset — a training gap
+  // (an empty week) or the detected deload above breaks the streak. This is what
+  // catches the never-deloaded athlete: `weeksSince` stays null for them, so the
+  // old code read "accumulation" forever no matter how long they'd been grinding.
+  let loadedStreak = 0;
+  for (let w = 1; w <= 12; w++) {
+    if (weeksSince != null && w >= weeksSince) break; // hit the last reset — streak resets there
+    if (weeklyTonnage(date, w) <= 0) break;           // an untrained week ends the streak
+    loadedStreak++;
+  }
+  const deloadDueByStreak = weeksSince == null && loadedStreak >= DELOAD_DUE_CONSECUTIVE_WEEKS;
   // ACWR: this week's load vs the chronic base of the FOUR PRIOR weeks (the chronic
   // window must EXCLUDE the acute week, or the ratio is biased toward 1 and a real
   // spike never crosses the threshold). Mirrors the endurance ACWR below.
@@ -364,6 +376,7 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
   let note: string;
   if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
   else if (buildingBase) { phase = "accumulation"; note = "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching."; }
+  else if (deloadDueByStreak) { phase = "deload-due"; note = `You've strung ~${loadedStreak} loaded weeks together with no reset${recoveryDrifting ? " and recovery's drifting" : ""} — a deload week is about due, even though there's no prior deload on record.`; }
   else if (acwr != null && acwr >= 1.4) { phase = "intensification"; note = "Load's ramped this block — hold the line, don't pile on."; }
   else if (weeksSince == null) { phase = "accumulation"; note = "No recent deload on record — keep building, plan a reset every 4–6 weeks."; }
   else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`; }
