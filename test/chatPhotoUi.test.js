@@ -47,7 +47,9 @@ test("chat photo composer can refocus the same textarea after the keyboard hides
   assert.match(chatComposerController, /CairnChatComposerFocus\.wireFocus/);
   assert.match(chatComposerFocus, /function\s+chatComposerReleaseStaleInputFocus/);
   assert.match(chatComposerFocus, /function\s+chatComposerRecoverInputFocusFromTap/);
-  assert.match(chatComposerFocus, /document\.activeElement\s*===\s*options\.input\)\s*options\.input\.blur\(\)/);
+  // Recovery is refocus-only: the release hook must NEVER blur the composer (a
+  // blur-then-refocus within one tap flickered the keyboard; a stale read dropped it).
+  assert.doesNotMatch(chatComposerFocus, /\.blur\(\)/);
   assert.match(chatComposerFocus, /chatComposerFocusInput\(options\.input\)/);
   assert.match(chatComposerFocus, /input\.focus\(\{\s*preventScroll:\s*true\s*\}\)/);
   assert.match(chatComposerFocus, /addEventListener\("pointerup",\s*recoverInputFocusFromTap,\s*\{\s*passive:\s*true\s*\}\)/);

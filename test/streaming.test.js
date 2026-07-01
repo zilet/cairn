@@ -155,3 +155,61 @@ test("chat stream filter holds an undecided leading narration line until classif
   assert.equal(text.trim(), "**Ready**\n- go");
   assert.doesNotMatch(text, /query the chat_turns table/);
 });
+
+test("chat stream filter withholds ALL pre-marker text (plain commentary too) — nothing to retract", () => {
+  const events = [];
+  const stream = createChatStreamFilter((e) => events.push(e));
+  // Plain interim commentary that is NOT tool narration — the old classifier
+  // streamed lines like these, then WIPED them (a `reset`) when the reply marker
+  // landed. That show-then-retract is the "thinking looks cut off" bug.
+  stream.push("Let me look at your recent training to answer that well.\n");
+  stream.push("Actually, the key thing about your squat is the bar path.\n");
+  assert.deepEqual(events.filter((e) => e.type === "delta"), [], "pre-marker prose must never stream as a delta");
+  assert.deepEqual(events.filter((e) => e.type === "reset"), [], "so there is never anything to reset");
+
+  stream.push(`${CHAT_REPLY_SENTINEL}\nHold the weight this week and add one set.`);
+  stream.finish();
+  const text = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(text.trim(), "Hold the weight this week and add one set.");
+  assert.deepEqual(events.filter((e) => e.type === "reset"), [], "the streaming path never fires a reset");
+});
+
+test("chat stream filter exposes the streamed-so-far reply for the reconnect snapshot", () => {
+  const events = [];
+  const stream = createChatStreamFilter((e) => events.push(e));
+  stream.push(`${CHAT_REPLY_SENTINEL}\nYou're recovered and due — a good day to train.`);
+  assert.ok(stream.reply().length > 0, "reply() reflects prose streamed so far (for the SSE snapshot)");
+  stream.push(" Keep the squat where it is.");
+  stream.finish();
+  const streamed = events.filter((e) => e.type === "delta").map((e) => e.text).join("");
+  assert.equal(stream.reply(), streamed, "reply() equals exactly what was streamed as deltas");
+  assert.equal(stream.reply().trim(), "You're recovered and due — a good day to train. Keep the squat where it is.");
+});
+
+test("chat stream filter cuts the reply at the LAST action sentinel, matching parseChatReply", () => {
+  const events = [];
+  const stream = createChatStreamFilter((e) => events.push(e));
+  const raw = `${CHAT_REPLY_SENTINEL}\nI'll log that with an ${CHAT_ACTION_SENTINEL} block now.\n${CHAT_ACTION_SENTINEL}\n{"actions":[{"type":"log_activity","text":"ran 5k"}]}`;
+  stream.push(raw);
+  stream.finish();
+  const streamed = events.filter((e) => e.type === "delta").map((e) => e.text).join("").trim();
+  assert.equal(streamed, `I'll log that with an ${CHAT_ACTION_SENTINEL} block now.`);
+  // The live-streamed reply is identical to what the final parse renders (first
+  // sentinel occurrence == last: a prose mention must not truncate either path).
+  assert.equal(parseChatReply(raw).reply, streamed);
+});
+
+test("parseChatReply: no marker → broadened stripper also drops plain data-retrieval narration", () => {
+  const out = `Let me pull up your recent training data first.\nNow I'll review your metrics.\nYou're moving well — hold the weight this week.`;
+  const { reply } = parseChatReply(out);
+  assert.equal(reply, "You're moving well — hold the weight this week.");
+});
+
+test("parseChatReply: broadened stripper still keeps 'log'/'record' coaching verbs", () => {
+  // "log"/"record" double as coaching verbs — a reply that opens with them must
+  // survive the stripper (the retrieval-noun broadening must not swallow them).
+  assert.equal(parseChatReply("I'll log that for you and hold your squat.").reply,
+    "I'll log that for you and hold your squat.");
+  assert.equal(parseChatReply("Let me record your PR — nice work.").reply,
+    "Let me record your PR — nice work.");
+});

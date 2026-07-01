@@ -43,12 +43,12 @@
     // in both Safari tabs and installed PWAs.
     let vvMax = vv.height;
     let keyboardIntentUntil = 0;
-    let chatFocusGraceUntil = 0;
     let nativePickerFocusSuppressUntil = 0;
     let settleTimer: ReturnType<typeof setTimeout> | 0 = 0;
-    let staleChatFocusTimer: ReturnType<typeof setTimeout> | 0 = 0;
-    let geometryWasOpen = false;
-    const keyboardThreshold = () => Math.max(140, window.innerHeight * 0.18);
+    // Relaxed threshold so a SMALL keyboard (a hardware accessory bar, an iPad
+    // floating/split keyboard) still registers as "open" instead of reading closed
+    // mid-type — a false "closed" used to trigger a stale-focus blur.
+    const keyboardThreshold = () => Math.max(100, window.innerHeight * 0.15);
     const keyboardGeometryOpen = () => {
       const layoutShrink = Math.max(0, window.innerHeight - vv.height);
       const visualShrink = Math.max(0, vvMax - vv.height);
@@ -57,25 +57,11 @@
     const keyboardIntentOpen = () => Date.now() < keyboardIntentUntil;
     const isChatTextInput = (el: EventTarget | Element | null | undefined): el is HTMLElement =>
       textInputEl(el) && Boolean(el.closest?.(".chatview"));
-    const releaseStaleChatFocus = () => {
-      const el = document.activeElement;
-      if (!softKeyboard() || !textInputEl(el)) return;
-      if (!document.body.classList.contains("chat-mode") || !el.closest?.(".chatview")) return;
-      if (Date.now() < chatFocusGraceUntil) return;
-      el.blur();
-    };
-    const scheduleStaleChatFocusRelease = () => {
-      if (staleChatFocusTimer) clearTimeout(staleChatFocusTimer);
-      const delay = Math.max(0, chatFocusGraceUntil - Date.now() + 20);
-      staleChatFocusTimer = setTimeout(() => {
-        staleChatFocusTimer = 0;
-        if (!keyboardGeometryOpen()) {
-          chatFocusGraceUntil = 0;
-          releaseStaleChatFocus();
-          syncChatViewport();
-        }
-      }, delay);
-    };
+    // NOTE: there is deliberately no blur-by-heuristic here anymore. iOS can dismiss
+    // the keyboard without blurring the textarea, and a stale geometry read (resume,
+    // small keyboard) used to make us blur the composer — dropping a keyboard that
+    // was actually up. Recovery is now REFOCUS-only (on the next real tap); we never
+    // blur the composer from a heuristic.
     const settle = (long = false) => {
       if (settleTimer) clearTimeout(settleTimer);
       settleTimer = setTimeout(sync, long ? 960 : 420);
@@ -89,17 +75,17 @@
         return;
       }
       keyboardIntentUntil = Date.now() + (isChatTarget ? 1500 : 900);
-      if (isChatTarget) chatFocusGraceUntil = Date.now() + 1700;
       sync();
       settle(true);
     };
-    const applyVvb = (kbOpen: boolean) => {
-      // Pin the fixed bottom bars to the VISUAL viewport's bottom edge:
-      // settled PWA -> 0; browser tab with a bottom toolbar -> positive.
-      // Keyboard open -> 0 because chat hides the bar behind the keyboard anyway.
+    const applyVvb = () => {
+      // Pin the fixed bottom bars (toast, rest timer, and the tab bar when shown) to
+      // the VISUAL viewport's bottom edge: settled PWA -> 0; browser tab with a bottom
+      // toolbar -> positive. NOT forced to 0 while the keyboard is up — the tab bar is
+      // slid off-screen by CSS then, and the toast/rest-bar should float ABOVE the
+      // keyboard rather than snap down behind it.
       const rawVvb = window.innerHeight - (vv.offsetTop + vv.height);
-      const vvb = kbOpen ? 0 : Math.max(0, rawVvb);
-      root.style.setProperty("--vvb", `${Math.round(vvb)}px`);
+      root.style.setProperty("--vvb", `${Math.round(Math.max(0, rawVvb))}px`);
     };
     const sync = () => {
       if (vv.height > vvMax) vvMax = vv.height;
@@ -109,17 +95,14 @@
         nativePickerFocusSuppressUntil = 0;
       }
       const kbOpen = geometryOpen || keyboardIntentOpen();
+      // STRUCTURAL layout (tab bar slide, chat-column re-anchor to bottom:0, chatnote
+      // hide) is gated on REAL keyboard geometry only — an intent tap that never
+      // summons a keyboard must not bounce the tab bar. `kb-open` (intent) is kept for
+      // cheap cosmetic prep only and drives nothing structural.
       document.body.classList.toggle("kb-geometry-open", geometryOpen);
       document.body.classList.toggle("kb-open", kbOpen);
-      applyVvb(kbOpen);
+      applyVvb();
       syncChatViewport();
-      // iOS can dismiss the keyboard without blurring the textarea. Release stale
-      // chat focus once geometry says the keyboard is gone.
-      if (geometryOpen) geometryWasOpen = true;
-      if (!kbOpen && geometryWasOpen) {
-        geometryWasOpen = false;
-        releaseStaleChatFocus();
-      }
     };
     vv.addEventListener("resize", sync);
     vv.addEventListener("scroll", sync); // keyboard open/close shifts offsetTop
@@ -135,19 +118,19 @@
     // Resume paths can leave visualViewport metrics stale; re-measure after pageshow,
     // focus, app-visible, and explicit chat keyboard-settle notifications.
     const resync = () => { sync(); requestAnimationFrame(() => requestAnimationFrame(sync)); };
-    window.addEventListener("pageshow", resync);
+    // On resume the vvMax ratchet can be stale. Re-baseline it to the current height,
+    // but ONLY when no text input is focused (keyboard down) — otherwise we'd shrink
+    // the tall baseline the PWA needs to keep detecting an on-screen keyboard, and
+    // (now that we never blur) that would just misread geometry, not drop the keyboard.
+    const reseedAndResync = () => { if (!focusedTextInput()) vvMax = vv.height; resync(); };
+    window.addEventListener("pageshow", reseedAndResync);
     window.addEventListener("focus", resync);
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") resync(); });
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reseedAndResync(); });
     document.addEventListener("cairn:keyboard-settle", (event) => {
       const detail = event instanceof CustomEvent && event.detail && typeof event.detail === "object"
-        ? event.detail as { chatFocusGraceMs?: unknown; nativePickerSuppressMs?: unknown }
+        ? event.detail as { nativePickerSuppressMs?: unknown }
         : null;
-      const chatFocusGraceMs = Number(detail?.chatFocusGraceMs) || 0;
       const nativePickerSuppressMs = Number(detail?.nativePickerSuppressMs) || 0;
-      if (chatFocusGraceMs > 0) {
-        chatFocusGraceUntil = Math.max(chatFocusGraceUntil, Date.now() + Math.min(chatFocusGraceMs, 2400));
-        scheduleStaleChatFocusRelease();
-      }
       if (nativePickerSuppressMs > 0) {
         nativePickerFocusSuppressUntil = Math.max(
           nativePickerFocusSuppressUntil,

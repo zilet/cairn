@@ -43,8 +43,12 @@ export const CHAT_REPLY_SENTINEL = "===CAIRN_REPLY===";
 // step verb and a filesystem/db token on the same leading line.
 function stripLeadingNarration(s: string): string {
   const lines = s.split("\n");
-  const verb = /^\s*(I will|I'll|I am going to|I'm going to|Let me|First,?\s+I|Now,?\s+I|Next,?\s+I|Then,?\s+I|I need to|I should|I'll now|Reading|Fetching|Checking|Querying|Listing|Running|Inspecting|Examining|Looking at|Searching|Viewing)\b/i;
-  const tech = /(\/\w|\.json\b|\.db\b|\.js\b|\.ts\b|\bsqlite|\bnode\b|\bnpm\b|\btable\b|\bdatabase\b|\bschema\b|\bdirectory\b|\bcommand\b|\bquery\b|\bfile\b|\bfiles\b|\brepo\b|\bworkspace\b|node_modules|package\.json|cairn\.db|chat_messages|chat_turns|\/app\b|\/home\b|\/data\b)/i;
+  const verb = /^\s*(I will|I'll|I am going to|I'm going to|Let me|First,?\s+I|Now,?\s+I|Next,?\s+I|Then,?\s+I|I need to|I should|I'll now|Reading|Fetching|Checking|Querying|Listing|Running|Inspecting|Examining|Looking at|Pulling up|Pulling|Reviewing|Gathering|Searching|Viewing)\b/i;
+  // A retrieval/plumbing token. Broadened past raw filesystem/db words to a few
+  // data-plumbing NOUNS an agent narrates a lookup with ("pull up your data",
+  // "get the context", "check your metrics"). Deliberately NOT "log"/"record" — those
+  // double as coaching verbs ("I'll log that", "I'll record it"), which must survive.
+  const tech = /(\/\w|\.json\b|\.db\b|\.js\b|\.ts\b|\bsqlite|\bnode\b|\bnpm\b|\btable\b|\bdatabase\b|\bschema\b|\bdirectory\b|\bcommand\b|\bquery\b|\bfile\b|\bfiles\b|\brepo\b|\bworkspace\b|\bdata\b|\bcontext\b|\bmetrics?\b|node_modules|package\.json|cairn\.db|chat_messages|chat_turns|\/app\b|\/home\b|\/data\b)/i;
   let i = 0;
   while (i < lines.length) {
     if (lines[i].trim() === "") { i++; continue; }                      // blanks between narration
