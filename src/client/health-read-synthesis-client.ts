@@ -3,6 +3,7 @@
 type HealthReadSynthesisRecord = Record<string, unknown>;
 type HealthReadSynthesisPriority = HealthReadSynthesisRecord & {
   label?: string;
+  why_it_matters?: string;
   the_move?: string;
   recheck?: string;
 };
@@ -54,14 +55,23 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
       ${s.story ? `<p class="hsyn-story">${deps.escapeHtml(s.story)}</p>` : ""}
       ${prios.length ? `<div class="hsyn-prios">${prios.map((p) => `
         <div class="hsyn-prio">
-          <span class="hsyn-plabel">${deps.escapeHtml(p.label || "")}</span>
-          ${p.the_move ? `<span class="hsyn-pmove">${deps.escapeHtml(p.the_move)}</span>` : ""}
+          <div class="hsyn-ptop">
+            <span class="hsyn-plabel">${deps.escapeHtml(p.label || "")}</span>
+            <button class="linkbtn linkbtn-plain linkbtn-sm hsyn-ask" type="button" data-ask="${deps.escapeAttr(prioQuestion(p))}" aria-label="Ask the coach about ${deps.escapeAttr(p.label || "this")}">Ask<span aria-hidden="true"> →</span></button>
+          </div>
+          ${p.why_it_matters ? `<p class="hsyn-pwhy">${deps.escapeHtml(p.why_it_matters)}</p>` : ""}
+          ${p.the_move ? `<div class="hsyn-pmove"><span class="hsyn-pmove-k lbl">Do</span> ${deps.escapeHtml(p.the_move)}</div>` : ""}
           ${p.recheck ? `<span class="hsyn-precheck lbl">${deps.escapeHtml(p.recheck)}</span>` : ""}
         </div>`).join("")}</div>` : ""}
-      ${s.one_change ? `<div class="hsyn-onechange"><span class="lbl">If you change one thing</span><span>${deps.escapeHtml(s.one_change)}</span></div>` : ""}
-      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${deps.escapeHtml(deps.relTime(s.generated_at))}` : ""}</span>${stale
-        ? `<button id="hsynRefresh" class="hpic-refresh hpic-refresh-stale" type="button" title="New results since this read"><span class="hdot hdot-warn"></span>New results — refresh</button>`
-        : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}</div>`;
+      ${s.one_change ? `<div class="hsyn-onechange well-accent-sm"><span class="lbl">If you change one thing</span><span>${deps.escapeHtml(s.one_change)}</span></div>` : ""}
+      <div class="hsyn-foot">
+        <button class="linkbtn linkbtn-plain linkbtn-sm hsyn-askall" type="button" data-ask="${deps.escapeAttr(WHOLE_PICTURE_Q)}">Ask about my whole picture<span aria-hidden="true"> →</span></button>
+        <span class="hsyn-foot-r">
+          <span class="lbl">${s.generated_at ? `read ${deps.escapeHtml(deps.relTime(s.generated_at))}` : ""}</span>${stale
+          ? `<button id="hsynRefresh" class="hpic-refresh hpic-refresh-stale" type="button" title="New results since this read"><span class="hdot hdot-warn"></span>New results — refresh</button>`
+          : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}
+        </span>
+      </div>`;
     } else {
       body = `
       <p class="hsyn-invite">Your labs, training, recovery and nutrition — read as one connected, prioritized picture.</p>
@@ -70,6 +80,17 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
     wrap.innerHTML = `<div class="hsyn reveal"><div class="hsyn-kicker lbl">Your health — one picture</div>${body}</div>`;
     select(deps, "#hsynRefresh")?.addEventListener("click", () => trigger(deps));
     select(deps, "#hsynGen")?.addEventListener("click", () => trigger(deps));
+    wrap.querySelectorAll<HTMLElement>(".hsyn-ask, .hsyn-askall").forEach((button) =>
+      button.addEventListener("click", () => CairnHealthClient.askCoach(button.getAttribute("data-ask"))));
+  }
+
+  const WHOLE_PICTURE_Q = "Walk me through my whole health picture — what matters most right now, and the single most effective thing I can do about it?";
+
+  // A grounded, ready-to-send question about ONE priority for the ask deep-link.
+  function prioQuestion(p: HealthReadSynthesisPriority): string {
+    const label = String(p.label || "this").replace(/\s+/g, " ").trim();
+    const why = String(p.why_it_matters || "").replace(/\s+/g, " ").trim();
+    return `Tell me more about ${label} in my health picture.${why ? ` (${why})` : ""} What's the most effective thing I can do about it?`;
   }
 
   function load(deps: ClientHealthReadControllerDeps, token: number): void {

@@ -10,6 +10,7 @@ type HealthMarkersPoint = {
 type HealthMarkersBand = {
   low?: unknown;
   high?: unknown;
+  dir?: unknown;
 };
 
 type HealthMarkersRow = {
@@ -20,6 +21,7 @@ type HealthMarkersRow = {
   prev?: HealthMarkersPoint | null;
   points?: HealthMarkersPoint[] | null;
   optimal?: HealthMarkersBand | null;
+  in_optimal?: unknown;
   trend?: { dir?: unknown; span_days?: unknown } | null;
 };
 
@@ -54,6 +56,63 @@ function markerTrendWord(marker: HealthMarkersRow | null | undefined): string {
 
 function markerSpanWord(days: unknown): string {
   return CairnHealthClient.markerSpanWord(days);
+}
+
+function flaggedByLab(flag: unknown): boolean {
+  const f = String(flag || "").toLowerCase();
+  return f === "low" || f === "high" || f === "abnormal" || f === "critical";
+}
+
+// The optimal band as a target phrase honoring the zone's worse-direction:
+// dir 'high' → lower is better ("≤ 100"), dir 'low' → higher is better
+// ("≥ 40"), else the band ("70–100"). Unit appended when known. NOT escaped —
+// callers escape.
+function optimalPhrase(marker: HealthMarkersRow | null | undefined): string {
+  const band = marker?.optimal;
+  const low = Number(band?.low);
+  const high = Number(band?.high);
+  if (!band || !Number.isFinite(low) || !Number.isFinite(high)) return "";
+  const dir = String(band.dir || "");
+  const range = dir === "high"
+    ? `≤ ${formatMarkerNumber(high)}`
+    : dir === "low"
+      ? `≥ ${formatMarkerNumber(low)}`
+      : `${formatMarkerNumber(low)}–${formatMarkerNumber(high)}`;
+  return `${range}${marker?.unit ? ` ${String(marker.unit)}` : ""}`;
+}
+
+// The catalog's shared "out of range" definition: lab-flagged, or lab-normal
+// but outside the optimal band (the doctor report's findings set).
+function markerOutOfRange(marker: HealthMarkersRow | null | undefined): boolean {
+  return flaggedByLab(marker?.latest?.flag) || marker?.in_optimal === false;
+}
+
+// A specific, ready-to-send question about this marker for the "ask the coach"
+// deep-link — grounded in the actual reading so the coach gets real context.
+function markerAskQuestion(marker: HealthMarkersRow | null | undefined): string {
+  const name = String(marker?.name || marker?.key || "this marker").replace(/\s+/g, " ").trim();
+  const latest = marker?.latest || {};
+  const val = latest.value != null && latest.value !== ""
+    ? `${formatMarkerNumber(latest.value)}${marker?.unit ? ` ${String(marker.unit)}` : ""}`
+    : "";
+  const phrase = optimalPhrase(marker);
+  if (markerOutOfRange(marker)) {
+    const side = optimalSideWord(marker);
+    const where = side || (flaggedByLab(latest.flag) ? `flagged ${String(latest.flag).toLowerCase()}` : "outside its optimal range");
+    const opt = phrase ? ` (optimal ${phrase})` : "";
+    return `Can you tell me about my ${name}? It's ${val ? `${val}, ` : ""}${where}${opt}. What's likely driving it, and what should I focus on to improve it?`;
+  }
+  return `Can you tell me about my ${name}${val ? ` — it's ${val}` : ""}? Is this something I should keep an eye on?`;
+}
+
+// Which side of the optimal band the latest value sits on, in plain words.
+function optimalSideWord(marker: HealthMarkersRow | null | undefined): string {
+  const band = marker?.optimal;
+  const low = Number(band?.low);
+  const high = Number(band?.high);
+  const value = Number(marker?.latest?.value);
+  if (!band || !Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(value)) return "";
+  return value > high ? "above optimal" : value < low ? "below optimal" : "";
 }
 
 // Richer inline progress chart: hand-built SVG, no library. Shades the optimal-zone
@@ -109,6 +168,35 @@ function markerChartSvg(marker: HealthMarkersRow | null | undefined): string {
       <line class="hchart-guide" x1="0" y1="${T}" x2="0" y2="${H - B}"/>
       <circle class="hchart-cursor" cx="0" cy="0" r="4.2"/>
       <g class="hchart-tip" transform="translate(0,0)"><rect rx="9" x="0" y="0" width="0" height="18"/><text x="8" y="13"></text></g>
+    </svg>`;
+}
+
+// Single-reading gauge: no history to chart yet, so show WHERE the one value
+// sits against the optimal band — shaded zone on a track, a dot for the
+// reading, band-edge labels (only the edge that matters for one-sided zones).
+function markerBandSvg(marker: HealthMarkersRow | null | undefined): string {
+  const band = marker?.optimal;
+  const low = Number(band?.low);
+  const high = Number(band?.high);
+  const value = Number(marker?.latest?.value);
+  if (!band || !Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(value)) return "";
+  const W = 300, H = 46, L = 14, R = 14, y = 18;
+  let min = Math.min(low, value), max = Math.max(high, value);
+  if (max === min) { max += 1; min -= 1; }
+  const pad = (max - min) * 0.1; min -= pad; max += pad;
+  const x = (v: number) => L + ((v - min) / (max - min)) * (W - L - R);
+  const flagged = flaggedByLab(marker?.latest?.flag) || value < low || value > high;
+  const bx = x(low), bw = Math.max(1, x(high) - x(low));
+  const dir = String(band.dir || "");
+  const labels = [
+    dir !== "high" ? `<text class="hchart-txt" x="${bx.toFixed(1)}" y="${H - 6}" text-anchor="middle">${escHtml(formatMarkerNumber(low))}</text>` : "",
+    dir !== "low" ? `<text class="hchart-txt" x="${(bx + bw).toFixed(1)}" y="${H - 6}" text-anchor="middle">${escHtml(formatMarkerNumber(high))}</text>` : "",
+  ].join("");
+  return `<svg class="hchart hgauge" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+      <line class="hgauge-track" x1="${L}" y1="${y}" x2="${W - R}" y2="${y}"/>
+      <rect class="hchart-band" x="${bx.toFixed(1)}" y="${y - 7}" width="${bw.toFixed(1)}" height="14" rx="4"/>
+      <circle class="hchart-dot" cx="${x(value).toFixed(1)}" cy="${y}" r="5" fill="${flagged ? "#b3402e" : "#6e7f5c"}"/>
+      ${labels}
     </svg>`;
 }
 
@@ -186,16 +274,18 @@ function wireMarkerChart(svg: SVGElement | null | undefined): void {
   chartSvg.addEventListener("pointerleave", (event) => { if (event.pointerType === "mouse") rest(); });
 }
 
-// Expanded panel: chart, optimal-band caption, trend words, and latest reading.
+// Expanded panel: chart (2+ readings) or band gauge (single reading with a
+// known optimal zone), an optimal-target caption, trend words, latest reading.
 function markerPanelHtml(marker: HealthMarkersRow | null | undefined): string {
   const latest = marker?.latest || {};
   const chart = markerChartSvg(marker);
-  if (!chart) return "";
-  const band = marker?.optimal && Number.isFinite(Number(marker.optimal.low)) && Number.isFinite(Number(marker.optimal.high))
-    ? `optimal ${escHtml(formatMarkerNumber(marker.optimal.low))}–${escHtml(formatMarkerNumber(marker.optimal.high))}${marker.unit ? " " + escHtml(marker.unit) : ""}`
-    : "";
-  const trend = markerTrendWord(marker);
-  const caption = [band, trend].filter(Boolean).join(" · ");
+  const gauge = chart ? "" : markerBandSvg(marker);
+  if (!chart && !gauge) return "";
+  const phrase = optimalPhrase(marker);
+  const band = phrase ? `optimal ${escHtml(phrase)}` : "";
+  const side = optimalSideWord(marker);
+  const trend = chart ? markerTrendWord(marker) : "single reading";
+  const caption = [band, side, trend].filter(Boolean).join(" · ");
   const latestValue = latest.value != null && latest.value !== "" ? formatMarkerNumber(latest.value) : "";
   const age = latest.date ? relAge(String(latest.date)) : "";
   const latestLine = latestValue
@@ -204,12 +294,14 @@ function markerPanelHtml(marker: HealthMarkersRow | null | undefined): string {
         ${age ? `<span class="hchart-latest-when" title="${escAttr(absDate(String(latest.date)))}">latest · ${escHtml(age)}</span>` : ""}
       </div>`
     : "";
-  return `${latestLine}${chart}${caption ? `<div class="hchart-cap">${caption}</div>` : ""}`;
+  const ask = `<button class="linkbtn linkbtn-plain linkbtn-sm hmk-ask" type="button" data-ask="${escAttr(markerAskQuestion(marker))}">Ask the coach<span class="hmk-ask-arw" aria-hidden="true"> →</span></button>`;
+  return `${latestLine}${chart || gauge}${caption ? `<div class="hchart-cap">${caption}</div>` : ""}${ask}`;
 }
 
 function hmkRowHtml(marker: HealthMarkersRow | null | undefined, index = 0): string {
   const latest = marker?.latest || {};
-  const exp = markerPoints(marker).filter((point) => point && Number.isFinite(Number(point.value))).length >= 2;
+  const panel = markerPanelHtml(marker);
+  const exp = !!panel;
   const lv = Number(latest.value), pv = marker?.prev ? Number(marker.prev.value) : NaN;
   let delta = "";
   if (Number.isFinite(lv) && Number.isFinite(pv) && lv !== pv) {
@@ -217,7 +309,13 @@ function hmkRowHtml(marker: HealthMarkersRow | null | undefined, index = 0): str
     delta = `<span class="hmk-delta">${df > 0 ? "▲" : "▼"} ${escHtml(formatMarkerNumber(Math.abs(df)))}</span>`;
   }
   const age = latest.date ? relAge(String(latest.date)) : "";
-  const when = age ? `<span class="hmk-when" title="${escAttr(absDate(String(latest.date)))}">${escHtml(age)}</span>` : "";
+  // An out-of-range row states its target inline — the number you need for
+  // context without a tap. In-range rows stay quiet (the dot says enough).
+  const target = markerOutOfRange(marker) ? optimalPhrase(marker) : "";
+  const sub = [age, target ? `optimal ${target}` : ""].filter(Boolean).join(" · ");
+  const when = sub
+    ? `<span class="hmk-when"${latest.date ? ` title="${escAttr(absDate(String(latest.date)))}"` : ""}>${escHtml(sub)}</span>`
+    : "";
   const unit = marker?.unit ? `<span class="hmk-unit">${escHtml(marker.unit)}</span>` : "";
   const rowInner = `<span class="hdot ${CairnHealthPicture.healthDotClass(latest.flag)}"></span>
       <span class="hmk-id">
@@ -232,7 +330,7 @@ function hmkRowHtml(marker: HealthMarkersRow | null | undefined, index = 0): str
   return `<div class="hmk reveal${exp ? " hmk-x" : ""}" style="${stagger(index)}" data-mkey="${escAttr(marker?.key || "")}">
     ${exp
       ? `<button class="hmk-row" aria-expanded="false">${rowInner}</button>
-        <div class="hmk-panel"><div class="hmk-panel-in">${markerPanelHtml(marker)}</div></div>`
+        <div class="hmk-panel"><div class="hmk-panel-in">${panel}</div></div>`
       : `<div class="hmk-row">${rowInner}</div>`}
   </div>`;
 }
@@ -242,7 +340,12 @@ const CAIRN_HEALTH_MARKERS = {
   sparkDateLabel,
   markerTrendWord,
   markerSpanWord,
+  optimalPhrase,
+  optimalSideWord,
+  markerOutOfRange,
+  markerAskQuestion,
   markerChartSvg,
+  markerBandSvg,
   wireMarkerChart,
   markerPanelHtml,
   hmkRowHtml,

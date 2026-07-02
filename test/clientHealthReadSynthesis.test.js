@@ -144,6 +144,30 @@ test("health read synthesis renders the connected read and escapes generated con
   assert.doesNotMatch(synthesis.innerHTML, /<focus>|<now>|<8w>|<steady>/);
 });
 
+test("health read synthesis renders why-it-matters and ask-the-coach deep-links", () => {
+  const helper = loadSynthesis();
+  const { deps, synthesis } = depsFor();
+
+  helper.render({
+    synthesis: {
+      headline: "Lipids lead",
+      priorities: [
+        { label: "Lipids", why_it_matters: "ApoB drives long-term risk", the_move: "More fiber" },
+      ],
+      one_change: "Boring breakfast",
+    },
+  }, deps, 7);
+
+  // why_it_matters is now surfaced (it used to be generated and thrown away).
+  assert.match(synthesis.innerHTML, /ApoB drives long-term risk/);
+  // Per-priority ask button, grounded in the priority.
+  assert.match(synthesis.innerHTML, /class="[^"]*\blinkbtn\b[^"]*\bhsyn-ask\b[^"]*"/);
+  assert.match(synthesis.innerHTML, /data-ask="Tell me more about Lipids[^"]*ApoB drives long-term risk/);
+  // Card-level whole-picture ask.
+  assert.match(synthesis.innerHTML, /class="[^"]*\blinkbtn\b[^"]*\bhsyn-askall\b[^"]*"/);
+  assert.match(synthesis.innerHTML, /Walk me through my whole health picture/);
+});
+
 test("health read synthesis load keeps token freshness", async () => {
   const helper = loadSynthesis();
   const { deps, synthesis, apiCalls } = depsFor({

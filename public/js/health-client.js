@@ -80,11 +80,27 @@
         const span = markerSpanWord(trend.span_days);
         return `${dir}${span ? ` over ${span}` : ""}`;
     }
+    // Deep-link into Chat with a question pre-filled. The composer restores
+    // state.chatPrefill on init (see chat-composer-controller), so this hands the
+    // coach a specific, ready-to-send question about a marker/finding — the "ask
+    // more about it" affordance. Referenced via globalThis so it's a safe no-op in
+    // any context (tests, an unmounted shell) where the app globals aren't present.
+    function askCoach(question) {
+        const q = String(question ?? "").replace(/\s+/g, " ").trim();
+        if (!q)
+            return;
+        const g = globalThis;
+        if (g.state)
+            g.state.chatPrefill = q.slice(0, 600);
+        if (typeof g.activateTab === "function")
+            g.activateTab("chat");
+    }
     const CAIRN_HEALTH_CLIENT = {
         MAX_DOC_BYTES,
         MAX_DOC_TEXT,
         H_FILE_PROMPT,
         HEALTH_HERO_ART,
+        askCoach,
         DIRECTIVE_DOMAINS: CairnHealthEvidence.DIRECTIVE_DOMAINS,
         guessUploadMime,
         evidenceSafeUrl: CairnHealthEvidence.evidenceSafeUrl,

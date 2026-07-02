@@ -2071,11 +2071,27 @@ if (typeof window !== "undefined") {
         const span = markerSpanWord(trend.span_days);
         return `${dir}${span ? ` over ${span}` : ""}`;
     }
+    // Deep-link into Chat with a question pre-filled. The composer restores
+    // state.chatPrefill on init (see chat-composer-controller), so this hands the
+    // coach a specific, ready-to-send question about a marker/finding — the "ask
+    // more about it" affordance. Referenced via globalThis so it's a safe no-op in
+    // any context (tests, an unmounted shell) where the app globals aren't present.
+    function askCoach(question) {
+        const q = String(question ?? "").replace(/\s+/g, " ").trim();
+        if (!q)
+            return;
+        const g = globalThis;
+        if (g.state)
+            g.state.chatPrefill = q.slice(0, 600);
+        if (typeof g.activateTab === "function")
+            g.activateTab("chat");
+    }
     const CAIRN_HEALTH_CLIENT = {
         MAX_DOC_BYTES,
         MAX_DOC_TEXT,
         H_FILE_PROMPT,
         HEALTH_HERO_ART,
+        askCoach,
         DIRECTIVE_DOMAINS: CairnHealthEvidence.DIRECTIVE_DOMAINS,
         guessUploadMime,
         evidenceSafeUrl: CairnHealthEvidence.evidenceSafeUrl,
@@ -3135,6 +3151,60 @@ if (typeof window !== "undefined") {
     function markerSpanWord(days) {
         return CairnHealthClient.markerSpanWord(days);
     }
+    function flaggedByLab(flag) {
+        const f = String(flag || "").toLowerCase();
+        return f === "low" || f === "high" || f === "abnormal" || f === "critical";
+    }
+    // The optimal band as a target phrase honoring the zone's worse-direction:
+    // dir 'high' → lower is better ("≤ 100"), dir 'low' → higher is better
+    // ("≥ 40"), else the band ("70–100"). Unit appended when known. NOT escaped —
+    // callers escape.
+    function optimalPhrase(marker) {
+        const band = marker?.optimal;
+        const low = Number(band?.low);
+        const high = Number(band?.high);
+        if (!band || !Number.isFinite(low) || !Number.isFinite(high))
+            return "";
+        const dir = String(band.dir || "");
+        const range = dir === "high"
+            ? `≤ ${formatMarkerNumber(high)}`
+            : dir === "low"
+                ? `≥ ${formatMarkerNumber(low)}`
+                : `${formatMarkerNumber(low)}–${formatMarkerNumber(high)}`;
+        return `${range}${marker?.unit ? ` ${String(marker.unit)}` : ""}`;
+    }
+    // The catalog's shared "out of range" definition: lab-flagged, or lab-normal
+    // but outside the optimal band (the doctor report's findings set).
+    function markerOutOfRange(marker) {
+        return flaggedByLab(marker?.latest?.flag) || marker?.in_optimal === false;
+    }
+    // A specific, ready-to-send question about this marker for the "ask the coach"
+    // deep-link — grounded in the actual reading so the coach gets real context.
+    function markerAskQuestion(marker) {
+        const name = String(marker?.name || marker?.key || "this marker").replace(/\s+/g, " ").trim();
+        const latest = marker?.latest || {};
+        const val = latest.value != null && latest.value !== ""
+            ? `${formatMarkerNumber(latest.value)}${marker?.unit ? ` ${String(marker.unit)}` : ""}`
+            : "";
+        const phrase = optimalPhrase(marker);
+        if (markerOutOfRange(marker)) {
+            const side = optimalSideWord(marker);
+            const where = side || (flaggedByLab(latest.flag) ? `flagged ${String(latest.flag).toLowerCase()}` : "outside its optimal range");
+            const opt = phrase ? ` (optimal ${phrase})` : "";
+            return `Can you tell me about my ${name}? It's ${val ? `${val}, ` : ""}${where}${opt}. What's likely driving it, and what should I focus on to improve it?`;
+        }
+        return `Can you tell me about my ${name}${val ? ` — it's ${val}` : ""}? Is this something I should keep an eye on?`;
+    }
+    // Which side of the optimal band the latest value sits on, in plain words.
+    function optimalSideWord(marker) {
+        const band = marker?.optimal;
+        const low = Number(band?.low);
+        const high = Number(band?.high);
+        const value = Number(marker?.latest?.value);
+        if (!band || !Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(value))
+            return "";
+        return value > high ? "above optimal" : value < low ? "below optimal" : "";
+    }
     // Richer inline progress chart: hand-built SVG, no library. Shades the optimal-zone
     // band, draws a Catmull-Rom curve, and labels endpoint dates. Values go into numeric
     // attributes; text is escaped through the same global helpers as the legacy screen.
@@ -3194,6 +3264,40 @@ if (typeof window !== "undefined") {
       <line class="hchart-guide" x1="0" y1="${T}" x2="0" y2="${H - B}"/>
       <circle class="hchart-cursor" cx="0" cy="0" r="4.2"/>
       <g class="hchart-tip" transform="translate(0,0)"><rect rx="9" x="0" y="0" width="0" height="18"/><text x="8" y="13"></text></g>
+    </svg>`;
+    }
+    // Single-reading gauge: no history to chart yet, so show WHERE the one value
+    // sits against the optimal band — shaded zone on a track, a dot for the
+    // reading, band-edge labels (only the edge that matters for one-sided zones).
+    function markerBandSvg(marker) {
+        const band = marker?.optimal;
+        const low = Number(band?.low);
+        const high = Number(band?.high);
+        const value = Number(marker?.latest?.value);
+        if (!band || !Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(value))
+            return "";
+        const W = 300, H = 46, L = 14, R = 14, y = 18;
+        let min = Math.min(low, value), max = Math.max(high, value);
+        if (max === min) {
+            max += 1;
+            min -= 1;
+        }
+        const pad = (max - min) * 0.1;
+        min -= pad;
+        max += pad;
+        const x = (v) => L + ((v - min) / (max - min)) * (W - L - R);
+        const flagged = flaggedByLab(marker?.latest?.flag) || value < low || value > high;
+        const bx = x(low), bw = Math.max(1, x(high) - x(low));
+        const dir = String(band.dir || "");
+        const labels = [
+            dir !== "high" ? `<text class="hchart-txt" x="${bx.toFixed(1)}" y="${H - 6}" text-anchor="middle">${escHtml(formatMarkerNumber(low))}</text>` : "",
+            dir !== "low" ? `<text class="hchart-txt" x="${(bx + bw).toFixed(1)}" y="${H - 6}" text-anchor="middle">${escHtml(formatMarkerNumber(high))}</text>` : "",
+        ].join("");
+        return `<svg class="hchart hgauge" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+      <line class="hgauge-track" x1="${L}" y1="${y}" x2="${W - R}" y2="${y}"/>
+      <rect class="hchart-band" x="${bx.toFixed(1)}" y="${y - 7}" width="${bw.toFixed(1)}" height="14" rx="4"/>
+      <circle class="hchart-dot" cx="${x(value).toFixed(1)}" cy="${y}" r="5" fill="${flagged ? "#b3402e" : "#6e7f5c"}"/>
+      ${labels}
     </svg>`;
     }
     // Wire pointer scrubbing onto a marker chart SVG. Idempotent per element.
@@ -3309,17 +3413,19 @@ if (typeof window !== "undefined") {
         chartSvg.addEventListener("pointerleave", (event) => { if (event.pointerType === "mouse")
             rest(); });
     }
-    // Expanded panel: chart, optimal-band caption, trend words, and latest reading.
+    // Expanded panel: chart (2+ readings) or band gauge (single reading with a
+    // known optimal zone), an optimal-target caption, trend words, latest reading.
     function markerPanelHtml(marker) {
         const latest = marker?.latest || {};
         const chart = markerChartSvg(marker);
-        if (!chart)
+        const gauge = chart ? "" : markerBandSvg(marker);
+        if (!chart && !gauge)
             return "";
-        const band = marker?.optimal && Number.isFinite(Number(marker.optimal.low)) && Number.isFinite(Number(marker.optimal.high))
-            ? `optimal ${escHtml(formatMarkerNumber(marker.optimal.low))}–${escHtml(formatMarkerNumber(marker.optimal.high))}${marker.unit ? " " + escHtml(marker.unit) : ""}`
-            : "";
-        const trend = markerTrendWord(marker);
-        const caption = [band, trend].filter(Boolean).join(" · ");
+        const phrase = optimalPhrase(marker);
+        const band = phrase ? `optimal ${escHtml(phrase)}` : "";
+        const side = optimalSideWord(marker);
+        const trend = chart ? markerTrendWord(marker) : "single reading";
+        const caption = [band, side, trend].filter(Boolean).join(" · ");
         const latestValue = latest.value != null && latest.value !== "" ? formatMarkerNumber(latest.value) : "";
         const age = latest.date ? relAge(String(latest.date)) : "";
         const latestLine = latestValue
@@ -3328,11 +3434,13 @@ if (typeof window !== "undefined") {
         ${age ? `<span class="hchart-latest-when" title="${escAttr(absDate(String(latest.date)))}">latest · ${escHtml(age)}</span>` : ""}
       </div>`
             : "";
-        return `${latestLine}${chart}${caption ? `<div class="hchart-cap">${caption}</div>` : ""}`;
+        const ask = `<button class="linkbtn linkbtn-plain linkbtn-sm hmk-ask" type="button" data-ask="${escAttr(markerAskQuestion(marker))}">Ask the coach<span class="hmk-ask-arw" aria-hidden="true"> →</span></button>`;
+        return `${latestLine}${chart || gauge}${caption ? `<div class="hchart-cap">${caption}</div>` : ""}${ask}`;
     }
     function hmkRowHtml(marker, index = 0) {
         const latest = marker?.latest || {};
-        const exp = markerPoints(marker).filter((point) => point && Number.isFinite(Number(point.value))).length >= 2;
+        const panel = markerPanelHtml(marker);
+        const exp = !!panel;
         const lv = Number(latest.value), pv = marker?.prev ? Number(marker.prev.value) : NaN;
         let delta = "";
         if (Number.isFinite(lv) && Number.isFinite(pv) && lv !== pv) {
@@ -3340,7 +3448,13 @@ if (typeof window !== "undefined") {
             delta = `<span class="hmk-delta">${df > 0 ? "▲" : "▼"} ${escHtml(formatMarkerNumber(Math.abs(df)))}</span>`;
         }
         const age = latest.date ? relAge(String(latest.date)) : "";
-        const when = age ? `<span class="hmk-when" title="${escAttr(absDate(String(latest.date)))}">${escHtml(age)}</span>` : "";
+        // An out-of-range row states its target inline — the number you need for
+        // context without a tap. In-range rows stay quiet (the dot says enough).
+        const target = markerOutOfRange(marker) ? optimalPhrase(marker) : "";
+        const sub = [age, target ? `optimal ${target}` : ""].filter(Boolean).join(" · ");
+        const when = sub
+            ? `<span class="hmk-when"${latest.date ? ` title="${escAttr(absDate(String(latest.date)))}"` : ""}>${escHtml(sub)}</span>`
+            : "";
         const unit = marker?.unit ? `<span class="hmk-unit">${escHtml(marker.unit)}</span>` : "";
         const rowInner = `<span class="hdot ${CairnHealthPicture.healthDotClass(latest.flag)}"></span>
       <span class="hmk-id">
@@ -3355,7 +3469,7 @@ if (typeof window !== "undefined") {
         return `<div class="hmk reveal${exp ? " hmk-x" : ""}" style="${stagger(index)}" data-mkey="${escAttr(marker?.key || "")}">
     ${exp
             ? `<button class="hmk-row" aria-expanded="false">${rowInner}</button>
-        <div class="hmk-panel"><div class="hmk-panel-in">${markerPanelHtml(marker)}</div></div>`
+        <div class="hmk-panel"><div class="hmk-panel-in">${panel}</div></div>`
             : `<div class="hmk-row">${rowInner}</div>`}
   </div>`;
     }
@@ -3364,7 +3478,12 @@ if (typeof window !== "undefined") {
         sparkDateLabel,
         markerTrendWord,
         markerSpanWord,
+        optimalPhrase,
+        optimalSideWord,
+        markerOutOfRange,
+        markerAskQuestion,
         markerChartSvg,
+        markerBandSvg,
         wireMarkerChart,
         markerPanelHtml,
         hmkRowHtml,
@@ -3379,6 +3498,40 @@ if (typeof window !== "undefined") {
 // ==== public/js/health-markers-controller.js ====
 (() => {
 (() => {
+    // Session-scoped catalog state: the out-of-range quick filter (narrow to markers
+    // lab-flagged or outside their optimal band — the shared CairnHealthMarkers.
+    // markerOutOfRange definition) and the free-text search over ~180 marker names.
+    let showOutOfRange = false;
+    let searchQuery = "";
+    function normalizeQuery(value) {
+        return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+    }
+    function matchesSearch(marker) {
+        const q = normalizeQuery(searchQuery);
+        if (!q)
+            return true;
+        const name = normalizeQuery(marker.name || marker.key || "");
+        const label = normalizeQuery(marker.group_label || "");
+        return name.includes(q) || label.includes(q);
+    }
+    // Controls row (search + out-of-range pill) — rendered ONCE per data paint and
+    // left untouched while results re-render, so the search field keeps focus as
+    // you type. The input's value is set as a DOM property (not an attribute) to
+    // sidestep escaping. `outCount` is over ALL markers, so the pill is stable.
+    function controlsHtml(outCount) {
+        const toggle = outCount
+            ? `<button id="hMkOutToggle" class="hmk-filter-toggle${showOutOfRange ? " on" : ""}" aria-pressed="${showOutOfRange ? "true" : "false"}">
+          <span class="hdot hdot-warn"></span>Out of range · ${outCount}
+        </button>`
+            : "";
+        return `<div class="hmk-controls reveal">
+      <div class="hmk-search">
+        <svg class="hmk-search-i" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/><line x1="13.5" y1="13.5" x2="18" y2="18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <input id="hMkSearch" type="search" class="hmk-search-in" placeholder="Search markers…" aria-label="Search markers" autocomplete="off" spellcheck="false" enterkeyhint="search">
+      </div>
+      ${toggle}
+    </div>`;
+    }
     function controllerRecord(value) {
         return value && typeof value === "object" ? value : {};
     }
@@ -3437,7 +3590,11 @@ if (typeof window !== "undefined") {
                 lastSubgroup = subgroup;
             return subhead + CairnHealthMarkers.hmkRowHtml(marker, rowIndex.value++);
         }).join("");
-        const head = `<div class="hmk-grouphead lbl reveal" style="${deps.stagger(groupIndex)}">${deps.escapeHtml(group.label || group.key)}</div>`;
+        // A quiet count of this panel's out-of-range markers (among what's shown), so
+        // you can spot which stories need attention while scrolling the full catalog.
+        const off = ordered.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker)).length;
+        const badge = off ? `<span class="hmk-headcount">${off} off</span>` : "";
+        const head = `<div class="hmk-grouphead lbl reveal" style="${deps.stagger(groupIndex)}">${deps.escapeHtml(group.label || group.key)}${badge}</div>`;
         const note = group.key === "lipids"
             ? CairnHealthClient.lipidGroupNoteHtml(ordered, { relAge: deps.relAge })
             : "";
@@ -3452,10 +3609,48 @@ if (typeof window !== "undefined") {
             button.setAttribute("aria-expanded", open ? "true" : "false");
         }));
         wrap.querySelectorAll("svg.hchart").forEach((svg) => CairnHealthMarkers.wireMarkerChart(svg));
+        wrap.querySelectorAll(".hmk-ask").forEach((button) => button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            CairnHealthClient.askCoach(button.getAttribute("data-ask"));
+        }));
     }
     function paintEmpty(wrap, deps) {
         wrap.innerHTML = CairnHealthClient.markersEmptyHtml(CairnHealthClient.HEALTH_HERO_ART);
         select(deps, "#hMkToRecords")?.addEventListener("click", () => deps.switchHealthSeg("records", { openPicker: true }));
+    }
+    // Fill the results region (status + grouped sections) from the current filter
+    // state. Only #hMkResults is touched, so the search field's focus survives.
+    function renderResults(wrap, markers, groups, deps) {
+        const results = wrap.querySelector("#hMkResults");
+        if (!results)
+            return;
+        const outOfRange = markers.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker));
+        if (!outOfRange.length)
+            showOutOfRange = false;
+        const base = showOutOfRange ? outOfRange : markers;
+        const visible = base.filter(matchesSearch);
+        const q = normalizeQuery(searchQuery);
+        if (!visible.length) {
+            const why = q ? `No markers match “${deps.escapeHtml(searchQuery.trim())}”.` : "No markers out of range.";
+            results.innerHTML = `<div class="hmk-empty">${why}${q ? ` <button id="hMkClear" class="linkbtn">Clear search</button>` : ""}</div>`;
+            select(deps, "#hMkClear")?.addEventListener("click", () => {
+                searchQuery = "";
+                const input = wrap.querySelector("#hMkSearch");
+                if (input)
+                    input.value = "";
+                renderResults(wrap, markers, groups, deps);
+                wrap.querySelector("#hMkSearch")?.focus();
+            });
+            return;
+        }
+        const byGroup = groupMarkers(groups, visible);
+        const rowIndex = { value: 0 };
+        const sections = groups.map((group, index) => markerSectionHtml(group, index, byGroup.get(group.key) || [], rowIndex, deps)).join("");
+        const status = q
+            ? `<div class="hmk-status">${visible.length} of ${markers.length} markers</div>`
+            : "";
+        results.innerHTML = `${status}<div class="hmk-groups">${sections}</div>`;
+        wireMarkerCatalog(results);
     }
     function paintMarkers(wrap, response, deps, token) {
         if (token !== deps.pollToken() || !wrap.isConnected)
@@ -3466,12 +3661,27 @@ if (typeof window !== "undefined") {
             paintEmpty(wrap, deps);
             return;
         }
+        const outCount = markers.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker)).length;
         const groups = markerGroups(data, markers);
-        const byGroup = groupMarkers(groups, markers);
-        const rowIndex = { value: 0 };
-        const sections = groups.map((group, index) => markerSectionHtml(group, index, byGroup.get(group.key) || [], rowIndex, deps)).join("");
-        wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
-        wireMarkerCatalog(wrap);
+        wrap.innerHTML = `${controlsHtml(outCount)}<div id="hMkResults"></div>`;
+        const search = wrap.querySelector("#hMkSearch");
+        if (search) {
+            search.value = searchQuery;
+            search.addEventListener("input", () => {
+                searchQuery = search.value;
+                renderResults(wrap, markers, groups, deps);
+            });
+        }
+        wrap.querySelector("#hMkOutToggle")?.addEventListener("click", () => {
+            showOutOfRange = !showOutOfRange;
+            const button = wrap.querySelector("#hMkOutToggle");
+            if (button) {
+                button.classList.toggle("on", showOutOfRange);
+                button.setAttribute("aria-pressed", showOutOfRange ? "true" : "false");
+            }
+            renderResults(wrap, markers, groups, deps);
+        });
+        renderResults(wrap, markers, groups, deps);
     }
     function load(deps, token) {
         const wrap = select(deps, "#hMarkers");
@@ -3740,14 +3950,23 @@ if (typeof window !== "undefined") {
       ${s.story ? `<p class="hsyn-story">${deps.escapeHtml(s.story)}</p>` : ""}
       ${prios.length ? `<div class="hsyn-prios">${prios.map((p) => `
         <div class="hsyn-prio">
-          <span class="hsyn-plabel">${deps.escapeHtml(p.label || "")}</span>
-          ${p.the_move ? `<span class="hsyn-pmove">${deps.escapeHtml(p.the_move)}</span>` : ""}
+          <div class="hsyn-ptop">
+            <span class="hsyn-plabel">${deps.escapeHtml(p.label || "")}</span>
+            <button class="linkbtn linkbtn-plain linkbtn-sm hsyn-ask" type="button" data-ask="${deps.escapeAttr(prioQuestion(p))}" aria-label="Ask the coach about ${deps.escapeAttr(p.label || "this")}">Ask<span aria-hidden="true"> →</span></button>
+          </div>
+          ${p.why_it_matters ? `<p class="hsyn-pwhy">${deps.escapeHtml(p.why_it_matters)}</p>` : ""}
+          ${p.the_move ? `<div class="hsyn-pmove"><span class="hsyn-pmove-k lbl">Do</span> ${deps.escapeHtml(p.the_move)}</div>` : ""}
           ${p.recheck ? `<span class="hsyn-precheck lbl">${deps.escapeHtml(p.recheck)}</span>` : ""}
         </div>`).join("")}</div>` : ""}
-      ${s.one_change ? `<div class="hsyn-onechange"><span class="lbl">If you change one thing</span><span>${deps.escapeHtml(s.one_change)}</span></div>` : ""}
-      <div class="hsyn-foot"><span class="lbl">${s.generated_at ? `read ${deps.escapeHtml(deps.relTime(s.generated_at))}` : ""}</span>${stale
+      ${s.one_change ? `<div class="hsyn-onechange well-accent-sm"><span class="lbl">If you change one thing</span><span>${deps.escapeHtml(s.one_change)}</span></div>` : ""}
+      <div class="hsyn-foot">
+        <button class="linkbtn linkbtn-plain linkbtn-sm hsyn-askall" type="button" data-ask="${deps.escapeAttr(WHOLE_PICTURE_Q)}">Ask about my whole picture<span aria-hidden="true"> →</span></button>
+        <span class="hsyn-foot-r">
+          <span class="lbl">${s.generated_at ? `read ${deps.escapeHtml(deps.relTime(s.generated_at))}` : ""}</span>${stale
                 ? `<button id="hsynRefresh" class="hpic-refresh hpic-refresh-stale" type="button" title="New results since this read"><span class="hdot hdot-warn"></span>New results — refresh</button>`
-                : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}</div>`;
+                : `<button class="linkbtn" id="hsynRefresh" type="button">refresh</button>`}
+        </span>
+      </div>`;
         }
         else {
             body = `
@@ -3757,6 +3976,14 @@ if (typeof window !== "undefined") {
         wrap.innerHTML = `<div class="hsyn reveal"><div class="hsyn-kicker lbl">Your health — one picture</div>${body}</div>`;
         select(deps, "#hsynRefresh")?.addEventListener("click", () => trigger(deps));
         select(deps, "#hsynGen")?.addEventListener("click", () => trigger(deps));
+        wrap.querySelectorAll(".hsyn-ask, .hsyn-askall").forEach((button) => button.addEventListener("click", () => CairnHealthClient.askCoach(button.getAttribute("data-ask"))));
+    }
+    const WHOLE_PICTURE_Q = "Walk me through my whole health picture — what matters most right now, and the single most effective thing I can do about it?";
+    // A grounded, ready-to-send question about ONE priority for the ask deep-link.
+    function prioQuestion(p) {
+        const label = String(p.label || "this").replace(/\s+/g, " ").trim();
+        const why = String(p.why_it_matters || "").replace(/\s+/g, " ").trim();
+        return `Tell me more about ${label} in my health picture.${why ? ` (${why})` : ""} What's the most effective thing I can do about it?`;
     }
     function load(deps, token) {
         const wrap = select(deps, "#hSynthesis");

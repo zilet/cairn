@@ -1895,7 +1895,7 @@ declare global {
       markerSubgroup(groupKey: unknown, name: unknown): string | null;
       orderMarkersForDisplay<T extends { name?: unknown; key?: unknown }>(groupKey: unknown, list: T[] | null | undefined): T[];
       lipidGroupNoteHtml(
-        list: Array<{ name?: unknown; key?: unknown; latest?: { date?: unknown } }> | null | undefined,
+        list: Array<{ name?: unknown; key?: unknown; latest?: { date?: unknown } | null }> | null | undefined,
         options?: { relAge?: (date: string) => string },
       ): string;
     };
@@ -1905,6 +1905,7 @@ declare global {
       MAX_DOC_TEXT: number;
       H_FILE_PROMPT: string;
       HEALTH_HERO_ART: string;
+      askCoach(question: unknown): void;
       guessUploadMime(file: { type?: unknown; name?: unknown } | null | undefined): string;
       markersEmptyHtml(heroArt?: string): string;
       formatMarkerNumber(value: unknown): string;
@@ -1947,7 +1948,12 @@ declare global {
         points?: Array<{ value?: unknown; date?: unknown }> | null;
       } | null | undefined): string;
       markerSpanWord(days: unknown): string;
+      optimalPhrase(marker: Record<string, unknown> | null | undefined): string;
+      optimalSideWord(marker: Record<string, unknown> | null | undefined): string;
+      markerOutOfRange(marker: Record<string, unknown> | null | undefined): boolean;
+      markerAskQuestion(marker: Record<string, unknown> | null | undefined): string;
       markerChartSvg(marker: Record<string, unknown> | null | undefined): string;
+      markerBandSvg(marker: Record<string, unknown> | null | undefined): string;
       wireMarkerChart(svg: SVGElement | null | undefined): void;
       markerPanelHtml(marker: Record<string, unknown> | null | undefined): string;
       hmkRowHtml(marker: Record<string, unknown> | null | undefined, index?: number): string;

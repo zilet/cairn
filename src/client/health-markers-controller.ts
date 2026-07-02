@@ -10,6 +10,8 @@ type HealthMarkersControllerRow = HealthMarkersControllerRecord & {
   key?: string;
   group?: string;
   group_label?: string;
+  latest?: { flag?: unknown; date?: unknown } | null;
+  in_optimal?: unknown;
 };
 type HealthMarkersControllerResponse = {
   markers?: HealthMarkersControllerRow[];
@@ -17,6 +19,43 @@ type HealthMarkersControllerResponse = {
 };
 
 (() => {
+  // Session-scoped catalog state: the out-of-range quick filter (narrow to markers
+  // lab-flagged or outside their optimal band — the shared CairnHealthMarkers.
+  // markerOutOfRange definition) and the free-text search over ~180 marker names.
+  let showOutOfRange = false;
+  let searchQuery = "";
+
+  function normalizeQuery(value: unknown): string {
+    return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  function matchesSearch(marker: HealthMarkersControllerRow): boolean {
+    const q = normalizeQuery(searchQuery);
+    if (!q) return true;
+    const name = normalizeQuery(marker.name || marker.key || "");
+    const label = normalizeQuery(marker.group_label || "");
+    return name.includes(q) || label.includes(q);
+  }
+
+  // Controls row (search + out-of-range pill) — rendered ONCE per data paint and
+  // left untouched while results re-render, so the search field keeps focus as
+  // you type. The input's value is set as a DOM property (not an attribute) to
+  // sidestep escaping. `outCount` is over ALL markers, so the pill is stable.
+  function controlsHtml(outCount: number): string {
+    const toggle = outCount
+      ? `<button id="hMkOutToggle" class="hmk-filter-toggle${showOutOfRange ? " on" : ""}" aria-pressed="${showOutOfRange ? "true" : "false"}">
+          <span class="hdot hdot-warn"></span>Out of range · ${outCount}
+        </button>`
+      : "";
+    return `<div class="hmk-controls reveal">
+      <div class="hmk-search">
+        <svg class="hmk-search-i" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/><line x1="13.5" y1="13.5" x2="18" y2="18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <input id="hMkSearch" type="search" class="hmk-search-in" placeholder="Search markers…" aria-label="Search markers" autocomplete="off" spellcheck="false" enterkeyhint="search">
+      </div>
+      ${toggle}
+    </div>`;
+  }
+
   function controllerRecord(value: unknown): HealthMarkersControllerRecord {
     return value && typeof value === "object" ? (value as HealthMarkersControllerRecord) : {};
   }
@@ -83,7 +122,11 @@ type HealthMarkersControllerResponse = {
       if (subgroup) lastSubgroup = subgroup;
       return subhead + CairnHealthMarkers.hmkRowHtml(marker, rowIndex.value++);
     }).join("");
-    const head = `<div class="hmk-grouphead lbl reveal" style="${deps.stagger(groupIndex)}">${deps.escapeHtml(group.label || group.key)}</div>`;
+    // A quiet count of this panel's out-of-range markers (among what's shown), so
+    // you can spot which stories need attention while scrolling the full catalog.
+    const off = ordered.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker)).length;
+    const badge = off ? `<span class="hmk-headcount">${off} off</span>` : "";
+    const head = `<div class="hmk-grouphead lbl reveal" style="${deps.stagger(groupIndex)}">${deps.escapeHtml(group.label || group.key)}${badge}</div>`;
     const note = group.key === "lipids"
       ? CairnHealthClient.lipidGroupNoteHtml(ordered, { relAge: deps.relAge })
       : "";
@@ -99,11 +142,57 @@ type HealthMarkersControllerResponse = {
         button.setAttribute("aria-expanded", open ? "true" : "false");
       }));
     wrap.querySelectorAll<SVGElement>("svg.hchart").forEach((svg) => CairnHealthMarkers.wireMarkerChart(svg));
+    wrap.querySelectorAll<HTMLElement>(".hmk-ask").forEach((button) =>
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        CairnHealthClient.askCoach(button.getAttribute("data-ask"));
+      }));
   }
 
   function paintEmpty(wrap: HTMLElement, deps: ClientHealthMarkersControllerDeps): void {
     wrap.innerHTML = CairnHealthClient.markersEmptyHtml(CairnHealthClient.HEALTH_HERO_ART);
     select(deps, "#hMkToRecords")?.addEventListener("click", () => deps.switchHealthSeg("records", { openPicker: true }));
+  }
+
+  // Fill the results region (status + grouped sections) from the current filter
+  // state. Only #hMkResults is touched, so the search field's focus survives.
+  function renderResults(
+    wrap: HTMLElement,
+    markers: HealthMarkersControllerRow[],
+    groups: HealthMarkersControllerGroup[],
+    deps: ClientHealthMarkersControllerDeps,
+  ): void {
+    const results = wrap.querySelector<HTMLElement>("#hMkResults");
+    if (!results) return;
+    const outOfRange = markers.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker));
+    if (!outOfRange.length) showOutOfRange = false;
+    const base = showOutOfRange ? outOfRange : markers;
+    const visible = base.filter(matchesSearch);
+    const q = normalizeQuery(searchQuery);
+
+    if (!visible.length) {
+      const why = q ? `No markers match “${deps.escapeHtml(searchQuery.trim())}”.` : "No markers out of range.";
+      results.innerHTML = `<div class="hmk-empty">${why}${q ? ` <button id="hMkClear" class="linkbtn">Clear search</button>` : ""}</div>`;
+      select(deps, "#hMkClear")?.addEventListener("click", () => {
+        searchQuery = "";
+        const input = wrap.querySelector<HTMLInputElement>("#hMkSearch");
+        if (input) input.value = "";
+        renderResults(wrap, markers, groups, deps);
+        wrap.querySelector<HTMLInputElement>("#hMkSearch")?.focus();
+      });
+      return;
+    }
+
+    const byGroup = groupMarkers(groups, visible);
+    const rowIndex = { value: 0 };
+    const sections = groups.map((group, index) =>
+      markerSectionHtml(group, index, byGroup.get(group.key) || [], rowIndex, deps)
+    ).join("");
+    const status = q
+      ? `<div class="hmk-status">${visible.length} of ${markers.length} markers</div>`
+      : "";
+    results.innerHTML = `${status}<div class="hmk-groups">${sections}</div>`;
+    wireMarkerCatalog(results);
   }
 
   function paintMarkers(wrap: HTMLElement, response: unknown, deps: ClientHealthMarkersControllerDeps, token: number): void {
@@ -115,15 +204,29 @@ type HealthMarkersControllerResponse = {
       return;
     }
 
+    const outCount = markers.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker)).length;
     const groups = markerGroups(data, markers);
-    const byGroup = groupMarkers(groups, markers);
-    const rowIndex = { value: 0 };
-    const sections = groups.map((group, index) =>
-      markerSectionHtml(group, index, byGroup.get(group.key) || [], rowIndex, deps)
-    ).join("");
+    wrap.innerHTML = `${controlsHtml(outCount)}<div id="hMkResults"></div>`;
 
-    wrap.innerHTML = `<div class="hmk-groups">${sections}</div>`;
-    wireMarkerCatalog(wrap);
+    const search = wrap.querySelector<HTMLInputElement>("#hMkSearch");
+    if (search) {
+      search.value = searchQuery;
+      search.addEventListener("input", () => {
+        searchQuery = search.value;
+        renderResults(wrap, markers, groups, deps);
+      });
+    }
+    wrap.querySelector<HTMLElement>("#hMkOutToggle")?.addEventListener("click", () => {
+      showOutOfRange = !showOutOfRange;
+      const button = wrap.querySelector<HTMLElement>("#hMkOutToggle");
+      if (button) {
+        button.classList.toggle("on", showOutOfRange);
+        button.setAttribute("aria-pressed", showOutOfRange ? "true" : "false");
+      }
+      renderResults(wrap, markers, groups, deps);
+    });
+
+    renderResults(wrap, markers, groups, deps);
   }
 
   function load(deps: ClientHealthMarkersControllerDeps, token: number): void {

@@ -87,6 +87,96 @@ test("health marker row keeps expandable chart markup bounded and escaped", () =
   assert.doesNotMatch(html, /<bad>|<unit>/);
 });
 
+test("single-reading marker with an optimal band expands to a gauge with the target", () => {
+  const markers = loadHealthMarkers();
+  const single = {
+    key: "apob",
+    name: "ApoB",
+    unit: "mg/dL",
+    latest: { value: 105, date: "2026-06-20", flag: null },
+    optimal: { low: 0, high: 80, dir: "high" },
+    in_optimal: false,
+    points: [{ value: 105, date: "2026-06-20", flag: null }],
+  };
+  const html = markers.hmkRowHtml(single, 0);
+
+  assert.match(html, /hmk-x/); // expandable even with one reading
+  assert.match(html, /hgauge/); // band gauge, not a trend chart
+  assert.doesNotMatch(html, /hchart-line/);
+  assert.match(html, /single reading/);
+  assert.match(html, /optimal ≤ 80 mg\/dL/); // dir-aware target phrase
+  assert.match(html, /above optimal/);
+  assert.match(html, /fill="#b3402e"/); // out-of-band dot reads warn
+  // dir 'high': only the edge that matters gets a label (no "0" noise).
+  const gauge = html.slice(html.indexOf("<svg"));
+  assert.doesNotMatch(gauge, />0</);
+  assert.match(gauge, />80</);
+});
+
+test("single-reading marker without an optimal band stays a plain row", () => {
+  const markers = loadHealthMarkers();
+  const html = markers.hmkRowHtml({
+    name: "Blood Type",
+    latest: { value: "O+", date: "2026-01-10" },
+    points: [{ value: "O+", date: "2026-01-10" }],
+  }, 0);
+
+  assert.doesNotMatch(html, /hmk-x/);
+  assert.doesNotMatch(html, /hgauge/);
+  assert.match(html, /hmk-chev-ghost/);
+});
+
+test("optimal phrasing and side words honor the zone direction", () => {
+  const markers = loadHealthMarkers();
+  assert.equal(markers.optimalPhrase({ optimal: { low: 40, high: 200, dir: "low" }, unit: "ng/mL" }), "≥ 40 ng/mL");
+  assert.equal(markers.optimalPhrase({ optimal: { low: 70, high: 100 } }), "70–100");
+  assert.equal(markers.optimalPhrase({ optimal: null }), "");
+  assert.equal(markers.optimalSideWord({ optimal: { low: 40, high: 60 }, latest: { value: 20 } }), "below optimal");
+  assert.equal(markers.optimalSideWord({ optimal: { low: 40, high: 60 }, latest: { value: 50 } }), "");
+  assert.equal(markers.markerOutOfRange({ latest: { flag: "low" } }), true);
+  assert.equal(markers.markerOutOfRange({ latest: { flag: null }, in_optimal: false }), true);
+  assert.equal(markers.markerOutOfRange({ latest: { flag: "normal" }, in_optimal: true }), false);
+});
+
+test("expanded markers carry an 'ask the coach' deep-link with a grounded question", () => {
+  const markers = loadHealthMarkers();
+  const html = markers.hmkRowHtml(markerFixture(), 0);
+  assert.match(html, /class="[^"]*\blinkbtn\b[^"]*\bhmk-ask\b[^"]*"/);
+  assert.match(html, /data-ask="/);
+  // The question names the marker, its value, where it sits, and the target.
+  const q = markers.markerAskQuestion(markerFixture());
+  assert.match(q, /LDL <bad>/);
+  assert.match(q, /110 mg\/dL <unit>/);
+  assert.match(q, /above optimal/);
+  assert.match(q, /optimal 70–100/);
+  assert.match(q, /what should I focus on/i);
+  // An in-range marker asks a lighter "keep an eye on it" question.
+  const calm = markers.markerAskQuestion({ name: "HDL", unit: "mg/dL", latest: { value: 62 }, optimal: { low: 40, high: 100 }, in_optimal: true });
+  assert.match(calm, /keep an eye on/i);
+  assert.doesNotMatch(calm, /what's likely driving/i);
+});
+
+test("out-of-range rows carry the target inline while in-range rows stay quiet", () => {
+  const markers = loadHealthMarkers();
+  const offRow = markers.hmkRowHtml(markerFixture(), 0);
+  const offLine = offRow.slice(0, offRow.indexOf("hmk-panel"));
+  assert.match(offLine, /optimal 70–100 mg\/dL/);
+
+  const inRange = markers.hmkRowHtml({
+    name: "HDL",
+    unit: "mg/dL",
+    latest: { value: 62, date: "2026-06-20", flag: "normal" },
+    optimal: { low: 40, high: 100 },
+    in_optimal: true,
+    points: [
+      { value: 58, date: "2026-05-01" },
+      { value: 62, date: "2026-06-20" },
+    ],
+  }, 0);
+  const inLine = inRange.slice(0, inRange.indexOf("hmk-panel"));
+  assert.doesNotMatch(inLine, /optimal/);
+});
+
 test("health marker chart wiring is idempotent and updates the scrub affordance", () => {
   const markers = loadHealthMarkers();
   const listeners = new Map();
