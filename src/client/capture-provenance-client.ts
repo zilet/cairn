@@ -33,12 +33,11 @@ function provenanceLineHtml(directive: CaptureDirective | null | undefined, labe
 }
 
 function wireProvenance(scope?: ParentNode | null): void {
+  // "Why is my plan doing this" → the directive behind it, managed in place on
+  // Stand → Connections (the connected-brain home).
   (scope || view).querySelectorAll<HTMLElement>("[data-prov]").forEach((button) => button.addEventListener("click", () => {
-    state.meSeg = "health";
-    state.healthSeg = "read";
-    state.healthSegPicked = true;
-    state.pendingHealthScroll = "hbDirectives";
-    activateTab("me");
+    state.standSeg = "connections";
+    activateTab("stand");
   }));
 }
 

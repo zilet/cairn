@@ -22,6 +22,9 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     sections: {
       plan: ["edit", "endurance", "food", "meals", "coach"],
       progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
+      // Stand is the health home: every health tool is a first-class Stand sub-view.
+      // "me" health sections survive only as parse targets that redirect into Stand.
+      stand: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
       me: ["standing", "profile", "memory", "health", "life", "family"],
       health: ["read", "markers", "records", "share", "learned"],
       settings: ["you", "agents", "sources", "automation", "data"],
@@ -31,6 +34,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
   const VALID_TABS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.tabs);
   const PLAN_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.plan);
   const PROGRESS_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.progress);
+  const STAND_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.stand);
   const ME_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.me);
   const HEALTH_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.health);
   const SETTINGS_SECTIONS = new Set<string>(CLIENT_ROUTE_DEFINITIONS.sections.settings);
@@ -105,6 +109,8 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       ) as CairnRoute["section"];
     } else if (tab === "progress") {
       section = oneOf(sectionPart, PROGRESS_SECTIONS, null) as CairnRoute["section"];
+    } else if (tab === "stand") {
+      section = oneOf(sectionPart, STAND_SECTIONS, null) as CairnRoute["section"];
     } else if (tab === "me") {
       section = oneOf(sectionPart, ME_SECTIONS, CLIENT_ROUTE_DEFINITIONS.defaults.meSection) as CairnRoute["section"];
       if (section === "health") {
@@ -141,6 +147,9 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     } else if (tab === "progress") {
       const section = oneOf(r.section, PROGRESS_SECTIONS, null);
       if (section) path += `/${section}`;
+    } else if (tab === "stand") {
+      const section = oneOf(r.section, STAND_SECTIONS, null);
+      if (section) path += `/${section}`;
     } else if (tab === "me") {
       const section = oneOf(r.section, ME_SECTIONS, null);
       if (section) path += `/${section}`;
@@ -169,6 +178,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     validTabs: [...CLIENT_ROUTE_DEFINITIONS.tabs],
     planSections: [...CLIENT_ROUTE_DEFINITIONS.sections.plan],
     progressSections: [...CLIENT_ROUTE_DEFINITIONS.sections.progress],
+    standSections: [...CLIENT_ROUTE_DEFINITIONS.sections.stand],
     meSections: [...CLIENT_ROUTE_DEFINITIONS.sections.me],
     healthSections: [...CLIENT_ROUTE_DEFINITIONS.sections.health],
     settingsSections: [...CLIENT_ROUTE_DEFINITIONS.sections.settings],

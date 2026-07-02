@@ -9,6 +9,7 @@ import type {
   ClientProgressSection,
   ClientSessionSuggestion,
   ClientSettingsSection,
+  ClientStandSection,
   ClientTabName,
 } from "./client.js";
 
@@ -29,6 +30,7 @@ export type ClientAppState = {
   planJump?: ClientPlanSection | null;
   progressSeg?: ClientProgressSection;
   progressEx?: string;
+  standSeg?: ClientStandSection | null;
   meSeg?: ClientMeSection;
   healthSeg?: ClientHealthSection;
   healthSegPicked?: boolean;

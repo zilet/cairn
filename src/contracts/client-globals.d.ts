@@ -14,6 +14,7 @@ import type {
   ClientRoute,
   ClientRoutesApi,
   ClientSettingsSection as ContractClientSettingsSection,
+  ClientStandSection as ContractClientStandSection,
   ClientTabName as ContractClientTabName,
   ClientPrescription,
   ClientTodayAgenda,
@@ -53,6 +54,7 @@ declare global {
   type ClientTabName = ContractClientTabName;
   type ClientPlanSection = ContractClientPlanSection;
   type ClientProgressSection = ContractClientProgressSection;
+  type ClientStandSection = ContractClientStandSection;
   type ClientMeSection = ContractClientMeSection;
   type ClientHealthSection = ContractClientHealthSection;
   type ClientSettingsSection = ContractClientSettingsSection;
@@ -833,7 +835,7 @@ declare global {
   type ClientHealthStandingControllerDeps = {
     root: ParentNode;
     document: Document;
-    state: Pick<ClientAppState, "healthStandingRef" | "meSeg" | "healthSeg" | "healthSegPicked" | "pendingHealthScroll">;
+    state: Pick<ClientAppState, "healthStandingRef" | "standSeg" | "pendingHealthScroll">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     swrInvalidate(keyOrPrefix: string): void;
     toast(message: string): void;
@@ -845,7 +847,7 @@ declare global {
   };
 
   type ClientHealthRecordsControllerDeps = {
-    state: Pick<ClientAppState, "tab" | "meSeg" | "healthSeg" | "pendingHealthDocId">;
+    state: Pick<ClientAppState, "tab" | "standSeg" | "pendingHealthDocId">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     toast(message: string): void;
     armDelete(btn: Element, onConfirm: () => unknown, options?: { label?: string }): void;
@@ -882,8 +884,7 @@ declare global {
   type ClientHealthDocActionsControllerDeps = {
     state: {
       tab?: string;
-      meSeg?: string;
-      healthSeg?: string;
+      standSeg?: string | null;
     };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     toast(message: string): void;
@@ -991,6 +992,7 @@ declare global {
         routeApi?: ClientRoutesApi | null;
         planSections: ReadonlyArray<string | readonly [string, unknown]>;
         progressSections: ReadonlyArray<string | readonly [string, unknown]>;
+        standSections: ReadonlyArray<string | readonly [string, unknown]>;
         meSections: ReadonlyArray<string | readonly [string, unknown]>;
         healthSections: ReadonlyArray<string | readonly [string, unknown]>;
         settingsSections: ReadonlyArray<string | readonly [string, unknown]>;
@@ -1000,6 +1002,7 @@ declare global {
       state: ClientAppState;
       planSections: ReadonlyArray<string | readonly [string, unknown]>;
       progressSections: ReadonlyArray<string | readonly [string, unknown]>;
+      standSections: ReadonlyArray<string | readonly [string, unknown]>;
       meSections: ReadonlyArray<string | readonly [string, unknown]>;
       healthSections: ReadonlyArray<string | readonly [string, unknown]>;
       settingsSections: ReadonlyArray<string | readonly [string, unknown]>;

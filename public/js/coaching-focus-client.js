@@ -115,6 +115,7 @@ function cfocusDomainRoute(domain) {
             activateTab("plan");
             return;
         case "health":
+            state.standSeg = null;
             activateTab("stand");
             return;
         case "training":
@@ -130,6 +131,7 @@ function cfocusRoute(go) {
     switch (String(go || "")) {
         case "stand":
         case "me-standing":
+            state.standSeg = null;
             activateTab("stand");
             break;
         case "endurance":
@@ -141,6 +143,7 @@ function cfocusRoute(go) {
             activateTab("plan");
             break;
         case "markers":
+            state.standSeg = "markers";
             activateTab("stand");
             break;
         default:

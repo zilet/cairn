@@ -206,10 +206,9 @@ test("health standing controller paints the review and preserves the Health Read
   assert.equal(apiCalls[0], "/health/standing?reference_age=40");
 
   jump.click();
-  assert.equal(deps.state.meSeg, "health");
-  assert.equal(deps.state.healthSeg, "read");
-  assert.equal(deps.state.healthSegPicked, true);
-  assert.deepEqual(activated, ["me"]);
+  // The whole-picture read lives on the Stand overview now.
+  assert.equal(deps.state.standSeg, null);
+  assert.deepEqual(activated, ["stand"]);
 });
 
 test("health standing controller wires reference age, marker lever, BP open, and DEXA slot", () => {
@@ -240,8 +239,9 @@ test("health standing controller wires reference age, marker lever, BP open, and
   assert.equal(deps.state.healthStandingRef, 30);
   assert.equal(apiCalls[0], "/health/standing?reference_age=30");
   lever.click();
-  assert.equal(deps.state.healthSeg, "markers");
-  assert.deepEqual(activated, ["me"]);
+  // The marker catalog is a Stand sub-view now.
+  assert.equal(deps.state.standSeg, "markers");
+  assert.deepEqual(activated, ["stand"]);
   bp.click();
   assert.ok(deps.document.getElementById("bpSheetOv"));
 });

@@ -64,7 +64,8 @@ async function loadHealthDocs(deps) {
         }
         catch { }
     }
-    if (deps.state.tab !== "me" || deps.state.meSeg !== "health" || !wrap.isConnected)
+    // Records is hosted by the Stand tab; bail if the athlete navigated away mid-fetch.
+    if (deps.state.tab !== "stand" || deps.state.standSeg !== "records" || !wrap.isConnected)
         return docs || [];
     if (!docs || !docs.length) {
         wrap.innerHTML = CairnHealthRecords.recordsEmptyHtml();

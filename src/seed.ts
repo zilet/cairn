@@ -116,13 +116,13 @@ export function seed() {
   }
 
   // Example starter profile — clearly a placeholder. Replace it with your own
-  // numbers in the Me tab (or during first-run onboarding). A lean-safe goal
+  // numbers in your Profile (or during first-run onboarding). A lean-safe goal
   // (~0.8 lb/wk) so the goal check and Energy Balance views have something real
   // to render out of the box.
   const goalDate = new Date(Date.now() + 84 * 864e5).toISOString().slice(0, 10);
   db.prepare(
     `INSERT OR REPLACE INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, updated_at)
-     VALUES (1, 'male', 35, 178.0, 185, 175, ?, 1.5, 'Example profile — edit this in the Me tab to match you.', datetime('now'))`
+     VALUES (1, 'male', 35, 178.0, 185, 175, ?, 1.5, 'Example profile — edit this in your Profile (Settings → You) to match you.', datetime('now'))`
   ).run(goalDate);
 }
 

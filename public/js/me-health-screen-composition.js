@@ -2,13 +2,18 @@
 // @ts-check
 // Me + Health screen composition: section routing, dependency assembly, and
 // controller delegation for the classic-script PWA surface.
-const ME_HEALTH_SCREEN_SEGMENTS = [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"], ["life", "Life"], ["family", "Family"], ["memory", "Memory"]];
+// Me is the about-you home (reached from Settings → You). Standing and Health
+// retired to the Stand tab — their handlers below only redirect stale callers.
+const ME_HEALTH_SCREEN_SEGMENTS = [["profile", "Profile"], ["life", "Life"], ["family", "Family"], ["memory", "Memory"]];
 function createMeHealthScreenComposition(input) {
+    const goStand = () => {
+        globalThis.activateTab?.("stand");
+    };
     const handlers = {
-        standing: () => screen.renderMeStanding(),
+        standing: () => goStand(),
         profile: () => screen.renderMeProfile(),
         memory: () => screen.renderMemory(),
-        health: () => screen.renderHealth(),
+        health: () => goStand(),
         life: () => input.renderLife(),
         family: () => input.renderFamily(),
     };
@@ -156,13 +161,18 @@ function createMeHealthScreenComposition(input) {
         },
         renderMe: () => {
             input.invalidatePoll();
-            // Standing + Health moved to the Stand tab; Me is now the about-you home,
-            // reached from Settings → You, so it opens to Profile by default.
-            if (!input.state.meSeg)
+            // Standing + Health live on the Stand tab; a stale meSeg pointing there
+            // redirects. Me is the about-you home (Settings → You), Profile-first.
+            if (!input.state.meSeg || input.state.meSeg === "standing" || input.state.meSeg === "health") {
+                if (input.state.meSeg === "standing" || input.state.meSeg === "health") {
+                    goStand();
+                    return undefined;
+                }
                 input.state.meSeg = "profile";
+            }
             // Reached contextually (Me isn't a bar tab), so the header names the actual
-            // view — "Health"/"Profile"/… — not a generic "Me".
-            const titles = { health: "Health", profile: "Profile", memory: "Memory", life: "Life", family: "Family", standing: "Standing" };
+            // view — "Profile"/"Life"/… — not a generic "Me".
+            const titles = { profile: "Profile", memory: "Memory", life: "Life", family: "Family" };
             input.headerTitle.textContent = titles[input.state.meSeg] || "Profile";
             return (handlers[input.state.meSeg] || screen.renderMeProfile)();
         },

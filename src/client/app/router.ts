@@ -14,6 +14,7 @@ type ApplyRouteOptions = {
   routeApi?: AppRoutesApi | null;
   planSections: RouteItems;
   progressSections: RouteItems;
+  standSections: RouteItems;
   meSections: RouteItems;
   healthSections: RouteItems;
   settingsSections: RouteItems;
@@ -23,6 +24,7 @@ type CurrentRouteOptions = {
   state: ClientAppState;
   planSections: RouteItems;
   progressSections: RouteItems;
+  standSections: RouteItems;
   meSections: RouteItems;
   healthSections: RouteItems;
   settingsSections: RouteItems;
@@ -62,6 +64,16 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     return ROUTE_TABS.includes(s as ClientTabName) ? s as ClientTabName : "today";
   }
 
+  // Legacy me/standing + me/health/* deep links redirect into the Stand tab, where
+  // every health surface now lives first-class. Old bookmarks keep working.
+  const LEGACY_HEALTH_TO_STAND: Record<string, string | null> = {
+    read: null, // the overview IS the read
+    markers: "markers",
+    records: "records",
+    share: "share",
+    learned: "learned",
+  };
+
   function applyRouteState(route: AppRoute | null | undefined, options: ApplyRouteOptions): ClientTabName {
     if (!route) return "today";
     const { state } = options;
@@ -74,13 +86,24 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       state.planJump = section === "edit" ? null : section;
     } else if (tab === "progress") {
       state.progressSeg = routeKey(route.section, options.progressSections, state.progressSeg || null) as ClientProgressSection | undefined;
+    } else if (tab === "stand") {
+      state.standSeg = routeKey(route.section, options.standSections, null) as ClientStandSection | null;
+      if (state.standSeg === "records") state.pendingHealthDocId = route.id || null;
     } else if (tab === "me") {
-      state.meSeg = routeKey(route.section, options.meSections, "standing") as ClientMeSection;
-      if (state.meSeg === "health") {
-        state.healthSeg = routeKey(route.healthSection, options.healthSections, "read") as ClientHealthSection;
-        state.healthSegPicked = true;
-        state.pendingHealthDocId = route.id || null;
+      // Match the RAW section for the legacy redirects — "standing"/"health" are
+      // no longer Me seg-bar entries, so routeKey would fall back to profile.
+      const rawSection = String(route.section || "");
+      if (rawSection === "standing") {
+        state.standSeg = "age";
+        return "stand";
       }
+      if (rawSection === "health") {
+        const healthSection = routeKey(route.healthSection, options.healthSections, "read") as ClientHealthSection;
+        state.standSeg = (LEGACY_HEALTH_TO_STAND[healthSection] ?? null) as ClientStandSection | null;
+        if (state.standSeg === "records") state.pendingHealthDocId = route.id || null;
+        return "stand";
+      }
+      state.meSeg = routeKey(route.section, options.meSections, "profile") as ClientMeSection;
     } else if (tab === "settings") {
       state.setSeg = routeKey(route.section, options.settingsSections, state.setSeg || "agents") as ClientSettingsSection;
     } else if (tab === "chat") {
@@ -104,12 +127,11 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       if (section === "food" && state.logDate) route.date = state.logDate;
     } else if (tab === "progress") {
       route.section = routeKey(state.progressSeg || options.defaultProgressSection, options.progressSections, options.defaultProgressSection) as AppRoute["section"];
+    } else if (tab === "stand") {
+      route.section = routeKey(state.standSeg, options.standSections, null) as AppRoute["section"];
+      if (route.section === "records" && state.pendingHealthDocId) route.id = state.pendingHealthDocId;
     } else if (tab === "me") {
-      route.section = routeKey(state.meSeg, options.meSections, "standing") as AppRoute["section"];
-      if (route.section === "health") {
-        route.healthSection = routeKey(state.healthSeg, options.healthSections, "read") as AppRoute["healthSection"];
-        if (state.pendingHealthDocId) route.id = state.pendingHealthDocId;
-      }
+      route.section = routeKey(state.meSeg, options.meSections, "profile") as AppRoute["section"];
     } else if (tab === "settings") {
       route.section = routeKey(state.setSeg, options.settingsSections, "agents") as AppRoute["section"];
     } else if (tab === "chat" && state.pendingChatSession) {

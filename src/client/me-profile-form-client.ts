@@ -122,7 +122,7 @@ type MeProfileFormContext = {
     <h1 class="lbl" style="margin:24px 0 8px">Profile</h1>
     <div id="profFields">
     <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">Stamped on the doctor report you export from Health → Share. Leave empty to fill it in on paper instead.</p>
+      <p class="aboutme-hint">Stamped on the doctor report you export from Stand → Share with your doctor. Leave empty to fill it in on paper instead.</p>
       <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${deps.escapeAttr(profile.name || "")}" class="form-input"></div>
     ${n("age", "Age", profile.age)}
     ${n("height_cm", "Height (cm)", profile.height_cm, 0.1)}

@@ -1706,6 +1706,7 @@ function cfocusDomainRoute(domain) {
             activateTab("plan");
             return;
         case "health":
+            state.standSeg = null;
             activateTab("stand");
             return;
         case "training":
@@ -1721,6 +1722,7 @@ function cfocusRoute(go) {
     switch (String(go || "")) {
         case "stand":
         case "me-standing":
+            state.standSeg = null;
             activateTab("stand");
             break;
         case "endurance":
@@ -1732,6 +1734,7 @@ function cfocusRoute(go) {
             activateTab("plan");
             break;
         case "markers":
+            state.standSeg = "markers";
             activateTab("stand");
             break;
         default:
@@ -2658,14 +2661,14 @@ Object.assign(globalThis, {
                     return;
                 }
                 if (kind === "me-health-standing") {
+                    deps.state.standSeg = null;
                     deps.activateTab("stand");
                     return;
                 }
                 if (kind === "me-health-read") {
-                    deps.state.meSeg = "health";
-                    deps.state.healthSeg = "read";
-                    deps.state.healthSegPicked = true;
-                    deps.activateTab("me");
+                    // The whole-picture read lives on the Stand overview now.
+                    deps.state.standSeg = null;
+                    deps.activateTab("stand");
                     return;
                 }
                 if (kind.startsWith("tab:"))
@@ -6278,10 +6281,9 @@ if (typeof window !== "undefined") {
         if (!wrap.innerHTML)
             return;
         wrap.querySelector("#ctxHealthGo")?.addEventListener("click", () => {
-            deps.state.meSeg = "health";
-            deps.state.healthSeg = "read";
-            deps.state.healthSegPicked = true;
-            deps.activateTab("me");
+            // The whole-picture read lives on the Stand overview now.
+            deps.state.standSeg = null;
+            deps.activateTab("stand");
         });
     }
     const CAIRN_TODAY_SIDE_LOADERS = {

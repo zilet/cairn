@@ -101,14 +101,14 @@
                     return;
                 }
                 if (kind === "me-health-standing") {
+                    deps.state.standSeg = null;
                     deps.activateTab("stand");
                     return;
                 }
                 if (kind === "me-health-read") {
-                    deps.state.meSeg = "health";
-                    deps.state.healthSeg = "read";
-                    deps.state.healthSegPicked = true;
-                    deps.activateTab("me");
+                    // The whole-picture read lives on the Stand overview now.
+                    deps.state.standSeg = null;
+                    deps.activateTab("stand");
                     return;
                 }
                 if (kind.startsWith("tab:"))

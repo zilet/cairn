@@ -3578,6 +3578,10 @@ button.hmk-row:active{background:var(--card-2)}
 /* Your Read — the health synthesis as tap-to-expand focus-zones, never a scroll. */
 .stand-read{margin:4px 0 20px}
 .stand-read-k{display:block;color:var(--muted);margin-bottom:6px}
+.stand-read-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.stand-read-top .stand-read-k{margin-bottom:6px}
+.stand-read-refresh{flex:0 0 auto;font-size:.72rem;letter-spacing:.02em;display:inline-flex;align-items:center;gap:5px}
+.stand-read-gen{margin-top:2px}
 .stand-read-lede{font-family:var(--font-display);font-weight:460;font-variation-settings:"opsz" 48;
   font-size:1.2rem;line-height:1.32;color:var(--ink);margin:0 0 15px;text-wrap:balance;max-width:60ch}
 .stand-zones{display:flex;flex-direction:column;gap:10px}

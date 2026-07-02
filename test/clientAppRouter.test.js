@@ -20,7 +20,8 @@ const deps = {
   routeApi: { planSections: ["edit", "food", "meals", "coach"] },
   planSections: [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]],
   progressSections: [["sessions", "History"], ["program", "Program"], ["energy", "Energy"]],
-  meSections: [["standing", "Standing"], ["health", "Health"]],
+  standSections: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
+  meSections: [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"]],
   healthSections: [["read", "Read"], ["records", "Records"], ["markers", "Markers"]],
   settingsSections: [["agents", "Agents"], ["data", "Data"]],
 };
@@ -55,28 +56,54 @@ test("app router applies canonical route state without rendering", () => {
   );
   assert.equal(state.progressSeg, "energy");
 
+  // Stand sub-views are first-class routes.
+  assert.equal(
+    router.applyRouteState({ tab: "stand", section: "records", id: "7" }, { state, ...deps }),
+    "stand",
+  );
+  assert.equal(state.standSeg, "records");
+  assert.equal(state.pendingHealthDocId, "7");
+
+  // Legacy me/health deep links redirect into the Stand tab (health home).
   assert.equal(
     router.applyRouteState({ tab: "me", section: "health", healthSection: "records", id: "42" }, { state, ...deps }),
+    "stand",
+  );
+  assert.equal(state.standSeg, "records");
+  assert.equal(state.pendingHealthDocId, "42");
+
+  assert.equal(
+    router.applyRouteState({ tab: "me", section: "health", healthSection: "read" }, { state, ...deps }),
+    "stand",
+  );
+  assert.equal(state.standSeg, null);
+
+  // Legacy me/standing lands on the hosted bio-age read.
+  assert.equal(
+    router.applyRouteState({ tab: "me", section: "standing" }, { state, ...deps }),
+    "stand",
+  );
+  assert.equal(state.standSeg, "age");
+
+  // Me stays the about-you home.
+  assert.equal(
+    router.applyRouteState({ tab: "me", section: "profile" }, { state, ...deps }),
     "me",
   );
-  assert.equal(state.meSeg, "health");
-  assert.equal(state.healthSeg, "records");
-  assert.equal(state.healthSegPicked, true);
-  assert.equal(state.pendingHealthDocId, "42");
+  assert.equal(state.meSeg, "profile");
 });
 
 test("app router derives current route state from app state", () => {
   const router = loadRouter();
   const route = router.currentRouteState({
     state: {
-      tab: "me",
+      tab: "stand",
       day: null,
       dayPicked: false,
       plan: [],
       today: {},
       logDate: "2026-06-29",
-      meSeg: "health",
-      healthSeg: "markers",
+      standSeg: "records",
       pendingHealthDocId: "99",
     },
     ...deps,
@@ -84,11 +111,26 @@ test("app router derives current route state from app state", () => {
   });
 
   assert.deepEqual(plain(route), {
-    tab: "me",
-    section: "health",
-    healthSection: "markers",
+    tab: "stand",
+    section: "records",
     id: "99",
   });
+
+  const meRoute = router.currentRouteState({
+    state: {
+      tab: "me",
+      day: null,
+      dayPicked: false,
+      plan: [],
+      today: {},
+      logDate: "2026-06-29",
+      meSeg: "profile",
+    },
+    ...deps,
+    defaultProgressSection: "sessions",
+  });
+
+  assert.deepEqual(plain(meRoute), { tab: "me", section: "profile" });
 });
 
 test("app router syncs canonical URLs through push and replace history", () => {

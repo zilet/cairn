@@ -15,12 +15,17 @@ type RouteSyncMode = "push" | "replace";
       : null;
   }
 
+  function routeSyncStandSections(): ReadonlyArray<RouteSyncItem> {
+    return routeSyncApi()?.standSections || [];
+  }
+
   function routeSyncApply(route: RouteSyncRoute | null | undefined): ClientTabName {
     return window.CairnAppRouter.applyRouteState(route, {
       state,
       routeApi: routeSyncApi(),
       planSections: planSeg(),
       progressSections: PROGRESS_SEG,
+      standSections: routeSyncStandSections(),
       meSections: ME_SEG,
       healthSections: HEALTH_SEG,
       settingsSections: SET_SEG,
@@ -32,6 +37,7 @@ type RouteSyncMode = "push" | "replace";
       state,
       planSections: planSeg(),
       progressSections: PROGRESS_SEG,
+      standSections: routeSyncStandSections(),
       meSections: ME_SEG,
       healthSections: HEALTH_SEG,
       settingsSections: SET_SEG,

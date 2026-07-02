@@ -277,9 +277,9 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "markers": [ { "name": "Ferritin", "value": 45, "unit": "ng/mL", "flag": "low|high|normal|null" } ] }`,
     guidance: [
       `log_health records lab/bloodwork/DEXA/ECG results the user reports in chat — transcribe EVERY marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short plain-language summary.`,
-      `Do NOT curate to "the interesting ones": an in-range/normal/boring marker (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands straight in their Health records (Me → Health) and feeds the marker trends. Never invent a value.`,
+      `Do NOT curate to "the interesting ones": an in-range/normal/boring marker (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands straight in their health Records (Stand → Records) and feeds the marker trends. Never invent a value.`,
       `Preserve source units exactly as reported; do not convert US/SI/EU units yourself. Informational, not medical advice.`,
-      `NOTE: for a big pasted panel (dozens of markers), the Health tab's "paste results" box is the more reliable, complete path — you may mention it in passing.`,
+      `NOTE: for a big pasted panel (dozens of markers), the paste box on Stand → Records is the more reliable, complete path — you may mention it in passing.`,
     ],
   },
   add_context_event: {

@@ -157,10 +157,9 @@
         if (!wrap.innerHTML)
             return;
         wrap.querySelector("#ctxHealthGo")?.addEventListener("click", () => {
-            deps.state.meSeg = "health";
-            deps.state.healthSeg = "read";
-            deps.state.healthSegPicked = true;
-            deps.activateTab("me");
+            // The whole-picture read lives on the Stand overview now.
+            deps.state.standSeg = null;
+            deps.activateTab("stand");
         });
     }
     const CAIRN_TODAY_SIDE_LOADERS = {

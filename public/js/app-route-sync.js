@@ -9,12 +9,16 @@
             ? window.CairnRoutes
             : null;
     }
+    function routeSyncStandSections() {
+        return routeSyncApi()?.standSections || [];
+    }
     function routeSyncApply(route) {
         return window.CairnAppRouter.applyRouteState(route, {
             state,
             routeApi: routeSyncApi(),
             planSections: planSeg(),
             progressSections: PROGRESS_SEG,
+            standSections: routeSyncStandSections(),
             meSections: ME_SEG,
             healthSections: HEALTH_SEG,
             settingsSections: SET_SEG,
@@ -25,6 +29,7 @@
             state,
             planSections: planSeg(),
             progressSections: PROGRESS_SEG,
+            standSections: routeSyncStandSections(),
             meSections: ME_SEG,
             healthSections: HEALTH_SEG,
             settingsSections: SET_SEG,

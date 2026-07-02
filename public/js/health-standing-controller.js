@@ -27,10 +27,8 @@
             load(deps, deps.pollToken(), deps.state.healthStandingRef);
         }));
         wrap.querySelector("[data-lever-go]")?.addEventListener("click", () => {
-            deps.state.meSeg = "health";
-            deps.state.healthSeg = "markers";
-            deps.state.healthSegPicked = true;
-            deps.activateTab("me");
+            deps.state.standSeg = "markers";
+            deps.activateTab("stand");
         });
         select(deps, "#bpLogOpen")?.addEventListener("click", () => openBpSheet(deps));
         void deps.loadDexaTargeting?.("hDexaSlot");
@@ -145,13 +143,13 @@
         load(deps, deps.pollToken(), deps.state.healthStandingRef || 20);
         select(deps, "#hStandingToRead")?.addEventListener("click", () => openRead(deps));
     }
+    // The whole-picture read lives on the Stand overview now; a directives scroll
+    // request lands on the Connections sub-view where they're managed.
     function openRead(deps, opts = {}) {
-        deps.state.meSeg = "health";
-        deps.state.healthSeg = "read";
-        deps.state.healthSegPicked = true;
+        deps.state.standSeg = opts.scroll === "hbDirectives" ? "connections" : null;
         if (opts.scroll)
             deps.state.pendingHealthScroll = opts.scroll;
-        deps.activateTab("me");
+        deps.activateTab("stand");
     }
     const CAIRN_HEALTH_STANDING_CONTROLLER = {
         load,

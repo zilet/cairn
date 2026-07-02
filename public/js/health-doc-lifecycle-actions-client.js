@@ -36,7 +36,7 @@ function pollLifecycleHealthDoc(id, deps) {
         interval: 4000,
         onUpdate: (row) => {
             const doc = hdocLifecycleRecord(row);
-            if (deps.state.meSeg !== "health" || deps.state.healthSeg !== "records")
+            if (deps.state.standSeg !== "records")
                 return;
             const el = hdocLifecycleRow(doc.id);
             if (el) {

@@ -862,8 +862,16 @@ test("PWA route literals stay aligned across parser, types, and segment registri
   assertSameMembers(segmentKeys(uiSegments, "UI_PROGRESS_SEGMENTS"), progress, "Progress segments must cover every progress route section");
   assert.match(uiSegments, /routedToEndurance\s*=\s*deps\.state\.planSeg\s*===\s*"endurance"\s*\|\|\s*deps\.state\.planJump\s*===\s*"endurance"/);
   assert.match(uiShell, /const PROGRESS_SEG: readonly UiSegment\[\] = uiSegmentsApi\(\)\.PROGRESS_SEG/);
-  assertSameMembers(segmentKeys(meHealthComposition, "ME_HEALTH_SCREEN_SEGMENTS"), me, "Me segments must cover every Me route section");
+  // Me is the about-you home: standing/health stay parseable route sections (old
+  // deep links redirect to the Stand tab) but are no longer Me seg-bar entries.
+  const meBar = me.filter((section) => section !== "standing" && section !== "health");
+  assertSameMembers(segmentKeys(meHealthComposition, "ME_HEALTH_SCREEN_SEGMENTS"), meBar, "Me segments must cover every about-you Me route section");
   assertSameMembers(objectKeys(meHealthComposition, "handlers"), me, "Me handlers must cover every Me route section");
+  // Every Stand route section must be dispatched by the Stand screen.
+  const standScreen = read("src/client/stand-screen.ts");
+  for (const section of CLIENT_ROUTE_DEFINITIONS.sections.stand) {
+    assert.match(standScreen, new RegExp(`"${section}"`), `stand-screen must handle the "${section}" route section`);
+  }
   assertSameMembers(segmentKeys(meHealthTabs, "HEALTH_SEG"), health, "Health segments must cover every Health route section");
   assert.match(meHealth, /const HEALTH_SEG = ME_HEALTH_SCREEN\.HEALTH_SEG/);
   const settingsSegments = segmentKeys(settingsScreen, "SET_SEG");

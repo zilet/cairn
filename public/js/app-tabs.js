@@ -33,8 +33,8 @@
             return segSkeleton(jump, planSeg(), 3);
         }
         if (tab === "me") {
-            const seg = state.meSeg || "standing";
-            return ME_SEG.some(([key]) => key === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("standing", ME_SEG, 2);
+            const seg = state.meSeg || "profile";
+            return ME_SEG.some(([key]) => key === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
         }
         if (tab === "settings")
             return skelLines(2) + skelLines(3);

@@ -46,7 +46,7 @@ function pollLifecycleHealthDoc(id: string | number, deps: ClientHealthDocAction
     interval: 4000,
     onUpdate: (row) => {
       const doc = hdocLifecycleRecord(row) as HealthDocLifecycleDocument;
-      if (deps.state.meSeg !== "health" || deps.state.healthSeg !== "records") return;
+      if (deps.state.standSeg !== "records") return;
       const el = hdocLifecycleRow(doc.id);
       if (el) {
         el.innerHTML = CairnHealthDocs.healthDocInner(doc);

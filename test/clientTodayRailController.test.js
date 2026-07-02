@@ -269,13 +269,12 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     ["chat", "Explain this"],
     ["tab", "plan"],
     ["tab", "stand"],
-    ["tab", "me"],
+    ["tab", "stand"],
     ["tab", "progress"],
     ["collapse", card],
   ]);
   assert.equal(deps.state.planJump, "coach");
-  assert.equal(deps.state.meSeg, "health");
-  assert.equal(deps.state.healthSeg, "read");
-  assert.equal(deps.state.healthSegPicked, true);
+  // The whole-picture read lives on the Stand overview now.
+  assert.equal(deps.state.standSeg, null);
   assert.equal(card.removed, true);
 });

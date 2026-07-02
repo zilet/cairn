@@ -6,6 +6,7 @@ import type {
   ClientRouteDefinitions,
   ClientRouteSection,
   ClientSettingsSection,
+  ClientStandSection,
   ClientTabName,
 } from "./client-routes.js";
 
@@ -28,6 +29,7 @@ export interface ClientRoutesApi {
   validTabs: readonly ClientTabName[];
   planSections: readonly ClientPlanSection[];
   progressSections: readonly ClientProgressSection[];
+  standSections: readonly ClientStandSection[];
   meSections: readonly ClientMeSection[];
   healthSections: readonly ClientHealthSection[];
   settingsSections: readonly ClientSettingsSection[];

@@ -1378,6 +1378,9 @@ if (typeof window !== "undefined") {
         sections: {
             plan: ["edit", "endurance", "food", "meals", "coach"],
             progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
+            // Stand is the health home: every health tool is a first-class Stand sub-view.
+            // "me" health sections survive only as parse targets that redirect into Stand.
+            stand: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
             me: ["standing", "profile", "memory", "health", "life", "family"],
             health: ["read", "markers", "records", "share", "learned"],
             settings: ["you", "agents", "sources", "automation", "data"],
@@ -1387,6 +1390,7 @@ if (typeof window !== "undefined") {
     const VALID_TABS = new Set(CLIENT_ROUTE_DEFINITIONS.tabs);
     const PLAN_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.plan);
     const PROGRESS_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.progress);
+    const STAND_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.stand);
     const ME_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.me);
     const HEALTH_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.health);
     const SETTINGS_SECTIONS = new Set(CLIENT_ROUTE_DEFINITIONS.sections.settings);
@@ -1451,6 +1455,9 @@ if (typeof window !== "undefined") {
         else if (tab === "progress") {
             section = oneOf(sectionPart, PROGRESS_SECTIONS, null);
         }
+        else if (tab === "stand") {
+            section = oneOf(sectionPart, STAND_SECTIONS, null);
+        }
         else if (tab === "me") {
             section = oneOf(sectionPart, ME_SECTIONS, CLIENT_ROUTE_DEFINITIONS.defaults.meSection);
             if (section === "health") {
@@ -1485,6 +1492,11 @@ if (typeof window !== "undefined") {
             if (section)
                 path += `/${section}`;
         }
+        else if (tab === "stand") {
+            const section = oneOf(r.section, STAND_SECTIONS, null);
+            if (section)
+                path += `/${section}`;
+        }
         else if (tab === "me") {
             const section = oneOf(r.section, ME_SECTIONS, null);
             if (section)
@@ -1514,6 +1526,7 @@ if (typeof window !== "undefined") {
         validTabs: [...CLIENT_ROUTE_DEFINITIONS.tabs],
         planSections: [...CLIENT_ROUTE_DEFINITIONS.sections.plan],
         progressSections: [...CLIENT_ROUTE_DEFINITIONS.sections.progress],
+        standSections: [...CLIENT_ROUTE_DEFINITIONS.sections.stand],
         meSections: [...CLIENT_ROUTE_DEFINITIONS.sections.me],
         healthSections: [...CLIENT_ROUTE_DEFINITIONS.sections.health],
         settingsSections: [...CLIENT_ROUTE_DEFINITIONS.sections.settings],
@@ -1541,6 +1554,15 @@ if (typeof window !== "undefined") {
         const s = String(tab || "");
         return ROUTE_TABS.includes(s) ? s : "today";
     }
+    // Legacy me/standing + me/health/* deep links redirect into the Stand tab, where
+    // every health surface now lives first-class. Old bookmarks keep working.
+    const LEGACY_HEALTH_TO_STAND = {
+        read: null, // the overview IS the read
+        markers: "markers",
+        records: "records",
+        share: "share",
+        learned: "learned",
+    };
     function applyRouteState(route, options) {
         if (!route)
             return "today";
@@ -1556,13 +1578,27 @@ if (typeof window !== "undefined") {
         else if (tab === "progress") {
             state.progressSeg = routeKey(route.section, options.progressSections, state.progressSeg || null);
         }
-        else if (tab === "me") {
-            state.meSeg = routeKey(route.section, options.meSections, "standing");
-            if (state.meSeg === "health") {
-                state.healthSeg = routeKey(route.healthSection, options.healthSections, "read");
-                state.healthSegPicked = true;
+        else if (tab === "stand") {
+            state.standSeg = routeKey(route.section, options.standSections, null);
+            if (state.standSeg === "records")
                 state.pendingHealthDocId = route.id || null;
+        }
+        else if (tab === "me") {
+            // Match the RAW section for the legacy redirects — "standing"/"health" are
+            // no longer Me seg-bar entries, so routeKey would fall back to profile.
+            const rawSection = String(route.section || "");
+            if (rawSection === "standing") {
+                state.standSeg = "age";
+                return "stand";
             }
+            if (rawSection === "health") {
+                const healthSection = routeKey(route.healthSection, options.healthSections, "read");
+                state.standSeg = (LEGACY_HEALTH_TO_STAND[healthSection] ?? null);
+                if (state.standSeg === "records")
+                    state.pendingHealthDocId = route.id || null;
+                return "stand";
+            }
+            state.meSeg = routeKey(route.section, options.meSections, "profile");
         }
         else if (tab === "settings") {
             state.setSeg = routeKey(route.section, options.settingsSections, state.setSeg || "agents");
@@ -1593,13 +1629,13 @@ if (typeof window !== "undefined") {
         else if (tab === "progress") {
             route.section = routeKey(state.progressSeg || options.defaultProgressSection, options.progressSections, options.defaultProgressSection);
         }
+        else if (tab === "stand") {
+            route.section = routeKey(state.standSeg, options.standSections, null);
+            if (route.section === "records" && state.pendingHealthDocId)
+                route.id = state.pendingHealthDocId;
+        }
         else if (tab === "me") {
-            route.section = routeKey(state.meSeg, options.meSections, "standing");
-            if (route.section === "health") {
-                route.healthSection = routeKey(state.healthSeg, options.healthSections, "read");
-                if (state.pendingHealthDocId)
-                    route.id = state.pendingHealthDocId;
-            }
+            route.section = routeKey(state.meSeg, options.meSections, "profile");
         }
         else if (tab === "settings") {
             route.section = routeKey(state.setSeg, options.settingsSections, "agents");
@@ -1645,12 +1681,16 @@ if (typeof window !== "undefined") {
             ? window.CairnRoutes
             : null;
     }
+    function routeSyncStandSections() {
+        return routeSyncApi()?.standSections || [];
+    }
     function routeSyncApply(route) {
         return window.CairnAppRouter.applyRouteState(route, {
             state,
             routeApi: routeSyncApi(),
             planSections: planSeg(),
             progressSections: PROGRESS_SEG,
+            standSections: routeSyncStandSections(),
             meSections: ME_SEG,
             healthSections: HEALTH_SEG,
             settingsSections: SET_SEG,
@@ -1661,6 +1701,7 @@ if (typeof window !== "undefined") {
             state,
             planSections: planSeg(),
             progressSections: PROGRESS_SEG,
+            standSections: routeSyncStandSections(),
             meSections: ME_SEG,
             healthSections: HEALTH_SEG,
             settingsSections: SET_SEG,
@@ -1768,8 +1809,8 @@ if (typeof window !== "undefined") {
             return segSkeleton(jump, planSeg(), 3);
         }
         if (tab === "me") {
-            const seg = state.meSeg || "standing";
-            return ME_SEG.some(([key]) => key === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("standing", ME_SEG, 2);
+            const seg = state.meSeg || "profile";
+            return ME_SEG.some(([key]) => key === seg) ? segSkeleton(seg, ME_SEG, 2) : segSkeleton("profile", ME_SEG, 2);
         }
         if (tab === "settings")
             return skelLines(2) + skelLines(3);

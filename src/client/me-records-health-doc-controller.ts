@@ -6,8 +6,7 @@ type HealthDocument = import("../contracts/client-api.js").ClientHealthDocument;
 
 type HealthRecordsState = {
   tab?: string;
-  meSeg?: string;
-  healthSeg?: string;
+  standSeg?: string | null;
   pendingHealthDocId?: string | number | null;
 };
 
@@ -107,7 +106,8 @@ async function loadHealthDocs(deps: HealthRecordsControllerDeps): Promise<Health
       localStorage.setItem("cairn:healthDocCount", String(docs.length));
     } catch {}
   }
-  if (deps.state.tab !== "me" || deps.state.meSeg !== "health" || !wrap.isConnected) return docs || [];
+  // Records is hosted by the Stand tab; bail if the athlete navigated away mid-fetch.
+  if (deps.state.tab !== "stand" || deps.state.standSeg !== "records" || !wrap.isConnected) return docs || [];
   if (!docs || !docs.length) {
     wrap.innerHTML = CairnHealthRecords.recordsEmptyHtml();
     return [];

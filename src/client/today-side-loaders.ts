@@ -31,8 +31,7 @@ type TodaySideLoaderState = {
   logDate: string;
   planJump?: string | null;
   meSeg?: string | null;
-  healthSeg?: string | null;
-  healthSegPicked?: boolean;
+  standSeg?: string | null;
 };
 
 type TodaySideLoaderDeps = {
@@ -165,10 +164,9 @@ type TodaySideLoaderDeps = {
     wrap.innerHTML = CairnTodayContext.healthFocusBannerHtml(data);
     if (!wrap.innerHTML) return;
     wrap.querySelector("#ctxHealthGo")?.addEventListener("click", () => {
-      deps.state.meSeg = "health";
-      deps.state.healthSeg = "read";
-      deps.state.healthSegPicked = true;
-      deps.activateTab("me");
+      // The whole-picture read lives on the Stand overview now.
+      deps.state.standSeg = null;
+      deps.activateTab("stand");
     });
   }
 

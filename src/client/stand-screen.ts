@@ -20,9 +20,11 @@ type StandData = {
   focus: Record<string, unknown> | null;
   body: Record<string, unknown> | null;
   synthesis: StandSynthesis | null;
+  synthStale: boolean;
   connections: Array<{ text?: unknown; kind?: unknown }>;
   recovery: Record<string, unknown> | null;
   supplements: Array<Record<string, unknown>>;
+  directives: Array<Record<string, unknown>>;
 };
 type StandStatus = "ok" | "watch" | "warn" | "mute";
 
@@ -47,11 +49,20 @@ const HM = () => (globalThis as unknown as { CairnHealthMarkers?: Record<string,
 const BM = () => (globalThis as unknown as { CairnBodyMetrics?: Record<string, (...a: unknown[]) => unknown> }).CairnBodyMetrics;
 
 let DATA: StandData | null = null;
+let LOADP: Promise<void> | null = null;
 // domain-detail catalog state (mirrors the Markers view): which domain is open,
 // the free-text search, and the out-of-range filter. Reset each time a domain opens.
 let curDomain: string | null = null;
 let standQuery = "";
 let standOff = false;
+
+// Every Stand sub-view is a first-class, deep-linkable route (/app/stand/<seg>).
+// state.standSeg is the single source of which view is open; setting it keeps the
+// URL in step so reload/back land where you were.
+function setStandSeg(seg: ClientStandSection | null): void {
+  state.standSeg = seg;
+  if (state.tab === "stand") syncRouteFromState();
+}
 
 function status(m: StandMarker): StandStatus {
   const s = HM()?.markerStatus?.(m) as StandStatus | undefined;
@@ -89,12 +100,28 @@ function askLink(topic: string): string {
   const q = `Tell me more about ${topic} — what should I focus on?`;
   return `<button class="linkbtn linkbtn-plain linkbtn-sm stand-ask" type="button" data-ask="${escAttr(q)}">Ask the coach<span aria-hidden="true"> →</span></button>`;
 }
+// The agentic whole-picture read is generated and refreshed right here — Stand is
+// where the read lives, so the trigger lives with it (calm: one small control).
+function readRefreshHtml(): string {
+  return DATA?.synthStale
+    ? `<button class="linkbtn linkbtn-plain linkbtn-sm stand-read-refresh" data-readrefresh type="button"><span class="hdot hdot-warn"></span>New results — refresh</button>`
+    : `<button class="linkbtn linkbtn-plain linkbtn-sm stand-read-refresh" data-readrefresh type="button">refresh</button>`;
+}
+function readGenHtml(): string {
+  if (!(DATA?.markers || []).length) return "";
+  return `<div class="stand-read reveal">
+      <span class="stand-read-k lbl">Your read</span>
+      <p class="stand-read-lede">Your labs, training, recovery and nutrition — read as one connected, prioritized picture.</p>
+      <button class="draftbtn stand-read-gen" data-readgen type="button">Read my whole picture</button>
+    </div>`;
+}
 function readHtml(): string {
   const syn = DATA?.synthesis;
   const headline = syn && typeof syn.headline === "string" ? syn.headline.trim() : "";
   const prios = (syn?.priorities || []).slice(0, 3);
-  // No synthesis yet → fall back to the conductor focus line so Stand still leads.
-  if (!headline && !prios.length) return focusHeroHtml();
+  // No synthesis yet → the conductor focus line still leads, with a quiet invite
+  // to generate the whole-picture read once there are markers to read.
+  if (!headline && !prios.length) return focusHeroHtml() + readGenHtml();
   const age = syn && typeof syn.generated_at === "string" ? ` · ${relAge(syn.generated_at)}` : "";
   const zones = prios.map((p, i) => {
     const label = String(p.label || "");
@@ -116,7 +143,7 @@ function readHtml(): string {
     .map((c) => `<div class="stand-conn"><span class="stand-conn-i" aria-hidden="true">◇</span><span>${escHtml(String(c.text))}</span></div>`)
     .join("");
   return `<div class="stand-read reveal">
-      <span class="stand-read-k lbl">Your read${age}</span>
+      <span class="stand-read-top"><span class="stand-read-k lbl">Your read${age}</span>${readRefreshHtml()}</span>
       ${headline ? `<p class="stand-read-lede">${escHtml(headline)}</p>` : ""}
       ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
       ${oc}
@@ -226,21 +253,29 @@ function supplementsTile(): string {
       <span class="stand-tile-read">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
     </button>`;
 }
-function supplementsDetailHtml(): string {
-  const list = DATA?.supplements || [];
-  const rows = list.map((s) => {
-    const name = escHtml(String(s.name || ""));
-    const meta = [s.dose, s.frequency].filter(Boolean).map((x) => escHtml(String(x))).join(" · ");
-    const rel = Array.isArray(s.related_markers) && s.related_markers.length
-      ? `<span class="stand-supp-rel">for ${escHtml((s.related_markers as unknown[]).map(String).join(", "))}</span>` : "";
-    return `<div class="stand-supp"><span class="stand-supp-n">${name}</span>${meta ? `<span class="stand-supp-m">${meta}</span>` : ""}${rel}</div>`;
-  }).join("");
-  return `<div class="stand-detail stand-root">
-      <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
-      <h2 class="stand-detail-h">Supplements</h2>
-      <p class="stand-read-lede" style="font-size:1rem">What you take — Cairn folds these into your reads (e.g. creatine nudges eGFR).</p>
-      <div class="stand-supps">${rows || `<p class="stand-empty">Nothing tracked yet.</p>`}</div>
-    </div>`;
+// ---- connections (the connected brain: active directives, managed in-place) ----
+function activeDirectives(): Array<Record<string, unknown>> {
+  return (DATA?.directives || []).filter((d) => !d.status || d.status === "active");
+}
+function connectionsTile(): string {
+  const n = activeDirectives().length;
+  if (!n && !(DATA?.markers || []).length) return "";
+  const read = n
+    ? `<b>${n}</b> shaping your plan`
+    : "nothing in effect";
+  return `<button class="stand-tile reveal" data-connections>
+      <span class="stand-tile-top"><span class="hdot hdot-${n ? "watch" : "mute"}"></span><span class="stand-tile-name">Connections</span></span>
+      <span class="stand-tile-read ${n ? "watch" : ""}">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+    </button>`;
+}
+
+// ---- age (the biological-age / percentile standing read, hosted one tap down) ---
+function ageTile(): string {
+  if (!(DATA?.markers || []).length) return "";
+  return `<button class="stand-tile reveal" data-age>
+      <span class="stand-tile-top"><span class="hdot hdot-mute"></span><span class="stand-tile-name">Age</span></span>
+      <span class="stand-tile-read">how you compare</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+    </button>`;
 }
 
 function domainTileHtml(d: StandDomain, st: StandStatus): string {
@@ -267,8 +302,12 @@ function overviewHtml(): string {
   if (b) tiles.push({ st: bodyStatus(), html: b });
   const rec = recoveryTile();
   if (rec) tiles.push({ st: recoveryStatus(), html: rec });
+  const conn = connectionsTile();
+  if (conn) tiles.push({ st: activeDirectives().length ? "watch" : "mute", html: conn });
   const supp = supplementsTile();
   if (supp) tiles.push({ st: "ok", html: supp });
+  const age = ageTile();
+  if (age) tiles.push({ st: "mute", html: age });
   for (const d of DOMAINS) {
     const markers = markersOfDomain(d);
     if (!markers.length) continue;
@@ -284,15 +323,15 @@ function overviewHtml(): string {
     </div>`;
 }
 
-// The health depth + the clinician-facing exports, reachable from Stand: the full
-// agentic read, the doctor Share (clinical order + trends, untouched), uploaded
-// Records, and the learned timeline.
+// The health depth + the clinician-facing exports are Stand's OWN sub-views now —
+// Records, the doctor Share (clinical order + trends, untouched), and the learned
+// timeline all render in place, never warping to another tab.
 // A sticky bar pinned to the top of Stand — Add labs is always one tap away
 // (never buried at the scroll bottom); the rest of the health tools sit behind a
 // quiet "⋯" menu in the same bar.
 function actionBarHtml(): string {
   return `<div class="stand-actionbar">
-      <button class="stand-addbtn" data-tool="records" type="button"><span class="stand-addbtn-p" aria-hidden="true">＋</span>Add labs or scan</button>
+      <button class="stand-addbtn" data-tool="add" type="button"><span class="stand-addbtn-p" aria-hidden="true">＋</span>Add labs or scan</button>
       <div class="stand-more">
         <button class="stand-morebtn" type="button" aria-label="More health tools" aria-expanded="false" data-morebtn>⋯</button>
         <div class="stand-moremenu" data-moremenu hidden>
@@ -303,13 +342,176 @@ function actionBarHtml(): string {
       </div>
     </div>`;
 }
-function goHealth(seg: string): void {
-  const g = globalThis as unknown as {
-    state?: { meSeg?: string; healthSeg?: string; healthSegPicked?: boolean };
-    activateTab?: (t: string) => void;
+
+// ---- hosted health tools (records / share / learned / connections / age) -------
+// These reuse the shipped controllers with Stand-shaped deps: same upload flow,
+// same doctor report, same directive flips — rendered inside Stand's shell.
+function toolShellHtml(title: string, mounts: string, lede = ""): string {
+  return `<div class="stand-detail stand-root">
+      <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
+      <h2 class="stand-detail-h">${escHtml(title)}</h2>
+      ${lede ? `<p class="stand-read-lede" style="font-size:1rem">${escHtml(lede)}</p>` : ""}
+      ${mounts}
+    </div>`;
+}
+
+// Refresh Stand's own marker snapshot after an upload/re-analysis lands, so the
+// overview tiles are warm and current when the athlete steps back.
+async function refreshStandMarkers(): Promise<void> {
+  try {
+    const priority = await api("/markers/priority") as { markers?: StandMarker[]; groups?: StandGroup[] } | null;
+    if (DATA && priority && typeof priority === "object") {
+      DATA.markers = Array.isArray(priority.markers) ? priority.markers : DATA.markers;
+      DATA.groups = Array.isArray(priority.groups) ? priority.groups : DATA.groups;
+    }
+  } catch { /* the overview simply repaints from the last snapshot */ }
+}
+
+function pictureDeps(): ClientHealthPictureControllerDeps {
+  return {
+    root: view,
+    state,
+    api,
+    toast,
+    switchHealthSeg: (seg, opts) => { if (seg === "records") showRecords(opts || {}); else showOverview(); },
+    onHealthReadView: () => state.tab === "stand" && state.standSeg === "connections",
+    pollToken: () => pollToken,
+    escapeHtml: escHtml,
   };
-  if (g.state) { g.state.meSeg = "health"; g.state.healthSeg = seg; g.state.healthSegPicked = true; }
-  g.activateTab?.("me");
+}
+
+function recordsDeps(): ClientHealthRecordsControllerDeps {
+  return {
+    state,
+    api,
+    toast,
+    armDelete,
+    pollEnrichment,
+    enrichmentActive,
+    pollToken: () => pollToken,
+    loadHealthMarkers: () => { void refreshStandMarkers(); },
+    paintHealthPicture: () => CairnHealthPictureController.paintHealthPicture(pictureDeps()),
+    getHealthPictureCache: () => CairnHealthPictureController.getHealthPictureCache(),
+    setHealthPictureCache: (cache) => CairnHealthPictureController.setHealthPictureCache(cache),
+  };
+}
+
+function shareDeps(): ClientHealthShareControllerDeps {
+  return {
+    root: view,
+    api,
+    cachedApi,
+    peekCached,
+    swrInvalidate,
+    toast,
+    btnBusy,
+    downloadFile,
+    select: $,
+    stagger,
+    switchHealthSeg: (seg, opts) => { if (seg === "records") showRecords(opts || {}); else showOverview(); },
+    withToken,
+  };
+}
+
+function readDeps(): ClientHealthReadControllerDeps {
+  return {
+    root: view,
+    state,
+    api,
+    cachedApi,
+    peekCached,
+    markRefreshing,
+    swrInvalidate,
+    runOp,
+    toast,
+    pollToken: () => pollToken,
+    select: $,
+    escapeAttr: escAttr,
+    escapeHtml: escHtml,
+    relTime,
+    stagger,
+    reducedMotion,
+    switchHealthSeg: (seg) => { if (seg === "markers") showAllMarkers(); else showOverview(); },
+    isHealthReviewRunning: () => CairnHealthPictureController.isHealthReviewRunning(),
+    loadHealthPicture: (token, docsPromise) => CairnHealthPictureController.loadHealthPicture(token, docsPromise, pictureDeps()),
+    paintHealthPicture: () => CairnHealthPictureController.paintHealthPicture(pictureDeps()),
+    setReadSpy: () => {},
+    teardownReadSpy: () => {},
+  };
+}
+
+function standingDeps(): ClientHealthStandingControllerDeps {
+  return {
+    root: view,
+    document,
+    state,
+    api,
+    swrInvalidate,
+    toast,
+    activateTab,
+    pollToken: () => pollToken,
+    select: $,
+    escapeAttr: escAttr,
+    loadDexaTargeting: (slotId) => loadDexaTargeting(slotId),
+  };
+}
+
+function showRecords(opts: { openPicker?: boolean } = {}): void {
+  setStandSeg("records");
+  paint(toolShellHtml("Records", `<div id="hContent"></div>`,
+    "Lab reports, DEXA scans and other documents — everything Cairn reads your markers from."));
+  wireBack();
+  void CairnHealthRecordsController.render(recordsDeps());
+  if (opts.openPicker) view.querySelector<HTMLInputElement>("#hFile")?.click();
+}
+
+function showShare(): void {
+  setStandSeg("share");
+  paint(toolShellHtml("Share with your doctor", `<div id="hContent"></div><div id="hbSymptomLinks"></div>`));
+  wireBack();
+  CairnHealthShareController.render(shareDeps());
+  // "Worth mentioning to your doctor" belongs with the clinician-facing tools.
+  void CairnHealthReadController.loadSymptomLinks(readDeps(), pollToken);
+}
+
+function showLearned(): void {
+  setStandSeg("learned");
+  paint(toolShellHtml("Learned", `<div id="standLearned">${skelLines(4)}</div>`));
+  wireBack();
+  const token = pollToken;
+  api("/learned-timeline")
+    .then((data) => paintLearned(data, token))
+    .catch(() => paintLearned({ items: [] }, token));
+}
+function paintLearned(data: unknown, token: number): void {
+  const wrap = view.querySelector<HTMLElement>("#standLearned");
+  if (!wrap || !wrap.isConnected || token !== pollToken) return;
+  wrap.innerHTML = learnedTimelineHtml((data || { items: [] }) as Parameters<typeof learnedTimelineHtml>[0]);
+  // Curation lives in the about-you home (Settings → You → Memory).
+  wrap.querySelector<HTMLElement>("#learnedToMemory")?.addEventListener("click", () => {
+    state.meSeg = "memory";
+    activateTab("me");
+  });
+}
+
+function showConnections(): void {
+  setStandSeg("connections");
+  paint(toolShellHtml("Connections",
+    `<div id="hbDirectives"><div class="hb-load">Gathering connections…</div></div>
+     <div id="hPicture"></div>`,
+    "One brain across your whole picture: a finding in your labs quietly shapes your meals, training, and what to watch. Informational — never medical advice; nothing changes your plan on its own."));
+  wireBack();
+  void CairnHealthDirectiveLoader.load(pollToken);
+  const deps = pictureDeps();
+  if (CairnHealthPictureController.isHealthReviewRunning()) CairnHealthPictureController.paintHealthPicture(deps);
+  else void CairnHealthPictureController.loadHealthPicture(pollToken, api("/health-docs"), deps);
+}
+
+function showAge(): void {
+  setStandSeg("age");
+  paint(toolShellHtml("How you compare", `<div id="hContent"></div>`));
+  wireBack();
+  CairnHealthStandingController.paintReview(standingDeps());
 }
 
 // ---- domain detail — the Markers catalog, scoped to one domain -----------------
@@ -371,6 +573,7 @@ function domainResultsHtml(): string {
 function showDomain(key: string): void {
   curDomain = key; standQuery = ""; standOff = false;
   const all = key === "__all__";
+  setStandSeg(all ? "markers" : null);
   const d = all ? null : DOMAINS.find((x) => x.key === key);
   const markers = all ? (DATA?.markers || []) : d ? markersOfDomain(d) : [];
   const outCount = markers.filter(markerOutOfRange).length;
@@ -425,16 +628,39 @@ function paint(html: string): void {
     (globalThis as unknown as { viewEnter: () => void }).viewEnter();
   }
 }
-function showOverview(): void { paint(overviewHtml()); wireOverview(); }
+function showOverview(): void {
+  setStandSeg(null);
+  // Stepped back from a self-contained tool before the overview data landed →
+  // hold the calm loading state until the in-flight fetch resolves.
+  if (!DATA) {
+    paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
+    (LOADP || loadStandData()).then(() => {
+      if (state.tab === "stand" && !state.standSeg && DATA) { paint(overviewHtml()); wireOverview(); }
+      else if (state.tab === "stand" && !state.standSeg) paint(standErrorHtml());
+    });
+    return;
+  }
+  paint(overviewHtml());
+  wireOverview();
+}
 function showBody(): void {
+  setStandSeg("body");
   paint(bodyDetailHtml());
   wireBack();
   // Hand the mount to the self-contained body-metrics surface (log + trends).
   (BM()?.renderBodyMetrics as ((m: HTMLElement | null) => void) | undefined)?.(view.querySelector<HTMLElement>("#standBodyMetrics"));
   wireRows(view);
 }
-function showRecovery(): void { paint(recoveryDetailHtml()); wireBack(); }
-function showSupplements(): void { paint(supplementsDetailHtml()); wireBack(); }
+function showRecovery(): void { setStandSeg("recovery"); paint(recoveryDetailHtml()); wireBack(); }
+function showSupplements(): void {
+  setStandSeg("supplements");
+  // The manageable supplements card (plain-words add + remove) hosts in place of
+  // the old read-only list — say it once, Cairn folds it into your reads.
+  paint(toolShellHtml("Supplements", `<div id="hbSupplements"></div>`,
+    "What you take — Cairn folds these into your reads (e.g. creatine nudges eGFR)."));
+  wireBack();
+  CairnHealthReadSupplements.load(readDeps(), pollToken);
+}
 
 function wireOverview(): void {
   view.querySelectorAll<HTMLElement>("[data-domain]").forEach((b) =>
@@ -442,9 +668,20 @@ function wireOverview(): void {
   view.querySelector<HTMLElement>("[data-body]")?.addEventListener("click", () => showBody());
   view.querySelector<HTMLElement>("[data-recovery]")?.addEventListener("click", () => showRecovery());
   view.querySelector<HTMLElement>("[data-supps]")?.addEventListener("click", () => showSupplements());
+  view.querySelector<HTMLElement>("[data-connections]")?.addEventListener("click", () => showConnections());
+  view.querySelector<HTMLElement>("[data-age]")?.addEventListener("click", () => showAge());
   view.querySelector<HTMLElement>("[data-allmarkers]")?.addEventListener("click", () => showAllMarkers());
   view.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) =>
-    b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
+    b.addEventListener("click", () => {
+      const tool = b.dataset.tool || "";
+      if (tool === "add") showRecords({ openPicker: true });
+      else if (tool === "records") showRecords();
+      else if (tool === "share") showShare();
+      else if (tool === "learned") showLearned();
+    }));
+  // The agentic whole-picture read: generate on first run, refresh after new labs.
+  view.querySelector<HTMLElement>("[data-readrefresh]")?.addEventListener("click", () => triggerStandRead());
+  view.querySelector<HTMLElement>("[data-readgen]")?.addEventListener("click", () => triggerStandRead());
   // the "⋯ more" tools menu in the sticky action bar
   const moreBtn = view.querySelector<HTMLElement>("[data-morebtn]");
   const moreMenu = view.querySelector<HTMLElement>("[data-moremenu]");
@@ -490,39 +727,99 @@ function wireRows(wrap: ParentNode): void {
     }));
 }
 
-async function renderStand(): Promise<void> {
-  headerTitle.textContent = "Stand";
-  paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
-  try {
-    const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes] = await Promise.all([
+function standErrorHtml(): string {
+  return `<div class="stand-error loadstate"><span class="loadstate-label">Couldn't read your standing right now.</span></div>`;
+}
+
+// One fetch fills the whole overview snapshot; hosted tool views fetch their own
+// data so a deep link paints immediately while this warms behind them.
+function loadStandData(): Promise<void> {
+  const p = (async () => {
+    const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes, dirRes] = await Promise.all([
       api("/markers/priority") as unknown as Promise<{ markers?: StandMarker[]; groups?: StandGroup[] }>,
       (api("/coaching-focus") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/body-metrics?unit=in") as unknown as Promise<Record<string, unknown>>).catch(() => null),
-      (api("/health/synthesis") as unknown as Promise<{ synthesis?: StandSynthesis }>).catch(() => null),
+      (api("/health/synthesis") as unknown as Promise<{ synthesis?: StandSynthesis; stale?: unknown }>).catch(() => null),
       (api("/insights") as unknown as Promise<unknown>).catch(() => null),
       (api("/recovery") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/supplements") as unknown as Promise<unknown>).catch(() => null),
+      (api("/directives") as unknown as Promise<{ directives?: unknown[] }>).catch(() => null),
     ]);
     const insightsArr = Array.isArray(insightsRes)
       ? (insightsRes as Array<{ text?: unknown; kind?: unknown }>)
       : Array.isArray((insightsRes as { insights?: unknown } | null)?.insights)
         ? ((insightsRes as { insights: Array<{ text?: unknown; kind?: unknown }> }).insights)
         : [];
+    const syn = synthRes && typeof synthRes === "object" ? synthRes.synthesis : null;
     DATA = {
       markers: Array.isArray(priority?.markers) ? priority.markers : [],
       groups: Array.isArray(priority?.groups) ? priority.groups : [],
       focus,
       body,
-      synthesis: (synthRes && typeof synthRes === "object" ? synthRes.synthesis : null) || null,
+      synthesis: syn || null,
+      synthStale: !!(synthRes && typeof synthRes === "object" && (synthRes.stale ?? (syn as { stale?: unknown } | null)?.stale)),
       connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
       recovery: recoveryRes && typeof recoveryRes === "object" ? recoveryRes : null,
       supplements: (Array.isArray(suppRes) ? suppRes : (suppRes as { supplements?: unknown[] } | null)?.supplements || [])
         .filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && (s as { active?: unknown }).active !== 0),
+      directives: Array.isArray(dirRes?.directives)
+        ? (dirRes.directives as unknown[]).filter((d): d is Record<string, unknown> => !!d && typeof d === "object")
+        : [],
     };
-    showOverview();
+  })();
+  LOADP = p.catch(() => {});
+  return p;
+}
+
+// Regenerate the whole-picture read in place (the same background job the old
+// health Read tab ran), then repaint the overview with the fresh synthesis.
+function triggerStandRead(): void {
+  void runOp("health_synthesis", {}, {
+    path: "/health/synthesis",
+    anchor: ".stand-read",
+    caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
+    guard: () => !(state.tab === "stand" && !state.standSeg),
+    render: () => { void reloadStandRead(); },
+    onFail: () => {
+      toast("Couldn't read the picture right now — try again in a bit.");
+    },
+  });
+}
+async function reloadStandRead(): Promise<void> {
+  try {
+    const res = await api("/health/synthesis") as { synthesis?: StandSynthesis; stale?: unknown } | null;
+    if (DATA && res && typeof res === "object") {
+      DATA.synthesis = res.synthesis || DATA.synthesis;
+      DATA.synthStale = !!res.stale;
+    }
+  } catch { /* keep the last read */ }
+  if (state.tab === "stand" && !state.standSeg) showOverview();
+}
+
+async function renderStand(): Promise<void> {
+  headerTitle.textContent = "Stand";
+  const seg = state.standSeg || null;
+  const load = loadStandData();
+  // Self-contained tool views paint immediately (they fetch their own data); the
+  // overview snapshot warms behind them for the "‹ Stand" step back.
+  if (seg === "records") { showRecords(); return; }
+  if (seg === "share") { showShare(); return; }
+  if (seg === "learned") { showLearned(); return; }
+  if (seg === "connections") { showConnections(); return; }
+  if (seg === "age") { showAge(); return; }
+  if (seg === "supplements") { showSupplements(); return; }
+  paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
+  try {
+    await load;
   } catch {
-    paint(`<div class="stand-error loadstate"><span class="loadstate-label">Couldn't read your standing right now.</span></div>`);
+    paint(standErrorHtml());
+    return;
   }
+  if (state.tab !== "stand") return;
+  if (seg === "markers") { showAllMarkers(); return; }
+  if (seg === "body") { showBody(); return; }
+  if (seg === "recovery") { showRecovery(); return; }
+  showOverview();
 }
 
 const CAIRN_STAND = { renderStand };
