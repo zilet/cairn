@@ -192,6 +192,7 @@ export interface ClientPrescription {
   plan_item_id?: number;
   day_number?: number;        // the plan day this lift sits on (for the swap apply path)
   autoregulated?: boolean;    // recovery braked this step (informational)
+  rep_step?: boolean;         // double-progression rep advance (load held, reps climb in-range)
 }
 
 export interface ClientSessionSuggestionItem {
