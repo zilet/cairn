@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CLIENT_OUTPUTS } from "../scripts/build-client.mjs";
+import { BUNDLES, CLIENT_OUTPUTS } from "../scripts/build-client.mjs";
 import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
 import {
   CHAT_ACTION_PROMPT_SPECS,
@@ -26,6 +26,14 @@ import { listRoutableTasks, ROUTABLE_TASKS } from "../dist/repo/settings.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(path.join(root, p), "utf8");
+
+// The canonical browser boot order, derived from the bundle manifest — the single
+// source of truth now that index.html loads a handful of concatenated bundles
+// instead of ~216 individual <script>s. Flattening every bundle's constituents in
+// load order reproduces the exact pre-bundle <script> sequence, so load-order
+// contracts assert positions here (bootPos) rather than scanning index.html.
+const BOOT_ORDER = BUNDLES.flatMap((bundle) => bundle.inputs).map((file) => `/${file.replace(/^public\//, "")}`);
+const bootPos = (assetUrl) => BOOT_ORDER.indexOf(assetUrl);
 
 function stringMatches(src, re) {
   return [...src.matchAll(re)].map((m) => m[1]);
@@ -116,7 +124,10 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   const manifestOutputs = new Set(CLIENT_OUTPUTS.map((item) => item.output));
   assert.equal(manifestOutputs.size, CLIENT_OUTPUTS.length, "CLIENT_OUTPUTS must not contain duplicate outputs");
 
+  // The hand-written classic shim isn't a transpiled CLIENT_OUTPUT, but it is a
+  // real constituent the bundles must carry.
   const handwrittenClassicScripts = new Set(["public/js/10-boot.js"]);
+  const bundleOutputs = new Set(BUNDLES.map((bundle) => bundle.output));
   const publicScripts = readdirSync(path.join(root, "public/js"))
     .filter((file) => file.endsWith(".js"))
     .map((file) => `public/js/${file}`);
@@ -135,15 +146,41 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
       `${item.output} must be locally scoped so classic script reloads cannot redeclare top-level bindings`
     );
 
+    // Individual modules are no longer loaded directly — they ship inside a bundle.
     const url = `/${item.output.replace(/^public\//, "")}`;
-    assert.ok(index.includes(`<script src="${url}"></script>`), `${url} must be loaded by public/index.html`);
-    assert.ok(sw.includes(`"${url}"`), `${url} must be precached by public/sw.js`);
+    assert.ok(
+      !index.includes(`<script src="${url}"></script>`),
+      `${url} must not be <script>-loaded directly by index.html; it belongs to a bundle`
+    );
+  }
+
+  // Every constituent (each CLIENT_OUTPUT plus the hand-written shim) lands in
+  // EXACTLY ONE bundle, and bundles introduce nothing else.
+  const expectedConstituents = [...manifestOutputs, ...handwrittenClassicScripts].sort();
+  const allInputs = BUNDLES.flatMap((bundle) => bundle.inputs);
+  assert.equal(new Set(allInputs).size, allInputs.length, "no module may appear in more than one bundle");
+  assert.deepEqual(
+    [...allInputs].sort(),
+    expectedConstituents,
+    "bundles must partition exactly the generated outputs plus the hand-written classic shim"
+  );
+
+  // The flattened bundle order reproduces the canonical boot order, and both the
+  // index.html <script> graph and the sw precache load the bundles in manifest order.
+  const bundleUrls = BUNDLES.map((bundle) => `/${bundle.output.replace(/^public\//, "")}`);
+  const indexScripts = [...index.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+  const indexBundleScripts = indexScripts.filter((src) => src.startsWith("/js/"));
+  assert.deepEqual(indexBundleScripts, bundleUrls, "index.html must load every bundle in manifest order and nothing else under /js");
+  const swBundleScripts = [...sw.matchAll(/"(\/js\/[^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(swBundleScripts, bundleUrls, "sw.js CORE_ASSETS must precache every bundle in manifest order and nothing else under /js");
+  for (const bundle of BUNDLES) {
+    assert.ok(existsSync(path.join(root, bundle.output)), `${bundle.output} bundle must exist on disk`);
   }
 
   const unownedPublicScripts = publicScripts.filter(
-    (file) => !manifestOutputs.has(file) && !handwrittenClassicScripts.has(file)
+    (file) => !manifestOutputs.has(file) && !handwrittenClassicScripts.has(file) && !bundleOutputs.has(file)
   );
-  assert.deepEqual(unownedPublicScripts, [], "public/js scripts must be generated or explicitly classified");
+  assert.deepEqual(unownedPublicScripts, [], "public/js scripts must be generated, bundled, or explicitly classified");
 });
 
 test("background job kind contract covers API enqueue sites and worker handlers", () => {
@@ -654,7 +691,6 @@ test("Settings route helper exposes stale-route pruning", () => {
   const source = read("src/client/settings-routes.ts");
   const settingsAgentsController = read("public/js/settings-agents-controller.js");
   const settingsSourcesAutomationController = read("public/js/settings-sources-automation-controller.js");
-  const index = read("public/index.html");
   assert.match(source, /function\s+settingsPruneRoutes/);
   assert.match(source, /type SettingsRouteTask = \[string, string\]/);
   assert.match(helper, /function\s+settingsPruneRoutes/);
@@ -662,11 +698,11 @@ test("Settings route helper exposes stale-route pruning", () => {
   assert.match(settingsAgentsController, /deps\.pruneRoutes\(deps\.workingModel\.routes,\s*deps\.routeTasks,\s*enabledAgents\)/);
   assert.match(settingsSourcesAutomationController, /CairnSettingsSurface\.sourcesSliceHtml/);
   assert.ok(
-    index.indexOf("/js/settings-routes.js") > -1 &&
-      index.indexOf("/js/settings-routes.js") < index.indexOf("/js/settings-agents-controller.js") &&
-      index.indexOf("/js/settings-surface-client.js") < index.indexOf("/js/settings-screen.js") &&
-      index.indexOf("/js/settings-agents-controller.js") < index.indexOf("/js/settings-sources-automation-controller.js") &&
-      index.indexOf("/js/settings-sources-automation-controller.js") < index.indexOf("/js/settings-screen.js"),
+    bootPos("/js/settings-routes.js") > -1 &&
+      bootPos("/js/settings-routes.js") < bootPos("/js/settings-agents-controller.js") &&
+      bootPos("/js/settings-surface-client.js") < bootPos("/js/settings-screen.js") &&
+      bootPos("/js/settings-agents-controller.js") < bootPos("/js/settings-sources-automation-controller.js") &&
+      bootPos("/js/settings-sources-automation-controller.js") < bootPos("/js/settings-screen.js"),
     "Settings route/surface helpers and slice controllers must load before the Settings screen"
   );
 });
@@ -714,166 +750,13 @@ test("service worker caches core assets strictly and optional assets best-effort
   assert.match(sw, /const\s+OPTIONAL_ASSETS\s*=/);
   assert.match(sw, /addAll\(CORE_ASSETS\)/);
   assert.match(sw, /OPTIONAL_ASSETS\.map[\s\S]*catch\(\(\)\s*=>\s*null\)/);
-  assert.match(sw, /"\/js\/date-utils\.js"/);
-  assert.match(sw, /"\/js\/html-utils\.js"/);
-  assert.match(sw, /"\/js\/markdown-client\.js"/);
-  assert.match(sw, /"\/js\/ui-components\.js"/);
-  assert.match(sw, /"\/js\/ui-feedback-client\.js"/);
-  assert.match(sw, /"\/js\/ui-actions-client\.js"/);
-  assert.match(sw, /"\/js\/ui-view-transitions-client\.js"/);
-  assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
-  assert.match(sw, /"\/js\/format-utils\.js"/);
-  assert.match(sw, /"\/js\/api-client\.js"/);
-  assert.match(sw, /"\/js\/app-download\.js"/);
-  assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
-  assert.match(sw, /"\/js\/art-controller\.js"/);
-  assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
-  assert.match(sw, /"\/js\/ui-header-client\.js"/);
-  assert.match(sw, /"\/js\/02-ui\.js"/);
-  assert.match(sw, /"\/js\/detail-overlay-client\.js"/);
-  assert.match(sw, /"\/js\/exercise-detail-controller\.js"/);
-  assert.match(sw, /"\/js\/agent-login-model-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-assets-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-modal-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-session-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-client\.js"/);
-  assert.match(sw, /"\/js\/rest-timer\.js"/);
-  assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
-  assert.match(sw, /"\/js\/today-activity-client\.js"/);
-  assert.match(sw, /"\/js\/save-bar\.js"/);
-  assert.match(sw, /"\/js\/swr-cache\.js"/);
-  assert.match(sw, /"\/js\/today-agenda-client\.js"/);
-  assert.match(sw, /"\/js\/today-rail-loaders-client\.js"/);
-  assert.match(sw, /"\/js\/today-rail-controller\.js"/);
-  assert.match(sw, /"\/js\/today-plan-selection-client\.js"/);
-  assert.match(sw, /"\/js\/today-training-client\.js"/);
-  assert.match(sw, /"\/js\/today-progression-controller\.js"/);
-  assert.match(sw, /"\/js\/today-add-exercise-controller\.js"/);
-  assert.match(sw, /"\/js\/today-brief-client\.js"/);
-  assert.match(sw, /"\/js\/today-brief-override-client\.js"/);
-  assert.match(sw, /"\/js\/today-brief-actions-client\.js"/);
-  assert.match(sw, /"\/js\/today-brief-controller\.js"/);
-  assert.match(sw, /"\/js\/cardio-plan-client\.js"/);
-  assert.match(sw, /"\/js\/cardio-sync-client\.js"/);
-  assert.match(sw, /"\/js\/today-lately-client\.js"/);
-  assert.match(sw, /"\/js\/proposal-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-suggest-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-suggest-controller\.js"/);
-  assert.match(sw, /"\/js\/today-session-status-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-feedback-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-skip-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-set-model\.js"/);
-  assert.match(sw, /"\/js\/today-session-set-actions\.js"/);
-  assert.match(sw, /"\/js\/today-session-controller\.js"/);
-  assert.match(sw, /"\/js\/today-cards-client\.js"/);
-  assert.match(sw, /"\/js\/today-program-adjustments-client\.js"/);
-  assert.match(sw, /"\/js\/today-week-ahead-client\.js"/);
-  assert.match(sw, /"\/js\/today-context-client\.js"/);
-  assert.match(sw, /"\/js\/today-garmin-reconciliation-client\.js"/);
-  assert.match(sw, /"\/js\/today-side-loaders\.js"/);
-  assert.match(sw, /"\/js\/today-plan-session-model\.js"/);
-  assert.match(sw, /"\/js\/today-plan-session-data-client\.js"/);
-  assert.match(sw, /"\/js\/today-plan-session-preparation\.js"/);
-  assert.match(sw, /"\/js\/today-data-loader\.js"/);
-  assert.match(sw, /"\/js\/today-main-shell-client\.js"/);
-  assert.match(sw, /"\/js\/today-plan-surface-client\.js"/);
-  assert.match(sw, /"\/js\/today-plan-surface-renderer\.js"/);
-  assert.match(sw, /"\/js\/today-render-state-client\.js"/);
-  assert.match(sw, /"\/js\/today-post-render-wiring\.js"/);
-  assert.match(sw, /"\/js\/today-dependencies\.js"/);
-  assert.match(sw, /"\/js\/meal-row-client\.js"/);
-  assert.match(sw, /"\/js\/meal-plan-client\.js"/);
-  assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-row-actions-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-controller\.js"/);
-  assert.match(sw, /"\/js\/progress-data-client\.js"/);
-  assert.match(sw, /"\/js\/progress-endurance-client\.js"/);
-  assert.match(sw, /"\/js\/progress-components-client\.js"/);
-  assert.match(sw, /"\/js\/progress-line-chart-model\.js"/);
-  assert.match(sw, /"\/js\/progress-chart-scrub-client\.js"/);
-  assert.match(sw, /"\/js\/progress-chart-client\.js"/);
-  assert.match(sw, /"\/js\/progress-trend-weight-client\.js"/);
-  assert.match(sw, /"\/js\/progress-history-client\.js"/);
-  assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
-  assert.match(sw, /"\/js\/progress-route-deps-client\.js"/);
-  assert.match(sw, /"\/js\/progress-endurance-controller\.js"/);
-  assert.match(sw, /"\/js\/progress-volume-client\.js"/);
-  assert.match(sw, /"\/js\/progress-energy-client\.js"/);
-  assert.match(sw, /"\/js\/progress-energy-surface-client\.js"/);
-  assert.match(sw, /"\/js\/progress-calendar-client\.js"/);
-  assert.match(sw, /"\/js\/progress-muscle-trajectory-client\.js"/);
-  assert.match(sw, /"\/js\/progress-dexa-targeting-client\.js"/);
-  assert.match(sw, /"\/js\/progress-performance-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-adjustments-client\.js"/);
-  assert.match(sw, /"\/js\/progress-test-week-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-summary-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-block-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-controller\.js"/);
-  assert.match(sw, /"\/js\/health-docs-client\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
-  assert.match(sw, /"\/js\/food-note-client\.js"/);
-  assert.match(sw, /"\/js\/food-detail-controller\.js"/);
-  assert.match(sw, /"\/js\/me-profile-form-client\.js"/);
-  assert.match(sw, /"\/js\/me-profile-controller\.js"/);
-  assert.match(sw, /"\/js\/me-health-tabs-controller\.js"/);
-  assert.match(sw, /"\/js\/me-health-dependencies\.js"/);
-  assert.match(sw, /"\/js\/health-marker-order-client\.js"/);
-  assert.match(sw, /"\/js\/health-client\.js"/);
-  assert.match(sw, /"\/js\/health-read-client\.js"/);
-  assert.match(sw, /"\/js\/health-standing-primitives-client\.js"/);
-  assert.match(sw, /"\/js\/health-standing-client\.js"/);
-  assert.match(sw, /"\/js\/health-picture-client\.js"/);
-  assert.match(sw, /"\/js\/health-picture-controller\.js"/);
-  assert.match(sw, /"\/js\/health-directives-loader-client\.js"/);
-  assert.match(sw, /"\/js\/health-read-supplements-client\.js"/);
-  assert.match(sw, /"\/js\/health-read-controller\.js"/);
-  assert.match(sw, /"\/js\/health-learned-client\.js"/);
-  assert.match(sw, /"\/js\/health-records-client\.js"/);
-  assert.match(sw, /"\/js\/health-doc-upload-controller\.js"/);
-  assert.match(sw, /"\/js\/health-doc-actions-controller\.js"/);
-  assert.match(sw, /"\/js\/memory-client\.js"/);
-  assert.match(sw, /"\/js\/me-memory-controller\.js"/);
-  assert.match(sw, /"\/js\/life-client\.js"/);
-  assert.match(sw, /"\/js\/life-controller\.js"/);
-  assert.match(sw, /"\/js\/family-client\.js"/);
-  assert.match(sw, /"\/js\/family-controller\.js"/);
-  assert.match(sw, /"\/js\/chat-client\.js"/);
-  assert.match(sw, /"\/js\/chat-attachment-client\.js"/);
-  assert.match(sw, /"\/js\/chat-composer-focus-client\.js"/);
-  assert.match(sw, /"\/js\/chat-composer-controller\.js"/);
-  assert.match(sw, /"\/js\/chat-message-client\.js"/);
-  assert.match(sw, /"\/js\/chat-turn-records-client\.js"/);
-  assert.match(sw, /"\/js\/chat-layout-client\.js"/);
-  assert.match(sw, /"\/js\/chat-turn-client\.js"/);
-  assert.match(sw, /"\/js\/chat-history-client\.js"/);
-  assert.match(sw, /"\/js\/chat-header-controller\.js"/);
-  assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
-  assert.match(sw, /"\/js\/plan-editor-client\.js"/);
-  assert.match(sw, /"\/js\/plan-editor-form-client\.js"/);
-  assert.match(sw, /"\/js\/plan-editor-controller\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-client\.js"/);
-  assert.match(sw, /"\/js\/settings-surface-client\.js"/);
-  assert.match(sw, /"\/js\/settings-data-client\.js"/);
-  assert.match(sw, /"\/js\/settings-data-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-agents-client\.js"/);
-  assert.match(sw, /"\/js\/settings-agents-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-sources-automation-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-screen\.js"/);
-  assert.match(sw, /"\/js\/route-state\.js"/);
-  assert.match(sw, /"\/js\/app-router\.js"/);
-  assert.match(sw, /"\/js\/app-route-sync\.js"/);
-  assert.match(sw, /"\/js\/app-render-dispatch\.js"/);
-  assert.match(sw, /"\/js\/app-tabs\.js"/);
-  assert.match(sw, /"\/js\/agent-job-client\.js"/);
-  assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
-  assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
-  assert.match(sw, /"\/js\/app-service-worker\.js"/);
-  assert.match(sw, /"\/js\/app-discipline-primer\.js"/);
-  assert.match(sw, /"\/js\/app-onboarding\.js"/);
-  assert.match(sw, /"\/js\/app-startup\.js"/);
+  // The shell ships as a handful of concatenated bundles; CORE_ASSETS must precache
+  // exactly those bundles (in manifest order) and no individual module file.
+  const cachedJs = [...sw.matchAll(/"(\/js\/[^"]+)"/g)].map((m) => m[1]);
+  const bundleUrls = BUNDLES.map((bundle) => `/${bundle.output.replace(/^public\//, "")}`);
+  assert.deepEqual(cachedJs, bundleUrls, "CORE_ASSETS must precache exactly the bundles, in manifest order");
+  assert.match(sw, /"\/art\.js"/);
+  assert.match(sw, /"\/manifest\.json"/);
 });
 
 test("PWA deep links return the app shell without capturing API or MCP", () => {
@@ -888,7 +771,6 @@ test("PWA deep links return the app shell without capturing API or MCP", () => {
 });
 
 test("PWA route state is wired through boot, tabs, nested screens, and date-aware fuel", () => {
-  const index = read("public/index.html");
   const appStartup = read("public/js/app-startup.js");
   const appRouteSync = read("public/js/app-route-sync.js");
   const appRenderDispatch = read("public/js/app-render-dispatch.js");
@@ -907,7 +789,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const chatClient = read("public/js/chat-client.js");
   const chatHistoryClient = read("public/js/chat-history-client.js");
   assert.ok(
-    index.indexOf("/js/route-state.js") > -1 && index.indexOf("/js/route-state.js") < index.indexOf("/js/10-boot.js"),
+    bootPos("/js/route-state.js") > -1 && bootPos("/js/route-state.js") < bootPos("/js/10-boot.js"),
     "route-state.js must load before 10-boot.js"
   );
   assert.match(appRouteSync, /routeSyncApply/);
@@ -933,9 +815,9 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(chatClient, /hit\.session_id\s*\|\|\s*hit\.archived_at/);
   assert.match(chat, /openChatHistory/);
   assert.ok(
-    index.indexOf("/js/chat-history-client.js") > -1 &&
-      index.indexOf("/js/chat-history-client.js") < index.indexOf("/js/chat-header-controller.js") &&
-      index.indexOf("/js/chat-header-controller.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/chat-history-client.js") > -1 &&
+      bootPos("/js/chat-history-client.js") < bootPos("/js/chat-header-controller.js") &&
+      bootPos("/js/chat-header-controller.js") < bootPos("/js/09-plan-chat.js"),
     "chat-header-controller.js must load after chat history and before the Chat screen"
   );
   assert.match(chatHeader, /function ensureChatHeaderBtns/);
@@ -1542,7 +1424,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const chat = read("public/js/09-plan-chat.js");
   const boot = read("public/js/10-boot.js");
   const sw = read("public/sw.js");
-  const index = read("public/index.html");
   const dockerfile = read("Dockerfile");
   assert.match(today, /CairnTodayScreenRuntime\.create/);
   assert.match(todayCompatibilityBridges, /CairnTodayCompatibilityBridges/);
@@ -2452,871 +2333,871 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /src\/client\/progress-screen\.ts/);
   assert.match(clientBuild, /public\/js\/05-progress\.js/);
   assert.ok(
-    index.indexOf("/js/date-utils.js") > -1 && index.indexOf("/js/date-utils.js") < index.indexOf("/js/01-core.js"),
+    bootPos("/js/date-utils.js") > -1 && bootPos("/js/date-utils.js") < bootPos("/js/01-core.js"),
     "date-utils.js must load before 01-core.js"
   );
   assert.ok(
-    index.indexOf("/js/date-utils.js") > -1 &&
-      index.indexOf("/js/api-client.js") > index.indexOf("/js/date-utils.js") &&
-      index.indexOf("/js/api-client.js") < index.indexOf("/js/app-download.js"),
+    bootPos("/js/date-utils.js") > -1 &&
+      bootPos("/js/api-client.js") > bootPos("/js/date-utils.js") &&
+      bootPos("/js/api-client.js") < bootPos("/js/app-download.js"),
     "api-client.js must load after date-utils.js and before app-download.js"
   );
   assert.ok(
-    index.indexOf("/js/app-download.js") > index.indexOf("/js/api-client.js") &&
-      index.indexOf("/js/app-download.js") < index.indexOf("/js/01-core.js"),
+    bootPos("/js/app-download.js") > bootPos("/js/api-client.js") &&
+      bootPos("/js/app-download.js") < bootPos("/js/01-core.js"),
     "app-download.js must load after api-client.js and before 01-core.js"
   );
   assert.ok(
-    index.indexOf("/js/app-sw-recovery.js") > index.indexOf("/js/app-download.js") &&
-      index.indexOf("/js/app-sw-recovery.js") < index.indexOf("/js/01-core.js"),
+    bootPos("/js/app-sw-recovery.js") > bootPos("/js/app-download.js") &&
+      bootPos("/js/app-sw-recovery.js") < bootPos("/js/01-core.js"),
     "app-sw-recovery.js must load before app state and fragile feature scripts"
   );
   assert.ok(
-    index.indexOf("/js/art-controller.js") > index.indexOf("/js/01-core.js") &&
-      index.indexOf("/js/art-controller.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/art-controller.js") > bootPos("/js/01-core.js") &&
+      bootPos("/js/art-controller.js") < bootPos("/js/02-ui.js"),
     "art-controller.js must load after app state/API helpers and before 02-ui.js"
   );
   assert.ok(
-    index.indexOf("/js/pwa-install-coach.js") > index.indexOf("/js/01-core.js") &&
-      index.indexOf("/js/pwa-install-coach.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/pwa-install-coach.js") > bootPos("/js/01-core.js") &&
+      bootPos("/js/pwa-install-coach.js") < bootPos("/js/02-ui.js"),
     "pwa-install-coach.js must load early, after app state and before feature consumers"
   );
   assert.ok(
-    index.indexOf("/js/ui-header-client.js") > index.indexOf("/js/pwa-install-coach.js") &&
-      index.indexOf("/js/ui-header-client.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/ui-header-client.js") > bootPos("/js/pwa-install-coach.js") &&
+      bootPos("/js/ui-header-client.js") < bootPos("/js/02-ui.js"),
     "ui-header-client.js must load after app state helpers and before 02-ui.js"
   );
   assert.ok(
-    index.indexOf("/js/agent-login-model-client.js") > index.indexOf("/js/exercise-detail-controller.js") &&
-      index.indexOf("/js/agent-login-assets-client.js") > index.indexOf("/js/agent-login-model-client.js") &&
-      index.indexOf("/js/agent-login-modal-client.js") > index.indexOf("/js/agent-login-assets-client.js") &&
-      index.indexOf("/js/agent-login-session-client.js") > index.indexOf("/js/agent-login-modal-client.js") &&
-      index.indexOf("/js/agent-login-client.js") > index.indexOf("/js/agent-login-session-client.js") &&
-      index.indexOf("/js/agent-login-client.js") < index.indexOf("/js/agent-job-client.js") &&
-      index.indexOf("/js/agent-login-client.js") < index.indexOf("/js/settings-screen.js"),
+    bootPos("/js/agent-login-model-client.js") > bootPos("/js/exercise-detail-controller.js") &&
+      bootPos("/js/agent-login-assets-client.js") > bootPos("/js/agent-login-model-client.js") &&
+      bootPos("/js/agent-login-modal-client.js") > bootPos("/js/agent-login-assets-client.js") &&
+      bootPos("/js/agent-login-session-client.js") > bootPos("/js/agent-login-modal-client.js") &&
+      bootPos("/js/agent-login-client.js") > bootPos("/js/agent-login-session-client.js") &&
+      bootPos("/js/agent-login-client.js") < bootPos("/js/agent-job-client.js") &&
+      bootPos("/js/agent-login-client.js") < bootPos("/js/settings-screen.js"),
     "agent-login helpers must load in dependency order before Settings can launch agent login"
   );
   assert.ok(
-    index.indexOf("/js/agent-job-client.js") > index.indexOf("/js/agent-login-client.js") &&
-      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/rest-timer.js") &&
-      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/03-today.js") &&
-      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/09-plan-chat.js") &&
-      index.indexOf("/js/agent-job-client.js") < index.indexOf("/js/app-job-reconnectors.js"),
+    bootPos("/js/agent-job-client.js") > bootPos("/js/agent-login-client.js") &&
+      bootPos("/js/agent-job-client.js") < bootPos("/js/rest-timer.js") &&
+      bootPos("/js/agent-job-client.js") < bootPos("/js/03-today.js") &&
+      bootPos("/js/agent-job-client.js") < bootPos("/js/09-plan-chat.js") &&
+      bootPos("/js/agent-job-client.js") < bootPos("/js/app-job-reconnectors.js"),
     "agent-job-client.js must load after UI and agent-login helpers and before job consumers/reconnectors"
   );
   assert.ok(
-    index.indexOf("/js/html-utils.js") > -1 && index.indexOf("/js/html-utils.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/html-utils.js") > -1 && bootPos("/js/html-utils.js") < bootPos("/js/02-ui.js"),
     "html-utils.js must load before 02-ui.js and feature modules"
   );
   assert.ok(
-    index.indexOf("/js/markdown-client.js") > index.indexOf("/js/html-utils.js") &&
-      index.indexOf("/js/markdown-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/markdown-client.js") > bootPos("/js/html-utils.js") &&
+      bootPos("/js/markdown-client.js") < bootPos("/js/09-plan-chat.js"),
     "markdown-client.js must load after escaping helpers and before chat markdown consumers"
   );
   assert.ok(
-    index.indexOf("/js/ui-components.js") > index.indexOf("/js/html-utils.js") &&
-      index.indexOf("/js/ui-components.js") < index.indexOf("/js/health-client.js"),
+    bootPos("/js/ui-components.js") > bootPos("/js/html-utils.js") &&
+      bootPos("/js/ui-components.js") < bootPos("/js/health-client.js"),
     "ui-components.js must load after escaping helpers and before component consumers"
   );
   assert.ok(
-    index.indexOf("/js/ui-feedback-client.js") > index.indexOf("/js/ui-components.js") &&
-      index.indexOf("/js/ui-feedback-client.js") < index.indexOf("/js/ui-actions-client.js"),
+    bootPos("/js/ui-feedback-client.js") > bootPos("/js/ui-components.js") &&
+      bootPos("/js/ui-feedback-client.js") < bootPos("/js/ui-actions-client.js"),
     "ui-feedback-client.js must load after shared UI components and before UI actions"
   );
   assert.ok(
-    index.indexOf("/js/ui-actions-client.js") > index.indexOf("/js/ui-feedback-client.js") &&
-      index.indexOf("/js/ui-actions-client.js") < index.indexOf("/js/ui-view-transitions-client.js"),
+    bootPos("/js/ui-actions-client.js") > bootPos("/js/ui-feedback-client.js") &&
+      bootPos("/js/ui-actions-client.js") < bootPos("/js/ui-view-transitions-client.js"),
     "ui-actions-client.js must load after shared UI feedback and before view transitions"
   );
   assert.ok(
-    index.indexOf("/js/ui-view-transitions-client.js") > index.indexOf("/js/ui-actions-client.js") &&
-      index.indexOf("/js/ui-view-transitions-client.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/ui-view-transitions-client.js") > bootPos("/js/ui-actions-client.js") &&
+      bootPos("/js/ui-view-transitions-client.js") < bootPos("/js/02-ui.js"),
     "ui-view-transitions-client.js must load after shared UI actions and before the UI shell"
   );
   assert.ok(
-    index.indexOf("/js/ui-components.js") > index.indexOf("/js/html-utils.js") &&
-      index.indexOf("/js/ui-components.js") < index.indexOf("/js/today-training-client.js"),
+    bootPos("/js/ui-components.js") > bootPos("/js/html-utils.js") &&
+      bootPos("/js/ui-components.js") < bootPos("/js/today-training-client.js"),
     "ui-components.js must load before Today training component consumers"
   );
   assert.ok(
-    index.indexOf("/js/exercise-detail-client.js") > index.indexOf("/js/ui-view-transitions-client.js") &&
-      index.indexOf("/js/exercise-detail-client.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/exercise-detail-client.js") > bootPos("/js/ui-view-transitions-client.js") &&
+      bootPos("/js/exercise-detail-client.js") < bootPos("/js/02-ui.js"),
     "exercise-detail-client.js must load after shared UI helpers and before 02-ui.js"
   );
   assert.ok(
-    index.indexOf("/js/format-utils.js") > -1 && index.indexOf("/js/format-utils.js") < index.indexOf("/js/02-ui.js"),
+    bootPos("/js/format-utils.js") > -1 && bootPos("/js/format-utils.js") < bootPos("/js/02-ui.js"),
     "format-utils.js must load before 02-ui.js and feature modules"
   );
   assert.ok(
-    index.indexOf("/js/02-ui.js") > -1 &&
-      index.indexOf("/js/detail-overlay-client.js") > index.indexOf("/js/02-ui.js") &&
-      index.indexOf("/js/detail-overlay-client.js") < index.indexOf("/js/ui-motion-client.js"),
+    bootPos("/js/02-ui.js") > -1 &&
+      bootPos("/js/detail-overlay-client.js") > bootPos("/js/02-ui.js") &&
+      bootPos("/js/detail-overlay-client.js") < bootPos("/js/ui-motion-client.js"),
     "detail-overlay-client.js must load after UI shell and before feature consumers"
   );
   assert.ok(
-    index.indexOf("/js/exercise-detail-controller.js") > index.indexOf("/js/ui-motion-client.js") &&
-      index.indexOf("/js/exercise-detail-controller.js") < index.indexOf("/js/agent-login-client.js") &&
-      index.indexOf("/js/exercise-detail-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/exercise-detail-controller.js") > bootPos("/js/ui-motion-client.js") &&
+      bootPos("/js/exercise-detail-controller.js") < bootPos("/js/agent-login-client.js") &&
+      bootPos("/js/exercise-detail-controller.js") < bootPos("/js/03-today.js"),
     "exercise-detail-controller.js must load after detail helpers and before exercise guide consumers"
   );
   assert.ok(
-    index.indexOf("/js/02-ui.js") > -1 &&
-      index.indexOf("/js/rest-timer.js") > index.indexOf("/js/02-ui.js") &&
-      index.indexOf("/js/rest-timer.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/02-ui.js") > -1 &&
+      bootPos("/js/rest-timer.js") > bootPos("/js/02-ui.js") &&
+      bootPos("/js/rest-timer.js") < bootPos("/js/03-today.js"),
     "rest-timer.js must load after toast/UI helpers and before Today set logging"
   );
   assert.ok(
-    index.indexOf("/js/coaching-focus-client.js") > index.indexOf("/js/rest-timer.js") &&
-      index.indexOf("/js/coaching-focus-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/coaching-focus-client.js") > bootPos("/js/rest-timer.js") &&
+      bootPos("/js/coaching-focus-client.js") < bootPos("/js/03-today.js"),
     "coaching-focus-client.js must load after legacy UI helpers and before focus consumers"
   );
   assert.ok(
-    index.indexOf("/js/02-ui.js") > -1 &&
-      index.indexOf("/js/today-activity-client.js") > index.indexOf("/js/02-ui.js") &&
-      index.indexOf("/js/today-activity-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/02-ui.js") > -1 &&
+      bootPos("/js/today-activity-client.js") > bootPos("/js/02-ui.js") &&
+      bootPos("/js/today-activity-client.js") < bootPos("/js/03-today.js"),
     "today-activity-client.js must load after legacy UI dependencies and before activity consumers"
   );
   assert.ok(
-    index.indexOf("/js/02-ui.js") > -1 &&
-      index.indexOf("/js/save-bar.js") > index.indexOf("/js/02-ui.js") &&
-      index.indexOf("/js/save-bar.js") < index.indexOf("/js/swr-cache.js"),
+    bootPos("/js/02-ui.js") > -1 &&
+      bootPos("/js/save-bar.js") > bootPos("/js/02-ui.js") &&
+      bootPos("/js/save-bar.js") < bootPos("/js/swr-cache.js"),
     "save-bar.js must load after 02-ui.js and before feature modules"
   );
   assert.ok(
-    index.indexOf("/js/save-bar.js") > -1 &&
-      index.indexOf("/js/swr-cache.js") > index.indexOf("/js/save-bar.js") &&
-      index.indexOf("/js/swr-cache.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/save-bar.js") > -1 &&
+      bootPos("/js/swr-cache.js") > bootPos("/js/save-bar.js") &&
+      bootPos("/js/swr-cache.js") < bootPos("/js/03-today.js"),
     "swr-cache.js must load after save-bar.js and before feature modules"
   );
   assert.ok(
-    index.indexOf("/js/today-agenda-client.js") > index.indexOf("/js/swr-cache.js") &&
-      index.indexOf("/js/today-agenda-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-agenda-client.js") > bootPos("/js/swr-cache.js") &&
+      bootPos("/js/today-agenda-client.js") < bootPos("/js/03-today.js"),
     "today-agenda-client.js must load after swr-cache.js and before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/today-rail-loaders-client.js") > index.indexOf("/js/today-agenda-client.js") &&
-      index.indexOf("/js/today-rail-loaders-client.js") < index.indexOf("/js/today-rail-controller.js") &&
-      index.indexOf("/js/today-rail-controller.js") > index.indexOf("/js/today-agenda-client.js") &&
-      index.indexOf("/js/today-rail-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-rail-loaders-client.js") > bootPos("/js/today-agenda-client.js") &&
+      bootPos("/js/today-rail-loaders-client.js") < bootPos("/js/today-rail-controller.js") &&
+      bootPos("/js/today-rail-controller.js") > bootPos("/js/today-agenda-client.js") &&
+      bootPos("/js/today-rail-controller.js") < bootPos("/js/03-today.js"),
     "today-rail loaders/controller must load after agenda helpers and before Today"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-selection-client.js") > index.indexOf("/js/today-rail-controller.js") &&
-      index.indexOf("/js/today-plan-selection-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-plan-selection-client.js") > bootPos("/js/today-rail-controller.js") &&
+      bootPos("/js/today-plan-selection-client.js") < bootPos("/js/03-today.js"),
     "today-plan-selection-client.js must load after Today rail controller and before Today"
   );
   assert.ok(
-    index.indexOf("/js/today-garmin-reconciliation-client.js") > index.indexOf("/js/today-program-adjustments-client.js") &&
-      index.indexOf("/js/today-garmin-reconciliation-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-garmin-reconciliation-client.js") > bootPos("/js/today-program-adjustments-client.js") &&
+      bootPos("/js/today-garmin-reconciliation-client.js") < bootPos("/js/03-today.js"),
     "today-garmin-reconciliation-client.js must load after Today helper dependencies and before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/today-side-loaders.js") > index.indexOf("/js/today-garmin-reconciliation-client.js") &&
-      index.indexOf("/js/today-side-loaders.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-side-loaders.js") > bootPos("/js/today-garmin-reconciliation-client.js") &&
+      bootPos("/js/today-side-loaders.js") < bootPos("/js/03-today.js"),
     "today-side-loaders.js must load after Today side-loader dependencies and before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-session-preparation.js") > index.indexOf("/js/today-side-loaders.js") &&
-      index.indexOf("/js/today-plan-session-preparation.js") < index.indexOf("/js/today-data-loader.js"),
+    bootPos("/js/today-plan-session-preparation.js") > bootPos("/js/today-side-loaders.js") &&
+      bootPos("/js/today-plan-session-preparation.js") < bootPos("/js/today-data-loader.js"),
     "today-plan-session-preparation.js must load after Today side loaders and before data loading"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-session-model.js") > index.indexOf("/js/today-side-loaders.js") &&
-      index.indexOf("/js/today-plan-session-model.js") < index.indexOf("/js/today-plan-session-data-client.js"),
+    bootPos("/js/today-plan-session-model.js") > bootPos("/js/today-side-loaders.js") &&
+      bootPos("/js/today-plan-session-model.js") < bootPos("/js/today-plan-session-data-client.js"),
     "today-plan-session-model.js must load after Today side loaders and before plan/session data"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-session-data-client.js") > index.indexOf("/js/today-plan-session-model.js") &&
-      index.indexOf("/js/today-plan-session-data-client.js") < index.indexOf("/js/today-plan-session-preparation.js"),
+    bootPos("/js/today-plan-session-data-client.js") > bootPos("/js/today-plan-session-model.js") &&
+      bootPos("/js/today-plan-session-data-client.js") < bootPos("/js/today-plan-session-preparation.js"),
     "today-plan-session-data-client.js must load after Today plan/session model and before plan/session preparation"
   );
   assert.ok(
-    index.indexOf("/js/today-data-loader.js") > index.indexOf("/js/today-plan-session-preparation.js") &&
-      index.indexOf("/js/today-data-loader.js") < index.indexOf("/js/today-main-shell-client.js"),
+    bootPos("/js/today-data-loader.js") > bootPos("/js/today-plan-session-preparation.js") &&
+      bootPos("/js/today-data-loader.js") < bootPos("/js/today-main-shell-client.js"),
     "today-data-loader.js must load after Today preparation and before main shell helpers"
   );
   assert.ok(
-    index.indexOf("/js/today-main-shell-client.js") > index.indexOf("/js/today-data-loader.js") &&
-      index.indexOf("/js/today-main-shell-client.js") < index.indexOf("/js/today-plan-surface-client.js"),
+    bootPos("/js/today-main-shell-client.js") > bootPos("/js/today-data-loader.js") &&
+      bootPos("/js/today-main-shell-client.js") < bootPos("/js/today-plan-surface-client.js"),
     "today-main-shell-client.js must load after Today data loading and before plan-surface helpers"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-surface-client.js") > index.indexOf("/js/today-main-shell-client.js") &&
-      index.indexOf("/js/today-plan-surface-client.js") < index.indexOf("/js/today-plan-surface-renderer.js"),
+    bootPos("/js/today-plan-surface-client.js") > bootPos("/js/today-main-shell-client.js") &&
+      bootPos("/js/today-plan-surface-client.js") < bootPos("/js/today-plan-surface-renderer.js"),
     "today-plan-surface-client.js must load after Today main shell helpers and before plan-surface rendering"
   );
   assert.ok(
-    index.indexOf("/js/today-plan-surface-renderer.js") > index.indexOf("/js/today-plan-surface-client.js") &&
-      index.indexOf("/js/today-plan-surface-renderer.js") < index.indexOf("/js/today-render-state-client.js"),
+    bootPos("/js/today-plan-surface-renderer.js") > bootPos("/js/today-plan-surface-client.js") &&
+      bootPos("/js/today-plan-surface-renderer.js") < bootPos("/js/today-render-state-client.js"),
     "today-plan-surface-renderer.js must load after Today plan-surface helpers and before render-state helpers"
   );
   assert.ok(
-    index.indexOf("/js/today-render-state-client.js") > index.indexOf("/js/today-plan-surface-renderer.js") &&
-      index.indexOf("/js/today-render-state-client.js") < index.indexOf("/js/today-post-render-wiring.js"),
+    bootPos("/js/today-render-state-client.js") > bootPos("/js/today-plan-surface-renderer.js") &&
+      bootPos("/js/today-render-state-client.js") < bootPos("/js/today-post-render-wiring.js"),
     "today-render-state-client.js must load after Today plan-surface rendering and before post-render wiring"
   );
   assert.ok(
-    index.indexOf("/js/today-post-render-wiring.js") > index.indexOf("/js/today-render-state-client.js") &&
-      index.indexOf("/js/today-post-render-wiring.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-post-render-wiring.js") > bootPos("/js/today-render-state-client.js") &&
+      bootPos("/js/today-post-render-wiring.js") < bootPos("/js/03-today.js"),
     "today-post-render-wiring.js must load after Today render-state helpers and before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/today-training-client.js") > index.indexOf("/js/today-plan-selection-client.js") &&
-      index.indexOf("/js/today-training-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-training-client.js") > bootPos("/js/today-plan-selection-client.js") &&
+      bootPos("/js/today-training-client.js") < bootPos("/js/03-today.js"),
     "today-training-client.js must load before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/today-progression-controller.js") > index.indexOf("/js/today-training-client.js") &&
-      index.indexOf("/js/today-progression-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-progression-controller.js") > bootPos("/js/today-training-client.js") &&
+      bootPos("/js/today-progression-controller.js") < bootPos("/js/03-today.js"),
     "today-progression-controller.js must load after training helpers and before Today"
   );
   assert.ok(
-    index.indexOf("/js/today-add-exercise-controller.js") > index.indexOf("/js/today-progression-controller.js") &&
-      index.indexOf("/js/today-add-exercise-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-add-exercise-controller.js") > bootPos("/js/today-progression-controller.js") &&
+      bootPos("/js/today-add-exercise-controller.js") < bootPos("/js/03-today.js"),
     "today-add-exercise-controller.js must load after Today progression controller and before Today"
   );
   assert.ok(
-    index.indexOf("/js/today-brief-client.js") > index.indexOf("/js/today-add-exercise-controller.js") &&
-      index.indexOf("/js/today-brief-client.js") < index.indexOf("/js/today-brief-override-client.js"),
+    bootPos("/js/today-brief-client.js") > bootPos("/js/today-add-exercise-controller.js") &&
+      bootPos("/js/today-brief-client.js") < bootPos("/js/today-brief-override-client.js"),
     "today-brief-client.js must load after Today add-exercise controller and before Today brief override helpers"
   );
   assert.ok(
-    index.indexOf("/js/today-brief-override-client.js") > index.indexOf("/js/today-brief-client.js") &&
-      index.indexOf("/js/today-brief-override-client.js") < index.indexOf("/js/today-brief-actions-client.js"),
+    bootPos("/js/today-brief-override-client.js") > bootPos("/js/today-brief-client.js") &&
+      bootPos("/js/today-brief-override-client.js") < bootPos("/js/today-brief-actions-client.js"),
     "today-brief-override-client.js must load after Today brief helpers and before Today brief actions"
   );
   assert.ok(
-    index.indexOf("/js/today-brief-actions-client.js") > index.indexOf("/js/today-brief-override-client.js") &&
-      index.indexOf("/js/today-brief-actions-client.js") < index.indexOf("/js/today-brief-controller.js"),
+    bootPos("/js/today-brief-actions-client.js") > bootPos("/js/today-brief-override-client.js") &&
+      bootPos("/js/today-brief-actions-client.js") < bootPos("/js/today-brief-controller.js"),
     "today-brief-actions-client.js must load after Today brief override helpers and before Today brief controller"
   );
   assert.ok(
-    index.indexOf("/js/today-brief-controller.js") > index.indexOf("/js/today-brief-actions-client.js") &&
-      index.indexOf("/js/today-brief-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-brief-controller.js") > bootPos("/js/today-brief-actions-client.js") &&
+      bootPos("/js/today-brief-controller.js") < bootPos("/js/03-today.js"),
     "today-brief-controller.js must load after Today brief actions and before 03-today.js"
   );
   assert.ok(
-    index.indexOf("/js/cardio-plan-client.js") > index.indexOf("/js/today-brief-controller.js") &&
-      index.indexOf("/js/cardio-plan-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/cardio-plan-client.js") > bootPos("/js/today-brief-controller.js") &&
+      bootPos("/js/cardio-plan-client.js") < bootPos("/js/03-today.js"),
     "cardio-plan-client.js must load after Today brief controller and before screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/cardio-sync-client.js") > index.indexOf("/js/cardio-plan-client.js") &&
-      index.indexOf("/js/cardio-sync-client.js") < index.indexOf("/js/03-today.js") &&
-      index.indexOf("/js/cardio-sync-client.js") < index.indexOf("/js/05-progress.js") &&
-      index.indexOf("/js/cardio-sync-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/cardio-sync-client.js") > bootPos("/js/cardio-plan-client.js") &&
+      bootPos("/js/cardio-sync-client.js") < bootPos("/js/03-today.js") &&
+      bootPos("/js/cardio-sync-client.js") < bootPos("/js/05-progress.js") &&
+      bootPos("/js/cardio-sync-client.js") < bootPos("/js/09-plan-chat.js"),
     "cardio-sync-client.js must load before Today, Progress, and Plan consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-lately-client.js") > index.indexOf("/js/cardio-sync-client.js") &&
-      index.indexOf("/js/today-lately-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-lately-client.js") > bootPos("/js/cardio-sync-client.js") &&
+      bootPos("/js/today-lately-client.js") < bootPos("/js/03-today.js"),
     "today-lately-client.js must load after cardio sync helpers and before Today"
   );
   assert.ok(
-    index.indexOf("/js/proposal-client.js") > index.indexOf("/js/today-lately-client.js") &&
-      index.indexOf("/js/proposal-client.js") < index.indexOf("/js/coach-proposal-controller.js") &&
-      index.indexOf("/js/proposal-client.js") < index.indexOf("/js/03-today.js") &&
-      index.indexOf("/js/proposal-client.js") < index.indexOf("/js/06-coach-meals.js") &&
-      index.indexOf("/js/proposal-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/proposal-client.js") > bootPos("/js/today-lately-client.js") &&
+      bootPos("/js/proposal-client.js") < bootPos("/js/coach-proposal-controller.js") &&
+      bootPos("/js/proposal-client.js") < bootPos("/js/03-today.js") &&
+      bootPos("/js/proposal-client.js") < bootPos("/js/06-coach-meals.js") &&
+      bootPos("/js/proposal-client.js") < bootPos("/js/09-plan-chat.js"),
     "proposal-client.js must load before Today, Coach proposal, Meals, and Chat proposal consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-session-suggest-client.js") > index.indexOf("/js/proposal-client.js") &&
-      index.indexOf("/js/today-session-suggest-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-session-suggest-client.js") > bootPos("/js/proposal-client.js") &&
+      bootPos("/js/today-session-suggest-client.js") < bootPos("/js/03-today.js"),
     "today-session-suggest-client.js must load after proposal helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-session-suggest-controller.js") > index.indexOf("/js/today-session-suggest-client.js") &&
-      index.indexOf("/js/today-session-suggest-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-session-suggest-controller.js") > bootPos("/js/today-session-suggest-client.js") &&
+      bootPos("/js/today-session-suggest-controller.js") < bootPos("/js/03-today.js"),
     "today-session-suggest-controller.js must load after markup helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-session-status-client.js") > index.indexOf("/js/today-session-suggest-controller.js") &&
-      index.indexOf("/js/today-session-status-client.js") < index.indexOf("/js/today-cards-client.js") &&
-      index.indexOf("/js/today-session-status-client.js") < index.indexOf("/js/progress-history-client.js"),
+    bootPos("/js/today-session-status-client.js") > bootPos("/js/today-session-suggest-controller.js") &&
+      bootPos("/js/today-session-status-client.js") < bootPos("/js/today-cards-client.js") &&
+      bootPos("/js/today-session-status-client.js") < bootPos("/js/progress-history-client.js"),
     "today-session-status-client.js must load after session-suggest controller and before Today/History consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-session-feedback-client.js") > index.indexOf("/js/today-session-status-client.js") &&
-      index.indexOf("/js/today-session-feedback-client.js") < index.indexOf("/js/today-session-skip-client.js"),
+    bootPos("/js/today-session-feedback-client.js") > bootPos("/js/today-session-status-client.js") &&
+      bootPos("/js/today-session-feedback-client.js") < bootPos("/js/today-session-skip-client.js"),
     "today-session-feedback-client.js must load after session-status helpers and before session controller"
   );
   assert.ok(
-    index.indexOf("/js/today-session-skip-client.js") > index.indexOf("/js/today-session-feedback-client.js") &&
-      index.indexOf("/js/today-session-skip-client.js") < index.indexOf("/js/today-session-set-model.js"),
+    bootPos("/js/today-session-skip-client.js") > bootPos("/js/today-session-feedback-client.js") &&
+      bootPos("/js/today-session-skip-client.js") < bootPos("/js/today-session-set-model.js"),
     "today-session-skip-client.js must load after session-feedback helpers and before session set helpers"
   );
   assert.ok(
-    index.indexOf("/js/today-session-set-model.js") > index.indexOf("/js/today-session-skip-client.js") &&
-      index.indexOf("/js/today-session-set-model.js") < index.indexOf("/js/today-session-set-actions.js"),
+    bootPos("/js/today-session-set-model.js") > bootPos("/js/today-session-skip-client.js") &&
+      bootPos("/js/today-session-set-model.js") < bootPos("/js/today-session-set-actions.js"),
     "today-session-set-model.js must load after session-skip helpers and before session set actions"
   );
   assert.ok(
-    index.indexOf("/js/today-session-set-actions.js") > index.indexOf("/js/today-session-set-model.js") &&
-      index.indexOf("/js/today-session-set-actions.js") < index.indexOf("/js/today-session-controller.js"),
+    bootPos("/js/today-session-set-actions.js") > bootPos("/js/today-session-set-model.js") &&
+      bootPos("/js/today-session-set-actions.js") < bootPos("/js/today-session-controller.js"),
     "today-session-set-actions.js must load after session set model and before session controller"
   );
   assert.ok(
-    index.indexOf("/js/today-session-controller.js") > index.indexOf("/js/today-session-set-actions.js") &&
-      index.indexOf("/js/today-session-controller.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-session-controller.js") > bootPos("/js/today-session-set-actions.js") &&
+      bootPos("/js/today-session-controller.js") < bootPos("/js/03-today.js"),
     "today-session-controller.js must load after session set actions and before Today"
   );
   assert.ok(
-    index.indexOf("/js/today-cards-client.js") > index.indexOf("/js/today-session-status-client.js") &&
-      index.indexOf("/js/today-cards-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-cards-client.js") > bootPos("/js/today-session-status-client.js") &&
+      bootPos("/js/today-cards-client.js") < bootPos("/js/03-today.js"),
     "today-cards-client.js must load after session-status helpers and before Today"
   );
   assert.ok(
-    index.indexOf("/js/today-program-adjustments-client.js") > index.indexOf("/js/today-cards-client.js") &&
-      index.indexOf("/js/today-program-adjustments-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-program-adjustments-client.js") > bootPos("/js/today-cards-client.js") &&
+      bootPos("/js/today-program-adjustments-client.js") < bootPos("/js/03-today.js"),
     "today-program-adjustments-client.js must load after Today card helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-week-ahead-client.js") > index.indexOf("/js/today-program-adjustments-client.js") &&
-      index.indexOf("/js/today-week-ahead-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-week-ahead-client.js") > bootPos("/js/today-program-adjustments-client.js") &&
+      bootPos("/js/today-week-ahead-client.js") < bootPos("/js/03-today.js"),
     "today-week-ahead-client.js must load after Today rail helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-context-client.js") > index.indexOf("/js/today-week-ahead-client.js") &&
-      index.indexOf("/js/today-context-client.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-context-client.js") > bootPos("/js/today-week-ahead-client.js") &&
+      bootPos("/js/today-context-client.js") < bootPos("/js/03-today.js"),
     "today-context-client.js must load after Today week-ahead helpers and before Today consumers"
   );
   assert.ok(
-    index.indexOf("/js/today-dependencies.js") > index.indexOf("/js/today-post-render-wiring.js") &&
-      index.indexOf("/js/today-dependencies.js") < index.indexOf("/js/03-today.js"),
+    bootPos("/js/today-dependencies.js") > bootPos("/js/today-post-render-wiring.js") &&
+      bootPos("/js/today-dependencies.js") < bootPos("/js/03-today.js"),
     "today-dependencies.js must load after Today wiring helpers and before Today screen"
   );
   assert.ok(
-    index.indexOf("/js/progress-data-client.js") > index.indexOf("/js/today-post-render-wiring.js") &&
-      index.indexOf("/js/progress-data-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-data-client.js") > bootPos("/js/today-post-render-wiring.js") &&
+      bootPos("/js/progress-data-client.js") < bootPos("/js/05-progress.js"),
     "progress-data-client.js must load after Today helper wiring and before Progress consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-endurance-client.js") > index.indexOf("/js/progress-data-client.js") &&
-      index.indexOf("/js/progress-endurance-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-endurance-client.js") > bootPos("/js/progress-data-client.js") &&
+      bootPos("/js/progress-endurance-client.js") < bootPos("/js/05-progress.js"),
     "progress-endurance-client.js must load after Progress data helpers and before Progress consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-components-client.js") > index.indexOf("/js/progress-endurance-client.js") &&
-      index.indexOf("/js/progress-components-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-components-client.js") > bootPos("/js/progress-endurance-client.js") &&
+      bootPos("/js/progress-components-client.js") < bootPos("/js/05-progress.js"),
     "progress-components-client.js must load before Progress screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-line-chart-model.js") > index.indexOf("/js/progress-components-client.js") &&
-      index.indexOf("/js/progress-line-chart-model.js") < index.indexOf("/js/progress-chart-scrub-client.js"),
+    bootPos("/js/progress-line-chart-model.js") > bootPos("/js/progress-components-client.js") &&
+      bootPos("/js/progress-line-chart-model.js") < bootPos("/js/progress-chart-scrub-client.js"),
     "progress-line-chart-model.js must load after Progress components and before chart scrub helpers"
   );
   assert.ok(
-    index.indexOf("/js/progress-chart-scrub-client.js") > index.indexOf("/js/progress-line-chart-model.js") &&
-      index.indexOf("/js/progress-chart-scrub-client.js") < index.indexOf("/js/progress-chart-client.js"),
+    bootPos("/js/progress-chart-scrub-client.js") > bootPos("/js/progress-line-chart-model.js") &&
+      bootPos("/js/progress-chart-scrub-client.js") < bootPos("/js/progress-chart-client.js"),
     "progress-chart-scrub-client.js must load after the chart model and before the chart renderer"
   );
   assert.ok(
-    index.indexOf("/js/progress-chart-client.js") > index.indexOf("/js/progress-chart-scrub-client.js") &&
-      index.indexOf("/js/progress-chart-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-chart-client.js") > bootPos("/js/progress-chart-scrub-client.js") &&
+      bootPos("/js/progress-chart-client.js") < bootPos("/js/05-progress.js"),
     "progress-chart-client.js must load after chart scrub helpers and before Progress chart consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-trend-weight-client.js") > index.indexOf("/js/progress-chart-client.js") &&
-      index.indexOf("/js/progress-trend-weight-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-trend-weight-client.js") > bootPos("/js/progress-chart-client.js") &&
+      bootPos("/js/progress-trend-weight-client.js") < bootPos("/js/05-progress.js"),
     "progress-trend-weight-client.js must load after chart helpers and before Progress route consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-history-client.js") > index.indexOf("/js/progress-chart-client.js") &&
-      index.indexOf("/js/progress-history-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-history-client.js") > bootPos("/js/progress-chart-client.js") &&
+      bootPos("/js/progress-history-client.js") < bootPos("/js/05-progress.js"),
     "progress-history-client.js must load before Progress history consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-run-plan-client.js") > index.indexOf("/js/progress-history-client.js") &&
-      index.indexOf("/js/progress-run-plan-client.js") < index.indexOf("/js/progress-route-deps-client.js"),
+    bootPos("/js/progress-run-plan-client.js") > bootPos("/js/progress-history-client.js") &&
+      bootPos("/js/progress-run-plan-client.js") < bootPos("/js/progress-route-deps-client.js"),
     "progress-run-plan-client.js must load before Progress route deps"
   );
   assert.ok(
-    index.indexOf("/js/progress-route-deps-client.js") > index.indexOf("/js/progress-run-plan-client.js") &&
-      index.indexOf("/js/progress-route-deps-client.js") < index.indexOf("/js/progress-endurance-controller.js") &&
-      index.indexOf("/js/progress-route-deps-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-route-deps-client.js") > bootPos("/js/progress-run-plan-client.js") &&
+      bootPos("/js/progress-route-deps-client.js") < bootPos("/js/progress-endurance-controller.js") &&
+      bootPos("/js/progress-route-deps-client.js") < bootPos("/js/05-progress.js"),
     "progress-route-deps-client.js must load before Progress route consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-endurance-controller.js") > index.indexOf("/js/progress-route-deps-client.js") &&
-      index.indexOf("/js/progress-endurance-controller.js") < index.indexOf("/js/progress-volume-client.js"),
+    bootPos("/js/progress-endurance-controller.js") > bootPos("/js/progress-route-deps-client.js") &&
+      bootPos("/js/progress-endurance-controller.js") < bootPos("/js/progress-volume-client.js"),
     "progress-endurance-controller.js must load after Progress Endurance helpers and before sibling Progress helpers"
   );
   assert.ok(
-    index.indexOf("/js/progress-volume-client.js") > index.indexOf("/js/progress-endurance-controller.js") &&
-      index.indexOf("/js/progress-volume-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-volume-client.js") > bootPos("/js/progress-endurance-controller.js") &&
+      bootPos("/js/progress-volume-client.js") < bootPos("/js/05-progress.js"),
     "progress-volume-client.js must load before Progress Volume consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-energy-client.js") > index.indexOf("/js/progress-volume-client.js") &&
-      index.indexOf("/js/progress-energy-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-energy-client.js") > bootPos("/js/progress-volume-client.js") &&
+      bootPos("/js/progress-energy-client.js") < bootPos("/js/05-progress.js"),
     "progress-energy-client.js must load before Progress Energy consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-energy-surface-client.js") > index.indexOf("/js/progress-energy-client.js") &&
-      index.indexOf("/js/progress-energy-surface-client.js") < index.indexOf("/js/05-progress.js") &&
-      index.indexOf("/js/progress-energy-surface-client.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/progress-energy-surface-client.js") > bootPos("/js/progress-energy-client.js") &&
+      bootPos("/js/progress-energy-surface-client.js") < bootPos("/js/05-progress.js") &&
+      bootPos("/js/progress-energy-surface-client.js") < bootPos("/js/06-coach-meals.js"),
     "progress-energy-surface-client.js must load before Progress and Meals energy consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-calendar-client.js") > index.indexOf("/js/progress-energy-surface-client.js") &&
-      index.indexOf("/js/progress-calendar-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-calendar-client.js") > bootPos("/js/progress-energy-surface-client.js") &&
+      bootPos("/js/progress-calendar-client.js") < bootPos("/js/05-progress.js"),
     "progress-calendar-client.js must load before Progress Calendar consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-muscle-trajectory-client.js") > index.indexOf("/js/progress-calendar-client.js") &&
-      index.indexOf("/js/progress-muscle-trajectory-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-muscle-trajectory-client.js") > bootPos("/js/progress-calendar-client.js") &&
+      bootPos("/js/progress-muscle-trajectory-client.js") < bootPos("/js/05-progress.js"),
     "progress-muscle-trajectory-client.js must load before Progress muscle trajectory consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-dexa-targeting-client.js") > index.indexOf("/js/progress-muscle-trajectory-client.js") &&
-      index.indexOf("/js/progress-dexa-targeting-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-dexa-targeting-client.js") > bootPos("/js/progress-muscle-trajectory-client.js") &&
+      bootPos("/js/progress-dexa-targeting-client.js") < bootPos("/js/05-progress.js"),
     "progress-dexa-targeting-client.js must load before Progress and Health DEXA consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-performance-client.js") > index.indexOf("/js/progress-dexa-targeting-client.js") &&
-      index.indexOf("/js/progress-performance-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-performance-client.js") > bootPos("/js/progress-dexa-targeting-client.js") &&
+      bootPos("/js/progress-performance-client.js") < bootPos("/js/05-progress.js"),
     "progress-performance-client.js must load before Progress performance consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-program-adjustments-client.js") > index.indexOf("/js/progress-performance-client.js") &&
-      index.indexOf("/js/progress-program-adjustments-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-program-adjustments-client.js") > bootPos("/js/progress-performance-client.js") &&
+      bootPos("/js/progress-program-adjustments-client.js") < bootPos("/js/05-progress.js"),
     "progress-program-adjustments-client.js must load before Progress adjustment consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-test-week-client.js") > index.indexOf("/js/progress-program-adjustments-client.js") &&
-      index.indexOf("/js/progress-test-week-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-test-week-client.js") > bootPos("/js/progress-program-adjustments-client.js") &&
+      bootPos("/js/progress-test-week-client.js") < bootPos("/js/05-progress.js"),
     "progress-test-week-client.js must load before Progress test-week consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-program-summary-client.js") > index.indexOf("/js/progress-test-week-client.js") &&
-      index.indexOf("/js/progress-program-summary-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-program-summary-client.js") > bootPos("/js/progress-test-week-client.js") &&
+      bootPos("/js/progress-program-summary-client.js") < bootPos("/js/05-progress.js"),
     "progress-program-summary-client.js must load before Progress program-summary consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-program-block-client.js") > index.indexOf("/js/progress-program-summary-client.js") &&
-      index.indexOf("/js/progress-program-block-client.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-program-block-client.js") > bootPos("/js/progress-program-summary-client.js") &&
+      bootPos("/js/progress-program-block-client.js") < bootPos("/js/05-progress.js"),
     "progress-program-block-client.js must load before Progress program-block consumers"
   );
   assert.ok(
-    index.indexOf("/js/progress-program-controller.js") > index.indexOf("/js/progress-program-block-client.js") &&
-      index.indexOf("/js/progress-program-controller.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/progress-program-controller.js") > bootPos("/js/progress-program-block-client.js") &&
+      bootPos("/js/progress-program-controller.js") < bootPos("/js/05-progress.js"),
     "progress-program-controller.js must load before Progress program controller consumers"
   );
   assert.ok(
-    index.indexOf("/js/capture-provenance-client.js") > index.indexOf("/js/03-today.js") &&
-      index.indexOf("/js/capture-provenance-client.js") < index.indexOf("/js/capture-read-date-client.js"),
+    bootPos("/js/capture-provenance-client.js") > bootPos("/js/03-today.js") &&
+      bootPos("/js/capture-provenance-client.js") < bootPos("/js/capture-read-date-client.js"),
     "capture-provenance-client.js must load after Today and before Capture read helpers"
   );
   assert.ok(
-    index.indexOf("/js/capture-read-date-client.js") > index.indexOf("/js/capture-provenance-client.js") &&
-      index.indexOf("/js/capture-read-date-client.js") < index.indexOf("/js/capture-read-cards-client.js"),
+    bootPos("/js/capture-read-date-client.js") > bootPos("/js/capture-provenance-client.js") &&
+      bootPos("/js/capture-read-date-client.js") < bootPos("/js/capture-read-cards-client.js"),
     "capture-read-date-client.js must load before Capture read card helpers"
   );
   assert.ok(
-    index.indexOf("/js/capture-read-cards-client.js") > index.indexOf("/js/capture-read-date-client.js") &&
-      index.indexOf("/js/capture-read-cards-client.js") < index.indexOf("/js/capture-read-jobs-client.js"),
+    bootPos("/js/capture-read-cards-client.js") > bootPos("/js/capture-read-date-client.js") &&
+      bootPos("/js/capture-read-cards-client.js") < bootPos("/js/capture-read-jobs-client.js"),
     "capture-read-cards-client.js must load before Capture read job helpers"
   );
   assert.ok(
-    index.indexOf("/js/capture-read-jobs-client.js") > index.indexOf("/js/capture-read-cards-client.js") &&
-      index.indexOf("/js/capture-read-jobs-client.js") < index.indexOf("/js/capture-reads-client.js"),
+    bootPos("/js/capture-read-jobs-client.js") > bootPos("/js/capture-read-cards-client.js") &&
+      bootPos("/js/capture-read-jobs-client.js") < bootPos("/js/capture-reads-client.js"),
     "capture-read-jobs-client.js must load before capture-reads-client.js"
   );
   assert.ok(
-    index.indexOf("/js/capture-reads-client.js") > index.indexOf("/js/capture-read-jobs-client.js") &&
-      index.indexOf("/js/capture-reads-client.js") < index.indexOf("/js/capture-voice-client.js"),
+    bootPos("/js/capture-reads-client.js") > bootPos("/js/capture-read-jobs-client.js") &&
+      bootPos("/js/capture-reads-client.js") < bootPos("/js/capture-voice-client.js"),
     "capture-reads-client.js must load after Capture read helpers and before Capture consumers"
   );
   assert.ok(
-    index.indexOf("/js/capture-voice-client.js") > index.indexOf("/js/capture-reads-client.js") &&
-      index.indexOf("/js/capture-voice-client.js") < index.indexOf("/js/04-capture.js"),
+    bootPos("/js/capture-voice-client.js") > bootPos("/js/capture-reads-client.js") &&
+      bootPos("/js/capture-voice-client.js") < bootPos("/js/04-capture.js"),
     "capture-voice-client.js must load after Capture reads and before Capture consumers"
   );
   assert.ok(
-    index.indexOf("/js/04-capture.js") > index.indexOf("/js/capture-voice-client.js") &&
-      index.indexOf("/js/04-capture.js") < index.indexOf("/js/05-progress.js"),
+    bootPos("/js/04-capture.js") > bootPos("/js/capture-voice-client.js") &&
+      bootPos("/js/04-capture.js") < bootPos("/js/05-progress.js"),
     "04-capture.js must load after Capture helpers and before downstream screens"
   );
   assert.ok(
-    index.indexOf("/js/meal-row-client.js") > index.indexOf("/js/day-fuel-controller.js") &&
-      index.indexOf("/js/meal-row-client.js") < index.indexOf("/js/meal-plan-client.js"),
+    bootPos("/js/meal-row-client.js") > bootPos("/js/day-fuel-controller.js") &&
+      bootPos("/js/meal-row-client.js") < bootPos("/js/meal-plan-client.js"),
     "meal-row-client.js must load after fuel helpers and before Meal Plan shell helpers"
   );
   assert.ok(
-    index.indexOf("/js/meal-plan-client.js") > index.indexOf("/js/meal-row-client.js") &&
-      index.indexOf("/js/meal-plan-client.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/meal-plan-client.js") > bootPos("/js/meal-row-client.js") &&
+      bootPos("/js/meal-plan-client.js") < bootPos("/js/06-coach-meals.js"),
     "meal-plan-client.js must load after meal row helpers and before Meals screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/day-fuel-controller.js") > index.indexOf("/js/day-fuel-client.js") &&
-      index.indexOf("/js/day-fuel-controller.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/day-fuel-controller.js") > bootPos("/js/day-fuel-client.js") &&
+      bootPos("/js/day-fuel-controller.js") < bootPos("/js/06-coach-meals.js"),
     "day-fuel-controller.js must load after fuel helpers and before Meals screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/meal-recipe-client.js") > index.indexOf("/js/meal-plan-client.js") &&
-      index.indexOf("/js/meal-recipe-client.js") < index.indexOf("/js/meal-recipe-controller.js"),
+    bootPos("/js/meal-recipe-client.js") > bootPos("/js/meal-plan-client.js") &&
+      bootPos("/js/meal-recipe-client.js") < bootPos("/js/meal-recipe-controller.js"),
     "meal-recipe-client.js must load before the Meal Recipe controller"
   );
   assert.ok(
-    index.indexOf("/js/meal-recipe-controller.js") > index.indexOf("/js/meal-recipe-client.js") &&
-      index.indexOf("/js/meal-recipe-controller.js") < index.indexOf("/js/meal-swap-data-client.js"),
+    bootPos("/js/meal-recipe-controller.js") > bootPos("/js/meal-recipe-client.js") &&
+      bootPos("/js/meal-recipe-controller.js") < bootPos("/js/meal-swap-data-client.js"),
     "meal-recipe-controller.js must load before Meal Swap data helpers"
   );
   assert.ok(
-    index.indexOf("/js/meal-swap-data-client.js") > index.indexOf("/js/meal-recipe-controller.js") &&
-      index.indexOf("/js/meal-swap-data-client.js") < index.indexOf("/js/meal-swap-row-actions-controller.js"),
+    bootPos("/js/meal-swap-data-client.js") > bootPos("/js/meal-recipe-controller.js") &&
+      bootPos("/js/meal-swap-data-client.js") < bootPos("/js/meal-swap-row-actions-controller.js"),
     "meal-swap-data-client.js must load before Meal Swap row actions"
   );
   assert.ok(
-    index.indexOf("/js/meal-swap-row-actions-controller.js") > index.indexOf("/js/meal-swap-data-client.js") &&
-      index.indexOf("/js/meal-swap-row-actions-controller.js") < index.indexOf("/js/meal-swap-controller.js"),
+    bootPos("/js/meal-swap-row-actions-controller.js") > bootPos("/js/meal-swap-data-client.js") &&
+      bootPos("/js/meal-swap-row-actions-controller.js") < bootPos("/js/meal-swap-controller.js"),
     "meal-swap-row-actions-controller.js must load before Meal Swap controller"
   );
   assert.ok(
-    index.indexOf("/js/meal-swap-controller.js") > index.indexOf("/js/meal-swap-row-actions-controller.js") &&
-      index.indexOf("/js/meal-swap-controller.js") < index.indexOf("/js/meal-planner-controller.js"),
+    bootPos("/js/meal-swap-controller.js") > bootPos("/js/meal-swap-row-actions-controller.js") &&
+      bootPos("/js/meal-swap-controller.js") < bootPos("/js/meal-planner-controller.js"),
     "meal-swap-controller.js must load before Meal Planner controller"
   );
   assert.ok(
-    index.indexOf("/js/meal-planner-controller.js") > index.indexOf("/js/meal-swap-controller.js") &&
-      index.indexOf("/js/meal-planner-controller.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/meal-planner-controller.js") > bootPos("/js/meal-swap-controller.js") &&
+      bootPos("/js/meal-planner-controller.js") < bootPos("/js/06-coach-meals.js"),
     "meal-planner-controller.js must load before Meals screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/coach-proposal-controller.js") > index.indexOf("/js/meal-planner-controller.js") &&
-      index.indexOf("/js/coach-proposal-controller.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/coach-proposal-controller.js") > bootPos("/js/meal-planner-controller.js") &&
+      bootPos("/js/coach-proposal-controller.js") < bootPos("/js/06-coach-meals.js"),
     "coach-proposal-controller.js must load after proposal/meal planner helpers and before Meals screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/health-docs-client.js") > index.indexOf("/js/06-coach-meals.js") &&
-      index.indexOf("/js/health-docs-client.js") < index.indexOf("/js/07-me-health.js") &&
-      index.indexOf("/js/health-docs-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-docs-client.js") > bootPos("/js/06-coach-meals.js") &&
+      bootPos("/js/health-docs-client.js") < bootPos("/js/07-me-health.js") &&
+      bootPos("/js/health-docs-client.js") < bootPos("/js/08-me-records.js"),
     "health-docs-client.js must load before Health and Records document consumers"
   );
   assert.ok(
-    index.indexOf("/js/health-marker-order-client.js") > index.indexOf("/js/health-evidence-client.js") &&
-      index.indexOf("/js/health-marker-order-client.js") < index.indexOf("/js/health-client.js"),
+    bootPos("/js/health-marker-order-client.js") > bootPos("/js/health-evidence-client.js") &&
+      bootPos("/js/health-marker-order-client.js") < bootPos("/js/health-client.js"),
     "health-marker-order-client.js must load after Health evidence helpers and before shared Health helpers"
   );
   assert.ok(
-    index.indexOf("/js/health-client.js") > index.indexOf("/js/07-me-health.js") &&
-      index.indexOf("/js/health-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-client.js") > bootPos("/js/07-me-health.js") &&
+      bootPos("/js/health-client.js") < bootPos("/js/08-me-records.js"),
     "health-client.js must load after Health view definitions and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-read-client.js") > index.indexOf("/js/health-client.js") &&
-      index.indexOf("/js/health-read-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-read-client.js") > bootPos("/js/health-client.js") &&
+      bootPos("/js/health-read-client.js") < bootPos("/js/08-me-records.js"),
     "health-read-client.js must load after shared Health helpers and before boot can render Health Read"
   );
   assert.ok(
-    index.indexOf("/js/health-standing-primitives-client.js") > index.indexOf("/js/health-read-client.js") &&
-      index.indexOf("/js/health-standing-primitives-client.js") < index.indexOf("/js/health-standing-client.js"),
+    bootPos("/js/health-standing-primitives-client.js") > bootPos("/js/health-read-client.js") &&
+      bootPos("/js/health-standing-primitives-client.js") < bootPos("/js/health-standing-client.js"),
     "health-standing-primitives-client.js must load after Health Read helpers and before Standing renderer"
   );
   assert.ok(
-    index.indexOf("/js/health-standing-client.js") > index.indexOf("/js/health-standing-primitives-client.js") &&
-      index.indexOf("/js/health-standing-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-standing-client.js") > bootPos("/js/health-standing-primitives-client.js") &&
+      bootPos("/js/health-standing-client.js") < bootPos("/js/08-me-records.js"),
     "health-standing-client.js must load after Health Standing primitives and before boot can render Standing"
   );
   assert.ok(
-    index.indexOf("/js/health-picture-client.js") > index.indexOf("/js/health-standing-client.js") &&
-      index.indexOf("/js/health-picture-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-picture-client.js") > bootPos("/js/health-standing-client.js") &&
+      bootPos("/js/health-picture-client.js") < bootPos("/js/08-me-records.js"),
     "health-picture-client.js must load after Health Standing helpers and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-picture-controller.js") > index.indexOf("/js/health-picture-client.js") &&
-      index.indexOf("/js/health-picture-controller.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-picture-controller.js") > bootPos("/js/health-picture-client.js") &&
+      bootPos("/js/health-picture-controller.js") < bootPos("/js/08-me-records.js"),
     "health-picture-controller.js must load after Health Picture renderer and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-markers-client.js") > index.indexOf("/js/health-picture-controller.js") &&
-      index.indexOf("/js/health-markers-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-markers-client.js") > bootPos("/js/health-picture-controller.js") &&
+      bootPos("/js/health-markers-client.js") < bootPos("/js/08-me-records.js"),
     "health-markers-client.js must load after Health picture helpers and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-directives-client.js") > index.indexOf("/js/health-markers-client.js") &&
-      index.indexOf("/js/health-directives-client.js") < index.indexOf("/js/health-directives-loader-client.js"),
+    bootPos("/js/health-directives-client.js") > bootPos("/js/health-markers-client.js") &&
+      bootPos("/js/health-directives-client.js") < bootPos("/js/health-directives-loader-client.js"),
     "health-directives-client.js must load after Health marker helpers and before Records view hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-directives-loader-client.js") > index.indexOf("/js/health-directives-client.js") &&
-      index.indexOf("/js/health-directives-loader-client.js") < index.indexOf("/js/health-read-supplements-client.js"),
+    bootPos("/js/health-directives-loader-client.js") > bootPos("/js/health-directives-client.js") &&
+      bootPos("/js/health-directives-loader-client.js") < bootPos("/js/health-read-supplements-client.js"),
     "health-directives-loader-client.js must load after directive render helpers and before boot can render Health Read"
   );
   assert.ok(
-    index.indexOf("/js/health-read-supplements-client.js") > index.indexOf("/js/health-read-synthesis-client.js") &&
-      index.indexOf("/js/health-read-supplements-client.js") < index.indexOf("/js/health-read-controller.js"),
+    bootPos("/js/health-read-supplements-client.js") > bootPos("/js/health-read-synthesis-client.js") &&
+      bootPos("/js/health-read-supplements-client.js") < bootPos("/js/health-read-controller.js"),
     "health-read-supplements-client.js must load after Health Read synthesis helpers and before the Health Read controller"
   );
   assert.ok(
-    index.indexOf("/js/health-read-controller.js") > index.indexOf("/js/health-read-supplements-client.js") &&
-      index.indexOf("/js/health-read-controller.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-read-controller.js") > bootPos("/js/health-read-supplements-client.js") &&
+      bootPos("/js/health-read-controller.js") < bootPos("/js/08-me-records.js"),
     "health-read-controller.js must load after Health Read helpers and before boot can render Health Read"
   );
   assert.ok(
-    index.indexOf("/js/health-learned-client.js") > index.indexOf("/js/health-read-controller.js") &&
-      index.indexOf("/js/health-learned-client.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/health-learned-client.js") > bootPos("/js/health-read-controller.js") &&
+      bootPos("/js/health-learned-client.js") < bootPos("/js/08-me-records.js"),
     "health-learned-client.js must load after Health directive helpers and before Records learned timeline consumers"
   );
   assert.ok(
-    index.indexOf("/js/health-records-client.js") > index.indexOf("/js/health-learned-client.js") &&
-      index.indexOf("/js/health-records-client.js") < index.indexOf("/js/health-doc-upload-controller.js"),
+    bootPos("/js/health-records-client.js") > bootPos("/js/health-learned-client.js") &&
+      bootPos("/js/health-records-client.js") < bootPos("/js/health-doc-upload-controller.js"),
     "health-records-client.js must load after Health learned helpers and before Records upload hydration"
   );
   assert.ok(
-    index.indexOf("/js/health-doc-upload-controller.js") > index.indexOf("/js/health-records-client.js") &&
-      index.indexOf("/js/health-doc-upload-controller.js") < index.indexOf("/js/health-doc-actions-controller.js"),
+    bootPos("/js/health-doc-upload-controller.js") > bootPos("/js/health-records-client.js") &&
+      bootPos("/js/health-doc-upload-controller.js") < bootPos("/js/health-doc-actions-controller.js"),
     "health-doc-upload-controller.js must load after Records render helpers and before document row actions"
   );
   assert.ok(
-    index.indexOf("/js/health-doc-actions-controller.js") > index.indexOf("/js/health-doc-upload-controller.js") &&
-      index.indexOf("/js/health-doc-actions-controller.js") < index.indexOf("/js/me-records-health-doc-controller.js"),
+    bootPos("/js/health-doc-actions-controller.js") > bootPos("/js/health-doc-upload-controller.js") &&
+      bootPos("/js/health-doc-actions-controller.js") < bootPos("/js/me-records-health-doc-controller.js"),
     "health-doc-actions-controller.js must load after upload hydration and before the Records controller"
   );
   assert.ok(
-    index.indexOf("/js/me-records-health-doc-controller.js") > index.indexOf("/js/health-doc-actions-controller.js") &&
-      index.indexOf("/js/me-records-health-doc-controller.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/me-records-health-doc-controller.js") > bootPos("/js/health-doc-actions-controller.js") &&
+      bootPos("/js/me-records-health-doc-controller.js") < bootPos("/js/08-me-records.js"),
     "me-records-health-doc-controller.js must load after document row actions and before the Records screen"
   );
   assert.ok(
-    index.indexOf("/js/memory-client.js") > index.indexOf("/js/me-records-health-doc-controller.js") &&
-      index.indexOf("/js/memory-client.js") < index.indexOf("/js/me-memory-controller.js"),
+    bootPos("/js/memory-client.js") > bootPos("/js/me-records-health-doc-controller.js") &&
+      bootPos("/js/memory-client.js") < bootPos("/js/me-memory-controller.js"),
     "memory-client.js must load before the Me memory controller"
   );
   assert.ok(
-    index.indexOf("/js/me-memory-controller.js") > index.indexOf("/js/memory-client.js") &&
-      index.indexOf("/js/me-memory-controller.js") < index.indexOf("/js/10-boot.js"),
+    bootPos("/js/me-memory-controller.js") > bootPos("/js/memory-client.js") &&
+      bootPos("/js/me-memory-controller.js") < bootPos("/js/10-boot.js"),
     "me-memory-controller.js must load after pure Memory helpers and before boot can render Me memory"
   );
   assert.ok(
-    index.indexOf("/js/life-client.js") > index.indexOf("/js/me-memory-controller.js") &&
-      index.indexOf("/js/life-client.js") < index.indexOf("/js/life-controller.js"),
+    bootPos("/js/life-client.js") > bootPos("/js/me-memory-controller.js") &&
+      bootPos("/js/life-client.js") < bootPos("/js/life-controller.js"),
     "life-client.js must load before the Life controller"
   );
   assert.ok(
-    index.indexOf("/js/life-controller.js") > index.indexOf("/js/life-client.js") &&
-      index.indexOf("/js/life-controller.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/life-controller.js") > bootPos("/js/life-client.js") &&
+      bootPos("/js/life-controller.js") < bootPos("/js/08-me-records.js"),
     "life-controller.js must load before Records life timeline consumers"
   );
   assert.ok(
-    index.indexOf("/js/family-client.js") > index.indexOf("/js/life-controller.js") &&
-      index.indexOf("/js/family-client.js") < index.indexOf("/js/family-controller.js"),
+    bootPos("/js/family-client.js") > bootPos("/js/life-controller.js") &&
+      bootPos("/js/family-client.js") < bootPos("/js/family-controller.js"),
     "family-client.js must load before the Family controller"
   );
   assert.ok(
-    index.indexOf("/js/family-controller.js") > index.indexOf("/js/family-client.js") &&
-      index.indexOf("/js/family-controller.js") < index.indexOf("/js/08-me-records.js"),
+    bootPos("/js/family-controller.js") > bootPos("/js/family-client.js") &&
+      bootPos("/js/family-controller.js") < bootPos("/js/08-me-records.js"),
     "family-controller.js must load before Records family consumers"
   );
   assert.ok(
-    index.indexOf("/js/chat-client.js") > index.indexOf("/js/08-me-records.js") &&
-      index.indexOf("/js/chat-client.js") < index.indexOf("/js/chat-attachment-client.js"),
+    bootPos("/js/chat-client.js") > bootPos("/js/08-me-records.js") &&
+      bootPos("/js/chat-client.js") < bootPos("/js/chat-attachment-client.js"),
     "chat-client.js must load before chat attachment helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-attachment-client.js") > index.indexOf("/js/chat-client.js") &&
-      index.indexOf("/js/chat-attachment-client.js") < index.indexOf("/js/chat-composer-focus-client.js"),
+    bootPos("/js/chat-attachment-client.js") > bootPos("/js/chat-client.js") &&
+      bootPos("/js/chat-attachment-client.js") < bootPos("/js/chat-composer-focus-client.js"),
     "chat-attachment-client.js must load after chat helpers and before chat composer focus helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-composer-focus-client.js") > index.indexOf("/js/chat-attachment-client.js") &&
-      index.indexOf("/js/chat-composer-focus-client.js") < index.indexOf("/js/chat-composer-controller.js"),
+    bootPos("/js/chat-composer-focus-client.js") > bootPos("/js/chat-attachment-client.js") &&
+      bootPos("/js/chat-composer-focus-client.js") < bootPos("/js/chat-composer-controller.js"),
     "chat-composer-focus-client.js must load after chat attachment helpers and before chat composer controller"
   );
   assert.ok(
-    index.indexOf("/js/chat-composer-controller.js") > index.indexOf("/js/chat-composer-focus-client.js") &&
-      index.indexOf("/js/chat-composer-controller.js") < index.indexOf("/js/chat-message-client.js"),
+    bootPos("/js/chat-composer-controller.js") > bootPos("/js/chat-composer-focus-client.js") &&
+      bootPos("/js/chat-composer-controller.js") < bootPos("/js/chat-message-client.js"),
     "chat-composer-controller.js must load after chat focus helpers and before chat message helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-message-client.js") > index.indexOf("/js/chat-composer-controller.js") &&
-      index.indexOf("/js/chat-message-client.js") < index.indexOf("/js/chat-turn-records-client.js"),
+    bootPos("/js/chat-message-client.js") > bootPos("/js/chat-composer-controller.js") &&
+      bootPos("/js/chat-message-client.js") < bootPos("/js/chat-turn-records-client.js"),
     "chat-message-client.js must load after chat composer controller and before chat turn record helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-turn-records-client.js") > index.indexOf("/js/chat-message-client.js") &&
-      index.indexOf("/js/chat-turn-records-client.js") < index.indexOf("/js/chat-turn-stream-state-client.js"),
+    bootPos("/js/chat-turn-records-client.js") > bootPos("/js/chat-message-client.js") &&
+      bootPos("/js/chat-turn-records-client.js") < bootPos("/js/chat-turn-stream-state-client.js"),
     "chat-turn-records-client.js must load after chat message helpers and before chat turn stream-state helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-turn-stream-state-client.js") > index.indexOf("/js/chat-turn-records-client.js") &&
-      index.indexOf("/js/chat-turn-stream-state-client.js") < index.indexOf("/js/chat-layout-client.js"),
+    bootPos("/js/chat-turn-stream-state-client.js") > bootPos("/js/chat-turn-records-client.js") &&
+      bootPos("/js/chat-turn-stream-state-client.js") < bootPos("/js/chat-layout-client.js"),
     "chat-turn-stream-state-client.js must load after chat turn record helpers and before chat layout helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-layout-client.js") > index.indexOf("/js/chat-turn-stream-state-client.js") &&
-      index.indexOf("/js/chat-layout-client.js") < index.indexOf("/js/chat-turn-client.js"),
+    bootPos("/js/chat-layout-client.js") > bootPos("/js/chat-turn-stream-state-client.js") &&
+      bootPos("/js/chat-layout-client.js") < bootPos("/js/chat-turn-client.js"),
     "chat-layout-client.js must load after chat turn stream-state helpers and before chat turn helpers"
   );
   assert.ok(
-    index.indexOf("/js/chat-turn-client.js") > index.indexOf("/js/chat-layout-client.js") &&
-      index.indexOf("/js/chat-turn-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/chat-turn-client.js") > bootPos("/js/chat-layout-client.js") &&
+      bootPos("/js/chat-turn-client.js") < bootPos("/js/09-plan-chat.js"),
     "chat-turn-client.js must load after chat layout helpers and before 09-plan-chat.js"
   );
   assert.ok(
-    index.indexOf("/js/chat-history-client.js") > index.indexOf("/js/chat-turn-client.js") &&
-      index.indexOf("/js/chat-history-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/chat-history-client.js") > bootPos("/js/chat-turn-client.js") &&
+      bootPos("/js/chat-history-client.js") < bootPos("/js/09-plan-chat.js"),
     "chat-history-client.js must load after chat turn helpers and before 09-plan-chat.js"
   );
   assert.ok(
-    index.indexOf("/js/plan-endurance-model.js") > index.indexOf("/js/chat-history-client.js") &&
-      index.indexOf("/js/plan-endurance-model.js") < index.indexOf("/js/plan-endurance-client.js"),
+    bootPos("/js/plan-endurance-model.js") > bootPos("/js/chat-history-client.js") &&
+      bootPos("/js/plan-endurance-model.js") < bootPos("/js/plan-endurance-client.js"),
     "plan-endurance-model.js must load before Plan endurance orchestration"
   );
   assert.ok(
-    index.indexOf("/js/plan-endurance-client.js") > index.indexOf("/js/plan-endurance-model.js") &&
-      index.indexOf("/js/plan-endurance-client.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/plan-endurance-client.js") > bootPos("/js/plan-endurance-model.js") &&
+      bootPos("/js/plan-endurance-client.js") < bootPos("/js/09-plan-chat.js"),
     "plan-endurance-client.js must load before Plan endurance consumers"
   );
   assert.ok(
-    index.indexOf("/js/plan-editor-client.js") > index.indexOf("/js/plan-endurance-client.js") &&
-      index.indexOf("/js/plan-editor-client.js") < index.indexOf("/js/plan-editor-form-client.js"),
+    bootPos("/js/plan-editor-client.js") > bootPos("/js/plan-endurance-client.js") &&
+      bootPos("/js/plan-editor-client.js") < bootPos("/js/plan-editor-form-client.js"),
     "plan-editor-client.js must load after Plan endurance helpers and before Plan editor form helpers"
   );
   assert.ok(
-    index.indexOf("/js/plan-editor-form-client.js") > index.indexOf("/js/plan-editor-client.js") &&
-      index.indexOf("/js/plan-editor-form-client.js") < index.indexOf("/js/plan-editor-controller.js"),
+    bootPos("/js/plan-editor-form-client.js") > bootPos("/js/plan-editor-client.js") &&
+      bootPos("/js/plan-editor-form-client.js") < bootPos("/js/plan-editor-controller.js"),
     "plan-editor-form-client.js must load after Plan editor render helpers and before the Plan editor controller"
   );
   assert.ok(
-    index.indexOf("/js/plan-editor-controller.js") > index.indexOf("/js/plan-editor-form-client.js") &&
-      index.indexOf("/js/plan-editor-controller.js") < index.indexOf("/js/09-plan-chat.js"),
+    bootPos("/js/plan-editor-controller.js") > bootPos("/js/plan-editor-form-client.js") &&
+      bootPos("/js/plan-editor-controller.js") < bootPos("/js/09-plan-chat.js"),
     "plan-editor-controller.js must load after Plan editor form helpers and before Plan editor consumers"
   );
   assert.ok(
-    index.indexOf("/js/day-fuel-client.js") > index.indexOf("/js/05-progress.js") &&
-      index.indexOf("/js/day-fuel-client.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/day-fuel-client.js") > bootPos("/js/05-progress.js") &&
+      bootPos("/js/day-fuel-client.js") < bootPos("/js/06-coach-meals.js"),
     "day-fuel-client.js must load before Meals day-fuel consumers"
   );
   assert.ok(
-    index.indexOf("/js/day-fuel-controller.js") > index.indexOf("/js/day-fuel-client.js") &&
-      index.indexOf("/js/day-fuel-controller.js") < index.indexOf("/js/06-coach-meals.js"),
+    bootPos("/js/day-fuel-controller.js") > bootPos("/js/day-fuel-client.js") &&
+      bootPos("/js/day-fuel-controller.js") < bootPos("/js/06-coach-meals.js"),
     "day-fuel-controller.js must load before Meals day-fuel controller consumers"
   );
   assert.ok(
-    index.indexOf("/js/food-note-client.js") > index.indexOf("/js/06-coach-meals.js") &&
-      index.indexOf("/js/food-note-client.js") < index.indexOf("/js/07-me-health.js"),
+    bootPos("/js/food-note-client.js") > bootPos("/js/06-coach-meals.js") &&
+      bootPos("/js/food-note-client.js") < bootPos("/js/07-me-health.js"),
     "food-note-client.js must load before Me food-note consumers"
   );
   assert.ok(
-    index.indexOf("/js/food-detail-controller.js") > index.indexOf("/js/food-note-client.js") &&
-      index.indexOf("/js/food-detail-controller.js") < index.indexOf("/js/07-me-health.js"),
+    bootPos("/js/food-detail-controller.js") > bootPos("/js/food-note-client.js") &&
+      bootPos("/js/food-detail-controller.js") < bootPos("/js/07-me-health.js"),
     "food-detail-controller.js must load after food-note helpers and before food detail consumers"
   );
   assert.ok(
-    index.indexOf("/js/me-profile-form-client.js") > index.indexOf("/js/health-docs-client.js") &&
-      index.indexOf("/js/me-profile-form-client.js") < index.indexOf("/js/me-profile-controller.js"),
+    bootPos("/js/me-profile-form-client.js") > bootPos("/js/health-docs-client.js") &&
+      bootPos("/js/me-profile-form-client.js") < bootPos("/js/me-profile-controller.js"),
     "me-profile-form-client.js must load after shared Health document helpers and before the Me Profile controller"
   );
   assert.ok(
-    index.indexOf("/js/me-profile-controller.js") > index.indexOf("/js/me-profile-form-client.js") &&
-      index.indexOf("/js/me-profile-controller.js") < index.indexOf("/js/07-me-health.js"),
+    bootPos("/js/me-profile-controller.js") > bootPos("/js/me-profile-form-client.js") &&
+      bootPos("/js/me-profile-controller.js") < bootPos("/js/07-me-health.js"),
     "me-profile-controller.js must load after Me Profile form helpers and before Me Profile consumers"
   );
   assert.ok(
-    index.indexOf("/js/me-health-tabs-controller.js") > index.indexOf("/js/me-profile-controller.js") &&
-      index.indexOf("/js/me-health-tabs-controller.js") < index.indexOf("/js/me-health-controller-deps.js"),
+    bootPos("/js/me-health-tabs-controller.js") > bootPos("/js/me-profile-controller.js") &&
+      bootPos("/js/me-health-tabs-controller.js") < bootPos("/js/me-health-controller-deps.js"),
     "me-health-tabs-controller.js must load before Me Health dependency factories"
   );
   assert.ok(
-    index.indexOf("/js/me-health-controller-deps.js") > index.indexOf("/js/me-health-tabs-controller.js") &&
-      index.indexOf("/js/me-health-controller-deps.js") < index.indexOf("/js/me-health-dependencies.js"),
+    bootPos("/js/me-health-controller-deps.js") > bootPos("/js/me-health-tabs-controller.js") &&
+      bootPos("/js/me-health-controller-deps.js") < bootPos("/js/me-health-dependencies.js"),
     "me-health-controller-deps.js must load before the public Me Health dependency namespace"
   );
   assert.ok(
-    index.indexOf("/js/me-health-dependencies.js") > index.indexOf("/js/me-health-controller-deps.js") &&
-      index.indexOf("/js/me-health-dependencies.js") < index.indexOf("/js/07-me-health.js"),
+    bootPos("/js/me-health-dependencies.js") > bootPos("/js/me-health-controller-deps.js") &&
+      bootPos("/js/me-health-dependencies.js") < bootPos("/js/07-me-health.js"),
     "me-health-dependencies.js must load before Me Health screen consumers"
   );
   assert.ok(
-    index.indexOf("/js/settings-client.js") > index.indexOf("/js/settings-routes.js") &&
-      index.indexOf("/js/settings-client.js") < index.indexOf("/js/settings-surface-client.js"),
+    bootPos("/js/settings-client.js") > bootPos("/js/settings-routes.js") &&
+      bootPos("/js/settings-client.js") < bootPos("/js/settings-surface-client.js"),
     "settings-client.js must load before Settings surface helpers"
   );
   assert.ok(
-    index.indexOf("/js/settings-surface-client.js") > index.indexOf("/js/settings-client.js") &&
-      index.indexOf("/js/settings-surface-client.js") < index.indexOf("/js/settings-data-client.js"),
+    bootPos("/js/settings-surface-client.js") > bootPos("/js/settings-client.js") &&
+      bootPos("/js/settings-surface-client.js") < bootPos("/js/settings-data-client.js"),
     "settings-surface-client.js must load before Settings Data helpers"
   );
   assert.ok(
-    index.indexOf("/js/settings-data-client.js") > index.indexOf("/js/settings-surface-client.js") &&
-      index.indexOf("/js/settings-data-client.js") < index.indexOf("/js/settings-data-controller.js"),
+    bootPos("/js/settings-data-client.js") > bootPos("/js/settings-surface-client.js") &&
+      bootPos("/js/settings-data-client.js") < bootPos("/js/settings-data-controller.js"),
     "settings-data-client.js must load before Settings Data controller"
   );
   assert.ok(
-    index.indexOf("/js/settings-data-controller.js") > index.indexOf("/js/settings-data-client.js") &&
-      index.indexOf("/js/settings-data-controller.js") < index.indexOf("/js/settings-agents-client.js"),
+    bootPos("/js/settings-data-controller.js") > bootPos("/js/settings-data-client.js") &&
+      bootPos("/js/settings-data-controller.js") < bootPos("/js/settings-agents-client.js"),
     "settings-data-controller.js must load before Settings Agents helpers"
   );
   assert.ok(
-    index.indexOf("/js/settings-agents-client.js") > index.indexOf("/js/settings-data-controller.js") &&
-      index.indexOf("/js/settings-agents-client.js") < index.indexOf("/js/settings-agents-controller.js"),
+    bootPos("/js/settings-agents-client.js") > bootPos("/js/settings-data-controller.js") &&
+      bootPos("/js/settings-agents-client.js") < bootPos("/js/settings-agents-controller.js"),
     "settings-agents-client.js must load before Settings Agents controller"
   );
   assert.ok(
-    index.indexOf("/js/settings-agents-controller.js") > index.indexOf("/js/settings-agents-client.js") &&
-      index.indexOf("/js/settings-agents-controller.js") < index.indexOf("/js/settings-sources-automation-controller.js"),
+    bootPos("/js/settings-agents-controller.js") > bootPos("/js/settings-agents-client.js") &&
+      bootPos("/js/settings-agents-controller.js") < bootPos("/js/settings-sources-automation-controller.js"),
     "settings-agents-controller.js must load before Settings Sources/Automation controller"
   );
   assert.ok(
-    index.indexOf("/js/settings-sources-automation-controller.js") > index.indexOf("/js/settings-agents-controller.js") &&
-      index.indexOf("/js/settings-sources-automation-controller.js") < index.indexOf("/js/settings-screen.js"),
+    bootPos("/js/settings-sources-automation-controller.js") > bootPos("/js/settings-agents-controller.js") &&
+      bootPos("/js/settings-sources-automation-controller.js") < bootPos("/js/settings-screen.js"),
     "settings-sources-automation-controller.js must load before settings-screen.js"
   );
   assert.ok(
-    index.indexOf("/js/settings-screen.js") > index.indexOf("/js/settings-sources-automation-controller.js") &&
-      index.indexOf("/js/settings-screen.js") < index.indexOf("/js/route-state.js"),
+    bootPos("/js/settings-screen.js") > bootPos("/js/settings-sources-automation-controller.js") &&
+      bootPos("/js/settings-screen.js") < bootPos("/js/route-state.js"),
     "settings-screen.js must load after Settings helpers and before route-state.js"
   );
   assert.ok(
-    index.indexOf("/js/app-router.js") > index.indexOf("/js/route-state.js") &&
-      index.indexOf("/js/app-router.js") < index.indexOf("/js/app-route-sync.js"),
+    bootPos("/js/app-router.js") > bootPos("/js/route-state.js") &&
+      bootPos("/js/app-router.js") < bootPos("/js/app-route-sync.js"),
     "app-router.js must load after route-state.js and before route sync wrappers"
   );
   assert.ok(
-    index.indexOf("/js/app-route-sync.js") > index.indexOf("/js/app-router.js") &&
-      index.indexOf("/js/app-route-sync.js") < index.indexOf("/js/app-render-dispatch.js"),
+    bootPos("/js/app-route-sync.js") > bootPos("/js/app-router.js") &&
+      bootPos("/js/app-route-sync.js") < bootPos("/js/app-render-dispatch.js"),
     "app-route-sync.js must load after router helpers and before render dispatch"
   );
   assert.ok(
-    index.indexOf("/js/app-render-dispatch.js") > index.indexOf("/js/app-route-sync.js") &&
-      index.indexOf("/js/app-render-dispatch.js") < index.indexOf("/js/app-tabs.js"),
+    bootPos("/js/app-render-dispatch.js") > bootPos("/js/app-route-sync.js") &&
+      bootPos("/js/app-render-dispatch.js") < bootPos("/js/app-tabs.js"),
     "app-render-dispatch.js must load after route sync wrappers and before tab shell controls"
   );
   assert.ok(
-    index.indexOf("/js/app-tabs.js") > index.indexOf("/js/app-render-dispatch.js") &&
-      index.indexOf("/js/app-tabs.js") < index.indexOf("/js/app-job-reconnectors.js"),
+    bootPos("/js/app-tabs.js") > bootPos("/js/app-render-dispatch.js") &&
+      bootPos("/js/app-tabs.js") < bootPos("/js/app-job-reconnectors.js"),
     "app-tabs.js must load after render dispatch and before boot-time reconnectors"
   );
   assert.ok(
-    index.indexOf("/js/app-job-reconnectors.js") > index.indexOf("/js/app-tabs.js") &&
-      index.indexOf("/js/app-job-reconnectors.js") < index.indexOf("/js/10-boot.js"),
+    bootPos("/js/app-job-reconnectors.js") > bootPos("/js/app-tabs.js") &&
+      bootPos("/js/app-job-reconnectors.js") < bootPos("/js/10-boot.js"),
     "app-job-reconnectors.js must load after tab shell controls and before 10-boot.js"
   );
   assert.ok(
-    index.indexOf("/js/app-mobile-viewport.js") > index.indexOf("/js/app-job-reconnectors.js") &&
-      index.indexOf("/js/app-mobile-viewport.js") < index.indexOf("/js/10-boot.js"),
+    bootPos("/js/app-mobile-viewport.js") > bootPos("/js/app-job-reconnectors.js") &&
+      bootPos("/js/app-mobile-viewport.js") < bootPos("/js/10-boot.js"),
     "app-mobile-viewport.js must load after boot-time reconnectors and before 10-boot.js"
   );
   assert.ok(
-    index.indexOf("/js/app-service-worker.js") > index.indexOf("/js/app-mobile-viewport.js") &&
-      index.indexOf("/js/app-service-worker.js") < index.indexOf("/js/10-boot.js"),
+    bootPos("/js/app-service-worker.js") > bootPos("/js/app-mobile-viewport.js") &&
+      bootPos("/js/app-service-worker.js") < bootPos("/js/10-boot.js"),
     "app-service-worker.js must load after app shell helpers and before 10-boot.js"
   );
   assert.ok(
-    index.indexOf("/js/app-discipline-primer.js") > index.indexOf("/js/app-service-worker.js") &&
-      index.indexOf("/js/app-discipline-primer.js") < index.indexOf("/js/app-onboarding.js"),
+    bootPos("/js/app-discipline-primer.js") > bootPos("/js/app-service-worker.js") &&
+      bootPos("/js/app-discipline-primer.js") < bootPos("/js/app-onboarding.js"),
     "app-discipline-primer.js must load after app shell helpers and before 10-boot.js"
   );
   assert.ok(
-    index.indexOf("/js/app-onboarding.js") > index.indexOf("/js/app-discipline-primer.js") &&
-      index.indexOf("/js/app-onboarding.js") < index.indexOf("/js/app-startup.js"),
+    bootPos("/js/app-onboarding.js") > bootPos("/js/app-discipline-primer.js") &&
+      bootPos("/js/app-onboarding.js") < bootPos("/js/app-startup.js"),
     "app-onboarding.js must load after discipline priming and before startup"
   );
   assert.ok(
-    index.indexOf("/js/app-startup.js") > index.indexOf("/js/app-onboarding.js") &&
-      index.indexOf("/js/app-startup.js") < index.indexOf("/js/10-boot.js"),
+    bootPos("/js/app-startup.js") > bootPos("/js/app-onboarding.js") &&
+      bootPos("/js/app-startup.js") < bootPos("/js/10-boot.js"),
     "app-startup.js must load after app shell helpers and before 10-boot.js"
   );
   assert.match(dateUtils, /\/\/ @ts-check/);
@@ -5667,168 +5548,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(boot, /function\s+openOnboarding/);
   assert.doesNotMatch(boot, /function\s+downloadFile/);
   assert.doesNotMatch(boot, /window\.addEventListener\("popstate"/);
-  assert.match(sw, /"\/js\/today-agenda-client\.js"/);
-  assert.match(sw, /"\/js\/today-rail-loaders-client\.js"/);
-  assert.match(sw, /"\/js\/today-rail-controller\.js"/);
-  assert.match(sw, /"\/js\/today-plan-selection-client\.js"/);
-  assert.match(sw, /"\/js\/today-training-client\.js"/);
-  assert.match(sw, /"\/js\/today-progression-controller\.js"/);
-  assert.match(sw, /"\/js\/today-add-exercise-controller\.js"/);
-  assert.match(sw, /"\/js\/today-brief-client\.js"/);
-  assert.match(sw, /"\/js\/today-brief-override-client\.js"/);
-  assert.match(sw, /"\/js\/today-brief-actions-client\.js"/);
-  assert.match(sw, /"\/js\/cardio-plan-client\.js"/);
-  assert.match(sw, /"\/js\/cardio-sync-client\.js"/);
-  assert.match(sw, /"\/js\/today-lately-client\.js"/);
-  assert.match(sw, /"\/js\/proposal-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-suggest-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-suggest-controller\.js"/);
-  assert.match(sw, /"\/js\/today-session-status-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-feedback-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-skip-client\.js"/);
-  assert.match(sw, /"\/js\/today-session-set-model\.js"/);
-  assert.match(sw, /"\/js\/today-session-set-actions\.js"/);
-  assert.match(sw, /"\/js\/today-session-controller\.js"/);
-  assert.match(sw, /"\/js\/today-cards-client\.js"/);
-  assert.match(sw, /"\/js\/today-program-adjustments-client\.js"/);
-  assert.match(sw, /"\/js\/today-week-ahead-client\.js"/);
-  assert.match(sw, /"\/js\/today-context-client\.js"/);
-  assert.match(sw, /"\/js\/today-side-loaders\.js"/);
-  assert.match(sw, /"\/js\/today-plan-session-model\.js"/);
-  assert.match(sw, /"\/js\/today-plan-session-data-client\.js"/);
-  assert.match(sw, /"\/js\/today-plan-session-preparation\.js"/);
-  assert.match(sw, /"\/js\/today-data-loader\.js"/);
-  assert.match(sw, /"\/js\/today-main-shell-client\.js"/);
-  assert.match(sw, /"\/js\/today-plan-surface-client\.js"/);
-  assert.match(sw, /"\/js\/today-plan-surface-renderer\.js"/);
-  assert.match(sw, /"\/js\/today-render-state-client\.js"/);
-  assert.match(sw, /"\/js\/today-post-render-wiring\.js"/);
-  assert.match(sw, /"\/js\/today-dependencies\.js"/);
-  assert.match(sw, /"\/js\/progress-data-client\.js"/);
-  assert.match(sw, /"\/js\/progress-endurance-client\.js"/);
-  assert.match(sw, /"\/js\/progress-components-client\.js"/);
-  assert.match(sw, /"\/js\/progress-chart-scrub-client\.js"/);
-  assert.match(sw, /"\/js\/progress-chart-client\.js"/);
-  assert.match(sw, /"\/js\/progress-trend-weight-client\.js"/);
-  assert.match(sw, /"\/js\/progress-history-client\.js"/);
-  assert.match(sw, /"\/js\/progress-run-plan-client\.js"/);
-  assert.match(sw, /"\/js\/progress-route-deps-client\.js"/);
-  assert.match(sw, /"\/js\/progress-endurance-controller\.js"/);
-  assert.match(sw, /"\/js\/progress-volume-client\.js"/);
-  assert.match(sw, /"\/js\/progress-energy-client\.js"/);
-  assert.match(sw, /"\/js\/progress-energy-surface-client\.js"/);
-  assert.match(sw, /"\/js\/progress-calendar-client\.js"/);
-  assert.match(sw, /"\/js\/progress-muscle-trajectory-client\.js"/);
-  assert.match(sw, /"\/js\/progress-dexa-targeting-client\.js"/);
-  assert.match(sw, /"\/js\/progress-performance-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-adjustments-client\.js"/);
-  assert.match(sw, /"\/js\/progress-test-week-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-summary-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-block-client\.js"/);
-  assert.match(sw, /"\/js\/progress-program-controller\.js"/);
-  assert.match(sw, /"\/js\/coaching-focus-client\.js"/);
-  assert.match(sw, /"\/js\/markdown-client\.js"/);
-  assert.match(sw, /"\/js\/today-activity-client\.js"/);
-  assert.match(sw, /"\/js\/pwa-install-coach\.js"/);
-  assert.match(sw, /"\/js\/agent-login-model-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-assets-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-modal-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-session-client\.js"/);
-  assert.match(sw, /"\/js\/agent-login-client\.js"/);
-  assert.match(sw, /"\/js\/rest-timer\.js"/);
-  assert.match(sw, /"\/js\/ui-components\.js"/);
-  assert.match(sw, /"\/js\/ui-feedback-client\.js"/);
-  assert.match(sw, /"\/js\/ui-actions-client\.js"/);
-  assert.match(sw, /"\/js\/ui-view-transitions-client\.js"/);
-  assert.match(sw, /"\/js\/exercise-detail-client\.js"/);
-  assert.match(sw, /"\/js\/exercise-detail-controller\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-row-client\.js"/);
-  assert.match(sw, /"\/js\/meal-plan-client\.js"/);
-  assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
-  assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-data-client\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-row-actions-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-planner-controller\.js"/);
-  assert.match(sw, /"\/js\/coach-proposal-controller\.js"/);
-  assert.match(sw, /"\/js\/capture-provenance-client\.js"/);
-  assert.match(sw, /"\/js\/capture-reads-client\.js"/);
-  assert.match(sw, /"\/js\/capture-voice-client\.js"/);
-  assert.match(sw, /"\/js\/food-note-client\.js"/);
-  assert.match(sw, /"\/js\/food-detail-controller\.js"/);
-  assert.match(sw, /"\/js\/me-profile-form-client\.js"/);
-  assert.match(sw, /"\/js\/me-profile-controller\.js"/);
-  assert.match(sw, /"\/js\/me-health-tabs-controller\.js"/);
-  assert.match(sw, /"\/js\/health-marker-order-client\.js"/);
-  assert.match(sw, /"\/js\/health-client\.js"/);
-  assert.match(sw, /"\/js\/health-read-client\.js"/);
-  assert.match(sw, /"\/js\/health-standing-primitives-client\.js"/);
-  assert.match(sw, /"\/js\/health-standing-client\.js"/);
-  assert.match(sw, /"\/js\/health-picture-client\.js"/);
-  assert.match(sw, /"\/js\/health-picture-controller\.js"/);
-  assert.match(sw, /"\/js\/health-directives-loader-client\.js"/);
-  assert.match(sw, /"\/js\/health-read-supplements-client\.js"/);
-  assert.match(sw, /"\/js\/health-read-controller\.js"/);
-  assert.match(sw, /"\/js\/health-learned-client\.js"/);
-  assert.match(sw, /"\/js\/health-records-client\.js"/);
-  assert.match(sw, /"\/js\/health-doc-upload-controller\.js"/);
-  assert.match(sw, /"\/js\/health-doc-actions-controller\.js"/);
-  assert.match(sw, /"\/js\/me-records-health-doc-controller\.js"/);
-  assert.match(sw, /"\/js\/memory-client\.js"/);
-  assert.match(sw, /"\/js\/me-memory-controller\.js"/);
-  assert.match(sw, /"\/js\/life-client\.js"/);
-  assert.match(sw, /"\/js\/life-controller\.js"/);
-  assert.match(sw, /"\/js\/family-client\.js"/);
-  assert.match(sw, /"\/js\/family-controller\.js"/);
-  assert.match(sw, /"\/js\/health-docs-client\.js"/);
-  assert.match(sw, /"\/js\/chat-client\.js"/);
-  assert.match(sw, /"\/js\/chat-attachment-client\.js"/);
-  assert.match(sw, /"\/js\/chat-composer-focus-client\.js"/);
-  assert.match(sw, /"\/js\/chat-composer-controller\.js"/);
-  assert.match(sw, /"\/js\/chat-message-client\.js"/);
-  assert.match(sw, /"\/js\/chat-turn-records-client\.js"/);
-  assert.match(sw, /"\/js\/chat-layout-client\.js"/);
-  assert.match(sw, /"\/js\/chat-turn-client\.js"/);
-  assert.match(sw, /"\/js\/chat-history-client\.js"/);
-  assert.match(sw, /"\/js\/plan-endurance-model\.js"/);
-  assert.match(sw, /"\/js\/plan-endurance-client\.js"/);
-  assert.match(sw, /"\/js\/plan-editor-client\.js"/);
-  assert.match(sw, /"\/js\/plan-editor-form-client\.js"/);
-  assert.match(sw, /"\/js\/plan-editor-controller\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-client\.js"/);
-  assert.match(sw, /"\/js\/day-fuel-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-row-client\.js"/);
-  assert.match(sw, /"\/js\/meal-plan-client\.js"/);
-  assert.match(sw, /"\/js\/meal-recipe-client\.js"/);
-  assert.match(sw, /"\/js\/meal-recipe-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-data-client\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-row-actions-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-swap-controller\.js"/);
-  assert.match(sw, /"\/js\/meal-planner-controller\.js"/);
-  assert.match(sw, /"\/js\/coach-proposal-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-client\.js"/);
-  assert.match(sw, /"\/js\/settings-surface-client\.js"/);
-  assert.match(sw, /"\/js\/settings-data-client\.js"/);
-  assert.match(sw, /"\/js\/settings-data-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-agents-client\.js"/);
-  assert.match(sw, /"\/js\/settings-agents-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-sources-automation-controller\.js"/);
-  assert.match(sw, /"\/js\/settings-screen\.js"/);
-  assert.match(sw, /"\/js\/app-download\.js"/);
-  assert.match(sw, /"\/js\/app-sw-recovery\.js"/);
-  assert.match(sw, /"\/js\/save-bar\.js"/);
-  assert.match(sw, /"\/js\/app-route-sync\.js"/);
-  assert.match(sw, /"\/js\/app-render-dispatch\.js"/);
-  assert.match(sw, /"\/js\/app-tabs\.js"/);
-  assert.match(sw, /"\/js\/agent-job-client\.js"/);
-  assert.match(sw, /"\/js\/app-job-reconnectors\.js"/);
-  assert.match(sw, /"\/js\/app-mobile-viewport\.js"/);
-  assert.match(sw, /"\/js\/app-service-worker\.js"/);
-  assert.match(sw, /"\/js\/app-discipline-primer\.js"/);
-  assert.match(sw, /"\/js\/app-onboarding\.js"/);
-  assert.match(sw, /"\/js\/app-startup\.js"/);
+  // Every shipped bundle must be precached by the service worker (individual
+  // modules are concatenated into these bundles; see the dedicated sw core-assets test).
+  for (const bundle of BUNDLES) {
+    const bundleUrl = `/${bundle.output.replace(/^public\//, "")}`;
+    assert.ok(sw.includes(`"${bundleUrl}"`), `${bundleUrl} must be precached by public/sw.js`);
+  }
   assert.match(dockerfile, /ENV NPM_CONFIG_AUDIT=false[\s\S]*NPM_CONFIG_UPDATE_NOTIFIER=false/);
   assert.match(dockerfile, /COPY package\*\.json tsconfig\.json tsconfig\.client\.build\.json \.\//);
   assert.match(dockerfile, /RUN --mount=type=cache,target=\/root\/\.npm,sharing=locked npm ci/);

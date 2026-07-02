@@ -6,10 +6,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CLIENT_OUTPUTS } from "./build-client.mjs";
+import { BUNDLES, CLIENT_OUTPUTS } from "./build-client.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outputs = CLIENT_OUTPUTS.map((item) => item.output);
+// Guard both the per-file outputs AND the concatenated bundles index.html loads:
+// each must exist and be byte-identical after a clean rebuild.
+const outputs = [...CLIENT_OUTPUTS.map((item) => item.output), ...BUNDLES.map((bundle) => bundle.output)];
 
 function readOutput(file) {
   const abs = path.join(root, file);
