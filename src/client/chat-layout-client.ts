@@ -3,10 +3,17 @@
 // Chat viewport measurement, jump-to-latest wiring, and composer autosize.
 
 (() => {
+// D6 · 200px proximity: is the reader parked on the newest message? Tracked off the
+// log's own scroll (below) so it reflects real reader INTENT, and read by
+// measureChatTop when the keyboard lifts the column — so we re-pin to the latest
+// turn only for someone already at the bottom, never yanking a reader scrolled up.
+let chatNearBottom = true;
+
 function wireChatJump(log: HTMLElement | null, jump: HTMLElement | null): void {
   if (!log || !jump) return;
   const update = () => {
     const off = log.scrollHeight - log.scrollTop - log.clientHeight;
+    chatNearBottom = off < 200;
     jump.hidden = off < 120;
   };
   log.addEventListener("scroll", update, { passive: true });
@@ -49,6 +56,16 @@ function measureChatTop(): void {
   rootEl.style.setProperty("--cvt", `${Math.round(offTop)}px`);
   rootEl.style.setProperty("--chat-top", `${Math.round(headerH)}px`);
   if (tab) rootEl.style.setProperty("--tabbar-h", `${Math.round(tab.getBoundingClientRect().height)}px`);
+  // Keyboard up: CSS lifts the column onto the keyboard top (bottom:var(--vvb)),
+  // which shrinks the log by the occluded height and can drop the newest turn below
+  // the fold. Re-pin to the bottom when the reader was already there (chatNearBottom),
+  // so the latest message + composer stay in view above the keyboard while composing;
+  // someone scrolled up to re-read is left where they are. Runs on every viewport sync
+  // (measureChatTop is the guard's chat hook), so it also follows the keyboard's ramp.
+  if (chatNearBottom && document.body.classList.contains("kb-geometry-open")) {
+    const log = document.querySelector<HTMLElement>("#chatlog");
+    if (log) log.scrollTop = log.scrollHeight;
+  }
 }
 
 const CAIRN_CHAT_LAYOUT: ChatLayoutApi = {
