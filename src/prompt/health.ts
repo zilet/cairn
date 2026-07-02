@@ -19,6 +19,7 @@ import {
   renderRunCompliance,
   renderRunPlan,
   renderRunZones,
+  CAIRN_PERSONA,
 } from "./shared.js";
 
 const HEALTH_INGEST_SCHEMA = `{
@@ -77,7 +78,7 @@ ${absPath}
 It is a local health document (${kindHint}) — a PDF, image, HTML, or text export. Open and read it
 directly.`;
 
-  return `You ingest an athlete's health records into a training & nutrition tracker. The source may
+  return `You ingest a user's health records into a training & nutrition tracker. The source may
 contain a LONG history spanning many dates and years. Your job is to extract EVERY dated set of
 results and split them into one "panel" per distinct test/collection/scan date.
 
@@ -225,7 +226,9 @@ ${JSON.stringify(passages)}\n`
       : (m.trend?.projection ? { direction: null, projection: m.trend.projection } : null),
     recency: recencyOf(m.latest?.date),
   }));
-  return `You are a longevity & wellness coach reviewing this person's WHOLE health picture for
+  return `${CAIRN_PERSONA}
+
+Right now you're the preventive-medicine-literate reader of labs, reviewing this person's WHOLE health picture for
 their training/nutrition tracker: every lab marker they have uploaded (with trends across
 documents), their body composition, training, nutrition, goals, and life context.
 
@@ -233,9 +236,9 @@ NON-NEGOTIABLE FRAMING:
 - This is informational coaching, NOT medical diagnosis or medical advice. Never diagnose or
   prescribe. For anything clinical (a clearly out-of-range marker, a concerning trend), the
   "action"/"why" should say it is worth discussing with their doctor.
-- Plain language only — write for the athlete, not a clinician. No jargon without a translation.
+- Plain language only — write for the user, not a clinician. No jargon without a translation.
 - Ground every statement in the DATA / MARKER HISTORY below. Never invent values or trends.
-- Actions must be concrete food/training/lifestyle steps the athlete can actually take this week
+- Actions must be concrete food/training/lifestyle steps the user can actually take this week
   (e.g. "add 2 servings of oily fish", "keep easy runs easy while ferritin recovers"), respecting
   the lean-safe goal math and every exercise constraint_note.
 - Use the marker trends: a marker moving in the right direction is a win; one drifting the wrong
@@ -313,7 +316,9 @@ const RESEARCH_SCHEMA = `{
 export function buildResearchPrompt(question: string, markers: string[] = []): string {
   const q = String(question ?? "").trim().slice(0, 600);
   const m = (Array.isArray(markers) ? markers : []).map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 12);
-  return `You are a careful clinical-evidence researcher for a personal longevity & wellness tool.
+  return `${CAIRN_PERSONA}
+
+Right now you're acting as a careful clinical-evidence researcher for this longevity & wellness tool.
 Answer the QUESTION below grounded in CURRENT, reputable clinical evidence (recognized guideline
 bodies — AHA/ACC, ESC/EAS, ADA, Endocrine Society, USPSTF, NICE, WHO, Cochrane, KDIGO, ATA, and
 peer-reviewed literature). Use your web access to consult current sources.
@@ -344,7 +349,7 @@ ${RESEARCH_SCHEMA}`;
 // "Glucose, Random") needs a model that knows clinical naming AND can read the
 // units. It clusters ONLY same-analyte names; it must NOT merge clinically-distinct
 // measures. The result only MERGES series (via the canonical key) — it never
-// relabels what the athlete sees — so a conservative miss is harmless, an
+// relabels what the user sees — so a conservative miss is harmless, an
 // over-merge is the only real risk. Hence: when unsure, keep separate.
 export function buildMarkerReconcilePrompt(
   items: Array<{ name: string; unit: string | null; sample: unknown }>
@@ -352,7 +357,9 @@ export function buildMarkerReconcilePrompt(
   const list = items
     .map((it) => `  - "${it.name}"${it.unit ? ` [${it.unit}]` : " [no unit]"}${it.sample != null && it.sample !== "" ? ` e.g. ${JSON.stringify(it.sample)}` : ""}`)
     .join("\n");
-  return `You are a clinical lab-data librarian. Below is a list of lab/biomarker NAMES extracted from
+  return `${CAIRN_PERSONA}
+
+Right now you're acting as a clinical lab-data librarian. Below is a list of lab/biomarker NAMES extracted from
 one person's lab reports over several years, from different labs and panels. Different labs name the
 SAME analyte differently. Your job: group names that are the SAME analyte so the app can merge each
 analyte's history into one trend.
@@ -434,7 +441,9 @@ function renderHealthDrivers(ctx: any): string {
 export function buildHealthSynthesisPrompt(ctx?: CoachContext): string {
   const context = ctx ?? repo.getCoachContext();
   const focus = repo.healthFocus();
-  return `You are Cairn — the athlete's coach who happens to read bloodwork like a preventive-medicine
+  return `${CAIRN_PERSONA}
+
+You read bloodwork like a preventive-medicine
 specialist AND program training like an elite S&C coach. Write the WHOLE-PICTURE health read they'd
 get from a great coach who has all their data in front of them. It waits in their app for when they
 want it — it is NEVER pushed, and it is informational understanding, NOT medical advice.
@@ -486,7 +495,7 @@ ${JSON.stringify(context)}`;
 }
 
 // ---------- the week ahead (forward look) ----------
-// The day-read, projected: a calm sketch of the next several days so the athlete
+// The day-read, projected: a calm sketch of the next several days so the user
 // knows roughly when to lift, run, and rest — balancing their split with the
 // endurance base they're building. A SUGGESTION to reshape, never a fixed schedule.
 const WEEK_AHEAD_SCHEMA = `{
@@ -501,7 +510,9 @@ const WEEK_AHEAD_SCHEMA = `{
 export function buildWeekAheadPrompt(ctx?: CoachContext): string {
   const context = ctx ?? repo.getCoachContext();
   const todayName = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  return `You are Cairn, the athlete's calm training buddy. Sketch the SHAPE of the next several days — a
+  return `${CAIRN_PERSONA}
+
+Sketch the SHAPE of the next several days — a
 gentle look-ahead so they know roughly when to lift, when to run, and when to rest while balancing their
 goals. It waits in the app for them to glance at; it is a SUGGESTION to adapt, NEVER a fixed schedule or
 a gate.

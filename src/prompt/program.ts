@@ -1,5 +1,6 @@
 // Program-facing prompts: the exercise how-to explanation, the exercise-name
-// reconciliation, and the free-text onboarding extraction. Self-contained.
+// reconciliation, and the free-text onboarding extraction.
+import { CAIRN_PERSONA } from "./shared.js";
 
 const EXERCISE_EXPLANATION_SCHEMA = `{
   "setup": "<how to get into position, max 140 chars>",
@@ -8,7 +9,7 @@ const EXERCISE_EXPLANATION_SCHEMA = `{
   "avoid": "<one safety/common-mistake cue, max 140 chars>"
 }`;
 
-// Frictionless onboarding: the athlete wrote ONE short free-text intro instead of
+// Frictionless onboarding: the user wrote ONE short free-text intro instead of
 // filling a form. Extract a calm structured starting picture — never ask anything
 // back. Only fill what they actually said; everything else stays null and Cairn
 // learns it as they go (progressive understanding). Informational, never medical.
@@ -22,7 +23,9 @@ const ONBOARD_SCHEMA = `{
 }`;
 
 export function buildOnboardPrompt(text: string): string {
-  return `You are Cairn, meeting the athlete for the FIRST time. They wrote a short intro about themselves.
+  return `${CAIRN_PERSONA}
+
+You're meeting the user for the FIRST time. They wrote a short intro about themselves.
 Turn it into a calm, structured starting picture so the app is ready for them. DO NOT ask anything back —
 this is a one-shot setup. Fill ONLY what they actually said or clearly implied; leave everything else
 null/empty (Cairn learns the rest naturally over time). Approximate supplements sensibly (creatine →
@@ -30,7 +33,7 @@ null/empty (Cairn learns the rest naturally over time). Approximate supplements 
 medical advice. Respond with ONE JSON object, no prose, no fences:
 ${ONBOARD_SCHEMA}
 
-ATHLETE'S INTRO:
+USER'S INTRO:
 """${String(text ?? "").slice(0, 4000)}"""`;
 }
 
@@ -64,7 +67,7 @@ Rules:
 - Return only one JSON object, no prose and no markdown fences.
 - Four short fields: setup, move, feel, avoid. Each field must be useful and <= 140 characters.
 - Use plain coaching language for an intermediate lifter. No anatomy lecture.
-- Respect constraint_note and existing cues. Never tell the athlete to push through pain.
+- Respect constraint_note and existing cues. Never tell the user to push through pain.
 - If mode is "timed", describe position and hold quality. If mode is "reps", describe repeatable reps.
 - Informational only; do not diagnose or make clinical claims.
 
@@ -76,13 +79,13 @@ ${JSON.stringify(ex)}`;
 }
 
 // Agentic exercise reconciliation — the clean-naming layer over the deterministic
-// canonicalizer (src/repo/exercise-canon.ts). Athletes (and chat/import) name the
+// canonicalizer (src/repo/exercise-canon.ts). Users (and chat/import) name the
 // same movement many ways and leave messy, descriptive titles ("incline db press
 // lol 3x10"); the offline normalizer folds the obvious cases, but the long tail
 // (a duplicate worded differently, a throwaway phrase that needs cleaning) is
 // where a model helps. It clusters ONLY same-MOVEMENT names and profiles each to a
 // clean canonical + muscle group + mode. This only tidies NAMES and tags groups
-// for reuse — it NEVER touches the athlete's logged numbers — so a conservative
+// for reuse — it NEVER touches the user's logged numbers — so a conservative
 // miss is harmless; an over-merge (folding two different movements together) is
 // the only real risk. Hence: when unsure, do NOT merge.
 export function buildExerciseReconcilePrompt(
@@ -91,8 +94,10 @@ export function buildExerciseReconcilePrompt(
   const list = items
     .map((it) => `  - "${it.name}" [${it.group ? it.group : "no group"}, ${it.sets} logged set${it.sets === 1 ? "" : "s"}]`)
     .join("\n");
-  return `You are a strength-training data librarian. Below is a list of EXERCISE NAMES from one
-athlete's training log — many are messy, descriptive, or the same movement worded different ways.
+  return `${CAIRN_PERSONA}
+
+Right now you're acting as a strength-training data librarian. Below is a list of EXERCISE NAMES from one
+user's training log — many are messy, descriptive, or the same movement worded different ways.
 Your job: cluster names that are the SAME MOVEMENT to a clean canonical title and profile each (muscle
 group + mode), so the app can reuse one tidy entry per movement.
 
@@ -117,7 +122,7 @@ RULES (a wrong merge folds two different movements together — be CONSERVATIVE)
 - "mode" = "timed" for held positions measured in seconds (plank, dead hang, wall sit, a stretch);
   "reps" for everything counted in reps.
 
-This ONLY tidies names and tags muscle groups for reuse — it NEVER changes the athlete's logged numbers
+This ONLY tidies names and tags muscle groups for reuse — it NEVER changes the user's logged numbers
 (weights, reps, dates). Plain words, no scores.
 
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:

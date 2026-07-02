@@ -21,6 +21,7 @@ import {
   renderRunZones,
   renderTrainingSignals,
   renderTrajectory,
+  CAIRN_PERSONA,
 } from "./shared.js";
 
 const PLAN_SCHEMA = `{
@@ -50,7 +51,7 @@ const PLAN_SCHEMA = `{
 //              surgically: each attaches to its day_number, REPLACING that day's
 //              cardio while leaving its strength work intact; a day_number with no
 //              plan day yet is created as a dedicated run day. This is the headline
-//              output for a runner/hybrid athlete with an endurance goal — use it
+//              output for a runner/hybrid user with an endurance goal — use it
 //              alongside (or instead of) "changes". DON'T wrap runs in "days".
 // "days"     → ONLY for a real split/FREQUENCY rewrite (whole plan replaced). Each
 //              item may be strength OR { "kind":"cardio", … } as below:
@@ -78,7 +79,9 @@ export function buildCoachPrompt(userInstruction?: string): string {
     : disc === "hybrid"
       ? "a hybrid coach balancing endurance and strength"
       : "a strength coach";
-  return `You are ${coachRole} updating a training plan. The athlete's profile, goal check,
+  return `${CAIRN_PERSONA}
+
+Right now you are ${coachRole} updating a training plan. The user's profile, goal check,
 current plan, recent training sessions, recent cardio/activities, and accumulated memory are in
 the DATA section below.
 
@@ -90,8 +93,8 @@ NON-NEGOTIABLE GUARDRAILS:
 - Account for cardio load: if recent runs/rides are heavy, lean toward holding rather than adding.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the
   source of truth for strength progression. Use Garmin's endurance/recovery signals through the
-  athlete's stated focus: strength-first athletes use runs/rides mainly as recovery/cardio-load
-  context; runner/cyclist-first athletes make endurance progression central and keep lifting
+  user's stated focus: strength-first users use runs/rides mainly as recovery/cardio-load
+  context; runner/cyclist-first users make endurance progression central and keep lifting
   supportive.
 - Assisted movements use NEGATIVE target_weight. Small steps. Thin/absent data -> do not change.
 - TIMED exercises (mode:'timed', e.g. plank, dead hang) are prescribed in SECONDS (target_seconds)
@@ -158,7 +161,7 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     (l: any) => l.status === "plateaued" || l.suggested_action === "vary"
   );
   const injuryAreas = activeInjuryAreas(ctx);
-  // Rank candidates by the athlete's available equipment + a bias toward heavier
+  // Rank candidates by the user's available equipment + a bias toward heavier
   // COMPOUND loading (their explicit goal), never re-suggesting what's already planned.
   const equip = (() => { try { return repo.availableEquipment(); } catch { return []; } })();
   const equipList = equip.length ? equip : undefined;
@@ -176,12 +179,12 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     })
     .filter(Boolean);
   const variationBlock = variationLines.length
-    ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern, ranked toward heavier COMPOUND loading + the athlete's equipment — rotate ONE in to break the plateau, via a "swap":{from,to} change; the new lift starts light):\n${variationLines.join("\n")}\n`
+    ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern, ranked toward heavier COMPOUND loading + the user's equipment — rotate ONE in to break the plateau, via a "swap":{from,to} change; the new lift starts light):\n${variationLines.join("\n")}\n`
     : "";
-  // The athlete's persisted equipment, so any rotated/introduced movement is one they
+  // The user's persisted equipment, so any rotated/introduced movement is one they
   // can actually load. Empty → no constraint.
   const equipBlock = equip.length
-    ? `\nAVAILABLE EQUIPMENT: ${equip.join(", ")}. Only rotate in movements the athlete can load with this; bias toward heavier compound options for progressive overload.\n`
+    ? `\nAVAILABLE EQUIPMENT: ${equip.join(", ")}. Only rotate in movements the user can load with this; bias toward heavier compound options for progressive overload.\n`
     : "";
   // Weak-point read: which canonical groups are chronically UNDER their productive
   // volume range (or untrained lately) vs running high — so the evolution rebalances
@@ -206,9 +209,11 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     : disc === "hybrid"
       ? "a hybrid coach balancing endurance and strength"
       : "a strength coach";
-  return `You are ${coachRole} EVOLVING a training program — not just tweaking next week, but
+  return `${CAIRN_PERSONA}
+
+Right now you are ${coachRole} EVOLVING a training program — not just tweaking next week, but
 reading how each lift has actually been trending and deciding how the plan should adapt so the
-athlete keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
+user keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
 nothing is applied automatically (they drive).
 
 A deterministic PROGRAM-STATE read has already analyzed the logged history — per-lift trend +
@@ -226,7 +231,7 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   Use a "days" restructure (or swap the exercise within its day) to rotate a variation; keep the rest
   of the day intact.
 - RECOVER what's slipping: a "regressing" lift gets backed off, not pushed.
-- GROUND IN REALITY: prescribe from what the athlete ACTUALLY logs, never a stale plan number. If a
+- GROUND IN REALITY: prescribe from what the user ACTUALLY logs, never a stale plan number. If a
   lift's recent working weight has outpaced its plan target (e.g. the plan says 27 lb but they log 45-50
   every week), set the target to their real working load, then progress conservatively from THERE —
   never crawl up from an old number they left behind weeks ago.

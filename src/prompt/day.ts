@@ -24,6 +24,7 @@ import {
   renderTodayFuel,
   renderTrainingSignals,
   renderTrajectory,
+  CAIRN_PERSONA,
 } from "./shared.js";
 
 // ---------- the day read (Phase 1A — the soul) ----------
@@ -31,7 +32,7 @@ const DAY_READ_SCHEMA = `{
   "kind": "train|easy|rest",
   "headline": "<2-4 word plain-language state, e.g. 'Lower body.', 'Long run.', or 'Rest today.'>",
   "why": "<one warm, plain sentence — what you saw and why; NO numbers, NO scores>",
-  "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE athlete it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
+  "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE user it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
   "est_minutes": <rough minutes for the suggestion, or null>
 }`;
 
@@ -159,7 +160,7 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
   const context = ctx ?? repo.getCoachContext();
   const baseline = repo.dayRead(opts.date);
   const overrideBlock = opts.override?.trim()
-    ? `\nATHLETE OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
+    ? `\nUSER OVERRIDE (honor this — they're steering): "${opts.override.trim()}". Reshape the read accordingly (e.g. "rough night" → lean easy/rest; "short on time" → a compressed session; "I want to train anyway" → a train read even if the baseline leaned rest, kept appropriately light).\n`
     : "";
   // A compact recent-training summary so the agent reads the rhythm without
   // digging through the raw DATA blob — last few sessions + days since each,
@@ -192,7 +193,7 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
   const lastNightLine = ln && ln.text
     ? `\nLAST NIGHT: ${ln.text}. When it's worth a mention, name last night in plain words — one calm clause in a friend's voice ("you slept well", "a bit light on deep sleep", "HRV's a touch below your norm") — never a number wall or a score, and let how they actually feel override it.`
     : `\nSLEEP/RECOVERY: no recent sleep or HRV data has synced. Do NOT claim or imply how they slept ("you slept fine", "well-rested", etc.) — you have no sleep signal for last night. Speak only to what the data actually shows (training, recovery trend, the day ahead).`;
-  // The athlete has ALREADY completed a real, loading session today (a deterministic
+  // The user has ALREADY completed a real, loading session today (a deterministic
   // fact). This becomes a post-session DEBRIEF, not a fresh suggestion: acknowledge the
   // specific work, place it in the week, give ONE forward focus, and nudge refuel only
   // if there's a real gap. The facts below are deterministic; the agent writes the prose.
@@ -203,12 +204,14 @@ export function buildDayReadPrompt(ctx?: CoachContext, opts: { override?: string
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"easy", "focus":null, "est_minutes":null — the app renders this as the DONE read automatically.${debriefFacts(opts.date || context.now?.date || new Date().toISOString().slice(0, 10))}`
     : "";
-  return `You are Cairn, the athlete's calm health & training buddy. Read their WHOLE picture and
+  return `${CAIRN_PERSONA}
+
+This is the Brief — today's day-read. Read their WHOLE picture and
 judge what kind of day today should be: a real session, easy movement, or rest. This opens their
 app — it is the first and often only thing they see.
 ${renderNow(context)}
 THE CONSTITUTION (binding):
-- It is a SUGGESTION you offer, never a verdict you impose. The athlete drives; you navigate.
+- It is a SUGGESTION you offer, never a verdict you impose. The user drives; you navigate.
 - Be KIND and never anxious. Rest is wisdom, not failure. A low signal is information, never a
   judgement; their felt experience overrides any number.
 - CALM and plain. No 0-100 scores, no metric dump — numbers are vanity. Say the one true thing in
@@ -217,11 +220,11 @@ THE CONSTITUTION (binding):
   to opening a lifting plan every morning. Never insist on rest either. When you suggest rest, frame
   it as the wise, earned choice ("rest is wisdom"), never as falling behind.
 - ANTICIPATE fatigue, don't just react to it. When the signals carry a "fatigue" block with
-  anticipate_deload=true, recovery is drifting below the athlete's OWN norm (HRV down / resting HR up
+  anticipate_deload=true, recovery is drifting below the user's OWN norm (HRV down / resting HR up
   / sleep short vs baseline) while training days stack up — so today can still be a GREEN-LIGHT to
   train, but add a gentle forward-looking heads-up in a friend's voice ("you're good today, but a
   couple more hard days and you'll likely want a reset"). It's a kind early warning, never a brake or
-  a verdict — the athlete still drives.
+  a verdict — the user still drives.
 
 DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call):
 ${JSON.stringify(baseline.signals)}
@@ -257,7 +260,7 @@ const SESSION_SUGGEST_SCHEMA = `{
 }`;
 
 // "Ask it for a session right now." An on-demand agentic call that honors the
-// athlete's constraints (a time budget, an injury, available equipment) and the
+// user's constraints (a time budget, an injury, available equipment) and the
 // day read, returning a session SUGGESTION for review (you drive — nothing is
 // applied). opts carry the constraints the launchpad chips pass through.
 export function buildSessionPrompt(ctx?: CoachContext, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
@@ -268,7 +271,7 @@ export function buildSessionPrompt(ctx?: CoachContext, opts: { minutes?: number;
   if (opts.focus) wants.push(`FOCUS REQUESTED: ${opts.focus.trim()}.`);
   if (opts.equipment) wants.push(`EQUIPMENT AVAILABLE: ${opts.equipment.trim()} — only program what this allows.`);
   if (opts.constraints) wants.push(`WHAT THEY SAID (free text — read it like a coach and adapt): "${opts.constraints.trim()}". Honor the spirit: a sore/tired area → de-load or SWAP it for a different pattern / lower-impact option (see the swap menu); "easier" → lighter loads + shorter; "no <equipment>" → only what's available.`);
-  // When the athlete asks for something specific (a sore area, a focus, an
+  // When the user asks for something specific (a sore area, a focus, an
   // equipment limit), hand the agent a concrete SWAP MENU from the variation
   // library so it trades a movement for a real same-pattern alternative instead of
   // inventing one. Bounded; only when there's a request to adapt to.
@@ -294,7 +297,9 @@ export function buildSessionPrompt(ctx?: CoachContext, opts: { minutes?: number;
       swapMenu = `\nSWAP MENU (same-pattern alternatives for the plan's movements — use these to honor the request: trade a sore-area or off-limits lift for a different pattern or a lower-impact option, keeping loads conservative; you may also program something not listed):\n${lines.join("\n")}\n`;
     }
   }
-  return `You are Cairn, the athlete's strength & conditioning coach. Build ONE session for today,
+  return `${CAIRN_PERSONA}
+
+Right now you're the strength & conditioning coach. Build ONE session for today,
 on demand, honoring their real constraints and whole picture. This is a SUGGESTION for them to
 review — nothing is applied automatically (they drive).
 ${renderNow(context)}
@@ -306,7 +311,7 @@ GUARDRAILS:
 - Carry over sensible working weights from the plan / recent logs where they fit. Thin data → start
   light with a "NEW — start light, log actual" note.
 - Honor the day read: if today reads as rest/easy (kind="${read.kind}"), keep this session light and
-  short unless the athlete explicitly asked to train hard.
+  short unless the user explicitly asked to train hard.
 
 ${ELITE_STRENGTH_GUARDRAILS}
 
@@ -314,7 +319,7 @@ ${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
 ${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training")}${renderRunZones(context)}${renderRunPlan(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderTrainingSignals(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderReactionModel(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${wants.length ? `
-WHAT THE ATHLETE ASKED FOR:
+WHAT THE USER ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -329,11 +334,11 @@ const INSIGHT_SCHEMA = `{
   "kind": "connection",
   "found": true,
   "text": "<the ONE connection, one or two plain sentences in a friend's voice — NO numbers as scores, NO alarm>",
-  "rationale": "<ONE short sentence (≤240 chars) of plain-language reasoning that backs the connection — speak TO the athlete ('your recent labs show…'), never narrate the data structures you were given>",
+  "rationale": "<ONE short sentence (≤240 chars) of plain-language reasoning that backs the connection — speak TO the user ('your recent labs show…'), never narrate the data structures you were given>",
   "next_step": "<OPTIONAL: one concrete, low-friction next step (a food swap, a retest to consider) in ≤140 chars, or null — calm, never a directive>"
 }`;
 
-// The quiet-intelligence pass. Hunts the athlete's WHOLE picture for ONE genuine
+// The quiet-intelligence pass. Hunts the user's WHOLE picture for ONE genuine
 // cross-domain connection they couldn't easily make themselves — the kind a
 // friend who knew their labs, training, food and life would notice ("ferritin
 // ran low in spring and your volume's been down since — could be iron-limited").
@@ -346,7 +351,9 @@ export function buildInsightPrompt(ctx?: CoachContext, recent: string[] = []): s
   const recentBlock = recent.length
     ? `\nALREADY SAID (do NOT repeat or reword any of these — find something genuinely new, or return found:false):\n${recent.map((r) => `  - ${r}`).join("\n")}\n`
     : "";
-  return `You are Cairn, the athlete's calm health & longevity buddy. Look across their WHOLE picture
+  return `${CAIRN_PERSONA}
+
+Look across their WHOLE picture
 and find the ONE genuine cross-domain connection they likely couldn't make themselves — a thread that
 links two domains (a lab marker and their training, their sleep/recovery and their nutrition, a life
 event and a dip in volume). The kind of thing a sharp friend who quietly knew everything about them
@@ -363,7 +370,7 @@ THE CONSTITUTION (binding):
   "you should" — offer a thought and an optional next step, never a verdict or a gate. Health findings
   are informational, NOT medical advice; defer anything clinical to a clinician.
 - BRIEF and HUMAN. The headline carries the point; the rationale is ONE short sentence, not a
-  paragraph. Speak TO the athlete in everyday words — NEVER narrate the data you were handed or name
+  paragraph. Speak TO the user in everyday words — NEVER narrate the data you were handed or name
   its internal fields (no "the health_review confirms…", "recent_sessions show…", "the goal object").
   No grocery-list of evidence; one plain reason is enough.
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
@@ -388,13 +395,15 @@ const WEEKLY_READ_SCHEMA = `{
 }`;
 
 // A standing "here's how your week went + the one change I'd suggest" that WAITS
-// in-app for the athlete to read whenever they like — pull, never push. Stored
+// in-app for the user to read whenever they like — pull, never push. Stored
 // as an insight with kind:'weekly_read' so the Brief can surface it like any
 // other quiet line. Same calm voice as the cross-domain pass; honest continuity
 // (six steady weeks is "nice", a light week is fine), never streak pressure.
 export function buildWeeklyReadPrompt(ctx?: CoachContext): string {
   const context = ctx ?? repo.getCoachContext();
-  return `You are Cairn, the athlete's calm health & training buddy. Prepare a short standing read of
+  return `${CAIRN_PERSONA}
+
+Prepare a short standing read of
 how THIS WEEK actually went and the ONE change — if any — worth considering next week. It waits in the
 app for them to read when they like; it is NEVER pushed at them.
 
@@ -407,7 +416,7 @@ THE CONSTITUTION (binding):
   say that warmly and leave rationale and next_step empty. If there's genuinely nothing to report,
   return {"found": false}.
 - BRIEF and HUMAN. The headline carries the read; rationale is ONE short sentence, never a paragraph.
-  Speak TO the athlete in everyday words — NEVER narrate the data you were handed or name its internal
+  Speak TO the user in everyday words — NEVER narrate the data you were handed or name its internal
   fields. The one change, if any, goes in next_step.
 - Grounded in their ACTUAL recent data only (training, recovery, nutrition, life context below).
 ${renderRunCompliance(context, "weekly")}
