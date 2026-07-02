@@ -2,7 +2,7 @@ import { db } from "../db.js";
 import { type ContextEffect, activeContextEffect, markerInTransientWindow } from "./context-effect.js";
 import { DIRECTIVE_DOMAINS, addDirective, clearDirectivesForSource, defaultDirectiveKey, hydrateDirective, listActiveDirectives, normalizeDirectiveKey } from "./coach.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
-import { forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
+import { activeMedications, forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getProfile, listWeight } from "./profile.js";
@@ -15,6 +15,7 @@ import {
   markerGroup,
   markerSide,
   matchOptimalZone,
+  medsTreatingZone,
   optimalDistance,
   presentGroups,
 } from "./propagation-data.js";
@@ -45,14 +46,18 @@ function zoneProfile(): ZoneProfile | null {
 export {
   MARKER_MAPPINGS,
   OPTIMAL_ZONES,
+  cystatinHighBound,
+  dheasBand,
   egfrLowBound,
   isNonClinicalMarker,
   markerGroup,
   markerSide,
   matchOptimalZone,
+  medsTreatingZone,
   optimalDistance,
   personalizeZone,
   presentGroups,
+  psaHighBound,
 } from "./propagation-data.js";
 export type { OptimalZone, ZoneProfile } from "./propagation-data.js";
 export * from "./supplements.js";
@@ -263,6 +268,16 @@ function mappingDirectiveKey(zoneLabel: string, d: MappingDirective): string | n
   return normalizeDirectiveKey(`${zoneLabel}:${d.domain}:${d.key || d.directive}`);
 }
 
+// The plain-language med-interaction clause folded into a directive when the user is
+// already on a medication that targets this marker in the direction it's off — so the
+// coaching reasons WITH the treatment (dose/adherence/add-on with the doctor) rather
+// than treating them as untreated. INFORMATIONAL, never a prescription.
+function medInteractionClause(zoneLabel: string, side: MarkerContext["side"], treating: { label: string; names: string[] }): string {
+  const sideWord = side === "low" ? "below" : "above";
+  const names = treating.names.join(", ");
+  return `You're already on ${names} for this, so with ${zoneLabel} still ${sideWord} optimal the highest-leverage step is usually revisiting the dose, adherence, or an add-on with your doctor — not lifestyle change alone.`;
+}
+
 function lastDirectiveFeedback(source: string, marker: string | null, domain: string, directiveKey: string | null) {
   if (!directiveKey) return null;
   return hydrateDirective(db.prepare(
@@ -329,6 +344,10 @@ export function deriveDirectives() {
   // skipped. markers are sorted flagged-first then impact-desc, so first == most
   // significant.
   const seen = new Set<string>();
+  // Active medications, read ONCE — so the brain can reason WITH a treatment (a marker
+  // still off-optimal despite a med that targets it is a dose/adherence conversation,
+  // not a naive lifestyle nudge). Empty when no uploaded record carries a med list.
+  const meds = (() => { try { return activeMedications(); } catch { return []; } })();
   for (const m of markers) {
     const z = matchOptimalZone(m?.name, profile);
     if (!z) continue;
@@ -342,20 +361,35 @@ export function deriveDirectives() {
     if (!offMarkers.has(z.label)) offMarkers.set(z.label, ctx);
     const mapping = MARKER_MAPPINGS.find((x) => x.zone === z.label);
     if (!mapping) continue;
-    for (const d of mapping.derive(ctx)) {
+    const derived = mapping.derive(ctx);
+    // Med-aware augmentation: if the user is already on a med that targets THIS zone in
+    // the direction it's off, fold a "still off despite <med> → discuss dose/adherence"
+    // clause into ONE directive (the `watch` one — its "discuss with your doctor" framing
+    // fits best — else the first), so the set reasons WITH the treatment instead of
+    // repeating the note across domains. It stays the SAME directive (same key), so it
+    // never adds a row or trips the read-time collapse. INFORMATIONAL, flagged uncertain.
+    const treating = meds.length ? medsTreatingZone(z.label, ctx.side, meds) : null;
+    let medAugmentIdx = -1;
+    if (treating) {
+      medAugmentIdx = derived.findIndex((d) => d.domain === "watch");
+      if (medAugmentIdx < 0) medAugmentIdx = 0;
+    }
+    for (let i = 0; i < derived.length; i++) {
+      const d = derived[i];
       const directive_key = mappingDirectiveKey(z.label, d);
       if (directive_key && seen.has(directive_key)) continue; // already emitted this zone+domain directive this run
       const feedback = lastDirectiveFeedback(SOURCE, z.label, d.domain, directive_key);
       if (shouldSuppressDirective(feedback, ctx)) continue;
+      const augment = !!treating && i === medAugmentIdx;
       const row = addDirective({
         source: SOURCE,
         domain: d.domain,
         marker: z.label,
         directive_key,
-        directive: d.directive,
+        directive: augment ? `${d.directive} ${medInteractionClause(z.label, ctx.side, treating!)}` : d.directive,
         rationale: d.rationale,
         citation: d.citation ?? null,
-        uncertain: d.uncertain || !d.citation,
+        uncertain: d.uncertain || !d.citation || augment,
         trigger_value: numericVal,
         trigger_side: ctx.side,
         trigger_date: m?.latest?.date ?? null,
@@ -438,6 +472,22 @@ const MARKER_CLUSTERS: MarkerCluster[] = [
 // the most significant flags.
 const MAX_GENERIC_DIRECTIVES = 12;
 
+// Clinical groups whose whole story is ALREADY told end-to-end by the mapping +
+// cluster layer, so a flagged marker in them must NOT ALSO spawn a standalone generic
+// `watch` note. Today that's Lipids & Cardiovascular: the ApoB / LDL-C / Non-HDL-C /
+// Triglycerides / HDL-C / Total-cholesterol MARKER_MAPPINGS plus the
+// elevated-cardiovascular-risk cluster cover the panel completely. Without this guard,
+// a real lipid panel's dozen sub-fraction / ratio / composite names (LDL Small/Medium/
+// Peak Size/Particle Number, "Total Cholesterol / HDL Ratio", …) each fall through
+// matchOptimalZone (zoneNameTrustworthy rightly refuses to map a subfraction/ratio to a
+// serum band) and would pile ~10 noise rows on top of the mapped directives — turning
+// one lipid story into a wall of flags. Group-based (via the shared markerGroup taxonomy)
+// rather than a hardcoded name list, so it stays principled and generalizes.
+const GROUPS_FULLY_MODELED_BY_MAPPINGS = new Set(["lipids"]);
+function groupFullyModeledByMappings(name: string): boolean {
+  return GROUPS_FULLY_MODELED_BY_MAPPINGS.has(markerGroup(name).key);
+}
+
 // One soft `watch` note per lab-FLAGGED marker that has no mapped lever, so a flagged
 // analyte Cairn doesn't model (potassium, ALP, PSA, WBC, cortisol, calcium, lipase, …)
 // still surfaces instead of vanishing. Always uncertain:true (no established lever) and
@@ -449,6 +499,10 @@ function deriveGenericLongTail(source: string, markers: any[], seen: Set<string>
     if (emitted >= MAX_GENERIC_DIRECTIVES) break;
     const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
     if (!flag) continue; // generic fallback fires ONLY on an explicit lab flag
+    // A marker in a group the mapping/cluster layer already models end-to-end (lipids)
+    // must not ALSO emit a standalone generic note — that's the lipid-panel noise
+    // blow-up. Skip the whole group; the mapped + cluster directives tell its story.
+    if (groupFullyModeledByMappings(String(m?.name ?? ""))) continue;
     const z = matchOptimalZone(m?.name, profile);
     // Skip anything the mapped path already covers (a zone WITH a lever).
     if (z && MARKER_MAPPINGS.some((x) => x.zone === z.label)) continue;

@@ -77,3 +77,34 @@ test("canonicalDirectiveMarker aligns a lab-specific lipid name onto its zone la
   // A synthesized cluster marker ("A+B+C") is left untouched.
   assert.equal(repo.canonicalDirectiveMarker("ApoB+LDL-C+Lp(a)"), "ApoB+LDL-C+Lp(a)");
 });
+
+// Wave H item 2 — the USER-FACING directives listing (the /directives route fn,
+// listDirectives) must read through the SAME cross-source collapse as the coach prompt,
+// so a "Non-HDL-C" (markers) + "Non-HDL Cholesterol" (health_review) pair reads as one
+// clean row. Collapse is at READ time — the underlying rows are never deleted.
+test("the /directives listing (listDirectives) collapses the cross-source non-HDL pair", () => {
+  seedHealthDoc("2026-06-30", [marker("Non-HDL-C", 190, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives(); // deterministic 'markers' → Non-HDL-C nutrition + watch
+  repo.addHealthReview(
+    {
+      headline: "Lipids lead.",
+      directives: [{
+        domain: "nutrition",
+        marker: "Non-HDL Cholesterol",
+        directive: "Cut saturated fat and add soluble fiber to bring non-HDL toward optimal.",
+        rationale: "Non-HDL sums the atherogenic particles.",
+        citation: "AHA/ACC 2018 Cholesterol Guideline",
+      }],
+    },
+    "stub",
+  );
+  const key = repo.canonicalMarker("Non-HDL-C").key;
+  const nonhdlNut = (d) => d.domain === "nutrition" && repo.canonicalMarker(d.marker || "").key === key;
+  // Route-level active listing = ONE collapsed nutrition directive, deterministic source kept.
+  const active = repo.listDirectives({ all: false }).filter(nonhdlNut);
+  assert.equal(active.length, 1, "the cross-source non-HDL nutrition dup collapses to one row");
+  assert.equal(active[0].source, "markers", "the deterministic source is preferred");
+  // …but both rows still exist (collapse never deletes) — visible in the ?all history view.
+  const all = repo.listDirectives({ all: true }).filter(nonhdlNut);
+  assert.ok(all.length >= 2, "the underlying rows are preserved, only collapsed at read time");
+});
