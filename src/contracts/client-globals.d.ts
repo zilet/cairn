@@ -1301,6 +1301,8 @@ declare global {
   declare function renderWeight(): unknown;
   declare function renderMeasurements(): unknown;
   declare function renderBodyMetrics(mount: HTMLElement | null): void;
+  declare const CairnStand: { renderStand(): Promise<void> };
+  declare function renderStand(): Promise<void>;
   declare function renderVolume(): unknown;
   declare function renderEndurance(): unknown;
   declare function renderCalendar(): unknown;

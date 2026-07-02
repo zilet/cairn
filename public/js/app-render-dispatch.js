@@ -14,6 +14,8 @@
             return renderToday();
         if (tab === "session")
             return renderSession();
+        if (tab === "stand")
+            return CairnStand.renderStand();
         if (tab === "plan") {
             const jump = state.planJump || state.planSeg || "edit";
             state.planJump = null;

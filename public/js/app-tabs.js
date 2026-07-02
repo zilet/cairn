@@ -17,6 +17,8 @@
     function tabSkeleton(tab) {
         if (tab === "today" || tab === "session")
             return todaySkeleton();
+        if (tab === "stand")
+            return skelLines(2) + skelLines(3);
         if (tab === "progress") {
             const seg = defaultProgressSeg();
             return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3);

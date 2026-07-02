@@ -1353,7 +1353,7 @@ if (typeof window !== "undefined") {
             healthSection: "read",
             settingsSection: "agents",
         },
-        tabs: ["today", "session", "plan", "progress", "chat", "me", "settings"],
+        tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings"],
         sections: {
             plan: ["edit", "endurance", "food", "meals", "coach"],
             progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
@@ -1685,6 +1685,8 @@ if (typeof window !== "undefined") {
             return renderToday();
         if (tab === "session")
             return renderSession();
+        if (tab === "stand")
+            return CairnStand.renderStand();
         if (tab === "plan") {
             const jump = state.planJump || state.planSeg || "edit";
             state.planJump = null;
@@ -1729,6 +1731,8 @@ if (typeof window !== "undefined") {
     function tabSkeleton(tab) {
         if (tab === "today" || tab === "session")
             return todaySkeleton();
+        if (tab === "stand")
+            return skelLines(2) + skelLines(3);
         if (tab === "progress") {
             const seg = defaultProgressSeg();
             return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3);
