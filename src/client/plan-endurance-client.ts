@@ -86,7 +86,7 @@ function paintPlanEndurance(
   const runsSection = runs.length
     ? `<div class="end-runs reveal" style="${stagger(2)}">
          <div class="end-runs-h"><span class="lbl">This week's runs</span>
-           <button class="end-link" id="endEditRuns">Edit in Training →</button></div>
+           <button class="linkbtn end-link" id="endEditRuns">Edit in Training →</button></div>
          ${volumeLine}
          ${runRows}
        </div>${complianceHtml}${syncHtml}`
@@ -184,7 +184,7 @@ function renderEnduranceDraftResult(proposal: unknown): void {
   const p = enduranceModel().record(proposal) as EnduranceProposal;
   const cardio = p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
   if (!cardio.length) {
-    status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
+    status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="linkbtn end-link" id="endToCoach">Review in Coach →</button>`;
     status.querySelector("#endToCoach")?.addEventListener("click", () => renderCoach());
     return;
   }

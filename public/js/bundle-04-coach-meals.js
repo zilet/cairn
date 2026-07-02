@@ -29,7 +29,7 @@
         const head = `<div class="dayfuel-head"><span class="lbl">Today's fuel</span>${count ? `<span class="dayfuel-count">${count} item${count === 1 ? "" : "s"}</span>` : ""}</div>`;
         if (!count) {
             return `<div class="dayfuel reveal" style="--i:0">${head}
-          <div class="dayfuel-empty">Nothing logged yet today &mdash; log a meal in <button class="linklike" id="dayFuelAsk" type="button">Chat</button>; describe it in plain words and the macros are handled for you.</div>
+          <div class="dayfuel-empty">Nothing logged yet today &mdash; log a meal in <button class="linkbtn linkbtn-plain" id="dayFuelAsk" type="button">Chat</button>; describe it in plain words and the macros are handled for you.</div>
         </div>`;
         }
         let remLine = "";
@@ -881,7 +881,7 @@ function openMealSheet(current, dayIndex, mealIndex) {
     sheet.innerHTML = `
     <div class="sheet-card" role="dialog" aria-modal="true" aria-label="${escAttr(meal.name || meal.meal || "Meal")}">
       <div class="sheet-grab" aria-hidden="true"></div>
-      <button class="sheet-x" aria-label="Close">✕</button>
+      <button class="xbtn sheet-x" aria-label="Close">✕</button>
       <div class="sheet-scroll">
         <div class="sheet-hero">${artImg("food", artQuery, "artile-xl sheet-art", art("food", artQuery))}</div>
         <div class="sheet-kicker lbl">${escHtml(dayLabel)}</div>

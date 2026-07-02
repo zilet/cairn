@@ -33,7 +33,7 @@
             const bits = [supplement.dose, supplement.frequency].filter(Boolean).map(deps.escapeHtml).join(" · ");
             return `<div class="supp-chip" title="${deps.escapeAttr(supplement.note || supplement.name)}">
         <span class="supp-name">${deps.escapeHtml(supplement.name)}</span>${bits ? `<span class="supp-meta">${bits}</span>` : ""}
-        <button class="supp-x" data-suppx="${supplement.id}" aria-label="Remove ${deps.escapeAttr(supplement.name)}">×</button>
+        <button class="xbtn supp-x" data-suppx="${supplement.id}" aria-label="Remove ${deps.escapeAttr(supplement.name)}">×</button>
       </div>`;
         }).join("");
         wrap.innerHTML = `<div class="hb-section supp-card reveal" style="${deps.stagger(3)}">

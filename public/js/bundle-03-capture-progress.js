@@ -166,10 +166,10 @@ function captureReadRenderInsightCard(target, ins, deps) {
       ${why ? `<p class="insight-why" hidden>${deps.escapeHtml(why)}</p>` : ""}
       <div class="insight-foot">
         <div class="insight-acts">
-          <button class="insight-act insight-act-go" data-ifb="up">Got it</button>
-          <button class="insight-act" data-ifb="down">Not useful</button>
+          <button class="linkbtn-quiet insight-act insight-act-go" data-ifb="up">Got it</button>
+          <button class="linkbtn-quiet insight-act" data-ifb="down">Not useful</button>
         </div>
-        ${why ? `<button class="insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
+        ${why ? `<button class="linkbtn-quiet insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
       </div>
     </section>`;
     target.querySelectorAll("[data-ifb]").forEach((button) => button.addEventListener("click", () => captureReadInsightFeedback(target, ins, button.dataset.ifb, deps)));
@@ -211,23 +211,23 @@ function captureReadRenderWeeklyCard(target, ins, deps) {
     const change = String(ins.next_step || "").trim();
     const why = String(ins.rationale || "").trim();
     const range = deps.weekRangeLabel(ins.created_at);
-    target.innerHTML = `<section class="weekly-card settle-in">
+    target.innerHTML = `<section class="weekly-card well-accent well-accent-sage settle-in">
       <div class="weekly-head">
         <span class="weekly-kicker lbl">The week</span>
         ${range ? `<span class="weekly-range">${deps.escapeHtml(range)}</span>` : ""}
       </div>
       <p class="weekly-text">${text}</p>
-      ${change ? `<div class="weekly-change">
+      ${change ? `<div class="weekly-change well-accent-sm">
           <span class="weekly-change-lbl lbl">One change</span>
           <p class="weekly-change-text">${deps.escapeHtml(change)}</p>
         </div>` : ""}
       ${why ? `<p class="weekly-why" hidden>${deps.escapeHtml(why)}</p>` : ""}
       <div class="weekly-foot">
         <div class="insight-acts">
-          <button class="insight-act insight-act-go" data-ifb="up">Got it</button>
-          <button class="insight-act" data-ifb="down">Not useful</button>
+          <button class="linkbtn-quiet insight-act insight-act-go" data-ifb="up">Got it</button>
+          <button class="linkbtn-quiet insight-act" data-ifb="down">Not useful</button>
         </div>
-        ${why ? `<button class="insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
+        ${why ? `<button class="linkbtn-quiet insight-why-more" data-iwhy aria-expanded="false">why this</button>` : ""}
       </div>
     </section>`;
     target.querySelectorAll("[data-ifb]").forEach((button) => button.addEventListener("click", () => captureReadInsightFeedback(target, ins, button.dataset.ifb, deps, ".weekly-card")));

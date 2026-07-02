@@ -148,7 +148,7 @@ function nutritionCheckinProposalHtml(result: NutritionCheckinResult | null | un
   if (nutrition.fat_g != null) macroBits.push(`${Math.round(Number(nutrition.fat_g))}g fat`);
   const reason = nutrition.reason || parsed.summary || "";
   const notes = parsed.notes && String(parsed.notes).trim();
-  return `<section class="eb-proposal settle-in">
+  return `<section class="eb-proposal well-accent settle-in">
       <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> A target worth considering</div>
       <div class="eb-target">
         <span class="numeral numeral-lg"${Number.isFinite(target) ? ` data-cu="${Math.round(target)}"` : ""}>${Number.isFinite(target) ? "0" : "—"}</span>

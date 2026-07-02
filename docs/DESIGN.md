@@ -20,10 +20,14 @@ listed here are load-bearing — change them in all three places or not at all.
 --muted:   #746c5c;  /* tertiary text, labels — darkened from #8c8475 to clear WCAG AA on --card-2 */
 --line:    #e7dfd2;  /* hairlines */
 --line-2:  #d8cfbd;  /* stronger hairlines */
+--faint:   #c0b6a0;  /* faint taupe — dismiss/× glyphs, ghosted marks */
 --accent:  #b4552d;  /* terracotta — primary actions, highlights */
 --accent-deep: #93421f;
+--accent-wash: rgba(180,85,45,.1); /* terracotta @ ~10% — chip / hover tint fill */
+--on-accent: #fffdf8; /* cream ink/glyph ON a saturated fill (accent/sage/warn/ink/gold) — NOT a surface */
 --sage:    #6e7f5c;  /* success, completion, "done" states — borders/marks; ~4:1 on card, NOT for small text */
 --sage-text: #5f6e4f; /* sage for small TEXT on card/cream — clears WCAG AA 4.5:1 */
+--sage-deep: #5a6a4a; /* darker sage — hover/pressed state for sage text actions */
 --sage-bg: #eef0e6;
 --warn:    #b3402e;  /* warnings, destructive */
 --warn-bg: #f6e8e2;
@@ -44,8 +48,10 @@ Theme-color / manifest background: `#f4efe7`. Color-scheme: light. Status bar: `
 - **Display:** system serif stack (`ui-serif`, Iowan Old Style, Georgia, Times New Roman).
   Headings, day names, big numerals (calories, weights, stat strip), section titles.
   Big numerals use `font-variation-settings:"opsz" 144` and weight 560–620.
-- **Body/UI:** system sans stack (`ui-sans-serif`, system-ui, -apple-system, Segoe UI).
-  All body copy, inputs, buttons.
+- **Body/UI:** system sans stack (`ui-sans-serif`, system-ui, -apple-system, Segoe UI) — token
+  `--font-ui`. All body copy, inputs, buttons.
+- **Mono:** system mono stack (`ui-monospace`, SFMono-Regular, Menlo, Consolas) — token
+  `--font-mono`. Code/token/URL readouts only. Reference the token, never re-inline the stack.
 - **Labels:** system sans uppercase, `letter-spacing:.18em`, `font-size:.62rem`,
   color `var(--muted)` — the "PROTEIN ───" caps style. Class: `.lbl`.
 - The main PWA does not load third-party fonts. Keep typography on local/system stacks unless a
@@ -137,6 +143,31 @@ New/changed components (CSS must implement, the client JS must emit):
 - Activity entries `.qlent`: small `.qlent-art` (CairnArt.activity) + text + enrichment badge.
 - Buttons: `.logbtn` terracotta ink-on-cream → solid terracotta circle/pill, cream glyph;
   `.ghostbtn` hairline pill; `.draftbtn` hairline terracotta text pill.
+- **Interaction primitives live in `styles.css` §04c**, at the TOP of the file (above every
+  component) so a component can safely layer its own delta on top. Reuse them; a new surface
+  should never re-declare an accent link, a spined well, or a × glyph. Each consumer keeps its
+  bespoke class as a *hook* carrying only layout deltas (`.hb-rn-link{font-size:.8rem}`), never
+  the look.
+  - **Text buttons — `.linkbtn`.** Borderless accent button (weight 600, tactile `--press-sm`).
+    Base = underlined inline link (`--accent-deep`); modifiers `.linkbtn-plain` (no underline,
+    `--accent` — standalone actions like "Ask the coach →") and `.linkbtn-sm` (smaller). The
+    muted sibling **`.linkbtn-quiet`** (→ `--ink-2` on hover) is the calm "why this" / "details"
+    / "see the evidence" disclosure. Migrated onto these: `.hb-mk-allbtn`, `.hb-rn-link`,
+    `.end-link`, `.feedback-edit`, `.cardio-sync-go`, `.insight-act(-go)`, `.insight-why-more`,
+    `.agent-detail-link`, `.hb-devidence` (+ the `.hsyn-ask`/`.hmk-ask` asks). *Intentionally
+    distinct, not migrated:* `.lately-all` (uppercase micro-eyebrow) and the `.brief-steer-opt`
+    steer widget (ink-2 options with dot separators — its own cohesive affordance).
+  - **Spined wells — `.well-accent` / `.well-accent-sm` / `.well-accent-sage`.** The "one lever /
+    one change" callout: `.well-accent` = card + 3px terracotta spine + `--radius` + `--shadow-sm`;
+    `.well-accent-sm` = 2px spine + `--radius-sm` inline mini-well (no card bg/shadow — the site
+    adds its own); `.well-accent-sage` = the sage-spine modifier (calm / done / weekly). Each site
+    adds only its padding (+ optional tint bg). Used by `.hsyn-onechange`, `.hstand-lever`,
+    `.pperf-lever`, `.eb-proposal`, `.sug-composer`, `.weekly-change`, `.sug-card`, `.weekly-card`.
+    The kind-themed `.brief` hero stays hand-rolled (its rest/easy/train spine-colour variants and
+    warm wash sit outside the primitive).
+  - **Close / dismiss — `.xbtn`.** Bare-glyph × (`--muted` → `--ink`, `--press-xs`). Migrated:
+    `.chip-x` (destructive — retints to `--warn`), `.supp-x`, `.bpsheet-x`, `.agenda-x`, and the
+    framed `.sheet-x` (adds a card-2 circle chrome on top).
 - Chat `.bubble.user` = ink on `--ink` (cream text); `.bubble.assistant` = card.
 - Health **Standing** (Me→Health, the hero read): `.hstand*` — the momentum-led capacity read
   (three-age strip, `.hstand-bc-*` live body-composition, `.hstand-lever` terracotta well = the one
@@ -177,11 +208,21 @@ New/changed components (CSS must implement, the client JS must emit):
   Coach/review prose runs through `humanizeReviewText(text, latestISO)`, which strips the
   most-recent panel date (shown once as the `.hpic-asof` "As of …" caption) so it isn't restated
   on every line, and humanizes any remaining ISO dates. Status timestamps stay on `relTime()`.
-- **Action pills share one size.** Footer/action-row pills match the `.pillbtn`/`.ghostbtn`
-  family (`padding:8px 14px`, `font-size:~.72rem`, ~33–34px tall); pair them with a height-matched
-  `.iconbtn`/delete (34px) so the row sits on one baseline. Divider-separated sections (`.hdoc-foot`,
-  `.himpacts`, `.mp-history`) use `margin-top:~16px; padding-top:14px`. Don't ship a one-off smaller
-  pill — it reads as squashed next to the rest of the system.
+- **Action pills — reuse the family, don't re-roll.** The real sizes today: `.pillbtn`
+  (`11px 22px`/`.82rem`/~40px, the flagship) with `.pill-sm` (`8px 15px`/`.76rem`/~32px),
+  `.pill-warn`/`.pill-accent` modifiers; `.ghostbtn` and `.draftbtn` (`~9px 13–15px`/`.76rem`/~34px);
+  `.iconbtn`/`.delbtn` (30–32px). Pair a pill row with a height-matched icon/delete so it sits on one
+  baseline. Divider-separated sections (`.hdoc-foot`, `.himpacts`, `.mp-history`) use
+  `margin-top:~16px; padding-top:14px`. Don't hand-roll a one-off pill — reuse a family class.
+  There are **two intentional pill scales**, not one: the larger sentence-case **flagship**
+  `.pillbtn` (~40px, hero detail-action rows) and the compact **uppercase** `.ghostbtn`/`.draftbtn`
+  (~34px, inline actions). They share radius, weight, transition, and the global `:active` press —
+  differing only in size + case by role. Don't force them to one height; pick the scale that fits
+  the context.
+- **Segmented / toggle "active" fill is `--ink`.** Every mutually-exclusive switch — `.segbtn`,
+  the sliding `.seg-thumb`, `.disc-seg`/`.goalmode-seg`, the plan-editor `.pi-kindbtn`, `.hread-chip`
+  — fills `--ink` (cream text) when active. Don't use `--accent` for a segment's active state
+  (`--accent` is for actions, not "which of these is selected").
 
 ## Motion tokens
 

@@ -2317,7 +2317,7 @@ function todayAgendaGenericCardHtml(candidate, revealIdx) {
         ? `<button class="agenda-act" type="button" data-agenda-act="${escAttr(candidate.action.kind || "")}" data-agenda-id="${escAttr(candidate.id || "")}">${escHtml(candidate.action.label)}</button>`
         : "";
     const dismiss = candidate.dismissible
-        ? `<button class="agenda-x" type="button" data-agenda-dismiss="${escAttr(candidate.id || "")}" aria-label="Dismiss">✕</button>`
+        ? `<button class="xbtn agenda-x" type="button" data-agenda-dismiss="${escAttr(candidate.id || "")}" aria-label="Dismiss">✕</button>`
         : "";
     return `<div class="agenda-card reveal" data-agenda-card="${escAttr(candidate.id || "")}" data-agenda-kind="${escAttr(candidate.kind || "")}" style="${stagger(revealIdx || 0)}">
       ${dismiss}
@@ -4028,7 +4028,7 @@ const CARDIO_HR_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b45
         }
         return `<div class="cardio-sync" data-cardio-sync>
         ${lead}
-        <button class="cardio-sync-go" type="button" data-syncnow>Sync now</button>
+        <button class="linkbtn linkbtn-plain cardio-sync-go" type="button" data-syncnow>Sync now</button>
       </div>`;
     }
     function wireCardioSync(scope, onDone) {
@@ -4491,7 +4491,7 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
         const est = s.est_minutes != null && Number(s.est_minutes) > 0 ? `${Math.round(Number(s.est_minutes))} min` : "";
         const why = s.why ? escHtml(s.why) : "";
         const items = (Array.isArray(s.items) ? s.items : []).map((it, i) => todaySuggestItemHtml(it, i)).join("");
-        return `<section class="sug-card settle-in">
+        return `<section class="sug-card well-accent well-accent-sage settle-in">
       <div class="sug-head">
         <div class="sug-kicker lbl">A session for today${est ? ` · ${escHtml(est)}` : ""}</div>
         <h3 class="sug-name">${name}</h3>
@@ -4509,7 +4509,7 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
     </section>`;
     }
     function todaySuggestLoadingHtml() {
-        return `<div class="sug-card sug-loading settle-in">
+        return `<div class="sug-card well-accent well-accent-sage sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
       ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
     </div>`;
@@ -4519,13 +4519,13 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
         const line = row.agent_status === "unconfigured"
             ? "Building a session needs a coaching agent — connect one in Settings. You can train anyway in the meantime."
             : "Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.";
-        return `<div class="sug-card sug-fail settle-in">
+        return `<div class="sug-card well-accent well-accent-sage sug-fail settle-in">
           <div class="sug-fail-line">${escHtml(line)}</div>
           <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>
         </div>`;
     }
     function todaySuggestComposerHtml(vibes = SESSION_VIBES) {
-        return `<div class="sug-composer settle-in">
+        return `<div class="sug-composer well-accent settle-in">
       <input class="sug-prompt" type="text" autocomplete="off" enterkeyhint="go"
         aria-label="Describe the session you want"
         placeholder="say what you want — e.g. legs sore from yesterday's run, easier on the legs">
@@ -4762,7 +4762,7 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
         const figure = row.duration_sec != null
             ? fmtDur(row.duration_sec)
             : `${fmtWeight(row.weight)} <span>×</span> ${escHtml(row.reps ?? "")}${row.rir != null ? ` <span>@${escHtml(row.rir)}</span>` : ""}`;
-        return `<span class="chip" data-set="${escAttr(id)}">${number != null ? `<span class="chip-n">#${escHtml(number)}</span> ` : ""}${figure}<button class="chip-x" data-del="${escAttr(id)}" title="delete">×</button></span>`;
+        return `<span class="chip" data-set="${escAttr(id)}">${number != null ? `<span class="chip-n">#${escHtml(number)}</span> ` : ""}${figure}<button class="xbtn chip-x" data-del="${escAttr(id)}" title="delete">×</button></span>`;
     }
     // Tonnage = sum weight×reps over loaded sets. Timed, bodyweight, and assisted
     // sets stay out of the load total, matching the historical Today/History rule.
@@ -4836,7 +4836,7 @@ const TODAY_LATELY_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#
             return "";
         return `<div class="checkin-done feedback-done chip-in">
       <span class="checkin-done-mark" aria-hidden="true">✓</span> ${parts.join(" · ")}
-      <button class="feedback-edit" id="feedbackEdit" type="button">edit</button>
+      <button class="linkbtn linkbtn-plain linkbtn-sm feedback-edit" id="feedbackEdit" type="button">edit</button>
     </div>`;
     }
     function todaySkipNameHtml(name) {
@@ -9348,7 +9348,7 @@ if (typeof window !== "undefined") {
             macroBits.push(`${Math.round(Number(nutrition.fat_g))}g fat`);
         const reason = nutrition.reason || parsed.summary || "";
         const notes = parsed.notes && String(parsed.notes).trim();
-        return `<section class="eb-proposal settle-in">
+        return `<section class="eb-proposal well-accent settle-in">
       <div class="eb-kicker lbl"><span class="eb-glyph" aria-hidden="true">◇</span> A target worth considering</div>
       <div class="eb-target">
         <span class="numeral numeral-lg"${Number.isFinite(target) ? ` data-cu="${Math.round(target)}"` : ""}>${Number.isFinite(target) ? "0" : "—"}</span>
@@ -9833,7 +9833,7 @@ function performanceHtml(performance, options = {}) {
         html += `<div class="pperf-aero pperf-aero-${tone}">${escHtml(performance.endurance.headline)}</div>`;
     }
     if (!suppressLever && performance.lever?.headline) {
-        html += `<div class="pperf-lever">
+        html += `<div class="pperf-lever well-accent">
       <div class="pperf-lever-lbl lbl">The lever</div>
       <div class="pperf-lever-head">${escHtml(performance.lever.headline)}</div>
       ${performance.lever.why ? `<div class="pperf-lever-why">${escHtml(performance.lever.why)}</div>` : ""}

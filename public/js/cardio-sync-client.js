@@ -33,7 +33,7 @@ const CARDIO_HR_ZONE_COLORS = ["#cdd7c0", "#b9c79a", "#e6c87a", "#d98a4e", "#b45
         }
         return `<div class="cardio-sync" data-cardio-sync>
         ${lead}
-        <button class="cardio-sync-go" type="button" data-syncnow>Sync now</button>
+        <button class="linkbtn linkbtn-plain cardio-sync-go" type="button" data-syncnow>Sync now</button>
       </div>`;
     }
     function wireCardioSync(scope, onDone) {

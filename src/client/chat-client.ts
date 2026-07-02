@@ -59,7 +59,7 @@ function chatShellHtml(): string {
         <div id="chatPreview" class="chat-preview" hidden>
           <img alt="">
           <span class="chat-preview-hint">Photo attached — I'll estimate &amp; log it</span>
-          <button id="chatPreviewX" class="chip-x" aria-label="Remove photo">✕</button>
+          <button id="chatPreviewX" class="xbtn chip-x" aria-label="Remove photo">✕</button>
         </div>
         <div class="chatbar">
           <button id="chatAttach" class="attachbtn" aria-label="Attach a photo — camera, library, or files">

@@ -131,8 +131,8 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
           </div>
           <div class="agent-card-actions">
             ${agent.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
-            <button class="agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>
-            ${agent.models_list ? `<button class="agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
+            <button class="linkbtn-quiet agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>
+            ${agent.models_list ? `<button class="linkbtn-quiet agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
           </div>
         </div>
         ${agent.configured === false ? `<div class="agent-card-note">Not in rotation until connected${agent.can_login ? " — tap Connect" : ""}.</div>` : ""}

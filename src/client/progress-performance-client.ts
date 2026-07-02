@@ -76,7 +76,7 @@ function performanceHtml(performance: PerformanceStanding | null | undefined, op
   }
 
   if (!suppressLever && performance.lever?.headline) {
-    html += `<div class="pperf-lever">
+    html += `<div class="pperf-lever well-accent">
       <div class="pperf-lever-lbl lbl">The lever</div>
       <div class="pperf-lever-head">${escHtml(performance.lever.headline)}</div>
       ${performance.lever.why ? `<div class="pperf-lever-why">${escHtml(performance.lever.why)}</div>` : ""}

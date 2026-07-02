@@ -1729,7 +1729,7 @@ if (typeof window !== "undefined") {
         const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
         const evCount = d.marker && evMap ? (evMap.get(String(d.marker).toLowerCase()) || 0) : 0;
         const evidence = d.marker && (d.citation || evCount > 0)
-            ? `<button class="hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
+            ? `<button class="linkbtn-quiet hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
        <div class="hb-evbox" hidden></div>`
             : "";
         return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">
@@ -2289,7 +2289,7 @@ if (typeof window !== "undefined") {
       <div class="hb-sechead"><span class="lbl">What matters now</span>${matters.length ? `<span class="hb-secnote">${matters.length} to keep an eye on</span>` : `<span class="hb-secnote">all looking good</span>`}</div>
       <div class="hb-mklist">${lead.map((marker, index) => priorityMarkerHtml(marker, index)).join("")}</div>
       ${rest.length ? `<details class="hb-more"><summary>Everything else (${rest.length})</summary><div class="hb-mklist hb-mklist-quiet">${rest.map((marker, index) => priorityMarkerHtml(marker, index)).join("")}</div></details>` : ""}
-      <button class="hb-mk-allbtn" id="hbToMarkers" type="button">See every trend →</button>
+      <button class="linkbtn linkbtn-sm hb-mk-allbtn" id="hbToMarkers" type="button">See every trend →</button>
     </div>`;
     }
     const CAIRN_HEALTH_READ = {
@@ -2576,7 +2576,7 @@ if (typeof window !== "undefined") {
             : "";
         const leadLever = standing.lead_lever;
         const leverHtml = leadLever
-            ? `<section class="hstand-lever reveal" style="${stagger(1)}">
+            ? `<section class="hstand-lever well-accent reveal" style="${stagger(1)}">
         <span class="lbl">The one lever${leadLever.uncertain ? " · worth confirming" : ""}</span>
         <h3>${escHtml(leadLever.group || "")}</h3>
         <p>${escHtml(leadLever.why || "")}</p>
@@ -2698,7 +2698,7 @@ if (typeof window !== "undefined") {
         ov.id = "bpSheetOv";
         ov.className = "bpsheet-ov";
         ov.innerHTML = `<div class="bpsheet" role="dialog" aria-modal="true" aria-label="Log blood pressure">
-      <div class="bpsheet-hd"><h3>Log a reading</h3><button class="bpsheet-x" type="button" aria-label="Close">✕</button></div>
+      <div class="bpsheet-hd"><h3>Log a reading</h3><button class="xbtn bpsheet-x" type="button" aria-label="Close">✕</button></div>
       <form id="bpSheetForm" class="bpsheet-form">
         <div class="bpsheet-row">
           <label>Systolic<input id="bpSys" class="form-input" type="number" inputmode="numeric" min="60" max="260" placeholder="120" required></label>
@@ -3531,7 +3531,7 @@ if (typeof window !== "undefined") {
         return researchOff && unsourced
             ? `<div class="hb-research-nudge">
         <span class="hb-rn-text">Cairn can research these and cite real sources behind each one.</span>
-        <button class="hb-rn-link" id="hbResearchNudge" type="button">turn on research in Settings</button>
+        <button class="linkbtn hb-rn-link" id="hbResearchNudge" type="button">turn on research in Settings</button>
       </div>`
             : "";
     }
@@ -3843,7 +3843,7 @@ if (typeof window !== "undefined") {
             const bits = [supplement.dose, supplement.frequency].filter(Boolean).map(deps.escapeHtml).join(" · ");
             return `<div class="supp-chip" title="${deps.escapeAttr(supplement.note || supplement.name)}">
         <span class="supp-name">${deps.escapeHtml(supplement.name)}</span>${bits ? `<span class="supp-meta">${bits}</span>` : ""}
-        <button class="supp-x" data-suppx="${supplement.id}" aria-label="Remove ${deps.escapeAttr(supplement.name)}">×</button>
+        <button class="xbtn supp-x" data-suppx="${supplement.id}" aria-label="Remove ${deps.escapeAttr(supplement.name)}">×</button>
       </div>`;
         }).join("");
         wrap.innerHTML = `<div class="hb-section supp-card reveal" style="${deps.stagger(3)}">

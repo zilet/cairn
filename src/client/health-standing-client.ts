@@ -70,7 +70,7 @@ function renderHealthStandingHtml(data: HealthStandingRead | null | undefined, o
 
   const leadLever = standing.lead_lever;
   const leverHtml = leadLever
-    ? `<section class="hstand-lever reveal" style="${stagger(1)}">
+    ? `<section class="hstand-lever well-accent reveal" style="${stagger(1)}">
         <span class="lbl">The one lever${leadLever.uncertain ? " · worth confirming" : ""}</span>
         <h3>${escHtml(leadLever.group || "")}</h3>
         <p>${escHtml(leadLever.why || "")}</p>

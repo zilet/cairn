@@ -43,7 +43,7 @@ function todayAgendaGenericCardHtml(candidate: ClientTodayAgendaCandidate, revea
       ? `<button class="agenda-act" type="button" data-agenda-act="${escAttr(candidate.action.kind || "")}" data-agenda-id="${escAttr(candidate.id || "")}">${escHtml(candidate.action.label)}</button>`
       : "";
   const dismiss = candidate.dismissible
-    ? `<button class="agenda-x" type="button" data-agenda-dismiss="${escAttr(candidate.id || "")}" aria-label="Dismiss">✕</button>`
+    ? `<button class="xbtn agenda-x" type="button" data-agenda-dismiss="${escAttr(candidate.id || "")}" aria-label="Dismiss">✕</button>`
     : "";
   return `<div class="agenda-card reveal" data-agenda-card="${escAttr(candidate.id || "")}" data-agenda-kind="${escAttr(candidate.kind || "")}" style="${stagger(revealIdx || 0)}">
       ${dismiss}

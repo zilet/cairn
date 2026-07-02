@@ -247,7 +247,7 @@ function priorityMarkersSectionHtml(markersInput: unknown): string {
       <div class="hb-sechead"><span class="lbl">What matters now</span>${matters.length ? `<span class="hb-secnote">${matters.length} to keep an eye on</span>` : `<span class="hb-secnote">all looking good</span>`}</div>
       <div class="hb-mklist">${lead.map((marker, index) => priorityMarkerHtml(marker, index)).join("")}</div>
       ${rest.length ? `<details class="hb-more"><summary>Everything else (${rest.length})</summary><div class="hb-mklist hb-mklist-quiet">${rest.map((marker, index) => priorityMarkerHtml(marker, index)).join("")}</div></details>` : ""}
-      <button class="hb-mk-allbtn" id="hbToMarkers" type="button">See every trend →</button>
+      <button class="linkbtn linkbtn-sm hb-mk-allbtn" id="hbToMarkers" type="button">See every trend →</button>
     </div>`;
 }
 

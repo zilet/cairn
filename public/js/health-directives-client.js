@@ -19,7 +19,7 @@
         return researchOff && unsourced
             ? `<div class="hb-research-nudge">
         <span class="hb-rn-text">Cairn can research these and cite real sources behind each one.</span>
-        <button class="hb-rn-link" id="hbResearchNudge" type="button">turn on research in Settings</button>
+        <button class="linkbtn hb-rn-link" id="hbResearchNudge" type="button">turn on research in Settings</button>
       </div>`
             : "";
     }

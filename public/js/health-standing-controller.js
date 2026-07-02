@@ -42,7 +42,7 @@
         ov.id = "bpSheetOv";
         ov.className = "bpsheet-ov";
         ov.innerHTML = `<div class="bpsheet" role="dialog" aria-modal="true" aria-label="Log blood pressure">
-      <div class="bpsheet-hd"><h3>Log a reading</h3><button class="bpsheet-x" type="button" aria-label="Close">✕</button></div>
+      <div class="bpsheet-hd"><h3>Log a reading</h3><button class="xbtn bpsheet-x" type="button" aria-label="Close">✕</button></div>
       <form id="bpSheetForm" class="bpsheet-form">
         <div class="bpsheet-row">
           <label>Systolic<input id="bpSys" class="form-input" type="number" inputmode="numeric" min="60" max="260" placeholder="120" required></label>

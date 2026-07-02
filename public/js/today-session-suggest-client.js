@@ -42,7 +42,7 @@
         const est = s.est_minutes != null && Number(s.est_minutes) > 0 ? `${Math.round(Number(s.est_minutes))} min` : "";
         const why = s.why ? escHtml(s.why) : "";
         const items = (Array.isArray(s.items) ? s.items : []).map((it, i) => todaySuggestItemHtml(it, i)).join("");
-        return `<section class="sug-card settle-in">
+        return `<section class="sug-card well-accent well-accent-sage settle-in">
       <div class="sug-head">
         <div class="sug-kicker lbl">A session for today${est ? ` · ${escHtml(est)}` : ""}</div>
         <h3 class="sug-name">${name}</h3>
@@ -60,7 +60,7 @@
     </section>`;
     }
     function todaySuggestLoadingHtml() {
-        return `<div class="sug-card sug-loading settle-in">
+        return `<div class="sug-card well-accent well-accent-sage sug-loading settle-in">
       <span class="aspin" aria-hidden="true"></span>
       ${CairnUi.jobCaptionHtml({ tag: "div", className: "sug-loading-line job-cap" })}
     </div>`;
@@ -70,13 +70,13 @@
         const line = row.agent_status === "unconfigured"
             ? "Building a session needs a coaching agent — connect one in Settings. You can train anyway in the meantime."
             : "Couldn't draft a session just now — your buddy may be offline. You can train anyway or try again.";
-        return `<div class="sug-card sug-fail settle-in">
+        return `<div class="sug-card well-accent well-accent-sage sug-fail settle-in">
           <div class="sug-fail-line">${escHtml(line)}</div>
           <div class="sug-actions"><button class="pillbtn" data-sugaction="retry">Try again</button></div>
         </div>`;
     }
     function todaySuggestComposerHtml(vibes = SESSION_VIBES) {
-        return `<div class="sug-composer settle-in">
+        return `<div class="sug-composer well-accent settle-in">
       <input class="sug-prompt" type="text" autocomplete="off" enterkeyhint="go"
         aria-label="Describe the session you want"
         placeholder="say what you want — e.g. legs sore from yesterday's run, easier on the legs">

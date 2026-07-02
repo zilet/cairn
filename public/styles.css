@@ -18,10 +18,14 @@
   --muted:   #746c5c;   /* tertiary text, labels — darkened to clear WCAG AA (4.5:1) on card-2/paper; was #8c8475 (3.35:1) */
   --line:    #e7dfd2;   /* hairlines */
   --line-2:  #d8cfbd;   /* stronger hairlines */
+  --faint:   #c0b6a0;   /* faint taupe — dismiss/× glyphs, ghosted marks */
   --accent:  #b4552d;   /* terracotta — primary actions, highlights */
   --accent-deep: #93421f;
+  --accent-wash: rgba(180,85,45,.1);  /* terracotta @ ~10% — chip/hover tint fill */
+  --on-accent: #fffdf8; /* cream ink/glyph on a saturated fill (accent/sage/warn/ink/gold) */
   --sage:    #6e7f5c;   /* success, completion, "done" */
   --sage-text: #5f6e4f; /* sage for SMALL TEXT on card/cream — meets 4.5:1 AA (plain --sage is ~4:1, borders/marks only) */
+  --sage-deep: #5a6a4a; /* darker sage — hover/pressed state for sage text actions */
   --sage-bg: #eef0e6;
   --warn:    #b3402e;   /* warnings, destructive */
   --warn-bg: #f6e8e2;
@@ -56,15 +60,7 @@
 
   --font-display: ui-serif, 'Iowan Old Style', Georgia, 'Times New Roman', serif;
   --font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-
-  /* Legacy aliases — app.js still emits inline styles referencing the
-     old dark-theme variables. Mapped into the Atelier palette so the
-     app renders correctly even before the app.js rewrite lands. */
-  --bg: var(--paper);
-  --panel: var(--card);
-  --panel-2: var(--card-2);
-  --txt: var(--ink);
-  --accent-dim: var(--accent-deep);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* -------------------------------------------------------------------
@@ -90,7 +86,7 @@ input,select,textarea{font-family:var(--font-ui);color:var(--ink)}
 /* no double-tap-to-zoom on controls (iOS) — taps fire immediately, page never zooms */
 button,input,select,textarea,a{touch-action:manipulation}
 ::placeholder{color:#b3aa97;opacity:1}
-::selection{background:var(--accent);color:#fffdf8}
+::selection{background:var(--accent);color:var(--on-accent)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
 
 /* iOS Safari auto-zooms the page when a focused control's font-size is under
@@ -175,6 +171,54 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 ::view-transition-group(brief-hero){animation-duration:var(--dur-3);animation-timing-function:var(--ease)}
 ::view-transition-old(brief-hero),::view-transition-new(brief-hero){
   animation-duration:var(--dur-3);animation-timing-function:var(--ease);height:100%}
+
+/* -------------------------------------------------------------------
+   04c · Interaction primitives — the reusable building blocks
+   Defined HERE, ABOVE every component, so a component can safely layer
+   its own delta on top (a later, equal-specificity rule wins). New
+   surfaces should REUSE these, not hand-roll another accent link,
+   spined well, or × glyph. Frozen contract: docs/DESIGN.md.
+
+     Text buttons
+       .linkbtn         borderless accent text-button, underlined
+       .linkbtn-plain   — modifier: no underline (standalone "Ask →")
+       .linkbtn-sm      — modifier: smaller (.76rem)
+       .linkbtn-quiet   muted sibling (→ ink-2 on hover), for the calm
+                         "why this" / "details" disclosures
+     Spined wells (the "one lever / one change" callout)
+       .well-accent     card + 3px terracotta spine + radius + shadow
+       .well-accent-sm  — 2px spine + small radius (inline mini-well,
+                          no card bg/shadow; the site adds its own)
+       .well-accent-sage — modifier: sage spine (calm / done / weekly)
+     Close / dismiss
+       .xbtn            bare-glyph × (muted → ink, tiny tactile press);
+                        a framed variant just adds bg/border on top
+   ------------------------------------------------------------------- */
+.linkbtn{background:none;border:none;padding:0;font:inherit;color:var(--accent-deep);
+  font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  text-decoration-color:var(--line-2);
+  transition:color var(--dur-1) var(--ease),text-decoration-color var(--dur-1) var(--ease)}
+.linkbtn:hover{text-decoration-color:var(--accent)}
+.linkbtn:active{transform:var(--press-sm)}
+.linkbtn-sm{font-size:.76rem}
+.linkbtn-plain{color:var(--accent);text-decoration:none}
+.linkbtn-plain:hover{color:var(--accent-deep)}
+.linkbtn-quiet{background:none;border:none;padding:0;font:inherit;cursor:pointer;
+  color:var(--muted);font-weight:600;text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:var(--line-2);
+  transition:color var(--dur-1) var(--ease),text-decoration-color var(--dur-1) var(--ease)}
+.linkbtn-quiet:hover{color:var(--ink-2)}
+.linkbtn-quiet:active{transform:var(--press-sm)}
+
+.well-accent{background:var(--card);border-left:3px solid var(--accent);
+  border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+.well-accent-sm{border-left:2px solid var(--accent);border-radius:var(--radius-sm)}
+.well-accent-sage{border-left-color:var(--sage)}
+
+.xbtn{background:transparent;border:none;color:var(--muted);line-height:1;cursor:pointer;
+  transition:color var(--dur-1) var(--ease)}
+.xbtn:hover{color:var(--ink)}
+.xbtn:active{transform:var(--press-xs)}
 
 /* -------------------------------------------------------------------
    04b · Loading & progress — full-area "working" state
@@ -519,7 +563,8 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 }
 .chip span{color:var(--muted)}
 .chip-n{color:var(--accent);font-weight:620;margin-right:1px}
-.chip-x{background:none;border:none;color:#c0b6a0;font-size:1rem;line-height:1;padding:0 0 0 4px}
+/* destructive remove → .xbtn; delta = faint glyph that warms to --warn */
+.chip-x{color:var(--faint);font-size:1rem;padding:0 0 0 4px}
 .chip-x:active,.chip-x:hover{color:var(--warn)}
 
 /* set logging row */
@@ -537,7 +582,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 
 /* primary action button — solid terracotta, cream glyph */
 .logbtn{
-  flex:0 0 auto;background:var(--accent);color:#fffdf8;border:none;border-radius:999px;
+  flex:0 0 auto;background:var(--accent);color:var(--on-accent);border:none;border-radius:999px;
   width:44px;height:42px;font-size:1.35rem;font-weight:700;line-height:1;
   box-shadow:0 1px 2px rgba(147,66,31,.3),0 4px 12px rgba(147,66,31,.22);
   transition:background .15s,box-shadow .2s,transform .12s;
@@ -567,7 +612,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 
 /* skip ("not today") — quiet dismiss in the card header */
 .ex-skip{
-  flex:0 0 auto;background:none;border:none;color:#c0b6a0;font-size:.9rem;line-height:1;
+  flex:0 0 auto;background:none;border:none;color:var(--faint);font-size:.9rem;line-height:1;
   width:28px;height:28px;border-radius:999px;display:grid;place-items:center;padding:0;
   transition:color var(--dur-1),background var(--dur-1),transform var(--dur-1) var(--ease);
 }
@@ -606,7 +651,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .done-mark{
   width:42px;height:42px;margin:0 auto 12px;border-radius:999px;
   display:grid;place-items:center;font-size:1.15rem;
-  background:rgba(110,127,92,.16);color:var(--sage,#6e7f5c);
+  background:rgba(110,127,92,.16);color:var(--sage);
 }
 .done-kicker{margin-bottom:6px}
 .done-title{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
@@ -1185,7 +1230,7 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   font-family:var(--font-ui);font-weight:600;font-size:.76rem;letter-spacing:.08em;
   text-transform:uppercase;transition:background .15s,color .15s;
 }
-.draftbtn:hover{background:var(--accent);color:#fffdf8}
+.draftbtn:hover{background:var(--accent);color:var(--on-accent)}
 /* an applied draft — calm, done, non-interactive (no hover, no pointer) */
 .draftbtn.applied{
   border-color:var(--sage);background:var(--sage-bg);color:var(--sage);
@@ -1414,7 +1459,7 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .togglebtn{background:var(--card-2);border:1px solid var(--line);color:var(--muted);
   border-radius:999px;min-width:44px;height:30px;font-family:var(--font-ui);
   font-size:.66rem;font-weight:700;letter-spacing:.1em}
-.togglebtn.on{background:var(--sage);color:#fffdf8;border-color:var(--sage)}
+.togglebtn.on{background:var(--sage);color:var(--on-accent);border-color:var(--sage)}
 .warnpill{font-family:var(--font-ui);font-size:.56rem;font-weight:700;letter-spacing:.1em;
   color:var(--warn);background:var(--warn-bg);border:none;border-radius:999px;
   padding:2px 8px;text-transform:uppercase}
@@ -1439,7 +1484,7 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .memcontent{font-size:.88rem;color:var(--ink-2);line-height:1.5;word-wrap:break-word}
 .memctl{display:flex;gap:4px;flex:0 0 auto}
 .memdel.armed,.hdoc-del.armed,.life-del.armed{
-  color:#fffdf8;background:var(--warn);border-color:var(--warn);
+  color:var(--on-accent);background:var(--warn);border-color:var(--warn);
   font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.08em;
   text-transform:uppercase;
 }
@@ -1733,7 +1778,7 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .savebar-discard{background:transparent;border:none;color:rgba(248,243,234,.6);flex:0 0 auto;
   font-size:.8rem;font-weight:600;padding:8px 10px;border-radius:999px;
   transition:color var(--dur-1) ease,opacity var(--dur-1) ease}
-.savebar-save{background:var(--accent);border:none;color:#fffdf8;flex:0 0 auto;
+.savebar-save{background:var(--accent);border:none;color:var(--on-accent);flex:0 0 auto;
   font-size:.82rem;font-weight:700;letter-spacing:.04em;
   padding:9px 20px;border-radius:999px;
   transition:background var(--dur-1) ease,opacity var(--dur-1) ease}
@@ -1799,7 +1844,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   .segbtn:hover{color:var(--ink)}
   .segbtn.active:hover{color:var(--paper)}
   .rest-btn:hover{border-color:var(--ink);color:var(--ink)}
-  .savebar-discard:hover{color:#fffdf8}
+  .savebar-discard:hover{color:var(--on-accent)}
   .savebar-save:not(:disabled):hover{background:var(--accent-deep)}
 }
 
@@ -1961,8 +2006,8 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 .pillbtn:hover{border-color:var(--ink);box-shadow:var(--shadow-md)}
 .pillbtn:active{transform:var(--press)}
 .pill-warn{color:var(--warn)}
-.pill-accent{background:var(--accent);border-color:var(--accent);color:#fffdf8}
-.pill-accent:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:#fffdf8}
+.pill-accent{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.pill-accent:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:var(--on-accent)}
 .pill-sm{padding:8px 15px;font-size:.76rem}
 
 /* "This exercise" management row inside the exercise detail (change type / delete) */
@@ -1987,13 +2032,13 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
   border-radius:10px;padding:9px 10px;font-family:var(--font-ui);font-size:.9rem;color:var(--ink);
   font-variant-numeric:lining-nums tabular-nums;text-align:center}
 .edset input:focus{outline:none;border-color:var(--accent)}
-.edset-del{flex:0 0 auto;background:none;border:none;color:#c0b6a0;font-size:1.1rem;line-height:1;
+.edset-del{flex:0 0 auto;background:none;border:none;color:var(--faint);font-size:1.1rem;line-height:1;
   width:30px;height:30px;border-radius:999px;display:grid;place-items:center;padding:0;
   transition:color var(--dur-1),background var(--dur-1),transform var(--dur-1) var(--ease)}
 .edset-del:hover{color:var(--warn);background:var(--card-2)}
 .edset-del:active{transform:var(--press-xs)}
 /* two-tap armed state — × becomes a "remove?" chip (the shared destructive idiom) */
-.edset-del.armed{width:auto;padding:0 10px;color:#fffdf8;background:var(--warn);
+.edset-del.armed{width:auto;padding:0 10px;color:var(--on-accent);background:var(--warn);
   font-family:var(--font-ui);font-size:.6rem;font-weight:700;letter-spacing:.08em;
   text-transform:uppercase}
 .ed-notes{width:100%;background:var(--card-2);border:1px solid var(--line);border-radius:12px;
@@ -2002,7 +2047,7 @@ body.resting .savebar{bottom:calc(114px + max(env(safe-area-inset-bottom),6px) +
 
 /* PR badge — a small gold moment */
 .prbadge{display:inline-block;font-family:var(--font-ui);font-size:.56rem;font-weight:700;
-  letter-spacing:.14em;text-transform:uppercase;color:#fffdf8;background:var(--gold);
+  letter-spacing:.14em;text-transform:uppercase;color:var(--on-accent);background:var(--gold);
   border-radius:999px;padding:2px 8px;vertical-align:2px}
 
 /* -------------------------------------------------------------------
@@ -2206,9 +2251,9 @@ body.sheet-open{overflow:hidden}
   transform:translateY(100%);transition:transform var(--dur-3) var(--ease)}
 .sheet-in .sheet-card{transform:translateY(0)}
 .sheet-grab{width:40px;height:4px;border-radius:99px;background:var(--line-2);margin:10px auto 0;flex:0 0 auto}
+/* framed dismiss → .xbtn + a card-2 circle chrome */
 .sheet-x{position:absolute;top:14px;right:14px;z-index:2;background:var(--card-2);
-  border:1px solid var(--line);color:var(--muted);border-radius:999px;width:32px;height:32px;font-size:.85rem}
-.sheet-x:hover{color:var(--ink)}
+  border:1px solid var(--line);border-radius:999px;width:32px;height:32px;font-size:.85rem}
 .sheet-scroll{overflow-y:auto;overscroll-behavior:contain;text-align:center;
   padding:6px 22px calc(28px + env(safe-area-inset-bottom))}
 .sheet-hero{width:min(46vw,180px);margin:8px auto 0}
@@ -2306,8 +2351,8 @@ body.sheet-open{overflow:hidden}
 .cl0{background:var(--card-2)}
 .cl1{background:#f4e2d5}
 .cl2{background:#eac3a7}
-.cl3{background:#d49270;color:#fffdf8}
-.cl4{background:var(--accent);color:#fffdf8}
+.cl3{background:#d49270;color:var(--on-accent)}
+.cl4{background:var(--accent);color:var(--on-accent)}
 .cal-today{outline:2px solid var(--accent);outline-offset:1.5px}
 .cal-has{cursor:pointer}
 .cal-has:active{transform:var(--press-xs)}
@@ -2334,7 +2379,7 @@ body.sheet-open{overflow:hidden}
   padding:12px 14px;margin:0 0 12px;border-left:3px solid var(--sage)}
 .garmin-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
 .garmin-tag{flex:none;font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;
-  color:var(--accent);background:var(--accent-wash,rgba(180,85,45,.1));border-radius:999px;padding:3px 8px}
+  color:var(--accent);background:var(--accent-wash);border-radius:999px;padding:3px 8px}
 .garmin-tiles{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:10px}
 .gz-bar{display:flex;height:9px;border-radius:999px;overflow:hidden;background:var(--line-2);margin:2px 0 5px}
 .gz-seg{height:100%;min-width:1px}
@@ -2350,7 +2395,7 @@ body.sheet-open{overflow:hidden}
   font-size:.84rem;line-height:1.4;color:var(--ink-2)}
 .garmin-reconcile-glyph{flex:0 0 auto;color:var(--sage)}
 .garmin-reconcile-btn{flex:0 0 auto;font:inherit;font-size:.78rem;letter-spacing:.03em;
-  cursor:pointer;color:#fffdf8;background:var(--accent);border:none;border-radius:999px;
+  cursor:pointer;color:var(--on-accent);background:var(--accent);border:none;border-radius:999px;
   padding:6px 14px;transition:background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
 .garmin-reconcile-btn:hover{background:var(--accent-deep)}
 .garmin-reconcile-btn:active{transform:var(--press-lg)}
@@ -2506,9 +2551,9 @@ body.sheet-open{overflow:hidden}
 .brief-redirect:hover{border-color:var(--ink);color:var(--ink)}
 .brief-redirect:active{transform:var(--press)}
 .brief-redirect-primary{
-  background:var(--accent);border-color:var(--accent);color:#fffdf8;box-shadow:var(--shadow-sm);
+  background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:var(--shadow-sm);
 }
-.brief-redirect-primary:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:#fffdf8}
+.brief-redirect-primary:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:var(--on-accent)}
 .brief-rest .brief-redirect-primary,.brief-easy .brief-redirect-primary{
   background:var(--ink);border-color:var(--ink);color:var(--paper);
 }
@@ -2533,15 +2578,13 @@ body.sheet-open{overflow:hidden}
 /* the on-demand session-suggest card — a reviewable suggestion, not a plan */
 .sug-slot:empty{display:none}
 /* free-text session composer — "say what you want" */
-.sug-composer{
-  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
-  padding:14px;margin:0 0 14px;border-left:3px solid var(--terracotta);
-}
+/* spined well → .well-accent; delta = padding only */
+.sug-composer{padding:14px;margin:0 0 14px}
 .sug-prompt{
   width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
   border-radius:var(--radius-sm);padding:11px 13px;font-size:.92rem;font-family:inherit;
 }
-.sug-prompt:focus{outline:none;border-color:var(--terracotta)}
+.sug-prompt:focus{outline:none;border-color:var(--accent)}
 .sug-prompt::placeholder{color:var(--muted)}
 .sug-composer-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px}
 .sug-vibes{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
@@ -2549,12 +2592,11 @@ body.sheet-open{overflow:hidden}
   background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);cursor:pointer;
   border-radius:999px;padding:5px 11px;font-size:.76rem;white-space:nowrap;transition:all .15s ease;
 }
-@media (hover:hover){.sug-vibe:hover{border-color:var(--terracotta);color:var(--ink)}}
+@media (hover:hover){.sug-vibe:hover{border-color:var(--accent);color:var(--ink)}}
 .sug-composer-actions{display:flex;gap:8px;flex:0 0 auto}
-.sug-card{
-  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
-  padding:18px 18px 16px;margin:0 0 14px;border-left:3px solid var(--sage);
-}
+/* sage-spined well → .well-accent.well-accent-sage; delta = padding
+   (the .sug-loading / .sug-fail states just retint the spine below) */
+.sug-card{padding:18px 18px 16px;margin:0 0 14px}
 .sug-kicker{color:var(--muted);margin-bottom:6px}
 .sug-name{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
   font-size:1.3rem;line-height:1.15;color:var(--ink);margin:0}
@@ -2595,7 +2637,7 @@ body.sheet-open{overflow:hidden}
 @keyframes sugspin{to{transform:rotate(360deg)}}
 .aspin-sm{--asz:13px}
 .aspin-xs{--asz:11px;border-width:1.5px}
-.aspin-ghost{border-color:rgba(255,253,248,.45);border-top-color:#fffdf8}
+.aspin-ghost{border-color:rgba(255,253,248,.45);border-top-color:var(--on-accent)}
 
 /* indeterminate filament — a thin sweep of warm light along the top edge of a
    surface mid-generation (ideally overflow-clipped) */
@@ -2662,7 +2704,7 @@ body.swr-busy::after{
 .qlmic:active{transform:var(--press-sm)}
 .qlmic svg{display:block}
 /* listening state — a calm terracotta pulse, never frantic */
-.qlmic-live{background:var(--accent);border-color:var(--accent);color:#fffdf8;
+.qlmic-live{background:var(--accent);border-color:var(--accent);color:var(--on-accent);
   box-shadow:0 0 0 0 rgba(180,85,45,.35);animation:micpulse 1.6s var(--ease) infinite}
 @keyframes micpulse{
   0%{box-shadow:0 0 0 0 rgba(180,85,45,.34)}
@@ -2720,7 +2762,7 @@ body.swr-busy::after{
     border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
 }
 .feel-dot:active{transform:var(--press-xs)}
-.feel-dot-on{background:var(--sage);border-color:var(--sage);color:#fffdf8}
+.feel-dot-on{background:var(--sage);border-color:var(--sage);color:var(--on-accent)}
 .checkin-dismiss{
   margin-left:auto;background:none;border:none;color:var(--muted);
   font-size:.95rem;line-height:1;cursor:pointer;padding:2px 4px;
@@ -2757,21 +2799,17 @@ body.swr-busy::after{
 .insight-why{font-size:.84rem;color:var(--ink-2);line-height:1.5;margin:11px 0 0;max-width:72ch;position:relative}
 .insight-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;position:relative}
 /* quiet "why this" disclosure — mirrors the Brief's "tap to see why" */
-.insight-why-more{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
-  font-size:.7rem;font-weight:600;letter-spacing:.04em;text-decoration:underline;
-  text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;cursor:pointer}
-.insight-why-more:hover{color:var(--ink-2)}
+/* quiet disclosure → .linkbtn-quiet; delta = type only */
+.insight-why-more{font-family:var(--font-ui);font-size:.7rem;letter-spacing:.04em}
 /* insight/weekly actions — quiet text links (same idiom as "why this"), replacing
    the ambiguous ▲▼ vote arrows. "Got it" acknowledges AND clears the card (records
    the up-vote + dismisses in one tap → the brain learns this kind of connection
    lands); "Not useful" clears without a positive signal. A calm exit on both paths. */
 .insight-acts{display:flex;align-items:center;gap:16px}
-.insight-act{background:none;border:none;font-family:var(--font-ui);font-size:.74rem;
-  font-weight:600;letter-spacing:.02em;padding:0;cursor:pointer;color:var(--muted);
-  transition:color var(--dur-1) var(--ease)}
-.insight-act:hover{color:var(--ink-2)}
-.insight-act-go{color:var(--sage)}
-.insight-act-go:hover{color:#5a6a4a}
+/* quiet actions → .linkbtn-quiet; no underline; -go is the sage "commit" */
+.insight-act{font-family:var(--font-ui);font-size:.74rem;letter-spacing:.02em;text-decoration:none}
+.insight-act.insight-act-go{color:var(--sage)}
+.insight-act.insight-act-go:hover{color:var(--sage-deep)}
 
 /* the weekly read (E3) — "how the week went + the one change". Its own editorial
    card so a newer connection insight never buries it. Distinct identity from the
@@ -2779,11 +2817,10 @@ body.swr-busy::after{
    keystone "One change" in a terracotta-accented well. Reuses the insight foot. */
 .weekly-slot{margin:0}
 .weekly-slot:empty{display:none}
-.weekly-card{
-  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius-sm);
-  padding:18px 20px 14px;margin:0 0 14px;border-left:3px solid var(--sage);
-  position:relative;overflow:hidden;
-}
+/* sage-spined hero well → .well-accent.well-accent-sage; delta = small
+   radius + masthead spacing + the wash clip */
+.weekly-card{border-radius:var(--radius-sm);padding:18px 20px 14px;margin:0 0 14px;
+  position:relative;overflow:hidden}
 .weekly-card::before{content:"";position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(130% 90% at 0% 0%, rgba(110,127,92,.10), transparent 60%)}
 .weekly-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;position:relative}
@@ -2792,8 +2829,8 @@ body.swr-busy::after{
 .weekly-text{font-family:var(--font-display);font-weight:460;font-variation-settings:"opsz" 60;
   font-size:1.28rem;line-height:1.36;color:var(--ink);margin:0;max-width:60ch;position:relative}
 /* the one change — the single actionable thing, set apart so it never hides in prose */
-.weekly-change{margin:14px 0 0;padding:11px 14px;border-radius:var(--radius-sm);
-  background:var(--card-2);border-left:2px solid var(--accent);position:relative}
+/* inline mini-well → .well-accent-sm; delta = tint bg + padding */
+.weekly-change{margin:14px 0 0;padding:11px 14px;background:var(--card-2);position:relative}
 .weekly-change-lbl{display:block;color:var(--accent);margin-bottom:3px}
 .weekly-change-text{margin:0;font-size:.92rem;line-height:1.45;color:var(--ink)}
 .weekly-why{font-size:.85rem;color:var(--ink-2);line-height:1.5;margin:12px 0 0;max-width:72ch;position:relative}
@@ -2812,11 +2849,8 @@ body.swr-busy::after{
 .feedback-joint::placeholder{color:var(--muted)}
 .feedback-form .checkin-dismiss{position:absolute;top:8px;right:10px;margin-left:0}
 .feedback-done{font-size:.82rem}
-.feedback-edit{
-  background:none;border:none;color:var(--accent);cursor:pointer;font-family:var(--font-ui);
-  font-size:.76rem;padding:2px 4px;margin-left:4px;transition:color var(--dur-1) var(--ease);
-}
-.feedback-edit:hover{color:var(--accent-deep)}
+/* accent action → .linkbtn.linkbtn-plain.linkbtn-sm; delta = spacing only */
+.feedback-edit{font-family:var(--font-ui);padding:2px 4px;margin-left:4px}
 
 /* Energy Balance (Progress) — a calm editorial read, never a dashboard. */
 .eb-ctx{color:var(--muted);margin-top:11px}
@@ -2849,10 +2883,8 @@ body.swr-busy::after{
 .eb-ok-mark{color:var(--sage);font-size:.95rem;line-height:1.4;flex:0 0 auto}
 .eb-ok-lead{font-weight:600;color:var(--ink);font-size:.92rem}
 .eb-ok-body{margin:5px 0 0;font-size:.85rem;color:var(--ink-2);line-height:1.5}
-.eb-proposal{
-  background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
-  padding:16px 18px 14px;border-left:3px solid var(--accent);position:relative;overflow:hidden;
-}
+/* spined well → .well-accent; delta = padding + clip */
+.eb-proposal{padding:16px 18px 14px;position:relative;overflow:hidden}
 .eb-target{display:flex;align-items:baseline;gap:9px;margin-top:4px}
 .eb-target-unit{color:var(--muted)}
 .eb-macros{color:var(--ink-2);margin-top:7px;text-transform:none;letter-spacing:.02em;font-size:.8rem}
@@ -2939,10 +2971,8 @@ body.swr-busy::after{
   flex-wrap:wrap;margin-top:11px}
 .agent-card-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .agent-connect-btn{padding:6px 13px;font-size:.74rem}
-.agent-detail-link{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
-  font-size:.7rem;font-weight:600;letter-spacing:.04em;cursor:pointer;padding:4px 2px;
-  text-decoration:underline;text-underline-offset:2px;text-decoration-color:var(--line-2)}
-.agent-detail-link:hover{color:var(--ink-2)}
+/* quiet disclosure → .linkbtn-quiet; delta = type + disabled */
+.agent-detail-link{font-family:var(--font-ui);font-size:.7rem;letter-spacing:.04em;padding:4px 2px}
 .agent-detail-link:disabled{opacity:.5;cursor:default;text-decoration:none}
 
 /* state chip — calm, never an alarming red. Sage = connected, terracotta-ink invite
@@ -2951,7 +2981,7 @@ body.swr-busy::after{
   letter-spacing:.08em;text-transform:uppercase;border-radius:999px;padding:3px 9px;
   white-space:nowrap;line-height:1.5}
 .agent-chip-ok{color:var(--sage);background:var(--sage-bg)}
-.agent-chip-connect{color:var(--accent);background:var(--accent-wash,rgba(180,85,45,.1))}
+.agent-chip-connect{color:var(--accent);background:var(--accent-wash)}
 .agent-chip-installed{color:var(--ink-2);background:var(--card);border:1px solid var(--line-2)}
 .agent-chip-absent{color:var(--muted);background:var(--card);border:1px solid var(--line-2)}
 
@@ -3115,11 +3145,8 @@ body.swr-busy::after{
 .hread-jump-sub{font-size:.84rem;color:var(--muted);line-height:1.42}
 .hread-jump-arrow{flex:0 0 auto;font-size:1.2rem;color:var(--sage);font-weight:700}
 /* the "see every trend →" link out of the what-matters-now list to the Markers home */
-.hb-mk-allbtn{margin-top:12px;background:none;border:none;padding:4px 0;cursor:pointer;
-  font-family:var(--font-ui);font-size:.78rem;font-weight:600;letter-spacing:.01em;
-  color:var(--accent);text-decoration:underline;text-underline-offset:3px;
-  text-decoration-color:rgba(180,85,45,.35);transition:text-decoration-color var(--dur-1)}
-.hb-mk-allbtn:hover{text-decoration-color:var(--accent)}
+/* accent trend-link → .linkbtn.linkbtn-sm; delta = spacing only */
+.hb-mk-allbtn{margin-top:12px;padding:4px 0;font-family:var(--font-ui);letter-spacing:.01em}
 
 /* defensive wrapping — long marker names/values or agent prose must never break
    out of the card on narrow screens (the Health analysis overflow fix) */
@@ -3133,7 +3160,7 @@ body.swr-busy::after{
 /* the review card */
 /* the elite-coach whole-picture synthesis — leads the Read tab */
 .hsyn{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
-  padding:18px;margin:0 0 14px;border-left:3px solid var(--terracotta)}
+  padding:18px;margin:0 0 14px;border-left:3px solid var(--accent)}
 .hsyn-kicker{display:block;color:var(--muted);margin-bottom:6px}
 .hsyn-headline{font-family:var(--font-display);font-weight:530;font-variation-settings:"opsz" 80;
   font-size:1.22rem;line-height:1.28;color:var(--ink);margin:0 0 8px}
@@ -3141,12 +3168,20 @@ body.swr-busy::after{
 .hsyn-invite{font-size:.92rem;color:var(--ink-2);margin:0 0 12px}
 .hsyn-prios{display:flex;flex-direction:column;gap:8px;margin:0 0 12px}
 .hsyn-prio{padding:9px 11px;background:var(--card-2);border-radius:var(--radius-sm)}
-.hsyn-plabel{display:block;font-weight:600;font-size:.86rem;color:var(--ink)}
-.hsyn-pmove{display:block;font-size:.85rem;color:var(--ink-2);margin-top:2px}
+.hsyn-ptop{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.hsyn-plabel{font-weight:600;font-size:.86rem;color:var(--ink)}
+.hsyn-pwhy{font-size:.82rem;color:var(--muted);line-height:1.45;margin:2px 0 0}
+.hsyn-pmove{display:block;font-size:.85rem;color:var(--ink-2);margin-top:4px}
+.hsyn-pmove-k{color:var(--sage-text);margin-right:5px}
 .hsyn-precheck{display:block;color:var(--muted);margin-top:3px}
-.hsyn-onechange{margin:4px 0 12px;padding:11px 13px;border-radius:var(--radius-sm);
-  background:color-mix(in srgb,var(--terracotta) 9%,var(--card));border-left:2px solid var(--terracotta)}
-.hsyn-onechange .lbl{display:block;color:var(--terracotta);margin-bottom:3px}
+/* "ask the coach about this" deep-links — layout only; the look is .linkbtn-plain.linkbtn-sm */
+.hsyn-ask{flex:0 0 auto}
+.hsyn-foot-r{display:flex;align-items:center;gap:10px}
+.hmk-ask{display:inline-flex;align-items:center;margin:2px 0 12px;min-height:30px}
+.hmk-ask-arw{margin-left:1px}
+.hsyn-onechange{margin:4px 0 12px;padding:11px 13px;
+  background:color-mix(in srgb,var(--accent) 9%,var(--card))}
+.hsyn-onechange .lbl{display:block;color:var(--accent);margin-bottom:3px}
 .hsyn-onechange span:last-child{font-size:.9rem;color:var(--ink);line-height:1.45}
 .hsyn-focus{margin-top:4px;border-top:1px solid var(--line);padding-top:12px}
 .hsyn-tier-lbl{display:block;color:var(--muted);margin:10px 0 6px;letter-spacing:.04em}
@@ -3155,7 +3190,7 @@ body.swr-busy::after{
 .hsyn-fp:last-child{border-bottom:none}
 .hsyn-fp-head{display:flex;align-items:center;gap:7px}
 .hsyn-fp-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:0 0 auto}
-.hsyn-fp-now .hsyn-fp-dot{background:var(--terracotta)}
+.hsyn-fp-now .hsyn-fp-dot{background:var(--accent)}
 .hsyn-fp-group{font-weight:600;font-size:.86rem;color:var(--ink)}
 .hsyn-fp-soft{color:var(--muted)}
 .hsyn-fp-why{color:var(--muted);margin:1px 0 0 14px}
@@ -3292,9 +3327,9 @@ body.swr-busy::after{
 .hstand-chip-good{background:var(--sage-bg);color:var(--sage);border-color:transparent}
 .hstand-chip-good::before{content:"▾";font-size:.8em;color:var(--sage)}
 
-/* the one lever — a terracotta well naming the single highest-leverage move */
-.hstand-lever{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
-  border-left:3px solid var(--accent);padding:16px 18px}
+/* the one lever — a terracotta well naming the single highest-leverage move
+   (→ .well-accent; delta = padding only) */
+.hstand-lever{padding:16px 18px}
 .hstand-lever h3{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 56;
   font-size:1.18rem;line-height:1.2;color:var(--ink);margin:7px 0 4px}
 .hstand-lever p{font-size:.86rem;line-height:1.5;color:var(--ink-2);margin:0 0 9px}
@@ -3345,9 +3380,8 @@ body.swr-busy::after{
   box-shadow:var(--shadow-md);padding:20px;max-height:90vh;overflow:auto;animation:dlgin var(--dur-2) var(--ease)}
 .bpsheet-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
 .bpsheet-hd h3{font-family:var(--font-display);font-weight:560;font-size:1.25rem;color:var(--ink);margin:0}
-.bpsheet-x{background:transparent;border:none;color:var(--muted);font-size:1.05rem;cursor:pointer;
-  width:30px;height:30px;border-radius:50%}
-.bpsheet-x:active{transform:var(--press-xs)}
+/* dismiss → .xbtn; delta = size */
+.bpsheet-x{font-size:1.05rem;width:30px;height:30px;border-radius:50%}
 .bpsheet-form{display:grid;gap:11px}
 .bpsheet-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:9px}
 .bpsheet-form label{display:flex;flex-direction:column;gap:5px;font-size:.66rem;font-weight:700;
@@ -3461,6 +3495,33 @@ body.swr-busy::after{
 .hpic-build .hpic-headline{margin-top:10px}
 
 /* markers — grouped ledger cards, expandable progress-chart rows */
+/* catalog controls — a search field over ~180 markers + the out-of-range pill.
+   Rendered once and left in place so the search field keeps focus while typing. */
+.hmk-controls{display:flex;align-items:center;gap:9px;margin:0 0 12px;flex-wrap:wrap}
+.hmk-search{position:relative;flex:1 1 200px;min-width:160px}
+.hmk-search-i{position:absolute;left:11px;top:50%;transform:translateY(-50%);
+  width:16px;height:16px;color:var(--muted);pointer-events:none}
+.hmk-search-in{width:100%;height:40px;padding:0 12px 0 34px;border:1px solid var(--line-2);
+  border-radius:999px;background:var(--card-2);color:var(--ink);font-family:var(--font-ui);
+  font-size:.85rem;transition:border-color .15s,background .15s}
+.hmk-search-in::placeholder{color:var(--muted)}
+.hmk-search-in:focus{outline:none;border-color:var(--ink-2);background:var(--card)}
+.hmk-search-in::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;
+  width:15px;height:15px;background:var(--muted);cursor:pointer;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 2l8 8M10 2l-8 8' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat}
+/* out-of-range quick filter — one calm pill (the .ghostbtn family) */
+.hmk-filter-toggle{display:inline-flex;align-items:center;gap:7px;cursor:pointer;flex:0 0 auto;
+  background:transparent;border:1px solid var(--line-2);color:var(--ink-2);height:40px;
+  border-radius:999px;padding:0 14px;font-family:var(--font-ui);font-weight:600;
+  font-size:.76rem;letter-spacing:.04em;white-space:nowrap;
+  transition:border-color .15s,color .15s,background .15s}
+.hmk-filter-toggle:hover{border-color:var(--ink);color:var(--ink)}
+.hmk-filter-toggle.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.hmk-status{font-size:.74rem;color:var(--muted);margin:0 2px 10px}
+.hmk-empty{padding:22px 4px;color:var(--muted);font-size:.86rem;line-height:1.5}
+/* quiet out-of-range count on a sticky group head */
+.hmk-headcount{margin-left:7px;padding:1px 7px;border-radius:999px;font-size:.66rem;font-weight:650;
+  letter-spacing:.03em;color:var(--warn);background:rgba(179,64,46,.1);vertical-align:1px}
 .hmk-groups{display:grid;gap:18px}
 .hmk-section{min-width:0}
 /* a calm catalog section heading per health group ("Lipids & Cardiovascular").
@@ -3506,6 +3567,9 @@ button.hmk-row:active{background:var(--card-2)}
   font-size:1.25rem;color:var(--ink);font-variant-numeric:lining-nums}
 .hchart-latest-when{font-size:.7rem;color:var(--muted);letter-spacing:.01em}
 .hchart{width:100%;height:auto;display:block;margin:2px 0 6px;touch-action:pan-y;cursor:crosshair}
+/* single-reading band gauge — a static where-you-sit read, no scrubbing */
+.hgauge{cursor:default}
+.hgauge-track{stroke:var(--line-2);stroke-width:2;stroke-linecap:round}
 .hchart-band{fill:rgba(110,127,92,.14)}
 .hchart-txt{font-family:var(--font-ui);font-size:9px;letter-spacing:.08em;fill:var(--muted)}
 .hchart-cap{margin:0 0 12px;color:var(--muted);letter-spacing:.01em;font-size:.72rem;line-height:1.4}
@@ -3553,11 +3617,8 @@ button.hmk-row:active{background:var(--card-2)}
 .aboutme textarea:focus{outline:none;border-color:var(--line-2);box-shadow:0 0 0 3px rgba(180,85,45,.08)}
 .aboutme textarea::placeholder{color:var(--muted);opacity:.85}
 
-/* inline "go there" link button (Family -> Life hint) */
-.linkbtn{background:none;border:none;padding:0;font:inherit;color:var(--accent-deep);
-  font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;
-  text-decoration-color:var(--line-2)}
-.linkbtn:hover{text-decoration-color:var(--accent)}
+/* Interaction primitives (.linkbtn / .well-accent / .xbtn) live in §04c, at
+   the top of the file. Reuse them; don't re-declare here. */
 
 /* =====================================================================
    Family roster (Me -> Family) — warm cards, colour swatches
@@ -3565,13 +3626,13 @@ button.hmk-row:active{background:var(--card-2)}
 .famadd .fam-swatches{margin-top:2px}
 .fam-swatches{display:flex;gap:9px;flex-wrap:wrap}
 .fam-swatch{width:26px;height:26px;border-radius:50%;border:2px solid transparent;
-  background:var(--fam,#b4552d);cursor:pointer;padding:0;position:relative;
+  background:var(--fam,var(--accent));cursor:pointer;padding:0;position:relative;
   box-shadow:inset 0 0 0 2px var(--card);transition:transform var(--dur-1) var(--ease)}
 .fam-swatch:active{transform:var(--press-xs)}
 .fam-swatch-on{border-color:var(--ink);transform:scale(1.06)}
 .fam-card .fam-head{display:flex;align-items:center;gap:12px}
 .fam-mono{flex:0 0 auto;width:42px;height:42px;border-radius:50%;
-  background:var(--fam,#b4552d);color:#fffdf8;display:inline-flex;align-items:center;justify-content:center;
+  background:var(--fam,var(--accent));color:var(--on-accent);display:inline-flex;align-items:center;justify-content:center;
   font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 32;font-size:1.02rem;
   letter-spacing:.01em;box-shadow:var(--shadow-sm)}
 .fam-id{display:flex;flex-direction:column;gap:2px;min-width:0}
@@ -3624,9 +3685,8 @@ button.hmk-row:active{background:var(--card-2)}
   border:1px solid var(--line,rgba(0,0,0,.08));border-radius:999px;padding:5px 6px 5px 12px}
 .supp-name{font-size:.84rem;font-weight:600;color:var(--ink)}
 .supp-meta{font-size:.72rem;color:var(--muted)}
-.supp-x{border:none;background:transparent;color:var(--muted);font-size:1.05rem;line-height:1;
-  cursor:pointer;padding:0 4px;border-radius:50%}
-.supp-x:hover{color:var(--ink)}
+/* dismiss → .xbtn; delta = size + hit shape */
+.supp-x{font-size:1.05rem;padding:0 4px;border-radius:50%}
 .supp-input{display:flex;gap:8px}
 .supp-input input{flex:1;min-width:0;font:inherit;font-size:.86rem;padding:9px 12px;
   border:1px solid var(--line,rgba(0,0,0,.12));border-radius:10px;background:var(--card);color:var(--ink)}
@@ -3688,9 +3748,8 @@ button.hmk-row:active{background:var(--card-2)}
 .hb-dcite{font-size:.68rem;color:var(--muted);font-style:italic;margin-top:6px;opacity:.85}
 /* "see the evidence" — a calm disclosure that turns a cited claim into a verifiable
    one. Quiet underlined affordance; the box opens into the source(s). */
-.hb-devidence{background:none;border:none;color:var(--muted);font-family:var(--font-ui);
-  font-size:.68rem;font-weight:600;letter-spacing:.02em;text-decoration:underline;
-  text-underline-offset:3px;text-decoration-color:var(--line-2);padding:0;margin-top:7px;cursor:pointer}
+/* quiet disclosure → .linkbtn-quiet; delta = type + an accent-tinted hover */
+.hb-devidence{font-family:var(--font-ui);font-size:.68rem;letter-spacing:.02em;margin-top:7px}
 .hb-devidence:hover{color:var(--accent);text-decoration-color:var(--accent)}
 .hb-evbox{margin-top:9px;display:grid;gap:11px}
 .hb-evbox[hidden]{display:none}
@@ -3714,10 +3773,8 @@ button.hmk-row:active{background:var(--card-2)}
 .hb-research-nudge{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;
   margin-top:16px;padding-top:13px;border-top:1px solid var(--line-2)}
 .hb-rn-text{font-size:.8rem;color:var(--muted);line-height:1.45}
-.hb-rn-link{background:none;border:none;color:var(--accent);font-family:var(--font-ui);
-  font-size:.8rem;font-weight:600;letter-spacing:.01em;text-decoration:underline;
-  text-underline-offset:3px;text-decoration-color:rgba(180,85,45,.4);padding:0;cursor:pointer}
-.hb-rn-link:hover{text-decoration-color:var(--accent)}
+/* accent inline link → .linkbtn; delta = type only */
+.hb-rn-link{font-family:var(--font-ui);font-size:.8rem;letter-spacing:.01em}
 .hb-dctl{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
 .hb-dbtn{background:transparent;border:1px solid var(--line-2);color:var(--ink-2);
   border-radius:999px;padding:6px 13px;font-family:var(--font-ui);font-weight:600;
@@ -3867,7 +3924,8 @@ button.hmk-row:active{background:var(--card-2)}
 .pi-kindbtn{border:none;background:transparent;color:var(--muted);border-radius:999px;
   padding:5px 13px;font-family:var(--font-ui);font-weight:600;font-size:.66rem;
   letter-spacing:.06em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
-.pi-kindbtn.active{background:var(--accent);color:var(--paper)}
+/* active mode reads ink like every other segmented toggle (.segbtn / .disc-seg) */
+.pi-kindbtn.active{background:var(--ink);color:var(--paper)}
 .pi-nums-cardio{display:flex;gap:5px;align-items:center}
 .pi-nums-cardio input{
   width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
@@ -3913,10 +3971,8 @@ button.hmk-row:active{background:var(--card-2)}
 .cardio-sync-dot.pulse{background:var(--accent);animation:syncpulse .9s var(--ease) infinite alternate}
 .cardio-sync-text{flex:1;min-width:0;color:var(--muted);font-size:.74rem;letter-spacing:.01em;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cardio-sync-go{flex:0 0 auto;border:none;background:transparent;cursor:pointer;
-  color:var(--accent);font:inherit;font-size:.74rem;font-weight:600;letter-spacing:.02em;
-  padding:2px 2px;transition:color var(--dur-1) var(--ease)}
-.cardio-sync-go:hover{color:var(--accent-deep)}
+/* accent action → .linkbtn.linkbtn-plain; delta = layout + disabled */
+.cardio-sync-go{flex:0 0 auto;font-size:.74rem;letter-spacing:.02em;padding:2px 2px}
 .cardio-sync-go:disabled{color:var(--muted);cursor:default}
 
 /* Day-type-aware lead: a run-led session head (no focus pill — there's no set-by-set
@@ -4019,8 +4075,8 @@ button.hmk-row:active{background:var(--card-2)}
 /* This week's prescribed runs + the shape-your-running composer. */
 .end-runs,.end-runs-empty{margin:20px 0 4px}
 .end-runs-h,.end-shape-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px}
-.end-link{background:none;border:none;padding:0;cursor:pointer;font-family:var(--font-ui);
-  font-size:.8rem;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+/* accent inline link → .linkbtn; delta = type only */
+.end-link{font-family:var(--font-ui);font-size:.8rem}
 .end-run-row{display:flex;align-items:center;gap:9px;padding:10px 0}
 .end-run-row+.end-run-row{border-top:1px solid var(--line)}
 .end-run-main{flex:1;min-width:0;display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
@@ -4430,9 +4486,9 @@ button.hmk-row:active{background:var(--card-2)}
   border-left:3px solid var(--sage);padding:13px 16px;font-size:.9rem;line-height:1.5;color:var(--ink-2)}
 .pperf-aero-watch{border-left-color:var(--accent)}
 
-/* the one lever — terracotta well, the single biggest focus (mirrors hstand-lever) */
-.pperf-lever{background:color-mix(in srgb,var(--accent) 8%,var(--card));box-shadow:var(--shadow-sm);
-  border-radius:var(--radius);border-left:3px solid var(--accent);padding:15px 18px}
+/* the one lever — terracotta well, the single biggest focus (mirrors hstand-lever)
+   (→ .well-accent; delta = a faint accent tint + padding) */
+.pperf-lever{background:color-mix(in srgb,var(--accent) 8%,var(--card));padding:15px 18px}
 .pperf-lever-lbl{display:block;color:var(--accent-deep);margin-bottom:5px;letter-spacing:.06em}
 .pperf-lever-head{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 50;
   font-size:1.08rem;line-height:1.25;color:var(--ink)}
@@ -4566,7 +4622,7 @@ button.hmk-row:active{background:var(--card-2)}
 .phone-access-tease{font-size:.82rem;line-height:1.35;color:var(--muted)}
 .phone-access-body{margin-top:10px}
 .phone-access .cmd-line{
-  margin:10px 0 0;font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  margin:10px 0 0;font-family:var(--font-mono);
   font-size:.86rem;line-height:1.4;color:var(--ink-2);
   background:var(--card-2);padding:7px 9px;border-radius:8px;
   box-sizing:border-box;max-width:100%;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;
@@ -4574,12 +4630,12 @@ button.hmk-row:active{background:var(--card-2)}
 .phone-access .phone-access-then{margin-top:6px}
 .phone-access .phone-access-token{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
 .phone-access .phone-token{
-  min-width:0;max-width:100%;font-family:var(--font-mono,ui-monospace,monospace);
+  min-width:0;max-width:100%;font-family:var(--font-mono);
   font-size:.82rem;color:var(--ink-2);word-break:break-all;
 }
 .phone-access .phone-token-set{color:var(--sage)}
 .phone-access .phone-cmd-inline{
-  font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-family:var(--font-mono);
   font-size:.85em;background:var(--card-2);padding:1px 5px;border-radius:5px;
   display:inline-block;box-sizing:border-box;max-width:100%;overflow-x:auto;white-space:nowrap;
 }
@@ -4594,7 +4650,7 @@ button.hmk-row:active{background:var(--card-2)}
 .phone-coach .phone-coach-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
 .phone-coach .phone-coach-dismiss{margin-top:0;padding:4px 12px;font-size:.85em}
 .phone-coach-install{
-  background:var(--accent);border:1px solid var(--accent);color:#fffdf8;border-radius:999px;
+  background:var(--accent);border:1px solid var(--accent);color:var(--on-accent);border-radius:999px;
   padding:8px 16px;font-family:var(--font-ui);font-weight:600;font-size:.8rem;letter-spacing:.02em;
   box-shadow:var(--shadow-sm);transition:background .15s,border-color .15s,transform .12s;
 }
@@ -4649,9 +4705,9 @@ button.hmk-row:active{background:var(--card-2)}
   padding:8px 14px;font-family:var(--font-ui);font-weight:600;font-size:.88rem;cursor:pointer}
 .agenda-act:hover{background:var(--accent-deep)}
 .agenda-act:active{transform:var(--press)}
-.agenda-x{position:absolute;top:8px;right:9px;background:none;border:none;color:var(--muted);
-  font-size:.78rem;line-height:1;padding:4px;cursor:pointer;border-radius:6px}
-.agenda-x:hover{color:var(--ink);background:var(--card-2)}
+/* dismiss → .xbtn; delta = pin + a card-2 hover wash */
+.agenda-x{position:absolute;top:8px;right:9px;font-size:.78rem;padding:4px;border-radius:6px}
+.agenda-x:hover{background:var(--card-2)}
 .today-more{margin-top:2px}
 .today-more-sum{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;
   padding:8px 2px;color:var(--muted);font-size:.8rem;font-family:var(--font-ui)}
@@ -4692,9 +4748,6 @@ button.hmk-row:active{background:var(--card-2)}
 .dayfuel-edit{flex:0 0 auto;color:var(--muted);font-size:.82rem;margin-left:2px}
 .dayfuel-foot{margin-top:10px;text-align:center;color:var(--muted)}
 .dayfuel-empty{color:var(--ink-2);font-size:.9rem;line-height:1.5}
-.linklike{background:none;border:none;padding:0;color:var(--accent);font-weight:600;
-  cursor:pointer;font-family:inherit;font-size:inherit}
-.linklike:hover{color:var(--accent-deep)}
 
 /* Food-edit detail sheet: macro inputs in a tidy 2-up grid. */
 .fed-macros{display:grid;grid-template-columns:1fr 1fr;gap:10px}

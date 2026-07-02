@@ -58,7 +58,7 @@
         const cite = d.citation ? `<div class="hb-dcite">${escHtml(d.citation)}</div>` : "";
         const evCount = d.marker && evMap ? (evMap.get(String(d.marker).toLowerCase()) || 0) : 0;
         const evidence = d.marker && (d.citation || evCount > 0)
-            ? `<button class="hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
+            ? `<button class="linkbtn-quiet hb-devidence" type="button" data-evidence="${escAttr(String(d.marker))}" aria-expanded="false">see the evidence${evCount > 0 ? ` <span class="hb-evcount">(${evCount})</span>` : ""}</button>
        <div class="hb-evbox" hidden></div>`
             : "";
         return `<div class="hb-directive reveal${soft ? " hb-directive-soft" : ""}" style="${stagger(i + 1)}" data-dir="${escAttr(d.id)}">

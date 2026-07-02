@@ -10,7 +10,7 @@
         const figure = row.duration_sec != null
             ? fmtDur(row.duration_sec)
             : `${fmtWeight(row.weight)} <span>×</span> ${escHtml(row.reps ?? "")}${row.rir != null ? ` <span>@${escHtml(row.rir)}</span>` : ""}`;
-        return `<span class="chip" data-set="${escAttr(id)}">${number != null ? `<span class="chip-n">#${escHtml(number)}</span> ` : ""}${figure}<button class="chip-x" data-del="${escAttr(id)}" title="delete">×</button></span>`;
+        return `<span class="chip" data-set="${escAttr(id)}">${number != null ? `<span class="chip-n">#${escHtml(number)}</span> ` : ""}${figure}<button class="xbtn chip-x" data-del="${escAttr(id)}" title="delete">×</button></span>`;
     }
     // Tonnage = sum weight×reps over loaded sets. Timed, bodyweight, and assisted
     // sets stay out of the load total, matching the historical Today/History rule.
@@ -84,7 +84,7 @@
             return "";
         return `<div class="checkin-done feedback-done chip-in">
       <span class="checkin-done-mark" aria-hidden="true">✓</span> ${parts.join(" · ")}
-      <button class="feedback-edit" id="feedbackEdit" type="button">edit</button>
+      <button class="linkbtn linkbtn-plain linkbtn-sm feedback-edit" id="feedbackEdit" type="button">edit</button>
     </div>`;
     }
     function todaySkipNameHtml(name) {

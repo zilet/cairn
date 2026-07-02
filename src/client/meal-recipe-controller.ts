@@ -119,7 +119,7 @@ function openMealSheet(current: MealRecipeControllerPlan, dayIndex: number, meal
   sheet.innerHTML = `
     <div class="sheet-card" role="dialog" aria-modal="true" aria-label="${escAttr(meal.name || meal.meal || "Meal")}">
       <div class="sheet-grab" aria-hidden="true"></div>
-      <button class="sheet-x" aria-label="Close">✕</button>
+      <button class="xbtn sheet-x" aria-label="Close">✕</button>
       <div class="sheet-scroll">
         <div class="sheet-hero">${artImg("food", artQuery, "artile-xl sheet-art", art("food", artQuery))}</div>
         <div class="sheet-kicker lbl">${escHtml(dayLabel)}</div>

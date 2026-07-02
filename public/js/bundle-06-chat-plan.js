@@ -50,7 +50,7 @@ function chatShellHtml() {
         <div id="chatPreview" class="chat-preview" hidden>
           <img alt="">
           <span class="chat-preview-hint">Photo attached — I'll estimate &amp; log it</span>
-          <button id="chatPreviewX" class="chip-x" aria-label="Remove photo">✕</button>
+          <button id="chatPreviewX" class="xbtn chip-x" aria-label="Remove photo">✕</button>
         </div>
         <div class="chatbar">
           <button id="chatAttach" class="attachbtn" aria-label="Attach a photo — camera, library, or files">
@@ -2230,7 +2230,7 @@ if (typeof window !== "undefined") {
         const runsSection = runs.length
             ? `<div class="end-runs reveal" style="${stagger(2)}">
          <div class="end-runs-h"><span class="lbl">This week's runs</span>
-           <button class="end-link" id="endEditRuns">Edit in Training →</button></div>
+           <button class="linkbtn end-link" id="endEditRuns">Edit in Training →</button></div>
          ${volumeLine}
          ${runRows}
        </div>${complianceHtml}${syncHtml}`
@@ -2326,7 +2326,7 @@ if (typeof window !== "undefined") {
         const p = enduranceModel().record(proposal);
         const cardio = p.parsed && Array.isArray(p.parsed.cardio) ? p.parsed.cardio : [];
         if (!cardio.length) {
-            status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="end-link" id="endToCoach">Review in Coach →</button>`;
+            status.innerHTML = `The coach proposed plan changes but no runs this time. <button class="linkbtn end-link" id="endToCoach">Review in Coach →</button>`;
             status.querySelector("#endToCoach")?.addEventListener("click", () => renderCoach());
             return;
         }
