@@ -2943,7 +2943,7 @@ function chatHeaderDeps() {
     };
 }
 async function renderChat() {
-    headerTitle.textContent = "Chat";
+    headerTitle.textContent = "Coach";
     document.body.classList.add("chat-mode"); // the chat column owns the viewport; drop body's tab-bar padding
     chatTeardownMonitor(); // the log is about to be rebuilt -- drop the old stream + bubble map
     const token = ++pollToken; // bump so the async hydrate below can detect a stale tab

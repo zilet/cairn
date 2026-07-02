@@ -151,7 +151,28 @@ function overviewHtml(): string {
   return `<div class="stand-root">
       ${focusHeroHtml()}
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
+      ${toolsHtml()}
     </div>`;
+}
+
+// The health depth + the clinician-facing exports, reachable from Stand: the full
+// agentic read, the doctor Share (clinical order + trends, untouched), uploaded
+// Records, and the learned timeline.
+function toolsHtml(): string {
+  return `<div class="stand-tools">
+      <button class="linkbtn linkbtn-plain" data-tool="read">Full health read</button>
+      <button class="linkbtn linkbtn-plain" data-tool="share">Share with your doctor</button>
+      <button class="linkbtn linkbtn-plain" data-tool="records">Records</button>
+      <button class="linkbtn linkbtn-plain" data-tool="learned">Learned</button>
+    </div>`;
+}
+function goHealth(seg: string): void {
+  const g = globalThis as unknown as {
+    state?: { meSeg?: string; healthSeg?: string; healthSegPicked?: boolean };
+    activateTab?: (t: string) => void;
+  };
+  if (g.state) { g.state.meSeg = "health"; g.state.healthSeg = seg; g.state.healthSegPicked = true; }
+  g.activateTab?.("me");
 }
 
 // ---- domain detail — the Markers catalog, scoped to one domain -----------------
@@ -279,6 +300,8 @@ function wireOverview(): void {
   view.querySelectorAll<HTMLElement>("[data-domain]").forEach((b) =>
     b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
   view.querySelector<HTMLElement>("[data-body]")?.addEventListener("click", () => showBody());
+  view.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) =>
+    b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
 }
 function wireBack(): void {
   view.querySelector<HTMLElement>("[data-back]")?.addEventListener("click", () => showOverview());

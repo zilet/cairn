@@ -3525,6 +3525,9 @@ body.swr-busy::after{
   letter-spacing:.03em;color:var(--warn);background:rgba(179,64,46,.1);vertical-align:1px}
 .hmk-groups{display:grid;gap:18px}
 .hmk-section{min-width:0}
+/* clear breathing room between clinical groups so each panel reads as its own
+   story (not one continuous list) — applies to the Markers catalog + Stand detail. */
+.hmk-section + .hmk-section{margin-top:28px}
 /* a calm catalog section heading per health group ("Lipids & Cardiovascular").
    Pins just under the single Health seg (the Me seg yields its sticky slot on the
    Health sub-view — see .segwrap:has(+ .hsegwrap)), so the offset is one seg, not two. */
@@ -3582,6 +3585,8 @@ button.hmk-row:active{background:var(--card-2)}
 .stand-tile-read.watch b{color:var(--gold-deep)}
 .stand-tile-arw{position:absolute;right:12px;bottom:11px;color:var(--line-2);font-size:.85rem}
 
+.stand-tools{display:flex;flex-wrap:wrap;gap:8px 18px;margin:20px 2px 4px;padding-top:16px;border-top:1px solid var(--line)}
+.stand-tools .linkbtn{font-size:.82rem}
 .stand-back{margin:2px 0 4px;font-size:.84rem}
 .stand-subhead{font-size:.62rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
   color:var(--muted);margin:16px 2px 2px}

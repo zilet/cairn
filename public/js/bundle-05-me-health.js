@@ -3935,7 +3935,28 @@ if (typeof window !== "undefined") {
         return `<div class="stand-root">
       ${focusHeroHtml()}
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
+      ${toolsHtml()}
     </div>`;
+    }
+    // The health depth + the clinician-facing exports, reachable from Stand: the full
+    // agentic read, the doctor Share (clinical order + trends, untouched), uploaded
+    // Records, and the learned timeline.
+    function toolsHtml() {
+        return `<div class="stand-tools">
+      <button class="linkbtn linkbtn-plain" data-tool="read">Full health read</button>
+      <button class="linkbtn linkbtn-plain" data-tool="share">Share with your doctor</button>
+      <button class="linkbtn linkbtn-plain" data-tool="records">Records</button>
+      <button class="linkbtn linkbtn-plain" data-tool="learned">Learned</button>
+    </div>`;
+    }
+    function goHealth(seg) {
+        const g = globalThis;
+        if (g.state) {
+            g.state.meSeg = "health";
+            g.state.healthSeg = seg;
+            g.state.healthSegPicked = true;
+        }
+        g.activateTab?.("me");
     }
     // ---- domain detail — the Markers catalog, scoped to one domain -----------------
     // The old Markers affordances come along: search (when there are many), an
@@ -4063,6 +4084,7 @@ if (typeof window !== "undefined") {
     function wireOverview() {
         view.querySelectorAll("[data-domain]").forEach((b) => b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
         view.querySelector("[data-body]")?.addEventListener("click", () => showBody());
+        view.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
     }
     function wireBack() {
         view.querySelector("[data-back]")?.addEventListener("click", () => showOverview());
