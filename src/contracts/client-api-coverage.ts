@@ -125,6 +125,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/health-docs",
   "/health-docs/:id",
   "/health-docs/:id/reanalyze",
+  "/health-docs/:id/confirm",
   "/context-events",
   "/context-events/:id",
   "/injury-impacts",

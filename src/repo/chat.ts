@@ -20,7 +20,21 @@ function hydrateChat(row: any) {
       d.status = p?.status ?? "missing"; // 'missing' = proposal was deleted/never persisted
     }
   }
+  stampLabConfirms(meta);
   return { ...row, meta };
+}
+
+// A pasted-lab confirm affordance mirrors the draft one: stamp each with its health
+// document's CURRENT enrichment_status so the UI shows an already-confirmed lab as done
+// (not a stale "Confirm"), and a deleted/dismissed one as gone. 'pending_confirm' still
+// awaits the user; anything else (pending/in_progress/done) has been committed.
+function stampLabConfirms(meta: any): void {
+  if (!meta?.lab_confirms?.length) return;
+  for (const l of meta.lab_confirms) {
+    if (l?.id == null) continue;
+    const d = db.prepare(`SELECT enrichment_status FROM health_documents WHERE id = ?`).get(l.id) as any;
+    l.status = d ? (d.enrichment_status ?? "done") : "missing";
+  }
 }
 
 export function addChatMessage(role: string, content: string, agent?: string | null, meta?: any) {
@@ -125,6 +139,7 @@ function hydrateChatTurn(row: any) {
       d.status = p?.status ?? "missing";
     }
   }
+  stampLabConfirms(meta);
   return { ...row, meta };
 }
 

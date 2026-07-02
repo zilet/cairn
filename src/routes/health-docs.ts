@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {
   addHealthDocument,
+  confirmPendingLab,
   deleteHealthDocument,
   deriveDirectives,
   getHealthDocument,
@@ -122,6 +123,27 @@ healthDocsRouter.post("/:id/reanalyze", (req, res) => {
   setHealthDocEnrichStatus(Number(req.params.id), "pending");
   import("../enrich.js").then((m) => m.enqueueEnrich("health", Number(req.params.id))).catch(() => {});
   res.json(getHealthDocument(Number(req.params.id)));
+});
+
+// Confirm a pending_confirm lab paste — the chat propose→apply gate for a bulk panel.
+// When a transcriber is reachable it flips the draft into the completeness-first,
+// Claude-first health ingest (the same path the paste box uses); otherwise it commits
+// the chat agent's inline markers directly. Nothing writes to Health until this fires.
+healthDocsRouter.post("/:id/confirm", (req, res) => {
+  const id = Number(req.params.id);
+  if (!getHealthDocumentRaw(id)) return res.status(404).json({ error: "not found" });
+  const result = confirmPendingLab(id);
+  if (!result.ok) return res.status(404).json({ error: result.reason || "not found" });
+  if (result.enqueue) {
+    import("../enrich.js").then((m) => m.enqueueEnrich("health", id)).catch(() => {});
+  }
+  if (result.committed) {
+    // Markers landed inline (no transcriber reachable) → refresh the connected brain
+    // + whole-picture review, mirroring the enrichment path's follow-ons.
+    try { deriveDirectives(); } catch { /* keep the confirm resilient */ }
+    import("../enrich.js").then((m) => m.enqueueReviewRefresh()).catch(() => {});
+  }
+  res.json(result.doc ?? getHealthDocument(id));
 });
 
 healthDocsRouter.delete("/:id", (req, res) => {

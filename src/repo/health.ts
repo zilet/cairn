@@ -9,6 +9,7 @@ import { canonicalMarker } from "./marker-canon.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { getProfile } from "./profile.js";
+import { getSettings, pickHealthAgentOrder } from "./settings.js";
 import { type OptimalZone, applyReviewDirectives, isNonClinicalMarker, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
@@ -532,8 +533,10 @@ export function getHealthDocument(id: number) {
 export function listHealthDocuments(limit = 50) {
   // Newest results first — order by the effective result date (doc_date, falling
   // back to upload time) so a split multi-year import reads as a clean timeline.
+  // A 'pending_confirm' draft (a bulk lab pasted in chat, awaiting one-tap confirm)
+  // is NOT a record yet — hide it from Records until the user confirms it.
   return (db
-    .prepare(`SELECT * FROM health_documents ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC LIMIT ?`)
+    .prepare(`SELECT * FROM health_documents WHERE COALESCE(enrichment_status,'') != 'pending_confirm' ORDER BY COALESCE(doc_date, substr(created_at,1,10)) DESC, id DESC LIMIT ?`)
     .all(limit) as any[]).map(publicHealthDoc);
 }
 
@@ -546,6 +549,7 @@ export function newestHealthDocDate(): string | null {
     const row = db.prepare(
       `SELECT COALESCE(doc_date, substr(created_at, 1, 10)) AS d
          FROM health_documents
+        WHERE COALESCE(enrichment_status,'') != 'pending_confirm'
         ORDER BY COALESCE(doc_date, substr(created_at, 1, 10)) DESC, id DESC
         LIMIT 1`
     ).get() as any;
@@ -576,6 +580,68 @@ export function updateHealthDocFields(id: number, fields: { parsed_json?: any; s
 export function setHealthDocEnrichStatus(id: number, status: string) {
   db.prepare(`UPDATE health_documents SET enrichment_status = ? WHERE id = ?`).run(status, id);
   return getHealthDocument(id);
+}
+
+// ---------- pasted-lab confirm (chat propose→apply gate) ----------
+// A substantial lab pasted in chat is persisted as a 'pending_confirm' health document
+// (raw text on disk, no markers committed yet — see src/chatTurns.ts persistPendingLabDraft)
+// so a big write follows propose→apply instead of the immediate safe path.
+
+// Whether confirming can reach a faithful transcriber right now. Pure so the routing
+// decision is unit-testable without the DB/agent state.
+export function labConfirmCanTranscribe(enrichOn: boolean, hasAgent: boolean): boolean {
+  return enrichOn && hasAgent;
+}
+
+export interface ConfirmLabResult {
+  ok: boolean;
+  reason?: string;
+  doc?: any;
+  enqueue?: boolean;   // caller should enqueue the health enrich job (reliable path)
+  committed?: boolean; // markers were committed inline (graceful degrade)
+}
+
+// Confirm a pending_confirm lab paste. When a faithful transcriber is reachable
+// (enrichment on + a usable health agent), flip it to 'pending' and let the caller
+// enqueue the completeness-first, Claude-first health ingest — the SAME path the Health
+// tab's paste box uses (enrich.ts → pickHealthAgentOrder + buildHealthIngestPrompt).
+// Otherwise gracefully DEGRADE: commit the chat agent's inline markers (stashed under
+// parsed.pending_markers) directly so results aren't lost. Idempotent: a non-
+// pending_confirm doc is returned unchanged. `opts` injects the enrich/agent state for tests.
+export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAgent?: boolean }): ConfirmLabResult {
+  const row = getHealthDocumentRaw(id) as any;
+  if (!row) return { ok: false, reason: "not found" };
+  if (row.enrichment_status !== "pending_confirm") {
+    // Already confirmed / not a draft — idempotent success, nothing to do.
+    return { ok: true, doc: getHealthDocument(id), enqueue: false, committed: false };
+  }
+  const enrichOn = opts?.enrichOn ?? (() => { try { return !!getSettings().enrich_enabled; } catch { return false; } })();
+  const hasAgent = opts?.hasAgent ?? (() => { try { return pickHealthAgentOrder().length > 0; } catch { return false; } })();
+  if (labConfirmCanTranscribe(enrichOn, hasAgent)) {
+    setHealthDocEnrichStatus(id, "pending");
+    return { ok: true, doc: getHealthDocument(id), enqueue: true, committed: false };
+  }
+  // Graceful degrade: no transcriber reachable → commit the chat agent's inline markers
+  // (better than dropping them). Coerce/clamp + plausibility-filter like insertHealthPanels.
+  let parsed: any = null;
+  try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { parsed = null; }
+  const rawMarkers = Array.isArray(parsed?.pending_markers) ? parsed.pending_markers : [];
+  const markers = rawMarkers
+    .filter((m: any) => m && typeof m === "object")
+    .slice(0, MAX_MARKERS_PER_PANEL)
+    .map((m: any) => ({
+      name: String(m.name ?? "").slice(0, 120),
+      value: typeof m.value === "number" ? m.value : (m.value == null ? null : String(m.value).slice(0, 80)),
+      unit: m.unit == null ? null : String(m.unit).slice(0, 40),
+      flag: ["low", "normal", "high"].includes(m.flag) ? m.flag : null,
+    }))
+    .filter((m: any) => m.name && plausibleMarkerValue(m.name, m.value, m.unit).plausible);
+  updateHealthDocFields(id, {
+    parsed_json: { markers },
+    summary: (typeof parsed?.pending_summary === "string" ? parsed.pending_summary : null) ?? row.summary ?? null,
+  });
+  setHealthDocEnrichStatus(id, "done");
+  return { ok: true, doc: getHealthDocument(id), enqueue: false, committed: true };
 }
 
 export function deleteHealthDocument(id: number) {

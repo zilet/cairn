@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
+import { UPLOADS_DIR } from "./uploadPaths.js";
 import { buildChatPrompt, parseChatReply } from "./prompt.js";
 import { chatHistoryTimeLabel } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
@@ -133,15 +137,17 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // and skip the normal log_food application so the photo never double-logs.
     const photoFood = turn.image_path ? logPhotoFood(actions, turn) : null;
 
-    const { applied, drafts } = applyChatActions(
+    const { applied, drafts, labConfirms } = applyChatActions(
       { actions },
       { agent, imagePath: turn.image_path, message: turn.message, skipLogFood: !!photoFood },
     );
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
-    const meta = {
+    const meta: { applied: typeof applied; drafts: unknown[]; lab_confirms?: typeof labConfirms } = {
       applied,
       drafts: drafts.map(proposalMeta),
     };
+    // A substantial pasted lab awaits one-tap confirmation before it writes to Health.
+    if (labConfirms.length) meta.lab_confirms = labConfirms;
     const assistant = repo.addChatMessage("assistant", reply, agent, meta);
     const finished = repo.finishChatTurn(id, { reply, chosen_agent: agent, assistant_message_id: (assistant as any).id, meta });
     emit(id, { type: "done", turn: finished, message: assistant });
@@ -362,18 +368,83 @@ export function recoverChatTurns(): { requeued: number; interrupted: number } {
   return { requeued: requeue.length, interrupted };
 }
 
+// ---------- pasted-lab confirm draft (propose→apply for a bulk lab paste) ----------
+// A big pasted lab panel is a substantial write, so it follows the propose→apply idiom
+// instead of the immediate-apply safe path: it's persisted as a pending_confirm health
+// document (its raw text on disk, NO markers extracted yet, so it never leaks into the
+// marker history) that the user CONFIRMS in chat. Confirming routes it through the
+// completeness-first, Claude-first health ingest (enrich.ts → pickHealthAgentOrder) —
+// the same reliable transcription the Health tab's paste box uses. A small inline
+// mention ("my ldl was 90") stays on the immediate path.
+//
+// Threshold: reuse repo.estimateMarkerCandidates over the raw message (a bulk value-
+// per-line export), OR the count of markers the chat agent already extracted (covers a
+// one-line-per-marker / inline paste the line estimate misses). Either clearing the bar
+// makes it a draft.
+export const CHAT_LAB_CONFIRM_MIN = 8;
+export function isSubstantialLabPaste(text: string | null | undefined, agentMarkerCount = 0): boolean {
+  let estimate = 0;
+  try { estimate = repo.estimateMarkerCandidates(String(text ?? "")); } catch { estimate = 0; }
+  return estimate >= CHAT_LAB_CONFIRM_MIN || agentMarkerCount >= CHAT_LAB_CONFIRM_MIN;
+}
+
+export interface LabConfirmDraft { id: number; marker_estimate: number; summary: string | null; kind: string | null; }
+
+// Persist a substantial pasted lab as a pending_confirm health document and return the
+// meta descriptor the chat surface renders a one-tap Confirm from. The raw text lands on
+// disk (mirroring the Health tab's paste), and the chat agent's inline markers are stashed
+// under parsed.pending_markers — a NON-leaking key (getMarkerHistory reads parsed.markers)
+// used only as the graceful-degrade fallback when confirm can't reach a transcriber.
+// Returns null on a write failure so the caller can fall back to the immediate apply.
+function persistPendingLabDraft(a: { markers?: unknown; summary?: unknown; doc_date?: unknown; kind?: string }, message: string, estimate: number): LabConfirmDraft | null {
+  const text = String(message ?? "");
+  const markers = Array.isArray(a?.markers) ? a.markers : [];
+  try {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    const name = `${crypto.randomUUID()}.txt`;
+    const filePath = path.join(UPLOADS_DIR, name);
+    fs.writeFileSync(filePath, Buffer.from(text.slice(0, 400000), "utf8"));
+    const summary = stringOrNull(a?.summary);
+    const pending: Record<string, unknown> = {};
+    if (markers.length) pending.pending_markers = markers;
+    if (summary) pending.pending_summary = summary;
+    const doc = repo.addHealthDocument({
+      kind: (a?.kind ?? "other") as string,
+      doc_date: stringOrNull(a?.doc_date),
+      original_name: "Pasted results (chat)",
+      mime: "text/plain",
+      file_path: filePath,
+      parsed_json: Object.keys(pending).length ? pending : null,
+      summary,
+      enrichment_status: "pending_confirm",
+    }) as { id?: unknown; kind?: unknown } | null;
+    if (!doc || typeof doc.id !== "number") return null;
+    return {
+      id: doc.id,
+      marker_estimate: Math.max(estimate, markers.length),
+      summary,
+      kind: typeof doc.kind === "string" ? doc.kind : ((a?.kind as string) ?? null),
+    };
+  } catch (e: unknown) {
+    console.error(`[chat] failed to persist pending lab draft: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
 // ---------- action application ----------
 // Lifted verbatim from the old inline POST /api/chat handler so the worker is the
 // single place chat actions are applied. Safe actions apply immediately; plan
 // changes become DRAFT proposals (returned for the caller to summarize into meta).
-// Each action is independently guarded — one bad action records its error and the
-// rest still apply.
+// A SUBSTANTIAL pasted lab becomes a pending_confirm DRAFT the user confirms before it
+// writes to Health records (see persistPendingLabDraft). Each action is independently
+// guarded — one bad action records its error and the rest still apply.
 export function applyChatActions(
   parsed: { actions?: unknown } | ChatAction[] | null | undefined,
   ctx: { agent: string; imagePath?: string | null; message?: string | null; skipLogFood?: boolean },
-): { applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>; drafts: unknown[] } {
+): { applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>; drafts: unknown[]; labConfirms: LabConfirmDraft[] } {
   const applied: Array<{ type: ChatActionType; result?: unknown; error?: string }> = [];
   const drafts: unknown[] = [];
+  const labConfirms: LabConfirmDraft[] = [];
   const message = ctx.message ?? "";
   const actions = normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions);
   for (const a of actions) {
@@ -453,14 +524,23 @@ export function applyChatActions(
           break;
         }
         case "log_health": {
-          // Lab/DEXA results reported in chat → a 'done' health record (no binary),
-          // mirroring the MCP add_health_record path. Markers feed the trend view.
+          // Lab/DEXA results reported in chat. Markers feed the trend view.
           const parsedDocObject = a.parsed && typeof a.parsed === "object"
             ? a.parsed as Record<string, unknown>
             : null;
           const markers = Array.isArray(a.markers)
             ? a.markers
             : (parsedDocObject && Array.isArray(parsedDocObject.markers) ? parsedDocObject.markers : []);
+          // A SUBSTANTIAL pasted panel is a big write → propose→apply: persist a
+          // pending_confirm draft (raw text on disk, no markers committed yet) the user
+          // confirms, which then transcribes it through the completeness-first, Claude-
+          // first health ingest. A small inline mention still applies immediately below.
+          const estimate = (() => { try { return repo.estimateMarkerCandidates(message); } catch { return 0; } })();
+          if (isSubstantialLabPaste(message, markers.length)) {
+            const draft = persistPendingLabDraft(a, message, estimate);
+            if (draft) { labConfirms.push(draft); break; }
+            // couldn't persist (fs error) → fall through to the immediate apply
+          }
           const parsedDoc = parsedDocObject
             ? parsedDocObject
             : (markers.length ? { markers } : null);
@@ -525,5 +605,5 @@ export function applyChatActions(
       applied.push({ type: a.type, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  return { applied, drafts };
+  return { applied, drafts, labConfirms };
 }
