@@ -128,12 +128,83 @@
       ${zoneBarSvg(s)}
     </div>`;
     }
-    function compSection(comp) {
+    // --- the body figure: one silhouette, glowing focus zones -----------------------
+    // A calm front-facing figure. The lever region glows terracotta ("optimize here");
+    // regions where a muscle site is growing while the waist holds glow sage with a
+    // small upward mark ("winning here"). Illustration tones (like art.js), not theme
+    // vars — SVG stop-color doesn't reliably resolve var(). No user data → no escaping.
+    const BM_FIG_REG = {
+        waist: [[60, 110, 26, 25]],
+        chest: [[60, 80, 33, 19]],
+        arms: [[31, 99, 15, 50], [89, 99, 15, 50]],
+        legs: [[53, 190, 17, 52], [68, 190, 17, 52]],
+    };
+    const BM_FIG_BODY = `
+  <circle cx="60" cy="24" r="12.5"/>
+  <path d="M50 36 Q60 41 70 36 L74 45 Q83 49 82.5 60 L80 82 Q79 96 76.5 112 Q75 128 74 140 L46 140 Q45 128 43.5 112 Q41 96 40 82 L37.5 60 Q37 49 46 45 Z"/>
+  <path d="M41 49 Q31 53 29.5 70 L26 132 Q25.5 141 31 141 Q36 141 35.5 132 L40 74 Q41 58 44 52 Z"/>
+  <path d="M79 49 Q89 53 90.5 70 L94 132 Q94.5 141 89 141 Q84 141 84.5 132 L80 74 Q79 58 76 52 Z"/>
+  <path d="M47 138 L58.5 138 Q60 176 59 212 Q59 234 52.5 234 Q46 234 46.5 212 Q46.5 176 47 142 Z"/>
+  <path d="M61.5 138 L73 138 Q73.5 176 73.5 212 Q74 234 67.5 234 Q61 234 61 212 Q60 176 61.5 142 Z"/>`;
+    function bodyFigureSvg(focus, wins) {
+        const ACCENT = "#b4552d", SAGE = "#6e7f5c", SAGE_DEEP = "#5a6a4a";
+        const grad = (id, c) => `<radialGradient id="${id}" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${c}" stop-opacity="0.9"/><stop offset="45%" stop-color="${c}" stop-opacity="0.42"/><stop offset="100%" stop-color="${c}" stop-opacity="0"/></radialGradient>`;
+        let grads = "", glows = "", marks = "";
+        const region = (key, color, tag) => {
+            (BM_FIG_REG[key] || []).forEach((g, i) => {
+                const id = `bmfig-${tag}-${key}-${i}`;
+                grads += grad(id, color);
+                glows += `<ellipse cx="${g[0]}" cy="${g[1]}" rx="${g[2]}" ry="${g[3]}" fill="url(#${id})"/>`;
+            });
+        };
+        if (focus)
+            region(focus, ACCENT, "f");
+        for (const k of wins)
+            if (k !== focus)
+                region(k, SAGE, "w");
+        for (const k of wins)
+            if (k !== focus)
+                for (const g of BM_FIG_REG[k] || [])
+                    marks += `<path d="M${g[0] - 4} ${g[1] + 2} L${g[0]} ${g[1] - 3} L${g[0] + 4} ${g[1] + 2}" fill="none" stroke="${SAGE_DEEP}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>`;
+        const aria = focus
+            ? `Body figure highlighting the ${focus} as the focus area`
+            : wins.length ? `Body figure highlighting ${wins.join(" and ")} as improving` : "Body figure";
+        return `<svg class="bm-figure" viewBox="0 0 120 252" role="img" aria-label="${escAttr(aria)}" style="height:188px;width:auto;display:block">
+    <defs><clipPath id="bmfig-clip">${BM_FIG_BODY}</clipPath>
+      <linearGradient id="bmfig-base" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#e7ddcb"/><stop offset="100%" stop-color="#dbcfb8"/></linearGradient>${grads}</defs>
+    <g fill="url(#bmfig-base)">${BM_FIG_BODY}</g>
+    <g clip-path="url(#bmfig-clip)">${glows}</g>
+    <g fill="none" stroke="#c4b89d" stroke-width="1.4" stroke-linejoin="round">${BM_FIG_BODY}</g>
+    ${marks}
+  </svg>`;
+    }
+    // Map the deterministic focus lever + per-site trends onto body regions: a
+    // central-fat lever glows the waist; a muscle site growing while the waist holds
+    // glows that region sage (recomposition, not just gaining everywhere).
+    function deriveFigureRegions(comp, trends) {
+        const fk = comp.focus?.key;
+        const focus = fk === "whtr" || fk === "whr" || fk === "bodyfat" ? "waist" : null;
+        const sites = trends?.sites || [];
+        const dir = (k) => sites.find((s) => s.key === k)?.direction || null;
+        const wins = [];
+        if (dir("waist_in") !== "up") {
+            if (dir("upper_arm_in") === "up" || dir("forearm_in") === "up")
+                wins.push("arms");
+            if (dir("thigh_in") === "up" || dir("calf_in") === "up")
+                wins.push("legs");
+            if (dir("chest_in") === "up" || dir("shoulder_in") === "up")
+                wins.push("chest");
+        }
+        return { focus, wins };
+    }
+    function compSection(comp, trends) {
         if (!comp)
             return "";
         const rows = comp.scales.map(zoneRow).filter(Boolean).join("");
         if (!rows)
             return "";
+        const { focus: figFocus, wins } = deriveFigureRegions(comp, trends);
+        const figure = `<div class="bm-figure-wrap" style="display:flex;justify-content:center;margin:4px 0 12px">${bodyFigureSvg(figFocus, wins)}</div>`;
         const hasProjection = comp.scales.some((s) => s.value != null && s.projected != null);
         const legend = `<div class="sess-line" style="color:var(--muted,#8a8578);font-size:.74rem;margin-top:2px">● now${hasProjection ? ` · ◌ in ~12 weeks at your current pace` : ""}</div>`;
         const heading = comp.heading
@@ -147,6 +218,7 @@
             : "";
         return `<div class="sess bm-comp reveal" style="padding:12px;margin-bottom:12px">
       <div class="bm-sechead" style="font-weight:600;margin-bottom:2px">Where you stand</div>
+      ${figure}
       ${rows}${legend}${heading}${focus}
     </div>`;
     }
@@ -246,7 +318,7 @@
         ${unitToggle(unit)}
       </div>
       ${data.needs_height ? heightForm(data.profile, unit) : ""}
-      ${compSection(data.comp)}
+      ${compSection(data.comp, data.trends)}
       <div class="bm-indicators" style="display:grid;gap:8px;margin-bottom:12px">${indicators}</div>
       ${empty}
       ${!data.needs_height ? heightForm(data.profile, unit) : ""}
@@ -375,7 +447,7 @@
             mount.innerHTML = `<div class="bm-error sess-line" style="color:var(--muted,#8a8578);padding:12px">Couldn't load body metrics right now.</div>`;
         });
     }
-    const CAIRN_BODY_METRICS = { renderBodyMetrics };
+    const CAIRN_BODY_METRICS = { renderBodyMetrics, deriveFigureRegions, bodyFigureSvg };
     Object.assign(globalThis, { CairnBodyMetrics: CAIRN_BODY_METRICS, renderBodyMetrics });
     if (typeof window !== "undefined") {
         window.CairnBodyMetrics = CAIRN_BODY_METRICS;
