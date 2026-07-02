@@ -561,7 +561,9 @@ export function reactionModelForCoach(): {
       if (parsed && Array.isArray(parsed.patterns)) {
         patterns = parsed.patterns as ReactionPattern[];
         source = "cache";
-        narrative = getAppState("reaction_model_narrative");
+        // "" (the cleared sentinel setReactionNarrative writes) reads back as no
+        // narrative — the public contract is a real string or null, never empty.
+        narrative = getAppState("reaction_model_narrative") || null;
         builtAt = getAppState("reaction_model_built_at");
       }
     } catch { /* corrupt cache → rebuild */ }
@@ -580,11 +582,28 @@ export function reactionModelForCoach(): {
   return { patterns: ranked, narrative, built_at: builtAt, source };
 }
 
+// Persist (or clear) the plain-language "how your body responds" NARRATIVE — the
+// warm agentic layer over the deterministic patterns, surfaced through
+// reactionModelForCoach() (and GET /api/reaction-model + the coach context). This
+// repo function only STORES the text: it's deterministic + agent-free, so the model
+// layer never reaches an agent (coachOps.refreshReactionNarrative writes the text
+// upstream). Trimmed + capped; null/empty CLEARS the slot (a "" sentinel that
+// reactionModelForCoach reads back as null).
+export function setReactionNarrative(text: string | null): void {
+  const s = String(text ?? "").replace(/\s+/g, " ").trim();
+  setAppState("reaction_model_narrative", s ? s.slice(0, 600) : "");
+}
+
 export function saveReactionModel(): void {
   const model = buildReactionModel();
   const builtAt = new Date().toISOString();
   setAppState("reaction_model", JSON.stringify(model));
   setAppState("reaction_model_built_at", builtAt);
+  // A narrative speaks to patterns that were actually found; when the freshly built
+  // model has ZERO, any cached narrative is now stale (it describes a response the
+  // data no longer shows). Clear it so the surfaced read stays honest. A non-empty
+  // model LEAVES the prior narrative intact — coachOps refreshes it separately.
+  if (model.patterns.length === 0) setReactionNarrative(null);
   // Promote the load-bearing patterns into coach memory so the agent has them in
   // its working context even outside the structured read. Only strong/observed —
   // a tentative pattern isn't durable enough to memorialize. addMemory dedupes.

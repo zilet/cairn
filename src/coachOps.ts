@@ -33,6 +33,7 @@ import {
   buildOnboardPrompt,
   buildMarkerReconcilePrompt,
   buildExerciseReconcilePrompt,
+  buildReactionNarrativePrompt,
 } from "./prompt.js";
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
@@ -837,6 +838,45 @@ export async function growAboutMe(agent: string | undefined) {
   if (text === before) return { ok: true as const, changed: false, agent: chosen, tried };
   const profile = repo.setProfile({ about_me: text });
   return { ok: true as const, changed: true, profile, agent: chosen, tried };
+}
+
+// Write the plain-language NARRATIVE over the DETERMINISTIC reaction-model patterns
+// — the warm "how your body responds" read that reactionModelForCoach() / GET
+// /api/reaction-model / the coach context surface (the slot was dangling: nothing
+// wrote it). Reads the cached model via the repo; with ZERO patterns there's nothing
+// to narrate, so it SKIPS the agent entirely (a cheap, calm no-op that never touches
+// an existing narrative). Otherwise ONE agent turn writes 2-3 grounded sentences,
+// validated to a non-empty string and clamped before persist. Fail-open: no agent /
+// a wrong-shape reply / any throw is a no-op — it NEVER clears a prior narrative.
+// The `run` dep is injectable so tests can drive the success path offline without a
+// CLI; production callers (the nightly scheduler) omit it and get the real rotation.
+export async function refreshReactionNarrative(
+  agent: string | undefined,
+  hooks?: OpHooks,
+  deps?: { run?: typeof runChosen }
+) {
+  const run = deps?.run ?? runChosen;
+  const model = repo.reactionModelForCoach();
+  const patterns = Array.isArray(model?.patterns) ? model.patterns : [];
+  // No patterns → nothing to say. Skip the agent call; leave any narrative as-is
+  // (an emptied model already cleared it in repo.saveReactionModel).
+  if (!patterns.length) return { ok: true as const, skipped: true as const };
+  hooks?.onPhase?.("summarizing how your body responds");
+  try {
+    const prompt = buildReactionNarrativePrompt(patterns);
+    const { agent: chosen, result, tried } = await run(agent, prompt, { op: "reaction_narrative", signal: hooks?.signal });
+    const p: any = result?.parsed;
+    const text = p && typeof p === "object" ? String(p.narrative ?? "").trim() : "";
+    if (!text) {
+      // Wrong-shape / empty reply → keep the prior narrative untouched.
+      return { ok: false as const, error: "agent returned no usable narrative", agent: chosen, tried, agent_status: agentStatusFor({ ok: false, agent: chosen, tried }) };
+    }
+    repo.setReactionNarrative(text);
+    return { ok: true as const, narrative: text.slice(0, 600), agent: chosen, tried, agent_status: "ok" as const };
+  } catch (e: any) {
+    // Any failure degrades to a no-op; the existing narrative stands.
+    return { ok: false as const, error: e?.message ?? "reaction narrative refresh failed" };
+  }
 }
 
 // Reconcile passed suggestions to actuals and write durable learnings. Pure repo
