@@ -15,6 +15,7 @@ import {
   renderReactionModel,
   renderTodayFuel,
   renderTrainingSignals,
+  CAIRN_PERSONA,
 } from "./shared.js";
 
 // ---- prose-first chat contract ----
@@ -27,7 +28,7 @@ import {
 // a missing/garbled actions block (reply still stands) AND the legacy {reply,
 // actions} JSON shape, so nothing breaks if a model ignores the contract.
 export const CHAT_ACTION_SENTINEL = "===CAIRN_ACTIONS===";
-// The athlete-facing reply begins AFTER this marker. Autonomous agents (e.g. the
+// The user-facing reply begins AFTER this marker. Autonomous agents (e.g. the
 // gemini/antigravity CLI) narrate their tool steps ("I will query the … table") as
 // plain text BEFORE the real answer; the contract asks them to write this marker
 // right before the reply so we can drop everything prior. Fully backward-compatible:
@@ -43,8 +44,12 @@ export const CHAT_REPLY_SENTINEL = "===CAIRN_REPLY===";
 // step verb and a filesystem/db token on the same leading line.
 function stripLeadingNarration(s: string): string {
   const lines = s.split("\n");
-  const verb = /^\s*(I will|I'll|I am going to|I'm going to|Let me|First,?\s+I|Now,?\s+I|Next,?\s+I|Then,?\s+I|I need to|I should|I'll now|Reading|Fetching|Checking|Querying|Listing|Running|Inspecting|Examining|Looking at|Searching|Viewing)\b/i;
-  const tech = /(\/\w|\.json\b|\.db\b|\.js\b|\.ts\b|\bsqlite|\bnode\b|\bnpm\b|\btable\b|\bdatabase\b|\bschema\b|\bdirectory\b|\bcommand\b|\bquery\b|\bfile\b|\bfiles\b|\brepo\b|\bworkspace\b|node_modules|package\.json|cairn\.db|chat_messages|chat_turns|\/app\b|\/home\b|\/data\b)/i;
+  const verb = /^\s*(I will|I'll|I am going to|I'm going to|Let me|First,?\s+I|Now,?\s+I|Next,?\s+I|Then,?\s+I|I need to|I should|I'll now|Reading|Fetching|Checking|Querying|Listing|Running|Inspecting|Examining|Looking at|Pulling up|Pulling|Reviewing|Gathering|Searching|Viewing)\b/i;
+  // A retrieval/plumbing token. Broadened past raw filesystem/db words to a few
+  // data-plumbing NOUNS an agent narrates a lookup with ("pull up your data",
+  // "get the context", "check your metrics"). Deliberately NOT "log"/"record" — those
+  // double as coaching verbs ("I'll log that", "I'll record it"), which must survive.
+  const tech = /(\/\w|\.json\b|\.db\b|\.js\b|\.ts\b|\bsqlite|\bnode\b|\bnpm\b|\btable\b|\bdatabase\b|\bschema\b|\bdirectory\b|\bcommand\b|\bquery\b|\bfile\b|\bfiles\b|\brepo\b|\bworkspace\b|\bdata\b|\bcontext\b|\bmetrics?\b|node_modules|package\.json|cairn\.db|chat_messages|chat_turns|\/app\b|\/home\b|\/data\b)/i;
   let i = 0;
   while (i < lines.length) {
     if (lines[i].trim() === "") { i++; continue; }                      // blanks between narration
@@ -56,7 +61,7 @@ function stripLeadingNarration(s: string): string {
 
 export function parseChatReply(text: string): { reply: string; actions: ChatAction[] } {
   let raw = (text ?? "").toString();
-  // Drop any tool-step preamble before the athlete-facing reply marker. Keep the
+  // Drop any tool-step preamble before the user-facing reply marker. Keep the
   // LAST marker, in case the literal token shows up earlier inside the narration.
   const rIdx = raw.lastIndexOf(CHAT_REPLY_SENTINEL);
   const hadMarker = rIdx !== -1;
@@ -92,7 +97,7 @@ function renderNextStep(ctx: any): string {
 }
 
 // Conversational coach. Sees all data; may emit actions the server applies/drafts.
-// imagePath: absolute path of a photo the athlete attached this turn — the agent
+// imagePath: absolute path of a photo the user attached this turn — the agent
 // CLIs (Claude Code / Codex) can open local files, same trick as health docs.
 export function buildChatPrompt(history: { role: string; content: string; at?: string }[], message: string, imagePath?: string): string {
   const ctx = repo.getCoachContext();
@@ -100,10 +105,10 @@ export function buildChatPrompt(history: { role: string; content: string; at?: s
   // conversation's RHYTHM — what's from this morning vs minutes ago — not a flat,
   // timeless wall of text it would mistake for one continuous moment.
   const convo = (history || [])
-    .map((m) => `${m.at ? `[${m.at}] ` : ""}${m.role === "user" ? "Athlete" : "Coach"}: ${m.content}`)
+    .map((m) => `${m.at ? `[${m.at}] ` : ""}${m.role === "user" ? "User" : "Coach"}: ${m.content}`)
     .join("\n");
   const photoBlock = imagePath ? `
-ATTACHED PHOTO — the athlete attached a photo with this message, saved locally at this ABSOLUTE path:
+ATTACHED PHOTO — the user attached a photo with this message, saved locally at this ABSOLUTE path:
 ${imagePath}
 Open and LOOK at that image file directly before answering.
 - If it shows food (a plate, meal, snack, packaged item): identify the dish, estimate portion sizes
@@ -112,34 +117,35 @@ Open and LOOK at that image file directly before answering.
 - If it is not food (gym equipment, a form-check frame, a menu, a label): just use what you see to
   answer their message; only log when they clearly want something logged.
 ` : "";
-  return `You are Cairn, the athlete's personal strength & nutrition coach, chatting inside their app.
-You can SEE all their data (DATA section) and can ACT by emitting actions.
+  return `${CAIRN_PERSONA}
+
+You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.
 ${renderNow(ctx)}
 GUARDRAILS:
 - Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.
-- Fuel guidance follows the athlete's GOAL MODE (DATA: goal_mode) and goal.recommended: a lean-safe
+- Fuel guidance follows the user's GOAL MODE (DATA: goal_mode) and goal.recommended: a lean-safe
   deficit when LOSING, maintenance calories when MAINTAINING (don't push a deficit), a conservative
   surplus when GAINING — never a crash deficit and never a dirty bulk.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the source
-  of truth for strength progression. Adapt recommendations to the athlete's stated focus: strength-first
+  of truth for strength progression. Adapt recommendations to the user's stated focus: strength-first
   means Garmin runs/rides mainly influence recovery and conditioning; runner/cyclist-first means
   endurance progression is central and lifting supports it.
 - Assisted lifts use NEGATIVE weight; bodyweight uses null.
 - TIMED exercises (mode:'timed', e.g. plank, dead hang) log duration_sec and are prescribed via
   target_seconds — progression is in seconds (+5-15s/step), never load.
-- Keep training fresh: when the athlete sounds bored or an accessory has stalled for weeks, suggest
+- Keep training fresh: when the user sounds bored or an accessory has stalled for weeks, suggest
   swapping in a new same-muscle exercise (within their constraints, conservative starting load)
   rather than grinding the same movement forever.
 - PROGRESSIVE UNDERSTANDING: if the DATA shows an obvious gap (no profile.about_me, an unknown
   training-time or food like/dislike) you MAY ask ONE brief, low-friction question when it fits the
   conversation naturally — never a questionnaire, never more than one per turn — and emit an
   add_memory action capturing any durable answer they give. If nothing fits naturally, skip it.
-- SUPPLEMENTS — UNDERSTAND, DON'T INTERROGATE: when the athlete mentions what they take ("I take
+- SUPPLEMENTS — UNDERSTAND, DON'T INTERROGATE: when the user mentions what they take ("I take
   creatine daily, omega-3, some D, whey occasionally"), DON'T ask dose-by-dose questions. Capture it
   once with a log_supplement action, APPROXIMATING sensibly (creatine → ~5 g/day; "some D" → Vitamin
   D3; whey → counts toward protein). Acknowledge it in one calm line and move on; refine later only if
   it actually matters. Already-known supplements are in DATA.supplements — don't re-ask or re-suggest them.
-- SELF-UPDATING MEMORY: each row in DATA.memory carries an "id". When the athlete tells you something
+- SELF-UPDATING MEMORY: each row in DATA.memory carries an "id". When the user tells you something
   that CONTRADICTS or CHANGES a remembered fact, don't pile on a new memory — keep the store coherent:
   emit update_memory{id,...} to correct a fact in place (a refined or now-different version of the same
   thing), or supersede_memory{id, reason, replacement?} when an old fact is simply no longer true (e.g.
@@ -150,16 +156,16 @@ ${CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
 ${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}${renderNextStep(ctx)}
-Keep the reply short and human; confirm what you logged or drafted. When the athlete says a lift
+Keep the reply short and human; confirm what you logged or drafted. When the user says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
 bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.
 
 OUTPUT CONTRACT — write your reply between markers so it streams cleanly:
-1. Put this exact marker on its own line, immediately before your athlete-facing reply:
+1. Put this exact marker on its own line, immediately before your user-facing reply:
 ${CHAT_REPLY_SENTINEL}
    Anything before it — tool notes, "I will check the … table" step narration, private working
-   thoughts — is ignored and never reaches the athlete. Always write this marker exactly once.
-2. AFTER the marker, your reply to the athlete as plain, warm prose (markdown allowed) — no JSON, no
+   thoughts — is ignored and never reaches the user. Always write this marker exactly once.
+2. AFTER the marker, your reply to the user as plain, warm prose (markdown allowed) — no JSON, no
    code fence, no tool logs. This is shown to them live, word by word, so write it for a human.
 3. THEN, ONLY IF you need to log or change something, put this exact marker on its own line:
 ${CHAT_ACTION_SENTINEL}
@@ -172,7 +178,7 @@ ${photoBlock}
 CONVERSATION SO FAR:
 ${convo || "(new conversation)"}
 
-ATHLETE'S MESSAGE: ${message}
+USER'S MESSAGE: ${message}
 
 DATA:
 ${JSON.stringify(ctx)}`;
@@ -192,14 +198,16 @@ export function buildChatDistillPrompt(history: { role: string; content: string 
   const known = (repo.listMemory(60) as any[]).map((m) => `- ${m.content}`).join("\n");
   const convo = (history || [])
     .slice(-80)
-    .map((m) => `${m.role === "user" ? "Athlete" : "Coach"}: ${String(m.content ?? "").slice(0, 600)}`)
+    .map((m) => `${m.role === "user" ? "User" : "Coach"}: ${String(m.content ?? "").slice(0, 600)}`)
     .join("\n");
-  return `You are Cairn's coaching memory. The athlete is archiving this chat conversation and starting fresh.
-Distill ONLY the durable facts from it that their coach should still know weeks from now:
+  return `${CAIRN_PERSONA}
+
+Right now you are acting as Cairn's coaching memory. The user is archiving this chat conversation and starting fresh.
+Distill ONLY the durable facts from it that you should still know weeks from now:
 - preferences (training style, schedule, food likes/dislikes), constraints (equipment, time, pain/injury rules),
   decisions made together (plan changes agreed to, goals set), milestones, and genuinely notable observations.
 - NOT trivia, NOT one-off logs (sets, meals and weigh-ins are already stored), NOT anything recomputable
-  from the data, NOT advice the coach gave unless the athlete clearly adopted it.
+  from the data, NOT advice the coach gave unless the user clearly adopted it.
 - Each memory is one short, self-contained sentence. An empty list is a perfectly good answer.
 
 ALREADY REMEMBERED (do not repeat or restate any of these):
@@ -228,7 +236,9 @@ export function buildMemoryConsolidationPrompt(): string {
   const rows = (repo.listMemory(120) as any[]).map(
     (m) => `- [id ${m.id}] (${m.kind ?? "observation"}${Number(m.confidence) > 1 ? `, seen×${Math.round(Number(m.confidence) * 2) / 2}` : ""}) ${String(m.content ?? "").slice(0, 240)}`
   ).join("\n");
-  return `You are Cairn's coaching memory librarian. Tidy the athlete's memory store so it stays a
+  return `${CAIRN_PERSONA}
+
+Right now you are acting as Cairn's coaching-memory librarian. Tidy the user's memory store so it stays a
 coherent, non-redundant model of who they are — WITHOUT losing anything real. This is housekeeping,
 not coaching: be conservative, only act when you're confident.
 
@@ -265,8 +275,10 @@ export function buildAboutMeGrowthPrompt(): string {
   const mem = ctx.memory.map((m) => `- (${m.kind ?? "observation"}) ${String(m.content ?? "").slice(0, 240)}`).join("\n");
   const family = (ctx.family as any[] || []).map((f: any) => `- ${f.name ?? "member"}${f.relation ? ` (${f.relation})` : ""}${f.notes ? `: ${String(f.notes).slice(0, 120)}` : ""}`).join("\n");
   const checkins = (ctx.checkins as any[] || []).slice(0, 7).map((c: any) => `- ${c.date}: mood ${c.mood ?? "—"}, energy ${c.energy ?? "—"}, sleep ${c.sleep_feel ?? "—"}${c.note ? ` · ${String(c.note).slice(0, 80)}` : ""}`).join("\n");
-  return `You are Cairn's coaching memory, maintaining the athlete's "about me" — a short, warm,
-person-model their coach reads to personalize tone and plans. Update it from the data below.
+  return `${CAIRN_PERSONA}
+
+Right now you are acting as Cairn's coaching memory, maintaining the user's "about me" — a short, warm,
+person-model you read to personalize tone and plans. Update it from the data below.
 
 RULES:
 - AUGMENT, never replace wholesale. The EXISTING about-me is partly user-authored; preserve its
@@ -274,7 +286,7 @@ RULES:
   supports. If the data adds nothing, set "changed": false and return the existing text unchanged.
 - A few short paragraphs of plain prose — training style & schedule, food preferences/constraints,
   what they're working toward, the people they plan around, how they tend to feel/recover. No lists,
-  no headers, no numeric scores, no medical claims. Write it TO the coach, ABOUT the athlete.
+  no headers, no numeric scores, no medical claims. Write it TO the coach, ABOUT the user.
 - Never invent. Only what's in the data.
 
 EXISTING ABOUT-ME (preserve & extend; may be empty):

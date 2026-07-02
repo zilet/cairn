@@ -2,7 +2,7 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { enqueueChatTurn, cancelTurn, onTurnEvent } from "../chatTurns.js";
+import { enqueueChatTurn, cancelTurn, onTurnEvent, getTurnPartialReply } from "../chatTurns.js";
 import { enqueueAgentJob } from "../agentJobs.js";
 import { distillChat } from "../coachOps.js";
 import {
@@ -119,8 +119,15 @@ chatRouter.post("/reset", async (req, res) => {
 // in-flight + queued thread from this on every (re)load (durable across restarts).
 chatRouter.get("/turns", (_req, res) => res.json(listActiveChatTurns()));
 
-// One turn's current state (poll fallback when SSE is unavailable).
-chatRouter.get("/turns/:id", (req, res) => res.json(getChatTurn(Number(req.params.id)) ?? null));
+// One turn's current state (poll fallback when SSE is unavailable). Carries the
+// reply prose streamed so far so a poll-driven client fills the bubble live too.
+chatRouter.get("/turns/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const turn = getChatTurn(id) as any;
+  if (!turn) return res.json(null);
+  const partial = getTurnPartialReply(id);
+  res.json(partial ? { ...turn, partial_reply: partial } : turn);
+});
 
 // Stop a queued or running turn (drops it / SIGKILLs the live subprocess).
 chatRouter.post("/turns/:id/cancel", (req, res) => {
@@ -148,9 +155,13 @@ chatRouter.get("/turns/:id/stream", (req, res) => {
   const turn = getChatTurn(id) as any;
   if (!turn) { send("error", { error: "no such turn" }); return res.end(); }
 
-  // Initial snapshot, with the assistant message if the turn already finished.
+  // Initial snapshot, with the assistant message if the turn already finished, or
+  // the reply prose streamed so far if it's still running (a reconnecting client —
+  // iOS kills the EventSource on backgrounding — REPLACES its bubble with this so
+  // an interrupted stream comes back filled, not hollow).
   const assistantMsg = turn.assistant_message_id ? getChatMessage(turn.assistant_message_id) : null;
-  send("snapshot", { turn, message: assistantMsg });
+  const partialReply = getTurnPartialReply(id);
+  send("snapshot", { turn, message: assistantMsg, partial_reply: partialReply || undefined });
   if (["done", "error", "canceled"].includes(turn.status)) return res.end();
 
   const keepalive = setInterval(() => { try { res.write(`: keepalive\n\n`); } catch { /* client gone */ } }, 15000);

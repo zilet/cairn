@@ -135,6 +135,7 @@ function uiSegmentsDeps(): UiSegmentsDeps {
     renderVolume: () => renderVolume(),
     renderEndurance: () => renderEndurance(),
     renderWeight: () => renderWeight(),
+    renderMeasurements: () => renderMeasurements(),
     renderCalendar: () => renderCalendar(),
     renderHistory: () => renderHistory(),
     renderProgram: () => renderProgram(),

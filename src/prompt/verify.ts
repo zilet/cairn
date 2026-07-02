@@ -1,11 +1,12 @@
 // Self-critique verify prompts: the bounded second-pass safety checkers for a
 // drafted meal plan and a suggested session.
 import * as repo from "../repo.js";
+import { CAIRN_PERSONA } from "./shared.js";
 
 // ---------- self-critique verify pass (Trust build V1) ----------
 // A bounded SECOND agent turn that checks a just-drafted high-stakes generative
 // output against the HARD floors/constraints — the model reviewing its own work
-// before it reaches the athlete. It is a SAFETY backstop, not a redesign: it only
+// before it reaches the user. It is a SAFETY backstop, not a redesign: it only
 // fixes genuine floor/constraint violations, leaving a clean draft untouched. It
 // fails OPEN — if it can't run or returns garbage, the original draft ships exactly
 // as today (the verify pass is never load-bearing). Honors the constitution: still
@@ -25,7 +26,9 @@ export function buildPlanVerifyPrompt(draft: any): string {
   const goal = repo.computeGoalCheck();
   const recIntake = (goal as any)?.ok ? (goal as any).recommended?.target_intake_kcal ?? null : null;
   const recProtein = (goal as any)?.ok ? (goal as any).recommended?.protein_g ?? null : null;
-  return `You are Cairn's nutrition SAFETY CHECKER. A meal plan was just drafted for the athlete. Before
+  return `${CAIRN_PERSONA}
+
+Right now you are acting as Cairn's nutrition SAFETY CHECKER. A meal plan was just drafted for the user. Before
 they see it, verify it against the HARD floors below and FIX only genuine violations. This is a
 backstop, not a rewrite — a compliant plan passes through untouched.
 
@@ -35,7 +38,7 @@ HARD FLOORS (the only things you enforce):
 - Aim for 30g+ fiber/day from whole foods.
 - A lean-safe deficit only — never a crash deficit.
 - Respect any injury/allergy/preference constraints carried in the DATA's memory/health/context.
-- Keep meal-slot timing consistent with the athlete's stated schedule (e.g. no pre-workout meal if they train fasted).
+- Keep meal-slot timing consistent with the user's stated schedule (e.g. no pre-workout meal if they train fasted).
 
 If everything already holds, ok:true (do NOT nitpick taste or variety). If a floor is violated, return
 a fixed_draft in the EXACT meal-plan schema with the SMALLEST change that fixes it (e.g. add protein/fiber
@@ -49,14 +52,16 @@ ${JSON.stringify(draft)}
 ${VERIFY_RESULT_NOTE}`;
 }
 
-// Verify a just-suggested single session against the athlete's HARD constraints.
+// Verify a just-suggested single session against the user's HARD constraints.
 export function buildSessionVerifyPrompt(draft: any, opts: { minutes?: number; equipment?: string; focus?: string; constraints?: string; date?: string } = {}): string {
   const ctx = repo.getCoachContext();
   const limits: string[] = [];
   if (opts.minutes) limits.push(`- TIME BUDGET: the whole session must fit in about ${Math.round(opts.minutes)} minutes (est_minutes must be ≤ this; drop accessories before compounds).`);
   if (opts.equipment) limits.push(`- EQUIPMENT: only movements possible with: ${opts.equipment.trim()}.`);
   if (opts.constraints) limits.push(`- CONSTRAINTS: ${opts.constraints.trim()}.`);
-  return `You are Cairn's training SAFETY CHECKER. A single session was just suggested for the athlete.
+  return `${CAIRN_PERSONA}
+
+Right now you are acting as Cairn's training SAFETY CHECKER. A single session was just suggested for the user.
 Before they see it, verify it against the HARD constraints below and FIX only genuine violations. This
 is a backstop, not a rewrite — a compliant session passes through untouched. It remains a SUGGESTION.
 

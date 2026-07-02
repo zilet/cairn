@@ -5,18 +5,32 @@ import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence
 import { forecastMarker, getMarkerHistory, lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
+import { getProfile, listWeight } from "./profile.js";
 import {
   type MappingDirective,
   type MarkerContext,
   type OptimalZone,
+  type ZoneProfile,
   MARKER_MAPPINGS,
-  OPTIMAL_ZONES,
   markerGroup,
   markerSide,
   matchOptimalZone,
   optimalDistance,
   presentGroups,
 } from "./propagation-data.js";
+
+// The sex/age snapshot the connected-brain paths thread into matchOptimalZone so a
+// woman / older adult isn't held to the male/generic default band. Null-safe: an
+// empty profile (fresh DB) yields the default, so nothing behaves differently until
+// the athlete records their sex/age.
+function zoneProfile(): ZoneProfile | null {
+  try {
+    const p = getProfile();
+    return p ? { sex: p.sex ?? null, age: p.age ?? null } : null;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // This module is the connected-brain ENGINE: marker prioritization, the
@@ -31,14 +45,16 @@ import {
 export {
   MARKER_MAPPINGS,
   OPTIMAL_ZONES,
+  egfrLowBound,
   isNonClinicalMarker,
   markerGroup,
   markerSide,
   matchOptimalZone,
   optimalDistance,
+  personalizeZone,
   presentGroups,
 } from "./propagation-data.js";
-export type { OptimalZone } from "./propagation-data.js";
+export type { OptimalZone, ZoneProfile } from "./propagation-data.js";
 export * from "./supplements.js";
 export * from "./health-export.js";
 export * from "./health-focus.js";
@@ -171,11 +187,12 @@ export function prioritizeMarkers() {
   const haveKey = new Set(labMarkers.map((m: any) => foldIdentity(m)));
   const wearable = wearableFitnessMarkers().filter((m) => !haveKey.has(foldIdentity(m)));
   const markers = [...labMarkers, ...wearable];
+  const profile = zoneProfile(); // personalizes the sex/age-dependent optimal bands
   let flagged_count = 0;
   const enriched = markers.map((m: any) => {
     const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
     if (flagged) flagged_count++;
-    const z = matchOptimalZone(m?.name);
+    const z = matchOptimalZone(m?.name, profile);
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     const hasNum = Number.isFinite(numericVal);
     const comparable = m?.latest?.unit_mismatch !== true;
@@ -233,11 +250,13 @@ export function prioritizeMarkers() {
 // ---------- the propagation engine: derive cross-domain directives (T4) ----------
 // Helper: a value is "actionably off" when it's flagged low/high OR sits outside
 // its optimal band the worse way.
-function offOptimal(value: number, zoneLabel: string, flag: string | null): boolean {
+// Takes the (already profile-personalized) zone object rather than re-looking it up
+// by label, so the off-optimal test uses the SAME sex/age-adjusted band the caller
+// matched against — not the static male default.
+function offOptimal(value: number, zone: OptimalZone | null, flag: string | null): boolean {
   if (flag === "low" || flag === "high") return true;
-  const z = OPTIMAL_ZONES.find((x) => x.label === zoneLabel);
-  if (!z || !Number.isFinite(value)) return false;
-  return optimalDistance(value, z) > 0;
+  if (!zone || !Number.isFinite(value)) return false;
+  return optimalDistance(value, zone) > 0;
 }
 
 function mappingDirectiveKey(zoneLabel: string, d: MappingDirective): string | null {
@@ -298,6 +317,7 @@ export function deriveDirectives() {
   const SOURCE = "markers";
   clearDirectivesForSource(SOURCE);
   const { markers } = prioritizeMarkers();
+  const profile = zoneProfile(); // sex/age-personalized optimal bands (null-safe default)
   let saved = 0;
   // Collect every off-optimal marker as we go — the cluster layer (below) reads
   // this to make markers COMPOUND into one read instead of firing in isolation.
@@ -310,14 +330,14 @@ export function deriveDirectives() {
   // significant.
   const seen = new Set<string>();
   for (const m of markers) {
-    const z = matchOptimalZone(m?.name);
+    const z = matchOptimalZone(m?.name, profile);
     if (!z) continue;
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     if (!Number.isFinite(numericVal)) continue;
     const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
     const comparable = m?.latest?.unit_mismatch !== true;
     if (!comparable && !flag) continue;
-    if (comparable && !offOptimal(numericVal, z.label, flag)) continue;
+    if (comparable && !offOptimal(numericVal, z, flag)) continue;
     const ctx: MarkerContext = { value: numericVal, flag, zone: z, side: markerSide(numericVal, z, flag), marker: m };
     if (!offMarkers.has(z.label)) offMarkers.set(z.label, ctx);
     const mapping = MARKER_MAPPINGS.find((x) => x.zone === z.label);
@@ -346,13 +366,21 @@ export function deriveDirectives() {
     }
   }
 
+  // ---- generic long-tail fallback ----
+  // The mapped loop above only fires for the ~37 analytes with BOTH an optimal zone
+  // AND a MARKER_MAPPINGS lever. A lab-FLAGGED marker outside that set (potassium,
+  // ALP, PSA, WBC, cortisol, calcium, lipase, …) would otherwise propagate NOTHING —
+  // so each is surfaced as ONE soft, clearly-uncertain `watch` note, so nothing the
+  // lab flagged goes unnoticed. Informational, never a mapped lever.
+  saved += deriveGenericLongTail(SOURCE, markers, seen, profile);
+
   // ---- cross-marker synthesis (the cluster layer) ----
   // Some findings only make sense TOGETHER: ApoB + Lp(a) + hs-CRP is one
   // elevated-cardiovascular-risk story, not three; low ferritin + low hemoglobin
   // + a low/altered MCV is an anemia PATTERN, not three loose flags. These fire
   // ONE synthesized directive when the cluster is genuinely present, so the brain
   // reasons across markers instead of repeating itself. Still INFORMATIONAL.
-  saved += deriveMarkerClusters(SOURCE, offMarkers, seen);
+  saved += deriveMarkerClusters(SOURCE, offMarkers, seen, profile);
 
   // Directives just changed → today's cached Brief is stale. Invalidate HERE (the one
   // place every directive change flows through) rather than at each caller — so every
@@ -405,12 +433,68 @@ const MARKER_CLUSTERS: MarkerCluster[] = [
   // rather than this declarative table.
 ];
 
-function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerContext>, seen: Set<string> = new Set()): number {
+// Max generic long-tail watch notes per derive — keeps a huge/garbage panel from
+// flooding the list. markers arrive flagged-first then impact-desc, so the cap keeps
+// the most significant flags.
+const MAX_GENERIC_DIRECTIVES = 12;
+
+// One soft `watch` note per lab-FLAGGED marker that has no mapped lever, so a flagged
+// analyte Cairn doesn't model (potassium, ALP, PSA, WBC, cortisol, calcium, lipase, …)
+// still surfaces instead of vanishing. Always uncertain:true (no established lever) and
+// respects the same dismiss/resolve feedback memory as the mapped path.
+function deriveGenericLongTail(source: string, markers: any[], seen: Set<string>, profile?: ZoneProfile | null): number {
+  let saved = 0;
+  let emitted = 0;
+  for (const m of markers) {
+    if (emitted >= MAX_GENERIC_DIRECTIVES) break;
+    const flag: string | null = m?.latest?.flag === "low" || m?.latest?.flag === "high" ? m.latest.flag : null;
+    if (!flag) continue; // generic fallback fires ONLY on an explicit lab flag
+    const z = matchOptimalZone(m?.name, profile);
+    // Skip anything the mapped path already covers (a zone WITH a lever).
+    if (z && MARKER_MAPPINGS.some((x) => x.zone === z.label)) continue;
+    const name = canonicalMarker(String(m?.name ?? "")).name || String(m?.name ?? "").trim();
+    if (!name) continue;
+    const directive_key = normalizeDirectiveKey(`generic:${name}:watch`);
+    if (directive_key && seen.has(directive_key)) continue;
+    const feedback = lastDirectiveFeedback(source, name, "watch", directive_key);
+    // Suppress a note the athlete already dismissed/resolved at this same flag, unless the
+    // flag direction changed or a newer reading landed (there's no numeric optimal band
+    // here to judge "materially worse", so anchor on the flag side + reading date).
+    if (feedback) {
+      const sameSide = String(feedback.trigger_side || "") === flag;
+      const newDate = String(m?.latest?.date ?? "");
+      const sameDate = String(feedback.trigger_date || "") === newDate;
+      if (feedback.status === "dismissed" && sameSide) continue;
+      if (feedback.status === "resolved" && (sameDate || !newDate)) continue;
+    }
+    const value = m?.latest?.value;
+    const valStr = value != null && value !== "" ? ` (${value}${m?.unit ? ` ${m.unit}` : ""})` : "";
+    const row = addDirective({
+      source,
+      domain: "watch",
+      marker: name,
+      directive_key,
+      directive: `Your lab flagged ${name}${valStr} as ${flag}. It isn't one of the levers Cairn maps, so it's worth mentioning at your next visit to understand what's driving it.`,
+      rationale: "A flagged marker outside Cairn's mapped levers is surfaced as a soft watch item so nothing the lab flagged goes unnoticed. Informational, not medical advice.",
+      citation: null,
+      uncertain: true,
+      trigger_value: Number.isFinite(Number(value)) ? Number(value) : null,
+      trigger_side: flag,
+      trigger_date: m?.latest?.date ?? null,
+      resurfaced_from_id: feedback?.id ?? null,
+      status: "active",
+    });
+    if (row) { saved++; emitted++; if (directive_key) seen.add(directive_key); }
+  }
+  return saved;
+}
+
+function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerContext>, seen: Set<string> = new Set(), profile?: ZoneProfile | null): number {
   let saved = 0;
   // anemia pattern needs cross-marker reads (hemoglobin / MCV) that aren't all in
   // OPTIMAL_ZONES, so handle it specially off the marker history rather than the
   // off-optimal map alone.
-  const anemia = buildAnemiaCluster(offMarkers);
+  const anemia = buildAnemiaCluster(offMarkers, profile);
   const clusters: { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext }[] = [];
 
   for (const c of MARKER_CLUSTERS) {
@@ -459,7 +543,7 @@ function deriveMarkerClusters(source: string, offMarkers: Map<string, MarkerCont
 // as iron-deficiency anemia; ferritin alone is just low stores. Reads hemoglobin
 // & MCV from the full marker history (they aren't all in OPTIMAL_ZONES). Returns
 // one synthesized cluster or null.
-function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>): { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext } | null {
+function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>, profile?: ZoneProfile | null): { name: string; directives: MappingDirective[]; markerLabel: string; ctx: MarkerContext } | null {
   const ferritin = offMarkers.get("Ferritin");
   if (!ferritin || ferritin.side !== "low") return null;
   const { markers } = getMarkerHistory();
@@ -471,7 +555,10 @@ function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>): { name: str
     const v = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     return Number.isFinite(v) ? v : null;
   };
-  const hgbLow = hgbM?.latest?.flag === "low" || (numOf(hgbM) != null && (numOf(hgbM) as number) < 13.0);
+  // WHO anemia thresholds are sex-specific: hemoglobin < 13 g/dL in men, < 12 in
+  // (non-pregnant) women. Using the male 13.0 for a woman would over-call anemia.
+  const hgbThreshold = String(profile?.sex || "male").toLowerCase() === "female" ? 12.0 : 13.0;
+  const hgbLow = hgbM?.latest?.flag === "low" || (numOf(hgbM) != null && (numOf(hgbM) as number) < hgbThreshold);
   const mcvVal = numOf(mcvM);
   const mcvLow = mcvM?.latest?.flag === "low" || (mcvVal != null && mcvVal < 80);
   // Genuine pattern: low ferritin PLUS (low hemoglobin OR a small/low MCV).
@@ -492,6 +579,23 @@ function buildAnemiaCluster(offMarkers: Map<string, MarkerContext>): { name: str
 // 'markers' directives — each review save clears & rewrites only its own source.
 // Never auto-applies anything; this is the review side of propose-review-apply
 // for the clinical layer.
+// Canonical directive TARGET for a marker name: the OPTIMAL_ZONES label when the name
+// maps to a zone (so "LDL Chol Calc (NIH)", "LDL-C" and "LDL Cholesterol" all collapse
+// to "LDL-C"; "Non-HDL Cholesterol" → "Non-HDL-C"), else the marker-canon canonical
+// display name. The deterministic 'markers' source already stores the zone label; this
+// aligns the agent's free-text 'health_review' marker names onto the SAME label so the
+// cross-source de-dup (coach.ts dedupeActiveDirectives, keyed on canonicalMarker) folds
+// one lipid finding into one coherent directive set instead of two un-aliased copies.
+// Cluster markers ("A+B+C") are left untouched — they're a synthesized cross-marker read.
+export function canonicalDirectiveMarker(name: string | null | undefined): string | null {
+  if (name == null) return null;
+  const s = String(name).trim();
+  if (!s || s.includes("+")) return s || null;
+  const z = matchOptimalZone(s);
+  if (z) return z.label;
+  return canonicalMarker(s).name || s;
+}
+
 export function applyReviewDirectives(directives: any[]) {
   // Replace the health_review directive set with this list (clear + rewrite).
   // An explicit empty array legitimately means "this review flagged nothing now"
@@ -513,7 +617,10 @@ export function applyReviewDirectives(directives: any[]) {
   for (const d of list) {
     if (!d || typeof d !== "object") continue;
     const domain = DIRECTIVE_DOMAINS.has(String(d.domain)) ? String(d.domain) : "watch";
-    const marker = d.marker == null || String(d.marker).trim() === "" ? null : String(d.marker).trim().slice(0, 60);
+    const rawMarker = d.marker == null || String(d.marker).trim() === "" ? null : String(d.marker).trim().slice(0, 60);
+    // Canonicalize the agent's free-text marker onto its optimal-zone label so it folds
+    // together with the deterministic 'markers' directive for the same finding (de-noising).
+    const marker = rawMarker ? (canonicalDirectiveMarker(rawMarker) ?? rawMarker).slice(0, 60) : null;
     const directive = d.directive == null ? null : String(d.directive).trim().slice(0, 600) || null;
     const directive_key = defaultDirectiveKey(marker, domain, directive);
     const feedback = lastDirectiveFeedback("health_review", marker, domain, directive_key);
@@ -568,8 +675,9 @@ function buildReviewMarkerContexts(): Map<string, MarkerContext> {
   const out = new Map<string, MarkerContext>();
   let markers: any[] = [];
   try { markers = prioritizeMarkers().markers; } catch { return out; }
+  const profile = zoneProfile();
   for (const m of markers) {
-    const z = matchOptimalZone(m?.name);
+    const z = matchOptimalZone(m?.name, profile);
     if (!z) continue;
     const value = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     if (!Number.isFinite(value)) continue;
@@ -650,6 +758,62 @@ export function acuteReadingDateMap(): Record<string, string> {
   return out;
 }
 
+// ---------- body-composition staleness (a month-old DEXA vs newer weigh-ins) ----------
+// A DEXA / body-fat scan is a point-in-time snapshot. A directive derived from a scan
+// that's weeks old while the athlete has since actively LOST or GAINED weight (18 logged
+// sessions + weigh-ins moving) must NOT assert the stale scan as current — it decays to a
+// "worth a fresh scan to confirm" framing, preferring the newer weight-trend evidence.
+export const BODY_COMP_STALE_DAYS = 21;
+const BODY_COMP_MOVE_LB = 3; // weight moved at least this much since the scan → scan likely outdated
+
+function isBodyCompDirective(marker?: string | null): boolean {
+  if (!marker) return false;
+  return /body fat|body composition|body comp|dexa|fat mass|lean mass|visceral|almi|ffmi/i.test(String(marker));
+}
+
+// Bodyweight change since a scan date, from the weigh-in log: baseline = the weigh-in
+// nearest the scan, delta vs the latest. null when there's no NEWER weigh-in to compare.
+function weightDeltaSince(scanISO: string | null, weights: any[]): number | null {
+  if (!scanISO || !Array.isArray(weights) || !weights.length) return null;
+  const scan = Date.parse(String(scanISO));
+  if (!Number.isFinite(scan)) return null;
+  const latest = weights[weights.length - 1];
+  const latestW = Number(latest?.weight_lb);
+  const latestDate = Date.parse(String(latest?.date));
+  if (!Number.isFinite(latestW) || !Number.isFinite(latestDate) || latestDate <= scan) return null; // no weigh-in after the scan
+  let base: any = null;
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (const w of weights) {
+    const t = Date.parse(String(w?.date));
+    if (!Number.isFinite(t)) continue;
+    const gap = Math.abs(t - scan);
+    if (gap < bestGap) { bestGap = gap; base = w; }
+  }
+  const baseW = Number(base?.weight_lb);
+  if (!Number.isFinite(baseW)) return null;
+  return Math.round((latestW - baseW) * 10) / 10;
+}
+
+// Deterministic staleness read for a body-comp directive: its source scan is > ~3 weeks
+// old AND bodyweight has since moved enough that the scan can't be asserted as current.
+// { stale, reason (plain language), delta_lb }. stale=false for non-body-comp directives,
+// a recent scan, or a weight that hasn't moved.
+export function bodyCompStaleness(d: any, weights: any[], today?: string): { stale: boolean; reason: string | null; delta_lb: number | null } {
+  if (!isBodyCompDirective(d?.marker)) return { stale: false, reason: null, delta_lb: null };
+  const anchor = d?.trigger_date || d?.created_at || null;
+  const t = anchor ? Date.parse(String(anchor)) : Number.NaN;
+  if (!Number.isFinite(t)) return { stale: false, reason: null, delta_lb: null };
+  const now = today ? Date.parse(today) : Date.now();
+  const ageDays = Math.floor((now - t) / 864e5);
+  if (ageDays <= BODY_COMP_STALE_DAYS) return { stale: false, reason: null, delta_lb: null };
+  const delta = weightDeltaSince(String(anchor).slice(0, 10), weights);
+  if (delta == null || Math.abs(delta) < BODY_COMP_MOVE_LB) return { stale: false, reason: null, delta_lb: delta };
+  const weeks = Math.max(3, Math.round(ageDays / 7));
+  const dirWord = delta < 0 ? "down" : "up";
+  const reason = `Based on a body-composition scan ~${weeks} weeks old; your weight is ${dirWord} ~${Math.abs(delta)} lb since, so treat the number as provisional — a fresh scan would confirm before acting on it.`;
+  return { stale: true, reason, delta_lb: delta };
+}
+
 // Annotate directive rows with their freshness verdict (acute / age_days / stale),
 // anchoring acute markers to the real reading date. Every surface that must agree on
 // whether an acute finding is still current uses this: the Brief provenance line, the
@@ -658,6 +822,10 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
   const rows = Array.isArray(directives) ? directives : [];
   const anyAcute = rows.some((d) => isAcuteMarker(d?.marker));
   const map = anyAcute ? acuteReadingDateMap() : {};
+  // Body-comp staleness needs the weigh-in log — fetch ONCE, and only when a body-comp
+  // directive is present (the common case has none). Degrades to [] on any read error.
+  const anyBodyComp = rows.some((d) => isBodyCompDirective(d?.marker));
+  const weights = anyBodyComp ? (() => { try { return listWeight(120); } catch { return []; } })() : [];
   // The active life-context effect (a recent illness / injury / late night / hard block)
   // raises a transient-inflammation window. We only need it when there's an acute
   // directive to test, and we compute it ONCE. A caller may inject `eff` (testing, or a
@@ -691,24 +859,39 @@ export function annotateDirectiveFreshness(directives: any[], today?: string, ef
         transient_reason = `${String(d?.marker ?? "this acute marker").trim()} was likely drawn during ${flare} — informational; worth a recheck once it settles before it shapes training.`;
       }
     }
-    return { ...d, acute: f.acute, age_days: f.ageDays, stale: f.stale, transient, transient_reason };
+    // Body-comp recency decay (additive): a directive off a month-old DEXA while the
+    // athlete's weight has since moved reads as "worth a rescan", not a current fact.
+    const bc = anyBodyComp ? bodyCompStaleness(d, weights, today) : { stale: false, reason: null, delta_lb: null };
+    return { ...d, acute: f.acute, age_days: f.ageDays, stale: f.stale, transient, transient_reason, stale_measurement: bc.stale, rescan_reason: bc.reason, weight_delta_lb: bc.delta_lb };
   });
 }
 
 export function directivesForCoach() {
-  return listActiveDirectives().slice(0, 24).map((d: any) => ({
-    domain: d.domain,
-    marker: d.marker,
-    directive: d.directive,
-    rationale: d.rationale,
-    citation: d.citation,
-    uncertain: d.uncertain,
-    directive_key: d.directive_key,
-    trigger_value: d.trigger_value,
-    trigger_side: d.trigger_side,
-    trigger_date: d.trigger_date,
-    created_at: d.created_at,
-  }));
+  // Body-comp recency decay: a directive off a scan that's weeks old while bodyweight
+  // has since moved is reframed as provisional ("worth a fresh scan"), so the coach
+  // never asserts a stale DEXA as current. Fetch the weigh-in log once.
+  const weights = (() => { try { return listWeight(120); } catch { return []; } })();
+  return listActiveDirectives().slice(0, 24).map((d: any) => {
+    const bc = bodyCompStaleness(d, weights);
+    const directive = bc.stale && bc.reason
+      ? `${d.directive} [Note: ${bc.reason}]`
+      : d.directive;
+    return {
+      domain: d.domain,
+      marker: d.marker,
+      directive,
+      rationale: d.rationale,
+      citation: d.citation,
+      uncertain: d.uncertain,
+      directive_key: d.directive_key,
+      trigger_value: d.trigger_value,
+      trigger_side: d.trigger_side,
+      trigger_date: d.trigger_date,
+      created_at: d.created_at,
+      stale_measurement: bc.stale,
+      rescan_reason: bc.reason,
+    };
+  });
 }
 
 export function directiveFeedbackForCoach(limit = 12) {

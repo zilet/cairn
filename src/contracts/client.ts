@@ -190,6 +190,8 @@ export interface ClientPrescription {
   vary_to?: string;
   vary_options?: ClientPrescriptionVariation[];
   plan_item_id?: number;
+  day_number?: number;        // the plan day this lift sits on (for the swap apply path)
+  autoregulated?: boolean;    // recovery braked this step (informational)
 }
 
 export interface ClientSessionSuggestionItem {

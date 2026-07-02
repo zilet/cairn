@@ -28,12 +28,14 @@
         hasLog: () => !!document.getElementById("chatlog"),
         pendingIds: () => [...chatPendingBubbles.keys()]
             .filter((id) => chatPendingBubbles.get(id)?.isConnected),
-        createStream: (id) => new EventSource(withToken(`/api/chat/turns/${id}/stream`)),
+        createStream: (id) => typeof EventSource !== "undefined" ? new EventSource(withToken(`/api/chat/turns/${id}/stream`)) : null,
+        poll: (id) => api(`/chat/turns/${id}`),
         parse: parseTurnEvent,
         record: chatTurnRecord,
         phase: setTurnPhase,
         progress: setTurnProgress,
         delta: (id, text) => chatTurnStreamState.appendDelta(id, text),
+        replace: replaceStreamingBubble,
         reset: resetStreamingBubble,
         finish: finalizeTurn,
         cancel: finalizeCanceled,
@@ -91,10 +93,48 @@
         if (clean)
             setPendingCaption(el, clean);
     }
+    // Replace a streaming bubble's text wholesale from an SSE reconnect snapshot / poll
+    // (Part B): an interrupted stream comes back filled with the server's streamed-so-far
+    // prose instead of a hollow "Thinking…". No-op when there's nothing streamed yet.
+    function replaceStreamingBubble(id, text) {
+        const clean = String(text ?? "");
+        if (!clean)
+            return;
+        chatTurnStreamState.setText(id, clean);
+    }
+    // A streamed reply's prose is already on screen; while its actions apply (seconds),
+    // show a calm "Saving…" footer and drop the blinking caret so the wait isn't a
+    // silent blink. Non-streaming (pending) bubbles keep the caption swap as before.
+    function applyStreamStatus(el, text) {
+        el.classList.toggle("streaming-applying", !!text);
+        let note = el.querySelector(".stream-status");
+        if (text) {
+            if (!(note instanceof HTMLElement)) {
+                note = document.createElement("span");
+                note.className = "stream-status";
+                note.setAttribute("role", "status");
+                const stop = el.querySelector(".turn-stop");
+                if (stop)
+                    el.insertBefore(note, stop);
+                else
+                    el.appendChild(note);
+            }
+            note.textContent = text;
+        }
+        else if (note) {
+            note.remove();
+        }
+    }
     function setTurnPhase(id, turnValue) {
         const el = chatPendingBubbles.get(id);
-        if (el?.isConnected)
-            setPendingCaption(el, chatPhaseCaption(chatTurnRecord(turnValue)));
+        if (!el?.isConnected)
+            return;
+        const caption = chatPhaseCaption(chatTurnRecord(turnValue));
+        if (el.classList.contains("streaming")) {
+            applyStreamStatus(el, caption === "Saving…" ? caption : "");
+            return;
+        }
+        setPendingCaption(el, caption);
     }
     function resetStreamingBubble(id) {
         chatTurnStreamState.reset(id);
@@ -131,6 +171,9 @@
             return null;
         if (chatPendingBubbles.has(id))
             return chatPendingBubbles.get(id) || null;
+        // Only follow to the bottom if the reader is already near it — a queued turn's
+        // bubble appearing must never yank someone reading earlier messages (D6).
+        const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 200;
         const el = makePendingBubble({ ...turn, id });
         const anchor = findChatMessageAnchor(log, turn.user_message_id);
         if (anchor && anchor.parentElement === log)
@@ -138,7 +181,8 @@
         else
             log.appendChild(el);
         chatPendingBubbles.set(id, el);
-        log.scrollTop = log.scrollHeight;
+        if (stick)
+            log.scrollTop = log.scrollHeight;
         return el;
     }
     function appendFinalMessage(message, before) {

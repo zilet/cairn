@@ -26,6 +26,9 @@ type TodayPostRenderWiringDeps = {
   showPlan: boolean;
   soft: boolean;
   conductorLeads: boolean;
+  // When true, the rail is hydrated separately (progressive Today): skip both rail
+  // loaders here so the first paint never waits on the agenda.
+  deferRail?: boolean;
   agenda: Partial<ClientTodayAgenda> | null | undefined;
   agendaGeneric: ClientTodayAgendaCandidate[];
   todayCompass: TodayPostRenderCompass;
@@ -113,10 +116,12 @@ type TodayPostRenderWiringApi = {
         deps.loadCheckin();
         deps.loadDraftProposals();
       }
-      if (deps.agenda) {
-        deps.runAgendaRail(deps.agenda, deps.agendaGeneric, deps.todayRailDeps());
-      } else {
-        deps.runFallbackRail(deps.isToday, deps.todayRailDeps());
+      if (!deps.deferRail) {
+        if (deps.agenda) {
+          deps.runAgendaRail(deps.agenda, deps.agendaGeneric, deps.todayRailDeps());
+        } else {
+          deps.runFallbackRail(deps.isToday, deps.todayRailDeps());
+        }
       }
       deps.root.querySelector("#goalLine")?.addEventListener("click", () => deps.activateTab("progress"));
     }

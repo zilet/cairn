@@ -407,6 +407,75 @@ function bioAge(markers: any[], calendarAge: number | null) {
   return { value, delta: delta != null ? Math.round(delta * 10) / 10 : null, source: m?.latest?.kind || "lab", date: m?.latest?.date ?? null };
 }
 
+// Levine (2018) PhenoAge — a DETERMINISTIC biological-age estimate from nine routine
+// markers + calendar age, so the Standing read can speak to biological aging even
+// when a panel doesn't report its own bio-age. Returns null unless ALL nine markers
+// are present with plausible values (we never fabricate from a partial panel). The
+// RESULT is presented in PLAIN LANGUAGE only (direction + a soft magnitude word) —
+// per the constitution, the raw number is never surfaced as a score on the athlete.
+// Coefficients + the mortality→age transform are the published Levine values; inputs
+// are converted from US conventional units to the formula's expected units.
+export function levinePhenoAge(
+  markers: any[],
+  calendarAge: number | null,
+): { value: number; delta: number; direction: "younger" | "older" | "aligned"; note: string } | null {
+  const pick = (re: RegExp, min: number, max: number, exclude?: RegExp): number | null => {
+    const m = markers.find((x) => {
+      const name = String(x?.name ?? "");
+      if (!re.test(name)) return false;
+      if (exclude && exclude.test(name)) return false;
+      return true;
+    });
+    return plausibleNumber(latestNumber(m), min, max);
+  };
+  const albumin = pick(/\balbumin\b/i, 2, 6, /urine|micro|globulin|ratio|\//i);   // g/dL
+  const creat = pick(/\bcreatinine\b/i, 0.3, 2.0, /urine|clearance|egfr|ratio|\//i); // mg/dL
+  const glucose = pick(/\bglucose\b/i, 50, 400, /urine|tolerance|challenge/i);     // mg/dL
+  const crpRaw = pick(/c-reactive|hs-?crp/i, 0.05, 30);                            // mg/L
+  const lymphPct = pick(/lymphocyte/i, 3, 70, /absolute|#/i);                      // %
+  const mcv = pick(/\bmcv\b|mean corpuscular volume/i, 60, 120);                   // fL
+  const rdw = pick(/\brdw\b|red cell distribution/i, 9, 25);                       // %
+  const alp = pick(/alkaline phosphatase|\balp\b/i, 15, 400);                      // U/L
+  const wbc = pick(/white blood|\bwbc\b/i, 1.5, 25, /urine/i);                     // 10^3/µL
+  const age = Number(calendarAge);
+  if (![albumin, creat, glucose, crpRaw, lymphPct, mcv, rdw, alp, wbc].every((v) => v != null) || !Number.isFinite(age)) {
+    return null;
+  }
+  // US conventional → the formula's expected units.
+  const albumin_gL = (albumin as number) * 10;
+  const creat_umolL = (creat as number) * 88.42;
+  const glucose_mmolL = (glucose as number) / 18.0182;
+  const lnCRP = Math.log(Math.max((crpRaw as number) / 10, 0.01)); // mg/L → mg/dL, floored off ln(0)
+  const xb =
+    -19.9067
+    - 0.0336 * albumin_gL
+    + 0.0095 * creat_umolL
+    + 0.1953 * glucose_mmolL
+    + 0.0954 * lnCRP
+    - 0.0120 * (lymphPct as number)
+    + 0.0268 * (mcv as number)
+    + 0.3306 * (rdw as number)
+    + 0.00188 * (alp as number)
+    + 0.0554 * (wbc as number)
+    + 0.0804 * age;
+  const gamma = 0.0076927;
+  const mort = 1 - Math.exp((-Math.exp(xb) * (Math.exp(gamma * 120) - 1)) / gamma);
+  if (!(mort > 0 && mort < 1)) return null;
+  const pheno = 141.50225 + Math.log(-0.00553 * Math.log(1 - mort)) / 0.09165;
+  if (!Number.isFinite(pheno) || pheno < 18 || pheno > 120) return null;
+  const value = Math.round(pheno);
+  const delta = Math.round((pheno - age) * 10) / 10;
+  const direction: "younger" | "older" | "aligned" = delta < -2 ? "younger" : delta > 2 ? "older" : "aligned";
+  const mag = Math.abs(delta);
+  const soft = mag < 2 ? "right in line with" : mag < 5 ? "a little" : mag < 10 ? "a few years" : "well";
+  const note = direction === "aligned"
+    ? "Your bloodwork reads right in line with your calendar age."
+    : direction === "younger"
+      ? `Your bloodwork is reading ${soft === "right in line with" ? "in line with" : `${soft} younger than`} your calendar age — the panel's aging markers are in a good place.`
+      : `Your bloodwork is reading ${soft === "right in line with" ? "in line with" : `${soft} older than`} your calendar age — a few panel markers are worth tightening.`;
+  return { value, delta, direction, note };
+}
+
 // The single highest-leverage move — reuses the connected brain's one voice
 // (`healthFocus().lead`), so Standing points at the SAME priority as everywhere else.
 function leadLever() {
@@ -537,25 +606,50 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
   const activity = activityRead(actualAge);
   if (activity.equivalent != null) ageInputs.push({ age: activity.equivalent, weight: 0.9 });
 
+  // The multi-signal composite (VO2/body-comp/labs/BP/activity blended into one age).
+  // Kept ONLY for the full-read / back-compat payload — it is a fabricated number and
+  // the constitution bans surfacing it as a score, so it NEVER drives the hero.
   const signalAge = age != null ? weightedAge(ageInputs, age) : null;
 
-  // The HERO: lead with the lab's measured biological age when present (the athlete's own
-  // number), else Cairn's composite — framed by DIRECTION, the motivational truth. No two
-  // contradicting "ages" in the same read.
-  const heroBioAge = bioAgeInfo?.value ?? signalAge;
-  const heroSource = bioAgeInfo ? "lab" : "estimate";
-  const direction = heroBioAge == null || age == null
+  // A deterministic Levine PhenoAge from the panel, when all nine inputs are present —
+  // a REAL bio-age estimate (not the composite) that can anchor direction and speak in
+  // plain language. Null on a partial panel.
+  const pheno = levinePhenoAge(markers, age);
+
+  // The HERO leads with DIRECTION in plain language — never a fabricated number on the
+  // athlete. `biological_age` is populated ONLY from a REAL measure (a lab-reported
+  // bio-age, else the Levine PhenoAge); it's null when we'd otherwise have to invent
+  // one, so the client renders a plain-language read instead of a number. Direction
+  // prefers that real measure, then the labs' own read — never the composite.
+  const measuredBioAge = bioAgeInfo?.value ?? pheno?.value ?? null;
+  const measuredDelta = bioAgeInfo?.delta ?? pheno?.delta ?? (measuredBioAge != null && age != null ? Math.round((measuredBioAge - actualAge) * 10) / 10 : null);
+  const heroSource = bioAgeInfo ? "lab" : pheno ? "phenoage" : "estimate";
+  // The anchor that decides direction: a real measured age if we have one, else the
+  // deterministic labs read (labAge) — both honest, neither the fabricated composite.
+  const heroAnchor = measuredBioAge ?? (labs.equivalent != null ? labs.equivalent : null);
+  const direction = age == null || heroAnchor == null
     ? "unknown"
-    : heroBioAge < actualAge - 2 ? "younger"
-      : heroBioAge > actualAge + 2 ? "older" : "aligned";
+    : heroAnchor < actualAge - 2 ? "younger"
+      : heroAnchor > actualAge + 2 ? "older" : "aligned";
   const heroHeadline = direction === "younger"
     ? "You're trending younger."
     : direction === "older"
       ? "A few movable signals are aging the picture up — and they're the movable kind."
-      : heroBioAge == null
+      : direction === "unknown"
         ? "Add a few anchor signals and Cairn can build your standing read."
         : "You're right in line with your age — and the levers to tilt it younger are clear.";
   const headline = heroHeadline;
+  // Plain-language biological-age read for the hero — a direction sentence, NO number.
+  // Prefer the PhenoAge note when we computed one; else phrase from a lab bio-age;
+  // else stay silent (the headline already carries the read).
+  const bioReadNote = pheno?.note
+    ?? (bioAgeInfo && age != null
+      ? (direction === "younger"
+        ? "Your biological age is reading younger than your calendar age."
+        : direction === "older"
+          ? "Your biological age is reading older than your calendar age — the movable kind."
+          : "Your biological age is right in line with your calendar age.")
+      : null);
 
   // The "this quarter" momentum (wins in motion) and the single highest-leverage lever.
   const momentumRead = standingMomentum({ markers, profile });
@@ -634,16 +728,21 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
     generated_at: new Date().toISOString(),
     subject: { age, sex, reference_age: referenceAge, reference_age_band: `${referenceAge}s` },
     headline,
-    // The hero: one coherent age read (lab biological age preferred), framed by direction.
+    // The hero leads with DIRECTION in plain language. biological_age is a REAL
+    // measured value (lab-reported bio-age or Levine PhenoAge) or null — never the
+    // fabricated composite; the client renders `bio_read` (a direction sentence, no
+    // number) rather than the raw figure.
     hero: {
       calendar_age: age,
-      biological_age: heroBioAge,
-      biological_age_source: heroSource, // "lab" | "estimate"
-      biological_age_delta: bioAgeInfo?.delta ?? (heroBioAge != null && age != null ? heroBioAge - age : null),
+      biological_age: measuredBioAge, // real measure (lab | PhenoAge) or null — never the composite
+      biological_age_source: heroSource, // "lab" | "phenoage" | "estimate"
+      biological_age_delta: measuredDelta,
       direction, // "younger" | "older" | "aligned" | "unknown"
       headline: heroHeadline,
+      bio_read: bioReadNote, // plain-language biological-age read (no number) — null when there's nothing real to say
     },
     biological_age: bioAgeInfo, // the lab-measured value when a panel reports one, else null
+    pheno_age: pheno,           // deterministic Levine PhenoAge (plain-language surfaces only), else null
     momentum: { has_momentum: hasMomentum, chips: momentumRead.chips, summary: momentumRead.chips.filter((c) => c.dir === "good").map((c) => c.text).join(" · ") },
     lead_lever: lever,
     body_comp: bodyComp,

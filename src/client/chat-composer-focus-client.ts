@@ -59,8 +59,10 @@ function chatComposerFocusInput(input: ChatComposerFocusInput): void {
 }
 
 function chatComposerReleaseStaleInputFocus(options: ChatComposerFocusReleaseOptions): void {
-  if (!options.isSoftKeyboard()) return;
-  if (!options.isKeyboardGeometryOpen() && document.activeElement === options.input) options.input.blur();
+  // Never blur on pointerdown. The old blur-then-refocus-within-one-tap (blur here,
+  // refocus on pointerup) flickered the keyboard; worse, a stale "geometry closed"
+  // read blurred a composer whose keyboard was actually up. Recovery is refocus-only
+  // (recoverInputFocusFromTap on pointerup/click); this just re-measures the column.
   options.measure();
 }
 

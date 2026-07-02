@@ -97,14 +97,17 @@ test("v49 backfills stable chat session ids for archived conversations", () => {
   d.close();
 });
 
-test("migration versions are strictly ascending, unique, and gapless from 1", () => {
+test("migration versions are gapless 1..N, unique, and strictly ascending", () => {
   const versions = MIGRATIONS.map((m) => m.version);
   const sorted = [...versions].sort((a, b) => a - b);
   assert.deepEqual(versions, sorted, "MIGRATIONS array is declared in ascending order");
   assert.equal(new Set(versions).size, versions.length, "no duplicate version numbers");
-  // Gapless 1..N — runMigrations applies them in order keyed off user_version.
+  assert.equal(versions[0], 1, "the ladder starts at version 1");
+  // The canonical invariant: the ladder is a gapless run of integers 1..N. A GAP would
+  // silently skip a version number (user_version jumps past it, and it can never be
+  // filled later without re-numbering), so we hold the ladder strictly contiguous.
   for (let i = 0; i < versions.length; i++) {
-    assert.equal(versions[i], i + 1, `version at index ${i} should be ${i + 1}`);
+    assert.equal(versions[i], i + 1, `version at index ${i} must be ${i + 1} (gapless, unique, ascending)`);
   }
 });
 

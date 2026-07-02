@@ -513,6 +513,28 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id)`);
     } catch { /* best-effort backfill; future archives stamp session_id directly */ }
   } },
+  // v50–v54 — elite-review wave build (renumbered contiguous at integration from
+  // the per-wave reserved bands; none of these had ever applied to a real DB).
+  { version: 50, name: "context-event-healing", up: (db) => {
+    // Injuries heal over time: give context_events an expected recovery window and
+    // an explicit resolved stamp so a minor injury stops gating the day-read/conductor
+    // once it's past its window (or is confirmed healed), without hard-deleting it.
+    addColumn(db, "context_events", "expected_recovery_days INTEGER");
+    addColumn(db, "context_events", "resolved_at TEXT");
+  } },
+  { version: 51, name: "plan-item-superset-group", up: (db) => addColumn(db, "plan_items", "superset_group INTEGER") },
+  { version: 52, name: "profile-equipment", up: (db) => addColumn(db, "profile", "equipment TEXT") },
+  { version: 53, name: "exercise-tenure-first-seen", up: (db) => {
+    // Per-movement TENURE ("14 weeks on this movement") is derived from the first
+    // logged set for an exercise — no dedicated column needed. This migration only
+    // ensures the supporting index exists so the first-seen read stays cheap.
+    try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sets_exercise_session ON logged_sets(exercise_id, session_id)`); } catch { /* index may exist */ }
+  } },
+  // v54: height in inches on profile (mirrors the app's lb/in convention). The
+  // new body_measurements table itself is created via CREATE TABLE IF NOT EXISTS
+  // in db.ts (which runs on every boot), so per the "new tables need no
+  // migration" rule only this column add needs a versioned migration.
+  { version: 54, name: "profile-height-in", up: (db) => addColumn(db, "profile", "height_in REAL") },
 ];
 
 export function runMigrations(db: DatabaseSync) {

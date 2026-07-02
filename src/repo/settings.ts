@@ -481,6 +481,7 @@ export function getAgentConfig() {
       version: present ? agentVersion(name) : null,
       can_login: !!a.can_login,
       models_list: !!a.models_list,
+      web_access: !!a.web_access,
       usable: enabled && present && env_ok && configured !== false,
     };
   });
@@ -564,4 +565,21 @@ export function pickHealthAgentOrder(
   if (routed && enabled.includes(routed)) head.push(routed);
   for (const p of prefer) if (enabled.includes(p) && !head.includes(p)) head.push(p);
   return [...head, ...enabled.filter((n) => !head.includes(n))];
+}
+
+// Agent order for LIVE web research — a web-capable CLI (declares `web_access: true`
+// in agents.json, surfaced through getAgentConfig) must run FIRST, since the whole
+// point is browsing to ground a claim; a non-browsing agent can only hallucinate a
+// citation (which the research firewall then discards). Mirrors pickHealthAgentOrder:
+// NO round-robin cursor side effect, [] when nothing is usable. `research` isn't a
+// per-task route key, so an explicit pin is honored upstream (runChosen) instead.
+// `cfg` injects the usable set + web flags so the ordering is unit-testable offline.
+export function pickResearchAgentOrder(
+  cfg?: { agents?: { name: string; web_access?: boolean }[] },
+): string[] {
+  const all = cfg?.agents ?? getAgentConfig().filter((a) => a.usable).map((a) => ({ name: a.name, web_access: !!a.web_access }));
+  const enabled = all.map((a) => a.name);
+  if (enabled.length <= 1) return enabled;
+  const web = all.filter((a) => a.web_access).map((a) => a.name);
+  return [...web, ...enabled.filter((n) => !web.includes(n))];
 }

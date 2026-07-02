@@ -51,6 +51,15 @@ export interface ActiveContextItem {
   reason: string;                    // one plain-words line — never a score
 }
 
+// An injury past its expected window but not yet confirmed healed — worth ONE gentle
+// "still bothering you?" so the coach can close it, never a nag.
+export interface ResolveCandidate {
+  id: number | null;
+  title: string;
+  since: string | null;
+  likely_resolved: boolean; // already decayed (area trained since) vs merely past-window
+}
+
 export interface ContextEffect {
   active: ActiveContextItem[];
   expect_worse_sleep: boolean;
@@ -58,6 +67,9 @@ export interface ContextEffect {
   reduce_load: boolean;
   fueling_disrupted: boolean;
   any: boolean;
+  // Injuries the coach can gently confirm are healed (past-window, unresolved). Pull,
+  // never push — the coach asks once, a one-tap/one-sentence resolve closes it.
+  resolve_candidates: ResolveCandidate[];
 }
 
 // The searchable text of a context_event: kind + title + detail + meta.impact.
@@ -97,7 +109,12 @@ function classifyEvent(ev: any): ActiveContextItem | null {
   // the title names no recognized injury word (e.g. "Foot sole cuts from beach shells").
   const isInjuryKind = ev?.kind === "injury";
 
-  if (isInjuryKind || INJURY_RE.test(text)) {
+  // A resolved (confirmed-healed) or LIKELY-RESOLVED (past its window, area trained
+  // since) injury no longer eases load — it's downgraded to a soft note, not a hard
+  // gate. The flags ride on the hydrated row (annotateHealing); a raw passed-in event
+  // has neither, so offline classification is unchanged.
+  const injuryHealed = !!(ev?.resolved || ev?.likely_resolved);
+  if ((isInjuryKind || INJURY_RE.test(text)) && !injuryHealed) {
     reduce_load = true;
     reasons.push("an active injury is worth easing or working around");
   }
@@ -183,9 +200,21 @@ export function activeContextEffect(date?: string, events?: any[]): ContextEffec
   }
 
   const active: ActiveContextItem[] = [];
+  const resolve_candidates: ResolveCandidate[] = [];
   for (const ev of rows) {
     if (!ev || typeof ev !== "object") continue;
     if (ev.archived) continue; // a passed-in (non-active-only) list may include archived rows
+    if (ev.resolved) continue; // an explicitly-healed injury is closed — no active effect
+    // A past-window, still-open injury is worth a gentle one-time "is it still bugging
+    // you?" — surfaced as a pull candidate, whether or not it's decayed yet.
+    if (ev.kind === "injury" && ev.past_window && !ev.resolved) {
+      resolve_candidates.push({
+        id: ev.id ?? null,
+        title: String(ev.title ?? "").trim() || "an injury",
+        since: ev.start_date ?? null,
+        likely_resolved: !!ev.likely_resolved,
+      });
+    }
     const item = classifyEvent(ev);
     if (!item) continue;
     if (!withinWindow(ev, item, d)) continue;
@@ -199,6 +228,7 @@ export function activeContextEffect(date?: string, events?: any[]): ContextEffec
     reduce_load: active.some((a) => a.reduce_load),
     fueling_disrupted: active.some((a) => a.fueling_disrupted),
     any: active.length > 0,
+    resolve_candidates,
   };
   return eff;
 }

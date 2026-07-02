@@ -101,6 +101,6 @@ test("the connected brain folds supplements into the coach prompts", () => {
   assert.ok(ctx.supplements.some((s) => s.name === "Creatine monohydrate"), "in coach context");
 
   const p = prompt.buildDayReadPrompt();
-  assert.match(p, /SUPPLEMENTS THE ATHLETE ALREADY TAKES/);
+  assert.match(p, /SUPPLEMENTS THE USER ALREADY TAKES/);
   assert.match(p, /Creatine monohydrate/);
 });

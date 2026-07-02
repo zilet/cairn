@@ -10,7 +10,7 @@ export const CLIENT_ROUTE_DEFINITIONS = {
   tabs: ["today", "session", "plan", "progress", "chat", "me", "settings"],
   sections: {
     plan: ["edit", "endurance", "food", "meals", "coach"],
-    progress: ["trend", "volume", "endurance", "weight", "calendar", "sessions", "program", "energy"],
+    progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
     me: ["standing", "profile", "memory", "health", "life", "family"],
     health: ["read", "markers", "records", "share", "learned"],
     settings: ["agents", "sources", "automation", "data"],

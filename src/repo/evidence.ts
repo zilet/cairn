@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { getProfile } from "./profile.js";
 import { matchOptimalZone, prioritizeMarkers } from "./propagation.js";
 import { getSettings } from "./settings.js";
 
@@ -239,8 +240,9 @@ export function buildSafetyMarkerContext(): SafetyMarkerContext {
   const byLabel: SafetyMarkerContext["byLabel"] = {};
   try {
     const { markers } = prioritizeMarkers();
+    const profile = (() => { try { const p = getProfile(); return p ? { sex: p.sex ?? null, age: p.age ?? null } : null; } catch { return null; } })();
     for (const m of markers as any[]) {
-      const z = matchOptimalZone(m?.name);
+      const z = matchOptimalZone(m?.name, profile);
       if (!z) continue;
       if (m?.latest?.unit_mismatch === true) continue;
       const v = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);

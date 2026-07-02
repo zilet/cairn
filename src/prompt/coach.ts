@@ -3,10 +3,10 @@
 import * as repo from "../repo.js";
 import {
   activeInjuryAreas,
+  buildEliteGuardrails,
   COACHING_STANCE,
   CONTEXT_GUARDRAILS,
   disciplineOf,
-  ELITE_STRENGTH_GUARDRAILS,
   renderCoachingFocus,
   renderConnectedBrain,
   renderDexaTargeting,
@@ -21,13 +21,15 @@ import {
   renderRunZones,
   renderTrainingSignals,
   renderTrajectory,
+  CAIRN_PERSONA,
 } from "./shared.js";
 
 const PLAN_SCHEMA = `{
   "summary": "one or two sentences on the overall adjustment",
   "changes": [
     { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_weight": <number>, "reason": "<why>" },
-    { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_seconds": <number>, "reason": "<why — ONLY for mode:'timed' exercises>" }
+    { "day_number": <1-5>, "exercise": "<exact exercise name>", "target_seconds": <number>, "reason": "<why — ONLY for mode:'timed' exercises>" },
+    { "day_number": <1-5>, "swap": { "from": "<exact current exercise>", "to": "<new same-pattern movement>" }, "reason": "<why rotate it in>" }
   ],
   "cardio": [
     { "day_number": <1-7>, "label": "<e.g. Easy run / Long run / Tempo / Intervals>",
@@ -36,17 +38,25 @@ const PLAN_SCHEMA = `{
   ],
   "notes": "<optional coaching notes, may be empty>"
 }
-// "changes"  → tweak strength targets on existing plan days (applied in place).
+// "changes"  → tweak strength targets on existing plan days (applied in place). A
+//              change may instead carry "swap":{from,to} to ROTATE one movement out
+//              for a same-pattern variation IN PLACE (the preferred way to break a
+//              plateau — keeps the slot + rep scheme, starts the new lift light). Use
+//              a swap over a full "days" restructure when only one exercise changes.
+//              To COMBINE two accessories as a SUPERSET, give both items the same
+//              "superset_group" integer in a "days" restructure (optional; omit for
+//              standalone). Pair antagonists or a compound + an unrelated accessory to
+//              save time; never superset two heavy compounds.
 // "cardio"   → prescribe THIS WEEK's runs (one entry per planned run). Applied
 //              surgically: each attaches to its day_number, REPLACING that day's
 //              cardio while leaving its strength work intact; a day_number with no
 //              plan day yet is created as a dedicated run day. This is the headline
-//              output for a runner/hybrid athlete with an endurance goal — use it
+//              output for a runner/hybrid user with an endurance goal — use it
 //              alongside (or instead of) "changes". DON'T wrap runs in "days".
 // "days"     → ONLY for a real split/FREQUENCY rewrite (whole plan replaced). Each
 //              item may be strength OR { "kind":"cardio", … } as below:
 //   "days": [ { "day_number": <n>, "name": "<day name>", "focus": "<focus>", "items": [
-//     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null> },
+//     { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <n|null>, "superset_group": <int|null — same value pairs two items as a superset> },
 //     { "kind": "cardio", "exercise": "<e.g. Long run>", "target_distance_km": <n|null>,
 //       "target_duration_min": <n|null>, "target_zone": "<Z2|tempo|easy|null>", "note": "<optional>" }
 //   ] } ]`;
@@ -69,7 +79,9 @@ export function buildCoachPrompt(userInstruction?: string): string {
     : disc === "hybrid"
       ? "a hybrid coach balancing endurance and strength"
       : "a strength coach";
-  return `You are ${coachRole} updating a training plan. The athlete's profile, goal check,
+  return `${CAIRN_PERSONA}
+
+Right now you are ${coachRole} updating a training plan. The user's profile, goal check,
 current plan, recent training sessions, recent cardio/activities, and accumulated memory are in
 the DATA section below.
 
@@ -81,8 +93,8 @@ NON-NEGOTIABLE GUARDRAILS:
 - Account for cardio load: if recent runs/rides are heavy, lean toward holding rather than adding.
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the
   source of truth for strength progression. Use Garmin's endurance/recovery signals through the
-  athlete's stated focus: strength-first athletes use runs/rides mainly as recovery/cardio-load
-  context; runner/cyclist-first athletes make endurance progression central and keep lifting
+  user's stated focus: strength-first users use runs/rides mainly as recovery/cardio-load
+  context; runner/cyclist-first users make endurance progression central and keep lifting
   supportive.
 - Assisted movements use NEGATIVE target_weight. Small steps. Thin/absent data -> do not change.
 - TIMED exercises (mode:'timed', e.g. plank, dead hang) are prescribed in SECONDS (target_seconds)
@@ -115,7 +127,7 @@ have none — that's fine, just use what's there):
 - This is kind, not anxious: a rough session is information, not failure. Easing off is the plan
   working as designed, never a penalty.
 
-${ELITE_STRENGTH_GUARDRAILS}
+${buildEliteGuardrails(ctx)}
 
 ${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(ctx)}${COACHING_STANCE}
@@ -149,16 +161,30 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     (l: any) => l.status === "plateaued" || l.suggested_action === "vary"
   );
   const injuryAreas = activeInjuryAreas(ctx);
+  // Rank candidates by the user's available equipment + a bias toward heavier
+  // COMPOUND loading (their explicit goal), never re-suggesting what's already planned.
+  const equip = (() => { try { return repo.availableEquipment(); } catch { return []; } })();
+  const equipList = equip.length ? equip : undefined;
   const variationLines = stalled
     .map((l: any) => {
       // Injury-aware: the candidate list must not include movements that load an
       // injured area (else it contradicts the "never load an injured area" rule).
-      const names = (repo.suggestAlternatives(l.exercise, { limit: 4, injuryAreas }) as any[]).map((v) => v.name);
+      const names = (repo.suggestAlternatives(l.exercise, {
+        limit: 4,
+        injuryAreas,
+        preferCompound: true,
+        availableEquipment: equipList,
+      }) as any[]).map((v) => v.name);
       return names.length ? `- ${l.exercise} → ${names.join(", ")}` : null;
     })
     .filter(Boolean);
   const variationBlock = variationLines.length
-    ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern — rotate ONE in to break the plateau, starting light):\n${variationLines.join("\n")}\n`
+    ? `\nVARIATION CANDIDATES for the stalled lifts (same movement pattern, ranked toward heavier COMPOUND loading + the user's equipment — rotate ONE in to break the plateau, via a "swap":{from,to} change; the new lift starts light):\n${variationLines.join("\n")}\n`
+    : "";
+  // The user's persisted equipment, so any rotated/introduced movement is one they
+  // can actually load. Empty → no constraint.
+  const equipBlock = equip.length
+    ? `\nAVAILABLE EQUIPMENT: ${equip.join(", ")}. Only rotate in movements the user can load with this; bias toward heavier compound options for progressive overload.\n`
     : "";
   // Weak-point read: which canonical groups are chronically UNDER their productive
   // volume range (or untrained lately) vs running high — so the evolution rebalances
@@ -183,9 +209,11 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     : disc === "hybrid"
       ? "a hybrid coach balancing endurance and strength"
       : "a strength coach";
-  return `You are ${coachRole} EVOLVING a training program — not just tweaking next week, but
+  return `${CAIRN_PERSONA}
+
+Right now you are ${coachRole} EVOLVING a training program — not just tweaking next week, but
 reading how each lift has actually been trending and deciding how the plan should adapt so the
-athlete keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
+user keeps progressing and doesn't stall or get bored. This is a SUGGESTION for them to review;
 nothing is applied automatically (they drive).
 
 A deterministic PROGRAM-STATE read has already analyzed the logged history — per-lift trend +
@@ -203,16 +231,18 @@ HOW TO EVOLVE (this is the whole point — be a real coach, not a preset):
   Use a "days" restructure (or swap the exercise within its day) to rotate a variation; keep the rest
   of the day intact.
 - RECOVER what's slipping: a "regressing" lift gets backed off, not pushed.
-- GROUND IN REALITY: prescribe from what the athlete ACTUALLY logs, never a stale plan number. If a
+- GROUND IN REALITY: prescribe from what the user ACTUALLY logs, never a stale plan number. If a
   lift's recent working weight has outpaced its plan target (e.g. the plan says 27 lb but they log 45-50
   every week), set the target to their real working load, then progress conservatively from THERE —
   never crawl up from an old number they left behind weeks ago.
 - REBALANCE toward weak points: read the VOLUME BALANCE block — bias added/rotated work to the LAGGING
   groups (don't keep feeding the groups that are already well-trained). Building a balanced body, and
   bringing up weak points, is the job — not repeating the same favorite lifts.
-- KEEP IT FRESH: when an accessory has been static and the program reads repetitive, introduce ONE or
-  TWO new exercises hitting the same muscle (probe an alternative they haven't tried) — small novelty
-  often beats wholesale rewrites. Every new/rotated exercise starts at a conservative load with a
+- KEEP IT FRESH + BUILD TOWARD HEAVIER COMPOUNDS: when an accessory has been static and the program
+  reads repetitive, ROTATE ONE in via a "swap":{from,to} change (probe an alternative they haven't tried,
+  biased toward a heavier COMPOUND option they can load with their equipment) — small novelty often
+  beats wholesale rewrites. You MAY propose a movement outside the built-in library; it will be
+  classified and validated on apply. Every new/rotated exercise starts at a conservative load with a
   "NEW — start light, log actual" note and MUST respect constraint_notes / injuries.
 - PERIODIZE: respect the mesocycle position — if a deload is about due (phase "deload-due"), propose a
   lighter week rather than piling on. Don't ramp intensity and volume at once.
@@ -231,9 +261,9 @@ NON-NEGOTIABLE GUARDRAILS (same as the coach):
 - Prefer 1-3 focused, well-justified changes over a sweeping rewrite. Restructure the split (a "days"
   rewrite) only when frequency/recovery/plateaus clearly call for it.
 
-${ELITE_STRENGTH_GUARDRAILS}
+${buildEliteGuardrails(ctx)}
 
-${variationBlock}${weakBlock}${CONTEXT_GUARDRAILS}
+${variationBlock}${equipBlock}${weakBlock}${CONTEXT_GUARDRAILS}
 ${renderCoachingFocus(ctx)}${COACHING_STANCE}
 
 ${renderDiscipline(ctx, "training")}${renderEnduranceGoal(ctx, "training")}${renderRunCompliance(ctx, "training")}${renderRunZones(ctx)}${renderRunPlan(ctx)}${renderConnectedBrain(ctx, { domains: ["training", "watch"] })}${renderTrainingSignals(ctx)}${renderProgramState(ctx)}${renderMuscleGroups(ctx)}${renderPerformance(ctx)}${renderDexaTargeting(ctx, "training")}${renderBlock(ctx)}${renderReactionModel(ctx)}${renderTrajectory(ctx)}

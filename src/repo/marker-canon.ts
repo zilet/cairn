@@ -113,6 +113,23 @@ const MARKER_ALIASES: AliasEntry[] = [
     canonical: "hs-CRP",
     aliases: ["hs-crp", "hscrp", "high-sensitivity c-reactive protein", "high sensitivity c reactive protein", "c-reactive protein, high sensitivity", "high-sensitivity c-reactive protein (hs-crp)"],
   },
+  {
+    // Calculated / generically-named LDL cholesterol. Different labs print it as
+    // "LDL-C", "LDL Cholesterol", or "LDL Chol Calc (NIH)"/"LDL Cholesterol Calc" —
+    // all the SAME analyte, so they fold to one series (and one lipid directive)
+    // instead of a duplicate LDL story per lab name. Deliberately EXCLUDES the
+    // distinct DIRECT-measured LDL ("LDL-C (direct)" → "ldl c direct", left unmerged).
+    key: "ldl c",
+    canonical: "LDL-C",
+    aliases: ["ldl c", "ldl cholesterol", "ldl chol", "ldl chol calc nih", "ldl cholesterol calc", "ldl cholesterol calc nih", "ldl calculated", "ldl chol calc", "ldl cholesterol calculated", "ldl cholesterol (calc)"],
+  },
+  {
+    // Non-HDL cholesterol under its several printed names ("Non-HDL-C",
+    // "Non-HDL Cholesterol", "Non HDL Chol"). One residual-risk marker, one series.
+    key: "non hdl c",
+    canonical: "Non-HDL-C",
+    aliases: ["non hdl c", "non hdl", "non hdl cholesterol", "non hdl chol", "non hdl cholesterol calc", "cholesterol non hdl"],
+  },
 ];
 
 // normalized alias → { key, canonical }.

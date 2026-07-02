@@ -159,7 +159,9 @@ test("mobile viewport guard derives keyboard state from visual viewport geometry
   env.fireViewport("resize");
   assert.equal(env.body.classList.contains("kb-open"), true);
   assert.equal(env.body.classList.contains("kb-geometry-open"), true);
-  assert.equal(env.getStyle("--vvb"), "0px");
+  // --vvb is NOT forced to 0 under the keyboard anymore — it tracks the real toolbar
+  // correction (innerHeight 800 - vv 540 = 260) so a toast floats above the keyboard.
+  assert.equal(env.getStyle("--vvb"), "260px");
 
   const chatView = new FakeElement("DIV");
   const input = new FakeElement("TEXTAREA");
@@ -171,7 +173,9 @@ test("mobile viewport guard derives keyboard state from visual viewport geometry
 
   assert.equal(env.body.classList.contains("kb-open"), false);
   assert.equal(env.body.classList.contains("kb-geometry-open"), false);
-  assert.equal(input.blurCount, 1);
+  // iOS can dismiss the keyboard without blurring the textarea; the guard must NOT
+  // blur it by heuristic (that dropped a keyboard that was still up). Refocus-only.
+  assert.equal(input.blurCount, 0);
 });
 
 test("mobile viewport keeps keyboard intent separate from geometry truth", () => {

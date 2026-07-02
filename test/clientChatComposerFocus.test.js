@@ -59,7 +59,7 @@ function loadComposerFocus() {
   return { composerFocus: context.CairnChatComposerFocus, context, document, rafs, timers };
 }
 
-test("chat composer focus release clears stale active textarea before a mobile retap", () => {
+test("chat composer focus release never blurs the composer (refocus-only recovery)", () => {
   const env = loadComposerFocus();
   const input = new FakeInput(env.document);
   let measures = 0;
@@ -72,20 +72,11 @@ test("chat composer focus release clears stale active textarea before a mobile r
     measure: () => { measures += 1; },
   });
 
-  assert.equal(input.blurCount, 1);
-  assert.equal(env.document.activeElement, env.document.body);
-  assert.equal(measures, 1);
-
-  env.document.activeElement = input;
-  env.composerFocus.releaseStaleInputFocus({
-    input,
-    isSoftKeyboard: () => true,
-    isKeyboardGeometryOpen: () => true,
-    measure: () => { measures += 1; },
-  });
-
-  assert.equal(input.blurCount, 1, "open keyboard geometry is not force-blurred");
+  // A stale "geometry closed" read must NOT blur a focused composer — that used to
+  // drop a keyboard that was actually up. This hook only re-measures the column.
+  assert.equal(input.blurCount, 0);
   assert.equal(env.document.activeElement, input);
+  assert.equal(measures, 1);
 });
 
 test("chat composer focus recovery focuses synchronously from the tap gesture", () => {
@@ -125,8 +116,9 @@ test("chat composer focus wiring turns a stale mobile textarea into a tappable c
 
   env.document.activeElement = input;
   input.dispatch("pointerdown");
-  assert.equal(input.blurCount, 1);
-  assert.equal(env.document.activeElement, env.document.body);
+  // pointerdown never blurs — no blur-then-refocus-within-one-tap keyboard flicker.
+  assert.equal(input.blurCount, 0);
+  assert.equal(env.document.activeElement, input);
 
   input.dispatch("pointerup");
   assert.equal(input.focusCalls.length, 1);

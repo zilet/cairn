@@ -6,13 +6,28 @@
 import * as repo from "../repo.js";
 import type { PartialCoachContext } from "../repo/coach-context.js";
 
+// The ONE unified identity every coaching prompt opens with. Cairn is a single
+// intelligence — at once a longevity-minded coach, a preventive-medicine-literate
+// reader of labs, a nutritionist, and a life-aware buddy — that adapts its
+// specialization to the task while speaking in one calm voice. Each builder appends
+// its task-specific framing AFTER this block instead of declaring a divergent "You
+// are a …" identity. Bound to the constitution (calm, suggestion-not-a-gate, no
+// numeric scores, you-drive, pull-never-push, health findings informational).
+export const CAIRN_PERSONA = `You are Cairn — one calm, unified coaching intelligence for a single person's whole health and training life. You are all of these at once, shifting to whichever the moment needs:
+- a longevity-minded strength & conditioning COACH,
+- a preventive-medicine-literate reader of LABS & health markers,
+- a whole-foods NUTRITIONIST,
+- and a life-aware, everyday BUDDY who knows this person.
+You see the person's WHOLE picture together — training, food, labs, recovery, sleep, body, and real life — and you understand timing (time of day, where they are in the week or training block) and how things change over time (trends, not just today's number). You speak in ONE voice: calm, plain-language, human — never a dashboard, never clinical jargon dumped on them.
+Constitution (non-negotiable): every read is a SUGGESTION, never a gate or a verdict — the person drives. NO numeric scores or 0-100 grades, ever. Insights are PULL, not push — they wait to be opened, they never nag. Health findings are INFORMATIONAL, not medical advice — defer anything clinical to a clinician.`;
+
 // Personal-context guardrails, shared by the coach / chat / meal-plan prompts.
 // The coach reads `health` and `context_events` from the DATA snapshot and is
-// expected to plan AROUND the athlete's real life.
+// expected to plan AROUND the user's real life.
 export const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context_events" and "health" data):
 - TRIPS: for any dates that overlap an active/upcoming trip, plan a travel-friendly / deload
   approach (bodyweight or minimal-equipment work, reduced volume) rather than normal loading.
-  Surface upcoming trips so the athlete can plan around them.
+  Surface upcoming trips so the user can plan around them.
 - INJURIES: NEVER program loaded movements through an injured area. De-load or swap the affected
   exercises for pain-free alternatives, and respect every exercise's existing constraint_note. The
   app already correlates each active injury with the planned exercises that load that area (and offers
@@ -37,7 +52,7 @@ export const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context
   A directive flagged "uncertain" or lacking a citation is a softer nudge, not a hard rule. This is
   informational, NOT medical advice — defer anything clinical to a clinician.`;
 
-// Discipline framing (v35), rendered into the plan-shaping prompts. The athlete's
+// Discipline framing (v35), rendered into the plan-shaping prompts. The user's
 // primary discipline (strength | endurance | hybrid) decides whether endurance
 // progression is a FIRST-CLASS driver or supporting context. Defaults to
 // 'strength' (today's behavior) when nothing is set. Returns a compact block.
@@ -52,7 +67,7 @@ function enduranceSportOf(ctx: any): string | null {
 }
 
 // `focus` tailors the line to the consuming prompt: 'training' for the coach/session,
-// 'nutrition' for meals, 'day' for the Brief. Returns "" for a strength athlete in
+// 'nutrition' for meals, 'day' for the Brief. Returns "" for a strength user in
 // the training/day case (no behavior change) so the existing prompts read identically.
 // The current local clock, stated plainly so the agent anchors every
 // time-relative word ("today", "tonight", "this morning", "last night") to
@@ -69,8 +84,8 @@ export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "da
   const sport = enduranceSportOf(ctx);
   const sportTxt = sport ? ` (${sport})` : "";
   if (disc === "strength") {
-    // Meals still want one explicit line so an endurance-leaning athlete isn't
-    // assumed; for training/day a strength athlete is the default — say nothing.
+    // Meals still want one explicit line so an endurance-leaning user isn't
+    // assumed; for training/day a strength user is the default — say nothing.
     if (focus === "nutrition") return `\nPRIMARY DISCIPLINE: strength-first — fuel for lifting + recovery; a lean-safe deficit is appropriate when fat loss is the goal.\n`;
     return "";
   }
@@ -79,9 +94,9 @@ export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "da
     : `PRIMARY DISCIPLINE: HYBRID${sportTxt}. Balance endurance and strength as co-equal goals — progress BOTH, and let recovery/scheduling arbitrate when they compete.`;
   if (focus === "nutrition") {
     return `\n${lead}
-ENDURANCE FUELING (binding for this athlete):
+ENDURANCE FUELING (binding for this user):
 - PROTECT CARBOHYDRATE for fueling — carbs power endurance work; do NOT slash them to chase a deficit.
-- Do NOT force a calorie deficit unless fat loss is an explicit goal. For an endurance athlete eating to
+- Do NOT force a calorie deficit unless fat loss is an explicit goal. For an endurance user eating to
   TRAIN and PERFORM, anchor to maintenance (or a small surplus on the biggest weeks), not a cut.
 - PERIODIZE carbs around the week: more carbs on/around LONG and QUALITY (tempo/interval) sessions,
   lighter on easy/rest days. Time a real pre-/during-/post-long-session carb intake.
@@ -107,7 +122,7 @@ and hard days as hard (polarized), and guard earned recovery after long or quali
 // The endurance OBJECTIVE (v37), rendered for a prompt. Orthogonal to discipline:
 // a RACE goal makes the coach periodize a conservative ramp + taper toward a date;
 // a STANDING goal makes it maintain readiness (no peak/taper). Both ask the coach to
-// prescribe THIS WEEK's runs concretely so a runner/hybrid athlete gets an actionable
+// prescribe THIS WEEK's runs concretely so a runner/hybrid user gets an actionable
 // plan, not just prose. `focus` tailors it to the consuming prompt. Returns "" when
 // there's no endurance goal (today's behavior unchanged).
 export function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | "day"): string {
@@ -127,7 +142,7 @@ export function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | 
     }
     return `\n${head}
 - PERIODIZE toward the date: build the aerobic base, add quality (tempo/threshold/intervals) through the build, sharpen near the race, then TAPER the final ~2 weeks (cut volume, keep some intensity, arrive fresh).
-- Progress run volume CONSERVATIVELY (~10%/week; a down week every ~4th). Honor the phase hint above unless the athlete's actual base says to hold.
+- Progress run volume CONSERVATIVELY (~10%/week; a down week every ~4th). Honor the phase hint above unless the user's actual base says to hold.
 - Prescribe THIS WEEK's runs concretely (easy / long / quality, each with a zone + a distance or duration) — this is the headline output for a runner, alongside any lifting tweaks. Keep lifting supportive so it doesn't compromise the key runs.\n`;
   }
   // standing
@@ -139,7 +154,7 @@ export function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | 
     return `\n${head}\n- No taper or peak — keep runs steady and sustainable (mostly easy aerobic, one quality touch a week). Today's run maintains readiness, it doesn't chase a date.\n`;
   }
   return `\n${head}
-- MAINTAIN rather than ramp to a date: a steady, sustainable base (mostly easy) + one quality session/week keeps the athlete ${dist ? `${dist}-ready` : "ready"} at any time. Consistency over peaking.
+- MAINTAIN rather than ramp to a date: a steady, sustainable base (mostly easy) + one quality session/week keeps the user ${dist ? `${dist}-ready` : "ready"} at any time. Consistency over peaking.
 - Prescribe THIS WEEK's runs concretely (easy + one quality), conservative volume. Keep lifting per the discipline.\n`;
 }
 
@@ -149,7 +164,7 @@ export function renderEnduranceGoal(ctx: any, focus: "training" | "nutrition" | 
 // what ACTUALLY happened (per Garmin/logged activities), conservatively. `pct_km`
 // is an INTERNAL proportion — NEVER surfaced as a score; we speak in plain words
 // ("ran X of Y km"). Quiet by default: returns "" when there's NO endurance goal
-// AND nothing was prescribed (a strength-only athlete sees nothing new). `focus`
+// AND nothing was prescribed (a strength-only user sees nothing new). `focus`
 // tailors the binding guidance to the consuming prompt.
 export function renderRunCompliance(ctx: any, focus: "training" | "day" | "weekly"): string {
   const rc = ctx?.run_compliance;
@@ -288,11 +303,11 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
   }
 
   // SYMPTOM ↔ MARKER connections (the connected brain reaching across logs): a
-  // symptom the athlete mentioned co-occurring with a genuinely off-marker. Purely
+  // symptom the user mentioned co-occurring with a genuinely off-marker. Purely
   // informational — a "worth raising with your clinician" nudge, NEVER a diagnosis.
   const symLinks = Array.isArray(ctx?.symptom_links) ? ctx.symptom_links : [];
   if (symLinks.length && (!wanted || wanted.includes("watch") || wanted.includes("training"))) {
-    lines.push("SYMPTOM ↔ LAB CONNECTIONS (something the athlete noted lines up with an out-of-range marker — mention it gently as worth raising with their doctor; informational, never a diagnosis, never alarmist):");
+    lines.push("SYMPTOM ↔ LAB CONNECTIONS (something the user noted lines up with an out-of-range marker — mention it gently as worth raising with their doctor; informational, never a diagnosis, never alarmist):");
     for (const s of symLinks.slice(0, 3)) {
       const mk = Array.isArray(s.markers) ? s.markers.map((m: any) => `${m.name} ${m.value ?? ""} (${m.side})`.trim()).join(", ") : "";
       lines.push(`  - ${String(s.note ?? `${s.symptom} alongside ${mk}`).trim()}`);
@@ -303,7 +318,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
   if (relevantFeedback.length) {
     lines.push("DIRECTIVE FEEDBACK MEMORY (use this to avoid stale repeats; only reintroduce if the marker materially changed or the user asks):");
     for (const d of relevantFeedback) {
-      const status = d.status === "dismissed" ? "dismissed by athlete" : "marked done/handled";
+      const status = d.status === "dismissed" ? "dismissed by user" : "marked done/handled";
       const marker = d.marker ? `${String(d.marker).trim()} · ` : "";
       const snap = [d.trigger_side, d.trigger_value, d.trigger_date].filter((x: any) => x != null && x !== "").join(" ");
       lines.push(`  - ${status}: ${marker}${String(d.directive ?? "").trim()}${snap ? ` (marker snapshot: ${snap})` : ""}`);
@@ -347,7 +362,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     if (rec.muscle_mass_kg != null) body.push(`muscle ${rec.muscle_mass_kg} kg`);
     if (bits.length) lines.push(`RECOVERY (last ${ctx.recovery.days}d, ${(ctx.recovery.sources || []).join("+") || "no source"}): ${bits.join(", ")} — read the WHOLE picture; bias toward recovery when sleep/HRV/readiness are low or resting HR/stress are elevated vs their norm.`);
     // Acute-vs-chronic baseline: the last 7 days against the 30-day norm, so the
-    // agent compares the athlete to THEIR OWN baseline (not a population number).
+    // agent compares the user to THEIR OWN baseline (not a population number).
     const dl = ctx?.recovery?.delta;
     const rc = ctx?.recovery?.recent;
     const bl = ctx?.recovery?.baseline;
@@ -363,13 +378,13 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     }
     if (body.length) lines.push(`BODY COMPOSITION (latest): ${body.join(", ")}.`);
   }
-  // Supplements the athlete already takes — relevant across domains (whey ↔ protein
+  // Supplements the user already takes — relevant across domains (whey ↔ protein
   // floor, creatine ↔ recovery/eGFR, D3/omega-3 ↔ markers). Always folded in when
   // present so the coach doesn't re-suggest what they're on and can connect a
   // supplement to the marker it touches.
   const supps = Array.isArray(ctx?.supplements) ? ctx.supplements : [];
   if (supps.length) {
-    lines.push("SUPPLEMENTS THE ATHLETE ALREADY TAKES (factor in; don't re-suggest what they're on — whey counts toward the protein floor; a supplement overlapping a now-replete marker is worth a gentle note, never alarm):");
+    lines.push("SUPPLEMENTS THE USER ALREADY TAKES (factor in; don't re-suggest what they're on — whey counts toward the protein floor; a supplement overlapping a now-replete marker is worth a gentle note, never alarm):");
     for (const s of supps) {
       const dose = s.dose ? ` ${s.dose}` : "";
       const freq = s.frequency ? `, ${s.frequency}` : "";
@@ -383,7 +398,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
 // Render the deterministic training signals (repo.trainingSignals, carried on
 // ctx.training_signals) as a plain-language block. This is the inference the prompt
 // used to ask the agent to do over raw recent_sessions — now pre-computed so the
-// athlete's own logged sets + 1-tap feedback VISIBLY steer the next recommendation.
+// user's own logged sets + 1-tap feedback VISIBLY steer the next recommendation.
 // Returns "" when there's nothing load-bearing to say.
 export function renderTrainingSignals(ctx: any): string {
   const ts = ctx?.training_signals;
@@ -405,7 +420,7 @@ export function renderTrainingSignals(ctx: any): string {
   }
   if (ts.autoregulation?.note) lines.push(`AUTOREGULATION (recent 1-tap body feedback): ${ts.autoregulation.note}`);
   if (!lines.length) return "";
-  return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the athlete's OWN recent sets + feedback — evidence for whether a lift earned a bump, so the plan visibly reflects what they actually did):\n${lines.join("\n")}\n`;
+  return `\nLOGGED-PERFORMANCE SIGNALS (deterministic, from the user's OWN recent sets + feedback — evidence for whether a lift earned a bump, so the plan visibly reflects what they actually did):\n${lines.join("\n")}\n`;
 }
 
 // Active injury areas drawn from context_events (an injury's title/detail/meta.area
@@ -429,7 +444,7 @@ export function activeInjuryAreas(ctx: any): string[] {
 // All four return "" when there's nothing to say (calm by default), surface plain words
 // + a confidence WORD only (never a number/score), and are suggestions never gates.
 
-// HOW THIS ATHLETE RESPONDS — the personalization spine. Carries the standing principle
+// HOW THIS USER RESPONDS — the personalization spine. Carries the standing principle
 // that prevents the engine's hard-won fixes from regressing in the agent's own prose.
 export function renderReactionModel(ctx: any): string {
   const rm = ctx?.reaction_model;
@@ -439,7 +454,7 @@ export function renderReactionModel(ctx: any): string {
     .filter((l: string) => l.trim().length > 10);
   if (!lines.length) return "";
   const narr = rm.narrative ? `\n${String(rm.narrative).trim()}` : "";
-  return `\nHOW THIS ATHLETE RESPONDS (learned from their OWN logged history — personalize your defaults to this; a suggestion, never a gate. Trust their LOGGED loads over any stale plan number, and read a grip/form note as a technique cue, not a load cap):${narr}\n${lines.join("\n")}\n`;
+  return `\nHOW THIS USER RESPONDS (learned from their OWN logged history — personalize your defaults to this; a suggestion, never a gate. Trust their LOGGED loads over any stale plan number, and read a grip/form note as a technique cue, not a load cap):${narr}\n${lines.join("\n")}\n`;
 }
 
 // THE ARC — where today sits on the path to their goals. One clause, never a date wall.
@@ -452,7 +467,8 @@ export function renderTrajectory(ctx: any): string {
 // LIFE CONTEXT — a one-mention event shaping today, then fading. Never a forced rest.
 export function renderActiveContext(ctx: any): string {
   const c = ctx?.context_today;
-  if (!c || !c.any) return "";
+  if (!c) return "";
+  const out: string[] = [];
   const items = Array.isArray(c.active) ? c.active : [];
   const bits = items.slice(0, 3).map((a: any) => String(a.reason || a.title || "").trim()).filter(Boolean);
   const flags: string[] = [];
@@ -460,8 +476,20 @@ export function renderActiveContext(ctx: any): string {
   if (c.transient_inflammation) flags.push("a transient inflammation bump is likely — do NOT alarm on an acute marker or cap training for it");
   if (c.reduce_load) flags.push("ease the load a touch");
   if (c.fueling_disrupted) flags.push("fueling/scale may be disrupted — lean conservative, don't re-target on noise");
-  if (!bits.length && !flags.length) return "";
-  return `\nLIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.\n`;
+  if (c.any && (bits.length || flags.length)) {
+    out.push(`LIFE CONTEXT RIGHT NOW (${bits.join("; ") || "an active life event"}): ${flags.join("; ")}. Plan AROUND it kindly — it fades on its own; never a verdict, never a forced rest.`);
+  }
+  // A past-window injury that hasn't been confirmed healed → invite ONE gentle
+  // confirm (pull, never nag). If it's already likely-resolved, say so softly; a
+  // "yes it's healed" closes it (resolve_context_event) in one tap/one sentence.
+  const rc = Array.isArray(c.resolve_candidates) ? c.resolve_candidates : [];
+  if (rc.length) {
+    const cand = rc[0];
+    const healed = cand.likely_resolved ? " (it looks healed from the training since)" : "";
+    out.push(`HEALING CHECK (informational, ask at most ONCE, never a nag): the "${String(cand.title).trim()}" injury is past its expected recovery window${healed}. If it comes up naturally, gently confirm whether it's still bothering them — if they say it's fine, mark it resolved (resolve_context_event) so the plan stops working around it. Do NOT keep programming around it as a hard constraint.`);
+  }
+  if (!out.length) return "";
+  return `\n${out.join("\n")}\n`;
 }
 
 export function renderTodayFuel(ctx: any): string {
@@ -485,7 +513,7 @@ export function renderTodayFuel(ctx: any): string {
   };
   const total = macroBits(intake.totals);
   const lines = [
-    `TODAY'S FUEL (persisted food log for ${intake.date || "today"} in the athlete's LOCAL day — survives chat resets; use it as current context, never as a capture nudge):`,
+    `TODAY'S FUEL (persisted food log for ${intake.date || "today"} in the user's LOCAL day — survives chat resets; use it as current context, never as a capture nudge):`,
     `- TOTAL SO FAR: ${entries.length} item${entries.length === 1 ? "" : "s"}${total.length ? ` · ${total.join(" · ")}` : " · macros not estimated yet"}.`,
   ];
 
@@ -518,7 +546,7 @@ export function renderTodayFuel(ctx: any): string {
     lines.push(`  - id ${e.id}: ${e.meal || "meal"} — ${String(e.summary || "Food").trim()}${entryBits.length ? ` (${entryBits.join(" · ")})` : ""}${e.logged_at ? ` at ${e.logged_at}` : ""}${status}`);
   }
   if (entries.length > 6) lines.push(`  - plus ${entries.length - 6} more item${entries.length - 6 === 1 ? "" : "s"} in DATA.day_intake.entries.`);
-  lines.push("FOOD USE: reference this when answering about today, fuel, recovery, or training readiness. In chat, if the athlete corrects one of these rows, use update_food_note with the existing id; if they mention the same meal again, do not log a duplicate. Treat this as a single-day snapshot, not a weekly retarget signal by itself.");
+  lines.push("FOOD USE: reference this when answering about today, fuel, recovery, or training readiness. In chat, if the user corrects one of these rows, use update_food_note with the existing id; if they mention the same meal again, do not log a duplicate. Treat this as a single-day snapshot, not a weekly retarget signal by itself.");
   return `\n${lines.join("\n")}\n`;
 }
 
@@ -544,13 +572,13 @@ export const COACHING_STANCE = `COACH LIKE ONE PERSON, NOT A DASHBOARD:
 // all the domain reads, so the agent leads with ONE sequenced focus (lead + parallel +
 // later + connections + the batched retest) instead of a flood of co-equal blocks. The
 // `brief` form (for the day-read) shows only the lead line. Returns "" when there's no
-// focus (a thin athlete) so it degrades exactly like the other render* helpers.
+// focus (a thin user) so it degrades exactly like the other render* helpers.
 export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: boolean } = {}): string {
   const cf = ctx?.coaching_focus as any;
   if (!cf || !cf.available || !cf.lead) return "";
   const lead = cf.lead;
   if (opts.brief) {
-    return `THIS BLOCK'S ONE FOCUS: ${lead.title} — ${lead.why}${lead.move ? ` (${lead.move})` : ""}\n`;
+    return `THIS BLOCK'S ONE FOCUS: ${lead.title} — ${lead.why}${lead.move ? ` (${lead.move})` : ""}${cf.caveat ? `\nEASE AROUND (injury/soreness): ${cf.caveat}` : ""}\n`;
   }
   const lines: string[] = [];
   lines.push("THIS BLOCK — THE FOCUS (the conductor; LEAD with this — everything below it is evidence, not a checklist):");
@@ -558,6 +586,9 @@ export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: bo
   for (const p of cf.parallel || []) lines.push(`  ▸ ALONGSIDE (${p.domain}, handled via a different lever): ${p.title} — ${p.why}${p.move ? ` ${p.move}` : ""}`);
   if ((cf.later || []).length) lines.push(`  ▸ LATER (say it's deferred — do NOT act on it yet): ${cf.later.map((l: any) => l.title).join("; ")}`);
   for (const c of cf.connections || []) lines.push(`  ▸ CONNECT: ${c}`);
+  // The life/soreness caveat: a training lever that loads an injured/sore area is
+  // worked AROUND, never pushed through — plain words, a suggestion not a gate.
+  if (cf.caveat) lines.push(`  ▸ EASE AROUND (injury/soreness): ${cf.caveat}`);
   if (cf.retest) lines.push(`  ▸ NEXT CHECK-IN${cf.retest.in_weeks === 0 ? " (due now)" : ""}: re-test ${cf.retest.focus.join(", ")} — ${cf.retest.why}`);
   return `${lines.join("\n")}\n\n`;
 }
@@ -636,7 +667,7 @@ export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boo
 
   // Mesocycle position (deload timing) when program-state carries it.
   if (st?.mesocycle?.note) lines.push(`MESOCYCLE: ${st.mesocycle.note}`);
-  // Endurance trajectory (hybrid/endurance athletes) — the conservative read.
+  // Endurance trajectory (hybrid/endurance users) — the conservative read.
   if (st?.endurance?.why) lines.push(`ENDURANCE TRAJECTORY: ${st.endurance.why}`);
 
   // The concrete adaptations digest — the "what to change & why" the coach should
@@ -649,11 +680,11 @@ export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boo
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
-// renderPerformance: the TRAINING-INTELLIGENCE read — where the athlete actually
+// renderPerformance: the TRAINING-INTELLIGENCE read — where the user actually
 // STANDS (capacity), not just whether last week trended up. Benchmarked against
 // sex/age strength standards + VO2max norms, the strength imbalances, the single
 // biggest lever, the lifts worth re-TESTING, and a variety nudge. Folded into every
-// strength prompt so the coach LEADS with where the athlete is and balances their
+// strength prompt so the coach LEADS with where the user is and balances their
 // development — bring laggards up, fix imbalances, re-measure stale lifts, rotate a
 // movement. Plain words / percentile-level reference reads, never a 0-100 score.
 // Returns "" when there's nothing benchmarked yet (quiet by default).
@@ -679,7 +710,7 @@ export function renderPerformance(ctx: PartialCoachContext, opts: { brief?: bool
   const lines: string[] = [];
   if (p.hero?.headline) {
     lines.push(
-      `PERFORMANCE STANDING (the deterministic CAPACITY read — where the athlete genuinely stands vs proven sex/age strength standards + VO2max norms; percentile/level are recognized reference reads, NEVER a score; evidence for the focus above): ${p.hero.headline}.`,
+      `PERFORMANCE STANDING (the deterministic CAPACITY read — where the user genuinely stands vs proven sex/age strength standards + VO2max norms; percentile/level are recognized reference reads, NEVER a score; evidence for the focus above): ${p.hero.headline}.`,
     );
   }
   if (caps.length) {
@@ -710,7 +741,7 @@ export function renderPerformance(ctx: PartialCoachContext, opts: { brief?: bool
   return lines.length ? `\n${lines.join("\n")}\n` : "";
 }
 
-// renderRunZones: the athlete's Z1–Z5 bpm bands grounded in real physiology
+// renderRunZones: the user's Z1–Z5 bpm bands grounded in real physiology
 // (max-HR + resting HR), so the agent prescribes runs to an actual pulse instead
 // of a vague "easy". Quiet by default — "" when no zones are available (no age +
 // no Garmin HR). Plain words + concrete bpm, never a score.
@@ -720,7 +751,7 @@ export function renderRunZones(ctx: PartialCoachContext): string {
   const bands = z.zones
     .map((b: any) => `${b.zone} ${b.label} ${b.low_bpm}–${b.high_bpm} bpm (${b.feel})`)
     .join("; ");
-  return `\nRUN HR ZONES (the athlete's real bpm bands — prescribe runs to these, not a vague effort): ${bands}.${z.note ? ` ${z.note}` : ""}\n`;
+  return `\nRUN HR ZONES (the user's real bpm bands — prescribe runs to these, not a vague effort): ${bands}.${z.note ? ` ${z.note}` : ""}\n`;
 }
 
 // renderRunPlan: this week's PERIODIZED run mix from the deterministic engine —
@@ -767,7 +798,7 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
 }
 
 // renderMuscleGroups: the per-canonical-group ADVANCING vs STALLING read (the
-// athlete's own mental model), plus — when a group is stalling — the MENU of
+// user's own mental model), plus — when a group is stalling — the MENU of
 // same-pattern variations to rotate in. Optionally a short TEST WEEK line when a
 // cadenced re-test is due. Quiet by default — "" when nothing's logged to read.
 export function renderMuscleGroups(ctx: PartialCoachContext): string {
@@ -775,7 +806,7 @@ export function renderMuscleGroups(ctx: PartialCoachContext): string {
   const tw = ctx?.test_week as any;
   const lines: string[] = [];
   if (gt?.available && Array.isArray(gt.groups) && gt.groups.length) {
-    lines.push(`MUSCLE GROUPS — ADVANCING vs STALLING (the athlete thinks in groups; plain words, no scores): ${gt.headline}`);
+    lines.push(`MUSCLE GROUPS — ADVANCING vs STALLING (the user thinks in groups; plain words, no scores): ${gt.headline}`);
     for (const g of gt.groups) {
       let line = `  - ${g.label} [${g.verdict}]${g.lead_lift ? ` — ${g.lead_lift}` : ""}: ${g.note}`;
       if (g.verdict === "stalling" && Array.isArray(g.vary_options) && g.vary_options.length) {
@@ -816,14 +847,102 @@ export function renderDexaTargeting(ctx: PartialCoachContext, focus: "training" 
 }
 
 // Elite-coach + longevity guardrails for the STRENGTH prompts — the
-// programming-quality floor this athlete's history demands, in plain,
+// programming-quality floor this user's history demands, in plain,
 // suggestion-framed words (no scores). Folded into the coach / session /
 // week-ahead prompts so core, grip, mobility and ankle work are treated as
 // first-class, cumulative elbow load is managed, and earned rest is protected.
+// The GENERIC elite-programming block — true for ANY user, no personal specifics.
+// buildEliteGuardrails(ctx) below layers this user's DERIVED specifics on top
+// (injuries, an endurance goal, flagged labs). Kept as a plain constant because the
+// Brief (day.ts) and health-review (health.ts) prompts embed it without a ctx —
+// they get the correct-for-everyone floor; only the coach prompts personalize it.
 export const ELITE_STRENGTH_GUARDRAILS = `ELITE PROGRAMMING GUARDRAILS (longevity-minded; a complete program, not just the big lifts — all suggestions, never gates, no scores):
 - CORE is first-class: program anti-extension / anti-rotation work (planks, pallof press, dead bugs) and LOADED CARRIES — they build trunk stability, posture and bone density. Don't leave them as an afterthought.
 - GRIP / FOREARM work is first-class too: dead hangs and loaded carries build grip and protect the elbow, and carry over to every pull. If none is programmed, work some in.
-- MOBILITY / ANKLE / calf / tibialis resilience matters here (ankle-fracture + surgery history, and a returning runner building toward a half marathon): a few minutes of ankle + hip prep and direct calf/tibialis work protect the joints under running and lifting. Mobility is tracked but never counts as working volume.
-- MANAGE CUMULATIVE GRIP + ELBOW LOAD as a SHARED BUDGET across RDLs, heavy pulls/rows, and dead hangs (the athlete has cubital-tunnel / elbow sensitivity). Don't stack a heavy pulling day, an RDL session and long hangs back-to-back; use straps on the heaviest pulls when grip is the limiter, and spread elbow-intensive work out.
-- BALANCE CHEST vs SHOULDERS: don't let lateral raises run ~2×/week while chest gets a single movement. Give horizontal pressing (the athlete prefers barbell bench) at least the volume the side delts get.
-- WEIGHT EARNED REST HARDER for this athlete: they tend to override rest and come back flat, and free-T sits low-side. When recovery is drifting or several loading days have stacked, lean toward a genuine rest/deload — frame it as the strong, earned choice, never as falling behind.`;
+- MOBILITY / ANKLE / calf / tibialis resilience matters: a few minutes of ankle + hip prep and direct calf/tibialis work protect the joints under running and lifting. Mobility is tracked but never counts as working volume.
+- MANAGE CUMULATIVE GRIP + ELBOW LOAD as a SHARED BUDGET across RDLs, heavy pulls/rows, and dead hangs. Don't stack a heavy pulling day, an RDL session and long hangs back-to-back; use straps on the heaviest pulls when grip is the limiter, and spread elbow-intensive work out.
+- BALANCE PUSHING vs PULLING and CHEST vs SHOULDERS: don't let lateral raises run ~2×/week while chest gets a single movement. Give horizontal pressing at least the volume the side delts get.
+- WEIGHT EARNED REST as a strong choice: when recovery is drifting or several loading days have stacked, lean toward a genuine rest/deload — frame it as the strong, earned choice, never as falling behind.`;
+
+// Derive THIS user's elite guardrails from context — injuries, endurance goal,
+// flagged labs, stated preferences — instead of hard-coding one person's specifics
+// into every committed prompt (which is simply wrong for any OTHER user). Layers the
+// GENERIC block above with the specifics that actually apply. An empty profile yields
+// exactly the generic block; seed data with an ankle history + a half-marathon goal +
+// low free-T surfaces those representative specifics. Constitution: suggestions, no
+// scores; health flags are informational, not medical advice.
+export function buildEliteGuardrails(ctx: any): string {
+  const extra: string[] = [];
+
+  // One lowercased haystack of the free-text context sources that name injuries,
+  // preferences, and flagged findings. Bounded + defensive — any missing key is "".
+  const injuries = injuryText(ctx);
+  const haystack = [
+    injuries,
+    stringifySafe(ctx?.about_me ?? ctx?.profile?.about_me),
+    stringifySafe(ctx?.memory),
+    stringifySafe(ctx?.directives),
+    stringifySafe(ctx?.health),
+    stringifySafe(ctx?.health_review),
+  ].join(" \n ").toLowerCase();
+
+  const has = (...needles: string[]) => needles.some((n) => haystack.includes(n));
+  const injuryHas = (...needles: string[]) => needles.some((n) => injuries.toLowerCase().includes(n));
+
+  // Endurance goal / returning-runner framing (drives the ankle+calf emphasis).
+  const goal = ctx?.endurance_goal ?? null;
+  const disc = String(ctx?.discipline?.primary ?? ctx?.profile?.primary_discipline ?? "").toLowerCase();
+  const enduranceSport = String(ctx?.discipline?.endurance_sport ?? ctx?.profile?.endurance_sport ?? "").toLowerCase();
+  const runningFocus = disc === "endurance" || disc === "hybrid" || /run|jog|marathon/.test(enduranceSport) || (goal && (goal.is_race || goal.event));
+  const raceEvent = goal && goal.event ? String(goal.event).slice(0, 60) : null;
+
+  // Lower-limb / running-joint history → an ankle/calf/tibialis resilience emphasis
+  // that names the actual reason (injury history and/or a running goal).
+  const lowerLimb = injuryHas("ankle", "foot", "achilles", "calf", "shin", "tibial", "plantar");
+  if (lowerLimb || runningFocus) {
+    const why = lowerLimb && runningFocus
+      ? "a lower-limb history and a return to running"
+      : lowerLimb ? "a lower-limb injury history" : "a return to running";
+    const race = raceEvent ? ` toward ${raceEvent}` : "";
+    extra.push(`- ANKLE + CALF/TIBIALIS RESILIENCE is a priority here given ${why}${race}: keep a few minutes of ankle + hip prep and direct calf/tibialis work in every relevant session — it protects the joints under running load.`);
+  }
+
+  // Elbow / cubital-tunnel / wrist sensitivity → tighten the grip+elbow shared-budget.
+  if (injuryHas("elbow", "cubital", "wrist", "forearm", "tendin") || has("cubital", "epicondyl")) {
+    extra.push(`- ELBOW SENSITIVITY on record: treat grip- and elbow-intensive work (RDLs, heavy rows/pulls, long dead hangs) as a shared budget — don't stack them back-to-back, use straps when grip is the limiter, and keep supinated/curl load conservative.`);
+  }
+
+  // Low testosterone / free-T flag → recovery emphasis on top of earned rest.
+  if (has("free t", "free-t", "testosterone", "low t ")) {
+    extra.push(`- RECOVERY MATTERS MORE HERE: testosterone reads on the low side, so protect sleep and earned rest even harder — when in doubt, take the deload; it's the strong choice, not falling behind.`);
+  }
+
+  // A named upper-body preference tailors the balance emphasis (e.g. prefers barbell bench).
+  if (has("barbell bench", "prefers bench", "bench press") && !extra.some((e) => e.includes("BENCH PREFERENCE"))) {
+    // Only when it reads as a genuine preference, not just any mention.
+    if (has("prefer") && has("bench")) {
+      extra.push(`- BENCH PREFERENCE noted: they favour barbell bench — anchor horizontal pressing there, but keep chest volume in balance with the side-delt work rather than letting laterals outpace pressing.`);
+    }
+  }
+
+  if (!extra.length) return ELITE_STRENGTH_GUARDRAILS;
+  return `${ELITE_STRENGTH_GUARDRAILS}\n\nSPECIFIC TO THIS USER (derived from their context — injuries, goal, labs; informational, not medical advice):\n${extra.join("\n")}`;
+}
+
+// Pull active injury free-text out of context_events (kind:'injury') for the derivation.
+function injuryText(ctx: any): string {
+  const events = Array.isArray(ctx?.context_events) ? ctx.context_events : [];
+  const parts: string[] = [];
+  for (const ev of events) {
+    if (ev?.kind !== "injury") continue;
+    const meta = ev?.meta && typeof ev.meta === "object" ? ev.meta : null;
+    for (const s of [ev?.title, ev?.detail, meta?.area]) if (s) parts.push(String(s));
+  }
+  return parts.join(" ");
+}
+
+function stringifySafe(v: any): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch { return ""; }
+}

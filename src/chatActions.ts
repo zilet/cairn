@@ -16,7 +16,9 @@ export const CHAT_ACTION_TYPES = [
   "plan_restructure",
   "log_health",
   "add_context_event",
+  "resolve_context_event",
   "log_supplement",
+  "log_measurement",
 ] as const;
 
 export type ChatActionType = typeof CHAT_ACTION_TYPES[number];
@@ -138,11 +140,22 @@ export interface AddContextEventAction extends ChatActionBase {
   meta?: unknown;
 }
 
+export interface ResolveContextEventAction extends ChatActionBase {
+  type: "resolve_context_event";
+  id: number | string;
+  date?: unknown;
+}
+
 export interface LogSupplementAction extends ChatActionBase {
   type: "log_supplement";
   items?: ChatActionRecord[];
   text?: unknown;
   summary?: unknown;
+}
+
+export interface LogMeasurementAction extends ChatActionBase {
+  type: "log_measurement";
+  [key: string]: unknown;
 }
 
 export type ChatAction =
@@ -159,7 +172,9 @@ export type ChatAction =
   | PlanRestructureAction
   | LogHealthAction
   | AddContextEventAction
-  | LogSupplementAction;
+  | ResolveContextEventAction
+  | LogSupplementAction
+  | LogMeasurementAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
 
@@ -279,6 +294,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Set start/end dates ONLY when the athlete actually gave them. NEVER guess or approximate a date (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't know. If the exact date matters (e.g. a race they're training for), record the event with null dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.`,
     ],
   },
+  resolve_context_event: {
+    type: "resolve_context_event",
+    applyMode: "immediate",
+    shape: `{ "type": "resolve_context_event", "id": <existing context_event id from DATA.context_events>, "date": "YYYY-MM-DD|null" }`,
+    guidance: [
+      `resolve_context_event closes a healed injury / finished trip / passed life event on their timeline WITHOUT deleting it — it stays on record but stops making the plan work around it. Use it when the athlete confirms an injury/niggle is no longer bothering them (e.g. you gently asked about a past-window injury and they said it's fine). Only emit it for an id that is actually in DATA.context_events, and only when they've confirmed — never guess it's healed.`,
+    ],
+  },
   log_supplement: {
     type: "log_supplement",
     applyMode: "immediate",
@@ -289,6 +312,16 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     { "type": "log_supplement", "items": [
       { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] },
       { "name": "Vitamin D3", "dose": "2000 IU", "frequency": "daily", "category": "vitamin", "related_markers": ["Vitamin D"] } ] }`,
+  },
+  log_measurement: {
+    type: "log_measurement",
+    applyMode: "immediate",
+    shape: `{ "type": "log_measurement", "date": "YYYY-MM-DD|null", "waist_in": 34, "chest_in": 42, "upper_arm_in": 15,
+      "hip_in": 40, "neck_in": 15.5, "shoulder_in": 50, "thigh_in": 24, "calf_in": 16, "forearm_in": 12,
+      "height_in": 70, "note": "<optional>", "source": "chat" }`,
+    guidance: [
+      `log_measurement records at-home body measurements (tape/circumference, in inches) so the body picture — waist trend, BMI, waist-to-height, Navy body-fat estimate — stays current. Include only the sites they actually gave; the user can just say "waist 34, chest 42, arms 15" and it logs. "upper_arm_in" is the arm/bicep; only send "height_in" if they tell you their height (it updates the profile so BMI/body-fat light up). Leave date null unless they name one.`,
+    ],
   },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
 
@@ -350,6 +383,22 @@ function arrayOrEmpty(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+// The measurable inputs of a log_measurement action (the tape sites + height). Kept
+// literal here so chatActions stays free of a repo import; the repo's pickSites is the
+// authority on which of these actually persist.
+const MEASUREMENT_ACTION_FIELDS = [
+  "neck_in",
+  "shoulder_in",
+  "chest_in",
+  "waist_in",
+  "hip_in",
+  "thigh_in",
+  "calf_in",
+  "upper_arm_in",
+  "forearm_in",
+  "height_in",
+] as const;
+
 export function normalizeChatAction(value: unknown): ChatAction | null {
   if (!isRecord(value) || !isKnownType(value.type)) return null;
   switch (value.type) {
@@ -385,12 +434,20 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       return nonBlank(value.kind) ? { ...value, type: "log_health", kind: value.kind } : null;
     case "add_context_event":
       return nonBlank(value.kind) ? { ...value, type: "add_context_event", kind: value.kind } : null;
+    case "resolve_context_event":
+      return finiteId(value.id) ? { ...value, type: "resolve_context_event", id: value.id } : null;
     case "log_supplement": {
       const items = Array.isArray(value.items) ? value.items.filter(isRecord) : undefined;
       return items?.length
         ? { ...value, type: "log_supplement", items }
         : { ...value, type: "log_supplement" };
     }
+    case "log_measurement":
+      // Keep it only when at least one measurable field (a *_in site or height) is present —
+      // an empty measurement is a no-op the apply path would just record as ok:false.
+      return MEASUREMENT_ACTION_FIELDS.some((k) => value[k] != null && value[k] !== "")
+        ? { ...value, type: "log_measurement" }
+        : null;
   }
   const _exhaustive: never = value.type;
   return _exhaustive;

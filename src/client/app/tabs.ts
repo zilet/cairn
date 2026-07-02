@@ -72,7 +72,12 @@ type TabSwitchOptions = {
     closeDetail(true);
     closeMealSheet(true);
     document.querySelectorAll<HTMLElement>(".tab").forEach((el) => {
-      el.classList.toggle("active", el.dataset.tab === next);
+      const isActive = el.dataset.tab === next;
+      el.classList.toggle("active", isActive);
+      // aria-current names the live tab for assistive tech; the active dot (mobile)
+      // / bold label + inset (desktop) carry the non-color affordance in CSS.
+      if (isActive) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
     });
     state.tab = next;
     if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");

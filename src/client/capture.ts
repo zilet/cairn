@@ -14,7 +14,13 @@ async function quickLog(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     }) as unknown as CaptureActivity;
-  } catch (_e) { toast("Couldn't log that — check your connection."); return; }
+  } catch (_e) {
+    // Network dropped — DON'T lose the log. Queue the exact POST and replay it on
+    // reconnect (the input was already cleared, so the text lives only in the outbox).
+    outboxEnqueue("activity", "/activities", { text });
+    toast("Saved — will sync when you're back online");
+    return;
+  }
   if (a && a.error) { toast("Couldn't log that — try again."); return; }
   toast("Logged");
 
@@ -65,7 +71,16 @@ function setupWeightChip(): void {
     if (!w) { input.focus(); return; }
     try {
       await api("/bodyweight", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weight_lb: w }) });
-    } catch { toast("Couldn't save your weight — try again."); return; }
+    } catch {
+      // Offline — queue the weigh-in and reflect it optimistically; it syncs on reconnect.
+      outboxEnqueue("weight", "/bodyweight", { weight_lb: w });
+      const pendingVal = chip && chip.querySelector("[data-wtval]");
+      if (pendingVal) pendingVal.innerHTML = `${w}<span class="stat-plus">+</span>`;
+      if (mini) mini.innerHTML = `${w}<span class="wt-mini-unit">lb</span><span class="stat-plus">+</span>`;
+      input.value = ""; inline.hidden = true;
+      toast("Saved — will sync when you're back online");
+      return;
+    }
     // a weigh-in syncs profile.weight_lb and moves the weight trend / pace — drop the
     // caches that read it so Today's compass + the Weight/Energy views stay honest.
     swrInvalidate("progress:weight");
@@ -140,7 +155,14 @@ async function relogFrequent(summary: string | undefined, chip?: HTMLElement): P
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ meal, text: summary }),
     }) as CaptureFoodNote;
-  } catch { f = null; }
+  } catch {
+    // Offline — queue the re-log and replay it on reconnect rather than dropping it.
+    _relogInFlight = false;
+    if (chip) chip.classList.remove("freq-chip-busy");
+    outboxEnqueue("food", "/food-notes", { meal, text: summary });
+    toast("Saved · " + meal + " — will sync when you're back");
+    return;
+  }
   _relogInFlight = false;
   if (chip) chip.classList.remove("freq-chip-busy");
   if (!f || f.error) { toast("Couldn't log that — try again."); return; }

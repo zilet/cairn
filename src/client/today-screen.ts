@@ -221,10 +221,6 @@ async function renderToday(opts: any = {}) {
     planReveal: todayState.planReveal,
     focusEngaged,
   });
-  // Focus mode is superseded by the isolated Session destination: on Today the
-  // plan area is always the calm launch card, never an inline focus surface.
-  const focus = false;
-
   // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
   // When the day is about running — cardio prescribed and/or a synced run, with NO
   // strength logged today — the run is the HERO of the plan area, not buried under a
@@ -259,52 +255,44 @@ async function renderToday(opts: any = {}) {
   // through the agenda (which omits it when nothing's logged), so there is no path,
   // even on a 404/offline fallback, that can render the old "Nothing logged yet"
   // capture nudge. The other rail cards keep a fallback for graceful degradation.
-  let agenda = null;
-  const agendaGeneric: any[] = []; // generic Era-2 cards we drew (wired after the write)
-  // The CONDUCTOR — one sequenced whole-athlete focus (GET /api/coaching-focus), the
-  // cross-domain analog of the health focus. It leads Today just under the Brief and
-  // SUBSUMES the parallel banner cluster: when it's available it carries the one
-  // highest-leverage lever, so the standalone health-lever line (#ctxHealth) and the
-  // ◎ goal line / ✦ draft banner stand down (one voice, not five). Fetched in parallel
-  // with the agenda so it adds no serial latency; null/unavailable (thin athlete /
-  // offline / route absent) degrades cleanly — the old lines return exactly as before.
-  let conductor = null;
-  if (!focus) {
-    [agenda, conductor] = await Promise.all([
-      CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps()),
-      todayApi("/coaching-focus").catch(() => null),
-    ]);
-  }
-  // On Today the conductor shows as ONE thread line — the full lead/alongside/
-  // later/check-in card is a weeks-cadence review that lives on Me → Standing.
-  // The thread still subsumes the redundant compass + health-lever banner lines,
-  // but a pending plan PROPOSAL (the brain's prepared change) always shows below.
-  const conductorHtml = conductor ? coachingFocusThreadHtml(conductor) : "";
-  const conductorLeads = !!conductorHtml; // the thread has something to lead with
-  const railHtml = focus
-    ? ""
-    : (agenda ? CairnTodayRailController.railHtml(agenda, agendaGeneric) : CairnTodayRailController.fallbackRailHtml(isToday));
+  // The CONDUCTOR (whole-athlete focus, GET /api/coaching-focus) and the SALIENCE
+  // ARBITER (GET /api/today-agenda, which shapes the rail) are the two network reads
+  // that used to block the FIRST paint: renderToday awaited them before its single
+  // innerHTML write, so a cold open held a blank skeleton for their latency stacked on
+  // top of everything else. Now we kick them off, render the calm base IMMEDIATELY,
+  // and hydrate the conductor thread + the rail into their stable slots as they land
+  // (phase two, at the end of this function). Null/unavailable degrades exactly as
+  // before — the standalone goal/health lines simply return.
+  const renderedDate = todayState.logDate;
+  const railToken = pollToken;
+  const agendaPromise = CairnTodayRailController.fetchTodayAgenda(todayState.logDate, todayRailDeps());
+  const conductorPromise = todayApi("/coaching-focus").catch(() => null);
+
+  // The goal line is deferred into #goalSlot: painting it now and then hiding it when
+  // the conductor turns out to lead would flip on screen, so it renders once, in its
+  // final form, in phase two.
+  const goalLineHtml = CairnTodayContext.goalLineHtml(stats, curW, isToday);
 
   let html = todayMainShell.leadHtml({
-    focus,
-    focusHtml: focusBarHtml(read, day, { exDone, exTotal, isToday }),
+    focus: false,
+    focusHtml: "",
     isToday,
     briefHtml: briefHtml(read, { showPlan, hasPlanDay, isToday }),
-    conductorHtml,
-    conductorLeads,
-    goalLineHtml: CairnTodayContext.goalLineHtml(stats, curW, isToday),
+    conductorHtml: "",
+    conductorLeads: false,
+    goalLineHtml: "",
     currentWeight: curW,
   }, todayMainShellDeps());
 
   // On Today, the plan area is a calm launch card into the isolated Session
   // destination (logging no longer lives inline here). The done card still shows
   // inline; a rare persisted focus-mode still falls through to the old surface.
-  html += (showPlan && !showDone && !focus)
+  html += (showPlan && !showDone)
     ? sessionLaunchCardHtml({ day, exDone, exTotal, isToday, hasLoggedSets, isRunDay, read })
     : todayPlanSurfaceRenderer.buildHtml({
     showDone,
     showPlan,
-    focus,
+    focus: false,
     session,
     day,
     isToday,
@@ -332,17 +320,15 @@ async function renderToday(opts: any = {}) {
     rxFor,
   }, todayPlanSurfaceRendererDeps());
 
-  // ---- Trajectory tier (this week), quiet, below the fold — hidden in focus ----
-  if (!focus) {
-    html += todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps());
-  }
+  // ---- Trajectory tier (this week), quiet, below the fold ----
+  html += todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps());
 
-  // Scope the focus class to this render via a wrapper, so a tab switch (which
-  // replaces #view wholesale) can never leave the class stranded. The primary
-  // column (.today-main) holds the Brief, capture, and logging surface; the rail
-  // (.today-rail) sits beside it on wide screens (section 36) and stacks under it
-  // on mobile/tablet. Focus mode is a single centered column — no rail.
-  todayView.innerHTML = todayMainShell.wrapHtml(html, { focus, railHtml });
+  // The primary column (.today-main) holds the Brief, capture, and logging surface;
+  // the rail (.today-rail) sits beside it on wide screens and stacks under it on
+  // mobile/tablet. The rail is DEFERRED: paint an empty (but present) .today-rail now
+  // so the two-column desktop layout is stable from the first frame, and hydrate its
+  // structure + loaders in phase two once the agenda resolves.
+  todayView.innerHTML = todayMainShell.wrapHtml(html, { focus: false, railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
 
   // The lead entry: one tap opens the isolated Session destination.
   todayView.querySelector("#sessLaunch")?.addEventListener("click", () => openSession());
@@ -350,22 +336,26 @@ async function renderToday(opts: any = {}) {
   // Calm, dismissible "add to home screen" coach — appended to the primary column AFTER
   // the wholesale innerHTML write above (mounting before it would be silently wiped).
   // Pull, not push: it waits below the Brief, hidden in standalone mode and after dismissal.
-  if (!focus) {
-    try {
-      const main = todayView.querySelector(".today-main");
-      if (main && typeof renderPhoneCoachBanner === "function") renderPhoneCoachBanner(main);
-    } catch {}
-  }
+  try {
+    const main = todayView.querySelector(".today-main");
+    if (main && typeof renderPhoneCoachBanner === "function") renderPhoneCoachBanner(main);
+  } catch {}
 
+  // Phase-1 wiring covers everything the athlete can act on immediately (capture,
+  // Brief, session launch, day switch, drafts, wearable). The RAIL and the standalone
+  // health lever are deferred to phase two: deferRail skips both rail loaders, and
+  // conductorLeads:true holds the health-lever load so the conductor can decide whether
+  // it shows at all — one voice, and no late-write race to clean up.
   CairnTodayPostRenderWiring.wirePostRender(todayDeps().postRender({
     read,
     isToday,
-    focus,
+    focus: false,
     showPlan,
     soft,
-    conductorLeads,
-    agenda,
-    agendaGeneric,
+    conductorLeads: true,
+    deferRail: true,
+    agenda: null,
+    agendaGeneric: [],
     todayCompass,
   }));
 
@@ -376,6 +366,45 @@ async function renderToday(opts: any = {}) {
   setupAddExercise();
 
   todayDataLoader.scheduleSoftRepaint(todayData, todayDeps().dataRefresh());
+
+  // ---- PHASE 2: hydrate the conductor thread + agenda rail as they resolve ----
+  // Everything above painted without waiting on these two network reads. Fold them in
+  // now. Bail if the surface moved on (tab switch, date change, or a newer render
+  // superseded this one) so a stale read never lands on the wrong screen.
+  const [agenda, conductor] = await Promise.all([agendaPromise, conductorPromise]);
+  if (todayState.tab !== "today" || todayState.logDate !== renderedDate || pollToken !== railToken) return;
+
+  const conductorHtml = conductor ? coachingFocusThreadHtml(conductor) : "";
+  const conductorLeads = !!conductorHtml;
+  const cfocusSlot = todayView.querySelector("#cfocusSlot");
+  if (cfocusSlot) {
+    // Clicks on the thread ride the global [data-cfocus-go] delegate, so dropping the
+    // markup into the slot is enough — no per-render wiring to re-run.
+    cfocusSlot.innerHTML = conductorHtml;
+    cfocusSlot.classList.toggle("cfocus-thread-slot", conductorLeads);
+  }
+  // The goal line renders now, in final form, unless the conductor leads and subsumes it.
+  const goalSlot = todayView.querySelector("#goalSlot");
+  if (goalSlot) {
+    goalSlot.innerHTML = conductorLeads ? "" : goalLineHtml;
+    goalSlot.querySelector("#goalLine")?.addEventListener("click", () => activateTab("progress"));
+  }
+  // The standalone health lever was held in phase one; load it only when the conductor
+  // isn't already carrying the one highest-leverage line.
+  if (!conductorLeads) loadHealthFocusBanner();
+
+  // Rail: render the agenda-driven structure (or the calm fallback) into the reserved
+  // .today-rail slot, then run its loaders. railHtml() fills agendaGeneric in place,
+  // which runAgendaRail then wires — keep that order.
+  const agendaGeneric: any[] = [];
+  const railEl = todayView.querySelector(".today-rail");
+  if (railEl) {
+    railEl.outerHTML = agenda
+      ? CairnTodayRailController.railHtml(agenda, agendaGeneric)
+      : CairnTodayRailController.fallbackRailHtml(isToday);
+    if (agenda) CairnTodayRailController.runAgendaRail(agenda, agendaGeneric, todayRailDeps());
+    else CairnTodayRailController.runFallbackRail(isToday, todayRailDeps());
+  }
 }
 
 // ---------- The focused Session destination (its own route, isolated from Today) ----------

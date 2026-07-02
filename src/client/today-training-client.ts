@@ -45,11 +45,84 @@ function exRxVaryMenuHtml(rx: ClientPrescriptionLike): string {
     ? rx.vary_options.filter((o) => o && typeof o === "object" && o.name)
     : [];
   if (!opts.length) return "";
+  // Each chip is ACTIONABLE: tapping it drafts a swap proposal (from → this option)
+  // through the propose→apply path (POST /program/swap → a DRAFT the athlete applies).
+  // Carries the from-exercise + the plan day so the delegated handler can build it.
+  const from = rx?.exercise ? String(rx.exercise) : "";
+  const day = rx?.day_number != null ? String(rx.day_number) : "";
+  const swappable = !!from && !!day;
   const chips = opts
     .slice(0, 3)
-    .map((opt) => CairnUi.textChipHtml({ className: "ex-rx-opt", label: opt.name, title: opt.why }))
+    .map((opt) =>
+      CairnUi.textChipHtml({
+        className: "ex-rx-opt",
+        label: opt.name,
+        title: opt.why,
+        attrs: swappable
+          ? {
+              role: "button",
+              tabindex: "0",
+              "data-rx-swap-from": from,
+              "data-rx-swap-to": String(opt.name),
+              "data-rx-swap-day": day,
+            }
+          : undefined,
+      })
+    )
     .join("");
   return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">rotate one in</span><div class="ex-rx-opts">${chips}</div></div>`;
+}
+
+// Draft the swap through the propose→apply path (nothing auto-applies). Best-effort:
+// uses the global api() + toast() when present, and fires a DOM event any proposals
+// surface can pick up. A no-op outside the browser (tests) or when api() is absent.
+async function requestRxSwap(from: string, to: string, day: number | null): Promise<void> {
+  if (typeof api !== "function" || !from || !to || day == null) return;
+  try {
+    const r = (await api("/program/swap", { method: "POST", body: JSON.stringify({ day, from, to }) })) as
+      | { ok?: boolean; error?: string; proposal?: unknown }
+      | null;
+    if (r && r.ok) {
+      if (typeof toast === "function") toast(`Drafted a swap: ${from} → ${to}. Review it in Coach.`);
+      if (typeof document !== "undefined" && typeof CustomEvent === "function") {
+        document.dispatchEvent(new CustomEvent("cairn:proposal-drafted", { detail: r.proposal }));
+      }
+    } else if (typeof toast === "function") {
+      toast((r && r.error) || "Couldn't draft that swap.");
+    }
+  } catch {
+    if (typeof toast === "function") toast("Couldn't draft that swap.");
+  }
+}
+
+// Delegated, idempotent wiring for the swap chips (registered once at load). Guarded
+// for the browser so the pure helpers above stay unit-testable in a bare VM context.
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  const chipFrom = (target: EventTarget | null): HTMLElement | null => {
+    const el = target as HTMLElement | null;
+    return el && typeof el.closest === "function" ? el.closest<HTMLElement>(".ex-rx-opt[data-rx-swap-to]") : null;
+  };
+  const fire = (chip: HTMLElement) => {
+    const day = Number(chip.getAttribute("data-rx-swap-day"));
+    void requestRxSwap(
+      chip.getAttribute("data-rx-swap-from") || "",
+      chip.getAttribute("data-rx-swap-to") || "",
+      Number.isFinite(day) ? day : null
+    );
+  };
+  document.addEventListener("click", (e) => {
+    const chip = chipFrom(e.target);
+    if (!chip) return;
+    e.preventDefault();
+    fire(chip);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const chip = chipFrom(e.target);
+    if (!chip) return;
+    e.preventDefault();
+    fire(chip);
+  });
 }
 
 function exRxLineHtml(rx: ClientPrescriptionLike): string {
@@ -65,7 +138,7 @@ function exRxLineHtml(rx: ClientPrescriptionLike): string {
         ${delta ? `<span class="ex-rx-delta">${delta}</span>` : ""}
       </div>
       ${rx.why ? `<div class="ex-rx-why">${escHtml(rx.why)}</div>` : ""}
-      ${rx.action === "vary" ? exRxVaryMenuHtml(rx) : ""}
+      ${rx.action === "vary" || rx.action === "introduce" ? exRxVaryMenuHtml(rx) : ""}
     </div>`;
 }
 

@@ -154,7 +154,7 @@ EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}`;
 }
 
 // ---- food photo → macros (vision) ----------------------------------------------
-// A plate photo the athlete attached in Chat. The agent CLIs (Claude Code / Codex)
+// A plate photo the user attached in Chat. The agent CLIs (Claude Code / Codex)
 // can open local files, so we hand the agent the ABSOLUTE image path (same trick as
 // the health-doc ingest) and ask it to LOOK at the plate and estimate its foods +
 // macros. Output is FLAT top-level macros (NOT the {structured} wrapper the text
@@ -163,14 +163,14 @@ EXISTING MEMORY (do not repeat): ${JSON.stringify(recentMemory)}`;
 export function buildFoodPhotoPrompt(absPath: string, hint?: string): string {
   const profile = repo.getProfile();
   const goal = repo.computeGoalCheck();
-  return `You estimate the nutrition of a meal from a PHOTO of the plate, for an athlete's food log.
+  return `You estimate the nutrition of a meal from a PHOTO of the plate, for a user's food log.
 The photo is a local image file saved on this machine.
 
 LOOK AT THE IMAGE FILE AT THIS ABSOLUTE PATH:
 ${absPath}
 Open and view that image directly before answering. If the runtime attached the same image bytes inline,
 use that inline image as the source of truth and do not claim you cannot access the local file.${hint ? `
-The athlete's note for this meal: "${hint}" — use it to disambiguate, but trust what you SEE.` : ""}
+The user's note for this meal: "${hint}" — use it to disambiguate, but trust what you SEE.` : ""}
 
 YOUR JOB:
 - Identify the dish(es) on the plate and the visible foods/components.
@@ -226,13 +226,13 @@ const GARMIN_STRENGTH_SCHEMA = `{
 // reconstruction of a workout that already happened — not coaching, not a plan
 // change, no scores. The deterministic layer (repo.reconcileGarminStrength) has
 // already attached the physiology; this fills the narrative + the exercises Garmin
-// detected that the athlete did NOT already log by hand.
+// detected that the user did NOT already log by hand.
 export function buildGarminStrengthPrompt(garminActivity: any): string {
   const ga = garminActivity ?? {};
   const date = ga.date || "";
   const session = date ? repo.getSessionByDate(date) : null;
   const logged = Array.isArray((session as any)?.sets) ? (session as any).sets : [];
-  // What the athlete already logged by hand for this day — NEVER duplicate these.
+  // What the user already logged by hand for this day — NEVER duplicate these.
   const loggedExercises = [...new Set(logged.map((s: any) => s.exercise).filter(Boolean))];
   const exercises = (repo.listExercises() as any[]).map((e) => ({ name: e.name, mode: e.mode || "reps", muscle_group: e.muscle_group || null }));
   const plan = (repo.getPlan() as any[]).map((d) => ({
@@ -256,9 +256,9 @@ export function buildGarminStrengthPrompt(garminActivity: any): string {
     exercise_sets: ga.exercise_sets ?? null,
   };
 
-  return `You reconcile a Garmin-recorded STRENGTH workout into the athlete's training log. The
+  return `You reconcile a Garmin-recorded STRENGTH workout into the user's training log. The
 workout already happened; your job is (a) a one-line read of how the body responded, and (b) the
-exercises Garmin detected, cleaned up (naming + mode only) — but ONLY the ones the athlete did not
+exercises Garmin detected, cleaned up (naming + mode only) — but ONLY the ones the user did not
 already log by hand.
 
 THE CONSTITUTION (binding):
@@ -269,12 +269,12 @@ GUARDRAILS:
 - Use ONLY Garmin's detected "exercise_sets". NEVER invent exercises, reps, or weights. If
   exercise_sets is empty/missing, return "sets": [] and "extrapolated": false and just summarize the
   physiology.
-- DO NOT emit a set for any exercise already in ALREADY LOGGED — the athlete logged those by hand and
+- DO NOT emit a set for any exercise already in ALREADY LOGGED — the user logged those by hand and
   they are the source of truth. Fill in only the OTHER detected exercises.
 - Map each Garmin category (e.g. "BENCH_PRESS", "BARBELL_DEADLIFT") to an exact KNOWN EXERCISE or
   PLAN exercise name when it clearly matches; otherwise use a clean, human exercise name derived from
   the category (Title Case, e.g. "Barbell Bench Press"). Prefer reusing existing names.
-- The set weights are ALREADY in the athlete's own units (pounds) — do NOT convert, re-scale, or
+- The set weights are ALREADY in the user's own units (pounds) — do NOT convert, re-scale, or
   invent weights. Copy the detected weight through as-is. weight = null means bodyweight (push-ups,
   pull-ups, dips); a NEGATIVE weight means an assisted movement (leave that sign intact).
 - Timed holds (plank, dead hang, wall sit) → set "duration_sec" + "mode":"timed" with weight null;

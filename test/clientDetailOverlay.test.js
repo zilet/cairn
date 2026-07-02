@@ -17,6 +17,20 @@ class FakeElement {
     this._innerHTML = "";
     this.className = "";
     this.dataset = {};
+    this.attrs = {};
+    this.focusCount = 0;
+  }
+
+  setAttribute(name, value) {
+    this.attrs[name] = String(value);
+  }
+
+  getAttribute(name) {
+    return Object.hasOwn(this.attrs, name) ? this.attrs[name] : null;
+  }
+
+  focus() {
+    this.focusCount += 1;
   }
 
   get isConnected() {
@@ -125,6 +139,7 @@ class FakeElement {
 class FakeDocument {
   constructor() {
     this.body = new FakeElement("body");
+    this.activeElement = null;
     this.listeners = new Map();
     this.transitions = 0;
     this.startViewTransition = (fn) => {
@@ -198,6 +213,23 @@ test("detail overlay mounts, escapes photo source, and closes from controls", ()
   const backdrop = context.CairnDetailOverlay.mountDetail("<p>Again</p>");
   backdrop.dispatch("click", { target: backdrop });
   assert.equal(document.querySelector(".detail"), null);
+});
+
+test("detail overlay carries dialog semantics, locks scroll, and restores it on close", () => {
+  const { context, document } = loadOverlay({ reduced: true });
+
+  const detail = context.mountDetail("<h2>Details</h2>");
+  assert.equal(detail.getAttribute("role"), "dialog");
+  assert.equal(detail.getAttribute("aria-modal"), "true");
+  assert.equal(detail.getAttribute("aria-label"), "Details");
+  // Focus lands on the close control inside the dialog.
+  assert.ok(detail.querySelector(".detail-x").focusCount >= 1);
+  // Background scroll is locked while open, restored on close.
+  assert.equal(document.body.style.overflow, "hidden");
+
+  detail.querySelector(".detail-x").click();
+  assert.equal(document.querySelector(".detail"), null);
+  assert.equal(document.body.style.overflow, "");
 });
 
 test("detail overlay opens from an origin tile with transition cleanup", () => {

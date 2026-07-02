@@ -45,6 +45,16 @@ export function onTurnEvent(id: number, listener: (e: TurnEvent) => void): () =>
   return turnBus.on(id, listener);
 }
 
+// Live streaming filters keyed by turn id, so the SSE snapshot (and the poll
+// fallback) can hand a reconnecting client the reply prose streamed so far. iOS
+// standalone kills the EventSource on backgrounding; without this, the reconnect
+// snapshot carried no partial text and the bubble came back hollow. Set while a
+// turn streams, cleared when the turn goes terminal (processChatTurnInner finally).
+const streamFilters = new Map<number, ReturnType<typeof createChatStreamFilter>>();
+export function getTurnPartialReply(id: number): string {
+  try { return streamFilters.get(id)?.reply() ?? ""; } catch { return ""; }
+}
+
 // ---------- serial queue ----------
 // Live AbortControllers keyed by turn id, so a Stop can SIGKILL the running CLI.
 // processChatTurn releases its own controller in a finally; the runner backstop
@@ -144,6 +154,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     emit(id, { type: "error", turn: failed, message: assistant });
   } finally {
     controllers.delete(id);
+    streamFilters.delete(id);
   }
 }
 
@@ -267,6 +278,7 @@ async function runChatCompletion(
     const name = order[0];
     const started = Date.now();
     const stream = createChatStreamFilter((e) => emit(id, e));
+    streamFilters.set(id, stream); // exposed to the SSE snapshot / poll fallback
     try {
       const res = await runAgentStreaming(name, prompt, {
         signal,
@@ -465,6 +477,9 @@ export function applyChatActions(
           break;
         }
         case "add_context_event":
+          // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
+          // the active-context effect; addContextEvent busts the cached Brief at the
+          // repo layer now (so EVERY surface reacts, not just chat).
           applied.push({ type: a.type, result: repo.addContextEvent({
             kind: a.kind,
             title: stringOrUndefined(a.title),
@@ -473,11 +488,11 @@ export function applyChatActions(
             end_date: stringOrUndefined(a.end_date),
             meta: a.meta,
           }) });
-          // A just-mentioned event (a late concert, travel, illness) shapes TODAY via
-          // the active-context effect — bust the cached Brief so the next open reflects
-          // it (expect-worse-sleep / don't-alarm-on-CRP / ease the load) instead of a
-          // stale read written before the athlete said anything.
-          try { repo.invalidateDayRead(); } catch { /* best-effort */ }
+          break;
+        case "resolve_context_event":
+          // Confirmed healed / over → close it (keeps the record); resolveContextEvent
+          // busts the Brief at the repo layer.
+          applied.push({ type: a.type, result: repo.resolveContextEvent(Number(a.id), stringOrUndefined(a.date)) ?? { error: "not found", id: a.id } });
           break;
         case "log_supplement": {
           // Supplement UNDERSTANDING (not a daily log): the athlete mentioned what
@@ -490,6 +505,11 @@ export function applyChatActions(
           }
           break;
         }
+        case "log_measurement":
+          // At-home body measurements ("waist 34, chest 42, arms 15") apply immediately —
+          // a safe capture like log_food; returns the row + fresh indicators.
+          applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
+          break;
         case "plan_update":
           drafts.push(repo.createProposal(ctx.agent, "chat: plan update", "", { summary: a.summary, changes: a.changes }));
           break;

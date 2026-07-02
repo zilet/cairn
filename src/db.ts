@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS plan_items (
   target_distance_km REAL,               -- planned distance (cardio), e.g. 12
   target_duration_min REAL,              -- planned moving time in minutes (cardio)
   target_zone TEXT,                      -- HR/effort zone, free text, e.g. 'Z2' | 'tempo' | 'easy'
-  interval_json TEXT                     -- optional interval structure, JSON (e.g. [{reps:6,on:'400m',off:'90s'}])
+  interval_json TEXT,                    -- optional interval structure, JSON (e.g. [{reps:6,on:'400m',off:'90s'}])
+  superset_group INTEGER                 -- optional pairing/superset id: items on the same day sharing a value are done as a superset (v56). NULL = standalone
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS profile (
   sex TEXT DEFAULT 'male',
   age INTEGER,
   height_cm REAL,
+  height_in REAL,                        -- height in inches (v59) — mirrors the app's lb/in convention; source-of-truth for BMI/WHtR/Navy body-fat. NULL = unset (BMI degrades to a "set your height" hint)
   weight_lb REAL,
   goal_weight_lb REAL,
   goal_date TEXT,
@@ -318,6 +320,24 @@ CREATE TABLE IF NOT EXISTS meal_plans (
   status TEXT DEFAULT 'draft'
 );
 
+-- Accepted adaptive-nutrition targets (the MacroFactor-style loop's OUTPUT, persisted).
+-- When the athlete accepts a nutrition_target proposal, the accepted numbers land here
+-- with an effective_date so the fuel card / goal math / next check-in read the ACCEPTED
+-- target instead of forever re-deriving the formula. History is kept (one row per
+-- acceptance); the active target is the newest row with effective_date <= today.
+CREATE TABLE IF NOT EXISTS nutrition_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  effective_date TEXT NOT NULL,       -- YYYY-MM-DD the accepted target takes effect
+  target_kcal INTEGER,
+  protein_g INTEGER,
+  carbs_g INTEGER,
+  fat_g INTEGER,
+  source TEXT,                        -- 'checkin' | 'manual' | ...
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_targets_eff ON nutrition_targets(effective_date);
+
 CREATE TABLE IF NOT EXISTS food_notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
@@ -338,6 +358,29 @@ CREATE TABLE IF NOT EXISTS bodyweight_log (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bw_date ON bodyweight_log(date);
+
+-- At-home body measurements (circumferences, in inches — mirrors the app's
+-- lb/in convention). One row per measuring session; every site is nullable so
+-- the athlete can log only what they measured that day. These feed the derived,
+-- deterministic indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat %)
+-- so an at-home tape gives a reliable read between DEXA scans (which go stale).
+CREATE TABLE IF NOT EXISTS body_measurements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,                       -- YYYY-MM-DD (local day)
+  waist_in REAL,
+  hip_in REAL,
+  chest_in REAL,
+  shoulder_in REAL,
+  neck_in REAL,
+  thigh_in REAL,
+  upper_arm_in REAL,
+  calf_in REAL,
+  forearm_in REAL,
+  note TEXT,
+  source TEXT DEFAULT 'manual',            -- manual | chat | shortcut | other
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_body_measurements_date ON body_measurements(date);
 
 -- Home / clinic blood-pressure readings. Unlike labs, these are point-in-time
 -- measurements; the exact timestamp matters for repeated home averages and for
@@ -588,7 +631,9 @@ CREATE TABLE IF NOT EXISTS context_events (
   start_date TEXT,
   end_date TEXT,                      -- nullable (ongoing / open-ended)
   meta_json TEXT,
-  archived INTEGER DEFAULT 0
+  archived INTEGER DEFAULT 0,
+  expected_recovery_days INTEGER,     -- injuries: expected healing window (days from start); NULL = open-ended / non-injury
+  resolved_at TEXT                    -- YYYY-MM-DD an event was explicitly closed (healed); NULL = still open
 );
 
 -- Optional subjective morning check-in (mood/energy/sleep-feel/soreness on a

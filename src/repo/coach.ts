@@ -12,7 +12,8 @@ import { muscleGroupTrajectory, testWeekDue } from "./muscle-trajectory.js";
 import { coachingFocus } from "./coaching-focus.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
-import { capStr, getDayIntake } from "./nutrition.js";
+import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
+import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
@@ -311,6 +312,12 @@ interface CoachContextSignals {
   enduranceTestsView: any;
   trajectoryView: any;
   coachingFocusView: any;
+  // Computed once + shared: the active life-context effect, the training-signals
+  // rollup, and the active context events (so buildPersonSlice/buildTrainingSlice and
+  // the conductor all read the same values without recomputing).
+  contextTodayView: any;
+  trainingSignalsView: any;
+  contextEventsView: any[];
 }
 
 // Identity / person model: who the athlete is, what the coach remembers, the people
@@ -318,7 +325,7 @@ interface CoachContextSignals {
 function buildPersonSlice(
   signals: CoachContextSignals
 ): Pick<CoachContext, "now" | "profile" | "discipline" | "memory" | "learnings" | "context_events" | "family" | "checkins" | "reaction_model" | "context_today"> {
-  const { profile } = signals;
+  const { profile, contextEventsView, contextTodayView } = signals;
   return {
     // The current LOCAL clock (date + weekday + time + part-of-day). Folded in so
     // EVERY plan-shaping prompt knows the time of day — without it the agent is
@@ -342,7 +349,7 @@ function buildPersonSlice(
     // "tolerates higher frequency than the read assumed"). Suggestion-not-a-gate:
     // these inform tone/defaults, never enforce.
     learnings: recentLearnings(6),
-    context_events: listContextEvents({ activeOnly: true }),
+    context_events: contextEventsView,        // active life-context (computed once)
     family: listFamily(),                     // family roster the coach plans around
     checkins: listCheckins(7),                // optional subjective morning check-ins
     // How THIS athlete actually reacts, learned from their own logged history (deficit→
@@ -351,14 +358,14 @@ function buildPersonSlice(
     reaction_model: reactionModelForCoach(),
     // Active life-context effect (a late concert / travel / illness mentioned once) →
     // expect worse sleep / a transient inflammation bump (don't alarm) / plan around it.
-    context_today: activeContextEffect(),
+    context_today: contextTodayView,
   };
 }
 
 // Nutrition goal + today's fuel. Both goal reads reuse the already-fetched profile.
 function buildNutritionSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "goal" | "goal_mode" | "day_intake"> {
+): Pick<CoachContext, "goal" | "goal_mode" | "day_intake" | "meal_plan"> {
   const { profile } = signals;
   return {
     goal: computeGoalCheck(profile), // reuse the profile already fetched above
@@ -370,6 +377,10 @@ function buildNutritionSlice(
     // Today's persisted food log. This is independent of the live chat thread, so
     // a breakfast logged before "Fresh start" still shapes the next nutrition turn.
     day_intake: dayIntakeForCoach(),
+    // A bounded view of the current meal plan (today's + tomorrow's meals + the daily
+    // targets + a freshness flag) so chat / the day-read / insights can reference the
+    // ACTUAL planned food instead of being blind to it. Null when there's no live plan.
+    meal_plan: (() => { try { return mealPlanForCoach(); } catch { return null; } })(),
   };
 }
 
@@ -382,7 +393,7 @@ function buildTrainingSlice(
   const {
     garmin, recentSessions, dayReadView, programBal, recentLoad, fullProgramState,
     performanceView, programAdjustmentsView, groupsTrajectoryView, testWeekView,
-    dexaTargetingView, trajectoryView,
+    dexaTargetingView, trajectoryView, trainingSignalsView,
   } = signals;
   return {
     plan: getPlan(),
@@ -391,7 +402,8 @@ function buildTrainingSlice(
     // Deterministic progression-readiness + autoregulation rollup computed from the
     // athlete's own recent sets + 1-tap feedback — so logged performance VISIBLY
     // steers the next recommendation instead of being inferred from a raw array.
-    training_signals: trainingSignals(recentSessions),
+    // Computed once (shared with the conductor's life/soreness awareness).
+    training_signals: trainingSignalsView,
     garmin,
     // Active periodization block (goal / phase / week N of M) so the coach
     // periodizes against the current mesocycle instead of progressing blindly.
@@ -573,6 +585,12 @@ export function getCoachContext(): CoachContext {
   const runVarietyView = (() => { try { return runVarietyRead(today); } catch { return null; } })();
   const enduranceTestsView = (() => { try { return enduranceTestsDue(today); } catch { return []; } })();
   const trajectoryView = getTrajectory();
+  // The active life-context effect, the training-signals rollup and the active context
+  // events, computed ONCE and shared by the person/training slices AND the conductor
+  // (life/soreness awareness) so nothing recomputes them.
+  const contextTodayView = (() => { try { return activeContextEffect(); } catch { return { active: [], any: false, reduce_load: false, resolve_candidates: [] }; } })();
+  const trainingSignalsView = trainingSignals(recentSessions);
+  const contextEventsView = (() => { try { return listContextEvents({ activeOnly: true }) as any[]; } catch { return []; } })();
   // THE CONDUCTOR (the whole-athlete analog of healthFocus): arbitrate every domain
   // read into ONE sequenced focus — a single lead lever, 1-2 parallel levers, an
   // explicit "later", the cross-domain connections, and one batched retest — so the
@@ -596,9 +614,15 @@ export function getCoachContext(): CoachContext {
         trajectory: trajectoryView,
         testWeek: testWeekView,
         enduranceTests: enduranceTestsView,
+        // Life/soreness awareness: active injuries + the autoregulation rollup + the
+        // reduce-load window, so the conductor never leads with a lever that loads an
+        // injured/sore area (it demotes or caveats it instead).
+        injuries: contextEventsView.filter((e: any) => e?.kind === "injury"),
+        autoregulation: trainingSignalsView?.autoregulation ?? null,
+        contextToday: contextTodayView,
       });
     } catch {
-      return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null };
+      return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null, caveat: null };
     }
   })();
   const signals: CoachContextSignals = {
@@ -623,6 +647,9 @@ export function getCoachContext(): CoachContext {
     enduranceTestsView,
     trajectoryView,
     coachingFocusView,
+    contextTodayView,
+    trainingSignalsView,
+    contextEventsView,
   };
   // Compose the context from cohesive per-domain slices. Every EXPENSIVE signal above
   // (garmin/recovery/day-read/program-state/volume balance/acute load + the conductor's
@@ -635,6 +662,7 @@ export function getCoachContext(): CoachContext {
     ...buildRunningSlice(signals),
     ...buildHealthSlice(signals),
     ...buildBrainSlice(signals),
+    body_metrics: (() => { try { return bodyMetricsContextSlice(); } catch { return null; } })(),
   };
 }
 

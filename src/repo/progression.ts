@@ -14,10 +14,14 @@
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
-import { canonicalGroup, classifyConstraint, isMobility, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
-import { examplesForGroup, suggestAlternatives } from "./exercise-variations.js";
+import { canonicalGroup, classifyConstraint, classifyMuscleGroup, isMobility, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
+import { type Equipment, effectiveVolumeByGroup, examplesForGroup, parseEquipment, suggestAlternatives, type VolumeSet } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { getPlan } from "./plan.js";
+// createProposal + the auto-progression dedup live in profile.js; imported here (as
+// run-progression.ts does for buildRunPlanProposal) so REST + MCP share ONE proposal
+// builder instead of duplicating the change-shaping logic (and drifting).
+import { createProposal, getProfile, supersedeAutoProgressionDrafts } from "./profile.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
@@ -39,6 +43,10 @@ const STEP_CEIL_COMPOUND = 5;     // …or ≤5 lb on a compound, whichever is s
 const STEP_CEIL_ISOLATION = 2.5;  // …or ≤2.5 lb on an isolation lift
 const SECONDS_STEP = 5;           // timed holds progress +5s when solid
 const DELOAD_FRAC = 0.1;          // a deload backs the load off ~10%
+// A movement run this long (steady, not stalled) is ripe for PROACTIVE variety —
+// introduce a fresh variation before staleness sets in, at a block boundary, rather
+// than waiting for a measured plateau. Tenure = weeks since the lift was first logged.
+const INTRODUCE_TENURE_WEEKS = 12;
 
 // Isolation groups get the smaller (2.5 lb) plate jump; compounds get 5 lb.
 const ISOLATION_GROUPS = new Set([
@@ -71,6 +79,144 @@ export interface Prescription {
   vary_to?: string;                    // a concrete same-pattern variation to rotate in (action "vary")
   vary_options?: { name: string; why: string }[]; // a MENU of same-pattern swaps (action "vary"); vary_to is the lead
   plan_item_id?: number;               // set by planDayProgression for the apply path
+  day_number?: number;                 // set by planDayProgression — the day the lift sits on (for the swap apply path)
+  autoregulated?: boolean;             // recovery signals braked this step (overload→hold / hold→deload) — informational
+}
+
+// ---- autoregulation + acute-recovery gate -----------------------------------
+// The 1-tap session feedback (sessions.soreness/performance 1-5 + free-text
+// joint_pain) plus recent ACUTE muscle load must GATE the deterministic
+// prescription — otherwise the one-tap auto-progression could propose an OVERLOAD
+// the morning after soreness 5 / a named sore joint. Recovery INFORMS, it never
+// overrides progressive overload beyond ONE step toward safety: overload→hold on
+// high soreness / low performance / a just-smoked group; hold→deload when a named
+// joint loads that lift. Constitution: kind, plain words, no scores; a brake, not
+// a penalty.
+export interface AutoregSignals {
+  soreness: number | null;    // most recent 1-5
+  performance: number | null; // most recent 1-5
+  joint_pain: string | null;  // most recent free-text ("left knee")
+  date: string | null;
+}
+
+const AUTOREG_WINDOW_DAYS = 3; // feedback older than this is stale — don't brake on it
+
+// Read the most recent session feedback within the window (the freshest non-null
+// value of each field). Null-safe: no feedback → all nulls (no brake).
+export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDateISO()): AutoregSignals {
+  const today = String(date || localDateISO()).slice(0, 10);
+  const since = addDaysISO(today, -(Math.max(1, days) - 1)) ?? today;
+  const out: AutoregSignals = { soreness: null, performance: null, joint_pain: null, date: null };
+  try {
+    const rows = db.prepare(
+      `SELECT date, soreness, performance, joint_pain FROM sessions
+        WHERE date >= ? AND date <= ? ORDER BY date DESC`
+    ).all(since, today) as any[];
+    for (const r of rows) {
+      if (out.soreness == null && r.soreness != null) out.soreness = Number(r.soreness);
+      if (out.performance == null && r.performance != null) out.performance = Number(r.performance);
+      if (out.joint_pain == null && r.joint_pain != null && String(r.joint_pain).trim()) out.joint_pain = String(r.joint_pain).trim();
+      if (out.date == null && (r.soreness != null || r.performance != null || (r.joint_pain && String(r.joint_pain).trim()))) out.date = String(r.date);
+    }
+  } catch { /* sessions columns absent → no signal */ }
+  return out;
+}
+
+// A named joint (free-text like "left knee") → the canonical groups whose loaded
+// work stresses that joint, so we can tell whether THIS lift loads the sore joint.
+const JOINT_GROUP_MAP: Array<{ re: RegExp; groups: MuscleGroup[] }> = [
+  { re: /knee/, groups: ["quads", "hamstrings", "calves"] },
+  { re: /shoulder|delt|rotator|\bac\b/, groups: ["chest", "shoulders", "rear delts"] },
+  { re: /elbow|cubital|forearm|\bwrist/, groups: ["biceps", "triceps", "forearms", "back"] },
+  { re: /lower ?back|lumbar|\bback\b|spine|\bsi\b|sacro/, groups: ["back", "hamstrings", "quads"] },
+  { re: /\bhip\b|groin|glute/, groups: ["glutes", "hamstrings", "quads"] },
+  { re: /ankle|achilles|\bcalf\b|\bfoot\b|shin|tib/, groups: ["calves", "quads"] },
+];
+
+function jointLoadsGroup(jointText: string, group: MuscleGroup | null): boolean {
+  if (!group) return false;
+  const s = String(jointText || "").toLowerCase();
+  if (!s) return false;
+  for (const m of JOINT_GROUP_MAP) if (m.re.test(s) && m.groups.includes(group)) return true;
+  return false;
+}
+
+// Decide the ONE-step autoregulation brake for a lift, given its computed action,
+// its canonical group, the recent feedback, and the acute-load map. Returns the new
+// action + a plain reason, or null when nothing brakes. Never steps more than once
+// toward safety (overload→hold, hold→deload).
+type BrakeResult = { action: "hold" | "deload"; why: string } | null;
+function autoregBrake(
+  action: ProgressionAction,
+  group: MuscleGroup | null,
+  hasHistory: boolean,
+  autoreg: AutoregSignals | null,
+  recentLoad: Map<MuscleGroup, RecentLoad> | null,
+): BrakeResult {
+  if (!autoreg && !recentLoad) return null;
+  const heavyAcute = group && recentLoad ? recentLoad.get(group)?.heavy === true : false;
+  const jointHit = group && autoreg?.joint_pain ? jointLoadsGroup(autoreg.joint_pain, group) : false;
+  const soreHigh = autoreg?.soreness != null && autoreg.soreness >= 4;
+  const perfLow = autoreg?.performance != null && autoreg.performance <= 2;
+  const highStrain = soreHigh || perfLow || heavyAcute;
+
+  // A named sore joint is the strongest brake — one step toward safety.
+  if (jointHit) {
+    if (action === "overload") {
+      return { action: "hold", why: `Your last check-in flagged a sore joint this lift loads — holding the load today rather than adding; earn a clean, pain-free session first.` };
+    }
+    if (action === "hold" && hasHistory) {
+      return { action: "deload", why: `A sore joint this lift loads is still flagged — easing the load a touch so it can settle before you build again.` };
+    }
+    return null;
+  }
+  // High soreness / low performance / a just-smoked group → don't add load today.
+  if (highStrain && action === "overload") {
+    const reason = heavyAcute
+      ? "this muscle got a heavy dose recently"
+      : soreHigh ? "recent soreness is running high" : "recent sessions felt flat";
+    return { action: "hold", why: `Holding the load today — ${reason}, so this isn't the session to push. Recovery informs the plan; it's a brake, not a penalty.` };
+  }
+  return null;
+}
+
+// ---- movement tenure (proactive-variety ledger) -----------------------------
+// Weeks since a movement was FIRST logged — how long the athlete has been running
+// it. Used to suggest rotating a fresh variation in PROACTIVELY (before a measured
+// plateau), at a block boundary. Null when the lift has never been logged.
+export function movementTenureWeeks(name: string, date = localDateISO()): number | null {
+  const ex = findExercise(name);
+  if (!ex) return null;
+  const first = (db.prepare(
+    `SELECT MIN(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id WHERE ls.exercise_id = ?`
+  ).get(ex.id) as any)?.d;
+  if (!first) return null;
+  const days = daysBetweenISO(String(date || localDateISO()).slice(0, 10), String(first).slice(0, 10));
+  if (days == null || days < 0) return 0;
+  return Math.round(days / 7);
+}
+
+// The athlete's available equipment, parsed from the persisted profile.equipment
+// free-text field. Empty → no constraint (rank neutrally).
+export function availableEquipment(): Equipment[] {
+  try { return parseEquipment((getProfile() as any)?.equipment ?? null); } catch { return []; }
+}
+
+// Read/write the persisted equipment/preference profile (profile.equipment free
+// text). Kept here (a direct column write) rather than in setProfile so the big
+// profile upsert stays untouched — setProfile never lists equipment, so it never
+// clobbers it. Returns the stored text + the parsed Equipment types.
+export function getEquipmentProfile(): { equipment: string | null; parsed: Equipment[] } {
+  const eq = (() => { try { return (getProfile() as any)?.equipment ?? null; } catch { return null; } })();
+  return { equipment: eq, parsed: parseEquipment(eq) };
+}
+
+export function setEquipmentProfile(equipment: string | null): { equipment: string | null; parsed: Equipment[] } {
+  const val = equipment == null ? null : String(equipment).trim().slice(0, 1000) || null;
+  const existing = db.prepare(`SELECT id FROM profile WHERE id = 1`).get();
+  if (existing) db.prepare(`UPDATE profile SET equipment = ? WHERE id = 1`).run(val);
+  else db.prepare(`INSERT INTO profile (id, equipment) VALUES (1, ?)`).run(val);
+  return { equipment: val, parsed: parseEquipment(val) };
 }
 
 // ---- small helpers ----
@@ -211,16 +357,45 @@ function loadedDeltaText(current: number | null, next: number | null): string {
   return d > 0 ? `+${d} lb` : `−${Math.abs(d)} lb`;
 }
 
+// Same-pattern variation MENU for a lift, ranked toward the athlete's available
+// equipment + heavier COMPOUND loading (the owner's explicit goal), never
+// re-suggesting a movement already on the day. Pure over suggestAlternatives.
+function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: string }[] {
+  const equip = ctx?.availableEquipment ?? [];
+  const exclude = ctx?.excludeNames ?? [];
+  return (suggestAlternatives(name, {
+    limit: 3,
+    preferCompound: true,
+    availableEquipment: equip.length ? equip : undefined,
+    excludeNames: exclude.length ? exclude : undefined,
+  }) as { name: string; why: string }[]).map((v) => ({ name: v.name, why: v.why }));
+}
+
 // ---- the per-lift prescription ----------------------------------------------
 // nextPrescription reads the latest logged top set + RIR + the lift's
 // program-state status/trend, and proposes the NEXT session's target. Returns
 // null when there's no history AND no plan item to read (nothing to say). Pass a
 // pre-built `states` map when iterating many lifts (avoids recomputing the whole
 // program-state per lift).
-export function nextPrescription(exerciseName: string, states?: Map<string, LiftState>): Prescription | null {
+export interface PrescriptionOpts {
+  autoreg?: AutoregSignals | null;               // latest 1-tap session feedback (soreness/perf/joint)
+  recentLoad?: Map<MuscleGroup, RecentLoad> | null; // acute per-group load (a just-smoked group)
+  availableEquipment?: Equipment[] | null;       // rank variation candidates by what the athlete can load
+  excludeNames?: string[] | null;                // movements already on the day — don't re-suggest them
+}
+
+export function nextPrescription(exerciseName: string, states?: Map<string, LiftState>, opts?: PrescriptionOpts): Prescription | null {
   const ex = findExercise(exerciseName);
   const mode: "reps" | "timed" = ex?.mode === "timed" ? "timed" : "reps";
   const group: string | null = ex?.muscle_group ?? null;
+  // Autoregulation + acute-recovery gate. Compute lazily for a standalone call so
+  // Today's per-lift read is braked too; planDayProgression threads a shared read in.
+  const canonGroup: MuscleGroup | null = canonicalGroup(group) ?? classifyMuscleGroup(exerciseName);
+  const autoreg = opts && "autoreg" in opts ? (opts.autoreg ?? null) : recentAutoregulation();
+  const recentLoad = opts && "recentLoad" in opts ? (opts.recentLoad ?? null) : recentMuscleLoad(2);
+  const equip = opts && "availableEquipment" in opts ? (opts.availableEquipment ?? []) : availableEquipment();
+  const excludeNames = (opts?.excludeNames ?? []).filter(Boolean);
+  const tenureWeeks = movementTenureWeeks(exerciseName);
   // Only a LOAD-limiting constraint (pain/strain under load) freezes load. A form/
   // grip/ROM cue ("neutral grip only, no supinated curls") does NOT — the athlete
   // manages it technically and still earns load. classifyConstraint draws the line so
@@ -236,8 +411,18 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   // Nothing logged and nothing planned → genuinely nothing to read.
   if (!last && !plan) return null;
 
-  if (mode === "timed") return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state);
-  return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state);
+  const brakeCtx: PrescCtx = { canonGroup, autoreg, recentLoad, tenureWeeks, availableEquipment: equip, excludeNames };
+  if (mode === "timed") return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
+  return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
+}
+
+interface PrescCtx {
+  canonGroup: MuscleGroup | null;
+  autoreg: AutoregSignals | null;
+  recentLoad: Map<MuscleGroup, RecentLoad> | null;
+  tenureWeeks: number | null;
+  availableEquipment: Equipment[];
+  excludeNames: string[];
 }
 
 function repsPrescription(
@@ -247,7 +432,8 @@ function repsPrescription(
   plan: ReturnType<typeof planItemFor>,
   cur: PrescriptionTarget | null,
   last: ReturnType<typeof latestTopSet>,
-  state: LiftState | null
+  state: LiftState | null,
+  brakeCtx?: PrescCtx
 ): Prescription {
   // Ground in REALITY. The load to progress FROM is the HARDER of the plan target and
   // the athlete's actual recent working weight — so a stale plan target (e.g. 27 lb)
@@ -276,6 +462,9 @@ function repsPrescription(
   let nextWeight: number | null = baseWeight;
   let varyTo: string | undefined;
   let varyOptions: { name: string; why: string }[] | undefined;
+  // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
+  // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
+  const varyCandidates = rankedVaryOptions(name, brakeCtx);
 
   const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
@@ -306,9 +495,10 @@ function repsPrescription(
       // Carry a concrete same-pattern candidate so "switch it up" is actionable (Today
       // shows the real alternative; the evolution/apply path can rotate it in).
       // A MENU of same-pattern candidates (not just one forced swap) so the athlete
-      // chooses; vary_to stays the lead candidate for back-compat.
-      varyOptions = (suggestAlternatives(name, { limit: 3 }) as any[])
-        .map((v) => ({ name: v.name, why: v.why }));
+      // chooses; vary_to stays the lead candidate for back-compat. Ranked by the
+      // athlete's available equipment + biased toward heavier compound loading, and
+      // never re-suggesting a movement already on the day.
+      varyOptions = varyCandidates;
       varyTo = varyOptions[0]?.name;
       why = varyTo
         ? `Flat about ${state?.weeks_static} weeks — rotate to ${varyTo} (same movement pattern) to unstick it; keep the rest of the day.`
@@ -322,6 +512,22 @@ function repsPrescription(
     action = "hold";
     nextWeight = baseWeight;
     why = "Nothing logged yet — start where the plan sits and log your actual sets.";
+  } else if (
+    !loadConstrained &&
+    (state?.status === "maintaining") &&
+    (brakeCtx?.tenureWeeks ?? 0) >= INTRODUCE_TENURE_WEEKS &&
+    varyCandidates.length > 0
+  ) {
+    // PROACTIVE variety: the lift is holding steady but you've run it a long time —
+    // introduce a fresh same-pattern variation (ranked toward heavier compound
+    // loading) before staleness sets in, rather than waiting for a measured plateau.
+    // Load is held; the novelty IS the stimulus. This makes the "introduce" action
+    // reachable deterministically.
+    action = "introduce";
+    nextWeight = baseWeight;
+    varyOptions = varyCandidates;
+    varyTo = varyOptions[0]?.name;
+    why = `You've run ${name} steady for ~${brakeCtx?.tenureWeeks} weeks — introduce ${varyTo} (same pattern, room to load heavier) to freshen the stimulus before it goes stale.`;
   } else if (earned) {
     action = "overload";
     if (baseWeight == null) {
@@ -358,6 +564,22 @@ function repsPrescription(
     else if (action === "hold" && !loadConstrained) why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
   }
 
+  // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
+  // a just-smoked group / a named sore joint. Recovery INFORMS, never overrides
+  // progressive overload by more than a step. Applied last so it wins over the earned
+  // step (an earned overload the morning after a sore knee becomes a hold/deload).
+  let autoregulated = false;
+  const brake = brakeCtx ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad) : null;
+  if (brake) {
+    autoregulated = true;
+    action = brake.action;
+    why = brake.why;
+    if (brake.action === "hold") nextWeight = baseWeight;
+    else nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
+    varyTo = undefined;
+    varyOptions = undefined;
+  }
+
   const suggested: PrescriptionTarget = {
     sets,
     rep_low: repLow ?? undefined,
@@ -382,6 +604,7 @@ function repsPrescription(
     reground: planBehind || undefined,
     vary_to: varyTo,
     vary_options: varyOptions,
+    autoregulated: autoregulated || undefined,
   };
 }
 
@@ -392,7 +615,8 @@ function timedPrescription(
   plan: ReturnType<typeof planItemFor>,
   cur: PrescriptionTarget | null,
   last: ReturnType<typeof latestTopSet>,
-  state: LiftState | null
+  state: LiftState | null,
+  brakeCtx?: PrescCtx
 ): Prescription {
   const baseSeconds: number | null =
     plan?.seconds != null ? plan.seconds
@@ -432,12 +656,26 @@ function timedPrescription(
     why = "Hold this duration until it feels easy, then extend it.";
   }
 
+  // AUTOREGULATION GATE (timed): a sore joint this hold loads, high soreness, or a
+  // just-smoked group holds/eases the duration rather than extending. Timed work
+  // eases in SECONDS, never load. Applied last so it wins over the earned extension.
+  let autoregulated = false;
+  const brake = brakeCtx ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad) : null;
+  if (brake) {
+    autoregulated = true;
+    action = brake.action;
+    why = brake.why;
+    if (brake.action === "hold") nextSeconds = baseSeconds;
+    else nextSeconds = baseSeconds != null ? Math.max(10, Math.round(baseSeconds * (1 - DELOAD_FRAC))) : baseSeconds;
+  }
+
   const suggested: PrescriptionTarget = { sets, seconds: nextSeconds ?? undefined };
   const delta_text = secondsDeltaText(baseSeconds, nextSeconds);
 
   return {
     exercise: ex_name(name),
     mode: "timed",
+    autoregulated: autoregulated || undefined,
     action,
     suggested,
     current: cur,
@@ -474,13 +712,92 @@ export function planDayProgression(dayNumber: number): Prescription[] {
       WHERE pi.plan_day_id = ? ORDER BY pi.position`
   ).all(day.id) as any[];
   const states = buildLiftStateMap(); // compute the program-state ONCE for the day
+  // Autoregulation + acute-load read computed ONCE for the whole day and threaded in,
+  // so the one-tap apply proposal built from these is gated too (no overload the
+  // morning after soreness / a named sore joint). Equipment + the day's own movements
+  // are threaded in too so a variety suggestion ranks by what the athlete can load and
+  // never re-suggests something already on the day.
+  const autoreg = recentAutoregulation();
+  const recentLoad = recentMuscleLoad(2);
+  const equip = availableEquipment();
+  const dayMovements = items.filter((it) => it.kind !== "cardio" && it.name).map((it) => String(it.name));
   const out: Prescription[] = [];
   for (const it of items) {
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
-    const p = nextPrescription(it.name, states);
-    if (p) out.push({ ...p, plan_item_id: it.plan_item_id });
+    const excludeNames = dayMovements.filter((n) => n.toLowerCase() !== String(it.name).toLowerCase());
+    const p = nextPrescription(it.name, states, { autoreg, recentLoad, availableEquipment: equip, excludeNames });
+    if (p) out.push({ ...p, plan_item_id: it.plan_item_id, day_number: dayNumber });
   }
   return out;
+}
+
+// Turn a day's per-lift prescriptions into a DRAFT plan proposal (the one-tap
+// auto-progression apply), via the existing propose→apply path — never auto-applied.
+// THE ONE shared builder for REST + MCP so they never drift. A `vary` prescription
+// becomes a real {swap:{from,to}} change (rotating the stalled lift out for the lead
+// same-pattern option) — it used to map to a target change on the SAME exercise at
+// the held weight, i.e. a silent no-op. Everything else maps to a target step, and a
+// "hold" (including an autoregulation-braked hold) is by definition no change → dropped.
+// Returns the designed { ok:false, error } (status 200 at the surface) when there's
+// nothing to propose.
+export function buildProgressionProposal(day: number): { ok: false; error: string } | { ok: true; proposal: any } {
+  if (!Number.isFinite(day)) return { ok: false, error: "day required" };
+  const prescriptions = planDayProgression(day);
+  const changes: Record<string, any>[] = [];
+  for (const p of prescriptions) {
+    if (p.action === "hold") continue; // a hold is no change
+    // A vary/introduce → a first-class swap (rotate the lift out for the lead option).
+    if (p.action === "vary" || p.action === "introduce") {
+      const to = p.vary_to ?? p.vary_options?.[0]?.name ?? null;
+      if (!to) continue; // no candidate → nothing to swap to (skip, never a no-op)
+      changes.push({ day_number: day, swap: { from: p.exercise, to }, reason: p.why || `Rotate a variation in for ${p.exercise}.` });
+      continue;
+    }
+    const c: Record<string, any> = {
+      day_number: day,
+      exercise: p.exercise,
+      sets: p.suggested?.sets ?? null,
+      rep_low: p.suggested?.rep_low ?? null,
+      rep_high: p.suggested?.rep_high ?? null,
+      reason: p.why || p.delta_text || null,
+    };
+    if (p.mode === "timed") {
+      if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
+    } else if (p.suggested.weight !== undefined) {
+      c.target_weight = p.suggested.weight;
+    }
+    // Only a change that moves a target (or is a swap) is a real change.
+    if (c.target_weight !== undefined || c.target_seconds !== undefined) changes.push(c);
+  }
+  if (!changes.length) return { ok: false, error: "nothing to propose for this day" };
+  const parsed = {
+    summary: `Auto-progression for day ${day} — ${changes.length} lift${changes.length === 1 ? "" : "s"}`,
+    changes,
+  };
+  // Retire any prior un-applied auto-progression draft for THIS day so repeated taps
+  // never stack duplicates (the fresh draft reflects the latest logs).
+  supersedeAutoProgressionDrafts(day);
+  const proposal = createProposal("auto-progression", `day ${day} progression`, "", parsed);
+  return { ok: true, proposal };
+}
+
+// Build a DRAFT proposal to ROTATE one exercise out for another on a day — the
+// propose→apply path behind Today's "rotate one in" chips (and MCP swap_exercise).
+// Never auto-applies; the swap only lands when the athlete taps Apply. Returns the
+// designed { ok:false, error } (status 200 at the surface) on bad input.
+export function buildSwapProposal(day: number, from: string, to: string): { ok: false; error: string } | { ok: true; proposal: any } {
+  const d = Number(day);
+  if (!Number.isFinite(d)) return { ok: false, error: "day required" };
+  const f = String(from ?? "").trim();
+  const t = String(to ?? "").trim();
+  if (!f) return { ok: false, error: "from exercise required" };
+  if (!t) return { ok: false, error: "to exercise required" };
+  const parsed = {
+    summary: `Rotate ${f} → ${t} on day ${d}`,
+    changes: [{ day_number: d, swap: { from: f, to: t }, reason: `Rotate a same-pattern variation in for ${f}.` }],
+  };
+  const proposal = createProposal("exercise-swap", `swap ${f} → ${t}`, "", parsed);
+  return { ok: true, proposal };
 }
 
 // ---- program balance (volume per canonical group) ---------------------------
@@ -512,22 +829,16 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
   const since = addDaysISO(today, -(weeks * 7 - 1)) ?? today;
 
   const rows = db.prepare(
-    `SELECT e.muscle_group AS mg, e.name AS name, s.date AS date
+    `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
+            ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
       WHERE s.date >= ? AND s.date <= ?`
   ).all(since, today) as any[];
 
-  // Tally per canonical group, dropping mobility from the count.
-  const tally = new Map<string, { sets: number; last: string | null }>();
-  for (const r of rows) {
-    const g = canonicalGroup(r.mg) ?? canonicalGroup(r.name); // group, else best-effort off name
-    if (!g || isMobility(g)) continue;
-    const cur = tally.get(g) ?? { sets: 0, last: null };
-    cur.sets += 1;
-    if (!cur.last || String(r.date) > cur.last) cur.last = String(r.date);
-    tally.set(g, cur);
-  }
+  // ONE honest-volume truth: warmups excluded, RIR-weighted, indirect credit, canon
+  // taxonomy (mobility never counts). Shared with muscleVolume + getVolumeByMuscle.
+  const tally = effectiveVolumeByGroup(rows as VolumeSet[]);
 
   const daysAgo = (iso: string | null): number | null => {
     if (!iso) return null;
@@ -540,10 +851,10 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
     const lm = MUSCLE_LANDMARKS[group];
     let band: GroupBalance["band"] = "productive";
     if (lm) band = weeklySets < lm.low ? "low" : weeklySets > lm.high ? "high" : "productive";
-    const since7 = daysAgo(v.last);
+    const since7 = daysAgo(v.last_date);
     const stale = since7 != null && since7 > 7;
     const status: GroupBalance["status"] = band === "low" || stale ? "due" : band === "high" ? "high" : "ok";
-    groups.push({ group, sets: weeklySets, band, last_trained: v.last, status });
+    groups.push({ group, sets: weeklySets, band, last_trained: v.last_date, status });
   }
   // Surface groups that were NOT trained at all in the window but have a landmark
   // — they're "due" too (the missing-pattern signal lives in programAdjustments).

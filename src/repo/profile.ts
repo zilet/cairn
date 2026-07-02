@@ -1,6 +1,8 @@
 import { db } from "../db.js";
 import { findExercise } from "./exercises.js";
 import { lsqSlopePerDay } from "./health.js";
+import { invalidateDayRead } from "./intelligence.js";
+import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getProgress } from "./sessions.js";
 import { LB_PER_KG, localDateISO } from "./shared.js";
@@ -185,11 +187,26 @@ export function applyProposal(id: number) {
   // is clamped to lean-safe kcal/protein floors and any adjustment is reported.
   if (p.parsed.kind === "nutrition_target") {
     const { nutrition, clamped } = clampNutritionTarget(p.parsed.nutrition);
+    // Close the loop: PERSIST the accepted (clamped, lean-safe) target so the fuel
+    // card, goal math and next check-in read THIS number instead of re-deriving the
+    // formula. Effective from today. Failure to persist never blocks the ack.
+    let accepted: any = null;
+    try {
+      accepted = setNutritionTarget({
+        target_kcal: nutrition.target_kcal,
+        protein_g: nutrition.protein_g,
+        carbs_g: nutrition.carbs_g,
+        fat_g: nutrition.fat_g,
+        source: "checkin",
+        note: nutrition.reason ?? null,
+      });
+    } catch { accepted = null; }
     setProposalStatus(id, "applied");
     return {
       ok: true,
       id, applied: [], nutrition,
-      note: "advisory nutrition target — no plan changes to apply",
+      note: "advisory nutrition target — saved as your active target",
+      ...(accepted ? { accepted } : {}),
       ...(clamped.length ? { clamped } : {}),
     };
   }
@@ -260,6 +277,9 @@ export function applyProposal(id: number) {
   }
   setProposalStatus(id, "applied");
   supersedeSiblingTrainingDrafts(id);
+  // An applied target tweak / added movement / week of runs can change today's read —
+  // bust the cached Brief so the next open reflects the change, not the stale plan.
+  invalidateDayRead();
   return { ok: true, id, applied, added, skipped, ...(runs ? { runs: runs.applied } : {}), ...(clamped.length ? { clamped } : {}) };
 }
 
@@ -295,13 +315,26 @@ export function getPrimaryDiscipline(): "strength" | "endurance" | "hybrid" {
 
 export function setProfile(p: any) {
   const cur = getProfile() || {};
+  // Height in inches (v59) — mirrors the app's lb/in convention. Same nullable
+  // contract as the other optional fields: '' / null clears, undefined leaves
+  // intact, a value is clamped to a plausible human range. NaN → null.
+  const heightIn: number | null =
+    p.height_in !== undefined
+      ? (p.height_in == null || p.height_in === ""
+          ? null
+          : Math.round(Math.min(108, Math.max(24, Number(p.height_in))) * 10) / 10 || null)
+      : (cur.height_in ?? null);
   const merged = {
     // The athlete's name (optional). Same contract as the free-text fields: an
     // explicit '' clears it, undefined leaves the existing value intact, capped.
     name: p.name !== undefined ? (p.name == null ? null : String(p.name).trim().slice(0, 120) || null) : (cur.name ?? null),
     sex: p.sex ?? cur.sex ?? "male",
     age: p.age ?? cur.age ?? null,
-    height_cm: p.height_cm ?? cur.height_cm ?? null,
+    // When only inches were ever provided, derive cm so the existing TDEE /
+    // doctor-report paths (which read height_cm) light up too. An explicit cm
+    // always wins.
+    height_cm: p.height_cm ?? cur.height_cm ?? (heightIn != null ? Math.round(heightIn * 2.54 * 10) / 10 : null),
+    height_in: heightIn,
     weight_lb: p.weight_lb ?? cur.weight_lb ?? null,
     goal_weight_lb: p.goal_weight_lb ?? cur.goal_weight_lb ?? null,
     goal_date: p.goal_date ?? cur.goal_date ?? null,
@@ -331,17 +364,17 @@ export function setProfile(p: any) {
       : (cur.endurance_goal_json ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, goal_weight_lb, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
-       sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, weight_lb=excluded.weight_lb,
+       sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, height_in=excluded.height_in, weight_lb=excluded.weight_lb,
        goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date, goal_mode=excluded.goal_mode,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
-  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
+  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
   return getProfile();
 }
 
@@ -588,12 +621,41 @@ export function computeGoalCheck(prof?: any) {
   // never a score. Null/silent when there isn't enough scale data or no goal.
   const goalPace = projectGoalPace(p, lbsToLose);
 
+  // ---- the EFFECTIVE target the surfaces read (accepted > formula) ----------
+  // If the athlete has ACCEPTED an adaptive-nutrition target, that number wins over
+  // the re-derived formula (closing the loop — the accepted target is persisted, not
+  // recomputed each time). The formula stays the fallback AND the lean-safe floor:
+  // protein never drops below the recommended protein floor. `accepted` is null-safe.
+  let accepted: any = null;
+  try { accepted = getActiveNutritionTarget(); } catch { accepted = null; }
+  const effective_target = accepted && accepted.target_kcal != null
+    ? {
+        target_kcal: Math.round(accepted.target_kcal),
+        protein_g: Math.max(Math.round(accepted.protein_g ?? 0), Math.round(recommended.protein_g || 0)),
+        carbs_g: accepted.carbs_g != null ? Math.round(accepted.carbs_g) : null,
+        fat_g: accepted.fat_g != null ? Math.round(accepted.fat_g) : null,
+        source: "accepted" as const,
+        effective_date: accepted.effective_date,
+      }
+    : {
+        target_kcal: Math.round(recommended.target_intake_kcal),
+        protein_g: Math.round(recommended.protein_g || 0),
+        carbs_g: null,
+        fat_g: null,
+        source: "formula" as const,
+        effective_date: null,
+      };
+
   return {
     ok: true, bmr: Math.round(bmr), tdee, lbs_to_lose: lbsToLose,
     // The effective journey shape (v41) — drives the day-intake target framing,
     // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
     goal_mode: mode,
     safe_max_rate_lb: safeMaxRate, requested, recommended, message,
+    // The persisted accepted target (or null) + the EFFECTIVE target every surface
+    // should read (accepted wins, formula is the fallback/floor). Additive.
+    accepted_target: accepted,
+    effective_target,
     // Additive (older consumers ignore): the measured-trend forecast.
     trend_lb_wk: goalPace.trend_lb_wk,
     projected_goal_date: goalPace.projected_goal_date,

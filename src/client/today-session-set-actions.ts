@@ -79,8 +79,12 @@ type TodaySessionSetActionsApi = {
           body: JSON.stringify(payload.body),
         }));
       } catch {
+        // Dead zone on the gym floor — DON'T drop the set. Queue the exact POST and
+        // replay it in order on reconnect; the persistent "N to sync" line and the
+        // toast tell the athlete it's held, not lost.
         logBtn.disabled = false;
-        deps.toast("Couldn't log that set — check your connection.");
+        (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.("set", "/sets", payload.body);
+        deps.toast("Set saved — will sync when you're back online");
         return;
       }
       logBtn.disabled = false;

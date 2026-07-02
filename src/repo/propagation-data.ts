@@ -199,7 +199,11 @@ function zoneNameTrustworthy(name: string): boolean {
   return true;
 }
 
-export function matchOptimalZone(name: string): OptimalZone | null {
+// `profile` (optional) personalizes the sex/age-dependent bands (testosterone,
+// estradiol, ferritin, body fat, eGFR). Omitted → the male/generic default, so every
+// existing caller is byte-for-byte unchanged; the connected-brain paths thread the
+// athlete's profile through so a woman/older adult isn't held to a male band.
+export function matchOptimalZone(name: string, profile?: ZoneProfile | null): OptimalZone | null {
   const n = String(name ?? "").toLowerCase();
   // A ratio / urine / pattern / free-T / lipoprotein-subfraction name must not be held
   // to a serum concentration band it was never measured against (the clinically-wrong
@@ -216,7 +220,8 @@ export function matchOptimalZone(name: string): OptimalZone | null {
   // A non-fasting glucose substring-matched the FASTING band — don't hold it to a
   // fasting target it shouldn't be judged against (protects the physician report).
   if (suppressFastingGlucoseZone(n, best)) return null;
-  return best;
+  if (!best) return null;
+  return personalizeZone(best, profile);
 }
 
 // Distance from the optimal band, normalized 0..1 by the band's own width
@@ -250,6 +255,74 @@ export function markerSide(value: number, zone: OptimalZone, flag: string | null
   if (value < zone.optimal[0]) return "low";
   if (value > zone.optimal[1]) return "high";
   return "unknown";
+}
+
+// ---------- sex/age personalization of the optimal bands ----------
+// The static OPTIMAL_ZONES table above carries the MALE / generic-adult default so
+// every existing caller (and the doctor report) keeps behaving exactly as before
+// when no profile is supplied. A handful of analytes have optimal ranges that
+// genuinely depend on SEX (testosterone, estradiol, ferritin, body fat) or AGE
+// (eGFR falls with normal aging), and the male band fires clinically WRONG
+// directives for a woman or an older adult ("low testosterone" on a premenopausal
+// woman's 40 ng/dL; "reduced eGFR" on a healthy 70-year-old's 72). When a profile
+// IS threaded through matchOptimalZone the band is adjusted here — returning a COPY,
+// never mutating the shared const. Everything stays INFORMATIONAL, not medical advice.
+export interface ZoneProfile { sex?: string | null; age?: number | null }
+
+function zoneSex(profile?: ZoneProfile | null): "male" | "female" {
+  return String(profile?.sex || "male").toLowerCase() === "female" ? "female" : "male";
+}
+function zoneAge(profile?: ZoneProfile | null): number | null {
+  const n = Number(profile?.age);
+  return Number.isFinite(n) ? n : null;
+}
+
+// eGFR declines with normal aging (~0.8-1 mL/min/1.73m² per year past 40), so a
+// value that flags a 30-year-old is age-appropriate at 70. The lower optimal edge
+// is age-banded to the expected range so a healthy older adult isn't read as having
+// reduced kidney function; a value below the age band still flags (genuinely low).
+export function egfrLowBound(age: number | null): number {
+  if (age == null || age < 40) return 90;
+  if (age < 50) return 82;
+  if (age < 60) return 75;
+  if (age < 70) return 68;
+  return 60;
+}
+
+// Return the profile-adjusted zone (a COPY when adjusted), or the base zone when the
+// analyte isn't sex/age-dependent or no profile was supplied. Only the bands known
+// to differ by sex/age are touched; everything else passes through unchanged.
+export function personalizeZone(base: OptimalZone, profile?: ZoneProfile | null): OptimalZone {
+  if (!profile) return base;
+  const sex = zoneSex(profile);
+  const age = zoneAge(profile);
+  switch (base.label) {
+    case "Testosterone":
+      // Female total testosterone runs ~8-60 ng/dL; the male 500-900 band would fire a
+      // false "low testosterone". No established longevity lever for women here → soft band.
+      if (sex === "female") return { ...base, optimal: [8, 60], dir: "band", actionable: false };
+      return base;
+    case "Estradiol":
+      // Premenopausal estradiol is cycle-dependent and spans a wide range; the male
+      // 10-40 band would falsely flag a normal woman as "high estradiol".
+      if (sex === "female") return { ...base, optimal: [10, 350], dir: "band", actionable: false };
+      return base;
+    case "Ferritin":
+      // Menstruating women carry lower iron stores; the male 50 lower bound over-flags
+      // "low ferritin". Frank deficiency in women is defined nearer 30.
+      if (sex === "female") return { ...base, optimal: [30, 150] };
+      return base;
+    case "Body fat":
+      // Women carry more essential fat; the male 10-25% band would flag a lean woman.
+      if (sex === "female") return { ...base, optimal: [18, 33] };
+      return base;
+    case "eGFR": {
+      const lo = egfrLowBound(age);
+      return lo === base.optimal[0] ? base : { ...base, optimal: [lo, base.optimal[1]] };
+    }
+    default:
+      return base;
+  }
 }
 
 // ---------- marker → cross-domain directive mapping table (T4 static data) ----------

@@ -157,16 +157,16 @@ const CLASSIFY_RULES: Array<[MuscleGroup, RegExp[]]> = [
   ["core", [/\bplank/, /\bcrunch/, /\bsit up/, /\bab\b/, /\babs\b/, /\bab /, /dead bug/, /hollow/, /\bpallof/, /\bl sit/, /hanging (leg|knee) raise/, /leg raise/, /knee raise/, /russian twist/, /\bwoodchop/, /\bcable rotation/, /\boblique/, /\bbird dog/, /\bbicycle\b/, /toe touch/, /\bv up/, /\brollout/, /ab wheel/, /\bsuitcase/]],
   // --- forearms / grip / carries ---
   ["forearms", [/dead hang/, /\bhang\b/, /farmer/, /\bcarry\b/, /\bcarries\b/, /grip/, /wrist (curl|roller|extension)/, /\bplate pinch/, /\bgripper/, /finger/]],
-  // --- calves (before generic legs) ---
-  ["calves", [/calf/, /\bcalves/, /\btib(ialis)?\b/, /\btoe raise/, /seated calf/, /standing calf/]],
+  // --- calves + anterior tibialis (before generic legs) ---
+  ["calves", [/calf/, /\bcalves/, /\btib(ialis)?\b/, /\btib raise/, /dorsiflex/, /\btoe raise/, /seated calf/, /standing calf/]],
   // --- hamstrings / hinge / posterior ---
   ["hamstrings", [/leg curl/, /lying curl/, /seated curl/, /\bham(string)?\b/, /\brdl\b/, /romanian/, /stiff leg/, /stiff legged/, /good morning/, /nordic/, /\bdeadlift/, /\bglute ham/, /\bghr\b/]],
-  // --- glutes ---
-  ["glutes", [/hip thrust/, /glute bridge/, /\bbridge\b/, /\bglute/, /\bkickback/, /abduction/, /\bbird dog\b/]],
+  // --- glutes (incl. hip abduction) ---
+  ["glutes", [/hip thrust/, /glute bridge/, /\bbridge\b/, /\bglute/, /\bkickback/, /abduction/, /abductor/, /lateral (band )?walk/, /monster walk/, /clamshell/, /\bbird dog\b/]],
   // --- quads / knee-dominant ---
   ["quads", [/squat/, /leg press/, /leg extension/, /\blunge/, /split squat/, /\bstep up/, /\bhack\b/, /\bsissy/, /\bwall sit/, /\bquad/, /goblet/, /pistol/]],
   // --- rear delts (before shoulders + back) ---
-  ["rear delts", [/face pull/, /rear delt/, /reverse (fly|pec|flye)/, /rear fly/, /\bband pull apart/, /\bypt\b/, /\bprone y\b/, /\bprone t\b/]],
+  ["rear delts", [/face pull/, /rear delt/, /reverse (fly|pec|flye|delt)/, /rear (fly|flye|raise)/, /\bband pull apart/, /\bypt\b/, /\bprone y\b/, /\bprone t\b/]],
   // --- shoulders / vertical & lateral pressing ---
   ["shoulders", [/overhead press/, /\bohp\b/, /shoulder press/, /military press/, /\barnold/, /lateral raise/, /side raise/, /front raise/, /\bdelt/, /\bshoulder\b/, /\bpike push/, /upright row/, /\bshrug/]],
   // --- chest / horizontal pressing ---

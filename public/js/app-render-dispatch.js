@@ -7,7 +7,7 @@
         document.getElementById("hdrChatActions")?.remove();
         document.body.classList.remove("chat-mode");
         if (tab !== "chat")
-            document.body.classList.remove("kb-open");
+            document.body.classList.remove("kb-open", "kb-geometry-open");
         document.body.dataset.tab = tab;
         updateHeaderCondense();
         if (tab === "today")

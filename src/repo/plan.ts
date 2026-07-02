@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { constraintLimitsLoad, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exercises.js";
+import { invalidateDayRead } from "./intelligence.js";
 
 // ---------- plan ----------
 // LEFT JOIN on exercises (v35): a cardio plan item (kind='cardio') has no
@@ -10,6 +11,7 @@ import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exerc
 const PLAN_ITEM_COLS = `pi.id, pi.plan_day_id, pi.position, pi.sets, pi.rep_low, pi.rep_high,
                 pi.target_weight, pi.note, pi.warmup_sets, pi.target_seconds,
                 pi.kind, pi.target_distance_km, pi.target_duration_min, pi.target_zone, pi.interval_json,
+                pi.superset_group,
                 e.name AS exercise, e.muscle_group, e.unit, e.constraint_note, e.mode`;
 
 function hydratePlanItem(row: any) {
@@ -277,17 +279,17 @@ function insertPlanItem(row: {
   target_weight?: number | null; note?: string | null; warmup_sets?: number | null;
   target_seconds?: number | null; kind?: string;
   target_distance_km?: number | null; target_duration_min?: number | null;
-  target_zone?: string | null; interval_json?: string | null;
+  target_zone?: string | null; interval_json?: string | null; superset_group?: number | null;
 }) {
   return db.prepare(
-    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, warmup_sets, target_seconds, kind, target_distance_km, target_duration_min, target_zone, interval_json, superset_group)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     row.plan_day_id, row.position, row.exercise_id ?? null,
     row.sets ?? null, row.rep_low ?? null, row.rep_high ?? null, row.target_weight ?? null,
     row.note ?? null, row.warmup_sets ?? null, row.target_seconds ?? null,
     row.kind ?? "strength", row.target_distance_km ?? null, row.target_duration_min ?? null,
-    row.target_zone ?? null, row.interval_json ?? null
+    row.target_zone ?? null, row.interval_json ?? null, row.superset_group ?? null
   );
 }
 
@@ -302,7 +304,7 @@ function insertPlanItem(row: {
 // an UPDATE (an ADD starts at the coach's conservative target as-is).
 export interface PlanChange {
   day_number: number;
-  exercise: string;
+  exercise?: string;
   target_weight?: number | null;
   target_seconds?: number | null;
   sets?: number | null;
@@ -311,14 +313,25 @@ export interface PlanChange {
   reason?: string | null;
   note?: string | null;
   mode?: string | null;
+  // A first-class SWAP: rotate one exercise out for another IN PLACE on a day
+  // (the vary/rotate intent) — replaces the matching plan item's exercise while
+  // keeping its slot + rep scheme, starting the new movement light (log actual).
+  swap?: { from?: string | null; to?: string | null } | null;
 }
 export function applyPlanChange(
   c: PlanChange,
   opts: { clamp?: boolean } = {}
-): { action: "updated" | "added"; day: number; exercise: string; updated?: number; clamped?: ClampAdjustment[] } {
+): { action: "updated" | "added" | "swapped"; day: number; exercise: string; from?: string; updated?: number; clamped?: ClampAdjustment[] } {
   const dayNumber = Number(c.day_number);
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) throw new Error(`No plan day ${dayNumber}`);
+
+  // SWAP: replace one movement in place (the rotate/vary intent). Handled before the
+  // name-match path because a swap change carries {from,to}, not a single `exercise`.
+  if (c.swap && (c.swap.from || c.swap.to)) {
+    return applyPlanSwap(day.id, dayNumber, c.swap, c.reason ?? c.note ?? null);
+  }
+
   const name = String(c.exercise ?? "").trim();
   if (!name) throw new Error("exercise required");
 
@@ -360,6 +373,46 @@ export function applyPlanChange(
   return { action: "added", day: dayNumber, exercise: ex.name };
 }
 
+// Replace one exercise IN PLACE on a day (the swap/rotate intent). Finds the plan
+// item for `from` (exact name, then a normalized-key drift match), points it at the
+// resolved `to` exercise, keeps the slot (position/sets/reps/superset), and starts the
+// new movement light (target reset + a "start light, log actual" note) since load
+// rarely transfers cleanly across a variation. Throws when `from` isn't on the day
+// (so applyProposal reports it honestly) or `to` is missing.
+function applyPlanSwap(
+  dayId: number,
+  dayNumber: number,
+  swap: { from?: string | null; to?: string | null },
+  reason: string | null,
+): { action: "swapped"; day: number; exercise: string; from: string; updated: number } {
+  const fromName = String(swap.from ?? "").trim();
+  const toName = String(swap.to ?? "").trim();
+  if (!fromName) throw new Error("swap.from required");
+  if (!toName) throw new Error("swap.to required");
+
+  const dayItems = db.prepare(
+    `SELECT pi.id AS id, pi.target_seconds AS target_seconds, e.name AS ex_name, e.mode AS mode
+       FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+      WHERE pi.plan_day_id = ? AND (pi.kind IS NULL OR pi.kind != 'cardio')`
+  ).all(dayId) as any[];
+  const fromNorm = normalizeExerciseName(fromName);
+  const fromKey = normalizedExerciseKey(fromName);
+  const match =
+    dayItems.find((r) => normalizeExerciseName(r.ex_name) === fromNorm) ??
+    dayItems.find((r) => normalizedExerciseKey(r.ex_name) === fromKey);
+  if (!match) throw new Error(`"${fromName}" is not on day ${dayNumber} to swap out`);
+
+  // Resolve (or create) the incoming movement — its group + mode auto-classify from
+  // the name (findOrCreateExercise applies detectExerciseMode when mode is omitted).
+  const toEx = findOrCreateExercise(toName);
+  const note = `Rotated in for ${match.ex_name}${reason ? ` — ${reason}` : ""} — start light, log your actual working weight.`.slice(0, 500);
+  const timed = toEx.mode === "timed";
+  const info = db.prepare(
+    `UPDATE plan_items SET exercise_id = ?, target_weight = NULL, target_seconds = ?, note = ? WHERE id = ?`
+  ).run(toEx.id, timed ? (match.target_seconds ?? null) : null, note, match.id);
+  return { action: "swapped", day: dayNumber, exercise: toEx.name, from: match.ex_name, updated: Number(info.changes) };
+}
+
 // ---------- plan editing (manual + restructure) ----------
 export interface PlanItemInput {
   exercise?: string;            // optional for a cardio item (its label can live in `note`)
@@ -370,6 +423,7 @@ export interface PlanItemInput {
   note?: string | null;
   warmup_sets?: number | null;
   target_seconds?: number | null;
+  superset_group?: number | null;       // pair items on a day into a superset (v56); NULL = standalone
   mode?: string | null; // applied when the exercise is created (reps | timed)
   // First-class planned cardio (v35). kind:'cardio' carries an endurance
   // prescription with NO loaded exercise; kind:'strength' (default) is unchanged.
@@ -435,8 +489,12 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
       plan_day_id: dayId, position: i, exercise_id: ex.id, sets: it.sets ?? 3,
       rep_low: it.rep_low ?? null, rep_high: it.rep_high ?? null, target_weight: it.target_weight ?? null,
       note: it.note ?? null, warmup_sets: it.warmup_sets ?? null, target_seconds: it.target_seconds ?? null, kind: "strength",
+      superset_group: numOrNull(it.superset_group),
     });
   });
+  // A changed plan day can change what "today" points at (focus/frequency) — refresh
+  // the cached Brief so an applied edit isn't read against the old day from any surface.
+  invalidateDayRead();
   return getPlanDay(day_number);
 }
 
@@ -476,7 +534,7 @@ export function setWeeklyRuns(runs: RunPrescription[]) {
           .map((it: any) => ({
             exercise: it.exercise, sets: it.sets, rep_low: it.rep_low, rep_high: it.rep_high,
             target_weight: it.target_weight, note: it.note, warmup_sets: it.warmup_sets,
-            target_seconds: it.target_seconds, mode: it.mode,
+            target_seconds: it.target_seconds, mode: it.mode, superset_group: it.superset_group,
           }))
       : [];
     const cardio: PlanItemInput[] = dayRuns.map((r) => ({
@@ -521,6 +579,9 @@ export function replacePlan(days: { day_number?: number; name?: string; focus?: 
     db.exec("ROLLBACK");
     throw e;
   }
+  // A restructure (new split/frequency) can move what today should be — bust the
+  // cached Brief so a stale "train your old focus" read never survives an apply.
+  invalidateDayRead();
   return getPlan();
 }
 

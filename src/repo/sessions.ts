@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { isStrengthGarminType, listActivities, listGarminActivities, listGarminDailyMetrics, listGarminSources } from "./activities.js";
 import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } from "./endurance-sports.js";
+import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { findExercise, findOrCreateExercise, listExercises } from "./exercises.js";
 import { listContextEvents, listHealthDocuments, listHealthReviews } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
@@ -155,6 +156,9 @@ export function setSessionFeedback(
     vals.push(session.id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   }
+  // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling
+  // addCheckin already busts the Brief) — refresh so today's read reflects it.
+  invalidateDayRead(date || localDateISO());
   return getSessionDetail(session.id);
 }
 
@@ -783,28 +787,33 @@ export function getRunCompliance(weekStartISO?: string): RunCompliance {
 
 export function getVolumeByMuscle(days = 30) {
   const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  // UNIFIED onto the ONE honest-volume truth (effectiveVolumeByGroup): folds sets
+  // onto CANONICAL groups (not a raw muscle_group + 'other' bucket), excludes warmups,
+  // weights by proximity-to-failure, and credits ~0.5 indirect sets — the same model
+  // programBalance / muscleVolume use. Fetches per-set rows (incl. bodyweight/timed)
+  // rather than a raw COUNT(*); tonnage still comes only from loaded working sets.
   const rows = db
     .prepare(
-      `SELECT COALESCE(e.muscle_group, 'other') AS muscle_group,
-              CAST(ROUND(SUM(ls.weight * ls.reps)) AS INTEGER) AS tonnage,
-              COUNT(*) AS sets
+      `SELECT s.date AS date, e.name AS exercise, e.muscle_group AS muscle_group,
+              ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls
        JOIN sessions s ON s.id = ls.session_id
        JOIN exercises e ON e.id = ls.exercise_id
-       WHERE ls.weight > 0 AND ls.reps > 0 AND s.date >= ?
-       GROUP BY COALESCE(e.muscle_group, 'other')
-       ORDER BY tonnage DESC`
+       WHERE s.date >= ?`
     )
     .all(cutoff) as any[];
 
-  const total_tonnage = rows.reduce((sum, r) => sum + r.tonnage, 0);
-  const by_muscle = rows.map((r) => ({
-    muscle_group: r.muscle_group as string,
-    tonnage: r.tonnage as number,
-    sets: r.sets as number,
-    pct: total_tonnage > 0 ? Math.round((r.tonnage / total_tonnage) * 100) : 0,
-  }));
-  return { days, total_tonnage, by_muscle };
+  const byGroup = effectiveVolumeByGroup(rows as VolumeSet[]);
+  const total_tonnage = [...byGroup.values()].reduce((sum, v) => sum + v.tonnage, 0);
+  const by_muscle = [...byGroup.entries()]
+    .map(([group, v]) => ({
+      muscle_group: group as string,
+      tonnage: Math.round(v.tonnage),
+      sets: Math.round(v.sets * 10) / 10, // effective working sets (may be fractional)
+      pct: total_tonnage > 0 ? Math.round((v.tonnage / total_tonnage) * 100) : 0,
+    }))
+    .sort((a, b) => b.sets - a.sets);
+  return { days, total_tonnage: Math.round(total_tonnage), by_muscle };
 }
 
 export function getTrainingCalendar(days = 84) {

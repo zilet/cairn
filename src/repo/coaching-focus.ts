@@ -48,6 +48,10 @@ export interface CoachingFocus {
   connections: string[]; // 1-2 plain cross-domain ties
   retest: CoachingRetest | null; // ONE batched check-in, not four nag feeds
   horizon_weeks: number | null;
+  // A life/soreness CAVEAT: when a training lever would load an active injury / sore
+  // joint / reduce-load window, the conductor either demotes it or annotates it. Plain
+  // words, never a gate — "work the leg plateau AROUND your knee, pain-free only".
+  caveat: string | null;
 }
 
 interface CoachingDisciplineInput {
@@ -185,6 +189,27 @@ interface EnduranceTestInput {
   exercise?: unknown;
 }
 
+// An active injury the conductor must plan around (from context_events).
+interface InjuryInput {
+  title?: unknown;
+  area?: unknown;
+  detail?: unknown;
+  likely_resolved?: unknown;
+}
+
+// The 1-tap autoregulation rollup (soreness/joint pain) — a soft signal, never a gate.
+interface AutoregInput {
+  note?: unknown;
+  joint_pain?: unknown;
+  soreness?: unknown;
+}
+
+// The active life-context effect (activeContextEffect) — reduce-load window etc.
+interface ContextTodayInput {
+  reduce_load?: unknown;
+  any?: unknown;
+}
+
 export interface CoachingFocusInput {
   discipline?: CoachingDisciplineInput | null;
   enduranceGoal?: EnduranceGoalInput | null;
@@ -201,6 +226,11 @@ export interface CoachingFocusInput {
   trajectory?: TrajectoryInput | null;
   testWeek?: TestWeekInput | null;
   enduranceTests?: unknown;
+  // Life/soreness awareness: the conductor must not lead with a training lever that
+  // loads an active injury or a sore joint (it demotes or caveats it instead).
+  injuries?: InjuryInput[] | null;
+  autoregulation?: AutoregInput | null;
+  contextToday?: ContextTodayInput | null;
 }
 
 interface Candidate {
@@ -208,6 +238,9 @@ interface Candidate {
   leverage: number; // INTERNAL ordering only — never surfaced
   slot: "lead" | "parallel" | "later";
   key: string;
+  // Set when this (training) lever loads a flagged/injured/sore area — the conductor
+  // prefers a non-conflicting lead and, if it keeps this one, surfaces the caveat.
+  caveat?: string;
 }
 
 function num(v: unknown): number | null {
@@ -239,6 +272,66 @@ function varyOptionName(option: unknown): string | null {
   return raw ? String(raw) : null;
 }
 
+// ---- life/soreness awareness: don't lead with a lever that loads a flagged area ----
+// A canonical muscle-group label → the injury/joint words that mean training that
+// group would aggravate an active problem. Small, conservative, plain words (mirrors
+// the BODY_AREAS spirit in health.ts, kept local so the conductor stays self-contained).
+const GROUP_BODY_WORDS: Record<string, string[]> = {
+  legs: ["knee", "quad", "hamstring", "hip", "glute", "ankle", "calf", "leg", "squat", "lunge", "shin", "patell", "acl", "mcl", "meniscus", "groin", "adductor"],
+  quads: ["knee", "quad", "leg", "squat", "patell"],
+  hamstrings: ["hamstring", "knee", "hip", "leg", "posterior"],
+  glutes: ["glute", "hip", "leg", "groin"],
+  hips: ["hip", "glute", "groin", "adductor"],
+  calves: ["calf", "calves", "ankle", "achilles", "shin"],
+  back: ["back", "lumbar", "spine", "disc", "lat", "deadlift", "row", "hinge", "sciatic"],
+  chest: ["chest", "pec", "sternum", "rib", "bench"],
+  shoulders: ["shoulder", "delt", "rotator", "cuff", "press", "overhead", "labrum", "impingement", "ac joint"],
+  arms: ["elbow", "wrist", "bicep", "tricep", "forearm", "tendon", "cubital", "tennis elbow", "golfer"],
+  biceps: ["elbow", "bicep", "forearm"],
+  triceps: ["elbow", "tricep"],
+  core: ["back", "spine", "abdominal", "oblique", "hernia"],
+};
+
+interface FlaggedContext {
+  words: string[];     // lowercased injury/sore-joint texts to match against a lever
+  phrase: string;      // the human name of the flagged area for the caveat line
+  reduceLoad: boolean; // an active reduce-load window is on
+  any: boolean;
+}
+
+// Collect the flagged/injured/sore areas the conductor must plan around: active
+// (not likely-resolved) injuries + a flagged joint-pain autoregulation signal + a
+// reduce-load window. Returns "" phrase and any:false when there's nothing to flag.
+function flaggedContext(inp: CoachingFocusInput): FlaggedContext {
+  const words: string[] = [];
+  const phrases: string[] = [];
+  for (const inj of inputArray<InjuryInput>(inp.injuries)) {
+    if (inj?.likely_resolved) continue; // a healed injury no longer caveats
+    const txt = `${lc(inj?.title)} ${lc(inj?.area)} ${lc(inj?.detail)}`.trim();
+    if (txt) { words.push(txt); phrases.push(String(inj?.title || inj?.area || "an injury").trim()); }
+  }
+  const jp = lc(inp.autoregulation?.joint_pain);
+  if (jp) { words.push(jp); phrases.push(`${jp} (a joint you flagged)`); }
+  const reduceLoad = !!inp.contextToday?.reduce_load;
+  return { words, phrase: phrases[0] ?? "", reduceLoad, any: words.length > 0 };
+}
+
+// Does a training lever on `groupLabel` (with an optional lead lift) load one of the
+// flagged areas? Matches the group's body-words against each injury text, and the
+// lead-lift name directly against the injury text.
+function leverLoadsFlagged(groupLabel: string, leadLift: string, flagged: FlaggedContext): boolean {
+  if (!flagged.any) return false;
+  const label = lc(groupLabel);
+  const lift = lc(leadLift);
+  const bodyWords = GROUP_BODY_WORDS[label] ?? [label].filter(Boolean);
+  for (const injTxt of flagged.words) {
+    if (bodyWords.some((w) => w && injTxt.includes(w))) return true;
+    if (label && injTxt.includes(label)) return true;
+    if (lift && injTxt.split(/\s+/).some((tok) => tok.length > 3 && lift.includes(tok))) return true;
+  }
+  return false;
+}
+
 // ---- candidate generation: one read per domain, each scored for internal ranking ----
 
 function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
@@ -265,6 +358,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
 }
 
 function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
+  const flagged = flaggedContext(inp);
   // A genuinely STALLED canonical group with a concrete swap menu is the most
   // coach-like training lead (the athlete's own "which groups stall" framing).
   const groups = inputArray<MuscleGroupTrajectoryInput>(inp.groupsTrajectory?.groups);
@@ -277,14 +371,19 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
       .map(varyOptionName)
       .filter((name): name is string => name != null);
     const label = lc(stalled.label || stalled.group);
+    const conflicts = leverLoadsFlagged(label, String(stalled.lead_lift ?? ""), flagged);
+    const caveat = conflicts
+      ? `Ease this AROUND the ${flagged.phrase || "flagged area"} — work the plateau with pain-free variations only, don't push loaded reps through it.`
+      : undefined;
     return {
       key: "training-stall",
       leverage: 4.2,
       slot: "lead",
+      caveat,
       item: {
         domain: "training",
         title: `Break the plateau on your ${label}`,
-        why: `${stalled.lead_lift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.`,
+        why: `${stalled.lead_lift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.${caveat ? ` (${caveat})` : ""}`,
         move: opts.length ? `Rotate in ${opts.join(" or ")} for a few weeks.` : undefined,
         based_on: [`${stalled.lead_lift || label} is marked stalling`, stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat"],
       },
@@ -293,14 +392,19 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
   // Else the capacity laggard (the one lift furthest behind for the athlete's age).
   const lever = inp.performance?.lever;
   if (lever?.headline) {
+    const conflicts = leverLoadsFlagged(String(lever.headline), String(lever.target ?? ""), flagged);
+    const caveat = conflicts
+      ? `Ease this AROUND the ${flagged.phrase || "flagged area"} — pain-free work only until it settles.`
+      : undefined;
     return {
       key: "training-lever",
       leverage: 3.8,
       slot: "lead",
+      caveat,
       item: {
         domain: "training",
         title: String(lever.headline),
-        why: String(lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is."),
+        why: `${String(lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is.")}${caveat ? ` (${caveat})` : ""}`,
         move: lever.target ? String(lever.target) : undefined,
         based_on: ["Performance standing lever", lever.why ? String(lever.why) : "Capacity comparison across lifts"],
       },
@@ -521,13 +625,28 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   // health act_now). If nothing is lead-eligible but a strong parallel exists
   // (e.g. a health act_now on an otherwise-steady athlete), promote it.
   const leadEligible = candidates.filter((c) => c.slot === "lead").sort((a, b) => b.leverage - a.leverage);
-  let lead = leadEligible[0] ?? null;
+  // Prefer a lead that does NOT conflict with an active injury / sore joint. A training
+  // lever loading a flagged area is DEMOTED so a clean lever leads (the demoted one
+  // still rides in parallel/later carrying its caveat). Only when there's no clean
+  // alternative does the conflicted lever lead — then its caveat is surfaced.
+  const cleanLeadEligible = leadEligible.filter((c) => !c.caveat);
+  let lead = cleanLeadEligible[0] ?? null;
   if (!lead) {
-    const strong = candidates.filter((c) => c.leverage >= 3.5).sort((a, b) => b.leverage - a.leverage)[0];
-    lead = strong ?? null;
+    const strongClean = candidates.filter((c) => !c.caveat && c.leverage >= 3.5 && c.slot !== "later").sort((a, b) => b.leverage - a.leverage)[0];
+    lead = strongClean ?? leadEligible[0] ?? null;
   }
   const leadKey = lead?.key;
   const leadDomain = lead?.item.domain;
+
+  // The conductor's life/soreness caveat: if the lead kept a conflicted training lever
+  // (nothing cleaner existed) surface its caveat; if a training lever was DEMOTED for
+  // an injury/sore area, note that we deliberately held off leading with it.
+  const conflictedLever = candidates.find((c) => c.caveat);
+  const caveat = lead?.caveat
+    ? lead.caveat
+    : (conflictedLever && conflictedLever.key !== leadKey
+        ? `Held off leading with "${conflictedLever.item.title}" this block — ${conflictedLever.caveat}`
+        : null);
 
   // PARALLEL: up to 2 of the rest, on a DIFFERENT lever than the lead (so they can
   // genuinely be worked simultaneously — e.g. diet handles lipids while you train).
@@ -572,5 +691,6 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     connections,
     retest,
     horizon_weeks,
+    caveat: caveat ? clip(caveat, 220) : null,
   };
 }
