@@ -101,8 +101,7 @@
                     return;
                 }
                 if (kind === "me-health-standing") {
-                    deps.state.meSeg = "standing";
-                    deps.activateTab("me");
+                    deps.activateTab("stand");
                     return;
                 }
                 if (kind === "me-health-read") {

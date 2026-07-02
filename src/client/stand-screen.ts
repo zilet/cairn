@@ -279,7 +279,7 @@ function overviewHtml(): string {
   return `<div class="stand-root">
       ${actionBarHtml()}
       ${readHtml()}
-      <div class="stand-browse lbl">Your markers</div>
+      <div class="stand-browse lbl">Your markers<button class="stand-allmk linkbtn linkbtn-plain linkbtn-sm" type="button" data-allmarkers>All markers<span aria-hidden="true"> →</span></button></div>
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
     </div>`;
 }
@@ -336,12 +336,15 @@ function standControlsHtml(total: number, outCount: number): string {
 }
 
 function domainResultsHtml(): string {
-  const d = DOMAINS.find((x) => x.key === curDomain);
-  if (!d) return "";
-  // Sections = the domain's clinical groups, worst first, each with its own head +
-  // sub-group sub-heads — so the fine taxonomy stays usable one tap down.
-  const present = (DATA?.groups || []).filter((g) => d.groups.includes(g.key) && markersOfGroup(g.key).length);
-  present.sort((a, b) => RANK[worstOf(markersOfGroup(b.key))] - RANK[worstOf(markersOfGroup(a.key))]);
+  const all = curDomain === "__all__";
+  const d = all ? null : DOMAINS.find((x) => x.key === curDomain);
+  if (!all && !d) return "";
+  // Sections = clinical groups, each with its own head + sub-group sub-heads so the
+  // fine taxonomy stays usable one tap down. A domain view sorts its groups worst-
+  // first (what needs attention rises); the full "All markers" catalog keeps the
+  // backend's canonical clinical-review order (CBC → CMP → lipids → …).
+  const present = (DATA?.groups || []).filter((g) => (all || d!.groups.includes(g.key)) && markersOfGroup(g.key).length);
+  if (!all) present.sort((a, b) => RANK[worstOf(markersOfGroup(b.key))] - RANK[worstOf(markersOfGroup(a.key))]);
   let rowIndex = 0;
   const sections = present.map((g, gi) => {
     let list = markersOfGroup(g.key);
@@ -367,12 +370,13 @@ function domainResultsHtml(): string {
 
 function showDomain(key: string): void {
   curDomain = key; standQuery = ""; standOff = false;
-  const d = DOMAINS.find((x) => x.key === key);
-  const markers = d ? markersOfDomain(d) : [];
+  const all = key === "__all__";
+  const d = all ? null : DOMAINS.find((x) => x.key === key);
+  const markers = all ? (DATA?.markers || []) : d ? markersOfDomain(d) : [];
   const outCount = markers.filter(markerOutOfRange).length;
   paint(`<div class="stand-detail stand-root">
       <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
-      <h2 class="stand-detail-h">${escHtml(d?.label || "Markers")}</h2>
+      <h2 class="stand-detail-h">${escHtml(all ? "All markers" : d?.label || "Markers")}</h2>
       ${standControlsHtml(markers.length, outCount)}
       <div id="standResults"></div>
     </div>`);
@@ -380,6 +384,7 @@ function showDomain(key: string): void {
   wireControls();
   renderResults();
 }
+function showAllMarkers(): void { showDomain("__all__"); }
 function renderResults(): void {
   const el = view.querySelector<HTMLElement>("#standResults");
   if (!el) return;
@@ -399,26 +404,16 @@ function wireControls(): void {
 }
 
 function bodyDetailHtml(): string {
-  const body = DATA?.body as Record<string, unknown> | null;
-  const comp = body && body.comp && typeof body.comp === "object" ? (body.comp as Record<string, unknown>) : null;
-  const scales = comp && Array.isArray(comp.scales) ? (comp.scales as Array<Record<string, unknown>>) : [];
-  const focus = comp && comp.focus && typeof comp.focus === "object" ? (comp.focus as Record<string, unknown>) : null;
-  // reuse the shipped body figure: waist glows when the lever is central-fat.
-  const fk = focus && typeof focus.key === "string" ? focus.key : null;
-  const figFocus = fk === "whtr" || fk === "whr" || fk === "bodyfat" ? "waist" : null;
-  const fig = (BM()?.bodyFigureSvg?.(figFocus, []) as string) || "";
-  const focusLine = focus && typeof focus.line === "string" ? focus.line : "";
-  const cards = scales.filter((s) => s.value != null).map((s) => {
-    const off = focus ? "" : "";
-    return `<div class="stand-mcard ${off}"><span class="stand-mcard-l">${escHtml(String(s.label || ""))}</span><span class="stand-mcard-v">${escHtml(String(s.value))}${s.unit ? escHtml(String(s.unit)) : ""}</span></div>`;
-  }).join("");
-  // Fold the DEXA / body-composition markers (the "body" clinical group) in here too.
+  // The Body detail is the full body-progress home: the shipped body-metrics
+  // surface (the glowing figure, "where you stand" indicators, height, one-tap
+  // tape logging, and per-site + weight trend sparklines) mounts into
+  // #standBodyMetrics on showBody(). We keep only the DEXA / body-composition
+  // markers (the "body" clinical group) below it, for their inline charts.
   const dexa = markersOfGroup("body").map((m) => HM()?.hmkRowHtml?.(m) as string).filter(Boolean).join("");
   return `<div class="stand-detail stand-root">
       <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
       <h2 class="stand-detail-h">Body</h2>
-      <div class="stand-figrow">${fig}<div class="stand-figtxt">${focusLine ? `<p>${escHtml(focusLine)}</p>` : "<p>Holding steady — log a tape session to refresh the read.</p>"}</div></div>
-      ${cards ? `<div class="stand-mcards">${cards}</div>` : ""}
+      <div id="standBodyMetrics" class="stand-bodymetrics"></div>
       ${dexa ? `<div class="stand-subhead">From your DEXA</div><div class="hmk-list">${dexa}</div>` : ""}
     </div>`;
 }
@@ -431,7 +426,13 @@ function paint(html: string): void {
   }
 }
 function showOverview(): void { paint(overviewHtml()); wireOverview(); }
-function showBody(): void { paint(bodyDetailHtml()); wireBack(); wireRows(view); }
+function showBody(): void {
+  paint(bodyDetailHtml());
+  wireBack();
+  // Hand the mount to the self-contained body-metrics surface (log + trends).
+  (BM()?.renderBodyMetrics as ((m: HTMLElement | null) => void) | undefined)?.(view.querySelector<HTMLElement>("#standBodyMetrics"));
+  wireRows(view);
+}
 function showRecovery(): void { paint(recoveryDetailHtml()); wireBack(); }
 function showSupplements(): void { paint(supplementsDetailHtml()); wireBack(); }
 
@@ -441,6 +442,7 @@ function wireOverview(): void {
   view.querySelector<HTMLElement>("[data-body]")?.addEventListener("click", () => showBody());
   view.querySelector<HTMLElement>("[data-recovery]")?.addEventListener("click", () => showRecovery());
   view.querySelector<HTMLElement>("[data-supps]")?.addEventListener("click", () => showSupplements());
+  view.querySelector<HTMLElement>("[data-allmarkers]")?.addEventListener("click", () => showAllMarkers());
   view.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) =>
     b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
   // the "⋯ more" tools menu in the sticky action bar

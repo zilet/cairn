@@ -268,7 +268,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
   assert.deepEqual(calls, [
     ["chat", "Explain this"],
     ["tab", "plan"],
-    ["tab", "me"],
+    ["tab", "stand"],
     ["tab", "me"],
     ["tab", "progress"],
     ["collapse", card],

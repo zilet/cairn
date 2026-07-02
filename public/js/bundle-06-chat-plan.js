@@ -2199,7 +2199,7 @@ if (typeof window !== "undefined") {
             : `<div class="end-goal reveal" style="${stagger(0)}">
          <div class="end-goal-head"><span class="lbl">Running goal</span></div>
          <div class="end-goal-name">No goal set yet</div>
-         <div class="end-goal-sub">Set a race or a standing readiness target in <b>Me → Profile</b> and the coach will periodize your running toward it.</div>
+         <div class="end-goal-sub">Set a race or a standing readiness target in <b>Settings → You → Profile</b> and the coach will periodize your running toward it.</div>
        </div>`;
         const rampHtml = rampHtmlForGoal(goal);
         const standingNote = goal && goal.mode === "standing"

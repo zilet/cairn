@@ -3603,7 +3603,9 @@ button.hmk-row:active{background:var(--card-2)}
 .stand-conn{display:flex;gap:9px;align-items:flex-start;background:var(--card);border-radius:12px;
   box-shadow:var(--shadow-sm);padding:11px 13px;margin-bottom:8px;font-size:.83rem;color:var(--ink-2);line-height:1.42}
 .stand-conn-i{color:var(--gold-deep);flex:0 0 auto;margin-top:1px}
-.stand-browse{display:block;color:var(--muted);margin:0 2px 9px}
+.stand-browse{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--muted);margin:0 2px 9px}
+.stand-allmk{flex:0 0 auto;font-size:.72rem;letter-spacing:.02em}
+.stand-bodymetrics{margin-bottom:4px}
 
 .stand-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .stand-tile{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:13px 13px 12px;

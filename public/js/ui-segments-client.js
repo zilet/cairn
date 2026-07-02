@@ -185,8 +185,8 @@ function createUiSegments(deps) {
     function planSeg() {
         const routedToEndurance = deps.state.planSeg === "endurance" || deps.state.planJump === "endurance";
         return uiSegmentsShowEnduranceTab() || routedToEndurance
-            ? [["edit", "Training"], ["endurance", "Endurance"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]]
-            : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]];
+            ? [["edit", "Training"], ["endurance", "Endurance"], ["food", "Food"], ["meals", "Meals"], ["coach", "Drafts"]]
+            : [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Drafts"]];
     }
     const planHandlers = {
         edit: () => deps.renderPlanEditor(),

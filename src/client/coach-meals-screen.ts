@@ -21,7 +21,7 @@ function agentName(agent: CoachAgent): string {
 
 // ---------- Coach ----------
 async function renderCoach(): Promise<void> {
-  headerTitle.textContent = "Coach";
+  headerTitle.textContent = "Drafts";
   state.planSeg = "coach";
   view.innerHTML = segSkeleton("coach", planSeg(), 2);
   const agents = coachMealRows<CoachAgent>(await api("/agents"));
@@ -33,6 +33,7 @@ async function renderCoach(): Promise<void> {
     ).join("");
 
   await skelSwap(() => { view.innerHTML = segBar("coach", planSeg()) + `
+    <p class="drafts-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your coach's plan &amp; meal drafts wait here — nothing changes until you review and apply it. Talk to your coach anytime in the <button class="linkbtn linkbtn-plain" id="draftsToChat" type="button">Coach</button> tab.</p>
     <div class="field"><label>Agent</label>
       <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
     <div class="field"><label>Instruction (optional)</label>
@@ -55,6 +56,7 @@ async function renderCoach(): Promise<void> {
     <div id="meallist"></div>`; });
 
   wireSeg(PLAN_HANDLERS);
+  $("#draftsToChat")?.addEventListener("click", () => activateTab("chat"));
   $<HTMLSelectElement>("#presetsel")?.addEventListener("change", (e) => {
     const wrap = htmlElement($("#customwrap"));
     const target = e.target instanceof HTMLSelectElement ? e.target : null;

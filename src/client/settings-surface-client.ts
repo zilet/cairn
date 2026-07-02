@@ -202,7 +202,7 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
         <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
         <label class="toggle"><input type="checkbox" id="researchEnabled" ${wm.research_enabled ? "checked" : ""}>
           <span>Let Cairn research your findings and cite real sources</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” in <b>Me → Health → Read</b>. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” on your <b>Stand</b> read. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
         ${researchSuggest}
       </section>`;
 }

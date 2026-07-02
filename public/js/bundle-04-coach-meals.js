@@ -1757,7 +1757,7 @@ function agentName(agent) {
 }
 // ---------- Coach ----------
 async function renderCoach() {
-    headerTitle.textContent = "Coach";
+    headerTitle.textContent = "Drafts";
     state.planSeg = "coach";
     view.innerHTML = segSkeleton("coach", planSeg(), 2);
     const agents = coachMealRows(await api("/agents"));
@@ -1766,6 +1766,7 @@ async function renderCoach() {
         agents.map((a) => `<option value="${escAttr(agentName(a))}"${a.enabled ? "" : " disabled"}>${escHtml(agentName(a))}${a.enabled ? "" : " (off)"}${a.env_ok ? "" : " · no key"}</option>`).join("");
     await skelSwap(() => {
         view.innerHTML = segBar("coach", planSeg()) + `
+    <p class="drafts-lede sess-line" style="color:var(--muted);margin:2px 2px 16px;line-height:1.5">Your coach's plan &amp; meal drafts wait here — nothing changes until you review and apply it. Talk to your coach anytime in the <button class="linkbtn linkbtn-plain" id="draftsToChat" type="button">Coach</button> tab.</p>
     <div class="field"><label>Agent</label>
       <select id="agentsel">${agentOpts || "<option>none configured</option>"}</select></div>
     <div class="field"><label>Instruction (optional)</label>
@@ -1788,6 +1789,7 @@ async function renderCoach() {
     <div id="meallist"></div>`;
     });
     wireSeg(PLAN_HANDLERS);
+    $("#draftsToChat")?.addEventListener("click", () => activateTab("chat"));
     $("#presetsel")?.addEventListener("change", (e) => {
         const wrap = htmlElement($("#customwrap"));
         const target = e.target instanceof HTMLSelectElement ? e.target : null;
