@@ -13,7 +13,6 @@
         const hasGarmin = !!(input.session && input.session.garmin);
         const showPlan = !input.isToday || hasLoggedSets || hasGarmin || revealOn || input.read?.kind === "train";
         const showDone = isFinished && input.isToday && !revealOn;
-        const focus = !showDone && input.focusEngaged(input.logDate, { showPlan, hasLoggedSets, isToday: input.isToday });
         return {
             hasLoggedSets,
             hasPlanDay,
@@ -22,7 +21,6 @@
             hasGarmin,
             showPlan,
             showDone,
-            focus,
         };
     }
     const CAIRN_TODAY_RENDER_STATE = { derive };

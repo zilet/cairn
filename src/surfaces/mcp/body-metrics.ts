@@ -11,7 +11,7 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 export function registerBodyMetricsTools(server: McpToolRegistrar) {
   server.tool(
     "log_body_measurement",
-    "Log an at-home body measuring session (circumferences, in inches). Any subset of sites — the athlete logs what they measured. Optional height_in updates the profile so BMI / body-fat can compute. Returns the logged row plus fresh plain-language indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate). Nothing auto-applies.",
+    "Log an at-home body measuring session (circumferences, in inches). Any subset of sites — the user logs what they measured. Optional height_in updates the profile so BMI / body-fat can compute. Returns the logged row plus fresh plain-language indicators (BMI, waist-to-height, waist-to-hip, Navy body-fat % estimate). Nothing auto-applies.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       waist_in: z.number().optional(),
@@ -23,7 +23,7 @@ export function registerBodyMetricsTools(server: McpToolRegistrar) {
       upper_arm_in: z.number().optional(),
       calf_in: z.number().optional(),
       forearm_in: z.number().optional(),
-      height_in: z.number().optional().describe("athlete height in inches — sets the profile so BMI/body-fat light up"),
+      height_in: z.number().optional().describe("user height in inches — sets the profile so BMI/body-fat light up"),
       note: z.string().optional(),
       source: z.string().optional(),
     },

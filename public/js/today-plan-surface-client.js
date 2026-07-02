@@ -27,7 +27,6 @@
           </div>
           <div class="session-head-side">
             ${options.exTotal ? `<span class="session-prog" title="exercises with a logged set"><b>${options.exDone}</b><span class="session-prog-sep">/</span>${options.exTotal}</span>` : ""}
-            <button class="focus-enter" id="focusEnter" title="Distraction-free logging">${deps.trainGlyph} Focus</button>
           </div>
         </div>`;
     }

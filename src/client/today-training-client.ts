@@ -46,7 +46,7 @@ function exRxVaryMenuHtml(rx: ClientPrescriptionLike): string {
     : [];
   if (!opts.length) return "";
   // Each chip is ACTIONABLE: tapping it drafts a swap proposal (from → this option)
-  // through the propose→apply path (POST /program/swap → a DRAFT the athlete applies).
+  // through the propose→apply path (POST /program/swap → a DRAFT the user applies).
   // Carries the from-exercise + the plan day so the delegated handler can build it.
   const from = rx?.exercise ? String(rx.exercise) : "";
   const day = rx?.day_number != null ? String(rx.day_number) : "";

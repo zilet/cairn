@@ -18,7 +18,7 @@
         if (!wrap)
             return;
         wrap.innerHTML = CairnHealthStanding.renderHealthStandingHtml(data, { referenceAge: deps.state.healthStandingRef });
-        // If the whole-athlete conductor already leads the Standing page, do not render
+        // If the whole-picture conductor already leads the Standing page, do not render
         // a second "one lever" surface from the narrower health read.
         if (select(deps, "#cfocusStandingSlot .cfocus"))
             wrap.querySelector(".hstand-lever")?.remove();

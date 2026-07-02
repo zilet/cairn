@@ -1,6 +1,6 @@
 // @ts-check
 // Today plan-day selection: infer which plan day a session belongs to, then pick
-// the next calm default when the athlete opens Today without explicitly choosing.
+// the next calm default when the user opens Today without explicitly choosing.
 
 type TodayPlanSelectionItem = {
   exercise?: string | null;

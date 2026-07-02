@@ -110,18 +110,8 @@ test("Today Brief handles done, provisional, and offline states", () => {
   assert.doesNotMatch(dismissed, /showing the deterministic read/);
 });
 
-test("Today focus bar and signal summary preserve plain-language framing", () => {
+test("Today signal summary preserves plain-language framing", () => {
   const brief = loadTodayBrief();
-  const focus = brief.focusBarHtml(
-    { kind: "train", headline: "Upper pull", focus: "Rows", signals: {} },
-    { name: "Day <A>" },
-    { exDone: 2, exTotal: 5, isToday: false }
-  );
-
-  assert.match(focus, /id="backToday"/);
-  assert.match(focus, /Day &lt;A&gt;/);
-  assert.match(focus, /2<\/span><span class="focus-prog-sep">\/<\/span>5 done/);
-  assert.match(focus, /Upper pull/);
   assert.equal(brief.signalsText({ signals: {} }), "Reading your recent training and recovery.");
   assert.equal(
     brief.signalsText({ signals: { consecutive_training_days: 3, low_sleep: true, checkin: true } }),

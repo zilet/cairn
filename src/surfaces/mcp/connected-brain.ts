@@ -53,7 +53,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "run_health_review",
-    "Run a coaching agent over the athlete's full context plus aggregated marker history to produce a fresh whole-picture health review (informational, not medical advice). Returns ok:false when the agent's output is unusable.",
+    "Run a coaching agent over the user's full context plus aggregated marker history to produce a fresh whole-picture health review (informational, not medical advice). Returns ok:false when the agent's output is unusable.",
     { agent: z.string().optional().describe("omit or 'auto' to use the configured rotation") },
     async ({ agent }) => asText(await runHealthReview(agent))
   );
@@ -74,42 +74,42 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_coaching_focus",
-    "THE CONDUCTOR — the single sequenced WHOLE-ATHLETE focus, the cross-domain analog of get_health_focus. Arbitrates training, running, DEXA body-comp, labs, nutrition and recovery into ONE lead lever for this block + 1-2 things handled alongside (usually via a different lever) + an explicit 'later' (what's deferred) + the cross-domain connections + ONE batched ~6-8wk retest checkpoint. How an elite coach prioritizes + sequences: act on a few things, name what waits, connect the domains. Plain words, no scores.",
+    "THE CONDUCTOR — the single sequenced WHOLE-PICTURE focus, the cross-domain analog of get_health_focus. Arbitrates training, running, DEXA body-comp, labs, nutrition and recovery into ONE lead lever for this block + 1-2 things handled alongside (usually via a different lever) + an explicit 'later' (what's deferred) + the cross-domain connections + ONE batched ~6-8wk retest checkpoint. How an elite coach prioritizes + sequences: act on a few things, name what waits, connect the domains. Plain words, no scores.",
     {},
     async () => asText(getCoachingFocus())
   );
 
   server.tool(
     "get_reaction_model",
-    "How THIS athlete actually reacts, learned from their own logged history: a handful of plain-language patterns (e.g. how a deficit moves their weight, whether hs-CRP tracks training load, what late events cost their sleep, which plan days land vs get skipped, whether recovery signal is even available) each with a confidence WORD (tentative/observed/strong) — never a number. The personalization spine.",
+    "How THIS user actually reacts, learned from their own logged history: a handful of plain-language patterns (e.g. how a deficit moves their weight, whether hs-CRP tracks training load, what late events cost their sleep, which plan days land vs get skipped, whether recovery signal is even available) each with a confidence WORD (tentative/observed/strong) — never a number. The personalization spine.",
     {},
     async () => asText(reactionModelForCoach())
   );
 
   server.tool(
     "get_trajectory",
-    "The athlete's forward ARC: a periodized horizon (weeks/phase) toward their goals (body-comp, longevity markers, any race), the milestones along it, and today framed as the next step on the path. Plain words, no completion %; null line when there's no goal/block/race.",
+    "The user's forward ARC: a periodized horizon (weeks/phase) toward their goals (body-comp, longevity markers, any race), the milestones along it, and today framed as the next step on the path. Plain words, no completion %; null line when there's no goal/block/race.",
     { date: z.string().optional() },
     async ({ date }) => asText(getTrajectory(date))
   );
 
   server.tool(
     "get_context_effect",
-    "The active life-context effect: events the athlete mentioned once (a late concert, travel, illness, a hard week) that should shape today — expect worse sleep / a transient inflammation bump (don't alarm) / ease the load / disrupted fueling — each with a fade date. Plain words; empty when nothing's active.",
+    "The active life-context effect: events the user mentioned once (a late concert, travel, illness, a hard week) that should shape today — expect worse sleep / a transient inflammation bump (don't alarm) / ease the load / disrupted fueling — each with a fade date. Plain words; empty when nothing's active.",
     { date: z.string().optional() },
     async ({ date }) => asText(activeContextEffect(date))
   );
 
   server.tool(
     "get_next_step",
-    "The single highest-leverage next action across ALL domains (train/fuel/recover/recheck/life) right now — one calm thing, or null on a quiet day. A suggestion the athlete drives, never a to-do wall.",
+    "The single highest-leverage next action across ALL domains (train/fuel/recover/recheck/life) right now — one calm thing, or null on a quiet day. A suggestion the user drives, never a to-do wall.",
     { date: z.string().optional() },
     async ({ date }) => asText(nextBestStep(date) ?? { next_step: null })
   );
 
   server.tool(
     "mark_next_step",
-    "Record the athlete's response to a next-step: action 'done' (did it) or 'snooze' (not today) by step_key — so a handled/skipped step doesn't return tomorrow. Pull, never push.",
+    "Record the user's response to a next-step: action 'done' (did it) or 'snooze' (not today) by step_key — so a handled/skipped step doesn't return tomorrow. Pull, never push.",
     { step_key: z.string(), action: z.enum(["done", "snooze"]) },
     async ({ step_key, action }) => {
       if (action === "done") nextStepDone(step_key);
@@ -137,7 +137,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_health_export",
-    "Structured, FHIR-inspired health summary: a portable read-only slice of the athlete's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus non-marker MyChart clinicalFacts such as medications/allergies/procedures, the understood supplement regimen, and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. INFORMATIONAL, not medical advice — no 0-100 scores anywhere.",
+    "Structured, FHIR-inspired health summary: a portable read-only slice of the user's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus non-marker MyChart clinicalFacts such as medications/allergies/procedures, the understood supplement regimen, and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. INFORMATIONAL, not medical advice — no 0-100 scores anywhere.",
     {},
     async () => asText(buildHealthExport())
   );
@@ -158,7 +158,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_symptom_links",
-    "Symptom ↔ marker connections: a symptom the athlete logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs.",
+    "Symptom ↔ marker connections: a symptom the user logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs.",
     {},
     async () => asText(symptomMarkerLinks())
   );

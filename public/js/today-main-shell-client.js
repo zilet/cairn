@@ -22,8 +22,6 @@
     </div>`;
     }
     function leadHtml(options, deps) {
-        if (options.focus)
-            return options.focusHtml;
         return `${options.isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${options.briefHtml}
@@ -44,9 +42,7 @@
     </details>`;
     }
     function wrapHtml(content, options) {
-        return options.focus
-            ? `<div class="today-wrap today-focus">${content}</div>`
-            : `<div class="today-wrap"><div class="today-main">${content}</div>${options.railHtml}</div>`;
+        return `<div class="today-wrap"><div class="today-main">${content}</div>${options.railHtml}</div>`;
     }
     const CAIRN_TODAY_MAIN_SHELL = {
         leadHtml,

@@ -68,7 +68,7 @@ programRouter.post("/program/evolve", async (req, res) => {
 });
 
 // The persisted equipment/preference profile (free text) that RANKS variation
-// suggestions by what the athlete can actually load. GET reads it (+ the parsed
+// suggestions by what the user can actually load. GET reads it (+ the parsed
 // equipment types); PUT replaces it (null/'' clears). A plain profile field.
 programRouter.get("/program/equipment", (_req, res) => res.json(getEquipmentProfile()));
 programRouter.put("/program/equipment", (req, res) => {
@@ -82,7 +82,7 @@ programRouter.get("/program/blocks", (req, res) =>
 );
 programRouter.get("/program/blocks/active", (_req, res) => res.json(getActiveBlock()));
 // Ensure ONE active periodization block exists (auto-create a sensible default aligned
-// to the athlete's goal when none is running; idempotent — never resets an in-progress
+// to the user's goal when none is running; idempotent — never resets an in-progress
 // block). Keeps periodization live without waiting for the scheduler's weekly slot.
 programRouter.post("/program/blocks/ensure", (_req, res) => res.json(ensureActiveBlock()));
 programRouter.post("/program/blocks", (req, res) => res.json(createBlock(req.body ?? {})));
@@ -186,7 +186,7 @@ programRouter.get("/program-state", (req, res) =>
   res.json(getProgramState(req.query.date ? String(req.query.date) : undefined))
 );
 // The TRAINING-INTELLIGENCE / performance read — the athletic counterpart to
-// /api/health/standing. Benchmarks where the athlete actually STANDS (each lift's
+// /api/health/standing. Benchmarks where the user actually STANDS (each lift's
 // capacity vs sex/age strength standards + VO2max norms), the strength imbalances,
 // the single biggest lever, lifts worth re-testing, a variety nudge, and a holistic
 // balance line. Derived live each call; percentile/level reference reads, no scores.
@@ -195,7 +195,7 @@ programRouter.get("/performance", (req, res) =>
 );
 // The RUNNING brain: this week's deterministic periodized run mix (N easy Z2 + 1
 // long + 1 rotated quality, each with a bpm-bearing zone + interval structure) and
-// the athlete's real HR-zone bpm bands. The endurance counterpart to /performance.
+// the user's real HR-zone bpm bands. The endurance counterpart to /performance.
 // Both degrade to {available:false} for a non-runner / no zones.
 programRouter.get("/run-plan", (req, res) =>
   res.json(weeklyRunPlan(req.query.date ? String(req.query.date) : undefined))

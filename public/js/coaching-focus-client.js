@@ -1,6 +1,6 @@
 (() => {
 // @ts-check
-// Whole-athlete focus card renderer and routing bridge.
+// Whole-picture focus card renderer and routing bridge.
 const CFOCUS_DOMAIN_LABEL = {
     training: "Training",
     running: "Running",

@@ -65,7 +65,6 @@
             loadWearable: (isToday) => bridge().loadWearable(isToday),
             loadCheckin,
             loadDraftProposals: () => bridge().loadDraftProposals(),
-            setFocus: input.setFocus,
             viewEnter,
             invalidateTodayProgression: () => bridge().invalidateTodayProgression(),
             scheduleRxRefresh: () => bridge().scheduleRxRefresh(),

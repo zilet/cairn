@@ -8,6 +8,10 @@ function showToast(msg: unknown, opts: ToastOptions = {}): void {
   if (!toastEl) {
     toastEl = document.createElement("div");
     toastEl.className = "toast";
+    // Announced to assistive tech: a transient, non-interrupting status line.
+    toastEl.setAttribute("role", "status");
+    toastEl.setAttribute("aria-live", "polite");
+    toastEl.setAttribute("aria-atomic", "true");
     document.body.appendChild(toastEl);
   }
   if (toastTimer) clearTimeout(toastTimer);

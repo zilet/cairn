@@ -1,6 +1,6 @@
 (() => {
 // @ts-check
-// Stateful Today Brief controller: fetch/cache, focus state, and reconnect wiring.
+// Stateful Today Brief controller: fetch/cache and reconnect wiring.
 (() => {
     function provisionalRead(_date) {
         return CairnTodayBrief.provisionalRead();
@@ -121,20 +121,6 @@
             offlineDismissed: CairnTodayBriefActionsClient.offlineDismissed(),
         });
     }
-    function focusEngaged(date, options, deps) {
-        if (!options.showPlan)
-            return false;
-        const f = deps.state.focus;
-        if (f && f.date === date)
-            return f.on;
-        return !!(options.isToday && options.hasLoggedSets);
-    }
-    function setFocus(date, on, deps) {
-        deps.state.focus = { date, on };
-    }
-    function focusBarHtml(read, day, options) {
-        return CairnTodayBrief.focusBarHtml(read, day, { ...options, isToday: !!options.isToday });
-    }
     function briefSignalsText(read) {
         return CairnTodayBrief.signalsText(read);
     }
@@ -154,14 +140,11 @@
         briefHtml,
         briefSignalsText,
         dayReadOverrideOpOpts,
-        focusBarHtml,
-        focusEngaged,
         loadBrief,
         paintBriefReshaping,
         provisionalRead,
         reconnectDayReadOverride,
         reshapeToday,
-        setFocus,
         upgradeBriefInPlace,
         wireBrief,
     };

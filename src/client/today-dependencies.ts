@@ -30,7 +30,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         cardioPrescription: input.cardioPrescription,
         rxMoveCount: input.rxMoveCount,
         setsTonnage: input.setsTonnage,
-        trainGlyph: CairnTodayBrief.BRIEF_KIND.train.glyph,
       };
     },
 
@@ -154,7 +153,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         state: input.state,
         read: renderInput.read,
         isToday: renderInput.isToday,
-        focus: renderInput.focus,
         showPlan: renderInput.showPlan,
         soft: renderInput.soft,
         conductorLeads: renderInput.conductorLeads,
@@ -185,7 +183,6 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         runFallbackRail: CairnTodayRailController.runFallbackRail,
         todayRailDeps: deps.rail,
         activateTab: input.activateTab,
-        setFocus: input.setFocus,
         withViewTransition: input.withViewTransition,
         viewEnter: input.viewEnter,
         localISO: input.localISO,

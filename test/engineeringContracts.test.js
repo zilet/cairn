@@ -3949,7 +3949,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayAddExerciseControllerSource, /CairnTodayAddExerciseController/);
   assert.match(todayBriefSource, /type ClientDayRead = import\("\.\.\/contracts\/client\.js"\)\.ClientDayRead/);
   assert.match(todayBriefSource, /function todayBriefHtml\(read: TodayBriefRead \| null \| undefined/);
-  assert.match(todayBriefSource, /function todayFocusBarHtml/);
   assert.match(todayBriefSource, /CairnTodayBrief/);
   assert.match(cardioPlanSource, /function cardioPrescription/);
   assert.match(cardioPlanSource, /Object\.assign\(globalThis, \{/);
@@ -4040,7 +4039,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayMainShellSource, /type TodayMainShellLeadOptions = \{/);
   assert.match(todayMainShellSource, /function leadHtml\(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps\): string/);
   assert.match(todayMainShellSource, /function weekFoldHtml\(compass: TodayMainShellCompass/);
-  assert.match(todayMainShellSource, /function wrapHtml\(content: string, options: \{ focus: boolean; railHtml: string \}\): string/);
+  assert.match(todayMainShellSource, /function wrapHtml\(content: string, options: \{ railHtml: string \}\): string/);
   assert.match(todayMainShellSource, /CairnTodayMainShell/);
   assert.match(todayPlanSurfaceSource, /type TodayPlanSurfaceDeps = \{/);
   assert.match(todayPlanSurfaceSource, /function sessionHeadHtml\(/);
@@ -4905,7 +4904,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayBriefClient, /Object\.assign\(globalThis, \{ CairnTodayBrief: CAIRN_TODAY_BRIEF \}\)/);
   assert.match(todayBriefClient, /window\.CairnTodayBrief = CAIRN_TODAY_BRIEF/);
   assert.match(todayBriefClient, /briefHtml: todayBriefHtml/);
-  assert.match(todayBriefClient, /focusBarHtml: todayFocusBarHtml/);
   assert.doesNotMatch(todayBriefClient, /^const\s+BRIEF_KIND|^const\s+BRIEF_OVERRIDES|^function\s+todayBriefHtml/m);
   assert.match(cardioPlanClient, /Object\.assign\(globalThis, \{/);
   assert.match(cardioPlanClient, /CairnCardioPlan/);
@@ -5453,7 +5451,6 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(today, /function refreshAdaptedRx\(\)\s*\{[\s\S]*const rxByEx/);
   assert.doesNotMatch(today, /function resetAddForm|const datalist = todayView\.querySelector\("#exOptions"\)|const skippedBtn = \[\.\.\.todayView\.querySelectorAll/);
   assert.match(todayBriefControllerSource, /CairnTodayBrief\.briefHtml/);
-  assert.match(todayBriefControllerSource, /CairnTodayBrief\.focusBarHtml/);
   assert.match(todayBriefControllerSource, /CairnTodayBrief\.signalsText/);
   assert.match(todayBriefOverrideSource, /function dayReadOverrideOpOpts\(/);
   assert.match(todayBriefOverrideSource, /function reconnectDayReadOverride\(/);

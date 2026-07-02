@@ -30,7 +30,6 @@ type TodayScreenRuntimeDepsInput = {
   cardioEffortMatches(item: any, effort: any): boolean;
   suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
   upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
-  setFocus(date: string, on: boolean): void;
   revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
   postExerciseMode(name: string, mode: string): Promise<unknown>;
 };
@@ -100,7 +99,6 @@ function createTodayScreenRuntimeDependencies(input: TodayScreenRuntimeDepsInput
     loadWearable: (isToday) => bridge().loadWearable(isToday),
     loadCheckin,
     loadDraftProposals: () => bridge().loadDraftProposals(),
-    setFocus: input.setFocus,
     viewEnter,
     invalidateTodayProgression: () => bridge().invalidateTodayProgression(),
     scheduleRxRefresh: () => bridge().scheduleRxRefresh(),

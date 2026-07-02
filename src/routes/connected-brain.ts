@@ -99,7 +99,7 @@ connectedBrainRouter.get("/next-step", (req, res) =>
 );
 
 // done / snooze are the calm "did it" / "not today" feedback: a skipped step doesn't
-// return tomorrow (constitution: pull, never push; the athlete drives).
+// return tomorrow (constitution: pull, never push; the user drives).
 connectedBrainRouter.post("/next-step/done", (req, res) => {
   const k = String(req.body?.step_key ?? "").trim();
   if (!k) return res.status(400).json({ ok: false, error: "step_key required" });
@@ -119,7 +119,7 @@ connectedBrainRouter.post("/next-step/snooze", (req, res) => {
 // Both informational, no scores. The narrative is regenerated via POST below.
 connectedBrainRouter.get("/health/focus", (_req, res) => res.json(healthFocus()));
 
-// THE CONDUCTOR: one sequenced whole-athlete focus (lead + parallel + later +
+// THE CONDUCTOR: one sequenced whole-picture focus (lead + parallel + later +
 // connections + a batched retest) across training, running, DEXA, health, nutrition
 // and recovery. Pull/on-demand; the surface leads with this instead of a card flood.
 connectedBrainRouter.get("/coaching-focus", (_req, res) => res.json(getCoachingFocus()));
@@ -153,7 +153,7 @@ connectedBrainRouter.get("/directives", (req, res) =>
   })
 );
 
-// Symptom <-> marker connections: a symptom the athlete logged (in a life event or a
+// Symptom <-> marker connections: a symptom the user logged (in a life event or a
 // check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet
 // "worth mentioning to your clinician" read. Informational, never diagnostic; [] when
 // nothing co-occurs. The connected brain reaching ACROSS the logs.

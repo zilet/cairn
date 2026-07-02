@@ -104,7 +104,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| DELETE | `/api/chat` | "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is part of the athlete's history/export, so nothing is hard-deleted anymore. |
+| DELETE | `/api/chat` | "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is part of the user's history/export, so nothing is hard-deleted anymore. |
 | GET | `/api/chat` |  |
 | POST | `/api/chat` | Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the user message + a chat_turn and hand it to the serial worker, returning at once. The PWA streams progress over GET /api/chat/turns/:id/stream and rebuilds the in-flight + queued thread from GET /api/chat/turns on (re)load — so a follow-up queued mid-think, or a turn interrupted by navigation/reload/restart, survives. |
 | POST | `/api/chat/reset` | "Fresh start": ARCHIVE the live conversation immediately (so the composer is usable at once — no blocking on the agent), then distill durable facts from the pre-archive history into memory in the BACKGROUND as a chat_distill job. The PWA settles a "remembered" pill when the job lands; a message typed during the distill just queues as a normal chat turn (archive-before-enqueue keeps the ordering). When bg_ops is OFF this falls back to the legacy blocking inline path. |
@@ -139,7 +139,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/coaching-focus` | THE CONDUCTOR: one sequenced whole-athlete focus (lead + parallel + later + connections + a batched retest) across training, running, DEXA, health, nutrition and recovery. Pull/on-demand; the surface leads with this instead of a card flood. |
+| GET | `/api/coaching-focus` | THE CONDUCTOR: one sequenced whole-picture focus (lead + parallel + later + connections + a batched retest) across training, running, DEXA, health, nutrition and recovery. Pull/on-demand; the surface leads with this instead of a card flood. |
 
 ## `/context-effect`
 
@@ -404,7 +404,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/next-step` |  |
-| POST | `/api/next-step/done` | done / snooze are the calm "did it" / "not today" feedback: a skipped step doesn't return tomorrow (constitution: pull, never push; the athlete drives). |
+| POST | `/api/next-step/done` | done / snooze are the calm "did it" / "not today" feedback: a skipped step doesn't return tomorrow (constitution: pull, never push; the user drives). |
 | POST | `/api/next-step/snooze` |  |
 
 ## `/nutrition`
@@ -425,7 +425,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/performance` | The TRAINING-INTELLIGENCE / performance read — the athletic counterpart to /api/health/standing. Benchmarks where the athlete actually STANDS (each lift's capacity vs sex/age strength standards + VO2max norms), the strength imbalances, the single biggest lever, lifts worth re-testing, a variety nudge, and a holistic balance line. Derived live each call; percentile/level reference reads, no scores. |
+| GET | `/api/performance` | The TRAINING-INTELLIGENCE / performance read — the athletic counterpart to /api/health/standing. Benchmarks where the user actually STANDS (each lift's capacity vs sex/age strength standards + VO2max norms), the strength imbalances, the single biggest lever, lifts worth re-testing, a variety nudge, and a holistic balance line. Derived live each call; percentile/level reference reads, no scores. |
 
 ## `/plan`
 
@@ -459,8 +459,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/program/blocks/:id/advance` |  |
 | POST | `/api/program/blocks/:id/complete` |  |
 | GET | `/api/program/blocks/active` |  |
-| POST | `/api/program/blocks/ensure` | Ensure ONE active periodization block exists (auto-create a sensible default aligned to the athlete's goal when none is running; idempotent — never resets an in-progress block). Keeps periodization live without waiting for the scheduler's weekly slot. |
-| GET | `/api/program/equipment` | The persisted equipment/preference profile (free text) that RANKS variation suggestions by what the athlete can actually load. GET reads it (+ the parsed equipment types); PUT replaces it (null/'' clears). A plain profile field. |
+| POST | `/api/program/blocks/ensure` | Ensure ONE active periodization block exists (auto-create a sensible default aligned to the user's goal when none is running; idempotent — never resets an in-progress block). Keeps periodization live without waiting for the scheduler's weekly slot. |
+| GET | `/api/program/equipment` | The persisted equipment/preference profile (free text) that RANKS variation suggestions by what the user can actually load. GET reads it (+ the parsed equipment types); PUT replaces it (null/'' clears). A plain profile field. |
 | PUT | `/api/program/equipment` |  |
 | POST | `/api/program/evolve` | Adaptive program evolution: read the program-state and draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for review — same propose→apply path as /agent/run, driven by the trend analysis. |
 | GET | `/api/program/progression` | Per-lift next-session prescription for every strength item on a plan day. ?day=N selects the day; omit to default to the plan day today's read points at (the "upcoming session" the Brief already suggests). Returns [] when the day has no strength items or does not exist. |
@@ -524,7 +524,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/run-plan` | The RUNNING brain: this week's deterministic periodized run mix (N easy Z2 + 1 long + 1 rotated quality, each with a bpm-bearing zone + interval structure) and the athlete's real HR-zone bpm bands. The endurance counterpart to /performance. Both degrade to {available:false} for a non-runner / no zones. |
+| GET | `/api/run-plan` | The RUNNING brain: this week's deterministic periodized run mix (N easy Z2 + 1 long + 1 rotated quality, each with a bpm-bearing zone + interval structure) and the user's real HR-zone bpm bands. The endurance counterpart to /performance. Both degrade to {available:false} for a non-runner / no zones. |
 
 ## `/run-zones`
 
@@ -599,7 +599,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/symptom-links` | Symptom <-> marker connections: a symptom the athlete logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
+| GET | `/api/symptom-links` | Symptom <-> marker connections: a symptom the user logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
 
 ## `/test-week`
 

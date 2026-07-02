@@ -1,5 +1,5 @@
 // @ts-check
-// Pure Today Brief and focus-bar rendering helpers for the vanilla PWA.
+// Pure Today Brief rendering helpers for the vanilla PWA.
 
 type ClientDayRead = import("../contracts/client.js").ClientDayRead;
 
@@ -27,12 +27,6 @@ type TodayBriefHtmlOptions = {
   morph?: boolean;
   reducedMotion?: boolean;
   offlineDismissed?: boolean;
-};
-
-type TodayFocusBarOptions = {
-  exDone?: unknown;
-  exTotal?: unknown;
-  isToday?: boolean;
 };
 
 type TodayPlanDay = {
@@ -155,28 +149,6 @@ type TodayPlanDay = {
     </section>`;
   }
 
-  function todayFocusBarHtml(read: TodayBriefRead | null | undefined, day: TodayPlanDay | null | undefined, options: TodayFocusBarOptions = {}): string {
-    const meta = todayBriefMeta(read);
-    const line = read?.headline || read?.focus || meta.lead;
-    const dayName = day?.name ? day.name : "Today's session";
-    const exTotal = Number(options.exTotal) || 0;
-    const exDone = Number(options.exDone) || 0;
-    const prog = exTotal
-      ? `<span class="focus-prog"><span class="focus-prog-done">${exDone}</span><span class="focus-prog-sep">/</span>${exTotal} done</span>`
-      : "";
-    return `<div class="focus-bar reveal" style="--i:0" aria-label="Workout focus">
-      <div class="focus-bar-row">
-        ${!options.isToday ? `<button class="focus-back" id="backToday" aria-label="Back to today">←</button>` : `<span class="focus-glyph" aria-hidden="true">${meta.glyph}</span>`}
-        <div class="focus-id">
-          <span class="focus-day">${escHtml(dayName)}</span>
-          ${prog}
-        </div>
-        <button class="focus-exit" id="focusExit">Exit focus</button>
-      </div>
-      ${line ? `<div class="focus-read">${escHtml(line)}</div>` : ""}
-    </div>`;
-  }
-
   function todayBriefSignalsText(read: TodayBriefRead | null | undefined): string {
     const signals = read?.signals && typeof read.signals === "object" ? read.signals as Record<string, unknown> : {};
     const bits: string[] = [];
@@ -202,7 +174,6 @@ type TodayPlanDay = {
     agentOffline: todayBriefAgentOffline,
     agentOfflineNoticeHtml: todayBriefAgentOfflineNoticeHtml,
     briefHtml: todayBriefHtml,
-    focusBarHtml: todayFocusBarHtml,
     signalsText: todayBriefSignalsText,
   };
 

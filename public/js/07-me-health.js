@@ -63,7 +63,7 @@
         return ME_HEALTH_SCREEN.onHealthReadView();
     }
     // The Standing review — the FIRST thing Me opens to. It leads with the conductor's
-    // whole-athlete "Where to focus" card (the cross-domain lead, tapping through to the
+    // whole-picture "Where to focus" card (the cross-domain lead, tapping through to the
     // plan), then the detailed where-you-stand health read below.
     async function renderMeStanding() {
         await ME_HEALTH_SCREEN.renderMeStanding();

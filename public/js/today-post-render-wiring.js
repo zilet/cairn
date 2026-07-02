@@ -1,7 +1,7 @@
 (() => {
 // @ts-check
-// Today post-render DOM wiring: quick capture, cardio/apply/focus/date controls,
-// and non-focus side loader dispatch after the Today HTML swap.
+// Today post-render DOM wiring: quick capture, cardio/apply/date controls,
+// and side loader dispatch after the Today HTML swap.
 (() => {
     function wirePostRender(deps) {
         deps.updateHeaderCondense();
@@ -34,41 +34,29 @@
         deps.wireBrief(deps.read, { isToday: deps.isToday });
         if (deps.read?._provisional)
             deps.upgradeBriefInPlace(deps.state.logDate, deps.isToday);
-        if (!deps.focus && deps.showPlan)
+        if (deps.showPlan)
             deps.loadTrainingProvenance(deps.isToday);
         deps.loadTableHint();
-        if (!deps.focus) {
-            deps.setupWeightChip();
-            deps.setupVoiceCapture();
-            deps.loadFrequentFoods();
-            deps.loadContextBanner();
-            if (!deps.conductorLeads)
-                deps.loadHealthFocusBanner();
-            deps.loadWearable(deps.isToday);
-            if (deps.isToday) {
-                deps.loadCheckin();
-                deps.loadDraftProposals();
-            }
-            if (!deps.deferRail) {
-                if (deps.agenda) {
-                    deps.runAgendaRail(deps.agenda, deps.agendaGeneric, deps.todayRailDeps());
-                }
-                else {
-                    deps.runFallbackRail(deps.isToday, deps.todayRailDeps());
-                }
-            }
-            deps.root.querySelector("#goalLine")?.addEventListener("click", () => deps.activateTab("progress"));
+        deps.setupWeightChip();
+        deps.setupVoiceCapture();
+        deps.loadFrequentFoods();
+        deps.loadContextBanner();
+        if (!deps.conductorLeads)
+            deps.loadHealthFocusBanner();
+        deps.loadWearable(deps.isToday);
+        if (deps.isToday) {
+            deps.loadCheckin();
+            deps.loadDraftProposals();
         }
-        const focusEnterButton = deps.root.querySelector("#focusEnter");
-        focusEnterButton?.addEventListener("click", () => {
-            deps.setFocus(deps.state.logDate, true);
-            deps.withViewTransition(() => Promise.resolve(deps.renderToday()).then(deps.viewEnter));
-        });
-        const focusExitButton = deps.root.querySelector("#focusExit");
-        focusExitButton?.addEventListener("click", () => {
-            deps.setFocus(deps.state.logDate, false);
-            deps.withViewTransition(() => Promise.resolve(deps.renderToday()).then(deps.viewEnter));
-        });
+        if (!deps.deferRail) {
+            if (deps.agenda) {
+                deps.runAgendaRail(deps.agenda, deps.agendaGeneric, deps.todayRailDeps());
+            }
+            else {
+                deps.runFallbackRail(deps.isToday, deps.todayRailDeps());
+            }
+        }
+        deps.root.querySelector("#goalLine")?.addEventListener("click", () => deps.activateTab("progress"));
         deps.root.querySelector("#paceOffer")?.addEventListener("click", () => {
             deps.state.chatPrefill = deps.todayCompass.paceOffer?.ask || "";
             deps.activateTab("chat");
