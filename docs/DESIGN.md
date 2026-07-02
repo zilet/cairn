@@ -22,7 +22,8 @@ listed here are load-bearing — change them in all three places or not at all.
 --line-2:  #d8cfbd;  /* stronger hairlines */
 --accent:  #b4552d;  /* terracotta — primary actions, highlights */
 --accent-deep: #93421f;
---sage:    #6e7f5c;  /* success, completion, "done" states */
+--sage:    #6e7f5c;  /* success, completion, "done" states — borders/marks; ~4:1 on card, NOT for small text */
+--sage-text: #5f6e4f; /* sage for small TEXT on card/cream — clears WCAG AA 4.5:1 */
 --sage-bg: #eef0e6;
 --warn:    #b3402e;  /* warnings, destructive */
 --warn-bg: #f6e8e2;

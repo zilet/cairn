@@ -21,6 +21,7 @@
   --accent:  #b4552d;   /* terracotta — primary actions, highlights */
   --accent-deep: #93421f;
   --sage:    #6e7f5c;   /* success, completion, "done" */
+  --sage-text: #5f6e4f; /* sage for SMALL TEXT on card/cream — meets 4.5:1 AA (plain --sage is ~4:1, borders/marks only) */
   --sage-bg: #eef0e6;
   --warn:    #b3402e;   /* warnings, destructive */
   --warn-bg: #f6e8e2;
@@ -4770,7 +4771,7 @@ button.hmk-row:active{background:var(--card-2)}
   transition:background .15s ease}
 .cfocus-thread:hover{background:var(--card-2)}
 .cfocus-thread-arrow{flex:0 0 auto;color:var(--sage);font-weight:700}
-.cfocus-thread-lbl{flex:0 0 auto;color:var(--sage);letter-spacing:.08em}
+.cfocus-thread-lbl{flex:0 0 auto;color:var(--sage-text);letter-spacing:.08em}
 .cfocus-thread-txt{flex:1 1 auto;min-width:0;font-size:.9rem;font-weight:560;color:var(--ink);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cfocus-thread-go{flex:0 0 auto;color:var(--muted);font-weight:600;transition:transform .15s ease}

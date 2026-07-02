@@ -2119,10 +2119,10 @@ if (typeof window !== "undefined") {
       <h2 class="modal-title">Welcome to Cairn</h2>
       <p class="ob-lead">A few basics, then you're in — I'll learn the rest as we go.</p>
       <div class="ob-grid">
-        <div class="field"><label>Age</label>
+        <div class="field"><label for="obAge">Age</label>
           <input id="obAge" type="number" inputmode="numeric" min="13" max="100" placeholder="years"></div>
-        <div class="field"><label>Days / week</label>
-          <div class="seg" id="obDays">
+        <div class="field"><label id="obDaysLbl">Days / week</label>
+          <div class="seg" id="obDays" role="group" aria-labelledby="obDaysLbl">
             <button type="button" class="segbtn" data-dpw="3">3</button>
             <button type="button" class="segbtn active" data-dpw="4">4</button>
             <button type="button" class="segbtn" data-dpw="5">5</button>
@@ -2135,7 +2135,7 @@ if (typeof window !== "undefined") {
           <button type="button" class="segbtn" data-disc="endurance">Endurance</button>
           <button type="button" class="segbtn" data-disc="hybrid">Hybrid</button>
         </div></div>
-      <div class="field"><label>Main goal</label>
+      <div class="field"><label for="obGoal">Main goal</label>
         <select id="obGoal">
           <option value="">What matters most? (optional)</option>
           <option value="stay strong and age well">Stay strong &amp; age well</option>
@@ -2144,7 +2144,7 @@ if (typeof window !== "undefined") {
           <option value="sport or event performance">Sport / performance</option>
           <option value="overall health and energy">Overall health &amp; energy</option>
         </select></div>
-      <div class="field"><label>Anything else <span class="ob-opt">— optional</span></label>
+      <div class="field"><label for="obIntro">Anything else <span class="ob-opt">— optional</span></label>
         <textarea id="obIntro" class="ob-intro" rows="3"
           placeholder="injuries, how you eat, height &amp; weight, supplements you take… a sentence is plenty."></textarea></div>
       <button id="obStart" class="logbtn" style="width:100%;height:46px;margin-top:6px;letter-spacing:.05em">START</button>
