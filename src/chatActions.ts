@@ -204,7 +204,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `// The endurance OBJECTIVE (running goal), orthogonal to the lifting plan. Use mode
     // "race" for a dated event (the coach periodizes a ramp + taper), or "standing" for
     // an ongoing readiness target with NO date (e.g. "stay 10k-ready"). Set this when the
-    // athlete states a running goal ("I want to run the Cambridge Half on Nov 1", "keep me
+    // user states a running goal ("I want to run the Cambridge Half on Nov 1", "keep me
     // able to run a 10k anytime"). Distinct from primary_discipline (set via set_profile).
     { "type": "set_endurance_goal", "mode": "race",
       "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",
@@ -234,8 +234,8 @@ export const CHAT_ACTION_PROMPT_SPECS = {
         { "item": "<ingredient>", "amount": "<qty>", "kcal": <number|null>, "protein_g": <number|null>, "carbs_g": <number|null>, "fat_g": <number|null> } ],
       "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number|null>, "notes": <string|null> }`,
     guidance: [
-      `log_food records a meal estimate (food note) — use it when the athlete reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
-      `BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today, reference it instead of logging a duplicate. If the athlete is correcting that row, emit update_food_note with the existing id.`,
+      `log_food records a meal estimate (food note) — use it when the user reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
+      `BEFORE emitting log_food, check DATA.day_intake.entries. If the same meal is already logged today, reference it instead of logging a duplicate. If the user is correcting that row, emit update_food_note with the existing id.`,
     ],
   },
   update_food_note: {
@@ -255,7 +255,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
       { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] }`,
     guidance: [
-      `plan_update (target tweaks AND adding/swapping a movement on an existing day) is saved as a DRAFT for the athlete to review and apply — never assume it's live. A plan_update change whose exercise is already on that day TWEAKS it; a change whose exercise is NOT on that day yet ADDS it (include sets + rep_low/rep_high so it lands complete). Use plan_update to add ONE or a few movements to days that exist.`,
+      `plan_update (target tweaks AND adding/swapping a movement on an existing day) is saved as a DRAFT for the user to review and apply — never assume it's live. A plan_update change whose exercise is already on that day TWEAKS it; a change whose exercise is NOT on that day yet ADDS it (include sets + rep_low/rep_high so it lands complete). Use plan_update to add ONE or a few movements to days that exist.`,
     ],
   },
   plan_restructure: {
@@ -266,7 +266,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
         { "exercise": "Back Squat", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 190, "note": "" },
         { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed", "note": "" } ] } ] }`,
     guidance: [
-      `plan_restructure (changing the split or days-per-week) is saved as a DRAFT for the athlete to review and apply — never assume it's live. Use plan_restructure only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible exercises that honor their constraints and carrying over weights where it makes sense.`,
+      `plan_restructure (changing the split or days-per-week) is saved as a DRAFT for the user to review and apply — never assume it's live. Use plan_restructure only when the split/frequency itself changes ("5 days a week"), proposing a full plan with sensible exercises that honor their constraints and carrying over weights where it makes sense.`,
     ],
   },
   log_health: {
@@ -276,7 +276,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "summary": "<plain-language 1-2 sentence read on the results>",
       "markers": [ { "name": "Ferritin", "value": 45, "unit": "ng/mL", "flag": "low|high|normal|null" } ] }`,
     guidance: [
-      `log_health records lab/bloodwork/DEXA/ECG results the athlete reports in chat — transcribe EVERY marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short plain-language summary.`,
+      `log_health records lab/bloodwork/DEXA/ECG results the user reports in chat — transcribe EVERY marker verbatim with its value, unit and a low/high/normal flag vs the usual range, plus a short plain-language summary.`,
       `Do NOT curate to "the interesting ones": an in-range/normal/boring marker (the full CBC differential, electrolytes, the whole urinalysis, omega sub-fractions, every hormone) is just as required as a flagged one — if it has a name and a value, include it. Lands straight in their Health records (Me → Health) and feeds the marker trends. Never invent a value.`,
       `Preserve source units exactly as reported; do not convert US/SI/EU units yourself. Informational, not medical advice.`,
       `NOTE: for a big pasted panel (dozens of markers), the Health tab's "paste results" box is the more reliable, complete path — you may mention it in passing.`,
@@ -291,7 +291,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     guidance: [
       `add_context_event records a trip, injury/niggle, major life event, or family commitment onto their timeline (Me → Life) so the plan adapts around it — ease off an injured area, plan travel-friendly weeks, dial volume back during a stressful stretch, keep family days shorter/more flexible.`,
       `Use "injury" for any pain/niggle they mention, "trip" for travel, "family_event" for a recurring family/kids commitment (meta {member, recurrence}, e.g. "Tue 17:00 soccer"), "life_event" otherwise.`,
-      `Set start/end dates ONLY when the athlete actually gave them. NEVER guess or approximate a date (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't know. If the exact date matters (e.g. a race they're training for), record the event with null dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.`,
+      `Set start/end dates ONLY when the user actually gave them. NEVER guess or approximate a date (don't turn "in November" into a specific day) — leave start_date/end_date null when you don't know. If the exact date matters (e.g. a race they're training for), record the event with null dates and ask them once, in one brief line, for the real date rather than inventing a placeholder.`,
     ],
   },
   resolve_context_event: {
@@ -299,13 +299,13 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     applyMode: "immediate",
     shape: `{ "type": "resolve_context_event", "id": <existing context_event id from DATA.context_events>, "date": "YYYY-MM-DD|null" }`,
     guidance: [
-      `resolve_context_event closes a healed injury / finished trip / passed life event on their timeline WITHOUT deleting it — it stays on record but stops making the plan work around it. Use it when the athlete confirms an injury/niggle is no longer bothering them (e.g. you gently asked about a past-window injury and they said it's fine). Only emit it for an id that is actually in DATA.context_events, and only when they've confirmed — never guess it's healed.`,
+      `resolve_context_event closes a healed injury / finished trip / passed life event on their timeline WITHOUT deleting it — it stays on record but stops making the plan work around it. Use it when the user confirms an injury/niggle is no longer bothering them (e.g. you gently asked about a past-window injury and they said it's fine). Only emit it for an id that is actually in DATA.context_events, and only when they've confirmed — never guess it's healed.`,
     ],
   },
   log_supplement: {
     type: "log_supplement",
     applyMode: "immediate",
-    shape: `// Supplement UNDERSTANDING (not a daily log). When the athlete mentions what they take
+    shape: `// Supplement UNDERSTANDING (not a daily log). When the user mentions what they take
     // ("I take creatine daily, omega-3, some D, whey occasionally"), capture it ONCE and
     // approximate sensibly. Prefer structured "items" (you fill canonical name + typical
     // dose + cadence + the markers it touches); or pass "text" for the server to approximate.
@@ -346,16 +346,16 @@ function renderActionGuidance(types: readonly ChatActionType[]): string {
 
 export function renderChatActionSchema(): string {
   return `[
-    // zero or more — ONLY when the athlete clearly asked to log or change something.
+    // zero or more — ONLY when the user clearly asked to log or change something.
     ${chatActionPromptSpecs().map((spec) => spec.shape).join(",\n    ")}
 ]`;
 }
 
 export function renderChatActionPromptProse(): string {
-  return `ACTIONS — only when the athlete clearly asks to log or change something:
+  return `ACTIONS — only when the user clearly asks to log or change something:
 - ${immediateChatActionTypes().join(", ")} are APPLIED immediately.
 ${renderActionGuidance(immediateChatActionTypes())}
-- ${draftChatActionTypes().join(" and ")} are saved as DRAFTS for the athlete to review and apply — never assume they're live.
+- ${draftChatActionTypes().join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.
 ${renderActionGuidance(draftChatActionTypes())}
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.`;
 }

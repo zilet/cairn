@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**223 routes** across 85 groups.
+**224 routes** across 85 groups.
 
 ## `/activities`
 
@@ -299,6 +299,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | DELETE | `/api/health-docs/:id` |  |
 | GET | `/api/health-docs/:id` | Single row (frontend polls this to watch enrichment_status). |
 | PUT | `/api/health-docs/:id` |  |
+| POST | `/api/health-docs/:id/confirm` | Confirm a pending_confirm lab paste — the chat propose→apply gate for a bulk panel. When a transcriber is reachable it flips the draft into the completeness-first, Claude-first health ingest (the same path the paste box uses); otherwise it commits the chat agent's inline markers directly. Nothing writes to Health until this fires. |
 | GET | `/api/health-docs/:id/file` | Stream the original file. Only raster images / PDF are served inline. |
 | POST | `/api/health-docs/:id/reanalyze` | Re-run the agentic scan over a document's original file. |
 

@@ -1101,7 +1101,7 @@ test("chat action write contract stays typed and prompt-aligned", () => {
   assert.equal(immediateActions.includes("plan_update"), false);
   assert.equal(immediateActions.includes("plan_restructure"), false);
   assert.match(actionProse, /APPLIED immediately/);
-  assert.match(actionProse, /DRAFTS for the athlete to review and apply/);
+  assert.match(actionProse, /DRAFTS for the user to review and apply/);
 
   for (const actionType of CHAT_ACTION_TYPES) {
     assert.match(chatActions, new RegExp(`"${actionType}"`), `${actionType} should be owned by chatActions.ts`);
