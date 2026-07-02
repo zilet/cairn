@@ -1,7 +1,7 @@
 (() => {
 // @ts-check
 // Pure Settings screen surface helpers: data coercion, status adapters, and slice markup.
-const SETTINGS_SURFACE_SEGMENTS = [["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
+const SETTINGS_SURFACE_SEGMENTS = [["you", "You"], ["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
 function settingsSurfaceRecord(value) {
     return value && typeof value === "object" ? value : {};
 }

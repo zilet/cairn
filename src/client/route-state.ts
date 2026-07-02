@@ -14,7 +14,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     defaults: {
       tab: "today",
       planSection: "edit",
-      meSection: "standing",
+      meSection: "profile",
       healthSection: "read",
       settingsSection: "agents",
     },
@@ -24,7 +24,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
       me: ["standing", "profile", "memory", "health", "life", "family"],
       health: ["read", "markers", "records", "share", "learned"],
-      settings: ["agents", "sources", "automation", "data"],
+      settings: ["you", "agents", "sources", "automation", "data"],
     },
   } as const satisfies ClientRouteDefinitions;
   const APP_PATH_SEGMENT = cleanSegment(CLIENT_ROUTE_DEFINITIONS.appBasePath);

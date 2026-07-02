@@ -174,7 +174,28 @@
         function renderDataSlice() {
             CairnSettingsDataController.render(settingsDataDeps());
         }
-        const SLICES = { agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
+        // "You" — the about-you & context home (Profile, Family, Life, Memory). These are
+        // low-frequency, set-once surfaces; they open their existing detail views.
+        function renderYouSlice() {
+            const slot = view.querySelector("#setSlice");
+            if (!slot)
+                return;
+            const item = (seg, title, sub) => `<button class="set-you-card" data-you="${seg}" type="button">
+        <span class="set-you-t">${title}</span><span class="set-you-s">${sub}</span>
+        <span class="set-you-arw" aria-hidden="true">›</span>
+      </button>`;
+            slot.innerHTML = `<div class="set-you reveal">
+        ${item("profile", "Profile", "About you, goals, discipline & bodyweight")}
+        ${item("family", "Family", "The people your coach plans around")}
+        ${item("life", "Life", "Trips, injuries & events on your timeline")}
+        ${item("memory", "Memory", "What Cairn remembers about you")}
+      </div>`;
+            slot.querySelectorAll("[data-you]").forEach((b) => b.addEventListener("click", () => {
+                state.meSeg = (b.dataset.you || "profile");
+                activateTab("me");
+            }));
+        }
+        const SLICES = { you: renderYouSlice, agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
         const paintSlice = (key) => (SLICES[key || "agents"] || renderAgentsSlice)();
         // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no
         // refetch, edits preserved), keep the save bar mounted on the stable sentinel.

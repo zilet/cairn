@@ -261,8 +261,10 @@ function createMeHealthScreenComposition(input: ClientMeHealthScreenCompositionI
     renderMe: () => {
       input.headerTitle.textContent = "Me";
       input.invalidatePoll();
-      if (!input.state.meSeg) input.state.meSeg = "standing";
-      return (handlers[input.state.meSeg] || screen.renderMeStanding)();
+      // Standing + Health moved to the Stand tab; Me is now the about-you home,
+      // reached from Settings → You, so it opens to Profile by default.
+      if (!input.state.meSeg) input.state.meSeg = "profile";
+      return (handlers[input.state.meSeg] || screen.renderMeProfile)();
     },
     renderMeProfile: async () => {
       await CairnMeProfileController.renderProfile(screen.meProfileDeps());

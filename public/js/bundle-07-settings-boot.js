@@ -310,7 +310,7 @@ Object.assign(globalThis, {
 (() => {
 // @ts-check
 // Pure Settings screen surface helpers: data coercion, status adapters, and slice markup.
-const SETTINGS_SURFACE_SEGMENTS = [["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
+const SETTINGS_SURFACE_SEGMENTS = [["you", "You"], ["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
 function settingsSurfaceRecord(value) {
     return value && typeof value === "object" ? value : {};
 }
@@ -1299,7 +1299,28 @@ if (typeof window !== "undefined") {
         function renderDataSlice() {
             CairnSettingsDataController.render(settingsDataDeps());
         }
-        const SLICES = { agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
+        // "You" — the about-you & context home (Profile, Family, Life, Memory). These are
+        // low-frequency, set-once surfaces; they open their existing detail views.
+        function renderYouSlice() {
+            const slot = view.querySelector("#setSlice");
+            if (!slot)
+                return;
+            const item = (seg, title, sub) => `<button class="set-you-card" data-you="${seg}" type="button">
+        <span class="set-you-t">${title}</span><span class="set-you-s">${sub}</span>
+        <span class="set-you-arw" aria-hidden="true">›</span>
+      </button>`;
+            slot.innerHTML = `<div class="set-you reveal">
+        ${item("profile", "Profile", "About you, goals, discipline & bodyweight")}
+        ${item("family", "Family", "The people your coach plans around")}
+        ${item("life", "Life", "Trips, injuries & events on your timeline")}
+        ${item("memory", "Memory", "What Cairn remembers about you")}
+      </div>`;
+            slot.querySelectorAll("[data-you]").forEach((b) => b.addEventListener("click", () => {
+                state.meSeg = (b.dataset.you || "profile");
+                activateTab("me");
+            }));
+        }
+        const SLICES = { you: renderYouSlice, agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
         const paintSlice = (key) => (SLICES[key || "agents"] || renderAgentsSlice)();
         // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no
         // refetch, edits preserved), keep the save bar mounted on the stable sentinel.
@@ -1349,7 +1370,7 @@ if (typeof window !== "undefined") {
         defaults: {
             tab: "today",
             planSection: "edit",
-            meSection: "standing",
+            meSection: "profile",
             healthSection: "read",
             settingsSection: "agents",
         },
@@ -1359,7 +1380,7 @@ if (typeof window !== "undefined") {
             progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
             me: ["standing", "profile", "memory", "health", "life", "family"],
             health: ["read", "markers", "records", "share", "learned"],
-            settings: ["agents", "sources", "automation", "data"],
+            settings: ["you", "agents", "sources", "automation", "data"],
         },
     };
     const APP_PATH_SEGMENT = cleanSegment(CLIENT_ROUTE_DEFINITIONS.appBasePath);
