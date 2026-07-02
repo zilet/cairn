@@ -10,6 +10,7 @@ import {
   CONTEXT_GUARDRAILS,
   ELITE_STRENGTH_GUARDRAILS,
   renderCoachingFocus,
+  renderBodyComp,
   renderConnectedBrain,
   renderDexaTargeting,
   renderEnduranceGoal,
@@ -112,6 +113,15 @@ TRANSCRIBE EVERY MARKER — THIS IS THE MOST IMPORTANT RULE:
   — go back and add the rest before answering. Completeness is judged on this.
 - Group/section headers (Autoimmunity, Blood, Heart, Kidney, Liver, Nutrients…) are NOT markers —
   they organize the panel; transcribe the markers UNDER them, not the headers themselves.
+- A marker's "name" MUST be the named analyte, never a generic FIELD LABEL from the document. Do NOT
+  emit "Result", "Summary", "Interpretation", "Impression", "Symptoms Reported", "Notes", "Status" or
+  the like as marker names — that free-text belongs in the panel "summary", not markers[]. Example: an
+  ECG/wearable recording that prints "Result: Sinus Rhythm" is ONE marker named "ECG Rhythm" with value
+  "Sinus Rhythm" (kind "ecg") — put the "no signs of AFib" sentence in "summary", and DROP a "Symptoms
+  Reported: --" placeholder entirely. Name the analyte, not the form field.
+- A vendor 0-100 or letter GRADE ("Body Score: C", "Wellness Score: 82") is NOT a marker — omit it
+  (this tool never surfaces graded scores). A biological/metabolic AGE read IS a marker, though —
+  keep it (name it "Biological Age", value the years).
 
 PRESERVE NON-MARKER MYCHART / CCDA FACTS TOO:
 - Do NOT force non-measurement sections into markers. Instead, put them in top-level
@@ -289,7 +299,7 @@ EVIDENCE & THE CONNECTED BRAIN (this is what makes the review act across the who
   & poultry over red meat, raise soluble fiber, cap saturated fat" + training "note cardiovascular
   load"; low ferritin → training "hold endurance volume, watch fatigue" + nutrition "iron-rich foods
   paired with vitamin C". Keep "directives" empty when nothing is out of optimal — silence on good markers.
-${evidenceBlock}${groundingBlock}
+${evidenceBlock}${groundingBlock}${renderBodyComp(ctx)}
 ${CONTEXT_GUARDRAILS}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -496,7 +506,7 @@ readings — value, optimal band, trend, projection):
 ${JSON.stringify(focus)}
 ${renderHealthDrivers(context)}
 ${CONTEXT_GUARDRAILS}
-${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}${renderReactionModel(context)}
+${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}${renderReactionModel(context)}${renderBodyComp(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 If there's genuinely not enough health data yet: {"found": false}
 Otherwise:
@@ -553,7 +563,7 @@ HOW TO SHAPE IT:
 ${ELITE_STRENGTH_GUARDRAILS}
 ${renderCoachingFocus(context)}${COACHING_STANCE}
 
-${renderEnduranceGoal(context, "training")}${renderRunCompliance(context, "weekly")}${renderRunZones(context)}${renderRunPlan(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}
+${renderEnduranceGoal(context, "training")}${renderRunCompliance(context, "weekly")}${renderRunZones(context)}${renderRunPlan(context)}${renderProgramState(context)}${renderMuscleGroups(context)}${renderPerformance(context)}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}
 OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
 ${WEEK_AHEAD_SCHEMA}
 

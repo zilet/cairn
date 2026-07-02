@@ -39,13 +39,13 @@ const MARKER_GROUPS: MarkerGroup[] = [
   { key: "thyroid", label: "Thyroid", keys: ["tsh", "free t3", "free t4", "thyroxine", "triiodo", "thyroid", "thyroglobulin", "thyroid peroxidase", "tpo antibod", "thyroid antibod", "thyroxine binding globulin"] },
   { key: "hormones", label: "Hormones", keys: ["testosterone", "estradiol", "estrogen", "cortisol", "dhea", "shbg", "sex hormone binding globulin", "progesterone", "prolactin", "igf", "lh", "fsh", "leptin"] },
   { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "methylmalonic", "magnesium", "zinc", "calcium", "selenium", "copper", "omega", "arachidonic"] },
-  { key: "cardiac", label: "Cardiac", keys: ["troponin", "nt-probnp", "nt probnp", "pro-bnp", "probnp", "bnp"] },
+  { key: "cardiac", label: "Cardiac", keys: ["troponin", "nt-probnp", "nt probnp", "pro-bnp", "probnp", "bnp", "ecg", "ekg", "electrocardiogram", "heart rhythm", "sinus rhythm", "atrial fibrillation", "afib", "qt interval", "qtc", "qrs", "pr interval", "rhythm"] },
   { key: "autoimmune", label: "Autoimmune & Antibodies", keys: ["antinuclear", "ana screen", "rheumatoid", "anti-ccp", "ccp antibod", "anti-dsdna", "dsdna"] },
   { key: "screening", label: "Cancer Screening", keys: ["prostate specific antigen", "psa", "cea", "alpha-fetoprotein", "ca-125", "ca 125", "ca 19-9", "ca19-9"] },
   { key: "metals", label: "Heavy Metals", keys: ["lead", "mercury", "arsenic", "cadmium", "aluminum", "aluminium"] },
   { key: "urinalysis", label: "Urinalysis", keys: ["urinalysis", "urine", "specific gravity", "leukocyte esterase", "urobilinogen", "epithelial cells", "hyaline cast", "urine cast"] },
   { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "resting hr", "heart rate", "pulse", "respiratory rate", "respiration", "oxygen saturation", "spo2", "o2 sat", "temperature", "body temp"] },
-  { key: "fitness", label: "Fitness & Metabolic Rate", keys: ["vo2max", "vo2 max", "vo₂max", "resting metabolic rate", "predicted rmr", "rmr", "respiratory exchange", "fat utilization", "carbohydrate utilization", "fuel utilization", "metabolic age", "fitness age", "hrv", "heart rate variability"] },
+  { key: "fitness", label: "Fitness & Metabolic Rate", keys: ["vo2max", "vo2 max", "vo₂max", "resting metabolic rate", "predicted rmr", "rmr", "respiratory exchange", "fat utilization", "carbohydrate utilization", "fuel utilization", "metabolic age", "fitness age", "biological age", "bio age", "inner age", "hrv", "heart rate variability"] },
   { key: "body", label: "Body Composition", keys: ["body fat", "fat mass", "fat-free mass", "fat free mass", "lean mass", "appendicular", "almi", "ffmi", "android/gynoid", "android gynoid", "gynoid", "bone density", "bone mineral content", "bmd", "t-score", "z-score", "visceral", "total mass", "bmi"] },
   { key: "other", label: "Other Markers", keys: [] },
 ];
@@ -58,8 +58,41 @@ const OTHER_GROUP: MarkerGroup = MARKER_GROUPS[MARKER_GROUPS.length - 1];
 // (non-destructively — the source doc + its parsed_json are left intact). Matched
 // like markerGroup: lowercased substring against the marker name.
 const NON_CLINICAL_MARKER_KEYS = ["sphere", "cylinder", "lens type", "pupillary distance", "visual acuity"];
+
+// Generic document-FIELD labels an extractor sometimes emits as if they were
+// markers — a report's free-text "Result" / "Summary" / "Symptoms Reported"
+// line, an ordering-provider row, an interpretation blurb. They're never a named
+// lab analyte, carry no zone, and only clutter the catalog (the canonical case:
+// an Apple Watch ECG export whose "Result"='Sinus Rhythm', "Summary"='…no AFib',
+// "Symptoms Reported"='--' fields each became a "marker" and landed in Other).
+// The rhythm itself belongs to the doc's summary, not a trend series — a proper
+// future ECG extraction names the analyte (e.g. "ECG Rhythm") and lands in
+// Cardiac. Matched as the WHOLE name (trimmed, lowercased) so a real analyte
+// that merely CONTAINS one of these words ("Test Result Flag") is unaffected.
+const NON_CLINICAL_EXACT_NAMES = new Set([
+  "result", "results", "summary", "note", "notes", "comment", "comments",
+  "interpretation", "impression", "impressions", "conclusion", "conclusions",
+  "recommendation", "recommendations", "finding", "findings",
+  "symptoms", "symptoms reported", "reported symptoms", "symptom",
+  "indication", "indications", "reason for test", "reason for exam",
+  "status", "reported", "provider", "ordering provider", "collected", "specimen",
+]);
+
+// Vendor composite "scores" / letter grades (Body Score "C", Wellness Score,
+// Readiness Score …). The constitution bans surfacing 0-100 / graded scores, and
+// they carry no clinical band. t-score / z-score are REAL body-comp analytes, so
+// they're exempted below. Matched as a substring.
+const NON_CLINICAL_SCORE_NAMES = [
+  "body score", "wellness score", "health score", "overall score", "fitness score",
+  "readiness score", "recovery score", "sleep score", "stress score", "vitality score",
+  "longevity score", "wellbeing score", "well-being score",
+];
+
 export function isNonClinicalMarker(name: string): boolean {
-  const n = String(name ?? "").toLowerCase();
+  const n = String(name ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!n) return true;
+  if (NON_CLINICAL_EXACT_NAMES.has(n)) return true;
+  if (NON_CLINICAL_SCORE_NAMES.some((k) => n.includes(k))) return true;
   return NON_CLINICAL_MARKER_KEYS.some((k) => n.includes(k));
 }
 

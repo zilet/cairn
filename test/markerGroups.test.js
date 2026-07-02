@@ -19,6 +19,9 @@ test("the clinically-distinct stories each land in their own group (not Other)",
     // Lipids & cardiac
     ["Total Cholesterol", "lipids"],
     ["Troponin T HS Baseline", "cardiac"],
+    ["ECG Rhythm", "cardiac"],
+    ["QT Interval", "cardiac"],
+    ["Biological Age", "fitness"],
     // Metabolic & the metabolic-cart fitness fields
     ["Hemoglobin A1c", "metabolic"],
     ["VO2max", "fitness"],
@@ -114,18 +117,21 @@ test("Liver group relabels to 'Liver & Pancreas' but still reads as Liver", () =
   assert.match(label("ALT"), /Liver/i, "still matches a /Liver/ assertion");
 });
 
-test("a genuinely-composite read with no clinical home stays in Other", () => {
-  assert.equal(g("Biological Age"), "other");
-  assert.equal(g("Body Score"), "other");
-});
-
-test("isNonClinicalMarker drops an eyeglass Rx but never a real lab analyte", () => {
+test("isNonClinicalMarker drops eyeglass Rx, doc-field junk, and vendor scores but never a real analyte", () => {
+  // Eyeglass Rx (the original case).
   assert.equal(repo.isNonClinicalMarker("Left Sphere (OS)"), true);
   assert.equal(repo.isNonClinicalMarker("Right Sphere (OD)"), true);
   assert.equal(repo.isNonClinicalMarker("Cylinder"), true);
   assert.equal(repo.isNonClinicalMarker("Lens Type"), true);
-  // Clinical markers must pass straight through.
-  for (const ok of ["Total Cholesterol", "Spherocytes", "ApoB", "Vitamin D", "Ferritin", "Globulin"]) {
+  // Generic document FIELD labels an ECG/wearable export leaks as "markers".
+  for (const junk of ["Result", "Summary", "Symptoms Reported", "Interpretation", "Impression", "Notes", "Status"]) {
+    assert.equal(repo.isNonClinicalMarker(junk), true, `${junk} should be dropped as a doc-field label`);
+  }
+  // Vendor composite scores / letter grades (constitution: no graded scores).
+  assert.equal(repo.isNonClinicalMarker("Body Score"), true);
+  assert.equal(repo.isNonClinicalMarker("Wellness Score"), true);
+  // Clinical markers — incl. the score-suffixed body-comp analytes — pass through.
+  for (const ok of ["Total Cholesterol", "Spherocytes", "ApoB", "Vitamin D", "Ferritin", "Globulin", "T-Score", "Z-Score", "Biological Age", "Summary of Findings Panel"]) {
     assert.equal(repo.isNonClinicalMarker(ok), false, `${ok} must not be filtered`);
   }
 });
@@ -137,7 +143,7 @@ test("panels render in conventional clinical lab-review order, not longevity-imp
   // sequence must come back in the canonical clinical order regardless.
   resetTables("health_documents", "blood_pressure_readings");
   seedHealthDoc("2026-06-01", [
-    marker("Biological Age", 41), // → other (always last)
+    marker("Osmolality, Serum", 285), // → other (always last)
     marker("Body Fat %", 14, { unit: "%" }),
     marker("VO2max", 48, { unit: "mL/kg/min" }),
     marker("Resting Heart Rate", 52, { unit: "bpm" }),
@@ -214,4 +220,30 @@ test("getMarkerHistory excludes the eyewear Rx and groups the rest (no Other sou
   for (const k of ["lipids", "electrolytes", "fitness", "urinalysis", "metals"]) {
     assert.ok(present.has(k), `present groups include ${k}`);
   }
+});
+
+test("getMarkerHistory drops an ECG export's doc-field junk (no 'Other' soup)", () => {
+  // The exact shape seen live: an Apple Watch ECG doc whose form fields became
+  // "markers". The rhythm belongs to the doc summary, not a trend series — none
+  // of these should survive into the marker catalog, so 'other' stays empty.
+  resetTables("health_documents", "blood_pressure_readings");
+  seedHealthDoc("2026-06-01", [
+    marker("Result", "Sinus Rhythm"),
+    marker("Summary", "This ECG recording does not show signs of AFib."),
+    marker("Symptoms Reported", "--"),
+    marker("Body Score", "C"),
+    marker("Biological Age", -7.4),
+    marker("Total Cholesterol", 180, { unit: "mg/dL" }),
+  ]);
+  const { markers } = repo.getMarkerHistory();
+  const names = markers.map((m) => m.name);
+  for (const junk of ["Result", "Summary", "Symptoms Reported", "Body Score"]) {
+    assert.ok(!names.includes(junk), `${junk} filtered out`);
+  }
+  // Biological Age is a real longevity read — kept, and grouped into fitness.
+  const bio = markers.find((m) => m.name === "Biological Age");
+  assert.ok(bio, "Biological Age retained");
+  assert.equal(bio.group, "fitness");
+  // No surviving marker landed in the catch-all.
+  assert.ok(!markers.some((m) => m.group === "other"), "nothing fell into Other");
 });
