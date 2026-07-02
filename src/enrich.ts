@@ -44,8 +44,21 @@ let draining = false;
 // (cleared when the review job starts, so data landing mid-run queues the next).
 let reviewQueued = false;
 
+// Pure: whether to enqueue a review refresh given the current latch state. Keeps
+// the "at most one pending refresh" pile-up guard unit-testable.
+export function shouldEnqueueReviewRefresh(alreadyQueued: boolean): boolean {
+  return !alreadyQueued;
+}
+
+// Pure: only REGENERATE the whole-picture synthesis after new labs when the user has
+// ALREADY opted into it (a synthesis exists). Never create one uninvited — pull, not
+// push (docs/VISION.md). Extracted so the gate is testable without an agent call.
+export function shouldRegenerateSynthesis(existingSynthesis: unknown): boolean {
+  return existingSynthesis != null;
+}
+
 export function enqueueReviewRefresh(): void {
-  if (reviewQueued) return;
+  if (!shouldEnqueueReviewRefresh(reviewQueued)) return;
   reviewQueued = true;
   queue.push({ kind: "review", id: 0 });
   if (!draining) void drain();
@@ -500,12 +513,17 @@ async function processReviewJob(): Promise<void> {
 
   // New labs landed → refresh the elite-coach whole-picture synthesis on the fresh
   // directives + review, so the Health → Read view's lead reflects the new panel without a
-  // manual refresh. Pull artifact (cached); a failure keeps the previous synthesis.
-  try {
-    const r = await synthesizeHealth("auto");
-    console.log(r.ok ? "[enrich] health synthesis refreshed after new labs." : "[enrich] health synthesis: kept previous (no usable read).");
-  } catch (e: any) {
-    console.warn(`[enrich] health synthesis refresh failed: ${e?.message ?? e}`);
+  // manual refresh. Pull artifact (cached): only regenerate when a synthesis ALREADY
+  // exists (the user opted into the read at least once) — never conjure one uninvited.
+  // Non-blocking + silent-degrade: a failure keeps the previous synthesis, the Stand
+  // overview's existing stale/refresh affordance simply finds fresher data on its own.
+  if (shouldRegenerateSynthesis(repo.getHealthSynthesis())) {
+    try {
+      const r = await synthesizeHealth("auto");
+      console.log(r.ok ? "[enrich] health synthesis refreshed after new labs." : "[enrich] health synthesis: kept previous (no usable read).");
+    } catch (e: any) {
+      console.warn(`[enrich] health synthesis refresh failed: ${e?.message ?? e}`);
+    }
   }
 }
 

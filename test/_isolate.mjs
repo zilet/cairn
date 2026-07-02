@@ -15,6 +15,7 @@
 // already-empty tables) — this is the belt over their suspenders.
 import { beforeEach } from "node:test";
 import { db } from "../dist/db.js";
+import { resetMarkerHistoryCache } from "../dist/repo/health.js";
 
 // The schema is fixed for the life of the process, so enumerate + prepare once.
 const tables = db
@@ -37,4 +38,8 @@ beforeEach(() => {
     db.exec("ROLLBACK");
     throw err;
   }
+  // The wipe bypasses every repo write path (and thus the getMarkerHistory write
+  // counter), and rowids can collide across a wipe — so the in-process marker-history
+  // memo could otherwise serve a prior test's markers. Drop it explicitly here.
+  resetMarkerHistoryCache();
 });

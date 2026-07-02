@@ -23,6 +23,7 @@
 
 import { db } from "../db.js";
 import { seriesUnitsCompatible } from "./lab-units.js";
+import { bumpMarkerDataVersion } from "./marker-cache.js";
 
 // Lowercase, fold every non-alphanumeric run to a single space, collapse + trim.
 // "Glucose (random)" and "Glucose Random" → "glucose random" (a real merge);
@@ -157,6 +158,7 @@ export function setMarkerAlias(rawNorm: string, canonicalKey: string, canonicalN
        canonical_name = excluded.canonical_name,
        source = excluded.source`
   ).run(rawNorm, canonicalKey, canonicalName, source);
+  bumpMarkerDataVersion(); // a learned alias re-keys / merges getMarkerHistory series
 }
 
 export function listMarkerAliases(): Array<{ raw_norm: string; canonical_key: string; canonical_name: string; source: string }> {
@@ -165,6 +167,7 @@ export function listMarkerAliases(): Array<{ raw_norm: string; canonical_key: st
 
 export function clearMarkerAlias(rawNorm: string) {
   db.prepare("DELETE FROM marker_aliases WHERE raw_norm = ?").run(normalizeMarkerName(rawNorm));
+  bumpMarkerDataVersion();
 }
 
 // KB-only lookup (exact normalized match): the curated merge key for a name, or
