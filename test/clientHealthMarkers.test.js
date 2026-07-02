@@ -180,16 +180,17 @@ test("every row states its reference inline — optimal, else lab range, else fl
   }, 0);
   assert.match(labRange, /range 65–175 mcg\/dL/);
 
-  // No zone, no range, but a flag → the flag in plain words.
+  // No zone, no range, just a normal flag → NO written status; a calm green dot says it.
   const flagOnly = markers.hmkRowHtml({
     name: "Iron % Saturation", unit: "%",
     latest: { value: 24, date: "2026-06-20", flag: "normal" },
     points: [{ value: 24, date: "2026-06-20" }],
   }, 0);
-  assert.match(flagOnly, /in range/);
+  assert.doesNotMatch(flagOnly, /in range|above range|below range/);
+  assert.match(flagOnly, /hdot-ok/);
 });
 
-test("reference phrases: optimal beats lab range beats flag; one-sided and unitless handled", () => {
+test("reference phrases: optimal beats lab range; flag words are never written out", () => {
   const markers = loadHealthMarkers();
   assert.equal(markers.referenceRangePhrase({ reference: { low: 65, high: 175 }, unit: "mcg/dL" }), "65–175 mcg/dL");
   assert.equal(markers.referenceRangePhrase({ reference: { low: null, high: 3 }, unit: "mg/L" }), "≤ 3 mg/L");
@@ -198,8 +199,24 @@ test("reference phrases: optimal beats lab range beats flag; one-sided and unitl
   // optimal zone wins over a lab range when both are present.
   assert.equal(markers.markerReferenceSub({ optimal: { low: 70, high: 100 }, reference: { low: 60, high: 110 } }), "optimal 70–100");
   assert.equal(markers.markerReferenceSub({ reference: { low: 65, high: 175 }, unit: "mcg/dL" }), "range 65–175 mcg/dL");
-  assert.equal(markers.markerReferenceSub({ latest: { flag: "high" } }), "above range");
-  assert.equal(markers.markerReferenceSub({ latest: { flag: null } }), "");
+  // A bare flag no longer becomes prose — the colour carries it.
+  assert.equal(markers.markerReferenceSub({ latest: { flag: "high" } }), "");
+  assert.equal(markers.markerReferenceSub({ latest: { flag: "normal" } }), "");
+});
+
+test("markerStatus is optimal-aware: green in-band, amber off-optimal, red out-of-range", () => {
+  const markers = loadHealthMarkers();
+  // In the optimal band → green.
+  assert.equal(markers.markerStatus({ latest: { value: 62, flag: "normal" }, optimal: { low: 40, high: 100 }, in_optimal: true }), "ok");
+  // Lab says "normal" but sits ABOVE the optimal band (Ferritin 160 vs 50–150) → amber.
+  assert.equal(markers.markerStatus({ latest: { value: 160, flag: "normal" }, optimal: { low: 50, high: 150 }, in_optimal: false }), "watch");
+  // Lab-flagged → red regardless.
+  assert.equal(markers.markerStatus({ latest: { value: 200, flag: "high" } }), "warn");
+  // No optimal zone, but a lab range: inside → green, outside → red (even with no flag).
+  assert.equal(markers.markerStatus({ latest: { value: 76, flag: "normal" }, reference: { low: 65, high: 175 } }), "ok");
+  assert.equal(markers.markerStatus({ latest: { value: 220, flag: null }, reference: { low: 65, high: 175 } }), "warn");
+  // Nothing to compare against (a qualitative row) → muted, no false green.
+  assert.equal(markers.markerStatus({ name: "ABO Group", latest: { value: "O", flag: null } }), "mute");
 });
 
 test("health marker chart wiring is idempotent and updates the scrub affordance", () => {

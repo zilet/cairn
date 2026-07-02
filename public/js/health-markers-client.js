@@ -78,10 +78,10 @@
             : hasHigh ? `≤ ${formatMarkerNumber(high)}` : `≥ ${formatMarkerNumber(low)}`;
         return `${range}${unit}`;
     }
-    // The one reference a row should show, labeled by what it is: the evidence-anchored
-    // optimal band when we have one (the stronger framing), else the lab's own printed
-    // reference range, else the flag in plain words ("in range"). "" when we know
-    // nothing (a qualitative row with no range and no flag). NOT escaped.
+    // The one reference a row shows: the number it's being compared to. The
+    // evidence-anchored optimal band when we have one (the stronger framing), else the
+    // lab's own printed reference range. "" when there's no number to compare against —
+    // the status colour carries the read then, never a written-out "in range". NOT escaped.
     function markerReferenceSub(marker) {
         const opt = optimalPhrase(marker);
         if (opt)
@@ -89,14 +89,35 @@
         const ref = referenceRangePhrase(marker);
         if (ref)
             return `range ${ref}`;
-        const flag = String(marker?.latest?.flag || "").toLowerCase();
-        if (flag === "normal")
-            return "in range";
-        if (flag === "high")
-            return "above range";
-        if (flag === "low")
-            return "below range";
         return "";
+    }
+    // The at-a-glance status — a traffic-light read that DRIVES the colour (dot + value),
+    // so "good" needs no words. Optimal-aware, not just the lab flag: a value the lab
+    // calls "normal" can still sit outside its longevity-optimal band (watch), and a
+    // value outside the lab's OWN printed range reads warn even if the flag is missing.
+    //   warn  (red)   — lab-flagged low/high, or outside the printed reference range
+    //   watch (amber) — in range but off the optimal target band
+    //   ok    (green) — inside the optimal band or the lab range
+    //   mute  (grey)  — nothing to compare against (a qualitative row)
+    function markerStatus(marker) {
+        const labFlag = String(marker?.latest?.flag || "").toLowerCase();
+        if (flaggedByLab(labFlag))
+            return "warn";
+        if (marker?.in_optimal === false)
+            return "watch";
+        const v = Number(marker?.latest?.value);
+        const ref = marker?.reference;
+        if (ref && Number.isFinite(v)) {
+            const overHigh = ref.high != null && Number.isFinite(Number(ref.high)) && v > Number(ref.high);
+            const underLow = ref.low != null && Number.isFinite(Number(ref.low)) && v < Number(ref.low);
+            if (overHigh || underLow)
+                return "warn";
+            if (ref.low != null || ref.high != null)
+                return "ok";
+        }
+        if (labFlag === "normal" || marker?.in_optimal === true)
+            return "ok";
+        return "mute";
     }
     // The band to draw a gauge/chart against: the optimal zone (preferred) or, absent
     // one, the lab's two-sided reference range. One-sided ranges can't anchor a gauge
@@ -369,23 +390,26 @@
             delta = `<span class="hmk-delta">${df > 0 ? "▲" : "▼"} ${escHtml(formatMarkerNumber(Math.abs(df)))}</span>`;
         }
         const age = latest.date ? relAge(String(latest.date)) : "";
-        // Every row states its reference inline — the number you're being measured
-        // against, no tap required: the optimal band, else the lab's printed range,
-        // else the flag in plain words. This is the "where do I stand" at a glance.
+        // Every row shows the NUMBER it's compared to (optimal band, else lab range) —
+        // never a written-out "in range". The status colour, not prose, says good/off/out.
         const ref = markerReferenceSub(marker);
         const sub = [age, ref].filter(Boolean).join(" · ");
         const when = sub
             ? `<span class="hmk-when"${latest.date ? ` title="${escAttr(absDate(String(latest.date)))}"` : ""}>${escHtml(sub)}</span>`
             : "";
         const unit = marker?.unit ? `<span class="hmk-unit">${escHtml(marker.unit)}</span>` : "";
-        const rowInner = `<span class="hdot ${CairnHealthPicture.healthDotClass(latest.flag)}"></span>
+        // Traffic-light status colours the dot AND the value, so what needs attention
+        // (amber/red) pops while a good reading stays calm ink with a green dot.
+        const st = markerStatus(marker);
+        const valClass = st === "watch" ? " mst-watch" : st === "warn" ? " mst-warn" : "";
+        const rowInner = `<span class="hdot hdot-${st}"></span>
       <span class="hmk-id">
         <span class="hmk-name">${escHtml(marker?.name || marker?.key || "")}</span>
         ${when}
       </span>
       <span class="hmk-right">
         ${delta}
-        <span class="hmk-val">${escHtml(formatMarkerNumber(latest.value))}${unit}</span>
+        <span class="hmk-val${valClass}">${escHtml(formatMarkerNumber(latest.value))}${unit}</span>
         <span class="hmk-chev${exp ? "" : " hmk-chev-ghost"}" aria-hidden="true">${exp ? "▾" : ""}</span>
       </span>`;
         return `<div class="hmk reveal${exp ? " hmk-x" : ""}" style="${stagger(index)}" data-mkey="${escAttr(marker?.key || "")}">
@@ -404,6 +428,7 @@
         optimalSideWord,
         referenceRangePhrase,
         markerReferenceSub,
+        markerStatus,
         markerOutOfRange,
         markerAskQuestion,
         markerChartSvg,

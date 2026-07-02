@@ -1952,6 +1952,7 @@ declare global {
       optimalSideWord(marker: Record<string, unknown> | null | undefined): string;
       referenceRangePhrase(marker: Record<string, unknown> | null | undefined): string;
       markerReferenceSub(marker: Record<string, unknown> | null | undefined): string;
+      markerStatus(marker: Record<string, unknown> | null | undefined): "ok" | "watch" | "warn" | "mute";
       markerOutOfRange(marker: Record<string, unknown> | null | undefined): boolean;
       markerAskQuestion(marker: Record<string, unknown> | null | undefined): string;
       markerChartSvg(marker: Record<string, unknown> | null | undefined): string;

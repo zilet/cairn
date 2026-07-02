@@ -29,7 +29,8 @@
   --sage-bg: #eef0e6;
   --warn:    #b3402e;   /* warnings, destructive */
   --warn-bg: #f6e8e2;
-  --gold:    #c9a86a;   /* PR moments, gentle highlights */
+  --gold:    #c9a86a;   /* PR moments, gentle highlights — fills/marks, too light for text */
+  --gold-deep: #8a6d2e; /* readable amber for "watch" TEXT (marker value off-optimal) — AA on card */
 
   /* Stone — warm neutrals from the mark. An expanded dark ramp that
      pairs quietly with terracotta: richer near-black than ink for the
@@ -3551,7 +3552,12 @@ button.hmk-row:active{background:var(--card-2)}
 .hmk-when{font-size:.68rem;color:var(--muted);letter-spacing:.01em}
 .hmk-right{display:flex;align-items:baseline;gap:9px;flex:0 0 auto}
 .hmk-val{font-family:var(--font-display);font-variation-settings:"opsz" 40;font-weight:560;
-  font-size:1.05rem;font-variant-numeric:lining-nums}
+  font-size:1.05rem;font-variant-numeric:lining-nums;color:var(--ink)}
+/* traffic-light value tint: a good reading stays calm ink (green dot says enough);
+   an off-optimal one goes amber, an out-of-range one red — so attention pops. */
+.hmk-val.mst-watch{color:var(--gold-deep)}
+.hmk-val.mst-warn{color:var(--warn)}
+.hmk-val.mst-watch .hmk-unit,.hmk-val.mst-warn .hmk-unit{color:inherit;opacity:.7}
 .hmk-unit{font-family:var(--font-ui);font-size:.62rem;color:var(--muted);margin-left:3px;
   letter-spacing:.04em}
 .hmk-delta{font-size:.7rem;color:var(--muted);white-space:nowrap}

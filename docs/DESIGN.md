@@ -31,7 +31,8 @@ listed here are load-bearing — change them in all three places or not at all.
 --sage-bg: #eef0e6;
 --warn:    #b3402e;  /* warnings, destructive */
 --warn-bg: #f6e8e2;
---gold:    #c9a86a;  /* PR moments, streaks, small celebrations */
+--gold:    #c9a86a;  /* PR moments, streaks, small celebrations — fills/marks, too light for text */
+--gold-deep: #8a6d2e; /* readable amber for "watch" TEXT (a marker value off its optimal band) — AA on card */
 --stone-deep:  #2c2620;  /* stone, warm neutrals from the mark — charcoal stack, dark surfaces */
 --stone:       #473f36;  /* stone — flat mark, small sizes */
 --stone-taupe: #7d6a56;  /* stone — capstone, quiet secondary */
