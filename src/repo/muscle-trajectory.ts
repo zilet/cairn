@@ -29,7 +29,7 @@
 // the program state — mirroring performanceStanding(date, { programState, ... }).
 // ============================================================================
 import { localDateISO } from "./shared.js";
-import { getAppState } from "./app-state.js";
+import { getAppState, setAppState } from "./app-state.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
@@ -46,6 +46,7 @@ import {
   type ProgramState,
 } from "./program-state.js";
 import { listContextEvents } from "./health.js";
+import { getProgress } from "./sessions.js";
 
 // ============================================================================
 // 1) MUSCLE-GROUP TRAJECTORY
@@ -252,11 +253,30 @@ export function muscleGroupTrajectory(
 // A program-wide cadence for re-anchoring true capacity — distinct from
 // performance.ts's per-lift TEST_STALE_DAYS (42) staleness. ~7 weeks is the
 // midpoint of the typical 6-8 week mesocycle, so a test week falls naturally at
-// the end of a block. READ-ONLY here: this never stamps the cadence (the apply /
-// scheduler path owns writing 'last_test_week').
+// the end of a block. The cadence stamp is written by recordTestWeek() below —
+// wired into realization-block completion (program-blocks.ts) and self-healed
+// here from logged PRs — so the loop testWeekDue() reads actually closes.
 export const TEST_WEEK_CADENCE_WEEKS = 7;
 const TEST_WEEK_CADENCE_DAYS = TEST_WEEK_CADENCE_WEEKS * 7;
 export const TEST_WEEK_STATE_KEY = "last_test_week";
+
+// The span that folds a cluster of PRs into ONE de-facto test week: new maxes on
+// ≥2 key lifts within a calendar week read as a single re-anchoring moment.
+const DE_FACTO_TEST_WEEK_SPAN_DAYS = 7;
+
+// Stamp the last strength test-week date. Idempotent + MONOTONIC — the stamp only
+// ever moves FORWARD (an older date is ignored), so re-running block completion or
+// the read-time self-heal never rewinds the cadence. This is the writer the module
+// always referred to but that was never built; it's what lets testWeekDue() stop
+// nagging once a test week has actually happened. Returns the effective stamp.
+export function recordTestWeek(date?: string): string {
+  const d = date && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : localDateISO();
+  const prev = getAppState(TEST_WEEK_STATE_KEY);
+  const prevISO = prev && /^\d{4}-\d{2}-\d{2}/.test(prev) ? prev.slice(0, 10) : null;
+  if (prevISO && prevISO >= d) return prevISO; // ISO dates sort lexically — never go backwards
+  setAppState(TEST_WEEK_STATE_KEY, d);
+  return d;
+}
 
 export interface TestWeekDue {
   due: boolean;
@@ -302,11 +322,66 @@ function pickKeyLifts(lifts: LiftState[]): string[] {
   return out;
 }
 
+// Detect a de-facto test week from logged reality: new est-1RM maxes ("PRs")
+// landing on ≥2 of the key lifts within a ≤7-day span. An athlete who re-anchors
+// multiple main lifts inside a week has tested capacity — whether or not a formal
+// block framed it — so that window closes the loop just like a realization block.
+// A PR requires a PRIOR session to beat, so a first-ever baseline entry doesn't
+// count (that's what the "no test on record yet" read is for). Returns the most
+// recent qualifying window's latest PR date (never after `onOrBefore`), else null.
+function detectDeFactoTestWeek(keyLifts: string[], onOrBefore: string): string | null {
+  if (keyLifts.length < 2) return null;
+
+  // PR events per lift: a session date whose best est-1RM strictly beats every
+  // earlier session's best for that lift.
+  const events: { lift: string; date: string }[] = [];
+  for (const lift of keyLifts) {
+    const prog = getProgress(lift) as any;
+    const pts = (Array.isArray(prog.points) ? prog.points : [])
+      .filter((p: any) => p && p.best1rm != null && String(p.date).slice(0, 10) <= onOrBefore)
+      .sort((a: any, b: any) => String(a.date).localeCompare(String(b.date)));
+    let max = Number.NEGATIVE_INFINITY;
+    let seen = false;
+    for (const p of pts) {
+      const v = Number(p.best1rm);
+      if (!Number.isFinite(v)) continue;
+      if (seen && v > max + 1e-9) events.push({ lift, date: String(p.date).slice(0, 10) });
+      if (!seen || v > max) max = v;
+      seen = true;
+    }
+  }
+  if (events.length < 2) return null;
+
+  // Newest PR first; anchor a ≤7-day look-back on each and return the most recent
+  // anchor whose window carries PRs on ≥2 DISTINCT key lifts (the anchor is that
+  // window's latest PR date).
+  events.sort((a, b) => b.date.localeCompare(a.date));
+  for (const anchor of events) {
+    const inWindow = new Set<string>();
+    for (const e of events) {
+      const gap = daysBetweenISO(e.date, anchor.date);
+      if (gap != null && gap >= 0 && gap <= DE_FACTO_TEST_WEEK_SPAN_DAYS) inWindow.add(e.lift);
+    }
+    if (inWindow.size >= 2) return anchor.date;
+  }
+  return null;
+}
+
 export function testWeekDue(date?: string, opts: TestWeekOpts = {}): TestWeekDue {
   const d = date || localDateISO();
   const ps = opts.programState ?? getProgramState(d);
   const lifts = Array.isArray(ps.lifts) ? ps.lifts : [];
   const key_lifts = pickKeyLifts(lifts);
+
+  // Self-heal the cadence stamp before reading it: if the logged history shows a
+  // de-facto test week (PRs on ≥2 key lifts inside a week) newer than the current
+  // stamp, close the loop now so we don't nag an athlete who's actively
+  // re-anchoring. recordTestWeek is monotonic — this only ever moves the stamp
+  // forward, never rewinding a block-set stamp.
+  if (key_lifts.length >= 2) {
+    const deFacto = detectDeFactoTestWeek(key_lifts, d);
+    if (deFacto) recordTestWeek(deFacto);
+  }
 
   const last = getAppState(TEST_WEEK_STATE_KEY);
   const last_test_week = last && /^\d{4}-\d{2}-\d{2}/.test(last) ? last.slice(0, 10) : null;

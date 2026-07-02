@@ -5,9 +5,11 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { resetTables } from "./_seed.js";
 import * as blocks from "../dist/repo/program-blocks.js";
+import { getAppState } from "../dist/repo/app-state.js";
+import { localDateISO } from "../dist/repo/shared.js";
 
 beforeEach(() => {
-  resetTables("program_blocks");
+  resetTables("program_blocks", "app_state");
 });
 
 // ---- basic create + read ----
@@ -128,6 +130,41 @@ test("abandonBlock flips status to abandoned", () => {
   const a = blocks.abandonBlock(b.id);
   assert.equal(a.status, "abandoned");
   assert.equal(blocks.getActiveBlock(), null);
+});
+
+// ---- test-week loop closure (last_test_week stamp on realization) ----
+// The realization phase IS a strength test week (peak / express the block's work).
+// Completing a block in that phase closes the cadence loop testWeekDue() reads.
+
+test("completeBlock stamps last_test_week when the block is in its realization phase", () => {
+  const b = blocks.createBlock({ focus: "peak", phase: "realization", total_weeks: 4, week_index: 4 });
+  assert.equal(b.phase, "realization");
+  blocks.completeBlock(b.id);
+  assert.equal(getAppState("last_test_week"), localDateISO(), "the completion stamps today's test week");
+});
+
+test("completeBlock does NOT stamp when the block never reached realization", () => {
+  const b = blocks.createBlock({ focus: "strength", total_weeks: 6, week_index: 1 });
+  assert.equal(b.phase, "accumulation");
+  blocks.completeBlock(b.id);
+  assert.equal(getAppState("last_test_week"), null, "a block completed before realization did no test work");
+});
+
+test("advanceBlockWeek auto-complete stamps last_test_week when a PEAK block realizes", () => {
+  // A peak block on its last week is in realization; advancing past it auto-completes.
+  const peak = blocks.createBlock({ focus: "peak", total_weeks: 3, week_index: 3 });
+  assert.equal(peak.phase, "realization", "a peak block's last week realizes");
+  const done = blocks.advanceBlockWeek(peak.id);
+  assert.equal(done.status, "completed");
+  assert.equal(getAppState("last_test_week"), localDateISO(), "auto-completing the realization week stamps the test week");
+});
+
+test("advanceBlockWeek auto-complete does NOT stamp for a non-peak (deload) block", () => {
+  const b = blocks.createBlock({ focus: "strength", total_weeks: 3, week_index: 3 });
+  assert.equal(b.phase, "deload", "a non-peak block's last week is a deload, not realization");
+  const done = blocks.advanceBlockWeek(b.id);
+  assert.equal(done.status, "completed");
+  assert.equal(getAppState("last_test_week"), null, "a deload completion is not a test week");
 });
 
 // ---- updateBlock ----
