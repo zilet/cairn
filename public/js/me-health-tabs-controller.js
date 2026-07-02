@@ -10,7 +10,7 @@
         return typeof seg === "string" && HEALTH_SEG.some(([k]) => k === seg) ? seg : "read";
     }
     async function renderHealth(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Health";
         deps.state.meSeg = "health";
         deps.state.healthSeg = normalizeHealthSeg(deps.state.healthSeg);
         // New user with nothing uploaded yet -> open on Records (where you add a document),

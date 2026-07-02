@@ -10,7 +10,7 @@
                 : [];
     }
     async function render(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Memory";
         deps.state.meSeg = "memory";
         deps.invalidatePoll();
         deps.view.innerHTML = deps.segBar("memory", deps.segments) + `

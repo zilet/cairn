@@ -11,7 +11,7 @@
   }
 
   async function render(deps: ClientLifeControllerDeps): Promise<void> {
-    deps.headerTitle.textContent = "Me";
+    deps.headerTitle.textContent = "Life";
     deps.state.meSeg = "life";
     deps.invalidatePoll();
     deps.view.innerHTML = deps.segBar("life", deps.segments) + `

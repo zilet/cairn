@@ -303,7 +303,7 @@ test("family controller renders the family route and hydrates people by id", asy
   await h.context.CairnFamilyController.render(h.deps);
   await tick();
 
-  assert.equal(h.deps.headerTitle.textContent, "Me");
+  assert.equal(h.deps.headerTitle.textContent, "Family");
   assert.equal(h.deps.state.meSeg, "family");
   assert.equal(h.deps.invalidatePollCount, 1);
   assert.equal(h.deps.wireSegCount, 1);

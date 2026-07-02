@@ -120,7 +120,7 @@
   }
 
   async function renderProfile(deps: MeProfileControllerDeps): Promise<void> {
-    deps.headerTitle.textContent = "Me";
+    deps.headerTitle.textContent = "Profile";
     deps.state.meSeg = "profile";
     deps.invalidatePoll();
     deps.root.innerHTML = deps.segSkeleton("profile", deps.segments, 2);

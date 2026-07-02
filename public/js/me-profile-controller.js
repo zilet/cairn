@@ -109,7 +109,7 @@
         deps.select("#profToProgress")?.addEventListener("click", () => deps.activateTab("progress"));
     }
     async function renderProfile(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Profile";
         deps.state.meSeg = "profile";
         deps.invalidatePoll();
         deps.root.innerHTML = deps.segSkeleton("profile", deps.segments, 2);

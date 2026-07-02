@@ -89,7 +89,7 @@ type FamilyControllerApi = {
   }
 
   async function render(deps: FamilyControllerDeps): Promise<void> {
-    deps.headerTitle.textContent = "Me";
+    deps.headerTitle.textContent = "Family";
     deps.state.meSeg = "family";
     deps.invalidatePoll();
     deps.view.innerHTML = deps.segBar("family", deps.segments) + `

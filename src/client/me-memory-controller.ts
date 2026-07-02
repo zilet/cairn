@@ -33,7 +33,7 @@ type MeMemoryControllerDeps = {
   }
 
   async function render(deps: MeMemoryControllerDeps): Promise<void> {
-    deps.headerTitle.textContent = "Me";
+    deps.headerTitle.textContent = "Memory";
     deps.state.meSeg = "memory";
     deps.invalidatePoll();
     deps.view.innerHTML = deps.segBar("memory", deps.segments) + `

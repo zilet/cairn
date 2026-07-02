@@ -698,7 +698,7 @@ if (typeof window !== "undefined") {
         deps.select("#profToProgress")?.addEventListener("click", () => deps.activateTab("progress"));
     }
     async function renderProfile(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Profile";
         deps.state.meSeg = "profile";
         deps.invalidatePoll();
         deps.root.innerHTML = deps.segSkeleton("profile", deps.segments, 2);
@@ -799,7 +799,7 @@ if (typeof window !== "undefined") {
         return typeof seg === "string" && HEALTH_SEG.some(([k]) => k === seg) ? seg : "read";
     }
     async function renderHealth(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Health";
         deps.state.meSeg = "health";
         deps.state.healthSeg = normalizeHealthSeg(deps.state.healthSeg);
         // New user with nothing uploaded yet -> open on Records (where you add a document),
@@ -5847,7 +5847,7 @@ if (typeof window !== "undefined") {
                 : [];
     }
     async function render(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Memory";
         deps.state.meSeg = "memory";
         deps.invalidatePoll();
         deps.view.innerHTML = deps.segBar("memory", deps.segments) + `
@@ -6456,7 +6456,7 @@ if (typeof window !== "undefined") {
         return globalThis.CairnLifeTimelineActions;
     }
     async function render(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Life";
         deps.state.meSeg = "life";
         deps.invalidatePoll();
         deps.view.innerHTML = deps.segBar("life", deps.segments) + `
@@ -6659,7 +6659,7 @@ if (typeof window !== "undefined") {
         wrap.querySelectorAll("[data-fdel]").forEach((b) => b.addEventListener("click", () => startDelete(b, deps)));
     }
     async function render(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Family";
         deps.state.meSeg = "family";
         deps.invalidatePoll();
         deps.view.innerHTML = deps.segBar("family", deps.segments) + `

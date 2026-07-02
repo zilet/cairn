@@ -9,7 +9,7 @@
         return globalThis.CairnLifeTimelineActions;
     }
     async function render(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Life";
         deps.state.meSeg = "life";
         deps.invalidatePoll();
         deps.view.innerHTML = deps.segBar("life", deps.segments) + `

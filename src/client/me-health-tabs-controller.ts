@@ -10,7 +10,7 @@ function normalizeHealthSeg(seg: unknown): ClientHealthSection {
 }
 
 async function renderHealth(deps: ClientMeHealthTabsControllerDeps): Promise<void> {
-  deps.headerTitle.textContent = "Me";
+  deps.headerTitle.textContent = "Health";
   deps.state.meSeg = "health";
   deps.state.healthSeg = normalizeHealthSeg(deps.state.healthSeg);
   // New user with nothing uploaded yet -> open on Records (where you add a document),

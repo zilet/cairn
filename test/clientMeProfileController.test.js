@@ -275,7 +275,7 @@ test("Me Profile controller renders profile state and wires segmented controls",
 
   await harness.context.CairnMeProfileController.renderProfile(harness.deps);
 
-  assert.equal(harness.headerTitle.textContent, "Me");
+  assert.equal(harness.headerTitle.textContent, "Profile");
   assert.equal(harness.state.meSeg, "profile");
   assert.equal(harness.pollInvalidations, 1);
   assert.deepEqual(harness.requests.map((request) => request.path), ["/profile", "/goal"]);

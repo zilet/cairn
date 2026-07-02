@@ -56,7 +56,7 @@
         wrap.querySelectorAll("[data-fdel]").forEach((b) => b.addEventListener("click", () => startDelete(b, deps)));
     }
     async function render(deps) {
-        deps.headerTitle.textContent = "Me";
+        deps.headerTitle.textContent = "Family";
         deps.state.meSeg = "family";
         deps.invalidatePoll();
         deps.view.innerHTML = deps.segBar("family", deps.segments) + `
