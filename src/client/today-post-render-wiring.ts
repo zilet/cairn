@@ -11,6 +11,7 @@ type TodayPostRenderState = {
 
 type TodayPostRenderRead = {
   _provisional?: boolean;
+  _cached?: boolean;
 };
 
 type TodayPostRenderCompass = {
@@ -99,7 +100,10 @@ type TodayPostRenderWiringApi = {
     });
 
     deps.wireBrief(deps.read, { isToday: deps.isToday });
-    if (deps.read?._provisional) deps.upgradeBriefInPlace(deps.state.logDate, deps.isToday);
+    // A provisional placeholder upgrades visibly (thinking → settle); a cached
+    // paint reconciles SILENTLY against the network fetch (swaps only on a real
+    // content change). Both await the in-flight promise inside upgradeBriefInPlace.
+    if (deps.read?._provisional || deps.read?._cached) deps.upgradeBriefInPlace(deps.state.logDate, deps.isToday);
     if (deps.showPlan) deps.loadTrainingProvenance(deps.isToday);
 
     deps.loadTableHint();

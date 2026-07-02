@@ -32,7 +32,10 @@
             deps.applyDayProgression(applyButton, Number.isFinite(day) ? day : deps.state.day);
         });
         deps.wireBrief(deps.read, { isToday: deps.isToday });
-        if (deps.read?._provisional)
+        // A provisional placeholder upgrades visibly (thinking → settle); a cached
+        // paint reconciles SILENTLY against the network fetch (swaps only on a real
+        // content change). Both await the in-flight promise inside upgradeBriefInPlace.
+        if (deps.read?._provisional || deps.read?._cached)
             deps.upgradeBriefInPlace(deps.state.logDate, deps.isToday);
         if (deps.showPlan)
             deps.loadTrainingProvenance(deps.isToday);

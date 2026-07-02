@@ -146,7 +146,16 @@ class FakeElement {
   }
 }
 
-function loadController() {
+function fakeLocalStorage() {
+  const map = new Map();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => { map.set(key, String(value)); },
+    removeItem: (key) => { map.delete(key); },
+  };
+}
+
+function loadController(opts = {}) {
   const apiCalls = [];
   const invalidations = [];
   const renders = [];
@@ -164,8 +173,10 @@ function loadController() {
   const context = {
     Array,
     Object,
+    Number,
     Promise,
     String,
+    JSON,
     URLSearchParams,
     HTMLElement: FakeElement,
     HTMLButtonElement: FakeElement,
@@ -181,10 +192,18 @@ function loadController() {
     },
     CairnTodayBrief: {
       provisionalRead: () => ({ kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true }),
-      briefHtml: (read, opts) => `<section class="brief">${read?.headline || "Today"}:${opts.activeOverride || ""}</section>`,
+      briefHtml: (read, briefOpts) => `<section class="brief">${read?.headline || "Today"}:${briefOpts.activeOverride || ""}</section>`,
+      materiallyDiffers: (a, b) => {
+        if (!a || !b) return true;
+        const str = (v) => (v == null ? "" : String(v).trim());
+        return str(a.kind) !== str(b.kind) || str(a.headline) !== str(b.headline)
+          || str(a.why) !== str(b.why) || str(a.focus) !== str(b.focus)
+          || Number(a.est_minutes || 0) !== Number(b.est_minutes || 0);
+      },
       signalsText: () => "signals",
     },
   };
+  if (opts.localStorage) context.localStorage = opts.localStorage;
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-override-client.js"), "utf8"), context);
@@ -307,4 +326,102 @@ test("Today Brief controller preserves redirect wiring and override reconnect be
   assert.equal(harness.deps.state.brief.read.headline, "Short lift");
   assert.equal(harness.transitions.length, 1);
   assert.equal(harness.asks[0].minutes, 30);
+});
+
+test("loadBrief fast mode paints the last-known real read instantly and reconciles behind it", async () => {
+  const ls = fakeLocalStorage();
+  const cachedRead = { kind: "easy", headline: "Cached easy read", why: "recover", focus: "walk", est_minutes: 20, signals: {} };
+  ls.setItem("cairn.brief.v1", JSON.stringify({ date: "2026-07-01", read: cachedRead }));
+  const harness = loadController({ localStorage: ls });
+
+  const read = await harness.controller.loadBrief("2026-07-01", "", harness.deps, { fast: true });
+
+  // Instant real paint from the cache — no invented placeholder.
+  assert.equal(read._provisional, undefined);
+  assert.equal(read._cached, true);
+  assert.equal(read.headline, "Cached easy read");
+  // The network fetch still fires and is parked for the silent post-render reconcile.
+  assert.equal(harness.deps.state._briefInflight?.date, "2026-07-01");
+  assert.deepEqual(harness.apiCalls, ["/today-read?date=2026-07-01&agent=auto"]);
+});
+
+test("loadBrief fast mode never paints a cache entry from a different date", async () => {
+  const ls = fakeLocalStorage();
+  ls.setItem("cairn.brief.v1", JSON.stringify({ date: "2026-06-30", read: { kind: "easy", headline: "Yesterday", signals: {} } }));
+  const harness = loadController({ localStorage: ls });
+
+  const read = await harness.controller.loadBrief("2026-07-01", "", harness.deps, { fast: true });
+
+  // Cache is for a prior day → not used; the fetch resolves instantly here so we get the real read.
+  assert.notEqual(read.headline, "Yesterday");
+  assert.notEqual(read._cached, true);
+});
+
+test("loadBrief fast mode ignores the cache for an override steer", async () => {
+  const ls = fakeLocalStorage();
+  ls.setItem("cairn.brief.v1", JSON.stringify({ date: "2026-07-01", read: { kind: "rest", headline: "Cached rest read", signals: {} } }));
+  const harness = loadController({ localStorage: ls });
+
+  const read = await harness.controller.loadBrief("2026-07-01", "rough night", harness.deps, { fast: true });
+
+  // Cache is bypassed for an override steer (never painted, never overwritten); the
+  // override read is fetched fresh. (In this harness setTimeout is synchronous so
+  // the 1200ms guard wins the race → a provisional placeholder + a parked fetch.)
+  assert.notEqual(read._cached, true);
+  assert.ok(harness.apiCalls[0].includes("override=rough+night"));
+  assert.equal(harness.deps.state._briefInflight?.override, "rough night");
+  assert.equal(JSON.parse(ls.getItem("cairn.brief.v1")).read.headline, "Cached rest read");
+});
+
+test("loadBrief persists a real canonical read but not a provisional or override read", async () => {
+  const ls = fakeLocalStorage();
+  const harness = loadController({ localStorage: ls });
+
+  await harness.controller.loadBrief("2026-07-02", "", harness.deps);
+  const stored = JSON.parse(ls.getItem("cairn.brief.v1"));
+  assert.equal(stored.date, "2026-07-02");
+  assert.equal(stored.read.headline, "Easy day");
+  assert.equal(stored.read._cached, undefined);
+  assert.equal(stored.read._provisional, undefined);
+
+  // A fetch that fails (provisional) must not clobber the good cache.
+  await harness.controller.loadBrief("fallback", "", harness.deps);
+  assert.equal(JSON.parse(ls.getItem("cairn.brief.v1")).date, "2026-07-02");
+
+  // An override read must not clobber the canonical cache either.
+  await harness.controller.loadBrief("2026-07-03", "rough night", harness.deps);
+  assert.equal(JSON.parse(ls.getItem("cairn.brief.v1")).date, "2026-07-02");
+});
+
+test("upgradeBriefInPlace flashes thinking for a provisional paint but reconciles a cached paint silently", async () => {
+  // Provisional placeholder → visible thinking animation before the swap.
+  const prov = loadController({ localStorage: fakeLocalStorage() });
+  prov.deps.reducedMotion = () => false;
+  const provBrief = prov.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  let resolveProv;
+  const provPromise = new Promise((resolve) => { resolveProv = resolve; });
+  prov.deps.state.brief = { date: prov.deps.state.logDate, override: "", read: { kind: "train", headline: "Today", _provisional: true } };
+  prov.deps.state._briefInflight = { date: prov.deps.state.logDate, override: "", promise: provPromise };
+  const provDone = prov.controller.upgradeBriefInPlace(prov.deps.state.logDate, true, prov.deps);
+  assert.equal(provBrief.classList.contains("is-thinking"), true);
+  resolveProv({ kind: "train", headline: "Upper day", why: "ready", _provisional: false });
+  await provDone;
+
+  // Cached paint → silent reconcile, NO thinking flash.
+  const cachedHarness = loadController({ localStorage: fakeLocalStorage() });
+  cachedHarness.deps.reducedMotion = () => false;
+  const cachedBrief = cachedHarness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
+  let resolveCached;
+  const cachedPromise = new Promise((resolve) => { resolveCached = resolve; });
+  const shownRead = { kind: "train", headline: "Upper day", why: "ready", focus: null, est_minutes: 45 };
+  cachedHarness.deps.state.brief = { date: cachedHarness.deps.state.logDate, override: "", read: { ...shownRead, _cached: true } };
+  cachedHarness.deps.state._briefInflight = { date: cachedHarness.deps.state.logDate, override: "", promise: cachedPromise };
+  const cachedDone = cachedHarness.controller.upgradeBriefInPlace(cachedHarness.deps.state.logDate, true, cachedHarness.deps);
+  assert.equal(cachedBrief.classList.contains("is-thinking"), false);
+  resolveCached({ ...shownRead }); // identical → no DOM churn
+  await cachedDone;
+
+  // Fresh read adopted into state (flag dropped) and the element was never swapped.
+  assert.equal(!!cachedHarness.deps.state.brief.read._cached, false);
+  assert.equal(cachedHarness.rootEl.querySelector(".brief") === cachedBrief, true);
 });

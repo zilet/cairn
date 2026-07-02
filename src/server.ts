@@ -94,7 +94,14 @@ app.use(express.json({ limit: "1mb" }));
 // follows the traveling owner WITHOUT touching the server's own TZ. Invalid /
 // absent header → no override (server-local), exactly as before. Covers /api and
 // /mcp (both mounted below). Logs stay UTC instants; only the framing moves.
-app.use((req, _res, next) => runWithTimeZone(req.get("X-Cairn-TZ"), () => next()));
+app.use((req, _res, next) => {
+  const tz = req.get("X-Cairn-TZ");
+  // Remember the device's zone (cheap: writes only on change) so the scheduler's
+  // boot-warm + nightly Brief precompute — which run OUTSIDE any request — compute
+  // "today" in the device's calendar, not the server's. Best-effort; never blocks.
+  try { repo.recordClientTimeZone(tz); } catch {}
+  return runWithTimeZone(tz, () => next());
+});
 
 // REST API
 app.use("/api", api);

@@ -3,6 +3,9 @@
 
 type TodayBriefControllerDayRead = import("../contracts/client.js").ClientDayRead & {
   _provisional?: boolean;
+  // Painted instantly from the last-known real read for this date (localStorage);
+  // reconciled silently against the network fetch post-render.
+  _cached?: boolean;
   override?: string | null;
 };
 
@@ -54,6 +57,51 @@ type TodayBriefControllerDeps = {
 };
 
 (() => {
+  // localStorage key holding the most recent REAL (agentic, no-override) day read
+  // so a warm reopen paints the true sentence INSTANTLY — no invented placeholder,
+  // no visible swap when nothing changed. Bumped if the shape ever changes.
+  const BRIEF_LS_KEY = "cairn.brief.v1";
+
+  function briefStore(): Storage | null {
+    try {
+      return typeof localStorage !== "undefined" ? localStorage : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // The stored real read IFF it's for exactly this date (a previous day's read must
+  // never paint for today). Returns a clean read (no internal flags) or null.
+  function readCachedBrief(date: string): TodayBriefControllerDayRead | null {
+    const store = briefStore();
+    if (!store) return null;
+    try {
+      const raw = store.getItem(BRIEF_LS_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { date?: unknown; read?: TodayBriefControllerDayRead } | null;
+      if (!parsed || parsed.date !== date || !parsed.read || !parsed.read.kind) return null;
+      if (parsed.read._provisional) return null;
+      return parsed.read;
+    } catch {
+      return null;
+    }
+  }
+
+  // Persist the last-known real read. Only ever the canonical (no-override) read —
+  // an override ("rough night") is transient and must not poison the next open —
+  // and never a provisional/placeholder. Strips internal flags before storing.
+  function persistCachedBrief(date: string, override: string, read: TodayBriefControllerDayRead | null | undefined): void {
+    if (override || !read || read._provisional || !read.kind) return;
+    const store = briefStore();
+    if (!store) return;
+    try {
+      const clean = { ...read } as TodayBriefControllerDayRead;
+      delete clean._provisional;
+      delete clean._cached;
+      store.setItem(BRIEF_LS_KEY, JSON.stringify({ date, read: clean }));
+    } catch {}
+  }
+
   function provisionalRead(_date: string): TodayBriefControllerDayRead {
     return CairnTodayBrief.provisionalRead();
   }
@@ -65,7 +113,7 @@ type TodayBriefControllerDeps = {
     opts: { fast?: boolean } = {},
   ): Promise<TodayBriefControllerDayRead> {
     const cached = deps.state.brief;
-    if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional) return cached.read;
+    if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional && !cached.read._cached) return cached.read;
     const fetchRead: Promise<TodayBriefControllerDayRead> = (async () => {
       let read: TodayBriefControllerDayRead | null = null;
       try {
@@ -76,10 +124,24 @@ type TodayBriefControllerDeps = {
         read = null;
       }
       if (!read || !read.kind) read = provisionalRead(date);
+      persistCachedBrief(date, override || "", read);
       return read;
     })();
 
     if (opts.fast) {
+      // Instant truth: if we've seen today's REAL read before (and there's no
+      // override steer), paint it NOW as a normal read and reconcile silently
+      // against the fetch post-render. The invented placeholder is reserved for a
+      // genuinely first-ever open with nothing cached for this date.
+      if (!override) {
+        const stored = readCachedBrief(date);
+        if (stored) {
+          const instant: TodayBriefControllerDayRead = { ...stored, _cached: true };
+          deps.state._briefInflight = { date, override: "", promise: fetchRead };
+          deps.state.brief = { date, override: "", read: instant };
+          return instant;
+        }
+      }
       const timeout = 1200;
       const raced: { r: TodayBriefControllerDayRead } | null = await Promise.race([
         fetchRead.then((r) => ({ r })),
@@ -104,8 +166,13 @@ type TodayBriefControllerDeps = {
   async function upgradeBriefInPlace(date: string, isToday: boolean, deps: TodayBriefControllerDeps): Promise<void> {
     const inflight = deps.state._briefInflight;
     if (!inflight || inflight.date !== date) return;
+    // What's painted right now: a `_cached` read reconciles SILENTLY (it's already
+    // the true sentence, so no "thinking" flash and no swap unless content really
+    // changed); a `_provisional` placeholder gets the visible thinking → settle.
+    const shown = deps.state.brief && deps.state.brief.date === date ? deps.state.brief.read : null;
+    const silent = !!(shown && shown._cached && !shown._provisional);
     const briefEl = deps.root.querySelector<HTMLElement>(".brief");
-    if (briefEl && !deps.reducedMotion()) briefEl.classList.add("is-thinking");
+    if (briefEl && !silent && !deps.reducedMotion()) briefEl.classList.add("is-thinking");
     let read: TodayBriefControllerDayRead | null = null;
     try {
       read = await inflight.promise;
@@ -115,6 +182,14 @@ type TodayBriefControllerDeps = {
     if (deps.state.tab !== "today" || deps.state.logDate !== date) return;
     if (deps.state._briefInflight === inflight) deps.state._briefInflight = null;
     if (!read || read._provisional) {
+      // Refetch failed / not ready — keep whatever's painted (cached read stands).
+      briefEl?.classList.remove("is-thinking");
+      return;
+    }
+    // A cached paint that matches the network truth: adopt the fresh read into
+    // state (drops the _cached flag) but touch ZERO DOM — no settle animation.
+    if (silent && shown && !CairnTodayBrief.materiallyDiffers(shown, read)) {
+      deps.state.brief = { date, override: inflight.override || read.override || "", read };
       briefEl?.classList.remove("is-thinking");
       return;
     }

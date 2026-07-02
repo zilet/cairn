@@ -3361,6 +3361,30 @@ Object.assign(globalThis, {
       <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
     </section>`;
     }
+    // Does the freshly-fetched read differ from what's already painted in a way the
+    // athlete would SEE? Compares only the visible fields (kind/headline/why/focus/
+    // est_minutes) so an identical read reconciled behind a cached paint touches no
+    // DOM and never animates a "swap" of unchanged content. Pure + trivially tested.
+    function todayBriefMateriallyDiffers(a, b) {
+        if (!a || !b)
+            return true;
+        const str = (value) => (value == null ? "" : String(value).trim());
+        if (str(a.kind) !== str(b.kind))
+            return true;
+        if (str(a.headline) !== str(b.headline))
+            return true;
+        if (str(a.why) !== str(b.why))
+            return true;
+        if (str(a.focus) !== str(b.focus))
+            return true;
+        const mins = (value) => {
+            const n = Number(value);
+            return value == null || !Number.isFinite(n) ? null : Math.round(n);
+        };
+        if (mins(a.est_minutes) !== mins(b.est_minutes))
+            return true;
+        return false;
+    }
     function todayBriefSignalsText(read) {
         const signals = read?.signals && typeof read.signals === "object" ? read.signals : {};
         const bits = [];
@@ -3389,6 +3413,7 @@ Object.assign(globalThis, {
         agentOffline: todayBriefAgentOffline,
         agentOfflineNoticeHtml: todayBriefAgentOfflineNoticeHtml,
         briefHtml: todayBriefHtml,
+        materiallyDiffers: todayBriefMateriallyDiffers,
         signalsText: todayBriefSignalsText,
     };
     Object.assign(globalThis, { CairnTodayBrief: CAIRN_TODAY_BRIEF });
@@ -3656,12 +3681,62 @@ Object.assign(globalThis, {
 // @ts-check
 // Stateful Today Brief controller: fetch/cache and reconnect wiring.
 (() => {
+    // localStorage key holding the most recent REAL (agentic, no-override) day read
+    // so a warm reopen paints the true sentence INSTANTLY — no invented placeholder,
+    // no visible swap when nothing changed. Bumped if the shape ever changes.
+    const BRIEF_LS_KEY = "cairn.brief.v1";
+    function briefStore() {
+        try {
+            return typeof localStorage !== "undefined" ? localStorage : null;
+        }
+        catch {
+            return null;
+        }
+    }
+    // The stored real read IFF it's for exactly this date (a previous day's read must
+    // never paint for today). Returns a clean read (no internal flags) or null.
+    function readCachedBrief(date) {
+        const store = briefStore();
+        if (!store)
+            return null;
+        try {
+            const raw = store.getItem(BRIEF_LS_KEY);
+            if (!raw)
+                return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || parsed.date !== date || !parsed.read || !parsed.read.kind)
+                return null;
+            if (parsed.read._provisional)
+                return null;
+            return parsed.read;
+        }
+        catch {
+            return null;
+        }
+    }
+    // Persist the last-known real read. Only ever the canonical (no-override) read —
+    // an override ("rough night") is transient and must not poison the next open —
+    // and never a provisional/placeholder. Strips internal flags before storing.
+    function persistCachedBrief(date, override, read) {
+        if (override || !read || read._provisional || !read.kind)
+            return;
+        const store = briefStore();
+        if (!store)
+            return;
+        try {
+            const clean = { ...read };
+            delete clean._provisional;
+            delete clean._cached;
+            store.setItem(BRIEF_LS_KEY, JSON.stringify({ date, read: clean }));
+        }
+        catch { }
+    }
     function provisionalRead(_date) {
         return CairnTodayBrief.provisionalRead();
     }
     async function loadBrief(date, override, deps, opts = {}) {
         const cached = deps.state.brief;
-        if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional)
+        if (cached && cached.date === date && cached.override === (override || "") && !cached.read._provisional && !cached.read._cached)
             return cached.read;
         const fetchRead = (async () => {
             let read = null;
@@ -3676,9 +3751,23 @@ Object.assign(globalThis, {
             }
             if (!read || !read.kind)
                 read = provisionalRead(date);
+            persistCachedBrief(date, override || "", read);
             return read;
         })();
         if (opts.fast) {
+            // Instant truth: if we've seen today's REAL read before (and there's no
+            // override steer), paint it NOW as a normal read and reconcile silently
+            // against the fetch post-render. The invented placeholder is reserved for a
+            // genuinely first-ever open with nothing cached for this date.
+            if (!override) {
+                const stored = readCachedBrief(date);
+                if (stored) {
+                    const instant = { ...stored, _cached: true };
+                    deps.state._briefInflight = { date, override: "", promise: fetchRead };
+                    deps.state.brief = { date, override: "", read: instant };
+                    return instant;
+                }
+            }
             const timeout = 1200;
             const raced = await Promise.race([
                 fetchRead.then((r) => ({ r })),
@@ -3702,8 +3791,13 @@ Object.assign(globalThis, {
         const inflight = deps.state._briefInflight;
         if (!inflight || inflight.date !== date)
             return;
+        // What's painted right now: a `_cached` read reconciles SILENTLY (it's already
+        // the true sentence, so no "thinking" flash and no swap unless content really
+        // changed); a `_provisional` placeholder gets the visible thinking → settle.
+        const shown = deps.state.brief && deps.state.brief.date === date ? deps.state.brief.read : null;
+        const silent = !!(shown && shown._cached && !shown._provisional);
         const briefEl = deps.root.querySelector(".brief");
-        if (briefEl && !deps.reducedMotion())
+        if (briefEl && !silent && !deps.reducedMotion())
             briefEl.classList.add("is-thinking");
         let read = null;
         try {
@@ -3717,6 +3811,14 @@ Object.assign(globalThis, {
         if (deps.state._briefInflight === inflight)
             deps.state._briefInflight = null;
         if (!read || read._provisional) {
+            // Refetch failed / not ready — keep whatever's painted (cached read stands).
+            briefEl?.classList.remove("is-thinking");
+            return;
+        }
+        // A cached paint that matches the network truth: adopt the fresh read into
+        // state (drops the _cached flag) but touch ZERO DOM — no settle animation.
+        if (silent && shown && !CairnTodayBrief.materiallyDiffers(shown, read)) {
+            deps.state.brief = { date, override: inflight.override || read.override || "", read };
             briefEl?.classList.remove("is-thinking");
             return;
         }
@@ -6948,7 +7050,10 @@ if (typeof window !== "undefined") {
             deps.applyDayProgression(applyButton, Number.isFinite(day) ? day : deps.state.day);
         });
         deps.wireBrief(deps.read, { isToday: deps.isToday });
-        if (deps.read?._provisional)
+        // A provisional placeholder upgrades visibly (thinking → settle); a cached
+        // paint reconciles SILENTLY against the network fetch (swaps only on a real
+        // content change). Both await the in-flight promise inside upgradeBriefInPlace.
+        if (deps.read?._provisional || deps.read?._cached)
             deps.upgradeBriefInPlace(deps.state.logDate, deps.isToday);
         if (deps.showPlan)
             deps.loadTrainingProvenance(deps.isToday);

@@ -16,6 +16,7 @@ export * from "./repo/settings.js";
 export * from "./repo/art-ledger.js";
 export * from "./repo/agent-telemetry.js";
 export * from "./repo/app-state.js";
+export * from "./repo/client-tz.js"; // last-seen device zone for the TZ-correct Brief warm
 export * from "./repo/lab-units.js";
 export * from "./repo/marker-canon.js";
 export * from "./repo/health.js";

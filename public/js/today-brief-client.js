@@ -109,6 +109,30 @@
       <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
     </section>`;
     }
+    // Does the freshly-fetched read differ from what's already painted in a way the
+    // athlete would SEE? Compares only the visible fields (kind/headline/why/focus/
+    // est_minutes) so an identical read reconciled behind a cached paint touches no
+    // DOM and never animates a "swap" of unchanged content. Pure + trivially tested.
+    function todayBriefMateriallyDiffers(a, b) {
+        if (!a || !b)
+            return true;
+        const str = (value) => (value == null ? "" : String(value).trim());
+        if (str(a.kind) !== str(b.kind))
+            return true;
+        if (str(a.headline) !== str(b.headline))
+            return true;
+        if (str(a.why) !== str(b.why))
+            return true;
+        if (str(a.focus) !== str(b.focus))
+            return true;
+        const mins = (value) => {
+            const n = Number(value);
+            return value == null || !Number.isFinite(n) ? null : Math.round(n);
+        };
+        if (mins(a.est_minutes) !== mins(b.est_minutes))
+            return true;
+        return false;
+    }
     function todayBriefSignalsText(read) {
         const signals = read?.signals && typeof read.signals === "object" ? read.signals : {};
         const bits = [];
@@ -137,6 +161,7 @@
         agentOffline: todayBriefAgentOffline,
         agentOfflineNoticeHtml: todayBriefAgentOfflineNoticeHtml,
         briefHtml: todayBriefHtml,
+        materiallyDiffers: todayBriefMateriallyDiffers,
         signalsText: todayBriefSignalsText,
     };
     Object.assign(globalThis, { CairnTodayBrief: CAIRN_TODAY_BRIEF });
