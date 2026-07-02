@@ -1446,6 +1446,31 @@ export interface ClientBodyMetricTrends {
   sites: ClientBodySiteTrend[];
   weight: ClientBodySiteTrend;
 }
+export interface ClientBodyCompBand {
+  from: number;
+  to: number;
+  label: string;
+  tone: "ok" | "watch" | "warn" | "info";
+}
+export interface ClientBodyCompScale {
+  key: string;
+  label: string;
+  unit: string;
+  min: number;
+  max: number;
+  bands: ClientBodyCompBand[];
+  optimal: { from: number; to: number };
+  value: number | null;
+  projected: number | null;
+  horizon_weeks: number;
+  estimate: boolean;
+  read: string;
+}
+export interface ClientBodyCompFocus {
+  scales: ClientBodyCompScale[];
+  focus: { key: string; label: string; line: string } | null;
+  heading: string | null;
+}
 export interface ClientBodyMetricsSummary {
   latest: ClientBodyMeasurement | null;
   measurements: ClientBodyMeasurement[];
@@ -1453,7 +1478,9 @@ export interface ClientBodyMetricsSummary {
   trends: ClientBodyMetricTrends;
   profile: { height_in: number | null; sex: string; weight_lb: number | null; goal_weight_lb: number | null };
   needs_height: boolean;
-  sites: { key: string; label: string }[];
+  unit: "in" | "cm";
+  sites: { key: string; label: string; hint: string }[];
+  comp: ClientBodyCompFocus;
 }
 
 export interface ClientApiResponses {

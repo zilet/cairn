@@ -73,8 +73,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/body-metrics` | The measurements list + latest reading + derived indicators + per-site trends, in one composed payload the PWA renders directly. `?days=` bounds the window. |
-| POST | `/api/body-metrics` | Log a measuring session. Body carries any subset of the sites (inches), plus an optional note/source and — for convenience — height_in (routed to the profile so BMI / body-fat light up from the same call). Values are clamped in the repo. |
+| GET | `/api/body-metrics` | The measurements list + latest reading + derived indicators + per-site trends, in one composed payload the PWA renders directly. `?days=` bounds the window; `?unit=cm` re-expresses circumferences + trends in centimeters (storage stays in). |
+| POST | `/api/body-metrics` | Log a measuring session. Body carries any subset of the sites (inches by default; pass unit:"cm" to log centimeters), plus an optional note/source and — for convenience — height_in (routed to the profile so BMI / body-fat light up from the same call; it follows the same unit). Values are clamped in the repo. |
 | DELETE | `/api/body-metrics/:id` |  |
 | GET | `/api/body-metrics/:id` | Single-row read — 200 + null on absence (the PWA api() helper resolves to the body regardless of status, so a 404 error-object would read as a truthy hit). |
 | PUT | `/api/body-metrics/:id` |  |

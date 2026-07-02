@@ -316,11 +316,11 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   log_measurement: {
     type: "log_measurement",
     applyMode: "immediate",
-    shape: `{ "type": "log_measurement", "date": "YYYY-MM-DD|null", "waist_in": 34, "chest_in": 42, "upper_arm_in": 15,
+    shape: `{ "type": "log_measurement", "date": "YYYY-MM-DD|null", "unit": "in|cm", "waist_in": 34, "chest_in": 42, "upper_arm_in": 15,
       "hip_in": 40, "neck_in": 15.5, "shoulder_in": 50, "thigh_in": 24, "calf_in": 16, "forearm_in": 12,
       "height_in": 70, "note": "<optional>", "source": "chat" }`,
     guidance: [
-      `log_measurement records at-home body measurements (tape/circumference, in inches) so the body picture — waist trend, BMI, waist-to-height, Navy body-fat estimate — stays current. Include only the sites they actually gave; the user can just say "waist 34, chest 42, arms 15" and it logs. "upper_arm_in" is the arm/bicep; only send "height_in" if they tell you their height (it updates the profile so BMI/body-fat light up). Leave date null unless they name one.`,
+      `log_measurement records at-home body measurements (tape/circumference) so the body picture — waist trend, BMI, waist-to-height, Navy body-fat estimate — stays current. Include only the sites they actually gave; the user can just say "waist 34, chest 42, arms 15" and it logs. Values default to inches; if the user speaks centimeters, pass their numbers as given with "unit": "cm" — the server converts, storage stays inches. "upper_arm_in" is the arm/bicep; only send "height_in" if they tell you their height (it updates the profile so BMI/body-fat light up; it follows "unit" too). Leave date null unless they name one.`,
     ],
   },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };

@@ -846,6 +846,64 @@ export function renderDexaTargeting(ctx: PartialCoachContext, focus: "training" 
   return `\n${lines.join("\n")}\n`;
 }
 
+// renderBodyComp: the "BODY MEASUREMENTS" block — folds the at-home tape picture
+// (latest circumferences, the derived clinical indicators, the waist trend) into
+// the plan-shaping prompts so the connected brain reasons over it explicitly,
+// alongside DEXA and labs, in training AND nutrition. The tape body-fat is an
+// ESTIMATE and the ratios are recognized clinical measures — plain words, never a
+// Cairn-invented score. Quiet by default: "" when nothing has been logged.
+const BODY_COMP_SITE_WORDS: Record<string, string> = {
+  neck_in: "neck",
+  shoulder_in: "shoulders",
+  chest_in: "chest",
+  waist_in: "waist",
+  hip_in: "hips",
+  thigh_in: "thigh",
+  calf_in: "calf",
+  upper_arm_in: "upper arm",
+  forearm_in: "forearm",
+};
+
+export function renderBodyComp(ctx: any): string {
+  const bm = ctx?.body_metrics;
+  if (!bm) return "";
+  const lines: string[] = [];
+  const m = bm.measurements ?? {};
+  const parts: string[] = [];
+  for (const [key, word] of Object.entries(BODY_COMP_SITE_WORDS)) {
+    const v = (m as any)[key];
+    if (v != null && Number.isFinite(Number(v))) parts.push(`${word} ${v} in`);
+  }
+  if (parts.length) {
+    // Recency in human words (never a raw date in prose).
+    let age = "";
+    const t = Date.parse(String(bm.latest_date || ""));
+    if (Number.isFinite(t)) {
+      const d = Math.max(0, Math.round((Date.now() - t) / 864e5));
+      age =
+        d === 0 ? "today" : d === 1 ? "yesterday" : d < 14 ? `${d} days ago` : d < 70 ? `~${Math.round(d / 7)} weeks ago` : `~${Math.round(d / 30.4)} months ago`;
+    }
+    lines.push(`  - Latest tape session${age ? ` (${age})` : ""}: ${parts.join(", ")}.`);
+  }
+  for (const ind of Array.isArray(bm.indicators) ? bm.indicators : []) {
+    if (ind?.value == null) continue;
+    const zone = ind.zone ? ` (${ind.zone})` : "";
+    const est = ind.estimate ? " — a tape ESTIMATE; trust the trend, not the decimal" : "";
+    lines.push(`  - ${ind.label}: ${ind.value}${ind.unit || ""}${zone}${est}.`);
+  }
+  if (bm.waist_trend) lines.push(`  - ${String(bm.waist_trend).trim()}`);
+  if (bm.heading) lines.push(`  - Where it's heading: ${String(bm.heading).trim()}`);
+  if (bm.focus_line) lines.push(`  - The one lever (deterministic, shown on their Body card — stay consistent with it): ${String(bm.focus_line).trim()}`);
+  if (!lines.length) return "";
+  lines.unshift(
+    "BODY MEASUREMENTS (their at-home tape sessions — the reliable body-composition signal BETWEEN DEXA scans; ratios are recognized clinical measures, never a score):"
+  );
+  lines.push(
+    "  Use it across the whole picture: a waist drifting up while weight holds → tighten food quality / energy balance and read it alongside the lipid & glucose markers; arms or thighs growing while the waist holds → recomposition is working, protect the training volume driving it; waist-to-height creeping toward 0.5 → it outranks scale weight as the health lever. Trends over single readings; suggestions, never verdicts."
+  );
+  return `\n${lines.join("\n")}\n`;
+}
+
 // Elite-coach + longevity guardrails for the STRENGTH prompts — the
 // programming-quality floor this user's history demands, in plain,
 // suggestion-framed words (no scores). Folded into the coach / session /

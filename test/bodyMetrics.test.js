@@ -1,10 +1,17 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { localDaysAgo, repo, resetTables } from "./_seed.js";
+import { buildCoachPrompt, buildMealPlanPrompt, renderBodyComp } from "../dist/prompt.js";
 
 beforeEach(() => {
   resetTables("body_measurements", "bodyweight_log", "profile");
 });
+
+const NO_SCORE = (obj, label) => {
+  const json = JSON.stringify(obj);
+  assert.ok(!/impact_score/.test(json), `${label}: no impact_score leak`);
+  assert.ok(!/\b\d{1,3}\s*\/\s*100\b/.test(json), `${label}: no x/100 grade`);
+};
 
 // ---- round-trip + clamping ----------------------------------------------------
 test("addBodyMeasurement round-trips and clamps implausible sites to null", () => {
@@ -196,4 +203,135 @@ test("getBodyMetricsSummary composes measurements + indicators + trends + needs_
   assert.equal(full.latest.waist_in, 34);
   assert.equal(full.profile.height_in, 70);
   assert.ok(full.indicators.find((i) => i.key === "bmi").value != null);
+});
+
+// ---- units: cm speaks at every boundary, storage stays inches ------------------
+test("addBodyMeasurement converts cm to canonical inches and clamps in inches", () => {
+  const row = repo.addBodyMeasurement("2026-06-01", { waist_in: 86.4, chest_in: 106.7 }, null, "manual", "cm");
+  assert.equal(row.waist_in, 34); // 86.4 cm / 2.54
+  assert.equal(row.chest_in, 42);
+  // implausible even after conversion (300 cm ≈ 118 in > 100) → rejected, not clipped
+  const bad = repo.addBodyMeasurement("2026-06-02", { waist_in: 300 }, null, null, "cm");
+  assert.equal(bad.waist_in, null);
+});
+
+test("summary + trends re-express in cm on request (values, unit label, prose)", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 177, sex: "male" });
+  repo.addBodyMeasurement(localDaysAgo(42), { waist_in: 35 });
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 34 });
+
+  const summary = repo.getBodyMetricsSummary(365, "cm");
+  assert.equal(summary.unit, "cm");
+  assert.ok(Math.abs(summary.latest.waist_in - 86.4) < 0.1, `latest in cm, got ${summary.latest.waist_in}`);
+  const waist = summary.trends.sites.find((s) => s.key === "waist_in");
+  assert.equal(waist.unit, "cm");
+  assert.match(waist.text, /cm/);
+  assert.ok(Math.abs(waist.change - -2.5) < 0.2, `change ~ -2.5 cm, got ${waist.change}`);
+  // ratios/BMI/body-fat are unit-free and identical either way
+  const inSummary = repo.getBodyMetricsSummary(365, "in");
+  assert.deepEqual(
+    summary.indicators.map((i) => i.value),
+    inSummary.indicators.map((i) => i.value)
+  );
+});
+
+test("applyMeasurementAction understands unit:'cm' and height_cm", () => {
+  const res = repo.applyMeasurementAction({ unit: "cm", waist_in: 86.4, height_cm: 178, source: "chat" });
+  assert.equal(res.ok, true);
+  assert.equal(res.measurement.waist_in, 34);
+  assert.ok(Math.abs(repo.getProfile().height_in - 70.1) < 0.1, `height ~70.1 in, got ${repo.getProfile().height_in}`);
+  // height_in follows the action's unit too
+  repo.applyMeasurementAction({ unit: "cm", height_in: 178 });
+  assert.ok(Math.abs(repo.getProfile().height_in - 70.1) < 0.1);
+});
+
+// ---- per-site measuring hints ride on the summary ------------------------------
+test("summary sites carry a measuring hint for every site", () => {
+  const { sites } = repo.getBodyMetricsSummary();
+  assert.equal(sites.length, 9);
+  for (const s of sites) {
+    assert.equal(typeof s.hint, "string");
+    assert.ok(s.hint.length > 10, `${s.key} has a real hint`);
+  }
+  assert.match(sites.find((s) => s.key === "waist_in").hint, /navel/i);
+  assert.match(sites.find((s) => s.key === "upper_arm_in").hint, /not flexed/i);
+});
+
+// ---- where-you-stand scales + focus + heading ----------------------------------
+test("getBodyCompFocus is quiet-safe when empty and never emits a score", () => {
+  const comp = repo.getBodyCompFocus();
+  assert.equal(comp.scales.length, 4);
+  for (const s of comp.scales) assert.equal(s.value, null);
+  assert.equal(comp.focus, null);
+  assert.equal(comp.heading, null);
+  NO_SCORE(comp, "empty comp");
+});
+
+test("an out-of-optimal waist-to-height picks the ONE focus lever with a unit-aware delta", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 200, sex: "male" });
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 40, neck_in: 15, hip_in: 42 });
+  const comp = repo.getBodyCompFocus();
+  const whtr = comp.scales.find((s) => s.key === "whtr");
+  assert.equal(whtr.value, 0.57);
+  assert.deepEqual(whtr.optimal, { from: 0.4, to: 0.5 });
+  assert.ok(comp.focus);
+  assert.equal(comp.focus.key, "whtr");
+  assert.match(comp.focus.line, /~5 in/); // 40 − 0.5·70
+  // one reading → no projection yet, and the heading invites the second session
+  assert.equal(whtr.projected, null);
+  assert.match(comp.heading, /log another/i);
+  NO_SCORE(comp, "focused comp");
+
+  // the same lever speaks cm when asked
+  const cm = repo.getBodyCompFocus("cm");
+  assert.match(cm.focus.line, /~12.7 cm/);
+});
+
+test("a falling waist trend projects the heading marker toward optimal", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 190, sex: "male" });
+  repo.addBodyMeasurement(localDaysAgo(42), { waist_in: 38, neck_in: 15 });
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 37, neck_in: 15 });
+  const comp = repo.getBodyCompFocus();
+  const whtr = comp.scales.find((s) => s.key === "whtr");
+  assert.ok(whtr.value > 0.5, "starts above optimal");
+  assert.ok(whtr.projected != null && whtr.projected < whtr.value, "projected toward optimal");
+  assert.match(comp.heading, /~\d+ weeks?/);
+  assert.match(comp.heading, /optimal band/);
+  // body-fat projects too (waist drives the Navy estimate; neck held)
+  const bf = comp.scales.find((s) => s.key === "bodyfat");
+  assert.ok(bf.value != null && bf.projected != null && bf.projected < bf.value);
+});
+
+test("comp rides on the summary and the slice carries the same lever for the brain", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 200, sex: "male" });
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 40 });
+  const summary = repo.getBodyMetricsSummary();
+  assert.ok(summary.comp);
+  assert.equal(summary.comp.focus.key, "whtr");
+  const slice = repo.bodyMetricsContextSlice();
+  assert.equal(slice.focus_line, summary.comp.focus.line);
+  assert.equal(slice.heading, summary.comp.heading);
+});
+
+// ---- the brain reads the tape: renderBodyComp + prompt inclusion ----------------
+test("renderBodyComp is quiet without data and speaks the whole picture with it", () => {
+  assert.equal(renderBodyComp({}), "");
+  assert.equal(renderBodyComp({ body_metrics: null }), "");
+
+  repo.setProfile({ height_in: 70, weight_lb: 200, sex: "male" });
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 40, neck_in: 15, hip_in: 42 });
+  const block = renderBodyComp({ body_metrics: repo.bodyMetricsContextSlice() });
+  assert.match(block, /BODY MEASUREMENTS/);
+  assert.match(block, /waist 40 in/);
+  assert.match(block, /never a score/i);
+  assert.match(block, /The one lever/);
+  assert.match(block, /Where it's heading/);
+  assert.ok(!/\d{4}-\d{2}-\d{2}/.test(block), "no raw dates in prose");
+});
+
+test("the coach and meal-plan prompts fold the tape picture in", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 200, sex: "male" });
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 40, neck_in: 15 });
+  assert.match(buildCoachPrompt(), /BODY MEASUREMENTS/);
+  assert.match(buildMealPlanPrompt(), /BODY MEASUREMENTS/);
 });
