@@ -182,7 +182,6 @@ function loadController() {
     CairnTodayBrief: {
       provisionalRead: () => ({ kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true }),
       briefHtml: (read, opts) => `<section class="brief">${read?.headline || "Today"}:${opts.activeOverride || ""}</section>`,
-      focusBarHtml: (_read, day, opts) => `<div>${day?.name || ""}:${opts.exDone}/${opts.exTotal}:${opts.isToday ? "today" : "past"}</div>`,
       signalsText: () => "signals",
     },
   };
@@ -277,17 +276,6 @@ test("Today Brief controller fetches, caches, and falls back without blocking th
   const fallback = await harness.controller.loadBrief("fallback", "", harness.deps);
   assert.equal(fallback._provisional, true);
   assert.equal(fallback.kind, "train");
-});
-
-test("Today Brief controller owns focus state decisions", () => {
-  const harness = loadController();
-
-  assert.equal(harness.controller.focusEngaged("2026-07-01", { showPlan: false, hasLoggedSets: true, isToday: true }, harness.deps), false);
-  assert.equal(harness.controller.focusEngaged("2026-07-01", { showPlan: true, hasLoggedSets: true, isToday: true }, harness.deps), true);
-
-  harness.controller.setFocus("2026-07-01", false, harness.deps);
-  assert.equal(harness.controller.focusEngaged("2026-07-01", { showPlan: true, hasLoggedSets: true, isToday: true }, harness.deps), false);
-  assert.equal(harness.controller.focusBarHtml({ kind: "train", headline: "Lift" }, { name: "Day A" }, { exDone: 1, exTotal: 3, isToday: true }), "<div>Day A:1/3:today</div>");
 });
 
 test("Today Brief controller preserves redirect wiring and override reconnect behavior", () => {

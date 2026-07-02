@@ -95,16 +95,6 @@ type TodayScreenRuntimeContext = {
     read: (Partial<TodayScreenRuntimeDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
     options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
   ): string;
-  focusEngaged(
-    date: unknown,
-    options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
-  ): boolean;
-  setFocus(date: string, on: boolean): void;
-  focusBarHtml(
-    read: Partial<TodayScreenRuntimeDayRead> | null | undefined,
-    day: { name?: unknown } | null | undefined,
-    options: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
-  ): string;
   briefSignalsText(read: Partial<TodayScreenRuntimeDayRead> | null | undefined): string;
   revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
 };
@@ -171,7 +161,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
         cardioEffortMatches,
         suggestedPlanDayNumber,
         upgradeBriefInPlace,
-        setFocus,
         postExerciseMode,
         revealPlanThen,
       });
@@ -268,25 +257,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     return CairnTodayBriefController.briefHtml(read, options, bridge().briefDeps());
   }
 
-  function focusEngaged(
-    date: unknown,
-    options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
-  ): boolean {
-    return CairnTodayBriefController.focusEngaged(date, options, bridge().briefDeps());
-  }
-
-  function setFocus(date: string, on: boolean): void {
-    CairnTodayBriefController.setFocus(date, on, bridge().briefDeps());
-  }
-
-  function focusBarHtml(
-    read: Partial<TodayScreenRuntimeDayRead> | null | undefined,
-    day: { name?: unknown } | null | undefined,
-    options: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
-  ): string {
-    return CairnTodayBriefController.focusBarHtml(read, day, options);
-  }
-
   function briefSignalsText(read: Partial<TodayScreenRuntimeDayRead> | null | undefined): string {
     return CairnTodayBriefController.briefSignalsText(read);
   }
@@ -337,9 +307,6 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     upgradeBriefInPlace,
     reshapeToday,
     briefHtml,
-    focusEngaged,
-    setFocus,
-    focusBarHtml,
     briefSignalsText,
     revealPlanThen,
   };

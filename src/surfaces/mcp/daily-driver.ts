@@ -36,7 +36,7 @@ export function registerDailyDriverTools(server: McpToolRegistrar) {
 
   server.tool(
     "generate_insight",
-    "Run ONE agentic pass over the athlete's whole picture for a single genuine cross-domain connection (or a weekly read), dedupe against what's already been said, and store it. Returns ok:false when there's nothing real to say (found:false / duplicate / unusable shape). NO notification fires — the insight simply waits in-app. Informational, not medical advice.",
+    "Run ONE agentic pass over the user's whole picture for a single genuine cross-domain connection (or a weekly read), dedupe against what's already been said, and store it. Returns ok:false when there's nothing real to say (found:false / duplicate / unusable shape). NO notification fires — the insight simply waits in-app. Informational, not medical advice.",
     {
       kind: z.enum(["connection", "weekly_read"]).optional().describe("'connection' (default) = one cross-domain link; 'weekly_read' = the standing how-the-week-went read"),
       agent: z.string().optional().describe("omit or 'auto' to use the configured rotation"),

@@ -82,7 +82,7 @@ chatRouter.get("/sessions/:sessionId", (req, res) =>
   res.json(getArchivedConversation(req.params.sessionId)));
 
 // "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is
-// part of the athlete's history/export, so nothing is hard-deleted anymore.
+// part of the user's history/export, so nothing is hard-deleted anymore.
 chatRouter.delete("/", (_req, res) => res.json(clearChat()));
 
 // "Fresh start": ARCHIVE the live conversation immediately (so the composer is

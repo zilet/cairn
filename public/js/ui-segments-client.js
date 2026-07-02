@@ -45,7 +45,7 @@ function uiProgressLeafLabel(leaf) {
     const found = UI_PROGRESS_SEGMENTS.find(([k]) => k === leaf);
     return found ? found[1] : leaf;
 }
-// A group's visible leaves — endurance is hidden unless the athlete's discipline
+// A group's visible leaves — endurance is hidden unless the user's discipline
 // shows it OR it's the active view (so a deep-link to it is never stranded).
 function uiProgressVisibleLeaves(group, activeLeaf) {
     const leaves = UI_PROGRESS_GROUP_LEAVES[group] || [];

@@ -40,7 +40,6 @@ export type ClientAppState = {
   brief?: ClientBriefCache | null;
   _briefInflight?: { date: string; override: string; promise: Promise<ClientDayRead> } | null;
   _briefMorph?: boolean;
-  focus?: { date: string; on: boolean };
   planReveal?: { date: string; on: boolean; blank?: boolean };
   suggestedSession?: ClientSessionSuggestion | null;
   exModes?: Record<string, string>;

@@ -309,7 +309,7 @@ declare global {
 
   type ClientTodayBriefControllerDeps = {
     root: HTMLElement;
-    state: Pick<ClientAppState, "tab" | "logDate" | "brief" | "_briefInflight" | "_briefMorph" | "focus" | "plan" | "planReveal" | "progressSeg"> & {
+    state: Pick<ClientAppState, "tab" | "logDate" | "brief" | "_briefInflight" | "_briefMorph" | "plan" | "planReveal" | "progressSeg"> & {
       day?: number | null;
       dayPicked?: boolean;
     };
@@ -425,7 +425,6 @@ declare global {
   type ClientTodayDependenciesPostRenderInput = {
     read: { _provisional?: boolean } | null | undefined;
     isToday: boolean;
-    focus: boolean;
     showPlan: boolean;
     soft: boolean;
     conductorLeads: boolean;
@@ -495,7 +494,6 @@ declare global {
     loadWearable(isToday: boolean): unknown;
     loadCheckin(): unknown;
     loadDraftProposals(): unknown;
-    setFocus(date: string, on: boolean): unknown;
     viewEnter(): void;
     invalidateTodayProgression(): void;
     scheduleRxRefresh(): void;
@@ -587,13 +585,6 @@ declare global {
       read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
       options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
     ): string;
-    focusEngaged(date: unknown, options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown }): boolean;
-    setFocus(date: string, on: boolean): void;
-    focusBarHtml(
-      read: Partial<ClientDayRead> | null | undefined,
-      day: { name?: unknown } | null | undefined,
-      options: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
-    ): string;
     briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
     revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
   };
@@ -615,7 +606,6 @@ declare global {
       cardioEffortMatches(item: any, effort: any): boolean;
       suggestedPlanDayNumber(session: any, isToday: boolean): Promise<number>;
       upgradeBriefInPlace(date: string, isToday: boolean): Promise<void>;
-      setFocus(date: string, on: boolean): void;
       revealPlanThen(after: (() => unknown) | null | undefined, opts?: { blank?: boolean }): void;
       postExerciseMode(name: string, mode: string): Promise<unknown>;
     }): ClientTodayDependenciesContext;
@@ -3084,8 +3074,6 @@ declare global {
     CairnTodayMainShell: {
       leadHtml(
         options: {
-          focus: boolean;
-          focusHtml: string;
           isToday: boolean;
           briefHtml: string;
           conductorHtml: string;
@@ -3102,7 +3090,7 @@ declare global {
         compass: { paceOfferHtml?: string; weekRecap?: string | null; cellsHtml?: string },
         deps: { escapeHtml(value: unknown): string },
       ): string;
-      wrapHtml(content: string, options: { focus: boolean; railHtml: string }): string;
+      wrapHtml(content: string, options: { railHtml: string }): string;
     };
 
     CairnTodayPlanSurface: {
@@ -3124,7 +3112,6 @@ declare global {
           cardioPrescription(item: Record<string, unknown>): string;
           rxMoveCount(rxByEx: Record<string, unknown>): number;
           setsTonnage(sets: unknown): number;
-          trainGlyph: string;
         },
       ): string;
       daySwitchHtml(
@@ -3207,7 +3194,6 @@ declare global {
         };
         read: { _provisional?: boolean } | null | undefined;
         isToday: boolean;
-        focus: boolean;
         showPlan: boolean;
         soft: boolean;
         conductorLeads: boolean;
@@ -3241,7 +3227,6 @@ declare global {
         runFallbackRail(isToday: boolean, deps: ClientTodayRailControllerDeps): void;
         todayRailDeps(): ClientTodayRailControllerDeps;
         activateTab(tab: string): unknown;
-        setFocus(date: string, on: boolean): unknown;
         withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
         viewEnter(): void;
         localISO(): string;
@@ -3367,7 +3352,6 @@ declare global {
         reducedMotion?: boolean;
         offlineDismissed?: boolean;
       }): string;
-      focusBarHtml(read: Partial<ClientDayRead> | null | undefined, day: { name?: unknown } | null | undefined, options?: { exDone?: unknown; exTotal?: unknown; isToday?: boolean }): string;
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
     };
 
@@ -3400,17 +3384,6 @@ declare global {
         read: (Partial<ClientDayRead> & { _provisional?: unknown; override?: unknown }) | null | undefined,
         options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown },
         deps: ClientTodayBriefControllerDeps,
-      ): string;
-      focusEngaged(
-        date: unknown,
-        options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
-        deps: ClientTodayBriefControllerDeps,
-      ): boolean;
-      setFocus(date: string, on: boolean, deps: ClientTodayBriefControllerDeps): void;
-      focusBarHtml(
-        read: Partial<ClientDayRead> | null | undefined,
-        day: { name?: unknown } | null | undefined,
-        options?: { exDone?: unknown; exTotal?: unknown; isToday?: boolean },
       ): string;
       briefSignalsText(read: Partial<ClientDayRead> | null | undefined): string;
       wireBrief(

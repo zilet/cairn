@@ -1,5 +1,5 @@
 // @ts-check
-// Whole-athlete focus card renderer and routing bridge.
+// Whole-picture focus card renderer and routing bridge.
 
 type ClientCoachingFocus = import("../contracts/client.js").ClientCoachingFocus;
 type ClientCoachingFocusDomain = import("../contracts/client.js").ClientCoachingFocusDomain;

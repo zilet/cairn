@@ -30,7 +30,6 @@ type TodayState = Omit<typeof state, "brief" | "_briefInflight" | "exModes" | "p
   day: number | null;
   plan: TodayScreenPlanDay[];
   exModes: Record<string, string>;
-  focus?: { date: string; on: boolean } | null;
   brief?: { date: string; override: string; read: TodayScreenDayRead } | null;
   _briefInflight?: { date: string; override: string; promise: Promise<TodayScreenDayRead> } | null;
   _briefMorph?: boolean;
@@ -100,9 +99,6 @@ const {
   upgradeBriefInPlace,
   reshapeToday: todayRuntimeReshapeToday,
   briefHtml,
-  focusEngaged,
-  setFocus,
-  focusBarHtml,
   revealPlanThen,
 } = todayRuntime;
 
@@ -219,7 +215,6 @@ async function renderToday(opts: any = {}) {
     read,
     isToday,
     planReveal: todayState.planReveal,
-    focusEngaged,
   });
   // ---- Day-type-aware lead: read the day as run / lift / both / rest ----
   // When the day is about running — cardio prescribed and/or a synced run, with NO
@@ -255,7 +250,7 @@ async function renderToday(opts: any = {}) {
   // through the agenda (which omits it when nothing's logged), so there is no path,
   // even on a 404/offline fallback, that can render the old "Nothing logged yet"
   // capture nudge. The other rail cards keep a fallback for graceful degradation.
-  // The CONDUCTOR (whole-athlete focus, GET /api/coaching-focus) and the SALIENCE
+  // The CONDUCTOR (whole-picture focus, GET /api/coaching-focus) and the SALIENCE
   // ARBITER (GET /api/today-agenda, which shapes the rail) are the two network reads
   // that used to block the FIRST paint: renderToday awaited them before its single
   // innerHTML write, so a cold open held a blank skeleton for their latency stacked on
@@ -274,8 +269,6 @@ async function renderToday(opts: any = {}) {
   const goalLineHtml = CairnTodayContext.goalLineHtml(stats, curW, isToday);
 
   let html = todayMainShell.leadHtml({
-    focus: false,
-    focusHtml: "",
     isToday,
     briefHtml: briefHtml(read, { showPlan, hasPlanDay, isToday }),
     conductorHtml: "",
@@ -286,7 +279,7 @@ async function renderToday(opts: any = {}) {
 
   // On Today, the plan area is a calm launch card into the isolated Session
   // destination (logging no longer lives inline here). The done card still shows
-  // inline; a rare persisted focus-mode still falls through to the old surface.
+  // inline.
   html += (showPlan && !showDone)
     ? sessionLaunchCardHtml({ day, exDone, exTotal, isToday, hasLoggedSets, isRunDay, read })
     : todayPlanSurfaceRenderer.buildHtml({
@@ -328,7 +321,7 @@ async function renderToday(opts: any = {}) {
   // mobile/tablet. The rail is DEFERRED: paint an empty (but present) .today-rail now
   // so the two-column desktop layout is stable from the first frame, and hydrate its
   // structure + loaders in phase two once the agenda resolves.
-  todayView.innerHTML = todayMainShell.wrapHtml(html, { focus: false, railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
+  todayView.innerHTML = todayMainShell.wrapHtml(html, { railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
 
   // The lead entry: one tap opens the isolated Session destination.
   todayView.querySelector("#sessLaunch")?.addEventListener("click", () => openSession());
@@ -341,7 +334,7 @@ async function renderToday(opts: any = {}) {
     if (main && typeof renderPhoneCoachBanner === "function") renderPhoneCoachBanner(main);
   } catch {}
 
-  // Phase-1 wiring covers everything the athlete can act on immediately (capture,
+  // Phase-1 wiring covers everything the user can act on immediately (capture,
   // Brief, session launch, day switch, drafts, wearable). The RAIL and the standalone
   // health lever are deferred to phase two: deferRail skips both rail loaders, and
   // conductorLeads:true holds the health-lever load so the conductor can decide whether
@@ -349,7 +342,6 @@ async function renderToday(opts: any = {}) {
   CairnTodayPostRenderWiring.wirePostRender(todayDeps().postRender({
     read,
     isToday,
-    focus: false,
     showPlan,
     soft,
     conductorLeads: true,

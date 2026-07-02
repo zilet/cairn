@@ -11,7 +11,7 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerChatTools(server: McpToolRegistrar) {
   server.tool("get_chat_history",
-    "Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the athlete has recently asked or been told.",
+    "Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the user has recently asked or been told.",
     { limit: z.number().int().optional() },
     async ({ limit }) => asText(listChatMessages(limit ?? 50)));
 

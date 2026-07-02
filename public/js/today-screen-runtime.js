@@ -47,7 +47,6 @@
                     cardioEffortMatches,
                     suggestedPlanDayNumber,
                     upgradeBriefInPlace,
-                    setFocus,
                     postExerciseMode,
                     revealPlanThen,
                 });
@@ -125,15 +124,6 @@
         function briefHtml(read, options) {
             return CairnTodayBriefController.briefHtml(read, options, bridge().briefDeps());
         }
-        function focusEngaged(date, options) {
-            return CairnTodayBriefController.focusEngaged(date, options, bridge().briefDeps());
-        }
-        function setFocus(date, on) {
-            CairnTodayBriefController.setFocus(date, on, bridge().briefDeps());
-        }
-        function focusBarHtml(read, day, options) {
-            return CairnTodayBriefController.focusBarHtml(read, day, options);
-        }
         function briefSignalsText(read) {
             return CairnTodayBriefController.briefSignalsText(read);
         }
@@ -185,9 +175,6 @@
             upgradeBriefInPlace,
             reshapeToday,
             briefHtml,
-            focusEngaged,
-            setFocus,
-            focusBarHtml,
             briefSignalsText,
             revealPlanThen,
         };

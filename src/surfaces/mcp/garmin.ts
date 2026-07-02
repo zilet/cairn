@@ -89,7 +89,7 @@ export function registerGarminTools(server: McpToolRegistrar) {
     async ({ days }) => asText(listUnreconciledGarminStrength(days ?? 30)));
 
   server.tool("reconcile_garmin_strength",
-    "Reconcile synced Garmin strength activities into the day's Cairn session: merge the physiology layer (HR/zones/calories/training effect) now, and queue the agentic narrative + extrapolation of the detected exercises the athlete didn't already log. Pass {date} for one day, else {days} for a recent window.",
+    "Reconcile synced Garmin strength activities into the day's Cairn session: merge the physiology layer (HR/zones/calories/training effect) now, and queue the agentic narrative + extrapolation of the detected exercises the user didn't already log. Pass {date} for one day, else {days} for a recent window.",
     { date: z.string().optional(), days: z.number().int().optional() },
     async ({ date, days }) => {
       const rows = listStrengthGarminActivities(date ? { date } : { days });

@@ -24,10 +24,6 @@ type TodayRenderStateInput = {
   read: Partial<TodayRenderStateDayRead> | null | undefined;
   isToday: boolean;
   planReveal?: TodayRenderStatePlanReveal | null;
-  focusEngaged(
-    date: string,
-    opts: { showPlan: boolean; hasLoggedSets: boolean; isToday: boolean },
-  ): boolean;
 };
 type TodayRenderStateResult = {
   hasLoggedSets: boolean;
@@ -37,7 +33,6 @@ type TodayRenderStateResult = {
   hasGarmin: boolean;
   showPlan: boolean;
   showDone: boolean;
-  focus: boolean;
 };
 type TodayRenderStateApi = {
   derive(input: TodayRenderStateInput): TodayRenderStateResult;
@@ -56,7 +51,6 @@ type TodayRenderStateApi = {
     const hasGarmin = !!(input.session && input.session.garmin);
     const showPlan = !input.isToday || hasLoggedSets || hasGarmin || revealOn || input.read?.kind === "train";
     const showDone = isFinished && input.isToday && !revealOn;
-    const focus = !showDone && input.focusEngaged(input.logDate, { showPlan, hasLoggedSets, isToday: input.isToday });
 
     return {
       hasLoggedSets,
@@ -66,7 +60,6 @@ type TodayRenderStateApi = {
       hasGarmin,
       showPlan,
       showDone,
-      focus,
     };
   }
 

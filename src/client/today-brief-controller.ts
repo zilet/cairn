@@ -1,5 +1,5 @@
 // @ts-check
-// Stateful Today Brief controller: fetch/cache, focus state, and reconnect wiring.
+// Stateful Today Brief controller: fetch/cache and reconnect wiring.
 
 type TodayBriefControllerDayRead = import("../contracts/client.js").ClientDayRead & {
   _provisional?: boolean;
@@ -18,7 +18,6 @@ type TodayBriefControllerState = {
   brief?: { date: string; override: string; read: TodayBriefControllerDayRead } | null;
   _briefInflight?: { date: string; override: string; promise: Promise<TodayBriefControllerDayRead> } | null;
   _briefMorph?: boolean;
-  focus?: { date: string; on: boolean } | null;
   plan: TodayBriefControllerPlanDay[];
   planReveal?: { date: string; on: boolean; blank?: boolean } | null;
   progressSeg?: string;
@@ -176,29 +175,6 @@ type TodayBriefControllerDeps = {
     });
   }
 
-  function focusEngaged(
-    date: unknown,
-    options: { showPlan?: unknown; hasLoggedSets?: unknown; isToday?: unknown },
-    deps: TodayBriefControllerDeps,
-  ): boolean {
-    if (!options.showPlan) return false;
-    const f = deps.state.focus;
-    if (f && f.date === date) return f.on;
-    return !!(options.isToday && options.hasLoggedSets);
-  }
-
-  function setFocus(date: string, on: boolean, deps: TodayBriefControllerDeps): void {
-    deps.state.focus = { date, on };
-  }
-
-  function focusBarHtml(
-    read: TodayBriefControllerDayRead | null | undefined,
-    day: TodayBriefControllerPlanDay | null | undefined,
-    options: { exDone?: unknown; exTotal?: unknown; isToday?: unknown },
-  ): string {
-    return CairnTodayBrief.focusBarHtml(read, day, { ...options, isToday: !!options.isToday });
-  }
-
   function briefSignalsText(read: TodayBriefControllerDayRead | null | undefined): string {
     return CairnTodayBrief.signalsText(read);
   }
@@ -227,14 +203,11 @@ type TodayBriefControllerDeps = {
     briefHtml,
     briefSignalsText,
     dayReadOverrideOpOpts,
-    focusBarHtml,
-    focusEngaged,
     loadBrief,
     paintBriefReshaping,
     provisionalRead,
     reconnectDayReadOverride,
     reshapeToday,
-    setFocus,
     upgradeBriefInPlace,
     wireBrief,
   };

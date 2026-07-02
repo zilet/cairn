@@ -24,7 +24,7 @@
         const arrow = direction === "younger" ? "↓" : direction === "older" ? "↑" : "≈";
         const directionWord = direction === "younger" ? "trending younger" : direction === "older" ? "reading older" : "in line";
         // Plain-language biological-age read — the hero renders THIS, never a raw bio-age
-        // number (constitution: no score on the athlete). Prefer the server's `bio_read`;
+        // number (constitution: no score on the user). Prefer the server's `bio_read`;
         // else phrase from direction when a REAL measure (lab / PhenoAge) backs it.
         const heroRead = typeof hero.bio_read === "string" && hero.bio_read.trim() ? hero.bio_read.trim() : "";
         const hasRealBio = hero.biological_age_source === "lab" || hero.biological_age_source === "phenoage";

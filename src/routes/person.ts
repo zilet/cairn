@@ -24,7 +24,7 @@ personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 personRouter.put("/profile", (req, res) => {
   const body = req.body ?? {};
   // A real goal change is a confirmation: restart the gentle goal-check clock so
-  // it does not resurface immediately after the athlete just set it.
+  // it does not resurface immediately after the user just set it.
   if ("goal_mode" in body || "goal_weight_lb" in body || "goal_date" in body) {
     try {
       confirmGoalCheckin();

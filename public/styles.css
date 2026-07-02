@@ -2146,9 +2146,8 @@ header{position:relative}
 /* Today: the date control stays reachable — the header pins to the top of the
    scroll. At rest it's the full editorial header; once the page scrolls it
    condenses to a slim blurred band (kicker recedes, date shrinks) so it leads
-   without crowding the read. In focus mode the slim .focus-bar leads instead, so
-   the header drops back into normal flow (no double-pinned bars). */
-body[data-tab="today"]:not(:has(.today-focus)) header{
+   without crowding the read. */
+body[data-tab="today"] header{
   position:sticky;top:0;z-index:25;
   transition:padding var(--dur-2) var(--ease);
 }
@@ -2160,11 +2159,11 @@ body[data-tab="today"] header::after{
   opacity:0;transition:opacity var(--dur-2) var(--ease);
 }
 body[data-tab="today"] header #header-title{transition:font-size var(--dur-2) var(--ease)}
-body[data-tab="today"]:not(:has(.today-focus)) header.condensed{
+body[data-tab="today"] header.condensed{
   padding-top:calc(env(safe-area-inset-top) + 11px);padding-bottom:11px;
 }
-body[data-tab="today"]:not(:has(.today-focus)) header.condensed::after{opacity:1}
-body[data-tab="today"]:not(:has(.today-focus)) header.condensed #header-title{font-size:1.5rem}
+body[data-tab="today"] header.condensed::after{opacity:1}
+body[data-tab="today"] header.condensed #header-title{font-size:1.5rem}
 /* full-size transparent overlay over the title — a real tap target that opens the
    native date picker reliably (a genuine pointer event on a real input). */
 .hdr-datepick{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;border:0;
@@ -2504,63 +2503,6 @@ body.sheet-open{overflow:hidden}
 }
 .brief-rest .brief-redirect-primary:hover,.brief-easy .brief-redirect-primary:hover{
   background:var(--ink);border-color:var(--ink);color:var(--paper);box-shadow:var(--shadow-md);transform:translateY(-1px)}
-
-/* -------------------------------------------------------------------
-   Focus mode — a distraction-free logging view (see focusEngaged in app.js).
-   Today sheds its chrome to a slim sticky header + the logging cards. Calm and
-   editorial: the header floats on a blurred paper scrim, the accent marks "you're
-   in the work", desktop centers within the column / mobile bleeds to the edges.
-   ------------------------------------------------------------------- */
-/* the quiet "Focus" entry pill, right-aligned above the day switcher */
-.focus-enterrow{display:flex;justify-content:flex-end;margin:0 0 2px}
-.focus-enter{
-  display:inline-flex;align-items:center;gap:6px;
-  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
-  border-radius:999px;padding:7px 14px;font-family:var(--font-ui);font-weight:600;
-  font-size:.72rem;letter-spacing:.04em;cursor:pointer;
-  transition:border-color var(--dur-1),color var(--dur-1),background var(--dur-1),transform var(--dur-1);
-}
-.focus-enter:hover{border-color:var(--accent);color:var(--accent);background:rgba(180,85,45,.05)}
-.focus-enter:active{transform:var(--press)}
-
-/* the slim sticky header that leads focus mode */
-.focus-bar{
-  position:sticky;top:env(safe-area-inset-top,0px);z-index:30;
-  margin:0 -18px 14px;padding:11px 18px 12px;
-  background:rgba(252,250,244,.86);
-  backdrop-filter:blur(14px) saturate(1.1);-webkit-backdrop-filter:blur(14px) saturate(1.1);
-  border-bottom:1px solid var(--line);
-}
-.focus-bar-row{display:flex;align-items:center;gap:11px}
-.focus-glyph{color:var(--accent);font-size:.78rem;line-height:1;flex:0 0 auto}
-.focus-back{flex:0 0 auto;background:none;border:none;color:var(--ink-2);font-size:1.2rem;
-  line-height:1;padding:0 2px;cursor:pointer}
-.focus-back:hover{color:var(--ink)}
-.focus-id{flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.focus-day{
-  font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 60;
-  font-size:1.12rem;letter-spacing:-.01em;color:var(--ink);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;
-}
-.focus-prog{font-family:var(--font-ui);font-size:.72rem;font-weight:600;letter-spacing:.02em;
-  color:var(--muted);flex:0 0 auto}
-.focus-prog-done{color:var(--accent)}
-.focus-prog-sep{margin:0 1px;opacity:.55}
-.focus-exit{
-  flex:0 0 auto;background:none;border:1px solid var(--line-2);color:var(--ink-2);
-  border-radius:999px;padding:6px 12px;font-family:var(--font-ui);font-weight:600;
-  font-size:.68rem;letter-spacing:.04em;cursor:pointer;
-  transition:border-color var(--dur-1),color var(--dur-1),transform var(--dur-1);
-}
-.focus-exit:hover{border-color:var(--ink);color:var(--ink)}
-.focus-exit:active{transform:var(--press)}
-.focus-read{
-  margin-top:7px;font-family:var(--font-display);font-style:italic;font-weight:480;
-  font-variation-settings:"opsz" 40;font-size:.92rem;color:var(--ink-2);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}
-/* in focus the logging surface is the whole show — a touch more breathing room */
-.today-focus .plansurface{margin-top:2px}
 
 /* always-on capture row — quiet, there until you want it */
 .capture-row{margin:0 0 12px}
@@ -3821,14 +3763,12 @@ button.hmk-row:active{background:var(--card-2)}
      the Brief, capture, and the logging surface; the rail holds the week-ahead,
      weekly read, connection insight, garmin reconcile, and "lately". Two real
      wrappers → each column packs to the top independently (no row coupling). */
-  .today-wrap:not(.today-focus){
+  .today-wrap{
     display:grid;grid-template-columns:minmax(0,1.6fr) minmax(290px,1fr);
     column-gap:28px;align-items:start;
   }
   .today-main,.today-rail{min-width:0}
   .today-rail>*:empty{display:none}            /* an empty slot adds no gap */
-  /* focus mode stays a single centered column — no rail */
-  .today-wrap.today-focus{display:block}
 
   /* PROGRESS — history sessions as a two/three-up card grid under the hero */
   .sess-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}

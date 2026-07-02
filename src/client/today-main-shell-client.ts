@@ -2,8 +2,6 @@
 // Today main shell markup: Brief/capture lead, weekly fold, and focus/rail wrapper.
 
 type TodayMainShellLeadOptions = {
-  focus: boolean;
-  focusHtml: string;
   isToday: boolean;
   briefHtml: string;
   conductorHtml: string;
@@ -23,7 +21,7 @@ type TodayMainShellDeps = {
 type TodayMainShellApi = {
   leadHtml(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps): string;
   weekFoldHtml(compass: TodayMainShellCompass, deps: Pick<TodayMainShellDeps, "escapeHtml">): string;
-  wrapHtml(content: string, options: { focus: boolean; railHtml: string }): string;
+  wrapHtml(content: string, options: { railHtml: string }): string;
 };
 
 (() => {
@@ -49,7 +47,6 @@ type TodayMainShellApi = {
   }
 
   function leadHtml(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps): string {
-    if (options.focus) return options.focusHtml;
     return `${options.isToday ? "" : `<button id="backToday" class="ghostbtn back-today">← Back to today</button>`}
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${options.briefHtml}
@@ -71,10 +68,8 @@ type TodayMainShellApi = {
     </details>`;
   }
 
-  function wrapHtml(content: string, options: { focus: boolean; railHtml: string }): string {
-    return options.focus
-      ? `<div class="today-wrap today-focus">${content}</div>`
-      : `<div class="today-wrap"><div class="today-main">${content}</div>${options.railHtml}</div>`;
+  function wrapHtml(content: string, options: { railHtml: string }): string {
+    return `<div class="today-wrap"><div class="today-main">${content}</div>${options.railHtml}</div>`;
   }
 
   const CAIRN_TODAY_MAIN_SHELL: TodayMainShellApi = {

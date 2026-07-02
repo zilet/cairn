@@ -42,7 +42,7 @@ function rememberChatFuelContext(...msgs) {
 }
 // Expand the collapsed history block at the top of the chat log: smooth
 // max-height + fade per the motion rules, while keeping the messages the
-// athlete is looking at visually still. Anchoring re-measures the first
+// user is looking at visually still. Anchoring re-measures the first
 // visible element every frame (rather than accumulating deltas), so scroll
 // clamping while the scroller is still shorter than its viewport self-corrects.
 function expandChatEarlier(log, bar, block) {

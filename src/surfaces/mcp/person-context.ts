@@ -59,7 +59,7 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
 
   server.tool(
     "resolve_context_event",
-    "Close a life-timeline event as healed/over (e.g. an injury the athlete confirms is no longer bothering them) WITHOUT deleting it — it stays on the timeline and in exports but stops gating the day-read/coach as a hard constraint. Use this instead of delete when a niggle/injury has passed. `date` defaults to today.",
+    "Close a life-timeline event as healed/over (e.g. an injury the user confirms is no longer bothering them) WITHOUT deleting it — it stays on the timeline and in exports but stops gating the day-read/coach as a hard constraint. Use this instead of delete when a niggle/injury has passed. `date` defaults to today.",
     { id: z.number().int(), date: z.string().nullable().optional().describe("YYYY-MM-DD healed-on date; defaults to today") },
     async ({ id, date }) => asText(resolveContextEvent(id, date ?? undefined) ?? { error: "not found", id })
   );
@@ -127,7 +127,7 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
   // ---- supplements (UNDERSTANDING, not a daily log) ----
   server.tool(
     "list_supplements",
-    "List the athlete's understood supplement regimen (canonical name, approximate dose, cadence, the markers/domains each touches). Not a daily log. all=true includes stopped ones.",
+    "List the user's understood supplement regimen (canonical name, approximate dose, cadence, the markers/domains each touches). Not a daily log. all=true includes stopped ones.",
     { all: z.boolean().optional() },
     async ({ all }) => asText(listSupplements({ activeOnly: !all }))
   );
@@ -156,7 +156,7 @@ export function registerPersonContextTools(server: McpToolRegistrar) {
   server.tool(
     "onboard",
     "Frictionless first-run setup from ONE free-text intro ('41, training for longevity, lift 4x/week, bad left shoulder, train fasted, take creatine daily + omega-3'). Understands + applies profile/about-me/supplements/injuries/memories in one pass, then marks onboarded. Never interrogates; degrades to a deterministic base with no agent.",
-    { text: z.string().describe("the athlete's short free-text intro"), agent: z.string().optional() },
+    { text: z.string().describe("the user's short free-text intro"), agent: z.string().optional() },
     async ({ text, agent }) => asText(await onboardFromText(agent, text)),
   );
 }

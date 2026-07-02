@@ -41,7 +41,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_performance",
-    "The TRAINING-INTELLIGENCE / performance read — where the athlete actually STANDS, benchmarked like a coach would: each benchmark lift's CAPACITY as a sex- and age-adjusted percentile/level (beginner→elite) against proven strength standards, VO2max-for-age, the strength IMBALANCES (press vs pull, lower vs upper) to address, the single highest-leverage LEVER, lifts worth RE-TESTING (a heavy low-rep test to re-measure true capacity), a VARIETY nudge (don't run the identical rotation forever), motivational momentum, and a holistic balance line. Percentile/level are recognized reference reads, never a 0-100 score. The athletic counterpart to get_health_standing.",
+    "The TRAINING-INTELLIGENCE / performance read — where the user actually STANDS, benchmarked like a coach would: each benchmark lift's CAPACITY as a sex- and age-adjusted percentile/level (beginner→elite) against proven strength standards, VO2max-for-age, the strength IMBALANCES (press vs pull, lower vs upper) to address, the single highest-leverage LEVER, lifts worth RE-TESTING (a heavy low-rep test to re-measure true capacity), a VARIETY nudge (don't run the identical rotation forever), motivational momentum, and a holistic balance line. Percentile/level are recognized reference reads, never a 0-100 score. The athletic counterpart to get_health_standing.",
     { date: z.string().optional() },
     async ({ date }) => asText(performanceStanding(date))
   );
@@ -88,7 +88,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "ensure_active_block",
-    "Ensure ONE active periodization block exists — auto-creates a sensible default aligned to the athlete's goal (strength base, or an endurance-base/peak block sized to an approaching race) when none is running. Idempotent: returns the existing active block untouched if the athlete is mid-block. Keeps periodization live.",
+    "Ensure ONE active periodization block exists — auto-creates a sensible default aligned to the user's goal (strength base, or an endurance-base/peak block sized to an approaching race) when none is running. Idempotent: returns the existing active block untouched if the user is mid-block. Keeps periodization live.",
     {},
     async () => asText(ensureActiveBlock())
   );
@@ -130,14 +130,14 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_equipment",
-    "The athlete's persisted equipment/preference profile (free text) + the parsed equipment types. Variation/swap suggestions rank by what they can actually load.",
+    "The user's persisted equipment/preference profile (free text) + the parsed equipment types. Variation/swap suggestions rank by what they can actually load.",
     {},
     async () => asText(getEquipmentProfile())
   );
 
   server.tool(
     "set_equipment",
-    "Set the athlete's available equipment / training-preference free text (e.g. 'full gym', 'dumbbells + pull-up bar at home'). Variation suggestions rank by it. Pass empty to clear.",
+    "Set the user's available equipment / training-preference free text (e.g. 'full gym', 'dumbbells + pull-up bar at home'). Variation suggestions rank by it. Pass empty to clear.",
     { equipment: z.string().nullable().optional() },
     async ({ equipment }) => asText(setEquipmentProfile(equipment ?? null))
   );
@@ -211,7 +211,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_run_zones",
-    "The athlete's HR-zone bpm bands (Z1–Z5), grounded in real physiology — max-HR (explicit → age-estimated → Garmin-observed → Garmin's own zone boundaries) and resting HR (Karvonen %HRR when known). Plain words + concrete bpm, never a score. {available:false} with no age and no Garmin HR.",
+    "The user's HR-zone bpm bands (Z1–Z5), grounded in real physiology — max-HR (explicit → age-estimated → Garmin-observed → Garmin's own zone boundaries) and resting HR (Karvonen %HRR when known). Plain words + concrete bpm, never a score. {available:false} with no age and no Garmin HR.",
     {},
     async () => asText(runZones())
   );
@@ -225,14 +225,14 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_muscle_trajectory",
-    "Per-canonical-muscle-group ADVANCING vs STALLING read (the athlete's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. Plain words, no scores. {available:false} when nothing's logged.",
+    "Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. Plain words, no scores. {available:false} when nothing's logged.",
     { date: z.string().optional() },
     async ({ date }) => asText(muscleGroupTrajectory(date))
   );
 
   server.tool(
     "get_test_week",
-    "The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new athlete (never nags).",
+    "The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new user (never nags).",
     { date: z.string().optional() },
     async ({ date }) => asText(testWeekDue(date))
   );

@@ -21,10 +21,10 @@ import {
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerPersonTools(server: McpToolRegistrar) {
-  server.tool("get_profile", "Get the athlete's profile (age, height, weight, goal).", {},
+  server.tool("get_profile", "Get the user's profile (age, height, weight, goal).", {},
     async () => asText(getProfile()));
 
-  server.tool("set_profile", "Update profile fields (any subset). name is the athlete's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it.",
+  server.tool("set_profile", "Update profile fields (any subset). name is the user's name (optional; stamped on the doctor-ready clinical report — pass '' to clear). Weight in lb, height in cm. about_me is free-text the coach uses to personalize (training history, work pattern, food likes/dislikes, what 'better' means to you); pass '' to clear. allergies are a HARD safety exclusion for meal planning; dietary_restrictions (vegetarian, no pork, …) are respected strongly. Pass '' to clear either. primary_discipline ('strength'|'endurance'|'hybrid', default 'strength') shapes coaching framing, the day-read, and weekly stats; endurance_sport is optional free text ('running'/'cycling'/'triathlon'), '' clears it.",
     {
       name: z.string().optional(),
       sex: z.string().optional(), age: z.number().optional(), height_cm: z.number().optional(),
@@ -89,7 +89,7 @@ export function registerPersonTools(server: McpToolRegistrar) {
 
   server.tool(
     "confirm_goal_checkin",
-    "Restart the gentle 'is this still your goal?' clock (Era 2): records that the athlete confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else.",
+    "Restart the gentle 'is this still your goal?' clock (Era 2): records that the user confirmed (or changed) their goal, so the quiet check-in stays away for ~3 months. You-drive — changes nothing else.",
     {},
     async () => {
       confirmGoalCheckin();

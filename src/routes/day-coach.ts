@@ -22,7 +22,7 @@ dayCoachRouter.get("/today-read", async (req, res) => {
   const override = req.query.override ? String(req.query.override) : undefined;
   const agentParam = req.query.agent ? String(req.query.agent) : undefined;
   // ?reset=1 clears a persisted steer ("back to today's read") and recomputes the
-  // canonical read — the un-steer escape hatch, so the athlete is never trapped in
+  // canonical read — the un-steer escape hatch, so the user is never trapped in
   // an override they changed their mind about (mirrors the cache-invalidation path).
   const reset = req.query.reset === "1" || req.query.reset === "true";
   return res.json(await readToday({ date, override, agent: agentParam, reset, recordOutcome: true }));
