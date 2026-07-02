@@ -1036,12 +1036,19 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .chatdock{flex:0 0 auto;padding-top:2px}
 /* Mobile: the chat column is BOTTOM-ANCHORED, not height-measured. It's fixed
    between the header (top) and either the tab bar (--tabbar-h, keyboard closed)
-   or the layout-viewport bottom (bottom:0, keyboard open). In an installed PWA
-   iOS shrinks the layout viewport when the keyboard opens, so bottom:0 rides the
-   keyboard top every frame — the browser positions it natively with ZERO JS lag,
-   which is what keeps the textarea (and its native caret) glued to the box. The
-   old approach measured the height off visualViewport and lagged the keyboard
-   animation, so the painted box and the caret drifted apart. --cvt/--chat-top/
+   or the KEYBOARD TOP (keyboard open). Subtle iOS truth: in a STANDALONE
+   installed PWA the soft keyboard shrinks only the VISUAL viewport — the LAYOUT
+   viewport (what position:fixed;bottom:0 anchors to) does NOT move — so a plain
+   bottom:0 sits BEHIND the keyboard (the reported bug). Instead we lift the whole
+   column by the keyboard-occluded height the guard already publishes as --vvb
+   (innerHeight - vv bottom; see app-mobile-viewport.js): the box shrinks so the
+   composer docks ON the keyboard top and the log shrinks with it. Because --vvb
+   is a direct geometry read, bottom:var(--vvb) is correct whether or not the
+   layout viewport also shrinks (in a plain browser tab it does, so --vvb
+   collapses to 0 and this equals the old bottom:0). The keyboard-open state drops
+   the .22s ease so the composer tracks the geometry frame-for-frame instead of
+   lagging behind it (a JS-driven position under a CSS ease is exactly what made
+   the old height-measured box drift from the native caret). --cvt/--chat-top/
    --tabbar-h are kept current in JS (measureChatTop). Desktop keeps the in-flow
    sidebar column (the base .chatview height:--chat-h above) untouched. */
 @media (max-width:959px){
@@ -1062,9 +1069,12 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   }
   /* Keyboard up (REAL geometry only — an intent tap that summons no keyboard must
      not bounce the bar): the tab bar is dead weight while typing — slide it out so
-     the conversation + composer own the screen, and extend the column to the keyboard
-     top. The reassurance note hides too, reclaiming its lines for the log. */
-  body.chat-mode.kb-geometry-open .chatview{bottom:0}
+     the conversation + composer own the screen, and LIFT the column onto the
+     keyboard top (bottom:var(--vvb), not bottom:0, which would hide it behind the
+     keyboard in a standalone PWA — see the block comment above). transition:none so
+     the composer tracks the keyboard geometry instead of easing behind it. The
+     reassurance note hides too, reclaiming its lines for the log. */
+  body.chat-mode.kb-geometry-open .chatview{bottom:var(--vvb,0px);transition:none}
   body.chat-mode.kb-geometry-open .tabbar{transform:translateY(110%);pointer-events:none}
   body.chat-mode.kb-geometry-open .chatnote{display:none}
 }
