@@ -101,7 +101,7 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   if (!focus || !focus.available || !focus.lead) return "";
   const title = focus.lead.title || "";
   if (!title) return "";
-  return `<button class="cfocus-thread" type="button" data-cfocus-go="me-standing">
+  return `<button class="cfocus-thread" type="button" data-cfocus-go="stand">
     <span class="cfocus-thread-arrow" aria-hidden="true">↳</span>
     <span class="cfocus-thread-lbl lbl">Focus now</span>
     <span class="cfocus-thread-txt">${escHtml(title)}</span>
@@ -121,10 +121,7 @@ function cfocusDomainRoute(domain: ClientCoachingFocusDomain): void {
       activateTab("plan");
       return;
     case "health":
-      state.meSeg = "health";
-      state.healthSeg = "markers";
-      state.healthSegPicked = true;
-      activateTab("me");
+      activateTab("stand");
       return;
     case "training":
     case "recovery":
@@ -138,9 +135,9 @@ function cfocusDomainRoute(domain: ClientCoachingFocusDomain): void {
 
 function cfocusRoute(go: unknown): void {
   switch (String(go || "")) {
+    case "stand":
     case "me-standing":
-      state.meSeg = "standing";
-      activateTab("me");
+      activateTab("stand");
       break;
     case "endurance":
       state.progressSeg = "endurance";
@@ -151,10 +148,7 @@ function cfocusRoute(go: unknown): void {
       activateTab("plan");
       break;
     case "markers":
-      state.meSeg = "health";
-      state.healthSeg = "markers";
-      state.healthSegPicked = true;
-      activateTab("me");
+      activateTab("stand");
       break;
     default:
       if (isCoachingFocusDomain(go)) {

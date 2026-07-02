@@ -3944,6 +3944,59 @@ if (typeof window !== "undefined") {
       <span class="stand-tile-read ${st}">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
     </button>`;
     }
+    // ---- recovery (condensed tile + detail, from wearable/daily metrics) -----------
+    function recoveryData() {
+        const r = DATA?.recovery;
+        if (!r || r.has_data === false)
+            return null;
+        return r.recovery && typeof r.recovery === "object" ? r.recovery : null;
+    }
+    function sleepWord(min) {
+        const m = Number(min);
+        if (!Number.isFinite(m) || m <= 0)
+            return "";
+        return `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
+    }
+    function recoveryStatus() {
+        const rec = recoveryData();
+        if (!rec)
+            return "mute";
+        const score = Number(rec.avg_sleep_score);
+        if (Number.isFinite(score))
+            return score >= 75 ? "ok" : score >= 60 ? "watch" : "warn";
+        return "ok";
+    }
+    function recoveryTile() {
+        const rec = recoveryData();
+        if (!rec)
+            return "";
+        const st = recoveryStatus();
+        const sleep = sleepWord(rec.avg_sleep_min);
+        const hrv = Number(rec.avg_hrv_ms);
+        const read = sleep
+            ? `sleep <b>${escHtml(sleep)}</b>${Number.isFinite(hrv) && hrv > 0 ? ` · HRV ${Math.round(hrv)}` : ""}`
+            : "no wearable data yet";
+        return `<button class="stand-tile reveal" data-recovery>
+      <span class="stand-tile-top"><span class="hdot hdot-${st}"></span><span class="stand-tile-name">Recovery</span></span>
+      <span class="stand-tile-read ${st === "ok" ? "" : st}">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+    </button>`;
+    }
+    function recoveryDetailHtml() {
+        const rec = recoveryData();
+        const card = (label, value, sub = "") => value ? `<div class="stand-mcard"><span class="stand-mcard-l">${escHtml(label)}</span><span class="stand-mcard-v">${escHtml(value)}</span>${sub ? `<span class="stand-mcard-sub">${escHtml(sub)}</span>` : ""}</div>` : "";
+        const cards = rec ? [
+            card("Sleep", sleepWord(rec.avg_sleep_min), Number.isFinite(Number(rec.avg_sleep_score)) ? `score ${Math.round(Number(rec.avg_sleep_score))}` : ""),
+            card("HRV", Number.isFinite(Number(rec.avg_hrv_ms)) && Number(rec.avg_hrv_ms) > 0 ? `${Math.round(Number(rec.avg_hrv_ms))} ms` : ""),
+            card("Resting HR", Number.isFinite(Number(rec.avg_resting_hr)) ? `${Math.round(Number(rec.avg_resting_hr))} bpm` : ""),
+            card("Body battery", Number.isFinite(Number(rec.avg_body_battery)) ? `${Math.round(Number(rec.avg_body_battery))}` : ""),
+        ].filter(Boolean).join("") : "";
+        return `<div class="stand-detail stand-root">
+      <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
+      <h2 class="stand-detail-h">Recovery</h2>
+      <p class="stand-read-lede" style="font-size:1rem">A 14-day read from your wearable — sleep, HRV and resting heart rate holding steady.</p>
+      ${cards ? `<div class="stand-mcards">${cards}</div>` : `<p class="stand-empty">No wearable data yet.</p>`}
+    </div>`;
+    }
     function domainTileHtml(d, st) {
         const markers = markersOfDomain(d);
         const lead = leadMarker(markers);
@@ -3963,6 +4016,9 @@ if (typeof window !== "undefined") {
         const b = bodyTile();
         if (b)
             tiles.push({ st: bodyStatus(), html: b });
+        const rec = recoveryTile();
+        if (rec)
+            tiles.push({ st: recoveryStatus(), html: rec });
         for (const d of DOMAINS) {
             const markers = markersOfDomain(d);
             if (!markers.length)
@@ -3972,21 +4028,30 @@ if (typeof window !== "undefined") {
         }
         tiles.sort((a, b2) => RANK[b2.st] - RANK[a.st]);
         return `<div class="stand-root">
+      ${actionBarHtml()}
       ${readHtml()}
       <div class="stand-browse lbl">Your markers</div>
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
-      ${toolsHtml()}
     </div>`;
     }
     // The health depth + the clinician-facing exports, reachable from Stand: the full
     // agentic read, the doctor Share (clinical order + trends, untouched), uploaded
     // Records, and the learned timeline.
-    function toolsHtml() {
-        return `<div class="stand-tools">
-      <button class="linkbtn linkbtn-plain" data-tool="read">Full health read</button>
-      <button class="linkbtn linkbtn-plain" data-tool="share">Share with your doctor</button>
-      <button class="linkbtn linkbtn-plain" data-tool="records">Records</button>
-      <button class="linkbtn linkbtn-plain" data-tool="learned">Learned</button>
+    // A sticky bar pinned to the top of Stand — Add labs is always one tap away
+    // (never buried at the scroll bottom); the rest of the health tools sit behind a
+    // quiet "⋯" menu in the same bar.
+    function actionBarHtml() {
+        return `<div class="stand-actionbar">
+      <button class="stand-addbtn" data-tool="records" type="button"><span class="stand-addbtn-p" aria-hidden="true">＋</span>Add labs or scan</button>
+      <div class="stand-more">
+        <button class="stand-morebtn" type="button" aria-label="More health tools" aria-expanded="false" data-morebtn>⋯</button>
+        <div class="stand-moremenu" data-moremenu hidden>
+          <button class="stand-moreitem" data-tool="read" type="button">Full health read</button>
+          <button class="stand-moreitem" data-tool="share" type="button">Share with your doctor</button>
+          <button class="stand-moreitem" data-tool="records" type="button">Records</button>
+          <button class="stand-moreitem" data-tool="learned" type="button">Learned</button>
+        </div>
+      </div>
     </div>`;
     }
     function goHealth(seg) {
@@ -4121,10 +4186,25 @@ if (typeof window !== "undefined") {
     }
     function showOverview() { paint(overviewHtml()); wireOverview(); }
     function showBody() { paint(bodyDetailHtml()); wireBack(); wireRows(view); }
+    function showRecovery() { paint(recoveryDetailHtml()); wireBack(); }
     function wireOverview() {
         view.querySelectorAll("[data-domain]").forEach((b) => b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
         view.querySelector("[data-body]")?.addEventListener("click", () => showBody());
+        view.querySelector("[data-recovery]")?.addEventListener("click", () => showRecovery());
         view.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
+        // the "⋯ more" tools menu in the sticky action bar
+        const moreBtn = view.querySelector("[data-morebtn]");
+        const moreMenu = view.querySelector("[data-moremenu]");
+        moreBtn?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const open = moreMenu?.hasAttribute("hidden");
+            if (open)
+                moreMenu?.removeAttribute("hidden");
+            else
+                moreMenu?.setAttribute("hidden", "");
+            moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+        document.addEventListener("click", () => moreMenu?.setAttribute("hidden", ""), { once: true });
         // Your Read focus-zones: tap to expand the "why"; ask-the-coach deep-links.
         view.querySelectorAll("[data-zone]").forEach((z) => z.addEventListener("click", (e) => {
             if (e.target.closest(".stand-ask"))
@@ -4160,12 +4240,13 @@ if (typeof window !== "undefined") {
         headerTitle.textContent = "Stand";
         paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
         try {
-            const [priority, focus, body, synthRes, insightsRes] = await Promise.all([
+            const [priority, focus, body, synthRes, insightsRes, recoveryRes] = await Promise.all([
                 api("/markers/priority"),
                 api("/coaching-focus").catch(() => null),
                 api("/body-metrics?unit=in").catch(() => null),
                 api("/health/synthesis").catch(() => null),
                 api("/insights").catch(() => null),
+                api("/recovery").catch(() => null),
             ]);
             const insightsArr = Array.isArray(insightsRes)
                 ? insightsRes
@@ -4179,6 +4260,7 @@ if (typeof window !== "undefined") {
                 body,
                 synthesis: (synthRes && typeof synthRes === "object" ? synthRes.synthesis : null) || null,
                 connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
+                recovery: recoveryRes && typeof recoveryRes === "object" ? recoveryRes : null,
             };
             showOverview();
         }

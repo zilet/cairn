@@ -124,15 +124,15 @@ test("coaching focus route bridge preserves deep-link destinations", () => {
   assert.equal(state.planJump, "meals");
   assert.deepEqual(activated.at(-1), "plan");
 
+  // Health / markers / standing now unify onto the Stand tab (the where-you-stand brain).
   focus.cfocusRoute("health");
-  assert.equal(state.meSeg, "health");
-  assert.equal(state.healthSeg, "markers");
-  assert.equal(state.healthSegPicked, true);
-  assert.deepEqual(activated.at(-1), "me");
+  assert.deepEqual(activated.at(-1), "stand");
+
+  focus.cfocusRoute("markers");
+  assert.deepEqual(activated.at(-1), "stand");
 
   focus.cfocusRoute("me-standing");
-  assert.equal(state.meSeg, "standing");
-  assert.deepEqual(activated.at(-1), "me");
+  assert.deepEqual(activated.at(-1), "stand");
 
   focus.cfocusRoute("training");
   assert.equal(state.progressSeg, "program");
