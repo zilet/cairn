@@ -10,6 +10,7 @@ type ChatScreenMeta = {
   image?: unknown;
   applied?: unknown;
   drafts?: unknown;
+  lab_confirms?: unknown;
   [key: string]: unknown;
 };
 type ChatScreenAppliedAction = { type?: unknown; error?: unknown };
@@ -18,6 +19,13 @@ type ChatScreenDraft = {
   kind?: unknown;
   status?: unknown;
   summary?: unknown;
+};
+type ChatScreenLabConfirm = {
+  id?: unknown;
+  status?: unknown;
+  marker_estimate?: unknown;
+  summary?: unknown;
+  kind?: unknown;
 };
 type ChatScreenImagePayload = { dataUrl: string; base64: string; mime: "image/jpeg"; bytes: number };
 type ChatScreenGroup = { iso: string; msgs: ChatScreenMessage[] };

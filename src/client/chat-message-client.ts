@@ -166,6 +166,23 @@ function appendMsg(
       return `<button class="draftbtn" data-apply="${escAttr(d.id)}">Apply: ${label}</button>`;
     }).join("");
   }
+  // A substantial pasted lab awaits one-tap confirmation before it writes to Health
+  // records (propose→apply for a big write). Each reflects its doc's current status.
+  const labConfirms = chatMessageRows<ChatScreenLabConfirm>(meta.lab_confirms);
+  if (labConfirms.length) {
+    extra += labConfirms.map((l) => {
+      const status = chatMessageString(l.status);
+      if (status === "missing") return ""; // dismissed / deleted — nothing to offer
+      // Anything past pending_confirm (pending/in_progress/done) means committed.
+      if (status && status !== "pending_confirm")
+        return `<div class="draftbtn applied" aria-disabled="true">✓ Saved to Health</div>`;
+      const est = Number(l.marker_estimate) || 0;
+      const label = est ? `Save ~${est} lab results to Health` : "Save lab results to Health";
+      if (readonly)
+        return `<div class="bubble-meta"><span class="bubble-tag">lab draft</span></div>`;
+      return `<button class="draftbtn" data-confirm-lab="${escAttr(l.id)}">${escHtml(label)}</button>`;
+    }).join("");
+  }
   const hideText = !!meta.image && (!m.content || m.content === "(photo)");
   const body = hideText ? "" : role === "assistant"
     ? `<div class="bubble-text md">${mdToHtml(m.content)}</div>`
@@ -209,6 +226,25 @@ function appendMsg(
       // A code guardrail nudged a load to a safe step -- show the honest hairline note
       // inline under the bubble's actions (it persists exactly here on this turn).
       if (hasClamped) done.insertAdjacentHTML("afterend", clampNoteHtml(clamped));
+    });
+  });
+  // One-tap confirm for a pasted lab draft: commit it to Health records (nothing wrote
+  // before this). Mirrors the plan-draft apply flow — honest failure re-enables the button.
+  el.querySelectorAll("[data-confirm-lab]").forEach((b) => {
+    const btn = b instanceof HTMLButtonElement ? b : null;
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      let r: unknown = null;
+      try { r = await api(`/health-docs/${btn.dataset.confirmLab || ""}/confirm`, { method: "POST" }); } catch { r = null; }
+      const rec = chatMessageRecord(r);
+      if (!r || rec.error || rec.ok === false) { btn.disabled = false; toast("Couldn't save — try again"); return; }
+      toast("Saved to Health");
+      const done = document.createElement("div");
+      done.className = "draftbtn applied";
+      done.setAttribute("aria-disabled", "true");
+      done.textContent = "✓ Saved to Health";
+      btn.replaceWith(done);
     });
   });
   if (canCopy) {
