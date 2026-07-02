@@ -13,6 +13,7 @@
 
 import { db } from "../db.js";
 import { getEnduranceGoal } from "./profile.js";
+import { recordTestWeek } from "./muscle-trajectory.js";
 
 // ---- allowed enum values ----
 const VALID_FOCUS = ["strength", "hypertrophy", "endurance-base", "peak"] as const;
@@ -319,6 +320,11 @@ export function advanceBlockWeek(id?: number): ProgramBlock | null {
     block.id,
   );
 
+  // Auto-completing a PEAK block lands it in the realization phase — the test week
+  // the block was built toward. Close the cadence loop on that completion (the
+  // stamp is monotonic, so it's a no-op if a later test week is already recorded).
+  if (is_complete && auto_phase === "realization") recordTestWeek();
+
   return hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(block.id)
   );
@@ -331,9 +337,15 @@ export function completeBlock(id: number): ProgramBlock | null {
   db.prepare(
     "UPDATE program_blocks SET status = 'completed' WHERE id = ?"
   ).run(id);
-  return hydrateBlock(
+  const block = hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(id)
   );
+  // A block finished in its realization phase IS a test week — that phase's whole
+  // point is expressing/peaking the block's work on the main lifts. Close the
+  // cadence loop (monotonic; a no-op if a later test week is already stamped). A
+  // block completed early, before realization, did no test work → no stamp.
+  if (block?.phase === "realization") recordTestWeek();
+  return block;
 }
 
 /**
