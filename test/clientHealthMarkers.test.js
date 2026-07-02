@@ -156,25 +156,50 @@ test("expanded markers carry an 'ask the coach' deep-link with a grounded questi
   assert.doesNotMatch(calm, /what's likely driving/i);
 });
 
-test("out-of-range rows carry the target inline while in-range rows stay quiet", () => {
+test("every row states its reference inline — optimal, else lab range, else flag word", () => {
   const markers = loadHealthMarkers();
+  // Out of optimal → the optimal band.
   const offRow = markers.hmkRowHtml(markerFixture(), 0);
-  const offLine = offRow.slice(0, offRow.indexOf("hmk-panel"));
-  assert.match(offLine, /optimal 70–100 mg\/dL/);
+  assert.match(offRow.slice(0, offRow.indexOf("hmk-panel")), /optimal 70–100 mg\/dL/);
 
+  // In optimal → still shows the band (this is the fix: references are always visible).
   const inRange = markers.hmkRowHtml({
-    name: "HDL",
-    unit: "mg/dL",
+    name: "HDL", unit: "mg/dL",
     latest: { value: 62, date: "2026-06-20", flag: "normal" },
-    optimal: { low: 40, high: 100 },
-    in_optimal: true,
-    points: [
-      { value: 58, date: "2026-05-01" },
-      { value: 62, date: "2026-06-20" },
-    ],
+    optimal: { low: 40, high: 100 }, in_optimal: true,
+    points: [{ value: 58, date: "2026-05-01" }, { value: 62, date: "2026-06-20" }],
   }, 0);
-  const inLine = inRange.slice(0, inRange.indexOf("hmk-panel"));
-  assert.doesNotMatch(inLine, /optimal/);
+  assert.match(inRange.slice(0, inRange.indexOf("hmk-panel")), /optimal 40–100 mg\/dL/);
+
+  // No optimal zone but a lab reference range → "range 65–175 mcg/dL".
+  const labRange = markers.hmkRowHtml({
+    name: "Iron", unit: "mcg/dL",
+    latest: { value: 76, date: "2026-06-20", flag: "normal" },
+    reference: { low: 65, high: 175 },
+    points: [{ value: 76, date: "2026-06-20" }],
+  }, 0);
+  assert.match(labRange, /range 65–175 mcg\/dL/);
+
+  // No zone, no range, but a flag → the flag in plain words.
+  const flagOnly = markers.hmkRowHtml({
+    name: "Iron % Saturation", unit: "%",
+    latest: { value: 24, date: "2026-06-20", flag: "normal" },
+    points: [{ value: 24, date: "2026-06-20" }],
+  }, 0);
+  assert.match(flagOnly, /in range/);
+});
+
+test("reference phrases: optimal beats lab range beats flag; one-sided and unitless handled", () => {
+  const markers = loadHealthMarkers();
+  assert.equal(markers.referenceRangePhrase({ reference: { low: 65, high: 175 }, unit: "mcg/dL" }), "65–175 mcg/dL");
+  assert.equal(markers.referenceRangePhrase({ reference: { low: null, high: 3 }, unit: "mg/L" }), "≤ 3 mg/L");
+  assert.equal(markers.referenceRangePhrase({ reference: { low: 40, high: null } }), "≥ 40");
+  assert.equal(markers.referenceRangePhrase({ reference: null }), "");
+  // optimal zone wins over a lab range when both are present.
+  assert.equal(markers.markerReferenceSub({ optimal: { low: 70, high: 100 }, reference: { low: 60, high: 110 } }), "optimal 70–100");
+  assert.equal(markers.markerReferenceSub({ reference: { low: 65, high: 175 }, unit: "mcg/dL" }), "range 65–175 mcg/dL");
+  assert.equal(markers.markerReferenceSub({ latest: { flag: "high" } }), "above range");
+  assert.equal(markers.markerReferenceSub({ latest: { flag: null } }), "");
 });
 
 test("health marker chart wiring is idempotent and updates the scrub affordance", () => {

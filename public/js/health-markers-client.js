@@ -61,6 +61,61 @@
         }
         return `Can you tell me about my ${name}${val ? ` — it's ${val}` : ""}? Is this something I should keep an eye on?`;
     }
+    // The lab's printed reference range as a phrase ("65–175", "≤ 130", "≥ 40").
+    // Unit appended when known. NOT escaped — callers escape.
+    function referenceRangePhrase(marker) {
+        const ref = marker?.reference;
+        // NB: Number(null) is 0, not NaN — a null bound must be treated as absent, not 0.
+        const hasLow = ref?.low != null && Number.isFinite(Number(ref.low));
+        const hasHigh = ref?.high != null && Number.isFinite(Number(ref.high));
+        const low = Number(ref?.low);
+        const high = Number(ref?.high);
+        if (!ref || (!hasLow && !hasHigh))
+            return "";
+        const unit = marker?.unit ? ` ${String(marker.unit)}` : "";
+        const range = hasLow && hasHigh
+            ? `${formatMarkerNumber(low)}–${formatMarkerNumber(high)}`
+            : hasHigh ? `≤ ${formatMarkerNumber(high)}` : `≥ ${formatMarkerNumber(low)}`;
+        return `${range}${unit}`;
+    }
+    // The one reference a row should show, labeled by what it is: the evidence-anchored
+    // optimal band when we have one (the stronger framing), else the lab's own printed
+    // reference range, else the flag in plain words ("in range"). "" when we know
+    // nothing (a qualitative row with no range and no flag). NOT escaped.
+    function markerReferenceSub(marker) {
+        const opt = optimalPhrase(marker);
+        if (opt)
+            return `optimal ${opt}`;
+        const ref = referenceRangePhrase(marker);
+        if (ref)
+            return `range ${ref}`;
+        const flag = String(marker?.latest?.flag || "").toLowerCase();
+        if (flag === "normal")
+            return "in range";
+        if (flag === "high")
+            return "above range";
+        if (flag === "low")
+            return "below range";
+        return "";
+    }
+    // The band to draw a gauge/chart against: the optimal zone (preferred) or, absent
+    // one, the lab's two-sided reference range. One-sided ranges can't anchor a gauge
+    // (no opposite edge) so they're excluded here — the row line still states them.
+    function effectiveBand(marker) {
+        const o = marker?.optimal;
+        const oLow = Number(o?.low), oHigh = Number(o?.high);
+        if (o && Number.isFinite(oLow) && Number.isFinite(oHigh)) {
+            return { low: oLow, high: oHigh, dir: String(o.dir || "band"), kind: "optimal" };
+        }
+        const r = marker?.reference;
+        // A gauge needs both edges; Number(null) is 0, so guard the null explicitly.
+        if (r && r.low != null && r.high != null) {
+            const rLow = Number(r.low), rHigh = Number(r.high);
+            if (Number.isFinite(rLow) && Number.isFinite(rHigh))
+                return { low: rLow, high: rHigh, dir: "band", kind: "reference" };
+        }
+        return null;
+    }
     // Which side of the optimal band the latest value sits on, in plain words.
     function optimalSideWord(marker) {
         const band = marker?.optimal;
@@ -81,9 +136,9 @@
         const W = 300, H = 108, L = 14, R = 14, T = 14, B = 26;
         const vals = raw.map((point) => Number(point.value));
         let min = Math.min(...vals), max = Math.max(...vals);
-        const optimal = marker?.optimal && Number.isFinite(Number(marker.optimal.low)) && Number.isFinite(Number(marker.optimal.high))
-            ? marker.optimal
-            : null;
+        // Shade the optimal band when we have one, else the lab reference range — so a
+        // rangeless marker still gets its "normal" band drawn once the lab range is known.
+        const optimal = effectiveBand(marker);
         if (optimal) {
             min = Math.min(min, Number(optimal.low));
             max = Math.max(max, Number(optimal.high));
@@ -136,7 +191,7 @@
     // sits against the optimal band — shaded zone on a track, a dot for the
     // reading, band-edge labels (only the edge that matters for one-sided zones).
     function markerBandSvg(marker) {
-        const band = marker?.optimal;
+        const band = effectiveBand(marker);
         const low = Number(band?.low);
         const high = Number(band?.high);
         const value = Number(marker?.latest?.value);
@@ -287,11 +342,11 @@
         const gauge = chart ? "" : markerBandSvg(marker);
         if (!chart && !gauge)
             return "";
-        const phrase = optimalPhrase(marker);
-        const band = phrase ? `optimal ${escHtml(phrase)}` : "";
+        // The reference, already labeled ("optimal 50–150" / "range 65–175" / "in range").
+        const band = markerReferenceSub(marker);
         const side = optimalSideWord(marker);
         const trend = chart ? markerTrendWord(marker) : "single reading";
-        const caption = [band, side, trend].filter(Boolean).join(" · ");
+        const caption = [band ? escHtml(band) : "", side, trend].filter(Boolean).join(" · ");
         const latestValue = latest.value != null && latest.value !== "" ? formatMarkerNumber(latest.value) : "";
         const age = latest.date ? relAge(String(latest.date)) : "";
         const latestLine = latestValue
@@ -314,10 +369,11 @@
             delta = `<span class="hmk-delta">${df > 0 ? "▲" : "▼"} ${escHtml(formatMarkerNumber(Math.abs(df)))}</span>`;
         }
         const age = latest.date ? relAge(String(latest.date)) : "";
-        // An out-of-range row states its target inline — the number you need for
-        // context without a tap. In-range rows stay quiet (the dot says enough).
-        const target = markerOutOfRange(marker) ? optimalPhrase(marker) : "";
-        const sub = [age, target ? `optimal ${target}` : ""].filter(Boolean).join(" · ");
+        // Every row states its reference inline — the number you're being measured
+        // against, no tap required: the optimal band, else the lab's printed range,
+        // else the flag in plain words. This is the "where do I stand" at a glance.
+        const ref = markerReferenceSub(marker);
+        const sub = [age, ref].filter(Boolean).join(" · ");
         const when = sub
             ? `<span class="hmk-when"${latest.date ? ` title="${escAttr(absDate(String(latest.date)))}"` : ""}>${escHtml(sub)}</span>`
             : "";
@@ -346,6 +402,8 @@
         markerSpanWord,
         optimalPhrase,
         optimalSideWord,
+        referenceRangePhrase,
+        markerReferenceSub,
         markerOutOfRange,
         markerAskQuestion,
         markerChartSvg,

@@ -1950,6 +1950,8 @@ declare global {
       markerSpanWord(days: unknown): string;
       optimalPhrase(marker: Record<string, unknown> | null | undefined): string;
       optimalSideWord(marker: Record<string, unknown> | null | undefined): string;
+      referenceRangePhrase(marker: Record<string, unknown> | null | undefined): string;
+      markerReferenceSub(marker: Record<string, unknown> | null | undefined): string;
       markerOutOfRange(marker: Record<string, unknown> | null | undefined): boolean;
       markerAskQuestion(marker: Record<string, unknown> | null | undefined): string;
       markerChartSvg(marker: Record<string, unknown> | null | undefined): string;

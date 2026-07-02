@@ -845,6 +845,8 @@ export function getMarkerHistory() {
     unit_converted?: boolean;
     unit_mismatch?: boolean;
     expected_unit?: string | null;
+    ref_low?: number | null;
+    ref_high?: number | null;
     name: string;
     doc_id: number | null;
     kind: string;
@@ -881,6 +883,21 @@ export function getMarkerHistory() {
         const sourceUnit = em.unit !== null && em.unit !== undefined && String(em.unit).trim() ? String(em.unit).trim() : null;
         const normalized = normalizeMarkerReading(name, em.value, sourceUnit, matchOptimalZone(name));
         if (!normalized) continue;
+        // The lab's printed reference range (source unit). Scale it by the same
+        // factor the value was converted by, so range + value stay comparable after
+        // a recognized-unit normalization; pass-through markers keep it verbatim.
+        const refFactor =
+          normalized.unit_converted &&
+          typeof normalized.value === "number" &&
+          typeof normalized.source_value === "number" &&
+          normalized.source_value !== 0
+            ? normalized.value / normalized.source_value
+            : 1;
+        const scaleRef = (v: unknown): number | null => {
+          const n = Number(v);
+          if (v == null || v === "" || !Number.isFinite(n)) return null;
+          return Math.round(n * refFactor * 1000) / 1000;
+        };
         if (!byKey.has(key)) byKey.set(key, []);
         byKey.get(key)!.push({
           date,
@@ -892,6 +909,8 @@ export function getMarkerHistory() {
           unit_converted: normalized.unit_converted,
           unit_mismatch: normalized.unit_mismatch,
           expected_unit: normalized.expected_unit,
+          ref_low: scaleRef(em.ref_low),
+          ref_high: scaleRef(em.ref_high),
           name,
           doc_id: d.id,
           kind: d.kind ?? "other",
@@ -943,6 +962,8 @@ export function getMarkerHistory() {
         out.flag = r.flag;
         out.doc_id = r.doc_id;
         out.kind = r.kind;
+        if (r.ref_low != null) out.ref_low = r.ref_low;
+        if (r.ref_high != null) out.ref_high = r.ref_high;
       }
       if (r.unit_converted) {
         out.source_value = r.source_value ?? null;
@@ -1038,6 +1059,13 @@ export function getMarkerHistory() {
       unit,
       group: grp.key,
       group_label: grp.label,
+      // The lab's printed reference range for the latest reading (source-of-truth
+      // when there's no evidence-anchored optimal zone). Null bounds when the lab
+      // printed no range (qualitative rows, blood type). Both null → omitted below.
+      reference:
+        last.ref_low != null || last.ref_high != null
+          ? { low: last.ref_low ?? null, high: last.ref_high ?? null }
+          : null,
       latest: toPublicReading(last, true),
       prev: before && seriesUnitsCompatible(before.unit, unit) ? toPublicReading(before) : null,
       trend,

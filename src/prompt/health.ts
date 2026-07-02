@@ -34,7 +34,7 @@ const HEALTH_INGEST_SCHEMA = `{
       "summary": "<1-2 sentence plain-language read for THIS date's results>",
       "marker_count": <integer — how many results this date's source actually lists; markers[] MUST have this many entries>,
       "markers": [
-        { "name": "<e.g. 'LDL-C'>", "value": <number|string>, "unit": "<e.g. 'mg/dL'>", "flag": "low|normal|high|null" }
+        { "name": "<e.g. 'LDL-C'>", "value": <number|string>, "unit": "<e.g. 'mg/dL'>", "flag": "low|normal|high|null", "ref_low": <number|null>, "ref_high": <number|null> }
       ]
     }
   ],
@@ -139,6 +139,11 @@ OTHER GUARDRAILS:
 - Never invent values. Include only markers you can actually read. Use the source's range column to
   set "flag" (low/normal/high — "In Range" → normal, "Above Range" → high, "Below Range" → low);
   use null only when no range is shown. Don't guess a value or a range.
+- ALSO transcribe the printed reference range into "ref_low"/"ref_high" (the numeric bounds in the
+  SAME unit as value): "40 - 160" → ref_low 40, ref_high 160; a one-sided range keeps the other
+  bound null ("< 130" → ref_low null, ref_high 130; "> 40" → ref_low 40, ref_high null; ">= 60" → 60).
+  Both null when the source prints no range for that marker (many qualitative or blood-type rows).
+  Never invent a range — copy only what the report shows.
 - Preserve the source units exactly as printed (US or SI/EU units are both fine). Do NOT convert
   units yourself; Cairn normalizes recognized marker units deterministically after import.
 - doc_date is the specimen/collection/scan date (prefer it over a final-report date), YYYY-MM-DD.
