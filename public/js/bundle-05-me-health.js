@@ -4002,6 +4002,36 @@ if (typeof window !== "undefined") {
       ${cards ? `<div class="stand-mcards">${cards}</div>` : `<p class="stand-empty">No wearable data yet.</p>`}
     </div>`;
     }
+    // ---- supplements (condensed tile + list; informational, no traffic-light) ------
+    function supplementsTile() {
+        const list = DATA?.supplements || [];
+        if (!list.length)
+            return "";
+        const names = list.map((s) => String(s.name || "")).filter(Boolean);
+        const read = names.length
+            ? `${escHtml(names.slice(0, 2).join(", "))}${names.length > 2 ? ` +${names.length - 2}` : ""}`
+            : `${list.length} tracked`;
+        return `<button class="stand-tile reveal" data-supps>
+      <span class="stand-tile-top"><span class="hdot hdot-ok"></span><span class="stand-tile-name">Supplements</span></span>
+      <span class="stand-tile-read">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+    </button>`;
+    }
+    function supplementsDetailHtml() {
+        const list = DATA?.supplements || [];
+        const rows = list.map((s) => {
+            const name = escHtml(String(s.name || ""));
+            const meta = [s.dose, s.frequency].filter(Boolean).map((x) => escHtml(String(x))).join(" · ");
+            const rel = Array.isArray(s.related_markers) && s.related_markers.length
+                ? `<span class="stand-supp-rel">for ${escHtml(s.related_markers.map(String).join(", "))}</span>` : "";
+            return `<div class="stand-supp"><span class="stand-supp-n">${name}</span>${meta ? `<span class="stand-supp-m">${meta}</span>` : ""}${rel}</div>`;
+        }).join("");
+        return `<div class="stand-detail stand-root">
+      <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
+      <h2 class="stand-detail-h">Supplements</h2>
+      <p class="stand-read-lede" style="font-size:1rem">What you take — Cairn folds these into your reads (e.g. creatine nudges eGFR).</p>
+      <div class="stand-supps">${rows || `<p class="stand-empty">Nothing tracked yet.</p>`}</div>
+    </div>`;
+    }
     function domainTileHtml(d, st) {
         const markers = markersOfDomain(d);
         const lead = leadMarker(markers);
@@ -4024,6 +4054,9 @@ if (typeof window !== "undefined") {
         const rec = recoveryTile();
         if (rec)
             tiles.push({ st: recoveryStatus(), html: rec });
+        const supp = supplementsTile();
+        if (supp)
+            tiles.push({ st: "ok", html: supp });
         for (const d of DOMAINS) {
             const markers = markersOfDomain(d);
             if (!markers.length)
@@ -4191,10 +4224,12 @@ if (typeof window !== "undefined") {
     function showOverview() { paint(overviewHtml()); wireOverview(); }
     function showBody() { paint(bodyDetailHtml()); wireBack(); wireRows(view); }
     function showRecovery() { paint(recoveryDetailHtml()); wireBack(); }
+    function showSupplements() { paint(supplementsDetailHtml()); wireBack(); }
     function wireOverview() {
         view.querySelectorAll("[data-domain]").forEach((b) => b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
         view.querySelector("[data-body]")?.addEventListener("click", () => showBody());
         view.querySelector("[data-recovery]")?.addEventListener("click", () => showRecovery());
+        view.querySelector("[data-supps]")?.addEventListener("click", () => showSupplements());
         view.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
         // the "⋯ more" tools menu in the sticky action bar
         const moreBtn = view.querySelector("[data-morebtn]");
@@ -4244,13 +4279,14 @@ if (typeof window !== "undefined") {
         headerTitle.textContent = "Stand";
         paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
         try {
-            const [priority, focus, body, synthRes, insightsRes, recoveryRes] = await Promise.all([
+            const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes] = await Promise.all([
                 api("/markers/priority"),
                 api("/coaching-focus").catch(() => null),
                 api("/body-metrics?unit=in").catch(() => null),
                 api("/health/synthesis").catch(() => null),
                 api("/insights").catch(() => null),
                 api("/recovery").catch(() => null),
+                api("/supplements").catch(() => null),
             ]);
             const insightsArr = Array.isArray(insightsRes)
                 ? insightsRes
@@ -4265,6 +4301,8 @@ if (typeof window !== "undefined") {
                 synthesis: (synthRes && typeof synthRes === "object" ? synthRes.synthesis : null) || null,
                 connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
                 recovery: recoveryRes && typeof recoveryRes === "object" ? recoveryRes : null,
+                supplements: (Array.isArray(suppRes) ? suppRes : suppRes?.supplements || [])
+                    .filter((s) => !!s && typeof s === "object" && s.active !== 0),
             };
             showOverview();
         }

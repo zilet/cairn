@@ -22,6 +22,7 @@ type StandData = {
   synthesis: StandSynthesis | null;
   connections: Array<{ text?: unknown; kind?: unknown }>;
   recovery: Record<string, unknown> | null;
+  supplements: Array<Record<string, unknown>>;
 };
 type StandStatus = "ok" | "watch" | "warn" | "mute";
 
@@ -212,6 +213,36 @@ function recoveryDetailHtml(): string {
     </div>`;
 }
 
+// ---- supplements (condensed tile + list; informational, no traffic-light) ------
+function supplementsTile(): string {
+  const list = DATA?.supplements || [];
+  if (!list.length) return "";
+  const names = list.map((s) => String(s.name || "")).filter(Boolean);
+  const read = names.length
+    ? `${escHtml(names.slice(0, 2).join(", "))}${names.length > 2 ? ` +${names.length - 2}` : ""}`
+    : `${list.length} tracked`;
+  return `<button class="stand-tile reveal" data-supps>
+      <span class="stand-tile-top"><span class="hdot hdot-ok"></span><span class="stand-tile-name">Supplements</span></span>
+      <span class="stand-tile-read">${read}</span><span class="stand-tile-arw" aria-hidden="true">›</span>
+    </button>`;
+}
+function supplementsDetailHtml(): string {
+  const list = DATA?.supplements || [];
+  const rows = list.map((s) => {
+    const name = escHtml(String(s.name || ""));
+    const meta = [s.dose, s.frequency].filter(Boolean).map((x) => escHtml(String(x))).join(" · ");
+    const rel = Array.isArray(s.related_markers) && s.related_markers.length
+      ? `<span class="stand-supp-rel">for ${escHtml((s.related_markers as unknown[]).map(String).join(", "))}</span>` : "";
+    return `<div class="stand-supp"><span class="stand-supp-n">${name}</span>${meta ? `<span class="stand-supp-m">${meta}</span>` : ""}${rel}</div>`;
+  }).join("");
+  return `<div class="stand-detail stand-root">
+      <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
+      <h2 class="stand-detail-h">Supplements</h2>
+      <p class="stand-read-lede" style="font-size:1rem">What you take — Cairn folds these into your reads (e.g. creatine nudges eGFR).</p>
+      <div class="stand-supps">${rows || `<p class="stand-empty">Nothing tracked yet.</p>`}</div>
+    </div>`;
+}
+
 function domainTileHtml(d: StandDomain, st: StandStatus): string {
   const markers = markersOfDomain(d);
   const lead = leadMarker(markers);
@@ -236,6 +267,8 @@ function overviewHtml(): string {
   if (b) tiles.push({ st: bodyStatus(), html: b });
   const rec = recoveryTile();
   if (rec) tiles.push({ st: recoveryStatus(), html: rec });
+  const supp = supplementsTile();
+  if (supp) tiles.push({ st: "ok", html: supp });
   for (const d of DOMAINS) {
     const markers = markersOfDomain(d);
     if (!markers.length) continue;
@@ -400,12 +433,14 @@ function paint(html: string): void {
 function showOverview(): void { paint(overviewHtml()); wireOverview(); }
 function showBody(): void { paint(bodyDetailHtml()); wireBack(); wireRows(view); }
 function showRecovery(): void { paint(recoveryDetailHtml()); wireBack(); }
+function showSupplements(): void { paint(supplementsDetailHtml()); wireBack(); }
 
 function wireOverview(): void {
   view.querySelectorAll<HTMLElement>("[data-domain]").forEach((b) =>
     b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
   view.querySelector<HTMLElement>("[data-body]")?.addEventListener("click", () => showBody());
   view.querySelector<HTMLElement>("[data-recovery]")?.addEventListener("click", () => showRecovery());
+  view.querySelector<HTMLElement>("[data-supps]")?.addEventListener("click", () => showSupplements());
   view.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) =>
     b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
   // the "⋯ more" tools menu in the sticky action bar
@@ -457,13 +492,14 @@ async function renderStand(): Promise<void> {
   headerTitle.textContent = "Stand";
   paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
   try {
-    const [priority, focus, body, synthRes, insightsRes, recoveryRes] = await Promise.all([
+    const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes] = await Promise.all([
       api("/markers/priority") as unknown as Promise<{ markers?: StandMarker[]; groups?: StandGroup[] }>,
       (api("/coaching-focus") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/body-metrics?unit=in") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/health/synthesis") as unknown as Promise<{ synthesis?: StandSynthesis }>).catch(() => null),
       (api("/insights") as unknown as Promise<unknown>).catch(() => null),
       (api("/recovery") as unknown as Promise<Record<string, unknown>>).catch(() => null),
+      (api("/supplements") as unknown as Promise<unknown>).catch(() => null),
     ]);
     const insightsArr = Array.isArray(insightsRes)
       ? (insightsRes as Array<{ text?: unknown; kind?: unknown }>)
@@ -478,6 +514,8 @@ async function renderStand(): Promise<void> {
       synthesis: (synthRes && typeof synthRes === "object" ? synthRes.synthesis : null) || null,
       connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
       recovery: recoveryRes && typeof recoveryRes === "object" ? recoveryRes : null,
+      supplements: (Array.isArray(suppRes) ? suppRes : (suppRes as { supplements?: unknown[] } | null)?.supplements || [])
+        .filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && (s as { active?: unknown }).active !== 0),
     };
     showOverview();
   } catch {

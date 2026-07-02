@@ -3643,6 +3643,12 @@ button.hmk-row:active{background:var(--card-2)}
   padding:9px 11px;border-radius:9px;cursor:pointer}
 .stand-moreitem:hover{background:var(--card-2)}
 .stand-mcard-sub{display:block;font-size:.68rem;color:var(--muted);margin-top:2px}
+.stand-supps{display:flex;flex-direction:column;gap:8px}
+.stand-supp{background:var(--card);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 10px}
+.stand-supp-n{font-weight:640;font-size:.92rem;color:var(--ink)}
+.stand-supp-m{font-size:.82rem;color:var(--ink-2);font-variant-numeric:lining-nums}
+.stand-supp-rel{font-size:.72rem;color:var(--muted);width:100%}
 
 /* Settings → You: the about-you & context home (Profile / Family / Life / Memory). */
 .set-you{display:flex;flex-direction:column;gap:10px}
