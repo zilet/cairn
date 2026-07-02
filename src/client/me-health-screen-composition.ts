@@ -259,18 +259,21 @@ function createMeHealthScreenComposition(input: ClientMeHealthScreenCompositionI
       CairnHealthReadController.renderSynthesis(data, healthReadDeps(), token);
     },
     renderMe: () => {
-      input.headerTitle.textContent = "Me";
       input.invalidatePoll();
       // Standing + Health moved to the Stand tab; Me is now the about-you home,
       // reached from Settings → You, so it opens to Profile by default.
       if (!input.state.meSeg) input.state.meSeg = "profile";
+      // Reached contextually (Me isn't a bar tab), so the header names the actual
+      // view — "Health"/"Profile"/… — not a generic "Me".
+      const titles: Record<string, string> = { health: "Health", profile: "Profile", memory: "Memory", life: "Life", family: "Family", standing: "Standing" };
+      input.headerTitle.textContent = titles[input.state.meSeg] || "Profile";
       return (handlers[input.state.meSeg] || screen.renderMeProfile)();
     },
     renderMeProfile: async () => {
       await CairnMeProfileController.renderProfile(screen.meProfileDeps());
     },
     renderMeStanding: async () => {
-      input.headerTitle.textContent = "Me";
+      input.headerTitle.textContent = "Standing";
       input.state.meSeg = "standing";
       input.invalidatePoll();
       input.root.innerHTML = input.segBar("standing", ME_HEALTH_SCREEN_SEGMENTS)

@@ -3100,6 +3100,10 @@ body.swr-busy::after{
    support falls back cleanly to the original two-bar behavior above. */
 .segwrap:has(+ .hsegwrap){position:static}
 .segwrap:has(+ .hsegwrap) + .hsegwrap{top:env(safe-area-inset-top,0px)}
+/* Me is no longer a bar tab — it's reached only contextually (Settings → You, or a
+   Stand tool), so its obsolete top-level section nav is hidden: you land straight
+   on the view. The Health sub-nav (.hsegwrap) stays; back is the bottom bar. */
+body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hseg .seg-thumb{view-transition-name:hseg-thumb}
 #hPicture{margin-top:2px}
 #hContent{min-width:0}

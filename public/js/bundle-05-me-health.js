@@ -1322,19 +1322,22 @@ function createMeHealthScreenComposition(input) {
             CairnHealthReadController.renderSynthesis(data, healthReadDeps(), token);
         },
         renderMe: () => {
-            input.headerTitle.textContent = "Me";
             input.invalidatePoll();
             // Standing + Health moved to the Stand tab; Me is now the about-you home,
             // reached from Settings → You, so it opens to Profile by default.
             if (!input.state.meSeg)
                 input.state.meSeg = "profile";
+            // Reached contextually (Me isn't a bar tab), so the header names the actual
+            // view — "Health"/"Profile"/… — not a generic "Me".
+            const titles = { health: "Health", profile: "Profile", memory: "Memory", life: "Life", family: "Family", standing: "Standing" };
+            input.headerTitle.textContent = titles[input.state.meSeg] || "Profile";
             return (handlers[input.state.meSeg] || screen.renderMeProfile)();
         },
         renderMeProfile: async () => {
             await CairnMeProfileController.renderProfile(screen.meProfileDeps());
         },
         renderMeStanding: async () => {
-            input.headerTitle.textContent = "Me";
+            input.headerTitle.textContent = "Standing";
             input.state.meSeg = "standing";
             input.invalidatePoll();
             input.root.innerHTML = input.segBar("standing", ME_HEALTH_SCREEN_SEGMENTS)
@@ -4048,7 +4051,6 @@ if (typeof window !== "undefined") {
       <div class="stand-more">
         <button class="stand-morebtn" type="button" aria-label="More health tools" aria-expanded="false" data-morebtn>⋯</button>
         <div class="stand-moremenu" data-moremenu hidden>
-          <button class="stand-moreitem" data-tool="read" type="button">Full health read</button>
           <button class="stand-moreitem" data-tool="share" type="button">Share with your doctor</button>
           <button class="stand-moreitem" data-tool="records" type="button">Records</button>
           <button class="stand-moreitem" data-tool="learned" type="button">Learned</button>
