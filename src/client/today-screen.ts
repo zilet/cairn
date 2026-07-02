@@ -147,6 +147,7 @@ function todayRailDeps() {
 }
 
 async function renderToday(opts: any = {}) {
+  const enteredDate = todayState.logDate;
   const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
   const { soft, isToday } = todayData;
   const session: any = todayData.session;
@@ -321,6 +322,11 @@ async function renderToday(opts: any = {}) {
   // mobile/tablet. The rail is DEFERRED: paint an empty (but present) .today-rail now
   // so the two-column desktop layout is stable from the first frame, and hydrate its
   // structure + loaders in phase two once the agenda resolves.
+  // The awaits above (data load, session prep, the brief race) can outlast a tab
+  // switch or a date change — bail rather than paint Today over whichever surface
+  // the user moved to. Instant-paint Stand exposed this: a later cold repaint no
+  // longer papers over a stale write. (Phase two below re-checks the same way.)
+  if (todayState.tab !== "today" || todayState.logDate !== enteredDate) return;
   todayView.innerHTML = todayMainShell.wrapHtml(html, { railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
 
   // The lead entry: one tap opens the isolated Session destination.
@@ -508,6 +514,7 @@ function wireSessionDestination(): void {
 }
 
 async function renderSession(opts: any = {}): Promise<void> {
+  const enteredDate = todayState.logDate;
   const hadSurface = !!todayView.querySelector(".sess-dest");
   const fresh = !hadSurface || sessionFreshNext || !!opts.fresh;
   sessionFreshNext = false;
@@ -566,6 +573,9 @@ async function renderSession(opts: any = {}): Promise<void> {
   const dayFocus = day && day.focus ? String(day.focus) : "";
   const kicker = isToday ? "TODAY · SESSION" : (typeof humanDate === "function" ? humanDate(todayState.logDate) : todayState.logDate);
 
+  // Same stale-render bail as renderToday: the loads above can outlast leaving
+  // the Session destination, and this paint must never land on another tab.
+  if (todayState.tab !== "session" || todayState.logDate !== enteredDate) return;
   todayView.innerHTML = sessionShellHtml(surface, {
     fresh,
     kicker,
