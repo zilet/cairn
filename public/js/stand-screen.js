@@ -19,6 +19,11 @@
     const HM = () => globalThis.CairnHealthMarkers;
     const BM = () => globalThis.CairnBodyMetrics;
     let DATA = null;
+    // domain-detail catalog state (mirrors the Markers view): which domain is open,
+    // the free-text search, and the out-of-range filter. Reset each time a domain opens.
+    let curDomain = null;
+    let standQuery = "";
+    let standOff = false;
     function status(m) {
         const s = HM()?.markerStatus?.(m);
         return s || "mute";
@@ -127,27 +132,95 @@
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
     </div>`;
     }
-    // ---- domain detail — markers, led by their clinical sub-group ------------------
-    function domainDetailHtml(key) {
-        const d = DOMAINS.find((x) => x.key === key);
+    // ---- domain detail — the Markers catalog, scoped to one domain -----------------
+    // The old Markers affordances come along: search (when there are many), an
+    // out-of-range filter, clinical sub-group sections, and expandable rows carrying
+    // the chart, the range/optimal target, and the trend. Controls render ONCE (so the
+    // search field keeps focus); only #standResults re-fills on filter/search.
+    const HC = () => globalThis.CairnHealthClient;
+    function markerOutOfRange(m) { return !!HM()?.markerOutOfRange?.(m); }
+    function matchesQuery(m) {
+        const q = standQuery.toLowerCase().replace(/\s+/g, " ").trim();
+        if (!q)
+            return true;
+        return `${String(m.name || m.key || "")} ${String(m.group_label || "")}`.toLowerCase().includes(q);
+    }
+    function standControlsHtml(total, outCount) {
+        const search = total > 5
+            ? `<div class="hmk-search"><svg class="hmk-search-i" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.7"/><line x1="13.5" y1="13.5" x2="18" y2="18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><input id="standSearch" type="search" class="hmk-search-in" placeholder="Search…" aria-label="Search markers" autocomplete="off" spellcheck="false" enterkeyhint="search"></div>`
+            : "";
+        const pill = outCount
+            ? `<button id="standOut" class="hmk-filter-toggle${standOff ? " on" : ""}" aria-pressed="${standOff ? "true" : "false"}"><span class="hdot hdot-warn"></span>Out of range · ${outCount}</button>`
+            : "";
+        return search || pill ? `<div class="hmk-controls reveal">${search}${pill}</div>` : "";
+    }
+    function domainResultsHtml() {
+        const d = DOMAINS.find((x) => x.key === curDomain);
         if (!d)
-            return groupBlocksHtml("Markers", "");
-        // Group the domain's markers by clinical group, worst group first, each under a
-        // small sub-header — so the fine taxonomy survives one tap down.
+            return "";
+        // Sections = the domain's clinical groups, worst first, each with its own head +
+        // sub-group sub-heads — so the fine taxonomy stays usable one tap down.
         const present = (DATA?.groups || []).filter((g) => d.groups.includes(g.key) && markersOfGroup(g.key).length);
         present.sort((a, b) => RANK[worstOf(markersOfGroup(b.key))] - RANK[worstOf(markersOfGroup(a.key))]);
-        const blocks = present.map((g) => {
-            const rows = markersOfGroup(g.key).map((m) => HM()?.hmkRowHtml?.(m)).filter(Boolean).join("");
-            return `<div class="stand-subhead">${escHtml(g.label)}</div><div class="hmk-list">${rows}</div>`;
+        let rowIndex = 0;
+        const sections = present.map((g, gi) => {
+            let list = markersOfGroup(g.key);
+            if (standOff)
+                list = list.filter(markerOutOfRange);
+            list = list.filter(matchesQuery);
+            if (!list.length)
+                return "";
+            const ordered = HC()?.orderMarkersForDisplay?.(g.key, list) || list;
+            let lastSub = "";
+            const rows = ordered.map((m) => {
+                const sub = HC()?.markerSubgroup?.(g.key, String(m.name || m.key || ""));
+                const subhead = sub && sub !== lastSub ? `<div class="hmk-subhead">${escHtml(sub)}</div>` : "";
+                if (sub)
+                    lastSub = sub;
+                return subhead + HM()?.hmkRowHtml?.(m, rowIndex++);
+            }).join("");
+            const off = ordered.filter(markerOutOfRange).length;
+            const badge = off ? `<span class="hmk-headcount">${off} off</span>` : "";
+            const head = `<div class="hmk-grouphead lbl reveal" style="--i:${Math.min(gi, 12)}">${escHtml(g.label)}${badge}</div>`;
+            const note = g.key === "lipids" ? (HC()?.lipidGroupNoteHtml?.(ordered, { relAge }) || "") : "";
+            return `<section class="hmk-section">${head}${note}<div class="hmk-card">${rows}</div></section>`;
         }).join("");
-        return groupBlocksHtml(d.label, blocks);
+        return sections || `<p class="stand-empty">${standQuery || standOff ? "Nothing matches — clear the filter." : "No readings here yet."}</p>`;
     }
-    function groupBlocksHtml(title, inner) {
-        return `<div class="stand-detail stand-root">
+    function showDomain(key) {
+        curDomain = key;
+        standQuery = "";
+        standOff = false;
+        const d = DOMAINS.find((x) => x.key === key);
+        const markers = d ? markersOfDomain(d) : [];
+        const outCount = markers.filter(markerOutOfRange).length;
+        paint(`<div class="stand-detail stand-root">
       <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
-      <h2 class="stand-detail-h">${escHtml(title)}</h2>
-      ${inner || `<p class="stand-empty">No readings here yet.</p>`}
-    </div>`;
+      <h2 class="stand-detail-h">${escHtml(d?.label || "Markers")}</h2>
+      ${standControlsHtml(markers.length, outCount)}
+      <div id="standResults"></div>
+    </div>`);
+        wireBack();
+        wireControls();
+        renderResults();
+    }
+    function renderResults() {
+        const el = view.querySelector("#standResults");
+        if (!el)
+            return;
+        el.innerHTML = domainResultsHtml();
+        wireRows(el);
+    }
+    function wireControls() {
+        const search = view.querySelector("#standSearch");
+        search?.addEventListener("input", () => { standQuery = search.value; renderResults(); });
+        const pill = view.querySelector("#standOut");
+        pill?.addEventListener("click", () => {
+            standOff = !standOff;
+            pill.classList.toggle("on", standOff);
+            pill.setAttribute("aria-pressed", standOff ? "true" : "false");
+            renderResults();
+        });
     }
     function bodyDetailHtml() {
         const body = DATA?.body;
@@ -181,24 +254,25 @@
         }
     }
     function showOverview() { paint(overviewHtml()); wireOverview(); }
-    function showDomain(key) { paint(domainDetailHtml(key)); wireDetail(); }
-    function showBody() { paint(bodyDetailHtml()); wireDetail(); }
+    function showBody() { paint(bodyDetailHtml()); wireBack(); wireRows(view); }
     function wireOverview() {
         view.querySelectorAll("[data-domain]").forEach((b) => b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
         view.querySelector("[data-body]")?.addEventListener("click", () => showBody());
     }
-    function wireDetail() {
+    function wireBack() {
         view.querySelector("[data-back]")?.addEventListener("click", () => showOverview());
-        // marker row expand + chart + ask (mirrors the Markers catalog wiring)
-        view.querySelectorAll(".hmk-x .hmk-row").forEach((button) => button.addEventListener("click", () => {
+    }
+    // marker row expand + chart + ask (mirrors the Markers catalog wiring)
+    function wireRows(wrap) {
+        wrap.querySelectorAll(".hmk-x .hmk-row").forEach((button) => button.addEventListener("click", () => {
             const item = button.closest(".hmk");
             if (!item)
                 return;
             const open = item.classList.toggle("open");
             button.setAttribute("aria-expanded", open ? "true" : "false");
         }));
-        view.querySelectorAll("svg.hchart").forEach((svg) => HM()?.wireMarkerChart?.(svg));
-        view.querySelectorAll(".hmk-ask").forEach((button) => button.addEventListener("click", (event) => {
+        wrap.querySelectorAll("svg.hchart").forEach((svg) => HM()?.wireMarkerChart?.(svg));
+        wrap.querySelectorAll(".hmk-ask").forEach((button) => button.addEventListener("click", (event) => {
             event.stopPropagation();
             const g = globalThis;
             g.CairnHealthClient?.askCoach?.(button.getAttribute("data-ask"));
