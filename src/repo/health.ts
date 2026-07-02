@@ -61,6 +61,35 @@ export function cleanClinicalFacts(raw: any, max = MAX_CLINICAL_FACTS_PER_DOC): 
   return out;
 }
 
+// Active medications the user is on, read from the clinical_facts extracted out of
+// uploaded health records (a MyChart/CCDA medication list, kind === 'medication'). This
+// is the ONLY place meds are captured — there is NO meds CRUD — so it degrades to [] when
+// no uploaded record carries a medication section. Deduped by name (most-recent record
+// wins), with clearly inactive/discontinued entries dropped. Names are returned verbatim
+// for the connected brain to reason WITH (e.g. an off-optimal marker despite a medication
+// that targets it). INFORMATIONAL, never a prescription.
+const INACTIVE_MED_STATUS = /\b(discontinued|inactive|stopped|resolved|completed|historical|no longer|d\/c'?d|expired|held)\b/i;
+export function activeMedications(): Array<{ name: string; status: string | null; date: string | null }> {
+  const rows = db
+    .prepare(
+      `SELECT doc_date, created_at, parsed_json FROM health_documents
+       ORDER BY COALESCE(doc_date, substr(created_at, 1, 10)) DESC, id DESC`
+    )
+    .all() as any[];
+  const byName = new Map<string, { name: string; status: string | null; date: string | null }>();
+  for (const row of rows) {
+    let parsed: any = null;
+    try { parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null; } catch { continue; }
+    for (const f of cleanClinicalFacts(parsed?.clinical_facts, 500)) {
+      if (f.kind !== "medication") continue;
+      if (f.status && INACTIVE_MED_STATUS.test(f.status)) continue;
+      const key = f.name.toLowerCase();
+      if (!byName.has(key)) byName.set(key, { name: f.name, status: f.status ?? null, date: f.date ?? null }); // DESC order → first seen is most recent
+    }
+  }
+  return [...byName.values()];
+}
+
 // Coarse, provider-agnostic estimate of how many results a pasted lab panel
 // contains. Used ONLY to DETECT a grossly incomplete extraction (a model that
 // curated 111 markers down to 44) so the ingest path can re-run with a stricter

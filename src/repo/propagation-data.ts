@@ -131,6 +131,12 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   // wins) instead of being mis-routed to the serum Creatinine band by its "creatinine" token.
   { keys: ["egfr", "glomerular filtration", "estimated gfr", "gfr"], unit: "mL/min", optimal: [90, 130], dir: "low", actionable: true, label: "eGFR" },
   { keys: ["creatinine"], unit: "mg/dL", optimal: [0.7, 1.1], dir: "band", actionable: false, label: "Creatinine" },
+  // Cystatin C — a kidney-function marker independent of muscle mass (so it doesn't
+  // over-read in a lean/muscular athlete the way creatinine does). Higher is worse;
+  // the high edge is age-banded (cystatin C rises with normal aging like eGFR falls),
+  // so a healthy older adult isn't flagged. Zone-only — no lifestyle lever moves it, so
+  // it reads informational, not medical advice.
+  { keys: ["cystatin c", "cystatin"], unit: "mg/L", optimal: [0.5, 1.0], dir: "high", actionable: false, label: "Cystatin C" },
   { keys: ["alt", "sgpt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "ALT" },
   { keys: ["ast", "sgot"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "AST" },
   { keys: ["ggt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "GGT" },
@@ -140,8 +146,26 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["vitamin b12", "b12", "cobalamin"], unit: "pg/mL", optimal: [400, 900], dir: "low", actionable: true, label: "Vitamin B12" },
   { keys: ["folate", "folic acid"], unit: "ng/mL", optimal: [5, 20], dir: "low", actionable: true, label: "Folate" },
   { keys: ["magnesium, rbc", "rbc magnesium", "magnesium"], unit: "mg/dL", optimal: [2.0, 2.6], dir: "low", actionable: true, label: "Magnesium" },
+  // Serum total calcium — a tightly homeostatically-regulated value, so the "optimal"
+  // band is the healthy mid-reference, either side worse. It is albumin-bound, so an
+  // abnormal total calcium is often an albumin artifact — the mapped watch directive
+  // carries the albumin-correction interpretation. The matchOptimalZone guard keeps a
+  // DIFFERENT calcium measure (ionized calcium, a coronary-artery-calcium/Agatston
+  // SCORE, urine calcium) off this serum band. Zone + interpretive note only.
+  { keys: ["calcium"], unit: "mg/dL", optimal: [8.6, 10.2], dir: "band", actionable: false, label: "Calcium" },
   { keys: ["total testosterone", "testosterone, total", "testosterone"], unit: "ng/dL", optimal: [500, 900], dir: "low", actionable: true, label: "Testosterone" },
   { keys: ["estradiol", "e2"], unit: "pg/mL", optimal: [10, 40], dir: "band", actionable: false, label: "Estradiol" },
+  // Morning cortisol — an 8am serum draw. Cortisol has a strong diurnal fall, so the
+  // matchOptimalZone guard keeps a PM / evening / midnight / salivary / 24h-urine
+  // cortisol OFF this morning band (it was never measured against it). Either side of
+  // the band is worth clinical context; zone-only (no lifestyle lever), informational.
+  { keys: ["cortisol"], unit: "ug/dL", optimal: [6, 18], dir: "band", actionable: false, label: "Morning cortisol" },
+  // DHEA-sulfate — an adrenal androgen that declines steeply with age and runs lower
+  // in women, so the band is BOTH sex- and age-personalized (see dheasBand); the base
+  // here is a generic-male mid-life default for callers that pass no profile. Either
+  // side matters (low = adrenal decline, high = adrenal excess / PCOS). Keyed on the
+  // SULFATE form only (not bare "DHEA", a different, less stable analyte). Zone-only.
+  { keys: ["dhea-s", "dheas", "dhea sulfate", "dhea-sulfate", "dehydroepiandrosterone sulfate"], unit: "ug/dL", optimal: [95, 530], dir: "band", actionable: false, label: "DHEA-S" },
   { keys: ["lp(a)", "lipoprotein(a)", "lipoprotein (a)"], unit: "nmol/L", optimal: [0, 75], dir: "high", actionable: false, label: "Lp(a)" },
   { keys: ["uric acid"], unit: "mg/dL", optimal: [3, 6], dir: "high", actionable: true, label: "Uric acid" },
   // Body composition — a broad population "elevated body fat" band (NOT sex-specific; the
@@ -150,6 +174,12 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["body fat %", "body fat percent", "percent body fat", "total body fat"], unit: "%", optimal: [10, 25], dir: "high", actionable: true, label: "Body fat" },
   { keys: ["mercury"], unit: "ug/L", optimal: [0, 10], dir: "high", actionable: true, label: "Mercury" },
   { keys: ["rheumatoid factor"], unit: "IU/mL", optimal: [0, 14], dir: "high", actionable: false, label: "Rheumatoid factor" },
+  // PSA (total prostate-specific antigen) — the optimal upper edge is AGE-banded
+  // (Oesterling age-specific reference limits), since PSA rises with normal prostate
+  // growth; the base is the classic 4.0 ng/mL cutoff for callers with no age. Free-PSA
+  // and %-free-PSA are DIFFERENT measures and are kept off this band by
+  // zoneNameTrustworthy. Male-oriented; zone-only (no lifestyle lever), informational.
+  { keys: ["psa", "prostate specific antigen", "prostate-specific antigen"], unit: "ng/mL", optimal: [0, 4.0], dir: "high", actionable: false, label: "PSA" },
   { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP" },
   { keys: ["diastolic", "bp diastolic"], unit: "mmHg", optimal: [60, 80], dir: "high", actionable: true, label: "Diastolic BP" },
   // Endurance / cardiorespiratory fitness markers (v35). These come from wearables
@@ -181,6 +211,26 @@ function suppressFastingGlucoseZone(name: string, z: OptimalZone | null): boolea
   return NON_FASTING_GLUCOSE.test(n);
 }
 
+// The serum total-calcium band must not be claimed by a DIFFERENT "calcium" measure:
+// ionized calcium (different band/units), a coronary-artery-calcium / Agatston SCORE
+// (a CT risk number, not a blood level), or a urine calcium. Same specimen-guard shape
+// as the fasting-glucose suppression, so the doctor report never shows a spurious
+// "low/high calcium" against the wrong analyte.
+const NON_SERUM_CALCIUM = /\b(ionized|ionised|score|agatston|coronary|cac|urine|urinary)\b/;
+function suppressCalciumZone(name: string, z: OptimalZone | null): boolean {
+  if (!z || z.label !== "Calcium") return false;
+  return NON_SERUM_CALCIUM.test(String(name ?? "").toLowerCase());
+}
+
+// The morning-cortisol band applies only to an AM serum draw. Cortisol falls sharply
+// across the day, so a PM / evening / midnight / bedtime / salivary / urinary(-free)
+// cortisol must not be judged against the morning band. Same guard shape as glucose.
+const NON_MORNING_CORTISOL = /\b(pm|evening|afternoon|night|midnight|bedtime|salivary|saliva|urine|urinary)\b/;
+function suppressNonMorningCortisolZone(name: string, z: OptimalZone | null): boolean {
+  if (!z || z.label !== "Morning cortisol") return false;
+  return NON_MORNING_CORTISOL.test(String(name ?? "").toLowerCase());
+}
+
 // Specimen/analyte-type guard — mirrors report.ts's `optimalTrustworthy`, but ported
 // into the brain's chokepoint so a serum concentration band is NEVER claimed by a name
 // that isn't that serum analyte. Without it, naive substring matching emits clinically
@@ -194,7 +244,7 @@ function zoneNameTrustworthy(name: string): boolean {
   const n = String(name ?? "").toLowerCase();
   if (/\bratio\b|\bpattern\b|\burine\b/.test(n)) return false;
   if (n.includes("/")) return false;                                  // composite "x / y" names
-  if (n.includes("free") && n.includes("testosterone")) return false; // no free-T optimal band
+  if (n.includes("free") && (n.includes("testosterone") || n.includes("psa"))) return false; // free-T / free-PSA are distinct measures, no total-band
   if (/\b(ldl|hdl)\b/.test(n) && /\b(particle|small|medium|large|peak|number|size)\b/.test(n)) return false;
   return true;
 }
@@ -220,6 +270,10 @@ export function matchOptimalZone(name: string, profile?: ZoneProfile | null): Op
   // A non-fasting glucose substring-matched the FASTING band — don't hold it to a
   // fasting target it shouldn't be judged against (protects the physician report).
   if (suppressFastingGlucoseZone(n, best)) return null;
+  // Likewise a non-serum "calcium" (ionized / CT calcium score / urine) or a
+  // non-morning cortisol must not be held to their serum morning-draw bands.
+  if (suppressCalciumZone(n, best)) return null;
+  if (suppressNonMorningCortisolZone(n, best)) return null;
   if (!best) return null;
   return personalizeZone(best, profile);
 }
@@ -257,6 +311,58 @@ export function markerSide(value: number, zone: OptimalZone, flag: string | null
   return "unknown";
 }
 
+// ---------- medication ⇄ marker interaction table (pure) ----------
+// Medication classes with a well-established, direction-specific effect on a marker
+// zone, so the connected brain can reason WITH a treatment: a marker still off-optimal
+// while the user is ALREADY on a med that targets it is a dose / adherence / add-on
+// conversation with a doctor, NOT a naive "start a lifestyle lever" (LDL still high on a
+// statin ≠ someone untreated). `side` is the direction the med moves the marker toward
+// optimal (a statin lowers a HIGH LDL), so it only augments a directive on THAT side.
+// Matching is a lowercased substring on the med name (generic + common brand names).
+// INFORMATIONAL, never a prescription; the derived note is always flagged uncertain.
+interface MedClass { label: string; patterns: string[]; zones: string[]; side: "low" | "high"; }
+const MED_CLASSES: MedClass[] = [
+  { label: "a statin", patterns: ["statin", "atorvastatin", "rosuvastatin", "simvastatin", "pravastatin", "lovastatin", "pitavastatin", "fluvastatin", "lipitor", "crestor", "zocor"], zones: ["ApoB", "LDL-C", "Non-HDL-C", "Total cholesterol"], side: "high" },
+  { label: "ezetimibe", patterns: ["ezetimibe", "zetia"], zones: ["ApoB", "LDL-C", "Non-HDL-C", "Total cholesterol"], side: "high" },
+  { label: "a PCSK9 inhibitor", patterns: ["evolocumab", "repatha", "alirocumab", "praluent", "inclisiran", "leqvio", "pcsk9"], zones: ["ApoB", "LDL-C", "Non-HDL-C", "Total cholesterol"], side: "high" },
+  { label: "a fibrate", patterns: ["fenofibrate", "gemfibrozil", "fibrate", "tricor", "lopid"], zones: ["Triglycerides"], side: "high" },
+  { label: "metformin", patterns: ["metformin", "glucophage"], zones: ["HbA1c", "Fasting glucose", "Fasting insulin"], side: "high" },
+  { label: "an SGLT2 inhibitor", patterns: ["empagliflozin", "jardiance", "dapagliflozin", "farxiga", "canagliflozin", "invokana", "gliflozin"], zones: ["HbA1c", "Fasting glucose"], side: "high" },
+  { label: "a GLP-1 medication", patterns: ["semaglutide", "ozempic", "wegovy", "rybelsus", "liraglutide", "victoza", "saxenda", "tirzepatide", "mounjaro", "zepbound", "dulaglutide", "trulicity"], zones: ["HbA1c", "Fasting glucose", "Body fat"], side: "high" },
+  { label: "a sulfonylurea", patterns: ["glipizide", "glyburide", "glimepiride", "gliclazide"], zones: ["HbA1c", "Fasting glucose"], side: "high" },
+  { label: "a blood-pressure medication", patterns: ["lisinopril", "enalapril", "ramipril", "benazepril", "losartan", "valsartan", "olmesartan", "irbesartan", "telmisartan", "amlodipine", "nifedipine", "hydrochlorothiazide", "hctz", "chlorthalidone", "metoprolol", "atenolol", "carvedilol", "bisoprolol", "nebivolol"], zones: ["Systolic BP", "Diastolic BP"], side: "high" },
+  { label: "levothyroxine", patterns: ["levothyroxine", "synthroid", "levoxyl", "euthyrox", "unithroid"], zones: ["TSH"], side: "high" },
+  { label: "allopurinol", patterns: ["allopurinol", "febuxostat", "uloric"], zones: ["Uric acid"], side: "high" },
+  { label: "testosterone therapy", patterns: ["testosterone cypionate", "testosterone enanthate", "testosterone gel", "androgel", "testim", "depo-testosterone", "testosterone injection"], zones: ["Testosterone"], side: "low" },
+];
+
+// The active meds (by name) that target `zoneLabel` in the direction it's currently off.
+// Returns the med names + a generic class label, or null when nothing applies. `meds`
+// comes from repo.activeMedications() (the clinical_facts med list); pure so it's unit-
+// testable without a DB.
+export function medsTreatingZone(
+  zoneLabel: string,
+  side: MarkerContext["side"],
+  meds: Array<{ name?: string | null }>,
+): { label: string; names: string[] } | null {
+  if (side !== "low" && side !== "high") return null;
+  const classes = MED_CLASSES.filter((c) => c.side === side && c.zones.includes(zoneLabel));
+  if (!classes.length) return null;
+  const names: string[] = [];
+  let label = "";
+  for (const c of classes) {
+    for (const m of meds) {
+      const n = String(m?.name ?? "").toLowerCase();
+      if (n && c.patterns.some((p) => n.includes(p))) {
+        if (m?.name) names.push(String(m.name));
+        if (!label) label = c.label;
+      }
+    }
+  }
+  if (!names.length) return null;
+  return { label, names: [...new Set(names)] };
+}
+
 // ---------- sex/age personalization of the optimal bands ----------
 // The static OPTIMAL_ZONES table above carries the MALE / generic-adult default so
 // every existing caller (and the doctor report) keeps behaving exactly as before
@@ -289,6 +395,49 @@ export function egfrLowBound(age: number | null): number {
   return 60;
 }
 
+// Cystatin C rises with normal aging (like eGFR falls), so the optimal HIGH edge is
+// age-banded — a value that would flag a 30-year-old is age-appropriate at 70. Below
+// the band is never "worse" (dir 'high'), so only the upper edge moves.
+export function cystatinHighBound(age: number | null): number {
+  if (age == null || age < 50) return 1.0;
+  if (age < 60) return 1.1;
+  if (age < 70) return 1.2;
+  return 1.3;
+}
+
+// PSA age-specific upper reference limits (Oesterling): the prostate grows with age, so
+// the acceptable upper edge rises. Base 4.0 ng/mL (the classic general cutoff) when age
+// is unknown. Applies to the male-oriented total-PSA band.
+export function psaHighBound(age: number | null): number {
+  if (age == null) return 4.0;
+  if (age < 50) return 2.5;
+  if (age < 60) return 3.5;
+  if (age < 70) return 4.5;
+  return 6.5;
+}
+
+// DHEA-sulfate falls steeply with age and runs markedly lower in women, so its band is
+// both sex- and age-personalized. Broad brackets anchored to lab age-stratified
+// reference intervals (µg/dL) — informational orienting ranges, not a score. Missing age
+// defaults to a mid-life bracket so the band is always sane.
+export function dheasBand(sex: "male" | "female", age: number | null): [number, number] {
+  const a = age == null ? 40 : age;
+  if (sex === "female") {
+    if (a < 30) return [65, 380];
+    if (a < 40) return [45, 270];
+    if (a < 50) return [32, 240];
+    if (a < 60) return [26, 200];
+    if (a < 70) return [13, 130];
+    return [10, 90];
+  }
+  if (a < 30) return [280, 640];
+  if (a < 40) return [120, 520];
+  if (a < 50) return [95, 530];
+  if (a < 60) return [70, 310];
+  if (a < 70) return [42, 290];
+  return [28, 175];
+}
+
 // Return the profile-adjusted zone (a COPY when adjusted), or the base zone when the
 // analyte isn't sex/age-dependent or no profile was supplied. Only the bands known
 // to differ by sex/age are touched; everything else passes through unchanged.
@@ -319,6 +468,20 @@ export function personalizeZone(base: OptimalZone, profile?: ZoneProfile | null)
     case "eGFR": {
       const lo = egfrLowBound(age);
       return lo === base.optimal[0] ? base : { ...base, optimal: [lo, base.optimal[1]] };
+    }
+    case "Cystatin C": {
+      const hi = cystatinHighBound(age);
+      return hi === base.optimal[1] ? base : { ...base, optimal: [base.optimal[0], hi] };
+    }
+    case "PSA": {
+      // Age-banded upper edge; PSA is male-oriented — for a woman the marker is rarely
+      // meaningful and values sit near zero, so the same band is harmless.
+      const hi = psaHighBound(age);
+      return hi === base.optimal[1] ? base : { ...base, optimal: [base.optimal[0], hi] };
+    }
+    case "DHEA-S": {
+      const [lo, hi] = dheasBand(sex, age);
+      return { ...base, optimal: [lo, hi] };
     }
     default:
       return base;
@@ -462,6 +625,13 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
   ] },
   { zone: "Estradiol", derive: () => [
     { domain: "watch", directive: "An out-of-band estradiol is best read alongside testosterone (and with your doctor) — in men it often tracks with body fat and aromatization; chasing it in isolation isn't useful.", rationale: "Estradiol is interpreted in the context of testosterone and body composition, not as a standalone target.", citation: "Endocrine Society 2018 Testosterone Therapy Guideline", uncertain: true },
+  ] },
+  // Calcium has no lifestyle lever — this is an INTERPRETIVE watch note, not a diet
+  // change. Total serum calcium is albumin-bound, so an abnormal value is most often an
+  // albumin artifact; correcting for albumin (or confirming with ionized calcium) is the
+  // first step before it means a calcium disorder. Informational, not medical advice.
+  { zone: "Calcium", derive: (ctx) => [
+    { domain: "watch", directive: `Serum calcium reads ${ctx.side === "low" ? "low" : "high"} — before reading into it, correct for albumin (add ~0.8 mg/dL to the calcium for every 1 g/dL your albumin sits below 4.0 g/dL), since a low albumin can make calcium look low when it isn't. Confirm with a repeat (ionized calcium if needed) and discuss a genuinely out-of-range value with your doctor.`, rationale: "Total serum calcium is albumin-bound, so an abnormal reading is frequently an albumin artifact; albumin correction (or ionized calcium) is the first interpretive step before it points to a calcium disorder.", citation: "Clinical chemistry albumin-correction guidance (e.g. Payne's formula)", uncertain: true },
   ] },
   // ---- endurance / cardiorespiratory fitness (v35) ----
   // Device-derived markers — INFORMATIONAL, optimal-zone framing only, never a score.
