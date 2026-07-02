@@ -6662,8 +6662,6 @@ if (typeof window !== "undefined") {
         <button id="qlBtn" class="logbtn">↵</button>
         <button id="wtChipMini" class="wt-mini" title="Log bodyweight">${weightChipLabel(currentWeight)}<span class="stat-plus">+</span></button>
       </div>
-      <div id="freqFoods" class="freq-foods"></div>
-      ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
     </div>`;
     }
     function leadHtml(options, deps) {
@@ -6962,13 +6960,14 @@ if (typeof window !== "undefined") {
         deps.loadTableHint();
         deps.setupWeightChip();
         deps.setupVoiceCapture();
-        deps.loadFrequentFoods();
+        // Frequents ("Usual around now") + the "how are you feeling?" check-in were
+        // removed from Today — food variations weren't useful and Chat handles logging
+        // and how-you-feel far more naturally (where the user actually does it).
         deps.loadContextBanner();
         if (!deps.conductorLeads)
             deps.loadHealthFocusBanner();
         deps.loadWearable(deps.isToday);
         if (deps.isToday) {
-            deps.loadCheckin();
             deps.loadDraftProposals();
         }
         if (!deps.deferRail) {

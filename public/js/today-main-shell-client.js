@@ -17,8 +17,6 @@
         <button id="qlBtn" class="logbtn">↵</button>
         <button id="wtChipMini" class="wt-mini" title="Log bodyweight">${weightChipLabel(currentWeight)}<span class="stat-plus">+</span></button>
       </div>
-      <div id="freqFoods" class="freq-foods"></div>
-      ${isToday ? `<div id="checkinSlot" class="checkin-slot"></div>` : ""}
     </div>`;
     }
     function leadHtml(options, deps) {

@@ -39,13 +39,14 @@
         deps.loadTableHint();
         deps.setupWeightChip();
         deps.setupVoiceCapture();
-        deps.loadFrequentFoods();
+        // Frequents ("Usual around now") + the "how are you feeling?" check-in were
+        // removed from Today — food variations weren't useful and Chat handles logging
+        // and how-you-feel far more naturally (where the user actually does it).
         deps.loadContextBanner();
         if (!deps.conductorLeads)
             deps.loadHealthFocusBanner();
         deps.loadWearable(deps.isToday);
         if (deps.isToday) {
-            deps.loadCheckin();
             deps.loadDraftProposals();
         }
         if (!deps.deferRail) {

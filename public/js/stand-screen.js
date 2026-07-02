@@ -58,7 +58,46 @@
         const num = HM()?.formatMarkerNumber?.(v);
         return `${num ?? v}${m.unit ? ` ${String(m.unit)}` : ""}`;
     }
-    // ---- overview ------------------------------------------------------------------
+    // ---- overview: Your Read (the synthesis as focus-zones, not a scroll) ----------
+    function askLink(topic) {
+        const q = `Tell me more about ${topic} — what should I focus on?`;
+        return `<button class="linkbtn linkbtn-plain linkbtn-sm stand-ask" type="button" data-ask="${escAttr(q)}">Ask the coach<span aria-hidden="true"> →</span></button>`;
+    }
+    function readHtml() {
+        const syn = DATA?.synthesis;
+        const headline = syn && typeof syn.headline === "string" ? syn.headline.trim() : "";
+        const prios = (syn?.priorities || []).slice(0, 3);
+        // No synthesis yet → fall back to the conductor focus line so Stand still leads.
+        if (!headline && !prios.length)
+            return focusHeroHtml();
+        const age = syn && typeof syn.generated_at === "string" ? ` · ${relAge(syn.generated_at)}` : "";
+        const zones = prios.map((p, i) => {
+            const label = String(p.label || "");
+            const move = String(p.the_move || p.move || "");
+            const why = String(p.why_it_matters || p.why || "");
+            const tone = i === 0 ? "warn" : "watch"; // the lead reads strongest
+            return `<div class="stand-zone tone-${tone}" data-zone>
+        <div class="stand-zt"><span class="hdot hdot-${tone}"></span><span class="stand-zlabel">${escHtml(label)}</span><span class="stand-zchev" aria-hidden="true">▾</span></div>
+        ${move ? `<div class="stand-zmove">${escHtml(move)}</div>` : ""}
+        <div class="stand-zwhy">${why ? escHtml(why) : ""}${askLink(label || "this")}</div>
+      </div>`;
+        }).join("");
+        const oc = syn && typeof syn.one_change === "string" && syn.one_change.trim()
+            ? `<div class="stand-onechange well-accent-sm"><span class="lbl">If you change one thing</span><span>${escHtml(syn.one_change.trim())}</span></div>`
+            : "";
+        const conns = (DATA?.connections || [])
+            .filter((c) => typeof c.text === "string" && String(c.text).trim())
+            .slice(0, 2)
+            .map((c) => `<div class="stand-conn"><span class="stand-conn-i" aria-hidden="true">◇</span><span>${escHtml(String(c.text))}</span></div>`)
+            .join("");
+        return `<div class="stand-read reveal">
+      <span class="stand-read-k lbl">Your read${age}</span>
+      ${headline ? `<p class="stand-read-lede">${escHtml(headline)}</p>` : ""}
+      ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
+      ${oc}
+      ${conns ? `<div class="stand-conns"><div class="stand-conns-h lbl">Quiet connections</div>${conns}</div>` : ""}
+    </div>`;
+    }
     function focusHeroHtml() {
         const f = DATA?.focus;
         const headline = f && typeof f.headline === "string" ? f.headline.trim() : "";
@@ -128,7 +167,8 @@
         }
         tiles.sort((a, b2) => RANK[b2.st] - RANK[a.st]);
         return `<div class="stand-root">
-      ${focusHeroHtml()}
+      ${readHtml()}
+      <div class="stand-browse lbl">Your markers</div>
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
       ${toolsHtml()}
     </div>`;
@@ -280,6 +320,17 @@
         view.querySelectorAll("[data-domain]").forEach((b) => b.addEventListener("click", () => showDomain(b.dataset.domain || "")));
         view.querySelector("[data-body]")?.addEventListener("click", () => showBody());
         view.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
+        // Your Read focus-zones: tap to expand the "why"; ask-the-coach deep-links.
+        view.querySelectorAll("[data-zone]").forEach((z) => z.addEventListener("click", (e) => {
+            if (e.target.closest(".stand-ask"))
+                return;
+            z.classList.toggle("open");
+        }));
+        view.querySelectorAll(".stand-ask").forEach((b) => b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const g = globalThis;
+            g.CairnHealthClient?.askCoach?.(b.getAttribute("data-ask"));
+        }));
     }
     function wireBack() {
         view.querySelector("[data-back]")?.addEventListener("click", () => showOverview());
@@ -304,16 +355,25 @@
         headerTitle.textContent = "Stand";
         paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
         try {
-            const [priority, focus, body] = await Promise.all([
+            const [priority, focus, body, synthRes, insightsRes] = await Promise.all([
                 api("/markers/priority"),
                 api("/coaching-focus").catch(() => null),
                 api("/body-metrics?unit=in").catch(() => null),
+                api("/health/synthesis").catch(() => null),
+                api("/insights").catch(() => null),
             ]);
+            const insightsArr = Array.isArray(insightsRes)
+                ? insightsRes
+                : Array.isArray(insightsRes?.insights)
+                    ? (insightsRes.insights)
+                    : [];
             DATA = {
                 markers: Array.isArray(priority?.markers) ? priority.markers : [],
                 groups: Array.isArray(priority?.groups) ? priority.groups : [],
                 focus,
                 body,
+                synthesis: (synthRes && typeof synthRes === "object" ? synthRes.synthesis : null) || null,
+                connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
             };
             showOverview();
         }

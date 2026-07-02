@@ -12,11 +12,15 @@ type StandMarker = {
   points?: unknown; trend?: unknown;
 };
 type StandGroup = { key: string; label: string };
+type StandPriority = { label?: unknown; the_move?: unknown; move?: unknown; why_it_matters?: unknown; why?: unknown };
+type StandSynthesis = { headline?: unknown; story?: unknown; priorities?: StandPriority[]; one_change?: unknown; generated_at?: unknown };
 type StandData = {
   markers: StandMarker[];
   groups: StandGroup[];
   focus: Record<string, unknown> | null;
   body: Record<string, unknown> | null;
+  synthesis: StandSynthesis | null;
+  connections: Array<{ text?: unknown; kind?: unknown }>;
 };
 type StandStatus = "ok" | "watch" | "warn" | "mute";
 
@@ -78,7 +82,45 @@ function valWord(m: StandMarker): string {
   return `${num ?? v}${m.unit ? ` ${String(m.unit)}` : ""}`;
 }
 
-// ---- overview ------------------------------------------------------------------
+// ---- overview: Your Read (the synthesis as focus-zones, not a scroll) ----------
+function askLink(topic: string): string {
+  const q = `Tell me more about ${topic} — what should I focus on?`;
+  return `<button class="linkbtn linkbtn-plain linkbtn-sm stand-ask" type="button" data-ask="${escAttr(q)}">Ask the coach<span aria-hidden="true"> →</span></button>`;
+}
+function readHtml(): string {
+  const syn = DATA?.synthesis;
+  const headline = syn && typeof syn.headline === "string" ? syn.headline.trim() : "";
+  const prios = (syn?.priorities || []).slice(0, 3);
+  // No synthesis yet → fall back to the conductor focus line so Stand still leads.
+  if (!headline && !prios.length) return focusHeroHtml();
+  const age = syn && typeof syn.generated_at === "string" ? ` · ${relAge(syn.generated_at)}` : "";
+  const zones = prios.map((p, i) => {
+    const label = String(p.label || "");
+    const move = String(p.the_move || p.move || "");
+    const why = String(p.why_it_matters || p.why || "");
+    const tone: StandStatus = i === 0 ? "warn" : "watch"; // the lead reads strongest
+    return `<div class="stand-zone tone-${tone}" data-zone>
+        <div class="stand-zt"><span class="hdot hdot-${tone}"></span><span class="stand-zlabel">${escHtml(label)}</span><span class="stand-zchev" aria-hidden="true">▾</span></div>
+        ${move ? `<div class="stand-zmove">${escHtml(move)}</div>` : ""}
+        <div class="stand-zwhy">${why ? escHtml(why) : ""}${askLink(label || "this")}</div>
+      </div>`;
+  }).join("");
+  const oc = syn && typeof syn.one_change === "string" && syn.one_change.trim()
+    ? `<div class="stand-onechange well-accent-sm"><span class="lbl">If you change one thing</span><span>${escHtml(syn.one_change.trim())}</span></div>`
+    : "";
+  const conns = (DATA?.connections || [])
+    .filter((c) => typeof c.text === "string" && String(c.text).trim())
+    .slice(0, 2)
+    .map((c) => `<div class="stand-conn"><span class="stand-conn-i" aria-hidden="true">◇</span><span>${escHtml(String(c.text))}</span></div>`)
+    .join("");
+  return `<div class="stand-read reveal">
+      <span class="stand-read-k lbl">Your read${age}</span>
+      ${headline ? `<p class="stand-read-lede">${escHtml(headline)}</p>` : ""}
+      ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
+      ${oc}
+      ${conns ? `<div class="stand-conns"><div class="stand-conns-h lbl">Quiet connections</div>${conns}</div>` : ""}
+    </div>`;
+}
 function focusHeroHtml(): string {
   const f = DATA?.focus as Record<string, unknown> | null;
   const headline = f && typeof f.headline === "string" ? f.headline.trim() : "";
@@ -149,7 +191,8 @@ function overviewHtml(): string {
   }
   tiles.sort((a, b2) => RANK[b2.st] - RANK[a.st]);
   return `<div class="stand-root">
-      ${focusHeroHtml()}
+      ${readHtml()}
+      <div class="stand-browse lbl">Your markers</div>
       <div class="stand-grid">${tiles.map((t) => t.html).join("")}</div>
       ${toolsHtml()}
     </div>`;
@@ -302,6 +345,18 @@ function wireOverview(): void {
   view.querySelector<HTMLElement>("[data-body]")?.addEventListener("click", () => showBody());
   view.querySelectorAll<HTMLElement>("[data-tool]").forEach((b) =>
     b.addEventListener("click", () => goHealth(b.dataset.tool || "read")));
+  // Your Read focus-zones: tap to expand the "why"; ask-the-coach deep-links.
+  view.querySelectorAll<HTMLElement>("[data-zone]").forEach((z) =>
+    z.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest(".stand-ask")) return;
+      z.classList.toggle("open");
+    }));
+  view.querySelectorAll<HTMLElement>(".stand-ask").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const g = globalThis as unknown as { CairnHealthClient?: { askCoach?: (q: unknown) => void } };
+      g.CairnHealthClient?.askCoach?.(b.getAttribute("data-ask"));
+    }));
 }
 function wireBack(): void {
   view.querySelector<HTMLElement>("[data-back]")?.addEventListener("click", () => showOverview());
@@ -328,16 +383,25 @@ async function renderStand(): Promise<void> {
   headerTitle.textContent = "Stand";
   paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
   try {
-    const [priority, focus, body] = await Promise.all([
+    const [priority, focus, body, synthRes, insightsRes] = await Promise.all([
       api("/markers/priority") as unknown as Promise<{ markers?: StandMarker[]; groups?: StandGroup[] }>,
       (api("/coaching-focus") as unknown as Promise<Record<string, unknown>>).catch(() => null),
       (api("/body-metrics?unit=in") as unknown as Promise<Record<string, unknown>>).catch(() => null),
+      (api("/health/synthesis") as unknown as Promise<{ synthesis?: StandSynthesis }>).catch(() => null),
+      (api("/insights") as unknown as Promise<unknown>).catch(() => null),
     ]);
+    const insightsArr = Array.isArray(insightsRes)
+      ? (insightsRes as Array<{ text?: unknown; kind?: unknown }>)
+      : Array.isArray((insightsRes as { insights?: unknown } | null)?.insights)
+        ? ((insightsRes as { insights: Array<{ text?: unknown; kind?: unknown }> }).insights)
+        : [];
     DATA = {
       markers: Array.isArray(priority?.markers) ? priority.markers : [],
       groups: Array.isArray(priority?.groups) ? priority.groups : [],
       focus,
       body,
+      synthesis: (synthRes && typeof synthRes === "object" ? synthRes.synthesis : null) || null,
+      connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
     };
     showOverview();
   } catch {
