@@ -6,6 +6,7 @@ import { localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker } from "./marker-canon.js";
+import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { getProfile } from "./profile.js";
@@ -287,6 +288,7 @@ export function addBloodPressureReading(input: {
     `INSERT INTO blood_pressure_readings (measured_at, systolic, diastolic, pulse, source, position, note)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(row.measured_at, row.systolic, row.diastolic, row.pulse, row.source, row.position, row.note);
+  bumpMarkerHistoryVersion(); // BP readings feed getMarkerHistory's Systolic/Diastolic/Pulse series
   return db.prepare(`SELECT * FROM blood_pressure_readings WHERE id = ?`).get(info.lastInsertRowid);
 }
 
@@ -324,7 +326,9 @@ export function listBloodPressureReadings(limit = 60) {
 }
 
 export function deleteBloodPressureReading(id: number) {
-  return { ok: db.prepare(`DELETE FROM blood_pressure_readings WHERE id = ?`).run(id).changes > 0 };
+  const ok = db.prepare(`DELETE FROM blood_pressure_readings WHERE id = ?`).run(id).changes > 0;
+  if (ok) bumpMarkerHistoryVersion();
+  return { ok };
 }
 
 // A plain-language read of blood pressure: where the latest reading sits against the
@@ -457,6 +461,7 @@ export function addHealthDocument(input: HealthDocInput) {
       input.enrichment_status ?? null,
       input.source_doc_id ?? null
     );
+  bumpMarkerHistoryVersion(); // a new doc (or a derived panel) can add marker series
   return getHealthDocument(Number(info.lastInsertRowid));
 }
 
@@ -522,7 +527,9 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
 }
 
 function deleteDerivedHealthDocs(sourceId: number) {
-  return db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ?`).run(sourceId).changes;
+  const changes = db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ?`).run(sourceId).changes;
+  if (changes) bumpMarkerHistoryVersion();
+  return changes;
 }
 
 function deleteDerivedHealthDocsByType(sourceId: number, type: string) {
@@ -536,6 +543,7 @@ function deleteDerivedHealthDocsByType(sourceId: number, type: string) {
     if (String(parsed?.type ?? "") !== type) continue;
     deleted += Number(db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(row.id).changes);
   }
+  if (deleted) bumpMarkerHistoryVersion();
   return deleted;
 }
 
@@ -603,6 +611,9 @@ export function updateHealthDocFields(id: number, fields: { parsed_json?: any; s
   if (!sets.length) return getHealthDocument(id);
   vals.push(id);
   db.prepare(`UPDATE health_documents SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  // parsed_json/kind/doc_date all shift the marker series (re-analysis, confirm-lab
+  // commit, panel re-date); bump regardless of which field changed — cheap + exact.
+  bumpMarkerHistoryVersion();
   return getHealthDocument(id);
 }
 
@@ -678,6 +689,7 @@ export function deleteHealthDocument(id: number) {
   // no binary of their own and are meaningless without the source).
   const derived = deleteDerivedHealthDocs(id);
   const deleted = db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(id).changes;
+  if (deleted) bumpMarkerHistoryVersion();
   return { deleted, derived };
 }
 
@@ -816,11 +828,85 @@ export function forecastMarker(
   return { direction, eta_text, eta_weeks, crossing };
 }
 
+// ---------- getMarkerHistory memoization ----------
+// getMarkerHistory walks EVERY health_documents row (JSON.parse + canonicalize +
+// unit-normalize every marker), reads all blood_pressure_readings, then computes a
+// least-squares trend + forecast per marker — heavy, and a single Stand tab load
+// calls it 3-4× (markers/priority → prioritizeMarkers, health/synthesis → healthFocus
+// → prioritizeMarkers again, coaching-focus → getCoachContext, health/standing). Its
+// output is a pure function of (health_documents, blood_pressure_readings, marker_aliases
+// — the learned canonicalization — and the profile's sex/age, which personalizes the
+// optimal bands), so memoize on a signature of those. Two invalidation paths: (1) an
+// in-process WRITE VERSION (marker-cache.ts, shared with marker-canon.ts's alias writes)
+// bumped by every repo write that can change marker data — the fast, exact path; (2) a
+// cheap SQL signature BACKSTOP (row counts + max(id) of all three tables + profile
+// sex/age) for any write that bypasses the counter. Both fold into one key string.
+//
+// test/_isolate.mjs wipes ALL tables directly (bypassing these repo functions) before
+// every test, and rowids can COLLIDE across a wipe — so the SQL signature alone can
+// serve a stale cache from a prior test. The wipe therefore calls resetMarkerHistoryCache().
+let markerHistoryCache: { key: string; value: { markers: any[]; groups: any[] } } | null = null;
+
+// Bumped by every marker-data write path (add/update/delete health docs, BP insert/
+// delete). Also drops the cached value eagerly so memory doesn't hold a stale copy.
+function bumpMarkerHistoryVersion(): void {
+  bumpMarkerDataVersion();
+  markerHistoryCache = null;
+}
+
+// Explicit reset for the test isolate (which wipes tables out-of-band). Exported and
+// called from test/_isolate.mjs so a pristine-floor test never reads a prior test's
+// cached markers despite colliding rowids.
+export function resetMarkerHistoryCache(): void {
+  resetMarkerDataVersion();
+  markerHistoryCache = null;
+}
+
+// Cheap read-time signature: the shared write version plus row counts + max(id) of all
+// three source tables and the profile's sex/age (the only profile fields that shift the
+// personalized optimal bands, hence the trend/forecast). A query failure returns a
+// never-matching key so we rebuild rather than risk serving stale data.
+function markerHistorySignature(): string {
+  try {
+    const r = db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM health_documents) AS dc,
+           (SELECT COALESCE(MAX(id), 0) FROM health_documents) AS dm,
+           (SELECT COUNT(*) FROM blood_pressure_readings) AS bc,
+           (SELECT COALESCE(MAX(id), 0) FROM blood_pressure_readings) AS bm,
+           (SELECT COUNT(*) FROM marker_aliases) AS ac,
+           (SELECT COALESCE(MAX(rowid), 0) FROM marker_aliases) AS am`
+      )
+      .get() as any;
+    const p = db.prepare(`SELECT sex, age FROM profile WHERE id = 1`).get() as any;
+    return `${currentMarkerDataVersion()}|${r?.dc ?? 0}|${r?.dm ?? 0}|${r?.bc ?? 0}|${r?.bm ?? 0}|${r?.ac ?? 0}|${r?.am ?? 0}|${p?.sex ?? ""}|${p?.age ?? ""}`;
+  } catch {
+    return `nocache:${currentMarkerDataVersion()}:${Math.random()}`;
+  }
+}
+
 // ---------- health insights: marker history across all documents ----------
 // Aggregates every marker from every health document into one per-marker series.
 // Docs are walked in effective-date order (doc_date, falling back to the upload
 // date), so "latest" is the most recent reading and points form a time series.
-export function getMarkerHistory() {
+//
+// MEMOIZED: this thin wrapper serves a structuredClone of the cached result when the
+// signature is unchanged (a clone because callers — prioritizeMarkers, healthStanding,
+// healthFocus, report.ts — build/sort derived views off it; cloning keeps the exact
+// current semantics, where every call returns brand-new objects). The heavy walk lives
+// in computeMarkerHistory below.
+export function getMarkerHistory(): { markers: any[]; groups: any[] } {
+  const key = markerHistorySignature();
+  if (markerHistoryCache && markerHistoryCache.key === key) {
+    return structuredClone(markerHistoryCache.value);
+  }
+  const value = computeMarkerHistory();
+  markerHistoryCache = { key, value };
+  return structuredClone(value);
+}
+
+function computeMarkerHistory() {
   const docs = db
     .prepare(
       `SELECT id, kind, doc_date, created_at, parsed_json FROM health_documents
