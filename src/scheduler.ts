@@ -355,6 +355,14 @@ export function startScheduler() {
       try {
         repo.saveReactionModel();
       } catch (e: any) { console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`); }
+      // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
+      //     (agentic, best-effort). A quiet/failed agent leaves the prior narrative,
+      //     and an emptied model already cleared it in saveReactionModel. Pull, never push.
+      try {
+        const { refreshReactionNarrative } = await import("./coachOps.js");
+        const rn: any = await refreshReactionNarrative("auto");
+        if (rn.ok && rn.narrative) console.log(`[memory] refreshed the reaction-model narrative.`);
+      } catch (e: any) { console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`); }
       // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
       try {
         const { consolidateMemory, growAboutMe } = await import("./coachOps.js");

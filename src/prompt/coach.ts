@@ -275,3 +275,46 @@ ${PLAN_SCHEMA}
 DATA:
 ${JSON.stringify(ctx)}`;
 }
+
+// ---------- the personal-response NARRATIVE (the warm layer over the model) ----------
+
+const REACTION_NARRATIVE_SCHEMA = `{
+  "narrative": "<2-3 calm sentences, second person, on how their body tends to respond — grounded ONLY in the patterns below; NO numbers, NO scores, NO medical claims>"
+}`;
+
+// A short plain-language "here's what I've noticed about how you respond" read,
+// written OVER the deterministic reaction-model patterns (src/repo/reaction-model.ts).
+// It's the human voice on the personalization spine — the same patterns coaching
+// prompts already fold in (renderReactionModel), distilled into 2-3 warm sentences.
+// Grounded ONLY in the supplied patterns (never the raw logs, never a coefficient —
+// the model has already stripped its internal params); a suggestion, never a verdict.
+// Persisted via repo.setReactionNarrative and surfaced through reactionModelForCoach.
+export function buildReactionNarrativePrompt(
+  patterns: Array<{ statement?: string; confidence?: string; evidence_n?: number }>,
+): string {
+  const lines = (Array.isArray(patterns) ? patterns : [])
+    .map((p) => `  - [${String(p?.confidence ?? "observed")}] ${String(p?.statement ?? "").trim()}`)
+    .filter((l) => l.trim().length > 10);
+  return `${CAIRN_PERSONA}
+
+Summarize, in your own calm voice, HOW THIS USER'S BODY TENDS TO RESPOND — a short
+"here's what I've come to notice about you" read, drawn ONLY from the observed patterns below.
+
+THE CONSTITUTION (binding):
+- 2-3 sentences, SECOND PERSON ("your weight tends to…", "late nights seem to cost you…"). Plain,
+  warm, a friend's voice — never clinical, never a lecture.
+- GROUNDED ONLY in the patterns listed below. Do NOT invent a response the patterns don't show, and do
+  NOT reach for anything outside them. Hedge a tentative pattern ("seems to", "tends to").
+- NO numbers, NO 0-100 scores, NO coefficients/correlations/percentages. Speak to the DIRECTION and the
+  FEEL of how they respond, never a figure.
+- An observation and a SUGGESTION, never a verdict or a gate. Health findings are informational, NOT
+  medical advice.
+- NEVER name the internal patterns or their labels (no "the deficit_response pattern"); just speak the
+  read as if you'd noticed it yourself.
+
+OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences:
+${REACTION_NARRATIVE_SCHEMA}
+
+PATTERNS (the only ground truth for this read):
+${lines.length ? lines.join("\n") : "  (none)"}`;
+}
