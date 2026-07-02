@@ -17,7 +17,12 @@
 // to its deterministic floor when no agent is reachable), so the smoke run stays
 // offline. Exits non-zero on the first failed assertion or a boot timeout.
 import { existsSync } from "node:fs";
+import { BUNDLES } from "../scripts/build-client.mjs";
 import { serverEntry, withServer } from "../scripts/smoke-server.mjs";
+
+// The app shell boots via the LAST bundle (it carries the 10-boot shim). Derive
+// it from the build manifest so a bundle rename/reshape can't silently break this.
+const bootBundleUrl = BUNDLES[BUNDLES.length - 1].output.replace(/^public/, "");
 
 const AUTH_TOKEN = "cairn-smoke-auth-token";
 
@@ -94,7 +99,7 @@ async function runOpenSmoke(ctx) {
     const { status, headers, text } = await getText(base, route);
     ok(status === 200, `GET ${route} → app shell 200`, `got ${status}`);
     ok((headers.get("content-type") || "").includes("text/html"), `GET ${route} returns HTML`);
-    ok(/<script src="\/js\/10-boot\.js"><\/script>/.test(text), `GET ${route} includes boot script`);
+    ok(text.includes(`<script src="${bootBundleUrl}"></script>`), `GET ${route} includes boot bundle`);
     ok(/<link rel="manifest" href="\/manifest\.json">/.test(text), `GET ${route} includes manifest`);
   }
 
