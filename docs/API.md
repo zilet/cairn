@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**218 routes** across 85 groups.
+**223 routes** across 85 groups.
 
 ## `/activities`
 
@@ -112,7 +112,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/chat/sessions` |  |
 | GET | `/api/chat/sessions/:sessionId` |  |
 | GET | `/api/chat/turns` | Active (queued + running) turns, oldest-first — the PWA reconstructs the live in-flight + queued thread from this on every (re)load (durable across restarts). |
-| GET | `/api/chat/turns/:id` | One turn's current state (poll fallback when SSE is unavailable). |
+| GET | `/api/chat/turns/:id` | One turn's current state (poll fallback when SSE is unavailable). Carries the reply prose streamed so far so a poll-driven client fills the bubble live too. |
 | POST | `/api/chat/turns/:id/cancel` | Stop a queued or running turn (drops it / SIGKILLs the live subprocess). |
 | GET | `/api/chat/turns/:id/stream` | Live progress for one turn (Server-Sent Events). Sends an immediate snapshot (so a late subscriber / poll-fallback sees current state), then forwards every phase + the terminal event from the worker bus, then closes. A keepalive comment holds the connection through proxies. EventSource can't set headers, so the PWA reaches this with ?token= (withToken) when auth is on. |
 
@@ -155,6 +155,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/context-events` |  |
 | DELETE | `/api/context-events/:id` |  |
 | PUT | `/api/context-events/:id` |  |
+| POST | `/api/context-events/:id/resolve` | Close a context event as healed/over (one-tap resolve) without hard-deleting it — it stays on the timeline and in exports but stops gating the day-read/conductor. |
 
 ## `/dexa-targeting`
 
@@ -458,10 +459,14 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/program/blocks/:id/advance` |  |
 | POST | `/api/program/blocks/:id/complete` |  |
 | GET | `/api/program/blocks/active` |  |
+| POST | `/api/program/blocks/ensure` | Ensure ONE active periodization block exists (auto-create a sensible default aligned to the athlete's goal when none is running; idempotent — never resets an in-progress block). Keeps periodization live without waiting for the scheduler's weekly slot. |
+| GET | `/api/program/equipment` | The persisted equipment/preference profile (free text) that RANKS variation suggestions by what the athlete can actually load. GET reads it (+ the parsed equipment types); PUT replaces it (null/'' clears). A plain profile field. |
+| PUT | `/api/program/equipment` |  |
 | POST | `/api/program/evolve` | Adaptive program evolution: read the program-state and draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for review — same propose→apply path as /agent/run, driven by the trend analysis. |
 | GET | `/api/program/progression` | Per-lift next-session prescription for every strength item on a plan day. ?day=N selects the day; omit to default to the plan day today's read points at (the "upcoming session" the Brief already suggests). Returns [] when the day has no strength items or does not exist. |
 | POST | `/api/program/progression/apply` | Build a DRAFT plan proposal from the current day's per-lift prescriptions, via the same propose→apply path as /agent/run and /program/evolve. Never auto- applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed-failure signal — nothing wrong at the HTTP level, just nothing to do). |
 | POST | `/api/program/run-plan/apply` | Build a DRAFT plan proposal from this week's deterministic run mix, via the same propose→apply path as /program/progression/apply. Maps weeklyRunPlan(date).runs → parsed.cardio[] (applyProposal → setWeeklyRuns, keeping strength intact + carrying interval structure). Never auto-applied. Returns the designed ok:false at 200. |
+| POST | `/api/program/swap` | Draft a single-exercise SWAP (rotate `from` out for `to` on a day) as a DRAFT proposal via the propose→apply path — behind Today's "rotate one in" chips. Never auto-applied. Returns the designed { ok:false, error } at 200 on bad input. |
 | GET | `/api/program/variations` | Exercise variations / alternatives (the plateau-break + "make it interesting" library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps. |
 
 ## `/program-state`
