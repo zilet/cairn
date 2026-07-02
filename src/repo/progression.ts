@@ -41,7 +41,13 @@ import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 const STEP_FRAC = 0.1;            // ≤10% of the current load…
 const STEP_CEIL_COMPOUND = 5;     // …or ≤5 lb on a compound, whichever is smaller
 const STEP_CEIL_ISOLATION = 2.5;  // …or ≤2.5 lb on an isolation lift
-const SECONDS_STEP = 5;           // timed holds progress +5s when solid
+// Timed holds progress by a RELATIVE step — a fraction of the current hold, clamped to
+// a sane floor/ceiling — so a 20s plank and a 120s dead hang each progress proportionally
+// (a flat +N is trivial on a long hold and a huge jump on a short one). Timed work moves
+// in SECONDS, never load.
+const SECONDS_STEP_FRAC = 0.1;    // ~10% of the current hold…
+const SECONDS_STEP_MIN = 3;       // …never smaller than 3s (a real nudge on a short hold)
+const SECONDS_STEP_MAX = 20;      // …never larger than 20s in one step (a long hold doesn't leap)
 const DELOAD_FRAC = 0.1;          // a deload backs the load off ~10%
 // A movement run this long (steady, not stalled) is ripe for PROACTIVE variety —
 // introduce a fresh variation before staleness sets in, at a block boundary, rather
@@ -81,6 +87,7 @@ export interface Prescription {
   plan_item_id?: number;               // set by planDayProgression for the apply path
   day_number?: number;                 // set by planDayProgression — the day the lift sits on (for the swap apply path)
   autoregulated?: boolean;             // recovery signals braked this step (overload→hold / hold→deload) — informational
+  rep_step?: boolean;                  // double-progression REP advance (load held, reps climb in-range) — no plan change
 }
 
 // ---- autoregulation + acute-recovery gate -----------------------------------
@@ -224,6 +231,13 @@ function round5(n: number): number {
   return Math.round(n / 5) * 5;
 }
 
+// The relative timed step for a hold of `seconds`: ~10% of the hold, clamped to
+// [MIN, MAX] so short and long holds both progress proportionally.
+function timedStep(seconds: number): number {
+  const raw = Math.round(Math.abs(seconds) * SECONDS_STEP_FRAC);
+  return Math.min(SECONDS_STEP_MAX, Math.max(SECONDS_STEP_MIN, raw));
+}
+
 // The step ceiling for a lift, by group (compound vs isolation).
 function stepCeiling(group: string | null): number {
   const g = canonicalGroup(group);
@@ -324,6 +338,39 @@ function latestTopSet(name: string): { weight: number | null; reps: number | nul
     duration_sec: top.duration_sec ?? null,
     date: latestDate,
   };
+}
+
+// The latest session's WORKING sets for a reps lift — the sets at that session's
+// hardest (top) weight, so warmups/backoffs don't dilute the double-progression read.
+// Bodyweight (null weight) sets are all "working". Empty when nothing's logged. This is
+// how the engine tells "every set capped the range" from "only the top set did".
+function latestWorkingSets(name: string): { weight: number | null; reps: number | null; rir: number | null }[] {
+  const ex = findExercise(name);
+  if (!ex) return [];
+  const latestDate = (db.prepare(
+    `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+      WHERE ls.exercise_id = ? AND ls.reps IS NOT NULL`
+  ).get(ex.id) as any)?.d;
+  if (!latestDate) return [];
+  const rows = db.prepare(
+    `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+       FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+      WHERE ls.exercise_id = ? AND s.date = ? AND ls.reps IS NOT NULL`
+  ).all(ex.id, latestDate) as any[];
+  if (!rows.length) return [];
+  // The working weight is the hardest (largest signed) loaded weight in the session;
+  // sets at it are the working sets. If nothing carries a weight, it's a bodyweight
+  // movement and every logged set counts.
+  let topW: number | null = null;
+  for (const r of rows) {
+    if (r.weight != null && (topW == null || Number(r.weight) > topW)) topW = Number(r.weight);
+  }
+  const working = topW == null ? rows.filter((r) => r.weight == null) : rows.filter((r) => Number(r.weight) === topW);
+  return working.map((r) => ({
+    weight: r.weight ?? null,
+    reps: r.reps != null ? Number(r.reps) : null,
+    rir: r.rir != null ? Number(r.rir) : null,
+  }));
 }
 
 // Pull the per-lift program-state read (status/trend/stall) for ONE exercise —
@@ -462,16 +509,31 @@ function repsPrescription(
   let nextWeight: number | null = baseWeight;
   let varyTo: string | undefined;
   let varyOptions: { name: string; why: string }[] | undefined;
+  let repStep = false;  // a DOUBLE-PROGRESSION rep advance (load held, reps climb in-range)
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx);
 
   const status = state?.status ?? "new";
   const lastRir = last?.rir ?? null;
-  const hitTop = repHigh != null && last?.reps != null && Number(last.reps) >= repHigh;
-  // "Earned" overload = recent top set comfortably in range at RIR ≥ 2, OR the
-  // program-state trend reads progressing. RIR ≤ 1 means it was a grind — hold.
-  const earned = (lastRir != null && lastRir >= 2 && (hitTop || repHigh == null)) || status === "progressing";
+  // DOUBLE PROGRESSION, grounded in what was ACTUALLY logged: advance REPS within the
+  // prescribed range first, and only add LOAD once EVERY working set has hit the TOP of
+  // the range — then reset reps to the bottom at the new load. `allSetsAtTop` reads the
+  // latest session's working sets (a lone logged top set is trusted); `roomInRange` means
+  // the top set is still below the ceiling (a rep to earn). No range (repHigh null) → the
+  // old single-top-set read.
+  const hasRange = repLow != null && repHigh != null;
+  const workingSets = latestWorkingSets(name);
+  const topReps = last?.reps != null ? Number(last.reps) : null;
+  const setsAtTop = hasRange ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repHigh as number)).length : 0;
+  const allSetsAtTop = hasRange && workingSets.length > 0 && setsAtTop === workingSets.length;
+  const roomInRange = hasRange && topReps != null && topReps < (repHigh as number);
+  // "Strong" = the work earned progression: last top set at RIR ≥ 2, OR the program-state
+  // trend reads progressing. RIR ≤ 1 means it was a grind — hold.
+  const strong = (lastRir != null && lastRir >= 2) || status === "progressing";
+  // The LOAD step is earned only when EVERY working set capped the range (double
+  // progression). With no rep range, fall back to a strong top set (RIR 2+ / progressing).
+  const earned = hasRange ? allSetsAtTop && strong : strong;
 
   if (loadConstrained) {
     action = "hold";
@@ -528,12 +590,22 @@ function repsPrescription(
     varyOptions = varyCandidates;
     varyTo = varyOptions[0]?.name;
     why = `You've run ${name} steady for ~${brakeCtx?.tenureWeeks} weeks — introduce ${varyTo} (same pattern, room to load heavier) to freshen the stimulus before it goes stale.`;
+  } else if (hasRange && strong && roomInRange && !allSetsAtTop) {
+    // DOUBLE PROGRESSION — the REP stage. The work was strong but not every set has
+    // capped the range yet: advance reps within the range, hold the load. This is NO
+    // plan change (the plan already prescribes the range) — the athlete just earns reps.
+    action = "overload";
+    repStep = true;
+    nextWeight = baseWeight;
+    why = `Reps are climbing at RIR 2+ but not every set has hit ${repHigh} yet — chase a rep toward the top of the range across all your sets before any load. Cap every set, then the weight goes up.`;
   } else if (earned) {
+    // DOUBLE PROGRESSION — the LOAD stage. Every working set capped the range at RIR 2+
+    // (or no range + a strong top set) → the small earned step up, then reset to the bottom.
     action = "overload";
     if (baseWeight == null) {
-      // Bodyweight reps lift with room — progression is reps, not load.
+      // Bodyweight reps lift — no load to add; progression is reps/sets.
       nextWeight = null;
-      why = "Reps are there at low RIR — add a rep (or a set) before any load; it's a bodyweight movement.";
+      why = "You've capped the range on a bodyweight movement — add a rep or a set; there's no load to add.";
     } else if (baseWeight < 0) {
       // Assisted — reduce the assist toward bodyweight (a smaller absolute value).
       const ceil = stepCeiling(group);
@@ -542,17 +614,20 @@ function repsPrescription(
       nextWeight = reduced >= 0 ? null : reduced; // crossed to bodyweight → null
       why = nextWeight == null
         ? "You're nearly off the assist — try the next session at bodyweight."
-        : "Reps are there at low RIR — peel a little assist off; you're getting stronger.";
+        : "You capped the range — peel a little assist off; you're getting stronger.";
     } else {
       nextWeight = clampedOverload(baseWeight, group);
-      why = "You hit the top of the range at RIR 2+ — the small earned step up is yours.";
+      why = hasRange
+        ? `Every set hit ${repHigh} at RIR 2+ — take the earned step up, then reset to ${repLow} reps and build the range back up.`
+        : "You hit the top of the range at RIR 2+ — the small earned step up is yours.";
     }
   } else {
     action = "hold";
     nextWeight = baseWeight;
-    why = last
-      ? "Not quite earned yet — hold and finish the rep range cleanly at RIR 2+ before adding."
-      : "Hold here for now — a couple of logged sessions and the next step reads clearly.";
+    if (!last) why = "Hold here for now — a couple of logged sessions and the next step reads clearly.";
+    else if (hasRange && topReps != null && topReps >= (repHigh as number) && !allSetsAtTop)
+      why = `Your top set hit ${repHigh} but not every set did — hold the load and level all your sets at the top before adding.`;
+    else why = "Not quite earned yet — hold and finish the rep range cleanly at RIR 2+ before adding.";
   }
 
   // Catch-up framing: when the plan target was BEHIND the real working weight, say so
@@ -560,7 +635,7 @@ function repsPrescription(
   // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
   if (planBehind && baseWeight != null) {
     const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
-    if (action === "overload") why = `Your plan was behind what you're actually lifting — stepping up from your real working weight (${lbl}).`;
+    if (action === "overload" && !repStep) why = `Your plan was behind what you're actually lifting — stepping up from your real working weight (${lbl}).`;
     else if (action === "hold" && !loadConstrained) why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
   }
 
@@ -574,6 +649,7 @@ function repsPrescription(
     autoregulated = true;
     action = brake.action;
     why = brake.why;
+    repStep = false; // a braked step is a hold/deload, not a rep advance
     if (brake.action === "hold") nextWeight = baseWeight;
     else nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
     varyTo = undefined;
@@ -586,7 +662,9 @@ function repsPrescription(
     rep_high: repHigh ?? undefined,
     weight: nextWeight,
   };
-  const delta_text = loadedDeltaText(baseWeight, nextWeight);
+  // A rep advance holds the load and climbs the range — the honest delta is "+1 rep",
+  // not "hold X lb" (loadedDeltaText would read it as a no-op load move).
+  const delta_text = repStep ? "+1 rep" : loadedDeltaText(baseWeight, nextWeight);
   // The displayed "current" reflects REALITY when the plan was behind, so the card
   // reads "50 → 52.5", never "27 → …" off a number the athlete left behind weeks ago.
   const displayCurrent: PrescriptionTarget | null = cur
@@ -605,6 +683,7 @@ function repsPrescription(
     vary_to: varyTo,
     vary_options: varyOptions,
     autoregulated: autoregulated || undefined,
+    rep_step: repStep || undefined,
   };
 }
 
@@ -648,8 +727,10 @@ function timedPrescription(
     why = "Nothing logged yet — start at the planned hold and log your actual time.";
   } else if (solid || status === "progressing") {
     action = "overload";
-    nextSeconds = (baseSeconds ?? held ?? 0) + SECONDS_STEP;
-    why = "The hold's solid — add a few seconds. Progress timed work in time, never load.";
+    const base = baseSeconds ?? held ?? 0;
+    const step = timedStep(base);
+    nextSeconds = base + step;
+    why = `The hold's solid — add ${step}s (a proportional step for a ${base}s hold). Progress timed work in time, never load.`;
   } else {
     action = "hold";
     nextSeconds = baseSeconds ?? held;
@@ -746,6 +827,7 @@ export function buildProgressionProposal(day: number): { ok: false; error: strin
   const changes: Record<string, any>[] = [];
   for (const p of prescriptions) {
     if (p.action === "hold") continue; // a hold is no change
+    if (p.rep_step) continue; // a double-progression rep advance is no plan change — the range already covers it
     // A vary/introduce → a first-class swap (rotate the lift out for the lead option).
     if (p.action === "vary" || p.action === "introduce") {
       const to = p.vary_to ?? p.vary_options?.[0]?.name ?? null;

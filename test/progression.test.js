@@ -18,6 +18,7 @@ import { db, repo } from "./_seed.js";
 import {
   nextPrescription,
   planDayProgression,
+  buildProgressionProposal,
   programBalance,
   programAdjustments,
   recentMuscleLoad,
@@ -88,6 +89,61 @@ test("earned overload: hit the top of the range at RIR 2 → a clamped step up",
   assert.equal(p.suggested.weight, 190);
   assert.equal(p.delta_text, "+5 lb");
   assert.ok(p.suggested.weight > 0, "never a negative weight");
+});
+
+// ---- DOUBLE PROGRESSION (reps within range first, load only at the top of all sets) ----
+test("double progression: ALL prescribed sets at the top → LOAD bump + reps reset to bottom", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 185, focus: "Push" });
+  // A prior session mid-range, then a session where EVERY working set capped the range (12s)
+  // at RIR 2 — the earned LOAD step in double progression.
+  logSet("Barbell Bench Press", isoDaysAgo(10), { weight: 185, reps: 10, rir: 2, setNum: 1 });
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", isoDaysAgo(3), { weight: 185, reps: 12, rir: 2, setNum: s });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload");
+  assert.ok(!p.rep_step, "capping every set earns the LOAD step, not another rep step");
+  assert.equal(p.suggested.weight, 190, "a clamped +5 lb compound step up");
+  assert.equal(p.delta_text, "+5 lb");
+  // Reset reps to the BOTTOM of the range at the new load (the range itself is unchanged).
+  assert.equal(p.suggested.rep_low, 8);
+  assert.equal(p.suggested.rep_high, 12);
+  assert.match(p.why, /reset to 8 reps/i, "the why calls out the reset to the bottom of the range");
+});
+
+test("double progression: a MID-RANGE lift earns a REP, not load (no plan change)", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 8, rep_high: 12, target_weight: 185, focus: "Push" });
+  // Every working set was strong (RIR 2) but mid-range (9 reps, below the 12 ceiling) — the
+  // earned step is a REP within the range, the load is HELD, and it's not a plan change.
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", isoDaysAgo(3), { weight: 185, reps: 9, rir: 2, setNum: s });
+
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "overload");
+  assert.equal(p.rep_step, true, "a mid-range earned step is a rep advance");
+  assert.equal(p.suggested.weight, 185, "the load is held while reps climb in the range");
+  assert.equal(p.delta_text, "+1 rep");
+
+  // A rep advance is NOT a plan change — the plan already prescribes the range, so it
+  // never lands as a target edit in the one-tap apply proposal.
+  const prop = buildProgressionProposal(1);
+  assert.equal(prop.ok, false, "a rep-only advance produces nothing to apply — the range already covers it");
+});
+
+test("double progression: top set caps but a WORKING set falls short → hold and level the sets", () => {
+  makeExercise("Overhead Press", { muscle_group: "shoulders" });
+  planWith(1, { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 95, focus: "Push" });
+  // The top set hit 8 but the other working sets dropped to 6 — not every set capped, so
+  // the load holds (no rep step: the top set has no room; no load: the sets aren't level).
+  logSet("Overhead Press", isoDaysAgo(3), { weight: 95, reps: 8, rir: 2, setNum: 1 });
+  logSet("Overhead Press", isoDaysAgo(3), { weight: 95, reps: 6, rir: 1, setNum: 2 });
+  logSet("Overhead Press", isoDaysAgo(3), { weight: 95, reps: 6, rir: 1, setNum: 3 });
+
+  const p = nextPrescription("Overhead Press");
+  assert.equal(p.action, "hold");
+  assert.ok(!p.rep_step);
+  assert.equal(p.suggested.weight, 95, "load held until every set caps the range");
+  assert.match(p.why, /not every set/i);
 });
 
 test("overload step is CLAMPED — a giant history never yields a giant jump", () => {
@@ -203,6 +259,30 @@ test("timed lifts progress in SECONDS, never load", () => {
   assert.equal(p.suggested.seconds, 50, "45 + 5s step");
   assert.equal(p.suggested.weight, undefined, "no load on a timed lift");
   assert.equal(p.delta_text, "+5s");
+});
+
+test("timed progression is RELATIVE — a short and a long hold advance proportionally", () => {
+  // A 20s plank and a 120s dead hang must NOT get the same flat step: the step is a
+  // fraction of the current hold, clamped, so each progresses proportionally.
+  makeExercise("Plank", { muscle_group: "core", mode: "timed" });
+  makeExercise("Dead Hang", { muscle_group: "forearms", mode: "timed" });
+  planWith(1, { exercise: "Plank", sets: 3, target_seconds: 20, focus: "Core" });
+  planWith(2, { exercise: "Dead Hang", sets: 3, target_seconds: 120, focus: "Grip" });
+  logSet("Plank", isoDaysAgo(3), { duration_sec: 20 });
+  logSet("Dead Hang", isoDaysAgo(3), { duration_sec: 120 });
+
+  const plank = nextPrescription("Plank");
+  const hang = nextPrescription("Dead Hang");
+  assert.equal(plank.action, "overload");
+  assert.equal(hang.action, "overload");
+  const plankStep = plank.suggested.seconds - 20;
+  const hangStep = hang.suggested.seconds - 120;
+  assert.ok(plankStep >= 3, `short hold gets at least the 3s floor (got +${plankStep}s)`);
+  assert.ok(hangStep > plankStep, `the 120s hold steps up MORE in absolute seconds than the 20s hold (${hangStep} vs ${plankStep})`);
+  // The long hold's ~10% step (12s) dwarfs the short hold's floored step (3s).
+  assert.equal(hangStep, 12, "a 120s hold advances ~10% (+12s)");
+  assert.equal(plankStep, 3, "a 20s hold advances by the 3s floor, not a full 10% (2s)");
+  assert.match(plank.delta_text, /^\+\d+s$/, "timed delta reads in seconds");
 });
 
 test("assisted lifts reduce the assist toward bodyweight (never a positive flip)", () => {
