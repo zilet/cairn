@@ -3607,6 +3607,22 @@ button.hmk-row:active{background:var(--card-2)}
 .stand-conn{display:flex;gap:9px;align-items:flex-start;background:var(--card);border-radius:12px;
   box-shadow:var(--shadow-sm);padding:11px 13px;margin-bottom:8px;font-size:.83rem;color:var(--ink-2);line-height:1.42}
 .stand-conn-i{color:var(--gold-deep);flex:0 0 auto;margin-top:1px}
+/* recheck timing chip on a priority — a quiet "↻ recheck in ~3 months" nudge */
+.stand-zrecheck{display:block;margin-top:8px;color:var(--sage-text);letter-spacing:.02em}
+/* "The full story" — progressive disclosure of the read's depth, collapsed by default */
+.stand-story{margin-top:18px}
+.stand-story-t{display:inline-flex;align-items:center;gap:5px}
+.stand-story-chev{font-size:.7rem;transition:transform var(--dur-2) var(--ease)}
+.stand-story.open .stand-story-chev{transform:rotate(180deg)}
+.stand-story-body{max-height:0;overflow:hidden;transition:max-height var(--dur-3) var(--ease)}
+.stand-story.open .stand-story-body{max-height:1600px;margin-top:11px}
+.stand-story-p{font-size:.9rem;color:var(--ink-2);line-height:1.5;margin:0 0 14px}
+.stand-story-prios{display:flex;flex-direction:column;gap:12px;margin-bottom:12px}
+.stand-sp{background:var(--card);border-radius:13px;box-shadow:var(--shadow-sm);border-left:3px solid var(--line-2);padding:12px 14px}
+.stand-sp-label{font-weight:560;color:var(--ink);font-size:.9rem}
+.stand-sp-why{max-height:none;overflow:visible;margin-top:8px;font-size:.83rem;color:var(--muted);line-height:1.45}
+.stand-sp-why .stand-ask{display:block;margin-top:8px}
+.stand-ask-all{display:inline-block;margin-top:2px}
 .stand-browse{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--muted);margin:0 2px 9px}
 .stand-allmk{flex:0 0 auto;font-size:.72rem;letter-spacing:.02em}
 .stand-bodymetrics{margin-bottom:4px}

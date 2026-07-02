@@ -20,6 +20,18 @@
     const BM = () => globalThis.CairnBodyMetrics;
     let DATA = null;
     let LOADP = null;
+    // Stale-while-revalidate plumbing. `reqToken` is bumped by every load; a resolving
+    // fetch only writes DATA if it's still the latest (a slower earlier fetch never
+    // clobbers a newer one). `curView` names the on-screen Stand view so a background
+    // refresh only silently repaints the calm, input-free reads. `quietPaint` suppresses
+    // the view-enter animation during a background repaint.
+    let reqToken = 0;
+    let curView = "overview";
+    let quietPaint = false;
+    const SNAP_KEY = "cairn.stand.v1";
+    // Self-contained tool views fetch their own data — the overview background refresh
+    // must never repaint one out from under the user.
+    const SELF_CONTAINED = new Set(["records", "share", "learned", "connections", "age", "supplements"]);
     // domain-detail catalog state (mirrors the Markers view): which domain is open,
     // the free-text search, and the out-of-range filter. Reset each time a domain opens.
     let curDomain = null;
@@ -68,9 +80,15 @@
         return `${num ?? v}${m.unit ? ` ${String(m.unit)}` : ""}`;
     }
     // ---- overview: Your Read (the synthesis as focus-zones, not a scroll) ----------
+    const WHOLE_PICTURE_Q = "Walk me through my whole health picture — what matters most right now, and the single most effective thing I can do about it?";
     function askLink(topic) {
         const q = `Tell me more about ${topic} — what should I focus on?`;
         return `<button class="linkbtn linkbtn-plain linkbtn-sm stand-ask" type="button" data-ask="${escAttr(q)}">Ask the coach<span aria-hidden="true"> →</span></button>`;
+    }
+    // A small "recheck in ~3 months" timing chip on any priority that carries one.
+    function recheckBadge(p) {
+        const r = typeof p.recheck === "string" ? p.recheck.trim() : "";
+        return r ? `<span class="stand-zrecheck lbl">↻ ${escHtml(r)}</span>` : "";
     }
     // The agentic whole-picture read is generated and refreshed right here — Stand is
     // where the read lives, so the trigger lives with it (calm: one small control).
@@ -105,7 +123,7 @@
             return `<div class="stand-zone tone-${tone}" data-zone>
         <div class="stand-zt"><span class="hdot hdot-${tone}"></span><span class="stand-zlabel">${escHtml(label)}</span><span class="stand-zchev" aria-hidden="true">▾</span></div>
         ${move ? `<div class="stand-zmove">${escHtml(move)}</div>` : ""}
-        <div class="stand-zwhy">${why ? escHtml(why) : ""}${askLink(label || "this")}</div>
+        <div class="stand-zwhy">${why ? escHtml(why) : ""}${recheckBadge(p)}${askLink(label || "this")}</div>
       </div>`;
         }).join("");
         const oc = syn && typeof syn.one_change === "string" && syn.one_change.trim()
@@ -122,6 +140,38 @@
       ${zones ? `<div class="stand-zones">${zones}</div>` : ""}
       ${oc}
       ${conns ? `<div class="stand-conns"><div class="stand-conns-h lbl">Quiet connections</div>${conns}</div>` : ""}
+      ${fullStoryHtml()}
+    </div>`;
+    }
+    // Progressive disclosure of the depth the calm read holds back: the narrative
+    // "story" paragraph, any priorities beyond the visible three, and a whole-picture
+    // "ask the coach" deep-link. Collapsed by default; rendered only when there's more
+    // to show than the three zones already carry.
+    function fullStoryHtml() {
+        const syn = DATA?.synthesis;
+        const story = syn && typeof syn.story === "string" ? syn.story.trim() : "";
+        const rest = (syn?.priorities || []).slice(3);
+        const restRows = rest.map((p) => {
+            const label = String(p.label || "");
+            const move = String(p.the_move || p.move || "");
+            const why = String(p.why_it_matters || p.why || "");
+            if (!label && !move && !why)
+                return "";
+            return `<div class="stand-sp">
+        ${label ? `<div class="stand-sp-label">${escHtml(label)}</div>` : ""}
+        ${move ? `<div class="stand-zmove">${escHtml(move)}</div>` : ""}
+        <div class="stand-zwhy stand-sp-why">${why ? escHtml(why) : ""}${recheckBadge(p)}${askLink(label || "this")}</div>
+      </div>`;
+        }).join("");
+        if (!story && !restRows)
+            return "";
+        return `<div class="stand-story" data-story>
+      <button class="stand-story-t linkbtn linkbtn-quiet linkbtn-sm" type="button" data-storytoggle aria-expanded="false">The full story<span class="stand-story-chev" aria-hidden="true">▾</span></button>
+      <div class="stand-story-body">
+        ${story ? `<p class="stand-story-p">${escHtml(story)}</p>` : ""}
+        ${restRows ? `<div class="stand-story-prios">${restRows}</div>` : ""}
+        <button class="linkbtn linkbtn-plain linkbtn-sm stand-ask stand-ask-all" type="button" data-ask="${escAttr(WHOLE_PICTURE_Q)}">Ask the coach about this<span aria-hidden="true"> →</span></button>
+      </div>
     </div>`;
     }
     function focusHeroHtml() {
@@ -203,19 +253,18 @@
     </button>`;
     }
     function recoveryDetailHtml() {
+        // Reuse the shipped plain-language recovery read — ~13 signals (sleep + its
+        // architecture, resting HR, HRV + status, stress, body battery, respiration +
+        // SpO₂, skin temp, training readiness, VO₂max + status, steps, body comp) with
+        // source labels — instead of the old 4-card summary. Same /recovery payload.
         const rec = recoveryData();
-        const card = (label, value, sub = "") => value ? `<div class="stand-mcard"><span class="stand-mcard-l">${escHtml(label)}</span><span class="stand-mcard-v">${escHtml(value)}</span>${sub ? `<span class="stand-mcard-sub">${escHtml(sub)}</span>` : ""}</div>` : "";
-        const cards = rec ? [
-            card("Sleep", sleepWord(rec.avg_sleep_min), Number.isFinite(Number(rec.avg_sleep_score)) ? `score ${Math.round(Number(rec.avg_sleep_score))}` : ""),
-            card("HRV", Number.isFinite(Number(rec.avg_hrv_ms)) && Number(rec.avg_hrv_ms) > 0 ? `${Math.round(Number(rec.avg_hrv_ms))} ms` : ""),
-            card("Resting HR", Number.isFinite(Number(rec.avg_resting_hr)) ? `${Math.round(Number(rec.avg_resting_hr))} bpm` : ""),
-            card("Body battery", Number.isFinite(Number(rec.avg_body_battery)) ? `${Math.round(Number(rec.avg_body_battery))}` : ""),
-        ].filter(Boolean).join("") : "";
+        const body = rec
+            ? (CairnHealthRead.recoveryHtml(DATA?.recovery) || "")
+            : "";
         return `<div class="stand-detail stand-root">
       <button class="stand-back linkbtn linkbtn-plain" data-back>‹ Stand</button>
       <h2 class="stand-detail-h">Recovery</h2>
-      <p class="stand-read-lede" style="font-size:1rem">A 14-day read from your wearable — sleep, HRV and resting heart rate holding steady.</p>
-      ${cards ? `<div class="stand-mcards">${cards}</div>` : `<p class="stand-empty">No wearable data yet.</p>`}
+      ${body || `<p class="stand-empty">No wearable data yet.</p>`}
     </div>`;
     }
     // ---- supplements (condensed tile + list; informational, no traffic-light) ------
@@ -439,6 +488,7 @@
         };
     }
     function showRecords(opts = {}) {
+        curView = "records";
         setStandSeg("records");
         paint(toolShellHtml("Records", `<div id="hContent"></div>`, "Lab reports, DEXA scans and other documents — everything Cairn reads your markers from."));
         wireBack();
@@ -447,6 +497,7 @@
             view.querySelector("#hFile")?.click();
     }
     function showShare() {
+        curView = "share";
         setStandSeg("share");
         paint(toolShellHtml("Share with your doctor", `<div id="hContent"></div><div id="hbSymptomLinks"></div>`));
         wireBack();
@@ -455,6 +506,7 @@
         void CairnHealthReadController.loadSymptomLinks(readDeps(), pollToken);
     }
     function showLearned() {
+        curView = "learned";
         setStandSeg("learned");
         paint(toolShellHtml("Learned", `<div id="standLearned">${skelLines(4)}</div>`));
         wireBack();
@@ -475,6 +527,7 @@
         });
     }
     function showConnections() {
+        curView = "connections";
         setStandSeg("connections");
         paint(toolShellHtml("Connections", `<div id="hbDirectives"><div class="hb-load">Gathering connections…</div></div>
      <div id="hPicture"></div>`, "One brain across your whole picture: a finding in your labs quietly shapes your meals, training, and what to watch. Informational — never medical advice; nothing changes your plan on its own."));
@@ -487,6 +540,7 @@
             void CairnHealthPictureController.loadHealthPicture(pollToken, api("/health-docs"), deps);
     }
     function showAge() {
+        curView = "age";
         setStandSeg("age");
         paint(toolShellHtml("How you compare", `<div id="hContent"></div>`));
         wireBack();
@@ -556,6 +610,7 @@
         standQuery = "";
         standOff = false;
         const all = key === "__all__";
+        curView = all ? "markers" : "domain";
         setStandSeg(all ? "markers" : null);
         const d = all ? null : DOMAINS.find((x) => x.key === key);
         const markers = all ? (DATA?.markers || []) : d ? markersOfDomain(d) : [];
@@ -606,11 +661,16 @@
     // ---- render + wire -------------------------------------------------------------
     function paint(html) {
         view.innerHTML = html;
+        // A background (stale-while-revalidate) repaint must not re-run the view-enter
+        // animation — that would flash the whole screen for an invisible data refresh.
+        if (quietPaint)
+            return;
         if (typeof globalThis.viewEnter === "function") {
             globalThis.viewEnter();
         }
     }
     function showOverview() {
+        curView = "overview";
         setStandSeg(null);
         // Stepped back from a self-contained tool before the overview data landed →
         // hold the calm loading state until the in-flight fetch resolves.
@@ -630,6 +690,7 @@
         wireOverview();
     }
     function showBody() {
+        curView = "body";
         setStandSeg("body");
         paint(bodyDetailHtml());
         wireBack();
@@ -637,8 +698,9 @@
         BM()?.renderBodyMetrics?.(view.querySelector("#standBodyMetrics"));
         wireRows(view);
     }
-    function showRecovery() { setStandSeg("recovery"); paint(recoveryDetailHtml()); wireBack(); }
+    function showRecovery() { curView = "recovery"; setStandSeg("recovery"); paint(recoveryDetailHtml()); wireBack(); }
     function showSupplements() {
+        curView = "supplements";
         setStandSeg("supplements");
         // The manageable supplements card (plain-words add + remove) hosts in place of
         // the old read-only list — say it once, Cairn folds it into your reads.
@@ -681,6 +743,13 @@
             moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
         });
         document.addEventListener("click", () => moreMenu?.setAttribute("hidden", ""), { once: true });
+        // "The full story" progressive-disclosure: story paragraph + deeper priorities.
+        const storyToggle = view.querySelector("[data-storytoggle]");
+        storyToggle?.addEventListener("click", () => {
+            const story = view.querySelector("[data-story]");
+            const open = story?.classList.toggle("open") || false;
+            storyToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        });
         // Your Read focus-zones: tap to expand the "why"; ask-the-coach deep-links.
         view.querySelectorAll("[data-zone]").forEach((z) => z.addEventListener("click", (e) => {
             if (e.target.closest(".stand-ask"))
@@ -716,43 +785,125 @@
         return `<div class="stand-error loadstate"><span class="loadstate-label">Couldn't read your standing right now.</span></div>`;
     }
     // One fetch fills the whole overview snapshot; hosted tool views fetch their own
-    // data so a deep link paints immediately while this warms behind them.
+    // data so a deep link paints immediately while this warms behind them. Pure — it
+    // returns the built payload and never touches module state, so the caller decides
+    // whether it wins the token race and whether the change warrants a repaint.
+    async function fetchStandData() {
+        const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes, dirRes] = await Promise.all([
+            api("/markers/priority"),
+            api("/coaching-focus").catch(() => null),
+            api("/body-metrics?unit=in").catch(() => null),
+            api("/health/synthesis").catch(() => null),
+            api("/insights").catch(() => null),
+            api("/recovery").catch(() => null),
+            api("/supplements").catch(() => null),
+            api("/directives").catch(() => null),
+        ]);
+        const insightsArr = Array.isArray(insightsRes)
+            ? insightsRes
+            : Array.isArray(insightsRes?.insights)
+                ? (insightsRes.insights)
+                : [];
+        const syn = synthRes && typeof synthRes === "object" ? synthRes.synthesis : null;
+        return {
+            markers: Array.isArray(priority?.markers) ? priority.markers : [],
+            groups: Array.isArray(priority?.groups) ? priority.groups : [],
+            focus,
+            body,
+            synthesis: syn || null,
+            synthStale: !!(synthRes && typeof synthRes === "object" && (synthRes.stale ?? syn?.stale)),
+            connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
+            recovery: recoveryRes && typeof recoveryRes === "object" ? recoveryRes : null,
+            supplements: (Array.isArray(suppRes) ? suppRes : suppRes?.supplements || [])
+                .filter((s) => !!s && typeof s === "object" && s.active !== 0),
+            directives: Array.isArray(dirRes?.directives)
+                ? dirRes.directives.filter((d) => !!d && typeof d === "object")
+                : [],
+        };
+    }
+    // The canonical loader for cold paths (spinner → fetch → paint) and the step-back
+    // warm-behind. Token-guarded so a slower earlier fetch never clobbers a newer one.
     function loadStandData() {
-        const p = (async () => {
-            const [priority, focus, body, synthRes, insightsRes, recoveryRes, suppRes, dirRes] = await Promise.all([
-                api("/markers/priority"),
-                api("/coaching-focus").catch(() => null),
-                api("/body-metrics?unit=in").catch(() => null),
-                api("/health/synthesis").catch(() => null),
-                api("/insights").catch(() => null),
-                api("/recovery").catch(() => null),
-                api("/supplements").catch(() => null),
-                api("/directives").catch(() => null),
-            ]);
-            const insightsArr = Array.isArray(insightsRes)
-                ? insightsRes
-                : Array.isArray(insightsRes?.insights)
-                    ? (insightsRes.insights)
-                    : [];
-            const syn = synthRes && typeof synthRes === "object" ? synthRes.synthesis : null;
-            DATA = {
-                markers: Array.isArray(priority?.markers) ? priority.markers : [],
-                groups: Array.isArray(priority?.groups) ? priority.groups : [],
-                focus,
-                body,
-                synthesis: syn || null,
-                synthStale: !!(synthRes && typeof synthRes === "object" && (synthRes.stale ?? syn?.stale)),
-                connections: insightsArr.filter((c) => c && String(c.kind || "") === "connection"),
-                recovery: recoveryRes && typeof recoveryRes === "object" ? recoveryRes : null,
-                supplements: (Array.isArray(suppRes) ? suppRes : suppRes?.supplements || [])
-                    .filter((s) => !!s && typeof s === "object" && s.active !== 0),
-                directives: Array.isArray(dirRes?.directives)
-                    ? dirRes.directives.filter((d) => !!d && typeof d === "object")
-                    : [],
-            };
-        })();
+        const token = ++reqToken;
+        const p = fetchStandData().then((next) => {
+            if (token !== reqToken)
+                return; // a newer load already won
+            DATA = next;
+            saveSnapshot(next);
+        });
         LOADP = p.catch(() => { });
         return p;
+    }
+    // The stale-while-revalidate background refresh: fetch fresh data behind an already-
+    // painted view; if it actually changed, quietly repaint the calm reads in place.
+    function revalidateStand() {
+        const token = ++reqToken;
+        const p = fetchStandData().then((next) => {
+            if (token !== reqToken)
+                return; // superseded
+            const prev = DATA;
+            DATA = next;
+            saveSnapshot(next);
+            if (prev && standDataEqual(prev, next))
+                return; // nothing changed → no repaint
+            quietRepaintStand();
+        });
+        LOADP = p.catch(() => { });
+        return p.catch(() => { });
+    }
+    // Cheap structural equality — the payload is plain JSON, so a stable stringify is
+    // exact and fast enough for a once-per-entry compare.
+    function standDataEqual(a, b) {
+        try {
+            return JSON.stringify(a) === JSON.stringify(b);
+        }
+        catch {
+            return false;
+        }
+    }
+    // sessionStorage snapshot for an instant cold paint on the next open. Quota/parse
+    // safe — a failure just falls back to the normal loading → fetch path.
+    function saveSnapshot(data) {
+        try {
+            sessionStorage.setItem(SNAP_KEY, JSON.stringify(data));
+        }
+        catch { /* quota — skip */ }
+    }
+    function loadSnapshot() {
+        try {
+            const raw = sessionStorage.getItem(SNAP_KEY);
+            if (!raw)
+                return null;
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" && Array.isArray(parsed.markers) ? parsed : null;
+        }
+        catch {
+            return null;
+        }
+    }
+    // Repaint after a background refresh found a change — but ONLY the calm, input-free
+    // reads (overview, recovery). Domain/markers/body carry in-progress state (search
+    // focus, expanded rows, an open tape-log form) that a silent repaint would wipe, and
+    // self-contained tool views own their own data — so those are left as-is (the fresh
+    // DATA still shows the next time they're entered). Scroll is preserved so there's
+    // never a visible jump.
+    function quietRepaintStand() {
+        if (state.tab !== "stand")
+            return;
+        if (curView !== "overview" && curView !== "recovery")
+            return;
+        const y = window.scrollY;
+        quietPaint = true;
+        try {
+            if (curView === "overview")
+                showOverview();
+            else
+                showRecovery();
+        }
+        finally {
+            quietPaint = false;
+        }
+        window.scrollTo(0, y);
     }
     // Regenerate the whole-picture read in place (the same background job the old
     // health Read tab ran), then repaint the overview with the fresh synthesis.
@@ -780,46 +931,8 @@
         if (state.tab === "stand" && !state.standSeg)
             showOverview();
     }
-    async function renderStand() {
-        headerTitle.textContent = "Stand";
-        const seg = state.standSeg || null;
-        const load = loadStandData();
-        // Self-contained tool views paint immediately (they fetch their own data); the
-        // overview snapshot warms behind them for the "‹ Stand" step back.
-        if (seg === "records") {
-            showRecords();
-            return;
-        }
-        if (seg === "share") {
-            showShare();
-            return;
-        }
-        if (seg === "learned") {
-            showLearned();
-            return;
-        }
-        if (seg === "connections") {
-            showConnections();
-            return;
-        }
-        if (seg === "age") {
-            showAge();
-            return;
-        }
-        if (seg === "supplements") {
-            showSupplements();
-            return;
-        }
-        paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
-        try {
-            await load;
-        }
-        catch {
-            paint(standErrorHtml());
-            return;
-        }
-        if (state.tab !== "stand")
-            return;
+    // Paint one of the DATA-driven views straight from the in-memory snapshot.
+    function paintStandSeg(seg) {
         if (seg === "markers") {
             showAllMarkers();
             return;
@@ -833,6 +946,59 @@
             return;
         }
         showOverview();
+    }
+    async function renderStand() {
+        headerTitle.textContent = "Stand";
+        const seg = state.standSeg || null;
+        // Cold first paint: hydrate DATA from the sessionStorage snapshot so the overview
+        // paints instantly, then background-revalidate. A truly cold open (no snapshot)
+        // falls through to the loading state → fetch path below, exactly as before.
+        if (!DATA) {
+            const snap = loadSnapshot();
+            if (snap)
+                DATA = snap;
+        }
+        // Self-contained tool views fetch their own data — paint immediately and warm the
+        // overview snapshot behind them for the "‹ Stand" step back. The background
+        // refresh never repaints a tool view (quietRepaintStand only touches overview /
+        // recovery), so it stays put while its own data lands.
+        if (seg && SELF_CONTAINED.has(seg)) {
+            if (DATA)
+                void revalidateStand();
+            else
+                void loadStandData();
+            if (seg === "records")
+                return showRecords();
+            if (seg === "share")
+                return showShare();
+            if (seg === "learned")
+                return showLearned();
+            if (seg === "connections")
+                return showConnections();
+            if (seg === "age")
+                return showAge();
+            if (seg === "supplements")
+                return showSupplements();
+        }
+        // DATA-driven view. Warm (or snapshot-hydrated) → instant paint from cache, then
+        // revalidate in the background (repaints only on a real change, preserving scroll).
+        if (DATA) {
+            paintStandSeg(seg);
+            void revalidateStand();
+            return;
+        }
+        // Truly cold, no snapshot: the calm loading state, then fetch and paint.
+        paint(`<div class="stand-loading loadstate"><span class="loadstate-label">Reading where you stand…</span></div>`);
+        try {
+            await loadStandData();
+        }
+        catch {
+            paint(standErrorHtml());
+            return;
+        }
+        if (state.tab !== "stand")
+            return;
+        paintStandSeg(state.standSeg || null);
     }
     const CAIRN_STAND = { renderStand };
     Object.assign(globalThis, { CairnStand: CAIRN_STAND, renderStand });

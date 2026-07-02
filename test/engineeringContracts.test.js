@@ -882,6 +882,50 @@ test("PWA route literals stay aligned across parser, types, and segment registri
   );
 });
 
+test("Stand uses stale-while-revalidate with a sessionStorage snapshot and preserved scroll", () => {
+  const standScreen = read("src/client/stand-screen.ts");
+  // A request token discards a superseded background fetch instead of clobbering DATA.
+  assert.match(standScreen, /reqToken/, "Stand must guard background loads with a request token");
+  assert.match(standScreen, /if \(token !== reqToken\) return/, "a superseded fetch must not write DATA");
+  // sessionStorage snapshot → instant cold paint; quota/parse safe.
+  assert.match(standScreen, /sessionStorage\.setItem\(SNAP_KEY/, "Stand must persist a snapshot for instant cold paint");
+  assert.match(standScreen, /sessionStorage\.getItem\(SNAP_KEY/, "Stand must hydrate from the snapshot on cold open");
+  assert.match(standScreen, /function saveSnapshot/, "snapshot save must be wrapped safely");
+  // Background revalidate: fetch, compare, repaint only on a real change.
+  assert.match(standScreen, /function revalidateStand/, "Stand must have a background revalidate path");
+  assert.match(standScreen, /function standDataEqual/, "revalidate must compare old vs new before repainting");
+  assert.match(standScreen, /if \(prev && standDataEqual\(prev, next\)\) return/, "unchanged data must not repaint");
+  // Quiet repaint preserves scroll and skips the view-enter animation.
+  assert.match(standScreen, /const y = window\.scrollY/, "the background repaint must capture scroll");
+  assert.match(standScreen, /window\.scrollTo\(0, y\)/, "the background repaint must restore scroll");
+  assert.match(standScreen, /if \(quietPaint\) return/, "a background repaint must suppress the view-enter animation");
+  // Self-contained tool views are never repainted out from under the user.
+  assert.match(standScreen, /const SELF_CONTAINED: ReadonlySet<StandView>/, "self-contained tool views must be enumerated");
+  assert.match(standScreen, /if \(curView !== "overview" && curView !== "recovery"\) return/, "quiet repaint must skip input-bearing views");
+});
+
+test("Stand restores the read's depth and reuses the rich recovery renderer", () => {
+  const standScreen = read("src/client/stand-screen.ts");
+  // The full story expander: story paragraph, deeper priorities, recheck badges, whole-picture ask.
+  assert.match(standScreen, /function fullStoryHtml/, "Stand must render the progressive-disclosure full story");
+  assert.match(standScreen, /syn\.story/, "the expander must render the synthesis story paragraph");
+  assert.match(standScreen, /\(syn\?\.priorities \|\| \[\]\)\.slice\(3\)/, "the expander must show priorities beyond the visible three");
+  assert.match(standScreen, /function recheckBadge/, "priorities must carry a recheck timing badge");
+  assert.match(standScreen, /WHOLE_PICTURE_Q/, "the whole-picture ask deep-link must be present");
+  assert.match(standScreen, /data-storytoggle/, "the full story must be collapsible");
+  // Rich recovery reuses the shipped plain-language renderer, not the 4-card summary.
+  assert.match(standScreen, /CairnHealthRead\.recoveryHtml/, "recovery detail must reuse the rich health-read renderer");
+  assert.doesNotMatch(standScreen, /card\("Body battery"/, "the old 4-card recovery summary must be gone");
+});
+
+test("Stand SWR + depth land in the generated bundle", () => {
+  const bundle = read("public/js/stand-screen.js");
+  assert.match(bundle, /revalidateStand/, "generated stand-screen must carry the revalidate path");
+  assert.match(bundle, /SNAP_KEY/, "generated stand-screen must carry the snapshot key");
+  assert.match(bundle, /CairnHealthRead\.recoveryHtml/, "generated stand-screen must reuse rich recovery");
+  assert.match(bundle, /stand-story/, "generated stand-screen must carry the full-story markup");
+});
+
 test("chat session index is created only after the v49 column migration", () => {
   const schema = read("src/db.ts");
   const migrations = read("src/migrate.ts");
