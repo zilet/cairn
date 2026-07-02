@@ -228,6 +228,275 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/app/startup.ts", output: "public/js/app-startup.js" },
 ];
 
+// Ordered concatenation manifest. index.html loads a handful of bundles instead
+// of ~216 individual <script>s (a big cold-start win: far fewer request round
+// trips). Each bundle is the in-order concatenation of the already-built,
+// IIFE-wrapped individual outputs above, so global scope and load order are
+// unchanged. The CONCATENATION OF EVERY BUNDLE'S `inputs`, IN THIS ARRAY ORDER,
+// REPRODUCES THE CANONICAL <script> SEQUENCE EXACTLY — this manifest is now the
+// authoritative encoding of that order. Every CLIENT_OUTPUTS output (plus the
+// hand-written classic shim public/js/10-boot.js) appears in exactly one bundle.
+export const BUNDLES = [
+  {
+    output: "public/js/bundle-01-core.js",
+    label: "foundations (utils, api, core state, ui shell)",
+    inputs: [
+      "public/js/date-utils.js",
+      "public/js/html-utils.js",
+      "public/js/markdown-client.js",
+      "public/js/ui-components.js",
+      "public/js/ui-feedback-client.js",
+      "public/js/ui-actions-client.js",
+      "public/js/ui-view-transitions-client.js",
+      "public/js/exercise-detail-client.js",
+      "public/js/format-utils.js",
+      "public/js/api-client.js",
+      "public/js/app-download.js",
+      "public/js/app-sw-recovery.js",
+      "public/js/01-core.js",
+      "public/js/art-controller.js",
+      "public/js/pwa-install-coach.js",
+      "public/js/ui-header-client.js",
+      "public/js/ui-segments-client.js",
+      "public/js/02-ui.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-02-today.js",
+    label: "Today screen + Progress infrastructure",
+    inputs: [
+      "public/js/detail-overlay-client.js",
+      "public/js/ui-motion-client.js",
+      "public/js/exercise-detail-data-client.js",
+      "public/js/exercise-detail-explanation-client.js",
+      "public/js/exercise-detail-render-client.js",
+      "public/js/exercise-detail-actions-client.js",
+      "public/js/exercise-detail-controller.js",
+      "public/js/agent-login-model-client.js",
+      "public/js/agent-login-assets-client.js",
+      "public/js/agent-login-modal-client.js",
+      "public/js/agent-login-session-client.js",
+      "public/js/agent-login-client.js",
+      "public/js/agent-job-records-client.js",
+      "public/js/agent-job-client.js",
+      "public/js/rest-timer.js",
+      "public/js/coaching-focus-client.js",
+      "public/js/today-activity-client.js",
+      "public/js/save-bar.js",
+      "public/js/swr-cache.js",
+      "public/js/today-agenda-client.js",
+      "public/js/today-rail-loaders-client.js",
+      "public/js/today-rail-controller.js",
+      "public/js/today-plan-selection-client.js",
+      "public/js/today-training-client.js",
+      "public/js/today-progression-controller.js",
+      "public/js/today-add-exercise-controller.js",
+      "public/js/today-brief-client.js",
+      "public/js/today-brief-override-client.js",
+      "public/js/today-brief-actions-client.js",
+      "public/js/today-brief-controller.js",
+      "public/js/cardio-plan-client.js",
+      "public/js/cardio-sync-client.js",
+      "public/js/today-lately-client.js",
+      "public/js/proposal-client.js",
+      "public/js/today-session-suggest-client.js",
+      "public/js/today-session-suggest-controller.js",
+      "public/js/today-session-status-client.js",
+      "public/js/today-session-feedback-client.js",
+      "public/js/today-session-skip-client.js",
+      "public/js/today-session-set-model.js",
+      "public/js/today-session-set-actions.js",
+      "public/js/today-session-controller.js",
+      "public/js/today-cards-client.js",
+      "public/js/today-program-adjustments-client.js",
+      "public/js/today-week-ahead-client.js",
+      "public/js/today-context-client.js",
+      "public/js/today-compass-client.js",
+      "public/js/today-garmin-reconciliation-client.js",
+      "public/js/today-side-loaders.js",
+      "public/js/today-plan-session-model.js",
+      "public/js/today-plan-session-data-client.js",
+      "public/js/today-plan-session-preparation.js",
+      "public/js/today-data-loader.js",
+      "public/js/today-main-shell-client.js",
+      "public/js/today-plan-surface-client.js",
+      "public/js/today-plan-surface-renderer.js",
+      "public/js/today-render-state-client.js",
+      "public/js/today-post-render-wiring.js",
+      "public/js/today-dependencies.js",
+      "public/js/today-compatibility-bridges.js",
+      "public/js/today-screen-runtime-deps.js",
+      "public/js/today-screen-runtime.js",
+      "public/js/progress-data-client.js",
+      "public/js/progress-endurance-client.js",
+      "public/js/progress-components-client.js",
+      "public/js/progress-line-chart-model.js",
+      "public/js/progress-chart-scrub-client.js",
+      "public/js/progress-chart-drawing-client.js",
+      "public/js/progress-chart-client.js",
+      "public/js/progress-trend-weight-client.js",
+      "public/js/progress-history-model-client.js",
+      "public/js/progress-history-render-client.js",
+      "public/js/progress-history-client.js",
+      "public/js/progress-run-plan-client.js",
+      "public/js/progress-route-deps-client.js",
+      "public/js/progress-endurance-controller.js",
+      "public/js/progress-volume-client.js",
+      "public/js/progress-energy-client.js",
+      "public/js/progress-energy-surface-client.js",
+      "public/js/progress-calendar-client.js",
+      "public/js/progress-muscle-trajectory-client.js",
+      "public/js/progress-dexa-targeting-client.js",
+      "public/js/progress-performance-client.js",
+      "public/js/progress-program-adjustments-client.js",
+      "public/js/progress-test-week-client.js",
+      "public/js/progress-program-summary-client.js",
+      "public/js/progress-program-block-client.js",
+      "public/js/progress-program-controller.js",
+      "public/js/03-today.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-03-capture-progress.js",
+    label: "capture + Progress screen",
+    inputs: [
+      "public/js/capture-provenance-client.js",
+      "public/js/capture-read-date-client.js",
+      "public/js/capture-read-cards-client.js",
+      "public/js/capture-read-jobs-client.js",
+      "public/js/capture-reads-client.js",
+      "public/js/capture-voice-client.js",
+      "public/js/04-capture.js",
+      "public/js/body-metrics-client.js",
+      "public/js/05-progress.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-04-coach-meals.js",
+    label: "coach proposals + meal planner",
+    inputs: [
+      "public/js/day-fuel-client.js",
+      "public/js/day-fuel-controller.js",
+      "public/js/meal-row-client.js",
+      "public/js/meal-plan-client.js",
+      "public/js/meal-planner-jobs-client.js",
+      "public/js/meal-recipe-client.js",
+      "public/js/meal-recipe-controller.js",
+      "public/js/meal-swap-data-client.js",
+      "public/js/meal-swap-row-actions-controller.js",
+      "public/js/meal-swap-controller.js",
+      "public/js/meal-planner-actions-controller.js",
+      "public/js/meal-planner-controller.js",
+      "public/js/coach-proposal-controller.js",
+      "public/js/06-coach-meals.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-05-me-health.js",
+    label: "Me / Health / Records",
+    inputs: [
+      "public/js/food-note-client.js",
+      "public/js/food-detail-controller.js",
+      "public/js/health-docs-client.js",
+      "public/js/me-profile-form-client.js",
+      "public/js/me-profile-controller.js",
+      "public/js/me-health-log-renderer.js",
+      "public/js/me-health-tabs-controller.js",
+      "public/js/me-health-controller-deps.js",
+      "public/js/me-health-dependencies.js",
+      "public/js/me-health-screen-composition.js",
+      "public/js/07-me-health.js",
+      "public/js/health-evidence-client.js",
+      "public/js/health-marker-order-client.js",
+      "public/js/health-client.js",
+      "public/js/health-read-client.js",
+      "public/js/health-standing-primitives-client.js",
+      "public/js/health-standing-client.js",
+      "public/js/health-standing-controller.js",
+      "public/js/health-picture-client.js",
+      "public/js/health-picture-controller.js",
+      "public/js/health-markers-client.js",
+      "public/js/health-markers-controller.js",
+      "public/js/health-directives-client.js",
+      "public/js/health-directives-loader-client.js",
+      "public/js/health-read-synthesis-client.js",
+      "public/js/health-read-supplements-client.js",
+      "public/js/health-read-controller.js",
+      "public/js/health-learned-client.js",
+      "public/js/health-records-client.js",
+      "public/js/health-doc-upload-controller.js",
+      "public/js/health-doc-date-actions-client.js",
+      "public/js/health-doc-lifecycle-actions-client.js",
+      "public/js/health-doc-actions-controller.js",
+      "public/js/me-records-health-doc-controller.js",
+      "public/js/health-share-controller.js",
+      "public/js/memory-client.js",
+      "public/js/me-memory-controller.js",
+      "public/js/life-client.js",
+      "public/js/life-form-helpers.js",
+      "public/js/life-timeline-actions.js",
+      "public/js/life-controller.js",
+      "public/js/family-client.js",
+      "public/js/family-controller.js",
+      "public/js/08-me-records.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-06-chat-plan.js",
+    label: "Chat + Plan editor",
+    inputs: [
+      "public/js/chat-client.js",
+      "public/js/chat-attachment-client.js",
+      "public/js/chat-composer-focus-client.js",
+      "public/js/chat-composer-controller.js",
+      "public/js/chat-message-client.js",
+      "public/js/chat-turn-records-client.js",
+      "public/js/chat-turn-stream-state-client.js",
+      "public/js/chat-layout-client.js",
+      "public/js/chat-turn-monitor-client.js",
+      "public/js/chat-turn-client.js",
+      "public/js/chat-history-client.js",
+      "public/js/chat-header-controller.js",
+      "public/js/chat-starter-chips-client.js",
+      "public/js/chat-fuel-context-client.js",
+      "public/js/chat-earlier-history-client.js",
+      "public/js/plan-endurance-model.js",
+      "public/js/plan-endurance-client.js",
+      "public/js/plan-editor-client.js",
+      "public/js/plan-editor-form-client.js",
+      "public/js/plan-editor-controller.js",
+      "public/js/09-plan-chat.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-07-settings-boot.js",
+    label: "Settings + app router + boot",
+    inputs: [
+      "public/js/settings-routes.js",
+      "public/js/settings-client.js",
+      "public/js/settings-surface-client.js",
+      "public/js/settings-data-client.js",
+      "public/js/settings-data-controller.js",
+      "public/js/settings-agents-client.js",
+      "public/js/settings-agents-controller.js",
+      "public/js/settings-sources-automation-controller.js",
+      "public/js/settings-screen.js",
+      "public/js/route-state.js",
+      "public/js/app-router.js",
+      "public/js/app-route-sync.js",
+      "public/js/app-render-dispatch.js",
+      "public/js/app-tabs.js",
+      "public/js/app-job-reconnectors.js",
+      "public/js/app-mobile-viewport.js",
+      "public/js/app-service-worker.js",
+      "public/js/app-discipline-primer.js",
+      "public/js/app-onboarding.js",
+      "public/js/app-startup.js",
+      "public/js/10-boot.js",
+    ],
+  },
+];
+
 const compilerOptions = {
   alwaysStrict: false,
   ignoreDeprecations: "6.0",
@@ -239,6 +508,33 @@ const compilerOptions = {
 
 function wrapClassicScript(source) {
   return `(() => {\n${source.trimEnd()}\n})();\n`;
+}
+
+function bundleHeader(label) {
+  return (
+    "// GENERATED by scripts/build-client.mjs — do not edit.\n" +
+    "// Ordered concatenation of individual public/js modules (see the BUNDLES\n" +
+    "// manifest). The classic <script> load order is preserved exactly and each\n" +
+    "// constituent stays IIFE-wrapped, so global scope is unchanged.\n" +
+    `// Bundle: ${label}\n`
+  );
+}
+
+// Concatenate the already-built individual outputs, in manifest order, into the
+// handful of bundle files index.html actually loads. Reads what buildClient()
+// just wrote, so this must run AFTER the per-file emit.
+export function buildBundles() {
+  for (const bundle of BUNDLES) {
+    const chunks = bundle.inputs.map((input) => {
+      const body = readFileSync(path.join(root, input), "utf8").trimEnd();
+      return `// ==== ${input} ====\n${body}`;
+    });
+    const content = `${bundleHeader(bundle.label)}\n${chunks.join("\n;\n")}\n`;
+    const outputPath = path.join(root, bundle.output);
+    mkdirSync(path.dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, content);
+  }
+  console.log(`✓ built client bundles (${BUNDLES.length} bundle${BUNDLES.length === 1 ? "" : "s"})`);
 }
 
 export function buildClient() {
@@ -266,6 +562,7 @@ export function buildClient() {
   }
 
   console.log(`✓ built client output (${CLIENT_OUTPUTS.length} file${CLIENT_OUTPUTS.length === 1 ? "" : "s"})`);
+  buildBundles();
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === currentFile) {

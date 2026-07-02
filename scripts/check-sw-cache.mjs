@@ -65,11 +65,21 @@ function assertPublicAssetContract() {
   }
 
   if (scripts[0] !== "/art.js") errors.push("public/index.html must load /art.js before feature scripts");
-  const settingsRoutesIndex = scripts.indexOf("/js/settings-routes.js");
-  const bootIndex = scripts.indexOf("/js/10-boot.js");
-  if (bootIndex !== scripts.length - 1) errors.push("public/index.html must load /js/10-boot.js last");
-  if (settingsRoutesIndex === -1 || bootIndex === -1 || settingsRoutesIndex > bootIndex) {
-    errors.push("public/index.html must load /js/settings-routes.js before /js/10-boot.js");
+  // index.html loads a handful of concatenated bundles (bundle-NN-*.js) instead of
+  // the ~216 individual modules; the ordered constituents live in the build-client
+  // BUNDLES manifest. Here we only enforce that index.html loads bundle files and
+  // that the bundle set + order is exactly mirrored by CORE_ASSETS, so the boot
+  // graph and the precache never drift apart.
+  const indexBundles = scripts.filter((src) => src.startsWith("/js/"));
+  const coreBundles = core.filter((src) => src.startsWith("/js/"));
+  if (indexBundles.some((src) => !/^\/js\/bundle-\d+[\w-]*\.js$/.test(src))) {
+    errors.push(`public/index.html must load only /js/bundle-*.js scripts (got: ${indexBundles.join(", ")})`);
+  }
+  if (JSON.stringify(indexBundles) !== JSON.stringify(coreBundles)) {
+    errors.push(
+      "public/index.html bundle scripts and CORE_ASSETS bundles must match in order " +
+        `(index.html: ${indexBundles.join(", ")} | CORE_ASSETS: ${coreBundles.join(", ")})`
+    );
   }
 
   const missingFiles = allCached
