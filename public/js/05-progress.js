@@ -4,7 +4,7 @@
 // SWR over /exercises (key progress:exercises): the 1RM seg paints its exercise
 // picker + chart shell instantly on a warm re-entry, then revalidates.
 async function renderProgress() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "1RM";
     state.progressSeg = "trend";
     const token = ++pollToken;
     const peek = peekCached("progress:exercises");
@@ -24,7 +24,7 @@ async function renderProgress() {
 // `profile`, for the goal line): the Weight seg paints its chart instantly on a
 // warm re-entry, then revalidates. A bodyweight log invalidates progress:weight.
 async function renderWeight() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "Weight";
     state.progressSeg = "weight";
     const token = ++pollToken;
     const peekRows = peekCached("progress:weight");
@@ -58,7 +58,7 @@ async function renderWeight() {
 // (BMI / waist-to-height / Navy body-fat) and per-site trends. The seg bar keeps the
 // two-level Progress nav; the self-contained body-metrics client paints into the mount.
 async function renderMeasurements() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "Measurements";
     state.progressSeg = "measurements";
     view.innerHTML = segBar("measurements", PROGRESS_SEG) + `<div id="bodyMetricsMount"></div>`;
     wireSeg(PROGRESS_HANDLERS);
@@ -68,7 +68,7 @@ async function renderMeasurements() {
 // SWR over /volume?days=30 (key progress:volume): the Volume seg paints the
 // per-muscle bars instantly on a warm re-entry, then revalidates.
 async function renderVolume() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "Volume";
     state.progressSeg = "volume";
     const token = ++pollToken;
     const peek = peekCached("progress:volume");
@@ -155,7 +155,7 @@ function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
 // SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its
 // month grids instantly on a warm re-entry, then revalidates.
 async function renderCalendar() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "Calendar";
     state.progressSeg = "calendar";
     const token = ++pollToken;
     const peek = peekCached("progress:calendar");
@@ -220,7 +220,7 @@ function paintCalendarBody(data) {
 // revalidates. The shell (#checkinResult) is preserved across re-fills so an
 // in-flight nutrition check-in card is never clobbered by a background refresh.
 async function renderEnergy() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "Energy";
     state.progressSeg = "energy";
     const token = ++pollToken;
     const head = segBar("energy", PROGRESS_SEG);

@@ -8645,7 +8645,7 @@ function numOrNull(value) {
 // History seg paints the hero + session cards instantly, then revalidates and
 // re-paints only on change. A set-log / session-edit invalidates the key.
 async function renderHistory() {
-    headerTitle.textContent = "Progress";
+    headerTitle.textContent = "History";
     state.progressSeg = "sessions"; // remember the chosen seg so the default never yanks back
     const token = ++pollToken;
     const peek = peekCached("history:sessions");
@@ -9014,7 +9014,7 @@ function hasProgressEnduranceRecord(value) {
     return !!value && typeof value === "object";
 }
 async function renderProgressEndurance(deps) {
-    deps.headerTitle.textContent = "Progress";
+    deps.headerTitle.textContent = "Endurance";
     deps.state.progressSeg = "endurance";
     const token = deps.nextToken();
     deps.view.innerHTML = deps.segmentHtml("endurance") + `<div id="endBody">${deps.loading("Reading your week...")}</div>`;
@@ -10412,7 +10412,7 @@ async function triggerProgramEvolve(btn, deps) {
     });
 }
 async function renderProgressProgram(deps) {
-    deps.headerTitle.textContent = "Progress";
+    deps.headerTitle.textContent = "Program";
     deps.state.progressSeg = "program";
     const token = deps.nextToken();
     const peek = deps.peekCached("progress:program");

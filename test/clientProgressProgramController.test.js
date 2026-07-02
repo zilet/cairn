@@ -225,7 +225,7 @@ test("progress program controller repaints with the conductor when focus arrives
   await context.CairnProgressProgramController.render(deps);
   await Promise.resolve();
 
-  assert.equal(deps.headerTitle.textContent, "Progress");
+  assert.equal(deps.headerTitle.textContent, "Program");
   assert.equal(deps.state.progressSeg, "program");
   assert.match(deps.view.innerHTML, /FOCUS CARD/);
   assert.match(deps.view.innerHTML, /<summary>The full read<\/summary>/);

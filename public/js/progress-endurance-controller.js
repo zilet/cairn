@@ -12,7 +12,7 @@ function hasProgressEnduranceRecord(value) {
     return !!value && typeof value === "object";
 }
 async function renderProgressEndurance(deps) {
-    deps.headerTitle.textContent = "Progress";
+    deps.headerTitle.textContent = "Endurance";
     deps.state.progressSeg = "endurance";
     const token = deps.nextToken();
     deps.view.innerHTML = deps.segmentHtml("endurance") + `<div id="endBody">${deps.loading("Reading your week...")}</div>`;

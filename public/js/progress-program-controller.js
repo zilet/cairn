@@ -53,7 +53,7 @@ async function triggerProgramEvolve(btn, deps) {
     });
 }
 async function renderProgressProgram(deps) {
-    deps.headerTitle.textContent = "Progress";
+    deps.headerTitle.textContent = "Program";
     deps.state.progressSeg = "program";
     const token = deps.nextToken();
     const peek = deps.peekCached("progress:program");

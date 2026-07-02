@@ -116,7 +116,7 @@
     );
 
     deps.select("#profToToday")?.addEventListener("click", () => deps.activateTab("today"));
-    deps.select("#profToProgress")?.addEventListener("click", () => deps.activateTab("progress"));
+    deps.select("#profToProgress")?.addEventListener("click", () => { deps.state.progressSeg = "sessions"; deps.activateTab("progress"); });
   }
 
   async function renderProfile(deps: MeProfileControllerDeps): Promise<void> {

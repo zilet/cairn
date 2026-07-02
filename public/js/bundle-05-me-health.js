@@ -569,7 +569,7 @@ if (typeof window !== "undefined") {
 
     <div class="prof-capture-note sess">
       <div class="sess-line" style="color:var(--muted)">
-        Log your bodyweight, activities, and meals on <button class="linkbtn" id="profToToday">Today</button> — the quick-log, the bodyweight chip, voice, and your frequents all live there. They show up in <b>Lately</b> and <button class="linkbtn" id="profToProgress">Progress</button>.
+        Log your bodyweight, activities, and meals on <button class="linkbtn" id="profToToday">Today</button> — the quick-log, the bodyweight chip, voice, and your frequents all live there. They show up in <b>Lately</b> and your <button class="linkbtn" id="profToProgress">History</button>.
       </div>
     </div>`;
     }
@@ -695,7 +695,7 @@ if (typeof window !== "undefined") {
             profileBar.markDirty();
         }));
         deps.select("#profToToday")?.addEventListener("click", () => deps.activateTab("today"));
-        deps.select("#profToProgress")?.addEventListener("click", () => deps.activateTab("progress"));
+        deps.select("#profToProgress")?.addEventListener("click", () => { deps.state.progressSeg = "sessions"; deps.activateTab("progress"); });
     }
     async function renderProfile(deps) {
         deps.headerTitle.textContent = "Profile";

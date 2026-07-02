@@ -13,7 +13,7 @@ function numOrNull(value: unknown): number | null {
 // History seg paints the hero + session cards instantly, then revalidates and
 // re-paints only on change. A set-log / session-edit invalidates the key.
 async function renderHistory() {
-  headerTitle.textContent = "Progress";
+  headerTitle.textContent = "History";
   state.progressSeg = "sessions"; // remember the chosen seg so the default never yanks back
   const token = ++pollToken;
   const peek = peekCached("history:sessions");

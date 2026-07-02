@@ -62,7 +62,7 @@ async function triggerProgramEvolve(btn: Element, deps: ClientProgressProgramCon
 }
 
 async function renderProgressProgram(deps: ClientProgressProgramControllerDeps): Promise<unknown> {
-  deps.headerTitle.textContent = "Progress";
+  deps.headerTitle.textContent = "Program";
   deps.state.progressSeg = "program";
   const token = deps.nextToken();
   const peek = deps.peekCached<ProgressProgramState>("progress:program");

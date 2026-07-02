@@ -102,7 +102,7 @@ test("progress endurance controller fans out reads and paints the empty enduranc
 
   await controller.render(deps);
 
-  assert.equal(deps.headerTitle.textContent, "Progress");
+  assert.equal(deps.headerTitle.textContent, "Endurance");
   assert.equal(deps.state.progressSeg, "endurance");
   assert.equal(deps.wired, 1);
   assert.deepEqual(apiCalls, ["/stats", "/endurance-prs", "/endurance-goal", "/run-compliance", "/settings", "/run-plan"]);
