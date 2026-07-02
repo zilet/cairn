@@ -3366,6 +3366,10 @@ declare global {
         reducedMotion?: boolean;
         offlineDismissed?: boolean;
       }): string;
+      materiallyDiffers(
+        a: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined,
+        b: (Partial<ClientDayRead> & { _provisional?: unknown }) | null | undefined,
+      ): boolean;
       signalsText(read: Partial<ClientDayRead> | null | undefined): string;
     };
 

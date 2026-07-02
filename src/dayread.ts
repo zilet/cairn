@@ -9,6 +9,7 @@ import { buildDayReadPrompt } from "./prompt.js";
 import { INTERACTIVE_TIMEOUT_MS } from "./agents.js";
 import { runChosen } from "./runChosen.js";
 import { localDateISO } from "./repo/shared.js";
+import { isValidTimeZone } from "./tz.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -19,6 +20,20 @@ export function localToday(d: Date = new Date()): string {
   // the row getCoachContext reads (both follow the active device zone, else the
   // server's). Kept as a named export for its existing callers (api/scheduler).
   return localDateISO(d);
+}
+
+// The calendar date to WARM the Brief for. The scheduler runs outside any request
+// so there's no device zone in scope; passing the recorded client zone explicitly
+// makes the boot-warm + nightly precompute compute "today" in the DEVICE's zone
+// (the date its next open will request), falling back to server-local when no zone
+// has been recorded. Pure (zone in, date out) so it's trivially testable.
+export function warmDate(tz: string | undefined, now: Date = new Date()): string {
+  return localDateISO(now, isValidTimeZone(tz) ? tz : undefined);
+}
+
+// warmDate bound to the last recorded client zone — the date the scheduler warms.
+export function warmToday(now: Date = new Date()): string {
+  return warmDate(repo.recordedClientTimeZone(), now);
 }
 
 function deterministicHeadline(r: { kind: string; focus?: string | null }): string {

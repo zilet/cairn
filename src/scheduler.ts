@@ -2,7 +2,7 @@ import * as repo from "./repo.js";
 import { runAgentWithFallback, setAgentRunSink } from "./agents.js";
 import { buildCoachPrompt } from "./prompt.js";
 import { evolveProgram, generateInsight, nutritionCheckin, synthesizeHealth } from "./coachOps.js";
-import { precomputeDayRead, localToday } from "./dayread.js";
+import { precomputeDayRead, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
@@ -309,7 +309,9 @@ export function startScheduler() {
     if (precomputeBusy) return;
     const now = new Date();
     if (now.getHours() !== PRECOMPUTE_HOUR) return;
-    const stamp = localToday(now);
+    // Warm the DEVICE's calendar date (recorded client zone), not the server's, so
+    // a traveling owner's morning open still lands on a cached read.
+    const stamp = warmToday(now);
     if (stamp === lastPrecomputeDate) return; // already ran this day
     lastPrecomputeDate = stamp;
     precomputeBusy = true;
@@ -431,7 +433,7 @@ export function startScheduler() {
   // it in the background so the very next open is instant too. Safe no-op when an
   // agent is unreachable — it caches the deterministic floor.
   setTimeout(() => {
-    const today = localToday();
+    const today = warmToday();
     if (!repo.getCachedDayRead(today)) {
       precomputeDayRead(today)
         .then(() => console.log(`[brief] warmed today's day-read for ${today}.`))

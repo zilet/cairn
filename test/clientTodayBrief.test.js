@@ -118,3 +118,25 @@ test("Today signal summary preserves plain-language framing", () => {
     "3 days of training in a row; your sleep's been running short; you mentioned how you're feeling."
   );
 });
+
+test("Today Brief materiallyDiffers compares only the visible fields", () => {
+  const brief = loadTodayBrief();
+  const base = { kind: "train", headline: "Upper day", why: "recovered and due", focus: "push", est_minutes: 45, signals: {} };
+
+  // Identical visible content — even with different non-visible fields — is NOT a diff.
+  assert.equal(brief.materiallyDiffers(base, { ...base, source: "agent", agent: "claude", signals: { x: 1 } }), false);
+  // Whitespace-only headline change is not material.
+  assert.equal(brief.materiallyDiffers(base, { ...base, headline: "  Upper day " }), false);
+  // est_minutes rounds before comparing.
+  assert.equal(brief.materiallyDiffers(base, { ...base, est_minutes: 45.2 }), false);
+
+  // Any visible-field change IS a diff.
+  assert.equal(brief.materiallyDiffers(base, { ...base, kind: "easy" }), true);
+  assert.equal(brief.materiallyDiffers(base, { ...base, headline: "Easy day" }), true);
+  assert.equal(brief.materiallyDiffers(base, { ...base, why: "you're sore" }), true);
+  assert.equal(brief.materiallyDiffers(base, { ...base, focus: "pull" }), true);
+  assert.equal(brief.materiallyDiffers(base, { ...base, est_minutes: 30 }), true);
+  // A missing operand is treated as a difference.
+  assert.equal(brief.materiallyDiffers(null, base), true);
+  assert.equal(brief.materiallyDiffers(base, null), true);
+});
