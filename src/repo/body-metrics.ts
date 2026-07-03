@@ -226,6 +226,27 @@ export function latestBodyMeasurement(): BodyMeasurementRow | null {
   );
 }
 
+// A tape session fills in only what was measured — so the indicators/comp read
+// each site's LATEST KNOWN value across recent sessions (bounded to a year so a
+// waist-only re-tape doesn't pair with ancient hips), not just the newest row.
+// Otherwise logging just the waist today would blank waist-to-hip and the Navy
+// body-fat estimate until the athlete re-tapes everything in one sitting.
+export function latestKnownMeasurement(days = 365): BodyMeasurementRow | null {
+  const rows = listBodyMeasurements(days); // chronological
+  if (!rows.length) return latestBodyMeasurement();
+  const merged = { ...rows[rows.length - 1] };
+  for (const site of MEASUREMENT_SITES) {
+    if (merged[site] != null) continue;
+    for (let i = rows.length - 2; i >= 0; i--) {
+      if (rows[i][site] != null) {
+        merged[site] = rows[i][site];
+        break;
+      }
+    }
+  }
+  return merged;
+}
+
 export function updateBodyMeasurement(id: number, patch: Record<string, unknown>): BodyMeasurementRow | null {
   const cur = getBodyMeasurement(id);
   if (!cur) return null;
@@ -426,10 +447,11 @@ function navyBodyFat(
   };
 }
 
-// Compute the full indicator set from a measurement (defaults to latest) + profile.
+// Compute the full indicator set from a measurement (defaults to the latest
+// KNOWN value per site — see latestKnownMeasurement) + profile.
 export function getBodyIndicators(measurement?: BodyMeasurementRow | null, profile?: any): BodyIndicator[] {
   const p = profile ?? getProfile();
-  const m = measurement === undefined ? latestBodyMeasurement() : measurement;
+  const m = measurement === undefined ? latestKnownMeasurement() : measurement;
   const heightIn = effectiveHeightIn(p);
   const weightLb = latestWeightLb(p);
   const female = isFemale(p);
@@ -569,7 +591,7 @@ function projectValue(trend: SiteTrend | undefined, weeks: number): number | nul
 
 export function getBodyCompFocus(unit: MeasureUnit = "in"): BodyCompFocus {
   const p = getProfile();
-  const m = latestBodyMeasurement();
+  const m = latestKnownMeasurement();
   const heightIn = effectiveHeightIn(p);
   const female = isFemale(p);
   const indicators = getBodyIndicators(m, p);
@@ -793,7 +815,7 @@ export function getBodyMetricsSummary(days = 365, unit: MeasureUnit = "in"): Bod
   return {
     latest: latest ? rowToUnit(latest, unit) : null,
     measurements,
-    indicators: getBodyIndicators(latest, p),
+    indicators: getBodyIndicators(latestKnownMeasurement(days), p),
     trends: getBodyMetricTrends(days, unit),
     profile: {
       height_in: heightIn,
@@ -819,7 +841,7 @@ export function bodyMetricsContextSlice(): {
   focus_line: string | null;
   heading: string | null;
 } | null {
-  const latest = latestBodyMeasurement();
+  const latest = latestKnownMeasurement();
   const heightIn = effectiveHeightIn();
   if (!latest && heightIn == null) return null;
   const measurements: Partial<Record<MeasurementSite, number>> = {};
@@ -883,7 +905,7 @@ export function applyMeasurementAction(action: Record<string, unknown>): Measure
   if (!hasAnySite(sites)) {
     // Height-only capture is still useful (unlocks BMI) — treat as ok when we set it.
     const ok = heightRaw != null;
-    return { ok, measurement: null, height_in: heightIn, indicators: getBodyIndicators(latestBodyMeasurement()), note: ok ? "height set" : "nothing to log" };
+    return { ok, measurement: null, height_in: heightIn, indicators: getBodyIndicators(latestKnownMeasurement()), note: ok ? "height set" : "nothing to log" };
   }
   const measurement = addBodyMeasurement(
     typeof action.date === "string" ? action.date : undefined,

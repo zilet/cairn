@@ -100,6 +100,27 @@ test("waist-to-hip uses sex-aware cutoffs", () => {
   assert.equal(female.zone, "optimal"); // <0.85 for women
 });
 
+// ---- latest KNOWN value per site across sessions ------------------------------
+test("a partial re-tape merges with earlier sessions instead of blanking indicators", () => {
+  repo.setProfile({ sex: "male", height_in: 70 });
+  repo.addBodyMeasurement(localDaysAgo(30), { waist_in: 38, hip_in: 40, neck_in: 15 }, null, "manual");
+  repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 37 }, null, "manual");
+
+  const merged = repo.latestKnownMeasurement();
+  assert.equal(merged.waist_in, 37, "newest waist wins");
+  assert.equal(merged.hip_in, 40, "hip falls back to the session that taped it");
+  assert.equal(merged.date, localDaysAgo(0), "identity stays the newest session");
+
+  // Waist-to-hip and Navy body-fat survive the waist-only re-tape...
+  const summary = repo.getBodyMetricsSummary();
+  const whr = summary.indicators.find((i) => i.key === "whr");
+  assert.equal(whr.value, Math.round((37 / 40) * 100) / 100);
+  const bf = summary.indicators.find((i) => i.key === "bodyfat");
+  assert.ok(bf.value != null, "Navy estimate pairs today's waist with the known neck");
+  // ...and the payload's `latest` row stays the honest raw session.
+  assert.equal(summary.latest.hip_in, null);
+});
+
 // ---- Navy body-fat: sex-aware + labelled an estimate -------------------------
 test("Navy body-fat is sex-aware and always flagged an estimate", () => {
   repo.setProfile({ height_in: 70, sex: "male" });

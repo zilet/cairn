@@ -1,6 +1,8 @@
 // The Body "where you stand" figure: deterministic region derivation (which body
-// area glows) + the SVG it produces. The lever glows the waist; a muscle site
-// growing while the waist holds glows sage. No scores, escaped aria.
+// area is tinted) + the fitting-sheet SVG — an ellipse mannequin whose widths are
+// drawn from the latest tape, a dashed sage trace of the optimal waist for the
+// athlete's height, and hairline callouts for each measured site. No scores,
+// escaped aria, and it never emits NaN geometry.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -16,6 +18,7 @@ function loadBodyMetrics() {
     escHtml: (v) => String(v ?? ""),
     escAttr: (v) => String(v ?? "").replaceAll('"', "&quot;"),
     localISO: () => "2026-07-02",
+    relAge: () => "2 weeks ago",
     sparklineSvg: () => "",
     toast: () => {},
     api: () => Promise.resolve({}),
@@ -32,17 +35,29 @@ const trends = (dirs) => ({
   weight: { key: "weight", direction: null },
 });
 
+const latest = (over = {}) => ({
+  id: 1, date: "2026-06-20",
+  waist_in: null, hip_in: null, chest_in: null, shoulder_in: null, neck_in: null,
+  thigh_in: null, upper_arm_in: null, calf_in: null, forearm_in: null,
+  note: null, source: null, ...over,
+});
+
+const fig = (bm, over = {}) =>
+  bm.bodyFigureSvg({
+    latest: null, heightIn: 69, sex: "male", unit: "in", focus: null, wins: [], dirs: {}, ...over,
+  });
+
 test("deriveFigureRegions maps the central-fat lever to the waist", () => {
   const bm = loadBodyMetrics();
   for (const key of ["whtr", "whr", "bodyfat"]) {
     assert.equal(bm.deriveFigureRegions({ focus: { key } }, undefined).focus, "waist", `${key} → waist`);
   }
-  // BMI is whole-body, not a waist region; no lever glow.
+  // BMI is whole-body, not a waist region; no lever tint.
   assert.equal(bm.deriveFigureRegions({ focus: { key: "bmi" } }, undefined).focus, null);
   assert.equal(bm.deriveFigureRegions({ focus: null }, undefined).focus, null);
 });
 
-test("a muscle site growing while the waist holds glows sage; a rising waist suppresses it", () => {
+test("a muscle site growing while the waist holds reads as a win; a rising waist suppresses it", () => {
   const bm = loadBodyMetrics();
   // Recomposition: arms + thighs up, waist down → arms + legs win.
   const recomp = bm.deriveFigureRegions(
@@ -64,16 +79,73 @@ test("a muscle site growing while the waist holds glows sage; a rising waist sup
   assert.equal([...upper.wins].join(","), "chest");
 });
 
-test("bodyFigureSvg glows the focus terracotta and marks wins, and never leaks a score", () => {
+test("mergeLatestSites reads each site's latest known value across sessions", () => {
   const bm = loadBodyMetrics();
-  const svg = bm.bodyFigureSvg("waist", ["arms"]);
+  // The API lists sessions chronologically (oldest first, for charting); a quick
+  // waist-only re-tape must not blank last month's chest.
+  const rows = [
+    latest({ id: 1, date: "2026-05-01", chest_in: 41, hip_in: 40 }),
+    latest({ id: 2, date: "2026-06-01", waist_in: 39, chest_in: 42, thigh_in: 23 }),
+    latest({ id: 3, date: "2026-07-01", waist_in: 38 }),
+  ];
+  const merged = bm.mergeLatestSites(rows, rows[2]);
+  assert.equal(merged.waist_in, 38, "newest waist wins");
+  assert.equal(merged.chest_in, 42, "chest falls back to the last session that taped it");
+  assert.equal(merged.hip_in, 40, "hip reaches back two sessions");
+  assert.equal(merged.date, "2026-07-01", "row identity stays the newest session");
+  assert.equal(bm.mergeLatestSites([], null), null);
+});
+
+test("the mannequin draws from the tape: measured sites get callouts, unmeasured stay silent", () => {
+  const bm = loadBodyMetrics();
+  const svg = fig(bm, { latest: latest({ waist_in: 38, chest_in: 42, thigh_in: 23 }), dirs: { waist_in: "down" } });
   assert.match(svg, /<svg[^>]*class="bm-figure"/);
-  assert.match(svg, /clipPath id="bmfig-clip"/);
-  assert.match(svg, /#b4552d/, "focus glow uses the terracotta accent");
+  for (const [name, val] of [["WAIST", "38"], ["CHEST", "42"], ["THIGH", "23"]]) {
+    assert.match(svg, new RegExp(`>${name}</tspan>`), `${name} callout present`);
+    assert.match(svg, new RegExp(`>${val}</tspan>`), `${name} value present`);
+  }
+  assert.match(svg, />↓<\/tspan>/, "waist trend arrow rides the callout");
+  assert.doesNotMatch(svg, />HIP</, "untaped site gets no callout");
+  assert.doesNotMatch(svg, /NaN/, "geometry never leaks NaN");
+  // Callouts are tap-through affordances to the site's trend row.
+  assert.match(svg, /class="bm-co" data-site="waist_in" role="button" tabindex="0"/, "callout is keyboard-reachable");
+  assert.match(svg, /aria-label="See the waist trend"/);
+});
+
+test("the dashed optimal-waist trace appears only above the band", () => {
+  const bm = loadBodyMetrics();
+  // 38 in waist at 69 in height (0.55) → above optimal, trace + label drawn.
+  const above = fig(bm, { latest: latest({ waist_in: 38 }) });
+  assert.match(above, /stroke-dasharray="4 3"/, "dashed trace drawn");
+  assert.match(above, />OPTIMAL<\/tspan>/, "optimal callout labeled");
+  assert.match(above, />34\.5<\/tspan>/, "optimal waist = half the 69 in height");
+  assert.doesNotMatch(above, /data-site="optimal/, "the optimal marker is not a tap target");
+  // 31 in waist (0.45) sits inside the band → no target drawn over a lean waist.
+  const lean = fig(bm, { latest: latest({ waist_in: 31 }) });
+  assert.doesNotMatch(lean, /stroke-dasharray="4 3"/);
+  assert.doesNotMatch(lean, />OPTIMAL</);
+});
+
+test("cm payloads scale geometry in inches but display cm values", () => {
+  const bm = loadBodyMetrics();
+  // 96.5 cm waist (38 in) at 69 in height → above optimal, value shown as taped.
+  const svg = fig(bm, { unit: "cm", latest: latest({ waist_in: 96.5 }) });
+  assert.match(svg, />96\.5<\/tspan>/, "callout shows the cm value");
+  assert.match(svg, /stroke-dasharray="4 3"/, "band math ran in inches");
+  assert.match(svg, />87\.6<\/tspan>/, "optimal waist rendered in cm (34.5 in)");
+  assert.doesNotMatch(svg, /NaN/);
+});
+
+test("focus tints terracotta, wins mark sage, neutral stays quiet, and no score leaks", () => {
+  const bm = loadBodyMetrics();
+  const svg = fig(bm, { latest: latest({ waist_in: 38, upper_arm_in: 14 }), focus: "waist", wins: ["arms"] });
+  assert.match(svg, /#b4552d/, "focus tint uses the terracotta accent");
   assert.match(svg, /#5a6a4a/, "win chevron uses deep sage");
   assert.match(svg, /aria-label="[^"]*waist[^"]*"/i);
-  // Neutral state: base body only, no focus/win colors.
-  const neutral = bm.bodyFigureSvg(null, []);
+  // Neutral, no measurements: base mannequin only — no focus/win colors, no callouts.
+  const neutral = fig(bm);
   assert.doesNotMatch(neutral, /#b4552d|#5a6a4a/);
+  assert.doesNotMatch(neutral, /<text/, "default croquis carries no annotations");
+  assert.doesNotMatch(neutral, /NaN/);
   assert.doesNotMatch(svg, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
 });
