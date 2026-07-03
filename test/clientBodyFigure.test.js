@@ -1,8 +1,10 @@
 // The Body "where you stand" figure: deterministic region derivation (which body
-// area is tinted) + the fitting-sheet SVG — an ellipse mannequin whose widths are
-// drawn from the latest tape, a dashed sage trace of the optimal waist for the
-// athlete's height, and hairline callouts for each measured site. No scores,
-// escaped aria, and it never emits NaN geometry.
+// area is tinted) + the fitting-sheet SVG — one continuous croquis silhouette
+// whose outline widths are drawn from the latest tape, a dashed sage trace of
+// the optimal waistline for the athlete's height, hairline callouts for each
+// measured site carrying the move since the previous tape, and the previous-
+// session merge that feeds the then→now morph. No scores, escaped aria, and it
+// never emits NaN geometry.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -94,6 +96,42 @@ test("mergeLatestSites reads each site's latest known value across sessions", ()
   assert.equal(merged.hip_in, 40, "hip reaches back two sessions");
   assert.equal(merged.date, "2026-07-01", "row identity stays the newest session");
   assert.equal(bm.mergeLatestSites([], null), null);
+});
+
+test("mergePreviousSites reads the sheet one session ago (and needs two sessions)", () => {
+  const bm = loadBodyMetrics();
+  const rows = [
+    latest({ id: 1, date: "2026-05-01", chest_in: 41, waist_in: 40 }),
+    latest({ id: 2, date: "2026-06-01", waist_in: 39, thigh_in: 23 }),
+    latest({ id: 3, date: "2026-07-01", waist_in: 38 }),
+  ];
+  const prev = bm.mergePreviousSites(rows, rows[2]);
+  assert.equal(prev.waist_in, 39, "previous = the merge with the newest session dropped");
+  assert.equal(prev.chest_in, 41, "older sites still reach back");
+  assert.equal(prev.thigh_in, 23);
+  assert.equal(bm.mergePreviousSites([rows[0]], rows[0]), null, "one session has no 'then' frame");
+  assert.equal(bm.mergePreviousSites([], null), null);
+});
+
+test("the silhouette is one continuous path — no ellipse stack — and it clips its washes", () => {
+  const bm = loadBodyMetrics();
+  const neutral = fig(bm);
+  assert.doesNotMatch(neutral, /<ellipse/, "body geometry is smooth paths, not ellipses");
+  assert.match(neutral, /<clipPath id="bmfig-clip-core">/, "silhouette doubles as the glow clip");
+  const focused = fig(bm, { latest: latest({ waist_in: 38 }), focus: "waist" });
+  assert.match(focused, /<g clip-path="url\(#bmfig-clip-core\)">/, "torso glows stay inside the body line");
+  assert.match(focused, /<radialGradient id="bmfig-glow-a">/, "the focus wash is a soft glow, not a flat slab");
+  assert.match(focused, /class="bm-pulse"/, "the focus wash breathes");
+  assert.doesNotMatch(fig(bm, { latest: latest({ waist_in: 38 }) }), /bm-pulse/, "no focus, no pulse");
+});
+
+test("a move since the last tape rides the callout; tape noise stays quiet", () => {
+  const bm = loadBodyMetrics();
+  const moved = fig(bm, { latest: latest({ waist_in: 38 }), deltas: { waist_in: -1.5 }, dirs: { waist_in: "down" } });
+  assert.match(moved, />↓1\.5<\/tspan>/, "delta renders as arrow + magnitude");
+  const quiet = fig(bm, { latest: latest({ waist_in: 38 }), deltas: { waist_in: -0.1 }, dirs: { waist_in: "down" } });
+  assert.match(quiet, />↓<\/tspan>/, "sub-threshold delta falls back to the trend arrow");
+  assert.doesNotMatch(quiet, />↓0\.1</);
 });
 
 test("the mannequin draws from the tape: measured sites get callouts, unmeasured stay silent", () => {

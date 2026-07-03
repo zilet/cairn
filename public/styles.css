@@ -5155,3 +5155,8 @@ body[data-tab="session"] .tabbar{display:none}
   .tov-figs{gap:44px}
   .tov-fig{width:140px}
 }
+
+/* ---- Body figure: the focus wash breathes (body-metrics fitting sheet) ---- */
+@keyframes bm-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.bm-pulse{animation:bm-pulse 3.4s var(--ease, ease-in-out) infinite}
+@media (prefers-reduced-motion: reduce){ .bm-pulse{animation:none} }
