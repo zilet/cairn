@@ -22,6 +22,7 @@ import {
   planDayProgression,
   programAdjustments,
   programBalance,
+  recentMuscleLoad,
   runZones,
   setEquipmentProfile,
   setProposalStatus,
@@ -221,6 +222,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "Build a DRAFT plan proposal from this week's deterministic run mix (weeklyRunPlan) via the existing propose→apply path — applied through setWeeklyRuns, which keeps strength work intact and carries the interval structure. Never auto-applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's no run plan).",
     { date: z.string().optional() },
     async ({ date }) => asText(buildRunPlanProposal(date))
+  );
+
+  server.tool(
+    "get_muscle_load",
+    "Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day). Plain words, no scores.",
+    { days: z.number().int().min(1).max(7).optional().describe("window in days (default 2)") },
+    async ({ days }) => asText({ days: days ?? 2, groups: [...recentMuscleLoad(days ?? 2).values()] })
   );
 
   server.tool(

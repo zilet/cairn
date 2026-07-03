@@ -21,7 +21,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings"],
     sections: {
       plan: ["edit", "endurance", "food", "meals", "coach"],
-      progress: ["trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
+      progress: ["overview", "trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "energy"],
       // Stand is the health home: every health tool is a first-class Stand sub-view.
       // "me" health sections survive only as parse targets that redirect into Stand.
       stand: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],

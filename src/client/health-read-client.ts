@@ -4,7 +4,9 @@
 type HealthReadRecovery = {
   has_data?: unknown;
   sources?: unknown[];
+  delta?: { sleep?: unknown; hrv?: unknown; rhr?: unknown } | null;
   recovery?: {
+    last_date?: unknown;
     avg_sleep_min?: unknown;
     avg_deep_sleep_min?: unknown;
     avg_rem_sleep_min?: unknown;
@@ -68,6 +70,14 @@ function recoveryLineHtml(text: unknown, sub: unknown): string {
 // Plain-language recovery summary. Each row is a phrase, not a number to interpret.
 function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   const recovery = summary?.recovery || {};
+  const delta = summary?.delta && typeof summary.delta === "object" ? summary.delta : {};
+  // The recent-week-vs-30-day-norm delta, phrased as quiet progress against the
+  // athlete's OWN baseline; small drift stays silent.
+  const vsNorm = (value: unknown, floor: number, unit: string): string => {
+    const d = Number(value);
+    if (!Number.isFinite(d) || Math.abs(d) < floor) return "";
+    return ` · ${d > 0 ? "+" : "−"}${Math.round(Math.abs(d))} ${unit} vs your month`;
+  };
   const lines: string[] = [];
 
   const sleepMinutes = Number(recovery.avg_sleep_min);
@@ -86,12 +96,17 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
       Number.isFinite(deep) && deep > 0 ? `${Math.round(deep)}m deep` : null,
       Number.isFinite(rem) && rem > 0 ? `${Math.round(rem)}m REM` : null,
     ].filter(Boolean).join(" · ");
-    lines.push(recoveryLineHtml(phrase, `${hours}h${minutes ? " " + minutes + "m" : ""} a night${architecture ? " · " + architecture : ""}`));
+    lines.push(recoveryLineHtml(phrase, `${hours}h${minutes ? " " + minutes + "m" : ""} a night${architecture ? " · " + architecture : ""}${vsNorm(delta.sleep, 10, "min")}`));
   }
 
   const restingHr = Number(recovery.avg_resting_hr);
   if (Number.isFinite(restingHr) && restingHr > 0) {
-    lines.push(recoveryLineHtml("Resting heart rate steady", `~${Math.round(restingHr)} bpm`));
+    const rhrDelta = Number(delta.rhr);
+    const rhrPhrase =
+      Number.isFinite(rhrDelta) && rhrDelta >= 2 ? "Resting heart rate up a touch" :
+      Number.isFinite(rhrDelta) && rhrDelta <= -2 ? "Resting heart rate trending down" :
+      "Resting heart rate steady";
+    lines.push(recoveryLineHtml(rhrPhrase, `~${Math.round(restingHr)} bpm${vsNorm(delta.rhr, 2, "bpm")}`));
   }
 
   const hrv = Number(recovery.avg_hrv_ms);
@@ -102,7 +117,7 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
       status === "unbalanced" ? "Heart-rate variability a touch off" :
       status === "low" || status === "poor" ? "Heart-rate variability running low" :
       "Heart-rate variability holding";
-    lines.push(recoveryLineHtml(phrase, `~${Math.round(hrv)} ms`));
+    lines.push(recoveryLineHtml(phrase, `~${Math.round(hrv)} ms${vsNorm(delta.hrv, 3, "ms")}`));
   }
 
   const stress = Number(recovery.avg_stress);
@@ -175,8 +190,19 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
     .map((source) => source === "garmin" ? "Garmin" : source === "apple" ? "Apple Health" : source)
     .filter(Boolean)
     .join(" · ");
+  // Date the read honestly: say when data last arrived, and if the wearable has
+  // gone quiet, be explicit that the averages reflect the last synced stretch.
+  const lastDate = typeof recovery.last_date === "string" && /^\d{4}-\d{2}-\d{2}/.test(recovery.last_date)
+    ? recovery.last_date.slice(0, 10) : "";
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const stale = !!lastDate && lastDate < localISO(yesterday);
+  const lastLine = lastDate
+    ? `<p class="hb-rlast${stale ? " hb-rlast-stale" : ""}" title="${escAttr(absDate(lastDate))}">Last logged ${escHtml(relAge(lastDate))}${stale ? " — this read reflects your last synced stretch, not today" : ""}</p>`
+    : "";
   return `<div class="hb-recovery reveal" style="${stagger(0)}">
     <div class="hb-rtop"><span class="lbl">Recovery · last 2 weeks</span>${sourceLabel ? `<span class="hb-rsrc">${escHtml(sourceLabel)}</span>` : ""}</div>
+    ${lastLine}
     <div class="hb-rlist">${lines.join("")}</div>
   </div>`;
 }

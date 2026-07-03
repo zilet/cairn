@@ -23,6 +23,7 @@ import {
   planDayProgression,
   programAdjustments,
   programBalance,
+  recentMuscleLoad,
   runZones,
   setEquipmentProfile,
   setProposalStatus,
@@ -107,6 +108,15 @@ programRouter.post("/program/blocks/:id/complete", (req, res) => {
 // Plain words: which groups are due, which are over, and an adherence-skew
 // summary. No scores — band labels (low/productive/high) are the output.
 programRouter.get("/program/balance", (_req, res) => res.json(programBalance()));
+
+// Acute per-muscle freshness over the last ~2 days — recent strength sets AND
+// endurance sessions folded onto the regions they fatigue (a long ride loads the
+// legs). Lets the Train overview say "recovering from yesterday's ride" instead
+// of "undertrained" on a group that's simply resting. Plain words, no scores.
+programRouter.get("/muscle-load", (req, res) => {
+  const days = Number(req.query.days) > 0 ? Math.min(7, Number(req.query.days)) : 2;
+  res.json({ days, groups: [...recentMuscleLoad(days).values()] });
+});
 
 // Per-lift next-session prescription for every strength item on a plan day.
 // ?day=N selects the day; omit to default to the plan day today's read points

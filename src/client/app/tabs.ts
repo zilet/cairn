@@ -13,11 +13,11 @@ type TabSwitchOptions = {
   }
 
   // The Progress sub-view to land on. Endurance athletes default to the Endurance
-  // read; everyone else to History. Once the user picks any Progress seg this
-  // session, state.progressSeg keeps that choice.
+  // read; everyone else to the Train overview (the muscle-balance home). Once the
+  // user picks any Progress seg this session, state.progressSeg keeps that choice.
   function defaultProgressSeg(): string {
     if (state.progressSeg && PROGRESS_SEG.some(([key]) => key === state.progressSeg)) return state.progressSeg;
-    return isEndurance() ? "endurance" : "sessions";
+    return isEndurance() ? "endurance" : "overview";
   }
 
   function tabSkeleton(tab: ClientTabName): string {

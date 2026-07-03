@@ -3804,6 +3804,8 @@ button.hmk-row:active{background:var(--card-2)}
   padding:16px 18px;margin-bottom:14px}
 .hb-rtop{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:11px}
 .hb-rsrc{font-size:.66rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.hb-rlast{font-size:.76rem;color:var(--muted);margin:-6px 0 11px;line-height:1.45}
+.hb-rlast-stale{color:var(--accent)}
 .hb-rlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:11px 16px}
 .hb-rline{display:flex;flex-direction:column;gap:2px}
 .hb-rphrase{font-size:.9rem;font-weight:500;color:var(--ink);line-height:1.25}
@@ -5076,3 +5078,80 @@ body[data-tab="session"] .tabbar{display:none}
 }
 .sess-launch-arrow{transition:transform var(--dur-1) var(--ease)}
 @media (hover:hover){.sess-launch:hover .sess-launch-arrow{transform:translateX(3px)}}
+
+/* ---------- Train overview (the training home) ---------- */
+/* Masthead: editorial serif week-read over an honest stat strip. */
+.tov-mast{padding:6px 4px 14px}
+.tov-mast-h{
+  font-family:var(--font-display, ui-serif, Georgia, serif);
+  font-size:1.45rem;line-height:1.25;font-weight:600;color:var(--ink);
+  margin:6px 0 12px;letter-spacing:-.01em;
+}
+/* The muscle map: front + back silhouettes, tones = plain-word bands. */
+.tov-map{padding:16px 18px 14px}
+.tov-figs{display:flex;justify-content:center;gap:26px;margin:10px 0 4px}
+.tov-figs figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:6px}
+.tov-fig{width:124px;height:auto;display:block}
+.tov-legend{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;padding:8px 0 2px}
+.tov-leg{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--ink-2)}
+.tov-leg-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.tov-dot-due{background:var(--accent)}
+.tov-dot-ok{background:var(--sage)}
+.tov-dot-high{background:var(--gold)}
+.tov-dot-recover{background:var(--ink-2);opacity:.55}
+.tov-dot-idle{background:var(--line)}
+/* Per-muscle rows: name + verdict chip, a you-are-here band, one honest note. */
+.tov-kicker{margin:16px 4px 8px}
+.tov-row{
+  width:100%;display:flex;align-items:center;gap:12px;text-align:left;
+  background:var(--card);border:0;border-radius:var(--radius-sm);
+  padding:11px 14px;margin-bottom:8px;box-shadow:var(--shadow-sm);
+  cursor:pointer;transition:transform var(--dur-1) var(--ease);
+}
+.tov-row:active{transform:var(--press-lg)}
+.tov-row-dot{width:10px;height:10px;border-radius:50%;flex:none}
+.tov-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.tov-row-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tov-row-name{font-weight:600;color:var(--ink);font-size:.92rem}
+.tov-row-note{font-size:.74rem;color:var(--muted)}
+.tov-row-arw{color:var(--muted);flex:none}
+.tov-chip{
+  font-size:.66rem;letter-spacing:.04em;color:var(--ink-2);
+  background:var(--card-2);border-radius:999px;padding:2px 9px;white-space:nowrap;
+}
+.tov-chip-adv{color:var(--sage-text);background:var(--sage-bg)}
+.tov-chip-stall{color:var(--accent-deep);background:var(--accent-wash)}
+/* Categorical band: three zones, productive shaded sage, a placed dot. */
+.tov-band{position:relative;height:8px;border-radius:999px;background:var(--card-2);overflow:visible}
+.tov-band-zone{position:absolute;left:33%;width:34%;top:0;bottom:0;background:var(--sage-bg);border-radius:999px}
+.tov-band-dot{
+  position:absolute;top:50%;width:12px;height:12px;border-radius:50%;
+  transform:translate(-50%,-50%);border:2px solid var(--card);box-shadow:var(--shadow-sm);
+}
+/* Focus well + weekly moves + latest sessions. */
+.tov-focus{margin:14px 0}
+.tov-focus-title{font-weight:650;color:var(--ink);margin:4px 0 2px}
+.tov-focus-why{font-size:.82rem;color:var(--ink-2)}
+.tov-focus-move{font-size:.82rem;color:var(--ink-2);font-style:italic;margin-top:6px}
+.tov-focus-retest{font-size:.74rem;color:var(--muted);margin-top:6px}
+.tov-focus .linkbtn{margin-top:8px}
+.tov-moves{padding:14px 16px;margin:14px 0}
+.tov-move{display:flex;align-items:flex-start;gap:10px;padding:7px 0}
+.tov-move .tov-row-dot{margin-top:5px}
+.tov-move-main{display:flex;flex-direction:column;gap:2px;font-size:.86rem;color:var(--ink)}
+.tov-move-why{font-size:.74rem;color:var(--muted);font-weight:400}
+.tov-recent{margin:14px 0 8px}
+.tov-recent .lbl{margin:0 4px 8px}
+.tov-sess{
+  width:100%;display:flex;align-items:center;gap:10px;text-align:left;
+  background:var(--card);border:0;border-radius:var(--radius-sm);
+  padding:11px 14px;margin-bottom:8px;box-shadow:var(--shadow-sm);
+  cursor:pointer;transition:transform var(--dur-1) var(--ease);
+}
+.tov-sess:active{transform:var(--press-lg)}
+.tov-sess-name{font-weight:600;color:var(--ink);font-size:.9rem;flex:1;min-width:0}
+.tov-sess-meta{font-size:.74rem;color:var(--muted);white-space:nowrap}
+@media (min-width:960px){
+  .tov-figs{gap:44px}
+  .tov-fig{width:140px}
+}

@@ -118,7 +118,7 @@ test("tab controller switches tabs with skeleton-first paint and route sync", as
 });
 
 test("tab controller skips warm skeletons and tears down chat when leaving", async () => {
-  const env = loadTabs({ cachedKeys: new Set(["history:sessions"]), currentTab: "chat" });
+  const env = loadTabs({ cachedKeys: new Set(["history:sessions"]), currentTab: "chat", progressSeg: "sessions" });
 
   env.context.switchTab("progress", { replace: true });
   await flush();
@@ -142,6 +142,23 @@ test("tab controller skips warm skeletons and tears down chat when leaving", asy
     ["peekCached", "history:sessions"],
     ["renderTab", "progress"],
   ]);
+});
+
+test("tab controller lands Progress on the Train overview by default", async () => {
+  const env = loadTabs();
+
+  env.context.switchTab("progress", { syncRoute: false });
+  await flush();
+
+  assert.equal(env.context.state.tab, "progress");
+  assert.equal(env.context.defaultProgressSeg(), "overview");
+  assert.match(env.view.innerHTML, /^seg:overview:/);
+});
+
+test("tab controller keeps the Endurance default for endurance athletes", async () => {
+  const env = loadTabs({ endurance: true });
+
+  assert.equal(env.context.defaultProgressSeg(), "endurance");
 });
 
 test("tab controller honors a direct Plan Endurance route even when the tab is normally hidden", async () => {

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**184 tools.**
+**185 tools.**
 
 | Tool | Description |
 |---|---|
@@ -81,6 +81,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_learned_timeline` | A calm, pull-only read of what Cairn has understood about you and the changes it's made — load-bearing memories, outcome learnings, connected-brain directives, and applied plan changes. Newest-first, bounded. Explains, never grades; no scores. |
 | `get_meal_plan` | Get one meal plan by id (hydrated: parsed days/meals/macros). |
 | `get_meal_recipe` | Get the recipe for one planned meal — returns the cached recipe if the meal already has one, otherwise runs an agent to write it and caches it on the meal inside the plan. |
+| `get_muscle_load` | Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). heavy:true means a real dose (the muscle wants a day). Plain words, no scores. |
 | `get_muscle_trajectory` | Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. Plain words, no scores. {available:false} when nothing's logged. |
 | `get_next_step` | The single highest-leverage next action across ALL domains (train/fuel/recover/recheck/life) right now — one calm thing, or null on a quiet day. A suggestion the user drives, never a to-do wall. |
 | `get_outcome_learnings` | The quiet 'What Cairn has noticed' read: durable, plain-language learnings drawn from suggestion → actual reconciliation (e.g. 'tolerates higher training frequency than the read assumed'). Returns { learnings:[{id, content, noticed_at}] }, newest-first. These season the coach's defaults — never a score, never a gate; pull-never-push. |

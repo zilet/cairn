@@ -2,6 +2,7 @@
 // @ts-check
 // Segmented navigation plus the discipline state that gates Plan's Endurance tab.
 const UI_PROGRESS_SEGMENTS = [
+    ["overview", "Overview"],
     ["sessions", "History"],
     ["trend", "1RM"],
     ["volume", "Volume"],
@@ -25,7 +26,7 @@ const UI_PROGRESS_GROUPS = [
     ["body", "Body"],
 ];
 const UI_PROGRESS_GROUP_LEAVES = {
-    train: ["sessions", "trend", "volume", "endurance", "calendar"],
+    train: ["overview", "sessions", "trend", "volume", "endurance", "calendar"],
     performance: ["program"],
     fuel: ["energy"],
     body: ["weight", "measurements"],
@@ -172,6 +173,7 @@ function createUiSegments(deps) {
         segFitRaf = deps.requestAnimationFrame(() => deps.root.querySelectorAll(".seg").forEach(fitSeg));
     }
     const progressHandlers = {
+        overview: () => deps.renderTrainOverview(),
         trend: () => deps.renderProgress(),
         volume: () => deps.renderVolume(),
         endurance: () => deps.renderEndurance(),

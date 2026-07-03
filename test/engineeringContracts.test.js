@@ -329,7 +329,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   assert.match(parity, /src\/surfaces\/mcp\/training-log\.ts/);
   assert.match(genDocs, /src\/surfaces\/mcp\/training-status\.ts/);
   assert.match(parity, /src\/surfaces\/mcp\/training-status\.ts/);
-  assert.equal(tools.length, 181, "tool count should stay stable while modularizing MCP");
+  assert.equal(tools.length, 182, "tool count should stay stable while modularizing MCP");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -916,6 +916,18 @@ test("Stand restores the read's depth and reuses the rich recovery renderer", ()
   // Rich recovery reuses the shipped plain-language renderer, not the 4-card summary.
   assert.match(standScreen, /CairnHealthRead\.recoveryHtml/, "recovery detail must reuse the rich health-read renderer");
   assert.doesNotMatch(standScreen, /card\("Body battery"/, "the old 4-card recovery summary must be gone");
+});
+
+test("Stand's Recovery tile is freshness-gated; the detail dates itself", () => {
+  // Recovery is time-sensitive: a window average with no reading from today or
+  // yesterday must not sit on the overview presenting itself as a "now" read.
+  const standScreen = read("src/client/stand-screen.ts");
+  assert.match(standScreen, /function recoveryIsFresh/, "the tile must have a freshness check on recovery.last_date");
+  assert.match(standScreen, /if \(!rec \|\| !recoveryIsFresh\(\)\) return ""/, "a stale/absent reading must drop the tile");
+  // The detail always says when data last arrived (and flags a gone-quiet wearable).
+  const healthRead = read("src/client/health-read-client.ts");
+  assert.match(healthRead, /Last logged/, "the recovery detail must date its read");
+  assert.match(healthRead, /hb-rlast-stale/, "a stale read must carry the stale marker class");
 });
 
 test("Stand SWR + depth land in the generated bundle", () => {

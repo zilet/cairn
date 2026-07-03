@@ -13,6 +13,7 @@ type UiSegmentsDeps = {
   requestAnimationFrame(callback: FrameRequestCallback): number;
   cancelAnimationFrame(handle: number): void;
   addResizeListener(listener: () => void): void;
+  renderTrainOverview(): unknown;
   renderProgress(): unknown;
   renderVolume(): unknown;
   renderEndurance(): unknown;
@@ -53,6 +54,7 @@ declare var primaryDiscipline: string;
 declare var enduranceGoalSet: boolean;
 
 const UI_PROGRESS_SEGMENTS: readonly UiSegmentsSegment[] = [
+  ["overview", "Overview"],
   ["sessions", "History"],
   ["trend", "1RM"],
   ["volume", "Volume"],
@@ -77,7 +79,7 @@ const UI_PROGRESS_GROUPS: readonly UiSegmentsSegment[] = [
   ["body", "Body"],
 ];
 const UI_PROGRESS_GROUP_LEAVES: Record<string, readonly string[]> = {
-  train: ["sessions", "trend", "volume", "endurance", "calendar"],
+  train: ["overview", "sessions", "trend", "volume", "endurance", "calendar"],
   performance: ["program"],
   fuel: ["energy"],
   body: ["weight", "measurements"],
@@ -238,6 +240,7 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
   }
 
   const progressHandlers: UiSegmentsHandlerMap = {
+    overview: () => deps.renderTrainOverview(),
     trend: () => deps.renderProgress(),
     volume: () => deps.renderVolume(),
     endurance: () => deps.renderEndurance(),

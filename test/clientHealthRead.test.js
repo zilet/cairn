@@ -36,11 +36,19 @@ function loadHealthRead() {
   return context.CairnHealthRead;
 }
 
+function localISODaysAgo(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 test("health read recovery renderer speaks in plain phrases and escapes sources", () => {
   const read = loadHealthRead();
   const html = read.recoveryHtml({
     sources: ["garmin", "apple", "watch <raw>"],
+    delta: { sleep: -32.5, hrv: 4.2, rhr: 2.4 },
     recovery: {
+      last_date: localISODaysAgo(0),
       avg_sleep_min: 452,
       avg_deep_sleep_min: 72,
       avg_rem_sleep_min: 88,
@@ -64,9 +72,14 @@ test("health read recovery renderer speaks in plain phrases and escapes sources"
 
   assert.match(html, /Recovery · last 2 weeks/);
   assert.match(html, /Garmin · Apple Health · watch &lt;raw&gt;/);
+  assert.match(html, /Last logged today/);
+  assert.doesNotMatch(html, /last synced stretch/);
   assert.match(html, /Sleeping well/);
-  assert.match(html, /7h 32m a night · 72m deep · 88m REM/);
+  assert.match(html, /7h 32m a night · 72m deep · 88m REM · −33 min vs your month/);
+  assert.match(html, /Resting heart rate up a touch/);
+  assert.match(html, /~52 bpm · \+2 bpm vs your month/);
   assert.match(html, /Heart-rate variability balanced/);
+  assert.match(html, /~61 ms · \+4 ms vs your month/);
   assert.match(html, /Blood oxygen ran low overnight/);
   assert.match(html, /Skin temp ran warm overnight/);
   assert.match(html, /Primed to train/);
@@ -74,6 +87,21 @@ test("health read recovery renderer speaks in plain phrases and escapes sources"
   assert.match(html, /~9k steps/);
   assert.match(html, /Body composition/);
   assert.doesNotMatch(html, /<raw>/);
+});
+
+test("health read recovery dates a gone-quiet wearable honestly and mutes small drift", () => {
+  const read = loadHealthRead();
+  const html = read.recoveryHtml({
+    sources: ["garmin"],
+    delta: { sleep: 4, hrv: -1.2, rhr: 0.5 },
+    recovery: { last_date: localISODaysAgo(5), avg_sleep_min: 430, avg_resting_hr: 52, avg_hrv_ms: 60 },
+  });
+
+  assert.match(html, /hb-rlast-stale/);
+  assert.match(html, /Last logged 5 days ago — this read reflects your last synced stretch, not today/);
+  // Drift under the calm floors stays silent, and resting HR reads steady.
+  assert.doesNotMatch(html, /vs your month/);
+  assert.match(html, /Resting heart rate steady/);
 });
 
 test("health read recovery keeps quiet empty states", () => {

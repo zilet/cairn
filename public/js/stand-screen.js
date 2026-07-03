@@ -237,9 +237,22 @@
             return score >= 75 ? "ok" : score >= 60 ? "watch" : "warn";
         return "ok";
     }
+    // Recovery is a time-sensitive signal — a window average only reads as "now"
+    // while the wearable is actually syncing. No reading from today or yesterday →
+    // the tile comes off the overview (the detail stays deep-linkable and dates
+    // itself honestly).
+    function recoveryIsFresh() {
+        const rec = recoveryData();
+        const last = rec && typeof rec.last_date === "string" ? rec.last_date.slice(0, 10) : "";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(last))
+            return false;
+        const y = new Date();
+        y.setDate(y.getDate() - 1);
+        return last >= localISO(y);
+    }
     function recoveryTile() {
         const rec = recoveryData();
-        if (!rec)
+        if (!rec || !recoveryIsFresh())
             return "";
         const st = recoveryStatus();
         const sleep = sleepWord(rec.avg_sleep_min);

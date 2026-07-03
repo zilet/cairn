@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**224 routes** across 85 groups.
+**225 routes** across 86 groups.
 
 ## `/activities`
 
@@ -393,6 +393,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | PUT | `/api/memory/:id` |  |
 | POST | `/api/memory/:id/supersede` | Supersede (mark, never hard-delete): optionally provide a replacement content (a new row is created) or replacement_id (point at an existing row). |
 | POST | `/api/memory/consolidate` | Quiet memory consolidation: merge near-duplicates, supersede contradictions, promote recurring observations. Marks, never hard-deletes. On demand here; also scheduled nightly. Designed ok:false at 200 when the agent returns nothing usable. |
+
+## `/muscle-load`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/muscle-load` | Acute per-muscle freshness over the last ~2 days — recent strength sets AND endurance sessions folded onto the regions they fatigue (a long ride loads the legs). Lets the Train overview say "recovering from yesterday's ride" instead of "undertrained" on a group that's simply resting. Plain words, no scores. |
 
 ## `/muscle-trajectory`
 

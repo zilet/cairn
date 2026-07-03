@@ -124,6 +124,7 @@ function uiSegmentsDeps() {
         requestAnimationFrame: (callback) => requestAnimationFrame(callback),
         cancelAnimationFrame: (handle) => cancelAnimationFrame(handle),
         addResizeListener: (listener) => window.addEventListener("resize", listener),
+        renderTrainOverview: () => renderTrainOverview(),
         renderProgress: () => renderProgress(),
         renderVolume: () => renderVolume(),
         renderEndurance: () => renderEndurance(),
