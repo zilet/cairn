@@ -5,7 +5,24 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
-_Nothing yet._
+## [0.8.0] — 2026-07-04
+
+The body surfaces get an **elite figure**: the crude ellipse packs are replaced by one
+authored anatomical drawing (male/female from a shared skeleton) shared across Train and
+Stand. PWA cache `cairn-v427`.
+
+### Added
+
+- **Elite body figures** — a vendored, dependency-free `public/cairn-body-figure.js`
+  (`window.CairnBodyFigure`) replaces the crude ellipse packs with one authored
+  anatomical drawing (male/female from a shared skeleton). It powers **Train ›
+  Muscle balance** (front/back muscle map with band tone overlays and a due-only
+  pulse; tap a muscle to jump to its row) and the **Stand › Where you stand** figure
+  — a fixed reference silhouette whose tappable measurement callouts read each site
+  against a reference physique scaled to your height (waist ≤ half height, shoulder
+  ≈ 1.4–1.6× reference waist, arm ≈ calf, weight from FFMI), with a selected-site
+  detail panel and an under/reference/over read. Both surfaces degrade gracefully to
+  the prior figures if the library is absent. PWA cache `cairn-v427`.
 
 ## [0.7.0] — 2026-06-27
 

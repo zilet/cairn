@@ -184,7 +184,27 @@ function tovEllipse(shape: readonly number[], attrs: string): string {
   return `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"${transform} ${attrs}/>`;
 }
 
+// The vendored elite body figure (public/cairn-body-figure.js) — real muscle
+// heads, ab segmentation, twin gastrocs (design option 2a). Guarded exactly like
+// art(): a missing/stale lib degrades to the ellipse-pack fallback below, so the
+// muscle map always draws.
+function tovFigureLib(): CairnBodyFigureApi | null {
+  try {
+    return (window as unknown as { CairnBodyFigure?: CairnBodyFigureApi }).CairnBodyFigure || null;
+  } catch {
+    return null;
+  }
+}
+
+// tones fold maps 1:1 to the library's group keys; pulseDue breathes the due
+// groups and dataAttrs stamps data-group so a tap on a muscle jumps to its row.
 function tovFigureSvg(side: "front" | "back", tones: Record<string, string>): string {
+  const lib = tovFigureLib();
+  if (lib) return lib.figureSvg(side, tones, { pulseDue: true, dataAttrs: true });
+  return tovFigureSvgFallback(side, tones);
+}
+
+function tovFigureSvgFallback(side: "front" | "back", tones: Record<string, string>): string {
   const base = `fill="${TOV_FIG_BASE}" stroke="${TOV_FIG_LINE}" stroke-width="1"`;
   const silhouette = [
     `<circle cx="75" cy="22" r="12" ${base}/>`,
@@ -309,7 +329,7 @@ function tovRowsHtml(rows: TovRow[]): string {
   const visible = rows.filter((r) => r.tone !== "none" || TOV_GROUP_ORDER.includes(r.group));
   if (!visible.length) return "";
   const items = visible.map((row, i) => `
-    <button class="tov-row reveal" type="button" data-tovgo="program" style="${stagger(Math.min(i + 2, 12))}">
+    <button class="tov-row reveal" type="button" data-tovgo="program" data-group="${escAttr(row.group)}" style="${stagger(Math.min(i + 2, 12))}">
       <span class="tov-row-dot tov-dot-${row.tone === "none" ? "idle" : row.tone}"></span>
       <span class="tov-row-main">
         <span class="tov-row-top"><span class="tov-row-name">${escHtml(tovCapitalize(row.label))}</span>${tovVerdictChip(row)}</span>
@@ -413,6 +433,24 @@ function paintTrainOverview(data: TovData): void {
       }));
     })
   );
+  // Tap a muscle on the figure → scroll to its row and flash it. The elite figure
+  // stamps data-group on each toned muscle (scoped to .tov-map so the row buttons,
+  // which also carry data-group, aren't rebound); the ellipse-pack fallback carries
+  // none, so this is simply a no-op there.
+  view.querySelectorAll<SVGElement>(".tov-map [data-group]").forEach((el) => {
+    el.style.cursor = "pointer";
+    el.addEventListener("click", () => {
+      const group = el.getAttribute("data-group") || "";
+      const row = group ? view.querySelector<HTMLElement>(`.tov-row[data-group="${group}"]`) : null;
+      if (!row) return;
+      const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      row.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+      row.style.transition = "background-color .5s ease";
+      row.style.borderRadius = "10px";
+      row.style.backgroundColor = "var(--sage-bg, #eef0e6)";
+      setTimeout(() => { row.style.backgroundColor = "transparent"; }, 1100);
+    });
+  });
 }
 
 Object.assign(globalThis, { renderTrainOverview });
