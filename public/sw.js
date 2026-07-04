@@ -1,4 +1,4 @@
-const CACHE = "cairn-v426";
+const CACHE = "cairn-v427";
 // Generated artwork lives in its own cache: the images are content-keyed and
 // immutable on the server, so they stay valid across app deploys. Keeping them
 // out of the versioned CACHE (and off the activate-cleanup list) means a deploy
@@ -7,7 +7,7 @@ const ART_CACHE = "cairn-art-v1";
 const CORE_ASSETS = [
   "/", "/index.html", "/styles.css",
   "/js/bundle-01-core.js", "/js/bundle-02-today.js", "/js/bundle-03-capture-progress.js", "/js/bundle-04-coach-meals.js", "/js/bundle-05-me-health.js", "/js/bundle-06-chat-plan.js", "/js/bundle-07-settings-boot.js",
-  "/art.js", "/manifest.json",
+  "/art.js", "/cairn-body-figure.js", "/manifest.json",
 ];
 const OPTIONAL_ASSETS = [
   // Vendored xterm.js for the in-app agent-login terminal (lazy-loaded by the

@@ -5091,7 +5091,9 @@ body[data-tab="session"] .tabbar{display:none}
 .tov-map{padding:16px 18px 14px}
 .tov-figs{display:flex;justify-content:center;gap:26px;margin:10px 0 4px}
 .tov-figs figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:6px}
-.tov-fig{width:124px;height:auto;display:block}
+.tov-fig{width:116px;height:auto;display:block}
+.tov-map [data-group]{cursor:pointer}
+.tov-map [data-group]:focus-visible,.bm-co2:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .tov-legend{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;padding:8px 0 2px}
 .tov-leg{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--ink-2)}
 .tov-leg-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
@@ -5153,10 +5155,16 @@ body[data-tab="session"] .tabbar{display:none}
 .tov-sess-meta{font-size:.74rem;color:var(--muted);white-space:nowrap}
 @media (min-width:960px){
   .tov-figs{gap:44px}
-  .tov-fig{width:140px}
+  .tov-fig{width:132px}
 }
 
 /* ---- Body figure: the focus wash breathes (body-metrics fitting sheet) ---- */
 @keyframes bm-pulse{0%,100%{opacity:.55}50%{opacity:1}}
 .bm-pulse{animation:bm-pulse 3.4s var(--ease, ease-in-out) infinite}
 @media (prefers-reduced-motion: reduce){ .bm-pulse{animation:none} }
+
+/* ---- Elite Train muscle figure (cairn-body-figure.js): only what is DUE
+   breathes, and it stays sub-perceptual (motion rules, docs/DESIGN.md). ---- */
+@keyframes cbf-pulse{0%,100%{opacity:.10}50%{opacity:.42}}
+.cbf-pulse{animation:cbf-pulse 3.4s var(--ease, ease-in-out) infinite}
+@media (prefers-reduced-motion: reduce){ .cbf-pulse{animation:none} }

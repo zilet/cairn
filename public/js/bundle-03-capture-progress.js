@@ -1350,40 +1350,423 @@ Object.assign(globalThis, {
             base: { heightIn: data.profile?.height_in ?? null, sex: data.profile?.sex || "male", unit, focus, wins, dirs },
         };
     }
+    // ================= the elite Stand hero (design option 2b) =======================
+    // A FIXED reference figure (the vendored CairnBodyFigure) whose measurement sites
+    // you tap to read against a reference physique scaled to YOUR height — the waist
+    // ≤ half-height chalk trace, a per-site "where you stand vs reference" detail
+    // panel, and the reference-physique rows. When the library is absent the legacy
+    // tape-driven croquis (bodyFigureSvg, above) still draws — nothing regresses.
+    // The vendored figure lib (public/cairn-body-figure.js). Guarded like art().
+    function bmFigureLib() {
+        try {
+            return window.CairnBodyFigure || null;
+        }
+        catch {
+            return null;
+        }
+    }
+    // Which measurement site is being read (module state so a tap survives a repaint).
+    let bmSelectedSite = null;
+    // Library callout site name -> our tape key, and each key's short label.
+    const BM_STAND_SITE_OF = {
+        neck: "neck_in", shoulder: "shoulder_in", arm: "upper_arm_in", forearm: "forearm_in",
+        chest: "chest_in", waist: "waist_in", hip: "hip_in", thigh: "thigh_in", calf: "calf_in",
+    };
+    const BM_SITE_LABEL = {
+        neck_in: "neck", shoulder_in: "shoulder", chest_in: "chest", waist_in: "waist", hip_in: "hip",
+        thigh_in: "thigh", upper_arm_in: "arm", forearm_in: "forearm", calf_in: "calf",
+    };
+    function bmCap(value) {
+        return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+    }
+    // Height as 5′11″ (inches) or 180 cm (metric) for the reference-physique header.
+    function bmHeightLabel(heightIn, unit) {
+        if (unit === "cm")
+            return `${Math.round(heightIn * 2.54)} cm`;
+        const ft = Math.floor(heightIn / 12);
+        const rem = Math.round(heightIn - ft * 12);
+        return `${ft}′${rem}″`;
+    }
+    // Evidence-lite reference physique (inches), scaled to height — presented as
+    // references, not mandates. waist ≤ half height; shoulder ≈ 1.4–1.6× reference
+    // waist; chest ≈ 1.35×; arm ≈ calf; the rest from athletic proportion. Sex-aware.
+    function bmReferencePhysique(heightIn, female, calfIn) {
+        const h = Math.min(90, Math.max(48, heightIn));
+        const waist = (female ? 0.47 : 0.5) * h;
+        const shoulder = (female ? 1.4 : 1.5) * waist;
+        const chest = (female ? 1.28 : 1.35) * waist;
+        const hip = (female ? 1.28 : 1.12) * waist;
+        const arm = calfIn != null && calfIn > 0 ? calfIn : (female ? 0.3 : 0.34) * waist;
+        const forearm = (female ? 0.8 : 0.82) * arm;
+        const thigh = (female ? 0.62 : 0.58) * waist;
+        const calf = calfIn != null && calfIn > 0 ? calfIn : arm;
+        return { neck_in: arm, shoulder_in: shoulder, chest_in: chest, waist_in: waist, hip_in: hip, thigh_in: thigh, upper_arm_in: arm, forearm_in: forearm, calf_in: calf };
+    }
+    // Reference weight (lb) from FFMI at a lean body-fat — a target, not a mandate.
+    function bmReferenceWeightLb(heightIn, female) {
+        const hM = Math.min(90, Math.max(48, heightIn)) * 0.0254;
+        const ffmi = female ? 18.5 : 21.5;
+        const bf = female ? 0.235 : 0.135;
+        const kg = (ffmi * hM * hM) / (1 - bf);
+        return Math.round(kg * 2.20462);
+    }
+    function bmStandModel(data, unit) {
+        const merged = mergeLatestSites(data.measurements, data.latest);
+        const female = String(data.profile?.sex || "").toLowerCase() === "female";
+        const heightIn = data.profile?.height_in ?? null;
+        const focus = data.comp ? deriveFigureRegions(data.comp, data.trends).focus : null;
+        const calfRaw = merged && merged.calf_in != null ? merged.calf_in : null;
+        const calfIn = calfRaw != null ? (unit === "cm" ? calfRaw / 2.54 : calfRaw) : null;
+        return {
+            merged,
+            female,
+            heightIn,
+            unit,
+            focus,
+            reference: heightIn != null ? bmReferencePhysique(heightIn, female, calfIn) : null,
+            refWeightLb: heightIn != null ? bmReferenceWeightLb(heightIn, female) : null,
+            weightLb: data.profile?.weight_lb ?? null,
+        };
+    }
+    // The first site to read: a held selection (still measured), else the deterministic
+    // focus, else the first measured site top-to-bottom.
+    function bmResolveSelected(model) {
+        const measured = (k) => !!model.merged && model.merged[k] != null;
+        if (bmSelectedSite && measured(bmSelectedSite))
+            return bmSelectedSite;
+        if (model.focus === "waist" && measured("waist_in"))
+            return "waist_in";
+        const order = ["chest_in", "waist_in", "shoulder_in", "upper_arm_in", "hip_in", "thigh_in", "calf_in", "neck_in", "forearm_in"];
+        for (const k of order)
+            if (measured(k))
+                return k;
+        return null;
+    }
+    const BM_SITE_WHY = {
+        waist_in: {
+            over: "A waist nearer half your height is the biggest single lever on how lean you read.",
+            under: "Leaner than the reference waist for your height — right where you want it.",
+            at: "At the reference waist for your height.",
+        },
+        chest_in: {
+            under: "Room to build — a chest near 1.35× your reference waist reads powerful.",
+            over: "Strong — chest at or beyond its reference proportion.",
+            at: "At its reference proportion for your frame.",
+        },
+        shoulder_in: {
+            under: "Width to gain — broad shoulders (~1.5× your reference waist) define the V-taper.",
+            over: "Broad — shoulders at or beyond their reference width.",
+            at: "At their reference width for your frame.",
+        },
+        upper_arm_in: {
+            under: "Room to build — arms track your calf; they grow together.",
+            over: "Arms at or beyond their reference (about your calf).",
+            at: "At their reference — about your calf.",
+        },
+        hip_in: {
+            over: "Hips a touch over the athletic reference; trimming the waist usually pulls this in too.",
+            under: "In proportion with your frame.",
+            at: "In proportion with your frame.",
+        },
+    };
+    function bmSiteWhy(key, dir) {
+        const m = BM_SITE_WHY[key];
+        if (m)
+            return m[dir];
+        return dir === "under"
+            ? "Room to build toward its reference for your frame."
+            : dir === "over"
+                ? "At or beyond its reference proportion."
+                : "At its reference proportion for your frame.";
+    }
+    function bmChip(text, tone) {
+        const map = {
+            sage: "background:#e7ecdd;color:#5f6e4f",
+            warn: "background:#f3e0d8;color:#a3402a",
+            gold: "background:#efe6d0;color:#8a6d2e",
+            muted: "background:#efe7d8;color:#746c5c",
+        };
+        return `<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font:600 9.5px ui-sans-serif,system-ui,sans-serif;letter-spacing:.03em;${map[tone]}">${escHtml(text)}</span>`;
+    }
+    // Read a site's measured value (inches) against its reference (inches): the chip
+    // tone + word, and a plain-language why. Lower is better for waist/hip; higher for
+    // the muscle sites. A neutral ±6% band reads "at reference".
+    function bmSiteRead(key, vIn, rIn) {
+        const dev = rIn > 0 ? (vIn - rIn) / rIn : 0;
+        const lowerBetter = key === "waist_in" || key === "hip_in";
+        let dir;
+        let tone;
+        let text;
+        if (Math.abs(dev) <= 0.06) {
+            dir = "at";
+            tone = "sage";
+            text = "at reference";
+        }
+        else if (dev > 0) {
+            dir = "over";
+            tone = lowerBetter ? "warn" : "sage";
+            text = "over reference";
+        }
+        else {
+            dir = "under";
+            tone = lowerBetter ? "sage" : "gold";
+            text = "under reference";
+        }
+        return { dir, chip: { text, tone }, why: bmSiteWhy(key, dir) };
+    }
+    // The elite Stand figure: fixed silhouette + selected-site glow + reference-waist
+    // chalk trace + tappable measurement callouts. Coordinates: the library figure is
+    // authored in a 0–260 space; a translate(80,0) group centers it in a 420-wide box,
+    // leaving label rails on both sides. Callouts are drawn in the outer box space.
+    function bmStandFigureSvg(lib, model, selected) {
+        const sexKey = model.female ? "female" : "male";
+        const sil = lib.silhouette(sexKey);
+        const col = lib.COLORS;
+        const merged = model.merged;
+        const rawVal = (k) => {
+            const raw = merged ? merged[k] : null;
+            return raw != null && Number.isFinite(raw) ? raw : null;
+        };
+        const measured = (k) => rawVal(k) != null;
+        const inchOf = (k) => {
+            const v = rawVal(k);
+            return v == null ? null : model.unit === "cm" ? v / 2.54 : v;
+        };
+        const dispVal = (k) => bmFmt(rawVal(k));
+        const ref = model.reference;
+        // Selected-site glow, tinted by whether the value sits the unhelpful way off
+        // reference (waist over → terracotta; a muscle under → gold; otherwise sage).
+        const gradFor = (k) => {
+            const vi = inchOf(k);
+            const r = ref ? ref[k] : null;
+            if (vi == null || r == null)
+                return "bmfig2-sage";
+            const lowerBetter = k === "waist_in" || k === "hip_in";
+            if (lowerBetter)
+                return vi > r * 1.02 ? "bmfig2-warn" : "bmfig2-sage";
+            return vi < r * 0.97 ? "bmfig2-gold" : "bmfig2-sage";
+        };
+        let washes = "";
+        if (selected) {
+            const name = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === selected);
+            const glows = name ? lib.GLOWS[name] : null;
+            if (glows) {
+                const grad = gradFor(selected);
+                const clipOf = (c) => (c === "aR" ? "bmfig2-clip-aR" : c === "aL" ? "bmfig2-clip-aL" : "bmfig2-clip-t");
+                for (const [cx, cy, rx, ry, clip] of glows) {
+                    washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
+                }
+            }
+        }
+        // The reference-waist chalk trace, only when the waist is measured and above it.
+        const waistIn = inchOf("waist_in");
+        const refWaist = ref ? ref.waist_in : null;
+        let optTrace = "";
+        if (waistIn != null && refWaist != null && waistIn > refWaist + 0.2) {
+            const attrs = `fill="none" stroke="#5a6a4a" stroke-width="1.7" stroke-dasharray="4.5 3.5" stroke-linecap="round" opacity="0.9"`;
+            optTrace = `<path d="${lib.waistTrace(sexKey, 1)}" ${attrs}/><path d="${lib.waistTrace(sexKey, -1)}" ${attrs}/>`;
+        }
+        const group = `<g transform="translate(80,0)">
+      <path d="${sil.armL}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
+      <path d="${sil.armR}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
+      <path d="${sil.torso}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
+      ${washes}${optTrace}
+    </g>`;
+        const cos = [];
+        for (const c of lib.CALLOUTS) {
+            const key = BM_STAND_SITE_OF[c.site];
+            if (!key || !measured(key))
+                continue;
+            const [wx, wy] = lib.warpPoint(c.pt, sexKey);
+            cos.push({ key, side: c.side, segY: c.y, ax: 80 + wx, ay: wy });
+        }
+        let callouts = "";
+        for (const side of ["L", "R"]) {
+            const rail = cos.filter((c) => c.side === side).sort((a, b) => a.segY - b.segY);
+            let prevY = 40;
+            for (const c of rail) {
+                const y = Math.min(628, Math.max(prevY + 30, c.segY));
+                prevY = y;
+                const tx = side === "R" ? 348 : 72;
+                const lineEnd = side === "R" ? tx - 5 : tx + 5;
+                const sel = c.key === selected;
+                const anchor = side === "R" ? "start" : "end";
+                callouts += `<line x1="${bmR(c.ax)}" y1="${bmR(c.ay)}" x2="${lineEnd}" y2="${y}" stroke="${sel ? "#c98b5e" : "#c4b89d"}" stroke-width="1.3" stroke-dasharray="1.5 4" stroke-linecap="round"/>`;
+                callouts += `<circle cx="${bmR(c.ax)}" cy="${bmR(c.ay)}" r="2" fill="${sel ? "#b4552d" : "#c4b89d"}"/>`;
+                const label = `<text x="${tx}" y="${y + 3.5}" text-anchor="${anchor}" font-family="ui-sans-serif, system-ui, sans-serif"><tspan font-size="8.5" letter-spacing="0.1em" fill="${sel ? "#b4552d" : "#a99c82"}">${escHtml(BM_SITE_LABEL[c.key].toUpperCase())}</tspan><tspan dx="5" font-size="13" font-weight="600" font-family="ui-serif, Georgia, serif" fill="${sel ? "#b4552d" : "#211d17"}">${escHtml(dispVal(c.key))}</tspan></text>`;
+                const hitX = side === "R" ? tx - 4 : tx - 92;
+                callouts += `<g class="bm-co2" data-site="${escAttr(c.key)}" role="button" tabindex="0" aria-label="Read your ${escAttr(BM_SITE_LABEL[c.key])} against its reference"${sel ? ` aria-current="true"` : ""} style="cursor:pointer"><rect x="${hitX}" y="${y - 10}" width="96" height="18" fill="transparent"/>${label}</g>`;
+            }
+        }
+        const measuredList = cos.map((c) => `${BM_SITE_LABEL[c.key]} ${dispVal(c.key)}`).join(", ");
+        const aria = measuredList
+            ? `Your measurements on a reference figure: ${measuredList} ${model.unit}. Tap a measurement to read it against your reference.`
+            : "A reference body figure — log a tape session and your measurements appear as tappable callouts.";
+        const defs = `<defs>
+      <radialGradient id="bmfig2-warn"><stop offset="0%" stop-color="#b4552d" stop-opacity="0.32"/><stop offset="62%" stop-color="#b4552d" stop-opacity="0.15"/><stop offset="100%" stop-color="#b4552d" stop-opacity="0"/></radialGradient>
+      <radialGradient id="bmfig2-sage"><stop offset="0%" stop-color="#6e7f5c" stop-opacity="0.30"/><stop offset="62%" stop-color="#6e7f5c" stop-opacity="0.14"/><stop offset="100%" stop-color="#6e7f5c" stop-opacity="0"/></radialGradient>
+      <radialGradient id="bmfig2-gold"><stop offset="0%" stop-color="#c9a86a" stop-opacity="0.40"/><stop offset="62%" stop-color="#c9a86a" stop-opacity="0.18"/><stop offset="100%" stop-color="#c9a86a" stop-opacity="0"/></radialGradient>
+      <clipPath id="bmfig2-clip-t"><path d="${sil.torso}"/></clipPath>
+      <clipPath id="bmfig2-clip-aR"><path d="${sil.armR}"/></clipPath>
+      <clipPath id="bmfig2-clip-aL"><path d="${sil.armL}"/></clipPath>
+    </defs>`;
+        return `<svg class="bm-figure bm-figure2" viewBox="0 0 420 645" width="100%" role="img" aria-label="${escAttr(aria)}" style="display:block;max-width:440px;margin:0 auto;overflow:visible">${defs}${group}${callouts}</svg>`;
+    }
+    // The selected-site detail panel: your value vs its reference, an under/reference/
+    // over position bar, and a plain-language read.
+    function bmStandDetail(model, selected, unit) {
+        const wrap = (inner) => `<div class="bm-detail" style="margin-top:12px;background:#f8f3e8;border:1px solid #e7dfd2;border-radius:14px;padding:14px 16px 13px">${inner}</div>`;
+        if (!selected)
+            return wrap(`<div class="sess-line" style="color:var(--muted,#746c5c)">Tap a measurement on the figure to read it against your reference.</div>`);
+        const cur = model.merged ? model.merged[selected] : null;
+        const name = bmCap(BM_SITE_LABEL[selected]);
+        if (cur == null) {
+            return wrap(`<div style="display:flex;align-items:baseline;gap:9px"><span style="font:600 16px ui-serif,Georgia,serif;color:#211d17">${escHtml(name)}</span>${bmChip("not taped", "muted")}</div>
+      <div class="sess-line" style="color:var(--muted,#746c5c);margin-top:6px">Tape this site and it reads against its reference here.</div>`);
+        }
+        const rIn = model.reference ? model.reference[selected] : null;
+        const curIn = unit === "cm" ? cur / 2.54 : cur;
+        const read = rIn != null ? bmSiteRead(selected, curIn, rIn) : null;
+        const refDisp = rIn != null ? bmFmt(unit === "cm" ? rIn * 2.54 : rIn) : null;
+        const dev = rIn != null && rIn > 0 ? (curIn - rIn) / rIn : 0;
+        const pct = bmR(Math.min(97, Math.max(3, 50 + dev * 240)));
+        const chip = read ? bmChip(read.chip.text, read.chip.tone) : bmChip("logged", "muted");
+        const bar = rIn != null
+            ? `<div style="position:relative;height:6px;border-radius:3px;background:#efe7d8;margin:12px 0 4px"><span style="position:absolute;left:36%;width:28%;top:0;bottom:0;background:#dfe4d2;border-radius:3px"></span><span style="position:absolute;top:-2px;left:${pct}%;width:10px;height:10px;border-radius:50%;background:#211d17;transform:translateX(-50%);box-shadow:0 0 0 2px #fffdf8"></span></div>
+      <div style="display:flex;justify-content:space-between;font:600 9px ui-sans-serif,system-ui,sans-serif;letter-spacing:.1em;color:#a99c82"><span>UNDER</span><span>REFERENCE</span><span>OVER</span></div>`
+            : "";
+        const refCol = refDisp != null
+            ? `<span style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#746c5c">${escHtml(unit)} · reference</span><span style="font:italic 600 16px ui-serif,Georgia,serif;color:#5f6e4f">${escHtml(refDisp)}</span>`
+            : `<span style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#746c5c">${escHtml(unit)}</span>`;
+        return wrap(`<div style="display:flex;align-items:baseline;gap:9px"><span style="font:600 16px ui-serif,Georgia,serif;color:#211d17">${escHtml(name)}</span>${chip}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;margin-top:7px"><span style="font:600 22px ui-serif,Georgia,serif;color:#211d17">${escHtml(bmFmt(cur))}</span>${refCol}</div>
+    ${bar}
+    ${read ? `<div style="font:400 12.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#57503f;margin-top:9px">${escHtml(read.why)}</div>` : ""}`);
+    }
+    // Reference-physique rows: current → target, scaled to height. References, not
+    // mandates. Silent until height is known (the height form prompts for it).
+    function bmStandRefRows(model, unit) {
+        const ref = model.reference;
+        if (!ref || model.heightIn == null)
+            return "";
+        const conv = (inch) => (unit === "cm" ? inch * 2.54 : inch);
+        const rowHtml = (label, cur, tgt, chip) => `<div style="display:flex;align-items:baseline;gap:10px;padding:7px 2px;border-bottom:1px solid #f2ecdf">
+      <span style="flex:0 0 78px;font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.1em;color:#746c5c">${escHtml(label)}</span>
+      <span style="font:560 14.5px ui-serif,Georgia,serif;color:#211d17">${escHtml(cur)}</span>
+      <span style="color:#c0b6a0;font-size:12px">→</span>
+      <span style="font:italic 600 14.5px ui-serif,Georgia,serif;color:#5f6e4f">${escHtml(tgt)}</span>${chip}</div>`;
+        const siteRow = (key, label) => {
+            const tgtIn = ref[key];
+            const cur = model.merged ? model.merged[key] : null;
+            const curIn = cur != null ? (unit === "cm" ? cur / 2.54 : cur) : null;
+            const chip = curIn != null ? (() => { const r = bmSiteRead(key, curIn, tgtIn); return bmChip(r.chip.text, r.chip.tone); })() : "";
+            return rowHtml(label, cur != null ? bmFmt(cur) : "—", bmFmt(conv(tgtIn)), chip);
+        };
+        const rows = [
+            siteRow("shoulder_in", "SHOULDER"),
+            siteRow("chest_in", "CHEST"),
+            siteRow("waist_in", "WAIST"),
+            siteRow("hip_in", "HIP"),
+            siteRow("upper_arm_in", "ARM"),
+        ];
+        if (model.refWeightLb != null) {
+            const w = model.weightLb;
+            const dev = w != null ? (w - model.refWeightLb) / model.refWeightLb : null;
+            const chip = dev == null
+                ? ""
+                : Math.abs(dev) <= 0.04
+                    ? bmChip("at reference", "sage")
+                    : dev > 0
+                        ? bmChip("over", "warn")
+                        : bmChip("under", "gold");
+            rows.push(rowHtml("WEIGHT", w != null ? `${bmFmt(w)}` : "—", `${model.refWeightLb} lb`, chip));
+        }
+        const bfNote = model.female ? "FFMI 18–19 at 22–25% body fat" : "FFMI 21–22 at 12–15% body fat";
+        return `<div class="bm-ref" style="margin-top:16px">
+      <div style="font:700 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#746c5c">Reference physique · ${escHtml(bmHeightLabel(model.heightIn, unit))}</div>
+      <div style="margin-top:6px">${rows.join("")}</div>
+      <div style="font:400 11.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#a99c82;margin-top:9px">References, not mandates — waist ≤ half height, shoulder ≈ 1.4–1.6× reference waist, arm ≈ calf, weight from ${bfNote}.</div>
+    </div>`;
+    }
     function compSection(data, unit) {
         const comp = data.comp;
         if (!comp)
             return "";
-        const m = figureModel(data, unit);
-        const figure = bodyFigureSvg({ latest: m.merged, deltas: m.deltas, ...m.base });
-        // Mention the dashed trace only when the figure actually draws it (waist
-        // measured, height known, and the waist sits above the optimal band); a
-        // waist already at or under half height earns the quiet sage read instead.
-        const waistIn = m.merged?.waist_in != null ? (unit === "cm" ? m.merged.waist_in / 2.54 : m.merged.waist_in) : null;
-        const optDrawn = waistIn != null && data.profile?.height_in != null && waistIn > 0.5 * data.profile.height_in + 0.2;
-        const inBand = waistIn != null && data.profile?.height_in != null && !optDrawn;
-        const legendBits = [`tape · ${unit === "cm" ? "centimeters" : "inches"}`];
-        if (optDrawn)
-            legendBits.push(`<span style="color:var(--sage-text,#5f6e4f)">┄ the optimal waist for your height</span>`);
-        else if (inBand)
-            legendBits.push(`<span style="color:var(--sage-text,#5f6e4f)">waist inside the optimal band for your height</span>`);
-        const legend = data.latest
-            ? `<div class="sess-line" style="color:var(--muted,#746c5c);font-size:.74rem;text-align:center;margin-top:6px">${legendBits.join(" · ")}</div>`
-            : `<div class="sess-line" style="color:var(--muted,#746c5c);text-align:center;margin-top:6px">Log your first tape session above and the figure redraws to your measurements.</div>`;
+        const model = bmStandModel(data, unit);
+        const selected = bmResolveSelected(model);
+        const lib = bmFigureLib();
+        const figure = lib
+            ? bmStandFigureSvg(lib, model, selected)
+            : bodyFigureSvg({ latest: model.merged, deltas: {}, heightIn: model.heightIn, sex: model.female ? "female" : "male", unit, focus: model.focus, wins: [], dirs: {} });
+        const sub = data.latest
+            ? `<div class="sess-line" style="color:var(--muted,#746c5c);font-size:.82rem;margin-top:2px">Tap a measurement to read it against your reference.</div>`
+            : `<div class="sess-line" style="color:var(--muted,#746c5c);font-size:.82rem;margin-top:2px">Log your first tape session above and the figure fills in with your numbers.</div>`;
         const heading = comp.heading
-            ? `<div class="sess-line bm-heading" style="color:var(--ink-2,#57503f);margin-top:12px">${escHtml(comp.heading)}</div>`
+            ? `<div class="sess-line bm-heading" style="color:var(--ink-2,#57503f);margin-top:10px">${escHtml(comp.heading)}</div>`
             : "";
         const focus = comp.focus
-            ? `<div class="bm-focus" style="border-left:3px solid var(--accent,#b4552d);background:var(--accent-wash,rgba(180,85,45,.1));border-radius:8px;padding:10px 12px;margin-top:10px">
+            ? `<div class="bm-focus" style="border-left:3px solid var(--accent,#b4552d);background:var(--accent-wash,rgba(180,85,45,.1));border-radius:8px;padding:10px 12px;margin-top:12px">
         <div style="font-weight:600;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;color:var(--accent,#b4552d);margin-bottom:3px">Where to point it</div>
         <div class="sess-line">${escHtml(comp.focus.line)}</div>
       </div>`
             : "";
-        return `<div class="sess bm-comp reveal" style="padding:14px 12px;margin-bottom:12px">
-      <div class="bm-sechead" style="font-weight:600;margin-bottom:8px">Where you stand</div>
-      <div class="bm-figure-slot">${figure}</div>
-      ${legend}${heading}${focus}
+        const detail = data.latest ? bmStandDetail(model, selected, unit) : "";
+        return `<div class="sess bm-comp reveal" style="padding:16px 14px;margin-bottom:12px">
+      <div class="bm-sechead" style="font-weight:600;margin-bottom:2px">Where you stand</div>
+      ${sub}${heading}
+      <div class="bm-figure-slot" style="margin-top:8px">${figure}</div>
+      ${detail}${focus}
+      ${bmStandRefRows(model, unit)}
     </div>`;
+    }
+    // Re-render just the Stand hero from cached data (a selection tap must not blow
+    // away the log form's in-progress inputs), then re-wire its callout taps.
+    function bmRepaintStandHero(mount, data, unit) {
+        const card = mount.querySelector(".bm-comp");
+        if (!card)
+            return;
+        const holder = document.createElement("div");
+        holder.innerHTML = compSection(data, unit);
+        const fresh = holder.firstElementChild;
+        if (!fresh)
+            return;
+        fresh.classList.remove("reveal"); // a re-select shouldn't replay the entrance
+        card.replaceWith(fresh);
+        bmWireStandHero(mount, data, unit);
+    }
+    // Tap/enter a callout on the elite figure → select that site and repaint the hero.
+    function bmWireStandHero(mount, data, unit) {
+        const card = mount.querySelector(".bm-comp");
+        if (!card)
+            return;
+        const coOf = (e) => {
+            const t = e.target;
+            return t && typeof t.closest === "function" ? t.closest(".bm-co2") : null;
+        };
+        const select = (site) => {
+            if (!BM_SITE_KEYS.includes(site))
+                return;
+            bmSelectedSite = site;
+            bmRepaintStandHero(mount, data, unit);
+            const el = mount.querySelector(`.bm-co2[data-site="${site}"]`);
+            if (el && typeof el.focus === "function")
+                el.focus();
+        };
+        card.addEventListener("click", (e) => {
+            const g = coOf(e);
+            if (g)
+                select(g.dataset.site || "");
+        });
+        card.addEventListener("keydown", (e) => {
+            const key = e.key;
+            if (key !== "Enter" && key !== " ")
+                return;
+            const g = coOf(e);
+            if (g) {
+                e.preventDefault();
+                select(g.dataset.site || "");
+            }
+        });
     }
     // --- the numbers: zone bars with the reads folded in ----------------------------
     // Each indicator drawn on its plain-language bands: the optimal band reads
@@ -1663,12 +2046,17 @@ Object.assign(globalThis, {
                 jumpToTrend(g.dataset.site || "");
             }
         });
-        // The then→now morph: with two or more tape sessions the figure first draws
-        // at the PREVIOUS session's proportions and eases into today's over ~1.2s —
-        // you watch the tape move, values counting along the way; arrows and deltas
-        // land with the final frame. Skipped under prefers-reduced-motion.
+        // Elite Stand hero: tap a measurement to read it against its reference. Wired
+        // on the cached data so a re-select never refetches or resets the log form.
+        if (data)
+            bmWireStandHero(mount, data, unit);
+        // The then→now morph (LEGACY figure only — the elite fixed figure doesn't
+        // morph): with two or more tape sessions the legacy croquis first draws at the
+        // PREVIOUS session's proportions and eases into today's over ~1.2s, values
+        // counting along the way. Skipped under prefers-reduced-motion, and skipped
+        // entirely when the elite library drew the fixed figure instead.
         const slot = mount.querySelector(".bm-figure-slot");
-        if (slot && data) {
+        if (slot && data && !bmFigureLib()) {
             const m = figureModel(data, unit);
             const from = m.prev;
             const to = m.merged;
@@ -1763,7 +2151,11 @@ Object.assign(globalThis, {
             mount.innerHTML = `<div class="bm-error sess-line" style="color:var(--muted,#746c5c);padding:12px">Couldn't load body metrics right now.</div>`;
         });
     }
-    const CAIRN_BODY_METRICS = { renderBodyMetrics, deriveFigureRegions, bodyFigureSvg, mergeLatestSites, mergePreviousSites };
+    const CAIRN_BODY_METRICS = {
+        renderBodyMetrics, deriveFigureRegions, bodyFigureSvg, mergeLatestSites, mergePreviousSites,
+        bmReferencePhysique, bmReferenceWeightLb, bmStandModel, bmStandFigureSvg, bmSiteRead, bmResolveSelected,
+        bmStandDetail, bmStandRefRows, compSection,
+    };
     Object.assign(globalThis, { CairnBodyMetrics: CAIRN_BODY_METRICS, renderBodyMetrics });
     if (typeof window !== "undefined") {
         window.CairnBodyMetrics = CAIRN_BODY_METRICS;

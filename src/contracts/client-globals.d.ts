@@ -61,6 +61,43 @@ declare global {
   type ClientSegment = readonly [string, string];
   type ClientSettingsRouteTask = readonly [string, string];
   type ClientSaveBar = { markDirty(): void; save(): Promise<void> };
+
+  // The vendored elite body figure (public/cairn-body-figure.js -> window.CairnBodyFigure).
+  // One authored drawing (viewBox 0 0 260 640, centerline x=130) serves Train muscle
+  // balance and the Stand tape figure; male/female share paths via a per-zone x-warp.
+  // Reached through file-local guarded accessors (mirroring art()); never user text, so
+  // its SVG output is inserted raw.
+  type CairnBodyFigureSide = "front" | "back";
+  type CairnBodyFigureCallout = { side: "L" | "R"; y: number; pt: [number, number]; site: string; label: string };
+  type CairnBodyFigureOpts = {
+    sex?: string;
+    className?: string;
+    anatomyInk?: number;
+    pulseDue?: boolean;
+    dataAttrs?: boolean;
+    stand?: boolean;
+  };
+  type CairnBodyFigureApi = {
+    VIEWBOX: string;
+    CENTER_X: number;
+    COLORS: Record<string, string>;
+    TONES: Record<string, { fill: string; op: number }>;
+    CALLOUTS: CairnBodyFigureCallout[];
+    GLOWS: Record<string, Array<[number, number, number, number, string]>>;
+    silhouette(sex: string): { torso: string; armR: string; armL: string };
+    muscles(sex: string, side: CairnBodyFigureSide): Array<{ group: string; d: string }>;
+    detailStrokes(sex: string, side: CairnBodyFigureSide): string[];
+    warpPoint(pt: [number, number], sex: string): [number, number];
+    waistTrace(sex: string, sign: 1 | -1): string;
+    figureSvg(side: CairnBodyFigureSide, tones: Record<string, string>, opts?: CairnBodyFigureOpts): string;
+    loopD(pts: Array<[number, number]>): string;
+    openD(pts: Array<[number, number]>): string;
+    mirrorPts(pts: Array<[number, number]>): Array<[number, number]>;
+    warp(pts: Array<[number, number]>, sex: string): Array<[number, number]>;
+    kOf(y: number): number;
+    shrink(pts: Array<[number, number]>, f: number): Array<[number, number]>;
+  };
+
   type ProgressRecord = Record<string, unknown>;
   type ProgressExercise = ProgressRecord & { name: string };
   type ProgressWeightRow = ProgressRecord & { date?: string; weight_lb?: number | null };

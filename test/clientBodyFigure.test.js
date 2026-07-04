@@ -187,3 +187,103 @@ test("focus tints terracotta, wins mark sage, neutral stays quiet, and no score 
   assert.doesNotMatch(neutral, /NaN/);
   assert.doesNotMatch(svg, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
 });
+
+// ---- the elite figure (design 2a/2b): loads the vendored library alongside the
+// Stand client so window.CairnBodyFigure is present and the elite path is taken.
+function loadElite() {
+  const ctx = {
+    console, Date, Math, Number, Object, String, JSON, Array,
+    escHtml: (v) => String(v ?? ""),
+    escAttr: (v) => String(v ?? "").replaceAll('"', "&quot;"),
+    localISO: () => "2026-07-02", relAge: () => "2 weeks ago",
+    sparklineSvg: () => "", toast: () => {}, api: () => Promise.resolve({}),
+    matchMedia: () => ({ matches: false }),
+  };
+  ctx.window = ctx;
+  ctx.globalThis = ctx;
+  vm.runInNewContext(readFileSync(join(root, "public/cairn-body-figure.js"), "utf8"), ctx);
+  vm.runInNewContext(readFileSync(join(root, "public/js/body-metrics-client.js"), "utf8"), ctx);
+  return { bm: ctx.CairnBodyMetrics, F: ctx.CairnBodyFigure };
+}
+
+const mkData = (sites, profileOver = {}) => ({
+  latest: latest(sites),
+  measurements: [latest(sites)],
+  indicators: [],
+  trends: { window_days: 180, sites: [], weight: { key: "weight", direction: null } },
+  needs_height: false,
+  sites: [],
+  profile: { height_in: 71, sex: "male", weight_lb: 190, goal_weight_lb: 178, ...profileOver },
+  comp: { scales: [], focus: null, heading: null },
+});
+
+test("the vendored library renders the Train figure with tappable, breathing muscles", () => {
+  const { F } = loadElite();
+  const svg = F.figureSvg("front", { chest: "due", quads: "due", back: "ok" }, { pulseDue: true, dataAttrs: true });
+  assert.match(svg, /viewBox="0 0 260 640"/, "one authored coordinate system");
+  assert.match(svg, /data-group="chest"/, "toned muscles carry data-group for taps");
+  assert.match(svg, /class="cbf-pulse"/, "only due muscles breathe");
+  assert.doesNotMatch(svg, /data-group="back"/, "a back-only group never toned on the front");
+  assert.doesNotMatch(svg, /NaN/);
+  const stand = F.figureSvg("front", {}, { stand: true });
+  assert.doesNotMatch(stand, /data-group=/, "the plain stand silhouette carries no muscle overlays");
+  assert.doesNotMatch(stand, /cbf-pulse/);
+});
+
+test("reference physique scales to height and stays sex-aware", () => {
+  const { bm } = loadElite();
+  const male = bm.bmReferencePhysique(71, false, 15);
+  assert.equal(Math.round(male.waist_in * 10) / 10, 35.5, "reference waist = half height");
+  assert.ok(male.shoulder_in > male.waist_in * 1.4 && male.shoulder_in < male.waist_in * 1.6, "shoulder 1.4–1.6× reference waist");
+  assert.equal(male.upper_arm_in, 15, "arm tracks the measured calf");
+  const female = bm.bmReferencePhysique(65, true, null);
+  assert.ok(female.waist_in < 0.5 * 65, "female reference waist is leaner");
+  const wt = bm.bmReferenceWeightLb(71, false);
+  assert.ok(wt > 150 && wt < 210, `FFMI weight lands in a human range (${wt})`);
+});
+
+test("bmSiteRead reads waist lower-is-better and muscles higher-is-better", () => {
+  const { bm } = loadElite();
+  assert.equal(bm.bmSiteRead("waist_in", 40, 35.5).chip.tone, "warn", "a wide waist is a warn");
+  assert.equal(bm.bmSiteRead("waist_in", 32, 35.5).chip.tone, "sage", "a lean waist reads fine");
+  assert.equal(bm.bmSiteRead("chest_in", 40, 48).chip.tone, "gold", "an under-reference chest is room to build");
+  assert.equal(bm.bmSiteRead("chest_in", 49, 48).dir, "at", "within the neutral band reads at reference");
+});
+
+test("the elite Stand figure: measured sites become tap targets, selection glows, no score leaks", () => {
+  const { bm, F } = loadElite();
+  const model = bm.bmStandModel(mkData({ waist_in: 40, chest_in: 42, thigh_in: 23 }), "in");
+  const svg = bm.bmStandFigureSvg(F, model, "waist_in");
+  assert.match(svg, /class="bm-figure bm-figure2"/);
+  assert.match(svg, /class="bm-co2" data-site="waist_in" role="button" tabindex="0"/, "callout is keyboard-reachable");
+  assert.match(svg, /data-site="chest_in"/);
+  assert.doesNotMatch(svg, /data-site="hip_in"/, "an untaped site gets no callout");
+  assert.match(svg, /url\(#bmfig2-warn\)/, "an over-reference waist glows terracotta when selected");
+  assert.match(svg, /stroke-dasharray="4.5 3.5"/, "the reference-waist chalk trace draws above the band");
+  assert.doesNotMatch(svg, /NaN/);
+  assert.doesNotMatch(svg, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
+  const lean = bm.bmStandFigureSvg(F, bm.bmStandModel(mkData({ waist_in: 33 }), "in"), "waist_in");
+  assert.doesNotMatch(lean, /stroke-dasharray="4.5 3.5"/, "a lean waist draws no target trace");
+});
+
+test("compSection uses the elite figure when the library is present, the legacy croquis when not", () => {
+  const data = mkData({ waist_in: 38, chest_in: 43 });
+  const { bm: elite } = loadElite();
+  const heroElite = elite.compSection(data, "in");
+  assert.match(heroElite, /bm-figure2/, "elite fixed figure");
+  assert.match(heroElite, /Reference physique/, "reference rows render");
+  assert.match(heroElite, /References, not mandates/);
+  const legacy = loadBodyMetrics(); // this context has no CairnBodyFigure
+  const heroLegacy = legacy.compSection(data, "in");
+  assert.doesNotMatch(heroLegacy, /bm-figure2/, "falls back to the tape-driven croquis");
+  assert.match(heroLegacy, /class="bm-figure"/, "the legacy figure still draws — nothing regresses");
+});
+
+test("reference rows are silent without height and carry no score", () => {
+  const { bm } = loadElite();
+  const noHeight = bm.bmStandRefRows(bm.bmStandModel(mkData({ waist_in: 38 }, { height_in: null }), "in"), "in");
+  assert.equal(noHeight, "", "no height, no reference rows");
+  const withHeight = bm.bmStandRefRows(bm.bmStandModel(mkData({ waist_in: 38 }), "in"), "in");
+  assert.match(withHeight, /Reference physique/);
+  assert.doesNotMatch(withHeight, /\b\d{1,3}\s*\/\s*100\b/);
+});
