@@ -76,30 +76,15 @@ const todayRenderState = (globalThis as unknown as {
 
 const {
   sessionDeps: todaySessionDeps,
-  revealSessionComposer,
-  askForSession,
-  wireLogRow,
-  wireSkips,
-  wireBrief,
-  scheduleRxRefresh,
-  invalidateTodayProgression,
-  refreshAdaptedRx,
   setupAddExercise,
-  appendOffPlanCard,
-  loadWearable,
-  loadTableHint,
-  loadContextBanner,
-  loadDraftProposals,
   loadHealthFocusBanner,
   postExerciseMode: todayRuntimePostExerciseMode,
   reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest,
   reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride,
-  applyDayProgression,
+  invalidateTodayProgression: _invalidateTodayProgression,
   loadBrief,
-  upgradeBriefInPlace,
   reshapeToday: todayRuntimeReshapeToday,
   briefHtml,
-  revealPlanThen,
 } = todayRuntime;
 
 function postExerciseMode(name: string, mode: string): Promise<unknown> {

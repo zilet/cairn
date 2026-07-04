@@ -88,7 +88,6 @@
     const BM_FIG_INK = "#211d17";
     const BM_FIG_MUTED = "#746c5c";
     const BM_FIG_ACCENT = "#b4552d";
-    const BM_FIG_SAGE = "#6e7f5c";
     const BM_FIG_SAGE_DEEP = "#5a6a4a";
     const BM_FIG_LINE = "#c4b89d";
     const BM_SITE_KEYS = ["neck_in", "shoulder_in", "chest_in", "waist_in", "hip_in", "thigh_in", "upper_arm_in", "forearm_in", "calf_in"];

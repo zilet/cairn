@@ -20,7 +20,7 @@ const todayDataLoader = globalThis.CairnTodayDataLoader;
 const todayMainShell = globalThis.CairnTodayMainShell;
 const todayPlanSurfaceRenderer = globalThis.CairnTodayPlanSurfaceRenderer;
 const todayRenderState = globalThis.CairnTodayRenderState;
-const { sessionDeps: todaySessionDeps, revealSessionComposer, askForSession, wireLogRow, wireSkips, wireBrief, scheduleRxRefresh, invalidateTodayProgression, refreshAdaptedRx, setupAddExercise, appendOffPlanCard, loadWearable, loadTableHint, loadContextBanner, loadDraftProposals, loadHealthFocusBanner, postExerciseMode: todayRuntimePostExerciseMode, reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest, reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride, applyDayProgression, loadBrief, upgradeBriefInPlace, reshapeToday: todayRuntimeReshapeToday, briefHtml, revealPlanThen, } = todayRuntime;
+const { sessionDeps: todaySessionDeps, setupAddExercise, loadHealthFocusBanner, postExerciseMode: todayRuntimePostExerciseMode, reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest, reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride, invalidateTodayProgression: _invalidateTodayProgression, loadBrief, reshapeToday: todayRuntimeReshapeToday, briefHtml, } = todayRuntime;
 function postExerciseMode(name, mode) {
     return todayRuntimePostExerciseMode(name, mode);
 }

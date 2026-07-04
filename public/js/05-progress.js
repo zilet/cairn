@@ -149,7 +149,7 @@ async function loadVolumeBalance() {
 async function renderEndurance() {
     await CairnProgressEnduranceController.render(CairnProgressRouteDeps.endurance(() => renderEndurance()));
 }
-function paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
+function _paintEnduranceBody(end, prs, goal, compliance, settings, runPlan) {
     CairnProgressEnduranceController.paint(end, prs, goal, compliance, settings, runPlan, CairnProgressRouteDeps.endurance(() => renderEndurance()));
 }
 // SWR over /calendar?days=84 (key progress:calendar): the Calendar seg paints its

@@ -13,8 +13,8 @@ type TodayWeekAheadResponse = import("../contracts/client.js").ClientWeekAheadRe
     rest: "○",
   };
 
-  function todayWeekAheadRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  function todayWeekAheadRecord(value: unknown): Partial<TodayWeekAheadResponse> & Record<string, unknown> {
+    return value && typeof value === "object" ? value as Partial<TodayWeekAheadResponse> & Record<string, unknown> : {};
   }
 
   function todayWeekAheadKind(value: unknown): TodayWeekAheadDayKind {

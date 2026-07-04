@@ -181,7 +181,6 @@ const BM_FIG_DEFAULT: Record<"male" | "female", Record<BmSiteKey, number>> = {
 const BM_FIG_INK = "#211d17";
 const BM_FIG_MUTED = "#746c5c";
 const BM_FIG_ACCENT = "#b4552d";
-const BM_FIG_SAGE = "#6e7f5c";
 const BM_FIG_SAGE_DEEP = "#5a6a4a";
 const BM_FIG_LINE = "#c4b89d";
 

@@ -134,7 +134,7 @@ async function renderEndurance() {
   await CairnProgressEnduranceController.render(CairnProgressRouteDeps.endurance(() => renderEndurance()));
 }
 
-function paintEnduranceBody(
+function _paintEnduranceBody(
   end: unknown,
   prs: import("../contracts/client-api.js").ClientEndurancePRs | null,
   goal: import("../contracts/client-api.js").ClientEnduranceGoal | null,

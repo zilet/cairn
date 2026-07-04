@@ -1,8 +1,6 @@
 // @ts-check
 // Me -> Life form helpers: safe reads, dynamic fields, and add workflow.
 
-type LifeControllerContextEvent = import("../contracts/client-api.js").ClientContextEvent;
-
 type LifeControllerRecord = Record<string, unknown>;
 type LifeControllerForm = ClientLifeControllerForm;
 

@@ -1,6 +1,8 @@
 // @ts-check
 // Me -> Life timeline helpers: list loading, edit controls, and deletion.
 
+type LifeControllerContextEvent = import("../contracts/client-api.js").ClientContextEvent;
+
 type LifeTimelineActionsApi = {
   load(deps: ClientLifeControllerDeps): Promise<void>;
   rewireCard(card: HTMLElement, deps: ClientLifeControllerDeps): void;

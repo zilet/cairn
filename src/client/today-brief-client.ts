@@ -29,10 +29,6 @@ type TodayBriefHtmlOptions = {
   offlineDismissed?: boolean;
 };
 
-type TodayPlanDay = {
-  name?: unknown;
-};
-
 (() => {
   const BRIEF_KIND: Record<string, TodayBriefMeta> = {
     rest: { word: "Rest", glyph: "◐", lead: "A quiet day" },

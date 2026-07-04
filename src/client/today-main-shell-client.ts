@@ -29,7 +29,7 @@ type TodayMainShellApi = {
     return currentWeight != null ? `${currentWeight}<span class="wt-mini-unit">lb</span>` : "weight";
   }
 
-  function captureRowHtml(isToday: boolean, currentWeight: unknown, deps: TodayMainShellDeps): string {
+  function captureRowHtml(currentWeight: unknown, deps: TodayMainShellDeps): string {
     return `<div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
         <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
@@ -52,7 +52,7 @@ type TodayMainShellApi = {
     <div id="goalSlot">${options.conductorLeads ? "" : options.goalLineHtml}</div>
     <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
-    ${captureRowHtml(options.isToday, options.currentWeight, deps)}`;
+    ${captureRowHtml(options.currentWeight, deps)}`;
   }
 
   function weekFoldHtml(compass: TodayMainShellCompass, deps: Pick<TodayMainShellDeps, "escapeHtml">): string {

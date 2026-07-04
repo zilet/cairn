@@ -6747,7 +6747,7 @@ if (typeof window !== "undefined") {
     function weightChipLabel(currentWeight) {
         return currentWeight != null ? `${currentWeight}<span class="wt-mini-unit">lb</span>` : "weight";
     }
-    function captureRowHtml(isToday, currentWeight, deps) {
+    function captureRowHtml(currentWeight, deps) {
         return `<div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
         <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
@@ -6769,7 +6769,7 @@ if (typeof window !== "undefined") {
     <div id="goalSlot">${options.conductorLeads ? "" : options.goalLineHtml}</div>
     <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
-    ${captureRowHtml(options.isToday, options.currentWeight, deps)}`;
+    ${captureRowHtml(options.currentWeight, deps)}`;
     }
     function weekFoldHtml(compass, deps) {
         return `${compass.paceOfferHtml || ""}
@@ -11092,7 +11092,7 @@ const todayDataLoader = globalThis.CairnTodayDataLoader;
 const todayMainShell = globalThis.CairnTodayMainShell;
 const todayPlanSurfaceRenderer = globalThis.CairnTodayPlanSurfaceRenderer;
 const todayRenderState = globalThis.CairnTodayRenderState;
-const { sessionDeps: todaySessionDeps, revealSessionComposer, askForSession, wireLogRow, wireSkips, wireBrief, scheduleRxRefresh, invalidateTodayProgression, refreshAdaptedRx, setupAddExercise, appendOffPlanCard, loadWearable, loadTableHint, loadContextBanner, loadDraftProposals, loadHealthFocusBanner, postExerciseMode: todayRuntimePostExerciseMode, reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest, reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride, applyDayProgression, loadBrief, upgradeBriefInPlace, reshapeToday: todayRuntimeReshapeToday, briefHtml, revealPlanThen, } = todayRuntime;
+const { sessionDeps: todaySessionDeps, setupAddExercise, loadHealthFocusBanner, postExerciseMode: todayRuntimePostExerciseMode, reconnectSessionSuggest: todayRuntimeReconnectSessionSuggest, reconnectDayReadOverride: todayRuntimeReconnectDayReadOverride, invalidateTodayProgression: _invalidateTodayProgression, loadBrief, reshapeToday: todayRuntimeReshapeToday, briefHtml, } = todayRuntime;
 function postExerciseMode(name, mode) {
     return todayRuntimePostExerciseMode(name, mode);
 }

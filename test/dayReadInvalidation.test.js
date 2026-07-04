@@ -4,7 +4,7 @@
 // new injury / a session-feedback tap / a resolve never leaves a stale Brief behind.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
+import { repo, resetTables, localDaysAgo } from "./_seed.js";
 
 const TODAY = () => localDaysAgo(0);
 

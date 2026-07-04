@@ -5129,7 +5129,7 @@ body[data-tab="session"] .tabbar{display:none}
   transform:translate(-50%,-50%);border:2px solid var(--card);box-shadow:var(--shadow-sm);
 }
 /* Focus well + weekly moves + latest sessions. */
-.tov-focus{margin:14px 0}
+.tov-focus{margin:14px 0;padding:16px 18px 14px}
 .tov-focus-title{font-weight:650;color:var(--ink);margin:4px 0 2px}
 .tov-focus-why{font-size:.82rem;color:var(--ink-2)}
 .tov-focus-move{font-size:.82rem;color:var(--ink-2);font-style:italic;margin-top:6px}

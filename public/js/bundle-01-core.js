@@ -1905,7 +1905,7 @@ function uiProgressSubBar(group, activeLeaf) {
     const leaves = uiProgressVisibleLeaves(group, activeLeaf);
     if (leaves.length < 2)
         return "";
-    const li = Math.max(0, leaves.findIndex((k) => k === activeLeaf));
+    const li = Math.max(0, leaves.indexOf(activeLeaf));
     const buttons = leaves.map((k) => {
         const on = k === activeLeaf;
         return `<button class="segbtn${on ? " active" : ""}" type="button" data-seg="${k}" aria-pressed="${on ? "true" : "false"}">${uiProgressLeafLabel(k)}</button>`;

@@ -5,7 +5,7 @@
     function weightChipLabel(currentWeight) {
         return currentWeight != null ? `${currentWeight}<span class="wt-mini-unit">lb</span>` : "weight";
     }
-    function captureRowHtml(isToday, currentWeight, deps) {
+    function captureRowHtml(currentWeight, deps) {
         return `<div class="capture-row reveal" style="--i:1">
       <div class="wt-inline" id="wtInline" hidden>
         <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)">
@@ -27,7 +27,7 @@
     <div id="goalSlot">${options.conductorLeads ? "" : options.goalLineHtml}</div>
     <div id="draftSlot" class="draft-slot"></div>
     <div id="sugSlot" class="sug-slot"></div>
-    ${captureRowHtml(options.isToday, options.currentWeight, deps)}`;
+    ${captureRowHtml(options.currentWeight, deps)}`;
     }
     function weekFoldHtml(compass, deps) {
         return `${compass.paceOfferHtml || ""}

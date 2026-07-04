@@ -1544,7 +1544,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(smokeBrowser, /async function smokePlanSegmentNavigation/);
   assert.match(smokeBrowser, /#dayFuelSlot/);
   assert.match(smokeBrowser, /async function smokeHealthInnerNavigation/);
-  assert.match(smokeBrowser, /data-hseg="markers"/);
+  assert.match(smokeBrowser, /\[data-allmarkers\]/);
+  assert.match(smokeBrowser, /\/app\/stand\/records/);
   assert.match(smokeBrowser, /resetFocusAfterNativePicker/);
   assert.match(smokeBrowser, /cairn:keyboard-settle/);
   assert.match(smokeBrowser, /kb-geometry-open/);

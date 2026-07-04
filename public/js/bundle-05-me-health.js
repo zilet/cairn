@@ -2591,13 +2591,12 @@ if (typeof window !== "undefined") {
         if (!data) {
             return `<div class="hstand hstand-panel"><div class="empty">Health standing will appear once the read is available.</div></div>`;
         }
-        const primitives = CairnHealthStandingPrimitives;
         const standing = data;
         const subject = standing.subject ?? {};
         const hero = standing.hero ?? {};
         const ageNumber = Number(subject.age);
         const hasAge = Number.isFinite(ageNumber);
-        const actualDecade = hasAge ? primitives.hstandDecade(ageNumber) : null;
+        const actualDecade = hasAge ? hstandDecade(ageNumber) : null;
         const referenceAge = Number(subject.reference_age || options.referenceAge || actualDecade || 20);
         const referenceAges = [...new Set([...(actualDecade ? [actualDecade] : []), 20, 30, 40, 50, 60, 70])];
         const referenceButtons = referenceAges.map((age) => {
@@ -2641,12 +2640,12 @@ if (typeof window !== "undefined") {
             : "";
         const sexWord = subject.sex === "female" ? "women" : "men";
         const comparisons = Array.isArray(standing.comparisons) && standing.comparisons.length
-            ? standing.comparisons.map((comparison) => primitives.hstandCompHtml(comparison, sexWord, ageNumber)).join("")
+            ? standing.comparisons.map((comparison) => hstandCompHtml(comparison, sexWord, ageNumber)).join("")
             : `<div class="hstand-empty">VO2max or a DEXA/body-fat anchor unlocks real age-band percentiles.</div>`;
         const dimensions = Array.isArray(standing.dimensions)
             ? standing.dimensions
                 .filter((dimension) => dimension.id !== "bp" && dimension.id !== "body")
-                .map(primitives.hstandDimensionHtml)
+                .map(hstandDimensionHtml)
                 .join("")
             : "";
         const balanceHtml = standing.balance
@@ -2669,11 +2668,11 @@ if (typeof window !== "undefined") {
           <section class="hstand-ref">
             <span class="lbl">Compare against</span>
             <div class="hstand-refgrid">${referenceButtons}</div>
-            ${primitives.hstandRefSummaryHtml(standing.comparisons, referenceAge, actualDecade, sexWord)}
+            ${hstandRefSummaryHtml(standing.comparisons, referenceAge, actualDecade, sexWord)}
           </section>
           <section class="hstand-grid">
-            ${primitives.hstandBodyCompHtml(standing.body_comp)}
-            ${primitives.hstandBpCardHtml(standing.blood_pressure)}
+            ${hstandBodyCompHtml(standing.body_comp)}
+            ${hstandBpCardHtml(standing.blood_pressure)}
           </section>
           <div id="hDexaSlot" class="pdexa-slot"></div>
           <section class="hstand-panel">
@@ -2687,16 +2686,16 @@ if (typeof window !== "undefined") {
     </div>`;
     }
     const CAIRN_HEALTH_STANDING = {
-        hstandDecade: CairnHealthStandingPrimitives.hstandDecade,
-        hstandPct: CairnHealthStandingPrimitives.hstandPct,
-        localDateTimeInputValue: CairnHealthStandingPrimitives.localDateTimeInputValue,
-        hstandTone: CairnHealthStandingPrimitives.hstandTone,
-        hstandBandTone: CairnHealthStandingPrimitives.hstandBandTone,
-        hstandMeasureHtml: CairnHealthStandingPrimitives.hstandMeasureHtml,
-        hstandCompHtml: CairnHealthStandingPrimitives.hstandCompHtml,
-        hstandRefSummaryHtml: CairnHealthStandingPrimitives.hstandRefSummaryHtml,
-        hstandDimensionHtml: CairnHealthStandingPrimitives.hstandDimensionHtml,
-        hstandBpRows: CairnHealthStandingPrimitives.hstandBpRows,
+        hstandDecade,
+        hstandPct,
+        localDateTimeInputValue,
+        hstandTone,
+        hstandBandTone,
+        hstandMeasureHtml,
+        hstandCompHtml,
+        hstandRefSummaryHtml,
+        hstandDimensionHtml,
+        hstandBpRows,
         hstandBodyCompHtml: CairnHealthStandingPrimitives.hstandBodyCompHtml,
         hstandBpCardHtml: CairnHealthStandingPrimitives.hstandBpCardHtml,
         renderHealthStandingHtml,

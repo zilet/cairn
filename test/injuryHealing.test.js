@@ -4,7 +4,7 @@
 // without ever hard-deleting the record. An explicit resolve closes it outright.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedTrainingDay, localDaysAgo } from "./_seed.js";
+import { repo, resetTables, seedTrainingDay, localDaysAgo } from "./_seed.js";
 
 beforeEach(() => resetTables("context_events", "sessions", "logged_sets", "exercises", "day_reads"));
 

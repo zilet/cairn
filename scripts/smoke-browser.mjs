@@ -25,9 +25,13 @@ const routes = [
   { path: "/app/plan/food", tab: "plan", expectedState: { planSeg: "food" } },
   { path: "/app/plan/meals", tab: "plan", expectedState: { planSeg: "meals" } },
   { path: "/app/progress/energy", tab: "progress", expectedState: { progressSeg: "energy" } },
-  { path: "/app/me/standing", tab: "me", expectedState: { meSeg: "standing" } },
-  { path: "/app/me/health/read", tab: "me", expectedState: { meSeg: "health", healthSeg: "read" } },
-  { path: "/app/me/health/records", tab: "me", expectedState: { meSeg: "health", healthSeg: "records" } },
+  { path: "/app/stand", tab: "stand", expectedState: { standSeg: null } },
+  { path: "/app/stand/age", tab: "stand", expectedState: { standSeg: "age" } },
+  { path: "/app/stand/records", tab: "stand", expectedState: { standSeg: "records" } },
+  { path: "/app/stand/markers", tab: "stand", expectedState: { standSeg: "markers" } },
+  { path: "/app/me/standing", tab: "stand", expectedHref: "/app/stand/age", expectedState: { standSeg: "age" } },
+  { path: "/app/me/health/read", tab: "stand", expectedHref: "/app/stand", expectedState: { standSeg: null } },
+  { path: "/app/me/health/records", tab: "stand", expectedHref: "/app/stand/records", expectedState: { standSeg: "records" } },
   { path: "/app/me/memory", tab: "me", expectedState: { meSeg: "memory" } },
   { path: "/app/me/family", tab: "me", expectedState: { meSeg: "family" } },
   { path: "/app/chat", tab: "chat" },
@@ -332,7 +336,7 @@ async function evaluate(cdp, expression) {
     returnByValue: true,
   });
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || "Runtime.evaluate failed");
+    throw new Error(describeException(result.exceptionDetails));
   }
   return result.result?.value;
 }
@@ -510,6 +514,7 @@ async function smokeRoute(cdp, base, route) {
         tab: window.state && window.state.tab,
         planSeg: window.state && window.state.planSeg,
         progressSeg: window.state && window.state.progressSeg,
+        standSeg: window.state && window.state.standSeg,
         meSeg: window.state && window.state.meSeg,
         healthSeg: window.state && window.state.healthSeg,
         setSeg: window.state && window.state.setSeg,
@@ -517,7 +522,8 @@ async function smokeRoute(cdp, base, route) {
         scripts: document.scripts.length
       };
     })()`);
-    ok(state.href === route.path, `${route.path} preserves path URL after hydration`, JSON.stringify(state));
+    const expectedHref = route.expectedHref || route.path;
+    ok(state.href === expectedHref, `${route.path} lands on ${expectedHref} after hydration`, JSON.stringify(state));
     ok(state.tab === route.tab, `${route.path} active tab is ${route.tab}`, JSON.stringify(state));
     for (const [key, value] of Object.entries(route.expectedState || {})) {
       ok(state[key] === value, `${route.path} preserves ${key}=${value}`, JSON.stringify(state));
@@ -1125,13 +1131,13 @@ async function smokeProgressSegmentNavigation(cdp, base) {
     await navigateAndHydrate(cdp, base, "/app/progress/energy", "progress");
     await assertGlobals(cdp);
     await evaluate(cdp, `(() => {
-      const btn = document.querySelector('.segbtn[data-seg="program"]');
+      const btn = document.querySelector('.segbtn[data-proggroup="performance"], .segbtn[data-seg="program"]');
       if (!btn) throw new Error("missing Progress Program segment");
       btn.click();
       return true;
     })()`);
     await waitForCondition(cdp, "Progress segment click routes to Program", `(() => {
-      const active = document.querySelector('.segbtn.active[data-seg="program"]');
+      const active = document.querySelector('.segbtn.active[data-proggroup="performance"], .segbtn.active[data-seg="program"]');
       const view = document.querySelector("#view");
       return {
         ok: Boolean(
@@ -1149,13 +1155,13 @@ async function smokeProgressSegmentNavigation(cdp, base) {
     })()`);
 
     await evaluate(cdp, `(() => {
-      const btn = document.querySelector('.segbtn[data-seg="energy"]');
+      const btn = document.querySelector('.segbtn[data-proggroup="fuel"], .segbtn[data-seg="energy"]');
       if (!btn) throw new Error("missing Progress Energy segment");
       btn.click();
       return true;
     })()`);
     await waitForCondition(cdp, "Progress segment click returns to Energy", `(() => {
-      const active = document.querySelector('.segbtn.active[data-seg="energy"]');
+      const active = document.querySelector('.segbtn.active[data-proggroup="fuel"], .segbtn.active[data-seg="energy"]');
       return {
         ok: Boolean(active && window.state?.progressSeg === "energy" && location.pathname === "/app/progress/energy" && document.querySelector("#energyCard")),
         href: location.pathname,
@@ -1223,50 +1229,41 @@ async function smokePlanSegmentNavigation(cdp, base) {
 async function smokeHealthInnerNavigation(cdp, base) {
   const { failures, off } = collectFailures(cdp, base);
   try {
-    await navigateAndHydrate(cdp, base, "/app/me/health/read", "me");
+    await navigateAndHydrate(cdp, base, "/app/stand", "stand");
     await assertGlobals(cdp);
     await evaluate(cdp, `(() => {
-      const btn = document.querySelector('.hseg .segbtn[data-hseg="markers"]');
-      if (!btn) throw new Error("missing Health Markers segment");
+      const btn = document.querySelector("[data-allmarkers]");
+      if (!btn) throw new Error("missing Stand all-markers control");
       btn.click();
       return true;
     })()`);
-    await waitForCondition(cdp, "Health inner segment click routes to Markers", `(() => {
-      const active = document.querySelector('.hseg .segbtn.active[data-hseg="markers"]');
-      const content = document.querySelector("#hContent");
+    await waitForCondition(cdp, "Stand marker control routes to Markers", `(() => {
+      const content = document.querySelector("#standResults");
       return {
         ok: Boolean(
-          active &&
-          window.state?.tab === "me" &&
-          window.state?.meSeg === "health" &&
-          window.state?.healthSeg === "markers" &&
-          location.pathname === "/app/me/health/markers" &&
+          window.state?.tab === "stand" &&
+          window.state?.standSeg === "markers" &&
+          location.pathname === "/app/stand/markers" &&
           content &&
           content.textContent.trim().length > 0
         ),
         href: location.pathname,
-        healthSeg: window.state && window.state.healthSeg,
-        active: active ? active.textContent.trim() : ""
+        standSeg: window.state && window.state.standSeg,
+        contentLength: content ? content.textContent.trim().length : 0
       };
     })()`);
 
-    await evaluate(cdp, `(() => {
-      const btn = document.querySelector('.hseg .segbtn[data-hseg="records"]');
-      if (!btn) throw new Error("missing Health Records segment");
-      btn.click();
-      return true;
-    })()`);
-    await waitForCondition(cdp, "Health inner segment click routes to Records upload", `(() => {
-      const active = document.querySelector('.hseg .segbtn.active[data-hseg="records"]');
+    await navigateAndHydrate(cdp, base, "/app/stand/records", "stand");
+    await waitForCondition(cdp, "Stand records route renders upload", `(() => {
       return {
-        ok: Boolean(active && window.state?.healthSeg === "records" && location.pathname === "/app/me/health/records" && document.querySelector("#hUploadBox") && document.querySelector("#hUpload")),
+        ok: Boolean(window.state?.standSeg === "records" && location.pathname === "/app/stand/records" && document.querySelector("#hUploadBox") && document.querySelector("#hUpload")),
         href: location.pathname,
-        healthSeg: window.state && window.state.healthSeg,
+        standSeg: window.state && window.state.standSeg,
         hasUploadBox: Boolean(document.querySelector("#hUploadBox")),
         hasUploadButton: Boolean(document.querySelector("#hUpload"))
       };
     })()`);
-    ok(failures.length === 0, "/app/me/health inner navigation workflow has no browser runtime/load errors", failures.join("\n"));
+    ok(failures.length === 0, "/app/stand health-tool navigation workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
@@ -1493,7 +1490,7 @@ async function smokePlanEditorSaveAndMealRecipe(cdp, base) {
 async function smokeHealthRecordActions(cdp, base) {
   const { failures, off } = collectFailures(cdp, base);
   try {
-    await navigateAndHydrate(cdp, base, "/app/me/health/records", "me");
+    await navigateAndHydrate(cdp, base, "/app/stand/records", "stand");
     await assertGlobals(cdp);
 
     await waitForCondition(cdp, "Health Records renders the seeded bloodwork/DEXA documents", `(() => {
@@ -1597,7 +1594,7 @@ async function smokeHealthRecordActions(cdp, base) {
     const savedDoc = await apiJson(base, `/health-docs/${first.id}`);
     ok(savedDoc?.doc_date === newDate, "API reflects the edited result date", JSON.stringify(savedDoc?.doc_date));
 
-    ok(failures.length === 0, "/app/me/health/records workflow has no browser runtime/load errors", failures.join("\n"));
+    ok(failures.length === 0, "/app/stand/records workflow has no browser runtime/load errors", failures.join("\n"));
   } finally {
     off();
   }
