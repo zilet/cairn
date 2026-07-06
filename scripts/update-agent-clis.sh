@@ -135,26 +135,49 @@ install_npm_cli() {
   report_bin "$name"
 }
 
+run_cli_update() {
+  name="$1"
+  shift
+  timeout_s="${AGENT_INSTALL_TIMEOUT_SECONDS:-300}"
+
+  if ! command -v "$name" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  log "updating $name via '$name $*'"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_s" "$name" "$@" || return 1
+  else
+    "$name" "$@" || return 1
+  fi
+  report_bin "$name"
+  return 0
+}
+
 if [ "${UPDATE_CLAUDE:-1}" = "1" ]; then
-  install_npm_cli claude @anthropic-ai/claude-code "${CLAUDE_CODE_VERSION:-2.1.195}"
+  install_npm_cli claude @anthropic-ai/claude-code "${CLAUDE_CODE_VERSION:-2.1.201}"
 fi
 
 if [ "${UPDATE_CODEX:-1}" = "1" ]; then
-  install_npm_cli codex @openai/codex "${CODEX_CLI_VERSION:-0.142.3}" --include=optional
+  install_npm_cli codex @openai/codex "${CODEX_CLI_VERSION:-0.142.5}" --include=optional
 fi
 
 if [ "${UPDATE_ANTIGRAVITY:-1}" = "1" ]; then
-  run_installer agy \
-    "${ANTIGRAVITY_INSTALL_URL:-https://antigravity.google/cli/install.sh}" \
-    "${ANTIGRAVITY_INSTALL_SHA256:-}" \
-    "${ANTIGRAVITY_INSTALL_ALLOW_UNVERIFIED:-${AGENT_INSTALL_ALLOW_UNVERIFIED:-0}}"
+  if ! run_cli_update agy update; then
+    run_installer agy \
+      "${ANTIGRAVITY_INSTALL_URL:-https://antigravity.google/cli/install.sh}" \
+      "${ANTIGRAVITY_INSTALL_SHA256:-}" \
+      "${ANTIGRAVITY_INSTALL_ALLOW_UNVERIFIED:-${AGENT_INSTALL_ALLOW_UNVERIFIED:-0}}"
+  fi
 fi
 
 if [ "${UPDATE_GROK:-1}" = "1" ]; then
-  run_installer grok \
-    "${GROK_INSTALL_URL:-https://x.ai/cli/install.sh}" \
-    "${GROK_INSTALL_SHA256:-}" \
-    "${GROK_INSTALL_ALLOW_UNVERIFIED:-${AGENT_INSTALL_ALLOW_UNVERIFIED:-0}}"
+  if ! run_cli_update grok update; then
+    run_installer grok \
+      "${GROK_INSTALL_URL:-https://x.ai/cli/install.sh}" \
+      "${GROK_INSTALL_SHA256:-}" \
+      "${GROK_INSTALL_ALLOW_UNVERIFIED:-${AGENT_INSTALL_ALLOW_UNVERIFIED:-0}}"
+  fi
 fi
 
 log "agent CLI update complete"

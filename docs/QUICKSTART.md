@@ -53,9 +53,9 @@ one `docker exec` per provider —
 
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code  — OAuth/device-code prompt
-docker exec -u app -it cairn codex login         # Codex        — ChatGPT login
+docker exec -u app -it cairn codex login --device-auth  # Codex        — ChatGPT device login
 docker exec -u app -it cairn agy                 # Antigravity  — Google sign-in (paste the code quickly)
-docker exec -u app -it cairn grok login          # Grok         — device login (or use XAI_API_KEY)
+docker exec -u app -it cairn grok login --device-auth   # Grok         — device login (or use XAI_API_KEY)
 ```
 
 Always use `-u app` here — the server runs as that user, so a login written as root is invisible to it.
@@ -331,9 +331,9 @@ logins written as root are invisible to it.
 
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code — OAuth/device-code prompt
-docker exec -u app -it cairn codex login         # Codex — ChatGPT login
+docker exec -u app -it cairn codex login --device-auth  # Codex — ChatGPT device login
 docker exec -u app -it cairn agy                 # Antigravity (Google) — paste the code quickly (~30s)
-docker exec -u app -it cairn grok login          # Grok — interactive login (or use XAI_API_KEY, below)
+docker exec -u app -it cairn grok login --device-auth   # Grok — device login (or use XAI_API_KEY, below)
 ```
 
 After logging in, enable that agent in **Settings → Agents** and tap **Draft plan update** to test
@@ -363,7 +363,7 @@ The coaching CLIs run as the same user as `npm start`, so a normal login on the 
 
 ```bash
 claude        # Anthropic OAuth / login
-codex login   # ChatGPT
+codex login --device-auth   # ChatGPT device login
 agy           # Google
 ```
 

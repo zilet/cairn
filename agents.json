@@ -24,7 +24,7 @@
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "env_required": [],
-    "login": ["login"],
+    "login": ["login", "--device-auth"],
     "status_check": ["login", "status"],
     "auth_state": [".codex/auth.json"],
     "models_list": null,

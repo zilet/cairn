@@ -154,7 +154,7 @@ of the rotation, and each card shows the CLI's version + current model.
 Prefer a terminal? It's one `docker exec` (the container is named `cairn`):
 
 ```bash
-docker exec -u app -it cairn claude auth login   # or: codex login · agy · grok login  (pick one; -u app is required)
+docker exec -u app -it cairn claude auth login   # or: codex login --device-auth · agy · grok login --device-auth
 ```
 
 The built-in `stub` agent returns a canned demo proposal to explore the propose→apply UI offline (it's
@@ -389,9 +389,9 @@ model (and, for grok/agy, its model catalog).
 **From a terminal:** the container is named `cairn` (whether you used `docker run` or compose):
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code — sign in (URL + code)
-docker exec -u app -it cairn codex login         # Codex — ChatGPT login
+docker exec -u app -it cairn codex login --device-auth  # Codex — ChatGPT device login
 docker exec -u app -it cairn agy                 # Antigravity (Google), if installed
-docker exec -u app -it cairn grok login          # Grok, if installed (or set XAI_API_KEY)
+docker exec -u app -it cairn grok login --device-auth   # Grok, if installed (or set XAI_API_KEY)
 ```
 Grok headless can use an API key instead of the login — pass `-e XAI_API_KEY=…` on `docker run`
 (re-create the container to apply) or set it in `.env` for the compose path. Then enable the agent
@@ -407,7 +407,8 @@ the `cairn-home` Docker volume keeps those auth directories across restarts and 
 
 The image installs pinned Claude Code and Codex CLI versions plus checksum-pinned Antigravity/Grok
 installers at build time. For a long-running install, update them from **Settings → Agents → Update
-CLI tools**, or from the shell:
+CLI tools**, or from the shell. The updater uses each vendor CLI's own updater when available and
+falls back to the pinned installer path when a binary is missing:
 
 ```bash
 docker exec -u app cairn cairn-update-agent-clis

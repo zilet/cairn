@@ -121,9 +121,9 @@ From a terminal it's one `docker exec` (the container is named `cairn` whichever
 
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code — OAuth/device-code prompt
-docker exec -u app -it cairn codex login         # Codex — ChatGPT login
+docker exec -u app -it cairn codex login --device-auth  # Codex — ChatGPT device login
 docker exec -u app -it cairn agy                 # Antigravity (Google) — paste the code quickly
-docker exec -u app -it cairn grok login          # Grok — device login (or set XAI_API_KEY)
+docker exec -u app -it cairn grok login --device-auth   # Grok — device login (or set XAI_API_KEY)
 ```
 
 Pick **one** to start; the login persists in the `cairn-home` volume. Always use `-u app` here — a login
@@ -152,8 +152,9 @@ container. Building from source? `git pull && docker compose up -d --build`.
 
 ## Updating CLI Tools
 
-The image installs pinned Claude Code and Codex CLI versions when it is built.
-On a long-running host, update them from Settings -> Agents -> Update CLI tools, or run:
+The image installs pinned Claude Code and Codex CLI versions when it is built. Antigravity and Grok
+are installed from checksum-pinned vendor installers, then refreshed with their own update commands
+on long-running hosts. Update from Settings -> Agents -> Update CLI tools, or run:
 
 ```bash
 docker exec -u app cairn cairn-update-agent-clis

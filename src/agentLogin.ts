@@ -33,7 +33,7 @@ import { loadAgents } from "./agents.js";
 // docs/AGENT_CONNECT_BUILD_PLAN.md §4.1 against the live image.)
 const FALLBACK_LOGIN: Record<string, string[]> = {
   claude: ["auth", "login"],
-  codex: ["login"],
+  codex: ["login", "--device-auth"],
   grok: ["login", "--device-auth"],
   antigravity: [], // bare interactive `agy`
 };

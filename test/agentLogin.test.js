@@ -28,7 +28,7 @@ import {
 
 test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("claude"), ["claude", "auth", "login"]);
-  assert.deepEqual(resolveLoginArgv("codex"), ["codex", "login"]);
+  assert.deepEqual(resolveLoginArgv("codex"), ["codex", "login", "--device-auth"]);
   assert.deepEqual(resolveLoginArgv("grok"), ["grok", "login", "--device-auth"]);
   // antigravity logs in via the bare interactive CLI (login: []).
   assert.deepEqual(resolveLoginArgv("antigravity"), ["agy"]);

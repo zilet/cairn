@@ -43,9 +43,9 @@ can't see it:
 
 ```bash
 docker exec -u app -it cairn claude auth login   # Claude Code
-docker exec -u app -it cairn codex login         # Codex
+docker exec -u app -it cairn codex login --device-auth  # Codex
 docker exec -u app -it cairn agy                 # Antigravity (Google)
-docker exec -u app -it cairn grok login          # Grok (or set XAI_API_KEY)
+docker exec -u app -it cairn grok login --device-auth   # Grok (or set XAI_API_KEY)
 ```
 
 An agent that isn't logged in is automatically excluded from the auto-rotation (Settings shows it as

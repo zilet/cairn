@@ -193,7 +193,10 @@ browser and signs you in). From a shell on the Pi it's one `docker compose exec`
 ```bash
 ssh user@pi
 cd cairn
-docker compose exec -u app -it cairn claude auth login   # or: codex login · agy · grok login --device-auth
+docker compose exec -u app -it cairn claude auth login          # Claude Code
+docker compose exec -u app -it cairn codex login --device-auth  # Codex
+docker compose exec -u app -it cairn agy                        # Antigravity
+docker compose exec -u app -it cairn grok login --device-auth   # Grok
 ```
 
 Always **`-u app`** for new logins — a login written as root is invisible to the
@@ -332,7 +335,7 @@ version deliberately when you want to bump them:
 
 ```bash
 docker compose exec -u app cairn cairn-update-agent-clis
-docker compose exec -u app -e CLAUDE_CODE_VERSION=2.1.195 -e CODEX_CLI_VERSION=0.142.3 cairn cairn-update-agent-clis
+docker compose exec -u app -e CLAUDE_CODE_VERSION=2.1.201 -e CODEX_CLI_VERSION=0.142.5 cairn cairn-update-agent-clis
 ```
 
 Or **Settings → Agents → Update CLI tools**.
@@ -342,8 +345,8 @@ Force fresh CLI install on image rebuild:
 ```bash
 docker compose build \
   --build-arg AGENT_CLI_CACHE_BUST="$(date +%s)" \
-  --build-arg CLAUDE_CODE_VERSION=2.1.195 \
-  --build-arg CODEX_CLI_VERSION=0.142.3 \
+  --build-arg CLAUDE_CODE_VERSION=2.1.201 \
+  --build-arg CODEX_CLI_VERSION=0.142.5 \
   cairn
 docker compose up -d
 ```

@@ -57,8 +57,8 @@ test("agent CLI install script uses pinned npm package versions by default", () 
 
   assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
   const npmCalls = fs.readFileSync(npmLog, "utf8");
-  assert.match(npmCalls, /i -g @anthropic-ai\/claude-code@2\.1\.195/);
-  assert.match(npmCalls, /i -g @openai\/codex@0\.142\.3 --include=optional/);
+  assert.match(npmCalls, /i -g @anthropic-ai\/claude-code@2\.1\.201/);
+  assert.match(npmCalls, /i -g @openai\/codex@0\.142\.5 --include=optional/);
 }));
 
 test("agent CLI install script refuses moving npm tags unless explicitly allowed", () => withTempDir((dir) => {
@@ -142,6 +142,39 @@ test("agent CLI install script gates shell installers on checksum or explicit op
   assert.equal(verified.status, 0, `${verified.stdout}\n${verified.stderr}`);
   assert.match(readIfExists(curlLog), /curl/);
   assert.match(readIfExists(bashLog), /cairn-agy-installer/);
+}));
+
+test("agent CLI install script prefers first-party update commands for installed vendor CLIs", () => withTempDir((dir) => {
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const updateLog = path.join(dir, "update.log");
+  const curlLog = path.join(dir, "curl.log");
+  writeExecutable(path.join(bin, "agy"), [
+    "#!/bin/sh",
+    "printf '%s\\n' \"agy:$*\" >> \"$UPDATE_LOG\"",
+    "echo 1.0.17",
+  ].join("\n"));
+  writeExecutable(path.join(bin, "grok"), [
+    "#!/bin/sh",
+    "printf '%s\\n' \"grok:$*\" >> \"$UPDATE_LOG\"",
+    "echo grok 0.2.78",
+  ].join("\n"));
+  writeExecutable(path.join(bin, "curl"), "#!/bin/sh\nprintf '%s\\n' curl >> \"$CURL_LOG\"\n");
+  writeExecutable(path.join(bin, "timeout"), "#!/bin/sh\nshift\nexec \"$@\"\n");
+
+  const res = runUpdater(bin, {
+    UPDATE_CLAUDE: "0",
+    UPDATE_CODEX: "0",
+    UPDATE_ANTIGRAVITY: "1",
+    UPDATE_GROK: "1",
+    UPDATE_LOG: updateLog,
+    CURL_LOG: curlLog,
+  });
+
+  assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
+  assert.match(fs.readFileSync(updateLog, "utf8"), /^agy:update$/m);
+  assert.match(fs.readFileSync(updateLog, "utf8"), /^grok:update$/m);
+  assert.equal(readIfExists(curlLog), "");
 }));
 
 test("Docker builds include all coaching CLIs with pinned vendor installer hashes", () => {
