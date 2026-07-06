@@ -535,6 +535,18 @@ export const MIGRATIONS: Migration[] = [
   // in db.ts (which runs on every boot), so per the "new tables need no
   // migration" rule only this column add needs a versioned migration.
   { version: 54, name: "profile-height-in", up: (db) => addColumn(db, "profile", "height_in REAL") },
+  { version: 55, name: "agent-run-diagnostics", up: (db) => {
+    // Operator telemetry for CLI rotation/fallback: compact failure causes, exit
+    // status, and optional usage fields when a CLI exposes token/model metadata.
+    // No prompt or full output bodies are stored here.
+    addColumn(db, "agent_runs", "status TEXT");
+    addColumn(db, "agent_runs", "error_class TEXT");
+    addColumn(db, "agent_runs", "error_message TEXT");
+    addColumn(db, "agent_runs", "exit_code INTEGER");
+    addColumn(db, "agent_runs", "model TEXT");
+    addColumn(db, "agent_runs", "input_tokens INTEGER");
+    addColumn(db, "agent_runs", "output_tokens INTEGER");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

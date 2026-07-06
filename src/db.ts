@@ -778,6 +778,13 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   parsed INTEGER,                     -- 1 = output parsed as JSON
   latency_ms INTEGER,                 -- wall-clock for this attempt
   tried_json INTEGER,                 -- 1 = the one-shot JSON-repair retry was used
+  status TEXT,                        -- ok | auth_required | invalid_output | empty_reply | error | timeout | ...
+  error_class TEXT,                   -- compact machine-readable cause, e.g. auth_required/process_error
+  error_message TEXT,                 -- short sanitized operator-facing detail; never prompt/output bodies
+  exit_code INTEGER,
+  model TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);

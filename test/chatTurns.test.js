@@ -14,10 +14,10 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
-import { applyChatActions, shouldCreatePhotoFoodPlaceholder } from "../dist/chatTurns.js";
+import { applyChatActions, classifyChatAgentResult, shouldCreatePhotoFoodPlaceholder } from "../dist/chatTurns.js";
 
 beforeEach(() => {
-  for (const t of ["chat_turns", "chat_messages", "memory", "plan_proposals", "food_notes"]) {
+  for (const t of ["chat_turns", "chat_messages", "memory", "plan_proposals", "food_notes", "body_measurements"]) {
     try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
   }
 });
@@ -32,6 +32,20 @@ test("createChatTurn opens a queued turn and round-trips its fields", () => {
   assert.equal(t.user_message_id, userMsg.id);
   assert.equal(t.started_at, null);
   assert.deepEqual(repo.getChatTurn(t.id).message, "how's my week?");
+});
+
+test("chat classifies CLI login banners as auth failures, not replies", () => {
+  const attempt = classifyChatAgentResult("codex", {
+    code: 0,
+    raw: "Not logged in · Please run /login",
+    stderr: "",
+    parsed: null,
+  });
+  assert.equal(attempt.ok, false);
+  assert.equal(attempt.status, "auth_required");
+  assert.equal(attempt.error_class, "auth_required");
+  assert.equal(attempt.agent, "codex");
+  assert.match(attempt.error_message, /Not logged in/);
 });
 
 test("listActiveChatTurns returns queued+running oldest-first, excludes terminal", () => {

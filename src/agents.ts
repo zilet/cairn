@@ -521,6 +521,72 @@ export function extractJson(text: string): any | null {
   return null;
 }
 
+function numberOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+}
+
+function firstTokenCount(obj: any, keys: string[]): number | null {
+  for (const key of keys) {
+    const n = numberOrNull(obj?.[key]);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+function usageFromObject(obj: any): AgentUsage {
+  if (!obj || typeof obj !== "object") return {};
+  const usage = obj.usageMetadata ?? obj.usage ?? obj.token_usage ?? obj.tokenUsage ?? obj.metrics ?? obj;
+  const input = firstTokenCount(usage, [
+    "input_tokens",
+    "inputTokens",
+    "prompt_tokens",
+    "promptTokens",
+    "promptTokenCount",
+    "inputTokenCount",
+  ]);
+  const output = firstTokenCount(usage, [
+    "output_tokens",
+    "outputTokens",
+    "completion_tokens",
+    "completionTokens",
+    "candidatesTokenCount",
+    "outputTokenCount",
+  ]);
+  const model =
+    typeof obj.model === "string" ? obj.model :
+    typeof obj.model_name === "string" ? obj.model_name :
+    typeof obj.modelName === "string" ? obj.modelName :
+    typeof usage.model === "string" ? usage.model :
+    typeof usage.model_name === "string" ? usage.model_name :
+    null;
+  return { model, input_tokens: input, output_tokens: output };
+}
+
+function mergeUsage(a: AgentUsage, b: AgentUsage): AgentUsage {
+  return {
+    model: a.model ?? b.model ?? null,
+    input_tokens: a.input_tokens ?? b.input_tokens ?? null,
+    output_tokens: a.output_tokens ?? b.output_tokens ?? null,
+  };
+}
+
+export function extractAgentUsage(text: string): AgentUsage {
+  let usage: AgentUsage = {};
+  const parsed = extractJson(text);
+  if (parsed) usage = mergeUsage(usage, usageFromObject(parsed));
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s.startsWith("{") || !s.endsWith("}")) continue;
+    try {
+      usage = mergeUsage(usage, usageFromObject(JSON.parse(s)));
+    } catch {
+      /* ignore non-JSON lines */
+    }
+  }
+  return usage;
+}
+
 export interface RunOpts {
   timeoutMs?: number;
   signal?: AbortSignal;   // abort to kill the live subprocess mid-run (chat-turn Stop)
@@ -627,11 +693,18 @@ const JSON_REPAIR_SUFFIX =
   "\n\nYour previous reply was not a single valid JSON object. " +
   "Re-emit ONLY the JSON object, nothing else — no prose, no markdown fences.";
 
+export interface AgentUsage {
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+}
+
 export interface AgentResult {
   code: number | null;
   raw: string;
   stderr: string;
   parsed: any | null;
+  usage?: AgentUsage;
 }
 
 export interface FallbackResult {
@@ -652,6 +725,13 @@ export interface AgentRunRecord {
   parsed: boolean;
   latency_ms: number;
   tried_json: boolean; // whether the one-shot JSON-repair retry was used
+  status?: string | null;
+  error_class?: string | null;
+  error_message?: string | null;
+  exit_code?: number | null;
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
 }
 type AgentRunSink = (r: AgentRunRecord) => void;
 let agentRunSink: AgentRunSink | null = null;
@@ -708,16 +788,53 @@ export async function runAgentWithFallback(
       }
       if (result.parsed) {
         breakerNoteSuccess(name);
-        emitAgentRun({ op, agent: name, ok: true, parsed: true, latency_ms: Date.now() - started, tried_json: triedJson });
+        emitAgentRun({
+          op,
+          agent: name,
+          ok: true,
+          parsed: true,
+          latency_ms: Date.now() - started,
+          tried_json: triedJson,
+          status: "ok",
+          exit_code: result.code,
+          model: result.usage?.model ?? null,
+          input_tokens: result.usage?.input_tokens ?? null,
+          output_tokens: result.usage?.output_tokens ?? null,
+        });
         return { agent: name, result, tried };
       }
       breakerNoteFail(name);
-      emitAgentRun({ op, agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: triedJson });
-      tried.push({ agent: name, error: `ran but returned no valid JSON (exit ${result.code})` });
+      const error = `ran but returned no valid JSON (exit ${result.code})`;
+      emitAgentRun({
+        op,
+        agent: name,
+        ok: false,
+        parsed: false,
+        latency_ms: Date.now() - started,
+        tried_json: triedJson,
+        status: "invalid_output",
+        error_class: "invalid_json",
+        error_message: error,
+        exit_code: result.code,
+        model: result.usage?.model ?? null,
+        input_tokens: result.usage?.input_tokens ?? null,
+        output_tokens: result.usage?.output_tokens ?? null,
+      });
+      tried.push({ agent: name, error });
     } catch (e: any) {
       if (signal?.aborted) throw e; // canceled mid-run — stop the rotation
       breakerNoteFail(name);
-      emitAgentRun({ op, agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: triedJson });
+      emitAgentRun({
+        op,
+        agent: name,
+        ok: false,
+        parsed: false,
+        latency_ms: Date.now() - started,
+        tried_json: triedJson,
+        status: "error",
+        error_class: /timed out/i.test(String(e?.message || "")) ? "timeout" : "process_error",
+        error_message: e?.message,
+      });
       tried.push({ agent: name, error: e.message });
     }
   }
@@ -783,11 +900,12 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
     child.on("close", (code) => {
       cleanup();
       const parsed = extractJson(out);
+      const usage = extractAgentUsage(`${out}\n${err}`);
       // Surface stderr (under DEBUG) when the run looks unhealthy: a non-zero exit,
       // or a clean exit that nonetheless produced no parseable JSON. This is what
       // a self-hoster needs to see "not logged in" / "no such model" first-run errors.
       if (code !== 0 || !parsed) debugAgentStderr(name, code, err);
-      resolve({ code, raw: out, stderr: err, parsed });
+      resolve({ code, raw: out, stderr: err, parsed, usage });
     });
 
     if (useStdin) child.stdin.write(prompt);
@@ -923,6 +1041,7 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
     let text = "";  // accumulated assistant text (the model's full output)
     let err = "";
     let buf = "";   // stdout line buffer (NDJSON)
+    let meta = "";  // raw event snippets, used only for best-effort token/model telemetry
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
@@ -936,6 +1055,7 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
     const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
 
     const consume = (line: string) => {
+      if (meta.length < MAX_OUT) meta += `${line}\n`;
       const progress = streamProgress(format, line);
       if (progress) {
         try { opts.onProgress?.(progress); } catch { /* a bad consumer must never kill the stream */ }
@@ -959,10 +1079,11 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
     child.on("close", (code) => {
       cleanup();
       if (buf.trim()) consume(buf); // flush a trailing line with no newline
+      const usage = extractAgentUsage(`${meta}\n${err}`);
       // Chat's success is non-empty text (not JSON); log stderr when the stream
       // came back empty or the process exited non-zero so a failure is diagnosable.
       if (code !== 0 || !text.trim()) debugAgentStderr(name, code, err);
-      resolve({ code, raw: text, stderr: err, parsed: extractJson(text) });
+      resolve({ code, raw: text, stderr: err, parsed: extractJson(text), usage });
     });
 
     if (useStdin) child.stdin.write(prompt);

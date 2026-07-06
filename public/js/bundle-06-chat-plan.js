@@ -598,8 +598,33 @@ function chatMessageApplied(value) {
 function chatMessageDrafts(value) {
     return chatMessageRows(value);
 }
+function chatMessageAgentAttempts(value) {
+    return chatMessageRows(value);
+}
 function chatMessageString(value) {
     return value == null ? "" : String(value);
+}
+function chatAgentCheckHtml(attemptsValue) {
+    const failed = chatMessageAgentAttempts(attemptsValue).filter((row) => row.ok === false);
+    if (!failed.length)
+        return "";
+    const first = failed[0];
+    const agent = chatMessageString(first.agent) || "agent";
+    const status = chatMessageString(first.status || first.error_class).replace(/_/g, " ") || "needs attention";
+    const more = failed.length > 1 ? ` +${failed.length - 1}` : "";
+    return `<button class="agentcheck" type="button" data-agent-check="1" title="Open Settings → Agents">
+    <span class="agentcheck-dot" aria-hidden="true"></span>
+    <span>Agent check · ${escHtml(agent)} ${escHtml(status)}${escHtml(more)}</span>
+  </button>`;
+}
+function openAgentSettings() {
+    try {
+        state.setSeg = "agents";
+        activateTab("settings");
+    }
+    catch {
+        toast("Open Settings → Agents");
+    }
 }
 // Convert a SQLite UTC timestamp ("YYYY-MM-DD HH:MM:SS") to a local YYYY-MM-DD
 // for day grouping; falls back to today on anything unparseable.
@@ -764,6 +789,7 @@ function appendMsg(m, noScroll = false, parent = null, opts = {}) {
             return `<button class="draftbtn" data-confirm-lab="${escAttr(l.id)}">${escHtml(label)}</button>`;
         }).join("");
     }
+    extra += chatAgentCheckHtml(meta.agent_attempts);
     const hideText = !!meta.image && (!m.content || m.content === "(photo)");
     const body = hideText ? "" : role === "assistant"
         ? `<div class="bubble-text md">${mdToHtml(m.content)}</div>`
@@ -821,6 +847,11 @@ function appendMsg(m, noScroll = false, parent = null, opts = {}) {
             if (hasClamped)
                 done.insertAdjacentHTML("afterend", clampNoteHtml(clamped));
         });
+    });
+    el.querySelectorAll("[data-agent-check]").forEach((b) => {
+        const btn = b instanceof HTMLButtonElement ? b : null;
+        if (btn)
+            btn.addEventListener("click", openAgentSettings);
     });
     // One-tap confirm for a pasted lab draft: commit it to Health records (nothing wrote
     // before this). Mirrors the plan-draft apply flow — honest failure re-enables the button.

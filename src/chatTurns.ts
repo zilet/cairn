@@ -7,7 +7,13 @@ import { UPLOADS_DIR } from "./uploadPaths.js";
 import { buildChatPrompt, parseChatReply } from "./prompt.js";
 import { chatHistoryTimeLabel } from "./repo/shared.js";
 import { runWithTimeZone } from "./tz.js";
-import { runAgent, runAgentStreaming, agentSupportsStream, INTERACTIVE_TIMEOUT_MS } from "./agents.js";
+import {
+  runAgent,
+  runAgentStreaming,
+  agentSupportsStream,
+  INTERACTIVE_TIMEOUT_MS,
+  type AgentResult,
+} from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 import type { MemoryKind } from "./repo/memory.js";
 import {
@@ -120,7 +126,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
   controllers.set(id, controller);
 
   try {
-    const { agent, raw } = await runChatCompletion(id, turn, prompt, controller.signal);
+    const { agent, raw, attempts } = await runChatCompletion(id, turn, prompt, controller.signal);
     const { reply: replyText, actions } = parseChatReply(raw);
     const reply = replyText || "(no reply)";
 
@@ -142,12 +148,19 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
       { agent, imagePath: turn.image_path, message: turn.message, skipLogFood: !!photoFood },
     );
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
-    const meta: { applied: typeof applied; drafts: unknown[]; lab_confirms?: typeof labConfirms } = {
+    const failedAttempts = attempts.filter((a) => !a.ok);
+    const meta: {
+      applied: typeof applied;
+      drafts: unknown[];
+      lab_confirms?: typeof labConfirms;
+      agent_attempts?: ChatAgentAttempt[];
+    } = {
       applied,
       drafts: drafts.map(proposalMeta),
     };
     // A substantial pasted lab awaits one-tap confirmation before it writes to Health.
     if (labConfirms.length) meta.lab_confirms = labConfirms;
+    if (failedAttempts.length) meta.agent_attempts = attempts;
     const assistant = repo.addChatMessage("assistant", reply, agent, meta);
     const finished = repo.finishChatTurn(id, { reply, chosen_agent: agent, assistant_message_id: (assistant as any).id, meta });
     emit(id, { type: "done", turn: finished, message: assistant });
@@ -155,8 +168,9 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // Canceled mid-run: cancelTurn already flipped status + emitted the event.
     const cur = repo.getChatTurn(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return;
-    const assistant = repo.addChatMessage("assistant", `Couldn't reach a coaching agent: ${e?.message ?? e}`, null, { error: true });
-    const failed = repo.failChatTurn(id, e?.message ?? String(e), (assistant as any).id);
+    const failure = chatFailureReply(e);
+    const assistant = repo.addChatMessage("assistant", failure.content, failure.agent, failure.meta);
+    const failed = repo.failChatTurn(id, failure.error, (assistant as any).id);
     emit(id, { type: "error", turn: failed, message: assistant });
   } finally {
     controllers.delete(id);
@@ -267,17 +281,178 @@ const EMPTY_CHAT_RETRY_SUFFIX =
   "\n\nYour previous attempt exited without any assistant text. " +
   "Try once more now. Follow the same Cairn reply contract and produce the athlete-facing reply.";
 
+export type ChatAgentAttempt = {
+  agent: string;
+  ok: boolean;
+  status: string;
+  error_class?: string | null;
+  error_message?: string | null;
+  latency_ms?: number | null;
+  exit_code?: number | null;
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+};
+
+class ChatCompletionError extends Error {
+  attempts: ChatAgentAttempt[];
+  lastAgent: string | null;
+
+  constructor(attempts: ChatAgentAttempt[], message?: string) {
+    super(message || summarizeChatAttempts(attempts));
+    this.name = "ChatCompletionError";
+    this.attempts = attempts;
+    this.lastAgent = attempts.length ? attempts[attempts.length - 1].agent : null;
+  }
+}
+
+function cleanCliLine(value: unknown): string {
+  const text = String(value ?? "")
+    .replace(/\u2022/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0]?.slice(0, 220) || "";
+}
+
+function displayAgent(name: string | null | undefined): string {
+  const s = String(name || "agent").trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : "Agent";
+}
+
+export function classifyChatAgentResult(agent: string, result: AgentResult): ChatAgentAttempt | null {
+  const raw = String(result.raw || "");
+  const stderr = String(result.stderr || "");
+  const combined = `${raw}\n${stderr}`;
+  const infraSized = combined.trim().length <= 800;
+  const lower = combined.toLowerCase();
+  const authLike =
+    /\bnot logged in\b/.test(lower) ||
+    /\blogged out\b/.test(lower) ||
+    /\bplease (run )?\/?(log|sign)in\b/.test(lower) ||
+    /\b(run|use) .{0,24}\/?(log|sign)in\b/.test(lower) ||
+    /\bauth(entication|orization)? (required|failed|error)\b/.test(lower) ||
+    /\bunauthenticated\b/.test(lower) ||
+    /\bapi key\b.{0,40}\b(missing|required|invalid)\b/.test(lower) ||
+    /\b(missing|required|invalid)\b.{0,40}\bapi key\b/.test(lower);
+  if (authLike && infraSized) {
+    return {
+      agent,
+      ok: false,
+      status: "auth_required",
+      error_class: "auth_required",
+      error_message: cleanCliLine(combined) || "Not connected",
+      exit_code: result.code,
+      model: result.usage?.model ?? null,
+      input_tokens: result.usage?.input_tokens ?? null,
+      output_tokens: result.usage?.output_tokens ?? null,
+    };
+  }
+  if (result.code !== 0) {
+    return {
+      agent,
+      ok: false,
+      status: "error",
+      error_class: "process_exit",
+      error_message: cleanCliLine(stderr || raw) || `Exited with code ${result.code}`,
+      exit_code: result.code,
+      model: result.usage?.model ?? null,
+      input_tokens: result.usage?.input_tokens ?? null,
+      output_tokens: result.usage?.output_tokens ?? null,
+    };
+  }
+  if (!raw.trim()) {
+    return {
+      agent,
+      ok: false,
+      status: "empty_reply",
+      error_class: "empty_reply",
+      error_message: "Exited without a reply",
+      exit_code: result.code,
+      model: result.usage?.model ?? null,
+      input_tokens: result.usage?.input_tokens ?? null,
+      output_tokens: result.usage?.output_tokens ?? null,
+    };
+  }
+  return null;
+}
+
+function classifyChatException(agent: string, e: any): ChatAgentAttempt {
+  const message = cleanCliLine(e?.message ?? e);
+  return {
+    agent,
+    ok: false,
+    status: /timed out/i.test(message) ? "timeout" : "error",
+    error_class: /timed out/i.test(message) ? "timeout" : "process_error",
+    error_message: message || "Process error",
+  };
+}
+
+function recordChatAttempt(attempt: ChatAgentAttempt, started: number, parsed: boolean, triedJson: boolean): void {
+  attempt.latency_ms = Date.now() - started;
+  try {
+    repo.recordAgentRun({
+      op: "chat",
+      agent: attempt.agent,
+      ok: attempt.ok,
+      parsed,
+      latency_ms: attempt.latency_ms,
+      tried_json: triedJson,
+      status: attempt.status,
+      error_class: attempt.error_class ?? null,
+      error_message: attempt.error_message ?? null,
+      exit_code: attempt.exit_code ?? null,
+      model: attempt.model ?? null,
+      input_tokens: attempt.input_tokens ?? null,
+      output_tokens: attempt.output_tokens ?? null,
+    });
+  } catch { /* telemetry never breaks the loop */ }
+}
+
+function summarizeChatAttempts(attempts: ChatAgentAttempt[]): string {
+  const failed = attempts.filter((a) => !a.ok);
+  if (!failed.length) return "All agents failed to produce a reply";
+  return failed
+    .slice(-4)
+    .map((a) => `${displayAgent(a.agent)}: ${a.error_message || a.error_class || a.status}`)
+    .join("; ");
+}
+
+function chatFailureReply(e: any): { content: string; agent: string | null; meta: Record<string, unknown>; error: string } {
+  if (e instanceof ChatCompletionError) {
+    const attempts = e.attempts.filter((a) => !a.ok);
+    const first = attempts.length === 1 ? attempts[0] : null;
+    const content = first
+      ? `Couldn't reach ${displayAgent(first.agent)} CLI: ${first.error_message || first.error_class || first.status}. Check Settings → Agents.`
+      : `Couldn't reach a coaching agent. Tried ${summarizeChatAttempts(attempts)}. Check Settings → Agents.`;
+    return {
+      content,
+      agent: first?.agent ?? e.lastAgent,
+      meta: { error: true, agent_attempts: e.attempts },
+      error: summarizeChatAttempts(attempts),
+    };
+  }
+  const message = cleanCliLine(e?.message ?? e) || "Unknown error";
+  return {
+    content: `Couldn't reach a coaching agent: ${message}`,
+    agent: null,
+    meta: { error: true },
+    error: message,
+  };
+}
+
 async function runChatCompletion(
   id: number,
   turn: any,
   prompt: string,
   signal: AbortSignal,
-): Promise<{ agent: string; raw: string }> {
+): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[] }> {
   // Per-task routing: a "chat → claude" pin resolves an "auto"/blank turn to that
   // one enabled agent; an explicit turn.agent or an unrouted turn is unchanged.
   const chosen = repo.resolveAgentForTask("chat", turn.agent);
   const order: string[] = chosen && chosen !== "auto" ? [chosen] : repo.pickAgentOrder();
   if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
+  const attempts: ChatAgentAttempt[] = [];
 
   // ---- streaming attempt on the first agent (live tokens) ----
   if (agentSupportsStream(order[0])) {
@@ -294,11 +469,28 @@ async function runChatCompletion(
       });
       stream.finish();
       const raw = (res.raw ?? "").toString();
-      try { repo.recordAgentRun({ op: "chat", agent: name, ok: !!raw.trim(), parsed: !!raw.trim(), latency_ms: Date.now() - started, tried_json: false }); } catch { /* telemetry never breaks the loop */ }
-      if (raw.trim()) return { agent: name, raw };
+      const failure = classifyChatAgentResult(name, res);
+      if (!failure) {
+        const attempt: ChatAgentAttempt = {
+          agent: name,
+          ok: true,
+          status: "ok",
+          exit_code: res.code,
+          model: res.usage?.model ?? null,
+          input_tokens: res.usage?.input_tokens ?? null,
+          output_tokens: res.usage?.output_tokens ?? null,
+        };
+        recordChatAttempt(attempt, started, true, false);
+        attempts.push(attempt);
+        return { agent: name, raw, attempts };
+      }
+      recordChatAttempt(failure, started, false, false);
+      attempts.push(failure);
     } catch (e: any) {
       if (signal.aborted) throw e; // Stop — propagate to the cancel path
-      try { repo.recordAgentRun({ op: "chat", agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: false }); } catch { /* ignore */ }
+      const failure = classifyChatException(name, e);
+      recordChatAttempt(failure, started, false, false);
+      attempts.push(failure);
       // streaming transport failed — fall through to the one-shot rotation
     }
     // Nothing usable streamed: clear any partial bubble before the one-shot retry,
@@ -311,6 +503,10 @@ async function runChatCompletion(
   let lastErr: any = null;
   for (const name of order) {
     if (signal.aborted) throw new Error("canceled");
+    if (attempts.some((a) => a.agent === name && a.status === "auth_required")) {
+      lastErr = new Error(`${name}: auth required`);
+      continue;
+    }
     const started = Date.now();
     try {
       emit(id, { type: "progress", text: "Asking the coach…" });
@@ -323,17 +519,33 @@ async function runChatCompletion(
         res = await runAgent(name, prompt + EMPTY_CHAT_RETRY_SUFFIX, { signal, timeoutMs: INTERACTIVE_TIMEOUT_MS });
         raw = (res.raw ?? "").toString();
       }
-      const ok = !!raw.trim();
-      try { repo.recordAgentRun({ op: "chat", agent: name, ok, parsed: !!res.parsed, latency_ms: Date.now() - started, tried_json: retriedEmpty }); } catch { /* ignore */ }
-      if (ok) return { agent: name, raw };
-      lastErr = new Error(`${name}: empty reply${retriedEmpty ? " after retry" : ""}`);
+      const failure = classifyChatAgentResult(name, res);
+      if (!failure) {
+        const attempt: ChatAgentAttempt = {
+          agent: name,
+          ok: true,
+          status: "ok",
+          exit_code: res.code,
+          model: res.usage?.model ?? null,
+          input_tokens: res.usage?.input_tokens ?? null,
+          output_tokens: res.usage?.output_tokens ?? null,
+        };
+        recordChatAttempt(attempt, started, true, retriedEmpty);
+        attempts.push(attempt);
+        return { agent: name, raw, attempts };
+      }
+      recordChatAttempt(failure, started, false, retriedEmpty);
+      attempts.push(failure);
+      lastErr = new Error(`${name}: ${failure.error_message || failure.error_class || failure.status}`);
     } catch (e: any) {
       if (signal.aborted) throw e;
       lastErr = e;
-      try { repo.recordAgentRun({ op: "chat", agent: name, ok: false, parsed: false, latency_ms: Date.now() - started, tried_json: false }); } catch { /* ignore */ }
+      const failure = classifyChatException(name, e);
+      recordChatAttempt(failure, started, false, false);
+      attempts.push(failure);
     }
   }
-  throw lastErr || new Error("All agents failed to produce a reply");
+  throw new ChatCompletionError(attempts, lastErr?.message);
 }
 
 // User-requested Stop. Flips the turn state first (so the worker's catch knows
