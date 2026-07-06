@@ -135,6 +135,28 @@ function settingsLatency(value) {
     const n = Number(value) || 0;
     return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)}ms`;
 }
+function settingsCompactCount(value) {
+    const n = Number(value) || 0;
+    if (n >= 1_000_000)
+        return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1000)
+        return `${(n / 1000).toFixed(1)}k`;
+    return String(Math.round(n));
+}
+function settingsAttemptStatus(row) {
+    if (row.ok)
+        return { label: "clean", cls: "actlog-clean", title: "Completed cleanly" };
+    const status = String(row.status || row.error_class || "");
+    if (status === "auth_required")
+        return { label: "connect", cls: "actlog-auth", title: String(row.error_message || "Agent is not connected") };
+    if (status === "empty_reply")
+        return { label: "empty", cls: "actlog-retry", title: String(row.error_message || "No assistant text returned") };
+    if (status === "timeout")
+        return { label: "timeout", cls: "actlog-retry", title: String(row.error_message || "The CLI timed out") };
+    if (row.tried_json)
+        return { label: "retried", cls: "actlog-retry", title: String(row.error_message || "Needed a retry") };
+    return { label: "failed", cls: "actlog-retry", title: String(row.error_message || "The CLI failed") };
+}
 function garminStatusLine(settings, syncing, options = {}) {
     if (syncing)
         return `<span class="sync-dot pulse"></span><span class="sync-text">Syncing…</span>`;
@@ -171,10 +193,26 @@ function agentHealthCard(stats) {
         const total = (Number(row.ok) || 0) + (Number(row.fail) || 0);
         const word = total ? settingsAgentWord((Number(row.ok) || 0) / total) : null;
         const lat = row.p50_ms != null ? ` · ${settingsLatency(row.p50_ms)} typical` : "";
+        const auth = Number(row.auth_required) ? ` · ${Number(row.auth_required)} connect` : "";
+        const tokens = (Number(row.input_tokens) || Number(row.output_tokens))
+            ? ` · ${settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0))} tok`
+            : "";
         return `<div class="agenthealth-row">
         <span class="agenthealth-name">${escHtml(String(row.agent))}</span>
-        <span class="agenthealth-stat">${word || "—"}${lat}</span>
+        <span class="agenthealth-stat">${word || "—"}${lat}${auth}${tokens}</span>
       </div>`;
+    })
+        .join("");
+    const byOp = Array.isArray(statsRow.by_op) ? statsRow.by_op : [];
+    const opRows = byOp
+        .slice(0, 8)
+        .map(settingsClientRecord)
+        .filter((row) => row.op)
+        .map((row) => {
+        const runs = Number(row.runs) || 0;
+        const fail = Number(row.fail) || 0;
+        const suffix = fail ? ` · ${fail} fallback${fail === 1 ? "" : "s"}` : "";
+        return `<span class="agentop-pill">${escHtml(agentOpLabel(row.op))} · ${runs}${escHtml(suffix)}</span>`;
     })
         .join("");
     return `
@@ -182,6 +220,7 @@ function agentHealthCard(stats) {
       <div class="lbl" style="margin-bottom:6px">Agent health</div>
       <div class="sess-line">${okLine}</div>
       ${rows ? `<div class="agenthealth-rows">${rows}</div>` : ""}
+      ${opRows ? `<div class="agentop-rows">${opRows}</div>` : ""}
       <div class="sess-line" style="color:var(--muted);margin-top:8px">A failed run just falls through to the next enabled agent — this is the quiet pulse, not a verdict.</div>
     </div>`;
 }
@@ -207,14 +246,15 @@ function agentActivityCard(stats, options = {}) {
         const when = created
             ? `<span class="actlog-when" title="${escAttr(options.absDate ? options.absDate(created.slice(0, 10)) : created.slice(0, 10))}">${escHtml(options.relTime ? options.relTime(`${created.replace(" ", "T")}Z`) : created)}</span>`
             : "";
-        const clean = row.ok && row.parsed && !row.tried_json;
-        const flag = clean
-            ? `<span class="actlog-flag actlog-clean">clean</span>`
-            : `<span class="actlog-flag actlog-retry">needed a retry</span>`;
+        const status = settingsAttemptStatus(row);
+        const model = row.model ? `<span class="actlog-dot">·</span><span class="actlog-model">${escHtml(String(row.model))}</span>` : "";
+        const tokens = (Number(row.input_tokens) || Number(row.output_tokens))
+            ? `<span class="actlog-dot">·</span><span class="actlog-tokens">${escHtml(settingsCompactCount((Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0)))} tok</span>`
+            : "";
         return `<div class="actlog-row">
         <span class="actlog-op">${op}</span>
-        <span class="actlog-meta">${agent}${agent && when ? `<span class="actlog-dot">·</span>` : ""}${when}</span>
-        ${flag}
+        <span class="actlog-meta">${agent}${agent && when ? `<span class="actlog-dot">·</span>` : ""}${when}${model}${tokens}</span>
+        <span class="actlog-flag ${escAttr(status.cls)}" title="${escAttr(status.title)}">${escHtml(status.label)}</span>
       </div>`;
     })
         .join("");

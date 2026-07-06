@@ -44,24 +44,29 @@ test("settings agent health and activity stay qualitative and escaped", () => {
   const health = settings.agentHealthCard({
     runs: 3,
     ok_rate: 0.67,
-    by_agent: [{ agent: "<Claude>", ok: 2, fail: 1, p50_ms: 1250 }],
+    by_agent: [{ agent: "<Claude>", ok: 2, fail: 1, auth_required: 1, p50_ms: 1250, input_tokens: 1200, output_tokens: 300 }],
+    by_op: [{ op: "chat", runs: 2, ok: 1, fail: 1 }],
   });
   assert.match(health, /Most recent runs completed/);
-  assert.match(health, /mostly clean · 1.3s typical/);
+  assert.match(health, /mostly clean · 1.3s typical · 1 connect · 1.5k tok/);
+  assert.match(health, /answered in chat · 2 · 1 fallback/);
   assert.match(health, /&lt;Claude&gt;/);
   assert.doesNotMatch(health, /\b67\b|0\.67/);
 
   const activity = settings.agentActivityCard({
     recent: [
-      { op: "chat_distill", agent: "Claude", created_at: "2026-06-29 12:00:00", ok: true, parsed: true, tried_json: false },
-      { op: "custom_op", agent: "<Bad>", created_at: "2026-06-29 12:01:00", ok: false, parsed: false, tried_json: true },
+      { op: "chat_distill", agent: "Claude", created_at: "2026-06-29 12:00:00", ok: true, parsed: true, tried_json: false, model: "sonnet", input_tokens: 100, output_tokens: 20 },
+      { op: "custom_op", agent: "<Bad>", created_at: "2026-06-29 12:01:00", ok: false, parsed: false, tried_json: false, status: "auth_required", error_message: `Please run /login <bad>` },
     ],
   }, { relTime: () => "now", absDate: () => "June 29, 2026" });
   assert.match(activity, /saved chat to memory/);
   assert.match(activity, /custom op/);
   assert.match(activity, /&lt;Bad&gt;/);
+  assert.match(activity, /sonnet/);
+  assert.match(activity, /120 tok/);
   assert.match(activity, /clean/);
-  assert.match(activity, /needed a retry/);
+  assert.match(activity, /connect/);
+  assert.match(activity, /Please run \/login &lt;bad&gt;/);
 });
 
 test("settings noticed card escapes durable learning text", () => {

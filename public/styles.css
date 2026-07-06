@@ -1230,6 +1230,15 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   font-family:var(--font-ui);font-size:.58rem;font-weight:700;letter-spacing:.1em;
   text-transform:uppercase;white-space:nowrap}
 .bubble.user .bubble-meta .bubble-tag{background:rgba(255,253,248,.14);color:#d8c9b2}
+.agentcheck{
+  display:inline-flex;align-items:center;gap:7px;margin-top:8px;max-width:100%;
+  background:var(--card-2);border:1px solid var(--line);color:var(--muted);
+  border-radius:999px;padding:5px 9px;font-family:var(--font-ui);
+  font-size:.66rem;font-weight:650;line-height:1.2;text-align:left;
+}
+.agentcheck:hover{border-color:var(--line-2);color:var(--ink)}
+.agentcheck span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agentcheck-dot{width:7px;height:7px;border-radius:999px;background:var(--rust);flex:0 0 auto}
 
 .draftbtn{
   display:block;margin-top:9px;width:100%;background:transparent;
@@ -1434,6 +1443,10 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   color:var(--ink)}
 .agenthealth-stat{color:var(--muted);font-variant-numeric:lining-nums;text-align:right;
   flex:0 0 auto}
+.agentop-rows{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.agentop-pill{display:inline-flex;align-items:center;border:1px solid var(--line);
+  background:var(--card-2);color:var(--muted);border-radius:999px;padding:4px 8px;
+  font-size:.66rem;font-family:var(--font-ui);font-weight:650}
 
 /* "What Cairn did" — the quiet activity log of recent agent runs. Transparency, never
    a grade: each row reads op · agent · when · clean/needed-a-retry. Ledger-calm. */
@@ -1445,10 +1458,11 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .actlog-meta{flex:0 0 auto;color:var(--muted);font-size:.72rem;display:flex;align-items:baseline;gap:5px}
 .actlog-agent{font-variant-numeric:lining-nums}
 .actlog-dot{opacity:.6}
-.actlog-when{font-variant-numeric:lining-nums}
+.actlog-when,.actlog-model,.actlog-tokens{font-variant-numeric:lining-nums}
 .actlog-flag{flex:0 0 auto;font-family:var(--font-ui);font-size:.56rem;font-weight:700;
   letter-spacing:.1em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:nowrap}
 .actlog-clean{color:var(--sage);background:var(--sage-bg)}
+.actlog-auth{color:var(--rust);background:rgba(150,81,56,.12);border:1px solid rgba(150,81,56,.22)}
 .actlog-retry{color:var(--ink-2);background:var(--card-2);border:1px solid var(--line-2)}
 @media (max-width:440px){
   .actlog-row{flex-wrap:wrap;gap:4px 8px}
