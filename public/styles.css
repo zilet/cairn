@@ -448,10 +448,16 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 
 /* free-text quick log */
 .quicklog{display:flex;gap:8px;align-items:center;margin:2px 0 8px}
+/* input + inset mic share one relative field so the mic rides inside the input's
+   trailing edge instead of eating a row slot — keeps the capture row from
+   overflowing on compact phones. min-width:0 lets the field shrink to fit. */
+.ql-field{position:relative;display:flex;flex:1;min-width:0}
 .quicklog input{
-  flex:1;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
   border-radius:999px;padding:12px 16px;font-size:.88rem;
 }
+/* reserve trailing room for the inset mic only when it's actually shown */
+.ql-field:has(.qlmic:not([hidden])) #qlInput{padding-right:42px}
 
 /* recent activity entries */
 .ql-recent{margin:2px 0 14px}
@@ -511,7 +517,7 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 .wt-inline{display:flex;gap:8px;align-items:center;margin:0 0 10px}
 .wt-inline[hidden]{display:none}
 .wt-inline input{
-  flex:1;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
+  flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
   border-radius:var(--radius-sm);padding:10px 13px;
   font-family:var(--font-display);font-variation-settings:"opsz" 40;font-size:1rem;
 }
@@ -2692,21 +2698,25 @@ body.swr-busy::after{
 /* -------------------------------------------------------------------
    effortless capture — voice mic · frequents · how-you-feel
    ------------------------------------------------------------------- */
-/* press-to-talk mic in the quicklog row (hidden when Web Speech is absent) */
+/* press-to-talk mic — rides inside the input's trailing edge (hidden when Web
+   Speech is absent). Absolutely positioned so it never consumes row width;
+   centered via margin:auto so :active scale doesn't fight a translate. */
 .qlmic{
-  flex:0 0 auto;width:42px;height:42px;border-radius:999px;
-  background:var(--card-2);border:1px solid var(--line);color:var(--ink-2);
+  position:absolute;right:5px;top:0;bottom:0;margin:auto 0;
+  width:34px;height:34px;border-radius:999px;
+  background:transparent;border:none;color:var(--muted);
   display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
-  transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease),
+  transition:color var(--dur-1) var(--ease),
     background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease);
 }
 .qlmic[hidden]{display:none}
-.qlmic:hover{border-color:var(--line-2);color:var(--ink)}
+.qlmic:hover{background:var(--card-2);color:var(--ink)}
 .qlmic:active{transform:var(--press-sm)}
-.qlmic svg{display:block}
+.qlmic svg{display:block;width:19px;height:19px}
 /* listening state — a calm terracotta pulse, never frantic */
-.qlmic-live{background:var(--accent);border-color:var(--accent);color:var(--on-accent);
+.qlmic-live{background:var(--accent);color:var(--on-accent);
   box-shadow:0 0 0 0 rgba(180,85,45,.35);animation:micpulse 1.6s var(--ease) infinite}
+.qlmic-live:hover{background:var(--accent);color:var(--on-accent)}
 @keyframes micpulse{
   0%{box-shadow:0 0 0 0 rgba(180,85,45,.34)}
   70%{box-shadow:0 0 0 9px rgba(180,85,45,0)}

@@ -6754,8 +6754,10 @@ if (typeof window !== "undefined") {
         <button id="wtInlineGo" class="logbtn">+</button>
       </div>
       <div class="quicklog">
-        <input id="qlInput" type="text" placeholder="Log a ride, run, meal, or weight…">
-        <button id="qlMic" class="qlmic" type="button" hidden aria-label="Dictate" title="Say it out loud">${deps.micGlyph}</button>
+        <div class="ql-field">
+          <input id="qlInput" type="text" placeholder="Log a ride, run, meal, or weight…">
+          <button id="qlMic" class="qlmic" type="button" hidden aria-label="Dictate" title="Say it out loud">${deps.micGlyph}</button>
+        </div>
         <button id="qlBtn" class="logbtn">↵</button>
         <button id="wtChipMini" class="wt-mini" title="Log bodyweight">${weightChipLabel(currentWeight)}<span class="stat-plus">+</span></button>
       </div>
