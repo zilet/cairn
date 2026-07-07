@@ -67,6 +67,9 @@ function loadProgramController() {
     enduranceBlockHtml(endurance, index) {
       return `<div class="endurance" data-i="${index}">${String(endurance?.headline || "")}</div>`;
     },
+    hybridLoadCardHtml(hybrid, index) {
+      return `<div class="hybrid" data-i="${index}">${String(hybrid?.headline || "")}</div>`;
+    },
     loadPerformance() {
       calls.push("performance");
     },

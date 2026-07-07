@@ -1,15 +1,20 @@
 export function enduranceSportPatterns(sportInput: unknown = "running"): string[] {
   const sport = normalizeSportText(sportInput);
-  if (hasAnyToken(sport, ["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"])) {
-    return ["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"];
-  }
-  if (hasAnyToken(sport, ["swim", "swimming"])) return ["swim", "swimming"];
-  if (hasAnyToken(sport, ["row", "rowing", "erg"])) return ["row", "rowing", "erg"];
-  if (hasAnyToken(sport, ["walk", "walking", "hike", "hiking"])) return ["walk", "walking", "hike", "hiking"];
   if (hasAnyToken(sport, ["tri", "triathlon", "multisport"])) {
     return ["run", "running", "jog", "jogging", "cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross", "swim", "swimming", "triathlon", "multisport"];
   }
-  return ["run", "running", "jog", "jogging"];
+  const out: string[] = [];
+  const add = (xs: string[]) => {
+    for (const x of xs) if (!out.includes(x)) out.push(x);
+  };
+  if (hasAnyToken(sport, ["run", "running", "jog", "jogging"])) add(["run", "running", "jog", "jogging"]);
+  if (hasAnyToken(sport, ["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"])) {
+    add(["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"]);
+  }
+  if (hasAnyToken(sport, ["swim", "swimming"])) add(["swim", "swimming"]);
+  if (hasAnyToken(sport, ["row", "rowing", "erg"])) add(["row", "rowing", "erg"]);
+  if (hasAnyToken(sport, ["walk", "walking", "hike", "hiking"])) add(["walk", "walking", "hike", "hiking"]);
+  return out.length ? out : ["run", "running", "jog", "jogging"];
 }
 
 // Fold a raw activity type into a canonical endurance sport bucket, with whether

@@ -120,3 +120,49 @@ test("progress endurance best rows and sport card render safely", () => {
   assert.doesNotMatch(html, /<road>|<run>|<official>/);
   assert.equal(endurance.enduranceSportCardHtml({ label: "Empty" }, 1), "");
 });
+
+test("hybrid load card renders the endurance x strength warning safely", () => {
+  const endurance = loadProgressEndurance();
+  const html = endurance.hybridLoadCardHtml(
+    {
+      status: "shift-legs",
+      headline: "Run loaded the legs hard; move heavy lower-body work <now>.",
+      affected_groups: ["quads", "hamstrings"],
+      recent_endurance: {
+        date: "2026-04-20",
+        days_ago: 0,
+        type: "run",
+        label: "run",
+        duration_min: 55,
+        distance_km: 9,
+        intensity: "hard",
+        load: "heavy",
+        regions: ["quads", "hamstrings"],
+        detail: "~55 min",
+        why: "hard enough",
+      },
+      next_strength: {
+        day_number: 2,
+        day_name: "Lower",
+        focus: "Lower body",
+        days_until: 1,
+        groups: ["quads"],
+        impacted_groups: ["quads"],
+        heavy_leg_day: true,
+        advice: "swap-or-upper",
+        why: "Keep the lower session easy <please>.",
+      },
+      fuel: { risk: "high", why: "Protect carbs <fuel>." },
+    },
+    2,
+  );
+
+  assert.match(html, /Hybrid load/);
+  assert.match(html, /Shift legs/);
+  assert.match(html, /9\.0 km/);
+  assert.match(html, /quads/);
+  assert.match(html, /Keep the lower session easy &lt;please&gt;/);
+  assert.match(html, /Protect carbs &lt;fuel&gt;/);
+  assert.doesNotMatch(html, /<now>|<please>|<fuel>/);
+  assert.equal(endurance.hybridLoadCardHtml(null, 1), "");
+});

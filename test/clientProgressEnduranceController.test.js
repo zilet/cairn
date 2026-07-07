@@ -51,6 +51,7 @@ function loadProgressEnduranceController() {
     zoneBarHtml: () => "",
     enduranceBestRows: () => [],
     enduranceSportCardHtml: () => "",
+    hybridLoadCardHtml: () => "",
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-endurance-controller.js"), "utf8"), context);
@@ -70,6 +71,7 @@ function controllerDeps(overrides = {}) {
       if (path === "/stats") return { endurance: null };
       if (path === "/endurance-prs") return { sports: [], longest_km: null, longest_min: null, best_pace: [] };
       if (path === "/settings") return { settings: {} };
+      if (path === "/program-state") return { hybrid: null };
       return null;
     },
     nextToken: () => {
@@ -105,7 +107,7 @@ test("progress endurance controller fans out reads and paints the empty enduranc
   assert.equal(deps.headerTitle.textContent, "Endurance");
   assert.equal(deps.state.progressSeg, "endurance");
   assert.equal(deps.wired, 1);
-  assert.deepEqual(apiCalls, ["/stats", "/endurance-prs", "/endurance-goal", "/run-compliance", "/settings", "/run-plan"]);
+  assert.deepEqual(apiCalls, ["/stats", "/endurance-prs", "/endurance-goal", "/run-compliance", "/settings", "/run-plan", "/program-state"]);
   assert.match(view.querySelector("#endBody").innerHTML, /hero:Endurance:0/);
   assert.match(view.querySelector("#endBody").innerHTML, /No runs or rides logged yet/);
 });

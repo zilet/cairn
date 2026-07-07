@@ -276,6 +276,7 @@ declare global {
       pendingOffPlan?: Record<string, Array<{ name: string; mode?: string | null }>>;
     };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    storeCached(key: string, data: unknown): void;
     invalidate(key: string): void;
     invalidateTodayProgression(): void;
     scheduleRxRefresh(): void;
@@ -336,6 +337,7 @@ declare global {
   type ClientTodaySessionSetModelApi = {
     responseRecord(value: unknown): Record<string, unknown>;
     sessionPathId(session: Record<string, unknown>): string;
+    cacheSessionTruth(deps: ClientTodaySessionControllerDeps, value: unknown): void;
     invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
     invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
     logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): ClientTodaySessionSetPayloadResult;
@@ -479,6 +481,7 @@ declare global {
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     cachedApi(path: string, options?: CachedApiOptions<unknown>): Promise<unknown>;
     peekCached<T = unknown>(key: string, freshFor?: number): SwrPeek<T> | null;
+    storeCached(key: string, data: unknown): void;
     invalidate(keyOrPrefix: string): void;
     renderToday(opts?: Record<string, unknown>): unknown;
     withViewTransition(fn: () => unknown): Promise<unknown> | unknown;
@@ -676,6 +679,7 @@ declare global {
       plan: ClientTodayPlanSelectionDay[];
     };
     api(path: string): Promise<unknown>;
+    cachedApi?(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
   };
 
   type ClientHealthPictureCache = { review?: Record<string, unknown> | null; docCount?: number; newestDocAt?: string | null };
@@ -1147,6 +1151,7 @@ declare global {
   declare function paintSWR<Path extends string>(
     options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path },
   ): Promise<ClientApiResponse<Path> | undefined>;
+  declare function swrSet<T = unknown>(key: string, data: T): void;
   declare function markRefreshing(on: unknown): void;
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;
@@ -1297,6 +1302,7 @@ declare global {
   declare function zoneBarHtml(zones: unknown): string;
   declare function enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
   declare function enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
+  declare function hybridLoadCardHtml(hybrid: ClientProgramState["hybrid"], idx?: number): string;
   declare const HR_ZONE_COLORS: string[] | undefined;
   declare function reshapeToday(): Promise<void>;
   declare function setDiscipline(discipline: unknown): string;
@@ -2872,6 +2878,7 @@ declare global {
       zoneBarHtml(zones: unknown): string;
       enduranceBestRows(group: ClientSportBests | null | undefined): Array<{ label: string; val: string; date: string; type: string }>;
       enduranceSportCardHtml(group: ClientSportBests | null | undefined, idx: number): string;
+      hybridLoadCardHtml(hybrid: ClientProgramState["hybrid"], idx?: number): string;
     };
 
     CairnProgressEnduranceController: {
@@ -2883,6 +2890,7 @@ declare global {
         compliance: ClientRunCompliance | null,
         settings: unknown,
         runPlan: ClientWeeklyRunPlan | null,
+        programState: ClientProgramState | null,
         deps: ClientProgressEnduranceControllerDeps,
       ): void;
     };

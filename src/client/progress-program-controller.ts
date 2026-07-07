@@ -100,10 +100,11 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   const volume = data.volume;
   const meso = data.mesocycle || null;
   const endurance = data.endurance || null;
+  const hybrid = data.hybrid || null;
   const headline = data.headline || "";
   const adaptations = data.adaptations_due;
 
-  if (!lifts.length && !volume.length && !meso && !endurance) {
+  if (!lifts.length && !volume.length && !meso && !endurance && !hybrid) {
     deps.view.innerHTML = head + deps.hero("Program", []) +
       deps.empty(deps.art("exercise", "barbell squat"),
         "Not enough data yet — log a few sessions and your program intelligence will read here.");
@@ -142,6 +143,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
     : "";
   const mesoHtml = meso ? mesoBlockHtml(meso, 4) : "";
   const endHtml = endurance ? enduranceBlockHtml(endurance, 5) : "";
+  const hybridHtml = hybrid ? hybridLoadCardHtml(hybrid, 5) : "";
 
   const evolveFoot = `<div class="prog-evolve-foot reveal" style="${stagger(7)}">
     <button class="draftbtn prog-evolve-btn" id="progEvolveBtn" type="button">Evolve my plan</button>
@@ -157,13 +159,13 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
         <summary>The full read</summary>
         <div class="full-read-body">${
           headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
-          adaptHtml + volumeHtml + mesoHtml + endHtml
+          adaptHtml + volumeHtml + mesoHtml + endHtml + hybridHtml
         }</div>
       </details>` + evolveFoot;
   } else {
     html = head + deps.hero("Program", heroStats) +
       headlineHtml + testSlot + perfSlot + blockSlot + adjustSlot + muscleSlot + dexaSlot +
-      adaptHtml + liftsHtml + volumeHtml + mesoHtml + endHtml + evolveFoot;
+      adaptHtml + liftsHtml + volumeHtml + mesoHtml + endHtml + hybridHtml + evolveFoot;
   }
 
   deps.view.innerHTML = html;

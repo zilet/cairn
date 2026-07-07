@@ -67,9 +67,12 @@ resolves it from the package's profile call, falling back to the social-profile
 endpoint and then the activity payloads' `ownerDisplayName`/`ownerId` — a null
 displayName no longer silently skips the entire daily-summary block (the bug that
 left stress, body battery, calories, HR extremes, SpO₂, respiration, intensity
-minutes, floors, and distance all null). Every internal `client.get(...)` now
-**logs a warning** on failure (URL + message) so a wrong-path vs device-doesn't-
-report endpoint is diagnosable rather than invisibly degrading.
+minutes, floors, and distance all null). Internal `client.get(...)` calls log a
+warning on unexpected failures (URL + message) so a wrong-path vs device-doesn't-
+report endpoint is diagnosable rather than invisibly degrading. The experimental
+skin-temperature endpoint is disabled by default because the underlying connector
+prints Garmin's 404 before Cairn can quiet it; set `GARMIN_SKIN_TEMP_ENABLED=1`
+to test it on a device/account that is known to report the metric.
 
 `garmin_daily_metrics` now captures, where the device/account reports it:
 
@@ -79,7 +82,8 @@ report endpoint is diagnosable rather than invisibly degrading.
 - **HRV**: overnight average + status (balanced/unbalanced/low). (`getSleepData` + `/hrv-service`)
 - **Stress & Body Battery**: avg/max stress, body-battery high/low/charged/drained.
 - **Respiration & SpO₂**: avg/min/max respiration, average + lowest pulse-ox.
-- **Skin temperature**: overnight skin-temp deviation (Fenix/Venu/Epix-class only).
+- **Skin temperature**: overnight skin-temp deviation, opt-in via
+  `GARMIN_SKIN_TEMP_ENABLED=1` until the endpoint is verified for the account.
 - **Energy & movement**: steps, distance, floors, active/total/BMR calories,
   moderate + vigorous intensity minutes.
 - **Fitness**: VO₂max (running + cycling), training readiness, training status,
@@ -88,7 +92,8 @@ report endpoint is diagnosable rather than invisibly degrading.
   carries VO₂max.)
 - **Runner performance** (migration v45): race-time predictions (5K / 10K / half /
   marathon, in seconds), endurance score, hill score, and a training-load-balance
-  feedback phrase. (`/metrics-service/metrics/{racepredictions,endurancescore,hillscore,trainingloadbalance}`)
+  feedback phrase. (race predictions, endurance score, hill score, and the
+  training-status aggregate under `/metrics-service/metrics/...`)
 - **Body composition**: weight, body-fat %, muscle mass, body water %, bone mass,
   BMI, visceral fat. (from `getDailyWeightData`)
 - **Richer sleep**: when the package's `getSleepData` returns a reduced DTO,

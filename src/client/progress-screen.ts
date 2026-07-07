@@ -149,6 +149,7 @@ function _paintEnduranceBody(
     compliance,
     settings,
     runPlan,
+    null,
     CairnProgressRouteDeps.endurance(() => renderEndurance()),
   );
 }

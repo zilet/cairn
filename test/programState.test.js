@@ -118,6 +118,54 @@ test("hybrid cycling endurance matching is token-aware, not substring-only", () 
   assert.equal(e.acute_chronic_ratio, 1);
 });
 
+test("hybrid read shifts heavy lower-body lifting after a hard run", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.savePlanDay(2, "Lower", "Lower body", [
+    { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 225 },
+  ]);
+  repo.addActivity({ type: "run", duration_min: 55, distance_km: 9, date: REF });
+
+  const st = repo.getProgramState(REF);
+  assert.equal(st.hybrid.status, "shift-legs");
+  assert.equal(st.hybrid.recent_endurance.label, "run");
+  assert.ok(st.hybrid.affected_groups.includes("quads"));
+  assert.equal(st.hybrid.next_strength.day_number, 2);
+  assert.equal(st.hybrid.next_strength.advice, "swap-or-upper");
+  assert.ok(/upper|easy|lower/i.test(st.hybrid.next_strength.why));
+  assert.ok(st.adaptations_due.some((a) => /lower-body|legs|quads/i.test(a)), "hybrid conflict appears in adaptations due");
+});
+
+test("hybrid read does not overreact to a short easy run before legs", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.savePlanDay(2, "Lower", "Lower body", [
+    { exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 225 },
+  ]);
+  repo.addActivity({ type: "run", duration_min: 30, distance_km: 5, date: REF });
+
+  const st = repo.getProgramState(REF);
+  assert.equal(st.hybrid.status, "clear");
+  assert.equal(st.hybrid.recent_endurance.load, "light");
+  assert.equal(st.hybrid.next_strength.advice, "ok");
+  assert.ok(!st.adaptations_due.some((a) => /upper\/core|lower-body session/i.test(a)), "easy aerobic work should not force a leg-day swap");
+});
+
+test("hybrid read protects fuel when hard endurance lands during fat loss", () => {
+  repo.setProfile({
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    goal_mode: "lose",
+    weight_lb: 180,
+    goal_weight_lb: 170,
+  });
+  repo.addActivity({ type: "run", duration_min: 70, distance_km: 12, date: REF });
+
+  const st = repo.getProgramState(REF);
+  assert.equal(st.hybrid.status, "fuel-protect");
+  assert.equal(st.hybrid.fuel.risk, "high");
+  assert.match(st.hybrid.fuel.why, /protein|carbs|lean-safe|recovery/i);
+  assert.ok(st.adaptations_due.some((a) => /protect protein|lean-safe|carbs/i.test(a)), "fuel protection is an adaptation");
+});
+
 test("a strength athlete gets no endurance block; the aggregate has a headline", () => {
   repo.setProfile({ primary_discipline: "strength" });
   [21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: "Deadlift", weight: 300 + i * 10, reps: 3, rir: 2, date: back(d) }));

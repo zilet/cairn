@@ -8,6 +8,7 @@ type ProgressEndurancePRRows = import("../contracts/client-api.js").ClientEndura
 type ProgressEnduranceCompliance = import("../contracts/client-api.js").ClientRunCompliance;
 type ProgressEnduranceSportBests = import("../contracts/client-api.js").ClientSportBests;
 type ProgressEnduranceRunPlan = import("../contracts/client-api.js").ClientWeeklyRunPlan;
+type ProgressEnduranceProgramState = import("../contracts/client-api.js").ClientProgramState;
 
 type ProgressEnduranceControllerDeps = {
   view: HTMLElement;
@@ -52,6 +53,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
   let compliance: ProgressEnduranceCompliance | null = null;
   let settings: unknown = null;
   let runPlan: ProgressEnduranceRunPlan | null = null;
+  let programState: ProgressEnduranceProgramState | null = null;
   try {
     const results = await Promise.all([
       deps.api("/stats"),
@@ -60,6 +62,7 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
       deps.api("/run-compliance").catch(() => null),
       deps.api("/settings").then((row) => (row && (row as { settings?: unknown }).settings) || null).catch(() => null),
       deps.api("/run-plan").catch(() => null),
+      deps.api("/program-state").catch(() => null),
     ]);
     stats = results[0];
     prs = results[1] as ProgressEndurancePRRows | null;
@@ -67,12 +70,13 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
     compliance = results[3] as ProgressEnduranceCompliance | null;
     settings = results[4];
     runPlan = results[5] as ProgressEnduranceRunPlan | null;
+    programState = results[6] as ProgressEnduranceProgramState | null;
   } catch {
     stats = null;
   }
   if (!deps.isCurrent(token) || !deps.view.querySelector("#endBody")) return;
   const statsRow = progressEnduranceRecord(stats);
-  paintProgressEnduranceBody(statsRow.endurance || null, prs, goal, compliance, settings, runPlan, deps);
+  paintProgressEnduranceBody(statsRow.endurance || null, prs, goal, compliance, settings, runPlan, programState, deps);
 }
 
 function paintProgressEnduranceBody(
@@ -82,6 +86,7 @@ function paintProgressEnduranceBody(
   compliance: ProgressEnduranceCompliance | null,
   settings: unknown,
   runPlan: ProgressEnduranceRunPlan | null,
+  programState: ProgressEnduranceProgramState | null,
   deps: ProgressEnduranceControllerDeps,
 ): void {
   const body = deps.view.querySelector<HTMLElement>("#endBody");
@@ -90,6 +95,7 @@ function paintProgressEnduranceBody(
   const goalHtml = enduranceGoalCard(goal);
   const complianceHtml = runComplianceLine(compliance);
   const runPlanHtml = weeklyRunPlanCard(runPlan);
+  const hybridHtml = hybridLoadCardHtml(programState?.hybrid || null, 1);
   const syncHtml = (typeof cardioSyncLine === "function") ? cardioSyncLine(progressEnduranceRecord(settings), {}) : "";
   const hasWeek = hasProgressEnduranceRecord(end) && (
     progressEnduranceNumber(endRow.week_km) > 0 ||
@@ -104,7 +110,7 @@ function paintProgressEnduranceBody(
     prs.best_pace.length > 0
   );
   if (!hasWeek && !hasPRs) {
-    body.innerHTML = deps.hero("Endurance", []) + goalHtml + complianceHtml + runPlanHtml + syncHtml +
+    body.innerHTML = deps.hero("Endurance", []) + goalHtml + complianceHtml + runPlanHtml + hybridHtml + syncHtml +
       deps.empty(deps.art("activity", "run"),
         goalHtml
           ? "No runs logged yet - log one on Today (a phrase like \"ran 8 km easy\" is plenty) and your weekly runs build toward this."
@@ -122,8 +128,8 @@ function paintProgressEnduranceBody(
   }
 
   const coachLineHtml = enduranceCoachLine(runPlan);
-  const leadHtml = deps.hero("Endurance", heroStats) + coachLineHtml + goalHtml + complianceHtml + runPlanHtml;
-  const hasLead = !!(runPlanHtml || goalHtml || coachLineHtml);
+  const leadHtml = deps.hero("Endurance", heroStats) + coachLineHtml + goalHtml + complianceHtml + runPlanHtml + hybridHtml;
+  const hasLead = !!(runPlanHtml || goalHtml || coachLineHtml || hybridHtml);
   let deep = "";
 
   if (hasProgressEnduranceRecord(end) && (endRow.longest_km != null || endRow.longest_min != null)) {

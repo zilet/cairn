@@ -8,6 +8,8 @@ import {
   extractGarminFitnessMetrics,
   extractTrainingStatus,
   garminClientCredentials,
+  garminErrorStatus,
+  garminSkinTempEnabled,
 } from "../dist/garmin.js";
 
 test("extractGarminFitnessMetrics reads standard generic and cycling maxmet payloads", () => {
@@ -113,4 +115,18 @@ test("garminClientCredentials lets stored token files bootstrap the client", () 
     username: "user@example.com",
     password: "secret",
   });
+});
+
+test("garminErrorStatus reads Garmin connector and axios-style status shapes", () => {
+  assert.equal(garminErrorStatus(new Error('ERROR: (404), Not Found, {"message":"No data"}')), 404);
+  assert.equal(garminErrorStatus({ response: { status: 403 } }), 403);
+  assert.equal(garminErrorStatus({ message: "Request failed with status code 410" }), 410);
+  assert.equal(garminErrorStatus(new Error("socket hang up")), null);
+});
+
+test("garminSkinTempEnabled is explicit opt-in", () => {
+  assert.equal(garminSkinTempEnabled(undefined), false);
+  assert.equal(garminSkinTempEnabled("0"), false);
+  assert.equal(garminSkinTempEnabled("true"), true);
+  assert.equal(garminSkinTempEnabled("YES"), true);
 });

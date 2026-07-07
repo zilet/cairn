@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as repo from "./repo.js";
+import { localDateISO } from "./repo/shared.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
@@ -21,8 +22,14 @@ const STRENGTH_LIMIT = Math.max(0, Math.min(60, Number(process.env.GARMIN_STRENG
 // oscillation/ratio). Bounded like the others.
 const DETAIL_LIMIT = Math.max(0, Math.min(60, Number(process.env.GARMIN_DETAIL_LIMIT ?? 20)));
 
+export function garminSkinTempEnabled(value = process.env.GARMIN_SKIN_TEMP_ENABLED): boolean {
+  return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+}
+
+const SKIN_TEMP_ENABLED = garminSkinTempEnabled();
+
 function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - Math.max(0, days - 1) * 864e5).toISOString().slice(0, 10);
+  return localDateISO(new Date(Date.now() - Math.max(0, days - 1) * 864e5));
 }
 
 function asNum(v: any): number | null {
@@ -331,10 +338,40 @@ async function makeClient() {
   return client;
 }
 
+export function garminErrorStatus(e: any): number | null {
+  const direct = [
+    e?.status,
+    e?.statusCode,
+    e?.response?.status,
+    e?.response?.statusCode,
+    e?.cause?.status,
+    e?.cause?.response?.status,
+  ];
+  for (const v of direct) {
+    const n = Number(v);
+    if (Number.isInteger(n) && n >= 100 && n <= 599) return n;
+  }
+  const msg = String(e?.message ?? e ?? "");
+  const m = msg.match(/\((\d{3})\)|\bstatus(?:Code)?\D{0,8}(\d{3})\b/i);
+  const n = Number(m?.[1] ?? m?.[2]);
+  return Number.isInteger(n) && n >= 100 && n <= 599 ? n : null;
+}
+
+function isOptionalUnavailableStatus(status: number | null): boolean {
+  return status === 403 || status === 404 || status === 410;
+}
+
+type RawGetOptions = {
+  optionalKey?: string;
+  unavailable?: Set<string>;
+  quietStatuses?: number[];
+};
+
 // Hit any Garmin Connect endpoint via the package's generic client; never throw.
 // The connector's internal endpoints are undocumented and device-dependent, so
 // every caller treats a null as "not available on this account" and degrades.
-async function rawGet(client: any, url: string): Promise<any> {
+async function rawGet(client: any, url: string, options: RawGetOptions = {}): Promise<any> {
+  if (options.optionalKey && options.unavailable?.has(options.optionalKey)) return null;
   // The package's get() reaches axios with NO baseURL, so a RELATIVE service path
   // throws "Invalid URL" — the connectapi host must be prepended. This was the real
   // root cause behind the all-null rich fields (the instrumentation below exposed it
@@ -346,6 +383,12 @@ async function rawGet(client: any, url: string): Promise<any> {
   try {
     return await client.get(full);
   } catch (e: any) {
+    const status = garminErrorStatus(e);
+    if (options.optionalKey && options.unavailable && isOptionalUnavailableStatus(status)) {
+      options.unavailable.add(options.optionalKey);
+    }
+    const quiet = status != null && (options.quietStatuses ?? []).includes(status);
+    if (quiet) return null;
     // These endpoints are undocumented and device-dependent — a null is normal.
     // But the failures used to be INVISIBLE, which masked the displayName bug
     // (a null displayName silently skipped the whole daily-summary block) and
@@ -515,10 +558,11 @@ function foldReadiness(tr: any, m: repo.GarminDailyMetricInput) {
 
 async function syncDailyMetrics(client: any, sourceId: number, days: number, displayName: string | null) {
   let synced = 0;
+  const unavailable = new Set<string>();
   const rows: { iso: string; metric: repo.GarminDailyMetricInput }[] = [];
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(Date.now() - i * 864e5);
-    const iso = date.toISOString().slice(0, 10);
+    const iso = localDateISO(date);
     const metric: repo.GarminDailyMetricInput = { date: iso };
 
     try { metric.steps = asNum(await client.getSteps(date)); } catch {}
@@ -543,22 +587,28 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     const tr = await rawGet(client, `/metrics-service/metrics/trainingreadiness/${iso}`);
     if (tr) { foldReadiness(tr, metric); metric.raw = { ...(metric.raw as any || {}), trainingReadiness: tr }; }
 
-    // Sleep skin-temperature deviation (Fenix/Venu/Epix-class only); best-effort.
-    // FIX: the old path appended the date as a SEGMENT (`…/skinTemperature/${iso}`)
-    // and 404'd on every sync. The wellness skin-temp endpoint takes startDate/endDate
-    // QUERY params (same convention as python-garminconnect's get_skin_temp_data) — a
-    // single day is start==end. Field shape varies by device, so we search the tree
-    // for a deviation value (root-first, so a daily avg wins over a per-sample one).
-    // NOTE: the exact deviation field name still wants live verification on a watch
-    // that reports it; the path + param shape follow the documented convention.
-    const skin = await rawGet(
-      client,
-      `/wellness-service/wellness/daily/skinTemperature?startDate=${iso}&endDate=${iso}`,
-    );
-    if (skin) {
-      metric.skin_temp_dev_c = pickNumDeep(skin, [
-        "avgDeviation", "deviation", "sleepTemperatureDeviation", "temperatureDeviation", "avgDeviationSleep",
-      ]);
+    // Sleep skin-temperature deviation is optional and currently unverified for
+    // this account. The Garmin client logs 404s internally before our catch can
+    // quiet them, so keep this behind an explicit opt-in until the endpoint is
+    // proven for a device that reports it.
+    // If enabled, query a single day with startDate=endDate. Field shape varies
+    // by device, so we search the tree for a deviation value (root-first, so a
+    // daily avg wins over a per-sample one). This stays off until verified live.
+    if (SKIN_TEMP_ENABLED) {
+      const skin = await rawGet(
+        client,
+        `/wellness-service/wellness/daily/skinTemperature?startDate=${iso}&endDate=${iso}`,
+        {
+          optionalKey: "skin-temperature",
+          unavailable,
+          quietStatuses: [403, 404, 410],
+        },
+      );
+      if (skin) {
+        metric.skin_temp_dev_c = pickNumDeep(skin, [
+          "avgDeviation", "deviation", "sleepTemperatureDeviation", "temperatureDeviation", "avgDeviationSleep",
+        ]);
+      }
     }
 
     // Richer sleep DTO — fills sleep_score / avg_sleep_stress / restless_count when

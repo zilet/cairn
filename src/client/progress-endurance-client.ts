@@ -10,6 +10,7 @@ type EndurancePaceTrend = {
 };
 
 type EnduranceSportGroup = import("../contracts/client-api.js").ClientSportBests;
+type HybridLoadState = import("../contracts/client-api.js").ClientHybridState;
 
 type EnduranceBestPoint = {
   label: string;
@@ -133,6 +134,45 @@ function enduranceSportCardHtml(group: EnduranceSportGroup | null | undefined, i
   return `${head}<div class="end-pr-card">${body}</div>`;
 }
 
+function hybridStatusLabel(status: unknown): string {
+  if (status === "shift-legs") return "Shift legs";
+  if (status === "fuel-protect") return "Fuel first";
+  if (status === "watch") return "Watch";
+  return "Clear";
+}
+
+function hybridLoadCardHtml(hybrid: HybridLoadState | null | undefined, idx = 1): string {
+  if (!hybrid || !hybrid.headline) return "";
+  const impact = hybrid.recent_endurance;
+  const next = hybrid.next_strength;
+  const fuel = hybrid.fuel;
+  const bits: string[] = [];
+  if (impact) {
+    const dose = [
+      impact.detail ? `${impact.detail} ${impact.label}` : impact.label,
+      impact.distance_km != null ? `${fmtKm(impact.distance_km)} km` : null,
+      impact.duration_min != null ? `${Math.round(Number(impact.duration_min))} min` : null,
+      impact.load,
+    ].filter(Boolean).join(" · ");
+    bits.push(`<div class="hyb-line"><span class="lbl">Recent endurance</span><span>${escHtml(dose)}</span></div>`);
+  }
+  if (Array.isArray(hybrid.affected_groups) && hybrid.affected_groups.length) {
+    bits.push(`<div class="hyb-tags">${hybrid.affected_groups.map((g) => `<span>${escHtml(g)}</span>`).join("")}</div>`);
+  }
+  if (next?.why && next.advice !== "ok") {
+    bits.push(`<div class="hyb-line"><span class="lbl">Next strength</span><span>${escHtml(next.why)}</span></div>`);
+  }
+  if (fuel?.why && fuel.risk !== "low") {
+    bits.push(`<div class="hyb-line hyb-fuel"><span class="lbl">Fuel</span><span>${escHtml(fuel.why)}</span></div>`);
+  }
+  const cls = `hyb-card hyb-${String(hybrid.status || "clear").replace(/[^a-z-]/g, "")}`;
+  return `<div class="${cls} reveal" style="${stagger(idx)}">
+      <div class="hyb-head"><span class="lbl">Hybrid load</span><span class="hyb-pill">${escHtml(hybridStatusLabel(hybrid.status))}</span></div>
+      <div class="hyb-title">${escHtml(hybrid.headline)}</div>
+      ${bits.join("")}
+    </div>`;
+}
+
 const CAIRN_PROGRESS_ENDURANCE = {
   enduranceStatusWord,
   enduranceBlockHtml,
@@ -140,6 +180,7 @@ const CAIRN_PROGRESS_ENDURANCE = {
   zoneBarHtml,
   enduranceBestRows,
   enduranceSportCardHtml,
+  hybridLoadCardHtml,
 };
 
 Object.assign(globalThis, {
@@ -150,6 +191,7 @@ Object.assign(globalThis, {
   zoneBarHtml,
   enduranceBestRows,
   enduranceSportCardHtml,
+  hybridLoadCardHtml,
 });
 
 if (typeof window !== "undefined") {
@@ -161,5 +203,6 @@ if (typeof window !== "undefined") {
     zoneBarHtml,
     enduranceBestRows,
     enduranceSportCardHtml,
+    hybridLoadCardHtml,
   });
 }

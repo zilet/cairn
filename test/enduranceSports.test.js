@@ -5,6 +5,7 @@ import { activitySportWhere, canonicalEnduranceSport, enduranceSportPatterns } f
 test("endurance sport patterns default to running and classify common disciplines", () => {
   assert.deepEqual(enduranceSportPatterns(), ["run", "running", "jog", "jogging"]);
   assert.deepEqual(enduranceSportPatterns("road cycling"), ["cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"]);
+  assert.deepEqual(enduranceSportPatterns("running, MTB"), ["run", "running", "jog", "jogging", "cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross"]);
   assert.deepEqual(enduranceSportPatterns("triathlon"), ["run", "running", "jog", "jogging", "cycling", "cycle", "bike", "biking", "ride", "riding", "mtb", "gravel", "cyclocross", "swim", "swimming", "triathlon", "multisport"]);
   assert.deepEqual(enduranceSportPatterns("rowing erg"), ["row", "rowing", "erg"]);
 });

@@ -740,6 +740,46 @@ export interface ClientProgramEnduranceState {
   why: string;
 }
 
+export interface ClientHybridEnduranceImpact {
+  date: ISODateString | string;
+  days_ago: number;
+  type: string;
+  label: string;
+  duration_min: number | null;
+  distance_km: number | null;
+  intensity: "easy" | "moderate" | "hard";
+  load: "light" | "moderate" | "heavy";
+  regions: string[];
+  detail: string;
+  why: string;
+}
+
+export interface ClientHybridStrengthConflict {
+  day_number: number;
+  day_name: string;
+  focus: string | null;
+  days_until: number;
+  groups: string[];
+  impacted_groups: string[];
+  heavy_leg_day: boolean;
+  advice: "ok" | "hold-load" | "swap-or-upper" | "easy-only";
+  why: string;
+}
+
+export interface ClientHybridFuelRead {
+  risk: "low" | "watch" | "high";
+  why: string;
+}
+
+export interface ClientHybridState {
+  status: "clear" | "watch" | "shift-legs" | "fuel-protect";
+  headline: string;
+  affected_groups: string[];
+  recent_endurance: ClientHybridEnduranceImpact | null;
+  next_strength: ClientHybridStrengthConflict | null;
+  fuel: ClientHybridFuelRead | null;
+}
+
 export interface ClientProgramState {
   generated_for: ISODateString | string;
   discipline: string;
@@ -747,6 +787,7 @@ export interface ClientProgramState {
   volume: ClientProgramVolumeState[];
   mesocycle: ClientProgramMesocycleState;
   endurance: ClientProgramEnduranceState | null;
+  hybrid: ClientHybridState | null;
   headline: string;
   adaptations_due: string[];
 }
