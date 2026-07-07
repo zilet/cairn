@@ -1,7 +1,7 @@
 import { db } from "../db.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getGarminCoachSummary, hydrateJson, jsonOrNull, listActivities } from "./activities.js";
-import { getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
+import { cleanClinicalFacts, getLatestHealthReview, hydrateHealthDoc, listContextEvents } from "./health.js";
 import { dayRead, getCachedDayRead, invalidateDayRead } from "./intelligence.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
@@ -44,7 +44,22 @@ function healthForCoach() {
     const markers = Array.isArray(h.parsed?.markers)
       ? rankDocMarkers(h.parsed.markers).slice(0, 30)
       : undefined;
-    return { kind: h.kind, doc_date: h.doc_date, summary: h.summary, type: h.parsed?.type, markers };
+    const clinical_facts = cleanClinicalFacts(h.parsed?.clinical_facts, 12).map((f: any) => ({
+      kind: f.kind,
+      date: f.date,
+      name: f.name,
+      status: f.status,
+      detail: capStr(f.detail, 240),
+      source: f.source,
+    }));
+    return {
+      kind: h.kind,
+      doc_date: h.doc_date,
+      summary: h.summary,
+      type: h.parsed?.type,
+      markers,
+      ...(clinical_facts.length ? { clinical_facts } : {}),
+    };
   });
 }
 

@@ -144,6 +144,45 @@ test("coach context memory and learnings expose typed DTO fields", () => {
   assert.equal(typeof learning.content, "string");
 });
 
+test("coach context carries bounded clinical facts from non-marker health records", () => {
+  repo.addHealthDocument({
+    kind: "other",
+    doc_date: "2026-07-07",
+    summary: "PCP visit note with follow-up labs.",
+    parsed_json: {
+      markers: [],
+      clinical_facts: [
+        {
+          kind: "encounter",
+          date: "2026-07-07",
+          name: "Primary care follow-up",
+          status: "completed",
+          detail: "Reviewed elevated LDL, elevated Lp(a), and repeat labs.",
+          source: "Assessment/Plan",
+        },
+        {
+          kind: "other",
+          date: "2026-07-07",
+          name: "LIPID PANEL",
+          status: "ordered",
+          detail: "Future lab order.",
+          source: "Assessment/Plan",
+        },
+      ],
+    },
+    enrichment_status: "done",
+  });
+
+  const ctx = repo.getCoachContext();
+  assert.equal(ctx.health[0].summary, "PCP visit note with follow-up labs.");
+  assert.equal(ctx.health[0].markers.length, 0);
+  assert.ok(Array.isArray(ctx.health[0].clinical_facts));
+  assert.deepEqual(ctx.health[0].clinical_facts.map((f) => f.name), [
+    "Primary care follow-up",
+    "LIPID PANEL",
+  ]);
+});
+
 test("coach context does not leak conductor ranking internals", () => {
   const ctx = repo.getCoachContext();
   const conductor = JSON.stringify(ctx.coaching_focus);

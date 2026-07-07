@@ -115,8 +115,9 @@ export function buildHealthEnrichPrompt(absPath: string, kind: string): string {
   const recentMemory = (repo.listMemory(40) as any[]).map((m) => m.content);
 
   return `You analyze a single uploaded health document (a lab report, DEXA/body-composition
-scan, or similar) for a training & nutrition tracker. The document is a local file — an image or
-a PDF — saved on this machine.
+scan, ECG, vitals record, RMR/metabolic test, progress/visit note, after-visit summary, imaging
+report, vision prescription, medication list, immunization record, or similar) for a training & nutrition tracker. The document is a local
+file — an image or a PDF — saved on this machine.
 
 READ THE FILE AT THIS ABSOLUTE PATH:
 ${absPath}
@@ -135,7 +136,8 @@ GUARDRAILS:
 - Do not skip MyChart vitals/basic measurements: blood pressure, pulse/heart rate, weight, BMI,
   height, SpO2, temperature. If BP is printed as 124/78, emit two markers: Systolic BP 124 mmHg
   and Diastolic BP 78 mmHg.
-- Infer top-level "kind" from the document itself. Do not rely on the upload label.
+- Infer top-level "kind" from the document itself (${HEALTH_DOCUMENT_KIND_SCHEMA}). Do not rely on
+  the upload label.
 - Infer top-level "doc_date" from the collection date, test date, exam date, scan date, or report
   date printed in the document. Prefer the specimen/scan date over a final-report date. If no
   date is visible, return null.

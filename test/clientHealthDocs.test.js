@@ -54,7 +54,11 @@ test("health document helpers render analyzed records safely", () => {
   assert.equal(docs.docCollapsible(row), true);
   assert.equal(docs.markerFlagClass("critical"), "hm-flag warn");
   assert.equal(docs.healthKindLabel("dexa"), "DEXA");
-  assert.equal(docs.healthKindLabel("ecg"), "ECG - Garmin");
+  assert.equal(docs.healthKindLabel("ecg"), "ECG");
+  assert.equal(docs.healthKindLabel("visit_note"), "Visit Note");
+  assert.equal(docs.healthKindLabel("after_visit_summary"), "After Visit Summary");
+  assert.equal(docs.healthKindLabel("metabolic_test"), "Metabolic Test");
+  assert.equal(docs.healthKindLabel("vision"), "Vision");
 });
 
 test("health document wrappers collapse older cards and handle pending rows", () => {
@@ -68,4 +72,25 @@ test("health document wrappers collapse older cards and handle pending rows", ()
   assert.match(docs.healthDocInner(pending), /disabled/);
   assert.equal(docs.markersTable({ markers: [] }), "");
   assert.equal(docs.parsedDoc({ parsed_json: "not json" }), null);
+});
+
+test("health document teaser names structured clinical facts", () => {
+  const docs = loadHealthDocs();
+  const note = {
+    id: 3,
+    kind: "visit_note",
+    enrichment_status: "done",
+    summary: "PCP follow-up note.",
+    parsed_json: {
+      markers: [],
+      clinical_facts: [
+        { kind: "encounter", name: "Visit" },
+        { kind: "other", name: "Lab order" },
+      ],
+    },
+  };
+
+  const inner = docs.healthDocInner(note);
+  assert.match(inner, /Visit Note/);
+  assert.match(inner, /2 facts/);
 });

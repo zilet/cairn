@@ -149,7 +149,11 @@ OTHER GUARDRAILS:
 - doc_date is the specimen/collection/scan date (prefer it over a final-report date), YYYY-MM-DD.
   Drop any panel whose date you genuinely cannot determine.
 - Infer each panel's "kind" from its content (a lab panel is "bloodwork", a body-composition/bone
-  scan is "dexa", an ECG/electrocardiogram recording is "ecg", else "other").
+  scan is "dexa", an ECG/electrocardiogram recording is "ecg", blood pressure / pulse / height /
+  weight rows are "vitals", an indirect-calorimetry/RMR report is "metabolic_test", a progress/office/televisit note is "visit_note", an after-visit
+  instructions sheet is "after_visit_summary", a MyChart/CCDA bundle is "clinical_summary", imaging
+  reports are "imaging", eye/eyeglass prescription records are "vision", medication-only lists are "medication_list", immunizations are
+  "immunization_record", else "other").
 - "memory" is [] unless there is a genuinely durable, notable fact (a clear out-of-range trend, a
   meaningful body-composition change, an active medication/allergy/condition/procedure/injury or
   family/social-history fact that should shape training, nutrition, safety, or coaching). Do NOT

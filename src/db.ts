@@ -590,13 +590,13 @@ CREATE TABLE IF NOT EXISTS art_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_art_usage_created ON art_usage(created_at);
 
--- Uploaded health documents (bloodwork / DEXA / other), analyzed in the
+-- Uploaded health documents (labs, DEXA, ECG, vitals, visit notes, summaries, etc.), analyzed in the
 -- background by a file/vision-capable agent into structured markers + summary.
 -- The binary lives on disk under data/uploads/; file_path points at it.
 CREATE TABLE IF NOT EXISTS health_documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT DEFAULT (datetime('now')),
-  kind TEXT,                          -- bloodwork | dexa | ecg | other
+  kind TEXT,                          -- see src/healthDocumentKinds.ts
   doc_date TEXT,                      -- the test date (YYYY-MM-DD)
   original_name TEXT,
   mime TEXT,

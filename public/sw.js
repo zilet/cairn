@@ -1,4 +1,4 @@
-const CACHE = "cairn-v432";
+const CACHE = "cairn-v433";
 // Generated artwork lives in its own cache: the images are content-keyed and
 // immutable on the server, so they stay valid across app deploys. Keeping them
 // out of the versioned CACHE (and off the activate-cleanup list) means a deploy

@@ -10,6 +10,7 @@ type HealthDocMarker = {
 
 type HealthDocParsed = {
   markers?: HealthDocMarker[];
+  clinical_facts?: unknown[];
   type?: unknown;
 };
 
@@ -28,7 +29,17 @@ type HealthDocRow = {
 const HEALTH_DOC_KINDS: Array<readonly [string, string]> = [
   ["bloodwork", "Bloodwork"],
   ["dexa", "DEXA"],
-  ["ecg", "ECG - Garmin"],
+  ["ecg", "ECG"],
+  ["vitals", "Vitals"],
+  ["metabolic_test", "Metabolic Test"],
+  ["visit_note", "Visit Note"],
+  ["after_visit_summary", "After Visit Summary"],
+  ["clinical_summary", "Clinical Summary"],
+  ["imaging", "Imaging"],
+  ["vision", "Vision"],
+  ["procedure_note", "Procedure Note"],
+  ["medication_list", "Medication List"],
+  ["immunization_record", "Immunization Record"],
   ["other", "Other"],
 ];
 
@@ -105,12 +116,15 @@ function healthDocInner(doc: HealthDocRow): string {
   const busy = enrichmentActive(status);
   const collapsible = docCollapsible(doc);
   const markers = parsed && Array.isArray(parsed.markers) ? parsed.markers : [];
+  const facts = parsed && Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
   const flagged = markers.filter((marker) => {
     const flag = String(marker.flag || "").toLowerCase();
     return flag && flag !== "normal" && flag !== "optimal" && flag !== "in range" && flag !== "in-range";
   }).length;
   const teaser = markers.length
     ? `${markers.length} marker${markers.length === 1 ? "" : "s"}${flagged ? ` · ${flagged} flagged` : " · all in range"}`
+    : facts.length
+      ? `${facts.length} fact${facts.length === 1 ? "" : "s"}`
     : "Analyzed";
 
   const head = `<div class="sess-head${collapsible ? " hdoc-head" : ""}"${collapsible ? ` data-hdoc-toggle role="button" tabindex="0" aria-label="Toggle record detail"` : ""}>

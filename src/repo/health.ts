@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
+import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO } from "./shared.js";
@@ -455,7 +455,15 @@ export interface HealthDocInput {
 }
 
 export function addHealthDocument(input: HealthDocInput) {
-  const kind = normalizeHealthDocumentKind(input.kind);
+  const kind = inferHealthDocumentKind({
+    kind: input.kind,
+    type: input.parsed_json?.type,
+    summary: input.summary,
+    original_name: input.original_name,
+    markers: input.parsed_json?.markers,
+    clinical_facts: input.parsed_json?.clinical_facts,
+    mime: input.mime,
+  });
   const info = db
     .prepare(
       `INSERT INTO health_documents (kind, doc_date, original_name, mime, file_path, parsed_json, summary, enrichment_status, source_doc_id)
@@ -523,7 +531,14 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
     if (p.type) parsed.type = String(p.type).slice(0, 80);
     if (clinicalFacts.length) parsed.clinical_facts = clinicalFacts;
     const row = addHealthDocument({
-      kind: normalizeHealthDocumentKind(p.kind),
+      kind: inferHealthDocumentKind({
+        kind: p.kind,
+        type: p.type,
+        summary,
+        original_name: originalName,
+        markers,
+        clinical_facts: clinicalFacts,
+      }),
       doc_date: date,
       original_name: originalName ?? null,
       file_path: null,             // the binary lives on the source row only

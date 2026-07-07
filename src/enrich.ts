@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "./db.js";
-import { isHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
+import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import * as repo from "./repo.js";
 import { extractJson, runAgentWithFallback } from "./agents.js";
 import { buildEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
@@ -34,6 +34,12 @@ type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_s
 interface Job {
   kind: Kind;
   id: number;
+}
+interface HealthSource {
+  fp: string;
+  mime: string;
+  kind: string;
+  isDir: boolean;
 }
 
 const queue: Job[] = [];
@@ -313,7 +319,7 @@ async function processJob(job: Job): Promise<void> {
   let extractedDir: string | null = null;
   // Carry the health source out of the branch so the completeness retry below can
   // re-read it (text sources only) and re-prompt without re-deriving the path.
-  let healthSource: { fp: string; mime: string; kind: string; isDir: boolean } | null = null;
+  let healthSource: HealthSource | null = null;
   let ccdaExtraction: ReturnType<typeof repo.extractCcdaHealthData> | null = null;
   if (job.kind === "health") {
     const row = repo.getHealthDocumentRaw(job.id) as any;
@@ -385,6 +391,16 @@ async function processJob(job: Job): Promise<void> {
       const backfill = repo.applyCcdaHealthBackfill(job.id, ccdaExtraction);
       if (backfill.wrote) {
         console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s).`);
+        markStatus(job, "done");
+        try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
+        enqueueReviewRefresh();
+        return;
+      }
+    }
+    if (job.kind === "health") {
+      const fallback = applyTextVisitNoteFallback(job.id, healthSource);
+      if (fallback.applied) {
+        console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
         markStatus(job, "done");
         try { repo.deriveDirectives(); } catch (e: any) { console.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -471,10 +487,20 @@ async function processJob(job: Job): Promise<void> {
     }
   }
 
+  let fallbackApplied = false;
+  if (job.kind === "health" && !appliedFields && !addedMemory && !ccdaBackfill?.wrote) {
+    const fallback = applyTextVisitNoteFallback(job.id, healthSource);
+    if (fallback.applied) {
+      fallbackApplied = true;
+      addedMemory += fallback.addedMemory;
+      console.warn(`[enrich] health#${job.id}: agent returned no usable health ingest; deterministic visit-note fallback wrote ${fallback.facts} fact(s).`);
+    }
+  }
+
   // Parseable JSON of the wrong shape (e.g. a coach-proposal response) yields no
   // fields and no memory — the regex parse stands. Surface it rather than letting
   // a silent no-op masquerade as a successful enrichment.
-  if (!appliedFields && !addedMemory && !ccdaBackfill?.wrote) {
+  if (!appliedFields && !addedMemory && !ccdaBackfill?.wrote && !fallbackApplied) {
     // For a HEALTH doc this is not a benign no-op: the doc has no regex fallback
     // (the markers are the whole point), so a wrong-shape response that wrote
     // nothing must NOT read as 'done' — that would make a doc with dropped markers
@@ -948,6 +974,218 @@ function looksThinForBinaryHealthDoc(kind: string | null | undefined, got: numbe
   return (kind || "").toLowerCase() === "bloodwork" && got < COMPREHENSIVE_PANEL_FLOOR;
 }
 
+function isoFromDateLike(raw: string | null | undefined): string | null {
+  const s = String(raw ?? "").trim();
+  const iso = s.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const slash = s.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if (!slash) return null;
+  const mm = Number(slash[1]);
+  const dd = Number(slash[2]);
+  const yyyy = Number(slash[3]);
+  if (!Number.isInteger(mm) || !Number.isInteger(dd) || !Number.isInteger(yyyy)) return null;
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || yyyy < 1900 || yyyy > 2100) return null;
+  return `${String(yyyy).padStart(4, "0")}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+}
+
+function visitNoteSentence(line: string | null | undefined, max = 240): string | null {
+  const s = String(line ?? "").replace(/\s+/g, " ").trim();
+  return s ? s.slice(0, max) : null;
+}
+
+function clinicalNoteFallbackFromText(text: string): { doc_date: string | null; summary: string; clinical_facts: any[]; memory: any[] } | null {
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, " ").trim());
+  const nonEmpty = lines.filter(Boolean);
+  if (nonEmpty.length < 4) return null;
+
+  const lower = nonEmpty.join("\n").toLowerCase();
+  const looksClinical =
+    /assessment\/plan|progress notes?|televisit|office visit|after visit summary|history of present illness|follow-up/i.test(lower) &&
+    /patient|visit|provider|lab|medication|assessment|plan/i.test(lower);
+  if (!looksClinical) return null;
+
+  const docDate = nonEmpty.map(isoFromDateLike).find(Boolean) ?? null;
+  const providerMatch = nonEmpty.join("\n").match(/(?:progress notes?|visit notes?)\s+by\s+(.+?)\s+at\s+\d{1,2}\/\d{1,2}\/\d{4}/i);
+  const provider = visitNoteSentence(providerMatch?.[1], 120);
+  const encounterTitle = nonEmpty.find((l) =>
+    /visit|televisit|consult|encounter|progress note/i.test(l) &&
+    !/^progress notes?\s+by\b/i.test(l) &&
+    !/^today'?s visit/i.test(l)
+  ) ?? "Clinical visit";
+
+  const facts: any[] = [];
+  const seen = new Set<string>();
+  const addFact = (fact: any) => {
+    const name = visitNoteSentence(fact?.name, 180);
+    if (!name) return;
+    const clean = {
+      kind: fact.kind,
+      date: fact.date ?? docDate,
+      name,
+      status: visitNoteSentence(fact.status, 80) ?? null,
+      detail: visitNoteSentence(fact.detail, 500),
+      source: visitNoteSentence(fact.source, 160),
+    };
+    const key = [clean.kind, clean.date ?? "", clean.name.toLowerCase(), clean.status ?? "", clean.detail ?? ""].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    facts.push(clean);
+  };
+
+  const assessmentIdx = lines.findIndex((l) => /^assessment\/plan:?$/i.test(l));
+  const assessmentLines = assessmentIdx >= 0 ? lines.slice(assessmentIdx + 1) : lines;
+  const numbered = assessmentLines
+    .map((l) => l.match(/^\d+\.\s+(.+)$/)?.[1])
+    .filter((l): l is string => !!visitNoteSentence(l));
+  const labOrders = [...new Set(assessmentLines
+    .map((l) => l.match(/^[-*]\s*([A-Z0-9 ,()./%+-]{3,90});\s*Future\b/i)?.[1])
+    .filter((l): l is string => !!visitNoteSentence(l))
+    .map((l) => l.replace(/\s+/g, " ").trim()))];
+  const followupIdx = lines.findIndex((l) => /^follow-up:?$/i.test(l));
+  const sectionFollowup = followupIdx >= 0
+    ? lines.slice(followupIdx + 1).find((l) => /^[-*]\s+/.test(l))
+    : null;
+  const followup = sectionFollowup ?? assessmentLines.find((l) => /^[-*]\s+.*\b(labs?|follow|f\/u|mychart)\b/i.test(l)) ?? null;
+  const referral = assessmentLines.find((l) => /consider referral to cardiology|e-consult|CAC\b|risk stratification/i.test(l)) ?? null;
+  const riskLine = assessmentLines.find((l) => /PREVENT algorithm|ASCVD/i.test(l)) ?? null;
+  const familyLine = nonEmpty.find((l) => /denies family history .*heart|family history negative for cardiac/i.test(l)) ?? null;
+
+  const encounterDetailParts = [
+    numbered.length ? `Assessment: ${numbered.slice(0, 4).join("; ")}` : null,
+    labOrders.length ? `Future labs: ${labOrders.slice(0, 8).join(", ")}` : null,
+    followup ? `Follow-up: ${followup.replace(/^[-*]\s*/, "")}` : null,
+  ].filter(Boolean);
+  addFact({
+    kind: "encounter",
+    date: docDate,
+    name: provider ? `${encounterTitle} with ${provider}` : encounterTitle,
+    status: "completed",
+    detail: encounterDetailParts.join(". ") || null,
+    source: "visit note",
+  });
+  if (provider) {
+    addFact({ kind: "care_team", date: docDate, name: provider, status: "unknown", detail: "Provider listed on visit note.", source: "visit note" });
+  }
+  for (const item of numbered) {
+    const kind = /\bscreening\b|\blab test follow-up\b/i.test(item) ? "other" : "condition";
+    addFact({
+      kind,
+      date: docDate,
+      name: item,
+      status: kind === "condition" ? "active" : "unknown",
+      detail: "Listed in Assessment/Plan.",
+      source: "Assessment/Plan",
+    });
+  }
+  for (const order of labOrders) {
+    addFact({
+      kind: "other",
+      date: docDate,
+      name: order,
+      status: "ordered",
+      detail: "Future lab order in visit plan.",
+      source: "Assessment/Plan",
+    });
+  }
+  if (followup) {
+    addFact({
+      kind: "other",
+      date: docDate,
+      name: "Follow-up plan",
+      status: "planned",
+      detail: followup.replace(/^[-*]\s*/, ""),
+      source: "Follow-up",
+    });
+  }
+  if (referral) {
+    addFact({
+      kind: "other",
+      date: docDate,
+      name: "Cardiology referral/e-consult consideration",
+      status: "planned",
+      detail: referral.replace(/^[-*]\s*/, ""),
+      source: "Assessment/Plan",
+    });
+  }
+  if (riskLine) {
+    addFact({
+      kind: "other",
+      date: docDate,
+      name: "ASCVD risk reviewed",
+      status: "reviewed",
+      detail: riskLine.replace(/^[-*]\s*/, ""),
+      source: "Assessment/Plan",
+    });
+  }
+  if (familyLine) {
+    addFact({
+      kind: "family_history",
+      date: docDate,
+      name: "No known family history of heart disease noted",
+      status: "reported",
+      detail: familyLine,
+      source: "History",
+    });
+  }
+
+  const topic = numbered.filter((n) => !/\bscreening\b/i.test(n)).slice(0, 3).join(", ") || "health follow-up";
+  const orderText = labOrders.length
+    ? ` Future labs ordered: ${labOrders.slice(0, 6).join(", ")}${labOrders.length > 6 ? ", and more" : ""}.`
+    : "";
+  const followText = followup ? ` Follow-up plan: ${followup.replace(/^[-*]\s*/, "")}.` : "";
+  const summary = `${encounterTitle}${docDate ? ` on ${docDate}` : ""} documented ${topic}.${orderText}${followText}`.slice(0, 1000);
+  const memory: any[] = [];
+  if (labOrders.length || followup || referral) {
+    const bits = [
+      docDate ? `Visit note on ${docDate}` : "Visit note",
+      labOrders.length ? `planned future labs (${labOrders.slice(0, 8).join(", ")})` : null,
+      followup ? followup.replace(/^[-*]\s*/, "") : null,
+      referral ? "cardiology/e-consult may be considered depending on results" : null,
+    ].filter(Boolean);
+    memory.push({ content: `${bits.join("; ")}.`, kind: "milestone" });
+  }
+
+  if (!facts.length && !summary) return null;
+  return { doc_date: docDate, summary, clinical_facts: facts, memory };
+}
+
+function applyTextVisitNoteFallback(id: number, source: HealthSource | null): { applied: boolean; facts: number; addedMemory: number } {
+  if (!source || source.isDir) return { applied: false, facts: 0, addedMemory: 0 };
+  if (!/^text\/plain\b/i.test(source.mime) && !/\.txt$/i.test(source.fp)) return { applied: false, facts: 0, addedMemory: 0 };
+  let text = "";
+  try { text = fs.readFileSync(source.fp, "utf8").slice(0, 400_000); }
+  catch { return { applied: false, facts: 0, addedMemory: 0 }; }
+  const fallback = clinicalNoteFallbackFromText(text);
+  if (!fallback || (!fallback.clinical_facts.length && !fallback.summary)) return { applied: false, facts: 0, addedMemory: 0 };
+  const row = repo.getHealthDocumentRaw(id) as any;
+  repo.updateHealthDocFields(id, {
+    parsed_json: {
+      markers: [],
+      clinical_facts: fallback.clinical_facts,
+    },
+    summary: fallback.summary,
+    kind: inferHealthDocumentKind({
+      kind: row?.kind,
+      summary: fallback.summary,
+      original_name: row?.original_name,
+      markers: [],
+      clinical_facts: fallback.clinical_facts,
+      mime: row?.mime,
+    }),
+    doc_date: fallback.doc_date ?? row?.doc_date ?? null,
+  });
+  try { repo.replaceHealthPanels(id, [], row?.original_name ?? null); } catch { /* best effort cleanup */ }
+  let addedMemory = 0;
+  for (const m of fallback.memory) {
+    try {
+      if (repo.addMemory(m.content, m.kind || "observation", "health-note-fallback")) addedMemory++;
+    } catch { /* one memory should not fail the fallback */ }
+  }
+  return { applied: true, facts: fallback.clinical_facts.length, addedMemory };
+}
+
 function applyHealthIngest(id: number, parsed: any): boolean {
   const panels = ingestPanels(parsed);
   const panelFacts = panels.flatMap((p: any) => Array.isArray(p?.clinical_facts) ? p.clinical_facts : []);
@@ -987,7 +1225,18 @@ function applyHealthIngest(id: number, parsed: any): boolean {
     .map((p: any) => {
       const date = asStr(p.doc_date);
       const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
-      const kind = isHealthDocumentKind(p.kind) ? p.kind : normalizeHealthDocumentKind(p.type);
+      const explicitKind = normalizeHealthDocumentKind(p.kind);
+      const kind = explicitKind !== "other"
+        ? explicitKind
+        : inferHealthDocumentKind({
+          kind: p.kind,
+          type: p.type,
+          summary: p.summary,
+          original_name: row?.original_name,
+          markers: p.markers,
+          clinical_facts: p.clinical_facts,
+          mime: row?.mime,
+        });
       return {
         doc_date: validDate,
         kind,
@@ -1010,7 +1259,15 @@ function applyHealthIngest(id: number, parsed: any): boolean {
     if (clinicalFacts.length) out.clinical_facts = clinicalFacts;
     repo.updateHealthDocFields(id, {
       parsed_json: out,
-      kind: row?.kind || "other",
+      kind: inferHealthDocumentKind({
+        kind: row?.kind,
+        type: out.type,
+        summary,
+        original_name: row?.original_name,
+        markers: [],
+        clinical_facts: clinicalFacts,
+        mime: row?.mime,
+      }),
       summary,
     });
     repo.replaceHealthPanels(id, [], row?.original_name ?? null);
@@ -1034,7 +1291,15 @@ function applyHealthIngest(id: number, parsed: any): boolean {
   if (clinicalFacts.length) out.clinical_facts = clinicalFacts;
   const fields: { parsed_json?: any; summary?: string | null; kind?: string | null; doc_date?: string | null } = {
     parsed_json: out,
-    kind: primary.kind,
+    kind: inferHealthDocumentKind({
+      kind: primary.kind,
+      type: primary.type,
+      summary: (rest.length ? asStr(parsed?.summary) : null) ?? primary.summary ?? asStr(parsed?.summary) ?? null,
+      original_name: row?.original_name,
+      markers: primary.markers,
+      clinical_facts: clinicalFacts,
+      mime: row?.mime,
+    }),
   };
   if (primary.doc_date) fields.doc_date = primary.doc_date;
   // Prefer the cross-import overview as the source row's summary when there are

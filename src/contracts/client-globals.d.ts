@@ -1434,7 +1434,7 @@ declare global {
   ): void;
   declare function enrichmentActive(status: unknown): boolean;
   declare function healthKindLabel(kind: unknown): string;
-  declare function parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
+  declare function parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;
   declare function markerFlagClass(flag: unknown): string;
   declare function markersTable(parsed: unknown): string;
   declare function docCollapsible(doc: unknown): boolean;
@@ -2479,7 +2479,7 @@ declare global {
 
     CairnHealthDocs: {
       healthKindLabel(kind: unknown): string;
-      parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; type?: unknown } | null;
+      parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;
       markerFlagClass(flag: unknown): string;
       markersTable(parsed: unknown): string;
       docCollapsible(doc: unknown): boolean;
