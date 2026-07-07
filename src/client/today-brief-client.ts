@@ -97,7 +97,7 @@ type TodayBriefHtmlOptions = {
     const est = estMinutes != null ? `${estMinutes} min` : "";
     const headline = escHtml(read?.headline || meta.lead);
     const why = read?.why ? escHtml(read.why) : "";
-    const forward = read?.forward && kind !== "done" ? escHtml(read.forward) : "";
+    const forward = read?.forward && kind === "train" ? escHtml(read.forward) : "";
     const arc = read?.arc && !forward ? escHtml(read.arc) : "";
 
     const actions: string[] = [];

@@ -12,7 +12,7 @@
 // goal-checkin) stay silent and the candidate set under test is fully controlled.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, isoDaysAgo, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
+import { db, isoDaysAgo, localDaysAgo, repo, resetTables, seedHealthDoc, seedIntake, marker } from "./_seed.js";
 
 // Tables every candidate producer reads — wiped to a known floor each case so the
 // arbiter sees exactly (and only) what each test seeds.
@@ -20,7 +20,7 @@ beforeEach(() => {
   resetTables(
     "food_notes", "insights", "plan_proposals", "health_directives",
     "garmin_activities", "garmin_sources", "sessions", "logged_sets", "activities",
-    "plan_days", "plan_items", "bodyweight_log", "app_state", "profile",
+    "plan_days", "plan_items", "bodyweight_log", "app_state", "profile", "day_reads",
   );
 });
 
@@ -124,6 +124,7 @@ test("agenda-only draft, health, and running candidates render as generic cards"
     marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
   ]);
   repo.deriveDirectives();
+  repo.saveDayRead(localDaysAgo(0), { kind: "train", headline: "Train", why: "normal plan day" });
 
   const agenda = repo.todayAgenda();
   const all = [...agenda.primary, ...agenda.more];
@@ -142,6 +143,47 @@ test("agenda-only draft, health, and running candidates render as generic cards"
   assert.ok(byId("run-compliance")?.title);
 });
 
+test("rest or easy Brief suppresses plan-forward agenda cards", () => {
+  repo.savePlanDay(1, "Run", "Endurance", [
+    { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
+  ]);
+  repo.savePlanDay(2, "Push", "Shoulders", [
+    { exercise: "Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 20 },
+  ]);
+  repo.saveDayRead(localDaysAgo(0), { kind: "train", headline: "Train", why: "normal plan day" });
+
+  const openAgenda = repo.todayAgenda(localDaysAgo(0));
+  const openIds = [...openAgenda.primary, ...openAgenda.more].map((c) => c.id);
+  assert.ok(openIds.includes("week-ahead"), "precondition: plan-forward cards can surface on a normal plan day");
+  assert.ok(openIds.includes("run-compliance"), "precondition: running compliance can surface on a normal plan day");
+
+  for (const kind of ["rest", "easy"]) {
+    resetTables("day_reads");
+    repo.saveDayRead(localDaysAgo(0), { kind, headline: kind, why: "athlete chose recovery" });
+    const agenda = repo.todayAgenda(localDaysAgo(0));
+    const ids = [...agenda.primary, ...agenda.more].map((c) => c.id);
+
+    assert.equal(agenda.hero.id, "brief", "the Brief still leads the day");
+    assert.ok(!ids.includes("program-adjustments"), `${kind} day omits program adjustments`);
+    assert.ok(!ids.includes("week-ahead"), `${kind} day omits the week-ahead training card`);
+    assert.ok(!ids.includes("run-compliance"), `${kind} day omits running compliance`);
+  }
+});
+
+test("cold same-day Brief cache does not speculate with plan-forward agenda cards", () => {
+  repo.savePlanDay(1, "Run", "Endurance", [
+    { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
+  ]);
+  resetTables("day_reads");
+
+  const agenda = repo.todayAgenda(localDaysAgo(0));
+  const ids = [...agenda.primary, ...agenda.more].map((c) => c.id);
+
+  assert.equal(agenda.hero.id, "brief");
+  assert.ok(!ids.includes("week-ahead"));
+  assert.ok(!ids.includes("run-compliance"));
+});
+
 test("a routed Today date anchors weekly producers to that week", () => {
   repo.savePlanDay(1, "Run", "Endurance", [
     { kind: "cardio", exercise: "Easy run", target_distance_km: 10 },
@@ -155,6 +197,7 @@ test("a routed Today date anchors weekly producers to that week", () => {
   assert.equal(pastRun?.title, "0 of 10 km this week", "past Today links do not borrow the current week's run");
   assert.ok(!past.some((c) => c.id === "lately"), "past Today links do not surface current-week activity as lately");
 
+  repo.saveDayRead(localDaysAgo(0), { kind: "train", headline: "Train", why: "normal plan day" });
   const liveAgenda = repo.todayAgenda(isoDaysAgo(0));
   const liveRun = [...liveAgenda.primary, ...liveAgenda.more].find((c) => c.id === "run-compliance");
   assert.equal(liveRun?.title, "10 of 10 km this week", "the live week still reads the current run");

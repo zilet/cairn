@@ -28,6 +28,7 @@
 // barrel re-exports this very file.
 import { getDayIntake } from "./nutrition.js";
 import { localDateISO } from "./shared.js";
+import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights, listActiveDirectives } from "./coach.js";
 import { programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { getRunCompliance, getWeeklyStats } from "./sessions.js";
@@ -97,6 +98,20 @@ function briefHero(): TodayAgendaCandidate {
     priority: 100,
     client_card: "brief",
   };
+}
+
+// If the Brief has decided today is deliberately easy/rest, the agenda must not
+// re-introduce plan-forward training cards underneath it. If today's Brief cache
+// is cold, stay conservative until the read fills it; past/future routed dates
+// keep the old behavior because they are review/planning views, not "open today".
+function planForwardAllowed(date: string): boolean {
+  try {
+    const kind = getCachedDayRead(date)?.kind;
+    if (!kind && date === localDateISO()) return false;
+    return kind !== "rest" && kind !== "easy";
+  } catch {
+    return true;
+  }
 }
 
 // ---- fuel: the day's logged food, as an EVALUATION glance — NEVER a "log
@@ -328,6 +343,7 @@ function latelyCandidate(date: string): TodayAgendaCandidate | null {
 export function todayAgenda(date?: string): TodayAgenda {
   const d = String(date || localDateISO());
   const hero = briefHero();
+  const showPlanForward = planForwardAllowed(d);
 
   // Build every candidate, each isolated so one failing source never breaks the
   // agenda. Producers that read by date take `d`; the rest are date-agnostic.
@@ -338,11 +354,13 @@ export function todayAgenda(date?: string): TodayAgenda {
   add(safe(() => reconcileCandidate()));
   add(safe(() => planDraftCandidate()));
   add(safe(() => healthCandidate()));
-  add(safe(() => adjustmentsCandidate(d)));
+  if (showPlanForward) add(safe(() => adjustmentsCandidate(d)));
   add(safe(() => weeklyCandidate()));
   add(safe(() => insightCandidate()));
-  add(safe(() => weekAheadCandidate(d)));
-  add(safe(() => runComplianceCandidate(d)));
+  if (showPlanForward) {
+    add(safe(() => weekAheadCandidate(d)));
+    add(safe(() => runComplianceCandidate(d)));
+  }
   add(safe(() => latelyCandidate(d)));
 
   // The two NEW Era-2 candidate producers (sibling-built). They return a finished

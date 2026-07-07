@@ -75,6 +75,21 @@ test("Today Brief suppresses irrelevant steer chips and exposes reset when steer
   assert.match(html, /Changed your mind\?/);
 });
 
+test("Today Brief only shows the forward plan link on train reads", () => {
+  const brief = loadTodayBrief();
+  const read = {
+    kind: "rest",
+    headline: "Rest today",
+    why: "Let the work absorb.",
+    forward: "Next: Hinge / posterior chain",
+    arc: "Week 1 of 6",
+    signals: {},
+  };
+
+  assert.doesNotMatch(brief.briefHtml(read, { isToday: true }), /Next: Hinge/);
+  assert.match(brief.briefHtml({ ...read, kind: "train" }, { isToday: true }), /Next: Hinge/);
+});
+
 test("Today Brief handles done, provisional, and offline states", () => {
   const brief = loadTodayBrief();
   const done = brief.briefHtml({
