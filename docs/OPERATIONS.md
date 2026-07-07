@@ -58,7 +58,7 @@ failing requests.
 
 ```bash
 # Local (no Docker)
-npm run dev          # tsx watch, http://localhost:8787, DB at ./data/cairn.db
+npm run dev          # build browser JS from src/client, then tsx watch; http://localhost:8787
 
 # Override DB location for testing
 DB_PATH=/tmp/test.db npm run dev
@@ -72,8 +72,8 @@ The code path is identical. The only difference is `DATA_DIR`: `./data` locally,
 Docker (set by the Dockerfile `ENV` directive and the volume mount).
 For source-built Docker images, the Docker builder runs `npm run build`; that typechecks and
 generates the browser client, then the runtime image overlays generated `public/js` from the
-builder over the static `public/` tree. This keeps Raspberry Pi/source deploys from serving stale
-committed client output.
+builder over the static `public/` tree. Generated `public/js` is ignored by git, so source deploys
+compile from `src/client` instead of relying on committed transpiled browser files.
 Docker defaults to `TZ=America/New_York`. Set `TZ` in `.env` to the user's local timezone if weekly
 auto-coach is enabled; the scheduler uses container-local `getDay()` / `getHours()` for the
 configured day and hour. For Belgrade, use `TZ=Europe/Belgrade`.

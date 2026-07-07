@@ -15,7 +15,7 @@ COPY scripts/build-client.mjs ./scripts/build-client.mjs
 COPY src ./src
 # The bundling step concatenates every generated client output PLUS the one
 # hand-written classic shim, public/js/10-boot.js — the only public/ file the
-# builder needs (everything else in public/js is regenerated from src/client).
+# builder needs from git (everything else in public/js is regenerated from src/client).
 COPY public/js/10-boot.js ./public/js/10-boot.js
 # NO tsbuildcache mount here. tsc is `incremental` with tsBuildInfoFile under
 # .tsbuildcache/. A persisted cache mount would carry that .tsbuildinfo across

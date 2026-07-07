@@ -164,8 +164,8 @@ BuildKit layer caching.
 Some operators keep a private `deploy-rpi.sh` that rsyncs a dev checkout to the Pi over SSH
 on the tailnet and rebuilds — no registry required. That script is intentionally **not** in
 the public repo (lives under `.local/scripts/` in a personal checkout). Before syncing a
-TypeScript-frontend checkout, run the client/public deploy guard so stale generated browser
-output, classic-script global collisions, and service-worker cache drift are caught locally:
+TypeScript-frontend checkout, run the client/public deploy guard so browser-client buildability,
+classic-script global collisions, and service-worker cache drift are caught locally:
 
 ```bash
 npm run client:verify

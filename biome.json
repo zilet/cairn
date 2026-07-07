@@ -9,7 +9,6 @@
     "ignoreUnknown": true,
     "includes": [
       "src/**/*.ts",
-      "public/**/*.js",
       "test/**/*.mjs",
       "test/**/*.js",
       "*.mjs",

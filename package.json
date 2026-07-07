@@ -16,7 +16,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "npm run client:build && tsx watch src/server.ts",
     "build": "npm run client:check && npm run client:build && tsc",
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",

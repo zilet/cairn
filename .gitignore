@@ -3,6 +3,10 @@ node_modules/
 dist/
 .tsbuildcache/
 
+# generated browser client output; source lives in src/client/
+public/js/*.js
+!public/js/10-boot.js
+
 # runtime SQLite database (created on first boot)
 /data/
 *.db
@@ -34,4 +38,5 @@ media/frames/
 
 # logs & OS cruft
 *.log
+tmp-*.json
 .DS_Store

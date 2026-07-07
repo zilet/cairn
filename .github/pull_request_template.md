@@ -16,7 +16,7 @@
 ## Technical checklist
 
 - [ ] `npm test` passes
-- [ ] If `public/` changed: `sw.js` `CACHE` version bumped
+- [ ] If authored `public/` assets or served bundle URLs changed: `sw.js` `CACHE` version bumped
 - [ ] If schema changed: `db.ts` + `migrate.ts` updated per CONTRIBUTING.md
 - [ ] `api.ts` and `mcp.ts` kept in sync (if applicable)
 

@@ -2,6 +2,8 @@ node_modules
 dist
 data
 .tsbuildcache
+public/js/*.js
+!public/js/10-boot.js
 .github
 .agents
 .codex

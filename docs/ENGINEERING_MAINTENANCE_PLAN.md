@@ -209,7 +209,7 @@ Agent teams:
 - Client Build Agent: add a minimal TypeScript client check/build path.
 - Contract Agent: share domain payload types from server to client.
 - Global Cleanup Agent: replace implicit globals with explicit module exports/imports gradually.
-- Cache Agent: ensure generated client output and service-worker cache versioning stay correct.
+- Cache Agent: ensure generated client buildability, git-ignore hygiene, and service-worker cache versioning stay correct.
 
 Rules:
 

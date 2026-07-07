@@ -65,7 +65,7 @@ docker compose up -d --build
 The first build bakes the coaching CLIs in and takes a few minutes; later rebuilds are fast. Then
 open `http://localhost:8787`. Source builds run `npm run build` inside Docker, including the
 TypeScript browser-client build; the runtime image uses that generated `public/js` output rather
-than any stale checked-in browser files.
+than any checked-in browser files.
 
 ## Ways To Run It
 

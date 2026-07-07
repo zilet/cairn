@@ -1,38 +1,34 @@
 #!/usr/bin/env node
-// Guard generated browser output while the client migrates to src/client/*.ts.
-// The client build must be deterministic: if running it changes a tracked output,
-// commit that output with the source change and bump public/sw.js when required.
+// Guard browser-client buildability from TypeScript sources. Generated public/js output is ignored by git;
+// this check proves a checkout can recreate every served bundle without requiring committed transpiled JS churn.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLES, CLIENT_OUTPUTS } from "./build-client.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Guard both the per-file outputs AND the concatenated bundles index.html loads:
-// each must exist and be byte-identical after a clean rebuild.
+// Guard both the per-file outputs AND the concatenated bundles index.html loads.
 const outputs = [...CLIENT_OUTPUTS.map((item) => item.output), ...BUNDLES.map((bundle) => bundle.output)];
+const handwrittenPublicJs = new Set(["public/js/10-boot.js"]);
 
-function readOutput(file) {
-  const abs = path.join(root, file);
-  return existsSync(abs) ? readFileSync(abs, "utf8") : null;
-}
-
-for (const file of outputs) {
-  if (!existsSync(path.join(root, file))) {
-    console.error(`✗ client build output is missing: ${file}`);
-    process.exit(1);
-  }
-}
-
-const before = new Map(outputs.map((file) => [file, readOutput(file)]));
-execFileSync(process.execPath, ["scripts/build-client.mjs"], { cwd: root, stdio: "inherit" });
-
-const changed = outputs.filter((file) => before.get(file) !== readOutput(file));
-if (changed.length) {
-  console.error("✗ client build output was stale. Commit the generated output with the source change:");
-  for (const file of changed) console.error(`    ${file}`);
+const trackedPublicJs = execFileSync("git", ["ls-files", "--", "public/js/*.js"], { cwd: root, encoding: "utf8" })
+  .split(/\r?\n/)
+  .filter(Boolean);
+const trackedGenerated = trackedPublicJs.filter((file) => !handwrittenPublicJs.has(file));
+if (trackedGenerated.length) {
+  console.error("✗ generated client output is tracked by git; keep src/client as the source of truth:");
+  for (const file of trackedGenerated) console.error(`    ${file}`);
   process.exit(1);
 }
 
-console.log(`✓ client build output is up to date (${outputs.length} file${outputs.length === 1 ? "" : "s"})`);
+execFileSync(process.execPath, ["scripts/build-client.mjs"], { cwd: root, stdio: "inherit" });
+
+const missing = outputs.filter((file) => !existsSync(path.join(root, file)));
+if (missing.length) {
+  console.error("✗ client build did not generate every expected output:");
+  for (const file of missing) console.error(`    ${file}`);
+  process.exit(1);
+}
+
+console.log(`✓ client build output generated from TypeScript (${outputs.length} file${outputs.length === 1 ? "" : "s"})`);
