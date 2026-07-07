@@ -1489,6 +1489,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   const boot = read("public/js/10-boot.js");
   const sw = read("public/sw.js");
   const dockerfile = read("Dockerfile");
+  const gitignore = read(".gitignore");
+  const dockerignore = read(".dockerignore");
   assert.match(today, /CairnTodayScreenRuntime\.create/);
   assert.match(todayCompatibilityBridges, /CairnTodayCompatibilityBridges/);
   assert.match(todayScreenRuntimeSource, /function deps\(\): ClientTodayDependenciesContext/);
@@ -1496,6 +1498,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayScreenRuntimeDepsSource, /CairnTodayDependencies\.context/);
   assert.match(todayScreenRuntimeSource, /CairnTodayCompatibilityBridges\.create/);
   assert.doesNotMatch(today, /const todayDeps = CairnTodayDependencies\.context/);
+  assert.equal(pkg.scripts.dev, "npm run client:build && tsx watch src/server.ts");
   assert.equal(pkg.scripts.build, "npm run client:check && npm run client:build && tsc");
   assert.equal(pkg.scripts["client:check"], "tsc -p tsconfig.client.build.json --noEmit");
   assert.equal(pkg.scripts["client:build"], "node scripts/build-client.mjs");
@@ -3662,8 +3665,15 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientBuild, /process\.argv\[1\]/);
   assert.match(clientBuildCheck, /from "\.\/build-client\.mjs"/);
   assert.match(clientBuildCheck, /CLIENT_OUTPUTS\.map/);
-  assert.match(clientBuildCheck, /client build output was stale/);
-  assert.match(clientBuildCheck, /client build output is up to date/);
+  assert.match(clientBuildCheck, /Generated\s+public\/js output is ignored by git/);
+  assert.match(clientBuildCheck, /git",\s*\["ls-files",\s*"--",\s*"public\/js\/\*\.js"\]/);
+  assert.match(clientBuildCheck, /public\/js\/10-boot\.js/);
+  assert.match(clientBuildCheck, /generated client output is tracked by git/);
+  assert.match(clientBuildCheck, /client build output generated from TypeScript/);
+  assert.match(gitignore, /public\/js\/\*\.js/);
+  assert.match(gitignore, /!public\/js\/10-boot\.js/);
+  assert.match(dockerignore, /public\/js\/\*\.js/);
+  assert.match(dockerignore, /!public\/js\/10-boot\.js/);
   assert.match(contracts, /export \* from "\.\/client-api\.js"/);
   assert.match(contracts, /export \* from "\.\/client-api-coverage\.js"/);
   assert.match(apiContracts, /export interface ClientApiResponses/);
