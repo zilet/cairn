@@ -8,6 +8,7 @@ type TodaySessionSetPayloadResult =
 type TodaySessionSetModelApi = {
   responseRecord(value: unknown): Record<string, unknown>;
   sessionPathId(session: Record<string, unknown>): string;
+  cacheSessionTruth(deps: ClientTodaySessionControllerDeps, value: unknown): void;
   invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void;
   invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void;
   logPayloadFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): TodaySessionSetPayloadResult;
@@ -22,14 +23,26 @@ type TodaySessionSetModelApi = {
     return encodeURIComponent(String(session.id ?? ""));
   }
 
+  function sessionCacheKey(deps: ClientTodaySessionControllerDeps): string {
+    return "today:session:" + deps.state.logDate;
+  }
+
+  function cacheSessionTruth(deps: ClientTodaySessionControllerDeps, value: unknown): void {
+    const session = responseRecord(value);
+    if (session.id == null) return;
+    const cacheable = { ...session };
+    delete cacheable.summary;
+    deps.storeCached(sessionCacheKey(deps), cacheable);
+  }
+
   function invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void {
-    deps.invalidate("today:session:" + deps.state.logDate);
+    deps.invalidate(sessionCacheKey(deps));
     deps.invalidate("history:sessions");
   }
 
   function invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void {
     deps.state.brief = null;
-    deps.invalidate("today:session:" + deps.state.logDate);
+    deps.invalidate(sessionCacheKey(deps));
     deps.invalidate("stats");
     deps.invalidate("history:sessions");
     deps.invalidate("progress:volume");
@@ -87,6 +100,7 @@ type TodaySessionSetModelApi = {
   const CAIRN_TODAY_SESSION_SET_MODEL: TodaySessionSetModelApi = {
     responseRecord,
     sessionPathId,
+    cacheSessionTruth,
     invalidateSessionTruth,
     invalidateSetTruth,
     logPayloadFromRow,

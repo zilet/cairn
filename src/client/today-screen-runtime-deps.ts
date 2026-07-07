@@ -45,6 +45,7 @@ function createTodayScreenRuntimeDependencies(input: TodayScreenRuntimeDepsInput
     api: input.api,
     cachedApi: input.cachedApi as (path: string, opts?: TodayScreenRuntimeDepsCachedApiOptions<unknown>) => Promise<unknown>,
     peekCached: input.peekCached,
+    storeCached: swrSet,
     invalidate: swrInvalidate,
     renderToday: input.renderToday,
     withViewTransition,

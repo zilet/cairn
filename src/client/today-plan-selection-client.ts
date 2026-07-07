@@ -28,6 +28,7 @@ type TodayPlanSelectionDeps = {
     plan: TodayPlanSelectionDay[];
   };
   api(path: string): Promise<unknown>;
+  cachedApi?(path: string, options?: { key?: string; freshFor?: number }): Promise<unknown>;
 };
 
 (() => {
@@ -69,7 +70,9 @@ type TodayPlanSelectionDeps = {
     if (!isToday) return plan[0]?.day_number ?? 1;
 
     try {
-      const recent = await deps.api("/sessions?limit=20");
+      const recent = deps.cachedApi
+        ? await deps.cachedApi("/sessions?limit=20", { key: "history:sessions", freshFor: 30000 })
+        : await deps.api("/sessions?limit=20");
       const rows = Array.isArray(recent) ? recent as TodayPlanSelectionSession[] : [];
       const latest = rows.find((row) =>
         row.date !== deps.state.logDate && planDayNumberForSession(row, plan)

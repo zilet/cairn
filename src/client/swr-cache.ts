@@ -88,6 +88,14 @@ function _swrStore<T>(key: string, data: T): ClientSwrEntry<T> {
   return entry;
 }
 
+// Write-through cache priming for mutations that already received the fresh
+// server truth. This avoids the "invalidate -> immediately wait for a refetch"
+// gap on hot paths like finishing a workout.
+function swrSet<T>(key: string, data: T): void {
+  if (!key) return;
+  _swrStore(key, data);
+}
+
 // Stable structural compare for "did the JSON payload actually change?" using
 // JSON.stringify, since these are small API bodies we already serialize anyway.
 function _swrSame(a: unknown, b: unknown): boolean {
@@ -237,6 +245,7 @@ Object.assign(globalThis, {
   peekCached,
   cachedApi,
   paintSWR,
+  swrSet,
   markRefreshing,
   swrInvalidate,
   swrSweep,

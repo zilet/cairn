@@ -235,6 +235,7 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     return CairnTodayPlanSelection.suggestedPlanDayNumber(session, isToday, {
       state: input.state,
       api: todayScreenRuntimeApi,
+      cachedApi: todayScreenRuntimeCachedApi,
     });
   }
 

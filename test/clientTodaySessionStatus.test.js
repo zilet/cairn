@@ -64,8 +64,8 @@ test("Today session done card preserves calm completion selectors and escaping",
     duration_min: 52,
     notes: "felt <solid>",
     sets: [
-      { weight: 100, reps: 5 },
-      { weight: 50, reps: 10 },
+      { exercise: "Squat <A>", weight: 100, reps: 5 },
+      { exercise: "Row", weight: 50, reps: 10 },
     ],
   }, { name: "Plan day" }, { isToday: true });
 
@@ -73,13 +73,19 @@ test("Today session done card preserves calm completion selectors and escaping",
   assert.match(html, /Today · complete/);
   assert.match(html, /Pull &lt;heavy&gt;/);
   assert.match(html, /2 sets/);
+  assert.match(html, /2 movements/);
   assert.match(html, /1,000 lb/);
   assert.match(html, /52 min/);
+  assert.match(html, /ANALYSIS/);
+  assert.match(html, /Top loaded work: Squat &lt;A&gt; · 500 lb/);
+  assert.match(html, /Squat &lt;A&gt;/);
+  assert.match(html, /100 lb x 5/);
+  assert.match(html, /Row/);
   assert.match(html, /felt &lt;solid&gt;/);
   assert.match(html, /id="feedbackSlot"/);
   assert.match(html, /id="reopenBtn"/);
   assert.match(html, /id="toHistoryBtn"/);
-  assert.doesNotMatch(html, /Pull <heavy>|felt <solid>/);
+  assert.doesNotMatch(html, /Pull <heavy>|felt <solid>|Squat <A>/);
 });
 
 test("Today feedback markup owns scale, done state, and empty state", () => {

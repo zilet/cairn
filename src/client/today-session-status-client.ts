@@ -9,6 +9,15 @@ type LoggedSetLike = Partial<ClientLoggedSet> | null | undefined;
 type SessionLike = Partial<ClientTrainingSession> | null | undefined;
 type DayLike = Partial<ClientPlanDay> | null | undefined;
 type FeelKind = "soreness" | "performance";
+type DoneExerciseSummary = {
+  name: string;
+  sets: number;
+  tonnage: number;
+  timedSec: number;
+  bestLoad: number;
+  bestLoadLabel: string;
+  bestDuration: number;
+};
 
 (() => {
   const TODAY_FEEL_FACES = ["·", "◦", "○", "◍", "●"] as const;
@@ -34,14 +43,83 @@ type FeelKind = "soreness" | "performance";
     }, 0);
   }
 
+  function doneExerciseSummaries(sets: LoggedSetLike[]): DoneExerciseSummary[] {
+    const byName = new Map<string, DoneExerciseSummary>();
+    for (const raw of sets) {
+      const set = raw && typeof raw === "object" ? raw : {};
+      const name = String(set.exercise || "Work").trim() || "Work";
+      let row = byName.get(name);
+      if (!row) {
+        row = { name, sets: 0, tonnage: 0, timedSec: 0, bestLoad: 0, bestLoadLabel: "", bestDuration: 0 };
+        byName.set(name, row);
+      }
+      row.sets++;
+      const weight = Number(set.weight);
+      const reps = Number(set.reps);
+      if (weight > 0 && reps > 0) {
+        const load = weight * reps;
+        row.tonnage += load;
+        if (load > row.bestLoad) {
+          row.bestLoad = load;
+          row.bestLoadLabel = `${fmtWeight(weight)} x ${reps}`;
+        }
+      }
+      const duration = Number(set.duration_sec);
+      if (duration > 0) {
+        row.timedSec += duration;
+        if (duration > row.bestDuration) row.bestDuration = duration;
+      }
+    }
+    return [...byName.values()].sort((a, b) =>
+      (b.tonnage || b.timedSec || b.sets) - (a.tonnage || a.timedSec || a.sets)
+    );
+  }
+
+  function doneAnalysisHtml(sets: LoggedSetLike[]): string {
+    const rows = doneExerciseSummaries(sets);
+    if (!rows.length) return "";
+    const totalTonnage = rows.reduce((sum, row) => sum + row.tonnage, 0);
+    const totalTimed = rows.reduce((sum, row) => sum + row.timedSec, 0);
+    const metric = totalTonnage > 0 ? "tonnage" : totalTimed > 0 ? "time" : "sets";
+    const scoreFor = (row: DoneExerciseSummary): number =>
+      metric === "tonnage" ? row.tonnage : metric === "time" ? row.timedSec : row.sets;
+    const totalScore = rows.reduce((sum, row) => sum + scoreFor(row), 0) || 1;
+    const leader = rows[0];
+    const insight = totalTonnage > 0
+      ? `Top loaded work: ${leader.name} · ${Math.round(leader.tonnage).toLocaleString()} lb`
+      : leader.bestDuration > 0
+        ? `Longest hold: ${leader.name} · ${fmtDur(leader.bestDuration)}`
+        : `${rows.length} movement${rows.length === 1 ? "" : "s"} covered`;
+    const bars = rows.slice(0, 4).map((row) => {
+      const pct = Math.max(8, Math.round((scoreFor(row) / totalScore) * 100));
+      const meta = row.tonnage > 0
+        ? `${row.sets} set${row.sets === 1 ? "" : "s"} · ${Math.round(row.tonnage).toLocaleString()} lb`
+        : row.timedSec > 0
+          ? `${row.sets} set${row.sets === 1 ? "" : "s"} · ${fmtDur(row.timedSec)}`
+          : `${row.sets} set${row.sets === 1 ? "" : "s"}`;
+      const best = row.bestLoadLabel || (row.bestDuration > 0 ? fmtDur(row.bestDuration) : "");
+      return `<div class="done-bar-row">
+        <div class="done-bar-label"><span>${escHtml(row.name)}</span><em>${escHtml(best)}</em></div>
+        <div class="done-bar-track" aria-hidden="true"><span style="width:${pct}%"></span></div>
+        <div class="done-bar-meta">${escHtml(meta)}</div>
+      </div>`;
+    }).join("");
+    return `<div class="done-analysis" aria-label="Workout analysis">
+      <div class="done-analysis-head"><span class="lbl">ANALYSIS</span><strong>${escHtml(insight)}</strong></div>
+      <div class="done-bars">${bars}</div>
+    </div>`;
+  }
+
   function todaySessionDoneCardHtml(session: SessionLike, day: DayLike, options: { isToday?: boolean } = {}): string {
     const row = session && typeof session === "object" ? session : {};
     const sets = Array.isArray(row.sets) ? row.sets : [];
     const setCount = sets.length;
     const tonnage = todaySetsTonnage(sets);
+    const exerciseCount = doneExerciseSummaries(sets).length;
     const name = row.title || day?.name || row.day_name || "Session";
     const chips = [
       `${setCount} set${setCount === 1 ? "" : "s"}`,
+      exerciseCount ? `${exerciseCount} movement${exerciseCount === 1 ? "" : "s"}` : null,
       tonnage ? `${Math.round(tonnage).toLocaleString()} lb` : null,
       row.duration_min ? `${row.duration_min} min` : null,
     ].filter(Boolean).map((text) => `<span class="done-chip">${escHtml(text)}</span>`).join("");
@@ -50,6 +128,7 @@ type FeelKind = "soreness" | "performance";
       <div class="done-kicker lbl">${options.isToday ? "Today · complete" : "Complete"}</div>
       <h2 class="done-title">${escHtml(name)}</h2>
       <div class="done-chips">${chips}</div>
+      ${doneAnalysisHtml(sets)}
       ${row.notes ? `<div class="done-notes">“${escHtml(row.notes)}”</div>` : ""}
       <div id="feedbackSlot" class="feedback-slot done-feedback"></div>
       <div class="done-actions">

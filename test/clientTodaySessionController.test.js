@@ -251,6 +251,7 @@ function loadController({ apiImpl } = {}) {
   const transitions = [];
   const starts = [];
   const stops = [];
+  const cachedWrites = [];
   const collapses = [];
   const expands = [];
   const context = {
@@ -291,6 +292,7 @@ function loadController({ apiImpl } = {}) {
       if (path.includes("/feedback")) return { soreness: 2, performance: null, joint_pain: "" };
       return { ok: true };
     },
+    storeCached: (key, data) => cachedWrites.push({ key, data }),
     invalidate: (key) => invalidations.push(key),
     invalidateTodayProgression: () => invalidations.push("progression"),
     scheduleRxRefresh: () => rxRefreshes.push(true),
@@ -335,6 +337,7 @@ function loadController({ apiImpl } = {}) {
     rxRefreshes,
     starts,
     stops,
+    cachedWrites,
     collapses,
     expands,
     transitions,
@@ -397,6 +400,58 @@ test("Today session controller keeps card unchanged when set POST fails", async 
   assert.deepEqual(harness.invalidations, []);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["bad set"]);
   assert.equal(button.disabled, false);
+});
+
+test("Today session controller finishes into cached done mode immediately", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/44/finish" && opts?.method === "POST") {
+        return {
+          id: 44,
+          date: "2026-06-30",
+          finished_at: "2026-06-30T15:00:00Z",
+          sets: [
+            { exercise: "Push-up", weight: 20, reps: 8 },
+            { exercise: "Push-up", weight: 20, reps: 8 },
+          ],
+          summary: { sets: 2, tonnage: 320 },
+        };
+      }
+      return { ok: true };
+    },
+  });
+  harness.deps.state.planReveal = { date: "2026-06-30", on: true };
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("textarea", { id: "sessNotes", value: "solid" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+  finish.click();
+  await flushAsync();
+
+  assert.equal(harness.requests[0].path, "/sessions/44/finish");
+  assert.deepEqual(JSON.parse(harness.requests[0].opts.body), { notes: "solid" });
+  assert.equal(harness.deps.state.planReveal, null);
+  assert.equal(harness.deps.state.brief.read.kind, "done");
+  assert.deepEqual(plain(harness.cachedWrites), [{
+    key: "today:session:2026-06-30",
+    data: {
+      id: 44,
+      date: "2026-06-30",
+      finished_at: "2026-06-30T15:00:00Z",
+      sets: [
+        { exercise: "Push-up", weight: 20, reps: 8 },
+        { exercise: "Push-up", weight: 20, reps: 8 },
+      ],
+    },
+  }]);
+  assert.deepEqual(harness.invalidations, ["stats", "history:sessions"]);
+  assert.equal(harness.stops.length, 1);
+  assert.equal(harness.renders.length, 1);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Done · 2 sets · 320 lb"]);
 });
 
 test("Today session controller skips, undoes, and removes off-plan cards", async () => {

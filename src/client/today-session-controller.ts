@@ -5,6 +5,25 @@ type TodaySessionDeps = ClientTodaySessionControllerDeps;
 type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
 
 (() => {
+  function finishedBrief(date: string, summary: Record<string, unknown>): Record<string, unknown> {
+    const setCount = Number(summary.sets || 0);
+    return {
+      date,
+      override: "",
+      read: {
+        kind: "done",
+        headline: "You're done for today.",
+        why: setCount > 0
+          ? `${setCount} set${setCount === 1 ? "" : "s"} logged. Your workout analysis is ready below.`
+          : "Your workout is complete. The analysis is ready below.",
+        focus: null,
+        est_minutes: null,
+        signals: { logged_today: { sets: setCount } },
+        source: "local-finish",
+      },
+    };
+  }
+
   function wireFinishControls(session: Record<string, unknown>, deps: TodaySessionDeps): void {
     const finishBtn = deps.root.querySelector<HTMLButtonElement>("#finishBtn");
     if (finishBtn && !finishBtn.dataset.wired) {
@@ -24,11 +43,18 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
           deps.toast("Couldn't finish — check your connection");
           return;
         }
+        if (!result || result.error || result.ok === false || result.id == null) {
+          finishBtn.disabled = false;
+          deps.toast(result && result.error ? String(result.error) : "Couldn't finish that session");
+          return;
+        }
 
         const summary = CairnTodaySessionSetModel.responseRecord(result.summary);
-        deps.state.brief = null;
-        CairnTodaySessionSetModel.invalidateSessionTruth(deps);
+        CairnTodaySessionSetModel.cacheSessionTruth(deps, result);
+        deps.state.planReveal = null;
+        deps.state.brief = finishedBrief(deps.state.logDate, summary);
         deps.invalidate("stats");
+        deps.invalidate("history:sessions");
         deps.stopRest();
 
         const settle = () => {
@@ -51,11 +77,16 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
       reopenBtn.dataset.wired = "1";
       reopenBtn.addEventListener("click", async () => {
         reopenBtn.disabled = true;
+        let result: Record<string, unknown> | null = null;
         try {
-          await deps.api(`/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/reopen`, { method: "POST" });
+          result = CairnTodaySessionSetModel.responseRecord(
+            await deps.api(`/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/reopen`, { method: "POST" }),
+          );
         } catch {}
         deps.state.brief = null;
-        CairnTodaySessionSetModel.invalidateSessionTruth(deps);
+        if (result && result.id != null) CairnTodaySessionSetModel.cacheSessionTruth(deps, result);
+        else deps.invalidate("today:session:" + deps.state.logDate);
+        deps.invalidate("history:sessions");
         deps.state.planReveal = { date: deps.state.logDate, on: true };
         deps.withViewTransition(() => Promise.resolve(deps.renderToday()).then(() => deps.viewEnter()));
       });

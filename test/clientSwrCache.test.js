@@ -78,6 +78,18 @@ test("SWR cache stores normal payloads in memory and localStorage", async () => 
   assert.equal(loaded.storage.has("cairn.swr.v1.profile"), true);
 });
 
+test("SWR cache can be primed directly from mutation results", () => {
+  const loaded = loadSwrCache();
+
+  loaded.context.swrSet("today:session:2026-07-01", { id: 12, finished_at: "2026-07-01T14:00:00Z" });
+
+  assert.deepEqual(loaded.context.peekCached("today:session:2026-07-01").data, {
+    id: 12,
+    finished_at: "2026-07-01T14:00:00Z",
+  });
+  assert.equal(loaded.storage.has("cairn.swr.v1.today:session:2026-07-01"), true);
+});
+
 test("SWR cache keeps markers and recovery payloads memory-only", async () => {
   const loaded = loadSwrCache();
 
