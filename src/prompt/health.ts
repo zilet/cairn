@@ -375,28 +375,32 @@ ${RESEARCH_SCHEMA}`;
 // Glomerular Filt Rate" ⇄ eGFR; deciding whether a bare "Glucose" is the same as
 // "Glucose, Random") needs a model that knows clinical naming AND can read the
 // units. It clusters ONLY same-analyte names; it must NOT merge clinically-distinct
-// measures. The result only MERGES series (via the canonical key) — it never
-// relabels what the user sees — so a conservative miss is harmless, an
-// over-merge is the only real risk. Hence: when unsure, keep separate.
+// measures. The result MERGES series and chooses the clean internal display label
+// downstream agents/reports use. A conservative miss is harmless; an over-merge is
+// the only real risk. Hence: when unsure, keep separate.
 export function buildMarkerReconcilePrompt(
-  items: Array<{ name: string; unit: string | null; sample: unknown }>
+  items: Array<{ name: string; unit: string | null; sample: unknown; canonical?: string | null }>
 ): string {
   const list = items
-    .map((it) => `  - "${it.name}"${it.unit ? ` [${it.unit}]` : " [no unit]"}${it.sample != null && it.sample !== "" ? ` e.g. ${JSON.stringify(it.sample)}` : ""}`)
+    .map((it) => {
+      const canonical = String(it.canonical ?? "").replace(/\s+/g, " ").trim();
+      const hint = canonical && canonical !== it.name ? ` -> internal "${canonical}"` : "";
+      return `  - "${it.name}"${hint}${it.unit ? ` [${it.unit}]` : " [no unit]"}${it.sample != null && it.sample !== "" ? ` e.g. ${JSON.stringify(it.sample)}` : ""}`;
+    })
     .join("\n");
   return `${CAIRN_PERSONA}
 
 Right now you're acting as a clinical lab-data librarian. Below is a list of lab/biomarker NAMES extracted from
 one person's lab reports over several years, from different labs and panels. Different labs name the
 SAME analyte differently. Your job: group names that are the SAME analyte so the app can merge each
-analyte's history into one trend.
+analyte's history into one trend and show one clean internal marker label everywhere.
 
 RULES (a wrong merge corrupts a clinical trend — be CONSERVATIVE):
 - Group two names ONLY if they are unambiguously the SAME measurement. Use the units + sample values
   to confirm (the same analyte has compatible units; if units clearly differ in dimension, do NOT merge).
 - NEVER merge clinically-distinct measures, even when the names look similar:
     • calculated vs direct LDL ("LDL-Cholesterol" ≠ "LDL-C (direct)")
-    • random vs fasting vs ESTIMATED-AVERAGE glucose ("Glucose, Random" ≠ "Estimated Average Glucose" ≠ "Fasting Glucose")
+    • bare/unspecified vs random vs fasting vs ESTIMATED-AVERAGE glucose ("Glucose" ≠ "Glucose, Random" ≠ "Estimated Average Glucose" ≠ "Fasting Glucose")
     • free vs total ("Testosterone, Free" ≠ "Testosterone, Total")
     • serum vs URINE ("Albumin" ≠ "Albumin, Urine"), whole-blood sub-fractions, particle-number vs concentration
     • a ratio or a pattern/qualitative result vs a concentration
@@ -404,7 +408,10 @@ RULES (a wrong merge corrupts a clinical trend — be CONSERVATIVE):
   "Estimated Glomerular Filt Rate" = "Creatinine-Based Estimated Glomerular Filtration Rate (eGFR)";
   "Glucose (random)" = "Glucose Random"; "ALT" = "SGPT".
 - A name that has no same-analyte twin in the list is simply left out (do not emit a singleton group).
-- "canonical" = the clearest standard clinical name for the group (short; the most precise member is fine).
+- "canonical" = the clearest standard clinical name for the group, used as the app's internal display label.
+  Prefer standard marker labels over lab-specific wording: "LDL-C" over "LDL Chol Calc (NIH)",
+  "Total Cholesterol" over "Cholesterol, Total", "eGFR" over truncated long forms. Preserve method
+  distinctions only when clinically real, e.g. "LDL-C (Direct)" stays separate from calculated "LDL-C".
 - "members" = the EXACT names from the list (verbatim) that belong to the group. Every member must be a
   string copied from the list below.
 

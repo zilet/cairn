@@ -5,10 +5,10 @@
 // grade leaks out of the priority ranking.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, seedHealthDoc, marker, isoDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, seedHealthDoc, marker, isoDaysAgo, localDaysAgo } from "./_seed.js";
 
 beforeEach(() => {
-  resetTables("health_documents", "health_directives");
+  resetTables("health_documents", "health_directives", "bodyweight_log", "profile");
 });
 
 test("matchOptimalZone suppresses mis-routed analyte names (the clinically-wrong-directive guard)", () => {
@@ -16,6 +16,7 @@ test("matchOptimalZone suppresses mis-routed analyte names (the clinically-wrong
   assert.equal(repo.matchOptimalZone("Total Cholesterol / HDL Ratio"), null);
   assert.equal(repo.matchOptimalZone("Albumin, Random Urine without Creatinine"), null);
   assert.equal(repo.matchOptimalZone("Testosterone, Free"), null);
+  assert.equal(repo.matchOptimalZone("Sex Hormone Binding Globulin (SHBG)"), null);
   assert.equal(repo.matchOptimalZone("LDL Particle Number"), null);
   assert.equal(repo.matchOptimalZone("HDL Large"), null);
   // eGFR's full lab name matches the eGFR band, not the serum Creatinine band.
@@ -28,6 +29,17 @@ test("matchOptimalZone suppresses mis-routed analyte names (the clinically-wrong
   assert.equal(repo.matchOptimalZone("Body Fat %")?.label, "Body fat");
   assert.equal(repo.matchOptimalZone("Omega-3 Index")?.label, "Omega-3 index");
   assert.equal(repo.matchOptimalZone("Total Cholesterol")?.label, "Total cholesterol");
+  assert.equal(repo.matchOptimalZone("Red Blood Cell Count")?.label, "RBC");
+  assert.equal(repo.matchOptimalZone("Mean Corpuscular Hemoglobin")?.label, "MCH");
+  assert.equal(repo.matchOptimalZone("Mean Corpuscular Hemoglobin Concentration")?.label, "MCHC");
+  assert.equal(repo.matchOptimalZone("Iron % Saturation")?.label, "Iron saturation");
+  assert.equal(repo.matchOptimalZone("Iron Binding Capacity")?.label, "TIBC");
+  assert.equal(repo.matchOptimalZone("White Blood Cell Count")?.label, "WBC");
+  assert.equal(repo.matchOptimalZone("Absolute Neutrophil Count")?.label, "Absolute neutrophils");
+  assert.equal(repo.matchOptimalZone("Absolute NRBC Count")?.label, "Absolute NRBC");
+  assert.equal(repo.matchOptimalZone("NRBC %")?.label, "NRBC percentage");
+  assert.equal(repo.matchOptimalZone("Red Blood Cell (RBC) - Urine"), null);
+  assert.deepEqual(repo.matchOptimalZone("Hemoglobin", { sex: "female" })?.optimal, [11.6, 15]);
 });
 
 test("getMarkerHistory builds a per-marker series and a deterministic RISING trend", () => {
@@ -44,6 +56,22 @@ test("getMarkerHistory builds a per-marker series and a deterministic RISING tre
   assert.equal(apob.trend.n, 3);
   assert.ok(apob.trend.span_days > 300);
   assert.equal(apob.group, "lipids");
+});
+
+test("getMarkerHistory dedupes exact duplicate readings from overlapping uploads", () => {
+  seedHealthDoc("2025-01-01", [marker("ApoB", 80, { unit: "mg/dL" })]);
+  seedHealthDoc("2025-06-01", [marker("ApoB", 95, { unit: "mg/dL", flag: "high" })]);
+  seedHealthDoc("2025-06-01", [marker("Apolipoprotein B", 95, { unit: "mg/dL", flag: "normal" })]);
+  seedHealthDoc("2025-06-01", [marker("ApoB", 99, { unit: "mg/dL", flag: "high" })]);
+  seedHealthDoc("2025-12-01", [marker("ApoB", 110, { unit: "mg/dL" })]);
+
+  const apob = repo.getMarkerHistory().markers.find((m) => m.key === "apob");
+  assert.ok(apob, "apob series present");
+  assert.deepEqual(
+    apob.points.map((p) => `${p.date}:${p.value}`),
+    ["2025-01-01:80", "2025-06-01:95", "2025-06-01:99", "2025-12-01:110"],
+  );
+  assert.equal(apob.trend.n, 4, "trend uses unique clinical readings, not duplicate uploads");
 });
 
 test("getMarkerHistory reports a FALLING trend when values drop", () => {
@@ -115,6 +143,51 @@ test("getMarkerHistory trends mixed US/SI units in one canonical series", () => 
   assert.equal(ldl.trend.dir, "rising");
 });
 
+test("getMarkerHistory merges source Weight and DEXA Total Mass with kg/lb normalization", () => {
+  seedHealthDoc("2026-03-11", [marker("Weight", 84.8, { unit: "kg", flag: "normal" })], "other");
+  seedHealthDoc("2026-06-02", [marker("Total Mass", 184.3, { unit: "lbs", flag: "high" })], "dexa");
+  repo.logWeight(175.5, "2026-07-07");
+
+  const weight = repo.getMarkerHistory().markers.find((m) => m.key === "body weight");
+  assert.ok(weight, "body-weight series present");
+  assert.equal(weight.name, "Body Weight");
+  assert.equal(weight.unit, "lb");
+  assert.deepEqual(weight.source_names, ["Weight", "Total Mass"]);
+  assert.deepEqual(weight.points.map((p) => p.value), [187, 184.3, 175.5]);
+  assert.equal(weight.points[0].source_value, 84.8);
+  assert.equal(weight.points[0].source_unit, "kg");
+  assert.equal(weight.points[0].unit_converted, true);
+  assert.equal(weight.latest.value, 175.5);
+  assert.equal(weight.latest.flag, null);
+  assert.equal(weight.points[1].flag, null, "DEXA/source high flag is not carried as a bodyweight abnormality");
+});
+
+test("getMarkerHistory normalizes height units into one body-profile series", () => {
+  seedHealthDoc("2025-10-29", [marker("Height", 66, { unit: "in" })], "other");
+  seedHealthDoc("2026-03-11", [marker("Stature", 167.6, { unit: "cm" })], "other");
+
+  const height = repo.getMarkerHistory().markers.find((m) => m.key === "height");
+  assert.ok(height, "height series present");
+  assert.equal(height.name, "Height");
+  assert.equal(height.unit, "cm");
+  assert.deepEqual(height.points.map((p) => p.value), [167.6, 167.6]);
+  assert.equal(height.points[0].source_value, 66);
+  assert.equal(height.points[0].source_unit, "in");
+});
+
+test("getMarkerHistory drops TNP/test-not-performed supplemental rows", () => {
+  seedHealthDoc("2022-01-20", [
+    marker("HIV Ag/Ab Qualitative", "Non-Reactive"),
+    marker("HIV-1 Antibody 5th Gen", "TNP", { unit: "INDEX" }),
+    marker("HIV Result Interpretation", "Test not performed"),
+  ]);
+
+  const names = repo.getMarkerHistory().markers.map((m) => m.name);
+  assert.ok(names.includes("HIV Ag/Ab Qualitative"), "parent qualitative result remains");
+  assert.ok(!names.includes("HIV-1 Antibody 5th Gen"), "TNP supplemental row is dropped");
+  assert.ok(!names.includes("HIV Result Interpretation"), "test-not-performed row is dropped");
+});
+
 test("vitamin D nmol/L is converted before the low-side guard runs", () => {
   seedHealthDoc("2025-12-01", [marker("Vitamin D 25-OH", 50, { unit: "nmol/L" })]);
   const vd = repo.prioritizeMarkers().markers.find((m) => m.key.includes("vitamin d"));
@@ -129,7 +202,7 @@ test("Lp(a) mass units are not compared to nmol/L with a fake fixed conversion",
   seedHealthDoc("2025-12-01", [marker("Lp(a)", 40, { unit: "mg/dL" })]);
   // Series key is now the canonical marker key (marker-canon.ts: "lpa"); the
   // display name stays the lab's own "Lp(a)". Find by name so this stays robust.
-  const lpa = repo.prioritizeMarkers().markers.find((m) => m.name === "Lp(a)");
+  const lpa = repo.prioritizeMarkers().markers.find((m) => m.key === "lpa");
   assert.equal(lpa.latest.unit_mismatch, true);
   assert.equal(lpa.latest.expected_unit, "nmol/L");
   assert.equal(lpa.optimal, null);
@@ -169,7 +242,7 @@ test("getMarkerHistory flags dropped readings on an incompatible-unit split (no 
   seedHealthDoc("2024-01-01", [marker("Lp(a)", 30, { unit: "mg/dL" })]);
   seedHealthDoc("2024-06-01", [marker("Lp(a)", 35, { unit: "mg/dL" })]);
   seedHealthDoc("2025-01-01", [marker("Lp(a)", 90, { unit: "nmol/L" })]);
-  const lpa = repo.getMarkerHistory().markers.find((m) => m.name === "Lp(a)");
+  const lpa = repo.getMarkerHistory().markers.find((m) => m.key === "lpa");
   assert.equal(lpa.points.length, 1, "trend holds only the latest unit family");
   assert.equal(lpa.unit, "nmol/L");
   assert.equal(lpa.dropped_other_units, 2, "the two mg/dL readings are surfaced as a count");
@@ -199,9 +272,11 @@ test("prioritizeMarkers: a lab VO2max and a wearable VO2max collapse to one (no 
 
   // With NO lab present the wearable VO2max still surfaces (the fold isn't broken).
   db.prepare("DELETE FROM health_documents").run();
+  db.prepare("INSERT INTO garmin_daily_metrics (source_id, date, vo2max) VALUES (?, ?, ?)").run(sid, localDaysAgo(-7), 20);
   const wearableOnly = repo.prioritizeMarkers().markers.filter((m) => /vo2/i.test(String(m.name)));
   assert.equal(wearableOnly.length, 1);
   assert.equal(wearableOnly[0].source, "wearable");
+  assert.equal(wearableOnly[0].latest.value, 50, "future-dated Garmin rows do not become the latest marker");
 });
 
 // ---- GOLDEN CONSTITUTION TEST ----------------------------------------------

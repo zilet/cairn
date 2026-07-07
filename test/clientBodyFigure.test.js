@@ -230,24 +230,29 @@ test("the vendored library renders the Train figure with tappable, breathing mus
   assert.doesNotMatch(stand, /cbf-pulse/);
 });
 
-test("reference physique scales to height and stays sex-aware", () => {
+test("ratio context uses clinical waist guides without derived physique targets", () => {
   const { bm } = loadElite();
-  const male = bm.bmReferencePhysique(71, false, 15);
-  assert.equal(Math.round(male.waist_in * 10) / 10, 35.5, "reference waist = half height");
-  assert.ok(male.shoulder_in > male.waist_in * 1.4 && male.shoulder_in < male.waist_in * 1.6, "shoulder 1.4–1.6× reference waist");
-  assert.equal(male.upper_arm_in, 15, "arm tracks the measured calf");
-  const female = bm.bmReferencePhysique(65, true, null);
-  assert.ok(female.waist_in < 0.5 * 65, "female reference waist is leaner");
-  const wt = bm.bmReferenceWeightLb(71, false);
-  assert.ok(wt > 150 && wt < 210, `FFMI weight lands in a human range (${wt})`);
+  const model = bm.bmStandModel(mkData({ waist_in: 40, hip_in: 42, shoulder_in: 44, chest_in: 41, upper_arm_in: 14, calf_in: 15 }), "in");
+  const rows = bm.bmStandRatioRows(model, "in");
+  assert.match(rows, /Ratios &amp; context|Ratios & context/);
+  assert.match(rows, /WAIST\/HEIGHT/);
+  assert.match(rows, /clinical &lt;0\.50|clinical <0\.50/);
+  assert.match(rows, /SHOULDER\/WAIST/);
+  assert.match(rows, /tracking only/);
+  assert.match(rows, /no target/);
+  assert.doesNotMatch(rows, /Reference physique/);
+  assert.doesNotMatch(rows, /WEIGHT/);
+  assert.doesNotMatch(rows, /→/, "no current-to-target circumference arrows");
 });
 
-test("bmSiteRead reads waist lower-is-better and muscles higher-is-better", () => {
+test("site context only warns on clinical central-adiposity ratios", () => {
   const { bm } = loadElite();
-  assert.equal(bm.bmSiteRead("waist_in", 40, 35.5).chip.tone, "warn", "a wide waist is a warn");
-  assert.equal(bm.bmSiteRead("waist_in", 32, 35.5).chip.tone, "sage", "a lean waist reads fine");
-  assert.equal(bm.bmSiteRead("chest_in", 40, 48).chip.tone, "gold", "an under-reference chest is room to build");
-  assert.equal(bm.bmSiteRead("chest_in", 49, 48).dir, "at", "within the neutral band reads at reference");
+  const model = bm.bmStandModel(mkData({ waist_in: 40, hip_in: 42, chest_in: 41 }), "in");
+  assert.equal(bm.bmSiteContext(model, "waist_in").chip.tone, "warn", "a high waist-height ratio is a warn");
+  assert.equal(bm.bmSiteContext(model, "hip_in").chip.tone, "warn", "a high waist-hip ratio is a warn");
+  const chest = bm.bmSiteContext(model, "chest_in");
+  assert.equal(chest.chip.text, "tracking only");
+  assert.equal(chest.guide, "no target measurement");
 });
 
 test("the elite Stand figure: measured sites become tap targets, selection glows, no score leaks", () => {
@@ -258,7 +263,7 @@ test("the elite Stand figure: measured sites become tap targets, selection glows
   assert.match(svg, /class="bm-co2" data-site="waist_in" role="button" tabindex="0"/, "callout is keyboard-reachable");
   assert.match(svg, /data-site="chest_in"/);
   assert.doesNotMatch(svg, /data-site="hip_in"/, "an untaped site gets no callout");
-  assert.match(svg, /url\(#bmfig2-warn\)/, "an over-reference waist glows terracotta when selected");
+  assert.match(svg, /url\(#bmfig2-warn\)/, "a high waist-height ratio glows terracotta when selected");
   assert.match(svg, /stroke-dasharray="4.5 3.5"/, "the reference-waist chalk trace draws above the band");
   assert.doesNotMatch(svg, /NaN/);
   assert.doesNotMatch(svg, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
@@ -271,19 +276,23 @@ test("compSection uses the elite figure when the library is present, the legacy 
   const { bm: elite } = loadElite();
   const heroElite = elite.compSection(data, "in");
   assert.match(heroElite, /bm-figure2/, "elite fixed figure");
-  assert.match(heroElite, /Reference physique/, "reference rows render");
-  assert.match(heroElite, /References, not mandates/);
+  assert.match(heroElite, /Ratios &amp; context|Ratios & context/, "ratio context rows render");
+  assert.match(heroElite, /not target measurements/);
+  assert.doesNotMatch(heroElite, /Reference physique/);
   const legacy = loadBodyMetrics(); // this context has no CairnBodyFigure
   const heroLegacy = legacy.compSection(data, "in");
   assert.doesNotMatch(heroLegacy, /bm-figure2/, "falls back to the tape-driven croquis");
   assert.match(heroLegacy, /class="bm-figure"/, "the legacy figure still draws — nothing regresses");
 });
 
-test("reference rows are silent without height and carry no score", () => {
+test("ratio rows carry no score and never emit derived target measurements", () => {
   const { bm } = loadElite();
-  const noHeight = bm.bmStandRefRows(bm.bmStandModel(mkData({ waist_in: 38 }, { height_in: null }), "in"), "in");
-  assert.equal(noHeight, "", "no height, no reference rows");
-  const withHeight = bm.bmStandRefRows(bm.bmStandModel(mkData({ waist_in: 38 }), "in"), "in");
-  assert.match(withHeight, /Reference physique/);
+  const noHeight = bm.bmStandRatioRows(bm.bmStandModel(mkData({ shoulder_in: 44, waist_in: 38 }, { height_in: null }), "in"), "in");
+  assert.match(noHeight, /SHOULDER\/WAIST/, "height is not required for tracking-only ratios");
+  const withHeight = bm.bmStandRatioRows(bm.bmStandModel(mkData({ waist_in: 38, hip_in: 42, chest_in: 41 }), "in"), "in");
+  assert.match(withHeight, /Ratios &amp; context|Ratios & context/);
+  assert.doesNotMatch(withHeight, /Reference physique/);
+  assert.doesNotMatch(withHeight, /→/);
+  assert.doesNotMatch(withHeight, /WEIGHT/);
   assert.doesNotMatch(withHeight, /\b\d{1,3}\s*\/\s*100\b/);
 });

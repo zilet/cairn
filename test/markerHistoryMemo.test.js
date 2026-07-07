@@ -89,13 +89,13 @@ test("a blood-pressure delete invalidates the cache", () => {
 
 test("a learned marker alias invalidates the cache — the series merges on the next read", () => {
   seedHealthDoc("2025-01-01", [marker("eGFR", 98, { unit: "mL/min" })]);
-  seedHealthDoc("2025-06-01", [marker("Estimated Glomerular Filt Rate", 60, { unit: "mL/min" })]);
+  seedHealthDoc("2025-06-01", [marker("Kidney Filtration Estimate", 60, { unit: "mL/min" })]);
   const before = repo.getMarkerHistory().markers.filter((m) => m.key === "egfr");
   assert.equal(before[0].points.length, 1, "the abbreviation keys separately before the alias");
 
   // setMarkerAlias touches marker_aliases (a third table feeding getMarkerHistory via
   // canonicalization) — it must bust the memo even though the doc/BP tables are unchanged.
-  repo.setMarkerAlias(repo.normalizeMarkerName("Estimated Glomerular Filt Rate"), "egfr", "eGFR", "agent");
+  repo.setMarkerAlias(repo.normalizeMarkerName("Kidney Filtration Estimate"), "egfr", "eGFR", "agent");
   const after = repo.getMarkerHistory().markers.filter((m) => m.key === "egfr");
   assert.equal(after.length, 1);
   assert.equal(after[0].points.length, 2, "the alias merges both readings into one series");

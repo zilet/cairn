@@ -6,6 +6,7 @@ import { activeMedications, forecastMarker, getMarkerHistory, lsqSlopePerDay } f
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { getProfile, listWeight } from "./profile.js";
+import { localDateISO } from "./shared.js";
 import {
   type MappingDirective,
   type MarkerContext,
@@ -87,7 +88,8 @@ export * from "./health-focus.js";
 // latest/prev/trend/forecast/points) so prioritizeMarkers can treat them uniformly.
 // Empty when there's no wearable data — never throws.
 function wearableFitnessMarkers(days = 120): any[] {
-  const since = new Date(Date.now() - Math.max(1, days - 1) * 864e5).toISOString().slice(0, 10);
+  const since = localDateISO(new Date(Date.now() - Math.max(1, days - 1) * 864e5));
+  const today = localDateISO();
   // Each spec: the marker label + the daily-metrics column it reads (Garmin
   // preferred, daily_metrics fallback), and a sane plausibility clamp.
   const specs: { label: string; gCol: string; oCol: string | null; unit: string; lo: number; hi: number }[] = [
@@ -100,8 +102,9 @@ function wearableFitnessMarkers(days = 120): any[] {
     // One reading per day: prefer Garmin's value, else the source-agnostic one.
     const byDate = new Map<string, number>();
     const g = db.prepare(
-      `SELECT date, ${spec.gCol} AS v FROM garmin_daily_metrics WHERE date >= ? AND ${spec.gCol} IS NOT NULL ORDER BY date`
-    ).all(since) as any[];
+      `SELECT date, ${spec.gCol} AS v FROM garmin_daily_metrics
+       WHERE date >= ? AND date <= ? AND ${spec.gCol} IS NOT NULL ORDER BY date`
+    ).all(since, today) as any[];
     for (const r of g) {
       const v = Number(r.v);
       if (Number.isFinite(v) && v >= spec.lo && v <= spec.hi) byDate.set(String(r.date), v);
@@ -109,9 +112,9 @@ function wearableFitnessMarkers(days = 120): any[] {
     if (spec.label === "VO2max") {
       const activityRows = db.prepare(
         `SELECT date, vo2max AS v FROM garmin_activities
-         WHERE date >= ? AND vo2max IS NOT NULL
+         WHERE date >= ? AND date <= ? AND vo2max IS NOT NULL
          ORDER BY date, id`
-      ).all(since) as any[];
+      ).all(since, today) as any[];
       for (const r of activityRows) {
         const date = String(r.date);
         if (byDate.has(date)) continue;
@@ -121,8 +124,9 @@ function wearableFitnessMarkers(days = 120): any[] {
     }
     if (spec.oCol) {
       const o = db.prepare(
-        `SELECT date, ${spec.oCol} AS v FROM daily_metrics WHERE date >= ? AND ${spec.oCol} IS NOT NULL ORDER BY date`
-      ).all(since) as any[];
+        `SELECT date, ${spec.oCol} AS v FROM daily_metrics
+         WHERE date >= ? AND date <= ? AND ${spec.oCol} IS NOT NULL ORDER BY date`
+      ).all(since, today) as any[];
       for (const r of o) {
         const date = String(r.date);
         if (byDate.has(date)) continue; // Garmin already supplied this day
@@ -488,6 +492,23 @@ function groupFullyModeledByMappings(name: string): boolean {
   return GROUPS_FULLY_MODELED_BY_MAPPINGS.has(markerGroup(name).key);
 }
 
+function isBodyCompositionSupportOnlyMarker(name: string): boolean {
+  const n = String(name ?? "").toLowerCase();
+  if (!n) return false;
+  if (/\bbody fat\b/.test(n) && !/\b(trunk|arms?|legs?|android|gynoid)\b/.test(n)) return false;
+  if (/\b(almi|ffmi|appendicular|skeletal muscle mass index|lean mass index|fat[-\s]?free mass index)\b/.test(n)) return false;
+  if (/\b(bone mineral density|bmd|t[-\s]?score|z[-\s]?score)\b/.test(n)) return false;
+  return (
+    /\blean mass\b/.test(n) ||
+    /\bfat mass\b/.test(n) ||
+    /\bvisceral\b/.test(n) ||
+    /\bandroid\b|\bgynoid\b/.test(n) ||
+    /\btotal mass\b/.test(n) ||
+    /\bbone mineral content\b|\bbmc\b/.test(n) ||
+    /\bbody fat\b.*\b(trunk|arms?|legs?|android|gynoid)\b/.test(n)
+  );
+}
+
 // One soft `watch` note per lab-FLAGGED marker that has no mapped lever, so a flagged
 // analyte Cairn doesn't model (potassium, ALP, PSA, WBC, cortisol, calcium, lipase, …)
 // still surfaces instead of vanishing. Always uncertain:true (no established lever) and
@@ -503,6 +524,11 @@ function deriveGenericLongTail(source: string, markers: any[], seen: Set<string>
     // must not ALSO emit a standalone generic note — that's the lipid-panel noise
     // blow-up. Skip the whole group; the mapped + cluster directives tell its story.
     if (groupFullyModeledByMappings(String(m?.name ?? ""))) continue;
+    // DEXA/body-composition support metrics are context rows. Promoting each
+    // flagged fat/lean/regional submetric into a separate "mention this" watch
+    // note turns one scan into noise; the mapped Body fat directive and the
+    // standing/body-composition read carry the actionable story.
+    if (isBodyCompositionSupportOnlyMarker(String(m?.name ?? ""))) continue;
     const z = matchOptimalZone(m?.name, profile);
     // Skip anything the mapped path already covers (a zone WITH a lever).
     if (z && MARKER_MAPPINGS.some((x) => x.zone === z.label)) continue;
@@ -932,7 +958,7 @@ export function directivesForCoach() {
       : d.directive;
     return {
       domain: d.domain,
-      marker: d.marker,
+      marker: directiveDisplayMarker(d.marker),
       directive,
       rationale: d.rationale,
       citation: d.citation,
@@ -946,6 +972,18 @@ export function directivesForCoach() {
       rescan_reason: bc.reason,
     };
   });
+}
+
+function directiveDisplayMarker(marker: string | null | undefined): string | null {
+  if (marker == null) return null;
+  const s = String(marker).trim();
+  if (!s) return null;
+  // Cluster markers are compact synthesized IDs ("ApoB+LDL-C+Lp(a)") rather than
+  // single analyte labels; keep them short and stable for coach context.
+  if (s.includes("+")) return s;
+  const z = matchOptimalZone(s);
+  const base = z?.label ?? s;
+  return canonicalMarker(base).name || base;
 }
 
 export function directiveFeedbackForCoach(limit = 12) {

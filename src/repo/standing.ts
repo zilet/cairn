@@ -205,13 +205,33 @@ function latestNumber(marker: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function latestNumberFromSource(marker: any, re: RegExp): number | null {
+  const latestName = `${marker?.latest?.source_name ?? ""} ${marker?.source_name ?? ""}`;
+  if (re.test(latestName)) {
+    const n = Number(marker?.latest?.value);
+    if (Number.isFinite(n)) return n;
+  }
+  const points = Array.isArray(marker?.points) ? marker.points : [];
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i];
+    if (!re.test(String(p?.source_name ?? ""))) continue;
+    const n = Number(p?.value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 function plausibleNumber(value: any, min: number, max: number): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n >= min && n <= max ? n : null;
 }
 
 function findMarker(markers: any[], re: RegExp): any | null {
-  return markers.find((m) => re.test(String(m?.name ?? "")) || re.test(String(m?.key ?? ""))) ?? null;
+  return markers.find((m) => {
+    const sourceNames = Array.isArray(m?.source_names) ? m.source_names.join(" ") : "";
+    const haystack = `${m?.name ?? ""} ${m?.key ?? ""} ${m?.source_name ?? ""} ${sourceNames}`;
+    return re.test(haystack);
+  }) ?? null;
 }
 
 export function bandForPercentile(p: number | null | undefined): Tone {
@@ -330,7 +350,7 @@ function dexaRegional(markers: any[]) {
   return { visceral_fat_lbs, almi, ffmi, bmd_total, t_score, z_score, android_gynoid, fat, lean, notes };
 }
 
-function bodyComposition(markers: any[], currentWeightLb: number | null, nowISO: string) {
+export function bodyCompositionRead(markers: any[], currentWeightLb: number | null, nowISO: string) {
   const bfMarker = findMarker(markers, /^body fat\b|body fat %|fat percentage/i);
   const measuredBf = plausibleNumber(latestNumber(bfMarker), 3, 70);
   if (measuredBf == null) return null;
@@ -338,7 +358,8 @@ function bodyComposition(markers: any[], currentWeightLb: number | null, nowISO:
   const leanTotal = plausibleNumber(latestNumber(findMarker(markers, /lean mass \(total\)|^lean mass total/i)), 40, 400);
   const bmc = plausibleNumber(latestNumber(findMarker(markers, /bone mineral content|\bbmc\b/i)), 1, 20);
   const fatTotal = plausibleNumber(latestNumber(findMarker(markers, /fat mass \(total\)|^fat mass total/i)), 5, 300);
-  const totalMass = plausibleNumber(latestNumber(findMarker(markers, /^total mass\b/i)), 60, 500);
+  const totalMassMarker = findMarker(markers, /\btotal mass\b/i);
+  const totalMass = plausibleNumber(latestNumberFromSource(totalMassMarker, /\btotal mass\b/i) ?? latestNumber(totalMassMarker), 60, 500);
   const trunkFatPct = plausibleNumber(latestNumber(findMarker(markers, /body fat - trunk|trunk body fat/i)), 3, 70);
 
   const scanWeight = totalMass ?? currentWeightLb ?? null;
@@ -515,7 +536,7 @@ export function standingMomentum(opts: { markers?: any[]; profile?: any } = {}) 
   const lastW = weights.length ? Number(weights[weights.length - 1]?.weight_lb) : Number.NaN;
   const currentWeight = Number.isFinite(lastW) ? lastW : plausibleNumber(profile.weight_lb, 60, 600);
   const stats = (() => { try { return getWeeklyStats(); } catch { return null; } })() as any;
-  const comp = bodyComposition(markers, currentWeight, new Date().toISOString());
+  const comp = bodyCompositionRead(markers, currentWeight, new Date().toISOString());
   const bp = bpRead((() => { try { return listBloodPressureReadings(12); } catch { return []; } })());
 
   const chips: { kind: string; text: string; dir: string }[] = [];
@@ -565,7 +586,7 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
   const vo2Marker = findMarker(markers, /\bvo2\s?max|vo₂max/i);
   const vo2 = plausibleNumber(latestNumber(vo2Marker), 10, 100) ?? plausibleNumber(rec.vo2max, 10, 100);
   // Live body composition — the DEXA anchor projected onto current weight (progress, not a stale snapshot).
-  const bodyComp = bodyComposition(markers, currentWeight ?? null, nowISO);
+  const bodyComp = bodyCompositionRead(markers, currentWeight ?? null, nowISO);
   const bodyFat = bodyComp ? bodyComp.effective : plausibleNumber(rec.body_fat_pct, 3, 70);
   const bioAgeInfo = bioAge(markers, age);
   const rhrMarker = findMarker(markers, /resting hr|resting heart/i);

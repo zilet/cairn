@@ -238,6 +238,28 @@ function markFailed(job: Job): void {
   markStatus(job, "failed");
 }
 
+function healthDocHasStructuredContent(id: number): boolean {
+  const row = repo.getHealthDocumentRaw(id) as any;
+  if (!row) return false;
+  const parsed = row.parsed_json && typeof row.parsed_json === "object"
+    ? row.parsed_json
+    : (() => {
+      try {
+        return row.parsed_json ? JSON.parse(String(row.parsed_json)) : null;
+      } catch {
+        return null;
+      }
+    })();
+  return (
+    (Array.isArray(parsed?.markers) && parsed.markers.length > 0) ||
+    (Array.isArray(parsed?.clinical_facts) && parsed.clinical_facts.length > 0) ||
+    (Array.isArray(parsed?.panels) && parsed.panels.some((p: any) =>
+      (Array.isArray(p?.markers) && p.markers.length > 0) ||
+      (Array.isArray(p?.clinical_facts) && p.clinical_facts.length > 0)
+    ))
+  );
+}
+
 async function processJob(job: Job): Promise<void> {
   if (job.kind === "review") return processReviewJob();
   if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
@@ -369,6 +391,11 @@ async function processJob(job: Job): Promise<void> {
         return;
       }
     }
+    if (job.kind === "health" && healthDocHasStructuredContent(job.id)) {
+      console.warn(`[enrich] health#${job.id}: agent returned no usable JSON; kept existing structured ingest.`);
+      markStatus(job, "done");
+      return;
+    }
     markStatus(job, "failed");
     return;
   }
@@ -454,6 +481,11 @@ async function processJob(job: Job): Promise<void> {
     // look ingested. Mark it 'failed' so the surface shows it didn't take and a
     // re-trigger can retry. activity/food keep their regex parse, so 'done' is fine.
     if (job.kind === "health") {
+      if (healthDocHasStructuredContent(job.id)) {
+        console.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — kept existing structured ingest.`);
+        markStatus(job, "done");
+        return;
+      }
       console.warn(`[enrich] health#${job.id}: agent returned parseable JSON but no markers/summary/memory (wrong shape?) — marking failed (nothing ingested).`);
       markStatus(job, "failed");
       return;

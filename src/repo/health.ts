@@ -5,11 +5,12 @@ import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
-import { canonicalMarker } from "./marker-canon.js";
+import { canonicalMarker, canonicalMarkerForReading } from "./marker-canon.js";
 import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
-import { getProfile } from "./profile.js";
+import { getProfile, listWeight } from "./profile.js";
+import { matchClinicalReferenceRange } from "./reference-ranges.js";
 import { getSettings, pickHealthAgentOrder } from "./settings.js";
 import { type OptimalZone, applyReviewDirectives, isNonClinicalMarker, markerGroup, matchOptimalZone, optimalDistance, presentGroups } from "./propagation.js";
 
@@ -90,6 +91,16 @@ export function activeMedications(): Array<{ name: string; status: string | null
     }
   }
   return [...byName.values()];
+}
+
+function isNonResultMarkerValue(value: unknown): boolean {
+  const v = String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!v) return true;
+  return /^(?:tnp(?:\s+index)?|test not performed|not performed|not tested|not done|cancelled|canceled|not run)$/i.test(v);
+}
+
+function isAnthropometricMarkerKey(key: string): boolean {
+  return key === "body weight" || key === "height";
 }
 
 // Coarse, provider-agnostic estimate of how many results a pasted lab panel
@@ -933,10 +944,51 @@ function computeMarkerHistory() {
     expected_unit?: string | null;
     ref_low?: number | null;
     ref_high?: number | null;
+    ref_source?: string | null;
+    ref_source_url?: string | null;
     name: string;
     doc_id: number | null;
     kind: string;
   }
+  const readingValueKey = (value: number | string) => {
+    if (typeof value === "number") return String(Math.round(value * 1_000_000) / 1_000_000);
+    return String(value ?? "").trim().toLowerCase();
+  };
+  const readingDedupeKey = (r: Reading) => [r.date, readingValueKey(r.value), String(r.unit ?? "").trim().toLowerCase()].join("|");
+  const flagRank = (flag: string | null) => flag === "high" || flag === "low" ? 3 : flag === "normal" ? 2 : 1;
+  const mergeDuplicateReading = (first: Reading, next: Reading): Reading => ({
+    ...first,
+    // Prefer the later upload for display/source identity, but keep any extra
+    // clinical context either copy carried. The docs are already walked ASC.
+    name: next.name || first.name,
+    doc_id: next.doc_id ?? first.doc_id,
+    kind: next.kind || first.kind,
+    flag: flagRank(next.flag) > flagRank(first.flag) ? next.flag : first.flag ?? next.flag,
+    ref_low: first.ref_low ?? next.ref_low,
+    ref_high: first.ref_high ?? next.ref_high,
+    ref_source: first.ref_source ?? next.ref_source,
+    ref_source_url: first.ref_source_url ?? next.ref_source_url,
+    source_value: first.source_value ?? next.source_value,
+    source_unit: first.source_unit ?? next.source_unit,
+    unit_converted: first.unit_converted || next.unit_converted,
+    unit_mismatch: first.unit_mismatch || next.unit_mismatch,
+    expected_unit: first.expected_unit ?? next.expected_unit,
+  });
+  const dedupeReadings = (readings: Reading[]) => {
+    const out: Reading[] = [];
+    const seen = new Map<string, number>();
+    for (const r of readings) {
+      const key = readingDedupeKey(r);
+      const idx = seen.get(key);
+      if (idx == null) {
+        seen.set(key, out.length);
+        out.push(r);
+      } else {
+        out[idx] = mergeDuplicateReading(out[idx], r);
+      }
+    }
+    return out;
+  };
   const byKey = new Map<string, Reading[]>();
 
   for (const d of docs) {
@@ -955,19 +1007,26 @@ function computeMarkerHistory() {
         // Drop non-clinical extractions (e.g. an eyeglass Rx pulled from an eye-exam
         // doc) so they never form a marker series — non-destructive, the doc stays.
         if (isNonClinicalMarker(name)) continue;
+        // Drop non-results from imported panels. MyChart-style HIV/viral screens
+        // often include supplemental components with value "TNP" / "test not
+        // performed" after the parent screen is non-reactive; those are not
+        // dated clinical findings and should not become marker series.
+        if (isNonResultMarkerValue(em.value)) continue;
         // A reading is usable when the value is a finite number, a string with a
         // parseable lab number, or a non-empty qualitative result (e.g. "negative").
         // Recognized markers are normalized to the unit their optimal band expects
         // here, while source_value/source_unit keep the lab transcription inspectable.
         // The series KEY is the CANONICAL marker key (marker-canon.ts): different labs'
         // names for the same analyte ("Glucose (random)"/"Glucose Random"; "Vitamin D"/
-        // "25-OH Vitamin D"; "eGFR"/the long form) collapse onto one series. The display
-        // NAME stays the lab's own (last.name below), so canonicalization only MERGES —
-        // it never relabels what the athlete (or a directive) sees.
-        const key = canonicalMarker(name).key || name.toLowerCase();
-        const flag = ["low", "normal", "high"].includes(em.flag) ? em.flag : null;
+        // "25-OH Vitamin D"; "eGFR"/the long form) collapse onto one series. The
+        // display name is the curated internal label, while raw source labels stay
+        // attached for verification in app/report provenance.
+        let flag = ["low", "normal", "high"].includes(em.flag) ? em.flag : null;
         const sourceUnit = em.unit !== null && em.unit !== undefined && String(em.unit).trim() ? String(em.unit).trim() : null;
-        const normalized = normalizeMarkerReading(name, em.value, sourceUnit, matchOptimalZone(name));
+        const resolved = canonicalMarkerForReading(name, sourceUnit);
+        const key = resolved.key || name.toLowerCase();
+        if (isAnthropometricMarkerKey(key)) flag = null;
+        const normalized = normalizeMarkerReading(name, em.value, sourceUnit, matchOptimalZone(resolved.name));
         if (!normalized) continue;
         // The lab's printed reference range (source unit). Scale it by the same
         // factor the value was converted by, so range + value stay comparable after
@@ -984,6 +1043,8 @@ function computeMarkerHistory() {
           if (v == null || v === "" || !Number.isFinite(n)) return null;
           return Math.round(n * refFactor * 1000) / 1000;
         };
+        const refLow = scaleRef(em.ref_low);
+        const refHigh = scaleRef(em.ref_high);
         if (!byKey.has(key)) byKey.set(key, []);
         byKey.get(key)!.push({
           date,
@@ -995,8 +1056,10 @@ function computeMarkerHistory() {
           unit_converted: normalized.unit_converted,
           unit_mismatch: normalized.unit_mismatch,
           expected_unit: normalized.expected_unit,
-          ref_low: scaleRef(em.ref_low),
-          ref_high: scaleRef(em.ref_high),
+          ref_low: refLow,
+          ref_high: refHigh,
+          ref_source: refLow != null || refHigh != null ? "source_lab" : null,
+          ref_source_url: null,
           name,
           doc_id: d.id,
           kind: d.kind ?? "other",
@@ -1027,9 +1090,37 @@ function computeMarkerHistory() {
     if (row.pulse != null) addBpMarker("Pulse", row.pulse, "bpm", bpFlag("pulse", Number(row.pulse)), row);
   }
 
-  const markers = [...byKey.entries()].map(([key, readings]) => {
+  try {
+    const weightKey = canonicalMarker("Body Weight").key;
+    for (const row of listWeight(1000) as any[]) {
+      const numeric = Number(row?.weight_lb);
+      const date = String(row?.date || "").slice(0, 10);
+      if (!Number.isFinite(numeric) || !date) continue;
+      if (!byKey.has(weightKey)) byKey.set(weightKey, []);
+      const arr = byKey.get(weightKey)!;
+      const value = Math.round(numeric * 10) / 10;
+      if (arr.some((r) => readingDedupeKey(r) === [date, readingValueKey(value), "lb"].join("|"))) continue;
+      arr.push({
+        date,
+        value,
+        flag: null,
+        unit: "lb",
+        name: "Body Weight",
+        doc_id: null,
+        kind: "measurement",
+      });
+    }
+  } catch {
+    // Bodyweight logging is app context. If it is unavailable for any reason,
+    // uploaded health-document markers still render normally.
+  }
+
+  const markers = [...byKey.entries()].map(([key, rawReadings]) => {
+    const readings = dedupeReadings(rawReadings);
     const last = readings[readings.length - 1];
     const before = readings.length > 1 ? readings[readings.length - 2] : null;
+    const displayName = canonicalMarkerForReading(last.name, last.unit).name || last.name;
+    const sourceNames = [...new Set(readings.map((r) => r.name).filter(Boolean))];
     // Most recent non-null unit seen for this marker.
     let unit: string | null = null;
     for (let i = readings.length - 1; i >= 0; i--) {
@@ -1044,12 +1135,14 @@ function computeMarkerHistory() {
     const dropped_other_units = readings.length - sameUnitReadings.length;
     const toPublicReading = (r: Reading, includeKind = false) => {
       const out: any = { value: r.value, date: r.date };
+      if (r.name && r.name !== displayName) out.source_name = r.name;
       if (includeKind) {
         out.flag = r.flag;
         out.doc_id = r.doc_id;
         out.kind = r.kind;
         if (r.ref_low != null) out.ref_low = r.ref_low;
         if (r.ref_high != null) out.ref_high = r.ref_high;
+        if (r.ref_source) out.ref_source = r.ref_source;
       }
       if (r.unit_converted) {
         out.source_value = r.source_value ?? null;
@@ -1074,6 +1167,7 @@ function computeMarkerHistory() {
         value: typeof r.value === "number" ? r.value : Number(r.value),
         flag: r.flag,
         doc_id: r.doc_id,
+        ...(r.name && r.name !== displayName ? { source_name: r.name } : {}),
         ...(r.unit_converted ? { source_value: r.source_value ?? null, source_unit: r.source_unit ?? null, unit_converted: true } : {}),
         ...(r.unit_mismatch ? { source_value: r.source_value ?? r.value, source_unit: r.source_unit ?? r.unit ?? null, unit_mismatch: true, expected_unit: r.expected_unit ?? null } : {}),
       }))
@@ -1083,7 +1177,19 @@ function computeMarkerHistory() {
     // series' own spread (so a marker that barely moved doesn't read as a trend),
     // else 'rising'/'falling'. No score — just direction + raw change + span.
     const n = points.length;
-    const zone = last.unit_mismatch ? null : matchOptimalZone(last.name, zoneProfile);
+    const zone = last.unit_mismatch ? null : matchOptimalZone(displayName, zoneProfile);
+    const sourceReference =
+      last.ref_low != null || last.ref_high != null
+        ? { low: last.ref_low ?? null, high: last.ref_high ?? null, source: last.ref_source ?? "source_lab", source_url: last.ref_source_url ?? null }
+        : null;
+    const curatedReference = sourceReference || last.unit_mismatch
+      ? null
+      : matchClinicalReferenceRange(displayName, unit, zoneProfile) ?? matchClinicalReferenceRange(last.name, unit, zoneProfile);
+    const reference = sourceReference
+      ? { low: sourceReference.low, high: sourceReference.high }
+      : curatedReference
+        ? { low: curatedReference.low, high: curatedReference.high }
+        : null;
     let trend: {
       dir: "rising" | "falling" | "stable" | null;
       change: number | null;
@@ -1124,7 +1230,7 @@ function computeMarkerHistory() {
       //  • n<3 readings can't sustain a projection (an n=2 Lp(a) once read "falling,
       //    ~3 weeks to optimal" off two dots) — keep the raw direction, drop the ETA.
       //  • an implausibly steep slope (>50%/week of the value) won't hold — drop the ETA.
-      const nonTrending = isNonTrendingMarker(last.name);
+      const nonTrending = isNonTrendingMarker(displayName);
       const implausibleSlope = weekly != null && Number.isFinite(lastP.value) && lastP.value !== 0 && Math.abs(weekly) > Math.abs(lastP.value) * 0.5;
       const suppressProjection = nonTrending || n < 3 || implausibleSlope;
       if (nonTrending) forecast = { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
@@ -1138,20 +1244,22 @@ function computeMarkerHistory() {
         projection: suppressProjection ? null : forecast.eta_text,
       };
     }
-    const grp = markerGroup(last.name);
+    const grp = markerGroup(displayName);
     return {
       key,
-      name: last.name, // most recent casing seen
+      name: displayName,
+      source_name: last.name !== displayName ? last.name : null,
+      source_names: sourceNames.filter((n) => n !== displayName),
       unit,
       group: grp.key,
       group_label: grp.label,
       // The lab's printed reference range for the latest reading (source-of-truth
-      // when there's no evidence-anchored optimal zone). Null bounds when the lab
-      // printed no range (qualitative rows, blood type). Both null → omitted below.
-      reference:
-        last.ref_low != null || last.ref_high != null
-          ? { low: last.ref_low ?? null, high: last.ref_high ?? null }
-          : null,
+      // when there's no evidence-anchored optimal zone). If the upload omitted
+      // a range for a standard marker, a curated source-backed clinical reference
+      // interval may fill it; source_lab always wins over this fallback.
+      reference,
+      reference_source: sourceReference ? "source_lab" : curatedReference?.source ?? null,
+      reference_source_url: sourceReference ? null : curatedReference?.source_url ?? null,
       latest: toPublicReading(last, true),
       prev: before && seriesUnitsCompatible(before.unit, unit) ? toPublicReading(before) : null,
       trend,

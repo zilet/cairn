@@ -113,6 +113,7 @@ export interface CoachProgramState {
   volume: unknown[];
   mesocycle?: unknown;
   endurance?: unknown;
+  hybrid?: unknown;
   adaptations_due: unknown[];
 }
 
@@ -174,6 +175,7 @@ export interface CoachContextEnvelope {
   recovery: CoachRecoveryContext;
   checkins: CoachCheckin[];
   family: CoachFamilyMember[];
+  body_composition: CoachRecord | null;
   body_metrics: CoachRecord | null;
   supplements: CoachSupplement[];
   run_compliance: CoachRecord | null;

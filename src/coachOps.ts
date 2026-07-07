@@ -890,19 +890,18 @@ export function reconcileOutcomes(opts?: { maxPerPass?: number }) {
 // Learn the harder analyte synonyms a lab introduces (the clinical-judgment layer
 // over the deterministic canonicalizer — see buildMarkerReconcilePrompt). The
 // agent clusters same-analyte names; we persist each member→canonical decision in
-// marker_aliases (source 'agent'), so getMarkerHistory merges their series from
-// then on. SAFETY: persist ONLY genuine merges (a group with ≥2 distinct keys),
-// every member must be a verbatim input name, and members whose units are clearly
-// incompatible are rejected (the agent shouldn't merge across dimensions; this is
-// the belt-and-suspenders guard). The display name is NEVER changed — only the
-// merge key — so the worst a bad agent run can do is over-merge two series, which
-// the unit guard + conservative prompt make unlikely. Fail-open: no agent / bad
-// shape → nothing persisted, the deterministic floor still stands.
+// marker_aliases (source 'agent'), so getMarkerHistory merges their series and
+// exposes the canonical display label from then on. SAFETY: persist ONLY genuine
+// merges (a group with ≥2 distinct keys), every member must be a verbatim input
+// name, and members whose units are clearly incompatible are rejected (the agent
+// shouldn't merge across dimensions; this is the belt-and-suspenders guard).
+// Fail-open: no agent / bad shape → nothing persisted, the deterministic floor
+// still stands.
 export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
   const items = repo.distinctMarkerNames();
   if (items.length < 2) return { ok: true as const, aligned: 0, applied: 0, candidates: items.length };
   hooks?.onPhase?.("aligning lab names");
-  const prompt = buildMarkerReconcilePrompt(items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample })));
+  const prompt = buildMarkerReconcilePrompt(items.map((i) => ({ name: i.name, unit: i.unit, sample: i.sample, canonical: i.canonical })));
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "marker_reconcile", signal: hooks?.signal });
   const p: any = result?.parsed;
   if (!p || typeof p !== "object" || !Array.isArray(p.groups)) {

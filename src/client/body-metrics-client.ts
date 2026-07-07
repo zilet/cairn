@@ -563,11 +563,11 @@ function figureModel(data: BmSummary, unit: BmUnit): BmFigureModel {
 }
 
 // ================= the elite Stand hero (design option 2b) =======================
-// A FIXED reference figure (the vendored CairnBodyFigure) whose measurement sites
-// you tap to read against a reference physique scaled to YOUR height — the waist
-// ≤ half-height chalk trace, a per-site "where you stand vs reference" detail
-// panel, and the reference-physique rows. When the library is absent the legacy
-// tape-driven croquis (bodyFigureSvg, above) still draws — nothing regresses.
+// A FIXED figure (the vendored CairnBodyFigure) whose measurement sites you tap to
+// read in context. Clinical ratios get clinical cutoffs; shoulder/chest/arm ratios
+// are tracking-only, never back-solved into target body-part measurements. When the
+// library is absent the legacy tape-driven croquis (bodyFigureSvg, above) still
+// draws — nothing regresses.
 
 // The vendored figure lib (public/cairn-body-figure.js). Guarded like art().
 function bmFigureLib(): CairnBodyFigureApi | null {
@@ -595,37 +595,12 @@ function bmCap(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
-// Height as 5′11″ (inches) or 180 cm (metric) for the reference-physique header.
+// Height as 5′11″ (inches) or 180 cm (metric) for the ratios/context header.
 function bmHeightLabel(heightIn: number, unit: BmUnit): string {
   if (unit === "cm") return `${Math.round(heightIn * 2.54)} cm`;
   const ft = Math.floor(heightIn / 12);
   const rem = Math.round(heightIn - ft * 12);
   return `${ft}′${rem}″`;
-}
-
-// Evidence-lite reference physique (inches), scaled to height — presented as
-// references, not mandates. waist ≤ half height; shoulder ≈ 1.4–1.6× reference
-// waist; chest ≈ 1.35×; arm ≈ calf; the rest from athletic proportion. Sex-aware.
-function bmReferencePhysique(heightIn: number, female: boolean, calfIn: number | null): Record<BmSiteKey, number> {
-  const h = Math.min(90, Math.max(48, heightIn));
-  const waist = (female ? 0.47 : 0.5) * h;
-  const shoulder = (female ? 1.4 : 1.5) * waist;
-  const chest = (female ? 1.28 : 1.35) * waist;
-  const hip = (female ? 1.28 : 1.12) * waist;
-  const arm = calfIn != null && calfIn > 0 ? calfIn : (female ? 0.3 : 0.34) * waist;
-  const forearm = (female ? 0.8 : 0.82) * arm;
-  const thigh = (female ? 0.62 : 0.58) * waist;
-  const calf = calfIn != null && calfIn > 0 ? calfIn : arm;
-  return { neck_in: arm, shoulder_in: shoulder, chest_in: chest, waist_in: waist, hip_in: hip, thigh_in: thigh, upper_arm_in: arm, forearm_in: forearm, calf_in: calf };
-}
-
-// Reference weight (lb) from FFMI at a lean body-fat — a target, not a mandate.
-function bmReferenceWeightLb(heightIn: number, female: boolean): number {
-  const hM = Math.min(90, Math.max(48, heightIn)) * 0.0254;
-  const ffmi = female ? 18.5 : 21.5;
-  const bf = female ? 0.235 : 0.135;
-  const kg = (ffmi * hM * hM) / (1 - bf);
-  return Math.round(kg * 2.20462);
 }
 
 interface BmStandModel {
@@ -634,9 +609,6 @@ interface BmStandModel {
   heightIn: number | null;
   unit: BmUnit;
   focus: string | null;
-  reference: Record<BmSiteKey, number> | null;
-  refWeightLb: number | null;
-  weightLb: number | null;
 }
 
 function bmStandModel(data: BmSummary, unit: BmUnit): BmStandModel {
@@ -644,17 +616,12 @@ function bmStandModel(data: BmSummary, unit: BmUnit): BmStandModel {
   const female = String(data.profile?.sex || "").toLowerCase() === "female";
   const heightIn = data.profile?.height_in ?? null;
   const focus = data.comp ? deriveFigureRegions(data.comp, data.trends).focus : null;
-  const calfRaw = merged && merged.calf_in != null ? (merged.calf_in as number) : null;
-  const calfIn = calfRaw != null ? (unit === "cm" ? calfRaw / 2.54 : calfRaw) : null;
   return {
     merged,
     female,
     heightIn,
     unit,
     focus,
-    reference: heightIn != null ? bmReferencePhysique(heightIn, female, calfIn) : null,
-    refWeightLb: heightIn != null ? bmReferenceWeightLb(heightIn, female) : null,
-    weightLb: data.profile?.weight_lb ?? null,
   };
 }
 
@@ -669,44 +636,6 @@ function bmResolveSelected(model: BmStandModel): BmSiteKey | null {
   return null;
 }
 
-type BmRefDir = "under" | "over" | "at";
-const BM_SITE_WHY: Record<string, Record<BmRefDir, string>> = {
-  waist_in: {
-    over: "A waist nearer half your height is the biggest single lever on how lean you read.",
-    under: "Leaner than the reference waist for your height — right where you want it.",
-    at: "At the reference waist for your height.",
-  },
-  chest_in: {
-    under: "Room to build — a chest near 1.35× your reference waist reads powerful.",
-    over: "Strong — chest at or beyond its reference proportion.",
-    at: "At its reference proportion for your frame.",
-  },
-  shoulder_in: {
-    under: "Width to gain — broad shoulders (~1.5× your reference waist) define the V-taper.",
-    over: "Broad — shoulders at or beyond their reference width.",
-    at: "At their reference width for your frame.",
-  },
-  upper_arm_in: {
-    under: "Room to build — arms track your calf; they grow together.",
-    over: "Arms at or beyond their reference (about your calf).",
-    at: "At their reference — about your calf.",
-  },
-  hip_in: {
-    over: "Hips a touch over the athletic reference; trimming the waist usually pulls this in too.",
-    under: "In proportion with your frame.",
-    at: "In proportion with your frame.",
-  },
-};
-function bmSiteWhy(key: BmSiteKey, dir: BmRefDir): string {
-  const m = BM_SITE_WHY[key];
-  if (m) return m[dir];
-  return dir === "under"
-    ? "Room to build toward its reference for your frame."
-    : dir === "over"
-      ? "At or beyond its reference proportion."
-      : "At its reference proportion for your frame.";
-}
-
 type BmChipTone = "sage" | "warn" | "gold" | "muted";
 function bmChip(text: string, tone: BmChipTone): string {
   const map: Record<BmChipTone, string> = {
@@ -718,33 +647,65 @@ function bmChip(text: string, tone: BmChipTone): string {
   return `<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font:600 9.5px ui-sans-serif,system-ui,sans-serif;letter-spacing:.03em;${map[tone]}">${escHtml(text)}</span>`;
 }
 
-// Read a site's measured value (inches) against its reference (inches): the chip
-// tone + word, and a plain-language why. Lower is better for waist/hip; higher for
-// the muscle sites. A neutral ±6% band reads "at reference".
-function bmSiteRead(key: BmSiteKey, vIn: number, rIn: number): { dir: BmRefDir; chip: { text: string; tone: BmChipTone }; why: string } {
-  const dev = rIn > 0 ? (vIn - rIn) / rIn : 0;
-  const lowerBetter = key === "waist_in" || key === "hip_in";
-  let dir: BmRefDir;
-  let tone: BmChipTone;
-  let text: string;
-  if (Math.abs(dev) <= 0.06) {
-    dir = "at";
-    tone = "sage";
-    text = "at reference";
-  } else if (dev > 0) {
-    dir = "over";
-    tone = lowerBetter ? "warn" : "sage";
-    text = "over reference";
-  } else {
-    dir = "under";
-    tone = lowerBetter ? "sage" : "gold";
-    text = "under reference";
-  }
-  return { dir, chip: { text, tone }, why: bmSiteWhy(key, dir) };
+function bmInches(value: number | null, unit: BmUnit): number | null {
+  return value == null ? null : unit === "cm" ? value / 2.54 : value;
 }
 
-// The elite Stand figure: fixed silhouette + selected-site glow + reference-waist
-// chalk trace + tappable measurement callouts. Coordinates: the library figure is
+function bmRatio(n: number | null, d: number | null): number | null {
+  return n != null && d != null && d > 0 ? Math.round((n / d) * 100) / 100 : null;
+}
+
+function bmRatioDisplay(value: number | null): string {
+  return value == null ? "—" : value.toFixed(2).replace(/0$/, "").replace(/\.0$/, "");
+}
+
+function bmWaistHeightTone(value: number | null): { text: string; tone: BmChipTone } {
+  if (value == null) return { text: "needs height", tone: "muted" };
+  if (value >= 0.6) return { text: "high", tone: "warn" };
+  if (value >= 0.5) return { text: "above guide", tone: "warn" };
+  return { text: "within guide", tone: "sage" };
+}
+
+function bmWaistHipTone(value: number | null, female: boolean): { text: string; tone: BmChipTone } {
+  if (value == null) return { text: "needs hip", tone: "muted" };
+  const limit = female ? 0.85 : 0.9;
+  return value > limit ? { text: "above guide", tone: "warn" } : { text: "within guide", tone: "sage" };
+}
+
+function bmSiteContext(model: BmStandModel, key: BmSiteKey): { chip: { text: string; tone: BmChipTone }; metric: string; guide: string; why: string } {
+  const cur = model.merged ? (model.merged[key] as number | null) : null;
+  const curIn = bmInches(cur, model.unit);
+  const waistIn = bmInches(model.merged ? (model.merged.waist_in as number | null) : null, model.unit);
+  if (key === "waist_in") {
+    const whtr = bmRatio(curIn, model.heightIn);
+    const chip = bmWaistHeightTone(whtr);
+    return {
+      chip,
+      metric: `waist/height ${bmRatioDisplay(whtr)}`,
+      guide: "clinical guide: <0.50",
+      why: "This is the evidence-backed tape read: waist-to-height screens central adiposity without converting it into target chest, shoulder, or arm measurements.",
+    };
+  }
+  if (key === "hip_in" && waistIn != null) {
+    const whr = bmRatio(waistIn, curIn);
+    const chip = bmWaistHipTone(whr, model.female);
+    return {
+      chip,
+      metric: `waist/hip ${bmRatioDisplay(whr)}`,
+      guide: `clinical guide: <${model.female ? "0.85" : "0.90"}`,
+      why: "Waist-to-hip is a central-fat context read. Hip circumference itself is not assigned a target.",
+    };
+  }
+  return {
+    chip: { text: "tracking only", tone: "muted" },
+    metric: "circumference logged",
+    guide: "no target measurement",
+    why: "This site is useful for trend and proportion context, but Cairn no longer creates a target circumference from another body part.",
+  };
+}
+
+// The elite Stand figure: fixed silhouette + selected-site glow + waist-height
+// guide trace + tappable measurement callouts. Coordinates: the library figure is
 // authored in a 0–260 space; a translate(80,0) group centers it in a 420-wide box,
 // leaving label rails on both sides. Callouts are drawn in the outer box space.
 function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected: BmSiteKey | null): string {
@@ -762,17 +723,11 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     return v == null ? null : model.unit === "cm" ? v / 2.54 : v;
   };
   const dispVal = (k: BmSiteKey): string => bmFmt(rawVal(k) as number);
-  const ref = model.reference;
-
-  // Selected-site glow, tinted by whether the value sits the unhelpful way off
-  // reference (waist over → terracotta; a muscle under → gold; otherwise sage).
+  // Selected-site glow: only clinical central-adiposity ratios can warn. Other
+  // tape sites stay neutral because they are trend/proportion context, not targets.
   const gradFor = (k: BmSiteKey): string => {
-    const vi = inchOf(k);
-    const r = ref ? ref[k] : null;
-    if (vi == null || r == null) return "bmfig2-sage";
-    const lowerBetter = k === "waist_in" || k === "hip_in";
-    if (lowerBetter) return vi > r * 1.02 ? "bmfig2-warn" : "bmfig2-sage";
-    return vi < r * 0.97 ? "bmfig2-gold" : "bmfig2-sage";
+    const read = bmSiteContext(model, k);
+    return read.chip.tone === "warn" ? "bmfig2-warn" : "bmfig2-sage";
   };
   let washes = "";
   if (selected) {
@@ -787,11 +742,12 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     }
   }
 
-  // The reference-waist chalk trace, only when the waist is measured and above it.
+  // The clinical waist-height chalk trace, only when the waist is measured and
+  // above the waist/height 0.5 guide.
   const waistIn = inchOf("waist_in");
-  const refWaist = ref ? ref.waist_in : null;
+  const guideWaist = model.heightIn != null ? model.heightIn * 0.5 : null;
   let optTrace = "";
-  if (waistIn != null && refWaist != null && waistIn > refWaist + 0.2) {
+  if (waistIn != null && guideWaist != null && waistIn > guideWaist + 0.2) {
     const attrs = `fill="none" stroke="#5a6a4a" stroke-width="1.7" stroke-dasharray="4.5 3.5" stroke-linecap="round" opacity="0.9"`;
     optTrace = `<path d="${lib.waistTrace(sexKey, 1)}" ${attrs}/><path d="${lib.waistTrace(sexKey, -1)}" ${attrs}/>`;
   }
@@ -828,14 +784,14 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
       callouts += `<circle cx="${bmR(c.ax)}" cy="${bmR(c.ay)}" r="2" fill="${sel ? "#b4552d" : "#c4b89d"}"/>`;
       const label = `<text x="${tx}" y="${y + 3.5}" text-anchor="${anchor}" font-family="ui-sans-serif, system-ui, sans-serif"><tspan font-size="8.5" letter-spacing="0.1em" fill="${sel ? "#b4552d" : "#a99c82"}">${escHtml(BM_SITE_LABEL[c.key].toUpperCase())}</tspan><tspan dx="5" font-size="13" font-weight="600" font-family="ui-serif, Georgia, serif" fill="${sel ? "#b4552d" : "#211d17"}">${escHtml(dispVal(c.key))}</tspan></text>`;
       const hitX = side === "R" ? tx - 4 : tx - 92;
-      callouts += `<g class="bm-co2" data-site="${escAttr(c.key)}" role="button" tabindex="0" aria-label="Read your ${escAttr(BM_SITE_LABEL[c.key])} against its reference"${sel ? ` aria-current="true"` : ""} style="cursor:pointer"><rect x="${hitX}" y="${y - 10}" width="96" height="18" fill="transparent"/>${label}</g>`;
+      callouts += `<g class="bm-co2" data-site="${escAttr(c.key)}" role="button" tabindex="0" aria-label="Read your ${escAttr(BM_SITE_LABEL[c.key])} in context"${sel ? ` aria-current="true"` : ""} style="cursor:pointer"><rect x="${hitX}" y="${y - 10}" width="96" height="18" fill="transparent"/>${label}</g>`;
     }
   }
 
   const measuredList = cos.map((c) => `${BM_SITE_LABEL[c.key]} ${dispVal(c.key)}`).join(", ");
   const aria = measuredList
-    ? `Your measurements on a reference figure: ${measuredList} ${model.unit}. Tap a measurement to read it against your reference.`
-    : "A reference body figure — log a tape session and your measurements appear as tappable callouts.";
+    ? `Your measurements on a body figure: ${measuredList} ${model.unit}. Tap a measurement to read its context.`
+    : "A body figure — log a tape session and your measurements appear as tappable callouts.";
   const defs = `<defs>
       <radialGradient id="bmfig2-warn"><stop offset="0%" stop-color="#b4552d" stop-opacity="0.32"/><stop offset="62%" stop-color="#b4552d" stop-opacity="0.15"/><stop offset="100%" stop-color="#b4552d" stop-opacity="0"/></radialGradient>
       <radialGradient id="bmfig2-sage"><stop offset="0%" stop-color="#6e7f5c" stop-opacity="0.30"/><stop offset="62%" stop-color="#6e7f5c" stop-opacity="0.14"/><stop offset="100%" stop-color="#6e7f5c" stop-opacity="0"/></radialGradient>
@@ -847,81 +803,66 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
   return `<svg class="bm-figure bm-figure2" viewBox="0 0 420 645" width="100%" role="img" aria-label="${escAttr(aria)}" style="display:block;max-width:440px;margin:0 auto;overflow:visible">${defs}${group}${callouts}</svg>`;
 }
 
-// The selected-site detail panel: your value vs its reference, an under/reference/
-// over position bar, and a plain-language read.
+// The selected-site detail panel: clinical ratios where they exist; otherwise a
+// tracking-only read. No site gets a target circumference derived from another.
 function bmStandDetail(model: BmStandModel, selected: BmSiteKey | null, unit: BmUnit): string {
   const wrap = (inner: string) =>
     `<div class="bm-detail" style="margin-top:12px;background:#f8f3e8;border:1px solid #e7dfd2;border-radius:14px;padding:14px 16px 13px">${inner}</div>`;
-  if (!selected) return wrap(`<div class="sess-line" style="color:var(--muted,#746c5c)">Tap a measurement on the figure to read it against your reference.</div>`);
+  if (!selected) return wrap(`<div class="sess-line" style="color:var(--muted,#746c5c)">Tap a measurement on the figure to read its context.</div>`);
   const cur = model.merged ? (model.merged[selected] as number | null) : null;
   const name = bmCap(BM_SITE_LABEL[selected]);
   if (cur == null) {
     return wrap(`<div style="display:flex;align-items:baseline;gap:9px"><span style="font:600 16px ui-serif,Georgia,serif;color:#211d17">${escHtml(name)}</span>${bmChip("not taped", "muted")}</div>
-      <div class="sess-line" style="color:var(--muted,#746c5c);margin-top:6px">Tape this site and it reads against its reference here.</div>`);
+      <div class="sess-line" style="color:var(--muted,#746c5c);margin-top:6px">Tape this site and it reads in context here.</div>`);
   }
-  const rIn = model.reference ? model.reference[selected] : null;
-  const curIn = unit === "cm" ? cur / 2.54 : cur;
-  const read = rIn != null ? bmSiteRead(selected, curIn, rIn) : null;
-  const refDisp = rIn != null ? bmFmt(unit === "cm" ? rIn * 2.54 : rIn) : null;
-  const dev = rIn != null && rIn > 0 ? (curIn - rIn) / rIn : 0;
-  const pct = bmR(Math.min(97, Math.max(3, 50 + dev * 240)));
-  const chip = read ? bmChip(read.chip.text, read.chip.tone) : bmChip("logged", "muted");
-  const bar = rIn != null
-    ? `<div style="position:relative;height:6px;border-radius:3px;background:#efe7d8;margin:12px 0 4px"><span style="position:absolute;left:36%;width:28%;top:0;bottom:0;background:#dfe4d2;border-radius:3px"></span><span style="position:absolute;top:-2px;left:${pct}%;width:10px;height:10px;border-radius:50%;background:#211d17;transform:translateX(-50%);box-shadow:0 0 0 2px #fffdf8"></span></div>
-      <div style="display:flex;justify-content:space-between;font:600 9px ui-sans-serif,system-ui,sans-serif;letter-spacing:.1em;color:#a99c82"><span>UNDER</span><span>REFERENCE</span><span>OVER</span></div>`
-    : "";
-  const refCol = refDisp != null
-    ? `<span style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#746c5c">${escHtml(unit)} · reference</span><span style="font:italic 600 16px ui-serif,Georgia,serif;color:#5f6e4f">${escHtml(refDisp)}</span>`
-    : `<span style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#746c5c">${escHtml(unit)}</span>`;
-  return wrap(`<div style="display:flex;align-items:baseline;gap:9px"><span style="font:600 16px ui-serif,Georgia,serif;color:#211d17">${escHtml(name)}</span>${chip}</div>
-    <div style="display:flex;align-items:baseline;gap:8px;margin-top:7px"><span style="font:600 22px ui-serif,Georgia,serif;color:#211d17">${escHtml(bmFmt(cur))}</span>${refCol}</div>
-    ${bar}
-    ${read ? `<div style="font:400 12.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#57503f;margin-top:9px">${escHtml(read.why)}</div>` : ""}`);
+  const read = bmSiteContext(model, selected);
+  return wrap(`<div style="display:flex;align-items:baseline;gap:9px"><span style="font:600 16px ui-serif,Georgia,serif;color:#211d17">${escHtml(name)}</span>${bmChip(read.chip.text, read.chip.tone)}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;margin-top:7px;flex-wrap:wrap"><span style="font:600 22px ui-serif,Georgia,serif;color:#211d17">${escHtml(bmFmt(cur))}</span><span style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#746c5c">${escHtml(unit)}</span><span style="font:italic 600 14px ui-serif,Georgia,serif;color:#5f6e4f">${escHtml(read.metric)}</span></div>
+    <div style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#a99c82;margin-top:6px">${escHtml(read.guide)}</div>
+    <div style="font:400 12.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#57503f;margin-top:9px">${escHtml(read.why)}</div>`);
 }
 
-// Reference-physique rows: current → target, scaled to height. References, not
-// mandates. Silent until height is known (the height form prompts for it).
-function bmStandRefRows(model: BmStandModel, unit: BmUnit): string {
-  const ref = model.reference;
-  if (!ref || model.heightIn == null) return "";
-  const conv = (inch: number) => (unit === "cm" ? inch * 2.54 : inch);
-  const rowHtml = (label: string, cur: string, tgt: string, chip: string) =>
+// Ratio rows: clinical central-adiposity screens where evidence supports them,
+// plus optional tracking-only physique ratios. Nothing here back-solves a target
+// circumference for chest/shoulder/arm/hip/weight.
+function bmStandRatioRows(model: BmStandModel, unit: BmUnit): string {
+  const valIn = (key: BmSiteKey): number | null => bmInches(model.merged ? (model.merged[key] as number | null) : null, unit);
+  const waist = valIn("waist_in");
+  const hip = valIn("hip_in");
+  const shoulder = valIn("shoulder_in");
+  const chest = valIn("chest_in");
+  const arm = valIn("upper_arm_in");
+  const calf = valIn("calf_in");
+  const rows: string[] = [];
+  const rowHtml = (label: string, value: string, guide: string, chip: string) =>
     `<div style="display:flex;align-items:baseline;gap:10px;padding:7px 2px;border-bottom:1px solid #f2ecdf">
       <span style="flex:0 0 78px;font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.1em;color:#746c5c">${escHtml(label)}</span>
-      <span style="font:560 14.5px ui-serif,Georgia,serif;color:#211d17">${escHtml(cur)}</span>
-      <span style="color:#c0b6a0;font-size:12px">→</span>
-      <span style="font:italic 600 14.5px ui-serif,Georgia,serif;color:#5f6e4f">${escHtml(tgt)}</span>${chip}</div>`;
-  const siteRow = (key: BmSiteKey, label: string): string => {
-    const tgtIn = ref[key];
-    const cur = model.merged ? (model.merged[key] as number | null) : null;
-    const curIn = cur != null ? (unit === "cm" ? cur / 2.54 : cur) : null;
-    const chip = curIn != null ? (() => { const r = bmSiteRead(key, curIn, tgtIn); return bmChip(r.chip.text, r.chip.tone); })() : "";
-    return rowHtml(label, cur != null ? bmFmt(cur) : "—", bmFmt(conv(tgtIn)), chip);
-  };
-  const rows = [
-    siteRow("shoulder_in", "SHOULDER"),
-    siteRow("chest_in", "CHEST"),
-    siteRow("waist_in", "WAIST"),
-    siteRow("hip_in", "HIP"),
-    siteRow("upper_arm_in", "ARM"),
-  ];
-  if (model.refWeightLb != null) {
-    const w = model.weightLb;
-    const dev = w != null ? (w - model.refWeightLb) / model.refWeightLb : null;
-    const chip = dev == null
-      ? ""
-      : Math.abs(dev) <= 0.04
-        ? bmChip("at reference", "sage")
-        : dev > 0
-          ? bmChip("over", "warn")
-          : bmChip("under", "gold");
-    rows.push(rowHtml("WEIGHT", w != null ? `${bmFmt(w)}` : "—", `${model.refWeightLb} lb`, chip));
+      <span style="font:560 14.5px ui-serif,Georgia,serif;color:#211d17">${escHtml(value)}</span>
+      <span style="font:600 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#a99c82">${escHtml(guide)}</span>${chip}</div>`;
+  if (waist != null && model.heightIn != null) {
+    const v = bmRatio(waist, model.heightIn);
+    const c = bmWaistHeightTone(v);
+    rows.push(rowHtml("WAIST/HEIGHT", bmRatioDisplay(v), "clinical <0.50", bmChip(c.text, c.tone)));
   }
-  const bfNote = model.female ? "FFMI 18–19 at 22–25% body fat" : "FFMI 21–22 at 12–15% body fat";
+  if (waist != null && hip != null) {
+    const v = bmRatio(waist, hip);
+    const c = bmWaistHipTone(v, model.female);
+    rows.push(rowHtml("WAIST/HIP", bmRatioDisplay(v), `clinical <${model.female ? "0.85" : "0.90"}`, bmChip(c.text, c.tone)));
+  }
+  const tracking = [
+    ["SHOULDER/WAIST", bmRatio(shoulder, waist)],
+    ["CHEST/WAIST", bmRatio(chest, waist)],
+    ["ARM/CALF", bmRatio(arm, calf)],
+  ] as const;
+  for (const [label, value] of tracking) {
+    if (value == null) continue;
+    rows.push(rowHtml(label, bmRatioDisplay(value), "tracking only", bmChip("no target", "muted")));
+  }
+  if (!rows.length) return "";
   return `<div class="bm-ref" style="margin-top:16px">
-      <div style="font:700 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#746c5c">Reference physique · ${escHtml(bmHeightLabel(model.heightIn, unit))}</div>
+      <div style="font:700 10px ui-sans-serif,system-ui,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#746c5c">Ratios & context${model.heightIn != null ? ` · ${escHtml(bmHeightLabel(model.heightIn, unit))}` : ""}</div>
       <div style="margin-top:6px">${rows.join("")}</div>
-      <div style="font:400 11.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#a99c82;margin-top:9px">References, not mandates — waist ≤ half height, shoulder ≈ 1.4–1.6× reference waist, arm ≈ calf, weight from ${bfNote}.</div>
+      <div style="font:400 11.5px/1.55 ui-sans-serif,system-ui,sans-serif;color:#a99c82;margin-top:9px">Only waist-height and waist-hip use clinical risk guides. Shoulder/chest/arm ratios are trend context, not target measurements.</div>
     </div>`;
 }
 
@@ -935,7 +876,7 @@ function compSection(data: BmSummary, unit: BmUnit): string {
     ? bmStandFigureSvg(lib, model, selected)
     : bodyFigureSvg({ latest: model.merged, deltas: {}, heightIn: model.heightIn, sex: model.female ? "female" : "male", unit, focus: model.focus, wins: [], dirs: {} });
   const sub = data.latest
-    ? `<div class="sess-line" style="color:var(--muted,#746c5c);font-size:.82rem;margin-top:2px">Tap a measurement to read it against your reference.</div>`
+    ? `<div class="sess-line" style="color:var(--muted,#746c5c);font-size:.82rem;margin-top:2px">Tap a measurement to read its context.</div>`
     : `<div class="sess-line" style="color:var(--muted,#746c5c);font-size:.82rem;margin-top:2px">Log your first tape session above and the figure fills in with your numbers.</div>`;
   const heading = comp.heading
     ? `<div class="sess-line bm-heading" style="color:var(--ink-2,#57503f);margin-top:10px">${escHtml(comp.heading)}</div>`
@@ -952,7 +893,7 @@ function compSection(data: BmSummary, unit: BmUnit): string {
       ${sub}${heading}
       <div class="bm-figure-slot" style="margin-top:8px">${figure}</div>
       ${detail}${focus}
-      ${bmStandRefRows(model, unit)}
+      ${bmStandRatioRows(model, unit)}
     </div>`;
 }
 
@@ -1102,8 +1043,8 @@ function heightForm(profile: BmSummary["profile"], unit: BmUnit): string {
 // One tap from the top of the view (the monthly loop is glance → tape → log, so
 // entry never lives below the fold). Collapsed it reads as a single action row
 // with "last taped …"; open by default until the first session exists. The small
-// ⓘ affordance on each site label — tap (or focus the input) and the shared hint
-// line under the intro shows how to place the tape for that site.
+// ⓘ affordance on each site label — tap (or focus the input) and an inline
+// note opens right on that field, so the tape landmark is visible while typing.
 function logForm(data: BmSummary, unit: BmUnit): string {
   const sites = data.sites || [];
   // Local calendar day (localISO from date-utils) — a UTC slice would prefill
@@ -1112,10 +1053,14 @@ function logForm(data: BmSummary, unit: BmUnit): string {
   const max = unit === "cm" ? 254 : 100;
   const inputs = sites
     .map((s) => {
+      const hintId = `bmHint-${s.key}`;
       const info = s.hint
-        ? `<button type="button" class="bm-info" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" data-hint="${escAttr(s.hint)}" aria-expanded="false" aria-label="How to measure: ${escAttr(s.label)}" style="width:15px;height:15px;border-radius:50%;border:1px solid var(--muted,#746c5c);color:var(--muted,#746c5c);background:transparent;font-size:.6rem;line-height:1;font-style:italic;font-family:var(--font-display,Georgia,serif);cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none">i</button>`
+        ? `<button type="button" class="bm-info" data-site="${escAttr(s.key)}" data-label="${escAttr(s.label)}" aria-controls="${escAttr(hintId)}" aria-expanded="false" aria-label="How to measure: ${escAttr(s.label)}" title="How to measure ${escAttr(s.label)}" style="width:15px;height:15px;border-radius:50%;border:1px solid var(--muted,#746c5c);color:var(--muted,#746c5c);background:transparent;font-size:.6rem;line-height:1;font-style:italic;font-family:var(--font-display,Georgia,serif);cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none">i</button>`
         : "";
-      return `<label class="field" style="margin:0"><span style="display:inline-flex;align-items:center;gap:5px">${escHtml(s.label)}${info}</span><input class="form-input bm-site" data-site="${escAttr(s.key)}" type="number" inputmode="decimal" min="1" max="${max}" step="0.1" placeholder="${unit}" style="width:100%"></label>`;
+      const hint = s.hint
+        ? `<span id="${escAttr(hintId)}" class="bm-site-hint sess-line" data-site="${escAttr(s.key)}" role="note" hidden style="display:block;margin-top:6px;padding:7px 8px;border-radius:8px;background:var(--sage-bg,#eef0e6);color:var(--ink,#211d17);font-size:.76rem;line-height:1.35">${escHtml(s.hint)}</span>`
+        : "";
+      return `<label class="field bm-site-field" style="margin:0"><span style="display:inline-flex;align-items:center;gap:5px">${escHtml(s.label)}${info}</span><input class="form-input bm-site" data-site="${escAttr(s.key)}" type="number" inputmode="decimal" min="1" max="${max}" step="0.1" placeholder="${unit}"${s.hint ? ` aria-describedby="${escAttr(hintId)}"` : ""} style="width:100%">${hint}</label>`;
     })
     .join("");
   const last = data.latest?.date && typeof relAge === "function"
@@ -1127,8 +1072,7 @@ function logForm(data: BmSummary, unit: BmUnit): string {
         ${last}
       </summary>
       <div style="padding:0 14px 14px">
-        <div class="sess-line" style="color:var(--muted,#746c5c);margin:0 0 8px">Tape, relaxed, same time of day. Fill in what you measured — the rest stays blank. Tap ⓘ on any site for where the tape goes.</div>
-        <div id="bmSiteHint" class="sess-line" role="status" aria-live="polite" hidden style="margin:0 0 10px;padding:8px 10px;border-radius:8px;background:var(--sage-bg,#eef0e6);color:var(--ink,#211d17)"></div>
+        <div class="sess-line" style="color:var(--muted,#746c5c);margin:0 0 8px">Tape, relaxed, same time of day. Fill in what you measured — the rest stays blank. Tap i on any site for where the tape goes.</div>
         <div class="bm-site-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(6.5rem,1fr));gap:8px">${inputs}</div>
         <div style="display:flex;gap:8px;align-items:flex-end;margin-top:10px;flex-wrap:wrap">
           <label class="field" style="margin:0"><span>Date</span><input id="bmDate" class="form-input" type="date" value="${escAttr(today)}"></label>
@@ -1209,27 +1153,28 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
     });
   });
 
-  // ⓘ hints: tap toggles the shared hint line; focusing an input shows its site's
-  // hint too (so guidance appears right when you're about to type).
-  const hintBox = mount.querySelector("#bmSiteHint") as HTMLElement | null;
+  // ⓘ hints: tap toggles the field's inline note; focusing an input shows its
+  // note too (so guidance appears right when you're about to type).
   let hintSite: string | null = null;
   const setExpanded = (site: string | null) => {
     mount.querySelectorAll(".bm-info").forEach((b) => {
       b.setAttribute("aria-expanded", String((b as HTMLElement).dataset.site === site));
     });
   };
-  const showHint = (site: string, label: string, hint: string) => {
-    if (!hintBox) return;
+  const setHintVisible = (site: string | null) => {
+    mount.querySelectorAll(".bm-site-hint").forEach((box) => {
+      const el = box as HTMLElement;
+      el.hidden = el.dataset.site !== site;
+    });
+  };
+  const showHint = (site: string) => {
     hintSite = site;
-    hintBox.hidden = false;
-    hintBox.textContent = `${label} — ${hint}`;
+    setHintVisible(site);
     setExpanded(site);
   };
   const clearHint = () => {
-    if (!hintBox) return;
     hintSite = null;
-    hintBox.hidden = true;
-    hintBox.textContent = "";
+    setHintVisible(null);
     setExpanded(null);
   };
   mount.querySelectorAll(".bm-info").forEach((btn) => {
@@ -1239,14 +1184,14 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
       const el = btn as HTMLElement;
       const site = el.dataset.site || "";
       if (hintSite === site) clearHint();
-      else showHint(site, el.dataset.label || "", el.dataset.hint || "");
+      else showHint(site);
     });
   });
   mount.querySelectorAll(".bm-site").forEach((input) => {
     input.addEventListener("focus", () => {
       const site = (input as HTMLElement).dataset.site || "";
       const btn = mount.querySelector(`.bm-info[data-site="${site}"]`) as HTMLElement | null;
-      if (btn) showHint(site, btn.dataset.label || "", btn.dataset.hint || "");
+      if (btn) showHint(site);
     });
   });
 
@@ -1282,7 +1227,7 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
     }
   });
 
-  // Elite Stand hero: tap a measurement to read it against its reference. Wired
+  // Elite Stand hero: tap a measurement to read it in context. Wired
   // on the cached data so a re-select never refetches or resets the log form.
   if (data) bmWireStandHero(mount, data, unit);
 
@@ -1384,8 +1329,8 @@ function renderBodyMetrics(mount: HTMLElement | null): void {
 
 const CAIRN_BODY_METRICS = {
   renderBodyMetrics, deriveFigureRegions, bodyFigureSvg, mergeLatestSites, mergePreviousSites,
-  bmReferencePhysique, bmReferenceWeightLb, bmStandModel, bmStandFigureSvg, bmSiteRead, bmResolveSelected,
-  bmStandDetail, bmStandRefRows, compSection,
+  bmStandModel, bmStandFigureSvg, bmSiteContext, bmResolveSelected,
+  bmStandDetail, bmStandRatioRows, compSection,
 };
 Object.assign(globalThis, { CairnBodyMetrics: CAIRN_BODY_METRICS, renderBodyMetrics });
 if (typeof window !== "undefined") {

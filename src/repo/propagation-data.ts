@@ -28,7 +28,7 @@
 // per-marker sort and healthFocus(), and is unaffected by this group sequence.
 interface MarkerGroup { key: string; label: string; keys: string[]; }
 const MARKER_GROUPS: MarkerGroup[] = [
-  { key: "iron", label: "Iron & Red Blood", keys: ["ferritin", "transferrin", "tibc", "iron", "hemoglobin", "hgb", "hematocrit", "hct", "rbc", "red blood cell", "red cell distribution", "mcv", "mch", "rdw", "abo group", "rhesus", "rh factor", "blood type"] },
+  { key: "iron", label: "Iron & Red Blood", keys: ["ferritin", "transferrin", "tibc", "iron", "hemoglobin", "hgb", "hematocrit", "hct", "rbc", "red blood cell", "red cell distribution", "mean corpuscular volume", "mcv", "mch", "rdw", "abo group", "rhesus", "rh factor", "blood type"] },
   { key: "blood", label: "White Cells & Platelets", keys: ["wbc", "white blood", "platelet", "neutrophil", "absolute neut", "lymphocyte", "absolute lymph", "monocyte", "absolute mono", "eosinophil", "absolute eos", "basophil", "absolute baso", "granulocyte", "immature gran", "imm gran"] },
   { key: "metabolic", label: "Metabolic & Glucose", keys: ["hemoglobin a1c", "hb a1c", "hba1c", "a1c", "glucose", "insulin", "homa", "c-peptide", "fructosamine"] },
   { key: "electrolytes", label: "Electrolytes", keys: ["sodium", "potassium", "chloride", "carbon dioxide", "bicarbonate", "anion gap"] },
@@ -41,12 +41,13 @@ const MARKER_GROUPS: MarkerGroup[] = [
   { key: "vitamins", label: "Vitamins & Minerals", keys: ["vitamin d", "25-oh", "25 hydroxy", "25(oh)", "b12", "cobalamin", "folate", "vitamin b", "methylmalonic", "magnesium", "zinc", "calcium", "selenium", "copper", "omega", "arachidonic"] },
   { key: "cardiac", label: "Cardiac", keys: ["troponin", "nt-probnp", "nt probnp", "pro-bnp", "probnp", "bnp", "ecg", "ekg", "electrocardiogram", "heart rhythm", "sinus rhythm", "atrial fibrillation", "afib", "qt interval", "qtc", "qrs", "pr interval", "rhythm"] },
   { key: "autoimmune", label: "Autoimmune & Antibodies", keys: ["antinuclear", "ana screen", "rheumatoid", "anti-ccp", "ccp antibod", "anti-dsdna", "dsdna"] },
+  { key: "infectious", label: "Infectious Disease Screening", keys: ["hepatitis", "hiv", "hcv", "hbv", "surface antibody", "surface antigen"] },
   { key: "screening", label: "Cancer Screening", keys: ["prostate specific antigen", "psa", "cea", "alpha-fetoprotein", "ca-125", "ca 125", "ca 19-9", "ca19-9"] },
   { key: "metals", label: "Heavy Metals", keys: ["lead", "mercury", "arsenic", "cadmium", "aluminum", "aluminium"] },
   { key: "urinalysis", label: "Urinalysis", keys: ["urinalysis", "urine", "specific gravity", "leukocyte esterase", "urobilinogen", "epithelial cells", "hyaline cast", "urine cast"] },
-  { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "resting hr", "heart rate", "pulse", "respiratory rate", "respiration", "oxygen saturation", "spo2", "o2 sat", "temperature", "body temp"] },
-  { key: "fitness", label: "Fitness & Metabolic Rate", keys: ["vo2max", "vo2 max", "vo₂max", "resting metabolic rate", "predicted rmr", "rmr", "respiratory exchange", "fat utilization", "carbohydrate utilization", "fuel utilization", "metabolic age", "fitness age", "biological age", "bio age", "inner age", "hrv", "heart rate variability"] },
-  { key: "body", label: "Body Composition", keys: ["body fat", "fat mass", "fat-free mass", "fat free mass", "lean mass", "appendicular", "almi", "ffmi", "android/gynoid", "android gynoid", "gynoid", "bone density", "bone mineral content", "bmd", "t-score", "z-score", "visceral", "total mass", "bmi"] },
+  { key: "vitals", label: "Blood Pressure & Vitals", keys: ["systolic", "diastolic", "blood pressure", "resting heart", "resting hr", "heart rate", "pulse", "pain score", "respiratory rate", "respiration", "oxygen saturation", "spo2", "o2 sat", "temperature", "body temp"] },
+  { key: "fitness", label: "Fitness & Metabolic Rate", keys: ["vo2max", "vo2 max", "vo₂max", "resting metabolic rate", "predicted rmr", "rmr", "respiratory exchange", "fat oxidation", "carbohydrate oxidation", "fat utilization", "carbohydrate utilization", "fuel utilization", "metabolic age", "fitness age", "biological age", "bio age", "inner age", "hrv", "heart rate variability"] },
+  { key: "body", label: "Body Composition", keys: ["body fat", "fat mass", "fat-free mass", "fat free mass", "lean mass", "appendicular", "almi", "ffmi", "android/gynoid", "android gynoid", "gynoid", "bone density", "bone mineral content", "bmd", "t-score", "z-score", "visceral", "body weight", "total mass", "body mass index", "bmi", "height", "weight"] },
   { key: "other", label: "Other Markers", keys: [] },
 ];
 const OTHER_GROUP: MarkerGroup = MARKER_GROUPS[MARKER_GROUPS.length - 1];
@@ -152,6 +153,38 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["hdl"], unit: "mg/dL", optimal: [50, 90], dir: "low", actionable: true, label: "HDL-C" },
   { keys: ["total cholesterol"], unit: "mg/dL", optimal: [125, 200], dir: "high", actionable: true, label: "Total cholesterol" },
   { keys: ["omega-3 index", "omega 3 index", "omegacheck"], unit: "%", optimal: [8, 12], dir: "low", actionable: true, label: "Omega-3 index" },
+  // CBC / iron-study orientation ranges. These are conventional clinical ranges,
+  // not lifestyle targets; most are non-actionable so they populate app/report
+  // context without generating coaching directives.
+  { keys: ["red blood cell count", "rbc count", "rbc"], unit: "M/uL", optimal: [4.35, 5.65], dir: "band", actionable: false, label: "RBC" },
+  { keys: ["hemoglobin"], unit: "g/dL", optimal: [13.2, 16.6], dir: "band", actionable: false, label: "Hemoglobin" },
+  { keys: ["hematocrit"], unit: "%", optimal: [38.3, 48.6], dir: "band", actionable: false, label: "Hematocrit" },
+  { keys: ["mean corpuscular volume", "mcv"], unit: "fL", optimal: [80, 100], dir: "band", actionable: false, label: "MCV" },
+  { keys: ["mean corpuscular hemoglobin concentration", "mchc"], unit: "g/dL", optimal: [32, 36], dir: "band", actionable: false, label: "MCHC" },
+  { keys: ["mean corpuscular hemoglobin", "mch"], unit: "pg", optimal: [27, 33], dir: "band", actionable: false, label: "MCH" },
+  { keys: ["red cell distribution width, standard deviation", "red cell distribution width standard deviation", "rbc distribution width std dev", "rdw-sd", "rdw sd"], unit: "fL", optimal: [39, 46], dir: "band", actionable: false, label: "RDW-SD" },
+  { keys: ["red cell distribution width", "rdw-cv", "rdw cv", "rdw"], unit: "%", optimal: [11.5, 14.5], dir: "high", actionable: false, label: "RDW" },
+  { keys: ["iron % saturation", "iron saturation", "iron sat", "% saturation", "transferrin saturation"], unit: "%", optimal: [20, 50], dir: "band", actionable: false, label: "Iron saturation" },
+  { keys: ["total iron binding capacity", "iron binding capacity", "tibc"], unit: "mcg/dL", optimal: [250, 450], dir: "band", actionable: false, label: "TIBC" },
+  { keys: ["serum iron", "iron"], unit: "mcg/dL", optimal: [65, 175], dir: "band", actionable: false, label: "Serum iron" },
+  { keys: ["transferrin"], unit: "mg/dL", optimal: [200, 360], dir: "band", actionable: false, label: "Transferrin" },
+  { keys: ["white blood cell", "wbc"], unit: "K/uL", optimal: [4, 10], dir: "band", actionable: false, label: "WBC" },
+  { keys: ["platelet count", "platelets", "plt"], unit: "K/uL", optimal: [150, 450], dir: "band", actionable: false, label: "Platelets" },
+  { keys: ["mean platelet volume", "mpv"], unit: "fL", optimal: [7.5, 12], dir: "band", actionable: false, label: "MPV" },
+  { keys: ["absolute neutrophil count", "absolute neutrophil", "neutrophil absolute", "neutrophil count", "anc"], unit: "K/uL", optimal: [1.5, 7.5], dir: "band", actionable: false, label: "Absolute neutrophils" },
+  { keys: ["absolute lymphocyte count", "absolute lymphocyte", "lymphocyte absolute", "lymphocyte count"], unit: "K/uL", optimal: [1, 4], dir: "band", actionable: false, label: "Absolute lymphocytes" },
+  { keys: ["absolute monocyte count", "absolute monocyte", "monocyte absolute", "monocyte count"], unit: "K/uL", optimal: [0.2, 0.8], dir: "band", actionable: false, label: "Absolute monocytes" },
+  { keys: ["absolute eosinophil count", "absolute eosinophil", "eosinophil absolute", "eosinophil count"], unit: "K/uL", optimal: [0, 0.5], dir: "high", actionable: false, label: "Absolute eosinophils" },
+  { keys: ["absolute basophil count", "absolute basophil", "basophil absolute", "basophil count"], unit: "K/uL", optimal: [0, 0.2], dir: "high", actionable: false, label: "Absolute basophils" },
+  { keys: ["absolute immature granulocyte count", "absolute immature granulocyte", "absolute imm gran", "immature granulocyte absolute", "imm gran absolute"], unit: "K/uL", optimal: [0, 0.1], dir: "high", actionable: false, label: "Absolute immature granulocytes" },
+  { keys: ["absolute nrbc count", "absolute nrbc", "nrbc absolute"], unit: "K/uL", optimal: [0, 0], dir: "high", actionable: false, label: "Absolute NRBC" },
+  { keys: ["nrbc percentage", "nrbc percent", "nrbc %"], unit: "%", optimal: [0, 0], dir: "high", actionable: false, label: "NRBC percentage" },
+  { keys: ["neutrophil percentage", "neutrophil percent", "neutrophils %"], unit: "%", optimal: [40, 70], dir: "band", actionable: false, label: "Neutrophil percentage" },
+  { keys: ["lymphocyte percentage", "lymphocyte percent", "lymphocytes %"], unit: "%", optimal: [20, 45], dir: "band", actionable: false, label: "Lymphocyte percentage" },
+  { keys: ["monocyte percentage", "monocyte percent", "monocytes %"], unit: "%", optimal: [2, 10], dir: "band", actionable: false, label: "Monocyte percentage" },
+  { keys: ["eosinophil percentage", "eosinophil percent", "eosinophils %"], unit: "%", optimal: [0, 6], dir: "high", actionable: false, label: "Eosinophil percentage" },
+  { keys: ["basophil percentage", "basophil percent", "basophils %"], unit: "%", optimal: [0, 2], dir: "high", actionable: false, label: "Basophil percentage" },
+  { keys: ["immature granulocyte percentage", "immature granulocyte percent", "immature granulocytes %", "imm gran %"], unit: "%", optimal: [0, 1], dir: "high", actionable: false, label: "Immature granulocyte percentage" },
   { keys: ["hs-crp", "hscrp", "c-reactive", "c reactive", "crp"], unit: "mg/L", optimal: [0, 1], dir: "high", actionable: true, label: "hs-CRP" },
   { keys: ["homocysteine"], unit: "umol/L", optimal: [4, 9], dir: "high", actionable: true, label: "Homocysteine" },
   { keys: ["hba1c", "a1c", "hemoglobin a1c"], unit: "%", optimal: [4.5, 5.4], dir: "high", actionable: true, label: "HbA1c" },
@@ -164,6 +197,7 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   // wins) instead of being mis-routed to the serum Creatinine band by its "creatinine" token.
   { keys: ["egfr", "glomerular filtration", "estimated gfr", "gfr"], unit: "mL/min", optimal: [90, 130], dir: "low", actionable: true, label: "eGFR" },
   { keys: ["creatinine"], unit: "mg/dL", optimal: [0.7, 1.1], dir: "band", actionable: false, label: "Creatinine" },
+  { keys: ["blood urea nitrogen", "bun", "urea nitrogen"], unit: "mg/dL", optimal: [7, 20], dir: "band", actionable: false, label: "BUN" },
   // Cystatin C — a kidney-function marker independent of muscle mass (so it doesn't
   // over-read in a lean/muscular athlete the way creatinine does). Higher is worse;
   // the high edge is age-banded (cystatin C rises with normal aging like eGFR falls),
@@ -173,6 +207,16 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   { keys: ["alt", "sgpt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "ALT" },
   { keys: ["ast", "sgot"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "AST" },
   { keys: ["ggt"], unit: "U/L", optimal: [0, 30], dir: "high", actionable: true, label: "GGT" },
+  { keys: ["alkaline phosphatase", "alp"], unit: "U/L", optimal: [40, 120], dir: "band", actionable: false, label: "Alkaline phosphatase" },
+  { keys: ["bilirubin total", "total bilirubin", "bilirubin"], unit: "mg/dL", optimal: [0.2, 1.2], dir: "band", actionable: false, label: "Total bilirubin" },
+  { keys: ["albumin"], unit: "g/dL", optimal: [4, 5], dir: "band", actionable: false, label: "Albumin" },
+  { keys: ["total protein"], unit: "g/dL", optimal: [6.3, 7.9], dir: "band", actionable: false, label: "Total protein" },
+  { keys: ["globulin"], unit: "g/dL", optimal: [2, 3.5], dir: "band", actionable: false, label: "Globulin" },
+  { keys: ["sodium"], unit: "mmol/L", optimal: [135, 145], dir: "band", actionable: false, label: "Sodium" },
+  { keys: ["potassium"], unit: "mmol/L", optimal: [3.5, 5], dir: "band", actionable: false, label: "Potassium" },
+  { keys: ["chloride"], unit: "mmol/L", optimal: [98, 107], dir: "band", actionable: false, label: "Chloride" },
+  { keys: ["carbon dioxide", "bicarbonate", "co2"], unit: "mmol/L", optimal: [22, 29], dir: "band", actionable: false, label: "CO2" },
+  { keys: ["anion gap"], unit: "mmol/L", optimal: [6, 12], dir: "band", actionable: false, label: "Anion gap" },
   { keys: ["tsh"], unit: "uIU/mL", optimal: [0.5, 2.5], dir: "band", actionable: false, label: "TSH" },
   { keys: ["free t3", "free triiodothyronine", "ft3"], unit: "pg/mL", optimal: [3.0, 4.2], dir: "band", actionable: false, label: "Free T3" },
   { keys: ["free t4", "free thyroxine", "ft4"], unit: "ng/dL", optimal: [1.0, 1.5], dir: "band", actionable: false, label: "Free T4" },
@@ -278,6 +322,7 @@ function zoneNameTrustworthy(name: string): boolean {
   if (/\bratio\b|\bpattern\b|\burine\b/.test(n)) return false;
   if (n.includes("/")) return false;                                  // composite "x / y" names
   if (n.includes("free") && (n.includes("testosterone") || n.includes("psa"))) return false; // free-T / free-PSA are distinct measures, no total-band
+  if (/\b(sex hormone binding globulin|shbg|thyroxine binding globulin)\b/.test(n)) return false; // binding globulins are not serum globulin
   if (/\b(ldl|hdl)\b/.test(n) && /\b(particle|small|medium|large|peak|number|size)\b/.test(n)) return false;
   return true;
 }
@@ -493,6 +538,15 @@ export function personalizeZone(base: OptimalZone, profile?: ZoneProfile | null)
       // Menstruating women carry lower iron stores; the male 50 lower bound over-flags
       // "low ferritin". Frank deficiency in women is defined nearer 30.
       if (sex === "female") return { ...base, optimal: [30, 150] };
+      return base;
+    case "RBC":
+      if (sex === "female") return { ...base, optimal: [3.92, 5.13] };
+      return base;
+    case "Hemoglobin":
+      if (sex === "female") return { ...base, optimal: [11.6, 15] };
+      return base;
+    case "Hematocrit":
+      if (sex === "female") return { ...base, optimal: [35.5, 44.9] };
       return base;
     case "Body fat":
       // Women carry more essential fat; the male 10-25% band would flag a lean woman.

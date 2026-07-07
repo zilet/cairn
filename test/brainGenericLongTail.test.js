@@ -38,6 +38,27 @@ test("a mapped marker does NOT also get a generic note (no double-fire)", () => 
   assert.equal(apob.some((d) => /isn't one of the levers/i.test(d.directive)), false);
 });
 
+test("DEXA support-only body-comp flags do not emit generic watch noise", () => {
+  seedHealthDoc("2026-06-02", [
+    marker("Body Fat %", 35.6, { unit: "%", flag: "high" }),
+    marker("Fat Mass (Total)", 65.6, { unit: "lbs", flag: "high" }),
+    marker("Lean Mass (Total)", 112.6, { unit: "lbs", flag: "low" }),
+    marker("Visceral Fat", 1.13, { unit: "lbs", flag: "high" }),
+    marker("Total Mass", 184.3, { unit: "lbs", flag: "high" }),
+  ], "dexa");
+
+  repo.deriveDirectives();
+  const active = repo.listActiveDirectives();
+  assert.ok(active.some((d) => d.marker === "Body fat"), "the total body-fat lever still propagates");
+  for (const name of ["Fat Mass", "Lean Mass", "Visceral Fat", "Total Mass"]) {
+    assert.equal(
+      active.some((d) => new RegExp(name, "i").test(String(d.marker || "")) && /isn't one of the levers/i.test(String(d.directive || ""))),
+      false,
+      `${name} stays scan context, not a generic watch directive`,
+    );
+  }
+});
+
 test("many flagged long-tail markers are capped, not a wall", () => {
   const names = ["Potassium", "Calcium", "ALP", "Lipase", "Amylase", "PSA", "Cortisol", "Chloride", "Total Protein", "Globulin", "Sodium", "Uric Acid Extra", "Copper", "Zinc Extra", "Selenium Extra"];
   seedHealthDoc("2025-12-01", names.map((n) => marker(n, 999, { unit: "x", flag: "high" })));

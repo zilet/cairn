@@ -1,10 +1,10 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { localDaysAgo, repo, resetTables } from "./_seed.js";
+import { localDaysAgo, marker, repo, resetTables, seedHealthDoc } from "./_seed.js";
 import { buildCoachPrompt, buildMealPlanPrompt, renderBodyComp } from "../dist/prompt.js";
 
 beforeEach(() => {
-  resetTables("body_measurements", "bodyweight_log", "profile");
+  resetTables("body_measurements", "bodyweight_log", "profile", "health_documents");
 });
 
 const NO_SCORE = (obj, label) => {
@@ -342,7 +342,7 @@ test("renderBodyComp is quiet without data and speaks the whole picture with it"
   repo.setProfile({ height_in: 70, weight_lb: 200, sex: "male" });
   repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 40, neck_in: 15, hip_in: 42 });
   const block = renderBodyComp({ body_metrics: repo.bodyMetricsContextSlice() });
-  assert.match(block, /BODY MEASUREMENTS/);
+  assert.match(block, /BODY COMPOSITION \/ MEASUREMENTS/);
   assert.match(block, /waist 40 in/);
   assert.match(block, /never a score/i);
   assert.match(block, /The one lever/);
@@ -353,6 +353,48 @@ test("renderBodyComp is quiet without data and speaks the whole picture with it"
 test("the coach and meal-plan prompts fold the tape picture in", () => {
   repo.setProfile({ height_in: 70, weight_lb: 200, sex: "male" });
   repo.addBodyMeasurement(localDaysAgo(0), { waist_in: 40, neck_in: 15 });
-  assert.match(buildCoachPrompt(), /BODY MEASUREMENTS/);
-  assert.match(buildMealPlanPrompt(), /BODY MEASUREMENTS/);
+  assert.match(buildCoachPrompt(), /BODY COMPOSITION \/ MEASUREMENTS/);
+  assert.match(buildMealPlanPrompt(), /BODY COMPOSITION \/ MEASUREMENTS/);
+});
+
+test("renderBodyComp feeds DEXA projection dates to the brain even without tape", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 175.5, sex: "male" });
+  const scanDate = localDaysAgo(30);
+  const today = localDaysAgo(0);
+  seedHealthDoc(scanDate, [
+    marker("Body Fat %", 35.6, { unit: "%", flag: "high" }),
+    marker("Lean Mass (Total)", 112.6, { unit: "lbs" }),
+    marker("Bone Mineral Content (BMC)", 6.1, { unit: "lbs" }),
+    marker("Fat Mass (Total)", 65.6, { unit: "lbs", flag: "high" }),
+    marker("Total Mass", 184.3, { unit: "lbs" }),
+  ], "dexa");
+  repo.logWeight(184.3, scanDate);
+  repo.logWeight(175.5, today);
+  const ctx = repo.getCoachContext();
+  assert.ok(ctx.body_composition?.estimated, "coach context carries the current body-comp estimate");
+  const block = renderBodyComp(ctx);
+  assert.match(block, /DEXA-derived current estimate/);
+  assert.match(block, new RegExp(today));
+  assert.match(block, new RegExp(scanDate));
+  assert.match(block, /175\.5 lb current/);
+});
+
+test("renderBodyComp prefers tape estimate over DEXA projection when both exist", () => {
+  repo.setProfile({ height_in: 70, weight_lb: 175.5, sex: "male" });
+  const scanDate = localDaysAgo(30);
+  const tapeDate = localDaysAgo(4);
+  seedHealthDoc(scanDate, [
+    marker("Body Fat %", 35.6, { unit: "%", flag: "high" }),
+    marker("Lean Mass (Total)", 112.6, { unit: "lbs" }),
+    marker("Bone Mineral Content (BMC)", 6.1, { unit: "lbs" }),
+    marker("Fat Mass (Total)", 65.6, { unit: "lbs", flag: "high" }),
+    marker("Total Mass", 184.3, { unit: "lbs" }),
+  ], "dexa");
+  repo.addBodyMeasurement(tapeDate, { waist_in: 38, neck_in: 15, hip_in: 42 });
+
+  const block = renderBodyComp(repo.getCoachContext());
+  assert.doesNotMatch(block, /DEXA-derived current estimate/, "DEXA projection is suppressed when tape estimate exists");
+  assert.match(block, /DEXA body fat anchor/);
+  assert.match(block, /Body fat: /);
+  assert.match(block, /tape ESTIMATE/);
 });

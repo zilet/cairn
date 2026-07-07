@@ -29,7 +29,7 @@ test("buildHealthExport builds one Observation per marker with full dated histor
   const exp = repo.buildHealthExport();
   assert.equal(exp.observations.length, 1, "one Observation for the single distinct marker");
   const o = exp.observations[0];
-  assert.equal(o.name, "ApoB");
+  assert.equal(o.name, "Apolipoprotein B (ApoB)");
   assert.equal(o.value, 110, "latest reading is the value");
   assert.equal(o.unit, "mg/dL");
   assert.equal(o.effectiveDate, "2025-12-01");

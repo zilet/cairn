@@ -11,7 +11,7 @@ beforeEach(() => {
   resetTables("health_documents", "health_directives", "profile");
 });
 
-const markerNamed = (re) => repo.getMarkerHistory().markers.find((m) => re.test(m.name));
+const markerNamed = (re) => repo.getMarkerHistory().markers.find((m) => re.test(m.name) || re.test(m.key));
 
 test("isNonTrendingMarker flags genetically-fixed analytes only", () => {
   assert.equal(repo.isNonTrendingMarker("Lp(a)"), true);
@@ -25,7 +25,7 @@ test("isNonTrendingMarker flags genetically-fixed analytes only", () => {
 test("an n=2 Lp(a) series reads STABLE with no projection (no fake ETA)", () => {
   seedHealthDoc("2026-04-01", [marker("Lp(a)", 99, { unit: "nmol/L", flag: "high" })]);
   seedHealthDoc("2026-06-01", [marker("Lp(a)", 90, { unit: "nmol/L", flag: "high" })]);
-  const lpa = markerNamed(/lp\s?\(a\)/i);
+  const lpa = markerNamed(/lp\s?\(a\)|lipoprotein\s*\(a\)|\blpa\b/i);
   assert.ok(lpa, "the Lp(a) series exists");
   assert.equal(lpa.trend.n, 2);
   assert.equal(lpa.trend.dir, "stable", "genetically-fixed → never a confident direction");
@@ -38,7 +38,7 @@ test("a genetically-fixed marker stays stable even with THREE readings", () => {
   seedHealthDoc("2026-02-01", [marker("Lp(a)", 110, { unit: "nmol/L", flag: "high" })]);
   seedHealthDoc("2026-04-01", [marker("Lp(a)", 100, { unit: "nmol/L", flag: "high" })]);
   seedHealthDoc("2026-06-01", [marker("Lp(a)", 90, { unit: "nmol/L", flag: "high" })]);
-  const lpa = markerNamed(/lp\s?\(a\)/i);
+  const lpa = markerNamed(/lp\s?\(a\)|lipoprotein\s*\(a\)|\blpa\b/i);
   assert.equal(lpa.trend.dir, "stable");
   assert.equal(lpa.trend.projection, null);
 });

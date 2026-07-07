@@ -669,6 +669,12 @@ export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boo
   if (st?.mesocycle?.note) lines.push(`MESOCYCLE: ${st.mesocycle.note}`);
   // Endurance trajectory (hybrid/endurance users) — the conservative read.
   if (st?.endurance?.why) lines.push(`ENDURANCE TRAJECTORY: ${st.endurance.why}`);
+  if (st?.hybrid?.headline) {
+    const h = st.hybrid;
+    lines.push(`HYBRID INTERFERENCE (strength and endurance share recovery; do not stack hard lower-body lifting right after hard/long runs/rides): ${h.headline}`);
+    if (h.next_strength?.why) lines.push(`NEXT STRENGTH DECISION: ${h.next_strength.why}`);
+    if (h.fuel?.risk && h.fuel.risk !== "low" && h.fuel.why) lines.push(`FUEL / WEIGHT-LOSS RISK: ${h.fuel.why}`);
+  }
 
   // The concrete adaptations digest — the "what to change & why" the coach should
   // realize as proposed plan changes (most-actionable first, already deduped).
@@ -866,9 +872,33 @@ const BODY_COMP_SITE_WORDS: Record<string, string> = {
 
 export function renderBodyComp(ctx: any): string {
   const bm = ctx?.body_metrics;
-  if (!bm) return "";
+  const bc = ctx?.body_composition;
+  if (!bm && !bc) return "";
   const lines: string[] = [];
-  const m = bm.measurements ?? {};
+  const hasTapeBodyFat = Array.isArray(bm?.indicators)
+    && bm.indicators.some((ind: any) => String(ind?.label || "").toLowerCase() === "body fat" && ind?.estimate && ind?.value != null);
+  if (bc) {
+    const measured = bc.measured ?? {};
+    const estimated = bc.estimated ?? null;
+    const fat = bc.fat_mass ?? null;
+    const weight = bc.weight ?? null;
+    if (estimated?.value != null && !hasTapeBodyFat) {
+      lines.push(`  - DEXA-derived current estimate: ~${estimated.value}% body fat${estimated.as_of ? ` as of ${estimated.as_of}` : ""}; anchored to measured ${measured.value ?? "?"}%${measured.date ? ` on ${measured.date}` : ""}.`);
+    } else if (measured?.value != null) {
+      const tapeNote = hasTapeBodyFat ? " Use the tape estimate below as the between-scan current signal." : " Treat as historical if weight has moved since then.";
+      lines.push(`  - DEXA body fat anchor: ${measured.value}%${measured.date ? ` measured on ${measured.date}` : ""}.${tapeNote}`);
+    }
+    if (!hasTapeBodyFat && (fat?.est_now != null || fat?.dexa != null)) {
+      lines.push(`  - Fat mass: ${fat.est_now != null ? `~${fat.est_now} lb current estimate` : ""}${fat.est_now != null && fat.dexa != null ? "; " : ""}${fat.dexa != null ? `${fat.dexa} lb at DEXA` : ""}${fat.delta_lbs != null ? ` (${fat.delta_lbs >= 0 ? "+" : ""}${fat.delta_lbs} lb vs DEXA)` : ""}.`);
+    } else if (hasTapeBodyFat && fat?.dexa != null) {
+      lines.push(`  - DEXA fat mass anchor: ${fat.dexa} lb${measured.date ? ` measured on ${measured.date}` : ""}; do not treat this as current if tape/weight have moved.`);
+    }
+    if (weight?.current != null || weight?.at_scan != null) {
+      lines.push(`  - Weight context: ${weight.current != null ? `${weight.current} lb current` : ""}${weight.current != null && weight.at_scan != null ? "; " : ""}${weight.at_scan != null ? `${weight.at_scan} lb at scan` : ""}.`);
+    }
+    if (bc.note && !hasTapeBodyFat) lines.push(`  - Estimate note: ${String(bc.note).trim()}`);
+  }
+  const m = bm?.measurements ?? {};
   const parts: string[] = [];
   for (const [key, word] of Object.entries(BODY_COMP_SITE_WORDS)) {
     const v = (m as any)[key];
@@ -877,7 +907,7 @@ export function renderBodyComp(ctx: any): string {
   if (parts.length) {
     // Recency in human words (never a raw date in prose).
     let age = "";
-    const t = Date.parse(String(bm.latest_date || ""));
+    const t = Date.parse(String(bm?.latest_date || ""));
     if (Number.isFinite(t)) {
       const d = Math.max(0, Math.round((Date.now() - t) / 864e5));
       age =
@@ -885,18 +915,18 @@ export function renderBodyComp(ctx: any): string {
     }
     lines.push(`  - Latest tape session${age ? ` (${age})` : ""}: ${parts.join(", ")}.`);
   }
-  for (const ind of Array.isArray(bm.indicators) ? bm.indicators : []) {
+  for (const ind of Array.isArray(bm?.indicators) ? bm.indicators : []) {
     if (ind?.value == null) continue;
     const zone = ind.zone ? ` (${ind.zone})` : "";
     const est = ind.estimate ? " — a tape ESTIMATE; trust the trend, not the decimal" : "";
     lines.push(`  - ${ind.label}: ${ind.value}${ind.unit || ""}${zone}${est}.`);
   }
-  if (bm.waist_trend) lines.push(`  - ${String(bm.waist_trend).trim()}`);
-  if (bm.heading) lines.push(`  - Where it's heading: ${String(bm.heading).trim()}`);
-  if (bm.focus_line) lines.push(`  - The one lever (deterministic, shown on their Body card — stay consistent with it): ${String(bm.focus_line).trim()}`);
+  if (bm?.waist_trend) lines.push(`  - ${String(bm.waist_trend).trim()}`);
+  if (bm?.heading) lines.push(`  - Where it's heading: ${String(bm.heading).trim()}`);
+  if (bm?.focus_line) lines.push(`  - The one lever (deterministic, shown on their Body card — stay consistent with it): ${String(bm.focus_line).trim()}`);
   if (!lines.length) return "";
   lines.unshift(
-    "BODY MEASUREMENTS (their at-home tape sessions — the reliable body-composition signal BETWEEN DEXA scans; ratios are recognized clinical measures, never a score):"
+    "BODY COMPOSITION / MEASUREMENTS (DEXA is a dated anchor; current-weight projections and at-home tape trends are the between-scan signal. Estimates are estimates; trends over single readings; never a score):"
   );
   lines.push(
     "  Use it across the whole picture: a waist drifting up while weight holds → tighten food quality / energy balance and read it alongside the lipid & glucose markers; arms or thighs growing while the waist holds → recomposition is working, protect the training volume driving it; waist-to-height creeping toward 0.5 → it outranks scale weight as the health lever. Trends over single readings; suggestions, never verdicts."

@@ -58,6 +58,14 @@ test("a flagged ApoB produces nutrition + watch directives", () => {
   assert.equal(nut.uncertain ? 1 : 0, 0, "cited directive is not flagged uncertain");
 });
 
+test("directivesForCoach projects canonical marker display labels for agents", () => {
+  seedHealthDoc("2025-12-01", [marker("ApoB", 120, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  const coach = repo.directivesForCoach();
+  assert.ok(coach.some((d) => d.marker === "Apolipoprotein B (ApoB)"), "agent context uses the same canonical label as marker history/report");
+  assert.ok(repo.listActiveDirectives().some((d) => d.marker === "ApoB"), "stored directive identity stays stable");
+});
+
 test("a flagged HbA1c propagates into nutrition + training + watch", () => {
   seedHealthDoc("2025-12-01", [marker("HbA1c", 6.0, { unit: "%", flag: "high" })]);
   repo.deriveDirectives();

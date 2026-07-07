@@ -15,7 +15,8 @@ import { jaccard, memNorm, memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
-import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile } from "./profile.js";
+import { computeGoalCheck, effectiveGoalMode, getEnduranceGoal, getProfile, listWeight } from "./profile.js";
+import { bodyCompositionRead } from "./standing.js";
 import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, healthFocus, markerSide, matchOptimalZone, optimalDistance, prioritizeMarkers, supplementsForCoach } from "./propagation.js";
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
@@ -259,6 +260,7 @@ function programStateForCoach(st: ProgramState): CoachProgramState {
     volume: (Array.isArray(st.volume) ? st.volume : []).slice(0, 14),
     mesocycle: st.mesocycle,
     endurance: st.endurance,
+    hybrid: st.hybrid,
     adaptations_due: (Array.isArray(st.adaptations_due) ? st.adaptations_due : []).slice(0, 6),
   };
 }
@@ -312,6 +314,7 @@ interface CoachContextSignals {
   enduranceTestsView: any;
   trajectoryView: any;
   coachingFocusView: any;
+  bodyCompositionView: any;
   // Computed once + shared: the active life-context effect, the training-signals
   // rollup, and the active context events (so buildPersonSlice/buildTrainingSlice and
   // the conductor all read the same values without recomputing).
@@ -501,8 +504,8 @@ function buildRunningSlice(
 // view (threaded in — the same recovery the day-read/program-state already read).
 function buildHealthSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "health" | "health_review" | "directives" | "health_focus" | "symptom_links" | "health_synthesis" | "directive_feedback" | "recovery" | "supplements"> {
-  const { recovery, healthFocusView } = signals;
+): Pick<CoachContext, "health" | "health_review" | "directives" | "health_focus" | "symptom_links" | "health_synthesis" | "directive_feedback" | "recovery" | "body_composition" | "supplements"> {
+  const { recovery, healthFocusView, bodyCompositionView } = signals;
   return {
     health: healthForCoach(),
     health_review: healthReviewForCoach(),
@@ -512,6 +515,7 @@ function buildHealthSlice(
     health_synthesis: getHealthSynthesis(),   // the latest elite-coach whole-picture narrative (pull artifact), so chat/coach can reference it
     directive_feedback: directiveFeedbackForCoach(), // Done/Dismiss memory so the coach avoids stale repeats
     recovery,                                 // unified Garmin + Apple/other recovery view
+    body_composition: bodyCompositionView,    // DEXA anchor + current-weight projection, with dates
     supplements: supplementsForCoach(),       // understood supplement regimen (markers/protein it touches)
   };
 }
@@ -579,6 +583,17 @@ export function getCoachContext(): CoachContext {
   // Hoist the domain reads the CONDUCTOR arbitrates so they're computed ONCE here and
   // shared by both the context keys below and coachingFocus() (no double compute).
   const healthFocusView = healthFocus();
+  const bodyCompositionView = (() => {
+    try {
+      const priority = prioritizeMarkers();
+      const weights = listWeight(1) as any[];
+      const latestWeight = Array.isArray(weights) && weights.length ? weights[weights.length - 1] : null;
+      const asOf = latestWeight?.date ? String(latestWeight.date).slice(0, 10) : today;
+      return bodyCompositionRead(Array.isArray(priority?.markers) ? priority.markers : [], profile?.weight_lb ?? null, asOf);
+    } catch {
+      return null;
+    }
+  })();
   const performanceView = performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal });
   const programAdjustmentsView = programAdjustments(programBal, recentLoad, { runPlan: runPlanView, dexa: dexaTargetingView, testWeek: testWeekView }).slice(0, 6);
   const groupsTrajectoryView = (() => { try { return muscleGroupTrajectory(today, { programState: fullProgramState }); } catch { return null; } })();
@@ -647,6 +662,7 @@ export function getCoachContext(): CoachContext {
     enduranceTestsView,
     trajectoryView,
     coachingFocusView,
+    bodyCompositionView,
     contextTodayView,
     trainingSignalsView,
     contextEventsView,

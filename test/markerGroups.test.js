@@ -29,9 +29,12 @@ test("the clinically-distinct stories each land in their own group (not Other)",
     ["Predicted RMR", "fitness"],
     ["Respiratory Exchange Ratio (RER)", "fitness"],
     ["Carbohydrate Utilization", "fitness"],
+    ["Carbohydrate Oxidation", "fitness"],
     ["Fat Utilization", "fitness"],
+    ["Fat Oxidation", "fitness"],
     // CBC — the full differential, abbreviated the way a lab prints it
     ["Red Blood Cell Count", "iron"],
+    ["Mean Corpuscular Volume", "iron"],
     ["Absolute Lymph Count", "blood"],
     ["Absolute Mono Count", "blood"],
     ["Absolute Baso Count", "blood"],
@@ -54,6 +57,8 @@ test("the clinically-distinct stories each land in their own group (not Other)",
     // Autoimmune + cancer screening
     ["Antinuclear Antibodies (ANA) Screen", "autoimmune"],
     ["Rheumatoid Factor (RF)", "autoimmune"],
+    ["Hepatitis C Antibody", "infectious"],
+    ["HIV Ag/Ab Qualitative", "infectious"],
     ["Prostate Specific Antigen (PSA), Total", "screening"],
     ["Prostate Specific Antigen (PSA), Free", "screening"],
     // Vitamins / fatty acids
@@ -71,6 +76,7 @@ test("the clinically-distinct stories each land in their own group (not Other)",
     ["Squamous Epithelial Cells - Urine", "urinalysis"],
     // Vitals (MyChart import)
     ["Resting HR", "vitals"],
+    ["Pain Score", "vitals"],
     ["Respiratory Rate", "vitals"],
     ["Oxygen Saturation", "vitals"],
     ["Temperature", "vitals"],
@@ -80,6 +86,9 @@ test("the clinically-distinct stories each land in their own group (not Other)",
     ["Android/Gynoid (A/G) Ratio", "body"],
     ["Bone Mineral Content (BMC)", "body"],
     ["Total Mass", "body"],
+    ["Weight", "body"],
+    ["Height", "body"],
+    ["Body Mass Index", "body"],
   ];
   for (const [name, expected] of cases) {
     assert.equal(g(name), expected, `${name} should group to ${expected}, got ${g(name)}`);
@@ -151,6 +160,7 @@ test("panels render in conventional clinical lab-review order, not longevity-imp
     marker("Lead", 1.2, { unit: "mcg/dL" }),
     marker("PSA, Total", 0.8, { unit: "ng/mL" }),
     marker("ANA Screen", "Negative"),
+    marker("Hepatitis C Antibody", "Non-Reactive"),
     marker("Troponin T", 0.01, { unit: "ng/mL" }),
     marker("Vitamin D", 44, { unit: "ng/mL" }),
     marker("Total Testosterone", 620, { unit: "ng/dL" }),
@@ -170,7 +180,7 @@ test("panels render in conventional clinical lab-review order, not longevity-imp
     [
       "iron", "blood", "metabolic", "electrolytes", "kidney", "liver", "lipids",
       "inflammation", "thyroid", "hormones", "vitamins", "cardiac", "autoimmune",
-      "screening", "metals", "urinalysis", "vitals", "fitness", "body", "other",
+      "infectious", "screening", "metals", "urinalysis", "vitals", "fitness", "body", "other",
     ],
     "groups come back in conventional clinical lab-review order",
   );

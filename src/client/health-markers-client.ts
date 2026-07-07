@@ -22,6 +22,8 @@ type HealthMarkersRow = {
   points?: HealthMarkersPoint[] | null;
   optimal?: HealthMarkersBand | null;
   reference?: { low?: unknown; high?: unknown } | null;
+  reference_source?: unknown;
+  reference_source_url?: unknown;
   in_optimal?: unknown;
   trend?: { dir?: unknown; span_days?: unknown } | null;
 };
@@ -106,7 +108,9 @@ function markerAskQuestion(marker: HealthMarkersRow | null | undefined): string 
   return `Can you tell me about my ${name}${val ? ` — it's ${val}` : ""}? Is this something I should keep an eye on?`;
 }
 
-// The lab's printed reference range as a phrase ("65–175", "≤ 130", "≥ 40").
+// The reference range as a phrase ("65–175", "≤ 130", "≥ 40"). Usually this is
+// the lab's printed interval; standard markers may use a curated fallback when
+// the upload omitted one.
 // Unit appended when known. NOT escaped — callers escape.
 function referenceRangePhrase(marker: HealthMarkersRow | null | undefined): string {
   const ref = marker?.reference;
@@ -125,7 +129,7 @@ function referenceRangePhrase(marker: HealthMarkersRow | null | undefined): stri
 
 // The one reference a row shows: the number it's being compared to. The
 // evidence-anchored optimal band when we have one (the stronger framing), else the
-// lab's own printed reference range. "" when there's no number to compare against —
+// clinical reference range. "" when there's no number to compare against —
 // the status colour carries the read then, never a written-out "in range". NOT escaped.
 function markerReferenceSub(marker: HealthMarkersRow | null | undefined): string {
   const opt = optimalPhrase(marker);
@@ -139,7 +143,7 @@ function markerReferenceSub(marker: HealthMarkersRow | null | undefined): string
 // so "good" needs no words. Optimal-aware, not just the lab flag: a value the lab
 // calls "normal" can still sit outside its longevity-optimal band (watch), and a
 // value outside the lab's OWN printed range reads warn even if the flag is missing.
-//   warn  (red)   — lab-flagged low/high, or outside the printed reference range
+//   warn  (red)   — lab-flagged low/high, or outside the reference range
 //   watch (amber) — in range but off the optimal target band
 //   ok    (green) — inside the optimal band or the lab range
 //   mute  (grey)  — nothing to compare against (a qualitative row)
@@ -160,7 +164,7 @@ function markerStatus(marker: HealthMarkersRow | null | undefined): "ok" | "watc
 }
 
 // The band to draw a gauge/chart against: the optimal zone (preferred) or, absent
-// one, the lab's two-sided reference range. One-sided ranges can't anchor a gauge
+// one, the two-sided reference range. One-sided ranges can't anchor a gauge
 // (no opposite edge) so they're excluded here — the row line still states them.
 function effectiveBand(marker: HealthMarkersRow | null | undefined):
   { low: number; high: number; dir: string; kind: "optimal" | "reference" } | null {

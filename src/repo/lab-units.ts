@@ -45,6 +45,7 @@ function normUnit(unit: unknown): string | null {
   if (!raw) return null;
   return raw
     .replace(/[μµ]/g, "u")
+    .replace(/mcg/gi, "ug")
     .replace(/\u00b3/g, "3")
     .replace(/\u00b2/g, "2")
     .replace(/\s+/g, "")
@@ -64,7 +65,7 @@ function sameUnit(a: unknown, b: unknown): boolean {
     ["mmol/l"],
     ["ng/ml", "ug/l"],
     ["pg/ml", "ng/l"],
-    ["uiu/ml", "miu/l", "mu/l"],
+    ["uiu/ml", "miu/l", "miu/ml", "iu/l", "mu/l", "mu/ml"],
     ["u/l", "iu/l"],
     ["ml/min", "ml/min/1.73m2", "ml/min/1.73m^2"],
     ["mg/l"],
@@ -72,9 +73,20 @@ function sameUnit(a: unknown, b: unknown): boolean {
     ["umol/l"],
     ["pmol/l"],
     ["%"],
+    ["m/ul", "million/ul", "10^6/ul", "10e6/ul", "x10^6/ul", "x10e6/ul"],
+    ["k/ul", "th/ul", "thou/ul", "thousand/ul", "10^3/ul", "10e3/ul", "x10^3/ul", "x10e3/ul"],
+    ["g/dl"],
+    ["mcg/dl", "ug/dl"],
+    ["pg"],
+    ["fl"],
     ["bpm"],
     ["ms"],
     ["mmhg"],
+    ["lb", "lbs", "pound", "pounds"],
+    ["kg"],
+    ["cm"],
+    ["m"],
+    ["in", "inch", "inches"],
   ];
   return groups.some((g) => g.includes(ua) && g.includes(ub));
 }
@@ -126,6 +138,23 @@ function convertByZone(value: number, fromUnit: string | null, zone: LabUnitZone
   if (label === "estradiol" && from === "pmol/l") return { value: value / 3.671, converted: true };
   if (label === "hs-crp" && from === "mg/dl") return { value: value * 10, converted: true };
   if (["alt", "ast", "ggt"].includes(label) && from === "ukat/l") return { value: value * 60, converted: true };
+  if (
+    [
+      "wbc",
+      "platelets",
+      "absolute neutrophils",
+      "absolute lymphocytes",
+      "absolute monocytes",
+      "absolute eosinophils",
+      "absolute basophils",
+      "absolute immature granulocytes",
+      "absolute nrbc",
+    ].includes(label) &&
+    to === "k/ul" &&
+    (from === "cells/ul" || from === "cell/ul" || from === "/ul")
+  ) {
+    return { value: value / 1000, converted: true };
+  }
   if (["tsh", "fasting insulin"].includes(label) && sameUnit(from, expected)) {
     return { value, converted: from !== to };
   }
@@ -134,8 +163,60 @@ function convertByZone(value: number, fromUnit: string | null, zone: LabUnitZone
   return null;
 }
 
+function isBodyWeightName(name: string): boolean {
+  return /\bbody weight\b|^weight$|\btotal (?:body )?mass\b/i.test(name);
+}
+
+function isHeightName(name: string): boolean {
+  return /^height$|\bstature\b/i.test(name);
+}
+
+function normalizeAnthropometricReading(name: string, numeric: number, value: unknown, unit: string | null): NormalizedMarkerReading | null {
+  const from = normUnit(unit);
+  const sourceValue = typeof value === "number" ? value : String(value ?? "").trim();
+
+  if (isBodyWeightName(name)) {
+    if (!from || sameUnit(from, "lb")) return { value: numeric, unit: "lb" };
+    if (sameUnit(from, "kg")) {
+      return {
+        value: roundLabValue(numeric * 2.2046226218),
+        unit: "lb",
+        source_value: sourceValue,
+        source_unit: unit,
+        unit_converted: true,
+      };
+    }
+    return { value: numeric, unit, unit_mismatch: true, expected_unit: "lb", source_value: sourceValue, source_unit: unit };
+  }
+
+  if (isHeightName(name)) {
+    if (!from || sameUnit(from, "cm")) return { value: numeric, unit: "cm" };
+    if (sameUnit(from, "m")) {
+      return {
+        value: roundLabValue(numeric * 100),
+        unit: "cm",
+        source_value: sourceValue,
+        source_unit: unit,
+        unit_converted: true,
+      };
+    }
+    if (sameUnit(from, "in")) {
+      return {
+        value: roundLabValue(numeric * 2.54),
+        unit: "cm",
+        source_value: sourceValue,
+        source_unit: unit,
+        unit_converted: true,
+      };
+    }
+    return { value: numeric, unit, unit_mismatch: true, expected_unit: "cm", source_value: sourceValue, source_unit: unit };
+  }
+
+  return null;
+}
+
 export function normalizeMarkerReading(
-  _name: string,
+  name: string,
   value: unknown,
   unit: string | null,
   zone: LabUnitZone | null,
@@ -146,6 +227,9 @@ export function normalizeMarkerReading(
     if (!textValue) return null;
     return { value: textValue, unit };
   }
+
+  const anthropometric = normalizeAnthropometricReading(name, numeric, value, unit);
+  if (anthropometric) return anthropometric;
 
   const expectedUnit = zone?.unit ?? null;
   if (!zone || !expectedUnit) return { value: numeric, unit };
@@ -178,5 +262,13 @@ export function normalizeMarkerReading(
 export function seriesUnitsCompatible(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a && !b) return true;
   if (!a || !b) return false;
+  return sameUnit(a, b);
+}
+
+export function normalizeLabUnit(unit: unknown): string | null {
+  return normUnit(unit);
+}
+
+export function labUnitsCompatible(a: unknown, b: unknown): boolean {
   return sameUnit(a, b);
 }

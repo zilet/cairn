@@ -38,9 +38,13 @@ test("a genuinely-unmapped flagged marker (potassium / ALP / PSA) STILL gets one
   ]);
   repo.deriveDirectives();
   const active = repo.listActiveDirectives();
-  for (const name of ["Potassium", "ALP", "PSA"]) {
-    const g = active.filter((d) => (d.marker || "") === name && isGeneric(d));
-    assert.equal(g.length, 1, `${name} still surfaces exactly one generic watch note`);
+  for (const [inputName, markerName] of [
+    ["Potassium", "Potassium"],
+    ["ALP", "Alkaline Phosphatase"],
+    ["PSA", "PSA"],
+  ]) {
+    const g = active.filter((d) => (d.marker || "") === markerName && isGeneric(d));
+    assert.equal(g.length, 1, `${inputName} still surfaces exactly one generic watch note`);
     assert.equal(g[0].domain, "watch");
     assert.equal(!!g[0].uncertain, true);
   }

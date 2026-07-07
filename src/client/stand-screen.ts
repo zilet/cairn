@@ -43,7 +43,7 @@ const DOMAINS: StandDomain[] = [
   { key: "organs", label: "Organs", groups: ["kidney", "liver", "electrolytes"] },
   { key: "endocrine", label: "Hormones & Thyroid", groups: ["hormones", "thyroid"] },
   { key: "vitamins", label: "Vitamins & Minerals", groups: ["vitamins"] },
-  { key: "screening", label: "Screening & Other", groups: ["autoimmune", "screening", "metals", "urinalysis", "other"] },
+  { key: "screening", label: "Screening & Other", groups: ["autoimmune", "infectious", "screening", "metals", "urinalysis", "other"] },
 ];
 const HM = () => (globalThis as unknown as { CairnHealthMarkers?: Record<string, (...a: unknown[]) => unknown> }).CairnHealthMarkers;
 const BM = () => (globalThis as unknown as { CairnBodyMetrics?: Record<string, (...a: unknown[]) => unknown> }).CairnBodyMetrics;

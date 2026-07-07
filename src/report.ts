@@ -15,8 +15,7 @@
 
 import crypto from "node:crypto";
 import * as repo from "./repo.js";
-
-const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+import { formatReportDate, formatReportDateShort, reportDateISO, reportDaysBetween, reportTodayISO } from "./reportDates.js";
 
 function esc(s: unknown): string {
   return String(s ?? "")
@@ -26,24 +25,28 @@ function esc(s: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
-function fmtDate(iso?: string | null): string {
-  if (!iso) return "";
-  const [y, m, d] = String(iso).split("-").map(Number);
-  if (!y) return String(iso);
-  return `${MON[(m || 1) - 1]} ${d || 1}, ${y}`;
-}
-
-function fmtShort(iso?: string | null): string {
-  if (!iso) return "";
-  const [y, m] = String(iso).split("-").map(Number);
-  if (!y) return String(iso);
-  return `${MON[(m || 1) - 1]} '${String(y).slice(2)}`;
-}
+const fmtDate = formatReportDate;
+const fmtShort = formatReportDateShort;
+const dayISO = reportDateISO;
+const daysBetween = reportDaysBetween;
 
 function fmtVal(v: unknown): string {
   if (v == null || v === "") return "—";
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+  if (typeof v === "number") {
+    if (Number.isInteger(v)) return String(v);
+    const abs = Math.abs(v);
+    const places = abs < 2 ? 3 : abs < 100 ? 2 : 1;
+    return String(Math.round(v * (10 ** places)) / (10 ** places));
+  }
   return String(v);
+}
+
+function parseLabNumberLike(input: unknown): number {
+  if (typeof input === "number") return Number.isFinite(input) ? input : Number.NaN;
+  const match = String(input ?? "").trim().match(/[+-]?\d+(?:[.,]\d+)?/);
+  if (!match) return Number.NaN;
+  const out = Number(match[0].replace(",", "."));
+  return Number.isFinite(out) ? out : Number.NaN;
 }
 
 function heightText(cm?: number | null): string {
@@ -63,6 +66,62 @@ function optimalText(o: { low: number; high: number; dir: string } | null): stri
   return `${fmtVal(o.low)}–${fmtVal(o.high)}`;
 }
 
+function rangeText(range: { low?: number | null; high?: number | null } | null): string | null {
+  if (!range) return null;
+  const hasLow = range.low != null && Number.isFinite(Number(range.low));
+  const hasHigh = range.high != null && Number.isFinite(Number(range.high));
+  if (!hasLow && !hasHigh) return null;
+  if (hasLow && hasHigh) return `${fmtVal(range.low)}–${fmtVal(range.high)}`;
+  if (hasHigh) return `≤ ${fmtVal(range.high)}`;
+  return `≥ ${fmtVal(range.low)}`;
+}
+
+type TargetKind = "optimal" | "reference" | "source_flag" | "expected" | "context";
+
+function qualitativeExpectedText(name: string, value: unknown): string | null {
+  const n = name.toLowerCase();
+  const v = String(value ?? "").toLowerCase();
+  if (/\b(abo|rhesus|rh\s*factor|blood type)\b/.test(n)) return "fixed trait";
+  if (/\b(ecg|ekg|rhythm|sinus rhythm|troponin delta)\b/.test(n)) return "clinical context";
+  if (/\b(urinalysis|urine|leukocyte esterase|nitrite|ketone|bilirubin|urobilinogen|cast|crystal|bacteria|epithelial)\b/.test(n)) {
+    if (/\b(negative|none|not seen|absent|normal)\b/.test(v)) return "expected negative";
+    return "urine context";
+  }
+  if (/\b(hepatitis|hiv|infection|antigen|antibody|ana|screen)\b/.test(n)) {
+    if (/\b(negative|nonreactive|not detected|not present)\b/.test(v)) return "expected negative";
+    if (Number.isFinite(parseLabNumberLike(value))) return "serology context";
+    return "qualitative";
+  }
+  if (/\b(pattern|genotype|phenotype)\b/.test(n)) return "pattern context";
+  if (/\b(negative|nonreactive|not detected|none|not present|absent)\b/.test(v)) return "expected negative";
+  return null;
+}
+
+function contextualTargetText(name: string, value: unknown, flag: "high" | "low" | null): { text: string; kind: TargetKind } {
+  if (flag === "high" || flag === "low") return { text: `source flagged ${flag}`, kind: "source_flag" };
+  const qualitative = qualitativeExpectedText(name, value);
+  if (qualitative) return { text: qualitative, kind: qualitative.startsWith("expected") ? "expected" : "context" };
+  if (isDexaSupportOnlyBodyCompName(name) || isBoneDensityName(name) || isLeanMassIndexName(name)) return { text: "DEXA context", kind: "context" };
+  if (/\b(body|weight|height|mass|age|rer|rmr|metabolic|fitness|oxidation|utilization|fuel)\b/i.test(name)) return { text: "tracking context", kind: "context" };
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return { text: "qualitative", kind: "context" };
+  return { text: "source context", kind: "context" };
+}
+
+function targetSummary(args: {
+  name: string;
+  value: unknown;
+  flag: "high" | "low" | null;
+  optimalText: string | null;
+  reference?: { low?: number | null; high?: number | null } | null;
+}): { text: string; kind: TargetKind; referenceText: string | null } {
+  const reference = rangeText(args.reference ?? null);
+  if (args.optimalText) return { text: args.optimalText, kind: "optimal", referenceText: reference };
+  if (reference) return { text: `ref ${reference}`, kind: "reference", referenceText: reference };
+  const fallback = contextualTargetText(args.name, args.value, args.flag);
+  return { ...fallback, referenceText: null };
+}
+
 // Span in human words from a day count.
 function spanText(days?: number | null): string {
   if (!days || days < 1) return "";
@@ -70,6 +129,26 @@ function spanText(days?: number | null): string {
   const months = Math.round(days / 30.44);
   if (months < 24) return `${months} mo`;
   return `${Math.round((days / 365.25) * 10) / 10} yr`;
+}
+
+function freshnessWindowDays(name: string): number | null {
+  const n = name.toLowerCase();
+  if (/lipoprotein\s*\(?a\)?|\blp\s*\(?a\)?|blood type|genotype/i.test(n)) return null;
+  if (/hs[-\s]?crp|c[-\s]?reactive protein|\bcrp\b|sedimentation|sed rate|\besr\b|fibrinogen/i.test(n)) return 45;
+  if (/body fat|fat mass|lean mass|total mass|visceral|android|gynoid|almi|ffmi|bone mineral|bmd|t[\s-]?score|z[\s-]?score/i.test(n)) return 120;
+  if (/glucose|insulin|homa|c[-\s]?peptide|alt\b|ast\b|ggt|bilirubin|creatinine|egfr|bun\b|uric|tsh|testosterone|estradiol|cortisol|vitamin d|ferritin|iron|b12|folate|wbc|rbc|hemoglobin|hematocrit|platelet/i.test(n)) return 180;
+  if (/cholesterol|\bldl\b|\bhdl\b|triglyceride|apolipoprotein|\bapo\s?b\b|non[-\s]?hdl/i.test(n)) return 365;
+  return 365;
+}
+
+function findingFreshness(name: string, latestDate: string | null, asOf: string): { stale: boolean; note: string | null } {
+  const maxDays = freshnessWindowDays(name);
+  const ageDays = daysBetween(latestDate, asOf);
+  if (maxDays == null || ageDays == null || ageDays <= maxDays) return { stale: false, note: null };
+  return {
+    stale: true,
+    note: `Older result (${spanText(ageDays)} old); not highlighted as current for this marker.`,
+  };
 }
 
 export interface ReportMarker {
@@ -80,12 +159,26 @@ export interface ReportMarker {
   abnormal: boolean; // lab-flagged OR out of optimal target
   optimal: { low: number; high: number; dir: string } | null;
   optimalText: string | null;
+  reference: { low: number | null; high: number | null } | null;
+  referenceSource: string | null;
+  referenceSourceUrl: string | null;
+  referenceText: string | null;
+  targetText: string;
+  targetKind: TargetKind;
   inOptimal: boolean | null;
   latestDate: string | null;
   trendDir: string | null;
   trendText: string | null;
   methodNote: string | null;
+  sourceNames: string[];
+  estimated: boolean;
+  dateLabel: string | null;
+  staleForFinding: boolean;
+  freshnessNote: string | null;
+  findingSuppressed: boolean;
+  findingSuppressionNote: string | null;
   history: Array<{ value: unknown; date: string; flag: string | null }>;
+  source: string | null;
 }
 
 export interface ReportGroup {
@@ -100,7 +193,7 @@ export interface ClinicalReportData {
   dateRange: { from: string; to: string } | null;
   findings: ReportMarker[];
   groups: ReportGroup[];
-  bodyComp: { summary: string; asOf: string | null } | null;
+  bodyComp: { label: string; summary: string; asOf: string | null } | null;
   supplements: Array<{ name: string; dose: string | null; frequency: string | null }>;
   sources: Array<{ date: string | null; kind: string; name: string }>;
 }
@@ -117,6 +210,7 @@ function optimalTrustworthy(name: string, value: unknown): boolean {
   const n = name.toLowerCase();
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) return false; // qualitative result (e.g. pattern "A")
+  if (/\bvldl\b/.test(n)) return false; // VLDL must not inherit LDL-C's target
   if (/\bratio\b|\bpattern\b|\burine\b/.test(n)) return false;
   if (n.includes("/")) return false; // composite "x / y" names
   if (n.includes("free") && n.includes("testosterone")) return false; // no free-T zone
@@ -133,8 +227,9 @@ function isStandardLdlName(name: string): boolean {
   if (!/\bldl\b/.test(n)) return false;
   if (isDirectLdlName(n)) return false;
   if (/\bnon[-\s]?hdl\b/.test(n)) return false;
+  if (/\bvldl\b/.test(n)) return false;
   if (/\b(particle|small|medium|peak|pattern|large)\b/.test(n)) return false;
-  return /\bcholesterol\b|\bc\b/.test(n);
+  return /\bchol(?:esterol)?\b|\bcalc(?:ulated)?\b|\bc\b/.test(n);
 }
 
 function methodNote(name: string): string | null {
@@ -143,13 +238,353 @@ function methodNote(name: string): string | null {
   return null;
 }
 
-function toMarkerView(m: any): ReportMarker {
+function sourceNames(m: any, displayName: string): string[] {
+  const raw = Array.isArray(m?.source_names) ? m.source_names : (m?.source_name ? [m.source_name] : []);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const name = String(item ?? "").replace(/\s+/g, " ").trim();
+    if (!name || name === displayName || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    out.push(name);
+  }
+  return out.slice(0, 4);
+}
+
+function sourceNote(m: ReportMarker): string | null {
+  if (!m.sourceNames.length) return null;
+  const label = m.sourceNames.length === 1 ? "Source label" : "Source labels";
+  const suffix = m.sourceNames.length >= 4 ? "…" : "";
+  return `${label}: ${m.sourceNames.join("; ")}${suffix}`;
+}
+
+function referenceSourceNote(m: ReportMarker): string | null {
+  if (!m.referenceSource || m.referenceSource === "source_lab") return null;
+  return `Reference source: ${m.referenceSource}`;
+}
+
+function isBodyFatPctName(name: string): boolean {
+  const n = name.toLowerCase();
+  return /\bbody fat\b/.test(n) && !/\b(trunk|arms|legs|android|gynoid)\b/.test(n);
+}
+
+function isTotalFatMassName(name: string): boolean {
+  return /fat mass\s*\(total\)|^fat mass total$|^total fat mass$/i.test(name);
+}
+
+function isTotalLeanMassName(name: string): boolean {
+  const n = name.toLowerCase();
+  return /\blean mass\b/.test(n) && (/\btotal\b/.test(n) || /\(total\)/.test(n));
+}
+
+function isBodyWeightName(name: string): boolean {
+  return /\bbody weight\b|^weight$|\btotal (?:body )?mass\b/i.test(name);
+}
+
+function isProfileHeightName(name: string): boolean {
+  return /^height$|\bstature\b/i.test(name);
+}
+
+function isBodyMassIndexName(name: string): boolean {
+  return /\bbmi\b|body mass index/i.test(name);
+}
+
+function isLeanMassIndexName(name: string): boolean {
+  return /\b(almi|ffmi|appendicular|skeletal muscle mass index|lean mass index|fat[-\s]?free mass index)\b/i.test(name);
+}
+
+function isBoneDensityName(name: string): boolean {
+  return /\b(bone mineral density|bmd|t[-\s]?score|z[-\s]?score)\b/i.test(name);
+}
+
+function isDexaSupportOnlyBodyCompName(name: string): boolean {
+  const n = name.toLowerCase();
+  if (isBodyFatPctName(name)) return false;
+  if (isLeanMassIndexName(name)) return false;
+  if (isBoneDensityName(name)) return false;
+  if (isBodyWeightName(name) || isProfileHeightName(name)) return false;
+  return (
+    isTotalLeanMassName(name) ||
+    isTotalFatMassName(name) ||
+    /\bvisceral\b/.test(n) ||
+    /\bandroid\b|\bgynoid\b/.test(n) ||
+    /\bbone mineral content\b|\bbmc\b/.test(n) ||
+    /\b(fat mass|lean mass|body fat)\b.*\b(trunk|arms?|legs?|android|gynoid)\b/.test(n)
+  );
+}
+
+function appendNote(base: string | null, note: string): string {
+  return base ? `${base} ${note}` : note;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+interface BodyMetricEstimate {
+  measurementDate: string;
+  bodyFatPct: number;
+  bodyFatZone: string | null;
+  currentWeightLb: number | null;
+  weightDate: string | null;
+  fatMassLb: number | null;
+  heightIn: number | null;
+  measurements: Record<string, number>;
+}
+
+interface CurrentBodyContext {
+  currentWeightLb: number | null;
+  weightDate: string | null;
+  heightCm: number | null;
+  generatedDay: string;
+}
+
+function bodyMetricEstimate(bodyMetrics: any, currentWeightLb: unknown, weightDate: string | null, asOfISO?: string): BodyMetricEstimate | null {
+  const latestDate = dayISO(bodyMetrics?.latest_date, { notAfter: asOfISO });
+  const indicators = Array.isArray(bodyMetrics?.indicators) ? bodyMetrics.indicators : [];
+  const bf = indicators.find((i: any) => String(i?.label || "").toLowerCase() === "body fat" && i?.estimate);
+  const bodyFatPct = Number(bf?.value);
+  if (!latestDate || !Number.isFinite(bodyFatPct)) return null;
+  const weight = Number(currentWeightLb);
+  const currentWeight = Number.isFinite(weight) ? weight : null;
+  const measurements: Record<string, number> = {};
+  const rawMeasurements = bodyMetrics?.measurements && typeof bodyMetrics.measurements === "object" ? bodyMetrics.measurements : {};
+  for (const [key, value] of Object.entries(rawMeasurements)) {
+    const n = Number(value);
+    if (Number.isFinite(n)) measurements[key] = round1(n);
+  }
+  const fatMassLb = currentWeight != null ? round1(currentWeight * (bodyFatPct / 100)) : null;
+  const h = Number(bodyMetrics?.height_in);
+  return {
+    measurementDate: latestDate,
+    bodyFatPct: round1(bodyFatPct),
+    bodyFatZone: bf?.zone ? String(bf.zone) : null,
+    currentWeightLb: currentWeight,
+    weightDate: dayISO(weightDate, { notAfter: asOfISO }),
+    fatMassLb,
+    heightIn: Number.isFinite(h) ? round1(h) : null,
+    measurements,
+  };
+}
+
+function measurementParts(est: BodyMetricEstimate): string {
+  const labels: Record<string, string> = {
+    waist_in: "waist",
+    neck_in: "neck",
+    hip_in: "hip",
+    chest_in: "chest",
+    shoulder_in: "shoulders",
+    upper_arm_in: "upper arm",
+    thigh_in: "thigh",
+    calf_in: "calf",
+  };
+  return Object.entries(labels)
+    .map(([key, label]) => (est.measurements[key] != null ? `${label} ${fmtVal(est.measurements[key])} in` : ""))
+    .filter(Boolean)
+    .slice(0, 5)
+    .join(", ");
+}
+
+function appendSyntheticHistory(m: ReportMarker, value: number, date: string, flag: string | null): void {
+  if (!date) return;
+  const normalizedDate = dayISO(date);
+  if (!normalizedDate) return;
+  const exists = m.history.some((h) => h.date === normalizedDate && String(h.value) === String(value));
+  if (!exists) m.history.push({ value, date: normalizedDate, flag });
+  m.history.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+function refreshTargetText(m: ReportMarker): void {
+  const target = targetSummary({ name: m.name, value: m.value, flag: m.flag, optimalText: m.optimalText, reference: m.reference });
+  m.referenceText = target.referenceText;
+  m.targetText = target.text;
+  m.targetKind = target.kind;
+}
+
+function latestNumericHistory(m: ReportMarker): { value: number; date: string | null } | null {
+  for (let i = m.history.length - 1; i >= 0; i--) {
+    const value = Number(m.history[i]?.value);
+    if (Number.isFinite(value)) return { value, date: m.history[i]?.date ?? null };
+  }
+  const value = Number(m.value);
+  return Number.isFinite(value) ? { value, date: m.latestDate } : null;
+}
+
+function latestNumericHistoryExcluding(m: ReportMarker, date: string | null, value: number | null): { value: number; date: string | null } | null {
+  for (let i = m.history.length - 1; i >= 0; i--) {
+    const hValue = Number(m.history[i]?.value);
+    if (!Number.isFinite(hValue)) continue;
+    const sameDate = !!date && m.history[i]?.date === date;
+    const sameValue = value != null && Number.isFinite(value) && Math.abs(hValue - value) < 0.05;
+    if (sameDate && sameValue) continue;
+    return { value: hValue, date: m.history[i]?.date ?? null };
+  }
+  return null;
+}
+
+function setSimpleTrendFromPrior(m: ReportMarker, prior: { value: number; date: string | null } | null, current: number): void {
+  if (!prior || !Number.isFinite(prior.value)) return;
+  const delta = current - prior.value;
+  m.trendDir = Math.abs(delta) < 0.05 ? "stable" : delta > 0 ? "rising" : "falling";
+}
+
+function bodyWeightSourceLabel(m: ReportMarker): string {
+  const source = [m.name, ...m.sourceNames].join(" ").toLowerCase();
+  if (/\bdexa\b|\btotal mass\b/.test(source)) return "DEXA/source body weight";
+  return "source body weight";
+}
+
+function applyCurrentBodyContext(m: ReportMarker, ctx: CurrentBodyContext): ReportMarker {
+  const weight = Number(ctx.currentWeightLb);
+  const weightDate = dayISO(ctx.weightDate, { notAfter: ctx.generatedDay });
+  const hasLoggedWeight = Number.isFinite(weight) && !!weightDate;
+
+  if (isBodyWeightName(m.name)) {
+    const sourceLabel = bodyWeightSourceLabel(m);
+    m.name = "Body Weight";
+    m.unit = "lb";
+    m.flag = null;
+    m.optimal = null;
+    m.optimalText = null;
+    m.reference = null;
+    m.referenceSource = null;
+    m.referenceSourceUrl = null;
+    m.referenceText = null;
+    m.inOptimal = null;
+    m.abnormal = false;
+    m.estimated = false;
+    m.history = m.history.map((h) => ({ ...h, flag: null }));
+    m.targetText = "tracking context";
+    m.targetKind = "context";
+    if (hasLoggedWeight && weightDate && (!m.latestDate || weightDate >= m.latestDate)) {
+      const prior = latestNumericHistoryExcluding(m, weightDate, weight);
+      const priorDate = prior?.date ?? m.latestDate;
+      m.value = round1(weight);
+      m.latestDate = weightDate;
+      m.dateLabel = null;
+      appendSyntheticHistory(m, round1(weight), weightDate, null);
+      setSimpleTrendFromPrior(m, prior, weight);
+      m.trendText = prior && priorDate
+        ? `logged weight ${fmtVal(weight)} lb ${fmtShort(weightDate)}; previous body weight ${fmtVal(prior.value)} lb ${fmtShort(priorDate)}`
+        : `logged weight ${fmtVal(weight)} lb ${fmtShort(weightDate)}`;
+      m.methodNote = `Latest logged body weight; dated ${sourceLabel} readings are kept in history.`;
+      m.findingSuppressed = false;
+      m.findingSuppressionNote = null;
+      return m;
+    }
+    m.methodNote = appendNote(m.methodNote, "Dated body-weight reading from a source document; current profile/logged weight may be newer.");
+    return m;
+  }
+
+  if (isBodyMassIndexName(m.name) && hasLoggedWeight && weightDate) {
+    const heightCm = Number(ctx.heightCm);
+    if (Number.isFinite(heightCm) && heightCm > 0 && (!m.latestDate || weightDate >= m.latestDate)) {
+      const prior = latestNumericHistory(m);
+      const heightM = heightCm / 100;
+      const bmi = round1((weight * 0.45359237) / (heightM * heightM));
+      m.value = bmi;
+      m.latestDate = weightDate;
+      m.unit = "kg/m2";
+      m.dateLabel = "calc. as of";
+      m.flag = null;
+      m.optimal = null;
+      m.optimalText = null;
+      m.reference = { low: 18.5, high: 24.9 };
+      m.referenceSource = "CDC Adult BMI Categories";
+      m.referenceSourceUrl = "https://www.cdc.gov/bmi/adult-calculator/bmi-categories.html";
+      m.inOptimal = null;
+      m.abnormal = false;
+      m.estimated = true;
+      m.history = m.history.map((h) => ({ ...h, flag: null }));
+      appendSyntheticHistory(m, bmi, weightDate, null);
+      setSimpleTrendFromPrior(m, prior, bmi);
+      const priorText = prior && prior.date ? ` Source BMI was ${fmtVal(prior.value)} on ${fmtDate(prior.date)}.` : "";
+      m.methodNote = `Calculated from ${fmtVal(weight)} lb logged weight on ${fmtDate(weightDate)} and profile height ${fmtVal(heightCm)} cm. CDC treats BMI as a screening measure to interpret with other health factors.${priorText}`;
+      refreshTargetText(m);
+    }
+  }
+
+  return m;
+}
+
+function normalizeHistory(points: any[], asOfISO: string): ReportMarker["history"] {
+  const out: ReportMarker["history"] = [];
+  const seen = new Set<string>();
+  for (const p of points) {
+    const date = dayISO(p?.date, { notAfter: asOfISO });
+    if (!date) continue;
+    const flag = p?.flag ?? null;
+    const key = `${date}|${String(p?.value)}|${String(flag)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ value: p?.value, date, flag });
+  }
+  return out;
+}
+
+function applyBodyMetricEstimate(m: ReportMarker, estimate: BodyMetricEstimate | null, bodyComp: any, asOfISO: string): ReportMarker {
+  if (!estimate) return m;
+  const measuredDate = dayISO(bodyComp?.measured?.date, { notAfter: asOfISO });
+  const measuredPct = Number(bodyComp?.measured?.value);
+  const dexaFat = Number(bodyComp?.fat_mass?.dexa);
+  const parts = measurementParts(estimate);
+  const fromTape = `Tape-based Navy body-fat estimate from measurements on ${fmtDate(estimate.measurementDate)}${parts ? ` (${parts})` : ""}${estimate.heightIn != null ? ` and height ${fmtVal(estimate.heightIn)} in` : ""}`;
+  const freshness = findingFreshness(m.name, estimate.measurementDate, dayISO(asOfISO) || reportTodayISO());
+
+  if (isBodyFatPctName(m.name)) {
+    const priorValue = Number(m.value);
+    const priorDate = m.latestDate;
+    m.value = estimate.bodyFatPct;
+    m.latestDate = estimate.measurementDate;
+    m.estimated = true;
+    m.dateLabel = "tape est.";
+    m.flag = null;
+    m.methodNote = `${fromTape}. ${Number.isFinite(measuredPct) && measuredDate ? `DEXA measured ${round1(measuredPct)}% on ${fmtDate(measuredDate)}.` : "DEXA, when present, remains a dated scan anchor."}`;
+    m.trendDir = Number.isFinite(priorValue) ? estimate.bodyFatPct < priorValue - 0.4 ? "falling" : estimate.bodyFatPct > priorValue + 0.4 ? "rising" : "stable" : m.trendDir;
+    m.trendText = `tape estimate ${fmtVal(m.value)}% ${fmtShort(estimate.measurementDate)}${Number.isFinite(priorValue) && priorDate ? `; DEXA ${round1(priorValue)}% ${fmtShort(priorDate)}` : ""}`;
+    const num = Number(m.value);
+    if (m.optimal && Number.isFinite(num)) m.inOptimal = num >= m.optimal.low && num <= m.optimal.high;
+    m.abnormal = m.inOptimal === false;
+    m.staleForFinding = freshness.stale;
+    m.freshnessNote = freshness.note;
+    appendSyntheticHistory(m, estimate.bodyFatPct, estimate.measurementDate, null);
+    refreshTargetText(m);
+  } else if (isTotalFatMassName(m.name) && estimate.fatMassLb != null) {
+    const priorValue = Number(m.value);
+    const priorDate = m.latestDate;
+    const resultDate = estimate.weightDate || estimate.measurementDate;
+    m.value = estimate.fatMassLb;
+    m.latestDate = resultDate;
+    m.estimated = true;
+    m.dateLabel = "est. as of";
+    m.flag = null;
+    m.inOptimal = null;
+    m.abnormal = false;
+    m.methodNote = `Estimated from the ${fmtDate(estimate.measurementDate)} tape body-fat estimate (${fmtVal(estimate.bodyFatPct)}%)${estimate.currentWeightLb != null ? ` and ${fmtVal(estimate.currentWeightLb)} lb weight${estimate.weightDate ? ` on ${fmtDate(estimate.weightDate)}` : ""}` : ""}. ${Number.isFinite(dexaFat) && measuredDate ? `DEXA fat mass was ${round1(dexaFat)} lb on ${fmtDate(measuredDate)}.` : ""}`.trim();
+    m.trendDir = Number.isFinite(priorValue) ? estimate.fatMassLb < priorValue - 0.4 ? "falling" : estimate.fatMassLb > priorValue + 0.4 ? "rising" : "stable" : m.trendDir;
+    m.trendText = `tape+weight estimate ${fmtVal(m.value)} lb${Number.isFinite(priorValue) && priorDate ? `; DEXA ${round1(priorValue)} lb ${fmtShort(priorDate)}` : ""}`;
+    const resultFreshness = findingFreshness(m.name, resultDate, dayISO(asOfISO) || reportTodayISO());
+    m.staleForFinding = resultFreshness.stale;
+    m.freshnessNote = resultFreshness.note;
+    appendSyntheticHistory(m, estimate.fatMassLb, resultDate, null);
+    refreshTargetText(m);
+  }
+  return m;
+}
+
+function toMarkerView(m: any, asOfISO: string): ReportMarker {
+  const name = String(m?.name ?? "");
   const flag = m?.latest?.flag === "high" || m?.latest?.flag === "low" ? m.latest.flag : null;
-  const trusted = optimalTrustworthy(String(m?.name ?? ""), m?.latest?.value);
+  const trusted = optimalTrustworthy(name, m?.latest?.value);
   const inOptimal = trusted && typeof m?.in_optimal === "boolean" ? m.in_optimal : null;
   const optimal = trusted && m?.optimal && Number.isFinite(m.optimal.low) && Number.isFinite(m.optimal.high)
     ? { low: m.optimal.low, high: m.optimal.high, dir: m.optimal.dir }
     : null;
+  const optText = optimalText(optimal);
+  const reference = m?.reference && (m.reference.low != null || m.reference.high != null)
+    ? { low: m.reference.low ?? null, high: m.reference.high ?? null }
+    : null;
+  const target = targetSummary({ name, value: m?.latest?.value ?? null, flag, optimalText: optText, reference });
   const points = Array.isArray(m?.points) ? m.points : [];
   const t = m?.trend || {};
   // Build a plain-language trend phrase: direction + first→last over the span.
@@ -162,33 +597,83 @@ function toMarkerView(m: any): ReportMarker {
   } else if (t.projection) {
     trendText = String(t.projection);
   }
+  const latestDate = dayISO(m?.latest?.date, { notAfter: asOfISO });
+  const freshness = findingFreshness(name, latestDate, dayISO(asOfISO) || reportTodayISO());
   return {
-    name: String(m?.name ?? ""),
+    name,
     unit: m?.unit ?? null,
     value: m?.latest?.value ?? null,
     flag,
     abnormal: !!flag || inOptimal === false,
     optimal,
-    optimalText: optimalText(optimal),
+    optimalText: optText,
+    reference,
+    referenceSource: m?.reference_source ?? null,
+    referenceSourceUrl: m?.reference_source_url ?? null,
+    referenceText: target.referenceText,
+    targetText: target.text,
+    targetKind: target.kind,
     inOptimal,
-    latestDate: m?.latest?.date ?? null,
+    latestDate,
     trendDir: t.dir ?? null,
     trendText,
-    methodNote: methodNote(String(m?.name ?? "")),
-    history: points.map((p: any) => ({ value: p.value, date: p.date, flag: p.flag ?? null })),
+    methodNote: methodNote(name),
+    sourceNames: sourceNames(m, name),
+    estimated: false,
+    dateLabel: null,
+    staleForFinding: freshness.stale,
+    freshnessNote: freshness.note,
+    findingSuppressed: false,
+    findingSuppressionNote: null,
+    history: normalizeHistory(points, asOfISO),
+    source: m?.source ?? m?.latest?.kind ?? null,
   };
+}
+
+function applyBodyCompositionFindingPolicy(m: ReportMarker): ReportMarker {
+  if (!isDexaSupportOnlyBodyCompName(m.name)) return m;
+  if (m.estimated && isTotalFatMassName(m.name)) return m;
+
+  if (isTotalLeanMassName(m.name)) {
+    m.findingSuppressed = true;
+    m.findingSuppressionNote =
+      "DEXA lean mass is lean soft tissue, not a direct muscle/function diagnosis; shown as dated scan context, not a top finding without appendicular index, strength, or function evidence.";
+    m.methodNote = appendNote(m.methodNote, m.findingSuppressionNote);
+    m.targetText = "DEXA context";
+    m.targetKind = "context";
+    return m;
+  }
+
+  m.findingSuppressed = true;
+  m.findingSuppressionNote =
+    "DEXA body-composition submetric; kept as dated scan context while the body-fat/measurement estimate is the headline.";
+  m.methodNote = appendNote(m.methodNote, m.findingSuppressionNote);
+  m.targetText = "DEXA context";
+  m.targetKind = "context";
+  return m;
+}
+
+function applyVariableMetricFindingPolicy(m: ReportMarker): ReportMarker {
+  if (m.source !== "wearable") return m;
+  if (!/\b(hrv|heart rate variability|vo2\s?max|resting heart rate|resting hr|\brhr\b)\b/i.test(m.name)) return m;
+  m.findingSuppressed = true;
+  m.findingSuppressionNote =
+    "Wearable-derived fitness/recovery metric; shown as longitudinal context, not a lab or diagnostic finding.";
+  m.methodNote = appendNote(m.methodNote, m.findingSuppressionNote);
+  return m;
 }
 
 type MarkerRankRule = { rank: number; re: RegExp };
 
 const MARKER_ORDER: Record<string, MarkerRankRule[]> = {
   lipids: [
-    { rank: 10, re: /^total cholesterol$/i },
-    { rank: 20, re: /^(?!.*\bdirect\b)ldl\s*-?\s*(?:c|chol?esterol)\b/i },
+    { rank: 10, re: /^(?:total cholesterol|cholesterol,?\s*total)$/i },
+    { rank: 20, re: /^(?!.*\bdirect\b)ldl\s*-?\s*(?:c|chol(?:esterol)?|calc(?:ulated)?)\b/i },
     { rank: 22, re: /\bldl\b.*\bdirect\b|\bdirect\b.*\bldl\b/i },
     { rank: 30, re: /^hdl\s*-?\s*(?:c|cholesterol)$/i },
     { rank: 40, re: /^non[-\s]?hdl/i },
     { rank: 50, re: /^triglycerides?$/i },
+    { rank: 55, re: /\bvldl\b/i },
     { rank: 60, re: /total cholesterol.*hdl.*ratio|cholesterol.*hdl.*ratio/i },
     { rank: 70, re: /apolipoprotein b|\bapo\s?b\b/i },
     { rank: 80, re: /lipoprotein\s*\(?a\)?|\blp\s*\(?a\)?/i },
@@ -288,6 +773,11 @@ const MARKER_ORDER: Record<string, MarkerRankRule[]> = {
     { rank: 90, re: /\bdhea\b/i },
     { rank: 100, re: /\bigf\b|insulin-like growth/i },
   ],
+  infectious: [
+    { rank: 10, re: /hepatitis b|hbv/i },
+    { rank: 20, re: /hepatitis c|hcv/i },
+    { rank: 30, re: /\bhiv\b/i },
+  ],
   vitamins: [
     { rank: 10, re: /25[-\s]?oh vitamin d|vitamin d|25[-\s]?hydroxy/i },
     { rank: 20, re: /vitamin b12|cobalamin|\bb12\b/i },
@@ -304,17 +794,28 @@ const MARKER_ORDER: Record<string, MarkerRankRule[]> = {
     { rank: 20, re: /diastolic/i },
     { rank: 30, re: /resting heart rate|resting hr|\brhr\b/i },
     { rank: 40, re: /\bhrv\b|heart rate variability/i },
+    { rank: 50, re: /pain score/i },
+  ],
+  fitness: [
+    { rank: 10, re: /vo2\s?max/i },
+    { rank: 20, re: /\bhrv\b|heart rate variability/i },
+    { rank: 30, re: /resting metabolic|predicted rmr|\brmr\b/i },
+    { rank: 40, re: /respiratory exchange|\brer\b/i },
+    { rank: 50, re: /carbohydrate oxidation|carbohydrate utilization/i },
+    { rank: 60, re: /fat oxidation|fat utilization/i },
+    { rank: 70, re: /biological age|metabolic age|fitness age/i },
   ],
   body: [
-    { rank: 10, re: /body fat|fat percentage|fat %/i },
-    { rank: 20, re: /fat mass/i },
-    { rank: 30, re: /lean mass|lean tissue/i },
-    { rank: 40, re: /visceral/i },
-    { rank: 50, re: /android.*gynoid|gynoid.*android/i },
-    { rank: 60, re: /bone mineral density|\bbmd\b/i },
-    { rank: 70, re: /t[-\s]?score/i },
-    { rank: 80, re: /z[-\s]?score/i },
-    { rank: 90, re: /\bbmi\b|body mass index/i },
+    { rank: 5, re: /body weight|\bweight\b|total mass/i },
+    { rank: 10, re: /\bbmi\b|body mass index/i },
+    { rank: 20, re: /body fat|fat percentage|fat %/i },
+    { rank: 30, re: /fat mass/i },
+    { rank: 40, re: /lean mass|lean tissue/i },
+    { rank: 50, re: /visceral/i },
+    { rank: 60, re: /android.*gynoid|gynoid.*android/i },
+    { rank: 70, re: /bone mineral density|\bbmd\b/i },
+    { rank: 80, re: /t[-\s]?score/i },
+    { rank: 90, re: /z[-\s]?score/i },
     { rank: 100, re: /\brmr\b|resting metabolic/i },
   ],
 };
@@ -366,7 +867,7 @@ function isRestingHeartRateName(name: string): boolean {
 
 function isPointInTimeVitalName(name: string): boolean {
   if (isBloodPressureName(name) || isRestingHeartRateName(name)) return false;
-  return /\boxygen saturation\b|\bspo2\b|\bo2 sat\b|\bpulse\b|\brespiratory rate\b|\brespiration\b|\btemperature\b|\bbody temp\b|\baverage heart rate\b|^heart rate$/i.test(name);
+  return /\boxygen saturation\b|\bspo2\b|\bo2 sat\b|\bpulse\b|\brespiratory rate\b|\brespiration\b|\btemperature\b|\bbody temp\b|\bpain score\b|\baverage heart rate\b|^heart rate$/i.test(name);
 }
 
 function reportMarkerRelevant(groupKey: string, marker: ReportMarker): boolean {
@@ -377,18 +878,64 @@ function reportMarkerRelevant(groupKey: string, marker: ReportMarker): boolean {
   return marker.flag === "high" || marker.flag === "low" || marker.abnormal;
 }
 
+function duplicateProfileFieldMarker(marker: ReportMarker, profile: any): boolean {
+  if (isProfileHeightName(marker.name) && Number.isFinite(Number(profile?.height_cm))) return true;
+  return false;
+}
+
 export function buildClinicalReportData(): ClinicalReportData {
   const profile = (repo.getProfile() as any) || {};
   const { markers, groups } = repo.prioritizeMarkers() as any;
+  const generatedDay = reportTodayISO();
+  const generated = generatedDay;
+  let weightAsOf = generatedDay;
+  let loggedWeightDate: string | null = null;
+  let currentWeightLb: number | null = Number.isFinite(Number(profile.weight_lb)) ? Number(profile.weight_lb) : null;
+  try {
+    const weights = repo.listWeight(1) as any[];
+    const latest = Array.isArray(weights) && weights.length ? weights[weights.length - 1] : null;
+    if (latest?.date) {
+      loggedWeightDate = dayISO(latest.date, { notAfter: generatedDay });
+      weightAsOf = loggedWeightDate || generatedDay;
+    }
+    const w = Number(latest?.weight_lb);
+    if (Number.isFinite(w)) currentWeightLb = w;
+  } catch {
+    weightAsOf = generatedDay;
+  }
+  let bodyCompRead: any = null;
+  try {
+    bodyCompRead = repo.bodyCompositionRead(Array.isArray(markers) ? markers : [], currentWeightLb ?? profile.weight_lb ?? null, weightAsOf);
+  } catch {
+    bodyCompRead = null;
+  }
+  let bodyMetricRead: BodyMetricEstimate | null = null;
+  try {
+    bodyMetricRead = bodyMetricEstimate(repo.bodyMetricsContextSlice(), currentWeightLb, weightAsOf, generatedDay);
+  } catch {
+    bodyMetricRead = null;
+  }
 
   const markerViews = (Array.isArray(markers) ? markers : [])
     .map((m) => {
       const groupKey = m?.group || "other";
       const groupName = m?.group_label || "Other Markers";
-      const view = toMarkerView(m);
+      const view = applyVariableMetricFindingPolicy(
+        applyBodyCompositionFindingPolicy(
+          applyCurrentBodyContext(
+            applyBodyMetricEstimate(toMarkerView(m, generatedDay), bodyMetricRead, bodyCompRead, generatedDay),
+            {
+              currentWeightLb,
+              weightDate: loggedWeightDate,
+              heightCm: Number.isFinite(Number(profile.height_cm)) ? Number(profile.height_cm) : null,
+              generatedDay,
+            },
+          ),
+        ),
+      );
       return { groupKey, groupName, view };
     })
-    .filter(({ groupKey, view }) => reportMarkerRelevant(groupKey, view));
+    .filter(({ groupKey, view }) => reportMarkerRelevant(groupKey, view) && !duplicateProfileFieldMarker(view, profile));
   const views: ReportMarker[] = markerViews.map(({ view }) => view);
 
   // Group in canonical order (groups[] from prioritizeMarkers is already ordered).
@@ -414,7 +961,7 @@ export function buildClinicalReportData(): ClinicalReportData {
     if (!seen.has(k) && list.length) grouped.push({ key: k, label: groupLabel.get(k) || k, markers: sortReportMarkers(k, list) });
   }
   // Findings to discuss follow the same clinical panel/order as the report body.
-  const findings = grouped.flatMap((g) => g.markers.filter((v) => v.abnormal));
+  const findings = grouped.flatMap((g) => g.markers.filter((v) => v.abnormal && !v.staleForFinding && !v.findingSuppressed));
 
   // Whole date span covered by every reading.
   let from: string | null = null;
@@ -427,14 +974,40 @@ export function buildClinicalReportData(): ClinicalReportData {
     }
   }
 
-  // DEXA caption — the latest dexa document's plain summary, for the body-comp panel.
+  // Body-composition caption — prefer actual at-home measurements when present.
+  // A DEXA+weight projection is useful context, but it is NOT a fresh body-fat
+  // measurement and should never relabel DEXA rows as today's readings.
   let bodyComp: ClinicalReportData["bodyComp"] = null;
   try {
     const docs = (repo.listHealthDocuments() as any[]) || [];
     const dexa = docs
       .filter((d) => (d.kind === "dexa" || /dexa|dxa/i.test(String(d.original_name || ""))) && d.summary)
       .sort((a, b) => String(b.doc_date || "").localeCompare(String(a.doc_date || "")))[0];
-    if (dexa) bodyComp = { summary: String(dexa.summary), asOf: dexa.doc_date ?? null };
+    if (bodyMetricRead) {
+      const bits: string[] = [];
+      bits.push(`Tape estimate ${fmtVal(bodyMetricRead.bodyFatPct)}% body fat on ${fmtDate(bodyMetricRead.measurementDate)}`);
+      if (bodyMetricRead.fatMassLb != null) {
+        bits.push(`${fmtVal(bodyMetricRead.fatMassLb)} lb fat mass using ${fmtVal(bodyMetricRead.currentWeightLb)} lb weight${bodyMetricRead.weightDate ? ` on ${fmtDate(bodyMetricRead.weightDate)}` : ""}`);
+      }
+      const parts = measurementParts(bodyMetricRead);
+      if (parts) bits.push(`measurements: ${parts}`);
+      if (bodyCompRead?.measured?.value != null) {
+        const measuredDate = dayISO(bodyCompRead.measured.date, { notAfter: generatedDay });
+        bits.push(`DEXA anchor ${fmtVal(bodyCompRead.measured.value)}%${measuredDate ? ` on ${fmtDate(measuredDate)}` : ""}`);
+      }
+      bodyComp = { label: "At-home body estimate", summary: bits.join("; "), asOf: bodyMetricRead.weightDate || bodyMetricRead.measurementDate };
+    } else if (bodyCompRead?.estimated) {
+      const bits: string[] = [];
+      bits.push(`Current-weight-only projection ${fmtVal(bodyCompRead.estimated.value)}% body fat`);
+      if (bodyCompRead?.fat_mass?.est_now != null) bits.push(`${fmtVal(bodyCompRead.fat_mass.est_now)} lb fat mass`);
+      if (bodyCompRead?.measured?.value != null) {
+        const measuredDate = dayISO(bodyCompRead.measured.date, { notAfter: generatedDay });
+        bits.push(`from DEXA ${fmtVal(bodyCompRead.measured.value)}%${measuredDate ? ` on ${fmtDate(measuredDate)}` : ""}`);
+      }
+      if (bodyCompRead?.weight?.current != null) bits.push(`using current weight ${fmtVal(bodyCompRead.weight.current)} lb`);
+      bits.push("not a fresh body-fat measurement");
+      bodyComp = { label: "DEXA projection context", summary: bits.join("; "), asOf: dayISO(bodyCompRead.estimated.as_of, { notAfter: generatedDay }) };
+    } else if (dexa) bodyComp = { label: "DEXA", summary: String(dexa.summary), asOf: dayISO(dexa.doc_date, { notAfter: generatedDay }) };
   } catch {
     bodyComp = null;
   }
@@ -467,9 +1040,9 @@ export function buildClinicalReportData(): ClinicalReportData {
       sex: profile.sex ?? null,
       age: profile.age ?? null,
       heightText: heightText(profile.height_cm),
-      weightLb: profile.weight_lb ?? null,
+      weightLb: currentWeightLb ?? profile.weight_lb ?? null,
     },
-    generated: new Date().toISOString(),
+    generated,
     dateRange: from && to ? { from, to } : null,
     findings,
     groups: grouped,
@@ -504,10 +1077,19 @@ function optimalNote(m: ReportMarker): string {
   return `<span class="offt">${optimalSide(m)}</span>`;
 }
 
+function resultDateLabel(m: ReportMarker): string {
+  if (m.dateLabel) return m.dateLabel;
+  return m.estimated ? "est. as of" : "as of";
+}
+
+function resultDateText(m: ReportMarker): string {
+  return m.latestDate ? `${resultDateLabel(m)} ${fmtShort(m.latestDate)}` : "";
+}
+
 function resultCell(m: ReportMarker): string {
   // Out-of-range values are HIGHLIGHTED (calm amber), not painted red.
   const cls = m.abnormal ? "res hl" : "res";
-  const date = m.latestDate ? `<div class="res-date">as of ${esc(fmtShort(m.latestDate))}</div>` : "";
+  const date = m.latestDate ? `<div class="res-date">${esc(resultDateLabel(m))} ${esc(fmtShort(m.latestDate))}</div>` : "";
   return `<div class="resline"><span class="${cls}">${esc(fmtVal(m.value))}${m.unit ? ` <span class="u">${esc(m.unit)}</span>` : ""}</span> ${flagChip(m.flag)}${optimalNote(m)}</div>${date}`;
 }
 
@@ -549,10 +1131,11 @@ function groupTable(g: ReportGroup): string {
       rows.push(`<tr class="subrow"><th colspan="4">${esc(subgroup)}</th></tr>`);
       lastSubgroup = subgroup;
     }
+    const notes = [m.methodNote, sourceNote(m), referenceSourceNote(m), m.freshnessNote].filter(Boolean);
     rows.push(`<tr class="${m.abnormal ? "row-abn" : ""}">
-      <td class="m-name">${esc(m.name)}${m.methodNote ? `<div class="m-note">${esc(m.methodNote)}</div>` : ""}</td>
+      <td class="m-name">${esc(m.name)}${notes.map((n) => `<div class="m-note">${esc(n)}</div>`).join("")}</td>
       <td class="m-res">${resultCell(m)}</td>
-      <td class="m-tgt">${m.optimalText ? esc(m.optimalText) : "—"}</td>
+      <td class="m-tgt ${esc(m.targetKind)}">${esc(m.targetText)}</td>
       <td class="m-hist">${historyCell(m)}</td>
     </tr>`);
   }
@@ -560,22 +1143,27 @@ function groupTable(g: ReportGroup): string {
     <h2>${esc(g.label)}</h2>
     ${g.key === "lipids" ? lipidGroupNote(g.markers) : ""}
     <table class="markers">
-      <thead><tr><th>Marker</th><th>Result</th><th>Optimal target<span class="th-note">†</span></th><th>History</th></tr></thead>
+      <thead><tr><th>Marker</th><th>Result</th><th>Target / reference<span class="th-note">†</span></th><th>History</th></tr></thead>
       <tbody>${rows.join("\n")}</tbody>
     </table>
   </section>`;
 }
 
-function abnormalGroups(groups: ReportGroup[]): ReportGroup[] {
+function abnormalGroups(groups: ReportGroup[], opts: { includeStale?: boolean } = {}): ReportGroup[] {
   return groups
-    .map((g) => ({ ...g, markers: g.markers.filter((m) => m.abnormal) }))
+    .map((g) => ({ ...g, markers: g.markers.filter((m) => m.abnormal && !m.findingSuppressed && (opts.includeStale || !m.staleForFinding)) }))
     .filter((g) => g.markers.length);
 }
 
 function findingsBox(groups: ReportGroup[]): string {
   const grouped = abnormalGroups(groups);
+  const staleTotal = abnormalGroups(groups, { includeStale: true })
+    .reduce((sum, g) => sum + g.markers.filter((m) => m.staleForFinding).length, 0);
   if (!grouped.length) {
-    return `<section class="findings none"><h2>Findings</h2><p>No markers fall outside their lab reference range or optimal target.</p></section>`;
+    const msg = staleTotal
+      ? `No current highlighted findings. ${staleTotal} older out-of-range reading${staleTotal === 1 ? "" : "s"} are kept in the dated panels below.`
+      : "No markers fall outside their lab reference range or optimal target.";
+    return `<section class="findings none"><h2>Findings</h2><p>${esc(msg)}</p></section>`;
   }
   const CAP = 24;
   let shown = 0;
@@ -586,9 +1174,15 @@ function findingsBox(groups: ReportGroup[]): string {
           if (shown >= CAP) return "";
           shown++;
       const status = m.flag === "high" ? "High" : m.flag === "low" ? "Low" : m.inOptimal === false ? optimalSide(m) : "";
-      const tgt = m.optimalText ? ` <span class="f-tgt">optimal ${esc(m.optimalText)}</span>` : "";
+      const date = m.latestDate ? ` <span class="f-date">${esc(resultDateText(m))}</span>` : "";
+      const tgt = m.targetKind === "optimal" && m.optimalText
+        ? ` <span class="f-tgt">optimal ${esc(m.optimalText)}</span>`
+        : m.targetKind === "reference"
+          ? ` <span class="f-tgt">${esc(m.targetText)}</span>`
+          : "";
       const tr = m.trendText ? ` <span class="f-tr">${esc(m.trendText)}</span>` : "";
-      return `<li><span class="f-name">${esc(m.name)}</span> <span class="f-val">${esc(fmtVal(m.value))}${m.unit ? ` ${esc(m.unit)}` : ""}</span> <span class="f-flag ${m.flag || "off"}">${esc(status)}</span>${tgt}${tr}</li>`;
+      const note = m.estimated && m.history[0]?.date ? ` <span class="f-note">DEXA ${esc(fmtShort(m.history[0].date))}</span>` : "";
+      return `<li><span class="f-name">${esc(m.name)}</span> <span class="f-val">${esc(fmtVal(m.value))}${m.unit ? ` ${esc(m.unit)}` : ""}</span>${date} <span class="f-flag ${m.flag || "off"}">${esc(status)}</span>${tgt}${tr}${note}</li>`;
     })
         .filter(Boolean)
     .join("\n");
@@ -598,7 +1192,8 @@ function findingsBox(groups: ReportGroup[]): string {
     .filter(Boolean)
     .join("\n");
   const total = grouped.reduce((sum, g) => sum + g.markers.length, 0);
-  const more = total > CAP ? `<p class="f-more">+ ${total - CAP} more outside range — see panels below</p>` : "";
+  const omitted = staleTotal ? ` ${staleTotal} older out-of-range reading${staleTotal === 1 ? "" : "s"} not highlighted as current — see dated panels below.` : "";
+  const more = total > CAP || omitted ? `<p class="f-more">${total > CAP ? `+ ${total - CAP} more outside range — see panels below.` : ""}${omitted}</p>` : "";
   return `<section class="findings">
     <h2>Findings by panel</h2>
     <div class="f-groups">${blocks}</div>${more}
@@ -622,18 +1217,27 @@ export function renderClinicalReportText(data: ClinicalReportData, opts: { name?
   L.push("");
 
   const groupedFindings = abnormalGroups(data.groups);
+  const staleFindings = abnormalGroups(data.groups, { includeStale: true })
+    .reduce((sum, g) => sum + g.markers.filter((m) => m.staleForFinding).length, 0);
   if (groupedFindings.length) {
     L.push("FINDINGS TO DISCUSS");
     for (const g of groupedFindings) {
       L.push(`  ${g.label}:`);
       for (const m of g.markers) {
         const status = m.flag === "high" ? "High" : m.flag === "low" ? "Low" : optimalSide(m);
-        const when = m.latestDate ? `, ${fmtShort(m.latestDate)}` : "";
-        const tgt = m.optimalText ? ` · optimal ${m.optimalText}` : "";
+        const when = m.latestDate ? `, ${resultDateText(m)}` : "";
+        const tgt = m.targetKind === "optimal" && m.optimalText
+          ? ` · optimal ${m.optimalText}`
+          : m.targetKind === "reference" ? ` · ${m.targetText}` : "";
         const tr = m.trendText ? ` · ${m.trendText}` : "";
         L.push(`    • ${m.name} — ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""}${when} (${status})${tgt}${tr}`);
       }
     }
+    if (staleFindings) L.push(`  (${staleFindings} older out-of-range reading${staleFindings === 1 ? "" : "s"} kept in dated panels below, not highlighted as current.)`);
+    L.push("");
+  } else if (staleFindings) {
+    L.push(`FINDINGS TO DISCUSS`);
+    L.push(`  No current highlighted findings. ${staleFindings} older out-of-range reading${staleFindings === 1 ? "" : "s"} are kept in dated panels below.`);
     L.push("");
   }
 
@@ -657,15 +1261,16 @@ export function renderClinicalReportText(data: ClinicalReportData, opts: { name?
       }
       const flag = m.flag === "high" ? " [High]" : m.flag === "low" ? " [Low]" : m.inOptimal === false ? ` [${optimalSide(m)}]` : "";
       const hist = m.history.length > 1 ? `   {${m.history.slice(-6).map((h) => `${fmtVal(h.value)} ${fmtShort(h.date)}`).join(" · ")}}` : "";
-      const tgt = m.optimalText ? `  (optimal ${m.optimalText})` : "";
-      const when = m.latestDate ? `, ${fmtShort(m.latestDate)}` : "";
-      L.push(`  ${m.name}: ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""}${when}${flag}${tgt}${m.methodNote ? ` — ${m.methodNote}` : ""}${hist}`);
+      const tgt = m.targetKind === "optimal" && m.optimalText ? `  (optimal ${m.optimalText})` : `  (${m.targetText})`;
+      const when = m.latestDate ? `, ${resultDateText(m)}` : "";
+      const notes = [m.methodNote, sourceNote(m), referenceSourceNote(m), m.freshnessNote].filter(Boolean);
+      L.push(`  ${m.name}: ${fmtVal(m.value)}${m.unit ? ` ${m.unit}` : ""}${when}${flag}${tgt}${notes.length ? ` — ${notes.join("; ")}` : ""}${hist}`);
     }
     L.push("");
   }
 
   if (data.bodyComp) {
-    L.push(`BODY COMPOSITION (DEXA${data.bodyComp.asOf ? `, ${fmtDate(data.bodyComp.asOf)}` : ""})`);
+    L.push(`BODY COMPOSITION (${data.bodyComp.label}${data.bodyComp.asOf ? `, ${fmtDate(data.bodyComp.asOf)}` : ""})`);
     L.push(`  ${data.bodyComp.summary}`);
     L.push("");
   }
@@ -679,8 +1284,9 @@ export function renderClinicalReportText(data: ClinicalReportData, opts: { name?
     L.push("");
   }
 
-  L.push("— Optimal targets are evidence-anchored preventive/longevity bands, DISTINCT from the");
-  L.push("  lab's population reference interval. Informational, not medical advice. Generated by Cairn.");
+  L.push("— Target/reference legend: optimal = evidence-anchored preventive/longevity band;");
+  L.push("  ref = the source lab's printed reference interval, or a curated adult reference interval when the upload omitted one; context labels are not targets.");
+  L.push("  Informational, not medical advice. Generated by Cairn.");
   return L.join("\n");
 }
 
@@ -747,7 +1353,8 @@ h1{font-size:25px;margin:0 0 3px}
 .f-flag{font-weight:700;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--amber)}
 .f-flag.low{color:var(--amber)}
 .f-flag.off{color:var(--soft)}
-.f-tgt,.f-tr{color:var(--soft);font-size:11px}
+.f-tgt,.f-tr,.f-date,.f-note{color:var(--soft);font-size:11px}
+.f-date{font-weight:600}
 .f-more{margin:9px 0 0;color:var(--soft);font-style:italic;border:0;font-size:12px}
 
 /* group tables */
@@ -768,6 +1375,8 @@ table.markers tr{break-inside:avoid}
 .m-note{margin-top:2px;color:var(--soft);font-weight:400;font-size:10.5px;line-height:1.35}
 .m-res{width:23%;font-variant-numeric:tabular-nums}
 .m-tgt{width:14%;color:var(--soft);font-variant-numeric:tabular-nums}
+.m-tgt.reference,.m-tgt.source_flag,.m-tgt.expected,.m-tgt.context{font-size:11px}
+.m-tgt.context{font-style:italic}
 .m-hist{width:33%;color:var(--soft);font-size:11px}
 .resline{white-space:nowrap}
 .res{font-weight:600}
@@ -851,7 +1460,7 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
   if (data.subject.weightLb != null) sub.push(`${esc(data.subject.weightLb)} lb`);
 
   const bodyComp = data.bodyComp
-    ? `<div class="cap bodycomp"><b>DEXA${data.bodyComp.asOf ? ` · ${esc(fmtDate(data.bodyComp.asOf))}` : ""}:</b> ${esc(data.bodyComp.summary)}</div>`
+    ? `<div class="cap bodycomp"><b>${esc(data.bodyComp.label)}${data.bodyComp.asOf ? ` · ${esc(fmtDate(data.bodyComp.asOf))}` : ""}:</b> ${esc(data.bodyComp.summary)}</div>`
     : "";
 
   const supps = data.supplements.length
@@ -895,7 +1504,7 @@ export function renderClinicalReportHTML(data: ClinicalReportData, opts: { name?
   ${supps}
 
   <div class="foot">
-    <b>†&nbsp;Optimal target</b> bands are evidence-anchored preventive / longevity references — DISTINCT from a lab's population reference interval (a value can read “in range” yet sit outside an optimal target). This summary is informational and is not medical advice. No 0–100 scores are used.
+    <b>†&nbsp;Target/reference</b>: <b>optimal</b> bands are evidence-anchored preventive / longevity references; <b>ref</b> means the source lab's printed reference interval, or a curated adult reference interval when the upload omitted one; context labels (for example DEXA context, fixed trait, qualitative) are not targets. This summary is informational and is not medical advice. No 0–100 scores are used.
   </div>
 </div>
 <div class="actionbar no-print" role="region" aria-label="Report export actions">
