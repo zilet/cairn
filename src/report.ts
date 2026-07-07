@@ -356,21 +356,49 @@ function sortReportMarkers(groupKey: string, markers: ReportMarker[]): ReportMar
     .map((x) => x.marker);
 }
 
+function isBloodPressureName(name: string): boolean {
+  return /\bsystolic\b|\bdiastolic\b|\bblood pressure\b|\bbp\b/i.test(name);
+}
+
+function isRestingHeartRateName(name: string): boolean {
+  return /\bresting heart rate\b|\bresting hr\b|\brhr\b/i.test(name);
+}
+
+function isPointInTimeVitalName(name: string): boolean {
+  if (isBloodPressureName(name) || isRestingHeartRateName(name)) return false;
+  return /\boxygen saturation\b|\bspo2\b|\bo2 sat\b|\bpulse\b|\brespiratory rate\b|\brespiration\b|\btemperature\b|\bbody temp\b|\baverage heart rate\b|^heart rate$/i.test(name);
+}
+
+function reportMarkerRelevant(groupKey: string, marker: ReportMarker): boolean {
+  // Normal spot vitals add noise to a PCP handoff: a months-old pulse ox, pulse,
+  // temperature, respiratory rate, or ECG average HR is app context, not a current
+  // clinical finding. Keep BP, resting HR, and any spot vital the source flagged.
+  if (groupKey !== "vitals" || !isPointInTimeVitalName(marker.name)) return true;
+  return marker.flag === "high" || marker.flag === "low" || marker.abnormal;
+}
+
 export function buildClinicalReportData(): ClinicalReportData {
   const profile = (repo.getProfile() as any) || {};
   const { markers, groups } = repo.prioritizeMarkers() as any;
 
-  const views: ReportMarker[] = (Array.isArray(markers) ? markers : []).map(toMarkerView);
+  const markerViews = (Array.isArray(markers) ? markers : [])
+    .map((m) => {
+      const groupKey = m?.group || "other";
+      const groupName = m?.group_label || "Other Markers";
+      const view = toMarkerView(m);
+      return { groupKey, groupName, view };
+    })
+    .filter(({ groupKey, view }) => reportMarkerRelevant(groupKey, view));
+  const views: ReportMarker[] = markerViews.map(({ view }) => view);
 
   // Group in canonical order (groups[] from prioritizeMarkers is already ordered).
   const order: Array<{ key: string; label: string }> = Array.isArray(groups) ? groups : [];
   const byGroup = new Map<string, ReportMarker[]>();
   const groupLabel = new Map<string, string>();
-  for (const m of markers as any[]) {
-    const k = m?.group || "other";
-    groupLabel.set(k, m?.group_label || "Other Markers");
+  for (const { groupKey: k, groupName, view } of markerViews) {
+    groupLabel.set(k, groupName);
     if (!byGroup.has(k)) byGroup.set(k, []);
-    byGroup.get(k)!.push(toMarkerView(m));
+    byGroup.get(k)!.push(view);
   }
   const grouped: ReportGroup[] = [];
   const seen = new Set<string>();

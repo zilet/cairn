@@ -107,6 +107,48 @@ test("plain-text twin carries findings + a copy-ready structure", () => {
   assert.ok(/Lipoprotein \(a\).*130.*High/.test(text), "the flagged marker is listed in findings");
 });
 
+test("doctor report omits normal context-only spot vitals but keeps BP and resting HR", () => {
+  seedHealthDoc("2026-03-11", [
+    marker("Systolic BP", 120, { unit: "mmHg", flag: "normal" }),
+    marker("Diastolic BP", 77, { unit: "mmHg", flag: "normal" }),
+    marker("Resting HR", 55, { unit: "bpm", flag: "normal" }),
+    marker("Average Heart Rate", 57, { unit: "bpm" }),
+    marker("Oxygen Saturation", 96, { unit: "%", flag: "normal" }),
+    marker("Pulse", 78, { unit: "bpm" }),
+    marker("Respiratory Rate", 16, { unit: "breaths/min" }),
+    marker("Temperature", 36.3, { unit: "deg C" }),
+  ]);
+
+  const data = buildClinicalReportData();
+  const vitals = data.groups.find((g) => g.key === "vitals");
+  assert.ok(vitals, "vitals group still exists for useful rows");
+  const names = vitals.markers.map((m) => m.name);
+  assert.ok(names.some((name) => /systolic/i.test(name)), "systolic BP stays in the report");
+  assert.ok(names.some((name) => /diastolic/i.test(name)), "diastolic BP stays in the report");
+  assert.ok(names.some((name) => /resting hr|resting heart/i.test(name)), "resting HR stays in the report");
+
+  const html = renderClinicalReportHTML(data, {});
+  const text = renderClinicalReportText(data, {});
+  for (const hidden of ["Average Heart Rate", "Oxygen Saturation", "Pulse", "Respiratory Rate", "Temperature"]) {
+    assert.doesNotMatch(html, new RegExp(hidden), `${hidden} is omitted from HTML report`);
+    assert.doesNotMatch(text, new RegExp(hidden), `${hidden} is omitted from text report`);
+  }
+});
+
+test("doctor report keeps abnormal spot vitals as clinically relevant", () => {
+  seedHealthDoc("2026-03-11", [
+    marker("Oxygen Saturation", 92, { unit: "%", flag: "low" }),
+    marker("Pulse", 115, { unit: "bpm", flag: "high" }),
+  ]);
+
+  const data = buildClinicalReportData();
+  const vitals = data.groups.find((g) => g.key === "vitals");
+  assert.ok(vitals, "vitals group present");
+  assert.deepEqual(vitals.markers.map((m) => m.name), ["Oxygen Saturation", "Pulse"]);
+  assert.ok(data.findings.some((f) => f.name === "Oxygen Saturation" && f.flag === "low"));
+  assert.ok(data.findings.some((f) => f.name === "Pulse" && f.flag === "high"));
+});
+
 test("lipid report reads in clinician order and keeps direct LDL clearly separate", () => {
   seedHealthDoc("2024-04-17", [
     marker("LDL-C (direct)", 175, { unit: "mg/dL", flag: "normal" }),
