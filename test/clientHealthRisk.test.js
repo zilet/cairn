@@ -45,8 +45,22 @@ function computedFixture(overrides = {}) {
         heart_failure: { ten_year: 0.02, thirty_year: null },
       },
       vascular_age: 39,
+      projection: {
+        current: { ten_year: 0.072, thirty_year: 0.245, vascular_age: 39 },
+        targets_met: { ten_year: 0.051, thirty_year: 0.19, vascular_age: 36 },
+        levers_applied: [
+          {
+            key: "lipids",
+            label: "Lipid-lowering to target",
+            from: 150,
+            to: 110,
+            unit: "mg/dL non-HDL",
+            detail: "Bringing ApoB toward ~80 mg/dL lowers non-HDL cholesterol with it, from 150 to 110 mg/dL.",
+          },
+        ],
+      },
       horizons_note: "30-year estimates are validated only for ages 30–59.",
-      frame: "Informational, not medical advice <script>. A validated estimate from the AHA PREVENT (2023) equations.",
+      frame: "A validated estimate from the AHA PREVENT (2023) equations.",
     },
     enhancers: [
       {
@@ -68,7 +82,7 @@ function computedFixture(overrides = {}) {
         why: "...",
       },
     ],
-    frame: "Informational, not medical advice.",
+    frame: "Informational, not medical advice <script>. The prevent block is the clinical risk read.",
     ...overrides,
   };
 }
@@ -95,28 +109,97 @@ test("cardiovascular risk renderer pairs a favorable vascular age with the enhan
   assert.match(html, /24\.5%/);
   assert.match(html, /4\.1%/);
   assert.match(html, /2\.0%/);
-  // the visualization is bound to the real PREVENT total-CVD risk and lever
-  // projections, with the optimized path framed as visual-only.
+  // the ribbon is a REAL current-vs-targets-met recompute (from prevent.projection),
+  // every dimension bound to a computed number — no invented "optimized lift".
   assert.match(html, /hrisk-viz/);
-  assert.match(html, /30-year risk ribbon/);
-  assert.match(html, /Current PREVENT path/);
-  assert.match(html, /Optimized lever path/);
+  assert.match(html, /Risk trajectory/);
+  assert.match(html, /Current vs\. if you hit your targets/);
+  // axis carries the real current 10-yr / 30-yr reads
   assert.match(html, /10 yr 7\.2%/);
   assert.match(html, /30 yr 24\.5%/);
-  assert.match(html, /ApoB particle reduction 95mg\/dL to 80mg\/dL/);
-  assert.match(html, /not a separate clinical risk score/);
-  assert.doesNotMatch(html, /optimized[^<]{0,30}\d+\.\d%/i);
+  // legend carries plain current vs targets-met labels
+  assert.match(html, /Current path/);
+  assert.match(html, /If you hit your targets/);
+  // the note enumerates ONLY the dimensions that actually move (real recompute):
+  // 30-yr 24.5%→19.0%, 10-yr 7.2%→5.1%, vascular age 39→36
+  assert.match(html, /30-year risk from 24\.5% to 19\.0%/);
+  assert.match(html, /10-year risk from 7\.2% to 5\.1%/);
+  assert.match(html, /vascular age from 39 to 36/);
+  assert.match(html, /recomputed with the PREVENT equations, not a separate score/);
   // the heart-failure 30-yr horizon is null → shows the horizons_note, not a number
   assert.match(html, /30-year estimates are validated only for ages 30–59/);
-  // levers strip
+  // levers strip (from data.projections — the current→target lever chips)
   assert.match(html, /ApoB particle reduction/);
   assert.match(html, /95mg\/dL → 80mg\/dL/);
-  // frame footer, escaped
+  // top-level frame footer, surfaced verbatim + escaped
   assert.match(html, /Informational, not medical advice &lt;script&gt;/);
   // constitution: no 0-100 score, no letter grade, anywhere
   assert.doesNotMatch(html, /\d+\s*\/\s*100/);
   assert.doesNotMatch(html, /\bgrade\b/i);
   assert.doesNotMatch(html, /<script>/);
+});
+
+test("cardiovascular risk ribbon never claims 'from X% to X%' when the 10-yr rounds identical", () => {
+  const risk = loadHealthRisk();
+  // A young, low-risk profile: the 10-yr % rounds identical (0.7% → 0.7%) but the
+  // 30-yr and vascular age genuinely improve. The copy must speak to the dims that
+  // actually move, never print a same-to-same delta.
+  const html = risk.renderCardiovascularRiskHtml(
+    computedFixture({
+      prevent: {
+        ...computedFixture().prevent,
+        vascular_age: 34,
+        estimates: {
+          total_cvd: { ten_year: 0.007, thirty_year: 0.057 },
+          ascvd: { ten_year: 0.004, thirty_year: 0.03 },
+          heart_failure: { ten_year: 0.002, thirty_year: 0.01 },
+        },
+        projection: {
+          current: { ten_year: 0.007, thirty_year: 0.057, vascular_age: 34 },
+          targets_met: { ten_year: 0.0065, thirty_year: 0.0536, vascular_age: 33 },
+          levers_applied: [
+            {
+              key: "lipids",
+              label: "Lipid-lowering to target",
+              from: 127,
+              to: 110.4,
+              unit: "mg/dL non-HDL",
+              detail: "…",
+            },
+          ],
+        },
+      },
+    })
+  );
+  // 30-yr 5.7% → 5.4% and vascular age 34 → 33 are surfaced; the identical 10-yr is not.
+  assert.match(html, /30-year risk from 5\.7% to 5\.4%/);
+  assert.match(html, /vascular age from 34 to 33/);
+  assert.doesNotMatch(html, /from 0\.7% to 0\.7%/);
+  assert.doesNotMatch(html, /10-year risk from 0\.7% to 0\.7%/);
+  // still renders the optimized path (there IS a real, visible gap)
+  assert.match(html, /hrisk-viz-optimized/);
+});
+
+test("cardiovascular risk ribbon draws only the current path when no lever is applied (no fabricated gap)", () => {
+  const risk = loadHealthRisk();
+  const html = risk.renderCardiovascularRiskHtml(
+    computedFixture({
+      enhancers: [],
+      prevent: {
+        ...computedFixture().prevent,
+        projection: {
+          current: { ten_year: 0.072, thirty_year: 0.245, vascular_age: 39 },
+          targets_met: { ten_year: 0.072, thirty_year: 0.245, vascular_age: 39 },
+          levers_applied: [],
+        },
+      },
+    })
+  );
+  assert.match(html, /hrisk-viz/);
+  assert.match(html, /Your current PREVENT path/);
+  assert.doesNotMatch(html, /hrisk-viz-optimized/);
+  assert.doesNotMatch(html, /If you hit your targets/);
+  assert.match(html, /No modifiable lever moves this read/);
 });
 
 test("cardiovascular risk renderer never shows vascular age alone even with no tension", () => {

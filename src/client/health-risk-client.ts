@@ -23,30 +23,6 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     return Math.max(0, Math.min(1, value));
   }
 
-  function pointForRisk(year: number, fraction: number | null): { x: number; y: number } {
-    const x = year === 30 ? 350 : year === 10 ? 164 : 24;
-    const risk = clamp01((fraction ?? 0) / 0.35);
-    return { x, y: Math.round((166 - risk * 112) * 10) / 10 };
-  }
-
-  function projectionPressure(projection: CardiovascularRiskProjection): number | null {
-    const current = finiteNumber(projection.current);
-    const target = finiteNumber(projection.target);
-    if (current == null || target == null) return null;
-    if (projection.expected_direction === "higher") {
-      if (target <= 0 || current >= target) return 0;
-      return clamp01((target - current) / target);
-    }
-    if (target <= 0 || current <= target) return 0;
-    return clamp01((current - target) / Math.max(target, 1));
-  }
-
-  function hrisk_projectionLabel(projection: CardiovascularRiskProjection): string | null {
-    if (projection.current == null) return null;
-    const unit = projection.unit ? escHtml(projection.unit) : "";
-    return `${escHtml(projection.label)} ${escHtml(String(projection.current))}${unit} to ${escHtml(String(projection.target))}${unit}`;
-  }
-
   function hrisk_horizonStat(
     label: string,
     horizon: CardiovascularRiskHorizon,
@@ -92,76 +68,128 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     return `<li><b>${escHtml(assumption.input)}</b> assumed ${escHtml(assumption.assumed)} — ${escHtml(assumption.reason)}</li>`;
   }
 
+  // Risk accumulates over the horizon: both paths start at ~0 today and rise to
+  // the 10-yr and 30-yr total-CVD reads. The plot region (x 44→328, y 30→150) is
+  // kept clear of the decorative heart glyph and the axis row so it never reads
+  // busy. clamp scales 0–35% risk across the vertical band.
+  const VX0 = 44;
+  const VX10 = 186;
+  const VX30 = 328;
+  const VYBASE = 150;
+  const VYTOP = 30;
+
+  function vizY(fraction: number | null): number {
+    return Math.round((VYBASE - clamp01((fraction ?? 0) / 0.35) * (VYBASE - VYTOP)) * 10) / 10;
+  }
+
+  function vizPath(ten: number, thirty: number): string {
+    const y10 = vizY(ten);
+    const y30 = vizY(thirty);
+    return `M ${VX0} ${VYBASE} C ${VX0 + 46} ${VYBASE}, ${VX10 - 46} ${y10}, ${VX10} ${y10} S ${VX30 - 46} ${y30}, ${VX30} ${y30}`;
+  }
+
+  // The showpiece: a REAL current-vs-targets-met counterfactual straight from
+  // data.prevent.projection (a genuine second PREVENT pass). Every dimension is
+  // bound to a computed number — there is no invented "optimized lift". When no
+  // lever can be pulled, only the current trajectory is drawn (no fabricated gap).
   function hrisk_riskViz(data: CardiovascularRiskRead): string {
     const prevent = data.prevent;
-    const ten = finiteNumber(prevent?.estimates?.total_cvd?.ten_year);
-    if (!prevent || ten == null) return "";
-    const thirty = finiteNumber(prevent.estimates.total_cvd.thirty_year);
-    const current30 = thirty ?? ten;
-    const p0 = pointForRisk(0, 0);
-    const p10 = pointForRisk(10, ten);
-    const p30 = pointForRisk(30, current30);
-    const leverPressures = (data.projections ?? []).map(projectionPressure).filter((n): n is number => n != null);
-    const leverPressure = leverPressures.length ? leverPressures.reduce((sum, n) => sum + n, 0) / leverPressures.length : 0;
-    const enhancerPressure = clamp01((data.enhancers ?? []).length / 5);
-    const optimizedLift = Math.round((18 + leverPressure * 42 + enhancerPressure * 10) * 10) / 10;
-    const o10 = { x: p10.x, y: Math.min(164, p10.y + optimizedLift * 0.45) };
-    const o30 = { x: p30.x, y: Math.min(164, p30.y + optimizedLift) };
-    const riskLine = `M ${p0.x} ${p0.y} C 76 ${p0.y - 2}, 118 ${p10.y + 8}, ${p10.x} ${p10.y} S 288 ${p30.y}, ${p30.x} ${p30.y}`;
-    const optLine = `M ${p0.x} ${p0.y} C 76 ${p0.y}, 118 ${o10.y + 6}, ${o10.x} ${o10.y} S 288 ${o30.y}, ${o30.x} ${o30.y}`;
-    const band = `${riskLine} L ${o30.x} ${o30.y} C 288 ${o30.y}, 214 ${o10.y}, ${o10.x} ${o10.y} S 76 ${p0.y}, ${p0.x} ${p0.y} Z`;
-    const tenLabel = riskPct(ten) ?? "not available";
-    const thirtyLabel = thirty != null ? riskPct(thirty) : null;
-    const projectionLabels = (data.projections ?? []).map(hrisk_projectionLabel).filter(Boolean).slice(0, 3);
-    const projectionText = projectionLabels.length
-      ? projectionLabels.join("; ")
-      : "projection targets will appear once current lever values are available";
-    const arteryWidth = Math.round((14 - enhancerPressure * 5 - leverPressure * 2) * 10) / 10;
-    const plaqueRadius = Math.round((3 + enhancerPressure * 5 + leverPressure * 3) * 10) / 10;
+    const projection = prevent?.projection ?? null;
+    const curTen = finiteNumber(projection?.current?.ten_year ?? prevent?.estimates?.total_cvd?.ten_year);
+    if (!prevent || curTen == null) return "";
+    const curThirty = finiteNumber(projection?.current?.thirty_year ?? prevent.estimates.total_cvd.thirty_year);
+    const cur30 = curThirty ?? curTen;
+
+    const levers = projection?.levers_applied ?? [];
+    const hasLevers = levers.length > 0;
+    const optTen = hasLevers ? finiteNumber(projection?.targets_met?.ten_year) : null;
+    const optThirtyRaw = hasLevers ? finiteNumber(projection?.targets_met?.thirty_year) : null;
+    const opt30 = optThirtyRaw ?? optTen;
+    const curVage = finiteNumber(projection?.current?.vascular_age ?? prevent.vascular_age);
+    const optVage = hasLevers ? finiteNumber(projection?.targets_met?.vascular_age) : null;
+
+    const tenLabel = riskPct(curTen) ?? "not available";
+    const thirtyLabel = curThirty != null ? riskPct(curThirty) : null;
+    const optTenLabel = optTen != null ? riskPct(optTen) : null;
+    const optThirtyLabel = optThirtyRaw != null ? riskPct(optThirtyRaw) : null;
+
+    // Enumerate ONLY the dimensions that actually move at display precision. For a
+    // young, low-risk person the 10-yr % can round identical while the 30-yr and
+    // vascular age visibly improve — so the copy never claims "from 0.7% to 0.7%".
+    // If nothing changes visibly, there's no gap to draw (no fabricated ribbon).
+    const changed: string[] = [];
+    if (thirtyLabel && optThirtyLabel && optThirtyLabel !== thirtyLabel) {
+      changed.push(`30-year risk from ${thirtyLabel} to ${optThirtyLabel}`);
+    }
+    if (optTenLabel && optTenLabel !== tenLabel) {
+      changed.push(`10-year risk from ${tenLabel} to ${optTenLabel}`);
+    }
+    if (curVage != null && optVage != null && optVage !== curVage) {
+      changed.push(`vascular age from ${curVage} to ${optVage}`);
+    }
+    const showOptimized = hasLevers && optTen != null && opt30 != null && changed.length > 0;
+
+    const curLine = vizPath(curTen, cur30);
+    const optLine = showOptimized ? vizPath(optTen!, opt30!) : "";
+    const y10 = vizY(curTen);
+    const y30 = vizY(cur30);
+    const oy10 = showOptimized ? vizY(optTen!) : y10;
+    const oy30 = showOptimized ? vizY(opt30!) : y30;
+    const band = showOptimized
+      ? `${curLine} L ${VX30} ${oy30} C ${VX30 - 46} ${oy30}, ${VX10 + 46} ${oy10}, ${VX10} ${oy10} S ${VX0 + 46} ${VYBASE}, ${VX0} ${VYBASE} Z`
+      : "";
+
+    const deltaSentence = showOptimized
+      ? `Hitting your lever targets lowers your ${changed.join(", ")} — recomputed with the PREVENT equations, not a separate score.`
+      : "No modifiable lever moves this read right now, so only your current PREVENT trajectory is shown.";
+
     const aria = [
       `Current PREVENT total CVD risk: 10-year ${tenLabel}`,
       thirtyLabel ? `30-year ${thirtyLabel}` : "30-year horizon not available for this age",
-      `optimized lever path shaped by ${projectionText}`,
-      `${(data.enhancers ?? []).length} risk enhancer${(data.enhancers ?? []).length === 1 ? "" : "s"} in context`,
+      showOptimized
+        ? `if you hit your targets: ${changed.join(", ")}, from ${levers.map((l) => l.label).join(", ")}`
+        : "no lever changes this read",
     ].join(". ");
+
+    const optChips = showOptimized
+      ? `<div class="hrisk-viz-legend">
+      <span><i class="hrisk-viz-key hrisk-viz-key-current"></i>Current path</span>
+      <span><i class="hrisk-viz-key hrisk-viz-key-optimized"></i>If you hit your targets</span>
+    </div>`
+      : `<div class="hrisk-viz-legend">
+      <span><i class="hrisk-viz-key hrisk-viz-key-current"></i>Current path</span>
+    </div>`;
 
     return `<div class="hrisk-viz${prevent.provisional ? " hrisk-viz-provisional" : ""}">
     <div class="hrisk-viz-top">
-      <b>30-year risk ribbon</b>
-      <span>PREVENT base read with lever targets</span>
+      <b>Risk trajectory</b>
+      <span>${showOptimized ? "Current vs. if you hit your targets" : "Your current PREVENT path"}</span>
     </div>
-    <svg class="hrisk-viz-svg" viewBox="0 0 380 210" role="img" aria-label="${escHtml(aria)}">
+    <svg class="hrisk-viz-svg" viewBox="0 0 360 196" role="img" aria-label="${escHtml(aria)}">
       <defs>
-        <linearGradient id="hriskRibbon" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stop-color="#d8b06a" stop-opacity=".18"/>
-          <stop offset="60%" stop-color="#b9684a" stop-opacity=".24"/>
-          <stop offset="100%" stop-color="#8d4e3d" stop-opacity=".32"/>
+        <linearGradient id="hriskRibbon" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="#b9684a" stop-opacity=".26"/>
+          <stop offset="100%" stop-color="#b9684a" stop-opacity=".05"/>
         </linearGradient>
       </defs>
-      <path class="hrisk-viz-grid" d="M24 54H350 M24 110H350 M24 166H350"/>
-      <path class="hrisk-viz-band" d="${band}"/>
-      <path class="hrisk-viz-current" d="${riskLine}"/>
-      <path class="hrisk-viz-optimized" d="${optLine}"/>
-      <g class="hrisk-viz-artery" transform="translate(214 52)">
-        <path class="hrisk-viz-heart" d="M35 21c-8-17-34-10-34 9 0 19 34 39 34 39s34-20 34-39c0-19-26-26-34-9Z"/>
-        <path class="hrisk-viz-vessel" style="stroke-width:${arteryWidth}" d="M35 68 C35 92 22 110 22 133 C22 153 35 166 35 188"/>
-        <circle class="hrisk-viz-plaque" cx="24" cy="126" r="${plaqueRadius}"/>
-        <circle class="hrisk-viz-plaque hrisk-viz-plaque-soft" cx="39" cy="145" r="${Math.max(2.5, plaqueRadius - 2)}"/>
+      <path class="hrisk-viz-grid" d="M${VX0} ${VYTOP}H${VX30} M${VX0} ${(VYTOP + VYBASE) / 2}H${VX30} M${VX0} ${VYBASE}H${VX30}"/>
+      <g class="hrisk-viz-motif" aria-hidden="true" transform="translate(${VX0 - 8} 8)">
+        <path class="hrisk-viz-heart" d="M9 16C3 8 -3 12 1 18 3 21 9 25 9 25s6-4 8-7c4-6 -2-10 -8-2Z"/>
       </g>
+      ${band ? `<path class="hrisk-viz-band" d="${band}"/>` : ""}
+      <path class="hrisk-viz-current" d="${curLine}"/>
+      ${optLine ? `<path class="hrisk-viz-optimized" d="${optLine}"/>` : ""}
       <g class="hrisk-viz-points">
-        <circle cx="${p10.x}" cy="${p10.y}" r="4"/>
-        <circle cx="${p30.x}" cy="${p30.y}" r="4"/>
-        <circle cx="${o30.x}" cy="${o30.y}" r="3"/>
+        <circle cx="${VX10}" cy="${y10}" r="4"/>
+        <circle cx="${VX30}" cy="${y30}" r="4"/>
+        ${showOptimized ? `<circle class="hrisk-viz-point-opt" cx="${VX30}" cy="${oy30}" r="3.5"/>` : ""}
       </g>
-      <text class="hrisk-viz-axis" x="24" y="192">today</text>
-      <text class="hrisk-viz-axis" x="144" y="192">10 yr ${escHtml(tenLabel)}</text>
-      <text class="hrisk-viz-axis" x="292" y="192">${thirtyLabel ? `30 yr ${escHtml(thirtyLabel)}` : "30 yr n/a"}</text>
+      <text class="hrisk-viz-axis" x="${VX0}" y="180">today</text>
+      <text class="hrisk-viz-axis" x="${VX10}" y="180" text-anchor="middle">10 yr ${escHtml(tenLabel)}</text>
+      <text class="hrisk-viz-axis" x="${VX30}" y="180" text-anchor="end">${thirtyLabel ? `30 yr ${escHtml(thirtyLabel)}` : "30 yr n/a"}</text>
     </svg>
-    <div class="hrisk-viz-legend">
-      <span><i class="hrisk-viz-key hrisk-viz-key-current"></i>Current PREVENT path</span>
-      <span><i class="hrisk-viz-key hrisk-viz-key-optimized"></i>Optimized lever path</span>
-    </div>
-    <p class="hrisk-viz-note">The upper path is the computed PREVENT total-CVD read. The lower path is a visual counterfactual shaped by your current-to-target levers, not a separate clinical risk score.</p>
+    ${optChips}
+    <p class="hrisk-viz-note">${escHtml(deltaSentence)}</p>
   </div>`;
   }
 
@@ -228,7 +256,7 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     ${vizHtml}
     ${leversHtml}
     ${provisionalHtml}
-    <p class="hrisk-frame">${escHtml(prevent.frame)}</p>
+    <p class="hrisk-frame">${escHtml(data.frame || prevent.frame)}</p>
   </section>`;
   }
 

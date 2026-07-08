@@ -35,6 +35,11 @@ function round1(n: number): number {
 }
 
 function asNumber(v: unknown): number | null {
+  // null/undefined/"" must read as absent, NOT 0 — `Number(null)` is 0, which
+  // would (a) silently short-circuit the height_cm→BMI fallback when height_in
+  // is null and (b) let a null age slip past the `age == null` missing-input
+  // guard. Treat empties as null so "not on file" stays "not on file".
+  if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -80,6 +85,18 @@ function addEnhancer(out: RiskEnhancer[], condition: boolean, item: RiskEnhancer
   if (condition) out.push(item);
 }
 
+// Lp(a) is reported in two units that DON'T convert cleanly (particle count vs
+// mass), so "elevated" is a different number in each: ≈75 nmol/L vs ≈30 mg/dL.
+// A single >75 threshold silently misses every mg/dL lab (an elevated 30–50
+// mg/dL reads <75 and never flags). Branch on the unit, case-insensitively;
+// an unknown/blank unit keeps the historical nmol/L threshold.
+function lpaElevated(marker: RiskMarker): boolean {
+  if (marker.value == null) return false;
+  const unit = String(marker.unit ?? "").toLowerCase();
+  const threshold = unit.includes("mg") ? 30 : 75;
+  return marker.value > threshold;
+}
+
 export function cardiovascularRiskRead() {
   const profile = (() => {
     try {
@@ -102,6 +119,7 @@ export function cardiovascularRiskRead() {
     hdl_c: markerByZone("HDL-C"),
     ldl_c: markerByZone("LDL-C"),
     non_hdl_c: markerByZone("Non-HDL-C"),
+    triglycerides: markerByZone("Triglycerides"),
     apob: markerByZone("ApoB"),
     lpa: markerByZone("Lp(a)"),
     hs_crp: markerByZone("hs-CRP"),
@@ -110,6 +128,28 @@ export function cardiovascularRiskRead() {
     systolic_bp: markerByZone("Systolic BP"),
     vo2max: markerByZone("VO2max"),
   };
+
+  // Total cholesterol is a required PREVENT input. When it isn't on file directly
+  // but LDL + HDL + triglycerides are, derive it via the Friedewald-consistent
+  // sum (TC = LDL + HDL + TG/5, mg/dL) rather than failing the whole read. Only
+  // valid when TG < 400 mg/dL (Friedewald breaks down above that). The derivation
+  // is surfaced as a PREVENT assumption below so the read stays honest.
+  let tcDerived = false;
+  if (
+    markers.total_cholesterol.value == null &&
+    markers.ldl_c.value != null &&
+    markers.hdl_c.value != null &&
+    markers.triglycerides.value != null &&
+    markers.triglycerides.value < 400
+  ) {
+    markers.total_cholesterol = {
+      label: "Total cholesterol",
+      value: round1(markers.ldl_c.value + markers.hdl_c.value + markers.triglycerides.value / 5),
+      unit: "mg/dL",
+      date: markers.ldl_c.date ?? markers.hdl_c.date ?? markers.triglycerides.date ?? null,
+    };
+    tcDerived = true;
+  }
 
   // profile.smoking/bp_treated/statin are 0/1/NULL (NULL = not captured). Real
   // status wins whenever it's on file; a still-unset input falls back to
@@ -158,6 +198,11 @@ export function cardiovascularRiskRead() {
       heart_failure: { ten_year: number | null; thirty_year: number | null };
     };
     vascular_age: number | null;
+    projection: {
+      current: { ten_year: number | null; thirty_year: number | null; vascular_age: number | null };
+      targets_met: { ten_year: number | null; thirty_year: number | null; vascular_age: number | null };
+      levers_applied: Array<{ key: string; label: string; from: number; to: number; unit: string; detail: string }>;
+    } | null;
     horizons_note: string;
     frame: string;
   } | null = null;
@@ -192,6 +237,14 @@ export function cardiovascularRiskRead() {
         reason: "No HbA1c on file to derive diabetes status from; PREVENT assumes the lower-risk value until one is.",
       });
     }
+    if (tcDerived) {
+      assumptions.push({
+        input: "total cholesterol",
+        assumed: `derived (${markers.total_cholesterol.value} mg/dL)`,
+        reason:
+          "No direct total cholesterol on file; PREVENT uses the Friedewald-consistent sum of LDL + HDL + triglycerides/5 (valid while triglycerides are under 400 mg/dL). Add a direct total cholesterol to remove this estimate.",
+      });
+    }
 
     const preventInputs: PreventInputs = {
       age: age!,
@@ -214,6 +267,96 @@ export function cardiovascularRiskRead() {
     if (hasAnyEstimate) {
       const provisional = assumptions.length > 0;
       preventStatus = provisional ? "computed_provisional" : "computed";
+
+      // ---- REAL counterfactual: recompute PREVENT with the modifiable levers at
+      // target. NOT invented geometry — a genuine second pass through the same
+      // vendored equations. Only inputs PREVENT actually reads move: total
+      // cholesterol / non-HDL (the lipid lever), BMI (the body-composition lever),
+      // and smoking. ApoB/Lp(a)/hs-CRP are NOT PREVENT inputs, so they never move
+      // the number directly — instead the ApoB optimal target MOTIVATES the lipid
+      // lever (ApoB and non-HDL reflect the same atherogenic particle burden and
+      // fall together). Lp(a) is genetic and never moves.
+      const targetInputs: PreventInputs = { ...preventInputs };
+      const leversApplied: Array<{
+        key: string;
+        label: string;
+        from: number;
+        to: number;
+        unit: string;
+        detail: string;
+      }> = [];
+
+      const curHdl = preventInputs.hdl;
+      const curNonHdl = preventInputs.total_chol - curHdl;
+      const apob = markers.apob.value;
+      const NON_HDL_OPTIMAL_MAX = 130; // OPTIMAL_ZONES Non-HDL-C ceiling
+      let targetNonHdl = curNonHdl;
+      if (apob != null && apob > 80 && curNonHdl > 0) {
+        // Lowering ApoB toward its ~80 mg/dL optimal scales non-HDL down with it.
+        targetNonHdl = Math.min(targetNonHdl, curNonHdl * (80 / apob));
+      }
+      if (curNonHdl > NON_HDL_OPTIMAL_MAX) {
+        targetNonHdl = Math.min(targetNonHdl, NON_HDL_OPTIMAL_MAX);
+      }
+      if (curNonHdl > 0 && targetNonHdl < curNonHdl - 0.5) {
+        targetInputs.total_chol = round1(curHdl + targetNonHdl);
+        leversApplied.push({
+          key: "lipids",
+          label: "Lipid-lowering to target",
+          from: round1(curNonHdl),
+          to: round1(targetNonHdl),
+          unit: "mg/dL non-HDL",
+          detail:
+            apob != null && apob > 80
+              ? `Bringing ApoB toward ~80 mg/dL lowers non-HDL cholesterol with it, from ${round1(curNonHdl)} to ${round1(targetNonHdl)} mg/dL.`
+              : `Bringing non-HDL cholesterol into the optimal range (≤${NON_HDL_OPTIMAL_MAX} mg/dL), from ${round1(curNonHdl)} to ${round1(targetNonHdl)} mg/dL.`,
+        });
+      }
+
+      // Body-composition lever — PREVENT only sees body fat through BMI, so an
+      // above-range BMI is pulled toward the top of the healthy band. A normal
+      // BMI has no PREVENT lever to pull (truthfully), even if body fat is high.
+      const BMI_OPTIMAL_MAX = 24.9;
+      if (preventInputs.bmi > 25) {
+        targetInputs.bmi = BMI_OPTIMAL_MAX;
+        leversApplied.push({
+          key: "body_fat",
+          label: "Body composition to healthy BMI",
+          from: round1(preventInputs.bmi),
+          to: BMI_OPTIMAL_MAX,
+          unit: "kg/m²",
+          detail: `Moving BMI into the healthy range (${round1(preventInputs.bmi)} → ${BMI_OPTIMAL_MAX} kg/m²).`,
+        });
+      }
+
+      // Smoking lever — only present if the athlete is actually a smoker.
+      if (preventInputs.smoker) {
+        targetInputs.smoker = false;
+        leversApplied.push({
+          key: "smoking",
+          label: "Quit smoking",
+          from: 1,
+          to: 0,
+          unit: "",
+          detail: "Removing smoking as a risk factor.",
+        });
+      }
+
+      const targetsMetEstimate = leversApplied.length ? estimatePreventRisk(targetInputs) : estimate;
+      const projection = {
+        current: {
+          ten_year: estimate.total_cvd.ten_year,
+          thirty_year: estimate.total_cvd.thirty_year,
+          vascular_age: estimate.vascular_age,
+        },
+        targets_met: {
+          ten_year: targetsMetEstimate.total_cvd.ten_year,
+          thirty_year: targetsMetEstimate.total_cvd.thirty_year,
+          vascular_age: targetsMetEstimate.vascular_age,
+        },
+        levers_applied: leversApplied,
+      };
+
       prevent = {
         provisional,
         assumptions,
@@ -224,6 +367,7 @@ export function cardiovascularRiskRead() {
           heart_failure: estimate.heart_failure,
         },
         vascular_age: estimate.vascular_age,
+        projection,
         horizons_note: "30-year estimates are validated only for ages 30–59.",
         frame:
           "Informational, not medical advice. A validated estimate from the AHA PREVENT (2023) equations; provisional inputs are assumed and shown above.",
@@ -243,7 +387,7 @@ export function cardiovascularRiskRead() {
     why: "ApoB is the atherogenic particle count and is the most direct modifiable lipid target.",
     lever: "Bring ApoB toward ~80 mg/dL or lower with clinician-guided lipid work plus diet/fiber support.",
   });
-  addEnhancer(enhancers, (markers.lpa.value ?? 0) > 75, {
+  addEnhancer(enhancers, lpaElevated(markers.lpa), {
     key: "lpa",
     label: "Elevated Lp(a)",
     finding: markerFinding(markers.lpa),

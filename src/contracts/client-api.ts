@@ -1155,6 +1155,27 @@ export interface ClientRiskHorizon {
   thirty_year: number | null;
 }
 
+export interface ClientRiskProjectionOutcome {
+  ten_year: number | null;
+  thirty_year: number | null;
+  vascular_age: number | null;
+}
+
+export interface ClientRiskLeverApplied {
+  key: string;
+  label: string;
+  from: number;
+  to: number;
+  unit: string;
+  detail: string;
+}
+
+export interface ClientPreventProjection {
+  current: ClientRiskProjectionOutcome;
+  targets_met: ClientRiskProjectionOutcome;
+  levers_applied: ClientRiskLeverApplied[];
+}
+
 export interface ClientPreventEstimate {
   provisional: boolean;
   assumptions: ClientPreventAssumption[];
@@ -1165,6 +1186,10 @@ export interface ClientPreventEstimate {
     heart_failure: ClientRiskHorizon;
   };
   vascular_age: number | null;
+  // A REAL recompute of PREVENT with the modifiable levers at target — genuine
+  // current-vs-targets-met risk, not invented ribbon geometry. Null-safe for
+  // older payloads.
+  projection?: ClientPreventProjection | null;
   horizons_note: string;
   frame: string;
 }
