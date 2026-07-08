@@ -100,6 +100,57 @@ test("captured smoking/BP-treatment/statin status removes the provisional assump
   assert.ok(typeof smokerTenYear === "number" && smokerTenYear > nonSmokerTenYear);
 });
 
+test("interpretation reads the whole picture for a young athlete: low 10-year, but 30-year + enhancers are the lever", () => {
+  // The real owner's shape: male 44, a LOW 10-year ASCVD (<5% band) but a
+  // meaningful 30-year outlook and elevated ApoB / Lp(a) / hs-CRP. The read must
+  // name where the lever actually is, never let the reassuring 10-year stand alone.
+  repo.setProfile({ sex: "male", age: 44, height_in: 69, weight_lb: 190, smoking: 0, bp_treated: 0, statin: 0 });
+  seedHealthDoc("2026-06-15", [
+    marker("Total Cholesterol", 210, { unit: "mg/dL" }),
+    marker("HDL Cholesterol", 50, { unit: "mg/dL" }),
+    marker("LDL Cholesterol", 140, { unit: "mg/dL" }),
+    marker("Non-HDL Cholesterol", 160, { unit: "mg/dL", flag: "high" }),
+    marker("ApoB", 125, { unit: "mg/dL", flag: "high" }),
+    marker("Lp(a)", 99.7, { unit: "nmol/L", flag: "high" }),
+    marker("hs-CRP", 1.8, { unit: "mg/L", flag: "high" }),
+    marker("HbA1c", 5.4, { unit: "%" }),
+    marker("eGFR", 95, { unit: "mL/min" }),
+    marker("Systolic BP", 122, { unit: "mmHg" }),
+  ]);
+  const prevent = repo.cardiovascularRiskRead().prevent;
+  // ACC/AHA 10-year ASCVD band: this profile is comfortably < 5% → low.
+  assert.equal(prevent.category, "low");
+  const text = prevent.interpretation;
+  assert.match(text, /\d+ in 100 people with your profile/);
+  assert.match(text, /low 10-year risk/);
+  // The honesty guard: the long game (30-year) and the elevated enhancers are named.
+  assert.match(text, /30-year outlook/);
+  assert.match(text, /ApoB, Lp\(a\) and hs-CRP/);
+  assert.match(text, /where the lever is/);
+  assert.match(text, /acting now/);
+});
+
+test("interpretation names the clinician lever for an intermediate/high band", () => {
+  // An older profile with poor lipids/BP lands in a higher ACC/AHA band; the
+  // interpretation shifts to naming the actionable clinician lever, not the young
+  // "pays off most" framing.
+  repo.setProfile({ sex: "male", age: 68, height_in: 69, weight_lb: 205, smoking: 1, bp_treated: 0, statin: 0 });
+  seedHealthDoc("2026-06-15", [
+    marker("Total Cholesterol", 265, { unit: "mg/dL", flag: "high" }),
+    marker("HDL Cholesterol", 34, { unit: "mg/dL" }),
+    marker("ApoB", 140, { unit: "mg/dL", flag: "high" }),
+    marker("hs-CRP", 3.2, { unit: "mg/L", flag: "high" }),
+    marker("HbA1c", 6.0, { unit: "%" }),
+    marker("eGFR", 72, { unit: "mL/min" }),
+    marker("Systolic BP", 148, { unit: "mmHg", flag: "high" }),
+  ]);
+  const prevent = repo.cardiovascularRiskRead().prevent;
+  assert.ok(["intermediate", "high"].includes(prevent.category), `expected intermediate/high, got ${prevent.category}`);
+  assert.match(prevent.interpretation, /in 100 people with your profile/);
+  assert.match(prevent.interpretation, /discuss with a clinician/);
+  assert.doesNotMatch(prevent.interpretation, /while you're young/);
+});
+
 test("cardiovascular risk read degrades on sparse data", () => {
   const risk = repo.cardiovascularRiskRead();
   assert.equal(risk.model_status.prevent, "insufficient_inputs");

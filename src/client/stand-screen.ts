@@ -662,8 +662,22 @@ async function paintClinicalInputs(token: number): Promise<void> {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ [field]: val }),
           });
+          if (token !== pollToken) return;
+          // Visible acknowledgement: the read often doesn't MOVE (answering "No" to
+          // smoking equals the value PREVENT already assumed), so without this it
+          // reads as broken. A toast + a gentle pulse on the risk card confirm the
+          // tap registered; the repaint below still clears the provisional badge +
+          // assumptions once every flag is captured (a real change).
+          toast("Saved — read updated");
+          const riskCard = view.querySelector<HTMLElement>("#hRisk");
+          if (riskCard) {
+            riskCard.classList.remove("hrisk-flash");
+            void riskCard.offsetWidth; // reflow so the animation restarts on rapid taps
+            riskCard.classList.add("hrisk-flash");
+            setTimeout(() => riskCard.classList.remove("hrisk-flash"), 1400);
+          }
           // Recompute the risk read with the sharpened input.
-          if (token === pollToken) CairnHealthRiskController.load(riskDeps(), pollToken);
+          CairnHealthRiskController.load(riskDeps(), pollToken);
         } catch {
           toast("Couldn't save that just now.");
         }

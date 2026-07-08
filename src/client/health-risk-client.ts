@@ -68,6 +68,32 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     return `<li><b>${escHtml(assumption.input)}</b> assumed ${escHtml(assumption.assumed)} — ${escHtml(assumption.reason)}</li>`;
   }
 
+  // The clinical band label shown beside the plain-language interpretation. A
+  // category (per ACC/AHA), NOT a 0-100 wellness grade.
+  const HRISK_CATEGORY_LABEL: Record<string, string> = {
+    low: "Low 10-year risk",
+    borderline: "Borderline 10-year risk",
+    intermediate: "Intermediate 10-year risk",
+    high: "High 10-year risk",
+  };
+
+  // A calm, additive interpretation well: what the risk % actually means, in one
+  // human sentence, with the ACC/AHA category as a small pill. Empty when the
+  // backend has nothing to say (older payload / no ASCVD horizon).
+  function hrisk_interpretationHtml(prevent: NonNullable<CardiovascularRiskRead["prevent"]>): string {
+    const interpretation = prevent.interpretation ? String(prevent.interpretation) : "";
+    if (!interpretation) return "";
+    const category = prevent.category ? String(prevent.category) : "";
+    const pill =
+      category && HRISK_CATEGORY_LABEL[category]
+        ? `<span class="hrisk-cat hrisk-cat-${escAttr(category)}">${escHtml(HRISK_CATEGORY_LABEL[category])}</span>`
+        : "";
+    return `<div class="hrisk-interp">
+    <div class="hrisk-interp-head"><span class="lbl">What this means</span>${pill}</div>
+    <p class="hrisk-interp-line">${escHtml(interpretation)}</p>
+  </div>`;
+  }
+
   // Risk accumulates over the horizon: both paths start at ~0 today and rise to
   // the 10-yr and 30-yr total-CVD reads. The plot region (x 44→328, y 30→150) is
   // kept clear of the decorative heart glyph and the axis row so it never reads
@@ -228,6 +254,7 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     ${hrisk_horizonStat("Heart failure", prevent.estimates.heart_failure, prevent.horizons_note)}
   </div>`;
 
+    const interpHtml = hrisk_interpretationHtml(prevent);
     const vizHtml = hrisk_riskViz(data);
 
     const enhancersHtml = `<div class="hrisk-enh">
@@ -253,6 +280,7 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     ${vageHtml}
     ${enhancersHtml}
     ${stats}
+    ${interpHtml}
     ${vizHtml}
     ${leversHtml}
     ${provisionalHtml}

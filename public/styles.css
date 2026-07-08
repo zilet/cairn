@@ -3519,6 +3519,27 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hrisk-viz-key{width:18px;height:0;border-top:3px solid var(--accent-deep);border-radius:999px}
 .hrisk-viz-key-optimized{border-top-color:var(--sage);border-top-style:dashed}
 .hrisk-viz-note{margin:8px 0 0;font-size:.74rem;line-height:1.45;color:var(--muted)}
+/* calm interpretation well — what the % actually means, with the ACC/AHA band as
+   a small category pill (a clinical category, NOT a 0-100 wellness grade) */
+.hrisk-interp{background:var(--card-2);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;display:grid;gap:7px}
+.hrisk-interp-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hrisk-interp-line{margin:0;font-size:.86rem;line-height:1.5;color:var(--ink-2)}
+.hrisk-cat{flex:0 0 auto;font-size:.62rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  border-radius:999px;padding:3px 9px;white-space:nowrap}
+.hrisk-cat-low{color:var(--sage);background:var(--sage-bg)}
+.hrisk-cat-borderline{color:var(--gold-deep);background:var(--card)}
+.hrisk-cat-intermediate{color:var(--accent-deep);background:var(--card)}
+.hrisk-cat-high{color:var(--warn);background:var(--warn-bg)}
+/* a brief, gentle acknowledgement pulse on the risk card after a sharpen flag
+   autosaves — reassures the tap registered even when the numbers don't move */
+.hrisk-flash{animation:hriskFlash 1.3s ease-out}
+@keyframes hriskFlash{
+  0%{box-shadow:0 0 0 0 rgba(110,127,92,.32)}
+  30%{box-shadow:0 0 0 5px rgba(110,127,92,.14)}
+  100%{box-shadow:0 0 0 0 rgba(110,127,92,0)}
+}
+@media (prefers-reduced-motion:reduce){.hrisk-flash{animation:none}}
 /* the compact "what moves it" lever strip */
 .hrisk-levers{border-top:1px solid var(--line);padding-top:12px}
 .hrisk-lev-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
@@ -4225,6 +4246,14 @@ button.hmk-row:active{background:var(--card-2)}
   border-radius:999px;padding:9px 8px;font-family:var(--font-ui);font-weight:600;
   font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
 .disc-seg .segbtn.active,.goalmode-seg .segbtn.active,.triflag-seg .segbtn.active{background:var(--ink);color:var(--paper)}
+/* Activity level — 5 human-labelled pills. The labels are long, so this wraps
+   into a soft pill group rather than cramming an equal-flex bar. */
+.actlevel-seg{display:flex;flex-wrap:wrap;gap:6px;background:transparent;border:none;padding:0}
+.actlevel-seg .segbtn{flex:0 0 auto;border:1px solid var(--line);background:var(--card-2);color:var(--ink-2);
+  border-radius:999px;padding:8px 13px;font-family:var(--font-ui);font-weight:600;
+  font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.actlevel-seg .segbtn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.actlevel-desc{color:var(--muted)}
 
 /* The cardio "tag" caps chip used wherever a cardio item names its modality. */
 .cardio-tag{display:inline-block;color:var(--sage);background:var(--sage-bg);
