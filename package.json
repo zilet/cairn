@@ -17,7 +17,7 @@
   },
   "scripts": {
     "dev": "npm run client:build && tsx watch src/server.ts",
-    "build": "npm run client:check && npm run client:build && tsc",
+    "build": "npm run client:check && npm run client:build && npm run tsc --",
     "start": "node dist/server.js",
     "seed": "tsx src/seed.ts",
     "seed:demo": "tsx src/demoSeed.ts",
@@ -29,10 +29,11 @@
     "docs:index": "node scripts/gen-docs.mjs",
     "docs:check": "node scripts/gen-docs.mjs --check",
     "actions:check": "node scripts/check-action-pins.mjs",
-    "client:check": "tsc -p tsconfig.client.build.json --noEmit",
+    "tsc": "node node_modules/typescript-7/bin/tsc",
+    "client:check": "npm run tsc -- -p tsconfig.client.build.json --noEmit",
     "client:build": "node scripts/build-client.mjs",
     "client:verify": "npm run typecheck:client && node scripts/check-client-build-output.mjs",
-    "typecheck:client": "tsc -p tsconfig.client.json && npm run client:check",
+    "typecheck:client": "npm run tsc -- -p tsconfig.client.json && npm run client:check",
     "public:check": "node scripts/check-public-scripts.mjs",
     "lint": "biome lint .",
     "lint:changed": "biome lint --changed",
@@ -66,6 +67,7 @@
     "@types/node": "^24.13.2",
     "@types/ws": "^8.18.1",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-7": "npm:typescript@^7.0.2"
   }
 }

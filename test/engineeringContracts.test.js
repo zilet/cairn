@@ -1524,10 +1524,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayScreenRuntimeSource, /CairnTodayCompatibilityBridges\.create/);
   assert.doesNotMatch(today, /const todayDeps = CairnTodayDependencies\.context/);
   assert.equal(pkg.scripts.dev, "npm run client:build && tsx watch src/server.ts");
-  assert.equal(pkg.scripts.build, "npm run client:check && npm run client:build && tsc");
-  assert.equal(pkg.scripts["client:check"], "tsc -p tsconfig.client.build.json --noEmit");
+  assert.equal(pkg.scripts.build, "npm run client:check && npm run client:build && npm run tsc --");
+  assert.equal(pkg.scripts.tsc, "node node_modules/typescript-7/bin/tsc");
+  assert.equal(pkg.scripts["client:check"], "npm run tsc -- -p tsconfig.client.build.json --noEmit");
   assert.equal(pkg.scripts["client:build"], "node scripts/build-client.mjs");
-  assert.match(pkg.scripts["typecheck:client"], /tsc -p tsconfig\.client\.json && npm run client:check/);
+  assert.match(pkg.scripts["typecheck:client"], /npm run tsc -- -p tsconfig\.client\.json && npm run client:check/);
   assert.equal(pkg.scripts["public:check"], "node scripts/check-public-scripts.mjs");
   assert.equal(pkg.scripts["presmoke:browser"], "npm run build");
   assert.equal(pkg.scripts["smoke:browser"], "node scripts/smoke-browser.mjs");
