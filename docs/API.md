@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**230 routes** across 86 groups.
+**231 routes** across 87 groups.
 
 ## `/activities`
 
@@ -618,6 +618,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/test-week` |  |
+
+## `/today`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/today` | Cold-start aggregate for the Today screen. This is deliberately only the independent low-risk reads the client previously fetched separately; route semantics for /plan, /sessions?date=, /stats, /profile, and /exercises stay unchanged and the client still primes their individual SWR keys. |
 
 ## `/today-agenda`
 

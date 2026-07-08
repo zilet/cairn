@@ -24,19 +24,21 @@ test("Today starts non-dependent summary reads before later render work", () => 
   assert.match(todayDataLoader, /const\s+statsPromise\s*=/);
   assert.match(todayDataLoader, /const\s+profilePromise\s*=/);
   assert.match(todayDataLoader, /const\s+exercisesPromise\s*=/);
-  assert.match(todayDataLoader, /Promise\.all\(\[statsPromise,\s*profilePromise,\s*exercisesPromise\]\)/);
+  assert.match(todayDataLoader, /Promise\.all\(\[[\s\S]*statsPromise,[\s\S]*profilePromise,[\s\S]*exercisesPromise,[\s\S]*\]\)/);
   assert.match(today, /todayDataLoader\.load/);
 });
 
 test("Today starts plan and session requests together on the cold path", () => {
+  assert.match(todayDataLoader, /deps\.cachedApi\("\/today\?date="/, "cold path tries the aggregate first");
   const planPromise = todayDataLoader.indexOf("const planPromise");
   const sessionPromise = todayDataLoader.indexOf("const sessionPromise");
-  const awaitBoth = todayDataLoader.indexOf("Promise.all([planPromise, sessionPromise])");
+  const awaitBoth = todayDataLoader.indexOf("const [plan, session, stats, profile, exercises] = await Promise.all");
   const assignPlan = todayDataLoader.indexOf("deps.state.plan = plan as unknown[]");
   assert.ok(planPromise > -1, "plan promise is started explicitly");
   assert.ok(sessionPromise > planPromise, "session promise starts immediately after plan promise");
   assert.ok(awaitBoth > sessionPromise, "plan and session are awaited together");
   assert.ok(assignPlan > awaitBoth, "plan state is assigned after both independent reads are in flight");
+  assert.match(todayDataLoader, /if\s*\(!aggregate\)\s*\{[\s\S]*revalidate\("\/plan", "plan"\);[\s\S]*revalidate\("\/sessions\?date="/, "independent SWR revalidation stays as aggregate fallback");
 });
 
 test("Today SWR-caches progression and invalidates it when set truth changes", () => {
