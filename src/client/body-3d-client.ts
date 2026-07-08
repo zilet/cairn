@@ -31,7 +31,6 @@ interface Body3DEnhancement {
 }
 
 (() => {
-const BODY3D_SITE_KEYS: Body3DSiteKey[] = ["chest_in", "waist_in", "hip_in", "shoulder_in", "upper_arm_in", "thigh_in"];
 const BODY3D_VERTEX = `
 attribute vec2 a_pos;
 attribute float a_shade;
