@@ -1,4 +1,5 @@
 import { getRecoverySummary } from "./coach.js";
+import { parseDexaRegional } from "./dexa-canon.js";
 import { bpRead, listBloodPressureReadings } from "./health.js";
 import { getProfile, listWeight } from "./profile.js";
 import { healthFocus, prioritizeMarkers } from "./propagation.js";
@@ -286,23 +287,9 @@ function weightedAge(inputs: { age: number | null; weight: number }[], fallback:
 // fat sits, where lean is light, how bone is loading). Informational, never a grade.
 function dexaRegional(markers: any[]) {
   const num = (re: RegExp, min: number, max: number) => plausibleNumber(latestNumber(findMarker(markers, re)), min, max);
-  const visceral_fat_lbs = num(/visceral fat/i, 0, 25);
-  const almi = num(/\balmi\b|appendicular lean mass index/i, 3, 20);
-  const ffmi = num(/\bffmi\b|fat[\s-]?free mass index/i, 10, 40);
-  const bmd_total = num(/bmd[\s-]*total body|total body bmd/i, 0.4, 2.5);
-  const t_score = plausibleNumber(latestNumber(findMarker(markers, /^t[\s-]?score\b/i)), -6, 6);
-  const z_score = plausibleNumber(latestNumber(findMarker(markers, /^z[\s-]?score\b/i)), -6, 6);
-  const android_gynoid = num(/android\/gynoid|a\/g ratio/i, 0.3, 2.5);
-  const fat = {
-    trunk: num(/body fat[\s-]*trunk/i, 3, 70),
-    arms: num(/body fat[\s-]*arms/i, 3, 70),
-    legs: num(/body fat[\s-]*legs/i, 3, 70),
-  };
-  const lean = {
-    trunk: num(/lean mass[\s-]*trunk/i, 5, 160),
-    arms: num(/lean mass[\s-]*arms/i, 2, 90),
-    legs: num(/lean mass[\s-]*legs/i, 5, 160),
-  };
+  // Numeric extraction lives in the DEXA canon (dexa-canon.ts) so the recognition
+  // regexes + shape have one home; the plain-language notes stay here.
+  const { visceral_fat_lbs, almi, ffmi, bmd_total, t_score, z_score, android_gynoid, fat, lean } = parseDexaRegional(num);
   const present = [visceral_fat_lbs, almi, ffmi, bmd_total, t_score, z_score, android_gynoid, fat.trunk, lean.legs].some((x) => x != null);
   if (!present) return null;
 

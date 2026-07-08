@@ -1,4 +1,5 @@
-import { getAppState, setAppState } from "./app-state.js";
+import { todayISO } from "../db.js";
+import { type CadencePolicy, applyAttentionObservation, getAttentionSchedule } from "./attention.js";
 import { type GoalMode, effectiveGoalMode, getProfile } from "./profile.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
 
@@ -7,63 +8,90 @@ import type { TodayAgendaCandidate } from "./today-agenda.js";
 //
 // Goals drift, and the goal modes (lose / maintain / gain) made that explicit.
 // RARELY — and only as a quiet, pull-based card surfaced THROUGH the Today
-// salience arbiter — the buddy checks in: "you've been maintaining ~3 months;
+// salience arbiter — the buddy checks in: "you've been maintaining a while;
 // still the plan, or shifting?". It honors §2.7 (understands you, keeps
 // understanding) WITHOUT nagging.
 //
-// Constitution (BINDING): months apart, never blocking, dismissible to silence,
+// Constitution (BINDING): far apart, never blocking, dismissible to silence,
 // no nag, no score. Pull-never-push. You-drive: a "change" routes through the
 // EXISTING profile goal flow (Me→Profile selector / setProfile) — nothing here
 // auto-applies. Kind, never anxious.
 //
-// State rides entirely in app_state (no migration):
-//   goal_checkin_confirmed_at — last time the user confirmed OR changed their
-//                               goal (an epoch-ms stamp). ALSO seeded to "now"
-//                               the first time we ever observe a profile, so the
-//                               first prompt comes ~90 days into use, never on
-//                               day one (a brand-new user is never nagged).
-//   goal_checkin_dismissed_at — last time the card was waved off; we then stay
-//                               quiet for a long cooldown.
+// CADENCE (K5): the timing is NOT a fixed 90-day interval. It rides the shared
+// attention engine as a `journey`-domain signal, so every "still my goal" (a
+// clean check) STRETCHES the next ask via the tier machine — active → confirming
+// → surveillance → released — and a boringly-stable goal converges to *no*
+// scheduled check (event-driven only). A real goal change re-seeds it at active.
 // ----------------------------------------------------------------------------
 
-const CONFIRMED_KEY = "goal_checkin_confirmed_at";
-const DISMISSED_KEY = "goal_checkin_dismissed_at";
+const SIGNAL_KEY = "journey:goal-checkin";
 
-const DAY_MS = 86_400_000;
-// Surface only once the goal has been stable a long time, and stay quiet for a
-// long cooldown after a dismiss — this is months-apart by design, never a nag.
-const STABLE_DAYS = 90; // ≈3 months since the last confirm/change before we ask
-const DISMISS_COOLDOWN_DAYS = 60; // stay silent at least this long after a dismiss
+// The K5 cadence policy for the goal check-in. `active_days` is the FIRST gentle
+// ask (~3 months after the goal is set); each clean confirm then stretches the
+// interval (×surveillance_multiplier), and after a couple of clean surveillance
+// checks it releases entirely (no scheduled check until the goal changes).
+const GOAL_POLICY: CadencePolicy = {
+  signal_class: "journey:goal",
+  domain: "journey",
+  source: "goal-checkin",
+  active_days: 90, // ≈3 months from setting a goal to the first gentle check
+  confirming_days: 90, // confirm it still holds before stretching further
+  surveillance_initial_days: 150,
+  surveillance_multiplier: 1.75,
+  surveillance_max_days: 365,
+  surveillance_checks_before_release: 2,
+  reason: "It's been a while on this goal — a gentle check that it still fits.",
+  release_condition:
+    "The goal is stable and confirmed; it goes quiet until you change it, bring it up, or your journey phase shifts.",
+};
 
-function now(): number {
-  return Date.now();
-}
-
-// Read an epoch-ms stamp out of app_state; null when absent or unparseable.
-function readStamp(key: string): number | null {
-  const raw = getAppState(key);
-  if (raw == null || raw === "") return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function writeStamp(key: string, ms: number): void {
-  setAppState(key, String(Math.trunc(ms)));
+function daysBetween(fromISO: string, toISO: string): number {
+  const a = Date.parse(`${fromISO}T00:00:00Z`);
+  const b = Date.parse(`${toISO}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.round((b - a) / 86_400_000);
 }
 
 // ---------- public stamping helpers ----------
 
-// Stamp that the user has confirmed (or changed) their goal — restarts the
-// stable-period clock so the next gentle check is ~3 months out. Called from the
-// confirm/change paths (the existing profile goal flow).
+// Stamp that the user has confirmed their goal ("still my goal") — a CLEAN check
+// that stretches the next gentle ask (and, repeated, releases it). The first ever
+// confirm (no entry yet) starts the ~3-month clock rather than releasing. Called
+// from the confirm path AND the existing profile goal-change flow.
 export function confirmGoalCheckin(): void {
-  writeStamp(CONFIRMED_KEY, now());
+  const prev = getAttentionSchedule(SIGNAL_KEY);
+  // A clean check with no prior entry would release immediately; instead treat the
+  // very first confirm as starting the active clock (the first ask lands ~90 days
+  // out, never on day one).
+  const status = prev ? "clean" : "active";
+  applyAttentionObservation({
+    signal_key: SIGNAL_KEY,
+    policy: GOAL_POLICY,
+    observation: { checked_at: todayISO(), status },
+  });
 }
 
-// Stamp that the card was waved off — start the dismiss cooldown so it stays
-// quiet for a long while. Dismissible to silence (constitution).
+// A real goal CHANGE — re-seed at the active tier (a fresh goal deserves a fresh
+// ~3-month clock, not the stretched cadence of the old one). goal_change is a
+// reactivating event in the attention engine.
+export function reactivateGoalCheckin(): void {
+  applyAttentionObservation({
+    signal_key: SIGNAL_KEY,
+    policy: GOAL_POLICY,
+    observation: { checked_at: todayISO(), status: "active", event: "goal_change" },
+  });
+}
+
+// Stamp that the card was waved off — a clean check that quiets it (stretches the
+// interval), never a nag. Dismissible to silence (constitution).
 export function dismissGoalCheckin(): void {
-  writeStamp(DISMISSED_KEY, now());
+  const prev = getAttentionSchedule(SIGNAL_KEY);
+  const status = prev ? "clean" : "active";
+  applyAttentionObservation({
+    signal_key: SIGNAL_KEY,
+    policy: GOAL_POLICY,
+    observation: { checked_at: todayISO(), status },
+  });
 }
 
 // ---------- the candidate producer ----------
@@ -100,37 +128,32 @@ function lineFor(mode: GoalMode, monthsStable: number): { kicker: string; title:
 //
 // Logic:
 //   • No profile at all → null (nothing to ask about).
-//   • First observation: seed goal_checkin_confirmed_at = now and return null,
-//     so a brand-new user's first prompt is ~STABLE_DAYS out, not on day one.
-//   • Recently dismissed (within the cooldown) → null.
-//   • Goal stable < STABLE_DAYS → null.
-//   • Otherwise → a modest-priority, dismissible 'primary' candidate.
-export function goalCheckinCandidate(): TodayAgendaCandidate | null {
+//   • No attention entry yet → seed it at the active tier (the first ask lands
+//     ~active_days out) and return null, so a brand-new user is never nagged.
+//   • Entry released or not yet due → null.
+//   • Otherwise (next_due has arrived) → a modest-priority, dismissible candidate.
+export function goalCheckinCandidate(asOf: string = todayISO()): TodayAgendaCandidate | null {
   const prof = getProfile();
   if (!prof) return null; // no profile yet — nothing to check in on
 
-  const t = now();
+  const entry = getAttentionSchedule(SIGNAL_KEY);
 
-  // First-ever observation: seed the confirm stamp so the clock starts NOW
-  // (never nag a fresh user — their first prompt lands ~STABLE_DAYS later).
-  const confirmedAt = readStamp(CONFIRMED_KEY);
-  if (confirmedAt == null) {
-    writeStamp(CONFIRMED_KEY, t);
+  // First-ever observation: seed the active clock so the first prompt lands
+  // ~active_days later (never nag a fresh user), then stay quiet.
+  if (!entry) {
+    applyAttentionObservation({
+      signal_key: SIGNAL_KEY,
+      policy: GOAL_POLICY,
+      observation: { checked_at: asOf, status: "active" },
+    });
     return null;
   }
 
-  // Respect a long cooldown after a dismiss — quiet means quiet.
-  const dismissedAt = readStamp(DISMISSED_KEY);
-  if (dismissedAt != null && t - dismissedAt < DISMISS_COOLDOWN_DAYS * DAY_MS) return null;
-
-  // Only ask once the goal has genuinely been stable a long time. If the user
-  // changed their goal more recently than the last dismiss, the confirm clock
-  // already restarted (confirmGoalCheckin), so this is the single gate.
-  const sinceConfirmMs = t - confirmedAt;
-  if (sinceConfirmMs < STABLE_DAYS * DAY_MS) return null;
+  // Released (converged to no scheduled check) or not yet due → quiet.
+  if (entry.tier === "released" || !entry.next_due || entry.next_due > asOf) return null;
 
   const mode = effectiveGoalMode(prof);
-  const monthsStable = Math.round(sinceConfirmMs / (30 * DAY_MS));
+  const monthsStable = Math.max(1, Math.round(daysBetween(entry.last_checked || asOf, asOf) / 30));
   const { kicker, title, body } = lineFor(mode, monthsStable);
 
   return {

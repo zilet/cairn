@@ -27,6 +27,7 @@ import {
   setEquipmentProfile,
   setProposalStatus,
   testWeekDue,
+  trainingPlaybook,
   updateBlock,
   weeklyRunPlan,
 } from "../../domain/training/index.js";
@@ -243,6 +244,16 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new user (never nags).",
     { date: z.string().optional() },
     async ({ date }) => asText(testWeekDue(date))
+  );
+
+  server.tool(
+    "get_training_playbook",
+    "The deterministic TRAINING PLAYBOOK — the plateau-type plays (strength plateau, endurance plateau, mono-stimulus, hybrid interference) and an adherence-fit restructure read the evolve-program loop can focus a proposal on. Each play carries a plain-language why + a short menu of adaptations, grounded in the program-state. Suggestion only: never mutates the plan, never a score; quiet ('no signal strong enough to change the plan') at steady state.",
+    {
+      date: z.string().optional(),
+      window: z.number().int().positive().optional().describe("adherence lookback window in days (default 28, min 14)"),
+    },
+    async ({ date, window }) => asText(trainingPlaybook(date, window !== undefined ? { windowDays: window } : {}))
   );
 
   server.tool(

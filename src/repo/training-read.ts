@@ -8,9 +8,11 @@
 //   2. HOW HARD was it? — a training-load grade (hard / moderate / easy), so a
 //      light recovery session isn't counted as a stacked hard day toward "you've
 //      earned rest". A genuine recovery day should BREAK the hard-day streak.
-// Leaf module: imports only `db`, so it can be used by both sessions/activities
-// and intelligence (which import each other) without a cycle.
+// Leaf module: imports only `db` and the runtime-free load thresholds, so it can be
+// used by both sessions/activities and intelligence (which import each other) without
+// a cycle.
 import { db } from "../db.js";
+import { CARDIO_GRADE } from "./heavy-load.js";
 
 export type MovementBucket = "push" | "pull" | "lower" | "core" | "mobility" | "other";
 export type TrainingLoad = "hard" | "moderate" | "easy";
@@ -176,10 +178,10 @@ export function cardioEffort(a: { type?: string | null; duration_min?: number | 
   const dist = a.distance_km != null ? Number(a.distance_km) : null;
   if (dur == null && dist == null) return null;
   if (/walk|hike/.test(type)) {
-    return (dur != null && dur >= 90) || (dist != null && dist >= 8) ? "moderate" : "easy";
+    return (dur != null && dur >= CARDIO_GRADE.walkHikeModerateMin) || (dist != null && dist >= CARDIO_GRADE.walkHikeModerateKm) ? "moderate" : "easy";
   }
-  if ((dur != null && dur >= 50) || (dist != null && dist >= 9)) return "hard";
-  if ((dur != null && dur >= 25) || (dist != null && dist >= 4)) return "moderate";
+  if ((dur != null && dur >= CARDIO_GRADE.hardMin) || (dist != null && dist >= CARDIO_GRADE.hardKm)) return "hard";
+  if ((dur != null && dur >= CARDIO_GRADE.moderateMin) || (dist != null && dist >= CARDIO_GRADE.moderateKm)) return "moderate";
   return "easy";
 }
 

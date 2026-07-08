@@ -138,10 +138,32 @@ export function startScheduler() {
     //     firing decision (signature changed + cooldown) is made inside the block.
     const triggerCheckDue =
       !evolutionDue && repo.getAppState("program_evolution_trigger_date") !== localToday(now);
+    // (f) Keep the TRAINING BENCHMARK attention (K5) fresh — a cheap, deterministic,
+    //     no-agent pass (≤1×/day) that writes each tracked lift's + the test-week's
+    //     re-test cadence onto the shared attention engine. This is what lets
+    //     testWeekDue / the benchmark reads DEFER to the tier machine (active on a
+    //     plateau/block checkpoint, released on clean progress) instead of a fixed
+    //     interval — rule 2a. Without this pass the entries never exist and the reads
+    //     fall back to the legacy cadence.
+    const benchmarkAttnDue = repo.getAppState("benchmark_attention_date") !== localToday(now);
 
-    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue && !blockAdvanceDue && !triggerCheckDue) return;
+    if (!insightDue && !weeklyDue && !nutritionDue && !evolutionDue && !blockAdvanceDue && !triggerCheckDue && !benchmarkAttnDue) return;
     proactiveBusy = true;
     try {
+      if (benchmarkAttnDue) {
+        // Stamp first (cheap deterministic read; runs ≤1×/day). Only for a training
+        // athlete with a plan — nothing to benchmark otherwise.
+        repo.setAppState("benchmark_attention_date", localToday(now));
+        try {
+          const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);
+          if (hasPlan) {
+            const entries = repo.refreshTrainingBenchmarkAttention();
+            console.log(`[proactive] refreshed training benchmark attention (${entries.length} signal(s)).`);
+          }
+        } catch (e: any) {
+          console.error(`[proactive] benchmark attention refresh failed: ${e?.message ?? e}`);
+        }
+      }
       if (blockAdvanceDue) {
         try {
           const hasPlan = (repo.getPlan() as any[]).some((d) => Array.isArray(d.items) && d.items.length);

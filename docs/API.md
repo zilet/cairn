@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**231 routes** across 87 groups.
+**232 routes** across 87 groups.
 
 ## `/activities`
 
@@ -475,6 +475,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/program/equipment` | The persisted equipment/preference profile (free text) that RANKS variation suggestions by what the user can actually load. GET reads it (+ the parsed equipment types); PUT replaces it (null/'' clears). A plain profile field. |
 | PUT | `/api/program/equipment` |  |
 | POST | `/api/program/evolve` | Adaptive program evolution: read the program-state and draft a plan EVOLUTION (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for review — same propose→apply path as /agent/run, driven by the trend analysis. |
+| GET | `/api/program/playbook` | The deterministic TRAINING PLAYBOOK — plateau-type plays (strength/endurance/ mono-stimulus/hybrid-interference) + an adherence-fit restructure read, each with plain-language adaptations the evolve-program loop can focus on. Suggestion only: never mutates the plan, never a score. Quiet ("no signal strong enough") at steady state. ?date= / ?window= optional. |
 | GET | `/api/program/progression` | Per-lift next-session prescription for every strength item on a plan day. ?day=N selects the day; omit to default to the plan day today's read points at (the "upcoming session" the Brief already suggests). Returns [] when the day has no strength items or does not exist. |
 | POST | `/api/program/progression/apply` | Build a DRAFT plan proposal from the current day's per-lift prescriptions, via the same propose→apply path as /agent/run and /program/evolve. Never auto- applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed-failure signal — nothing wrong at the HTTP level, just nothing to do). |
 | POST | `/api/program/run-plan/apply` | Build a DRAFT plan proposal from this week's deterministic run mix, via the same propose→apply path as /program/progression/apply. Maps weeklyRunPlan(date).runs → parsed.cardio[] (applyProposal → setWeeklyRuns, keeping strength intact + carrying interval structure). Never auto-applied. Returns the designed ok:false at 200. |

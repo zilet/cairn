@@ -22,6 +22,7 @@
 // self) and is the single point getMarkerHistory keys on.
 
 import { db } from "../db.js";
+import { createAliasStore } from "./canon-aliases.js";
 import { seriesUnitsCompatible } from "./lab-units.js";
 import { bumpMarkerDataVersion } from "./marker-cache.js";
 
@@ -335,34 +336,33 @@ for (const e of MARKER_ALIASES) {
   for (const a of e.aliases) KB.set(normalizeMarkerName(a), { key: e.key, canonical: e.canonical });
 }
 
+// The persisted alias table, on the shared canon-alias store (a learned alias re-keys
+// / merges getMarkerHistory series, so every mutation bumps the marker data version).
+const aliasStore = createAliasStore({
+  table: "marker_aliases",
+  keyColumn: "raw_norm",
+  valueColumns: ["canonical_key", "canonical_name"],
+  listOrderBy: "canonical_name, raw_norm",
+  stampCreatedAt: true,
+  onMutate: bumpMarkerDataVersion,
+});
+
 export function getMarkerAlias(rawNorm: string): { canonical_key: string; canonical_name: string } | null {
   if (!rawNorm) return null;
-  const r = db
-    .prepare("SELECT canonical_key, canonical_name FROM marker_aliases WHERE raw_norm = ?")
-    .get(rawNorm) as any;
-  return r ? { canonical_key: r.canonical_key, canonical_name: r.canonical_name } : null;
+  return aliasStore.get(rawNorm) as { canonical_key: string; canonical_name: string } | null;
 }
 
 export function setMarkerAlias(rawNorm: string, canonicalKey: string, canonicalName: string, source = "agent") {
   if (!rawNorm || !canonicalKey || !canonicalName) return;
-  db.prepare(
-    `INSERT INTO marker_aliases (raw_norm, canonical_key, canonical_name, source, created_at)
-     VALUES (?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(raw_norm) DO UPDATE SET
-       canonical_key = excluded.canonical_key,
-       canonical_name = excluded.canonical_name,
-       source = excluded.source`
-  ).run(rawNorm, canonicalKey, canonicalName, source);
-  bumpMarkerDataVersion(); // a learned alias re-keys / merges getMarkerHistory series
+  aliasStore.set(rawNorm, [canonicalKey, canonicalName], source);
 }
 
 export function listMarkerAliases(): Array<{ raw_norm: string; canonical_key: string; canonical_name: string; source: string }> {
-  return db.prepare("SELECT raw_norm, canonical_key, canonical_name, source FROM marker_aliases ORDER BY canonical_name, raw_norm").all() as any[];
+  return aliasStore.list();
 }
 
 export function clearMarkerAlias(rawNorm: string) {
-  db.prepare("DELETE FROM marker_aliases WHERE raw_norm = ?").run(normalizeMarkerName(rawNorm));
-  bumpMarkerDataVersion();
+  aliasStore.clear(normalizeMarkerName(rawNorm));
 }
 
 const BARE_DIFFERENTIAL_NAMES = new Set([
