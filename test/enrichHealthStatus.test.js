@@ -88,6 +88,12 @@ Follow-up:
 
   const fp = path.join(os.tmpdir(), `cairn-visit-note-${process.pid}-${Date.now()}.txt`);
   fs.writeFileSync(fp, note, "utf8");
+  const event = repo.addContextEvent({
+    kind: "life_event",
+    title: "PCP follow-up visit",
+    detail: "Planned primary care appointment to review cholesterol labs.",
+    start_date: "2026-07-07",
+  });
   const doc = repo.addHealthDocument({
     kind: "other",
     original_name: "progress-note.txt",
@@ -117,4 +123,10 @@ Follow-up:
   assert.ok(facts.some((f) => f.name === "Follow-up plan" && /labs in Aug/i.test(f.detail)));
   assert.ok(facts.some((f) => f.kind === "family_history"));
   assert.ok(repo.listMemory(10).some((m) => m.kind === "milestone" && /future labs/i.test(m.content)));
+
+  const resolvedEvent = repo.getContextEvent(event.id);
+  assert.equal(resolvedEvent.resolved_at, "2026-07-07");
+  assert.equal(resolvedEvent.meta.matched_health_doc.id, doc.id);
+  assert.equal(resolvedEvent.meta.matched_health_doc.kind, "visit_note");
+  assert.equal(repo.listContextEvents({ activeOnly: true }).some((e) => e.id === event.id), false);
 });

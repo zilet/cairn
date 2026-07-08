@@ -2,7 +2,7 @@ import { db } from "../db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
 import { invalidateDayRead } from "./intelligence.js";
-import { localDateISO } from "./shared.js";
+import { daysBetweenISO, localDateISO } from "./shared.js";
 import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker, canonicalMarkerForReading } from "./marker-canon.js";
@@ -1510,6 +1510,130 @@ export function resolveContextEvent(id: number, date?: string) {
   // A resolved injury no longer eases load — the next Brief should reflect that.
   try { invalidateDayRead(); } catch { /* best-effort */ }
   return getContextEvent(id);
+}
+
+export interface HealthDocContextEventMatch {
+  event_id: number;
+  health_document_id: number;
+  score: number;
+  resolved_at: string;
+  reason: string;
+}
+
+const VISIT_DOCUMENT_TEXT =
+  /\b(after visit summary|visit note|progress note|office visit|televisit|adult patient visit|primary care|pcp|assessment\/plan|follow[-\s]?up)\b/i;
+const PCP_CONTEXT_TEXT =
+  /\b(pcp|primary care|doctor|clinician|clinic|appointment|visit|follow[-\s]?up|televisit|check[-\s]?up|physical)\b/i;
+
+function compactText(...parts: unknown[]): string {
+  return parts
+    .flatMap((p) => Array.isArray(p) ? p : [p])
+    .filter((p) => p != null)
+    .map((p) => String(p).replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function healthDocEventDate(doc: any): string | null {
+  const own = String(doc?.doc_date ?? "").slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(own)) return own;
+  const facts = Array.isArray(doc?.parsed?.clinical_facts) ? doc.parsed.clinical_facts : [];
+  for (const f of facts) {
+    const d = String(f?.date ?? "").slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  }
+  return null;
+}
+
+function healthDocVisitText(doc: any): string {
+  const facts = Array.isArray(doc?.parsed?.clinical_facts) ? doc.parsed.clinical_facts : [];
+  return compactText(
+    doc?.kind,
+    doc?.summary,
+    doc?.original_name,
+    facts.flatMap((f: any) => [f?.kind, f?.name, f?.status, f?.source, f?.detail]),
+  );
+}
+
+function healthDocLooksLikeCompletedVisit(doc: any): boolean {
+  const kind = String(doc?.kind ?? "");
+  if (kind === "visit_note" || kind === "after_visit_summary") return true;
+  const facts = Array.isArray(doc?.parsed?.clinical_facts) ? doc.parsed.clinical_facts : [];
+  if (facts.some((f: any) => f?.kind === "encounter" && /\b(completed|done|visit|televisit|office)\b/i.test(compactText(f?.status, f?.name, f?.detail)))) {
+    return true;
+  }
+  return VISIT_DOCUMENT_TEXT.test(healthDocVisitText(doc));
+}
+
+function scoreVisitEventMatch(event: any, docDate: string | null, docText: string): { score: number; reason: string } {
+  if (!event || event.archived) return { score: 0, reason: "" };
+  if (!["life_event", "family_event"].includes(String(event.kind ?? ""))) return { score: 0, reason: "" };
+  if (event.meta?.matched_health_doc?.id) return { score: 0, reason: "" };
+  const eventText = compactText(event.title, event.detail, event.meta && JSON.stringify(event.meta));
+  if (!PCP_CONTEXT_TEXT.test(eventText)) return { score: 0, reason: "" };
+
+  let score = 2;
+  const reasons: string[] = ["planned clinical event"];
+  if (/\b(pcp|primary care)\b/i.test(eventText)) { score += 3; reasons.push("PCP wording"); }
+  if (/\b(appointment|visit|follow[-\s]?up|televisit)\b/i.test(eventText)) { score += 1; reasons.push("visit wording"); }
+  if (/\b(pcp|primary care|after visit summary|visit note|televisit|office visit|adult patient visit)\b/i.test(docText)) {
+    score += 2;
+    reasons.push("matching visit document");
+  }
+
+  const eventDate = String(event.start_date ?? "").slice(0, 10);
+  if (docDate && /^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
+    const delta = Math.abs(daysBetweenISO(docDate, eventDate) ?? 99);
+    if (delta === 0) { score += 5; reasons.push("same date"); }
+    else if (delta === 1) { score += 3; reasons.push("one-day date match"); }
+    else if (delta <= 3) { score += 1; reasons.push("nearby date"); }
+    else return { score: 0, reason: "" };
+  } else if (docDate || eventDate) {
+    score += 1;
+  }
+
+  return { score, reason: reasons.join(", ") };
+}
+
+// When a processed visit note / after-visit summary clearly corresponds to a planned
+// PCP-style life event, close the active event but keep it on the timeline with a
+// provenance link to the health document. This prevents a completed appointment from
+// continuing to shape the day-read as an upcoming obligation.
+export function reconcileHealthDocumentContextEvents(healthDocumentId: number): HealthDocContextEventMatch[] {
+  const doc = getHealthDocument(healthDocumentId) as any;
+  if (!doc || !healthDocLooksLikeCompletedVisit(doc)) return [];
+  const docDate = healthDocEventDate(doc);
+  const docText = healthDocVisitText(doc);
+  const events = listContextEvents({ activeOnly: false }) as any[];
+  let best: { event: any; score: number; reason: string } | null = null;
+  for (const event of events) {
+    const scored = scoreVisitEventMatch(event, docDate, docText);
+    if (scored.score < 8) continue;
+    if (!best || scored.score > best.score) best = { event, ...scored };
+  }
+  if (!best) return [];
+
+  const resolvedAt = docDate ?? localDateISO();
+  const existingMeta = best.event.meta && typeof best.event.meta === "object" && !Array.isArray(best.event.meta)
+    ? best.event.meta
+    : {};
+  const matched = {
+    id: doc.id,
+    kind: doc.kind,
+    doc_date: docDate,
+    summary: capStr(doc.summary, 240),
+  };
+  updateContextEvent(best.event.id, {
+    meta: { ...existingMeta, matched_health_doc: matched },
+    resolved_at: best.event.resolved_at ?? resolvedAt,
+  });
+  return [{
+    event_id: best.event.id,
+    health_document_id: doc.id,
+    score: best.score,
+    resolved_at: resolvedAt,
+    reason: best.reason,
+  }];
 }
 
 export function deleteContextEvent(id: number) {

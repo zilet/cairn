@@ -1151,6 +1151,17 @@ function clinicalNoteFallbackFromText(text: string): { doc_date: string | null; 
   return { doc_date: docDate, summary, clinical_facts: facts, memory };
 }
 
+function reconcileHealthDocContext(id: number): void {
+  try {
+    const matches = repo.reconcileHealthDocumentContextEvents(id);
+    if (matches.length) {
+      console.log(`[enrich] health#${id}: resolved ${matches.length} matched context event(s).`);
+    }
+  } catch (e: any) {
+    console.warn(`[enrich] health#${id}: context-event reconciliation failed: ${e?.message || e}`);
+  }
+}
+
 function applyTextVisitNoteFallback(id: number, source: HealthSource | null): { applied: boolean; facts: number; addedMemory: number } {
   if (!source || source.isDir) return { applied: false, facts: 0, addedMemory: 0 };
   if (!/^text\/plain\b/i.test(source.mime) && !/\.txt$/i.test(source.fp)) return { applied: false, facts: 0, addedMemory: 0 };
@@ -1183,6 +1194,7 @@ function applyTextVisitNoteFallback(id: number, source: HealthSource | null): { 
       if (repo.addMemory(m.content, m.kind || "observation", "health-note-fallback")) addedMemory++;
     } catch { /* one memory should not fail the fallback */ }
   }
+  reconcileHealthDocContext(id);
   return { applied: true, facts: fallback.clinical_facts.length, addedMemory };
 }
 
@@ -1271,6 +1283,7 @@ function applyHealthIngest(id: number, parsed: any): boolean {
       summary,
     });
     repo.replaceHealthPanels(id, [], row?.original_name ?? null);
+    reconcileHealthDocContext(id);
     return true;
   }
 
@@ -1313,6 +1326,7 @@ function applyHealthIngest(id: number, parsed: any): boolean {
   if (created.length) {
     console.log(`[enrich] health#${id}: split import into ${cleaned.length} dated panel(s) (${created.length} derived).`);
   }
+  reconcileHealthDocContext(id);
   return true;
 }
 
