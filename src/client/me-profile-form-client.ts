@@ -9,6 +9,9 @@ type MeProfileProfile = import("../contracts/client-api.js").ClientProfile & {
   endurance_sport?: string | null;
   allergies?: string | null;
   dietary_restrictions?: string | null;
+  smoking?: number | null;
+  bp_treated?: number | null;
+  statin?: number | null;
 };
 type MeProfileGoalCheck = import("../contracts/client-api.js").ClientGoalCheck & {
   tdee?: number | string | null;
@@ -99,6 +102,23 @@ type MeProfileFormContext = {
 
   function activeGoalTargetDisplay(goalMode: string): string {
     return goalMode === "maintain" ? "display:none" : "";
+  }
+
+  // Tri-state capture (Not set / No / Yes) for a PREVENT cardiovascular-risk
+  // input. "Not set" stays the honest default — nothing is forced, so a fresh
+  // profile keeps risk.ts's provisional assumption until the athlete answers.
+  function triFlagFieldHtml(deps: MeProfileControllerDeps, id: string, label: string, value: number | null | undefined): string {
+    const v = value == null ? null : Number(value);
+    const opt = (val: string, text: string, active: boolean) =>
+      `<button type="button" class="segbtn${active ? " active" : ""}" data-triflag="${val}">${text}</button>`;
+    return `<div class="field" style="margin-bottom:9px">
+      <label>${deps.escapeHtml(label)}</label>
+      <div class="seg triflag-seg" id="${id}" role="group" aria-label="${deps.escapeAttr(label)}">
+        ${opt("", "Not set", v == null)}
+        ${opt("0", "No", v === 0)}
+        ${opt("1", "Yes", v === 1)}
+      </div>
+    </div>`;
   }
 
   function profileHtml(
@@ -202,6 +222,14 @@ type MeProfileFormContext = {
       <label for="dietary_restrictions">Dietary preferences</label>
       <p class="aboutme-hint">Respected strongly in your meal plans (e.g. vegetarian, pescatarian, no pork).</p>
       <input id="dietary_restrictions" type="text" placeholder="e.g. pescatarian, no pork" maxlength="1000" class="form-input">
+    </div>
+
+    <div class="field" style="margin-top:9px;margin-bottom:0">
+      <label>Cardiovascular risk inputs <span class="ob-opt">— optional</span></label>
+      <p class="aboutme-hint">Sharpens your AHA PREVENT cardiovascular-risk read. Leave any of these "Not set" and Cairn assumes the lower-risk value until you answer.</p>
+      ${triFlagFieldHtml(deps, "smokingSeg", "Do you currently smoke?", profile.smoking)}
+      ${triFlagFieldHtml(deps, "bpTreatedSeg", "On blood-pressure medication?", profile.bp_treated)}
+      ${triFlagFieldHtml(deps, "statinSeg", "On a statin?", profile.statin)}
     </div>
     </div>
 

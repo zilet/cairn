@@ -552,6 +552,13 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "profile", "start_date TEXT");
     addColumn(db, "profile", "goal_bodyfat_pct REAL");
   } },
+  // v57: the three PREVENT inputs Cairn didn't capture before — smoking, BP
+  // treatment, and statin use. 0/1, NULL = not captured (keeps the read provisional).
+  { version: 57, name: "profile-cv-risk-flags", up: (db) => {
+    addColumn(db, "profile", "smoking INTEGER");
+    addColumn(db, "profile", "bp_treated INTEGER");
+    addColumn(db, "profile", "statin INTEGER");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

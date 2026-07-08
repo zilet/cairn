@@ -326,6 +326,17 @@ function cleanISODate(v: any): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
+// Coerce a PREVENT capture flag (smoking / bp_treated / statin) at the trust
+// boundary. Accepts a boolean or 0/1 (as number or string); null/'' clears it
+// back to "not captured"; anything else is treated as unset. Callers apply the
+// same undefined-leaves-intact contract as about_me before calling this.
+function coerceFlag(v: any): number | null {
+  if (v == null || v === "") return null;
+  if (v === true || v === 1 || v === "1" || v === "true") return 1;
+  if (v === false || v === 0 || v === "0" || v === "false") return 0;
+  return null;
+}
+
 export function setProfile(p: any) {
   const cur = getProfile() || {};
   // Height in inches (v59) — mirrors the app's lb/in convention. Same nullable
@@ -378,10 +389,17 @@ export function setProfile(p: any) {
     endurance_goal_json: p.endurance_goal !== undefined
       ? serializeEnduranceGoal(p.endurance_goal)
       : (cur.endurance_goal_json ?? null),
+    // AHA PREVENT capture flags (v57). Same nullable contract as the other
+    // optional fields: undefined leaves intact, null/'' clears back to "not
+    // captured", a boolean/0/1 sets it. Removes risk.ts's provisional assumption
+    // for whichever of the three is on file.
+    smoking: p.smoking !== undefined ? coerceFlag(p.smoking) : (cur.smoking ?? null),
+    bp_treated: p.bp_treated !== undefined ? coerceFlag(p.bp_treated) : (cur.bp_treated ?? null),
+    statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, smoking, bp_treated, statin, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, height_in=excluded.height_in, weight_lb=excluded.weight_lb,
@@ -390,8 +408,9 @@ export function setProfile(p: any) {
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
-       endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
-  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.start_weight_lb, merged.start_date, merged.goal_weight_lb, merged.goal_bodyfat_pct, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
+       endurance_goal_json=excluded.endurance_goal_json,
+       smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
+  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.start_weight_lb, merged.start_date, merged.goal_weight_lb, merged.goal_bodyfat_pct, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json, merged.smoking, merged.bp_treated, merged.statin);
   return getProfile();
 }
 

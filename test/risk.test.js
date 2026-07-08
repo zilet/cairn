@@ -62,6 +62,44 @@ test("cardiovascular risk read collects inputs, enhancers, and lever projections
   assert.ok(risk.projections.some((p) => p.key === "apob" && p.target === 80));
 });
 
+test("captured smoking/BP-treatment/statin status removes the provisional assumptions", () => {
+  const baseProfile = {
+    sex: "male",
+    age: 44,
+    height_in: 66,
+    weight_lb: 190,
+  };
+  const markers = () =>
+    seedHealthDoc("2026-06-15", [
+      marker("Total Cholesterol", 238, { unit: "mg/dL" }),
+      marker("HDL Cholesterol", 54, { unit: "mg/dL" }),
+      marker("HbA1c", 5.3, { unit: "%" }),
+      marker("eGFR", 98, { unit: "mL/min" }),
+      marker("Systolic BP", 120, { unit: "mmHg" }),
+    ]);
+
+  repo.setProfile({ ...baseProfile, smoking: 0, bp_treated: 0, statin: 0 });
+  markers();
+  const computed = repo.cardiovascularRiskRead();
+  assert.equal(computed.model_status.prevent, "computed");
+  assert.equal(computed.prevent.provisional, false);
+  assert.equal(computed.prevent.confidence, "high");
+  assert.deepEqual(computed.prevent.assumptions, []);
+  assert.ok(!computed.inputs.missing_inputs.includes("smoking status"));
+  assert.ok(!computed.inputs.missing_inputs.includes("blood-pressure treatment status"));
+  assert.ok(!computed.inputs.missing_inputs.includes("statin treatment status"));
+  const nonSmokerTenYear = computed.prevent.estimates.total_cvd.ten_year;
+
+  resetTables("profile", "health_documents");
+  repo.setProfile({ ...baseProfile, smoking: 1, bp_treated: 0, statin: 0 });
+  markers();
+  const smoker = repo.cardiovascularRiskRead();
+  assert.equal(smoker.model_status.prevent, "computed");
+  assert.equal(smoker.prevent.provisional, false);
+  const smokerTenYear = smoker.prevent.estimates.total_cvd.ten_year;
+  assert.ok(typeof smokerTenYear === "number" && smokerTenYear > nonSmokerTenYear);
+});
+
 test("cardiovascular risk read degrades on sparse data", () => {
   const risk = repo.cardiovascularRiskRead();
   assert.equal(risk.model_status.prevent, "insufficient_inputs");

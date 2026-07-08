@@ -179,6 +179,9 @@ export interface ClientProfile {
   endurance_goal?: ClientEnduranceGoal | null;
   about_me?: string | null;
   family_prefs?: string | null;
+  smoking?: number | null;
+  bp_treated?: number | null;
+  statin?: number | null;
   [key: string]: unknown;
 }
 

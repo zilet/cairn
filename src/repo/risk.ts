@@ -111,6 +111,13 @@ export function cardiovascularRiskRead() {
     vo2max: markerByZone("VO2max"),
   };
 
+  // profile.smoking/bp_treated/statin are 0/1/NULL (NULL = not captured). Real
+  // status wins whenever it's on file; a still-unset input falls back to
+  // PREVENT's population-typical LOWER-RISK default and keeps the read provisional.
+  const smokingFlag = profile?.smoking != null ? !!Number(profile.smoking) : null;
+  const bpTreatedFlag = profile?.bp_treated != null ? !!Number(profile.bp_treated) : null;
+  const statinFlag = profile?.statin != null ? !!Number(profile.statin) : null;
+
   const missing_inputs: string[] = [];
   if (age == null) missing_inputs.push("age");
   if (!sex) missing_inputs.push("sex");
@@ -119,17 +126,17 @@ export function cardiovascularRiskRead() {
   if (markers.systolic_bp.value == null) missing_inputs.push("systolic blood pressure");
   if (markers.egfr.value == null) missing_inputs.push("eGFR");
   if (bmi == null) missing_inputs.push("height/weight for BMI");
-  missing_inputs.push("smoking status");
-  missing_inputs.push("blood-pressure treatment status");
-  missing_inputs.push("statin treatment status");
+  if (smokingFlag == null) missing_inputs.push("smoking status");
+  if (bpTreatedFlag == null) missing_inputs.push("blood-pressure treatment status");
+  if (statinFlag == null) missing_inputs.push("statin treatment status");
 
   const diabetesByA1c = markers.hba1c.value != null ? markers.hba1c.value >= 6.5 : null;
 
-  // AHA PREVENT (2023) base-model risk. Cairn doesn't yet capture smoking, BP-
-  // treatment, or statin status (no profile fields — none added here on purpose),
-  // so those three always default to the population-typical LOWER-RISK value and
-  // the read is marked provisional; diabetes uses the same HbA1c-derived flag as
-  // `inputs.diabetes_by_a1c` above, assuming non-diabetic when HbA1c is missing.
+  // AHA PREVENT (2023) base-model risk. Smoking/BP-treatment/statin use the real
+  // captured value when the athlete has recorded it; any still-unset one defaults
+  // to the population-typical LOWER-RISK value and keeps the read provisional.
+  // Diabetes uses the same HbA1c-derived flag as `inputs.diabetes_by_a1c` above,
+  // assuming non-diabetic when HbA1c is missing.
   const preventSex: "male" | "female" | null = sex === "male" || sex === "female" ? sex : null;
   const preventReady =
     age != null &&
@@ -156,23 +163,28 @@ export function cardiovascularRiskRead() {
   } | null = null;
 
   if (preventReady) {
-    const assumptions: PreventAssumption[] = [
-      {
+    const assumptions: PreventAssumption[] = [];
+    if (smokingFlag == null) {
+      assumptions.push({
         input: "smoking",
         assumed: "non-smoker",
-        reason: "Smoking status isn't captured in Cairn yet; PREVENT assumes the lower-risk value until it is.",
-      },
-      {
+        reason: "Smoking status isn't captured yet; PREVENT assumes the lower-risk value until it is.",
+      });
+    }
+    if (bpTreatedFlag == null) {
+      assumptions.push({
         input: "blood-pressure treatment",
         assumed: "not on antihypertensive medication",
-        reason: "BP-treatment status isn't captured in Cairn yet; PREVENT assumes the lower-risk value until it is.",
-      },
-      {
+        reason: "BP-treatment status isn't captured yet; PREVENT assumes the lower-risk value until it is.",
+      });
+    }
+    if (statinFlag == null) {
+      assumptions.push({
         input: "statin use",
         assumed: "not on a statin",
-        reason: "Statin status isn't captured in Cairn yet; PREVENT assumes the lower-risk value until it is.",
-      },
-    ];
+        reason: "Statin status isn't captured yet; PREVENT assumes the lower-risk value until it is.",
+      });
+    }
     if (diabetesByA1c == null) {
       assumptions.push({
         input: "diabetes",
@@ -187,12 +199,12 @@ export function cardiovascularRiskRead() {
       total_chol: markers.total_cholesterol.value!,
       hdl: markers.hdl_c.value!,
       sbp: markers.systolic_bp.value!,
-      bp_treated: false,
+      bp_treated: bpTreatedFlag ?? false,
       diabetes: diabetesByA1c ?? false,
-      smoker: false,
+      smoker: smokingFlag ?? false,
       bmi: bmi!,
       egfr: markers.egfr.value!,
-      statin: false,
+      statin: statinFlag ?? false,
     };
     const estimate = estimatePreventRisk(preventInputs);
     const hasAnyEstimate = [estimate.total_cvd, estimate.ascvd, estimate.heart_failure].some(
@@ -307,6 +319,7 @@ export function cardiovascularRiskRead() {
     },
   ];
 
+  const remainingAssumptions = prevent?.assumptions.map((a) => a.input).join(", ") ?? "";
   return {
     model_status: {
       prevent: preventStatus,
@@ -314,11 +327,15 @@ export function cardiovascularRiskRead() {
       reason:
         preventStatus === "insufficient_inputs"
           ? "Missing one of the required PREVENT inputs (age, sex, total cholesterol, HDL, systolic BP, eGFR, BMI), or age falls outside the equations' validated 30-79 range."
-          : "AHA PREVENT (2023) base-model equations, computed from vendored coefficients. Smoking, BP-treatment, and statin status default to the lower-risk assumption until Cairn captures them.",
+          : preventStatus === "computed_provisional"
+            ? `AHA PREVENT (2023) base-model equations, computed from vendored coefficients. Still assumed: ${remainingAssumptions}.`
+            : "AHA PREVENT (2023) base-model equations, computed from vendored coefficients using your captured status for every input.",
       next:
         preventStatus === "insufficient_inputs"
           ? "Add the missing labs/vitals above before a risk percentage can be computed."
-          : "Capture smoking, BP-treatment, and statin status to remove today's provisional assumptions.",
+          : preventStatus === "computed_provisional"
+            ? `Capture ${remainingAssumptions} to remove today's provisional assumptions.`
+            : "Nothing further needed for these inputs.",
     },
     inputs: {
       age,

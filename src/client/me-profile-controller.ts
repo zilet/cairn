@@ -11,11 +11,17 @@
   function wireProfileForm(
     deps: MeProfileControllerDeps,
     enduranceGoal: MeProfileEnduranceGoalDraft,
-    initial: { discipline: string; enduranceMode: string; goalMode: string },
+    initial: {
+      discipline: string; enduranceMode: string; goalMode: string;
+      smoking: number | null; bpTreated: number | null; statin: number | null;
+    },
   ): void {
     let pickedDisc = String(initial.discipline || "strength");
     let pickedEgMode = String(initial.enduranceMode || "none");
     let pickedGoalMode = String(initial.goalMode || "maintain");
+    let pickedSmoking: number | null = initial.smoking;
+    let pickedBpTreated: number | null = initial.bpTreated;
+    let pickedStatin: number | null = initial.statin;
 
     const enduranceGoalPayload = (): MeProfileEnduranceGoalDraft | null | undefined => {
       const dist = deps.numberValue("#eg_distance");
@@ -57,6 +63,9 @@
         about_me: deps.textAreaValue("#about_me").trim(),
         allergies: deps.inputValue("#allergies").trim(),
         dietary_restrictions: deps.inputValue("#dietary_restrictions").trim(),
+        smoking: pickedSmoking,
+        bp_treated: pickedBpTreated,
+        statin: pickedStatin,
       };
       await deps.api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       deps.setDiscipline(pickedDisc);
@@ -115,6 +124,21 @@
       })
     );
 
+    const wireTriFlag = (id: string, onPick: (value: number | null) => void): void => {
+      const group = deps.select<HTMLElement>(`#${id}`);
+      group?.querySelectorAll<HTMLElement>("[data-triflag]").forEach((button) =>
+        button.addEventListener("click", () => {
+          const raw = button.dataset.triflag ?? "";
+          onPick(raw === "" ? null : Number(raw));
+          setActiveButton(group, ".segbtn", button);
+          profileBar.markDirty();
+        })
+      );
+    };
+    wireTriFlag("smokingSeg", (v) => { pickedSmoking = v; });
+    wireTriFlag("bpTreatedSeg", (v) => { pickedBpTreated = v; });
+    wireTriFlag("statinSeg", (v) => { pickedStatin = v; });
+
     deps.select("#profToToday")?.addEventListener("click", () => deps.activateTab("today"));
     deps.select("#profToProgress")?.addEventListener("click", () => { deps.state.progressSeg = "sessions"; deps.activateTab("progress"); });
   }
@@ -140,7 +164,12 @@
       deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode });
     });
     deps.wireSeg(deps.handlers);
-    wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode });
+    wireProfileForm(deps, enduranceGoal, {
+      discipline, enduranceMode, goalMode,
+      smoking: profile.smoking == null ? null : Number(profile.smoking),
+      bpTreated: profile.bp_treated == null ? null : Number(profile.bp_treated),
+      statin: profile.statin == null ? null : Number(profile.statin),
+    });
   }
 
   const CAIRN_ME_PROFILE_CONTROLLER = {

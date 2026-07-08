@@ -343,6 +343,9 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
     about_me: "Train around family",
     allergies: "nuts",
     dietary_restrictions: "pescatarian",
+    smoking: null,
+    bp_treated: null,
+    statin: null,
   });
   assert.deepEqual(harness.invalidations, ["profile", "stats", "progress:weight", "progress:energy"]);
   assert.equal(harness.goalFlags.at(-1), true);

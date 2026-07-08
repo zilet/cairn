@@ -4104,13 +4104,15 @@ button.hmk-row:active{background:var(--card-2)}
    ------------------------------------------------------------------- */
 
 /* Discipline segmented control (Profile + onboarding) — hand-built seg, the
-   classic background-swap active state (matches onboarding's days/week). */
-.disc-seg,.goalmode-seg{display:flex;gap:0;background:var(--card-2);border:1px solid var(--line);
+   classic background-swap active state (matches onboarding's days/week).
+   .triflag-seg (Profile → cardiovascular risk inputs: smoking/BP-meds/statin)
+   reuses the same pill so "Not set" reads as calm and un-alarming as the rest. */
+.disc-seg,.goalmode-seg,.triflag-seg{display:flex;gap:0;background:var(--card-2);border:1px solid var(--line);
   border-radius:999px;padding:3px;width:100%}
-.disc-seg .segbtn,.goalmode-seg .segbtn{flex:1;border:none;background:transparent;color:var(--ink-2);
+.disc-seg .segbtn,.goalmode-seg .segbtn,.triflag-seg .segbtn{flex:1;border:none;background:transparent;color:var(--ink-2);
   border-radius:999px;padding:9px 8px;font-family:var(--font-ui);font-weight:600;
   font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
-.disc-seg .segbtn.active,.goalmode-seg .segbtn.active{background:var(--ink);color:var(--paper)}
+.disc-seg .segbtn.active,.goalmode-seg .segbtn.active,.triflag-seg .segbtn.active{background:var(--ink);color:var(--paper)}
 
 /* The cardio "tag" caps chip used wherever a cardio item names its modality. */
 .cardio-tag{display:inline-block;color:var(--sage);background:var(--sage-bg);
