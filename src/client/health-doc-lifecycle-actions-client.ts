@@ -93,6 +93,7 @@ function startHealthDocDelete(btn: Element, deps: ClientHealthDocActionsControll
       .then(() => {
         deps.toast("Removed");
         row.remove();
+        swrInvalidate("health:records"); // keep the cached-first Records paint honest
         const list = hdocLifecycleElement("#hlist");
         if (list && !list.children.length) list.innerHTML = CairnHealthRecords.recordsEmptyHtml();
         refreshPictureAfterLifecycleHealthDocDelete(deps);

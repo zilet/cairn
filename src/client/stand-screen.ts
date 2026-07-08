@@ -550,12 +550,17 @@ function showShare(): void {
 function showLearned(): void {
   curView = "learned";
   setStandSeg("learned");
-  paint(toolShellHtml("Learned", `<div id="standLearned">${skelLines(4)}</div>`));
+  // Cached-first, like Overview/Share: paint the last-known timeline instantly
+  // (skeleton only on a true cold start), then revalidate in the background.
+  const peek = peekCached<unknown>("health:learned");
+  paint(toolShellHtml("Learned", `<div id="standLearned">${peek ? "" : skelLines(4)}</div>`));
   wireBack();
+  if (peek) paintLearned(peek.data, pollToken);
   const token = pollToken;
-  api("/learned-timeline")
-    .then((data) => paintLearned(data, token))
-    .catch(() => paintLearned({ items: [] }, token));
+  cachedApi("/learned-timeline", {
+    key: "health:learned",
+    onUpgrade: (data, { changed }) => { if (changed || !peek) paintLearned(data, token); },
+  }).catch(() => { if (!peek) paintLearned({ items: [] }, token); });
 }
 function paintLearned(data: unknown, token: number): void {
   const wrap = view.querySelector<HTMLElement>("#standLearned");

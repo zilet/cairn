@@ -68,20 +68,38 @@ function directiveLoaderPaint(wrap: Element, active: DirectiveLoaderDirective[],
   );
 }
 
+type DirectiveLoaderBundle = { res: unknown; evSummary: DirectiveLoaderEvidenceSummary };
+
+// The connected brain is health data — cache it MEMORY-ONLY (the `health:` prefix
+// keeps it out of localStorage) so it paints instantly WITHIN a session but never
+// lands on disk.
+const DIRECTIVES_CACHE_KEY = "health:directives";
+
+function directiveLoaderPaintBundle(wrap: Element, bundle: DirectiveLoaderBundle): void {
+  const all = directiveLoaderRows<DirectiveLoaderDirective>(directiveLoaderRecord(bundle.res).directives);
+  const active = all.filter((d) => !d.status || d.status === "active");
+  directiveLoaderPaint(wrap, active, bundle.evSummary);
+}
+
 async function directiveLoaderLoad(token: number): Promise<void> {
   const wrap = $<HTMLElement>("#hbDirectives");
   if (!wrap || !wrap.isConnected) return;
-  let res: unknown = null, evSummary: DirectiveLoaderEvidenceSummary = null;
+  // Cached-first: repaint the last-known connections instantly, then revalidate.
+  const peek = peekCached<DirectiveLoaderBundle>(DIRECTIVES_CACHE_KEY);
+  if (peek) directiveLoaderPaintBundle(wrap, peek.data);
+  let res: unknown = null, evSummary: DirectiveLoaderEvidenceSummary = null, ok = false;
   try {
     [res, evSummary] = await Promise.all([
       api("/directives"),
       api("/evidence/summary").then((summary) => summary as DirectiveLoaderEvidenceSummary).catch(() => null),
     ]);
-  } catch { res = null; }
+    ok = true;
+  } catch { ok = false; }
   if (token !== pollToken || !wrap.isConnected) return;
-  const all = directiveLoaderRows<DirectiveLoaderDirective>(directiveLoaderRecord(res).directives);
-  const active = all.filter((d) => !d.status || d.status === "active");
-  directiveLoaderPaint(wrap, active, evSummary);
+  if (!ok) { if (!peek) directiveLoaderPaintBundle(wrap, { res: null, evSummary: null }); return; }
+  const bundle: DirectiveLoaderBundle = { res, evSummary };
+  swrSet(DIRECTIVES_CACHE_KEY, bundle);
+  if (!peek || JSON.stringify(peek.data) !== JSON.stringify(bundle)) directiveLoaderPaintBundle(wrap, bundle);
 }
 
 async function directiveLoaderResolve(id: string, status: "resolved" | "dismissed"): Promise<void> {
@@ -93,6 +111,7 @@ async function directiveLoaderResolve(id: string, status: "resolved" | "dismisse
   } catch { res = null; }
   if (!directiveLoaderRecord(res).ok) { toast("Couldn't update"); return; }
   toast(status === "resolved" ? "Marked done" : "Dismissed");
+  swrInvalidate(DIRECTIVES_CACHE_KEY); // don't flash the just-resolved item back from cache
   const after = () => { void directiveLoaderLoad(pollToken); };
   if (card) collapseEl(card, after); else after();
 }
@@ -105,6 +124,7 @@ async function directiveLoaderDerive(): Promise<void> {
   const row = directiveLoaderRecord(res);
   if (!row.ok) { toast("Couldn't refresh"); restore(); return; }
   toast(row.derived ? `Refreshed — ${row.derived} found` : "Up to date");
+  swrInvalidate(DIRECTIVES_CACHE_KEY); // re-derive changed the set; refetch fresh
   void directiveLoaderLoad(pollToken);
 }
 

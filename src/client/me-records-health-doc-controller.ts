@@ -90,29 +90,20 @@ function pollHealthDoc(id: string | number, deps: HealthRecordsControllerDeps): 
   CairnHealthDocActionsController.pollDoc(id, healthDocActionsDeps(deps));
 }
 
-async function loadHealthDocs(deps: HealthRecordsControllerDeps): Promise<HealthDocument[]> {
-  const wrap = hrecElement("#hlist");
-  if (!wrap) return [];
-  let docs: HealthDocument[] = [];
-  let fetched = false;
-  try {
-    docs = hrecRows<HealthDocument>(await deps.api("/health-docs"));
-    fetched = true;
-  } catch {
-    docs = [];
-  }
-  if (fetched && Array.isArray(docs)) {
-    try {
-      localStorage.setItem("cairn:healthDocCount", String(docs.length));
-    } catch {}
-  }
-  // Records is hosted by the Stand tab; bail if the athlete navigated away mid-fetch.
-  if (deps.state.tab !== "stand" || deps.state.standSeg !== "records" || !wrap.isConnected) return docs || [];
-  if (!docs || !docs.length) {
-    wrap.innerHTML = CairnHealthRecords.recordsEmptyHtml();
-    return [];
-  }
+// Health records are personal data — cache them MEMORY-ONLY (the `health:` prefix
+// keeps them out of localStorage) so the list paints instantly WITHIN a session
+// (no cold-gate behind a skeleton) but never lands on disk.
+const RECORDS_CACHE_KEY = "health:records";
 
+function renderHealthDocs(deps: HealthRecordsControllerDeps, docs: HealthDocument[]): void {
+  const wrap = hrecElement("#hlist");
+  if (!wrap) return;
+  // Records is hosted by the Stand tab; bail if the athlete navigated away.
+  if (deps.state.tab !== "stand" || deps.state.standSeg !== "records" || !wrap.isConnected) return;
+  if (!docs.length) {
+    wrap.innerHTML = CairnHealthRecords.recordsEmptyHtml();
+    return;
+  }
   wrap.innerHTML = CairnHealthRecords.recordsListHtml(docs);
   wrap.querySelectorAll<HTMLElement>(".hdoc").forEach((el) => {
     wireHealthDoc(el, deps);
@@ -122,8 +113,10 @@ async function loadHealthDocs(deps: HealthRecordsControllerDeps): Promise<Health
     const wanted = String(deps.state.pendingHealthDocId);
     const target = [...wrap.querySelectorAll<HTMLElement>(".hdoc[data-hdoc]")]
       .find((el) => el.dataset.hdoc === wanted);
-    deps.state.pendingHealthDocId = null;
+    // Only consume the deep-link once the target actually renders — so a warm cached
+    // paint that predates a just-uploaded doc keeps it for the revalidated paint.
     if (target) {
+      deps.state.pendingHealthDocId = null;
       target.classList.remove("hdoc-collapsed");
       try {
         target.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -132,6 +125,30 @@ async function loadHealthDocs(deps: HealthRecordsControllerDeps): Promise<Health
       }
     }
   }
+}
+
+async function loadHealthDocs(deps: HealthRecordsControllerDeps): Promise<HealthDocument[]> {
+  const wrap = hrecElement("#hlist");
+  if (!wrap) return [];
+  const peek = peekCached<HealthDocument[]>(RECORDS_CACHE_KEY);
+  if (peek) renderHealthDocs(deps, hrecRows<HealthDocument>(peek.data));
+
+  let docs: HealthDocument[] = [];
+  let fetched = false;
+  try {
+    docs = hrecRows<HealthDocument>(await deps.api("/health-docs"));
+    fetched = true;
+  } catch {
+    docs = [];
+  }
+  if (!fetched) return peek ? hrecRows<HealthDocument>(peek.data) : [];
+  swrSet(RECORDS_CACHE_KEY, docs);
+  try {
+    localStorage.setItem("cairn:healthDocCount", String(docs.length));
+  } catch {}
+  // Re-paint only when the payload changed, so a no-op revalidate never disturbs an
+  // in-flight enrichment poll or the user's scroll.
+  if (!peek || JSON.stringify(peek.data) !== JSON.stringify(docs)) renderHealthDocs(deps, docs);
   return docs;
 }
 

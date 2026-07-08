@@ -158,6 +158,8 @@ function loadController() {
     Object,
     Promise,
     String,
+    peekCached: () => null,
+    swrSet: () => {},
     window: null,
     globalThis: null,
   };
@@ -347,7 +349,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
     bp_treated: null,
     statin: null,
   });
-  assert.deepEqual(harness.invalidations, ["profile", "stats", "progress:weight", "progress:energy"]);
+  assert.deepEqual(harness.invalidations, ["profile", "me:goal", "stats", "progress:weight", "progress:energy"]);
   assert.equal(harness.goalFlags.at(-1), true);
   assert.equal(harness.toasts.at(-1), "Your running plan now lives in Plan → Endurance");
   assert.equal(harness.renderCount, 1);

@@ -5,34 +5,38 @@ type LifeControllerContextEvent = import("../contracts/client-api.js").ClientCon
 
 type LifeTimelineActionsApi = {
   load(deps: ClientLifeControllerDeps): Promise<void>;
+  repaintCached(deps: ClientLifeControllerDeps): void;
+  cachedEvents(): LifeControllerContextEvent[];
   rewireCard(card: HTMLElement, deps: ClientLifeControllerDeps): void;
   startDelete(button: Element, deps: ClientLifeControllerDeps): void;
   startEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps): void;
 };
 
+// SWR cache keys, mirroring Family/Memory. Events persist; the derived injury
+// impacts are a calm enhancement on top and are cached separately so a failed
+// impacts read never blanks the timeline.
+const LIFE_CACHE_KEY = "me:life";
+const LIFE_IMPACTS_CACHE_KEY = "me:life:impacts";
+
 function lifeFormHelpers(): LifeFormHelpersApi {
   return (globalThis as unknown as { CairnLifeFormHelpers: LifeFormHelpersApi }).CairnLifeFormHelpers;
 }
 
-async function loadLifeTimeline(deps: ClientLifeControllerDeps): Promise<void> {
+function cachedLifeEvents(): LifeControllerContextEvent[] {
+  return lifeFormHelpers().rows<LifeControllerContextEvent>(peekCached<LifeControllerContextEvent[]>(LIFE_CACHE_KEY)?.data);
+}
+
+function cachedLifeImpacts(): unknown {
+  return peekCached(LIFE_IMPACTS_CACHE_KEY)?.data ?? null;
+}
+
+// Pure paint from an (events, impacts) pair — shared by the warm cached paint, the
+// revalidated paint, and every optimistic mutation's onChange repaint.
+function renderLifeTimeline(deps: ClientLifeControllerDeps, events: LifeControllerContextEvent[], impacts: unknown): void {
   const wrap = $("#llist");
   if (!wrap) return;
-  let events: LifeControllerContextEvent[] = [];
-  // Fetch the timeline and the structured injury impacts together. Impacts are a
-  // calm enhancement on active injuries — if the read fails, the cards still draw.
-  let impacts: unknown = null;
-  const helpers = lifeFormHelpers();
-  try {
-    const [eventRows, impactRows] = await Promise.all([
-      deps.api("/context-events"),
-      deps.api("/injury-impacts").catch(() => null),
-    ]);
-    events = helpers.rows<LifeControllerContextEvent>(eventRows);
-    impacts = impactRows;
-  } catch {
-    events = [];
-  }
   if (deps.state.tab !== "me" || deps.state.meSeg !== "life" || !wrap.isConnected) return;
+  const helpers = lifeFormHelpers();
   if (!events.length) {
     wrap.innerHTML = `<div class="empty">Nothing on your timeline yet.</div>`;
     return;
@@ -57,6 +61,46 @@ async function loadLifeTimeline(deps: ClientLifeControllerDeps): Promise<void> {
   wrap.querySelectorAll<HTMLElement>("[data-ldel]").forEach((button) =>
     button.addEventListener("click", () => startLifeDelete(button, deps))
   );
+}
+
+function repaintCachedLife(deps: ClientLifeControllerDeps): void {
+  renderLifeTimeline(deps, cachedLifeEvents(), cachedLifeImpacts());
+}
+
+async function loadLifeTimeline(deps: ClientLifeControllerDeps): Promise<void> {
+  const wrap = $("#llist");
+  if (!wrap) return;
+  const helpers = lifeFormHelpers();
+  // Paint the last-known timeline instantly (no cold-gate on the network), then
+  // revalidate. Fetch the events and the structured injury impacts together.
+  const peekEvents = peekCached<LifeControllerContextEvent[]>(LIFE_CACHE_KEY);
+  const peekImpacts = peekCached(LIFE_IMPACTS_CACHE_KEY);
+  if (peekEvents) renderLifeTimeline(deps, helpers.rows<LifeControllerContextEvent>(peekEvents.data), peekImpacts?.data ?? null);
+
+  let events: LifeControllerContextEvent[] = [];
+  let impacts: unknown = null;
+  try {
+    const [eventRows, impactRows] = await Promise.all([
+      deps.api("/context-events"),
+      deps.api("/injury-impacts").catch(() => null),
+    ]);
+    events = helpers.rows<LifeControllerContextEvent>(eventRows);
+    impacts = impactRows;
+  } catch {
+    if (!peekEvents) renderLifeTimeline(deps, [], null);
+    return;
+  }
+  swrSet(LIFE_CACHE_KEY, events);
+  if (impacts != null) swrSet(LIFE_IMPACTS_CACHE_KEY, impacts);
+  if (deps.state.tab !== "me" || deps.state.meSeg !== "life") return;
+  // A failed impacts read keeps whatever we already had, never wipes it.
+  const effImpacts = impacts != null ? impacts : (peekImpacts?.data ?? null);
+  // Skip a no-op repaint so an in-progress inline edit isn't stomped mid-type.
+  const changed = !peekEvents
+    || JSON.stringify(peekEvents.data) !== JSON.stringify(events)
+    || JSON.stringify(peekImpacts?.data ?? null) !== JSON.stringify(effImpacts);
+  if (peekEvents && !changed) return;
+  renderLifeTimeline(deps, events, effImpacts);
 }
 
 function startLifeEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps): void {
@@ -108,25 +152,36 @@ function startLifeEdit(card: HTMLElement | null, deps: ClientLifeControllerDeps)
       if (event.kind === "trip") newMeta.location = metaValue || undefined;
       else if (event.kind === "injury") newMeta.area = metaValue || undefined;
     }
+    const helpers = lifeFormHelpers();
+    const patch = {
+      kind: event.kind,
+      title,
+      detail: value(".le-detail"),
+      start_date: value(".le-start"),
+      end_date: value(".le-end"),
+    };
     try {
-      await deps.api(`/context-events/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: event.kind,
-          title,
-          detail: value(".le-detail"),
-          start_date: value(".le-start"),
-          end_date: value(".le-end"),
-          meta: newMeta,
+      await optimisticMutation<LifeControllerContextEvent[]>({
+        key: LIFE_CACHE_KEY,
+        apply: (current) => helpers.rows<LifeControllerContextEvent>(current).map((row) =>
+          String(row.id) === id ? { ...row, ...patch, meta_json: JSON.stringify(newMeta) } : row),
+        rollback: cachedLifeEvents(),
+        request: () => deps.api(`/context-events/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...patch, meta: newMeta }),
         }),
+        commit: (current, response) => {
+          const row = helpers.record(response) as LifeControllerContextEvent;
+          return row.id ? current.map((item) => String(item.id) === id ? row : item) : current;
+        },
+        onChange: () => repaintCachedLife(deps),
       });
     } catch {
       deps.toast("Couldn't save that — try again.");
       return;
     }
     deps.toast("Updated");
-    loadLifeTimeline(deps);
   };
   box.querySelector<HTMLButtonElement>(".le-save")?.addEventListener("click", save);
   box.querySelector<HTMLButtonElement>(".le-cancel")?.addEventListener("click", cancel);
@@ -145,15 +200,24 @@ function startLifeDelete(button: Element, deps: ClientLifeControllerDeps): void 
   if (!(row instanceof HTMLElement)) return;
   const id = row.dataset.life;
   if (!id) return;
+  const helpers = lifeFormHelpers();
   deps.armDelete(button, () => {
-    deps.api(`/context-events/${id}`, { method: "DELETE" })
-      .then(() => { deps.toast("Removed"); loadLifeTimeline(deps); })
+    optimisticMutation<LifeControllerContextEvent[]>({
+      key: LIFE_CACHE_KEY,
+      apply: (current) => helpers.rows<LifeControllerContextEvent>(current).filter((item) => String(item.id) !== id),
+      rollback: cachedLifeEvents(),
+      request: () => deps.api(`/context-events/${id}`, { method: "DELETE" }),
+      onChange: () => repaintCachedLife(deps),
+    })
+      .then(() => { deps.toast("Removed"); })
       .catch(() => deps.toast("Couldn't remove that — try again."));
   });
 }
 
 const CAIRN_LIFE_TIMELINE_ACTIONS: LifeTimelineActionsApi = {
   load: loadLifeTimeline,
+  repaintCached: repaintCachedLife,
+  cachedEvents: cachedLifeEvents,
   rewireCard: rewireLifeCard,
   startDelete: startLifeDelete,
   startEdit: startLifeEdit,

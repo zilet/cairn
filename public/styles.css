@@ -143,6 +143,10 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   animation:rise .5s cubic-bezier(.22,1,.36,1) both;
   animation-delay:calc(min(var(--i,0),12) * 45ms);
 }
+/* A soft (background stale-while-revalidate) Today repaint mounts the same cards
+   but must feel silent — suppress the entrance stagger so a "nothing changed"
+   refresh never re-flashes the whole screen (mirrors Stand's quietPaint). */
+.today-soft .reveal{animation:none;transform:none}
 @keyframes chipin{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
 .chip-in{animation:chipin .22s cubic-bezier(.22,1,.36,1)}
 

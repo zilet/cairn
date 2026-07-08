@@ -2,6 +2,8 @@
 // Me Profile controller: profile fetch/render, form wiring, and persistence.
 
 (() => {
+  const GOAL_CACHE_KEY = "me:goal";
+
   function setActiveButton(root: ParentNode | null | undefined, selector: string, active: Element): void {
     root?.querySelectorAll(selector).forEach((element) => {
       element.classList.toggle("active", element === active);
@@ -74,7 +76,7 @@
         deps.setEnduranceGoalSet(!!body.endurance_goal);
         if (!hadGoal && body.endurance_goal) deps.toast("Your running plan now lives in Plan → Endurance");
       }
-      ["profile", "stats", "progress:weight", "progress:energy"].forEach(deps.swrInvalidate);
+      ["profile", GOAL_CACHE_KEY, "stats", "progress:weight", "progress:energy"].forEach(deps.swrInvalidate);
       deps.renderMe();
       return true;
     };
@@ -143,13 +145,14 @@
     deps.select("#profToProgress")?.addEventListener("click", () => { deps.state.progressSeg = "sessions"; deps.activateTab("progress"); });
   }
 
-  async function renderProfile(deps: MeProfileControllerDeps): Promise<void> {
-    deps.headerTitle.textContent = "Profile";
-    deps.state.meSeg = "profile";
-    deps.invalidatePoll();
-    deps.root.innerHTML = deps.segSkeleton("profile", deps.segments, 2);
-
-    const [profileRaw, goalRaw] = await Promise.all([deps.api("/profile"), deps.api("/goal")]);
+  // Build + wire the whole profile form from a (profile, goal) pair. Factored out
+  // so the warm cached paint and the revalidated paint share one path.
+  async function applyProfile(
+    deps: MeProfileControllerDeps,
+    profileRaw: unknown,
+    goalRaw: unknown,
+    opts: { animate: boolean },
+  ): Promise<void> {
     const profile = CairnMeProfileForm.record(profileRaw) as MeProfileProfile;
     const goal = CairnMeProfileForm.record(goalRaw) as MeProfileGoalCheck;
     deps.setDiscipline(profile.primary_discipline);
@@ -160,16 +163,46 @@
     const goalMode = CairnMeProfileForm.goalMode(profile, goal);
     const discipline = deps.primaryDiscipline();
 
-    await deps.skeletonSwap(() => {
+    const draw = () => {
       deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode });
-    });
-    deps.wireSeg(deps.handlers);
-    wireProfileForm(deps, enduranceGoal, {
-      discipline, enduranceMode, goalMode,
-      smoking: profile.smoking == null ? null : Number(profile.smoking),
-      bpTreated: profile.bp_treated == null ? null : Number(profile.bp_treated),
-      statin: profile.statin == null ? null : Number(profile.statin),
-    });
+      deps.wireSeg(deps.handlers);
+      wireProfileForm(deps, enduranceGoal, {
+        discipline, enduranceMode, goalMode,
+        smoking: profile.smoking == null ? null : Number(profile.smoking),
+        bpTreated: profile.bp_treated == null ? null : Number(profile.bp_treated),
+        statin: profile.statin == null ? null : Number(profile.statin),
+      });
+    };
+    if (opts.animate) await deps.skeletonSwap(draw);
+    else draw();
+  }
+
+  async function renderProfile(deps: MeProfileControllerDeps): Promise<void> {
+    deps.headerTitle.textContent = "Profile";
+    deps.state.meSeg = "profile";
+    deps.invalidatePoll();
+
+    // Profile is already SWR-cached (today-data-loader writes "profile"); paint it
+    // instantly and skip the skeleton, then revalidate both reads in the background.
+    const peek = peekCached<MeProfileProfile>("profile");
+    if (peek) await applyProfile(deps, peek.data, peekCached<MeProfileGoalCheck>(GOAL_CACHE_KEY)?.data ?? {}, { animate: false });
+    else deps.root.innerHTML = deps.segSkeleton("profile", deps.segments, 2);
+
+    let profileRaw: unknown, goalRaw: unknown;
+    try {
+      [profileRaw, goalRaw] = await Promise.all([deps.api("/profile"), deps.api("/goal")]);
+    } catch {
+      if (!peek) await applyProfile(deps, {}, {}, { animate: true });
+      return;
+    }
+    swrSet("profile", profileRaw);
+    swrSet(GOAL_CACHE_KEY, goalRaw);
+    // Stale-guard: the athlete may have left Profile while the reads were in flight.
+    if (deps.state.meSeg !== "profile") return;
+    // A background revalidate must never stomp an in-progress edit — hold the paint
+    // while the save bar is open (dirty), exactly like the Settings SWR path.
+    if (peek && document.body.classList.contains("savebar-open")) return;
+    await applyProfile(deps, profileRaw, goalRaw, { animate: !peek });
   }
 
   const CAIRN_ME_PROFILE_CONTROLLER = {
