@@ -19,6 +19,7 @@
 // what the athlete typed as the exercise name on a logged set.
 
 import { db } from "../db.js";
+import { createAliasStore } from "./canon-aliases.js";
 
 // ---- THE CANONICAL MUSCLE-GROUP TAXONOMY (authoritative) --------------------
 // Every exercise resolves to exactly one of these. `core`, `forearms`, `mobility`
@@ -196,37 +197,30 @@ export function resolveGroup(name: string, storedGroup: string | null | undefine
 }
 
 // ---- exercise_aliases (the persisted dedup decisions) -----------------------
-// Mirrors marker_aliases. Defensive: never throws if the table isn't present yet
-// (it's created in db.ts as CREATE TABLE IF NOT EXISTS on boot).
+// Mirrors marker_aliases on the shared canon-alias store. Defensive (guarded): never
+// throws if the table isn't present yet (it's created in db.ts as CREATE TABLE IF NOT
+// EXISTS on boot).
+const aliasStore = createAliasStore({
+  table: "exercise_aliases",
+  keyColumn: "alias",
+  valueColumns: ["canonical"],
+  listOrderBy: "canonical, alias",
+  guarded: true,
+});
+
 export function getExerciseAlias(alias: string): { canonical: string } | null {
-  try {
-    const r = db.prepare("SELECT canonical FROM exercise_aliases WHERE alias = ?").get(normalizeExerciseName(alias)) as any;
-    return r ? { canonical: r.canonical } : null;
-  } catch {
-    return null;
-  }
+  return aliasStore.get(normalizeExerciseName(alias)) as { canonical: string } | null;
 }
 
 export function setExerciseAlias(alias: string, canonical: string, source = "agent"): void {
   const a = normalizeExerciseName(alias);
   const c = String(canonical ?? "").replace(/\s+/g, " ").trim();
   if (!a || !c) return;
-  try {
-    db.prepare(
-      `INSERT INTO exercise_aliases (alias, canonical, source) VALUES (?, ?, ?)
-       ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical, source = excluded.source`
-    ).run(a, c, source);
-  } catch {
-    /* table not present yet — no-op */
-  }
+  aliasStore.set(a, [c], source);
 }
 
 export function listExerciseAliases(): Array<{ alias: string; canonical: string; source: string }> {
-  try {
-    return db.prepare("SELECT alias, canonical, source FROM exercise_aliases ORDER BY canonical, alias").all() as any[];
-  } catch {
-    return [];
-  }
+  return aliasStore.list();
 }
 
 // ---- agentic exercise understanding (messy input → canonical name + profile) -

@@ -114,6 +114,55 @@ test("testWeekDue stays quiet for an athlete with no benchmark history", () => {
   assert.deepEqual(tw.key_lifts, []);
 });
 
+// ── K5 cadence: testWeekDue DEFERS to the attention engine (rule 2a) ───────────
+// The recurring re-test is no longer a fixed 49-day interval. Once the K5 benchmark-
+// attention pass runs, testWeekDue reads the tier machine: a cleanly-progressing
+// athlete's test-week signal RELEASES → no scheduled test even when the old fixed
+// cadence would fire; a plateau keeps it active and it fires when the window arrives.
+
+test("a cleanly-progressing athlete converges to NO scheduled test week — a released K5 entry overrides the fixed cadence", () => {
+  // Real benchmark history so key_lifts is non-empty (reaches the cadence branch).
+  [21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: "Back Squat", weight: 315 + i * 5, reps: 3, rir: 2, date: back(d) }));
+  // A stale stamp that the OLD fixed cadence would treat as due (~9 weeks).
+  repo.setAppState("last_test_week", back(63));
+
+  // The benchmark-attention pass on a clean, progressing lift releases the test-week signal.
+  repo.refreshTrainingBenchmarkAttention(REF, {
+    programState: {
+      generated_for: REF, discipline: "strength",
+      lifts: [{ exercise: "Back Squat", muscle_group: "legs", mode: "reps", sessions: 6, est_1rm: 335, best_seconds: null, trend_per_wk: 4, status: "progressing", stall_signals: [], weeks_static: null, suggested_action: "overload", why: "Climbing." }],
+      volume: [], mesocycle: { weeks_since_deload: null, phase: null, acute_chronic_ratio: null, note: "" }, endurance: null, hybrid: null, headline: "", adaptations_due: [],
+    },
+    testWeek: { due: false, why: "", key_lifts: [], cadence_weeks: 0, last_test_week: back(63) },
+    enduranceTests: [],
+  });
+  const attn = repo.getAttentionSchedule("training:strength:test-week");
+  assert.equal(attn?.tier, "released", "clean progress releases the test-week signal");
+
+  const tw = repo.testWeekDue(REF);
+  assert.equal(tw.due, false, "a released K5 entry overrides the fixed 49-day cadence — no forced test");
+});
+
+test("a plateau keeps the test week scheduled through K5 — due when the response window arrives", () => {
+  [21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Bench Press", weight: 205, reps: 3, rir: 1, date: back(d) }));
+  repo.setAppState("last_test_week", back(30)); // inside the old fixed cadence — the fixed path would NOT fire
+
+  const plateaued = {
+    generated_for: REF, discipline: "strength",
+    lifts: [{ exercise: "Bench Press", muscle_group: "chest", mode: "reps", sessions: 6, est_1rm: 205, best_seconds: null, trend_per_wk: 0, status: "plateaued", stall_signals: ["same top load"], weeks_static: 4, suggested_action: "vary", why: "Flat." }],
+    volume: [], mesocycle: { weeks_since_deload: null, phase: null, acute_chronic_ratio: null, note: "" }, endurance: null, hybrid: null, headline: "", adaptations_due: [],
+  };
+  repo.refreshTrainingBenchmarkAttention(REF, { programState: plateaued, testWeek: { due: false, why: "", key_lifts: [], cadence_weeks: 0, last_test_week: back(30) }, enduranceTests: [] });
+  const attn = repo.getAttentionSchedule("training:strength:test-week");
+  assert.equal(attn?.tier, "active", "a plateau activates the test-week signal");
+
+  // Before the response window → not yet due (a scheduled, not fixed, check).
+  assert.equal(repo.testWeekDue(REF, { programState: plateaued }).due, false, "scheduled, not immediate");
+  // Once next_due arrives → due.
+  const arrived = new Date(new Date(attn.next_due + "T00:00:00Z").getTime() + 864e5).toISOString().slice(0, 10);
+  assert.equal(repo.testWeekDue(arrived, { programState: plateaued }).due, true, "fires when the scheduled window arrives");
+});
+
 // ── recordTestWeek (the writer that closes the loop) ──────────────────────────
 
 test("recordTestWeek stamps the cadence date and is MONOTONIC — it never moves backwards", () => {

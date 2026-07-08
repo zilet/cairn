@@ -8,12 +8,12 @@ import {
 import {
   addCheckin,
   computeGoalCheck,
-  confirmGoalCheckin,
   getCheckinByDate,
   getProfile,
   listCheckins,
   listWeight,
   logWeight,
+  reactivateGoalCheckin,
   setProfile,
 } from "../domain/person/index.js";
 
@@ -23,11 +23,12 @@ export const personRouter = Router();
 personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 personRouter.put("/profile", (req, res) => {
   const body = req.body ?? {};
-  // A real goal change is a confirmation: restart the gentle goal-check clock so
-  // it does not resurface immediately after the user just set it.
+  // A real goal change re-seeds the gentle goal-check cadence at the active tier
+  // (a fresh goal gets a fresh ~3-month clock, not the old goal's stretched one),
+  // so it does not resurface immediately after the user just set it.
   if ("goal_mode" in body || "goal_weight_lb" in body || "goal_date" in body) {
     try {
-      confirmGoalCheckin();
+      reactivateGoalCheckin();
     } catch {
       /* best-effort */
     }

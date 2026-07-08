@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**189 tools.**
+**190 tools.**
 
 | Tool | Description |
 |---|---|
@@ -112,6 +112,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_symptom_links` | Symptom ↔ marker connections: a symptom the user logged (in a life event or a check-in note — e.g. blurry vision, fatigue, headaches) co-occurring with a genuinely out-of-optimal lab marker (e.g. an elevated systolic BP, low ferritin). A quiet 'worth mentioning to your clinician' read — INFORMATIONAL, never a diagnosis; returns [] when nothing co-occurs. The connected brain reaching across the logs. |
 | `get_test_week` | The cadenced strength TEST-WEEK read — whether a re-test is due (the active block's realization phase, or ~7 weeks since the last test week) and the benchmark lifts worth re-testing to re-anchor true capacity. Read-only (never stamps the cadence). due:false for a new user (never nags). |
 | `get_today_agenda` | The Today salience arbiter (Era 2): ONE deterministic ranking + budget pass over the whole Today surface → { hero, primary[], more[], total }, so only the 1-2 things that matter most today surface inline and the rest collapse behind 'more'. Internal priorities never cross to the user (no scores). Pass `date` (YYYY-MM-DD; defaults to today). |
+| `get_training_playbook` | The deterministic TRAINING PLAYBOOK — the plateau-type plays (strength plateau, endurance plateau, mono-stimulus, hybrid interference) and an adherence-fit restructure read the evolve-program loop can focus a proposal on. Each play carries a plain-language why + a short menu of adaptations, grounded in the program-state. Suggestion only: never mutates the plan, never a score; quiet ('no signal strong enough to change the plan') at steady state. |
 | `get_trajectory` | The user's forward ARC: a periodized horizon (weeks/phase) toward their goals (body-comp, longevity markers, any race), the milestones along it, and today framed as the next step on the path. Plain words, no completion %; null line when there's no goal/block/race. |
 | `get_update_status` | Get the running Cairn version and whether a newer release is available (current, latest, update_available, html_url, notes, checked_at, enabled). Served from the cached daily check — no network on this call. Pull-never-push: nothing notifies; the result just waits in Settings → Data. |
 | `get_volume` | Training volume (tonnage) broken down by muscle group over the last N days (default 30). |
