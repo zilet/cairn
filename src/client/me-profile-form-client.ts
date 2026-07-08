@@ -5,13 +5,11 @@ type MeProfileControllerRecord = Record<string, unknown>;
 type MeProfileProfile = import("../contracts/client-api.js").ClientProfile & {
   age?: number | string | null;
   height_cm?: number | string | null;
+  height_in?: number | string | null;
   endurance_goal_json?: string | null;
   endurance_sport?: string | null;
   allergies?: string | null;
   dietary_restrictions?: string | null;
-  smoking?: number | null;
-  bp_treated?: number | null;
-  statin?: number | null;
 };
 type MeProfileGoalCheck = import("../contracts/client-api.js").ClientGoalCheck & {
   tdee?: number | string | null;
@@ -73,11 +71,70 @@ type MeProfileFormContext = {
   enduranceGoal: MeProfileEnduranceGoalDraft;
   enduranceMode: string;
   goalMode: string;
+  unit: "in" | "cm";
 };
 
 (() => {
   function profileRecord(value: unknown): MeProfileControllerRecord {
     return value && typeof value === "object" ? value as MeProfileControllerRecord : {};
+  }
+
+  // --- units ---------------------------------------------------------------
+  // ONE unit system shared with Body Metrics (same localStorage key): "in" ⇒
+  // imperial (feet+inches / lb), "cm" ⇒ metric (cm / kg). Storage stays imperial
+  // server-side — this only changes what's shown and how entries are read. Mirrors
+  // body-metrics-client.ts's bmUnitPref()/bmSetUnitPref() so a switch in either
+  // surface follows the athlete to the other.
+  const PROF_UNIT_KEY = "cairn-bm-unit";
+  const LB_PER_KG = 2.2046226218;
+  const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+  function profUnitPref(): "in" | "cm" {
+    try {
+      const saved = localStorage.getItem(PROF_UNIT_KEY);
+      if (saved === "in" || saved === "cm") return saved;
+    } catch {
+      /* private mode */
+    }
+    try {
+      // Only the US, Liberia and Myanmar default to imperial; everyone else metric.
+      const region = ((navigator.language || "").split("-")[1] || "").toUpperCase();
+      return region && !["US", "LR", "MM"].includes(region) ? "cm" : "in";
+    } catch {
+      return "in";
+    }
+  }
+
+  function profSetUnitPref(unit: "in" | "cm"): void {
+    try {
+      localStorage.setItem(PROF_UNIT_KEY, unit);
+    } catch {
+      /* private mode */
+    }
+  }
+
+  function massLabel(unit: "in" | "cm"): string {
+    return unit === "cm" ? "kg" : "lb";
+  }
+
+  // Stored pounds → the display unit (kg when metric), rounded to 0.1.
+  function displayMass(lb: unknown, unit: "in" | "cm"): number | null {
+    const n = lb == null || lb === "" ? null : Number(lb);
+    if (n == null || !Number.isFinite(n)) return null;
+    return unit === "cm" ? round1(n / LB_PER_KG) : round1(n);
+  }
+
+  // The athlete's height in total inches (schema source-of-truth is height_in;
+  // legacy rows that only ever stored height_cm still light up via the fallback).
+  function profileHeightIn(profile: MeProfileProfile): number | null {
+    const num = (v: unknown): number | null => {
+      const n = v == null || v === "" ? NaN : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const hin = num(profile.height_in);
+    if (hin != null) return hin;
+    const cm = num(profile.height_cm);
+    return cm == null ? null : round1(cm / 2.54);
   }
 
   function profileNumberInputHtml(deps: MeProfileControllerDeps, id: string, label: string, val: unknown, step: number | string = 1): string {
@@ -104,21 +161,21 @@ type MeProfileFormContext = {
     return goalMode === "maintain" ? "display:none" : "";
   }
 
-  // Tri-state capture (Not set / No / Yes) for a PREVENT cardiovascular-risk
-  // input. "Not set" stays the honest default — nothing is forced, so a fresh
-  // profile keeps risk.ts's provisional assumption until the athlete answers.
-  function triFlagFieldHtml(deps: MeProfileControllerDeps, id: string, label: string, value: number | null | undefined): string {
-    const v = value == null ? null : Number(value);
-    const opt = (val: string, text: string, active: boolean) =>
-      `<button type="button" class="segbtn${active ? " active" : ""}" data-triflag="${val}">${text}</button>`;
-    return `<div class="field" style="margin-bottom:9px">
-      <label>${deps.escapeHtml(label)}</label>
-      <div class="seg triflag-seg" id="${id}" role="group" aria-label="${deps.escapeAttr(label)}">
-        ${opt("", "Not set", v == null)}
-        ${opt("0", "No", v === 0)}
-        ${opt("1", "Yes", v === 1)}
-      </div>
-    </div>`;
+  // The in·lb / cm·kg switch. Active fill is --ink (Atelier segmented rule); the
+  // whole toggle is one preference so length and mass never disagree.
+  function unitToggleHtml(unit: "in" | "cm"): string {
+    const btn = (u: "in" | "cm") =>
+      `<button type="button" class="prof-unit-btn${u === unit ? " on" : ""}" data-unit="${u}" aria-pressed="${u === unit}">${u} · ${massLabel(u)}</button>`;
+    return `<div class="prof-unit-toggle" id="profUnitToggle" role="group" aria-label="Measurement units">${btn("in")}${btn("cm")}</div>`;
+  }
+
+  // A calm grouped section: an uppercase eyebrow (with an optional right-aligned
+  // control) over its fields, hairline-divided from the section above.
+  function sectionHtml(deps: MeProfileControllerDeps, eyebrow: string, body: string, right = ""): string {
+    return `<section class="prof-section">
+      <div class="prof-section-head"><span class="lbl">${deps.escapeHtml(eyebrow)}</span>${right}</div>
+      ${body}
+    </section>`;
   }
 
   function profileHtml(
@@ -127,11 +184,126 @@ type MeProfileFormContext = {
     goal: MeProfileGoalCheck,
     context: MeProfileFormContext,
   ): string {
-    const { discipline, enduranceGoal, enduranceMode, goalMode } = context;
+    const { discipline, enduranceGoal, enduranceMode, goalMode, unit } = context;
     const reqWarn = goal?.requested?.aggressive
       ? `<div class="ex-flag" style="margin-top:0"><b>Goal too aggressive for lean mass.</b> ${goal.message}</div>`
       : `<div class="sess-line">${goal?.message || ""}</div>`;
     const n = (id: string, label: string, val: unknown, step: number | string = 1) => profileNumberInputHtml(deps, id, label, val, step);
+
+    // Body figures shown in the athlete's chosen unit; server storage stays imperial.
+    const hin = profileHeightIn(profile);
+    const ft = hin == null ? "" : Math.floor(hin / 12);
+    const inPart = hin == null ? "" : Math.round(hin - Math.floor(hin / 12) * 12);
+    const cmDisp = hin == null ? "" : Math.round(hin * 2.54);
+    const mLbl = massLabel(unit);
+    const wDisp = displayMass(profile.weight_lb, unit);
+    const gDisp = displayMass(profile.goal_weight_lb, unit);
+
+    const heightField = `<div class="field" style="margin-bottom:9px">
+      <label>Height</label>
+      <div id="heightImperial" class="prof-unit-row" style="${unit === "cm" ? "display:none" : ""}">
+        <div class="prof-unit-in"><input id="height_ft" type="number" step="1" min="0" inputmode="numeric" value="${deps.escapeAttr(ft)}" class="form-input"><span class="prof-unit-suf">ft</span></div>
+        <div class="prof-unit-in"><input id="height_in_part" type="number" step="1" min="0" inputmode="numeric" value="${deps.escapeAttr(inPart)}" class="form-input"><span class="prof-unit-suf">in</span></div>
+      </div>
+      <div id="heightMetric" class="prof-unit-in" style="${unit === "cm" ? "" : "display:none"}">
+        <input id="height_cm_val" type="number" step="0.1" min="0" inputmode="decimal" value="${deps.escapeAttr(cmDisp)}" class="form-input"><span class="prof-unit-suf">cm</span>
+      </div>
+    </div>`;
+
+    const weightField = `<div class="field" style="margin-bottom:9px">
+      <label>Weight</label>
+      <div class="prof-unit-in"><input id="weight_val" type="number" step="0.1" min="0" inputmode="decimal" value="${deps.escapeAttr(wDisp ?? "")}" class="form-input"><span class="prof-unit-suf" id="weightUnit">${mLbl}</span></div>
+    </div>`;
+
+    const youSection = sectionHtml(deps, "You", `
+      <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
+        <p class="aboutme-hint">Stamped on the doctor report you export from Stand → Share with your doctor. Leave empty to fill it in on paper instead.</p>
+        <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${deps.escapeAttr(profile.name || "")}" class="form-input"></div>
+      <div class="field aboutme" style="margin-bottom:0">
+        <label for="about_me">About you</label>
+        <p class="aboutme-hint">What "better" means to you, a little of your history, the foods you love and avoid, how work and life run. Optional — the coach reads it to make the pointing yours.</p>
+        <textarea id="about_me" rows="6" placeholder="e.g. lifted on and off for years; fasted mornings suit me; two young kids, so evenings are unpredictable..."
+          maxlength="8000">${deps.escapeHtml(profile.about_me || "")}</textarea>
+      </div>`);
+
+    const bodySection = sectionHtml(deps, "Body & goal", `
+      ${n("age", "Age", profile.age)}
+      ${heightField}
+      ${weightField}
+      <div class="field" style="margin-bottom:9px">
+        <label>Your goal</label>
+        <p class="aboutme-hint">Losing weight, holding steady, or a slow lean gain. Cairn fuels and frames everything around this — maintaining is a real goal, not "no goal". Change it anytime.</p>
+        <div class="seg goalmode-seg" id="goalModeSeg" role="group" aria-label="Goal mode">
+          <button type="button" class="segbtn${goalMode === "lose" ? " active" : ""}" data-goalmode="lose">Lose</button>
+          <button type="button" class="segbtn${goalMode === "maintain" ? " active" : ""}" data-goalmode="maintain">Maintain</button>
+          <button type="button" class="segbtn${goalMode === "gain" ? " active" : ""}" data-goalmode="gain">Gain</button>
+        </div>
+      </div>
+      <div id="goalTargetFields" style="${activeGoalTargetDisplay(goalMode)}">
+        <div class="field" style="margin-bottom:9px"><label>Goal weight</label>
+          <div class="prof-unit-in"><input id="goal_weight_val" type="number" step="0.1" min="0" inputmode="decimal" value="${deps.escapeAttr(gDisp ?? "")}" class="form-input"><span class="prof-unit-suf" id="goalWeightUnit">${mLbl}</span></div>
+        </div>
+        <div class="field" style="margin-bottom:9px"><label>Goal date <span class="ob-opt">— optional</span></label>
+          <input id="goal_date" type="date" value="${deps.escapeAttr(profile.goal_date || "")}" class="form-input"></div>
+      </div>
+      <p class="aboutme-hint" id="goalMaintainNote" style="margin:-2px 0 9px${goalMode === "maintain" ? "" : ";display:none"}">We anchor to your real expenditure — no goal weight needed. Cairn stays quiet unless your weight genuinely drifts.</p>
+      ${n("activity_factor", "Activity factor (1.3-1.8)", profile.activity_factor, 0.05)}`,
+      unitToggleHtml(unit));
+
+    const trainingSection = sectionHtml(deps, "Training", `
+      <div class="field" style="margin-bottom:9px">
+        <label>Your sport</label>
+        <p class="aboutme-hint">What you mostly train. Cairn meets you in it — the language, the day's read, and Progress reshape around it. Change it anytime.</p>
+        <div class="seg disc-seg" id="discSeg" role="group" aria-label="Primary discipline">
+          <button type="button" class="segbtn${discipline === "strength" ? " active" : ""}" data-disc="strength">Strength</button>
+          <button type="button" class="segbtn${discipline === "endurance" ? " active" : ""}" data-disc="endurance">Endurance</button>
+          <button type="button" class="segbtn${discipline === "hybrid" ? " active" : ""}" data-disc="hybrid">Hybrid</button>
+        </div>
+      </div>
+      <div class="field" id="endSportField" style="margin-bottom:9px${discipline === "strength" ? ";display:none" : ""}">
+        <label for="endurance_sport">Endurance sport <span class="ob-opt">— optional</span></label>
+        <input id="endurance_sport" type="text" placeholder="e.g. running, cycling, triathlon, rowing" maxlength="120"
+          value="${deps.escapeAttr(profile.endurance_sport || "")}" class="form-input">
+      </div>
+      <div class="field" id="endGoalField" style="margin-bottom:0">
+        <label>Running goal <span class="ob-opt">— optional</span></label>
+        <p class="aboutme-hint">A race the coach builds you toward, or an ongoing "stay ready" target. Either way it prescribes your runs each week alongside lifting — separate from the sport above.</p>
+        <div class="seg" id="endGoalMode" role="group" aria-label="Running goal mode">
+          <button type="button" class="segbtn${enduranceMode === "none" ? " active" : ""}" data-egmode="none">None</button>
+          <button type="button" class="segbtn${enduranceMode === "race" ? " active" : ""}" data-egmode="race">Race</button>
+          <button type="button" class="segbtn${enduranceMode === "standing" ? " active" : ""}" data-egmode="standing">Standing</button>
+        </div>
+        <div id="egRace" class="eg-sub" style="${enduranceMode === "race" ? "" : "display:none"}">
+          <div class="field" style="margin:9px 0 0"><label for="eg_event">Race</label>
+            <input id="eg_event" type="text" maxlength="120" placeholder="e.g. Cambridge Half" value="${deps.escapeAttr(enduranceGoal.event || "")}" class="form-input"></div>
+          <div class="field" style="margin:9px 0 0"><label for="eg_date">Race date</label>
+            <input id="eg_date" type="date" value="${deps.escapeAttr(enduranceGoal.date || "")}" class="form-input"></div>
+          <div class="field" style="margin:9px 0 0"><label for="eg_target">Target <span class="ob-opt">— optional</span></label>
+            <input id="eg_target" type="text" maxlength="60" placeholder="e.g. sub-1:45, just finish" value="${deps.escapeAttr(enduranceGoal.target || "")}" class="form-input"></div>
+        </div>
+        <div id="egStanding" class="eg-sub" style="${enduranceMode === "standing" ? "" : "display:none"}">
+          <div class="field" style="margin:9px 0 0"><label for="eg_label">Readiness</label>
+            <input id="eg_label" type="text" maxlength="80" placeholder="e.g. 10k-ready, half-ready" value="${deps.escapeAttr(enduranceGoal.label || "")}" class="form-input"></div>
+        </div>
+        <div id="egShared" class="eg-grid" style="${enduranceMode === "none" ? "display:none" : ""}">
+          <div class="field" style="margin:9px 0 0"><label for="eg_distance">Distance (km) <span class="ob-opt">— optional</span></label>
+            <input id="eg_distance" type="number" step="0.1" value="${deps.escapeAttr(enduranceGoal.distance_km ?? "")}" class="form-input"></div>
+          <div class="field" style="margin:9px 0 0"><label for="eg_weekly_km">Weekly km <span class="ob-opt">— optional</span></label>
+            <input id="eg_weekly_km" type="number" step="1" value="${deps.escapeAttr(enduranceGoal.weekly_km ?? "")}" class="form-input"></div>
+        </div>
+      </div>`);
+
+    const dietSection = sectionHtml(deps, "Diet", `
+      <div class="field" style="margin-bottom:9px">
+        <label for="allergies">Food allergies</label>
+        <p class="aboutme-hint">A hard exclusion — the coach never puts these in a meal, recipe, or swap. Leave empty if none.</p>
+        <input id="allergies" type="text" placeholder="e.g. peanuts, shellfish" maxlength="1000" value="${deps.escapeAttr(profile.allergies || "")}" class="form-input">
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label for="dietary_restrictions">Diet &amp; restrictions</label>
+        <p class="aboutme-hint">Treated as hard constraints in your meal plans — the coach builds every meal within them.</p>
+        <input id="dietary_restrictions" type="text" placeholder="e.g. vegan, vegetarian, pescatarian, no pork" maxlength="1000" value="${deps.escapeAttr(profile.dietary_restrictions || "")}" class="form-input">
+      </div>`);
 
     return deps.segBar("profile", deps.segments) + `
     <div class="sess">
@@ -139,98 +311,11 @@ type MeProfileFormContext = {
       ${reqWarn}
       ${goal?.recommended ? `<div class="sess-line" style="margin-top:6px"><b>${goal.goal_mode === "maintain" ? "Maintenance target" : goal.goal_mode === "gain" ? "Lean-gain target" : "Lean-safe target"}:</b> ${goal.recommended.target_intake_kcal} kcal · ${goal.recommended.protein_g} g protein${goal.recommended.weekly_rate_lb ? ` · ${goal.recommended.weekly_rate_lb} lb/wk` : ""}</div>` : ""}
     </div>
-    <h1 class="lbl" style="margin:24px 0 8px">Profile</h1>
-    <div id="profFields">
-    <div class="field" style="margin-bottom:9px"><label for="name">Name <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">Stamped on the doctor report you export from Stand → Share with your doctor. Leave empty to fill it in on paper instead.</p>
-      <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${deps.escapeAttr(profile.name || "")}" class="form-input"></div>
-    ${n("age", "Age", profile.age)}
-    ${n("height_cm", "Height (cm)", profile.height_cm, 0.1)}
-    ${n("weight_lb", "Weight (lb)", profile.weight_lb, 0.1)}
-    <div class="field" style="margin-bottom:9px">
-      <label>Your goal</label>
-      <p class="aboutme-hint">Losing weight, holding steady, or a slow lean gain. Cairn fuels and frames everything around this — maintaining is a real goal, not "no goal". Change it anytime.</p>
-      <div class="seg goalmode-seg" id="goalModeSeg" role="group" aria-label="Goal mode">
-        <button type="button" class="segbtn${goalMode === "lose" ? " active" : ""}" data-goalmode="lose">Lose</button>
-        <button type="button" class="segbtn${goalMode === "maintain" ? " active" : ""}" data-goalmode="maintain">Maintain</button>
-        <button type="button" class="segbtn${goalMode === "gain" ? " active" : ""}" data-goalmode="gain">Gain</button>
-      </div>
-    </div>
-    <div id="goalTargetFields" style="${activeGoalTargetDisplay(goalMode)}">
-      ${n("goal_weight_lb", "Goal weight (lb)", profile.goal_weight_lb, 0.1)}
-      <div class="field" style="margin-bottom:9px"><label>Goal date <span class="ob-opt">— optional</span></label>
-        <input id="goal_date" type="date" value="${deps.escapeAttr(profile.goal_date || "")}" class="form-input"></div>
-    </div>
-    <p class="aboutme-hint" id="goalMaintainNote" style="margin:-2px 0 9px${goalMode === "maintain" ? "" : ";display:none"}">We anchor to your real expenditure — no goal weight needed. Cairn stays quiet unless your weight genuinely drifts.</p>
-    ${n("activity_factor", "Activity factor (1.3-1.8)", profile.activity_factor, 0.05)}
-
-    <div class="field" style="margin-bottom:9px">
-      <label>Your sport</label>
-      <p class="aboutme-hint">What you mostly train. Cairn meets you in it — the language, the day's read, and Progress reshape around it. Change it anytime.</p>
-      <div class="seg disc-seg" id="discSeg" role="group" aria-label="Primary discipline">
-        <button type="button" class="segbtn${discipline === "strength" ? " active" : ""}" data-disc="strength">Strength</button>
-        <button type="button" class="segbtn${discipline === "endurance" ? " active" : ""}" data-disc="endurance">Endurance</button>
-        <button type="button" class="segbtn${discipline === "hybrid" ? " active" : ""}" data-disc="hybrid">Hybrid</button>
-      </div>
-    </div>
-    <div class="field" id="endSportField" style="margin-bottom:9px${discipline === "strength" ? ";display:none" : ""}">
-      <label for="endurance_sport">Endurance sport <span class="ob-opt">— optional</span></label>
-      <input id="endurance_sport" type="text" placeholder="e.g. running, cycling, triathlon, rowing" maxlength="120"
-        value="${deps.escapeAttr(profile.endurance_sport || "")}" class="form-input">
-    </div>
-
-    <div class="field" id="endGoalField" style="margin-bottom:9px">
-      <label>Running goal <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">A race the coach builds you toward, or an ongoing "stay ready" target. Either way it prescribes your runs each week alongside lifting — separate from the sport above.</p>
-      <div class="seg" id="endGoalMode" role="group" aria-label="Running goal mode">
-        <button type="button" class="segbtn${enduranceMode === "none" ? " active" : ""}" data-egmode="none">None</button>
-        <button type="button" class="segbtn${enduranceMode === "race" ? " active" : ""}" data-egmode="race">Race</button>
-        <button type="button" class="segbtn${enduranceMode === "standing" ? " active" : ""}" data-egmode="standing">Standing</button>
-      </div>
-      <div id="egRace" class="eg-sub" style="${enduranceMode === "race" ? "" : "display:none"}">
-        <div class="field" style="margin:9px 0 0"><label for="eg_event">Race</label>
-          <input id="eg_event" type="text" maxlength="120" placeholder="e.g. Cambridge Half" value="${deps.escapeAttr(enduranceGoal.event || "")}" class="form-input"></div>
-        <div class="field" style="margin:9px 0 0"><label for="eg_date">Race date</label>
-          <input id="eg_date" type="date" value="${deps.escapeAttr(enduranceGoal.date || "")}" class="form-input"></div>
-        <div class="field" style="margin:9px 0 0"><label for="eg_target">Target <span class="ob-opt">— optional</span></label>
-          <input id="eg_target" type="text" maxlength="60" placeholder="e.g. sub-1:45, just finish" value="${deps.escapeAttr(enduranceGoal.target || "")}" class="form-input"></div>
-      </div>
-      <div id="egStanding" class="eg-sub" style="${enduranceMode === "standing" ? "" : "display:none"}">
-        <div class="field" style="margin:9px 0 0"><label for="eg_label">Readiness</label>
-          <input id="eg_label" type="text" maxlength="80" placeholder="e.g. 10k-ready, half-ready" value="${deps.escapeAttr(enduranceGoal.label || "")}" class="form-input"></div>
-      </div>
-      <div id="egShared" class="eg-grid" style="${enduranceMode === "none" ? "display:none" : ""}">
-        <div class="field" style="margin:9px 0 0"><label for="eg_distance">Distance (km) <span class="ob-opt">— optional</span></label>
-          <input id="eg_distance" type="number" step="0.1" value="${deps.escapeAttr(enduranceGoal.distance_km ?? "")}" class="form-input"></div>
-        <div class="field" style="margin:9px 0 0"><label for="eg_weekly_km">Weekly km <span class="ob-opt">— optional</span></label>
-          <input id="eg_weekly_km" type="number" step="1" value="${deps.escapeAttr(enduranceGoal.weekly_km ?? "")}" class="form-input"></div>
-      </div>
-    </div>
-
-    <div class="field aboutme" style="margin-bottom:0">
-      <label for="about_me">About you</label>
-      <p class="aboutme-hint">What "better" means to you, a little of your history, the foods you love and avoid, how work and life run. Optional — the coach reads it to make the pointing yours.</p>
-      <textarea id="about_me" rows="6" placeholder="e.g. lifted on and off for years; fasted mornings suit me; two young kids, so evenings are unpredictable..."
-        maxlength="8000">${deps.escapeHtml(profile.about_me || "")}</textarea>
-    </div>
-    <div class="field" style="margin-top:9px;margin-bottom:9px">
-      <label for="allergies">Food allergies</label>
-      <p class="aboutme-hint">A hard exclusion — the coach never puts these in a meal, recipe, or swap. Leave empty if none.</p>
-      <input id="allergies" type="text" placeholder="e.g. peanuts, shellfish" maxlength="1000" class="form-input">
-    </div>
-    <div class="field" style="margin-bottom:0">
-      <label for="dietary_restrictions">Dietary preferences</label>
-      <p class="aboutme-hint">Respected strongly in your meal plans (e.g. vegetarian, pescatarian, no pork).</p>
-      <input id="dietary_restrictions" type="text" placeholder="e.g. pescatarian, no pork" maxlength="1000" class="form-input">
-    </div>
-
-    <div class="field" style="margin-top:9px;margin-bottom:0">
-      <label>Cardiovascular risk inputs <span class="ob-opt">— optional</span></label>
-      <p class="aboutme-hint">Sharpens your AHA PREVENT cardiovascular-risk read. Leave any of these "Not set" and Cairn assumes the lower-risk value until you answer.</p>
-      ${triFlagFieldHtml(deps, "smokingSeg", "Do you currently smoke?", profile.smoking)}
-      ${triFlagFieldHtml(deps, "bpTreatedSeg", "On blood-pressure medication?", profile.bp_treated)}
-      ${triFlagFieldHtml(deps, "statinSeg", "On a statin?", profile.statin)}
-    </div>
+    <div id="profFields" class="prof-form">
+      ${youSection}
+      ${bodySection}
+      ${trainingSection}
+      ${dietSection}
     </div>
 
     <div class="prof-capture-note sess">
@@ -245,6 +330,8 @@ type MeProfileFormContext = {
     goalMode: profileGoalMode,
     enduranceGoal: profileEnduranceGoal,
     html: profileHtml,
+    unitPref: profUnitPref,
+    setUnitPref: profSetUnitPref,
   };
 
   Object.assign(globalThis, { CairnMeProfileForm: CAIRN_ME_PROFILE_FORM });

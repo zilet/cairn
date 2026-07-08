@@ -14,6 +14,12 @@ type HealthRiskRead = import("../contracts/client-api.js").ClientCardiovascularR
     if (!wrap) return;
     wrap.innerHTML = CairnHealthRisk.renderCardiovascularRiskHtml(data);
     wrap.querySelector("[data-risk-sharpen]")?.addEventListener("click", () => {
+      // Prefer an in-place sharpen (Stand → Age scrolls to the clinical inputs);
+      // fall back to the legacy Me → Profile jump when no handler is supplied.
+      if (deps.onSharpen) {
+        deps.onSharpen();
+        return;
+      }
       deps.state.meSeg = "profile";
       deps.activateTab("me");
     });
