@@ -19,6 +19,7 @@ import { registerSystemTools } from "./surfaces/mcp/system.js";
 import { registerTrainingLogTools } from "./surfaces/mcp/training-log.js";
 import { registerTrainingStatusTools } from "./surfaces/mcp/training-status.js";
 import { registerBodyMetricsTools } from "./surfaces/mcp/body-metrics.js";
+import { registerJourneyTools } from "./surfaces/mcp/journey.js";
 
 export function buildMcpServer(): McpServer {
   const server = new McpServer({ name: "cairn", version: "0.1.0" });
@@ -40,6 +41,7 @@ export function buildMcpServer(): McpServer {
   registerTrainingLogTools(server);
   registerTrainingStatusTools(server);
   registerBodyMetricsTools(server);
+  registerJourneyTools(server);
 
   return server;
 }

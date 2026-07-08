@@ -460,8 +460,26 @@ export function renderReactionModel(ctx: any): string {
 // THE ARC — where today sits on the path to their goals. One clause, never a date wall.
 export function renderTrajectory(ctx: any): string {
   const t = ctx?.trajectory;
-  if (!t || !t.line) return "";
-  return `\nTHE ARC (where today sits on the path to their goals — voice at most ONE natural clause when it fits, never a milestone list-dump or a date wall): ${String(t.line).trim()}\n`;
+  const line = t?.line ? String(t.line).trim() : "";
+  const journey = ctx?.journey;
+  const jBits: string[] = [];
+  const phase = journey?.active_phase;
+  if (phase?.kind) {
+    jBits.push(`active phase: ${String(phase.kind).replace(/_/g, " ")}`);
+  }
+  const milestone = Array.isArray(journey?.milestones) ? journey.milestones[0] : null;
+  if (milestone?.label) {
+    jBits.push(`latest milestone: ${String(milestone.label).trim()}`);
+  }
+  const suggestion = journey?.transition_suggestion;
+  if (suggestion?.kind) {
+    jBits.push(`next phase to consider: ${String(suggestion.kind).replace(/_/g, " ")}`);
+  }
+  if (!line && !jBits.length) return "";
+  const journeyLine = jBits.length
+    ? ` Journey context: ${jBits.join("; ")}. Treat this as context only — nothing auto-applies.`
+    : "";
+  return `\nTHE ARC (where today sits on the path to their goals — voice at most ONE natural clause when it fits, never a milestone list-dump or a date wall): ${line}${journeyLine}\n`;
 }
 
 // LIFE CONTEXT — a one-mention event shaping today, then fading. Never a forced rest.

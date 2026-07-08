@@ -154,6 +154,7 @@ export interface CoachContextEnvelope {
   endurance_goal: CoachEnduranceGoal | null;
   goal: CoachGoalCheck | null;
   goal_mode: CoachGoalMode;
+  journey: CoachRecord | null;
   day_intake: CoachDayIntake;
   meal_plan: CoachRecord | null;
   plan: CoachRecord[];

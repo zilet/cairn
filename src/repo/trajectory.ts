@@ -40,6 +40,7 @@ import { getProgramState } from "./program-state.js";
 // and runs against any version — never a hard dependency on a possibly-absent
 // export. dayRead is always present.
 import * as intelligence from "./intelligence.js";
+import { journeyMilestones } from "./journey.js";
 import { getHealthSynthesis } from "./propagation.js";
 import { localDateISO } from "./shared.js";
 
@@ -318,6 +319,18 @@ export function getTrajectory(date?: string): Trajectory {
   // it's a standing lever to hold across the whole arc, not a calendar event.
   if (oneChange) {
     milestones.push({ label: oneChange, when: null, kind: "lever" });
+  }
+
+  // Journey milestones — calm body-composition progress markers along the same arc.
+  // Keep only the top one here so the forward read never becomes a badge wall.
+  const journey = safe<any[]>(() => journeyMilestones(today), []);
+  const jm = Array.isArray(journey) ? journey[0] : null;
+  if (jm?.label) {
+    milestones.push({
+      label: String(jm.label).slice(0, 80),
+      when: isISODate(jm.achieved_date) ? jm.achieved_date : null,
+      kind: "journey",
+    });
   }
 
   const sorted = sortAndCap(milestones);

@@ -20,6 +20,7 @@ import { memoryLearningRouter } from "./routes/memory-learning.js";
 import { personContextRouter } from "./routes/person-context.js";
 import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
+import { journeyRouter } from "./routes/journey.js";
 
 export const api = Router();
 
@@ -40,6 +41,7 @@ api.use("/", memoryLearningRouter);
 api.use("/", personContextRouter);
 api.use("/", trainingLogRouter);
 api.use("/", bodyMetricsRouter);
+api.use("/", journeyRouter);
 api.use("/chat", chatRouter);
 api.use("/agent-jobs", agentJobsRouter);
 

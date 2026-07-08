@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { latestJourneyMilestoneSince } from "./journey.js";
 import { localDateISO } from "./shared.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
 
@@ -190,6 +191,17 @@ function appliedPlanChange(stampSql: string): Change | null {
   }
 }
 
+// ---- source: a body-composition journey milestone since the stamp ----
+function journeyMilestoneChange(stampSql: string): Change | null {
+  try {
+    const m = latestJourneyMilestoneSince(stampSql);
+    if (!m) return null;
+    return { weight: m.priority || 64, phrase: `You crossed ${m.label.toLowerCase()}` };
+  } catch {
+    return null;
+  }
+}
+
 // The candidate the Today arbiter calls. Returns null (silent) when there's no
 // prior stamp (first-ever open) or nothing genuinely notable changed.
 export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate | null {
@@ -204,7 +216,7 @@ export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate |
   if (!stampSql || !parseSqlTs(stampSql)) return null;
 
   const changes: Change[] = [];
-  for (const src of [newLabChange, resolvedDirectiveChange, appliedPlanChange, newInsightChange, recentPrChange]) {
+  for (const src of [newLabChange, resolvedDirectiveChange, journeyMilestoneChange, appliedPlanChange, newInsightChange, recentPrChange]) {
     const c = src(stampSql);
     if (c && c.phrase) changes.push(c);
   }
