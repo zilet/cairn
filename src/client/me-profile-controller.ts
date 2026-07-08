@@ -10,20 +10,22 @@
     });
   }
 
+  const LB_PER_KG = 2.2046226218;
+  const round1 = (n: number): number => Math.round(n * 10) / 10;
+
   function wireProfileForm(
     deps: MeProfileControllerDeps,
     enduranceGoal: MeProfileEnduranceGoalDraft,
     initial: {
-      discipline: string; enduranceMode: string; goalMode: string;
-      smoking: number | null; bpTreated: number | null; statin: number | null;
+      discipline: string; enduranceMode: string; goalMode: string; unit: "in" | "cm";
     },
   ): void {
     let pickedDisc = String(initial.discipline || "strength");
     let pickedEgMode = String(initial.enduranceMode || "none");
     let pickedGoalMode = String(initial.goalMode || "maintain");
-    let pickedSmoking: number | null = initial.smoking;
-    let pickedBpTreated: number | null = initial.bpTreated;
-    let pickedStatin: number | null = initial.statin;
+    // The active display unit (in ⇒ imperial, cm ⇒ metric). The toggle converts
+    // the body inputs in place; storage always writes imperial (height_in / lb).
+    let activeUnit: "in" | "cm" = initial.unit === "cm" ? "cm" : "in";
 
     const enduranceGoalPayload = (): MeProfileEnduranceGoalDraft | null | undefined => {
       const dist = deps.numberValue("#eg_distance");
@@ -49,13 +51,45 @@
       return null;
     };
 
+    // Read the height inputs (structure differs per unit) back to total inches.
+    const readHeightIn = (): number | null => {
+      if (activeUnit === "cm") {
+        const cm = deps.numberValue("#height_cm_val");
+        return cm == null ? null : round1(cm / 2.54);
+      }
+      const ftv = deps.numberValue("#height_ft");
+      const inv = deps.numberValue("#height_in_part");
+      if (ftv == null && inv == null) return null;
+      return (ftv ?? 0) * 12 + (inv ?? 0);
+    };
+    // Body mass field → pounds (the schema unit) from the active display unit.
+    const readMassLb = (selector: string): number | null => {
+      const v = deps.numberValue(selector);
+      if (v == null) return null;
+      return activeUnit === "cm" ? round1(v * LB_PER_KG) : v;
+    };
+
     const persistProfile = async () => {
+      const heightIn = readHeightIn();
+      // Store height_in as the source-of-truth AND a matching height_cm so the
+      // TDEE / doctor-report paths (which read cm) stay in sync. In metric mode
+      // the typed cm is authoritative; in imperial we derive cm from inches.
+      const heightCm =
+        activeUnit === "cm"
+          ? (() => {
+              const cm = deps.numberValue("#height_cm_val");
+              return cm == null ? null : round1(cm);
+            })()
+          : heightIn == null
+            ? null
+            : round1(heightIn * 2.54);
       const body = {
         name: deps.inputValue("#name").trim(),
         age: deps.numberValue("#age"),
-        height_cm: deps.numberValue("#height_cm"),
-        weight_lb: deps.numberValue("#weight_lb"),
-        goal_weight_lb: deps.numberValue("#goal_weight_lb"),
+        height_in: heightIn,
+        height_cm: heightCm,
+        weight_lb: readMassLb("#weight_val"),
+        goal_weight_lb: readMassLb("#goal_weight_val"),
         goal_date: deps.inputValue("#goal_date") || null,
         activity_factor: deps.numberValue("#activity_factor"),
         goal_mode: pickedGoalMode,
@@ -65,9 +99,6 @@
         about_me: deps.textAreaValue("#about_me").trim(),
         allergies: deps.inputValue("#allergies").trim(),
         dietary_restrictions: deps.inputValue("#dietary_restrictions").trim(),
-        smoking: pickedSmoking,
-        bp_treated: pickedBpTreated,
-        statin: pickedStatin,
       };
       await deps.api("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       deps.setDiscipline(pickedDisc);
@@ -126,20 +157,63 @@
       })
     );
 
-    const wireTriFlag = (id: string, onPick: (value: number | null) => void): void => {
-      const group = deps.select<HTMLElement>(`#${id}`);
-      group?.querySelectorAll<HTMLElement>("[data-triflag]").forEach((button) =>
-        button.addEventListener("click", () => {
-          const raw = button.dataset.triflag ?? "";
-          onPick(raw === "" ? null : Number(raw));
-          setActiveButton(group, ".segbtn", button);
-          profileBar.markDirty();
-        })
-      );
+    // Unit toggle: convert the body inputs between imperial and metric IN PLACE
+    // (so unsaved edits survive) and persist the shared preference. It changes
+    // display only — the canonical values are unchanged, so it never marks dirty.
+    const setInput = (selector: string, value: string): void => {
+      const el = deps.select<HTMLInputElement>(selector);
+      if (el) el.value = value;
     };
-    wireTriFlag("smokingSeg", (v) => { pickedSmoking = v; });
-    wireTriFlag("bpTreatedSeg", (v) => { pickedBpTreated = v; });
-    wireTriFlag("statinSeg", (v) => { pickedStatin = v; });
+    const convMass = (selector: string, next: "in" | "cm"): void => {
+      const raw = (deps.select<HTMLInputElement>(selector)?.value ?? "").trim();
+      if (raw === "") return;
+      const v = Number(raw);
+      if (!Number.isFinite(v)) return;
+      setInput(selector, String(next === "cm" ? round1(v / LB_PER_KG) : round1(v * LB_PER_KG)));
+    };
+    const applyUnit = (next: "in" | "cm"): void => {
+      if (next === activeUnit) return;
+      // Height: read the currently-shown unit, write the other, swap visibility.
+      if (next === "cm") {
+        const ftv = deps.numberValue("#height_ft");
+        const inv = deps.numberValue("#height_in_part");
+        const totalIn = ftv == null && inv == null ? null : (ftv ?? 0) * 12 + (inv ?? 0);
+        setInput("#height_cm_val", totalIn == null ? "" : String(round1(totalIn * 2.54)));
+      } else {
+        const cm = deps.numberValue("#height_cm_val");
+        const totalIn = cm == null ? null : cm / 2.54;
+        if (totalIn == null) {
+          setInput("#height_ft", "");
+          setInput("#height_in_part", "");
+        } else {
+          const f = Math.floor(totalIn / 12);
+          setInput("#height_ft", String(f));
+          setInput("#height_in_part", String(Math.round(totalIn - f * 12)));
+        }
+      }
+      const himp = deps.select<HTMLElement>("#heightImperial");
+      const hmet = deps.select<HTMLElement>("#heightMetric");
+      if (himp) himp.style.display = next === "cm" ? "none" : "";
+      if (hmet) hmet.style.display = next === "cm" ? "" : "none";
+      // Weight + goal weight (values were shown in the old unit).
+      convMass("#weight_val", next);
+      convMass("#goal_weight_val", next);
+      const mLbl = next === "cm" ? "kg" : "lb";
+      const wU = deps.select<HTMLElement>("#weightUnit");
+      if (wU) wU.textContent = mLbl;
+      const gU = deps.select<HTMLElement>("#goalWeightUnit");
+      if (gU) gU.textContent = mLbl;
+      deps.select<HTMLElement>("#profUnitToggle")?.querySelectorAll<HTMLElement>("[data-unit]").forEach((b) => {
+        const on = b.dataset.unit === next;
+        b.setAttribute?.("aria-pressed", String(on));
+        b.classList?.toggle("on", on);
+      });
+      activeUnit = next;
+      CairnMeProfileForm.setUnitPref(next);
+    };
+    deps.select<HTMLElement>("#profUnitToggle")?.querySelectorAll<HTMLElement>("[data-unit]").forEach((button) =>
+      button.addEventListener("click", () => applyUnit(button.dataset.unit === "cm" ? "cm" : "in"))
+    );
 
     deps.select("#profToToday")?.addEventListener("click", () => deps.activateTab("today"));
     deps.select("#profToProgress")?.addEventListener("click", () => { deps.state.progressSeg = "sessions"; deps.activateTab("progress"); });
@@ -162,16 +236,12 @@
     const enduranceMode = typeof enduranceGoal.mode === "string" && enduranceGoal.mode ? enduranceGoal.mode : "none";
     const goalMode = CairnMeProfileForm.goalMode(profile, goal);
     const discipline = deps.primaryDiscipline();
+    const unit = CairnMeProfileForm.unitPref();
 
     const draw = () => {
-      deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode });
+      deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode, unit });
       deps.wireSeg(deps.handlers);
-      wireProfileForm(deps, enduranceGoal, {
-        discipline, enduranceMode, goalMode,
-        smoking: profile.smoking == null ? null : Number(profile.smoking),
-        bpTreated: profile.bp_treated == null ? null : Number(profile.bp_treated),
-        statin: profile.statin == null ? null : Number(profile.statin),
-      });
+      wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode, unit });
     };
     if (opts.animate) await deps.skeletonSwap(draw);
     else draw();

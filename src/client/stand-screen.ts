@@ -524,6 +524,15 @@ function riskDeps(): ClientHealthRiskControllerDeps {
     activateTab,
     pollToken: () => pollToken,
     select: $,
+    // The provisional-read nudge scrolls to the in-place clinical inputs instead
+    // of leaving Stand for Me → Profile.
+    onSharpen: () => {
+      const el = view.querySelector<HTMLElement>("#hClinicalInputs");
+      if (!el) return;
+      const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+      el.querySelector<HTMLElement>(".segbtn")?.focus?.();
+    },
   };
 }
 
@@ -592,10 +601,75 @@ function showAge(): void {
   setStandSeg("age");
   paint(toolShellHtml("How you compare",
     `<div id="hRisk"><div class="hrisk hrisk-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div></div>
+     <div id="hClinicalInputs"></div>
      <div id="hContent"></div>`));
   wireBack();
   CairnHealthRiskController.load(riskDeps(), pollToken);
+  void paintClinicalInputs(pollToken);
   CairnHealthStandingController.paintReview(standingDeps());
+}
+
+// The PREVENT capture flags (smoking / BP-treated / statin) live here — beside the
+// cardiovascular-risk read they sharpen, not buried in the Profile form. Each is a
+// tri-state (Not set / No / Yes); a tap autosaves that one flag (partial PUT, the
+// rest of the profile is untouched) and refreshes the risk read above so the
+// sharpened inputs recompute. Informational — nothing changes the plan on its own.
+const CLINICAL_FLAGS: Array<{ field: "smoking" | "bp_treated" | "statin"; label: string }> = [
+  { field: "smoking", label: "Do you currently smoke?" },
+  { field: "bp_treated", label: "On blood-pressure medication?" },
+  { field: "statin", label: "On a statin?" },
+];
+
+function clinicalFlagRowHtml(field: string, label: string, value: number | null): string {
+  const opt = (val: string, text: string, active: boolean) =>
+    `<button type="button" class="segbtn${active ? " active" : ""}" data-triflag="${val}">${text}</button>`;
+  return `<div class="prof-clin-row">
+      <span class="prof-clin-q">${escHtml(label)}</span>
+      <div class="seg" data-clinflag="${escAttr(field)}" role="group" aria-label="${escAttr(label)}">
+        ${opt("", "Not set", value == null)}
+        ${opt("0", "No", value === 0)}
+        ${opt("1", "Yes", value === 1)}
+      </div>
+    </div>`;
+}
+
+async function paintClinicalInputs(token: number): Promise<void> {
+  const mount = view.querySelector<HTMLElement>("#hClinicalInputs");
+  if (!mount) return;
+  let profile: Record<string, unknown> = {};
+  try {
+    profile = (await api("/profile")) as Record<string, unknown> || {};
+  } catch {
+    return; // the risk card stands on its own; the sharpen control is additive
+  }
+  if (token !== pollToken || !mount.isConnected) return;
+  const flag = (v: unknown): number | null => (v == null ? null : Number(v));
+  mount.innerHTML = `<div class="prof-clinical sess reveal">
+      <span class="lbl">Sharpen your read</span>
+      <p class="sess-line" style="color:var(--muted);margin-top:6px">Three quick answers refine the cardiovascular-risk read above. Leave any “Not set” and Cairn assumes the lower-risk value.</p>
+      ${CLINICAL_FLAGS.map((f) => clinicalFlagRowHtml(f.field, f.label, flag(profile[f.field]))).join("")}
+    </div>`;
+  mount.querySelectorAll<HTMLElement>("[data-clinflag]").forEach((group) => {
+    const field = group.dataset.clinflag || "";
+    group.querySelectorAll<HTMLElement>("[data-triflag]").forEach((button) =>
+      button.addEventListener("click", async () => {
+        const raw = button.dataset.triflag ?? "";
+        const val = raw === "" ? null : Number(raw);
+        group.querySelectorAll(".segbtn").forEach((b) => b.classList.toggle("active", b === button));
+        try {
+          await api("/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [field]: val }),
+          });
+          // Recompute the risk read with the sharpened input.
+          if (token === pollToken) CairnHealthRiskController.load(riskDeps(), pollToken);
+        } catch {
+          toast("Couldn't save that just now.");
+        }
+      })
+    );
+  });
 }
 
 // ---- domain detail — the Markers catalog, scoped to one domain -----------------

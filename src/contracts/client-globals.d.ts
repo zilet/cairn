@@ -934,6 +934,9 @@ declare global {
     activateTab(tab: string): unknown;
     pollToken(): number;
     select<T extends Element = Element>(selector: string): T | null;
+    // When present, the "sharpen this read" nudge calls this instead of jumping to
+    // Me → Profile — used by Stand → Age to scroll to the in-place clinical inputs.
+    onSharpen?(): void;
   };
 
   type ClientHealthRecordsControllerDeps = {
@@ -2198,6 +2201,8 @@ declare global {
         goal: MeProfileGoalCheck,
         context: MeProfileFormContext,
       ): string;
+      unitPref(): "in" | "cm";
+      setUnitPref(unit: "in" | "cm"): void;
     };
 
     CairnMeProfileController: {

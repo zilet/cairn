@@ -75,6 +75,7 @@ function depsFor(root, options = {}) {
     activateTab: (tab) => activated.push(tab),
     pollToken: () => options.pollToken ?? 1,
     select: (selector) => root.querySelector(selector),
+    ...(options.onSharpen ? { onSharpen: options.onSharpen } : {}),
   };
   return { deps, apiCalls, activated, state };
 }
@@ -140,4 +141,22 @@ test("health risk controller wires the provisional-read Profile nudge", () => {
 
   assert.equal(state.meSeg, "profile");
   assert.deepEqual(activated, ["me"]);
+});
+
+test("health risk controller prefers an in-place onSharpen handler over the Profile jump", () => {
+  const rootEl = new FakeElement("root");
+  const riskSlot = new FakeElement("hRisk");
+  const sharpen = new FakeElement("", "button");
+  riskSlot.selectors.set("[data-risk-sharpen]", sharpen);
+  rootEl.selectors.set("#hRisk", riskSlot);
+  const { controller } = loadController();
+  let sharpened = 0;
+  const { deps, activated, state } = depsFor(rootEl, { onSharpen: () => { sharpened += 1; } });
+
+  controller.render({ model_status: { prevent: "computed_provisional" } }, deps);
+  sharpen.click();
+
+  assert.equal(sharpened, 1);
+  assert.equal(state.meSeg, undefined); // did NOT fall back to the tab jump
+  assert.deepEqual(activated, []);
 });
