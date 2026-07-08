@@ -175,6 +175,9 @@ export interface ClientProfile {
   goal_weight_lb?: number | null;
   goal_date?: string | null;
   goal_mode?: "lose" | "maintain" | "gain" | null;
+  start_weight_lb?: number | null;
+  start_date?: string | null;
+  goal_bodyfat_pct?: number | null;
   primary_discipline?: "strength" | "endurance" | "hybrid" | string | null;
   endurance_goal?: ClientEnduranceGoal | null;
   about_me?: string | null;
@@ -183,6 +186,69 @@ export interface ClientProfile {
   bp_treated?: number | null;
   statin?: number | null;
   [key: string]: unknown;
+}
+
+export type ClientJourneyPhaseKind = "cut" | "maintenance" | "diet_break" | "reverse" | "gain" | string;
+export type ClientJourneyPhaseStatus = "proposed" | "active" | "completed" | "discarded" | string;
+export type ClientJourneyMilestoneKind = "weight_loss" | "goal_progress" | "goal_reached" | "bodyfat_band" | "bodyfat_goal" | string;
+
+export interface ClientJourneyPhase {
+  id?: number;
+  kind: ClientJourneyPhaseKind;
+  start_date?: string | null;
+  end_date?: string | null;
+  start_weight_lb?: number | null;
+  target_weight_lb?: number | null;
+  start_bodyfat_pct?: number | null;
+  target_bodyfat_pct?: number | null;
+  planned_rate_lb_wk?: number | null;
+  status?: ClientJourneyPhaseStatus;
+  reason?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ClientJourneyTransitionSuggestion {
+  kind: ClientJourneyPhaseKind;
+  reason: string;
+  start_date: string;
+  target_weight_lb: number | null;
+  target_bodyfat_pct: number | null;
+  planned_rate_lb_wk: number | null;
+}
+
+export interface ClientJourneyMilestone {
+  id: string;
+  kind: ClientJourneyMilestoneKind;
+  label: string;
+  detail: string | null;
+  achieved_date: string | null;
+  achieved_at: string | null;
+  value: number | null;
+  priority: number;
+}
+
+export interface ClientJourneyRead {
+  profile: {
+    start_weight_lb: number | null;
+    start_date: string | null;
+    goal_weight_lb: number | null;
+    goal_bodyfat_pct: number | null;
+    goal_mode: string | null;
+  } | null;
+  body_fat: {
+    body_fat_pct?: number | null;
+    source?: string | null;
+    date?: string | null;
+    [key: string]: unknown;
+  } | null;
+  active_phase: ClientJourneyPhase | null;
+  proposed_phases: ClientJourneyPhase[];
+  transition_suggestion: ClientJourneyTransitionSuggestion | null;
+  milestones: ClientJourneyMilestone[];
+  leanness_rate?: unknown;
 }
 
 export interface ClientGoalCheck {
@@ -1674,6 +1740,9 @@ export interface ClientApiResponses {
   "/api/muscle-trajectory": ClientMuscleGroupTrajectory;
   "/api/test-week": ClientTestWeekDue;
   "/api/dexa-targeting": ClientDexaTargeting;
+  "/api/journey": ClientJourneyRead;
+  "/api/journey/milestones": ClientJourneyMilestone[];
+  "/api/journey/transition-suggestion": ClientJourneyTransitionSuggestion | null;
   "/api/program/run-plan/apply": ClientProposalResult;
   "/api/coaching-focus": ClientCoachingFocus;
   "/api/health/markers": ClientHealthMarker[];

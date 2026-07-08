@@ -22,6 +22,8 @@ type TovData = {
   load: Record<string, unknown> | null;
   adjustments: unknown[] | null;
   sessions: unknown[] | null;
+  journey: import("../contracts/client-api.js").ClientJourneyRead | null;
+  journeyMilestones: import("../contracts/client-api.js").ClientJourneyMilestone[] | null;
 };
 
 // SVG paint attrs don't reliably resolve CSS var() — hardcoded Atelier hexes,
@@ -76,7 +78,7 @@ function tovLoadSnapshot(): TovData | null {
 
 async function tovFetch(): Promise<TovData> {
   const grab = (path: string) => api(path).catch(() => null);
-  const [stats, balance, trajectory, focus, load, adjustments, sessions] = await Promise.all([
+  const [stats, balance, trajectory, focus, load, adjustments, sessions, journey, journeyMilestones] = await Promise.all([
     grab("/stats"),
     grab("/program/balance"),
     grab("/muscle-trajectory"),
@@ -84,6 +86,8 @@ async function tovFetch(): Promise<TovData> {
     grab("/muscle-load"),
     grab("/program/adjustments"),
     grab("/sessions?limit=3"),
+    grab("/journey"),
+    grab("/journey/milestones"),
   ]);
   return {
     stats: CairnProgressData.record(stats),
@@ -93,6 +97,8 @@ async function tovFetch(): Promise<TovData> {
     load: CairnProgressData.record(load),
     adjustments: Array.isArray(adjustments) ? adjustments : null,
     sessions: Array.isArray(sessions) ? sessions : null,
+    journey: journey && typeof journey === "object" && !Array.isArray(journey) ? journey as import("../contracts/client-api.js").ClientJourneyRead : null,
+    journeyMilestones: Array.isArray(journeyMilestones) ? journeyMilestones as import("../contracts/client-api.js").ClientJourneyMilestone[] : null,
   };
 }
 
@@ -401,27 +407,36 @@ function tovSessionsHtml(data: TovData): string {
   </div>`;
 }
 
+function tovJourneyHtml(data: TovData): string {
+  return CairnProgressJourney?.journeyCardHtml?.(data.journey, data.journeyMilestones, { stagger }) || "";
+}
+
 // ---- paint ----------------------------------------------------------------------
 
 function paintTrainOverview(data: TovData): void {
   const head = segBar("overview", PROGRESS_SEG);
   const rows = tovFoldRows(data);
   const hasAny = rows.some((r) => r.sets > 0) || CairnProgressData.rows(data.sessions).length > 0;
+  const journey = tovJourneyHtml(data);
   if (!hasAny) {
     view.innerHTML = head + `<div class="tov-empty">` +
+      journey +
       emptyStateHtml(art("exercise", "barbell row"), "Log a session and this becomes your training map — what's trained, what's due, and where to push next.") +
       `</div>`;
     wireSeg(PROGRESS_HANDLERS);
+    CairnProgressJourney?.wire?.(view);
     return;
   }
   view.innerHTML = head +
     tovMastHtml(data, rows) +
+    journey +
     tovMapHtml(rows) +
     tovFocusHtml(data) +
     tovRowsHtml(rows) +
     tovMovesHtml(data) +
     tovSessionsHtml(data);
   wireSeg(PROGRESS_HANDLERS);
+  CairnProgressJourney?.wire?.(view);
   runCountUps(view);
   view.querySelectorAll<HTMLElement>("[data-tovgo]").forEach((el) =>
     el.addEventListener("click", () => {

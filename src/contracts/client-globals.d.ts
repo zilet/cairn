@@ -36,6 +36,8 @@ import type {
   ClientHealthStandingDimension,
   ClientHealthStandingMeasure,
   ClientHealthDocument,
+  ClientJourneyMilestone,
+  ClientJourneyRead,
   ClientMealPlan,
   ClientPerformanceStanding,
   ClientProgramBlock,
@@ -834,6 +836,16 @@ declare global {
   type ClientProgressRouteDeps = {
     endurance(renderSelf: () => unknown): ClientProgressEnduranceControllerDeps;
     program(renderSelf: () => unknown): ClientProgressProgramControllerDeps;
+  };
+
+  type ClientProgressJourneyApi = {
+    hasRead(read: ClientJourneyRead | null | undefined, milestones?: unknown): boolean;
+    journeyCardHtml(
+      read: ClientJourneyRead | null | undefined,
+      milestones: ClientJourneyMilestone[] | unknown,
+      deps?: { stagger?(index?: number | null): string },
+    ): string;
+    wire(root?: ParentNode): void;
   };
 
   type ClientHealthPictureControllerDeps = {
@@ -2896,6 +2908,8 @@ declare global {
       tidyExerciseNames(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void>;
     };
 
+    CairnProgressJourney: ClientProgressJourneyApi;
+
     CairnProgressRouteDeps: ClientProgressRouteDeps;
 
     CairnCoachingFocus: {
@@ -3789,6 +3803,7 @@ declare global {
   declare const CairnProgressProgramSummary: Window["CairnProgressProgramSummary"];
   declare const CairnProgressProgramBlock: Window["CairnProgressProgramBlock"];
   declare const CairnProgressProgramController: Window["CairnProgressProgramController"];
+  declare const CairnProgressJourney: Window["CairnProgressJourney"];
   declare const CairnProgressRouteDeps: Window["CairnProgressRouteDeps"];
   declare const CairnCoachingFocus: Window["CairnCoachingFocus"];
   declare const CairnCardioPlan: Window["CairnCardioPlan"];
