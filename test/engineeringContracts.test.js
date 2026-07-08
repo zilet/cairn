@@ -183,6 +183,27 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   assert.deepEqual(unownedPublicScripts, [], "public/js scripts must be generated, bundled, or explicitly classified");
 });
 
+test("Track E Body 3D scaffold is progressive and stays out of Today", () => {
+  const body3dSource = read("src/client/body-3d-client.ts");
+  const bodyMetricsSource = read("src/client/body-metrics-client.ts");
+  const todayBundle = BUNDLES.find((bundle) => bundle.output === "public/js/bundle-02-today.js");
+  const progressBundle = BUNDLES.find((bundle) => bundle.output === "public/js/bundle-03-capture-progress.js");
+  assert.ok(todayBundle, "Today bundle should be declared");
+  assert.ok(progressBundle, "Progress/Stand bundle should be declared");
+  assert.ok(!todayBundle.inputs.includes("public/js/body-3d-client.js"), "Body 3D must not land in the Today bundle");
+  assert.ok(progressBundle.inputs.includes("public/js/body-3d-client.js"), "Body 3D should ship with the Progress/Stand bundle");
+  assert.ok(
+    progressBundle.inputs.indexOf("public/js/body-3d-client.js") < progressBundle.inputs.indexOf("public/js/body-metrics-client.js"),
+    "Body 3D global must load before body-metrics-client can read it"
+  );
+  assert.match(body3dSource, /prefers-reduced-motion: reduce/, "Body 3D must capability-gate reduced motion");
+  assert.match(body3dSource, /visibilityState/, "Body 3D must avoid hidden-document promotion");
+  assert.match(body3dSource, /readPixels/, "Body 3D must prove a nonblank first frame before promotion");
+  assert.doesNotMatch(body3dSource, /https?:\/\//, "Body 3D must not load CDN/network assets");
+  assert.match(bodyMetricsSource, /class="bm-figure-fallback"/, "2D body figure must remain first-paint fallback");
+  assert.match(bodyMetricsSource, /body3d\.enhance/, "Body metrics should only opt into the guarded enhancement API");
+});
+
 test("background job kind contract covers API enqueue sites and worker handlers", () => {
   const api = [
     "src/api.ts",

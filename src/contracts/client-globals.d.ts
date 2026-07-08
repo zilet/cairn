@@ -99,6 +99,33 @@ declare global {
     shrink(pts: Array<[number, number]>, f: number): Array<[number, number]>;
   };
 
+  // Track E Body 3D progressive enhancement (src/client/body-3d-client.ts).
+  // The 2D CairnBodyFigure remains first paint and fallback; this API only
+  // promotes after WebGL capability checks and a nonblank ready frame.
+  type CairnBody3DReason = "ok" | "reduced_motion" | "hidden_document" | "no_canvas" | "no_webgl" | "offscreen" | "render_failed";
+  type CairnBody3DSiteKey = "chest_in" | "waist_in" | "hip_in" | "shoulder_in" | "upper_arm_in" | "thigh_in";
+  type CairnBody3DModel = {
+    female?: boolean;
+    unit?: "in" | "cm";
+    heightIn?: number | null;
+    selected?: string | null;
+    focus?: string | null;
+    sites?: Partial<Record<CairnBody3DSiteKey, number | null>>;
+  };
+  type CairnBody3DEnhancement = {
+    status: "skipped" | "waiting" | "ready";
+    reason: CairnBody3DReason;
+    destroy(): void;
+  };
+  type CairnBody3DApi = {
+    canEnhance(): { ok: boolean; reason: CairnBody3DReason };
+    enhance(slot: HTMLElement, opts: {
+      model: CairnBody3DModel;
+      onReady?: () => void;
+      onSelect?: (site: CairnBody3DSiteKey) => void;
+    }): CairnBody3DEnhancement;
+  };
+
   type ProgressRecord = Record<string, unknown>;
   type ProgressExercise = ProgressRecord & { name: string };
   type ProgressWeightRow = ProgressRecord & { date?: string; weight_lb?: number | null };
