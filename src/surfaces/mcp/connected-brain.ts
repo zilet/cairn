@@ -24,6 +24,7 @@ import {
   healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
+  doctorPacketRead,
   healthFocus,
   healthStanding,
   prioritizeMarkers,
@@ -60,6 +61,13 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here.",
     {},
     async () => asText(doctorLoopRead({ refresh: true }))
+  );
+
+  server.tool(
+    "get_doctor_packet",
+    "Export-ready doctor packet: current prioritized health focus, active connected-brain directives, doctor-loop missing-workup/retest plan, AHA PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice; no disease-labeling or wellness scores.",
+    { as_of: z.string().optional().describe("YYYY-MM-DD date for due/retest checks; defaults to today.") },
+    async ({ as_of }) => asText(doctorPacketRead({ refresh: true, asOf: as_of }))
   );
 
   server.tool(

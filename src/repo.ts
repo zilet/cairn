@@ -25,6 +25,7 @@ export * from "./repo/ccda.js";
 export * from "./repo/standing.js";
 export * from "./repo/risk.js"; // cardiovascular risk input/enhancer/counterfactual read
 export * from "./repo/doctor-loop.js"; // missing-workup + lab/DEXA retest attention policies
+export * from "./repo/doctor-packet.js"; // export-ready doctor packet composing focus/risk/retests/outcomes
 export * from "./repo/prevent.js"; // AHA PREVENT (2023) base-model risk engine (pure math)
 export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";

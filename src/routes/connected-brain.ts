@@ -25,6 +25,7 @@ import {
   healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
+  doctorPacketRead,
   getSettings,
   healthFocus,
   healthStanding,
@@ -55,6 +56,14 @@ connectedBrainRouter.get("/health/risk", (_req, res) => res.json(cardiovascularR
 // Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention
 // rows derived through the adaptive attention engine. Informational, not medical advice.
 connectedBrainRouter.get("/health/doctor-loop", (_req, res) => res.json(doctorLoopRead({ refresh: true })));
+
+// Export-ready doctor packet: current prioritized health focus, active directives,
+// doctor-loop retest/missing-workup plan, PREVENT cardiovascular-risk read, and
+// latest intervention-outcome annotations. Informational, not medical advice.
+connectedBrainRouter.get("/health/doctor-packet", (req, res) => {
+  const asOf = typeof req.query.as_of === "string" ? req.query.as_of : undefined;
+  res.json(doctorPacketRead({ refresh: true, asOf }));
+});
 
 // Intervention -> outcome annotations: compare follow-up marker readings against
 // the directive/intervention anchor that created the follow-up. Directional only:

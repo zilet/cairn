@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**229 routes** across 86 groups.
+**230 routes** across 86 groups.
 
 ## `/activities`
 
@@ -283,6 +283,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/health` |  |
 | GET | `/api/health/doctor-loop` | Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention rows derived through the adaptive attention engine. Informational, not medical advice. |
+| GET | `/api/health/doctor-packet` | Export-ready doctor packet: current prioritized health focus, active directives, doctor-loop retest/missing-workup plan, PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice. |
 | GET | `/api/health/focus` | The elite-coach synthesis layer: the deterministic TIERED focus (priorities, not a flat directive flood) + the latest cached agentic health-story narrative. Both informational, no scores. The narrative is regenerated via POST below. |
 | GET | `/api/health/markers` |  |
 | GET | `/api/health/outcomes` | Intervention -> outcome annotations: compare follow-up marker readings against the directive/intervention anchor that created the follow-up. Directional only: this never claims causation and never auto-resolves or escalates a directive. |
