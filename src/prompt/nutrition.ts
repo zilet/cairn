@@ -11,6 +11,7 @@ import {
   renderDexaTargeting,
   renderDiscipline,
   renderEnduranceGoal,
+  renderTrajectory,
   renderTodayFuel,
   CAIRN_PERSONA,
 } from "./shared.js";
@@ -231,7 +232,7 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderFoodMemory((ctx as any)?.memory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
+${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${expBlock}${fatigue}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || (disciplineOf(ctx) === "endurance" ? "Build next week's meal plan to FUEL the training week — carbs periodized around long/quality sessions, protein adequate for recovery; no forced deficit unless fat loss is the stated goal." : "Build next week's meal plan aligned to goal.recommended for the active GOAL MODE and the protein target.")}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -322,7 +323,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   adjustment lever to cut here.` : ""}
 
 ${CONTEXT_GUARDRAILS}
-${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
+${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
 USER: profile: ${JSON.stringify(profile)}
 
 OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
@@ -368,7 +369,7 @@ REPLACEMENT RULES:
 - It must fit the rest of the day (don't duplicate another meal's main protein/dish).
 
 ${LONGEVITY_GUARDRAILS}
-${renderGoalMode(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
+${renderGoalMode(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
 ${prefs ? `
 USER SCHEDULE & MEAL PREFERENCES (follow these):
 ${prefs}
@@ -402,6 +403,7 @@ export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: num
   const profile = repo.getProfile();
   const goal = repo.computeGoalCheck();
   const prefs = (repo.getSettings().meal_prefs || "").trim();
+  const ctx = repo.getCoachContext();
   return `${CAIRN_PERSONA}
 
 Right now you're the nutritionist — goal-aware and longevity-focused. Write a practical,
@@ -419,7 +421,7 @@ RECIPE RULES:
 - Steps must be ordered and practical for a weeknight home cook.
 
 ${LONGEVITY_GUARDRAILS}
-${renderFoodMemory(repo.listMemory())}${renderHouseholdDiet({ profile, family: repo.listFamily() })}${prefs ? `
+${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}${prefs ? `
 USER SCHEDULE & MEAL PREFERENCES (respect these):
 ${prefs}
 ` : ""}

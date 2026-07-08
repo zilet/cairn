@@ -2,6 +2,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables, isoDaysAgo } from "./_seed.js";
 import { getTrajectory } from "../dist/repo/trajectory.js";
+import { buildMealPlanPrompt } from "../dist/prompt.js";
 
 function reset() {
   resetTables("journey_phases", "body_measurements", "bodyweight_log", "garmin_daily_metrics", "profile", "app_state");
@@ -125,4 +126,19 @@ test("trajectory includes one calm journey milestone on the arc", () => {
 
   const t = getTrajectory();
   assert.ok(t.milestones.find((m) => m.kind === "journey"), "journey contributes one trajectory milestone");
+});
+
+test("nutrition prompts receive the journey arc without auto-applying phases", () => {
+  seedProfile({ start_weight_lb: 190, start_date: "2026-02-01", goal_bodyfat_pct: 15 });
+  const phase = repo.createJourneyPhase({
+    kind: "cut",
+    reason: "Start the cut.",
+    source: "test",
+  });
+  repo.activateJourneyPhase(phase.id);
+
+  const p = buildMealPlanPrompt();
+  assert.match(p, /THE ARC/);
+  assert.match(p, /active phase: cut/);
+  assert.match(p, /nothing auto-applies/i);
 });
