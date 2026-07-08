@@ -32,6 +32,7 @@ import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js"
 import { enduranceTestsDue, weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
 import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
 import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
+import { trainingPlaybook, type TrainingPlaybookRead } from "./training-playbook.js";
 
 export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
 
@@ -1277,6 +1278,7 @@ export function programEvolutionTrigger(
     balance?: ProgramBalance;
     testWeek?: TestWeekDue;
     enduranceTests?: { exercise?: string; kind?: string; why?: string }[];
+    trainingPlaybook?: TrainingPlaybookRead | null;
   } = {},
 ): ProgramEvolutionTrigger {
   const reasons: string[] = [];
@@ -1354,6 +1356,24 @@ export function programEvolutionTrigger(
   if (enduranceTestKeys.length) {
     reasons.push(`An endurance benchmark is due (${enduranceTestKeys.slice(0, 2).join(", ")}).`);
     sigParts.push(`endurance-test:${enduranceTestKeys.join(",")}`);
+  }
+
+  let playbook = opts.trainingPlaybook;
+  if (playbook === undefined) {
+    try { playbook = trainingPlaybook(date, { programState: ps }); } catch { playbook = null; }
+  }
+  const plays = Array.isArray(playbook?.plateau_plays) ? playbook!.plateau_plays : [];
+  for (const play of plays) {
+    if (!play?.kind) continue;
+    if (play.kind === "strength_plateau" && wantsVary.includes(String(play.exercise || ""))) {
+      continue; // the older vary trigger already names this exact lift
+    }
+    reasons.push(`${play.title}: ${play.adaptations?.[0] || play.why}`);
+    sigParts.push(`playbook:${play.kind}:${play.exercise || play.title}`);
+  }
+  if (playbook?.adherence && playbook.adherence.status !== "clear") {
+    reasons.push(`${playbook.adherence.pattern} Suggest a smaller or shorter template instead of letting the plan silently fail.`);
+    sigParts.push(`adherence:${playbook.adherence.status}:${playbook.adherence.missed_planned_sessions}:${playbook.adherence.skipped_exercises}`);
   }
 
   // (3) A muscle group running UNDER its productive volume range (or untrained
