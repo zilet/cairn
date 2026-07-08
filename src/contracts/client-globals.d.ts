@@ -3155,6 +3155,7 @@ declare global {
           api(path: string): Promise<unknown>;
           cachedApi(path: string, options?: { key?: string; freshFor?: number; onUpgrade?: (data: unknown, meta: { changed: boolean }) => void }): Promise<unknown>;
           peekCached<T = unknown>(key: string, freshFor?: number): { data: T; fresh: boolean } | null;
+          storeCached(key: string, data: unknown): void;
           localISO(date?: Date): string;
           todaySkeleton(): string;
           setTodayHeaderTitle(): void;
