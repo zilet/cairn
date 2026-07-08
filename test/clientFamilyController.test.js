@@ -294,6 +294,37 @@ function harness(initialPeople = []) {
     renderLife: async () => { deps.renderLifeCount += 1; },
     renderLifeCount: 0,
   };
+  const swr = new Map();
+  context.peekCached = (key) => swr.has(key) ? { data: swr.get(key), fresh: true } : null;
+  context.swrSet = (key, data) => swr.set(key, data);
+  context.cachedApi = async (path, options = {}) => {
+    const data = await deps.api(path);
+    if (options.key) swr.set(options.key, data);
+    if (options.onUpgrade) options.onUpgrade(data, { changed: true });
+    return data;
+  };
+  context.optimisticMutation = async (options) => {
+    const previous = swr.has(options.key) ? swr.get(options.key) : null;
+    const optimistic = options.apply(previous);
+    swr.set(options.key, optimistic);
+    if (options.onChange) options.onChange(optimistic, { phase: "optimistic" });
+    try {
+      const result = await options.request();
+      const committed = options.commit ? options.commit(optimistic, result) : undefined;
+      if (committed !== undefined && committed !== null) {
+        swr.set(options.key, committed);
+        if (options.onChange) options.onChange(committed, { phase: "commit" });
+      }
+      return result;
+    } catch (error) {
+      if (previous === null) swr.delete(options.key);
+      else {
+        swr.set(options.key, previous);
+        if (options.onChange) options.onChange(previous, { phase: "rollback" });
+      }
+      throw error;
+    }
+  };
   return { context, document, deps, requests, toasts, get people() { return people; } };
 }
 

@@ -7,6 +7,15 @@ type ClientSwrEntry<T> = { data: T; ts: number };
 type ClientSwrPeek<T> = { data: T; fresh: boolean };
 type ClientSwrUpgradeMeta = { changed: boolean };
 type ClientCachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: ClientSwrUpgradeMeta) => void };
+type ClientOptimisticMutationOptions<T, R = unknown> = {
+  key: string;
+  apply: (current: T | null) => T;
+  request: () => Promise<R>;
+  commit?: (current: T, result: R) => T | null | undefined;
+  fallback?: (error: unknown, optimistic: T, previous: T | null) => unknown;
+  rollback?: T;
+  onChange?: (data: T, meta: { phase: "optimistic" | "commit" | "rollback" }) => void;
+};
 type ClientPaintSwrOptions<T> = {
   key?: string;
   path?: string;
@@ -94,6 +103,33 @@ function _swrStore<T>(key: string, data: T): ClientSwrEntry<T> {
 function swrSet<T>(key: string, data: T): void {
   if (!key) return;
   _swrStore(key, data);
+}
+
+async function optimisticMutation<T, R = unknown>(options: ClientOptimisticMutationOptions<T, R>): Promise<R | undefined> {
+  const { key, apply, request, commit, fallback, rollback, onChange } = options;
+  const previous = peekCached<T>(key)?.data ?? null;
+  const optimistic = apply(previous);
+  swrSet(key, optimistic);
+  if (onChange) onChange(optimistic, { phase: "optimistic" });
+  try {
+    const result = await request();
+    const committed = commit ? commit(optimistic, result) : undefined;
+    if (committed !== undefined && committed !== null) {
+      swrSet(key, committed);
+      if (onChange) onChange(committed, { phase: "commit" });
+    }
+    return result;
+  } catch (error) {
+    const handled = fallback ? fallback(error, optimistic, previous) : false;
+    if (handled) return undefined;
+    const rollbackData = previous === null ? rollback : previous;
+    if (rollbackData === undefined) swrInvalidate(key);
+    else {
+      swrSet(key, rollbackData);
+      if (onChange) onChange(rollbackData, { phase: "rollback" });
+    }
+    throw error;
+  }
 }
 
 // Stable structural compare for "did the JSON payload actually change?" using
@@ -246,6 +282,7 @@ Object.assign(globalThis, {
   cachedApi,
   paintSWR,
   swrSet,
+  optimisticMutation,
   markRefreshing,
   swrInvalidate,
   swrSweep,

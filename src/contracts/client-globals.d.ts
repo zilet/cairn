@@ -1144,6 +1144,15 @@ declare global {
   type SwrPeek<T> = { data: T; fresh: boolean };
   type SwrUpgradeMeta = { changed: boolean };
   type CachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: SwrUpgradeMeta) => void };
+  type OptimisticMutationOptions<T, R = unknown> = {
+    key: string;
+    apply: (current: T | null) => T;
+    request: () => Promise<R>;
+    commit?: (current: T, result: R) => T | null | undefined;
+    fallback?: (error: unknown, optimistic: T, previous: T | null) => unknown;
+    rollback?: T;
+    onChange?: (data: T, meta: { phase: "optimistic" | "commit" | "rollback" }) => void;
+  };
   type PaintSwrOptions<T> = {
     key?: string;
     path?: string;
@@ -1162,6 +1171,7 @@ declare global {
     options?: PaintSwrOptions<ClientApiResponse<Path>> & { path?: Path },
   ): Promise<ClientApiResponse<Path> | undefined>;
   declare function swrSet<T = unknown>(key: string, data: T): void;
+  declare function optimisticMutation<T = unknown, R = unknown>(options: OptimisticMutationOptions<T, R>): Promise<R | undefined>;
   declare function markRefreshing(on: unknown): void;
   declare function swrInvalidate(keyOrPrefix: string): void;
   declare function swrSweep(): void;

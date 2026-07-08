@@ -13,6 +13,11 @@ type DayFuelControllerOptions = {
 
 (() => {
   const DAY_FUEL_ASK = "How's my eating shaping up today, and does it fit my goal?";
+  const EMPTY_TOTALS = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
+
+  function dayFuelCacheKey(): string {
+    return `food:day:${state.logDate || "today"}`;
+  }
 
   function fuelRoot(options: DayFuelControllerOptions = {}): ParentNode {
     return options.root || view;
@@ -41,24 +46,15 @@ type DayFuelControllerOptions = {
     }).join("");
   }
 
-  async function loadDayFuel(token: number, options: DayFuelControllerOptions = {}): Promise<void> {
+  function renderDayFuel(token: number, day: DayFuelControllerDay, options: DayFuelControllerOptions = {}): void {
     const root = fuelRoot(options);
     const slot = root.querySelector("#dayFuelSlot");
     if (!slot) return;
-    const qs = state.logDate ? `?date=${encodeURIComponent(state.logDate)}` : "";
-    let response: unknown = null;
-    try {
-      response = await api("/nutrition/day" + qs);
-    } catch {
-      slot.innerHTML = "";
-      return;
-    }
     if (!fuelStillCurrent(token, root, options)) return;
-    if (!response || typeof response !== "object") {
+    if (!day || typeof day !== "object") {
       slot.innerHTML = "";
       return;
     }
-    const day = response as DayFuelControllerDay;
     state._dayFuel = day;
     slot.innerHTML = CairnDayFuel.dayFuelHtml(day as unknown as Record<string, unknown>);
     runCountUps(slot);
@@ -69,6 +65,54 @@ type DayFuelControllerOptions = {
       if (options.onAsk) options.onAsk();
       else gotoChatWith(DAY_FUEL_ASK);
     });
+  }
+
+  async function loadDayFuel(token: number, options: DayFuelControllerOptions = {}): Promise<void> {
+    const root = fuelRoot(options);
+    const slot = root.querySelector("#dayFuelSlot");
+    if (!slot) return;
+    const qs = state.logDate ? `?date=${encodeURIComponent(state.logDate)}` : "";
+    const key = dayFuelCacheKey();
+    const peek = peekCached<DayFuelControllerDay>(key);
+    const result = await paintSWR({
+      key,
+      path: "/nutrition/day" + qs,
+      peek,
+      token,
+      tab: null,
+      render: (day) => renderDayFuel(token, day as DayFuelControllerDay, options),
+    });
+    if (!result && !peek && fuelStillCurrent(token, root, options)) slot.innerHTML = "";
+  }
+
+  function withFuelEntry(day: DayFuelControllerDay | null, id: number, patch: Partial<DayFuelControllerEntry> | null): DayFuelControllerDay {
+    const base = day || state._dayFuel as DayFuelControllerDay | null | undefined || {
+      date: state.logDate || "",
+      totals: { ...EMPTY_TOTALS },
+      entries: [],
+      count: 0,
+      target: null,
+      remaining: null,
+    };
+    const entries = Array.isArray(base.entries) ? base.entries : [];
+    const prior = entries.find((item) => item.id === id) || null;
+    const nextEntries = patch === null
+      ? entries.filter((item) => item.id !== id)
+      : entries.map((item) => item.id === id ? { ...item, ...patch } : item);
+    const delta = (key: "kcal" | "protein_g" | "carbs_g" | "fat_g" | "fiber_g") =>
+      (patch === null ? 0 : Number(patch[key] ?? prior?.[key] ?? 0)) - Number(prior?.[key] ?? 0);
+    const totals = { ...EMPTY_TOTALS, ...(base.totals || {}) };
+    for (const key of ["kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"] as const) {
+      totals[key] = Number(totals[key] || 0) + delta(key);
+    }
+    const remaining = base.remaining
+      ? {
+          ...base.remaining,
+          kcal: Number(base.remaining.kcal || 0) - delta("kcal"),
+          protein_g: Number(base.remaining.protein_g || 0) - delta("protein_g"),
+        }
+      : base.remaining;
+    return { ...base, entries: nextEntries, count: nextEntries.length, totals, remaining };
   }
 
   function openFoodEdit(id: number, fromEl: Element, options: DayFuelControllerOptions = {}): void {
@@ -106,7 +150,13 @@ type DayFuelControllerOptions = {
           fat_g: fuelNumberOrNull(fuelInputValue(el, "#fedFat")),
         };
         try {
-          await api(`/food-notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          await optimisticMutation<DayFuelControllerDay>({
+            key: dayFuelCacheKey(),
+            apply: (current) => withFuelEntry(current, id, body),
+            rollback: state._dayFuel as DayFuelControllerDay,
+            request: () => api(`/food-notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+            onChange: (day) => renderDayFuel(0, day, { ...options, isCurrent: () => true }),
+          });
           toast("Updated");
         } catch {
           toast("Couldn't save");
@@ -114,12 +164,17 @@ type DayFuelControllerOptions = {
         }
         swrInvalidate("progress:energy");
         closeDetail(true);
-        options.onRerender?.();
       });
       const del = el.querySelector("#fedDel");
       if (del) del.addEventListener("click", () => armDelete(del, async () => {
         try {
-          await api(`/food-notes/${id}`, { method: "DELETE" });
+          await optimisticMutation<DayFuelControllerDay>({
+            key: dayFuelCacheKey(),
+            apply: (current) => withFuelEntry(current, id, null),
+            rollback: state._dayFuel as DayFuelControllerDay,
+            request: () => api(`/food-notes/${id}`, { method: "DELETE" }),
+            onChange: (day) => renderDayFuel(0, day, { ...options, isCurrent: () => true }),
+          });
           toast("Removed");
         } catch {
           toast("Couldn't remove");
@@ -127,7 +182,6 @@ type DayFuelControllerOptions = {
         }
         swrInvalidate("progress:energy");
         closeDetail(true);
-        options.onRerender?.();
       }));
     });
   }

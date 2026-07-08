@@ -24,12 +24,39 @@ type MeMemoryControllerDeps = {
 };
 
 (() => {
+  const ME_MEMORY_CACHE_KEY = "me:memory";
+
   function memoryRows(value: unknown): MeMemoryRow[] {
     return Array.isArray(value)
       ? value.filter((row) => !!row && typeof row === "object") as MeMemoryRow[]
       : value && typeof value === "object"
         ? [value as MeMemoryRow]
         : [];
+  }
+
+  function renderMemoryList(deps: MeMemoryControllerDeps, items: MeMemoryRow[]): void {
+    const wrap = deps.view.querySelector<HTMLElement>("#memlist");
+    if (!wrap || deps.state.tab !== "me" || deps.state.meSeg !== "memory" || !wrap.isConnected) return;
+    if (!items.length) {
+      wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter - they'll gather here.</div>`;
+      return;
+    }
+    wrap.innerHTML = items.map((item, index) => CairnMemory.memoryRowHtml(item, index)).join("");
+
+    wrap.querySelectorAll<HTMLElement>("[data-memedit]").forEach((button) =>
+      button.addEventListener("click", () => startEdit(button.closest<HTMLElement>(".memrow"), deps))
+    );
+    wrap.querySelectorAll<HTMLElement>("[data-memdel]").forEach((button) =>
+      button.addEventListener("click", () => startDelete(button, deps))
+    );
+  }
+
+  function cachedMemoryRows(): MeMemoryRow[] {
+    return memoryRows(peekCached<MeMemoryRow[]>(ME_MEMORY_CACHE_KEY)?.data);
+  }
+
+  function repaintCachedMemory(deps: MeMemoryControllerDeps): void {
+    renderMemoryList(deps, cachedMemoryRows());
   }
 
   async function render(deps: MeMemoryControllerDeps): Promise<void> {
@@ -59,17 +86,30 @@ type MeMemoryControllerDeps = {
       const kind = kindSelect.value;
       input.value = "";
       try {
-        await deps.api("/memory", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content, kind }),
+        const tempId = -Date.now();
+        await optimisticMutation<MeMemoryRow[]>({
+          key: ME_MEMORY_CACHE_KEY,
+          apply: (current) => [
+            { id: tempId, content, kind: kind as MeMemoryRow["kind"], source: "user", created_at: new Date().toISOString() },
+            ...memoryRows(current),
+          ],
+          rollback: cachedMemoryRows(),
+          request: () => deps.api("/memory", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content, kind }),
+          }),
+          commit: (current, result) => {
+            const row = memoryRows(result)[0];
+            return row ? current.map((item) => item.id === tempId ? row : item) : current;
+          },
+          onChange: () => repaintCachedMemory(deps),
         });
       } catch {
         deps.toast("Couldn't save that - try again.");
         return;
       }
       deps.toast("Remembered");
-      load(deps);
     };
     addBtn.addEventListener("click", add);
     input.addEventListener("keydown", (event: KeyboardEvent) => { if (event.key === "Enter") add(); });
@@ -79,25 +119,18 @@ type MeMemoryControllerDeps = {
   async function load(deps: MeMemoryControllerDeps): Promise<void> {
     const wrap = deps.view.querySelector<HTMLElement>("#memlist");
     if (!wrap) return;
-    let items: MeMemoryRow[] = [];
+    const peek = peekCached<MeMemoryRow[]>(ME_MEMORY_CACHE_KEY);
+    if (peek) renderMemoryList(deps, memoryRows(peek.data));
     try {
-      items = memoryRows(await deps.api("/memory"));
+      await cachedApi("/memory", {
+        key: ME_MEMORY_CACHE_KEY,
+        onUpgrade: (items, { changed }) => {
+          if (changed || !peek) renderMemoryList(deps, memoryRows(items));
+        },
+      });
     } catch {
-      items = [];
+      if (!peek) renderMemoryList(deps, []);
     }
-    if (deps.state.tab !== "me" || deps.state.meSeg !== "memory" || !wrap.isConnected) return;
-    if (!items.length) {
-      wrap.innerHTML = `<div class="empty">Nothing remembered yet. As you chat and log, the coach keeps the facts and preferences that matter - they'll gather here.</div>`;
-      return;
-    }
-    wrap.innerHTML = items.map((item, index) => CairnMemory.memoryRowHtml(item, index)).join("");
-
-    wrap.querySelectorAll<HTMLElement>("[data-memedit]").forEach((button) =>
-      button.addEventListener("click", () => startEdit(button.closest<HTMLElement>(".memrow"), deps))
-    );
-    wrap.querySelectorAll<HTMLElement>("[data-memdel]").forEach((button) =>
-      button.addEventListener("click", () => startDelete(button, deps))
-    );
   }
 
   function startEdit(row: HTMLElement | null, deps: MeMemoryControllerDeps): void {
@@ -122,17 +155,26 @@ type MeMemoryControllerDeps = {
       const content = input.value.trim();
       if (!content) { input.focus(); return; }
       try {
-        await deps.api(`/memory/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content }),
+        await optimisticMutation<MeMemoryRow[]>({
+          key: ME_MEMORY_CACHE_KEY,
+          apply: (current) => memoryRows(current).map((item) => String(item.id) === id ? { ...item, content } : item),
+          rollback: cachedMemoryRows(),
+          request: () => deps.api(`/memory/${id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content }),
+          }),
+          commit: (current, result) => {
+            const row = memoryRows(result)[0];
+            return row ? current.map((item) => String(item.id) === id ? row : item) : current;
+          },
+          onChange: () => repaintCachedMemory(deps),
         });
       } catch {
         deps.toast("Couldn't save that - try again.");
         return;
       }
       deps.toast("Updated");
-      load(deps);
     };
     box.querySelector<HTMLButtonElement>(".memok")?.addEventListener("click", save);
     box.querySelector<HTMLButtonElement>("[data-memcancel]")?.addEventListener("click", cancel);
@@ -147,8 +189,14 @@ type MeMemoryControllerDeps = {
     const id = row?.dataset.mem;
     if (!id) return;
     deps.armDelete(button, () => {
-      deps.api(`/memory/${id}`, { method: "DELETE" })
-        .then(() => { deps.toast("Removed"); load(deps); })
+      optimisticMutation<MeMemoryRow[]>({
+        key: ME_MEMORY_CACHE_KEY,
+        apply: (current) => memoryRows(current).filter((item) => String(item.id) !== id),
+        rollback: cachedMemoryRows(),
+        request: () => deps.api(`/memory/${id}`, { method: "DELETE" }),
+        onChange: () => repaintCachedMemory(deps),
+      })
+        .then(() => { deps.toast("Removed"); })
         .catch(() => deps.toast("Couldn't remove that - try again."));
     });
   }
