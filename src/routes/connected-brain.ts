@@ -22,6 +22,7 @@ import {
   getHealthSynthesisView,
   getLatestHealthReview,
   getMarkerHistory,
+  healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
   getSettings,
@@ -29,6 +30,7 @@ import {
   healthStanding,
   listMarkerAliases,
   prioritizeMarkers,
+  recordHealthOutcomeAnnotations,
   symptomMarkerLinks,
 } from "../domain/health/index.js";
 import { addMemory } from "../domain/person/index.js";
@@ -53,6 +55,21 @@ connectedBrainRouter.get("/health/risk", (_req, res) => res.json(cardiovascularR
 // Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention
 // rows derived through the adaptive attention engine. Informational, not medical advice.
 connectedBrainRouter.get("/health/doctor-loop", (_req, res) => res.json(doctorLoopRead({ refresh: true })));
+
+// Intervention -> outcome annotations: compare follow-up marker readings against
+// the directive/intervention anchor that created the follow-up. Directional only:
+// this never claims causation and never auto-resolves or escalates a directive.
+connectedBrainRouter.get("/health/outcomes", (req, res) => {
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  res.json(healthOutcomeAnnotations(limit));
+});
+
+// Explicitly persist the outcome read into the quiet insight stream + learning
+// memory. Kept POST-only so a read of the page/tool cannot create memories.
+connectedBrainRouter.post("/health/outcomes/record", (req, res) => {
+  const limit = req.body?.limit ? Number(req.body.limit) : undefined;
+  res.json(recordHealthOutcomeAnnotations(limit));
+});
 
 // Latest review or null — a soft lookup like /sessions?date= (200 + null on
 // absence, never 404): "no review yet" is a normal state the PWA renders.

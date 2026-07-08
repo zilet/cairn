@@ -4,6 +4,7 @@ export * from "../../repo/dexa-targeting.js";
 export * from "../../repo/doctor-loop.js";
 export * from "../../repo/evidence.js";
 export * from "../../repo/health.js";
+export * from "../../repo/health-outcomes.js";
 export { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../../repo/coach.js";
 export * from "../../repo/lab-units.js";
 export * from "../../repo/marker-canon.js";
