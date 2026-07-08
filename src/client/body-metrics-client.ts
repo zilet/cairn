@@ -578,6 +578,16 @@ function bmFigureLib(): CairnBodyFigureApi | null {
   }
 }
 
+// Optional Track E progressive enhancement. The 2D figure remains first paint;
+// this guarded API can only promote after its own WebGL ready frame succeeds.
+function bmBody3DLib(): CairnBody3DApi | null {
+  try {
+    return (window as unknown as { CairnBody3D?: CairnBody3DApi }).CairnBody3D || null;
+  } catch {
+    return null;
+  }
+}
+
 // Which measurement site is being read (module state so a tap survives a repaint).
 let bmSelectedSite: BmSiteKey | null = null;
 
@@ -622,6 +632,28 @@ function bmStandModel(data: BmSummary, unit: BmUnit): BmStandModel {
     heightIn,
     unit,
     focus,
+  };
+}
+
+function bmBody3DModel(model: BmStandModel, selected: BmSiteKey | null): CairnBody3DModel {
+  const siteOf = (key: BmSiteKey): number | null => {
+    const raw = model.merged ? (model.merged[key] as number | null) : null;
+    return raw != null && Number.isFinite(raw) ? raw : null;
+  };
+  return {
+    female: model.female,
+    unit: model.unit,
+    heightIn: model.heightIn,
+    selected,
+    focus: model.focus,
+    sites: {
+      chest_in: siteOf("chest_in"),
+      waist_in: siteOf("waist_in"),
+      hip_in: siteOf("hip_in"),
+      shoulder_in: siteOf("shoulder_in"),
+      upper_arm_in: siteOf("upper_arm_in"),
+      thigh_in: siteOf("thigh_in"),
+    },
   };
 }
 
@@ -891,7 +923,7 @@ function compSection(data: BmSummary, unit: BmUnit): string {
   return `<div class="sess bm-comp reveal" style="padding:16px 14px;margin-bottom:12px">
       <div class="bm-sechead" style="font-weight:600;margin-bottom:2px">Where you stand</div>
       ${sub}${heading}
-      <div class="bm-figure-slot" style="margin-top:8px">${figure}</div>
+      <div class="bm-figure-slot" style="margin-top:8px" data-body3d="fallback:first-paint"><div class="bm-figure-fallback">${figure}</div></div>
       ${detail}${focus}
       ${bmStandRatioRows(model, unit)}
     </div>`;
@@ -1230,6 +1262,24 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
   // Elite Stand hero: tap a measurement to read it in context. Wired
   // on the cached data so a re-select never refetches or resets the log form.
   if (data) bmWireStandHero(mount, data, unit);
+
+  // Optional 3D promotion: only for the fixed Stand figure path, never before
+  // the 2D fallback has painted, and never if the capability gate declines.
+  if (data && data.latest && bmFigureLib()) {
+    const body3d = bmBody3DLib();
+    const slot3d = mount.querySelector(".bm-figure-slot") as HTMLElement | null;
+    if (body3d && slot3d && !slot3d.querySelector(".bm-body3d")) {
+      const model = bmStandModel(data, unit);
+      const selected = bmResolveSelected(model);
+      body3d.enhance(slot3d, {
+        model: bmBody3DModel(model, selected),
+        onSelect: (site) => {
+          bmSelectedSite = site;
+          bmRepaintStandHero(mount, data, unit);
+        },
+      });
+    }
+  }
 
   // The then→now morph (LEGACY figure only — the elite fixed figure doesn't
   // morph): with two or more tape sessions the legacy croquis first draws at the
