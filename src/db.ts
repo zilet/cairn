@@ -744,6 +744,24 @@ CREATE TABLE IF NOT EXISTS insights (
 );
 CREATE INDEX IF NOT EXISTS idx_insights_status ON insights(status);
 
+-- Adaptive attention schedule: one deterministic cadence row per signal the
+-- coach may revisit. Released entries have no next_due, so due queries stay quiet
+-- until new data, a related symptom, a question, or a goal change reactivates them.
+CREATE TABLE IF NOT EXISTS attention_schedule (
+  signal_key TEXT PRIMARY KEY,
+  domain TEXT NOT NULL,
+  tier TEXT NOT NULL,                  -- active | confirming | surveillance | released
+  next_due TEXT,                       -- YYYY-MM-DD; NULL when released
+  last_checked TEXT,                   -- YYYY-MM-DD of the reading/event that drove this state
+  reason TEXT NOT NULL,
+  release_condition TEXT NOT NULL,
+  source TEXT,
+  state_json TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_attention_due ON attention_schedule(next_due, tier);
+CREATE INDEX IF NOT EXISTS idx_attention_domain ON attention_schedule(domain, tier);
+
 -- Precomputed day-read cache (the Brief). One canonical (no-override) read per
 -- calendar day, written by the nightly scheduler pass (and on a cache miss) so
 -- the morning open is instant and never waits on an agent. Invalidated by the
