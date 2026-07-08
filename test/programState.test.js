@@ -205,6 +205,41 @@ test("tonnage ACWR is computed normally once a real chronic base exists", () => 
   assert.ok(meso.acute_chronic_ratio != null, "ACWR is computed once the chronic base clears the floor");
 });
 
+test("mesocycle deload due counts timed/bodyweight work, not tonnage only", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  // Six completed weeks of hard timed work with zero tonnage. This used to read as
+  // "No recent deload on record — keep building" forever because tonnage was 0.
+  for (const wk of [1, 2, 3, 4, 5, 6]) {
+    for (let s = 0; s < 4; s++) {
+      repo.logSetByName({ exercise: "Plank", duration_sec: 60, exercise_mode: "timed", date: back(wk * 7 + 1) });
+    }
+  }
+
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.phase, "deload-due");
+  assert.match(meso.note, /timed\/bodyweight\/endurance work counts/i);
+});
+
+test("mesocycle brings a reset forward when feedback fatigue stacks with hard endurance", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  // Four completed loaded weeks is not enough by itself for the default 6-week
+  // deload trigger, but recent joint feedback plus a heavy run is a real fatigue cue.
+  for (const wk of [1, 2, 3, 4]) {
+    for (const off of [1, 3]) {
+      for (let s = 1; s <= 4; s++) {
+        repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: back(wk * 7 + off) });
+      }
+    }
+  }
+  repo.addActivity({ type: "run", duration_min: 70, distance_km: 12, date: REF });
+  repo.setSessionFeedback(REF, { joint_pain: "left knee", soreness: 4, performance: 2 });
+
+  const meso = repo.getProgramState(REF).mesocycle;
+  assert.equal(meso.phase, "deload-due");
+  assert.match(meso.note, /joint feedback|soreness|flat/i);
+  assert.match(meso.note, /hard endurance|timed\/bodyweight/i);
+});
+
 test("endurance ACWR low-base guard: a returning runner's first week reads 'building', not 'spiking'", () => {
   repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
   // One real run this week; nothing in the prior four weeks (rebuilding base).

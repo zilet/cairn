@@ -30,6 +30,8 @@ import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
 // base. Below these floors we suppress the scary "spiking" read entirely.
 const TONNAGE_CHRONIC_FLOOR = 4000; // lb/wk of chronic tonnage before ACWR means anything
 const ENDURANCE_CHRONIC_FLOOR_KM = 8; // km/wk of chronic running before ACWR means anything
+const NON_TONNAGE_WEEK_FLOOR = 3; // timed/bodyweight/endurance units before a week counts as loaded
+const FATIGUE_DELOAD_MIN_WEEKS = 4; // enough accumulated work that feedback can bring the reset forward
 
 export type LiftStatus = "progressing" | "plateaued" | "regressing" | "maintaining" | "new";
 export type LiftAction = "overload" | "hold" | "deload" | "vary" | "technique" | "introduce" | null;
@@ -371,6 +373,64 @@ export function weeklyTonnage(date: string, weekBack: number): number {
 // EVEN for an athlete who has NEVER deloaded (the exact case that most needs one).
 const DELOAD_DUE_CONSECUTIVE_WEEKS = 6;
 
+function weeklyNonTonnageLoad(date: string, weekBack: number): { units: number; timed_seconds: number; bodyweight_sets: number; endurance_minutes: number } {
+  const end = isoDaysAgo(date, weekBack * 7);
+  const start = isoDaysAgo(date, weekBack * 7 + 6);
+  let timedSeconds = 0;
+  let bodyweightSets = 0;
+  try {
+    const row = db.prepare(
+      `SELECT
+          COALESCE(SUM(CASE WHEN ls.duration_sec IS NOT NULL AND ls.duration_sec > 0 THEN ls.duration_sec ELSE 0 END), 0) AS timed_seconds,
+          COALESCE(SUM(CASE WHEN ls.reps IS NOT NULL AND ls.reps > 0 AND (ls.weight IS NULL OR ls.weight <= 0) THEN 1 ELSE 0 END), 0) AS bodyweight_sets
+         FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE s.date >= ? AND s.date <= ?`
+    ).get(start, end) as any;
+    timedSeconds = Number(row?.timed_seconds ?? 0) || 0;
+    bodyweightSets = Number(row?.bodyweight_sets ?? 0) || 0;
+  } catch { /* older DB → no non-tonnage load */ }
+
+  let enduranceMinutes = 0;
+  let enduranceKm = 0;
+  try {
+    const patterns = enduranceSportPatterns(getProfile()?.endurance_sport);
+    const sport = activitySportWhere("activities", patterns);
+    const row = db.prepare(
+      `SELECT COALESCE(SUM(duration_min), 0) AS min, COALESCE(SUM(distance_km), 0) AS km
+         FROM activities
+        WHERE date >= ? AND date <= ? AND (${sport.sql})`
+    ).get(start, end, ...sport.params) as any;
+    enduranceMinutes = Number(row?.min ?? 0) || 0;
+    enduranceKm = Number(row?.km ?? 0) || 0;
+  } catch { /* no endurance rows */ }
+
+  const units = Math.round(((timedSeconds / 60) + bodyweightSets + (enduranceMinutes / 25) + (enduranceKm / 5)) * 10) / 10;
+  return { units, timed_seconds: Math.round(timedSeconds), bodyweight_sets: Math.round(bodyweightSets), endurance_minutes: Math.round(enduranceMinutes) };
+}
+
+function recentFeedbackFatigue(date: string, days = 14): { high: boolean; reasons: string[] } {
+  const end = String(date).slice(0, 10);
+  const start = isoDaysAgo(end, Math.max(1, days) - 1);
+  try {
+    const rows = db.prepare(
+      `SELECT soreness, performance, joint_pain FROM sessions
+        WHERE date >= ? AND date <= ?
+          AND (soreness IS NOT NULL OR performance IS NOT NULL OR (joint_pain IS NOT NULL AND TRIM(joint_pain) != ''))`
+    ).all(start, end) as any[];
+    if (!rows.length) return { high: false, reasons: [] };
+    const highSoreness = rows.filter((r) => Number(r.soreness) >= 4).length;
+    const lowPerformance = rows.filter((r) => Number(r.performance) <= 2).length;
+    const jointFlags = rows.filter((r) => r.joint_pain != null && String(r.joint_pain).trim()).length;
+    const reasons: string[] = [];
+    if (highSoreness >= 2) reasons.push("soreness is staying high");
+    if (lowPerformance >= 2) reasons.push("recent sessions are feeling flat");
+    if (jointFlags >= 1) reasons.push("joint feedback is still flagged");
+    return { high: reasons.length > 0, reasons };
+  } catch {
+    return { high: false, reasons: [] };
+  }
+}
+
 function mesocycle(date: string, recovery?: any): MesocycleState {
   // A "deload week" = a COMPLETED week whose tonnage fell well below the trailing
   // base. Start at w=1 (the current week is in-progress — a half-logged week early
@@ -389,7 +449,9 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
   let loadedStreak = 0;
   for (let w = 1; w <= 12; w++) {
     if (weeksSince != null && w >= weeksSince) break; // hit the last reset — streak resets there
-    if (weeklyTonnage(date, w) <= 0) break;           // an untrained week ends the streak
+    const tonnage = weeklyTonnage(date, w);
+    const nonTonnage = weeklyNonTonnageLoad(date, w);
+    if (tonnage <= 0 && nonTonnage.units < NON_TONNAGE_WEEK_FLOOR) break; // an untrained week ends the streak
     loadedStreak++;
   }
   const deloadDueByStreak = weeksSince == null && loadedStreak >= DELOAD_DUE_CONSECUTIVE_WEEKS;
@@ -414,14 +476,34 @@ function mesocycle(date: string, recovery?: any): MesocycleState {
   const rec = recovery ?? getRecoverySummary(14);
   const drift = rec?.delta ?? null;
   const recoveryDrifting = (drift?.hrv != null && drift.hrv < 0) || (drift?.rhr != null && drift.rhr > 2);
+  const feedbackFatigue = recentFeedbackFatigue(date);
+  const recentHybridHeavy = recentEnduranceImpacts(7, date).some((i) => i.load === "heavy");
+  const currentNonTonnage = weeklyNonTonnageLoad(date, 0);
+  const fatigueDeload =
+    loadedStreak >= FATIGUE_DELOAD_MIN_WEEKS &&
+    feedbackFatigue.high &&
+    (recoveryDrifting || recentHybridHeavy || currentNonTonnage.units >= NON_TONNAGE_WEEK_FLOOR);
 
   // (An athlete who is actively IN a deload this week is read from the active
   // periodization block's phase, not from this completed-week detector.)
   let phase: MesoPhase;
   let note: string;
   if (weeksSince != null && weeksSince >= 4) { phase = "deload-due"; note = `~${weeksSince} weeks since a deload${recoveryDrifting ? " and recovery's drifting" : ""} — a reset week is about due.`; }
+  else if (fatigueDeload) {
+    phase = "deload-due";
+    const fatigue = feedbackFatigue.reasons.join(" and ");
+    const loadText = recentHybridHeavy
+      ? "with hard endurance layered onto the block"
+      : currentNonTonnage.units >= NON_TONNAGE_WEEK_FLOOR
+        ? "with timed/bodyweight work adding fatigue beyond tonnage"
+        : "with recovery drifting";
+    note = `~${loadedStreak} loaded weeks plus ${fatigue} ${loadText} — a reset week is about due.`;
+  }
   else if (buildingBase) { phase = "accumulation"; note = "You're rebuilding your training base — keep volume steady and conservative; the load will feel like a jump only because the base is still thin, not because you're overreaching."; }
-  else if (deloadDueByStreak) { phase = "deload-due"; note = `You've strung ~${loadedStreak} loaded weeks together with no reset${recoveryDrifting ? " and recovery's drifting" : ""} — a deload week is about due, even though there's no prior deload on record.`; }
+  else if (deloadDueByStreak) {
+    const source = weeklyTonnage(date, 1) > 0 ? "" : " — timed/bodyweight/endurance work counts here even when tonnage is low";
+    phase = "deload-due"; note = `You've strung ~${loadedStreak} loaded weeks together with no reset${recoveryDrifting ? " and recovery's drifting" : ""}${source} — a deload week is about due, even though there's no prior deload on record.`;
+  }
   else if (acwr != null && acwr >= 1.4) { phase = "intensification"; note = "Load's ramped this block — hold the line, don't pile on."; }
   else if (weeksSince == null) { phase = "accumulation"; note = "No recent deload on record — keep building, plan a reset every 4–6 weeks."; }
   else { phase = "accumulation"; note = `${weeksSince} week${weeksSince === 1 ? "" : "s"} since your last deload — building.`; }

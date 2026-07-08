@@ -29,7 +29,7 @@ import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js"
 // compute when programAdjustments is called standalone (Today/Progress). The module
 // cycle (progression → run-progression → coach → progression) is resolved at call
 // time — these are only invoked inside programAdjustments, never at module init.
-import { weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
+import { enduranceTestsDue, weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
 import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
 import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 
@@ -1272,7 +1272,12 @@ export interface ProgramEvolutionTrigger {
 
 export function programEvolutionTrigger(
   date?: string,
-  opts: { programState?: any; balance?: ProgramBalance; testWeek?: TestWeekDue } = {},
+  opts: {
+    programState?: any;
+    balance?: ProgramBalance;
+    testWeek?: TestWeekDue;
+    enduranceTests?: { exercise?: string; kind?: string; why?: string }[];
+  } = {},
 ): ProgramEvolutionTrigger {
   const reasons: string[] = [];
   const sigParts: string[] = [];
@@ -1313,7 +1318,45 @@ export function programEvolutionTrigger(
   }
   const twDue = !!tw?.due;
 
-  // (2) A muscle group running UNDER its productive volume range (or untrained
+  // (2) Endurance/hybrid shifts that should wake the same plan-evolution loop:
+  //     a material mileage ramp, a mono-stimulus/run-plateau read, a due endurance
+  //     benchmark, or a ramp colliding with the next strength day. This is still
+  //     a draft trigger only — it does not mutate the plan.
+  const endurance = ps?.endurance;
+  const hybrid = ps?.hybrid;
+  const enduranceAcwr = Number(endurance?.acute_chronic_ratio);
+  const mileageRamp = Number.isFinite(enduranceAcwr) && enduranceAcwr >= 1.25;
+  if (mileageRamp) {
+    const pct = Math.round((enduranceAcwr - 1) * 100);
+    reasons.push(`Endurance volume is up ~${pct}% over your base — adapt the week before stacking more load.`);
+    sigParts.push(`endurance-ramp:${Math.round(enduranceAcwr * 100)}`);
+  }
+  if (endurance?.suggested_action === "add-quality") {
+    reasons.push("Running has turned into one steady stimulus — add a quality or long-run variation instead of just repeating the same run.");
+    sigParts.push("run-plateau:add-quality");
+  } else if (endurance?.pace_trend === "declining") {
+    reasons.push("Run pace is drifting the wrong way — treat this as a recovery/programming problem before adding more mileage.");
+    sigParts.push("run-plateau:pace-decline");
+  }
+  if (mileageRamp && (hybrid?.next_strength?.advice === "swap-or-upper" || hybrid?.next_strength?.advice === "hold-load")) {
+    reasons.push(`Mileage is ramping into ${hybrid.next_strength.day_name || "the next strength day"} — sequence lower-body work or deload it instead of forcing both.`);
+    sigParts.push(`hybrid-interference:${hybrid.next_strength.advice}:${hybrid.next_strength.day_number ?? "next"}`);
+  }
+
+  let et = opts.enduranceTests;
+  if (et === undefined) {
+    try { et = enduranceTestsDue(date); } catch { et = undefined; }
+  }
+  const enduranceTestKeys = (Array.isArray(et) ? et : [])
+    .map((t) => String(t?.exercise || "").trim())
+    .filter(Boolean)
+    .sort();
+  if (enduranceTestKeys.length) {
+    reasons.push(`An endurance benchmark is due (${enduranceTestKeys.slice(0, 2).join(", ")}).`);
+    sigParts.push(`endurance-test:${enduranceTestKeys.join(",")}`);
+  }
+
+  // (3) A muscle group running UNDER its productive volume range (or untrained
   //     lately) — a weak point worth building toward. Only fires for an athlete
   //     with real training history (else a blank new plan reads everything "due").
   let bal = opts.balance;

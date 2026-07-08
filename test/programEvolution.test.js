@@ -68,10 +68,48 @@ test("trigger fires on a re-test due", () => {
     programState: { lifts: [] },
     balance: { due: [], over: [] },
     testWeek: { due: true, key_lifts: ["Back Squat", "Bench Press"] },
+    enduranceTests: [],
   });
   assert.equal(out.due, true);
   assert.match(out.reasons.join(" "), /re-test/i);
   assert.match(out.signature, /test:1/);
+});
+
+test("trigger fires when endurance ramps into a strength conflict", () => {
+  const out = repo.programEvolutionTrigger("2026-06-26", {
+    programState: {
+      lifts: [],
+      endurance: { acute_chronic_ratio: 1.32, suggested_action: "build", pace_trend: "stable" },
+      hybrid: {
+        next_strength: { advice: "hold-load", day_name: "Lower", day_number: 2 },
+      },
+    },
+    balance: { due: [], over: [] },
+    testWeek: { due: false },
+    enduranceTests: [],
+  });
+  assert.equal(out.due, true);
+  assert.match(out.reasons.join(" "), /Endurance volume is up ~32%/);
+  assert.match(out.reasons.join(" "), /Lower/);
+  assert.match(out.signature, /endurance-ramp:132/);
+  assert.match(out.signature, /hybrid-interference:hold-load:2/);
+});
+
+test("trigger fires on endurance benchmark and run-plateau reads", () => {
+  const out = repo.programEvolutionTrigger("2026-06-26", {
+    programState: {
+      lifts: [],
+      endurance: { acute_chronic_ratio: 1.0, suggested_action: "add-quality", pace_trend: "stable" },
+    },
+    balance: { due: [], over: [] },
+    testWeek: { due: false },
+    enduranceTests: [{ exercise: "1-mile or 5k time-trial", kind: "endurance", why: "stale hard effort" }],
+  });
+  assert.equal(out.due, true);
+  assert.match(out.reasons.join(" "), /one steady stimulus/i);
+  assert.match(out.reasons.join(" "), /endurance benchmark/i);
+  assert.match(out.signature, /run-plateau:add-quality/);
+  assert.match(out.signature, /endurance-test:1-mile or 5k time-trial/);
 });
 
 test("a weak-point group only triggers for an athlete who is actually training", () => {
