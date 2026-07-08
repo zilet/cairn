@@ -22,6 +22,7 @@ import {
   getHealthSynthesisView,
   getLatestHealthReview,
   getMarkerHistory,
+  cardiovascularRiskRead,
   getSettings,
   healthFocus,
   healthStanding,
@@ -45,6 +46,8 @@ connectedBrainRouter.get("/health/standing", (req, res) => {
   const referenceAge = req.query.reference_age != null ? Number(req.query.reference_age) : undefined;
   res.json(healthStanding({ referenceAge }));
 });
+
+connectedBrainRouter.get("/health/risk", (_req, res) => res.json(cardiovascularRiskRead()));
 
 // Latest review or null — a soft lookup like /sessions?date= (200 + null on
 // absence, never 404): "no review yet" is a normal state the PWA renders.

@@ -21,6 +21,7 @@ import {
   getHealthSynthesisView,
   getLatestHealthReview,
   getMarkerHistory,
+  cardiovascularRiskRead,
   healthFocus,
   healthStanding,
   prioritizeMarkers,
@@ -42,6 +43,13 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "A pull-based health standing read: actual-age vs selectable reference-age percentiles for markers with real reference curves (VO2max/body composition), plus BP, labs, activity, Garmin/recovery signals, and a plain signal_age synthesis. Motivational orientation only — no 0-100 score and not medical advice.",
     { reference_age: z.number().optional().describe("Compare against this decade; e.g. 20 for 20s, 30 for 30s. Defaults to 20s.") },
     async ({ reference_age }) => asText(healthStanding({ referenceAge: reference_age }))
+  );
+
+  server.tool(
+    "get_cardiovascular_risk",
+    "Cardiovascular risk input/enhancer read: collects PREVENT/PCE inputs, names missing clinical inputs, surfaces ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history risk enhancers, and gives counterfactual lever projections. It does not emit a risk percentage unless sourced coefficients are vendored; informational, not medical advice.",
+    {},
+    async () => asText(cardiovascularRiskRead())
   );
 
   server.tool(

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**185 tools.**
+**186 tools.**
 
 | Tool | Description |
 |---|---|
@@ -49,6 +49,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_body_metric_trends` | Per-site least-squares trends across the window (waist, hips, chest, arms, …) plus bodyweight — each in plain language ('waist down 0.8 in over 6 weeks') with the raw points for a sparkline. Null-safe: a site with one reading reports no trend yet. |
 | `get_calendar` | Day-by-day training calendar/heatmap data (lifted, tonnage, activity, intensity level) for the last N days (default 84). |
 | `get_cardio` | The day's logged cardio efforts (runs/rides/etc.), each hydrated from the linked Garmin record so a synced effort carries its HR zones + pace. Strength is excluded (it's modeled as a session). Defaults to today; pass date YYYY-MM-DD. [] when there's no cardio that day. |
+| `get_cardiovascular_risk` | Cardiovascular risk input/enhancer read: collects PREVENT/PCE inputs, names missing clinical inputs, surfaces ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history risk enhancers, and gives counterfactual lever projections. It does not emit a risk percentage unless sourced coefficients are vendored; informational, not medical advice. |
 | `get_chat_history` | Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the user has recently asked or been told. |
 | `get_chat_session` | Read one archived conversation in full (chronological), keyed by its stable session_id from list_chat_sessions. archived_at is accepted as a legacy fallback. |
 | `get_checkin` | Get the latest check-in for a date (or null if none). |
