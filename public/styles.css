@@ -3476,11 +3476,12 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hrisk-viz-current,.hrisk-viz-optimized{fill:none;stroke-linecap:round;stroke-linejoin:round}
 .hrisk-viz-current{stroke:var(--accent-deep);stroke-width:3.2}
 .hrisk-viz-optimized{stroke:var(--sage);stroke-width:2.4;stroke-dasharray:8 7}
-.hrisk-viz-heart{fill:rgba(185,104,74,.12);stroke:var(--accent);stroke-width:2}
-.hrisk-viz-vessel{fill:none;stroke:rgba(116,137,106,.78);stroke-linecap:round}
-.hrisk-viz-plaque{fill:var(--gold);opacity:.72}
-.hrisk-viz-plaque-soft{fill:var(--accent);opacity:.4}
-.hrisk-viz-points circle{fill:var(--card);stroke:var(--ink-2);stroke-width:1.5}
+/* a small, static, purely decorative heart — fixed geometry, NEVER data-bound,
+   parked in the top-left corner clear of the trajectory lines and axis row */
+.hrisk-viz-motif{opacity:.5}
+.hrisk-viz-heart{fill:var(--accent);opacity:.5}
+.hrisk-viz-points circle{fill:var(--card);stroke:var(--accent-deep);stroke-width:1.6}
+.hrisk-viz-point-opt{stroke:var(--sage)!important}
 .hrisk-viz-axis{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.08em;
   text-transform:uppercase;fill:var(--muted)}
 .hrisk-viz-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:2px}
