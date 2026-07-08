@@ -388,7 +388,36 @@ test("Today session controller logs a set only after a successful POST and wires
 
   assert.equal(harness.requests[1].path, "/sets/10");
   assert.equal(harness.requests[1].opts.method, "DELETE");
-  assert.equal(harness.renders.length, 1);
+  // Optimistic delete: the chip is removed locally and NO full renderToday fires.
+  assert.equal(logged.children.length, 0);
+  assert.equal(harness.renders.length, 0);
+});
+
+test("Today session controller rolls back an optimistic set delete when the DELETE fails", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sets" && opts?.method === "POST") return { ok: true, id: 10, set_number: 1, weight: 20, reps: 8, rir: 2 };
+      if (opts?.method === "DELETE") throw new Error("offline");
+      return { ok: true };
+    },
+  });
+  const { row, button, logged } = addLoggingCard(harness.rootEl);
+
+  harness.controller.wireLogRow(row, harness.deps);
+  button.click();
+  await flushAsync();
+  assert.equal(logged.children.length, 1);
+
+  logged.querySelector("[data-del]").click();
+  await flushAsync();
+
+  // The DELETE was attempted, then rolled back — the chip is put back and a calm
+  // toast fires, with no full renderToday.
+  assert.equal(harness.requests.at(-1).path, "/sets/10");
+  assert.equal(harness.requests.at(-1).opts.method, "DELETE");
+  assert.equal(logged.children.length, 1);
+  assert.equal(harness.renders.length, 0);
+  assert.equal(harness.toasts.at(-1).message, "Couldn't remove that — try again.");
 });
 
 test("Today session controller keeps card unchanged when set POST fails", async () => {

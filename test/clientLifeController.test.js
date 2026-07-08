@@ -173,6 +173,14 @@ function decodeAttr(value) {
 
 function loadController() {
   const document = new FakeDocument();
+  const lsData = new Map();
+  const localStorage = {
+    get length() { return lsData.size; },
+    getItem: (key) => (lsData.has(key) ? lsData.get(key) : null),
+    setItem: (key, value) => lsData.set(key, String(value)),
+    removeItem: (key) => lsData.delete(key),
+    key: (index) => [...lsData.keys()][index] || null,
+  };
   const context = {
     Array,
     Date,
@@ -183,7 +191,13 @@ function loadController() {
     Object,
     Promise,
     String,
+    Error,
     document,
+    localStorage,
+    state: { tab: "me", meSeg: "life" },
+    pollToken: 1,
+    skelSwap: (fn) => fn(),
+    api: async () => ({ ok: true }),
     HTMLElement: FakeElement,
     localISO: () => "2026-06-30",
     stagger: (index) => `--i:${index}`,
@@ -193,6 +207,9 @@ function loadController() {
   context.window = context;
   context.globalThis = context;
   context.$ = (selector) => document.querySelector(selector);
+  // Load the real SWR cache so the optimistic mutation flow (peekCached / swrSet /
+  // optimisticMutation) is exercised end-to-end, not stubbed.
+  vm.runInNewContext(readFileSync(join(root, "public/js/swr-cache.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-form-helpers.js"), "utf8"), context);
@@ -300,8 +317,9 @@ test("life controller wires inline edit and delete actions", async () => {
 
   await h.context.CairnLifeController.load(h.deps);
   h.document.querySelector("[data-ldel]").click();
-  await Promise.resolve();
-  await Promise.resolve();
+  // The optimistic delete resolves through several async hops (apply → request →
+  // commit → toast); flush the full microtask/timer queue rather than a fixed count.
+  await new Promise((resolve) => setTimeout(resolve));
 
   const del = h.requests.find((request) => request.path === "/context-events/7" && request.opts?.method === "DELETE");
   assert.ok(del);

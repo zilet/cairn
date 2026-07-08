@@ -14,7 +14,7 @@ type LifeFormHelpersApi = {
   submit(deps: ClientLifeControllerDeps): Promise<void>;
 };
 
-function lifeFormTimelineActions(): Pick<LifeTimelineActionsApi, "load"> {
+function lifeFormTimelineActions(): Pick<LifeTimelineActionsApi, "load" | "repaintCached" | "cachedEvents"> {
   return (globalThis as unknown as { CairnLifeTimelineActions: LifeTimelineActionsApi }).CairnLifeTimelineActions;
 }
 
@@ -76,18 +76,41 @@ async function submitLifeForm(deps: ClientLifeControllerDeps): Promise<void> {
   const btn = $<HTMLButtonElement>("#lAdd");
   if (!btn) return;
   btn.disabled = true;
+  const actions = lifeFormTimelineActions();
   try {
-    const response = lifeRecord(await deps.api("/context-events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    const tempId = -Date.now();
+    const response = lifeRecord(await optimisticMutation<LifeControllerContextEvent[]>({
+      key: "me:life",
+      apply: (current) => [
+        {
+          id: tempId,
+          kind: body.kind,
+          title: body.title,
+          detail: body.detail,
+          start_date: body.start_date,
+          end_date: body.end_date,
+          meta_json: JSON.stringify(body.meta || {}),
+          created_at: new Date().toISOString(),
+        } as LifeControllerContextEvent,
+        ...lifeRows<LifeControllerContextEvent>(current),
+      ],
+      rollback: actions.cachedEvents(),
+      request: () => deps.api("/context-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      commit: (current, result) => {
+        const row = lifeRecord(result) as LifeControllerContextEvent;
+        return row.id ? current.map((item) => item.id === tempId ? row : item) : current;
+      },
+      onChange: () => actions.repaintCached(deps),
     }));
     if (response.error) { status.textContent = "Couldn't save that — try again."; return; }
     status.textContent = "";
     deps.toast("Added");
     // Reset the text + dates but keep the kind.
     drawLifeFields(lifeInputValue("lKind"));
-    lifeFormTimelineActions().load(deps);
   } catch {
     status.textContent = "Couldn't save that — check your connection.";
   } finally {

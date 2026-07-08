@@ -76,14 +76,25 @@ type TodaySessionFeedbackDeps = {
       button.addEventListener("click", async () => {
         const kind = String(button.dataset.feel || "");
         const val = Number(button.dataset.val);
+        const dots = [...slot.querySelectorAll<HTMLElement>(`.feel-dot[data-feel="${kind}"]`)];
+        // Optimistic apply — but snapshot the prior selection + fill so a rejected
+        // write rolls back instead of silently desyncing the dots from the truth.
+        const prevVal = picked[kind];
+        const prevOn = dots.map((dot) => dot.classList.contains("feel-dot-on"));
         picked[kind] = val;
-        slot.querySelectorAll<HTMLElement>(`.feel-dot[data-feel="${kind}"]`).forEach((dot) =>
-          dot.classList.toggle("feel-dot-on", Number(dot.dataset.val) <= val));
+        dots.forEach((dot) => dot.classList.toggle("feel-dot-on", Number(dot.dataset.val) <= val));
         const ok = await save();
-        if (ok && !notified) {
-          notified = true;
-          deps.toast("Noted");
+        if (ok) {
+          if (!notified) {
+            notified = true;
+            deps.toast("Noted");
+          }
+          return;
         }
+        // Roll back the optimistic fill to exactly what was showing before the tap.
+        picked[kind] = prevVal;
+        dots.forEach((dot, index) => dot.classList.toggle("feel-dot-on", prevOn[index]));
+        deps.toast("Couldn't save that — try again.");
       }));
 
     const joint = slot.querySelector<HTMLInputElement>("#feedbackJoint");
