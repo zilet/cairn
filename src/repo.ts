@@ -24,6 +24,7 @@ export * from "./repo/ccda.js";
 export * from "./repo/standing.js";
 export * from "./repo/risk.js"; // cardiovascular risk input/enhancer/counterfactual read
 export * from "./repo/doctor-loop.js"; // missing-workup + lab/DEXA retest attention policies
+export * from "./repo/prevent.js"; // AHA PREVENT (2023) base-model risk engine (pure math)
 export * from "./repo/coach-context.js";
 export * from "./repo/coach.js";
 export * from "./repo/propagation.js";
@@ -51,6 +52,11 @@ export * from "./repo/reaction-model.js"; // how THIS athlete actually reacts (t
 export * from "./repo/trajectory.js"; // one periodized arc to the goals, today as the next step
 export * from "./repo/journey.js"; // body-composition journey phases + leanness-aware cut foundation
 // context-effect: explicit re-export — its local isAcuteMarker would clash with propagation's `export *`
-export { activeContextEffect, markerInTransientWindow, type ActiveContextItem, type ContextEffect } from "./repo/context-effect.js";
+export {
+  activeContextEffect,
+  markerInTransientWindow,
+  type ActiveContextItem,
+  type ContextEffect,
+} from "./repo/context-effect.js";
 export * from "./repo/next-step.js"; // the one cross-domain next-best-step
 export * from "./repo/body-metrics.js"; // at-home body measurements + derived indicators (BMI/WHtR/WHR/Navy body-fat)
