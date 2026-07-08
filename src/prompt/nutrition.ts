@@ -61,11 +61,19 @@ function renderHouseholdDiet(ctx: any): string {
 
   const myAllergies = clean(profile.allergies);
   const myDiet = clean(profile.dietary_restrictions);
+  // A recognized whole-diet in this field is rendered as a HARD constraint by
+  // renderHardDiet (not here), so strip those keywords out before the softer
+  // "respect strongly" line — otherwise vegan/vegetarian would read as a mere
+  // preference AND double-render. Any non-diet remainder ("no cilantro") stays soft.
+  const softDiet = HARD_DIETS.reduce((s, d) => s.replace(new RegExp(d.re.source, "gi"), " "), myDiet)
+    .replace(/[\s,;/]+/g, " ")
+    .trim();
   const self: string[] = [];
   if (myAllergies)
-    self.push(`  - ALLERGIES (HARD EXCLUSION — for safety, NEVER include these ingredients in ANY meal, item, recipe, or substitution): ${myAllergies}`);
-  if (myDiet)
-    self.push(`  - DIETARY RESTRICTIONS (respect strongly): ${myDiet}`);
+    self.push(
+      `  - ALLERGIES (HARD EXCLUSION — for safety, NEVER include these ingredients in ANY meal, item, recipe, or substitution): ${myAllergies}`
+    );
+  if (softDiet) self.push(`  - DIETARY RESTRICTIONS (respect strongly): ${softDiet}`);
   if (self.length) {
     lines.push("USER'S DIETARY NEEDS:");
     lines.push(...self);
@@ -87,7 +95,9 @@ function renderHouseholdDiet(ctx: any): string {
     memberLines.push(`  - ${who} — ${parts.join("; ")}`);
   }
   if (memberLines.length) {
-    lines.push("HOUSEHOLD (optional kid-friendly / shared-meal mods — plan PRIMARILY for the user's own goal & protein target, but where it's EASY, note in that day's \"note\" field a simple mod so ONE base meal can also serve these people; never compromise the user's allergens or protein for this):");
+    lines.push(
+      "HOUSEHOLD (optional kid-friendly / shared-meal mods — plan PRIMARILY for the user's own goal & protein target, but where it's EASY, note in that day's \"note\" field a simple mod so ONE base meal can also serve these people; never compromise the user's allergens or protein for this):"
+    );
     lines.push(...memberLines);
   }
 
@@ -97,7 +107,8 @@ function renderHouseholdDiet(ctx: any): string {
 // Food/diet tokens — used to pick the memory rows that shape what to cook (a
 // like/dislike, an allergy, a diet). Kept broad but food-specific so a non-food
 // preference ("trains in the morning") never leaks into the meal prompts.
-const FOOD_MEMORY_RE = /\b(salmon|fish|seafood|shellfish|shrimp|prawn|tuna|sardine|mackerel|cod|chicken|beef|pork|lamb|turkey|steak|egg|eggs|dairy|milk|cheese|yogurt|gluten|wheat|nuts?|peanut|almond|cashew|walnut|soy|tofu|tempeh|rice|pasta|potato|bread|oats?|beans?|lentil|chickpea|quinoa|broccoli|kale|spinach|avocado|banana|berry|berries|fruit|veg|vegetable|veggies?|mushroom|onion|garlic|cilantro|coriander|spicy|spice|coffee|alcohol|meat|vegan|vegetarian|pescatarian|keto|paleo|carnivore|halal|kosher|lactose|intoleran|allerg)\b/i;
+const FOOD_MEMORY_RE =
+  /\b(salmon|fish|seafood|shellfish|shrimp|prawn|tuna|sardine|mackerel|cod|chicken|beef|pork|lamb|turkey|steak|egg|eggs|dairy|milk|cheese|yogurt|gluten|wheat|nuts?|peanut|almond|cashew|walnut|soy|tofu|tempeh|rice|pasta|potato|bread|oats?|beans?|lentil|chickpea|quinoa|broccoli|kale|spinach|avocado|banana|berry|berries|fruit|veg|vegetable|veggies?|mushroom|onion|garlic|cilantro|coriander|spicy|spice|coffee|alcohol|meat|vegan|vegetarian|pescatarian|keto|paleo|carnivore|halal|kosher|lactose|intoleran|allerg)\b/i;
 
 // Render food preferences/constraints from memory (a "hates salmon", a "dairy allergy",
 // "vegetarian") so the SWAP and RECIPE prompts honor them — otherwise a swap can happily
@@ -146,7 +157,9 @@ function renderGoalMode(ctx: any): string {
   const accepted = eff?.source === "accepted";
   const tgt = eff?.target_kcal ?? goal?.recommended?.target_intake_kcal;
   const protein = eff?.protein_g ?? goal?.recommended?.protein_g;
-  const anchor = tgt ? ` Anchor daily calories near ~${tgt} kcal with ~${protein} g protein (${accepted ? "the user's ACCEPTED adaptive-nutrition target — honor it over the formula" : "goal.recommended"}).` : "";
+  const anchor = tgt
+    ? ` Anchor daily calories near ~${tgt} kcal with ~${protein} g protein (${accepted ? "the user's ACCEPTED adaptive-nutrition target — honor it over the formula" : "goal.recommended"}).`
+    : "";
   if (mode === "maintain") {
     return `\nGOAL MODE: MAINTAIN — the user is holding steady, NOT losing weight. Do NOT prescribe a deficit or frame food as "getting lean"; fuel to maintenance — enough to support training and recovery, protein-forward, whole-food quality. Only flag intake if the measured weight trend genuinely drifts.${anchor}\n`;
   }
@@ -156,16 +169,118 @@ function renderGoalMode(ctx: any): string {
   return `\nGOAL MODE: LOSE — a lean-safe deficit toward the goal weight, protein protected, never a crash cut.${anchor}\n`;
 }
 
+// Recognized whole-diet identities that are HARD constraints — as firm as an
+// allergy. Naming one of these (in the profile's dietary_restrictions, in
+// settings.meal_prefs, or as a typed instruction/hint) means EVERY meal, item,
+// recipe, and substitution MUST comply. Matched case-insensitively on WORD
+// BOUNDARIES (with an optional trailing "s") so "novegan" or a bare substring
+// never misfires. Array order is the render order. A `plantForward` diet also
+// re-anchors the protein/omega-3 guardrails onto plant sources (no animal
+// protein instruction). An un-recognized free-text diet stays the softer
+// "respect strongly" nudge in renderHouseholdDiet — this is ONLY the hard set.
+const HARD_DIETS: { key: string; label: string; re: RegExp; rule: string; plantForward?: boolean }[] = [
+  {
+    key: "vegan",
+    label: "VEGAN",
+    re: /\bvegans?\b/i,
+    plantForward: true,
+    rule: "NO meat, poultry, fish, seafood, dairy, eggs, honey, gelatin, or any animal-derived ingredient.",
+  },
+  {
+    key: "vegetarian",
+    label: "VEGETARIAN",
+    re: /\bvegetarians?\b/i,
+    plantForward: true,
+    rule: "NO meat, poultry, fish, or seafood (dairy & eggs are allowed unless also excluded).",
+  },
+  {
+    key: "pescatarian",
+    label: "PESCATARIAN",
+    re: /\bpesca?tarians?\b/i,
+    rule: "NO meat or poultry (fish & seafood are allowed).",
+  },
+  {
+    key: "halal",
+    label: "HALAL",
+    re: /\bhalal\b/i,
+    rule: "Every ingredient must be HALAL — no pork or pork-derived ingredients, no alcohol, and only halal-permissible meat.",
+  },
+  {
+    key: "kosher",
+    label: "KOSHER",
+    re: /\bkosher\b/i,
+    rule: "Every ingredient must be KOSHER — no pork or shellfish, and never mix meat and dairy in the same meal.",
+  },
+  {
+    key: "keto",
+    label: "KETO",
+    re: /\bketo(genic)?\b/i,
+    rule: "Ketogenic — NO high-carb staples (bread, pasta, rice, potatoes, sugar, most fruit); keep net carbs very low.",
+  },
+  {
+    key: "carnivore",
+    label: "CARNIVORE",
+    re: /\bcarnivore\b/i,
+    rule: "Carnivore — animal foods only; NO plant foods (grains, legumes, vegetables, fruit).",
+  },
+  {
+    key: "paleo",
+    label: "PALEO",
+    re: /\bpaleo\b/i,
+    rule: "Paleo — NO grains, legumes, dairy, or refined sugar; whole, unprocessed foods only.",
+  },
+];
+
+// Detect every recognized whole-diet across all the places the user could have
+// declared it (profile.dietary_restrictions, settings.meal_prefs, a typed
+// instruction/hint), de-duped to the registry order. Kept pure for tests.
+function detectHardDiets(sources: Array<string | null | undefined>): typeof HARD_DIETS {
+  const text = sources.map((s) => String(s ?? "")).join("\n");
+  const hits: typeof HARD_DIETS = [];
+  for (const d of HARD_DIETS) if (d.re.test(text)) hits.push(d);
+  return hits;
+}
+
+// True when a matched diet forbids animal protein / fish (vegan, vegetarian) —
+// drives the plant-forward protein & omega-3 guardrail text.
+function isPlantForward(sources: Array<string | null | undefined>): boolean {
+  return detectHardDiets(sources).some((d) => d.plantForward);
+}
+
+// The HARD dietary-identity block — the same firmness/format as the allergy line
+// (a whole-diet identity is a hard rule, not a preference). "" when no recognized
+// diet is declared in any source. De-duped across sources by construction.
+function renderHardDiet(sources: Array<string | null | undefined>): string {
+  const hits = detectHardDiets(sources);
+  if (!hits.length) return "";
+  const lines = hits.map(
+    (d) =>
+      `  - ${d.label} (HARD RULE — as firm as an allergy; EVERY meal, item, recipe, and substitution MUST comply): ${d.rule}`
+  );
+  return `\nDIETARY IDENTITY (HARD CONSTRAINT — the user follows this diet; treat it with the SAME firmness as an allergy: NEVER include an excluded ingredient in ANY meal, item, recipe, or substitution):\n${lines.join("\n")}\n`;
+}
+
 // Framing: super-healthy, goal-aware, longevity coach — not just a macro calculator.
-const LONGEVITY_GUARDRAILS = `LONGEVITY GUARDRAILS:
-- Anchor EVERY meal on protein; total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g).
+// Protein and omega-3 anchors bend to a plant-forward diet (vegan/vegetarian): no
+// animal-protein instruction, no fish — otherwise the guardrails would contradict
+// the HARD dietary-identity block above.
+function longevityGuardrails(plantForward = false): string {
+  const proteinLine = plantForward
+    ? "- Anchor EVERY meal on PLANT protein (legumes, lentils, beans, chickpeas, tofu, tempeh, seitan, edamame, soy, seeds); total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g). Do NOT use meat, poultry, or fish to hit protein."
+    : "- Anchor EVERY meal on protein; total ~0.7-1 g per lb bodyweight per day (use goal.recommended.protein_g).";
+  const omega3Line = plantForward
+    ? "- Omega-3s from plant sources 2-3x/week (ground flaxseed, chia, walnuts, hemp, algae oil) — no fish."
+    : "- Oily fish 2-3x/week (salmon, sardines, mackerel) or another omega-3 source.";
+  return `LONGEVITY GUARDRAILS:
+${proteinLine}
 - 30g+ fiber per day: vegetables, legumes, fruit, whole grains.
 - Build meals from mostly whole, single-ingredient foods; minimize ultra-processed food, added
   sugar, and alcohol.
-- Oily fish 2-3x/week (salmon, sardines, mackerel) or another omega-3 source.
+${omega3Line}
 - Calorie target follows goal.recommended for the active GOAL MODE (a lean-safe deficit, maintenance,
   or a conservative surplus) — never a crash deficit and never an aggressive bulk.
 - Keep the last meal of the day moderate, not enormous or very late.`;
+}
 
 // Meal slots are flexible — the plan must bend around the user's real training schedule,
 // not assume a textbook pre/post-workout sandwich.
@@ -180,33 +295,42 @@ const MEAL_TIMING_RULES = `MEAL TIMING — slots are FLEXIBLE, schedule around t
 export function buildMealPlanPrompt(userInstruction?: string): string {
   const ctx = repo.getCoachContext();
   const prefs = (repo.getSettings().meal_prefs || "").trim();
-  const split = (ctx.plan as any[]).map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`).join("; ");
+  const split = (ctx.plan as any[])
+    .map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`)
+    .join("; ");
   // Make the plan adapt to the user's REAL inputs, not just a static goal number:
   // (1) the foods they actually log, (2) their measured expenditure, (3) current fatigue.
   const exp = repo.estimateExpenditure(21);
   const freqMap = new Map<string, any>();
-  for (const h of [8, 13, 19]) for (const f of repo.frequentFoods(h).slice(0, 4)) {
-    const k = String(f.summary).toLowerCase();
-    if (!freqMap.has(k)) freqMap.set(k, f);
-  }
+  for (const h of [8, 13, 19])
+    for (const f of repo.frequentFoods(h).slice(0, 4)) {
+      const k = String(f.summary).toLowerCase();
+      if (!freqMap.has(k)) freqMap.set(k, f);
+    }
   const freqList = [...freqMap.values()].sort((a, b) => b.count - a.count).slice(0, 10);
   const freqBlock = freqList.length
     ? `\nFREQUENTLY LOGGED FOODS (what the user ACTUALLY eats — build around these where they fit; reusing their own staples lifts adherence far more than novel gourmet meals):\n${freqList.map((f) => `  - ${f.summary} (logged ${f.count}×${f.protein_g != null ? `, ~${Math.round(f.protein_g)}g protein` : ""})`).join("\n")}\n`
     : "";
-  const expBlock = exp.tdee != null
-    ? `\nDERIVED EXPENDITURE (real — from logged intake minus the weighted weight trend; confidence ${exp.confidence}): TDEE ≈ ${exp.tdee} kcal/day; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. Anchor daily_kcal to goal.recommended, but SANITY-CHECK it against this measured expenditure — if they diverge a lot, trust the lean-safe target implied by this real TDEE over a stale goal number.\n`
-    : "";
+  const expBlock =
+    exp.tdee != null
+      ? `\nDERIVED EXPENDITURE (real — from logged intake minus the weighted weight trend; confidence ${exp.confidence}): TDEE ≈ ${exp.tdee} kcal/day; recent avg intake ${exp.intake_avg_kcal ?? "?"} kcal; weight trend ${exp.trend_lb_wk ?? "?"} lb/wk. Anchor daily_kcal to goal.recommended, but SANITY-CHECK it against this measured expenditure — if they diverge a lot, trust the lean-safe target implied by this real TDEE over a stale goal number.\n`
+      : "";
   const trainingSignals = ctx.training_signals as any;
   const fatigue = trainingSignals?.autoregulation?.note
     ? `\nRECOVERY DEBT (recent training feedback): ${trainingSignals.autoregulation.note} On a high-fatigue stretch keep protein high and carbs adequate for recovery — never slash intake to chase the deficit.\n`
     : "";
+  // A whole-diet identity can be declared in the profile, in meal prefs, OR typed
+  // into the request — scan all three and treat it as hard as an allergy.
+  const dietSources = [(ctx.profile as any)?.dietary_restrictions, prefs, userInstruction];
+  const hardDiet = renderHardDiet(dietSources);
+  const plantForward = isPlantForward(dietSources);
   return `${CAIRN_PERSONA}
 
 Right now you're the nutritionist — goal-aware and longevity-focused — building a 7-day
 meal plan that fuels the user's CURRENT goal (see GOAL MODE below) while eating for healthspan. The
 user's profile, goal check (with computed TDEE and a mode-correct recommended intake), training
 plan, recent activities, and food preferences in memory are in the DATA section.
-${renderGoalMode(ctx)}
+${renderGoalMode(ctx)}${hardDiet}
 HARD RULES:
 - Anchor daily_kcal to goal.recommended (the mode-correct target — a lean-safe deficit, maintenance,
   or a conservative surplus per GOAL MODE), NOT an aggressive crash deficit or a dirty bulk, even if
@@ -217,15 +341,19 @@ HARD RULES:
 - Favor whole foods; respect any preferences/constraints in memory.
 - Time more carbs around training days; keep it practical and repeatable, not 7 unique gourmet days.
 
-${LONGEVITY_GUARDRAILS}
+${longevityGuardrails(plantForward)}
 
 ${MEAL_TIMING_RULES}
 
 TRAINING SPLIT (plan the week's meals around these training days): ${split || "(no plan days)"}
-${prefs ? `
+${
+  prefs
+    ? `
 USER SCHEDULE & MEAL PREFERENCES (follow these — they override generic templates):
 ${prefs}
-` : ""}
+`
+    : ""
+}
 ${CONTEXT_GUARDRAILS}
 - TRIPS specifically: for weeks overlapping a trip, lean on portable, travel-friendly meals and
   flag that the user will be eating out.
@@ -281,6 +409,14 @@ export function buildNutritionCheckinPrompt(ctx?: CoachContext, opts: { windowDa
     : null;
   const proteinTarget = goal?.ok ? (eff?.protein_g ?? goal.recommended?.protein_g ?? null) : null;
   const targetIsAccepted = eff?.source === "accepted";
+  // A retarget must respect a HARD whole-diet identity too (it steers macros and
+  // is echoed back to the coach) — scan the profile diet + meal prefs.
+  const mealPrefs = (repo.getSettings().meal_prefs || "").trim();
+  const dietSources = [profile?.dietary_restrictions, mealPrefs];
+  const hardDiet = renderHardDiet(dietSources);
+  const plantProteinNote = isPlantForward(dietSources)
+    ? "\nPLANT-PROTEIN ANCHOR: the user's protein floor must be met with PLANT proteins (legumes, lentils, tofu, tempeh, seitan, edamame, soy, seeds) — never suggest animal protein to protect the protein floor.\n"
+    : "";
   return `${CAIRN_PERSONA}
 
 Right now you're the nutritionist — calm, goal-aware, longevity-focused — running a
@@ -302,7 +438,7 @@ ${JSON.stringify(exp)}
 
 CURRENT TARGET: ${currentTarget != null ? `~${currentTarget} kcal/day` : "(none set)"}, protein ~${proteinTarget != null ? `${proteinTarget} g/day` : "(unset)"}${targetIsAccepted ? " (the user's ACCEPTED target from a prior check-in — set prev_target_kcal to this, and only change it if the trend has genuinely moved since)" : ""}.
 GOAL CHECK (mode-correct recommendation): ${JSON.stringify(goal)}
-${renderGoalMode(context)}
+${renderGoalMode(context)}${hardDiet}${plantProteinNote}
 WHEN TO PROPOSE A CHANGE (else change:false):
 - Confidence must be at least "medium" AND the trend must have drifted meaningfully off the goal pace
   FOR THIS GOAL MODE — see below. Otherwise set change:false and stay quiet (the common, correct answer).
@@ -316,11 +452,15 @@ WHEN TO PROPOSE A CHANGE (else change:false):
   Respect goal.recommended as the floor — never below ~1500 kcal.
 - MACRO FLOORS: protect PROTEIN first (hold or raise — protein_g >= the current protein target), then fat
   to a healthy minimum, and let CARBS take the adjustment.
-- If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.${disciplineOf(context) !== "strength" ? `
+- If an active trip/illness window is in the data, prefer change:false — the data is disrupted; wait.${
+    disciplineOf(context) !== "strength"
+      ? `
 - ENDURANCE/HYBRID user: do NOT propose a deficit unless fat loss is an EXPLICIT goal — the default is
   to FUEL the training (anchor to maintenance). Protect CARBOHYDRATE; if anything, a sustained calorie
   deficit while mileage is high is the thing to flag (suggest eating MORE, not less). Carbs are not the
-  adjustment lever to cut here.` : ""}
+  adjustment lever to cut here.`
+      : ""
+  }
 
 ${CONTEXT_GUARDRAILS}
 ${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
@@ -338,7 +478,13 @@ export function buildMealSwapPrompt(args: { plan: any; day: string; mealIndex: n
   const { plan, day, mealIndex, hint } = args;
   const parsed = plan?.parsed ?? {};
   const dayObj = (Array.isArray(parsed.days) ? parsed.days : []).find(
-    (d: any) => String(d?.day ?? "").trim().toLowerCase() === String(day ?? "").trim().toLowerCase()
+    (d: any) =>
+      String(d?.day ?? "")
+        .trim()
+        .toLowerCase() ===
+      String(day ?? "")
+        .trim()
+        .toLowerCase()
   );
   const meals = Array.isArray(dayObj?.meals) ? dayObj.meals : [];
   const current = meals[mealIndex];
@@ -350,8 +496,16 @@ export function buildMealSwapPrompt(args: { plan: any; day: string; mealIndex: n
   // is silently ignored and the replacement can reintroduce a steered-away food.
   // renderConnectedBrain returns "" when there are no active directives.
   const ctx = repo.getCoachContext();
+  // The swap must honor a HARD whole-diet identity too — declared in the profile,
+  // in meal prefs, OR in the free-text hint ("I'm vegan now").
+  const dietSources = [(profile as any)?.dietary_restrictions, prefs, hint];
+  const hardDiet = renderHardDiet(dietSources);
+  const plantForward = isPlantForward(dietSources);
   const dayMeals = meals
-    .map((m: any, i: number) => `${i === mealIndex ? ">>> SWAP THIS ONE >>> " : ""}[${i}] ${m?.name ?? "?"} — ${m?.items ?? ""} (${m?.kcal ?? "?"} kcal, ${m?.protein_g ?? "?"}g protein, ${m?.carbs_g ?? "?"}g carbs, ${m?.fat_g ?? "?"}g fat)`)
+    .map(
+      (m: any, i: number) =>
+        `${i === mealIndex ? ">>> SWAP THIS ONE >>> " : ""}[${i}] ${m?.name ?? "?"} — ${m?.items ?? ""} (${m?.kcal ?? "?"} kcal, ${m?.protein_g ?? "?"}g protein, ${m?.carbs_g ?? "?"}g carbs, ${m?.fat_g ?? "?"}g fat)`
+    )
     .join("\n");
   return `${CAIRN_PERSONA}
 
@@ -368,14 +522,22 @@ REPLACEMENT RULES:
   (${current?.protein_g ?? "?"}g) — UNLESS the user's hint clearly asks otherwise.
 - It must fit the rest of the day (don't duplicate another meal's main protein/dish).
 
-${LONGEVITY_GUARDRAILS}
-${renderGoalMode(ctx)}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
-${prefs ? `
+${longevityGuardrails(plantForward)}
+${renderGoalMode(ctx)}${hardDiet}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}
+${
+  prefs
+    ? `
 USER SCHEDULE & MEAL PREFERENCES (follow these):
 ${prefs}
-` : ""}${hint?.trim() ? `
+`
+    : ""
+}${
+  hint?.trim()
+    ? `
 USER'S HINT (honor this): ${hint.trim()}
-` : ""}
+`
+    : ""
+}
 USER: profile: ${JSON.stringify(profile)}
 goal: ${JSON.stringify(goal)}
 
@@ -396,7 +558,13 @@ export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: num
   const { plan, day, mealIndex } = args;
   const parsed = plan?.parsed ?? {};
   const dayObj = (Array.isArray(parsed.days) ? parsed.days : []).find(
-    (d: any) => String(d?.day ?? "").trim().toLowerCase() === String(day ?? "").trim().toLowerCase()
+    (d: any) =>
+      String(d?.day ?? "")
+        .trim()
+        .toLowerCase() ===
+      String(day ?? "")
+        .trim()
+        .toLowerCase()
   );
   const meals = Array.isArray(dayObj?.meals) ? dayObj.meals : [];
   const current = meals[mealIndex];
@@ -404,6 +572,10 @@ export function buildRecipePrompt(args: { plan: any; day: string; mealIndex: num
   const goal = repo.computeGoalCheck();
   const prefs = (repo.getSettings().meal_prefs || "").trim();
   const ctx = repo.getCoachContext();
+  // The recipe must comply with a HARD whole-diet identity (profile diet or meal prefs).
+  const dietSources = [(profile as any)?.dietary_restrictions, prefs];
+  const hardDiet = renderHardDiet(dietSources);
+  const plantForward = isPlantForward(dietSources);
   return `${CAIRN_PERSONA}
 
 Right now you're the nutritionist — goal-aware and longevity-focused. Write a practical,
@@ -420,11 +592,15 @@ RECIPE RULES:
 - Keep the finished dish consistent with the meal's kcal and macros above.
 - Steps must be ordered and practical for a weeknight home cook.
 
-${LONGEVITY_GUARDRAILS}
-${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}${prefs ? `
+${longevityGuardrails(plantForward)}${hardDiet}
+${renderTrajectory(ctx)}${renderFoodMemory((ctx as any)?.memory)}${renderHouseholdDiet(ctx)}${
+  prefs
+    ? `
 USER SCHEDULE & MEAL PREFERENCES (respect these):
 ${prefs}
-` : ""}
+`
+    : ""
+}
 USER: profile: ${JSON.stringify(profile)}
 goal: ${JSON.stringify(goal)}
 
