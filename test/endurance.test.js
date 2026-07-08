@@ -331,7 +331,7 @@ test("Garmin activity-level VO2max feeds recovery markers when daily maxmet is a
 // ---------- GOLDEN: endurance markers never leak a 0-100 grade / impact_score ----------
 test("GOLDEN: wearable endurance markers carry no impact_score / 0-100 grade over the API boundary", () => {
   const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','t3')`).run();
-  for (const [d, v, rhr, hrv] of [["2026-03-01", 38, 70, 30], ["2026-03-05", 38, 71, 28], ["2026-03-10", 37, 72, 26]]) {
+  for (const [d, v, rhr, hrv] of [[isoDaysAgo(20), 38, 70, 30], [isoDaysAgo(15), 38, 71, 28], [isoDaysAgo(10), 37, 72, 26]]) {
     db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, vo2max, resting_hr, hrv_ms) VALUES (?, ?, ?, ?, ?)`).run(src.lastInsertRowid, d, v, rhr, hrv);
   }
   const { markers } = repo.prioritizeMarkers();
