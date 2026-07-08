@@ -5,16 +5,29 @@ import { dayRead } from "./intelligence.js";
 import { computeGoalCheck } from "./profile.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { localDateISO } from "./shared.js";
+import {
+  type FocusCandidate,
+  type FocusDomain,
+  type RankedFocus,
+  rankFocus,
+  scoreFocus,
+} from "./focus-candidate.js";
 
 // ============================================================================
-// THE ONE NEXT-BEST-STEP — a pure, deterministic, cross-domain producer.
+// THE ONE NEXT-BEST-STEP — a pure, deterministic, cross-domain producer + VIEW.
 //
 // Cairn's surfaces each shout their own thing (a due muscle group, a protein
 // gap, an earned rest, a lab to recheck). This module reads ALL of them with the
-// SAME repo data the rest of the app uses, scores them INTERNALLY (leverage +
-// actionability + freshness − a snooze cooldown), and returns the SINGLE highest
-// next step — or NULL on a quiet day. The integration owner maps this onto the
+// SAME repo data the rest of the app uses and returns the SINGLE highest next
+// step — or NULL on a quiet day. The integration owner maps this onto the
 // today-agenda candidate and handles the done/snooze taps.
+//
+// K3 (v1 arch): this module NO LONGER owns a scoring engine. Its producers emit
+// plain `FocusCandidate`s; the SINGLE shared arbiter (`scoreFocus`/`rankFocus` in
+// focus-candidate.ts — the same primitive the conductor uses) does the one ranking.
+// The only next-step-specific concern kept here is the snooze/done cooldown, folded
+// in as a `penalty` on the shared score. So there is exactly one "what's next"
+// scorer in the codebase, and this is a VIEW over it.
 //
 // Constitution (binding): NO numeric scores cross the public boundary. `leverage`
 // and the internal score are kept like marker `impact_score` — they shape the
@@ -23,7 +36,8 @@ import { localDateISO } from "./shared.js";
 //
 // CYCLE NOTE: this module is imported by the higher today-agenda layer, so it
 // must NOT import ./today-agenda.js. It only reaches DOWN to low-level repo
-// modules (propagation/progression/intelligence/profile/app-state) + the DB.
+// modules (propagation/progression/intelligence/profile/app-state/focus-candidate)
+// + the DB.
 // ============================================================================
 
 export interface NextStep {
@@ -43,20 +57,37 @@ export interface NextStep {
   leverage: number;
 }
 
-// A producer returns a candidate with everything the scorer needs. `actionable`
-// is whether there's something concrete to do TODAY (vs a passive "watch"), and
-// `fresh` is whether this just changed (a brand-new signal nudges slightly above
-// a long-standing one). Both are coarse booleans — no numbers leak.
+// A producer returns a candidate with everything the shared arbiter needs.
+// `actionable` is whether there's something concrete to do TODAY (vs a passive
+// "watch"), and `fresh` is whether this just changed (a brand-new signal nudges
+// slightly above a long-standing one). Both are coarse booleans — no numbers leak.
 interface Candidate extends NextStep {
   actionable: boolean;
   fresh: boolean;
 }
 
-// Internal scoring coefficients — same spirit as marker impact_score: they live
-// here, never on the wire.
-const LEVERAGE_WEIGHT = 10; // leverage dominates; a 3-leverage lever clears a 0-leverage one
-const ACTIONABLE_BONUS = 2;
-const FRESH_BONUS = 1;
+// The next-step `domain` vocabulary → the shared FocusDomain, so a next-step
+// candidate can be ranked by the one arbiter alongside every other producer.
+const NEXT_STEP_DOMAIN: Record<NextStep["domain"], FocusDomain> = {
+  train: "training",
+  fuel: "nutrition",
+  recover: "recovery",
+  recheck: "health",
+  life: "recovery",
+};
+
+// Adapt one next-step candidate to the shared producer contract (plain words only).
+// `kind` IS the stable step_key so the cooldown penalty keys off it downstream.
+function toFocusCandidate(c: Candidate): FocusCandidate {
+  return {
+    domain: NEXT_STEP_DOMAIN[c.domain] ?? "training",
+    kind: c.step_key,
+    priority_inputs: Array.isArray(c.based_on) ? c.based_on.filter(Boolean).slice(0, 3) : [],
+    headline: c.title,
+    why: c.why,
+    action: c.action ? { kind: c.action.kind, label: c.action.label } : null,
+  };
+}
 
 // Snooze / done cooldown window. A skipped or handled step stays quiet for this
 // many days so it doesn't return tomorrow. `done` uses a longer window than a
@@ -328,24 +359,13 @@ function produceLife(date: string): Candidate | null {
   };
 }
 
-// ---------- the arbiter ------------------------------------------------------
+// ---------- the producers, as one candidate set ------------------------------
 
-function scoreOf(c: Candidate, now: number): number {
-  return (
-    c.leverage * LEVERAGE_WEIGHT +
-    (c.actionable ? ACTIONABLE_BONUS : 0) +
-    (c.fresh ? FRESH_BONUS : 0) -
-    cooldownPenalty(c.step_key, now)
-  );
-}
-
-// Run every cross-domain producer, score them internally, and return the single
-// winner (or NULL on a quiet day). Never throws; missing data → a producer just
-// returns null and is skipped.
-export function nextBestStep(date?: string): NextStep | null {
+// Run every cross-domain producer and return today's next-step candidates. Never
+// throws; missing data → a producer just returns null and is skipped. This is the
+// PRODUCER half — the shared arbiter (below / the conductor) does the ranking.
+function nextStepCandidates(date?: string): Candidate[] {
   const d = date || localDateISO();
-  const now = Date.now();
-
   // The day-read is shared by the train + recover producers (one fetch).
   let read: ReturnType<typeof dayRead>;
   try { read = dayRead(d); } catch { read = { kind: "easy", focus: null, why: "", est_minutes: null, signals: {} }; }
@@ -357,24 +377,52 @@ export function nextBestStep(date?: string): NextStep | null {
   try { push(produceTrain(read, d)); } catch { /* skip */ }
   try { push(produceFuel(d)); } catch { /* skip */ }
   try { push(produceLife(d)); } catch { /* skip */ }
+  return candidates;
+}
 
+// The next-step producers exposed as the SHARED producer contract, so the conductor
+// (or any future surface) can fold today's cross-domain steps into the one arbitration
+// without re-deriving them. Cooldown/ambient filtering stays a next-step-view concern.
+export function nextStepFocusCandidates(date?: string): FocusCandidate[] {
+  return nextStepCandidates(date).map(toFocusCandidate);
+}
+
+// ---------- the VIEW over the one shared arbiter -----------------------------
+
+// Wrap a next-step candidate for the shared scorer: the conductor-style leverage the
+// producer declared + the coarse tie-break facts + the snooze/done cooldown as a
+// penalty (the only next-step-specific input to the single formula).
+function toRanked(c: Candidate, now: number): RankedFocus & { source: Candidate } {
+  return {
+    candidate: toFocusCandidate(c),
+    leverage: c.leverage,
+    actionable: c.actionable,
+    fresh: c.fresh,
+    penalty: cooldownPenalty(c.step_key, now),
+    source: c,
+  };
+}
+
+// Return the single highest next step (or NULL on a quiet day) by delegating the
+// RANKING to the shared arbiter (`scoreFocus`/`rankFocus`) — no bespoke scorer here.
+export function nextBestStep(date?: string): NextStep | null {
+  const now = Date.now();
+  const candidates = nextStepCandidates(date);
   if (!candidates.length) return null;
 
-  // Score; drop anything still inside a snooze/done cooldown, AND drop a pure
-  // ambient signal — a leverage-0, non-actionable, non-fresh candidate (e.g. the
-  // recovery-data gap). It's true context, but it's never worth being the SINGLE
-  // thing the athlete sees today; surfacing it daily would nag (pull-never-push),
-  // so a quiet day with only ambient state stays genuinely quiet.
-  let best: { c: Candidate; score: number } | null = null;
-  for (const c of candidates) {
-    if (c.leverage <= 0 && !c.actionable && !c.fresh) continue;
-    const score = scoreOf(c, now);
-    if (score < 0) continue; // suppressed by cooldown (penalty dwarfs the base)
-    if (!best || score > best.score) best = { c, score };
-  }
-  if (!best) return null;
+  // Drop a pure ambient signal — a leverage-0, non-actionable, non-fresh candidate
+  // (e.g. the recovery-data gap). It's true context, but never worth being the SINGLE
+  // thing the athlete sees today; surfacing it daily would nag (pull-never-push), so a
+  // quiet day with only ambient state stays genuinely quiet.
+  const ranked = candidates
+    .filter((c) => !(c.leverage <= 0 && !c.actionable && !c.fresh))
+    .map((c) => toRanked(c, now))
+    // Drop anything a cooldown suppresses (its penalty dwarfs the base score).
+    .filter((r) => scoreFocus(r) >= 0);
+  if (!ranked.length) return null;
 
-  const { domain, step_key, title, why, leverage, based_on, action } = best.c;
+  const best = rankFocus(ranked)[0].source;
+  const { domain, step_key, title, why, leverage, based_on, action } = best;
   // INTERNAL fields (actionable/fresh/score) never cross the boundary.
   return {
     domain,
