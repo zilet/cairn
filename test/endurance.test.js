@@ -313,10 +313,11 @@ test("a lab VO2max reading wins over the wearable estimate (no double-counting)"
 
 test("Garmin activity-level VO2max feeds recovery markers when daily maxmet is absent", () => {
   const src = db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin','activity-vo2')`).run();
+  const date = isoDaysAgo(20);
   db.prepare(
     `INSERT INTO garmin_activities (source_id, external_id, date, type, name, vo2max)
-     VALUES (?, 'run-vo2-1', '2026-03-10', 'run', 'Tempo run', 42)`
-  ).run(src.lastInsertRowid);
+     VALUES (?, 'run-vo2-1', ?, 'run', 'Tempo run', 42)`
+  ).run(src.lastInsertRowid, date);
 
   const { markers } = repo.prioritizeMarkers();
   const vo2 = markers.find((m) => m.key === "vo2max");
