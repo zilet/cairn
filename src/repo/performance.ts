@@ -33,6 +33,7 @@ import { localDateISO } from "./shared.js";
 // at call time). All degrade null-safe / [].
 import { enduranceTestsDue } from "./run-progression.js";
 import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
+import { benchmarkMilestoneCandidates, type TrainingMilestoneCandidate } from "./training-milestones.js";
 import {
   bandForPercentile,
   compareCurve,
@@ -289,6 +290,7 @@ export interface PerformanceStanding {
   imbalances: Imbalance[];
   lever: PerfLever | null;
   tests_due: PerfTestDue[];
+  milestones: TrainingMilestoneCandidate[];
   variety: { note: string; suggestions: string[] } | null;
   momentum: { chips: PerfMomentumChip[] };
   balance_note: string;
@@ -536,8 +538,8 @@ export function testsDue(caps: LiftCapacity[], lifts: LiftState[], refISO: strin
       kind: tag.kind,
       why:
         tag.kind === "core"
-          ? `A max ${lift.exercise} hold is a quick, honest test of trunk endurance — worth re-checking every month or so.`
-          : `A max ${lift.exercise} is a clean grip-strength test (and grip tracks with everything from pulls to longevity) — re-check it now and then.`,
+          ? `A max ${lift.exercise} hold is a quick, honest test of trunk endurance — worth re-checking when the training signal goes stale or a block checkpoint asks for it.`
+          : `A max ${lift.exercise} is a clean grip-strength test (and grip tracks with everything from pulls to longevity) — re-check it when cadence or a plateau makes it useful.`,
     });
   }
   return out.slice(0, 3);
@@ -791,6 +793,11 @@ export function performanceStanding(
       tests_due.push(t);
     }
   } catch { /* endurance tests unavailable → skip */ }
+  const milestones = benchmarkMilestoneCandidates({
+    capacities,
+    endurance,
+    enduranceTests: tests_due.filter((t) => t.kind === "endurance"),
+  });
   const variety = varietyRead(d);
   const momentum = { chips: performanceMomentum(programState, capacities, endurance) };
   const balance_note = balanceNote(recovery, programState);
@@ -810,6 +817,7 @@ export function performanceStanding(
     imbalances,
     lever,
     tests_due,
+    milestones,
     variety,
     momentum,
     balance_note,
