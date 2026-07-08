@@ -9,11 +9,39 @@ import {
   todayAgenda,
 } from "../domain/brain/index.js";
 import { allGuidelines, guidelineFor } from "../domain/health/index.js";
+import { getProfile } from "../domain/person/index.js";
+import { getPlan, getSessionByDate, getWeeklyStats, listExercises } from "../domain/training/index.js";
 import { localDateISO } from "../repo/shared.js";
 
 export const todayRouter = Router();
 
+function todayDateParam(value: unknown): string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? value
+    : localDateISO();
+}
+
+export function todayAggregate(dateQuery?: unknown) {
+  const date = todayDateParam(dateQuery);
+  return {
+    date,
+    plan: getPlan(),
+    session: getSessionByDate(date),
+    stats: getWeeklyStats(),
+    profile: getProfile(),
+    exercises: listExercises(),
+  };
+}
+
 // ---- Era 2 (the calm daily driver, docs/VISION.md §12) ----
+// Cold-start aggregate for the Today screen. This is deliberately only the
+// independent low-risk reads the client previously fetched separately; route
+// semantics for /plan, /sessions?date=, /stats, /profile, and /exercises stay
+// unchanged and the client still primes their individual SWR keys.
+todayRouter.get("/today", (req, res) => {
+  res.json(todayAggregate(req.query.date));
+});
+
 // The Today salience arbiter: ONE ranking + budget pass over the whole Today
 // surface, so only the 1-2 things that matter most today render inline and the
 // rest collapse behind a quiet "more". Marking "seen" at the end (debounced)

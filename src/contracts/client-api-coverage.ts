@@ -65,6 +65,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/endurance-goal",
   "/volume",
   "/calendar",
+  "/today",
   "/today-read",
   "/today-read/reshape",
   "/session-suggest",

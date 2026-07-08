@@ -13,12 +13,21 @@ type TodayDataState = {
   plan: unknown[];
   tab?: string;
 };
+type TodayDataAggregate = {
+  date?: string;
+  plan: unknown[];
+  session: unknown;
+  stats: unknown;
+  profile: unknown;
+  exercises: unknown[];
+};
 type TodayDataLoadDeps = {
   root: HTMLElement;
   state: TodayDataState;
   api(path: string): Promise<unknown>;
   cachedApi(path: string, opts?: TodayDataCachedApiOptions<unknown>): Promise<unknown>;
   peekCached<T = unknown>(key: string, freshFor?: number): TodayDataSwrPeek<T> | null;
+  storeCached(key: string, data: unknown): void;
   localISO(date?: Date): string;
   todaySkeleton(): string;
   setTodayHeaderTitle(): void;
@@ -47,6 +56,12 @@ type TodayDataLoaderApi = {
 };
 
 (() => {
+  function isTodayAggregate(value: unknown): value is TodayDataAggregate {
+    if (!value || typeof value !== "object") return false;
+    const row = value as Partial<TodayDataAggregate>;
+    return Array.isArray(row.plan) && "session" in row && "stats" in row && "profile" in row && Array.isArray(row.exercises);
+  }
+
   async function loadInner(
     opts: { soft?: unknown } | null | undefined,
     deps: TodayDataLoadDeps,
@@ -64,9 +79,6 @@ type TodayDataLoaderApi = {
       profile: deps.peekCached("profile"),
       exercises: deps.peekCached("exercises"),
     };
-    const statsPromise = peeks.stats ? Promise.resolve(peeks.stats.data) : deps.api("/stats");
-    const profilePromise = peeks.profile ? Promise.resolve(peeks.profile.data) : deps.api("/profile").catch(() => null);
-    const exercisesPromise = peeks.exercises ? Promise.resolve(peeks.exercises.data) : deps.api("/exercises").catch(() => []);
     const warm = Object.values(peeks).every(Boolean);
     let anyChanged = false;
     const revalidations: Array<Promise<unknown>> = [];
@@ -84,24 +96,84 @@ type TodayDataLoaderApi = {
     if (!warm && !deps.root.querySelector(".today-wrap")) deps.root.innerHTML = deps.todaySkeleton();
 
     const isToday = deps.state.logDate === deps.localISO();
-    const planPromise = deps.state.plan.length
+    const aggregateKey = "today:aggregate:" + deps.state.logDate;
+    let aggregate: TodayDataAggregate | null = null;
+    let aggregateFresh = false;
+    if (!warm) {
+      try {
+        const value = await deps.cachedApi("/today?date=" + encodeURIComponent(deps.state.logDate), {
+          key: aggregateKey,
+          onUpgrade: () => {
+            aggregateFresh = true;
+          },
+        });
+        if (isTodayAggregate(value)) {
+          aggregate = value;
+          if (aggregateFresh || !peeks.plan) deps.storeCached("plan", value.plan);
+          if (aggregateFresh || !peeks.session) deps.storeCached(sessKey, value.session);
+          if (aggregateFresh || !peeks.stats) deps.storeCached("stats", value.stats);
+          if (aggregateFresh || !peeks.profile) deps.storeCached("profile", value.profile);
+          if (aggregateFresh || !peeks.exercises) deps.storeCached("exercises", value.exercises);
+        }
+      } catch {
+        aggregate = null;
+      }
+    }
+    const useFreshAggregate = !!aggregate && aggregateFresh;
+
+    const planPromise = useFreshAggregate
+      ? Promise.resolve(aggregate!.plan)
+      : deps.state.plan.length
       ? Promise.resolve(deps.state.plan)
       : peeks.plan
         ? Promise.resolve(peeks.plan.data)
-        : deps.api("/plan");
-    const sessionPromise = peeks.session
+        : aggregate
+          ? Promise.resolve(aggregate.plan)
+          : deps.api("/plan");
+    const sessionPromise = useFreshAggregate
+      ? Promise.resolve(aggregate!.session)
+      : peeks.session
       ? Promise.resolve(peeks.session.data)
-      : deps.api("/sessions?date=" + deps.state.logDate);
+      : aggregate
+        ? Promise.resolve(aggregate.session)
+        : deps.api("/sessions?date=" + deps.state.logDate);
+    const statsPromise = useFreshAggregate
+      ? Promise.resolve(aggregate!.stats)
+      : peeks.stats
+      ? Promise.resolve(peeks.stats.data)
+      : aggregate
+        ? Promise.resolve(aggregate.stats)
+        : deps.api("/stats");
+    const profilePromise = useFreshAggregate
+      ? Promise.resolve(aggregate!.profile)
+      : peeks.profile
+      ? Promise.resolve(peeks.profile.data)
+      : aggregate
+        ? Promise.resolve(aggregate.profile)
+        : deps.api("/profile").catch(() => null);
+    const exercisesPromise = useFreshAggregate
+      ? Promise.resolve(aggregate!.exercises)
+      : peeks.exercises
+      ? Promise.resolve(peeks.exercises.data)
+      : aggregate
+        ? Promise.resolve(aggregate.exercises)
+        : deps.api("/exercises").catch(() => []);
 
-    const [plan, session] = await Promise.all([planPromise, sessionPromise]);
-    if (!deps.state.plan.length) deps.state.plan = plan as unknown[];
-    revalidate("/plan", "plan");
-    revalidate("/sessions?date=" + deps.state.logDate, sessKey);
-
-    const [stats, profile, exercises] = await Promise.all([statsPromise, profilePromise, exercisesPromise]);
-    revalidate("/stats", "stats");
-    revalidate("/profile", "profile");
-    revalidate("/exercises", "exercises");
+    const [plan, session, stats, profile, exercises] = await Promise.all([
+      planPromise,
+      sessionPromise,
+      statsPromise,
+      profilePromise,
+      exercisesPromise,
+    ]);
+    if (useFreshAggregate || !deps.state.plan.length) deps.state.plan = plan as unknown[];
+    if (!aggregate) {
+      revalidate("/plan", "plan");
+      revalidate("/sessions?date=" + deps.state.logDate, sessKey);
+      revalidate("/stats", "stats");
+      revalidate("/profile", "profile");
+      revalidate("/exercises", "exercises");
+    }
 
     return {
       soft,

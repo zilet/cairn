@@ -941,6 +941,15 @@ export interface ClientWeeklyStats {
   [key: string]: unknown;
 }
 
+export interface ClientTodayAggregate {
+  date: ISODateString | string;
+  plan: ClientPlanDay[];
+  session: ClientTrainingSession | null;
+  stats: ClientWeeklyStats;
+  profile: ClientProfile | null;
+  exercises: ClientExercise[];
+}
+
 export interface ClientWeightRow {
   id: number;
   date?: ISODateString;
@@ -1708,6 +1717,7 @@ export interface ClientApiResponses {
   "/api/endurance-goal": ClientEnduranceGoal | null;
   "/api/volume": ClientVolumeByMuscleResponse;
   "/api/calendar": ClientTrainingCalendarResponse;
+  "/api/today": ClientTodayAggregate;
   "/api/today-read": ClientDayRead;
   "/api/today-read/reshape": ClientDayRead | { ok: true; job: ClientAgentJob };
   "/api/session-suggest": ClientSessionSuggestResponse;

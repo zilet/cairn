@@ -117,6 +117,7 @@ function makeTodayDependencies(input: ClientTodayDependenciesContextInput): Clie
         api: input.api,
         cachedApi: input.cachedApi,
         peekCached: input.peekCached,
+        storeCached: input.storeCached,
         localISO: input.localISO,
         todaySkeleton: input.todaySkeleton,
         setTodayHeaderTitle: input.setTodayHeaderTitle,
