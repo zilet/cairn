@@ -109,6 +109,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/health/markers",
   "/markers/priority",
   "/health/standing",
+  "/health/risk",
   "/health/review",
   "/health/synthesis",
   "/directives",
