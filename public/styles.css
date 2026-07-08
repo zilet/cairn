@@ -3461,6 +3461,33 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
   font-size:1.5rem;color:var(--ink)}
 .hrisk-stat-primary .hrisk-stat-num{color:var(--accent-deep)}
 .hrisk-stat-sub{font-size:.72rem;color:var(--muted)}
+/* data-bound risk ribbon: current PREVENT path plus a lever-target path.
+   The lower path is visual only; no invented optimized clinical % is printed. */
+.hrisk-viz{border:1px solid var(--line);border-radius:var(--radius-sm);background:linear-gradient(180deg,var(--card-2),var(--card));
+  padding:13px 13px 12px;overflow:hidden}
+.hrisk-viz-provisional{border-style:dashed}
+.hrisk-viz-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+.hrisk-viz-top b{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 40;
+  font-size:1.02rem;color:var(--ink)}
+.hrisk-viz-top span{font-size:.72rem;color:var(--muted);text-align:right}
+.hrisk-viz-svg{display:block;width:100%;height:auto;min-height:176px}
+.hrisk-viz-grid{fill:none;stroke:var(--line);stroke-width:1;stroke-dasharray:3 7}
+.hrisk-viz-band{fill:url(#hriskRibbon)}
+.hrisk-viz-current,.hrisk-viz-optimized{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.hrisk-viz-current{stroke:var(--accent-deep);stroke-width:3.2}
+.hrisk-viz-optimized{stroke:var(--sage);stroke-width:2.4;stroke-dasharray:8 7}
+.hrisk-viz-heart{fill:rgba(185,104,74,.12);stroke:var(--accent);stroke-width:2}
+.hrisk-viz-vessel{fill:none;stroke:rgba(116,137,106,.78);stroke-linecap:round}
+.hrisk-viz-plaque{fill:var(--gold);opacity:.72}
+.hrisk-viz-plaque-soft{fill:var(--accent);opacity:.4}
+.hrisk-viz-points circle{fill:var(--card);stroke:var(--ink-2);stroke-width:1.5}
+.hrisk-viz-axis{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;fill:var(--muted)}
+.hrisk-viz-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:2px}
+.hrisk-viz-legend span{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--ink-2)}
+.hrisk-viz-key{width:18px;height:0;border-top:3px solid var(--accent-deep);border-radius:999px}
+.hrisk-viz-key-optimized{border-top-color:var(--sage);border-top-style:dashed}
+.hrisk-viz-note{margin:8px 0 0;font-size:.74rem;line-height:1.45;color:var(--muted)}
 /* the compact "what moves it" lever strip */
 .hrisk-levers{border-top:1px solid var(--line);padding-top:12px}
 .hrisk-lev-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
