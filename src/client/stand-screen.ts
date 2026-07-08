@@ -516,6 +516,17 @@ function standingDeps(): ClientHealthStandingControllerDeps {
   };
 }
 
+function riskDeps(): ClientHealthRiskControllerDeps {
+  return {
+    root: view,
+    state,
+    api,
+    activateTab,
+    pollToken: () => pollToken,
+    select: $,
+  };
+}
+
 function showRecords(opts: { openPicker?: boolean } = {}): void {
   curView = "records";
   setStandSeg("records");
@@ -574,8 +585,11 @@ function showConnections(): void {
 function showAge(): void {
   curView = "age";
   setStandSeg("age");
-  paint(toolShellHtml("How you compare", `<div id="hContent"></div>`));
+  paint(toolShellHtml("How you compare",
+    `<div id="hRisk"><div class="hrisk hrisk-busy"><div class="hshimmer hshimmer-lg"></div><div class="hshimmer"></div><div class="hshimmer hshimmer-sm"></div></div></div>
+     <div id="hContent"></div>`));
   wireBack();
+  CairnHealthRiskController.load(riskDeps(), pollToken);
   CairnHealthStandingController.paintReview(standingDeps());
 }
 

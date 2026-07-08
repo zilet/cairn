@@ -27,6 +27,7 @@ import type {
 } from "./client.js";
 import type {
   ClientBloodPressureReading,
+  ClientCardiovascularRisk,
   ClientEnduranceGoal,
   ClientHealthStanding,
   ClientHealthStandingBloodPressure,
@@ -876,7 +877,7 @@ declare global {
   type ClientHealthStandingControllerDeps = {
     root: ParentNode;
     document: Document;
-    state: Pick<ClientAppState, "healthStandingRef" | "standSeg" | "pendingHealthScroll">;
+    state: Pick<ClientAppState, "healthStandingRef" | "standSeg" | "pendingHealthScroll" | "meSeg">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     swrInvalidate(keyOrPrefix: string): void;
     toast(message: string): void;
@@ -885,6 +886,15 @@ declare global {
     select<T extends Element = Element>(selector: string): T | null;
     escapeAttr(value: unknown): string;
     loadDexaTargeting?(slotId: string): Promise<void> | void;
+  };
+
+  type ClientHealthRiskControllerDeps = {
+    root: ParentNode;
+    state: Pick<ClientAppState, "meSeg">;
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    activateTab(tab: string): unknown;
+    pollToken(): number;
+    select<T extends Element = Element>(selector: string): T | null;
   };
 
   type ClientHealthRecordsControllerDeps = {
@@ -2042,6 +2052,15 @@ declare global {
       openRead(deps: ClientHealthStandingControllerDeps, opts?: { scroll?: string }): void;
       paintReview(deps: ClientHealthStandingControllerDeps): void;
       render(data: ClientHealthStanding | null | undefined, deps: ClientHealthStandingControllerDeps): void;
+    };
+
+    CairnHealthRisk: {
+      renderCardiovascularRiskHtml(data: ClientCardiovascularRisk | null | undefined): string;
+    };
+
+    CairnHealthRiskController: {
+      load(deps: ClientHealthRiskControllerDeps, token: number): void;
+      render(data: ClientCardiovascularRisk | null | undefined, deps: ClientHealthRiskControllerDeps): void;
     };
 
     CairnHealthRead: {
@@ -3636,6 +3655,8 @@ declare global {
   declare const CairnHealthStanding: Window["CairnHealthStanding"];
   declare const CairnHealthStandingPrimitives: Window["CairnHealthStandingPrimitives"];
   declare const CairnHealthStandingController: Window["CairnHealthStandingController"];
+  declare const CairnHealthRisk: Window["CairnHealthRisk"];
+  declare const CairnHealthRiskController: Window["CairnHealthRiskController"];
   declare const CairnHealthRead: Window["CairnHealthRead"];
   declare const CairnHealthReadSynthesis: Window["CairnHealthReadSynthesis"];
   declare const CairnHealthReadSupplements: Window["CairnHealthReadSupplements"];

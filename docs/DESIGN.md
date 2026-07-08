@@ -176,6 +176,17 @@ New/changed components (CSS must implement, the client JS must emit):
   (`.bpsheet*`), never inline in the read. Connected-brain rail: `.hb-section` cards (directives,
   `.supp-*` supplements, and `.symlink-card` symptom↔marker connections — gold left-spine, `.symlink` /
   `.symlink-note` / `.symlink-mk`; a quiet "worth mentioning to your doctor" read, hidden when empty).
+- **Cardiovascular risk** (Stand → Age, `#hRisk` above the standing percentile read): `.hrisk*` — the
+  AHA PREVENT (2023) clinical read. `.hrisk-vage` is the vascular-age headline, ALWAYS paired in the
+  same card with `.hrisk-enh` (the enhancer overlay — ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history,
+  the residual risk the base equation misses); `.hrisk-enh-lede-tension` is the honesty guard that
+  names it explicitly when a favorable vascular age is undercut by non-empty enhancers — a card must
+  never show vascular age standing alone. `.hrisk-stats` leads with total-CVD 10/30-yr (`.hrisk-stat-primary`)
+  alongside ASCVD and heart-failure; `.hrisk-levers` is an optional compact "what moves it" chip strip;
+  `.hrisk-provisional`/`.hrisk-badge`/`.hrisk-assumptions` surface a still-assumed input with a calm
+  `.hrisk-sharpen` nudge into Me → Profile. `.hrisk-missing` is the calm insufficient-inputs state
+  (never an error tone). A clinical risk % and a vascular age are real numbers, not a banned 0–100
+  wellness score; `.hrisk-frame` always closes with the informational-not-medical-advice line.
 - **Performance** read (Progress→Program, the athletic counterpart to Standing): `.pperf*` — the
   "where you stand" capacity benchmark. `.pperf-hero` (sage left-spine, headline + sub + `.pperf-chip`
   momentum chips); `.pperf-caps` of `.pcap` rows (movement label + `.pcap-level` chip + a `.pcap-bar`

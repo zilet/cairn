@@ -1066,6 +1066,82 @@ export interface ClientHealthStanding {
   sources: string[];
 }
 
+// AHA PREVENT (2023) cardiovascular-risk read — see src/repo/risk.ts for the source shape.
+export type ClientPreventStatus = "computed" | "computed_provisional" | "insufficient_inputs";
+
+export interface ClientPreventAssumption {
+  input: string;
+  assumed: string;
+  reason: string;
+}
+
+export interface ClientRiskHorizon {
+  ten_year: number | null;
+  thirty_year: number | null;
+}
+
+export interface ClientPreventEstimate {
+  provisional: boolean;
+  assumptions: ClientPreventAssumption[];
+  confidence: "provisional" | "high";
+  estimates: {
+    total_cvd: ClientRiskHorizon;
+    ascvd: ClientRiskHorizon;
+    heart_failure: ClientRiskHorizon;
+  };
+  vascular_age: number | null;
+  horizons_note: string;
+  frame: string;
+}
+
+export interface ClientRiskEnhancer {
+  key: string;
+  label: string;
+  finding: string;
+  why: string;
+  lever: string | null;
+}
+
+export interface ClientRiskProjection {
+  key: string;
+  label: string;
+  current: number | null;
+  target: number;
+  unit: string;
+  expected_direction: "lower" | "higher";
+  why: string;
+}
+
+export interface ClientRiskMarker {
+  label: string;
+  value: number | null;
+  unit: string | null;
+  date: string | null;
+}
+
+export interface ClientCardiovascularRisk {
+  model_status: {
+    prevent: ClientPreventStatus;
+    ascvd_pce: string;
+    reason: string;
+    next: string;
+  };
+  inputs: {
+    age: number | null;
+    sex: string | null;
+    bmi: number | null;
+    body_fat_pct: number | null;
+    body_fat_source: string | null;
+    diabetes_by_a1c: boolean | null;
+    markers: Record<string, ClientRiskMarker>;
+    missing_inputs: string[];
+  };
+  prevent: ClientPreventEstimate | null;
+  enhancers: ClientRiskEnhancer[];
+  projections: ClientRiskProjection[];
+  frame: string;
+}
+
 export interface ClientFoodNote {
   id: number;
   meal?: string | null;
@@ -1603,6 +1679,7 @@ export interface ClientApiResponses {
   "/api/health/markers": ClientHealthMarker[];
   "/api/markers/priority": ClientPriorityMarkersResponse;
   "/api/health/standing": ClientHealthStanding;
+  "/api/health/risk": ClientCardiovascularRisk;
   "/api/health/review": ClientHealthReview | null;
   "/api/health/synthesis": ClientHealthSynthesisResponse;
   "/api/directives": ClientDirectivesResponse;

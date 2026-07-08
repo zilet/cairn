@@ -3430,6 +3430,60 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hstand-balance{background:var(--sage-bg);border-radius:var(--radius);padding:15px 18px}
 .hstand-balance p{font-size:.88rem;line-height:1.55;color:var(--ink-2);margin:7px 0 0;font-style:italic}
 
+/* Cardiovascular risk (AHA PREVENT 2023) — a validated clinical % + vascular age,
+   ALWAYS shown paired with the enhancer overlay (never a standalone "younger!" headline;
+   see hrisk-enh-lede-tension for the honesty guard). Informational, not medical advice. */
+.hrisk{background:var(--card);box-shadow:var(--shadow-sm);border-radius:var(--radius);
+  padding:18px;display:grid;gap:16px}
+.hrisk > .lbl{color:var(--muted)}
+.hrisk-vage{display:flex;align-items:baseline;gap:12px}
+.hrisk-vage-num{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 96;
+  font-size:2.6rem;line-height:1;color:var(--ink)}
+.hrisk-vage-label{font-size:.86rem;color:var(--ink-2);display:flex;flex-direction:column;gap:2px}
+.hrisk-vage-sub{font-size:.74rem;color:var(--muted)}
+/* the enhancer overlay — the residual risk a base % misses (ApoB/Lp(a)/hs-CRP/fitness/family) */
+.hrisk-enh{display:grid;gap:11px}
+.hrisk-enh-lede{font-size:.86rem;line-height:1.5;color:var(--ink-2);margin:0}
+.hrisk-enh-lede-tension{color:var(--accent-deep);font-weight:600}
+.hrisk-enh-row{background:var(--card-2);border-radius:var(--radius-sm);padding:12px 14px}
+.hrisk-enh-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px}
+.hrisk-enh-top b{font-size:.9rem;color:var(--ink)}
+.hrisk-enh-find{font-size:.76rem;color:var(--muted)}
+.hrisk-enh-why{font-size:.82rem;line-height:1.5;color:var(--ink-2);margin:6px 0 0}
+.hrisk-enh-lever{font-size:.82rem;color:var(--ink);margin:8px 0 0;background:var(--card);
+  border-radius:var(--radius-sm);padding:8px 11px}
+.hrisk-enh-lever .lbl{display:block;margin-bottom:3px;color:var(--accent-deep)}
+/* the clinical read: total-CVD leads (primary), ASCVD + heart-failure secondary */
+.hrisk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:11px}
+.hrisk-stat{border-top:1px solid var(--line);padding-top:9px;display:flex;flex-direction:column;gap:2px}
+.hrisk-stat-primary{border-top-color:var(--accent)}
+.hrisk-stat-num{font-family:var(--font-display);font-weight:560;font-variation-settings:"opsz" 56;
+  font-size:1.5rem;color:var(--ink)}
+.hrisk-stat-primary .hrisk-stat-num{color:var(--accent-deep)}
+.hrisk-stat-sub{font-size:.72rem;color:var(--muted)}
+/* the compact "what moves it" lever strip */
+.hrisk-levers{border-top:1px solid var(--line);padding-top:12px}
+.hrisk-lev-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.hrisk-lev-chip{font-size:.78rem;color:var(--ink-2);background:var(--card-2);border-radius:999px;
+  padding:6px 11px;border:1px solid var(--line)}
+.hrisk-lev-chip b{color:var(--ink);font-weight:600}
+/* provisional-read assumptions + the calm "sharpen it" nudge into Me → Profile */
+.hrisk-provisional{border-top:1px solid var(--line);padding-top:12px}
+.hrisk-badge{display:inline-block;font-size:.62rem;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--gold-deep);background:var(--card-2);border-radius:999px;
+  padding:3px 9px}
+.hrisk-assumptions{margin:10px 0 0;padding-left:18px;display:grid;gap:5px}
+.hrisk-assumptions li{font-size:.8rem;line-height:1.45;color:var(--ink-2)}
+.hrisk-sharpen{display:inline-block;margin-top:10px;font-size:.82rem}
+.hrisk-frame{font-size:.74rem;line-height:1.5;color:var(--muted);margin:0;border-top:1px solid var(--line);
+  padding-top:12px}
+/* insufficient-inputs — calm, never an error tone */
+.hrisk-missing{gap:10px}
+.hrisk-missing-lead{font-size:.92rem;color:var(--ink-2);margin:0}
+.hrisk-missing-list{margin:4px 0 0;padding-left:18px;display:grid;gap:4px}
+.hrisk-missing-list li{font-size:.82rem;color:var(--ink-2)}
+.hrisk-missing-note{font-size:.82rem;color:var(--muted);margin:4px 0 0}
+
 /* relocated BP capture sheet */
 .bpsheet-ov{position:fixed;inset:0;z-index:80;background:rgba(33,29,23,.42);backdrop-filter:blur(3px);
   display:flex;align-items:center;justify-content:center;padding:18px;animation:detailin var(--dur-2) var(--ease)}
