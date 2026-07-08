@@ -37,6 +37,8 @@ type FamilyControllerApi = {
 };
 
 (() => {
+  const FAMILY_CACHE_KEY = "me:family";
+
   function isRecord(value: unknown): value is FamilyControllerRecord {
     return !!value && typeof value === "object";
   }
@@ -72,11 +74,9 @@ type FamilyControllerApi = {
     };
   }
 
-  async function load(deps: FamilyControllerDeps): Promise<void> {
+  function renderFamilyList(deps: FamilyControllerDeps, people: FamilyControllerMember[]): void {
     const wrap = qs<HTMLElement>(deps, "#flist");
     if (!wrap) return;
-    let people: FamilyControllerMember[] = [];
-    try { people = rows<FamilyControllerMember>(await deps.api("/family")); } catch { people = []; }
     if (deps.state.tab !== "me" || deps.state.meSeg !== "family" || !wrap.isConnected) return;
     if (!Array.isArray(people) || !people.length) {
       wrap.innerHTML = `<div class="empty">No one here yet. Add the people you plan your weeks around.</div>`;
@@ -86,6 +86,31 @@ type FamilyControllerApi = {
     wrap.innerHTML = people.map((f, i) => CairnFamily.familyCardHtml(f, i)).join("");
     wrap.querySelectorAll<HTMLElement>("[data-fedit]").forEach((b) => b.addEventListener("click", () => startEdit(b.closest<HTMLElement>(".fam-card"), deps)));
     wrap.querySelectorAll<HTMLElement>("[data-fdel]").forEach((b) => b.addEventListener("click", () => startDelete(b, deps)));
+  }
+
+  function cachedFamilyRows(): FamilyControllerMember[] {
+    return rows<FamilyControllerMember>(peekCached<FamilyControllerMember[]>(FAMILY_CACHE_KEY)?.data);
+  }
+
+  function repaintCachedFamily(deps: FamilyControllerDeps): void {
+    renderFamilyList(deps, cachedFamilyRows());
+  }
+
+  async function load(deps: FamilyControllerDeps): Promise<void> {
+    const wrap = qs<HTMLElement>(deps, "#flist");
+    if (!wrap) return;
+    const peek = peekCached<FamilyControllerMember[]>(FAMILY_CACHE_KEY);
+    if (peek) renderFamilyList(deps, rows<FamilyControllerMember>(peek.data));
+    try {
+      await cachedApi("/family", {
+        key: FAMILY_CACHE_KEY,
+        onUpgrade: (people, { changed }) => {
+          if (changed || !peek) renderFamilyList(deps, rows<FamilyControllerMember>(people));
+        },
+      });
+    } catch {
+      if (!peek) renderFamilyList(deps, []);
+    }
   }
 
   async function render(deps: FamilyControllerDeps): Promise<void> {
@@ -136,12 +161,22 @@ type FamilyControllerApi = {
       if (!btn) return;
       btn.disabled = true;
       try {
-        const result = record(await deps.api("/family", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+        const tempId = -Date.now();
+        const result = record(await optimisticMutation<FamilyControllerMember[]>({
+          key: FAMILY_CACHE_KEY,
+          apply: (current) => [{ id: tempId, ...body }, ...rows<FamilyControllerMember>(current)],
+          rollback: cachedFamilyRows(),
+          request: () => deps.api("/family", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+          commit: (current, response) => {
+            const row = record(response) as FamilyControllerMember;
+            return row.id ? current.map((member) => member.id === tempId ? row : member) : current;
+          },
+          onChange: () => repaintCachedFamily(deps),
+        }));
         if (result.error) { status.textContent = "Couldn't save that — try again."; return; }
         status.textContent = "";
         deps.toast("Added");
         emptyFamilyForm(deps);
-        load(deps);
       } catch { status.textContent = "Couldn't save that — check your connection."; }
       finally { btn.disabled = false; }
     });
@@ -187,15 +222,25 @@ type FamilyControllerApi = {
       };
       const name = value(".fe-name");
       if (!name) { box.querySelector<HTMLInputElement>(".fe-name")?.focus(); return; }
+      const body = { name, relationship: value(".fe-rel"), birthdate: value(".fe-birth"), color: editColor, notes: value(".fe-notes"), allergies: value(".fe-allergy"), dietary_restrictions: value(".fe-diet") };
       try {
-        await deps.api(`/family/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, relationship: value(".fe-rel"), birthdate: value(".fe-birth"), color: editColor, notes: value(".fe-notes"), allergies: value(".fe-allergy"), dietary_restrictions: value(".fe-diet") }),
+        await optimisticMutation<FamilyControllerMember[]>({
+          key: FAMILY_CACHE_KEY,
+          apply: (current) => rows<FamilyControllerMember>(current).map((member) => String(member.id) === id ? { ...member, ...body } : member),
+          rollback: cachedFamilyRows(),
+          request: () => deps.api(`/family/${id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+          commit: (current, response) => {
+            const row = record(response) as FamilyControllerMember;
+            return row.id ? current.map((member) => String(member.id) === id ? row : member) : current;
+          },
+          onChange: () => repaintCachedFamily(deps),
         });
       } catch { deps.toast("Couldn't save that — try again."); return; }
       deps.toast("Updated");
-      load(deps);
     };
     box.querySelector<HTMLButtonElement>(".fe-save")?.addEventListener("click", save);
     box.querySelector<HTMLButtonElement>(".fe-cancel")?.addEventListener("click", cancel);
@@ -214,8 +259,14 @@ type FamilyControllerApi = {
     const id = row.dataset.fam;
     if (!id) return;
     deps.armDelete(btn, () => {
-      deps.api(`/family/${id}`, { method: "DELETE" })
-        .then(() => { deps.toast("Removed"); load(deps); })
+      optimisticMutation<FamilyControllerMember[]>({
+        key: FAMILY_CACHE_KEY,
+        apply: (current) => rows<FamilyControllerMember>(current).filter((member) => String(member.id) !== id),
+        rollback: cachedFamilyRows(),
+        request: () => deps.api(`/family/${id}`, { method: "DELETE" }),
+        onChange: () => repaintCachedFamily(deps),
+      })
+        .then(() => { deps.toast("Removed"); })
         .catch(() => deps.toast("Couldn't remove that — try again."));
     });
   }

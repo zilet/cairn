@@ -155,6 +155,48 @@ function loadController(overrides = {}) {
     closeDetail: () => { closed += 1; },
     toast: (message) => toasts.push(message),
   };
+  const swr = new Map();
+  context.peekCached = (key) => swr.has(key) ? { data: swr.get(key), fresh: true } : null;
+  context.swrSet = (key, data) => swr.set(key, data);
+  context.cachedApi = async (path, options = {}) => {
+    const data = await context.api(path);
+    if (options.key) swr.set(options.key, data);
+    if (options.onUpgrade) options.onUpgrade(data, { changed: true });
+    return data;
+  };
+  context.paintSWR = async (options = {}) => {
+    const peek = options.peek !== undefined ? options.peek : context.peekCached(options.key);
+    if (peek && options.render) options.render(peek.data, { warm: true });
+    const data = await context.cachedApi(options.path, {
+      key: options.key,
+      onUpgrade: (fresh) => {
+        if (options.render) options.render(fresh, { warm: false });
+      },
+    });
+    return data;
+  };
+  context.optimisticMutation = async (options) => {
+    const previous = swr.has(options.key) ? swr.get(options.key) : null;
+    const optimistic = options.apply(previous);
+    swr.set(options.key, optimistic);
+    if (options.onChange) options.onChange(optimistic, { phase: "optimistic" });
+    try {
+      const result = await options.request();
+      const committed = options.commit ? options.commit(optimistic, result) : undefined;
+      if (committed !== undefined && committed !== null) {
+        swr.set(options.key, committed);
+        if (options.onChange) options.onChange(committed, { phase: "commit" });
+      }
+      return result;
+    } catch (error) {
+      if (previous === null) swr.delete(options.key);
+      else {
+        swr.set(options.key, previous);
+        if (options.onChange) options.onChange(previous, { phase: "rollback" });
+      }
+      throw error;
+    }
+  };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-fuel-client.js"), "utf8"), context);
@@ -262,7 +304,9 @@ test("day fuel controller saves corrected macros and invalidates energy", async 
   assert.deepEqual(harness.toasts, ["Updated"]);
   assert.deepEqual(harness.invalidations, ["progress:energy"]);
   assert.equal(harness.closed, 1);
-  assert.equal(rerenders, 1);
+  assert.equal(rerenders, 0);
+  assert.equal(harness.context.state._dayFuel.entries[0].summary, "Greek yogurt");
+  assert.match(harness.slot.innerHTML, /Greek yogurt/);
 });
 
 test("day fuel controller deletes a note through the guarded delete path", async () => {
@@ -285,5 +329,6 @@ test("day fuel controller deletes a note through the guarded delete path", async
   assert.deepEqual(harness.toasts, ["Removed"]);
   assert.deepEqual(harness.invalidations, ["progress:energy"]);
   assert.equal(harness.closed, 1);
-  assert.equal(rerenders, 1);
+  assert.equal(rerenders, 0);
+  assert.equal(harness.context.state._dayFuel.count, 0);
 });

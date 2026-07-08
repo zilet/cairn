@@ -90,6 +90,37 @@ test("SWR cache can be primed directly from mutation results", () => {
   assert.equal(loaded.storage.has("cairn.swr.v1.today:session:2026-07-01"), true);
 });
 
+test("optimisticMutation primes locally, commits server truth, and rolls back on failure", async () => {
+  const loaded = loadSwrCache();
+  const changes = [];
+
+  await loaded.context.optimisticMutation({
+    key: "me:memory",
+    apply: (current) => [{ id: -1, content: "draft" }, ...(current || [])],
+    request: async () => ({ id: 7, content: "server" }),
+    commit: (current, result) => current.map((row) => row.id === -1 ? result : row),
+    onChange: (data, meta) => changes.push({ data, phase: meta.phase }),
+  });
+
+  assert.deepEqual(loaded.context.peekCached("me:memory").data, [{ id: 7, content: "server" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(changes)), [
+    { data: [{ id: -1, content: "draft" }], phase: "optimistic" },
+    { data: [{ id: 7, content: "server" }], phase: "commit" },
+  ]);
+
+  await assert.rejects(
+    loaded.context.optimisticMutation({
+      key: "me:memory",
+      apply: () => [{ id: 8, content: "bad" }],
+      request: async () => { throw new Error("offline"); },
+      onChange: (data, meta) => changes.push({ data, phase: meta.phase }),
+    }),
+    /offline/,
+  );
+  assert.deepEqual(loaded.context.peekCached("me:memory").data, [{ id: 7, content: "server" }]);
+  assert.equal(changes.at(-1).phase, "rollback");
+});
+
 test("SWR cache keeps markers and recovery payloads memory-only", async () => {
   const loaded = loadSwrCache();
 

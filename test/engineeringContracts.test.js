@@ -806,7 +806,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(uiSegments, /energy:\s*\(\)\s*=>\s*deps\.renderEnergy\(\)/, "Progress Energy must have a segment handler");
   assert.match(uiSegments, /deps\.syncRouteFromState\(\)/, "shared UI events should notify route sync");
   assert.match(ui, /CairnUiSegments/, "UI shell should delegate segmented navigation to the typed segments module");
-  assert.match(dayFuelController, /api\("\/nutrition\/day"\s*\+\s*qs\)/, "Plan Food must fetch the routed local day");
+  assert.match(dayFuelController, /path:\s*"\/nutrition\/day"\s*\+\s*qs/, "Plan Food must fetch the routed local day");
   assert.match(meals, /CairnDayFuelController\.loadDayFuel/, "Plan Food must use the routed day-fuel controller");
   assert.match(healthTabs, /const next = normalizeHealthSeg\(b\.dataset\.hseg\)[\s\S]*setHealthSegActive\(next,\s*deps\)[\s\S]*deps\.syncRouteFromState\?\.\(\)/);
   assert.match(health, /ME_HEALTH_SCREEN\.renderHealth\(\)/);
