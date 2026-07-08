@@ -106,3 +106,55 @@ test("three genuinely-hard days in a row still earns rest (the streak is intact)
   assert.equal(r.signals.consecutive_training_days, 3);
   assert.equal(r.kind, "rest");
 });
+
+test("dayRead maps an ad-hoc pull session by movement group and advances the split", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  repo.savePlanDay(1, "Pull", "Pull", [
+    { exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12 },
+    { exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12 },
+    { exercise: "EZ Bar Curl", sets: 3, rep_low: 10, rep_high: 15 },
+  ]);
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 10 },
+    { exercise: "Triceps Pushdown", sets: 3, rep_low: 10, rep_high: 15 },
+  ]);
+
+  const pullDate = dayBefore(REF, 2);
+  repo.logSetByName({ exercise: "Pull-Up", reps: 8, rir: 2, date: pullDate });
+  repo.logSetByName({ exercise: "One-Arm DB Row", weight: 75, reps: 10, rir: 2, date: pullDate });
+  repo.logSetByName({ exercise: "Hammer Curl", weight: 35, reps: 12, rir: 2, date: pullDate });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "train");
+  assert.equal(r.focus, "Push");
+  assert.equal(r.signals.plan_selection.anchor.method, "group-overlap");
+  assert.equal(r.signals.plan_selection.selected.day_number, 2);
+});
+
+test("dayRead shifts away from a recovering pull rotation toward fresher due push work", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  repo.savePlanDay(1, "Pull", "Pull", [
+    { exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12 },
+    { exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 12 },
+    { exercise: "EZ Bar Curl", sets: 3, rep_low: 10, rep_high: 15 },
+  ]);
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 10 },
+    { exercise: "Triceps Pushdown", sets: 3, rep_low: 10, rep_high: 15 },
+  ]);
+  repo.savePlanDay(3, "Lower", "Lower", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 8 },
+  ]);
+
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5, rir: 2, date: dayBefore(REF, 3), day_number: 3 });
+  repo.addActivity({ type: "row", duration_min: 60, distance_km: 10, date: dayBefore(REF, 1) });
+
+  const r = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(r.kind, "train");
+  assert.equal(r.focus, "Push");
+  assert.equal(r.signals.plan_selection.rotation.focus, "Pull");
+  assert.equal(r.signals.plan_selection.adapted, true);
+  assert.match(r.why, /due|recover/i);
+});

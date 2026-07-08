@@ -45,6 +45,17 @@ test("Today plan selection falls back to the best exercise-name match", () => {
   assert.equal(client.planDayNumberForSession(null, plan), null);
 });
 
+test("Today plan selection falls back to movement character when exercise names differ", () => {
+  const client = loadClient();
+  const split = [
+    { id: 11, day_number: 1, items: [{ exercise: "Lat Pulldown" }, { exercise: "Seated Cable Row" }] },
+    { id: 12, day_number: 2, items: [{ exercise: "Bench Press" }, { exercise: "Overhead Press" }] },
+  ];
+  const session = { sets: [{ exercise: "Pull-Up" }, { exercise: "One-Arm DB Row" }, { exercise: "Hammer Curl" }] };
+
+  assert.equal(client.planDayNumberForSession(session, split), 1);
+});
+
 test("Today plan selection wraps to the next ordered day", () => {
   const client = loadClient();
   const unsorted = [plan[2], plan[0], plan[1]];

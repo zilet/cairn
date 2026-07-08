@@ -4,6 +4,7 @@
 
 type TodayPlanSelectionItem = {
   exercise?: string | null;
+  kind?: string | null;
 };
 
 type TodayPlanSelectionDay = {
@@ -32,6 +33,29 @@ type TodayPlanSelectionDeps = {
 };
 
 (() => {
+  type MovementBucket = "push" | "pull" | "lower" | "core" | "mobility" | "cardio" | "other";
+
+  function movementBucket(name: string | null | undefined): MovementBucket {
+    const n = String(name || "").toLowerCase();
+    if (!n) return "other";
+    if (/\b(run|ride|bike|cycle|swim|row|walk|hike|ruck|cardio|z2|tempo|interval)\b/.test(n)) return "cardio";
+    if (/(90\s*\/\s*90|hip switch|mobility|stretch|cat[\s-]?cow|cossack|thoracic|opener|ankle|wrist prep)/.test(n)) return "mobility";
+    if (/(plank|dead\s*bug|hollow|bird\s*dog|pallof|crunch|sit[\s-]?up|leg raise|rollout|carry|farmer|suitcase)/.test(n)) return "core";
+    if (/(squat|deadlift|lunge|hinge|\brdl\b|leg press|leg curl|leg extension|hip thrust|glute|step[\s-]?up|calf|split squat|bulgarian)/.test(n)) return "lower";
+    if (/(bench|overhead press|\bohp\b|push[\s-]?up|\bdip\b|\bfly\b|lateral raise|press|tricep|pushdown|skullcrusher)/.test(n)) return "push";
+    if (/(\brow\b|pull[\s-]?up|pulldown|chin[\s-]?up|curl|face pull|\blat\b|shrug|pull[\s-]?over|rear delt)/.test(n)) return "pull";
+    return "other";
+  }
+
+  function bucketSet(names: Array<string | null | undefined>): Set<MovementBucket> {
+    const out = new Set<MovementBucket>();
+    for (const name of names) {
+      const bucket = movementBucket(name);
+      if (bucket !== "other" && bucket !== "mobility") out.add(bucket);
+    }
+    return out;
+  }
+
   function planDayNumberForSession(
     session: TodayPlanSelectionSession | null | undefined,
     plan: TodayPlanSelectionDay[] | null | undefined,
@@ -49,7 +73,23 @@ type TodayPlanSelectionDeps = {
       loggedNames.forEach((name) => { if (plannedNames.has(name)) hits++; });
       if (hits && (!best || hits > best.hits)) best = { day_number: day.day_number, hits };
     }
-    return best?.day_number ?? null;
+    if (best) return best.day_number;
+
+    const loggedBuckets = bucketSet((session.sets || []).map((set) => set.exercise));
+    let groupBest: { day_number: number; hits: number; ratio: number } | null = null;
+    if (loggedBuckets.size) {
+      for (const day of days) {
+        const plannedBuckets = bucketSet((day.items || []).filter((item) => item.kind !== "cardio").map((item) => item.exercise));
+        let hits = 0;
+        loggedBuckets.forEach((bucket) => { if (plannedBuckets.has(bucket)) hits++; });
+        if (!hits) continue;
+        const ratio = hits / Math.max(1, Math.min(loggedBuckets.size, plannedBuckets.size));
+        if (!groupBest || hits > groupBest.hits || (hits === groupBest.hits && ratio > groupBest.ratio)) {
+          groupBest = { day_number: day.day_number, hits, ratio };
+        }
+      }
+    }
+    return groupBest?.day_number ?? null;
   }
 
   function nextPlanDayNumber(dayNumber: number | null | undefined, plan: TodayPlanSelectionDay[] | null | undefined): number | null {

@@ -249,3 +249,18 @@ test("muscleVolume EXCLUDES mobility from the landmark / set-count math", () => 
   assert.ok(!vol.some((v) => v.muscle_group === "mobility"), "mobility never inflates the working-set bands");
   assert.ok(vol.some((v) => v.muscle_group === "quads"), "loaded groups are still counted");
 });
+
+test("programBalance includes programmed groups with zero recent logged rows", () => {
+  repo.setProfile({ primary_discipline: "strength" });
+  repo.savePlanDay(1, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 10 },
+    { exercise: "Triceps Pushdown", sets: 3, rep_low: 10, rep_high: 15 },
+  ]);
+
+  const bal = repo.programBalance(2, REF);
+  const groups = new Map(bal.groups.map((g) => [g.group, g]));
+  assert.equal(groups.get("chest")?.sets, 0);
+  assert.equal(groups.get("shoulders")?.status, "due");
+  assert.ok(bal.due.includes("triceps"), "a programmed but unlogged group is due, not invisible");
+});

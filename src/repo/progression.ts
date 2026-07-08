@@ -941,8 +941,41 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
     const status: GroupBalance["status"] = band === "low" || stale ? "due" : band === "high" ? "high" : "ok";
     groups.push({ group, sets: weeklySets, band, last_trained: v.last_date, status });
   }
-  // Surface groups that were NOT trained at all in the window but have a landmark
-  // — they're "due" too (the missing-pattern signal lives in programAdjustments).
+  // Surface groups that are PROGRAMMED but not trained at all in the window too.
+  // Otherwise the brain can show "Pull" because the template says so while the
+  // balance layer quietly omits push/core groups that have zero recent rows. Keep
+  // this plan-scoped: totally unplanned groups still surface through the explicit
+  // missing-pattern gaps below, not as a fake 12-item due wall.
+  const presentGroups = new Set(groups.map((g) => g.group));
+  const plannedGroups = new Set([...plannedMovesByGroup().keys()].filter((g) => MUSCLE_LANDMARKS[g]));
+  if (plannedGroups.size) {
+    const lastByGroup = new Map<string, string>();
+    const lastRows = db.prepare(
+      `SELECT e.muscle_group AS muscle_group, e.name AS exercise, MAX(s.date) AS last_date
+         FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+         JOIN sessions s ON s.id = ls.session_id
+        WHERE s.date <= ?
+        GROUP BY e.id`
+    ).all(today) as any[];
+    for (const r of lastRows) {
+      const g = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(r.exercise);
+      if (!g || g === "mobility" || !MUSCLE_LANDMARKS[g]) continue;
+      const last = String(r.last_date || "");
+      if (last && (!lastByGroup.has(g) || last > (lastByGroup.get(g) ?? ""))) lastByGroup.set(g, last);
+    }
+    for (const group of plannedGroups) {
+      if (presentGroups.has(group)) continue;
+      groups.push({
+        group,
+        sets: 0,
+        band: "low",
+        last_trained: lastByGroup.get(group) ?? null,
+        status: "due",
+      });
+      presentGroups.add(group);
+    }
+  }
+
   groups.sort((a, b) => b.sets - a.sets);
 
   const due = groups.filter((g) => g.status === "due").map((g) => g.group);
@@ -1190,7 +1223,7 @@ function plannedMovesByGroup(): Map<string, PlannedMove[]> {
   ).all() as any[];
   const map = new Map<string, PlannedMove[]>();
   for (const r of rows) {
-    const g = canonicalGroup(r.mg) ?? canonicalGroup(r.name);
+    const g = canonicalGroup(r.mg) ?? classifyMuscleGroup(r.name);
     if (!g) continue;
     (map.get(g) ?? map.set(g, []).get(g)!).push({ exercise: r.name, day: r.day, day_name: r.day_name ?? null });
   }
