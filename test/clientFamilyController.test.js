@@ -377,6 +377,17 @@ test("family controller validates and posts new family members", async () => {
   assert.equal(h.deps.view.querySelector("#flist").querySelector(".fam-card").dataset.fam, "1");
 });
 
+test("family optimistic pending rows do not expose committed edit controls", () => {
+  const h = harness();
+  const html = h.context.CairnFamily.familyCardHtml({ id: -123, name: "Mara" });
+
+  assert.match(html, /fam-name-pending/);
+  assert.doesNotMatch(html, /class="fam-name"/);
+  assert.doesNotMatch(html, /data-fedit/);
+  assert.doesNotMatch(html, /data-fdel/);
+  assert.match(html, /Saving/);
+});
+
 test("family controller edits and deletes existing family members", async () => {
   const h = harness([{ id: 7, name: "Mara", relationship: "daughter", color: "#b4552d" }]);
   await h.context.CairnFamilyController.render(h.deps);

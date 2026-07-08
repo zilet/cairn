@@ -57,6 +57,7 @@ function familyInitials(name: unknown): string {
 function familyCardInner(row: FamilyRow): string {
   const color = familyColor(row.color);
   const age = ageFromBirthdate(row.birthdate);
+  const pending = Number(row.id) < 0;
   const meta = [];
   if (row.relationship) meta.push(escHtml(row.relationship));
   if (age) meta.push(escHtml(age));
@@ -67,16 +68,16 @@ function familyCardInner(row: FamilyRow): string {
   return `<div class="fam-head">
       <span class="fam-mono" style="--fam:${escAttr(color)}">${escHtml(familyInitials(row.name))}</span>
       <div class="fam-id">
-        <span class="fam-name">${escHtml(row.name || "Someone")}</span>
+        <span class="${pending ? "fam-name-pending" : "fam-name"}">${escHtml(row.name || "Someone")}</span>
         ${meta.length ? `<span class="fam-meta">${meta.join(" · ")}</span>` : ""}
       </div>
     </div>
     ${row.notes ? `<div class="sess-line fam-notes">${escHtml(row.notes)}</div>` : ""}
     ${restrictions ? `<div class="sess-line fam-notes" style="color:var(--muted)">${restrictions}</div>` : ""}
-    <div class="hdoc-ctl">
+    ${pending ? `<div class="sess-line fam-notes" style="color:var(--muted)">Saving...</div>` : `<div class="hdoc-ctl">
       <button class="iconbtn" data-fedit="${escAttr(row.id)}" title="edit">✎</button>
       <button class="iconbtn fam-del" data-fdel="${escAttr(row.id)}" title="delete">×</button>
-    </div>`;
+    </div>`}`;
 }
 
 function familyCardHtml(row: FamilyRow, index?: number): string {
