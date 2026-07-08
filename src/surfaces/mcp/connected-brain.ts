@@ -21,11 +21,13 @@ import {
   getHealthSynthesisView,
   getLatestHealthReview,
   getMarkerHistory,
+  healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
   healthFocus,
   healthStanding,
   prioritizeMarkers,
+  recordHealthOutcomeAnnotations,
   symptomMarkerLinks,
 } from "../../domain/health/index.js";
 import { getOutcomeLearnings } from "../../domain/person/index.js";
@@ -58,6 +60,16 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here.",
     {},
     async () => asText(doctorLoopRead({ refresh: true }))
+  );
+
+  server.tool(
+    "get_health_outcomes",
+    "Intervention-to-outcome read: compares follow-up marker readings after prior connected-brain directives/intervention anchors and labels each as improving, unchanged, or worsening. Directional only, not proof of causation, no diagnosis, and no automatic directive changes. Pass record:true only when the user explicitly wants the read saved as an insight + learning memory.",
+    {
+      limit: z.number().int().optional(),
+      record: z.boolean().optional(),
+    },
+    async ({ limit, record }) => asText(record ? recordHealthOutcomeAnnotations(limit) : healthOutcomeAnnotations(limit))
   );
 
   server.tool(
