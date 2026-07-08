@@ -95,6 +95,17 @@ test("cardiovascular risk renderer pairs a favorable vascular age with the enhan
   assert.match(html, /24\.5%/);
   assert.match(html, /4\.1%/);
   assert.match(html, /2\.0%/);
+  // the visualization is bound to the real PREVENT total-CVD risk and lever
+  // projections, with the optimized path framed as visual-only.
+  assert.match(html, /hrisk-viz/);
+  assert.match(html, /30-year risk ribbon/);
+  assert.match(html, /Current PREVENT path/);
+  assert.match(html, /Optimized lever path/);
+  assert.match(html, /10 yr 7\.2%/);
+  assert.match(html, /30 yr 24\.5%/);
+  assert.match(html, /ApoB particle reduction 95mg\/dL to 80mg\/dL/);
+  assert.match(html, /not a separate clinical risk score/);
+  assert.doesNotMatch(html, /optimized[^<]{0,30}\d+\.\d%/i);
   // the heart-failure 30-yr horizon is null → shows the horizons_note, not a number
   assert.match(html, /30-year estimates are validated only for ages 30–59/);
   // levers strip
@@ -135,6 +146,7 @@ test("cardiovascular risk renderer surfaces a provisional read with assumptions 
   const html = risk.renderCardiovascularRiskHtml(fixture);
 
   assert.match(html, /Provisional read/);
+  assert.match(html, /hrisk-viz-provisional/);
   assert.match(html, /smoking/);
   assert.match(html, /non-smoker/);
   assert.match(html, /Smoking status isn't captured yet &lt;reason&gt;/);
@@ -170,6 +182,7 @@ test("cardiovascular risk renderer keeps the insufficient-inputs state calm, nev
   assert.match(html, /Add these to see your heart-age read/);
   assert.match(html, /smoking status &lt;x&gt;/);
   assert.match(html, /eGFR/);
+  assert.doesNotMatch(html, /hrisk-viz/);
   assert.doesNotMatch(html, /error/i);
   assert.doesNotMatch(html, /couldn't load/i);
 });
