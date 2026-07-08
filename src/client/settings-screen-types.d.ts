@@ -68,3 +68,10 @@ type SettingsScreenArtStats = import("../contracts/client-api.js").ClientArtStat
 type SettingsScreenGarminSyncResponse = import("../contracts/client-api.js").ClientGarminSyncResponse;
 
 type SettingsScreenSliceKey = ClientSettingsSection;
+
+type SettingsScreenBundle = {
+  rawData: unknown;
+  rawArtStats: unknown;
+  agentStats: unknown;
+  learnings: unknown;
+};
