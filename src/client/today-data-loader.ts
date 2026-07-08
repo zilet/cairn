@@ -83,11 +83,19 @@ type TodayDataLoaderApi = {
 
     if (!warm && !deps.root.querySelector(".today-wrap")) deps.root.innerHTML = deps.todaySkeleton();
 
-    if (!deps.state.plan.length) deps.state.plan = (peeks.plan ? peeks.plan.data : await deps.api("/plan")) as unknown[];
-    revalidate("/plan", "plan");
-
     const isToday = deps.state.logDate === deps.localISO();
-    const session = peeks.session ? peeks.session.data : await deps.api("/sessions?date=" + deps.state.logDate);
+    const planPromise = deps.state.plan.length
+      ? Promise.resolve(deps.state.plan)
+      : peeks.plan
+        ? Promise.resolve(peeks.plan.data)
+        : deps.api("/plan");
+    const sessionPromise = peeks.session
+      ? Promise.resolve(peeks.session.data)
+      : deps.api("/sessions?date=" + deps.state.logDate);
+
+    const [plan, session] = await Promise.all([planPromise, sessionPromise]);
+    if (!deps.state.plan.length) deps.state.plan = plan as unknown[];
+    revalidate("/plan", "plan");
     revalidate("/sessions?date=" + deps.state.logDate, sessKey);
 
     const [stats, profile, exercises] = await Promise.all([statsPromise, profilePromise, exercisesPromise]);

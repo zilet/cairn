@@ -28,6 +28,17 @@ test("Today starts non-dependent summary reads before later render work", () => 
   assert.match(today, /todayDataLoader\.load/);
 });
 
+test("Today starts plan and session requests together on the cold path", () => {
+  const planPromise = todayDataLoader.indexOf("const planPromise");
+  const sessionPromise = todayDataLoader.indexOf("const sessionPromise");
+  const awaitBoth = todayDataLoader.indexOf("Promise.all([planPromise, sessionPromise])");
+  const assignPlan = todayDataLoader.indexOf("deps.state.plan = plan as unknown[]");
+  assert.ok(planPromise > -1, "plan promise is started explicitly");
+  assert.ok(sessionPromise > planPromise, "session promise starts immediately after plan promise");
+  assert.ok(awaitBoth > sessionPromise, "plan and session are awaited together");
+  assert.ok(assignPlan > awaitBoth, "plan state is assigned after both independent reads are in flight");
+});
+
 test("Today SWR-caches progression and invalidates it when set truth changes", () => {
   assert.match(todayPlanSessionData, /deps\.cachedApi\("\/program\/progression\?day="/);
   assert.match(todayPlanSessionData, /key:\s*`program:progression:\$\{day\}`/);

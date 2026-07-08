@@ -18,15 +18,57 @@ function settingsDelay(ms: number): Promise<void> {
 const SET_SEG = CairnSettingsSurface.SET_SEG;
 const settingsStatus = CairnSettingsSurface.statusHelpers({ relTime, absDate });
 const { garminStatusLine, agentHealthCard, agentOpLabel, agentActivityCard, noticedCard, agentChipState } = settingsStatus;
+const SETTINGS_SCREEN_CACHE_KEY = "settings:screen";
 
-async function renderSettings(): Promise<void> {
-  headerTitle.textContent = "Settings";
+async function fetchSettingsBundle(): Promise<SettingsScreenBundle> {
   const [rawData, rawArtStats, agentStats, learnings] = await Promise.all([
     api("/settings"),
     api("/art/stats").catch(() => null),
-    api("/agent-stats").catch(() => null), // 404s on a backend without telemetry → degrade silently
-    api("/learnings").catch(() => null),   // F2: outcome learnings → "What Cairn has noticed"; absent on an older backend
+    api("/agent-stats").catch(() => null), // 404s on a backend without telemetry -> degrade silently
+    api("/learnings").catch(() => null),   // outcome learnings -> "What Cairn has noticed"; absent on older backends
   ]);
+  return { rawData, rawArtStats, agentStats, learnings };
+}
+
+function settingsBundleSame(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+async function renderSettings(): Promise<void> {
+  headerTitle.textContent = "Settings";
+  const token = ++pollToken;
+  const peek = peekCached<SettingsScreenBundle>(SETTINGS_SCREEN_CACHE_KEY);
+  if (peek) {
+    renderSettingsBundle(peek.data);
+    if (!peek.fresh) markRefreshing(true);
+    void fetchSettingsBundle()
+      .then((bundle) => {
+        swrSet(SETTINGS_SCREEN_CACHE_KEY, bundle);
+        if (token !== pollToken || state.tab !== "settings") return;
+        markRefreshing(false);
+        if (document.body.classList.contains("savebar-open")) return;
+        if (!settingsBundleSame(peek.data, bundle)) skelSwap(() => renderSettingsBundle(bundle));
+      })
+      .catch(() => {
+        if (token === pollToken && state.tab === "settings") markRefreshing(false);
+      });
+    return;
+  }
+
+  if (!view.querySelector("#setSlice")) view.innerHTML = loadingState("Opening Settings…");
+  const bundle = await fetchSettingsBundle();
+  swrSet(SETTINGS_SCREEN_CACHE_KEY, bundle);
+  if (token !== pollToken || state.tab !== "settings") return;
+  renderSettingsBundle(bundle);
+}
+
+function renderSettingsBundle(bundle: SettingsScreenBundle): void {
+  const { rawData, rawArtStats, agentStats, learnings } = bundle;
   const data = CairnSettingsSurface.settingsData(rawData);
   const artStats = rawArtStats ? (rawArtStats as SettingsScreenArtStats) : null;
   const s = data.settings;
@@ -96,6 +138,7 @@ async function renderSettings(): Promise<void> {
     if (wm.gemini_api_key.trim()) body.gemini_api_key = wm.gemini_api_key.trim();
     if (wm.garmin_password.trim()) body.garmin_password = wm.garmin_password.trim();
     await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    swrInvalidate(SETTINGS_SCREEN_CACHE_KEY);
     artEnabled = wm.art_enabled; // take effect on the next render, no reload
     return true;
   };

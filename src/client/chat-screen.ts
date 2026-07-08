@@ -10,6 +10,17 @@ function chatScreenMessages(value: unknown): ChatScreenMessage[] {
   return chatScreenRows<ChatScreenMessage>(value);
 }
 
+const CHAT_LIVE_CACHE_KEY = "chat:live:limit:200";
+
+function chatMessagesSame(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
 // ---------- Chat ----------
 function chatStarterChips(): ChatStarterChipsApi {
   return (globalThis as unknown as { CairnChatStarterChips: ChatStarterChipsApi }).CairnChatStarterChips;
@@ -76,7 +87,10 @@ function chatHeaderDeps(): ChatHeaderControllerDeps {
     state,
     currentToken: () => pollToken,
     clearFuelContext: () => chatFuelContextApi().clear(),
-    drawEmptyChat: () => drawChat([]),
+    drawEmptyChat: () => {
+      swrSet(CHAT_LIVE_CACHE_KEY, []);
+      drawChat([]);
+    },
     enqueueJob,
     openJobStream,
     openChatHistory,
@@ -97,7 +111,6 @@ async function renderChat(): Promise<void> {
 
   const log = $<HTMLElement>("#chatlog");
   if (!log) return;
-  log.innerHTML = loadingState("Catching up…");
   wireChatJump(log, $<HTMLElement>("#chatJump"));
   measureChatTop();
   requestAnimationFrame(measureChatTop); // re-measure once layout/fonts settle
@@ -129,13 +142,33 @@ async function renderChat(): Promise<void> {
     ensureMonitor: chatMonitorEnsure,
   });
 
+  const cachedMessages = peekCached<ChatScreenMessage[]>(CHAT_LIVE_CACHE_KEY);
+  if (cachedMessages) {
+    if (freshBtn) freshBtn.hidden = !cachedMessages.data.length;
+    chatFuelContextApi().seed(cachedMessages.data);
+    drawChat(cachedMessages.data);
+    void loadChatFuel(token);
+    if (!cachedMessages.fresh) markRefreshing(true);
+  } else {
+    log.innerHTML = loadingState("Catching up…");
+  }
+
   // Hydrate the log in the background -- the shell above is already interactive.
   let msgs: ChatScreenMessage[] = [];
-  try { msgs = chatScreenMessages(await api("/chat?limit=200")); } catch { msgs = []; }
+  let fetched = false;
+  try {
+    msgs = chatScreenMessages(await api("/chat?limit=200"));
+    fetched = true;
+  } catch {
+    msgs = [];
+  }
   if (token !== pollToken || !log.isConnected) return; // navigated away / re-rendered
+  markRefreshing(false);
+  if (!fetched && cachedMessages) return;
+  swrSet(CHAT_LIVE_CACHE_KEY, msgs);
   if (freshBtn) freshBtn.hidden = !msgs.length;
   chatFuelContextApi().seed(msgs);
-  drawChat(msgs);
+  if (!cachedMessages || !chatMessagesSame(cachedMessages.data, msgs)) drawChat(msgs);
   void loadChatFuel(token);
   // Rebuild any in-flight + queued turns from the server and resume streaming.
   void chatReconnect();
