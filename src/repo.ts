@@ -34,6 +34,7 @@ export * from "./repo/symptom-links.js"; // deterministic symptom → off-marker
 export * from "./repo/evidence.js";
 export * from "./repo/intelligence.js";
 export * from "./repo/program-state.js";
+export * from "./repo/training-playbook.js"; // plateau/adherence playbook suggestions for plan evolution
 export * from "./repo/progression.js";
 export * from "./repo/program-blocks.js";
 export * from "./repo/exercise-variations.js";
