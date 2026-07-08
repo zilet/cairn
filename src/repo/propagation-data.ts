@@ -258,7 +258,11 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   // zoneNameTrustworthy. Male-oriented; zone-only (no lifestyle lever), informational.
   { keys: ["psa", "prostate specific antigen", "prostate-specific antigen"], unit: "ng/mL", optimal: [0, 4.0], dir: "high", actionable: false, label: "PSA" },
   { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP" },
-  { keys: ["diastolic", "bp diastolic"], unit: "mmHg", optimal: [60, 80], dir: "high", actionable: true, label: "Diastolic BP" },
+  // "diastolic blood pressure" is listed explicitly so longest-match-wins beats the
+  // Systolic zone's generic "blood pressure" key (14 chars) — otherwise a marker named
+  // "Diastolic Blood Pressure" mis-routes to the Systolic band [105,120]. The bare
+  // "diastolic" key still catches "Diastolic BP" / "Diastolic".
+  { keys: ["diastolic blood pressure", "diastolic", "bp diastolic"], unit: "mmHg", optimal: [60, 80], dir: "high", actionable: true, label: "Diastolic BP" },
   // Endurance / cardiorespiratory fitness markers (v35). These come from wearables
   // (injected into prioritizeMarkers from the recovery summary) but also match a lab
   // VO2max test. Optimal-ZONE framing only — higher VO2max is better, lower resting

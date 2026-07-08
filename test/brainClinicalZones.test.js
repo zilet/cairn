@@ -74,6 +74,19 @@ test("an off-band calcium fires the albumin-correction interpretive watch note",
   assert.ok(cal.every((d) => !!d.uncertain), "interpretive, flagged uncertain");
 });
 
+test("diastolic BP is held to the diastolic band, not the systolic one (longest-match collision guard)", () => {
+  // "Diastolic Blood Pressure" contains the Systolic zone's generic "blood pressure"
+  // key (14 chars), which used to outrank "diastolic" (9 chars) under longest-match-wins,
+  // mis-routing every diastolic reading to the systolic band [105,120].
+  assert.deepEqual(z("Diastolic Blood Pressure")?.optimal, [60, 80]);
+  assert.equal(z("Diastolic Blood Pressure")?.label, "Diastolic BP");
+  assert.deepEqual(z("Diastolic BP")?.optimal, [60, 80]);
+  assert.equal(z("Diastolic")?.label, "Diastolic BP");
+  // The systolic side must stay correct.
+  assert.deepEqual(z("Systolic Blood Pressure")?.optimal, [105, 120]);
+  assert.deepEqual(z("Blood Pressure")?.optimal, [105, 120], "a bare BP reading still reads as systolic");
+});
+
 test("these zones carry NO numeric score anywhere (constitution)", () => {
   for (const name of ["Cystatin C", "Calcium", "Cortisol", "DHEA-S", "PSA"]) {
     const zone = z(name, { sex: "male", age: 55 });
