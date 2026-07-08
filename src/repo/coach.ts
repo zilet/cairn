@@ -29,6 +29,10 @@ import { getTrajectory } from "./trajectory.js";
 import { journeyRead } from "./journey.js";
 import { activeContextEffect } from "./context-effect.js";
 import { nextBestStep } from "./next-step.js";
+// Read-only reads folded into the conductor as external FocusCandidate producers (K3).
+import { cardiovascularRiskRead } from "./risk.js";
+import { trainingBenchmarkRead } from "./training-milestones.js";
+import { listDueAttention } from "./attention.js";
 import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
 
 // ---------- coach context (shared by prompts) ----------
@@ -633,6 +637,13 @@ function getCoachContextFromSnapshot(): CoachContext {
   const contextTodayView = brainSignal("context_today", () => { try { return activeContextEffect(); } catch { return { active: [], any: false, reduce_load: false, resolve_candidates: [] }; } });
   const trainingSignalsView = brainSignal("training_signals", () => trainingSignals(recentSessions));
   const contextEventsView = brainSignal("context_events:active", () => { try { return listContextEvents({ activeOnly: true }) as any[]; } catch { return []; } });
+  // External producer reads the CONDUCTOR arbitrates (K3), computed once here and
+  // threaded in so coachingFocus stays a pure function: the PREVENT cardiovascular
+  // risk read, benchmark milestones, and the K5 due-attention re-checks (labs/DEXA/
+  // lifts). journeyView.milestones is reused for the journey producer (no recompute).
+  const cardioRiskView = brainSignal("cardio_risk", () => { try { return cardiovascularRiskRead(); } catch { return null; } });
+  const benchmarkMilestonesView = brainSignal(`benchmark_milestones:${today}`, () => { try { return trainingBenchmarkRead(today, { programState: fullProgramState }).milestones; } catch { return []; } });
+  const dueAttentionView = brainSignal(`due_attention:${today}`, () => { try { return listDueAttention(today, { limit: 12 }); } catch { return []; } });
   // THE CONDUCTOR (the whole-athlete analog of healthFocus): arbitrate every domain
   // read into ONE sequenced focus — a single lead lever, 1-2 parallel levers, an
   // explicit "later", the cross-domain connections, and one batched retest — so the
@@ -662,6 +673,13 @@ function getCoachContextFromSnapshot(): CoachContext {
         injuries: contextEventsView.filter((e: any) => e?.kind === "injury"),
         autoregulation: trainingSignalsView?.autoregulation ?? null,
         contextToday: contextTodayView,
+        // External producers (K3): the whole picture — journey, benchmarks, the K5
+        // due re-checks, and the PREVENT cardiovascular risk — arbitrated by the ONE
+        // conductor alongside the domain levers, so there is a single "what's next" voice.
+        journeyMilestones: Array.isArray((journeyView as any)?.milestones) ? (journeyView as any).milestones : [],
+        benchmarkMilestones: benchmarkMilestonesView,
+        dueAttention: dueAttentionView,
+        cardioRisk: cardioRiskView,
       });
     } catch {
       return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null, caveat: null };
