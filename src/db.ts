@@ -111,7 +111,10 @@ CREATE TABLE IF NOT EXISTS profile (
   height_cm REAL,
   height_in REAL,                        -- height in inches (v59) — mirrors the app's lb/in convention; source-of-truth for BMI/WHtR/Navy body-fat. NULL = unset (BMI degrades to a "set your height" hint)
   weight_lb REAL,
+  start_weight_lb REAL,                  -- journey baseline weight (v56); explicit baseline, not re-derived on every weigh-in
+  start_date TEXT,                       -- journey baseline date (v56)
   goal_weight_lb REAL,
+  goal_bodyfat_pct REAL,                 -- journey target body-fat percent (v56)
   goal_date TEXT,
   goal_mode TEXT,                        -- lose | maintain | gain — the journey's shape (v41). NULL = derived from goal_weight (back-compat)
   activity_factor REAL DEFAULT 1.5,
@@ -381,6 +384,27 @@ CREATE TABLE IF NOT EXISTS body_measurements (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_body_measurements_date ON body_measurements(date);
+
+-- Body-composition / nutrition journey phases. Transitions are proposed first:
+-- status='proposed' rows wait for explicit user apply; only status='active'
+-- shapes the current journey read.
+CREATE TABLE IF NOT EXISTS journey_phases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,                    -- cut | maintenance | diet_break | reverse | gain
+  start_date TEXT,
+  end_date TEXT,
+  start_weight_lb REAL,
+  target_weight_lb REAL,
+  start_bodyfat_pct REAL,
+  target_bodyfat_pct REAL,
+  planned_rate_lb_wk REAL,
+  status TEXT NOT NULL DEFAULT 'proposed', -- proposed | active | completed | discarded
+  reason TEXT,
+  source TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_journey_phases_status ON journey_phases(status, start_date);
 
 -- Home / clinic blood-pressure readings. Unlike labs, these are point-in-time
 -- measurements; the exact timestamp matters for repeated home averages and for

@@ -547,6 +547,11 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "agent_runs", "input_tokens INTEGER");
     addColumn(db, "agent_runs", "output_tokens INTEGER");
   } },
+  { version: 56, name: "profile-journey-baseline", up: (db) => {
+    addColumn(db, "profile", "start_weight_lb REAL");
+    addColumn(db, "profile", "start_date TEXT");
+    addColumn(db, "profile", "goal_bodyfat_pct REAL");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {

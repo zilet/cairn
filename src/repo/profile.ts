@@ -313,6 +313,19 @@ export function getPrimaryDiscipline(): "strength" | "endurance" | "hybrid" {
   return normalizeDiscipline(p?.primary_discipline, p?.primary_discipline);
 }
 
+function clampProfileNumber(v: any, min: number, max: number): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(Math.min(max, Math.max(min, n)) * 10) / 10;
+}
+
+function cleanISODate(v: any): string | null {
+  if (v == null || v === "") return null;
+  const s = String(v).trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
 export function setProfile(p: any) {
   const cur = getProfile() || {};
   // Height in inches (v59) — mirrors the app's lb/in convention. Same nullable
@@ -336,7 +349,10 @@ export function setProfile(p: any) {
     height_cm: p.height_cm ?? cur.height_cm ?? (heightIn != null ? Math.round(heightIn * 2.54 * 10) / 10 : null),
     height_in: heightIn,
     weight_lb: p.weight_lb ?? cur.weight_lb ?? null,
+    start_weight_lb: p.start_weight_lb !== undefined ? clampProfileNumber(p.start_weight_lb, 50, 700) : (cur.start_weight_lb ?? null),
+    start_date: p.start_date !== undefined ? cleanISODate(p.start_date) : (cur.start_date ?? null),
     goal_weight_lb: p.goal_weight_lb ?? cur.goal_weight_lb ?? null,
+    goal_bodyfat_pct: p.goal_bodyfat_pct !== undefined ? clampProfileNumber(p.goal_bodyfat_pct, 3, 70) : (cur.goal_bodyfat_pct ?? null),
     goal_date: p.goal_date ?? cur.goal_date ?? null,
     // The journey's shape (v41). Same nullable contract as the free-text fields:
     // explicit null/'' clears it (→ derived), undefined leaves intact, a valid
@@ -364,17 +380,18 @@ export function setProfile(p: any) {
       : (cur.endurance_goal_json ?? null),
   };
   db.prepare(
-    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, goal_weight_lb, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO profile (id, name, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        name=excluded.name,
        sex=excluded.sex, age=excluded.age, height_cm=excluded.height_cm, height_in=excluded.height_in, weight_lb=excluded.weight_lb,
-       goal_weight_lb=excluded.goal_weight_lb, goal_date=excluded.goal_date, goal_mode=excluded.goal_mode,
+       start_weight_lb=excluded.start_weight_lb, start_date=excluded.start_date,
+       goal_weight_lb=excluded.goal_weight_lb, goal_bodyfat_pct=excluded.goal_bodyfat_pct, goal_date=excluded.goal_date, goal_mode=excluded.goal_mode,
        activity_factor=excluded.activity_factor, notes=excluded.notes, about_me=excluded.about_me,
        allergies=excluded.allergies, dietary_restrictions=excluded.dietary_restrictions,
        primary_discipline=excluded.primary_discipline, endurance_sport=excluded.endurance_sport,
        endurance_goal_json=excluded.endurance_goal_json, updated_at=datetime('now')`
-  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.goal_weight_lb, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
+  ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.start_weight_lb, merged.start_date, merged.goal_weight_lb, merged.goal_bodyfat_pct, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json);
   return getProfile();
 }
 
@@ -533,6 +550,89 @@ export function listWeight(limit = 60) {
 // ---------- goal feasibility check ----------
 export const KCAL_PER_LB = 3500;
 
+export interface BodyFatEstimate {
+  body_fat_pct: number;
+  source: "tape" | "garmin" | "profile";
+  date: string | null;
+  estimated: boolean;
+}
+
+function heightInFor(p: any): number | null {
+  const hin = Number(p?.height_in);
+  if (Number.isFinite(hin) && hin >= 24 && hin <= 108) return hin;
+  const hcm = Number(p?.height_cm);
+  if (Number.isFinite(hcm) && hcm >= 60 && hcm <= 275) return hcm / 2.54;
+  return null;
+}
+
+function navyTapeBodyFat(p: any): BodyFatEstimate | null {
+  const heightIn = heightInFor(p);
+  if (heightIn == null) return null;
+  const row = db
+    .prepare(`SELECT date, waist_in, hip_in, neck_in FROM body_measurements ORDER BY date DESC, id DESC LIMIT 1`)
+    .get() as any;
+  if (!row) return null;
+  const waist = Number(row.waist_in);
+  const neck = Number(row.neck_in);
+  const hip = Number(row.hip_in);
+  const female = String(p?.sex || "male").toLowerCase() === "female";
+  let value: number | null = null;
+  if (!female && Number.isFinite(waist) && Number.isFinite(neck) && waist > neck && heightIn > 0) {
+    value = 86.01 * Math.log10(waist - neck) - 70.041 * Math.log10(heightIn) + 36.76;
+  } else if (female && Number.isFinite(waist) && Number.isFinite(hip) && Number.isFinite(neck) && waist + hip > neck && heightIn > 0) {
+    value = 163.205 * Math.log10(waist + hip - neck) - 97.684 * Math.log10(heightIn) - 78.387;
+  }
+  if (value == null || !Number.isFinite(value)) return null;
+  value = Math.max(3, Math.min(70, Math.round(value * 10) / 10));
+  return { body_fat_pct: value, source: "tape", date: row.date ?? null, estimated: true };
+}
+
+function latestGarminBodyFat(): BodyFatEstimate | null {
+  const row = db
+    .prepare(`SELECT date, body_fat_pct FROM garmin_daily_metrics WHERE body_fat_pct IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1`)
+    .get() as any;
+  const value = Number(row?.body_fat_pct);
+  if (!Number.isFinite(value) || value < 3 || value > 70) return null;
+  return { body_fat_pct: Math.round(value * 10) / 10, source: "garmin", date: row.date ?? null, estimated: false };
+}
+
+export function currentBodyFatEstimate(prof?: any): BodyFatEstimate | null {
+  const p = prof ?? getProfile();
+  if (!p) return null;
+  return navyTapeBodyFat(p) ?? latestGarminBodyFat();
+}
+
+export function leannessAwareLossRates(weightLb: number, bodyFatPct?: number | null) {
+  const w = Number(weightLb);
+  const baseMax = Number.isFinite(w) ? 0.01 * w : 0;
+  const baseIdeal = Number.isFinite(w) ? 0.0075 * w : 0;
+  const bf = bodyFatPct == null ? Number.NaN : Number(bodyFatPct);
+  let maxPct = 0.01;
+  let idealPct = 0.0075;
+  let reason = "standard lean-safe cut";
+  if (Number.isFinite(bf)) {
+    if (bf < 15) {
+      maxPct = 0.0035;
+      idealPct = 0.0025;
+      reason = "very lean — taper the deficit hard to protect lean mass";
+    } else if (bf < 20) {
+      maxPct = 0.006;
+      idealPct = 0.0045;
+      reason = "leaner phase — slower loss protects training and lean mass";
+    } else if (bf < 25) {
+      maxPct = 0.008;
+      idealPct = 0.006;
+      reason = "mid-cut — slightly slower than the early phase";
+    }
+  }
+  return {
+    safe_max_rate_lb: +Math.min(baseMax, Math.max(0, w * maxPct)).toFixed(2),
+    lean_ideal_rate_lb: +Math.min(baseIdeal, Math.max(0, w * idealPct)).toFixed(2),
+    reason,
+    body_fat_pct: Number.isFinite(bf) ? Math.round(bf * 10) / 10 : null,
+  };
+}
+
 export function computeGoalCheck(prof?: any) {
   const p = prof ?? getProfile();
   if (!p || !p.weight_lb || !p.height_cm || !p.age) {
@@ -546,9 +646,13 @@ export function computeGoalCheck(prof?: any) {
   const mode = effectiveGoalMode(p);
   const lbsToLose = p.goal_weight_lb != null ? Math.max(0, p.weight_lb - p.goal_weight_lb) : 0;
 
-  // lean-safe loss: ~0.5-1% bodyweight/week; >1%/wk risks lean mass.
-  const safeMaxRate = +(0.01 * p.weight_lb).toFixed(2);   // upper bound (lb/wk)
-  const leanIdealRate = +(0.0075 * p.weight_lb).toFixed(2); // recommended (lb/wk)
+  // lean-safe loss: early cuts can run near ~0.5-1% BW/week, but the ceiling
+  // tapers as body fat falls. A tape/Garmin body-fat estimate is an estimate, so
+  // it only narrows the ceiling; absent BF keeps the old conservative default.
+  const bodyFat = currentBodyFatEstimate(p);
+  const lossRates = leannessAwareLossRates(p.weight_lb, bodyFat?.body_fat_pct ?? null);
+  const safeMaxRate = lossRates.safe_max_rate_lb;       // upper bound (lb/wk)
+  const leanIdealRate = lossRates.lean_ideal_rate_lb;   // recommended (lb/wk)
 
   let requested: any = null;
   let recommended: {
@@ -651,7 +755,15 @@ export function computeGoalCheck(prof?: any) {
     // The effective journey shape (v41) — drives the day-intake target framing,
     // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
     goal_mode: mode,
-    safe_max_rate_lb: safeMaxRate, requested, recommended, message,
+    safe_max_rate_lb: safeMaxRate,
+    leanness_rate: {
+      body_fat_pct: lossRates.body_fat_pct,
+      body_fat_source: bodyFat?.source ?? null,
+      reason: lossRates.reason,
+      safe_max_rate_lb: safeMaxRate,
+      lean_ideal_rate_lb: leanIdealRate,
+    },
+    requested, recommended, message,
     // The persisted accepted target (or null) + the EFFECTIVE target every surface
     // should read (accepted wins, formula is the fallback/floor). Additive.
     accepted_target: accepted,
@@ -730,4 +842,3 @@ export function projectGoalPace(p: any, lbsToLose: number): {
   }
   return { trend_lb_wk: trend, projected_goal_date, projection_text };
 }
-
