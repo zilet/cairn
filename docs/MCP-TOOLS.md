@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**186 tools.**
+**187 tools.**
 
 | Tool | Description |
 |---|---|
@@ -59,6 +59,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_day_intake` | A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining }. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one (a loss/gain goal, or the maintenance anchor) — else null (descriptive-only). 'remaining', never 'consumed'; no score. ?date defaults to the user's local today. |
 | `get_day_read` | Read what KIND of day today should be — train, easy, or rest — as a calm SUGGESTION (never a verdict, never a score). Synthesizes recent training, recovery, check-ins and life context. The agentic read writes the human sentence; if no agent is reachable it falls back to a deterministic floor. override reshapes the read ('rough night' / 'short on time' / 'I want to train anyway'). |
 | `get_dexa_targeting` | DEXA-driven targeting — maps the body scan's regional read (lean asymmetry, low ALMI/FFMI, low BMD, visceral/central fat) to concrete TRAINING + one NUTRITION target, each with a plain 'path to your next scan'. T/Z-scores + ALMI are recognized reference reads (never a score); BMD/visceral stay informational (clinician-framed). {available:false} with no DEXA. |
+| `get_doctor_loop` | Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here. |
 | `get_endurance_goal` | The user's endurance OBJECTIVE (v37), computed. mode 'race' carries a dated event with weeks/days-to-race + a periodization phase hint (base/build/sharpen/taper); mode 'standing' is an ongoing readiness target with no date. null when unset. Orthogonal to primary_discipline. Set it via set_profile { endurance_goal: {…} }. |
 | `get_endurance_prs` | Endurance PRs from logged cardio, GROUPED BY SPORT (a best is only meaningful within its modality): each sport's longest distance + duration, plus fastest pace (min/km at 1/5/10k/half/full) for foot sports (run/walk) or best speed (km/h) for cycling/swim/row. `sports[]` leads with the user's primary endurance sport (profile endurance_sport, default running); flat top-level fields mirror that lead sport for back-compat. Optional `type` filter. Plain numbers, never a score — the endurance analogue of the strength est-1RM. |
 | `get_equipment` | The user's persisted equipment/preference profile (free text) + the parsed equipment types. Variation/swap suggestions rank by what they can actually load. |

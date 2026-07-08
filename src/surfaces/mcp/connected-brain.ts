@@ -22,6 +22,7 @@ import {
   getLatestHealthReview,
   getMarkerHistory,
   cardiovascularRiskRead,
+  doctorLoopRead,
   healthFocus,
   healthStanding,
   prioritizeMarkers,
@@ -50,6 +51,13 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "Cardiovascular risk input/enhancer read: collects PREVENT/PCE inputs, names missing clinical inputs, surfaces ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history risk enhancers, and gives counterfactual lever projections. It does not emit a risk percentage unless sourced coefficients are vendored; informational, not medical advice.",
     {},
     async () => asText(cardiovascularRiskRead())
+  );
+
+  server.tool(
+    "get_doctor_loop",
+    "Doctor-loop read: structured missing-workup recommendations plus lab/DEXA retest attention derived through the adaptive attention engine. Informational, not medical advice; no PREVENT/PCE risk coefficients are computed here.",
+    {},
+    async () => asText(doctorLoopRead({ refresh: true }))
   );
 
   server.tool(

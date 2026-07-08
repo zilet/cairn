@@ -23,6 +23,7 @@ import {
   getLatestHealthReview,
   getMarkerHistory,
   cardiovascularRiskRead,
+  doctorLoopRead,
   getSettings,
   healthFocus,
   healthStanding,
@@ -48,6 +49,10 @@ connectedBrainRouter.get("/health/standing", (req, res) => {
 });
 
 connectedBrainRouter.get("/health/risk", (_req, res) => res.json(cardiovascularRiskRead()));
+
+// Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention
+// rows derived through the adaptive attention engine. Informational, not medical advice.
+connectedBrainRouter.get("/health/doctor-loop", (_req, res) => res.json(doctorLoopRead({ refresh: true })));
 
 // Latest review or null — a soft lookup like /sessions?date= (200 + null on
 // absence, never 404): "no review yet" is a normal state the PWA renders.
