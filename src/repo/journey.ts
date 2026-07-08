@@ -36,6 +36,19 @@ export interface JourneyTransitionSuggestion {
   planned_rate_lb_wk: number | null;
 }
 
+export type JourneyMilestoneKind = "weight_loss" | "goal_progress" | "goal_reached" | "bodyfat_band" | "bodyfat_goal";
+
+export interface JourneyMilestone {
+  id: string;
+  kind: JourneyMilestoneKind;
+  label: string;
+  detail: string | null;
+  achieved_date: string | null;
+  achieved_at: string | null;
+  value: number | null;
+  priority: number;
+}
+
 const KINDS = new Set<JourneyPhaseKind>(["cut", "maintenance", "diet_break", "reverse", "gain"]);
 const STATUSES = new Set<JourneyPhaseStatus>(["proposed", "active", "completed", "discarded"]);
 
@@ -160,6 +173,184 @@ function phaseAgeDays(phase: any, today: string): number | null {
   return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.round((b - a) / 864e5)) : null;
 }
 
+function daysAfterISO(date: string, days: number): string | null {
+  const t = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + days * 864e5).toISOString().slice(0, 10);
+}
+
+function firstWeightAtOrBelow(targetWeight: number, startDate?: string | null): any {
+  if (!Number.isFinite(targetWeight)) return null;
+  const since = iso(startDate);
+  if (since) {
+    return (
+      db
+        .prepare(
+          `SELECT date, weight_lb, created_at FROM bodyweight_log
+            WHERE date >= ? AND weight_lb <= ?
+            ORDER BY date ASC, id ASC LIMIT 1`,
+        )
+        .get(since, targetWeight) || null
+    );
+  }
+  return (
+    db
+      .prepare(
+        `SELECT date, weight_lb, created_at FROM bodyweight_log
+          WHERE weight_lb <= ?
+          ORDER BY date ASC, id ASC LIMIT 1`,
+      )
+      .get(targetWeight) || null
+  );
+}
+
+function latestWeightPoint(): any {
+  return db.prepare(`SELECT date, weight_lb, created_at FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() || null;
+}
+
+function measurementCreatedAt(date?: string | null): string | null {
+  const d = iso(date);
+  if (!d) return null;
+  const row = db.prepare(`SELECT created_at FROM body_measurements WHERE date = ? ORDER BY id DESC LIMIT 1`).get(d) as any;
+  return row?.created_at ?? null;
+}
+
+function addMilestone(out: JourneyMilestone[], milestone: JourneyMilestone) {
+  if (!milestone.label.trim()) return;
+  if (out.some((m) => m.id === milestone.id)) return;
+  out.push(milestone);
+}
+
+export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
+  const p = getProfile();
+  if (!p) return [];
+
+  const phase = activeJourneyPhase();
+  const latestWeight = latestWeightPoint();
+  const currentWeight = Number(latestWeight?.weight_lb ?? p.weight_lb);
+  const startWeight = Number(p.start_weight_lb ?? phase?.start_weight_lb);
+  const goalWeight = Number(p.goal_weight_lb ?? phase?.target_weight_lb);
+  const startDate = iso(p.start_date) ?? iso(phase?.start_date);
+  const bodyFat = currentBodyFatEstimate(p);
+  const startBf = Number(phase?.start_bodyfat_pct);
+  const targetBf = Number(p.goal_bodyfat_pct ?? phase?.target_bodyfat_pct);
+  const out: JourneyMilestone[] = [];
+
+  if (Number.isFinite(startWeight) && Number.isFinite(currentWeight) && currentWeight < startWeight) {
+    const lost = Math.round((startWeight - currentWeight) * 10) / 10;
+    const fiveLb = Math.floor(lost / 5) * 5;
+    if (fiveLb >= 5) {
+      const target = startWeight - fiveLb;
+      const hit = firstWeightAtOrBelow(target, startDate) ?? latestWeight;
+      addMilestone(out, {
+        id: `weight-loss-${fiveLb}`,
+        kind: "weight_loss",
+        label: `${fiveLb} lb down`,
+        detail: `From ${Math.round(startWeight * 10) / 10} lb to ${Math.round(currentWeight * 10) / 10} lb.`,
+        achieved_date: iso(hit?.date) ?? iso(latestWeight?.date) ?? today,
+        achieved_at: hit?.created_at ?? latestWeight?.created_at ?? null,
+        value: fiveLb,
+        priority: Math.min(84, 54 + Math.floor(fiveLb / 5) * 4),
+      });
+    }
+  }
+
+  if (
+    Number.isFinite(startWeight) &&
+    Number.isFinite(currentWeight) &&
+    Number.isFinite(goalWeight) &&
+    goalWeight < startWeight
+  ) {
+    const total = startWeight - goalWeight;
+    const progress = Math.max(0, Math.min(1, (startWeight - currentWeight) / total));
+    for (const pct of [75, 50, 25]) {
+      if (progress < pct / 100) continue;
+      const target = startWeight - total * (pct / 100);
+      const hit = firstWeightAtOrBelow(target, startDate) ?? latestWeight;
+      addMilestone(out, {
+        id: `goal-progress-${pct}`,
+        kind: "goal_progress",
+        label: `${pct}% of the way to goal weight`,
+        detail: `${Math.round((startWeight - currentWeight) * 10) / 10} of ${Math.round(total * 10) / 10} lb is off.`,
+        achieved_date: iso(hit?.date) ?? iso(latestWeight?.date) ?? today,
+        achieved_at: hit?.created_at ?? latestWeight?.created_at ?? null,
+        value: pct,
+        priority: 58 + Math.round(pct / 5),
+      });
+    }
+    if (currentWeight <= goalWeight + 0.5) {
+      const hit = firstWeightAtOrBelow(goalWeight + 0.5, startDate) ?? latestWeight;
+      addMilestone(out, {
+        id: "goal-weight-reached",
+        kind: "goal_reached",
+        label: "Goal weight reached",
+        detail: "Arrival now becomes a maintenance phase to stabilize.",
+        achieved_date: iso(hit?.date) ?? iso(latestWeight?.date) ?? today,
+        achieved_at: hit?.created_at ?? latestWeight?.created_at ?? null,
+        value: Math.round(currentWeight * 10) / 10,
+        priority: 96,
+      });
+    }
+  }
+
+  if (bodyFat && Number.isFinite(startBf) && bodyFat.body_fat_pct < startBf) {
+    const band = [35, 30, 25, 20, 15].find((x) => startBf > x && bodyFat.body_fat_pct <= x);
+    if (band != null) {
+      addMilestone(out, {
+        id: `bodyfat-band-${band}`,
+        kind: "bodyfat_band",
+        label: `Under ${band}% body-fat estimate`,
+        detail: `${bodyFat.source} estimate: ${bodyFat.body_fat_pct}%.`,
+        achieved_date: bodyFat.date ?? today,
+        achieved_at: bodyFat.source === "tape" ? measurementCreatedAt(bodyFat.date) : null,
+        value: band,
+        priority: 72,
+      });
+    }
+  }
+
+  if (bodyFat && Number.isFinite(targetBf) && targetBf > 0 && bodyFat.body_fat_pct <= targetBf + 0.3) {
+    addMilestone(out, {
+      id: "bodyfat-goal-reached",
+      kind: "bodyfat_goal",
+      label: "Target body-fat estimate reached",
+      detail: `${bodyFat.source} estimate: ${bodyFat.body_fat_pct}%.`,
+      achieved_date: bodyFat.date ?? today,
+      achieved_at: bodyFat.source === "tape" ? measurementCreatedAt(bodyFat.date) : null,
+      value: bodyFat.body_fat_pct,
+      priority: 94,
+    });
+  }
+
+  if (phase?.status === "active") {
+    const age = phaseAgeDays(phase, today);
+    if (age != null && age >= 28) {
+      const weeks = Math.floor(age / 7);
+      const milestoneWeeks = Math.floor(weeks / 4) * 4;
+      if (milestoneWeeks >= 4) {
+        addMilestone(out, {
+          id: `phase-${phase.kind}-${milestoneWeeks}w`,
+          kind: "goal_progress",
+          label: `${milestoneWeeks} weeks into this ${String(phase.kind).replace(/_/g, " ")} phase`,
+          detail: "The phase is established enough to read its trend calmly.",
+          achieved_date: daysAfterISO(phase.start_date, milestoneWeeks * 7),
+          achieved_at: null,
+          value: milestoneWeeks,
+          priority: Math.min(62, 42 + milestoneWeeks),
+        });
+      }
+    }
+  }
+
+  return out.sort((a, b) => b.priority - a.priority || String(b.achieved_date ?? "").localeCompare(String(a.achieved_date ?? ""))).slice(0, 8);
+}
+
+export function latestJourneyMilestoneSince(stampSql: string): JourneyMilestone | null {
+  const stamp = String(stampSql || "").trim();
+  if (!stamp) return null;
+  return journeyMilestones().find((m) => m.achieved_at != null && String(m.achieved_at) > stamp) ?? null;
+}
+
 export function journeyTransitionSuggestion(today = localDateISO()): JourneyTransitionSuggestion | null {
   const p = getProfile();
   if (!p) return null;
@@ -235,6 +426,7 @@ export function journeyRead(today = localDateISO()) {
     active_phase: activeJourneyPhase(),
     proposed_phases: listJourneyPhases("proposed"),
     transition_suggestion: journeyTransitionSuggestion(today),
+    milestones: journeyMilestones(today),
     leanness_rate: (goal as any)?.leanness_rate ?? null,
   };
 }

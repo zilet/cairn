@@ -26,6 +26,7 @@ import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-co
 // the existing coach↔intelligence import; resolved at call time, never at module init).
 import { reactionModelForCoach } from "./reaction-model.js";
 import { getTrajectory } from "./trajectory.js";
+import { journeyRead } from "./journey.js";
 import { activeContextEffect } from "./context-effect.js";
 import { nextBestStep } from "./next-step.js";
 import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
@@ -329,6 +330,7 @@ interface CoachContextSignals {
   runVarietyView: any;
   enduranceTestsView: any;
   trajectoryView: any;
+  journeyView: any;
   coachingFocusView: any;
   bodyCompositionView: any;
   // Computed once + shared: the active life-context effect, the training-signals
@@ -384,8 +386,8 @@ function buildPersonSlice(
 // Nutrition goal + today's fuel. Both goal reads reuse the already-fetched profile.
 function buildNutritionSlice(
   signals: CoachContextSignals
-): Pick<CoachContext, "goal" | "goal_mode" | "day_intake" | "meal_plan"> {
-  const { profile } = signals;
+): Pick<CoachContext, "goal" | "goal_mode" | "journey" | "day_intake" | "meal_plan"> {
+  const { profile, journeyView } = signals;
   return {
     goal: computeGoalCheck(profile), // reuse the profile already fetched above
     // The journey's SHAPE (v41) — lose | maintain | gain. Always present (even when
@@ -393,6 +395,10 @@ function buildNutritionSlice(
     // the framing: a deficit for 'lose', anchor-to-TDEE for 'maintain', a lean
     // surplus for 'gain'. Drives renderGoalMode and the fuel-card target.
     goal_mode: effectiveGoalMode(profile),
+    // Body-composition journey read: active/proposed phase, transition suggestion,
+    // leanness-aware rate, and calm milestones. Computed once and exposed to prompts
+    // as context only; suggestions/phases never auto-apply.
+    journey: journeyView,
     // Today's persisted food log. This is independent of the live chat thread, so
     // a breakfast logged before "Fresh start" still shapes the next nutrition turn.
     day_intake: dayIntakeForCoach(),
@@ -620,6 +626,7 @@ function getCoachContextFromSnapshot(): CoachContext {
   const runVarietyView = brainSignal(`run_variety:${today}`, () => { try { return runVarietyRead(today); } catch { return null; } });
   const enduranceTestsView = brainSignal(`endurance_tests:${today}`, () => { try { return enduranceTestsDue(today); } catch { return []; } });
   const trajectoryView = brainSignal("trajectory", () => getTrajectory());
+  const journeyView = brainSignal(`journey:${today}`, () => journeyRead(today));
   // The active life-context effect, the training-signals rollup and the active context
   // events, computed ONCE and shared by the person/training slices AND the conductor
   // (life/soreness awareness) so nothing recomputes them.
@@ -681,6 +688,7 @@ function getCoachContextFromSnapshot(): CoachContext {
     runVarietyView,
     enduranceTestsView,
     trajectoryView,
+    journeyView,
     coachingFocusView,
     bodyCompositionView,
     contextTodayView,

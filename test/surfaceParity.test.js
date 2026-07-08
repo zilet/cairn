@@ -27,6 +27,7 @@ const MCP_SOURCE_FILES = [
   "src/surfaces/mcp/garmin.ts",
   "src/surfaces/mcp/health-metrics.ts",
   "src/surfaces/mcp/health-records.ts",
+  "src/surfaces/mcp/journey.ts",
   "src/surfaces/mcp/memory-learning.ts",
   "src/surfaces/mcp/nutrition.ts",
   "src/surfaces/mcp/operator.ts",
@@ -74,6 +75,7 @@ function restResourceTokens() {
   addRouteTokens(tokens, read("src/routes/garmin.ts"), "garminRouter");
   addRouteTokens(tokens, read("src/routes/health-docs.ts"), "healthDocsRouter", "/health-docs");
   addRouteTokens(tokens, read("src/routes/health-metrics.ts"), "healthMetricsRouter");
+  addRouteTokens(tokens, read("src/routes/journey.ts"), "journeyRouter");
   addRouteTokens(tokens, read("src/routes/memory-learning.ts"), "memoryLearningRouter");
   addRouteTokens(tokens, read("src/routes/nutrition.ts"), "nutritionRouter");
   addRouteTokens(tokens, read("src/routes/operator.ts"), "operatorRouter");
