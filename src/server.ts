@@ -16,6 +16,7 @@ import { setAgentRunSink, loadAgents, invalidateAgentConfigured } from "./agents
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
 import { reportScriptCspHash } from "./report.js";
 import { runWithTimeZone } from "./tz.js";
+import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import * as repo from "./repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -100,7 +101,7 @@ app.use((req, _res, next) => {
   // boot-warm + nightly Brief precompute — which run OUTSIDE any request — compute
   // "today" in the device's calendar, not the server's. Best-effort; never blocks.
   try { repo.recordClientTimeZone(tz); } catch {}
-  return runWithTimeZone(tz, () => next());
+  return runWithBrainSnapshot(() => runWithTimeZone(tz, () => next()));
 });
 
 // REST API

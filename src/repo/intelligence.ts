@@ -9,6 +9,8 @@ import { programBalance } from "./progression.js";
 import { type TrainingLoad, dayLoad } from "./training-read.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup } from "./exercise-canon.js";
 import { recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
+import { invalidateBrainSnapshot } from "../brain/snapshot.js";
+import { resolveDayReadRule, type DayReadRule } from "./brain/day-read-rules.js";
 
 // ============================================================================
 // STUBS for the Stage-2 feature teams. Each has the FINAL signature + return
@@ -538,64 +540,88 @@ export function dayRead(date?: string, recovery?: any): DayRead {
   const todayLoad = dayLoad(d, { countsCardio });
   (signals as any).trained_today = trainedToday || !!bigActivity;
   (signals as any).today_load = todayLoad;
-  if ((trainedToday || bigActivity) && (todayLoad === "hard" || todayLoad === "moderate")) {
-    // Name the work for the deterministic `why` (the floor when the agent's offline).
-    // A logged lifting session reads as "session"; otherwise name the activity (run/
-    // ride). When BOTH happened, "session" wins so the lift isn't erased by the run.
-    const label = trainedToday ? "session" : (bigActivity && bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "session");
-    return { kind: "done", focus: null, why: `You already got a solid ${label} in today — the rest of the day is for recovery.`, est_minutes: null, signals };
-  }
-  // Earned rest comes from genuinely-loading days stacking up (intensity-aware
-  // now), or an acute recovery signal (short sleep / a run-down check-in). A
-  // weekly-mileage spike is NO LONGER a forced rest — for a hybrid athlete with a
-  // noisy chronic base it fired far too readily (and "rest" contradicted its own
-  // "an easier day" wording). It now rides as a caveat on the train read below,
-  // so the agent still sees `volume_spike` and the athlete still gets their day.
-  if (consec >= 3 || lowSleep || lowSubjective) {
-    return {
-      kind: "rest",
-      focus: null,
-      why: consec >= 3
-        ? "You've trained hard several days running — let it consolidate."
-        : lowSleep
-          ? "Sleep's run short lately — an easier day will serve you better."
-          : "You're feeling run-down today — rest is the smart call.",
-      est_minutes: null,
-      signals,
-    };
-  }
-  // An easy/light effort already done today (a short walk, a recovery spin a lifter
-  // doesn't count as their real work) — acknowledge it without telling them to rest.
-  if (trainedToday || bigActivity) {
-    return { kind: "easy", focus: null, why: "You've already moved today — keep the rest of it easy.", est_minutes: 20, signals };
-  }
-  // A genuine mileage spike WHILE actively stacking loading days earns an easier
-  // day (not a forced rest) so the running absorbs. Gated on consec>=1: if
-  // yesterday was already a recovery/easy day, the spike has been answered — don't
-  // stack easy on easy, let them train (the spike still rides as a caveat below).
-  if (volumeSpike && consec >= 1) {
-    return { kind: "easy", focus: null, why: "Your running's ramped this week — an easy day lets it absorb.", est_minutes: 25, signals };
-  }
-  const sd = suggestedPlanDay();
-  if (sd) {
-    // Still a green-light to train (a suggestion, never a gate), but voice the soft
-    // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
-    // a reset, and/or running ramped this week (keep today's miles easy).
-    const caveats: string[] = [];
-    if (reduceItem) caveats.push(
-      reduceItem.kind === "injury"
-        ? `you've got ${String(reduceItem.title || "an injury").toLowerCase()} to work around — train around it and skip anything that aggravates it`
-        : "there's something to ease around right now, so keep the load conservative",
-    );
-    if (sd.selection?.adapted && sd.selection?.reason) caveats.push(String(sd.selection.reason));
-    if (anticipateDeload) caveats.push("recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset");
-    if (volumeSpike) caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
-    const why = caveats.length
-      ? `You're good to train — ${caveats.join("; and ")}.`
-      : "You're recovered and due — good to go.";
-    return { kind: "train", focus: sd.focus, why, est_minutes: 60, signals };
-  }
-  return { kind: "easy", focus: null, why: "Nothing programmed — some easy movement is plenty today.", est_minutes: 20, signals };
+  const rules: DayReadRule[] = [
+    {
+      name: "logged-loading-work-today",
+      resolve: () => {
+        if (!((trainedToday || bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"))) return null;
+        // Name the work for the deterministic `why` (the floor when the agent's offline).
+        // A logged lifting session reads as "session"; otherwise name the activity (run/
+        // ride). When BOTH happened, "session" wins so the lift isn't erased by the run.
+        const label = trainedToday ? "session" : (bigActivity && bigActivity.type && bigActivity.type !== "other" ? String(bigActivity.type) : "session");
+        return { kind: "done", focus: null, why: `You already got a solid ${label} in today — the rest of the day is for recovery.`, est_minutes: null, signals };
+      },
+    },
+    {
+      name: "earned-rest",
+      resolve: () => {
+        // Earned rest comes from genuinely-loading days stacking up (intensity-aware
+        // now), or an acute recovery signal (short sleep / a run-down check-in). A
+        // weekly-mileage spike is NO LONGER a forced rest — for a hybrid athlete with a
+        // noisy chronic base it fired far too readily (and "rest" contradicted its own
+        // "an easier day" wording). It now rides as a caveat on the train read below,
+        // so the agent still sees `volume_spike` and the athlete still gets their day.
+        if (!(consec >= 3 || lowSleep || lowSubjective)) return null;
+        return {
+          kind: "rest",
+          focus: null,
+          why: consec >= 3
+            ? "You've trained hard several days running — let it consolidate."
+            : lowSleep
+              ? "Sleep's run short lately — an easier day will serve you better."
+              : "You're feeling run-down today — rest is the smart call.",
+          est_minutes: null,
+          signals,
+        };
+      },
+    },
+    {
+      name: "logged-light-work-today",
+      resolve: () => {
+        // An easy/light effort already done today (a short walk, a recovery spin a lifter
+        // doesn't count as their real work) — acknowledge it without telling them to rest.
+        if (!(trainedToday || bigActivity)) return null;
+        return { kind: "easy", focus: null, why: "You've already moved today — keep the rest of it easy.", est_minutes: 20, signals };
+      },
+    },
+    {
+      name: "endurance-volume-spike",
+      resolve: () => {
+        // A genuine mileage spike WHILE actively stacking loading days earns an easier
+        // day (not a forced rest) so the running absorbs. Gated on consec>=1: if
+        // yesterday was already a recovery/easy day, the spike has been answered — don't
+        // stack easy on easy, let them train (the spike still rides as a caveat below).
+        if (!(volumeSpike && consec >= 1)) return null;
+        return { kind: "easy", focus: null, why: "Your running's ramped this week — an easy day lets it absorb.", est_minutes: 25, signals };
+      },
+    },
+    {
+      name: "suggested-plan-day",
+      resolve: () => {
+        const sd = suggestedPlanDay();
+        if (!sd) return null;
+        // Still a green-light to train (a suggestion, never a gate), but voice the soft
+        // caveats so it's coach-level, not a blunt "go": fatigue quietly building toward
+        // a reset, and/or running ramped this week (keep today's miles easy).
+        const caveats: string[] = [];
+        if (reduceItem) caveats.push(
+          reduceItem.kind === "injury"
+            ? `you've got ${String(reduceItem.title || "an injury").toLowerCase()} to work around — train around it and skip anything that aggravates it`
+            : "there's something to ease around right now, so keep the load conservative",
+        );
+        if (sd.selection?.adapted && sd.selection?.reason) caveats.push(String(sd.selection.reason));
+        if (anticipateDeload) caveats.push("recovery's drifting below your norm, so a couple more hard days and you'll likely want a reset");
+        if (volumeSpike) caveats.push("your running's ramped this week, so keep today's miles easy and don't pile on hard intensity");
+        const why = caveats.length
+          ? `You're good to train — ${caveats.join("; and ")}.`
+          : "You're recovered and due — good to go.";
+        return { kind: "train", focus: sd.focus, why, est_minutes: 60, signals };
+      },
+    },
+  ];
+
+  return resolveDayReadRule(rules)
+    ?? { kind: "easy", focus: null, why: "Nothing programmed — some easy movement is plenty today.", est_minutes: 20, signals };
 }
 
 // ---------- the forward look (day-ahead heads-up) ----------
@@ -763,6 +789,7 @@ export function saveDayRead(date: string, read: any): void {
 
 export function invalidateDayRead(date?: string): void {
   const d = date || localDateISO();
+  invalidateBrainSnapshot("day_read");
   try { db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d); } catch {}
 }
 

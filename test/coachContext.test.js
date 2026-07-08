@@ -7,6 +7,10 @@ import {
   COACH_CONTEXT_REQUIRED_KEYS,
   isCoachContextEnvelope,
 } from "../dist/brain/coach-context-contract.js";
+import {
+  activeBrainSnapshotStats,
+  runWithBrainSnapshot,
+} from "../dist/brain/snapshot.js";
 
 function reset() {
   resetTables(
@@ -82,6 +86,34 @@ test("coach context contract recognizes the current prompt envelope", () => {
   for (const key of COACH_CONTEXT_ARRAY_KEYS) {
     assert.ok(Array.isArray(ctx[key]), `coach-context array contract failed for ${key}`);
   }
+});
+
+test("request-scoped brain snapshot reuses coach-context signal computations", () => {
+  const stats = runWithBrainSnapshot(() => {
+    const first = repo.getCoachContext();
+    const second = repo.getCoachContext();
+    assert.equal(isCoachContextEnvelope(first), true);
+    assert.equal(isCoachContextEnvelope(second), true);
+    assert.deepEqual(second.day_read, first.day_read);
+    return activeBrainSnapshotStats();
+  });
+
+  assert.equal(stats.active, true);
+  for (const key of [
+    "today",
+    "profile",
+    "garmin:coach:14",
+    "recovery:14",
+    "recent_sessions:20",
+    "program_state",
+    "coaching_focus",
+    "body_metrics",
+  ]) {
+    assert.equal(stats.computes[key], 1, `${key} should compute once in the request scope`);
+  }
+  const dayReadKeys = Object.keys(stats.computes).filter((key) => key.startsWith("day_read:"));
+  assert.equal(dayReadKeys.length, 1, "expected one date-scoped day-read signal");
+  assert.equal(stats.computes[dayReadKeys[0]], 1, "day-read should compute once in the request scope");
 });
 
 test("coach context prompt arrays stay bounded", () => {

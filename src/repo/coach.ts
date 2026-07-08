@@ -28,6 +28,7 @@ import { reactionModelForCoach } from "./reaction-model.js";
 import { getTrajectory } from "./trajectory.js";
 import { activeContextEffect } from "./context-effect.js";
 import { nextBestStep } from "./next-step.js";
+import { brainSignal, runWithBrainSnapshot } from "../brain/snapshot.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -563,42 +564,46 @@ function buildBrainSlice(
 }
 
 export function getCoachContext(): CoachContext {
-  const today = localDateISO();
+  return runWithBrainSnapshot(() => getCoachContextFromSnapshot());
+}
+
+function getCoachContextFromSnapshot(): CoachContext {
+  const today = brainSignal("today", () => localDateISO());
   // Compute the Garmin summary and the unified recovery view ONCE, then thread
   // them through the recovery + day_read keys so a single context build doesn't
   // fan out into getGarminCoachSummary three times.
-  const garmin = getGarminCoachSummary(14);
-  const recovery = getRecoverySummary(14, garmin);
-  const recentSessions = getRecentSessions(20);
-  const profile = getProfile() as any;
+  const garmin = brainSignal("garmin:coach:14", () => getGarminCoachSummary(14));
+  const recovery = brainSignal("recovery:14", () => getRecoverySummary(14, garmin));
+  const recentSessions = brainSignal("recent_sessions:20", () => getRecentSessions(20));
+  const profile = brainSignal("profile", () => getProfile() as any);
   // Compute the day-read ONCE so both day_read and the progression digest below
   // reference the same read (the progression is for the day this read points at).
-  const dayReadView = getCachedDayRead(today) ?? dayRead(today, recovery);
+  const dayReadView = brainSignal(`day_read:${today}`, () => getCachedDayRead(today) ?? dayRead(today, recovery));
   // Compute the volume balance + acute load ONCE and thread them into
   // programAdjustments — which would otherwise recompute both from scratch.
-  const programBal = programBalance(2, today);
-  const recentLoad = recentMuscleLoad(2, today);
+  const programBal = brainSignal(`program_balance:2:${today}`, () => programBalance(2, today));
+  const recentLoad = brainSignal(`recent_load:2:${today}`, () => recentMuscleLoad(2, today));
   // Compute the deterministic program-state ONCE and share it: the bounded coach
   // view AND the performance/capacity read both read from the same snapshot (and
   // the same recovery), so a single context build never computes program-state twice.
-  const fullProgramState = getProgramState(undefined, recovery);
+  const fullProgramState = brainSignal("program_state", () => getProgramState(undefined, recovery));
   // The active periodization block, computed ONCE and threaded into the run plan +
   // the test-week cadence so neither re-reads it.
-  const activeBlock = getActiveBlock();
+  const activeBlock = brainSignal("program_block:active", () => getActiveBlock());
   // Running brain (the endurance counterpart to program_state/performance): real
   // HR-zone bpm bands + this week's deterministic periodized run mix, both computed
   // ONCE from the recovery/programState/block already built above so nothing recomputes.
-  const runZonesView = (() => { try { return runZones({ profile, recovery }); } catch { return null; } })();
+  const runZonesView = brainSignal("run_zones", () => { try { return runZones({ profile, recovery }); } catch { return null; } });
   // Compute the run plan / DEXA targeting / test-week ONCE here, so both the context
   // keys below AND the programAdjustments digest reuse them (no double compute —
   // dexaTargeting reads healthStanding(), the heaviest of the three).
-  const runPlanView = (() => { try { return weeklyRunPlan(today, { programState: fullProgramState, recovery, block: activeBlock, zones: runZonesView ?? undefined }); } catch { return null; } })();
-  const dexaTargetingView = (() => { try { return dexaTargeting({ profile }); } catch { return { available: false, targets: [], lead: null, next_dexa_focus: null }; } })();
-  const testWeekView = (() => { try { return testWeekDue(today, { programState: fullProgramState, block: activeBlock }); } catch { return null; } })();
+  const runPlanView = brainSignal(`run_plan:${today}`, () => { try { return weeklyRunPlan(today, { programState: fullProgramState, recovery, block: activeBlock, zones: runZonesView ?? undefined }); } catch { return null; } });
+  const dexaTargetingView = brainSignal("dexa_targeting", () => { try { return dexaTargeting({ profile }); } catch { return { available: false, targets: [], lead: null, next_dexa_focus: null }; } });
+  const testWeekView = brainSignal(`test_week:${today}`, () => { try { return testWeekDue(today, { programState: fullProgramState, block: activeBlock }); } catch { return null; } });
   // Hoist the domain reads the CONDUCTOR arbitrates so they're computed ONCE here and
   // shared by both the context keys below and coachingFocus() (no double compute).
-  const healthFocusView = healthFocus();
-  const bodyCompositionView = (() => {
+  const healthFocusView = brainSignal("health_focus", () => healthFocus());
+  const bodyCompositionView = brainSignal(`body_composition:${today}`, () => {
     try {
       const priority = prioritizeMarkers();
       const weights = listWeight(1) as any[];
@@ -608,25 +613,25 @@ export function getCoachContext(): CoachContext {
     } catch {
       return null;
     }
-  })();
-  const performanceView = performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal });
-  const programAdjustmentsView = programAdjustments(programBal, recentLoad, { runPlan: runPlanView, dexa: dexaTargetingView, testWeek: testWeekView }).slice(0, 6);
-  const groupsTrajectoryView = (() => { try { return muscleGroupTrajectory(today, { programState: fullProgramState }); } catch { return null; } })();
-  const runVarietyView = (() => { try { return runVarietyRead(today); } catch { return null; } })();
-  const enduranceTestsView = (() => { try { return enduranceTestsDue(today); } catch { return []; } })();
-  const trajectoryView = getTrajectory();
+  });
+  const performanceView = brainSignal(`performance:${today}`, () => performanceStanding(today, { programState: fullProgramState, recovery, balance: programBal }));
+  const programAdjustmentsView = brainSignal(`program_adjustments:${today}`, () => programAdjustments(programBal, recentLoad, { runPlan: runPlanView, dexa: dexaTargetingView, testWeek: testWeekView }).slice(0, 6));
+  const groupsTrajectoryView = brainSignal(`groups_trajectory:${today}`, () => { try { return muscleGroupTrajectory(today, { programState: fullProgramState }); } catch { return null; } });
+  const runVarietyView = brainSignal(`run_variety:${today}`, () => { try { return runVarietyRead(today); } catch { return null; } });
+  const enduranceTestsView = brainSignal(`endurance_tests:${today}`, () => { try { return enduranceTestsDue(today); } catch { return []; } });
+  const trajectoryView = brainSignal("trajectory", () => getTrajectory());
   // The active life-context effect, the training-signals rollup and the active context
   // events, computed ONCE and shared by the person/training slices AND the conductor
   // (life/soreness awareness) so nothing recomputes them.
-  const contextTodayView = (() => { try { return activeContextEffect(); } catch { return { active: [], any: false, reduce_load: false, resolve_candidates: [] }; } })();
-  const trainingSignalsView = trainingSignals(recentSessions);
-  const contextEventsView = (() => { try { return listContextEvents({ activeOnly: true }) as any[]; } catch { return []; } })();
+  const contextTodayView = brainSignal("context_today", () => { try { return activeContextEffect(); } catch { return { active: [], any: false, reduce_load: false, resolve_candidates: [] }; } });
+  const trainingSignalsView = brainSignal("training_signals", () => trainingSignals(recentSessions));
+  const contextEventsView = brainSignal("context_events:active", () => { try { return listContextEvents({ activeOnly: true }) as any[]; } catch { return []; } });
   // THE CONDUCTOR (the whole-athlete analog of healthFocus): arbitrate every domain
   // read into ONE sequenced focus — a single lead lever, 1-2 parallel levers, an
   // explicit "later", the cross-domain connections, and one batched retest — so the
   // brain AND the interface lead with the same priority instead of a flood of co-equal
   // blocks. Pure, null-safe; degrades to {available:false} on a thin athlete.
-  const coachingFocusView = (() => {
+  const coachingFocusView = brainSignal("coaching_focus", () => {
     try {
       return coachingFocus({
         discipline: { primary: (profile?.primary_discipline as string) || "strength", endurance_sport: profile?.endurance_sport ?? null },
@@ -654,7 +659,7 @@ export function getCoachContext(): CoachContext {
     } catch {
       return { available: false, headline: "", lead: null, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null, caveat: null };
     }
-  })();
+  });
   const signals: CoachContextSignals = {
     today,
     profile,
@@ -693,7 +698,7 @@ export function getCoachContext(): CoachContext {
     ...buildRunningSlice(signals),
     ...buildHealthSlice(signals),
     ...buildBrainSlice(signals),
-    body_metrics: (() => { try { return bodyMetricsContextSlice(); } catch { return null; } })(),
+    body_metrics: brainSignal("body_metrics", () => { try { return bodyMetricsContextSlice(); } catch { return null; } }),
   };
 }
 
