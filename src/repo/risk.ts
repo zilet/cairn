@@ -97,6 +97,91 @@ function lpaElevated(marker: RiskMarker): boolean {
   return marker.value > threshold;
 }
 
+type RiskCategory = "low" | "borderline" | "intermediate" | "high";
+
+// ACC/AHA 10-year ASCVD risk bands (a clinical category, NOT a 0-100 wellness
+// grade): <5% low · 5-<7.5% borderline · 7.5-<20% intermediate · ≥20% high.
+function ascvdCategory(tenYear: number | null): RiskCategory | null {
+  if (tenYear == null || !Number.isFinite(tenYear)) return null;
+  const pct = tenYear * 100;
+  if (pct < 5) return "low";
+  if (pct < 7.5) return "borderline";
+  if (pct < 20) return "intermediate";
+  return "high";
+}
+
+const CATEGORY_ARTICLE: Record<RiskCategory, string> = {
+  low: "a low",
+  borderline: "a borderline",
+  intermediate: "an intermediate",
+  high: "a high",
+};
+
+function joinList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+function nIn100Phrase(fraction: number): string {
+  const n = Math.round(fraction * 100);
+  return n <= 0 ? "Fewer than 1 in 100 people with your profile" : `About ${n} in 100 people with your profile`;
+}
+
+// Compose a plain-language, whole-picture interpretation of the clinical risk.
+// The category + "N in 100" are anchored to the 10-year ASCVD estimate (the
+// atherosclerotic event — heart attack/stroke — the ACC/AHA bands describe).
+// For a YOUNG athlete with a low 10-year read but a meaningful 30-year outlook
+// and elevated enhancers (ApoB / Lp(a) / hs-CRP), it names where the lever
+// actually is instead of letting the reassuring 10-year number stand alone.
+function composePreventInterpretation(args: {
+  ascvdTen: number | null;
+  totalThirty: number | null;
+  age: number | null;
+  category: RiskCategory | null;
+  apob: number | null;
+  lpaElevated: boolean;
+  hsCrp: number | null;
+}): string {
+  const { ascvdTen, totalThirty, age, category } = args;
+  if (ascvdTen == null || category == null) return "";
+
+  const lead = `${nIn100Phrase(ascvdTen)} would be expected to have a heart attack or stroke in the next 10 years — ${CATEGORY_ARTICLE[category]} 10-year risk.`;
+
+  const levers: string[] = [];
+  if (args.apob != null && args.apob > 80) levers.push("ApoB");
+  if (args.lpaElevated) levers.push("Lp(a)");
+  if (args.hsCrp != null && args.hsCrp > 1) levers.push("hs-CRP");
+
+  const thirtyPct = totalThirty != null ? Math.round(totalThirty * 100) : null;
+  const thirtyMeaningful = thirtyPct != null && thirtyPct >= 10;
+  const young = age != null && age < 55;
+
+  if ((category === "low" || category === "borderline") && young && (thirtyMeaningful || levers.length > 0)) {
+    const thirtyClause = thirtyMeaningful ? `your 30-year outlook (~${thirtyPct}%)` : "your long-run risk";
+    const both = levers.length ? `${thirtyClause} and your elevated ${joinList(levers)}` : thirtyClause;
+    const verb = levers.length > 0 || thirtyMeaningful ? "are" : "is";
+    // "your 30-year outlook ... and your elevated ApoB, Lp(a) and hs-CRP" reads
+    // plural even with a single lever named, so `are` is correct once the "and"
+    // clause is present; a bare long-run clause with no lever uses `is`.
+    const conj = levers.length ? "are" : verb;
+    return `${lead} But ${both} ${conj} where the lever is — acting now, while you're young, pays off most.`;
+  }
+
+  if (category === "intermediate" || category === "high") {
+    const leverClause = levers.length
+      ? ` Your elevated ${joinList(levers)} ${levers.length === 1 ? "is" : "are"} the most actionable lever${levers.length === 1 ? "" : "s"} to discuss with a clinician.`
+      : "";
+    return `${lead}${leverClause}`;
+  }
+
+  // Low/borderline but not young (or no long-game story to tell).
+  if (levers.length) {
+    return `${lead} Your elevated ${joinList(levers)} ${levers.length === 1 ? "is" : "are"} still worth acting on to protect the long run.`;
+  }
+  return lead;
+}
+
 export function cardiovascularRiskRead() {
   const profile = (() => {
     try {
@@ -192,6 +277,8 @@ export function cardiovascularRiskRead() {
     provisional: boolean;
     assumptions: PreventAssumption[];
     confidence: "provisional" | "high";
+    category: RiskCategory | null;
+    interpretation: string;
     estimates: {
       total_cvd: { ten_year: number | null; thirty_year: number | null };
       ascvd: { ten_year: number | null; thirty_year: number | null };
@@ -357,10 +444,23 @@ export function cardiovascularRiskRead() {
         levers_applied: leversApplied,
       };
 
+      const category = ascvdCategory(estimate.ascvd.ten_year);
+      const interpretation = composePreventInterpretation({
+        ascvdTen: estimate.ascvd.ten_year,
+        totalThirty: estimate.total_cvd.thirty_year,
+        age,
+        category,
+        apob: markers.apob.value,
+        lpaElevated: lpaElevated(markers.lpa),
+        hsCrp: markers.hs_crp.value,
+      });
+
       prevent = {
         provisional,
         assumptions,
         confidence: provisional ? "provisional" : "high",
+        category,
+        interpretation,
         estimates: {
           total_cvd: estimate.total_cvd,
           ascvd: estimate.ascvd,

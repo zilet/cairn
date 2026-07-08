@@ -161,6 +161,46 @@ type MeProfileFormContext = {
     return goalMode === "maintain" ? "display:none" : "";
   }
 
+  // Human-readable activity levels → the stored `activity_factor` multiplier.
+  // The number stays the source of truth (goal-check math is unchanged); the
+  // pills are just a friendlier way to seed it. It's only a COLD-START estimate —
+  // Cairn refines real expenditure from logging via `estimateExpenditure`.
+  const ACTIVITY_LEVELS: ReadonlyArray<{ factor: number; label: string; desc: string }> = [
+    { factor: 1.3, label: "Sedentary", desc: "Desk job, little planned exercise." },
+    { factor: 1.45, label: "Lightly active", desc: "On your feet a fair bit, or 1–3 light sessions a week." },
+    { factor: 1.55, label: "Moderately active", desc: "Training 3–5 days a week." },
+    { factor: 1.7, label: "Very active", desc: "Hard training most days, or a physically demanding job." },
+    { factor: 1.8, label: "Athlete", desc: "Twice-a-day or very high training volume." },
+  ];
+
+  // Snap a stored factor to the nearest level; ties bias to the more-active side.
+  // An unset/invalid factor defaults to Moderately active (1.55), a sensible seed.
+  function nearestActivityFactor(value: unknown): number {
+    const f = value == null || value === "" ? NaN : Number(value);
+    if (!Number.isFinite(f)) return 1.55;
+    let best = ACTIVITY_LEVELS[0];
+    for (const lv of ACTIVITY_LEVELS) {
+      if (Math.abs(lv.factor - f) <= Math.abs(best.factor - f)) best = lv;
+    }
+    return best.factor;
+  }
+
+  function activityLevelHtml(deps: MeProfileControllerDeps, currentFactor: unknown): string {
+    const selected = nearestActivityFactor(currentFactor);
+    const pills = ACTIVITY_LEVELS.map(
+      (lv) =>
+        `<button type="button" class="segbtn${lv.factor === selected ? " active" : ""}" data-actlevel="${lv.factor}">${deps.escapeHtml(lv.label)}</button>`
+    ).join("");
+    const desc = ACTIVITY_LEVELS.find((lv) => lv.factor === selected)?.desc ?? "";
+    return `<div class="field" style="margin-bottom:0">
+      <label>Activity level</label>
+      <p class="aboutme-hint">A starting estimate of how active you are day to day. Cairn refines your real energy expenditure from your logging over time.</p>
+      <div class="seg actlevel-seg" id="activityLevelSeg" role="group" aria-label="Activity level">${pills}</div>
+      <p class="aboutme-hint actlevel-desc" id="activityLevelDesc" style="margin:6px 0 0">${deps.escapeHtml(desc)}</p>
+      <input type="hidden" id="activity_factor" value="${deps.escapeAttr(selected)}">
+    </div>`;
+  }
+
   // The in·lb / cm·kg switch. Active fill is --ink (Atelier segmented rule); the
   // whole toggle is one preference so length and mass never disagree.
   function unitToggleHtml(unit: "in" | "cm"): string {
@@ -247,7 +287,7 @@ type MeProfileFormContext = {
           <input id="goal_date" type="date" value="${deps.escapeAttr(profile.goal_date || "")}" class="form-input"></div>
       </div>
       <p class="aboutme-hint" id="goalMaintainNote" style="margin:-2px 0 9px${goalMode === "maintain" ? "" : ";display:none"}">We anchor to your real expenditure — no goal weight needed. Cairn stays quiet unless your weight genuinely drifts.</p>
-      ${n("activity_factor", "Activity factor (1.3-1.8)", profile.activity_factor, 0.05)}`,
+      ${activityLevelHtml(deps, profile.activity_factor)}`,
       unitToggleHtml(unit));
 
     const trainingSection = sectionHtml(deps, "Training", `

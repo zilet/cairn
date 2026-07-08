@@ -88,6 +88,7 @@ class FakeElement {
     if (selector === "[data-disc]") return Object.hasOwn(this.dataset, "disc");
     if (selector === "[data-egmode]") return Object.hasOwn(this.dataset, "egmode");
     if (selector === "[data-goalmode]") return Object.hasOwn(this.dataset, "goalmode");
+    if (selector === "[data-actlevel]") return Object.hasOwn(this.dataset, "actlevel");
     if (selector === "[data-unit]") return Object.hasOwn(this.dataset, "unit");
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
     return false;
@@ -132,6 +133,7 @@ class FakeElement {
     this.attachButtons("discSeg", "disc", ["strength", "endurance", "hybrid"]);
     this.attachButtons("endGoalMode", "egmode", ["none", "race", "standing"]);
     this.attachButtons("goalModeSeg", "goalmode", ["lose", "maintain", "gain"]);
+    this.attachButtons("activityLevelSeg", "actlevel", ["1.3", "1.45", "1.55", "1.7", "1.8"]);
     this.attachButtons("profUnitToggle", "unit", ["in", "cm"]);
   }
 
@@ -357,6 +359,25 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   assert.equal(harness.goalFlags.at(-1), true);
   assert.equal(harness.toasts.at(-1), "Your running plan now lives in Plan → Endurance");
   assert.equal(harness.renderCount, 1);
+});
+
+test("Me Profile activity-level pills map a human label to the stored activity_factor number", async () => {
+  // The default profile is activity_factor 1.55 → the selector opens on
+  // "Moderately active" and seeds the hidden number input with the same value.
+  const harness = profileHarness({ profile: { primary_discipline: "strength", endurance_goal_json: null } });
+  await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+
+  const hidden = harness.rootEl.querySelector("#activity_factor");
+  assert.equal(hidden.value, "1.55", "opens on the nearest level to the stored factor");
+
+  // Pick "Very active" (1.7) → the hidden number + the one-line description update.
+  harness.rootEl.querySelectorAll("[data-actlevel]").find((b) => b.dataset.actlevel === "1.7").click();
+  assert.equal(hidden.value, "1.7");
+  assert.match(harness.rootEl.querySelector("#activityLevelDesc").textContent, /Hard training most days/);
+
+  // Saving stores the mapped NUMBER (goal-check math is unchanged).
+  assert.equal(await harness.deps.saveOptions.onSave(), true);
+  assert.equal(harness.saved.activity_factor, 1.7);
 });
 
 test("Me Profile controller converts body inputs when the unit toggle flips, storing imperial", async () => {

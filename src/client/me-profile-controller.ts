@@ -157,6 +157,28 @@
       })
     );
 
+    // Activity level: the pills seed the stored `activity_factor` number (kept in
+    // a hidden input the save path already reads). Selecting one writes the factor,
+    // updates the one-line description, and marks the form dirty.
+    const ACTIVITY_DESC: Record<string, string> = {
+      "1.3": "Desk job, little planned exercise.",
+      "1.45": "On your feet a fair bit, or 1–3 light sessions a week.",
+      "1.55": "Training 3–5 days a week.",
+      "1.7": "Hard training most days, or a physically demanding job.",
+      "1.8": "Twice-a-day or very high training volume.",
+    };
+    deps.select<HTMLElement>("#activityLevelSeg")?.querySelectorAll<HTMLElement>("[data-actlevel]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const factor = button.dataset.actlevel || "";
+        const hidden = deps.select<HTMLInputElement>("#activity_factor");
+        if (hidden) hidden.value = factor;
+        setActiveButton(deps.select("#activityLevelSeg"), ".segbtn", button);
+        const desc = deps.select<HTMLElement>("#activityLevelDesc");
+        if (desc) desc.textContent = ACTIVITY_DESC[factor] || "";
+        profileBar.markDirty();
+      })
+    );
+
     // Unit toggle: convert the body inputs between imperial and metric IN PLACE
     // (so unsaved edits survive) and persist the shared preference. It changes
     // display only — the canonical values are unchanged, so it never marks dirty.

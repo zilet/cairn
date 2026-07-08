@@ -1176,10 +1176,17 @@ export interface ClientPreventProjection {
   levers_applied: ClientRiskLeverApplied[];
 }
 
+export type ClientRiskCategory = "low" | "borderline" | "intermediate" | "high";
+
 export interface ClientPreventEstimate {
   provisional: boolean;
   assumptions: ClientPreventAssumption[];
   confidence: "provisional" | "high";
+  // ACC/AHA 10-year ASCVD band (low/borderline/intermediate/high) + a plain-
+  // language, whole-picture interpretation. A clinical category, NOT a 0-100
+  // wellness grade. Null/empty on older payloads.
+  category?: ClientRiskCategory | null;
+  interpretation?: string;
   estimates: {
     total_cvd: ClientRiskHorizon;
     ascvd: ClientRiskHorizon;

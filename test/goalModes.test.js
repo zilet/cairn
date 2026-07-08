@@ -15,6 +15,32 @@ beforeEach(() => {
   resetTables("food_notes", "bodyweight_log", "context_events");
 });
 
+test("thin logging keeps the manual activity factor as the cold-start TDEE seed", () => {
+  // No intake/weight logged → adaptive confidence is 'none', so the target stays
+  // on the manual activity factor (bmr × factor). The factor is the seed until
+  // there's enough real data to trust the measured expenditure.
+  setProfile({ goal_mode: "maintain", activity_factor: 1.5 });
+  const g = repo.computeGoalCheck();
+  assert.equal(g.tdee_source, "activity_factor");
+  assert.equal(g.tdee, g.bmr * 1.5, "factor-derived TDEE (bmr rounds to an integer here)");
+});
+
+test("a HIGH-confidence adaptive expenditure overrides the manual activity factor", () => {
+  // Two full weeks of intake AND weigh-ins spanning two weeks → 'high' confidence,
+  // so the measured expenditure replaces the guessed multiplier (the factor becomes
+  // a pure cold-start seed, exactly as designed).
+  setProfile({ goal_mode: "maintain", weight_lb: 190, activity_factor: 1.3 });
+  for (let i = 0; i < 14; i++) seedIntake(i, 2600);
+  let w = 191.5;
+  for (const d of [14, 12, 10, 8, 6, 4, 2, 0]) { seedWeight(localDaysAgo(d), w); w -= 0.2; }
+  const exp = repo.estimateExpenditure();
+  assert.equal(exp.confidence, "high", "sanity: the seeded data is high-confidence");
+  const g = repo.computeGoalCheck();
+  assert.equal(g.tdee_source, "adaptive");
+  assert.equal(g.tdee, exp.tdee, "the target anchors to the measured expenditure, not bmr × factor");
+  assert.notEqual(g.tdee, g.bmr * 1.3, "the manual factor no longer drives the number");
+});
+
 test("maintain mode anchors the target to TDEE — no deficit, no pressure", () => {
   setProfile({ goal_mode: "maintain", weight_lb: 185 });
   const g = repo.computeGoalCheck();
