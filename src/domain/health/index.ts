@@ -1,6 +1,7 @@
 export * from "../../guidelines.js";
 export * from "../../repo/ccda.js";
 export * from "../../repo/dexa-targeting.js";
+export * from "../../repo/doctor-loop.js";
 export * from "../../repo/evidence.js";
 export * from "../../repo/health.js";
 export { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../../repo/coach.js";

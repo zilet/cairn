@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**226 routes** across 86 groups.
+**227 routes** across 86 groups.
 
 ## `/activities`
 
@@ -282,6 +282,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/health` |  |
+| GET | `/api/health/doctor-loop` | Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention rows derived through the adaptive attention engine. Informational, not medical advice. |
 | GET | `/api/health/focus` | The elite-coach synthesis layer: the deterministic TIERED focus (priorities, not a flat directive flood) + the latest cached agentic health-story narrative. Both informational, no scores. The narrative is regenerated via POST below. |
 | GET | `/api/health/markers` |  |
 | GET | `/api/health/review` | Latest review or null — a soft lookup like /sessions?date= (200 + null on absence, never 404): "no review yet" is a normal state the PWA renders. |
