@@ -246,6 +246,7 @@ function loadController({ apiImpl } = {}) {
   const requests = [];
   const invalidations = [];
   const toasts = [];
+  const outbox = [];
   const renders = [];
   const rxRefreshes = [];
   const transitions = [];
@@ -267,6 +268,7 @@ function loadController({ apiImpl } = {}) {
     window: null,
     globalThis: null,
     navigator: {},
+    outboxEnqueue: (kind, path, body) => outbox.push({ kind, path, body }),
     document: {
       createElement: (tag) => tag === "template" ? new FakeTemplate() : new FakeElement(tag),
     },
@@ -332,6 +334,7 @@ function loadController({ apiImpl } = {}) {
     deps,
     requests,
     invalidations,
+    outbox,
     toasts,
     renders,
     rxRefreshes,
@@ -452,6 +455,35 @@ test("Today session controller finishes into cached done mode immediately", asyn
   assert.equal(harness.stops.length, 1);
   assert.equal(harness.renders.length, 1);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Done · 2 sets · 320 lb"]);
+});
+
+test("Today session controller queues finish when the network drops", async () => {
+  const harness = loadController({
+    apiImpl: async () => {
+      throw new Error("offline");
+    },
+  });
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "plansurface" }));
+  surface.appendChild(new FakeElement("input", { id: "sessNotes", value: "felt strong but tired" }));
+  const finish = surface.appendChild(new FakeElement("button", { id: "finishBtn" }));
+
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+  finish.click();
+  await flushAsync();
+
+  assert.equal(harness.requests[0].path, "/sessions/44/finish");
+  assert.deepEqual(plain(harness.outbox), [{
+    kind: "finish",
+    path: "/sessions/44/finish",
+    body: { notes: "felt strong but tired" },
+  }]);
+  assert.equal(finish.disabled, false);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Finish saved — will sync when you're back online"]);
+  assert.deepEqual(harness.cachedWrites, []);
+  assert.deepEqual(harness.invalidations, []);
 });
 
 test("Today session controller skips, undoes, and removes off-plan cards", async () => {

@@ -40,7 +40,12 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
           }));
         } catch {
           finishBtn.disabled = false;
-          deps.toast("Couldn't finish — check your connection");
+          (globalThis as { outboxEnqueue?: (kind: string, path: string, body: unknown) => unknown }).outboxEnqueue?.(
+            "finish",
+            `/sessions/${CairnTodaySessionSetModel.sessionPathId(session)}/finish`,
+            { notes },
+          );
+          deps.toast("Finish saved — will sync when you're back online");
           return;
         }
         if (!result || result.error || result.ok === false || result.id == null) {
