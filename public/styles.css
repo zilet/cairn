@@ -143,6 +143,10 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
   animation:rise .5s cubic-bezier(.22,1,.36,1) both;
   animation-delay:calc(min(var(--i,0),12) * 45ms);
 }
+/* A soft (background stale-while-revalidate) Today repaint mounts the same cards
+   but must feel silent — suppress the entrance stagger so a "nothing changed"
+   refresh never re-flashes the whole screen (mirrors Stand's quietPaint). */
+.today-soft .reveal{animation:none;transform:none}
 @keyframes chipin{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
 .chip-in{animation:chipin .22s cubic-bezier(.22,1,.36,1)}
 
@@ -924,6 +928,32 @@ body.resting{padding-bottom:calc(144px + var(--vvb,0px))}
 .field select{appearance:none;-webkit-appearance:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%238c8475' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right 13px center;padding-right:34px}
+
+/* Me › Profile — grouped sections (You / Body & goal / Training / Diet), a shared
+   unit toggle, and unit-suffixed number inputs. Calm hairline-divided groups. */
+.prof-section{padding-top:20px;border-top:1px solid var(--line);margin-top:20px}
+.prof-section:first-child{padding-top:0;border-top:0;margin-top:0}
+.prof-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}
+.prof-section-head .lbl{margin:0}
+.prof-unit-toggle{display:flex;gap:4px;flex:0 0 auto}
+.prof-unit-btn{padding:3px 11px;font-family:var(--font-ui);font-size:.68rem;font-weight:600;
+  letter-spacing:.02em;background:var(--card-2);border:1px solid var(--line);border-radius:999px;
+  color:var(--muted);cursor:pointer;transition:background .15s ease,color .15s ease,border-color .15s ease}
+.prof-unit-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.prof-unit-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.prof-unit-row{display:flex;gap:10px}
+.prof-unit-in{position:relative;display:flex;align-items:center;flex:1 1 auto}
+.prof-unit-in input{padding-right:42px}
+.prof-unit-suf{position:absolute;right:12px;font-family:var(--font-ui);font-size:.7rem;font-weight:600;
+  text-transform:uppercase;letter-spacing:.1em;color:var(--muted);pointer-events:none}
+
+/* Stand › Age — the in-place "sharpen your read" clinical inputs (relocated from
+   Profile), sitting beside the cardiovascular-risk card they inform. */
+.prof-clinical{margin-top:12px}
+.prof-clin-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;padding:9px 0;border-top:1px solid var(--line)}
+.prof-clin-row:first-of-type{margin-top:6px}
+.prof-clin-q{font-size:.9rem;color:var(--ink)}
 
 #chart{width:100%;height:230px;background:var(--card);border:none;box-shadow:var(--shadow-sm);
   border-radius:var(--radius);margin-top:4px;touch-action:pan-y;cursor:crosshair}
@@ -3476,11 +3506,12 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hrisk-viz-current,.hrisk-viz-optimized{fill:none;stroke-linecap:round;stroke-linejoin:round}
 .hrisk-viz-current{stroke:var(--accent-deep);stroke-width:3.2}
 .hrisk-viz-optimized{stroke:var(--sage);stroke-width:2.4;stroke-dasharray:8 7}
-.hrisk-viz-heart{fill:rgba(185,104,74,.12);stroke:var(--accent);stroke-width:2}
-.hrisk-viz-vessel{fill:none;stroke:rgba(116,137,106,.78);stroke-linecap:round}
-.hrisk-viz-plaque{fill:var(--gold);opacity:.72}
-.hrisk-viz-plaque-soft{fill:var(--accent);opacity:.4}
-.hrisk-viz-points circle{fill:var(--card);stroke:var(--ink-2);stroke-width:1.5}
+/* a small, static, purely decorative heart — fixed geometry, NEVER data-bound,
+   parked in the top-left corner clear of the trajectory lines and axis row */
+.hrisk-viz-motif{opacity:.5}
+.hrisk-viz-heart{fill:var(--accent);opacity:.5}
+.hrisk-viz-points circle{fill:var(--card);stroke:var(--accent-deep);stroke-width:1.6}
+.hrisk-viz-point-opt{stroke:var(--sage)!important}
 .hrisk-viz-axis{font-family:var(--font-ui);font-size:.62rem;font-weight:700;letter-spacing:.08em;
   text-transform:uppercase;fill:var(--muted)}
 .hrisk-viz-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:2px}
@@ -3488,6 +3519,27 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hrisk-viz-key{width:18px;height:0;border-top:3px solid var(--accent-deep);border-radius:999px}
 .hrisk-viz-key-optimized{border-top-color:var(--sage);border-top-style:dashed}
 .hrisk-viz-note{margin:8px 0 0;font-size:.74rem;line-height:1.45;color:var(--muted)}
+/* calm interpretation well — what the % actually means, with the ACC/AHA band as
+   a small category pill (a clinical category, NOT a 0-100 wellness grade) */
+.hrisk-interp{background:var(--card-2);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;display:grid;gap:7px}
+.hrisk-interp-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hrisk-interp-line{margin:0;font-size:.86rem;line-height:1.5;color:var(--ink-2)}
+.hrisk-cat{flex:0 0 auto;font-size:.62rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  border-radius:999px;padding:3px 9px;white-space:nowrap}
+.hrisk-cat-low{color:var(--sage);background:var(--sage-bg)}
+.hrisk-cat-borderline{color:var(--gold-deep);background:var(--card)}
+.hrisk-cat-intermediate{color:var(--accent-deep);background:var(--card)}
+.hrisk-cat-high{color:var(--warn);background:var(--warn-bg)}
+/* a brief, gentle acknowledgement pulse on the risk card after a sharpen flag
+   autosaves — reassures the tap registered even when the numbers don't move */
+.hrisk-flash{animation:hriskFlash 1.3s ease-out}
+@keyframes hriskFlash{
+  0%{box-shadow:0 0 0 0 rgba(110,127,92,.32)}
+  30%{box-shadow:0 0 0 5px rgba(110,127,92,.14)}
+  100%{box-shadow:0 0 0 0 rgba(110,127,92,0)}
+}
+@media (prefers-reduced-motion:reduce){.hrisk-flash{animation:none}}
 /* the compact "what moves it" lever strip */
 .hrisk-levers{border-top:1px solid var(--line);padding-top:12px}
 .hrisk-lev-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
@@ -4194,6 +4246,14 @@ button.hmk-row:active{background:var(--card-2)}
   border-radius:999px;padding:9px 8px;font-family:var(--font-ui);font-weight:600;
   font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
 .disc-seg .segbtn.active,.goalmode-seg .segbtn.active,.triflag-seg .segbtn.active{background:var(--ink);color:var(--paper)}
+/* Activity level — 5 human-labelled pills. The labels are long, so this wraps
+   into a soft pill group rather than cramming an equal-flex bar. */
+.actlevel-seg{display:flex;flex-wrap:wrap;gap:6px;background:transparent;border:none;padding:0}
+.actlevel-seg .segbtn{flex:0 0 auto;border:1px solid var(--line);background:var(--card-2);color:var(--ink-2);
+  border-radius:999px;padding:8px 13px;font-family:var(--font-ui);font-weight:600;
+  font-size:.78rem;letter-spacing:.02em;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.actlevel-seg .segbtn.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.actlevel-desc{color:var(--muted)}
 
 /* The cardio "tag" caps chip used wherever a cardio item names its modality. */
 .cardio-tag{display:inline-block;color:var(--sage);background:var(--sage-bg);

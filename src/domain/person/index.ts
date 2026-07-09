@@ -1,7 +1,7 @@
 export * from "../../repo/chat.js";
 export * from "../../repo/context-effect.js";
 export { addCheckin, addFamily, deleteFamily, getCheckinByDate, listCheckins, listFamily, updateFamily } from "../../repo/coach.js";
-export { confirmGoalCheckin, dismissGoalCheckin } from "../../repo/goal-checkin.js";
+export { confirmGoalCheckin, dismissGoalCheckin, reactivateGoalCheckin } from "../../repo/goal-checkin.js";
 export { addContextEvent, deleteContextEvent, getInjuryImpacts, listContextEvents, resolveContextEvent, updateContextEvent } from "../../repo/health.js";
 export * from "../../repo/memory.js";
 export * from "../../repo/next-step.js";

@@ -30,6 +30,7 @@
 // ============================================================================
 import { localDateISO } from "./shared.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { getAttentionSchedule } from "./attention.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
@@ -400,20 +401,44 @@ export function testWeekDue(date?: string, opts: TestWeekOpts = {}): TestWeekDue
   let due = false;
   let why = "";
   if (inRealization) {
+    // Block realization phase IS a test week — a direct, event-driven check.
     due = true;
     why = `You're in the realization phase of "${block!.goal}" — a good week to re-test your main lifts and see what the block built.`;
   } else if (last_test_week == null) {
+    // Never tested — an event-driven "anchor where you stand" (never a nag, and
+    // key_lifts.length === 0 already short-circuited above for a brand-new athlete).
     due = true;
     why = "No strength test on record yet — a heavy-ish test session on your main lifts would anchor where you actually stand.";
-  } else if (sinceDays != null && sinceDays >= TEST_WEEK_CADENCE_DAYS) {
-    due = true;
-    const wk = Math.round(sinceDays / 7);
-    why = `It's been ~${wk} weeks since your last test week — re-testing your main lifts re-reads your real ceilings before the next build.`;
-  } else if (sinceDays != null) {
-    const wk = Math.max(0, TEST_WEEK_CADENCE_WEEKS - Math.round(sinceDays / 7));
-    why = wk > 0
-      ? `Last test week was ~${Math.round(sinceDays / 7)} weeks ago — next one in about ${wk} week${wk === 1 ? "" : "s"}.`
-      : "A test week is coming up soon.";
+  } else {
+    // The recurring re-test cadence NO LONGER runs on a fixed interval (rule 2a):
+    // it DEFERS to the K5 benchmark-attention entry (refreshTrainingBenchmarkAttention).
+    // A cleanly-progressing athlete's entry RELEASES → no scheduled test; a plateau
+    // or block checkpoint keeps it active/scheduled. Falls back to the legacy fixed
+    // cadence ONLY when the K5 entry hasn't been populated yet (before the scheduler's
+    // first pass, or in a deterministic unit context), so prior behavior is preserved.
+    const attn = getAttentionSchedule("training:strength:test-week");
+    if (attn) {
+      if (attn.tier === "released") {
+        // Converged to no scheduled check — quiet, event-driven only from here.
+      } else if (attn.next_due != null && attn.next_due <= d) {
+        due = true;
+        why = "Your main lifts are due a re-test — a heavy-ish test session re-reads your real ceilings before the next build.";
+      } else if (attn.next_due != null) {
+        const wk = Math.max(0, Math.round((daysBetweenISO(d, attn.next_due) ?? 0) / 7));
+        why = wk > 0
+          ? `Next strength test in about ${wk} week${wk === 1 ? "" : "s"}.`
+          : "A test week is coming up soon.";
+      }
+    } else if (sinceDays != null && sinceDays >= TEST_WEEK_CADENCE_DAYS) {
+      due = true;
+      const wk = Math.round(sinceDays / 7);
+      why = `It's been ~${wk} weeks since your last test week — re-testing your main lifts re-reads your real ceilings before the next build.`;
+    } else if (sinceDays != null) {
+      const wk = Math.max(0, TEST_WEEK_CADENCE_WEEKS - Math.round(sinceDays / 7));
+      why = wk > 0
+        ? `Last test week was ~${Math.round(sinceDays / 7)} weeks ago — next one in about ${wk} week${wk === 1 ? "" : "s"}.`
+        : "A test week is coming up soon.";
+    }
   }
 
   return { due, why, key_lifts, cadence_weeks: TEST_WEEK_CADENCE_WEEKS, last_test_week };

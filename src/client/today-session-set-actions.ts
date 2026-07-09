@@ -12,13 +12,58 @@ type TodaySessionSetActionsApi = {
     deps.root.querySelectorAll<HTMLElement>("[data-del]").forEach((button) => {
       if (button.dataset.wired) return;
       button.dataset.wired = "1";
-      button.addEventListener("click", async (event) => {
+      button.addEventListener("click", (event) => {
         event.stopPropagation();
-        await deps.api(`/sets/${button.dataset.del}`, { method: "DELETE" });
-        CairnTodaySessionSetModel.invalidateSetTruth(deps);
-        deps.renderToday();
+        void deleteSet(button, deps);
       });
     });
+  }
+
+  // Optimistic set-delete — mirrors the set-LOG path (DOM surgery + local stat
+  // repaint, no full re-render). The chip vanishes the instant you tap and the
+  // affected card/finish stats are re-tallied LOCALLY *before* the network
+  // round-trip; the DELETE fires in the background and, on failure, the chip is
+  // put back exactly where it sat. Dropping the old full renderToday() means
+  // removing one set no longer rebuilds the whole surface (which yanked scroll,
+  // replayed the entrance stagger, and refetched the world).
+  async function deleteSet(button: HTMLElement, deps: ClientTodaySessionControllerDeps): Promise<void> {
+    const id = button.dataset.del;
+    if (!id || button.dataset.deleting) return;
+    const chip = button.closest<HTMLElement>(".chip");
+    const card = button.closest<HTMLElement>(".ex");
+    if (!chip || !card) {
+      // Unexpected structure — fall back to the safe, correct full refresh.
+      try {
+        await deps.api(`/sets/${id}`, { method: "DELETE" });
+      } catch {
+        deps.toast("Couldn't remove that — try again.");
+        return;
+      }
+      CairnTodaySessionSetModel.invalidateSetTruth(deps);
+      deps.renderToday();
+      return;
+    }
+    button.dataset.deleting = "1";
+    // Remember the chip's exact position so a failed delete rolls back cleanly.
+    const parent = chip.parentElement;
+    const anchor = chip.nextElementSibling;
+    chip.remove();
+    bumpProgress(card);
+    refreshFinishStat(deps);
+    CairnTodaySessionSetModel.invalidateSetTruth(deps);
+    try {
+      const result = CairnTodaySessionSetModel.responseRecord(await deps.api(`/sets/${id}`, { method: "DELETE" }));
+      if (result.error) throw new Error(String(result.error));
+    } catch {
+      if (parent) {
+        if (anchor && anchor.parentElement === parent) parent.insertBefore(chip, anchor);
+        else parent.appendChild(chip);
+      }
+      button.dataset.deleting = "";
+      bumpProgress(card);
+      refreshFinishStat(deps);
+      deps.toast("Couldn't remove that — try again.");
+    }
   }
 
   function bumpProgress(card: HTMLElement): void {

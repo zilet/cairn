@@ -19,4 +19,5 @@ export * from "../../repo/program-state.js";
 export * from "../../repo/progression.js";
 export * from "../../repo/run-progression.js";
 export * from "../../repo/sessions.js";
+export * from "../../repo/training-playbook.js";
 export * from "../../repo/training-read.js";

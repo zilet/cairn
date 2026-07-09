@@ -50,11 +50,12 @@ const SWR_NS = "cairn.swr.v1."; // bump the version segment in lockstep with any
 const _swrMem = new Map<string, ClientSwrEntry<unknown>>(); // key -> { data, ts } (this-session tier, fastest)
 
 // Health-sensitive surfaces stay in the MEMORY tier only, never written to disk.
-// Lab markers and recovery (HRV / RHR / sleep / body-battery) are the most personal
-// data the app holds; they still paint instantly WITHIN a session from _swrMem, they
-// just don't persist to localStorage across a cold start (where everything else does).
+// Lab markers, recovery (HRV / RHR / sleep / body-battery), and the Stand health
+// tools (records / learned / directives) are the most personal data the app holds;
+// they still paint instantly WITHIN a session from _swrMem, they just don't persist
+// to localStorage across a cold start (where everything else does).
 function _swrMemOnly(key: string): boolean {
-  return /^(markers:|recovery:)/.test(key || "");
+  return /^(markers:|recovery:|health:)/.test(key || "");
 }
 
 function _swrLsGet(key: string): ClientSwrEntry<unknown> | null {

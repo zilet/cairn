@@ -208,16 +208,23 @@ export function refreshTrainingBenchmarkAttention(
     );
   }
 
+  // The test-week signal's ACTIVE status is derived from RAW, event-driven signals —
+  // NOT from testWeekDue's cadence output, which now DEFERS to this very entry (reading
+  // it back would let a released entry mask a fresh plateau). testWeekDue still fires
+  // its own event branches (block realization / no benchmark on record), and a stalled
+  // lift is the independent signal that re-activates re-testing.
   const tw = opts.testWeek === undefined ? testWeekDue(d, { programState: ps }) : opts.testWeek;
+  const anyStalled = lifts.some((l) => l.status === "plateaued" || l.status === "regressing");
+  const testWeekActive = !!tw?.due || anyStalled;
   out.push(
     applyAttentionObservation({
       signal_key: "training:strength:test-week",
       policy: STRENGTH_POLICY,
       observation: {
         checked_at: d,
-        status: tw?.due ? "active" : "clean",
-        reason: tw?.due
-          ? `${tw.why} Re-test the named lifts near the block checkpoint, then let cadence stretch again.`
+        status: testWeekActive ? "active" : "clean",
+        reason: testWeekActive
+          ? `${tw?.due ? tw.why : "A main lift is plateaued or regressing."} Re-test the named lifts near the checkpoint, then let cadence stretch again.`
           : "No strength test week is due; clean progress releases fixed testing cadence.",
       },
     }),

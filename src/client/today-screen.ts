@@ -133,6 +133,11 @@ function todayRailDeps() {
 
 async function renderToday(opts: any = {}) {
   const enteredDate = todayState.logDate;
+  // A soft (background stale-while-revalidate) repaint must feel silent: keep the
+  // scroll position and suppress the `.reveal` entrance stagger so a "nothing
+  // changed" refresh never flashes the whole screen or jumps under the reader.
+  // Mirrors Stand's quietPaint and the Session surface's scroll capture/restore.
+  const prevY = typeof window !== "undefined" ? window.scrollY : 0;
   const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
   const { soft, isToday } = todayData;
   const session: any = todayData.session;
@@ -312,7 +317,12 @@ async function renderToday(opts: any = {}) {
   // the user moved to. Instant-paint Stand exposed this: a later cold repaint no
   // longer papers over a stale write. (Phase two below re-checks the same way.)
   if (todayState.tab !== "today" || todayState.logDate !== enteredDate) return;
+  // The class must be on an ancestor at the moment innerHTML mounts the cards,
+  // since the CSS `rise` animation fires on insertion. toggle() also clears it on
+  // the next hard render so real entrances still animate.
+  todayView.classList.toggle("today-soft", !!soft);
   todayView.innerHTML = todayMainShell.wrapHtml(html, { railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
+  if (soft) { try { window.scrollTo(0, prevY); } catch {} }
 
   // The lead entry: one tap opens the isolated Session destination.
   todayView.querySelector("#sessLaunch")?.addEventListener("click", () => openSession());

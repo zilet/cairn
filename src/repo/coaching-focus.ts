@@ -22,7 +22,14 @@
 // {available:false} on a thin athlete.
 // ============================================================================
 
-export type FocusDomain = "training" | "running" | "nutrition" | "health" | "recovery" | "body";
+import {
+  type FocusCandidate,
+  type FocusDomain,
+  focusScore,
+} from "./focus-candidate.js";
+
+// Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
+export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
 
 export interface FocusItem {
   domain: FocusDomain;
@@ -231,6 +238,13 @@ export interface CoachingFocusInput {
   injuries?: InjuryInput[] | null;
   autoregulation?: AutoregInput | null;
   contextToday?: ContextTodayInput | null;
+  // ---- external producers the conductor arbitrates (K3) ---------------------
+  // Each is a plain read the orchestrator supplies (coach.ts), so this stays a PURE
+  // function. Adapted into FocusCandidates + folded into the one ranking below.
+  journeyMilestones?: unknown;   // JourneyMilestone[] — calm body-composition moments
+  benchmarkMilestones?: unknown; // TrainingMilestoneCandidate[] — near a strength/endurance standard
+  dueAttention?: unknown;        // AttentionScheduleEntry[] — K5 re-checks due (labs/DEXA/lifts)
+  cardioRisk?: unknown;          // cardiovascularRiskRead() — the PREVENT clinical risk read
 }
 
 interface Candidate {
@@ -256,6 +270,16 @@ function clip(s: unknown, n: number): string {
 }
 function inputArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
+}
+// The conductor ranks its internal candidates through the SAME scalar formula the
+// shared arbiter (focus-candidate.ts) uses for nextBestStep — so "leverage" means the
+// same thing on every "what's next" surface. Every conductor candidate is an actionable
+// lever, so this reduces to leverage ordering while staying the one shared primitive.
+function candScore(c: Candidate): number {
+  return focusScore(c.leverage, { actionable: true });
+}
+function byScore(a: Candidate, b: Candidate): number {
+  return candScore(b) - candScore(a);
 }
 function cleanEvidence(lines: unknown): string[] | undefined {
   const out = inputArray<unknown>(lines).map((line) => clip(line, 110)).filter(Boolean).slice(0, 3);
@@ -532,6 +556,117 @@ function bodyCandidate(inp: CoachingFocusInput): Candidate | null {
   };
 }
 
+// ---- external producers (K3): adapt each read to the shared FocusCandidate ----
+// The 4 producers named by the v1 plan flow through the SAME arbitration as the
+// domain candidates above. They emit the plain `FocusCandidate` contract; `lift`
+// is the SOLE place a leverage/slot is assigned to them (a producer never scores
+// itself). Their source modules are untouched — the orchestrator (coach.ts) supplies
+// the reads via input so this stays a pure function.
+
+// Lift a plain FocusCandidate into the conductor's internal, rankable Candidate.
+function lift(fc: FocusCandidate, leverage: number, slot: Candidate["slot"], key?: string): Candidate {
+  const based_on = cleanEvidence(fc.priority_inputs);
+  return {
+    key: key ?? fc.kind,
+    leverage,
+    slot,
+    item: {
+      domain: fc.domain,
+      title: clip(fc.headline, 90),
+      why: clip(fc.why, 240),
+      move: fc.move ? clip(fc.move, 240) : undefined,
+      based_on,
+    },
+  };
+}
+
+interface RiskEnhancerInput { key?: unknown; label?: unknown; lever?: unknown; }
+// The cardiovascular risk read (cardiovascularRiskRead) → one health/nutrition lever.
+// A clinical risk % is allowed (it's an evidence-defined, patient-facing number, NOT a
+// banned internal 0-100 grade); always framed informational-not-medical-advice with the
+// modifiable lever named. Elevated + computed → lead-eligible; else a parallel nudge.
+function riskCandidate(inp: CoachingFocusInput): Candidate | null {
+  const risk = inp.cardioRisk as any;
+  if (!risk || typeof risk !== "object") return null;
+  const est = risk.prevent?.estimates ?? null;
+  const ascvd10 = num(est?.ascvd?.ten_year);
+  const totalCvd10 = num(est?.total_cvd?.ten_year);
+  const primary10 = ascvd10 ?? totalCvd10;
+  const enhancers = inputArray<RiskEnhancerInput>(risk.enhancers);
+  // Nothing computable AND no modifiable enhancer to name → stay silent.
+  if (primary10 == null && !enhancers.length) return null;
+  const topEnh = enhancers[0] ?? null;
+  const enhKey = lc(topEnh?.key);
+  const domain: FocusDomain = enhKey === "body_fat" ? "nutrition" : enhKey === "vo2max" ? "running" : "health";
+  const vascular = num(risk.prevent?.vascular_age);
+  const elevated = primary10 != null && primary10 >= 7.5;
+  const leverage = elevated ? 3.7 : primary10 != null ? 2.8 : 2.4;
+  const slot: Candidate["slot"] = elevated ? "lead" : "parallel";
+  const whyBits: string[] = [];
+  if (primary10 != null) {
+    whyBits.push(`AHA PREVENT puts your 10-year ${ascvd10 != null ? "ASCVD" : "cardiovascular"} risk around ${primary10}%${vascular != null ? ` (heart age ~${vascular})` : ""}`);
+  }
+  if (topEnh?.label) whyBits.push(`${lc(topEnh.label)} is the main modifiable lever`);
+  const why = `${clip(whyBits.join(" — ") || "Your cardiovascular levers are worth a look.", 200)} Informational, not medical advice.`;
+  const fc: FocusCandidate = {
+    domain,
+    kind: "risk-cardiovascular",
+    headline: elevated ? "Lower your cardiovascular risk" : "Keep your cardiovascular risk low",
+    why,
+    move: topEnh?.lever ? String(topEnh.lever) : undefined,
+    priority_inputs: ["AHA PREVENT 2023 risk read", ...enhancers.slice(0, 2).map((e) => String(e?.label ?? "")).filter(Boolean)],
+    action: { kind: "open_health", label: "Open cardiovascular risk" },
+  };
+  return lift(fc, leverage, slot, "risk-cardiovascular");
+}
+
+interface JourneyMilestoneInput { label?: unknown; detail?: unknown; kind?: unknown; priority?: unknown; }
+// A body-composition journey milestone (journeyMilestones) → a calm parallel note.
+// Celebrations stay quiet, one at a time (constitution); low leverage so it never
+// crowds a real lever, but it's arbitrated through the one conductor like everything else.
+function journeyCandidate(inp: CoachingFocusInput): Candidate | null {
+  const ms = inputArray<JourneyMilestoneInput>(inp.journeyMilestones);
+  if (!ms.length) return null;
+  const top = [...ms].sort((a, b) => (num(b.priority) ?? 0) - (num(a.priority) ?? 0))[0];
+  if (!top?.label) return null;
+  const domain: FocusDomain = lc(top.kind).includes("bodyfat") ? "body" : "nutrition";
+  const fc: FocusCandidate = {
+    domain,
+    kind: "journey-milestone",
+    headline: String(top.label),
+    why: top.detail ? String(top.detail) : "A milestone on your journey worth a quiet nod — keep the approach that got you here.",
+    priority_inputs: ["Body-composition journey milestone"],
+    action: { kind: "open_progress", label: "See your journey" },
+  };
+  return lift(fc, 2.0, "parallel", "journey-milestone");
+}
+
+interface BenchmarkMilestoneInput { title?: unknown; why?: unknown; suggested_test?: unknown; target?: unknown; priority?: unknown; }
+// A strength/endurance benchmark milestone (benchmarkMilestones) → a training lever
+// within reach of a recognized standard. A motivating near-term target, arbitrated as
+// a parallel item (it rides alongside whatever leads).
+function benchmarkCandidate(inp: CoachingFocusInput): Candidate | null {
+  const ms = inputArray<BenchmarkMilestoneInput>(inp.benchmarkMilestones);
+  if (!ms.length) return null;
+  const top = [...ms].sort((a, b) => (num(b.priority) ?? 0) - (num(a.priority) ?? 0))[0];
+  if (!top?.title) return null;
+  const move = top.suggested_test
+    ? String(top.suggested_test)
+    : top.target
+      ? `Target: ${clip(top.target, 120)}`
+      : undefined;
+  const fc: FocusCandidate = {
+    domain: "training",
+    kind: "benchmark-milestone",
+    headline: String(top.title),
+    why: top.why ? String(top.why) : "You're within reach of a recognized standard — a motivating near-term target.",
+    move,
+    priority_inputs: ["Strength/endurance benchmark read"],
+    action: { kind: "open_progress", label: "See your benchmarks" },
+  };
+  return lift(fc, 2.0, "parallel", "benchmark-milestone");
+}
+
 function laterCandidates(inp: CoachingFocusInput): Candidate[] {
   const out: Candidate[] = [];
   // Mono-stimulus running → add variety, but only once the lead/parallel is set.
@@ -587,8 +722,19 @@ function buildConnections(lead: FocusItem | null, parallel: FocusItem[], inp: Co
 
 // ---- the unified retest checkpoint (batched, not four separate nag feeds) ----
 
+interface DueAttentionInput { signal_key?: unknown; domain?: unknown; reason?: unknown; }
+// A due-attention entry (listDueAttention / K5) → a short, readable checkpoint label.
+// A lab/DEXA re-check and a lift re-test batch into the SAME calm checkpoint.
+function attentionLabel(e: DueAttentionInput): string | null {
+  const tail = String(e?.signal_key ?? "").split(":").pop() ?? "";
+  const label = tail.replace(/[-_]+/g, " ").trim();
+  if (!label) return null;
+  return label.replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
 function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   const focus: string[] = [];
+  let dueNow = !!inp.testWeek?.due;
   if (inp.testWeek?.due) {
     for (const l of inputArray<unknown>(inp.testWeek.key_lifts)) focus.push(String(l));
   }
@@ -598,12 +744,23 @@ function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   for (const t of inputArray<PerformanceTestDueInput>(inp.performance?.tests_due)) {
     if (t?.exercise && t.kind !== "endurance") focus.push(String(t.exercise));
   }
-  const dedup = [...new Set(focus.map((f) => f.trim()).filter(Boolean))].slice(0, 4);
+  // K5: the due labs / DEXA / lift re-checks that the adaptive attention engine
+  // surfaces batch into this SAME checkpoint, so it's one calm draw + re-test window
+  // rather than four separate nag feeds ("worth one visit: ferritin, lipids, squat").
+  const dueAttention = inputArray<DueAttentionInput>(inp.dueAttention);
+  if (dueAttention.length) {
+    dueNow = true; // something is already due
+    for (const e of dueAttention) {
+      const label = attentionLabel(e);
+      if (label) focus.push(label);
+    }
+  }
+  const dedup = [...new Set(focus.map((f) => f.trim()).filter(Boolean))].slice(0, 5);
   if (!dedup.length) return null;
   return {
-    in_weeks: inp.testWeek?.due ? 0 : 1,
+    in_weeks: dueNow ? 0 : 1,
     focus: dedup,
-    why: "Batch these into one check-in week so you're re-testing every ~6–8 weeks — enough to see real change, not so often it interrupts the work.",
+    why: "Batch these into one check-in window so labs, scans and lift re-tests land together every ~6–8 weeks — enough to see real change, not so often it interrupts the work.",
   };
 }
 
@@ -617,6 +774,10 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     healthCandidate(input),
     dexaCandidate(input),
     bodyCandidate(input),
+    // External producers (K3) — same shared arbitration, one voice.
+    riskCandidate(input),
+    journeyCandidate(input),
+    benchmarkCandidate(input),
     ...laterCandidates(input),
   ].filter((c): c is Candidate => c != null);
 
@@ -624,7 +785,7 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   // baked into the leverage scores (recovery-deload > training stall > running >
   // health act_now). If nothing is lead-eligible but a strong parallel exists
   // (e.g. a health act_now on an otherwise-steady athlete), promote it.
-  const leadEligible = candidates.filter((c) => c.slot === "lead").sort((a, b) => b.leverage - a.leverage);
+  const leadEligible = candidates.filter((c) => c.slot === "lead").sort(byScore);
   // Prefer a lead that does NOT conflict with an active injury / sore joint. A training
   // lever loading a flagged area is DEMOTED so a clean lever leads (the demoted one
   // still rides in parallel/later carrying its caveat). Only when there's no clean
@@ -632,7 +793,7 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   const cleanLeadEligible = leadEligible.filter((c) => !c.caveat);
   let lead = cleanLeadEligible[0] ?? null;
   if (!lead) {
-    const strongClean = candidates.filter((c) => !c.caveat && c.leverage >= 3.5 && c.slot !== "later").sort((a, b) => b.leverage - a.leverage)[0];
+    const strongClean = candidates.filter((c) => !c.caveat && c.leverage >= 3.5 && c.slot !== "later").sort(byScore)[0];
     lead = strongClean ?? leadEligible[0] ?? null;
   }
   const leadKey = lead?.key;
@@ -652,14 +813,14 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   // genuinely be worked simultaneously — e.g. diet handles lipids while you train).
   const parallel = candidates
     .filter((c) => c.key !== leadKey && c.slot !== "later" && c.item.domain !== leadDomain && c.leverage >= 2.0)
-    .sort((a, b) => b.leverage - a.leverage)
+    .sort(byScore)
     .slice(0, 2);
 
   const used = new Set<string>([leadKey, ...parallel.map((c) => c.key)].filter(Boolean) as string[]);
   // LATER: the explicit deferral — what we are NOT doing yet, in priority order.
   const later = candidates
     .filter((c) => !used.has(c.key))
-    .sort((a, b) => b.leverage - a.leverage)
+    .sort(byScore)
     .slice(0, 3)
     .map((c) => ({ domain: c.item.domain, title: c.item.title }));
 

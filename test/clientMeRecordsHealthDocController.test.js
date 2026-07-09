@@ -245,6 +245,9 @@ function loadController() {
       getItem: (key) => localStorage.get(key) || null,
     },
     $: (selector) => document.querySelector(selector),
+    peekCached: () => null,
+    swrSet: () => {},
+    swrInvalidate: () => {},
     CairnHealthClient: {
       H_FILE_PROMPT: "Drop docs",
       MAX_DOC_BYTES: 15 * 1024 * 1024,

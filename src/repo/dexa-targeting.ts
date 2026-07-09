@@ -15,10 +15,13 @@
 // mirroring src/repo/symptom-links.ts — never alarmist, never a diagnosis. Every read
 // is null-safe and quiet by default: no DEXA → `{ available: false }`.
 
+import type { DexaRegional } from "./dexa-canon.js";
 import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 import { examplesForGroup } from "./exercise-variations.js";
 import { getProfile } from "./profile.js";
 import { healthStanding } from "./standing.js";
+
+export type { DexaRegional };
 
 // ── public shape ─────────────────────────────────────────────────────────────
 
@@ -50,19 +53,8 @@ export interface DexaTargeting {
   next_dexa_focus: string | null;
 }
 
-// The `regional` object as produced by standing.ts `dexaRegional`.
-export interface DexaRegional {
-  visceral_fat_lbs: number | null;
-  almi: number | null;
-  ffmi: number | null;
-  bmd_total: number | null;
-  t_score: number | null;
-  z_score: number | null;
-  android_gynoid: number | null;
-  fat: { trunk: number | null; arms: number | null; legs: number | null };
-  lean: { trunk: number | null; arms: number | null; legs: number | null };
-  notes?: any[];
-}
+// The canonical `DexaRegional` shape (produced by standing.ts `dexaRegional` via the
+// DEXA canon) is imported + re-exported at the top of this file.
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

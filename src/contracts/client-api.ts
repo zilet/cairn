@@ -1155,16 +1155,48 @@ export interface ClientRiskHorizon {
   thirty_year: number | null;
 }
 
+export interface ClientRiskProjectionOutcome {
+  ten_year: number | null;
+  thirty_year: number | null;
+  vascular_age: number | null;
+}
+
+export interface ClientRiskLeverApplied {
+  key: string;
+  label: string;
+  from: number;
+  to: number;
+  unit: string;
+  detail: string;
+}
+
+export interface ClientPreventProjection {
+  current: ClientRiskProjectionOutcome;
+  targets_met: ClientRiskProjectionOutcome;
+  levers_applied: ClientRiskLeverApplied[];
+}
+
+export type ClientRiskCategory = "low" | "borderline" | "intermediate" | "high";
+
 export interface ClientPreventEstimate {
   provisional: boolean;
   assumptions: ClientPreventAssumption[];
   confidence: "provisional" | "high";
+  // ACC/AHA 10-year ASCVD band (low/borderline/intermediate/high) + a plain-
+  // language, whole-picture interpretation. A clinical category, NOT a 0-100
+  // wellness grade. Null/empty on older payloads.
+  category?: ClientRiskCategory | null;
+  interpretation?: string;
   estimates: {
     total_cvd: ClientRiskHorizon;
     ascvd: ClientRiskHorizon;
     heart_failure: ClientRiskHorizon;
   };
   vascular_age: number | null;
+  // A REAL recompute of PREVENT with the modifiable levers at target — genuine
+  // current-vs-targets-met risk, not invented ribbon geometry. Null-safe for
+  // older payloads.
+  projection?: ClientPreventProjection | null;
   horizons_note: string;
   frame: string;
 }

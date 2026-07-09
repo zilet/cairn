@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { findExercise } from "./exercises.js";
+import { estimateExpenditure } from "./expenditure.js";
 import { lsqSlopePerDay } from "./health.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
@@ -660,7 +661,23 @@ export function computeGoalCheck(prof?: any) {
   const kg = p.weight_lb / LB_PER_KG;
   const sexAdj = (p.sex || "male") === "female" ? -161 : 5;
   const bmr = 10 * kg + 6.25 * p.height_cm - 5 * p.age + sexAdj;
-  const tdee = Math.round(bmr * (p.activity_factor || 1.5));
+  // The manual activity factor is a COLD-START seed. Once there's enough real
+  // logging to trust the MacroFactor-style derivation (HIGH confidence only —
+  // ≥2 weeks of intake AND weigh-ins over ≥2 weeks), prefer the athlete's
+  // measured expenditure so the target reflects reality, not a guessed multiplier.
+  // Thin data keeps the factor, so a light logging week never distorts the target.
+  const factorTdee = Math.round(bmr * (p.activity_factor || 1.5));
+  let tdee = factorTdee;
+  let tdee_source: "activity_factor" | "adaptive" = "activity_factor";
+  try {
+    const exp = estimateExpenditure();
+    if (exp.confidence === "high" && exp.tdee != null && exp.tdee > 0) {
+      tdee = exp.tdee;
+      tdee_source = "adaptive";
+    }
+  } catch {
+    /* no adaptive data / DB hiccup → keep the factor-derived TDEE */
+  }
 
   const mode = effectiveGoalMode(p);
   const lbsToLose = p.goal_weight_lb != null ? Math.max(0, p.weight_lb - p.goal_weight_lb) : 0;
@@ -770,7 +787,7 @@ export function computeGoalCheck(prof?: any) {
       };
 
   return {
-    ok: true, bmr: Math.round(bmr), tdee, lbs_to_lose: lbsToLose,
+    ok: true, bmr: Math.round(bmr), tdee, tdee_source, lbs_to_lose: lbsToLose,
     // The effective journey shape (v41) — drives the day-intake target framing,
     // the pace verdict, and every nutrition prompt. Additive; older consumers ignore.
     goal_mode: mode,

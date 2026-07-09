@@ -11,6 +11,7 @@ import * as repo from "../repo.js";
 import {
   CONTEXT_GUARDRAILS,
   renderActiveContext,
+  renderCoachingFocus,
   renderNow,
   renderReactionModel,
   renderTodayFuel,
@@ -89,13 +90,6 @@ export function parseChatReply(text: string): { reply: string; actions: ChatActi
   return { reply, actions: normalizeChatActions(actions) };
 }
 
-// THE ONE NEXT STEP — the single highest-leverage action across all domains.
-function renderNextStep(ctx: any): string {
-  const n = ctx?.next_step;
-  if (!n || !n.title) return "";
-  return `\nTHE ONE NEXT STEP (the single highest-leverage thing across all domains right now — lead with THIS if they ask what to do, but they drive; never a to-do wall): ${String(n.title).trim()}${n.why ? ` — ${String(n.why).trim()}` : ""}\n`;
-}
-
 // Conversational coach. Sees all data; may emit actions the server applies/drafts.
 // imagePath: absolute path of a photo the user attached this turn — the agent
 // CLIs (Claude Code / Codex) can open local files, same trick as health docs.
@@ -155,7 +149,7 @@ GUARDRAILS:
 ${CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
-${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}${renderNextStep(ctx)}
+${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderTodayFuel(ctx)}
 Keep the reply short and human; confirm what you logged or drafted. When the user says a lift
 "felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only draft a
 bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.

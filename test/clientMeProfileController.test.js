@@ -89,6 +89,8 @@ class FakeElement {
     if (selector === "[data-sex]") return Object.hasOwn(this.dataset, "sex");
     if (selector === "[data-egmode]") return Object.hasOwn(this.dataset, "egmode");
     if (selector === "[data-goalmode]") return Object.hasOwn(this.dataset, "goalmode");
+    if (selector === "[data-actlevel]") return Object.hasOwn(this.dataset, "actlevel");
+    if (selector === "[data-unit]") return Object.hasOwn(this.dataset, "unit");
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
     return false;
   }
@@ -133,6 +135,8 @@ class FakeElement {
     this.attachButtons("discSeg", "disc", ["strength", "endurance", "hybrid"]);
     this.attachButtons("endGoalMode", "egmode", ["none", "race", "standing"]);
     this.attachButtons("goalModeSeg", "goalmode", ["lose", "maintain", "gain"]);
+    this.attachButtons("activityLevelSeg", "actlevel", ["1.3", "1.45", "1.55", "1.7", "1.8"]);
+    this.attachButtons("profUnitToggle", "unit", ["in", "cm"]);
   }
 
   attachButtons(containerId, datasetKey, values) {
@@ -160,6 +164,8 @@ function loadController() {
     Object,
     Promise,
     String,
+    peekCached: () => null,
+    swrSet: () => {},
     window: null,
     globalThis: null,
   };
@@ -310,9 +316,11 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   await harness.context.CairnMeProfileController.renderProfile(harness.deps);
   harness.rootEl.querySelector("#name").value = "Milos";
   harness.rootEl.querySelector("#age").value = "42";
-  harness.rootEl.querySelector("#height_cm").value = "182.5";
-  harness.rootEl.querySelector("#weight_lb").value = "181.2";
-  harness.rootEl.querySelector("#goal_weight_lb").value = "188";
+  // Imperial is the default unit (no locale/localStorage in the vm): feet + inches.
+  harness.rootEl.querySelector("#height_ft").value = "5";
+  harness.rootEl.querySelector("#height_in_part").value = "11";
+  harness.rootEl.querySelector("#weight_val").value = "181.2";
+  harness.rootEl.querySelector("#goal_weight_val").value = "188";
   harness.rootEl.querySelector("#goal_date").value = "2026-12-01";
   harness.rootEl.querySelector("#activity_factor").value = "1.6";
   harness.rootEl.querySelector("#endurance_sport").value = "running";
@@ -331,11 +339,14 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
 
   assert.equal(harness.requests.at(-1).path, "/profile");
   assert.equal(harness.requests.at(-1).opts.method, "PUT");
+  // Storage stays imperial: height_in is the source-of-truth (5'11" = 71 in), with
+  // a derived height_cm kept in sync; the clinical CV flags are gone from Profile.
   assert.deepEqual(harness.saved, {
     name: "Milos",
     age: 42,
     sex: "female",
-    height_cm: 182.5,
+    height_in: 71,
+    height_cm: 180.3,
     weight_lb: 181.2,
     goal_weight_lb: 188,
     goal_date: "2026-12-01",
@@ -347,14 +358,59 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
     about_me: "Train around family",
     allergies: "nuts",
     dietary_restrictions: "pescatarian",
-    smoking: null,
-    bp_treated: null,
-    statin: null,
   });
-  assert.deepEqual(harness.invalidations, ["profile", "stats", "progress:weight", "progress:energy"]);
+  assert.deepEqual(harness.invalidations, ["profile", "me:goal", "stats", "progress:weight", "progress:energy"]);
   assert.equal(harness.goalFlags.at(-1), true);
   assert.equal(harness.toasts.at(-1), "Your running plan now lives in Plan → Endurance");
   assert.equal(harness.renderCount, 1);
+});
+
+test("Me Profile activity-level pills map a human label to the stored activity_factor number", async () => {
+  // The default profile is activity_factor 1.55 → the selector opens on
+  // "Moderately active" and seeds the hidden number input with the same value.
+  const harness = profileHarness({ profile: { primary_discipline: "strength", endurance_goal_json: null } });
+  await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+
+  const hidden = harness.rootEl.querySelector("#activity_factor");
+  assert.equal(hidden.value, "1.55", "opens on the nearest level to the stored factor");
+
+  // Pick "Very active" (1.7) → the hidden number + the one-line description update.
+  harness.rootEl.querySelectorAll("[data-actlevel]").find((b) => b.dataset.actlevel === "1.7").click();
+  assert.equal(hidden.value, "1.7");
+  assert.match(harness.rootEl.querySelector("#activityLevelDesc").textContent, /Hard training most days/);
+
+  // Saving stores the mapped NUMBER (goal-check math is unchanged).
+  assert.equal(await harness.deps.saveOptions.onSave(), true);
+  assert.equal(harness.saved.activity_factor, 1.7);
+});
+
+test("Me Profile controller converts body inputs when the unit toggle flips, storing imperial", async () => {
+  const harness = profileHarness({ profile: { primary_discipline: "strength", endurance_goal_json: null } });
+
+  await harness.context.CairnMeProfileController.renderProfile(harness.deps);
+  // Enter imperial values, then switch to metric — height/weight convert IN PLACE.
+  harness.rootEl.querySelector("#height_ft").value = "5";
+  harness.rootEl.querySelector("#height_in_part").value = "10";
+  harness.rootEl.querySelector("#weight_val").value = "200";
+  harness.rootEl.querySelector("#goal_weight_val").value = "190";
+
+  harness.rootEl.querySelectorAll("[data-unit]").find((b) => b.dataset.unit === "cm").click();
+
+  assert.equal(harness.rootEl.querySelector("#height_cm_val").value, "177.8"); // 70 in → cm
+  assert.equal(harness.rootEl.querySelector("#weight_val").value, "90.7"); // 200 lb → kg
+  assert.equal(harness.rootEl.querySelector("#goal_weight_val").value, "86.2");
+  assert.equal(harness.rootEl.querySelector("#weightUnit").textContent, "kg");
+  assert.equal(harness.rootEl.querySelector("#goalWeightUnit").textContent, "kg");
+  assert.equal(harness.rootEl.querySelector("#heightImperial").style.display, "none");
+  assert.equal(harness.rootEl.querySelector("#heightMetric").style.display, "");
+
+  // Saving from metric mode still writes imperial to the server.
+  assert.equal(await harness.deps.saveOptions.onSave(), true);
+  assert.equal(harness.saved.height_in, 70);
+  assert.equal(harness.saved.height_cm, 177.8);
+  assert.equal(harness.saved.weight_lb, 200);
+  assert.equal(harness.saved.goal_weight_lb, 190);
+  assert.equal(Object.hasOwn(harness.saved, "smoking"), false);
 });
 
 test("Me Profile controller does not clear an existing race goal when the date is missing", async () => {

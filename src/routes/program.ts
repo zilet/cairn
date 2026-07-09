@@ -28,6 +28,7 @@ import {
   setEquipmentProfile,
   setProposalStatus,
   testWeekDue,
+  trainingPlaybook,
   updateBlock,
   weeklyRunPlan,
 } from "../domain/training/index.js";
@@ -219,6 +220,16 @@ programRouter.get("/muscle-trajectory", (req, res) =>
 programRouter.get("/test-week", (req, res) =>
   res.json(testWeekDue(req.query.date ? String(req.query.date) : undefined))
 );
+// The deterministic TRAINING PLAYBOOK — plateau-type plays (strength/endurance/
+// mono-stimulus/hybrid-interference) + an adherence-fit restructure read, each with
+// plain-language adaptations the evolve-program loop can focus on. Suggestion only:
+// never mutates the plan, never a score. Quiet ("no signal strong enough") at steady
+// state. ?date= / ?window= optional.
+programRouter.get("/program/playbook", (req, res) => {
+  const date = req.query.date ? String(req.query.date) : undefined;
+  const windowDays = Number(req.query.window) > 0 ? Number(req.query.window) : undefined;
+  res.json(trainingPlaybook(date, windowDays !== undefined ? { windowDays } : {}));
+});
 // DEXA-driven targeting: the body scan's regional read → concrete training +
 // nutrition targets, each with a "path to your next scan". {available:false} w/o DEXA.
 programRouter.get("/dexa-targeting", (_req, res) => res.json(dexaTargeting()));

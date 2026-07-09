@@ -32,7 +32,7 @@ function wipe() {
   const tables = [
     "logged_sets", "session_skips", "sessions", "plan_items", "plan_days", "exercises",
     "bodyweight_log", "body_measurements", "activities", "daily_metrics", "garmin_activities", "garmin_daily_metrics",
-    "garmin_sources", "health_documents", "health_reviews", "health_directives", "insights",
+    "garmin_sources", "health_documents", "blood_pressure_readings", "health_reviews", "health_directives", "insights",
     "memory", "family_members", "context_events", "checkins", "meal_plans", "food_notes",
     "chat_messages", "day_reads", "suggestions", "plan_proposals", "evidence_cache",
     "art_assets", "art_aliases", "art_usage", "app_state",
@@ -53,7 +53,13 @@ function profile() {
     sex: "female",
     age: 41,
     height_cm: 167,
+    height_in: 65.7, // 167 cm — the modern lb/in field the risk read + BMI use
     weight_lb: 149,
+    // Non-smoker, no antihypertensive, no statin — captured so the PREVENT read
+    // renders as a confident (non-provisional) computed card out of the box.
+    smoking: 0,
+    bp_treated: 0,
+    statin: 0,
     goal_weight_lb: 142,
     goal_date: iso(-77), // ~11 weeks out
     activity_factor: 1.45,
@@ -268,6 +274,7 @@ function markers() {
     {
       date: iso(410), summary: "Baseline panel. ApoB and LDL elevated; vitamin D low; ferritin low-normal; inflammation mildly up.",
       markers: [
+        { name: "Total Cholesterol", value: 210, flag: "high", unit: "mg/dL" },
         { name: "ApoB", value: 108, flag: "normal", unit: "mg/dL" },
         { name: "LDL-C", value: 132, flag: "high", unit: "mg/dL" },
         { name: "HDL-C", value: 54, flag: "normal", unit: "mg/dL" },
@@ -285,6 +292,7 @@ function markers() {
     {
       date: iso(190), summary: "Six-month recheck. Lipids improving with diet changes; vitamin D climbing; ferritin slipping.",
       markers: [
+        { name: "Total Cholesterol", value: 194, flag: "normal", unit: "mg/dL" },
         { name: "ApoB", value: 99, flag: "normal", unit: "mg/dL" },
         { name: "LDL-C", value: 119, flag: "normal", unit: "mg/dL" },
         { name: "HDL-C", value: 56, flag: "normal", unit: "mg/dL" },
@@ -302,6 +310,7 @@ function markers() {
     {
       date: iso(22), summary: "Latest panel. ApoB trending the right way but still above optimal; vitamin D low-optimal; ferritin now low — worth watching alongside the trail mileage.",
       markers: [
+        { name: "Total Cholesterol", value: 185, flag: "normal", unit: "mg/dL" },
         { name: "ApoB", value: 92, flag: "normal", unit: "mg/dL" },
         { name: "LDL-C", value: 110, flag: "normal", unit: "mg/dL" },
         { name: "HDL-C", value: 58, flag: "normal", unit: "mg/dL" },
@@ -353,6 +362,11 @@ function markers() {
     ] },
     summary: "Follow-up DEXA — body fat down to 27.6%, lean mass held (97.1 lb). Recomp is working.", enrichment_status: "done",
   });
+  // Blood-pressure vitals — a small improving trend so "Systolic BP" is a real
+  // series and PREVENT's required systolic input (plus the cardiovascular risk
+  // card + trajectory ribbon) renders out of the box.
+  repo.addBloodPressureReading({ measured_at: iso(120), systolic: 122, diastolic: 79, pulse: 60, source: "manual", position: "seated" });
+  repo.addBloodPressureReading({ measured_at: iso(18), systolic: 116, diastolic: 74, pulse: 57, source: "manual", position: "seated" });
 }
 
 // ---------- the agentic whole-picture health review (Me → Health → Analysis) ----------

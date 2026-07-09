@@ -4,27 +4,7 @@
 import { db } from "../db.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
-
-const HEAVY_SETS = 4;
-
-type EnduranceRegion = {
-  re: RegExp;
-  label: string;
-  regions: MuscleGroup[];
-  heavyMin: number;
-  heavyKm: number;
-};
-
-// Per-modality thresholds: conservative prime movers only. A real long/hard run
-// loads legs and trunk; a casual walk should not block lower-body training.
-const ENDURANCE_REGIONS: EnduranceRegion[] = [
-  { re: /\b(ride|cycl|bik|mtb|gravel|spin|peloton)/, label: "ride", regions: ["quads", "hamstrings", "glutes", "calves", "core"], heavyMin: 75, heavyKm: 30 },
-  { re: /\b(run|jog|sprint|tempo|interval)/, label: "run", regions: ["quads", "hamstrings", "glutes", "calves", "core"], heavyMin: 55, heavyKm: 9 },
-  { re: /\b(hik|walk|ruck|trek|stair|stepper|elliptical)/, label: "hike", regions: ["quads", "glutes", "calves", "hamstrings"], heavyMin: 120, heavyKm: 16 },
-  { re: /\b(row|erg|kayak|paddle)/, label: "row", regions: ["back", "hamstrings", "glutes", "core"], heavyMin: 45, heavyKm: 8 },
-  { re: /\b(swim)/, label: "swim", regions: ["back", "shoulders", "chest", "core"], heavyMin: 45, heavyKm: 2.5 },
-  { re: /\b(ski|skat|snowboard)/, label: "session", regions: ["quads", "glutes", "calves", "hamstrings"], heavyMin: 90, heavyKm: 15 },
-];
+import { HEAVY_SETS, type EnduranceModality, matchEnduranceModality } from "./heavy-load.js";
 
 export interface RecentLoad {
   group: MuscleGroup;
@@ -52,17 +32,6 @@ export interface EnduranceImpact {
   why: string;
 }
 
-function normalizeActivityText(text: string): string {
-  return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function matchEnduranceRegion(text: string): EnduranceRegion | null {
-  const norm = normalizeActivityText(text);
-  if (!norm) return null;
-  for (const m of ENDURANCE_REGIONS) if (m.re.test(norm)) return m;
-  return null;
-}
-
 function durPhrase(min: number | null, km: number | null): string {
   if (min != null && min > 0) return min >= 90 ? `~${Math.round(min / 60)} h` : `~${Math.round(min / 5) * 5} min`;
   if (km != null && km > 0) return `~${Math.round(km)} km`;
@@ -88,7 +57,7 @@ function z45Seconds(raw: unknown): number {
 }
 
 function classifyImpactLoad(
-  region: EnduranceRegion,
+  region: EnduranceModality,
   dur: number | null,
   km: number | null,
   ate: number | null,
@@ -131,7 +100,7 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
     ).all(since, today) as any[];
     return acts
       .map((a): EnduranceImpact | null => {
-        const region = matchEnduranceRegion(`${a.type || ""} ${a.raw_text || ""} ${a.notes || ""}`);
+        const region = matchEnduranceModality(`${a.type || ""} ${a.raw_text || ""} ${a.notes || ""}`);
         if (!region) return null;
         const dur = a.duration_min != null ? Number(a.duration_min) : null;
         const km = a.distance_km != null ? Number(a.distance_km) : null;
