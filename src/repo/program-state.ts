@@ -15,6 +15,11 @@
 import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getRecoverySummary } from "./coach.js";
+import {
+  currentTrainingDataVersion,
+  registerTrainingCacheClear,
+  trainingBackstopSignature,
+} from "./training-cache.js";
 import { canonicalGroup, classifyMuscleGroup, MUSCLE_LANDMARKS, type MuscleGroup } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { effectiveGoalMode, getPrimaryDiscipline, getProfile } from "./profile.js";
@@ -778,7 +783,34 @@ function hybridState(date: string, endurance: EnduranceState | null, discipline:
 }
 
 // ---- the aggregate ----
+// MEMOIZED (repo/training-cache.ts): a single page render fans this heavy read
+// (~100–200 synchronous queries — an N+1 over every distinct exercise, each an
+// unbounded est-1RM history scan) out several times. It's a pure function of the
+// logged training + recovery data for a given date, so memoize on (date, training
+// version + SQL backstop) and serve a structuredClone (callers sort/mutate lifts).
+//
+// Why `recovery` is NOT in the key: getProgramState(date, recovery) is only ever
+// passed a recovery equal to getRecoverySummary(14) of the CURRENT data (getCoachContext
+// threads exactly that; every other caller passes none, so mesocycle() computes the
+// same thing internally). Recovery-source tables (daily_metrics / garmin_daily_metrics)
+// are in the backstop and bump the version, so a fixed (date, version) pins one recovery
+// → one result, whether the object is passed or recomputed.
+//
+// Single-slot (bounded) — the hot path is always `today`; a rare historical ?date=
+// simply misses and replaces. Registered for the test-isolate reset.
+let programStateCache: { key: string; value: ProgramState } | null = null;
+registerTrainingCacheClear(() => { programStateCache = null; });
+
 export function getProgramState(date?: string, recovery?: any): ProgramState {
+  const d = date || localDateISO();
+  const key = `${d}|${currentTrainingDataVersion()}|${trainingBackstopSignature()}`;
+  if (programStateCache && programStateCache.key === key) return structuredClone(programStateCache.value);
+  const value = computeProgramState(d, recovery);
+  programStateCache = { key, value };
+  return structuredClone(value);
+}
+
+function computeProgramState(date?: string, recovery?: any): ProgramState {
   const d = date || localDateISO();
   const discipline = getPrimaryDiscipline();
   const lifts = liftStates(d);

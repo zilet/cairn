@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { constraintLimitsLoad, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exercises.js";
 import { invalidateDayRead } from "./intelligence.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---------- plan ----------
 // LEFT JOIN on exercises (v35): a cardio plan item (kind='cardio') has no
@@ -495,6 +496,9 @@ export function savePlanDay(day_number: number, name: string, focus: string | nu
   // A changed plan day can change what "today" points at (focus/frequency) — refresh
   // the cached Brief so an applied edit isn't read against the old day from any surface.
   invalidateDayRead();
+  // plan_days count feeds getWeeklyStats.week_planned; bump covers a same-count in-place
+  // day rewrite too (setWeeklyRuns + replacePlan reach here, so they're covered as well).
+  bumpTrainingDataVersion();
   return getPlanDay(day_number);
 }
 
@@ -561,6 +565,7 @@ export function deletePlanDay(day_number: number) {
   if (!d) return { deleted: 0, day_number };
   db.prepare(`UPDATE sessions SET plan_day_id = NULL WHERE plan_day_id = ?`).run(d.id); // keep history, drop the link
   const r = db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(d.id); // plan_items cascade
+  if (r.changes) bumpTrainingDataVersion(); // removing a day changes week_planned
   return { deleted: r.changes, day_number };
 }
 

@@ -11,6 +11,12 @@ import { listFoodNotes, listMealPlans } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { effectiveGoalMode, getProfile, leanGainRate, listWeight } from "./profile.js";
 import { getSettings } from "./settings.js";
+import {
+  bumpTrainingDataVersion,
+  currentTrainingDataVersion,
+  registerTrainingCacheClear,
+  trainingBackstopSignature,
+} from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
 
 // ---------- sessions ----------
@@ -109,6 +115,7 @@ export function finishSession(sessionId: number, notes?: string | null) {
   }
   db.prepare(`UPDATE sessions SET duration_min = ?, notes = COALESCE(?, notes), finished_at = datetime('now') WHERE id = ?`)
     .run(duration_min, notes ?? null, sessionId);
+  bumpTrainingDataVersion();
   return { ...getSessionDetail(sessionId), summary: sessionSummary(sessionId) };
 }
 
@@ -155,6 +162,7 @@ export function setSessionFeedback(
   if (sets.length) {
     vals.push(session.id);
     db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+    bumpTrainingDataVersion(); // soreness/performance bends the program-state deload read
   }
   // A fresh 1-tap soreness/performance/joint signal is a day-read input (its sibling
   // addCheckin already busts the Brief) — refresh so today's read reflects it.
@@ -259,6 +267,7 @@ export function logSetByName(input: LogSetInput) {
     )
     .run(session.id, ex.id, setNumber, input.weight ?? null, input.reps ?? null, input.rir ?? null, input.note ?? null, input.duration_sec ?? null);
 
+  bumpTrainingDataVersion(); // a new logged set moves lifts/volume/weekly reads
   invalidateDayRead(date); // logging a set flips "trained today" → refresh the Brief
 
   // PR check. Reps exercises: a new all-time est-1RM (Epley). Timed exercises:
@@ -298,7 +307,9 @@ export function logSetByName(input: LogSetInput) {
 }
 
 export function deleteSet(id: number) {
-  return { deleted: db.prepare(`DELETE FROM logged_sets WHERE id = ?`).run(id).changes };
+  const deleted = db.prepare(`DELETE FROM logged_sets WHERE id = ?`).run(id).changes;
+  if (deleted) bumpTrainingDataVersion();
+  return { deleted };
 }
 
 // Edit a single logged set after the fact (history correction: a mistyped weight,
@@ -323,6 +334,7 @@ export function updateSet(
   if (sets.length) {
     vals.push(id);
     db.prepare(`UPDATE logged_sets SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+    bumpTrainingDataVersion(); // an in-place set correction the SQL backstop can't see
   }
   return db.prepare(
     `SELECT ls.*, e.name AS exercise, e.mode AS mode FROM logged_sets ls
@@ -477,7 +489,28 @@ export function getEndurancePRs(type?: string | null): EndurancePRs {
 
 // Compact dashboard: training days + tonnage over the last 7 days, plus a
 // consistency streak (consecutive days with a logged session or activity).
-export function getWeeklyStats(date?: string) {
+//
+// MEMOIZED (repo/training-cache.ts): a single Today render calls this up to ~6×
+// (routes /stats + /today, twice inside healthStanding, three producers in
+// todayAgenda). It's a pure function of the logged training/weigh-in/plan data for
+// a date, so memoize on (date, training version + SQL backstop) and serve a
+// structuredClone. Single-slot — the hot path is always `today`.
+let weeklyStatsCache: { key: string; value: WeeklyStats } | null = null;
+registerTrainingCacheClear(() => { weeklyStatsCache = null; });
+
+type WeeklyStats = ReturnType<typeof computeWeeklyStats>;
+
+export function getWeeklyStats(date?: string): WeeklyStats {
+  const requested = String(date || "").slice(0, 10);
+  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : localDateISO();
+  const key = `${anchor}|${currentTrainingDataVersion()}|${trainingBackstopSignature()}`;
+  if (weeklyStatsCache && weeklyStatsCache.key === key) return structuredClone(weeklyStatsCache.value);
+  const value = computeWeeklyStats(date);
+  weeklyStatsCache = { key, value };
+  return structuredClone(value);
+}
+
+function computeWeeklyStats(date?: string) {
   const requested = String(date || "").slice(0, 10);
   const today = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : localDateISO();
   // Anchor the rolling windows to LOCAL today (the same anchor the streak/Monday
@@ -904,6 +937,11 @@ export function getProgress(exerciseName: string) {
   const profRow = db.prepare("SELECT weight_lb FROM profile WHERE id = 1").get() as any;
   const bodyweightLb: number | null = profRow?.weight_lb != null ? Number(profRow.weight_lb) : null;
 
+  // Full, UNBOUNDED history on purpose: an all-time est-1RM and PR detection are only
+  // correct over every set ever logged for this lift — a window could miss the true max.
+  // The cost is contained by CALLERS, not here: getProgramState (the N+1 that hits this
+  // per distinct exercise) is memoized on the training-data version, so a page render
+  // pays this scan once per lift per data change, not on every read. Left unbounded.
   const rows = db
     .prepare(
       `SELECT s.date AS date, ls.weight AS weight, ls.reps AS reps, ls.rir AS rir

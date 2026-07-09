@@ -17,6 +17,7 @@ import { beforeEach } from "node:test";
 import { db } from "../dist/db.js";
 import { resetMarkerHistoryCache } from "../dist/repo/health.js";
 import { resetDayReadRefresh } from "../dist/dayread-refresh.js";
+import { resetTrainingDataCache } from "../dist/repo/training-cache.js";
 
 // The schema is fixed for the life of the process, so enumerate + prepare once.
 const tables = db
@@ -47,4 +48,8 @@ beforeEach(() => {
   // it (and restore default hooks) so it can never leak into — or spawn a CLI during —
   // a later test.
   resetDayReadRefresh();
+  // Same hazard for the training memos (getProgramState / getWeeklyStats /
+  // estimateExpenditure): reset their counters to 0 and drop every registered memo so a
+  // same-shape next test can't land on a colliding key and read a prior test's read.
+  resetTrainingDataCache();
 });

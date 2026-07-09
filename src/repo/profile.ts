@@ -7,6 +7,7 @@ import { getActiveNutritionTarget, setNutritionTarget } from "./nutrition.js";
 import { type ClampAdjustment, type RunPrescription, applyPlanChange, replacePlan, setWeeklyRuns } from "./plan.js";
 import { getProgress } from "./sessions.js";
 import { LB_PER_KG, localDateISO } from "./shared.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---------- exercise guide ----------
 export function getExerciseDetail(name: string) {
@@ -412,6 +413,9 @@ export function setProfile(p: any) {
        endurance_goal_json=excluded.endurance_goal_json,
        smoking=excluded.smoking, bp_treated=excluded.bp_treated, statin=excluded.statin, updated_at=datetime('now')`
   ).run(merged.name, merged.sex, merged.age, merged.height_cm, merged.height_in, merged.weight_lb, merged.start_weight_lb, merged.start_date, merged.goal_weight_lb, merged.goal_bodyfat_pct, merged.goal_date, merged.goal_mode, merged.activity_factor, merged.notes, merged.about_me, merged.allergies, merged.dietary_restrictions, merged.primary_discipline, merged.endurance_sport, merged.endurance_goal_json, merged.smoking, merged.bp_treated, merged.statin);
+  // Profile is UPDATEd in place (single row), so the SQL backstop's count/max can't
+  // see a sex/age/goal/weight change — bump so program/weekly/expenditure reads refresh.
+  bumpTrainingDataVersion();
   return getProfile();
 }
 
@@ -555,6 +559,7 @@ export function logWeight(weight_lb: number, date?: string, note?: string) {
   const info = db
     .prepare(`INSERT INTO bodyweight_log (date, weight_lb, note) VALUES (?, ?, ?)`)
     .run(d, weight_lb, note ?? null);
+  bumpTrainingDataVersion(); // a weigh-in moves the weekly trend + expenditure reads
   // Keep the profile's current weight in sync with the most recent entry.
   const latest = db.prepare(`SELECT weight_lb FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() as any;
   if (latest) setProfile({ weight_lb: latest.weight_lb });
