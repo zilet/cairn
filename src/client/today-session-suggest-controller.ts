@@ -13,6 +13,7 @@ type TodaySessionSuggestRunOptions = {
   path: "/session-suggest";
   anchor: "#sugSlot";
   caption: "session_suggest";
+  stream: true;
   guard: () => boolean;
   isFail: (result: unknown) => boolean;
   render: (result: unknown) => void;
@@ -61,6 +62,9 @@ type TodaySessionSuggestDeps = {
       path: "/session-suggest",
       anchor: "#sugSlot",
       caption: "session_suggest",
+      // Stream the session's "why" into the card as the coach writes it (stream-capable
+      // agents); the done render swaps in the full session card in place.
+      stream: true,
       guard: () => {
         const gone = !suggestSlot(deps)?.isConnected;
         if (gone) sessionSuggestInFlight = false;

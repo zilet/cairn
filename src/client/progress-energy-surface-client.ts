@@ -51,6 +51,9 @@ type ProgressEnergyRecord = Record<string, unknown>;
       path: "/nutrition/checkin",
       anchor: "#checkinResult",
       caption: "nutrition_checkin",
+      // Stream the check-in's read into the card as it's written; done swaps in the
+      // ok / proposal card in place.
+      stream: true,
       guard: () => {
         const gone = !view.querySelector("#checkinResult")?.isConnected;
         if (gone) done();

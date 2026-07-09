@@ -1038,6 +1038,7 @@ function triggerStandRead(): void {
     path: "/health/synthesis",
     anchor: ".stand-read",
     caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
+    stream: true,
     guard: () => !(state.tab === "stand" && !state.standSeg),
     render: () => { void reloadStandRead(); },
     onFail: () => {
