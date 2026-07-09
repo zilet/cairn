@@ -203,8 +203,8 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
 });
 
 test("the 2D body figure is the one true Stand figure — no 3D remnants", () => {
-  // Track E's WebGL body was retired for elite 2D (docs/VIZ-3D-ATELIER.md
-  // epilogue) — nothing may quietly reintroduce a Three/WebGL body path.
+  // A WebGL body experiment was retired in favor of the elite 2D figure —
+  // nothing may quietly reintroduce a Three/WebGL body path.
   const bodyMetricsSource = read("src/client/body-metrics-client.ts");
   assert.match(bodyMetricsSource, /class="bm-figure-fallback"/, "2D body figure remains the Stand first paint");
   assert.doesNotMatch(bodyMetricsSource, /Body3D|body-3d|bm-body3d/, "no 3D promotion wiring in body metrics");
