@@ -6,6 +6,7 @@
 // Split out of the former intelligence.ts monolith (K4). Plan-day selection lives
 // in plan-selection.ts; adaptive nutrition in expenditure.ts.
 import { db } from "../db.js";
+import { scheduleDayReadRefresh } from "../dayread-refresh.js";
 import { invalidateBrainSnapshot } from "../brain/snapshot.js";
 import { resolveDayReadRule, type DayReadRule } from "./brain/day-read-rules.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
@@ -489,6 +490,11 @@ export function invalidateDayRead(date?: string): void {
   const d = date || localDateISO();
   invalidateBrainSnapshot("day_read");
   try { db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(d); } catch {}
+  // Fresh-wake: schedule a debounced, coalesced, fire-and-forget background
+  // recompute so the athlete's next open serves a warm agentic read instead of
+  // paying the ~90s agent run inline. Best-effort + off the write path — it only
+  // acts when `d` covers today AND an agent is usable (see src/dayread-refresh.ts).
+  try { scheduleDayReadRefresh(d); } catch {}
 }
 
 // ---------- T5: frequent foods by time of day ----------

@@ -558,6 +558,9 @@ export function logWeight(weight_lb: number, date?: string, note?: string) {
   // Keep the profile's current weight in sync with the most recent entry.
   const latest = db.prepare(`SELECT weight_lb FROM bodyweight_log ORDER BY date DESC, id DESC LIMIT 1`).get() as any;
   if (latest) setProfile({ weight_lb: latest.weight_lb });
+  // A fresh weigh-in is a brain signal (it moves the weight trend the day-read +
+  // energy-balance read speak to) — refresh the Brief like its sibling signals do.
+  invalidateDayRead(d);
   return db.prepare(`SELECT * FROM bodyweight_log WHERE id = ?`).get(info.lastInsertRowid);
 }
 

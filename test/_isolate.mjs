@@ -16,6 +16,7 @@
 import { beforeEach } from "node:test";
 import { db } from "../dist/db.js";
 import { resetMarkerHistoryCache } from "../dist/repo/health.js";
+import { resetDayReadRefresh } from "../dist/dayread-refresh.js";
 
 // The schema is fixed for the life of the process, so enumerate + prepare once.
 const tables = db
@@ -42,4 +43,8 @@ beforeEach(() => {
   // counter), and rowids can collide across a wipe — so the in-process marker-history
   // memo could otherwise serve a prior test's markers. Drop it explicitly here.
   resetMarkerHistoryCache();
+  // A brain-signal write in one test arms a debounced day-read recompute timer; clear
+  // it (and restore default hooks) so it can never leak into — or spawn a CLI during —
+  // a later test.
+  resetDayReadRefresh();
 });
