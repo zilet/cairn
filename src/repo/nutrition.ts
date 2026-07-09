@@ -1,4 +1,5 @@
 import { db, todayISO } from "../db.js";
+import { emitEnrichTransition } from "../enrichBus.js";
 import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck } from "./profile.js";
 import { getSettings } from "./settings.js";
@@ -363,7 +364,9 @@ export function updateFoodNoteParsed(id: number, parsed: any) {
 
 export function setFoodNoteEnrichStatus(id: number, status: string) {
   db.prepare(`UPDATE food_notes SET enrichment_status = ? WHERE id = ?`).run(status, id);
-  return getFoodNote(id);
+  const row = getFoodNote(id);
+  emitEnrichTransition("food", id, row); // wake any SSE watcher on this row
+  return row;
 }
 
 // ---------- daily intake review (v41) ----------
@@ -467,7 +470,11 @@ export function updateFoodNote(id: number, fields: any) {
     db.prepare(`UPDATE food_notes SET meal = ? WHERE id = ?`).run(String(f.meal).trim().slice(0, 40), id);
   }
   bumpFoodDataVersion(); // an in-place kcal correction the SQL backstop can't see
-  return getFoodNote(id);
+  const updated = getFoodNote(id);
+  // A manual edit stamps enrichment_status 'done' OUTSIDE the queue/setter, so emit
+  // here too — a still-open SSE watcher (Fuel card) must see the row settle.
+  emitEnrichTransition("food", id, updated);
+  return updated;
 }
 
 export function hydrate(row: any) {

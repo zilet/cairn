@@ -11,6 +11,13 @@ import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.
 import { warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 
+// Live status-transition bus for background enrichment. The emit is wired into the
+// repo status setters (the choke point every write flows through — see enrichBus.ts);
+// re-exported here so onEnrichEvent reads as part of the enrichment engine's surface,
+// the same way agentJobs.ts owns onJobEvent. The SSE stream routes subscribe with it.
+export { onEnrichEvent, isEnrichTerminal, isEnrichActive } from "./enrichBus.js";
+export type { EnrichEvent, EnrichResourceKind } from "./enrichBus.js";
+
 const execFileP = promisify(execFile);
 
 // Background, in-process enrichment engine.
