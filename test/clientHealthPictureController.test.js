@@ -95,7 +95,7 @@ function loadController() {
   return context.CairnHealthPictureController;
 }
 
-function makeDeps({ api, token = 1, storage } = {}) {
+function makeDeps({ api, runOp, token = 1, storage, onHealthReadView } = {}) {
   const rootEl = new FakeElement("section");
   const slot = rootEl.appendChild(new FakeElement("div", { id: "hPicture" }));
   const calls = [];
@@ -104,9 +104,10 @@ function makeDeps({ api, token = 1, storage } = {}) {
     root: rootEl,
     state,
     api: api || (async () => null),
+    runOp: runOp || (async () => undefined),
     toast: (message) => calls.push(["toast", message]),
     switchHealthSeg: (seg, opts) => calls.push(["switch", seg, opts || {}]),
-    onHealthReadView: () => true,
+    onHealthReadView: onHealthReadView || (() => true),
     pollToken: () => token,
     escapeHtml: (value) => String(value ?? "").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
     storage: storage ?? null,
@@ -190,24 +191,79 @@ test("Health Picture controller loads review and docs with stale-token and stora
   assert.deepEqual(stored, [], "failed docs fetch must not persist a false zero count");
 });
 
-test("Health Picture controller dedupes review runs and stores successful result", async () => {
+test("Health Picture controller runs the review as a durable runOp job and stores the result", async () => {
+  // A4: the review is now a background agent job (runOp), not a blocking POST — under
+  // default bg_ops the route returns {ok, job} and the result streams to completion.
   const controller = loadController();
-  let apiCalls = 0;
+  let runOpCalls = 0;
+  let captured = null;
   const { deps, calls, state, slot } = makeDeps({
-    api: async (path, opts) => {
-      apiCalls += 1;
-      assert.equal(path, "/health/review");
-      assert.equal(opts.method, "POST");
-      return { ok: true, review: { created_at: "2026-07-01T10:00:00Z", parsed: { headline: "Done" } } };
+    runOp: async (kind, body, opts) => {
+      runOpCalls += 1;
+      assert.equal(kind, "health_review");
+      assert.equal(Object.keys(body).length, 0);
+      assert.equal(opts.path, "/health/review");
+      captured = opts;
+      return { id: "job-1" }; // a job handle — render/onFail fire later off the stream
     },
   });
   controller.setHealthPictureCache({ docCount: 1 });
 
+  // A second run while one is in flight is a no-op (dedupe on the running flag).
   await Promise.all([controller.runHealthReview(deps), controller.runHealthReview(deps)]);
+  assert.equal(runOpCalls, 1, "a second review while one is running is deduped");
+  assert.equal(controller.isHealthReviewRunning(), true, "the review is marked running until the job resolves");
+  assert.match(slot.innerHTML, /hpic-busy/, "the busy card is shown immediately");
 
-  assert.equal(apiCalls, 1);
+  // The fail contract the runOp harness uses to route render vs onFail.
+  assert.equal(captured.isFail({ ok: true, review: { parsed: {} } }), false);
+  assert.equal(captured.isFail({ ok: false, error: "x" }), true);
+  assert.equal(captured.isFail(null), true);
+
+  // Simulate the job completing successfully (what runOp calls on a good result).
+  captured.render({ ok: true, review: { created_at: "2026-07-01T10:00:00Z", parsed: { headline: "Done" } } });
+  assert.equal(controller.isHealthReviewRunning(), false, "the running flag clears when the job finishes");
   assert.equal(state.healthReview.parsed.headline, "Done");
   assert.equal(controller.getHealthPictureCache().review.parsed.headline, "Done");
   assert.deepEqual(calls, [["toast", "Your picture is ready"]]);
   assert.match(slot.innerHTML, /Done/);
+});
+
+test("Health Picture controller surfaces a review failure in place", async () => {
+  const controller = loadController();
+  let captured = null;
+  const { deps, slot } = makeDeps({
+    runOp: async (_kind, _body, opts) => { captured = opts; return { id: "job-2" }; },
+  });
+  controller.setHealthPictureCache({ docCount: 2 });
+
+  await controller.runHealthReview(deps);
+  // The job fails (e.g. no agent) — runOp routes to onFail.
+  captured.onFail({ ok: false, error: "no agent" });
+  assert.equal(controller.isHealthReviewRunning(), false);
+  assert.match(slot.innerHTML, /hpic-build/, "it repaints the picture with the docs it has");
+  assert.match(slot.innerHTML, /didn&#x27;t finish|didn't finish/, "the failure reason is shown in place");
+});
+
+test("Health Picture controller reconnects to an in-flight review after reload", () => {
+  const controller = loadController();
+  const { deps, state, slot } = makeDeps();
+  controller.setHealthPictureCache({ docCount: 1 });
+
+  const handlers = controller.reconnectHealthReview(deps);
+  assert.ok(handlers, "reconnect returns handlers when on the read view");
+  assert.equal(controller.isHealthReviewRunning(), true, "reconnect marks the review running while reattached");
+  assert.match(slot.innerHTML, /hpic-busy/);
+
+  handlers.onDone({ ok: true, review: { created_at: "2026-07-02T10:00:00Z", parsed: { headline: "Reattached" } } });
+  assert.equal(controller.isHealthReviewRunning(), false);
+  assert.equal(state.healthReview.parsed.headline, "Reattached");
+  assert.match(slot.innerHTML, /Reattached/);
+});
+
+test("Health Picture controller does not reconnect off the read view", () => {
+  const controller = loadController();
+  const { deps } = makeDeps({ onHealthReadView: () => false });
+  assert.equal(controller.reconnectHealthReview(deps), null);
+  assert.equal(controller.isHealthReviewRunning(), false);
 });

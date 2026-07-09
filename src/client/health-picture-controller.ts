@@ -11,6 +11,7 @@ type HealthPictureControllerDeps = {
   root: ParentNode;
   state: { healthReview?: unknown };
   api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+  runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
   toast(message: string): void;
   switchHealthSeg(seg: "read" | "markers" | "records" | "share" | "learned", opts?: { openPicker?: boolean }): void;
   onHealthReadView(): boolean;
@@ -20,7 +21,7 @@ type HealthPictureControllerDeps = {
 };
 
 (() => {
-  let healthReviewRun: Promise<HealthReviewRunResult> | null = null;
+  let healthReviewRunning = false;
   let healthReviewError: string | null = null;
 
   function cacheRoot(): HealthPictureCacheRoot {
@@ -56,7 +57,7 @@ type HealthPictureControllerDeps = {
   }
 
   function isHealthReviewRunning(): boolean {
-    return !!healthReviewRun;
+    return healthReviewRunning;
   }
 
   function pictureSlot(deps: HealthPictureControllerDeps): HTMLElement | null {
@@ -67,7 +68,7 @@ type HealthPictureControllerDeps = {
   function paintHealthPicture(deps: HealthPictureControllerDeps): void {
     const wrap = pictureSlot(deps);
     if (!wrap || !deps.onHealthReadView() || !wrap.isConnected) return;
-    if (healthReviewRun) {
+    if (healthReviewRunning) {
       wrap.innerHTML = CairnHealthPicture.reviewBusyHtml();
       return;
     }
@@ -91,29 +92,72 @@ type HealthPictureControllerDeps = {
     wrap.querySelector("#hRevBtn")?.addEventListener("click", () => { void runHealthReview(deps); });
   }
 
+  // A whole-picture review is a durable background agent job (default bg_ops): the
+  // route returns {ok, job} and the review streams to completion off the request
+  // path, so this uses the shared runOp pattern (like the health-synthesis caller)
+  // instead of a blocking POST — which, under bg_ops, always read `res.review` as
+  // undefined and showed "The review didn't come back" while the job ran invisibly.
+  // With bg_ops OFF the route responds inline with {ok, review} and runOp renders
+  // that synchronously, so both paths land here.
+  function reviewFailed(result: unknown): boolean {
+    const res = result && typeof result === "object" ? (result as HealthReviewRunResult) : null;
+    return !res || res.ok === false || !res.review;
+  }
+
+  function reviewOpOpts(deps: HealthPictureControllerDeps): ClientAgentOpHandlers {
+    return {
+      path: "/health/review",
+      guard: () => !pictureSlot(deps)?.isConnected,
+      isFail: reviewFailed,
+      render: (result: unknown) => {
+        healthReviewRunning = false;
+        const res = result as HealthReviewRunResult;
+        if (res && res.ok && res.review) {
+          deps.state.healthReview = res.review;
+          setHealthPictureCache({ ...(getHealthPictureCache() || {}), review: res.review });
+          deps.toast("Your picture is ready");
+        }
+        paintHealthPicture(deps);
+      },
+      onFail: (error: unknown) => {
+        healthReviewRunning = false;
+        const res = error && typeof error === "object" ? (error as HealthReviewRunResult) : null;
+        healthReviewError = res && res.error
+          ? `The review didn't finish: ${res.error}`
+          : "The review didn't come back — give it another try in a bit.";
+        paintHealthPicture(deps);
+      },
+    };
+  }
+
   async function runHealthReview(deps: HealthPictureControllerDeps): Promise<void> {
-    if (healthReviewRun) return;
+    if (healthReviewRunning) return;
     healthReviewError = null;
-    healthReviewRun = deps.api("/health/review", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    })
-      .then((res) => (res && typeof res === "object" ? (res as HealthReviewRunResult) : null))
-      .catch(() => null);
+    healthReviewRunning = true;
+    paintHealthPicture(deps); // busy card immediately; render/onFail flip it back
+    await deps.runOp("health_review", {}, reviewOpOpts(deps));
+  }
+
+  // Reattach to an in-flight review job after a reload (registered for the
+  // "health_review" job kind). Only when the user is actually on the health read
+  // view; otherwise the finished review is picked up by loadHealthPicture on the
+  // next visit (it's persisted server-side).
+  function reconnectHealthReview(deps: HealthPictureControllerDeps): ClientAgentOpHandlers | null {
+    if (!deps.onHealthReadView()) return null;
+    if (!pictureSlot(deps)) return null;
+    healthReviewRunning = true;
+    healthReviewError = null;
     paintHealthPicture(deps);
-    const res = await healthReviewRun;
-    healthReviewRun = null;
-    if (res && res.ok && res.review) {
-      deps.state.healthReview = res.review;
-      setHealthPictureCache({ ...(getHealthPictureCache() || {}), review: res.review });
-      deps.toast("Your picture is ready");
-    } else {
-      healthReviewError = res && res.error
-        ? `The review didn't finish: ${res.error}`
-        : "The review didn't come back — give it another try in a bit.";
-    }
-    paintHealthPicture(deps);
+    const opts = reviewOpOpts(deps);
+    return {
+      guard: opts.guard,
+      onDone: (result: unknown) => {
+        if (reviewFailed(result)) opts.onFail?.(result);
+        else opts.render?.(result);
+      },
+      onError: (message?: unknown) => opts.onFail?.(message ?? null),
+      onCanceled: () => opts.onFail?.(null),
+    };
   }
 
   async function loadHealthPicture(token: number, docsPromise: Promise<unknown>, deps: HealthPictureControllerDeps): Promise<void> {
@@ -148,6 +192,7 @@ type HealthPictureControllerDeps = {
     isHealthReviewRunning,
     loadHealthPicture,
     paintHealthPicture,
+    reconnectHealthReview,
     runHealthReview,
     setHealthPictureCache,
   };
