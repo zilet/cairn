@@ -216,17 +216,64 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 function enrichmentActive(status: unknown): boolean {
   return status === "pending" || status === "in_progress";
 }
-// Poll GET path/:id every ~1.5s up to ~10 tries. onUpdate(row) runs per fetch while the tab
-// is still current; resolves once status leaves the active states (or the cap is hit). Returns the last row.
-async function pollEnrichment<T extends UiRecord = UiRecord>(path: string, id: string | number, { tab, token, onUpdate, tries = 10, interval = 1500 }: PollEnrichmentOptions<T> = {}): Promise<T | null> {
+// Watch a just-logged row's background enrichment until it settles. SSE-FIRST:
+// subscribe to GET path/:id/stream (an EventSource, reached with ?token= via
+// withToken since it can't set a header) and forward each transition to onUpdate;
+// resolve once status leaves the active states. On ANY EventSource problem
+// (unavailable, connect error, auth/transport failure, or a server "not found"
+// event) fall back to the unchanged polling loop, so behaviour is never worse than
+// before. The stale-tab guard is identical on both paths: once the surface
+// re-renders (pollToken bump) or the tab changes, updates stop and it resolves null.
+async function pollEnrichment<T extends UiRecord = UiRecord>(path: string, id: string | number, opts: PollEnrichmentOptions<T> = {}): Promise<T | null> {
+  const sse = watchEnrichmentSse<T>(path, id, opts);
+  return sse ? sse : pollEnrichmentLoop<T>(path, id, opts);
+}
+
+// The stale-tab guard shared by both watchers: a re-render bumps pollToken and a
+// tab change moves state.tab, so a watcher armed against the old surface stops.
+function enrichWatchStale<T extends UiRecord>({ tab, token }: PollEnrichmentOptions<T>): boolean {
+  return token !== pollToken || state.tab !== tab;
+}
+
+// SSE path. Returns a Promise when EventSource is usable, or null so the caller
+// falls straight through to polling (older browsers / no EventSource).
+function watchEnrichmentSse<T extends UiRecord = UiRecord>(path: string, id: string | number, opts: PollEnrichmentOptions<T>): Promise<T | null> | null {
+  if (typeof EventSource === "undefined") return null;
+  let es: EventSource;
+  try { es = new EventSource(withToken(`/api${path}/${id}/stream`)); } catch { return null; }
+  return new Promise<T | null>((resolve) => {
+    let settled = false;
+    const finish = (val: T | null) => { if (settled) return; settled = true; try { es.close(); } catch {} resolve(val); };
+    // A connect/transport error, or the server's "not found" event, before we've
+    // settled → poll instead (never leave the caller hanging on a dead stream).
+    const fallback = () => { if (settled) return; settled = true; try { es.close(); } catch {} resolve(pollEnrichmentLoop<T>(path, id, opts)); };
+    const onRow = (ev: MessageEvent) => {
+      let row: T | null = null;
+      try { row = uiRecord(JSON.parse(ev.data).row) as T; } catch { return; }
+      if (!row || row.error) return; // wait for the next event / terminal close
+      if (enrichWatchStale(opts)) return finish(null); // navigated away / re-rendered
+      opts.onUpdate?.(row);
+      if (!enrichmentActive(row.enrichment_status)) finish(row);
+    };
+    es.addEventListener("snapshot", onRow as EventListener);
+    es.addEventListener("update", onRow as EventListener);
+    es.addEventListener("error", fallback); // a terminal close after finish() is ignored (already settled)
+  });
+}
+
+// Poll GET path/:id every ~1.5s up to ~10 tries — the fallback when SSE is
+// unavailable/failed. onUpdate(row) runs per fetch while the tab is still current;
+// resolves once status leaves the active states (or the cap is hit). Returns the last row.
+async function pollEnrichmentLoop<T extends UiRecord = UiRecord>(path: string, id: string | number, opts: PollEnrichmentOptions<T> = {}): Promise<T | null> {
+  const { tries = 10, interval = 1500 } = opts;
   let row: T | null = null;
   for (let i = 0; i < tries; i++) {
     await sleep(interval);
-    if (token !== pollToken || state.tab !== tab) return null; // navigated away / re-rendered
+    if (enrichWatchStale(opts)) return null; // navigated away / re-rendered
     try { row = uiRecord(await api(`${path}/${id}`)) as T; } catch { continue; }
     if (!row || row.error) continue;
-    if (token !== pollToken || state.tab !== tab) return null;
-    onUpdate && onUpdate(row);
+    if (enrichWatchStale(opts)) return null;
+    opts.onUpdate?.(row);
     if (!enrichmentActive(row.enrichment_status)) return row;
   }
   return row;

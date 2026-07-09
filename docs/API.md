@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**233 routes** across 87 groups.
+**236 routes** across 87 groups.
 
 ## `/activities`
 
@@ -14,7 +14,8 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/activities` |  |
 | POST | `/api/activities` |  |
-| GET | `/api/activities/:id` | Single activity row (frontend polls this to watch enrichment_status). |
+| GET | `/api/activities/:id` | Single activity row (poll fallback for watching enrichment_status). |
+| GET | `/api/activities/:id/stream` | Live enrichment status for one activity (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. EventSource can't set headers, so the PWA reaches this with ?token=. |
 
 ## `/agent`
 
@@ -234,8 +235,9 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/food-notes` |  |
 | POST | `/api/food-notes` |  |
 | DELETE | `/api/food-notes/:id` |  |
-| GET | `/api/food-notes/:id` | Single food note row, hydrated (frontend polls this to watch enrichment_status). |
+| GET | `/api/food-notes/:id` | Single food note row, hydrated (poll fallback for watching enrichment_status). |
 | PUT | `/api/food-notes/:id` | Manual correction of a logged food note (fix a macro, rename it, change the meal slot, "I changed my mind"). Stamps enrichment terminal so it isn't re-clobbered. 404 on unknown id. |
+| GET | `/api/food-notes/:id/stream` | Live enrichment status for one food note (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. EventSource can't set headers, so the PWA reaches this with ?token=. |
 
 ## `/frequent-foods`
 
@@ -302,11 +304,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | GET | `/api/health-docs` |  |
 | POST | `/api/health-docs` |  |
 | DELETE | `/api/health-docs/:id` |  |
-| GET | `/api/health-docs/:id` | Single row (frontend polls this to watch enrichment_status). |
+| GET | `/api/health-docs/:id` | Single row (poll fallback for watching enrichment_status). |
 | PUT | `/api/health-docs/:id` |  |
 | POST | `/api/health-docs/:id/confirm` | Confirm a pending_confirm lab paste — the chat propose→apply gate for a bulk panel. When a transcriber is reachable it flips the draft into the completeness-first, Claude-first health ingest (the same path the paste box uses); otherwise it commits the chat agent's inline markers directly. Nothing writes to Health until this fires. |
 | GET | `/api/health-docs/:id/file` | Stream the original file. Only raster images / PDF are served inline. |
 | POST | `/api/health-docs/:id/reanalyze` | Re-run the agentic scan over a document's original file. |
+| GET | `/api/health-docs/:id/stream` | Live enrichment status for one health document (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. getHealthDocument returns the PUBLIC shape (never the raw file_path). EventSource can't set headers, so the PWA reaches this with ?token=. |
 
 ## `/health-export`
 

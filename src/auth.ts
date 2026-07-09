@@ -83,6 +83,11 @@ export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
   if (/^\/api\/health-docs\/\d+\/file$/.test(p)) return true;
   if (/^\/api\/chat\/turns\/\d+\/stream$/.test(p)) return true;
   if (/^\/api\/agent-jobs\/\d+\/stream$/.test(p)) return true;
+  // Background-enrichment status streams (EventSource — no header): the PWA watches
+  // a just-logged activity / food note / health doc enrich in place via these.
+  if (/^\/api\/activities\/\d+\/stream$/.test(p)) return true;
+  if (/^\/api\/food-notes\/\d+\/stream$/.test(p)) return true;
+  if (/^\/api\/health-docs\/\d+\/stream$/.test(p)) return true;
   return false;
 }
 

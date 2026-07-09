@@ -1,4 +1,5 @@
 import { db, todayISO } from "../db.js";
+import { emitEnrichTransition } from "../enrichBus.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
@@ -376,7 +377,9 @@ export function updateActivityFields(id: number, fields: Record<string, any>) {
 
 export function setActivityEnrichStatus(id: number, status: string) {
   db.prepare(`UPDATE activities SET enrichment_status = ? WHERE id = ?`).run(status, id);
-  return getActivity(id);
+  const row = getActivity(id);
+  emitEnrichTransition("activity", id, row); // wake any SSE watcher on this row
+  return row;
 }
 
 // ---------- Garmin source data ----------

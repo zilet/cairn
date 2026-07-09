@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { emitEnrichTransition } from "../enrichBus.js";
 import { getSettings } from "./settings.js";
 import {
   canonicalGroup,
@@ -146,7 +147,9 @@ function maxExerciseId(): number {
 // done/failed/skipped), mirroring the activity/food/health setters.
 export function setExerciseEnrichStatus(id: number, status: string) {
   db.prepare(`UPDATE exercises SET enrichment_status = ? WHERE id = ?`).run(status, id);
-  return getExercise(id);
+  const row = getExercise(id);
+  emitEnrichTransition("exercise", id, row); // wake any SSE watcher on this row
+  return row;
 }
 
 // Whether an exercise's background enrichment is still running — the art route

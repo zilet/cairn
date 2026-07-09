@@ -6,6 +6,12 @@ test("query-token auth is limited to browser-only GET surfaces", () => {
   assert.equal(queryTokenAllowedPath("/api/health-docs/12/file"), true);
   assert.equal(queryTokenAllowedPath("/api/chat/turns/12/stream"), true);
   assert.equal(queryTokenAllowedPath("/api/agent-jobs/12/stream"), true);
+  // Background-enrichment status streams (EventSource — no header).
+  assert.equal(queryTokenAllowedPath("/api/activities/12/stream"), true);
+  assert.equal(queryTokenAllowedPath("/api/food-notes/12/stream"), true);
+  assert.equal(queryTokenAllowedPath("/api/health-docs/12/stream"), true);
+  // Only GET is ever query-token authed — a POST to the same path is rejected.
+  assert.equal(queryTokenAllowedPath("/api/activities/12/stream", "POST"), false);
   assert.equal(queryTokenAllowedPath("/api/export"), true);
   assert.equal(queryTokenAllowedPath("/api/export/db"), true);
   assert.equal(queryTokenAllowedPath("/api/health-export"), true);

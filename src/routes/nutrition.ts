@@ -25,6 +25,7 @@ import {
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { backgroundOp } from "./background-op.js";
+import { streamEnrichRow } from "./enrich-stream.js";
 
 export const nutritionRouter = Router();
 
@@ -142,12 +143,17 @@ nutritionRouter.get("/food-notes", (req, res) =>
   res.json(listFoodNotes(req.query.limit ? Number(req.query.limit) : 20))
 );
 
-// Single food note row, hydrated (frontend polls this to watch enrichment_status).
+// Single food note row, hydrated (poll fallback for watching enrichment_status).
 nutritionRouter.get("/food-notes/:id", (req, res) => {
   const f = getFoodNote(Number(req.params.id));
   if (!f) return res.status(404).json({ error: "not found" });
   res.json(f);
 });
+
+// Live enrichment status for one food note (Server-Sent Events) — the SSE-first
+// path the PWA uses instead of polling; snapshot then transitions, close on
+// terminal. EventSource can't set headers, so the PWA reaches this with ?token=.
+nutritionRouter.get("/food-notes/:id/stream", streamEnrichRow("food", getFoodNote));
 
 nutritionRouter.post("/food-notes", (req, res) => {
   const b = req.body ?? {};

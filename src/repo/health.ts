@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { emitEnrichTransition } from "../enrichBus.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { activeTimeZone } from "../tz.js";
 import { invalidateDayRead } from "./intelligence.js";
@@ -646,7 +647,9 @@ export function updateHealthDocFields(id: number, fields: { parsed_json?: any; s
 
 export function setHealthDocEnrichStatus(id: number, status: string) {
   db.prepare(`UPDATE health_documents SET enrichment_status = ? WHERE id = ?`).run(status, id);
-  return getHealthDocument(id);
+  const row = getHealthDocument(id); // public shape — never leaks file_path
+  emitEnrichTransition("health", id, row); // wake any SSE watcher on this row
+  return row;
 }
 
 // ---------- pasted-lab confirm (chat propose→apply gate) ----------

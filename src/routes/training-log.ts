@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { localToday } from "../dayread.js";
+import { streamEnrichRow } from "./enrich-stream.js";
 import {
   addActivity,
   deleteSet,
@@ -165,12 +166,17 @@ trainingLogRouter.get("/recent-training", (req, res) =>
   res.json(recentTraining(req.query.limit ? Number(req.query.limit) : 6))
 );
 
-// Single activity row (frontend polls this to watch enrichment_status).
+// Single activity row (poll fallback for watching enrichment_status).
 trainingLogRouter.get("/activities/:id", (req, res) => {
   const a = getActivity(Number(req.params.id));
   if (!a) return res.status(404).json({ error: "not found" });
   res.json(a);
 });
+
+// Live enrichment status for one activity (Server-Sent Events) — the SSE-first
+// path the PWA uses instead of polling; snapshot then transitions, close on
+// terminal. EventSource can't set headers, so the PWA reaches this with ?token=.
+trainingLogRouter.get("/activities/:id/stream", streamEnrichRow("activity", getActivity));
 
 trainingLogRouter.get("/stats", (_req, res) => res.json(getWeeklyStats()));
 
