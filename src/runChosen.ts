@@ -60,7 +60,13 @@ export async function runChosen(
   // Unpinned falls to defaultOrderForOp, which routes medical-analysis ops to the
   // faithful health order and research to a web-capable-first order.
   const order = resolveOrder(agent, op);
-  const fb = await runAgentWithFallback(order, prompt, opts);
+  // Parse marker-aware by default: the prose-first (reply-marked) op contracts invite
+  // free prose whose stray `{` would anchor plain extractJson on a non-JSON span and
+  // blank the parse — even though the real JSON sits complete after the data marker.
+  // extractMarkedJson slices past the markers first and degrades to EXACTLY extractJson
+  // on marker-less text, so this is behavior-identical for every unmarked op contract
+  // while making the reshaped ops parse on the one-shot path too (not just streamed).
+  const fb = await runAgentWithFallback(order, prompt, { ...opts, extract: opts.extract ?? extractMarkedJson });
   return { agent: fb.agent, result: fb.result, tried: fb.tried };
 }
 

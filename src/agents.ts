@@ -590,6 +590,14 @@ export function extractAgentUsage(text: string): AgentUsage {
 export interface RunOpts {
   timeoutMs?: number;
   signal?: AbortSignal;   // abort to kill the live subprocess mid-run (chat-turn Stop)
+  // Custom JSON extractor applied to the CLI's stdout instead of the default
+  // extractJson. Needed by the prose-first (reply-marked) op contracts: their prose
+  // may legitimately contain a stray `{`, which anchors extractJson's first-brace
+  // scan on a non-JSON span and blanks the parse — the marker-aware extractor
+  // (prompt/shared.ts extractMarkedJson) slices past the markers first. Threaded as
+  // an option because prompt/shared.ts imports from THIS module (a direct import
+  // here would be a cycle).
+  extract?: (text: string) => any | null;
 }
 
 const UPLOAD_IMAGE_RE = /\.(?:jpe?g|png|webp|gif|heic|heif)$/i;
@@ -778,12 +786,12 @@ export async function runAgentWithFallback(
     const started = Date.now();
     let triedJson = false;
     try {
-      let result = await runAgent(name, prompt, { timeoutMs, signal });
+      let result = await runAgent(name, prompt, { timeoutMs, signal, extract: o.extract });
       // One-shot JSON-repair retry: it ran but emitted nothing parseable.
       if (!result.parsed && !signal?.aborted) {
         triedJson = true;
         try {
-          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, { timeoutMs, signal });
+          result = await runAgent(name, prompt + JSON_REPAIR_SUFFIX, { timeoutMs, signal, extract: o.extract });
         } catch { /* keep the first (unparsed) result; fall through below */ }
       }
       if (result.parsed) {
@@ -845,7 +853,8 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
   // Back-compat: older call sites pass a bare timeout number.
   const timeoutMs = typeof opts === "number" ? opts : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = typeof opts === "number" ? undefined : opts.signal;
-  return runAgentImpl(name, prompt, timeoutMs, signal);
+  const extract = typeof opts === "number" ? undefined : opts.extract;
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract);
 }
 
 // ---------- subprocess env/workdir hardening (Trust build V1) ----------
@@ -856,7 +865,7 @@ export function runAgent(name: string, prompt: string, opts: RunOpts | number = 
 // itself. Prompts that hand the CLI an absolute uploaded-file path still use
 // DATA_DIR as cwd for compatibility with CLI file-read permissions.
 
-function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: AbortSignal): Promise<AgentResult> {
+function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: AbortSignal, extract?: (text: string) => any | null): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) return Promise.reject(new Error(`Unknown agent "${name}"`));
 
@@ -899,7 +908,7 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
     });
     child.on("close", (code) => {
       cleanup();
-      const parsed = extractJson(out);
+      const parsed = (extract ?? extractJson)(out);
       const usage = extractAgentUsage(`${out}\n${err}`);
       // Surface stderr (under DEBUG) when the run looks unhealthy: a non-zero exit,
       // or a clean exit that nonetheless produced no parseable JSON. This is what

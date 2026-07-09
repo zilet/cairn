@@ -18,7 +18,8 @@ import {
   CHAT_ACTION_SENTINEL,
   CHAT_REPLY_SENTINEL,
 } from "../dist/prompt.js";
-import { runChosenStreaming } from "../dist/runChosen.js";
+import { runChosen, runChosenStreaming } from "../dist/runChosen.js";
+import { extractJson, runAgentWithFallback } from "../dist/agents.js";
 import { onJobEvent, emitJobDelta, jobStreamsDeltas, STREAM_DELTA_KINDS } from "../dist/agentJobs.js";
 
 function collectFilter() {
@@ -318,4 +319,40 @@ test("jobStreamsDeltas: only the four prose-bearing kinds stream", () => {
     assert.ok(!jobStreamsDeltas(k), `${k} does not stream`);
   }
   assert.equal(STREAM_DELTA_KINDS.size, 4);
+});
+
+// ---------------- the one-shot (non-streamed) path parses marker-aware too ----------------
+// Post-integration review finding: the reshaped prompts invite free prose, and a stray
+// `{` in that prose anchors plain extractJson's first-brace scan on a non-JSON span —
+// blanking the parse even though the real JSON sits complete after the data marker.
+// runChosen therefore threads extractMarkedJson through runAgentWithFallback via
+// RunOpts.extract, so the contract is honored on EVERY call path, not just the one
+// that streams. These tests pin both the failure mode and the plumbing.
+
+test("a stray brace in the prose blanks plain extractJson but not extractMarkedJson", () => {
+  const good = '{"change":false,"summary":"holding steady"}';
+  const braceInProse = `${CHAT_REPLY_SENTINEL}\nYou sit in the {1800-2000} kcal window most days.\n${CHAT_ACTION_SENTINEL}\n${good}`;
+  const braceInNarration = `I will query the {sessions} table first.\n${CHAT_REPLY_SENTINEL}\nSteady week.\n${CHAT_ACTION_SENTINEL}\n${good}`;
+  for (const text of [braceInProse, braceInNarration]) {
+    assert.equal(extractJson(text), null, "plain extractJson misses the real JSON (the regression this guards)");
+    assert.deepEqual(extractMarkedJson(text), { change: false, summary: "holding steady" });
+  }
+});
+
+test("runAgentWithFallback honors RunOpts.extract on a real (stub) run", async () => {
+  // The stub CLI emits marker-less canned JSON; a sentinel extractor proves the
+  // option reaches the parse point (and, having parsed, skips the repair retry).
+  const fb = await runAgentWithFallback(["stub"], "ignored", { extract: () => ({ via: "custom-extract" }) });
+  assert.equal(fb.agent, "stub");
+  assert.deepEqual(fb.result.parsed, { via: "custom-extract" });
+});
+
+test("runChosen forwards a caller extract and still parses the stub's bare JSON by default", async () => {
+  const custom = await runChosen("stub", "ignored", { extract: () => ({ via: "runChosen" }) });
+  assert.deepEqual(custom.result.parsed, { via: "runChosen" });
+  // Default path: extractMarkedJson degrades to extractJson on marker-less output,
+  // so the stub's canned proposal parses exactly as before the wiring change.
+  const dflt = await runChosen("stub", "ignored");
+  assert.equal(dflt.agent, "stub");
+  assert.ok(dflt.result.parsed && Array.isArray(dflt.result.parsed.changes), "stub proposal parses via the default marker-aware extractor");
 });
