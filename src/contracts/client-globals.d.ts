@@ -1158,6 +1158,27 @@ declare global {
   declare function flushOutbox(): Promise<void>;
   declare function outboxCount(): number;
 
+  // api() in-flight dedupe + micro-TTL cache — the pure core exposed for tests
+  // (see api-client.ts).
+  type ClientApiCoalescer = {
+    isMicroCachePath(path: string): boolean;
+    peekFresh<T = unknown>(path: string): T | undefined;
+    store<T = unknown>(path: string, data: T): void;
+    invalidateAll(): void;
+    share<T>(path: string, start: () => Promise<T>): Promise<T>;
+    inFlightCount(): number;
+    cacheSize(): number;
+  };
+  type ClientApiCacheApi = {
+    createApiCoalescer(opts?: { now?: () => number; ttlMs?: number; ttlPaths?: readonly string[] }): ClientApiCoalescer;
+    shouldBypassApiCache(opts: RequestInit & { headers?: Record<string, string> }): boolean;
+    shouldArmGetTimeout(method: string, opts: RequestInit & { headers?: Record<string, string> }): boolean;
+    MICRO_TTL_MS: number;
+    MICRO_CACHE_PATHS: readonly string[];
+    GET_TIMEOUT_MS: number;
+  };
+  declare const CairnApiCache: ClientApiCacheApi;
+
   type SwrPeek<T> = { data: T; fresh: boolean };
   type SwrUpgradeMeta = { changed: boolean };
   type CachedApiOptions<T> = { key?: string; freshFor?: number; onUpgrade?: (data: T, meta: SwrUpgradeMeta) => void };
@@ -1561,6 +1582,7 @@ declare global {
     outboxEnqueue(kind: string, path: string, body: unknown): ClientOutboxItem;
     flushOutbox(): Promise<void>;
     outboxCount(): number;
+    CairnApiCache: ClientApiCacheApi;
 
     CairnChatClient: {
       CHAT_IMAGE_MAX_BYTES: number;
