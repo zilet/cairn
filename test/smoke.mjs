@@ -99,7 +99,7 @@ async function runOpenSmoke(ctx) {
     const { status, headers, text } = await getText(base, route);
     ok(status === 200, `GET ${route} → app shell 200`, `got ${status}`);
     ok((headers.get("content-type") || "").includes("text/html"), `GET ${route} returns HTML`);
-    ok(text.includes(`<script src="${bootBundleUrl}"></script>`), `GET ${route} includes boot bundle`);
+    ok(text.includes(`<script src="${bootBundleUrl}" defer></script>`), `GET ${route} includes boot bundle`);
     ok(/<link rel="manifest" href="\/manifest\.json">/.test(text), `GET ${route} includes manifest`);
   }
 
