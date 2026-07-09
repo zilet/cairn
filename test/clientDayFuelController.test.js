@@ -197,6 +197,12 @@ function loadController(overrides = {}) {
       throw error;
     }
   };
+  // Background-enrichment globals the controller reaches for to live-clear the
+  // "· estimating…" badge. Defaulted here so the watcher path is exercisable; an
+  // override lets a test drive a pending entry to settlement.
+  context.pollToken = overrides.pollToken ?? 0;
+  context.enrichmentActive = overrides.enrichmentActive || ((status) => status === "pending" || status === "in_progress");
+  context.pollEnrichment = overrides.pollEnrichment || (async () => null);
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-fuel-client.js"), "utf8"), context);
@@ -241,6 +247,43 @@ test("day fuel controller loads the selected day and wires editable rows", async
   harness.slot.querySelector("[data-fooditem]").click();
   assert.match(harness.mountedDetail.innerHTML, /Edit this meal/);
   assert.equal(harness.wiredDetail, 1);
+});
+
+test("day fuel controller clears the estimating badge when a pending note settles", async () => {
+  const watched = [];
+  const harness = loadController({
+    logDate: "2026-06-30",
+    day: {
+      date: "2026-06-30",
+      count: 1,
+      totals: { kcal: 0, protein_g: 0 },
+      target: { kcal: 2000, protein_g: 150, mode: "maintain" },
+      remaining: { kcal: 2000, protein_g: 150 },
+      entries: [{ id: 12, meal: "lunch", summary: "a plate", kcal: null, protein_g: null, enrichment_status: "pending" }],
+    },
+    // Stub the watcher: immediately deliver the settled (enriched) food-note row,
+    // the same nested `parsed` shape GET /food-notes/:id returns.
+    pollEnrichment: async (path, id, opts) => {
+      watched.push({ path, id });
+      opts.onUpdate({ id, enrichment_status: "done", parsed: { summary: "Grilled chicken plate", kcal: 620, protein_g: 52 } });
+      return null;
+    },
+  });
+
+  await harness.context.CairnDayFuelController.loadDayFuel(3, {
+    root: harness.rootEl,
+    isCurrent: (token) => token === 3,
+  });
+
+  // The pending entry was watched against the food-notes stream resource.
+  assert.deepEqual(watched, [{ path: "/food-notes", id: 12 }]);
+  // The estimate landed: badge cleared (status done), macros + totals folded in.
+  const entry = harness.context.state._dayFuel.entries[0];
+  assert.equal(entry.enrichment_status, "done");
+  assert.equal(entry.kcal, 620);
+  assert.equal(harness.context.state._dayFuel.totals.kcal, 620);
+  assert.doesNotMatch(harness.slot.innerHTML, /estimating/);
+  assert.match(harness.slot.innerHTML, /Grilled chicken plate/);
 });
 
 test("day fuel controller wires empty-state chat action", async () => {

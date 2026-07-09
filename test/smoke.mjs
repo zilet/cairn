@@ -205,6 +205,20 @@ async function runAuthSmoke(ctx) {
     ok((res.headers.get("content-type") || "").includes("text/event-stream"), "auth: stream uses text/event-stream");
     ok(/event: error/.test(text) && /no such turn/.test(text), "auth: stream route emitted the expected terminal error event", JSON.stringify(text));
   }
+
+  // 15) The background-enrichment status streams authenticate the same way (the
+  //     PWA reaches them via EventSource + ?token=). A non-existent id snapshots an
+  //     error event and closes. Covers all three polled resources.
+  for (const path of ["/api/activities/0/stream", "/api/food-notes/0/stream", "/api/health-docs/0/stream"]) {
+    const res = await fetch(`${base}${path}?token=${q}`);
+    const text = await res.text();
+    ok(res.status === 200, `auth: query token GET ${path} → 200`, `got ${res.status}`);
+    ok((res.headers.get("content-type") || "").includes("text/event-stream"), `auth: ${path} uses text/event-stream`);
+    ok(/event: error/.test(text) && /not found/.test(text), `auth: ${path} emitted the terminal not-found event`, JSON.stringify(text));
+    // And the same path without a token is refused (query-token allowlist is GET-scoped).
+    const denied = await fetch(`${base}${path}`);
+    ok(denied.status === 401, `auth: unauthenticated ${path} → 401`, `got ${denied.status}`);
+  }
 }
 
 if (!existsSync(serverEntry)) {
