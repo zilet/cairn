@@ -10,6 +10,7 @@ import {
   resolveGroup,
   setExerciseAlias,
 } from "./exercise-canon.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---------- exercises ----------
 const EXERCISE_MODES = ["reps", "timed"];
@@ -201,6 +202,7 @@ export function updateExercise(
   if (sets.length) {
     vals.push(id);
     db.prepare(`UPDATE exercises SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+    bumpTrainingDataVersion(); // mode/muscle_group change re-grades lifts in program-state
   }
   return getExercise(id);
 }

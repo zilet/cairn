@@ -3,6 +3,7 @@ import { newestHealthDocDate } from "./health.js";
 import { computeGoalCheck } from "./profile.js";
 import { getSettings } from "./settings.js";
 import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
+import { bumpFoodDataVersion } from "./training-cache.js";
 
 // ---------- accepted nutrition targets (adaptive-nutrition loop OUTPUT) ----------
 // Persist an accepted target so the fuel card / goal math / next check-in read the
@@ -326,6 +327,7 @@ export function addFoodNote(meal: string, raw: string, parsed: any, imagePath?: 
     `INSERT INTO food_notes (date, meal, raw_output, parsed_json, image_path, enrichment_status) VALUES (?, ?, ?, ?, ?, ?)`
   ).run(localDateISO(), meal || "meal", raw || "", parsed ? JSON.stringify(parsed) : null, imagePath ?? null, status);
   const row = hydrate(db.prepare(`SELECT * FROM food_notes WHERE id = ?`).get(info.lastInsertRowid));
+  bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
   // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
   if (status === "pending") {
     import("../enrich.js").then((m) => m.enqueueEnrich("food", row.id)).catch(() => {});
@@ -345,6 +347,7 @@ export function deleteFoodNote(id: number) {
   const row = getFoodNote(id);
   if (!row) return { deleted: false, id };
   db.prepare(`DELETE FROM food_notes WHERE id = ?`).run(id);
+  bumpFoodDataVersion();
   return { deleted: true, id };
 }
 
@@ -354,6 +357,7 @@ export function updateFoodNoteParsed(id: number, parsed: any) {
     parsed ? JSON.stringify(parsed) : null,
     id
   );
+  bumpFoodDataVersion(); // enrichment can revise kcal in place (backstop can't see it)
   return getFoodNote(id);
 }
 
@@ -462,6 +466,7 @@ export function updateFoodNote(id: number, fields: any) {
   if (f.meal !== undefined && f.meal !== null && String(f.meal).trim()) {
     db.prepare(`UPDATE food_notes SET meal = ? WHERE id = ?`).run(String(f.meal).trim().slice(0, 40), id);
   }
+  bumpFoodDataVersion(); // an in-place kcal correction the SQL backstop can't see
   return getFoodNote(id);
 }
 

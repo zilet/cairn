@@ -2,6 +2,7 @@ import { db, todayISO } from "../db.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
 import { localDateISO, chatHistoryTimeLabel } from "./shared.js";
 
@@ -95,6 +96,7 @@ export function addActivity(input: any) {
   if (status === "pending") {
     import("../enrich.js").then((m) => m.enqueueEnrich("activity", row.id)).catch(() => {});
   }
+  bumpTrainingDataVersion(); // cardio feeds weekly-stats + program-state endurance reads
   invalidateDayRead(date); // a logged activity (run/walk/class) is movement — today's Brief should reflect it
   return row;
 }
@@ -368,6 +370,7 @@ export function updateActivityFields(id: number, fields: Record<string, any>) {
   if (!sets.length) return getActivity(id);
   vals.push(id);
   db.prepare(`UPDATE activities SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  bumpTrainingDataVersion(); // enrichment can change distance/duration → weekly/endurance reads
   return getActivity(id);
 }
 
@@ -649,6 +652,7 @@ export function upsertGarminActivity(input: GarminActivityInput, sourceId?: numb
     input.avg_vertical_osc_cm ?? null, input.avg_vertical_ratio ?? null,
     jsonOrNull(input.raw)
   );
+  bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
   return hydrateJson(db.prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`).get(source.id, String(input.external_id)));
 }
 
@@ -690,6 +694,7 @@ export function upsertGarminDailyMetric(input: GarminDailyMetricInput, sourceId?
      VALUES (${placeholders})
      ON CONFLICT(source_id, date) DO UPDATE SET ${updates}, updated_at = datetime('now')`
   ).run(...values);
+  bumpTrainingDataVersion(); // fresh recovery (HRV/RHR) shifts the program-state deload read
   invalidateDayRead(); // a Garmin sync brings fresh recovery → today's Brief recomputes
   return hydrateJson(db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date));
 }
@@ -885,6 +890,7 @@ export function reconcileGarminStrength(garminActivityId: number) {
   let exercise_sets: any = null;
   try { exercise_sets = row.exercise_sets_json ? JSON.parse(row.exercise_sets_json) : null; } catch { exercise_sets = null; }
   const sets = setsForSession(session.id) as any[];
+  bumpTrainingDataVersion(); // links a session + deletes the stale generic activity row
   // is_primary reflects whether THIS reconciled row is the day's primary (longest).
   const isPrimary = primary.external_id === (row.external_id ?? null);
   return { session: getSessionDetail(session.id), has_manual_sets: sets.length > 0, exercise_sets, is_primary: isPrimary };

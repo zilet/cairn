@@ -7,6 +7,7 @@ import { listExercises } from "./exercises.js";
 import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker, canonicalMarkerForReading } from "./marker-canon.js";
 import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 import { capStr } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { getProfile, listWeight } from "./profile.js";
@@ -1446,6 +1447,7 @@ export function addContextEvent(input: ContextEventInput) {
   // sleep / plan around it) — bust the cached Brief so the next open reflects it,
   // from EVERY surface (REST/MCP/chat), not just the chat path.
   try { invalidateDayRead(); } catch { /* best-effort */ }
+  bumpTrainingDataVersion(); // an active trip/illness suppresses expenditure confidence
   return getContextEvent(Number(info.lastInsertRowid));
 }
 
@@ -1496,6 +1498,7 @@ export function updateContextEvent(id: number, patch: ContextEventInput) {
   // An edited event can change what shapes today (a new end date, a resolution) —
   // refresh the Brief from every surface.
   try { invalidateDayRead(); } catch { /* best-effort */ }
+  bumpTrainingDataVersion(); // an in-place edit (end date/resolution) the backstop can't see
   return getContextEvent(id);
 }
 
@@ -1509,6 +1512,7 @@ export function resolveContextEvent(id: number, date?: string) {
   db.prepare(`UPDATE context_events SET resolved_at = ? WHERE id = ?`).run(when, id);
   // A resolved injury no longer eases load — the next Brief should reflect that.
   try { invalidateDayRead(); } catch { /* best-effort */ }
+  bumpTrainingDataVersion(); // resolving an event re-opens expenditure confidence
   return getContextEvent(id);
 }
 
@@ -1639,6 +1643,7 @@ export function reconcileHealthDocumentContextEvents(healthDocumentId: number): 
 export function deleteContextEvent(id: number) {
   const r = { deleted: db.prepare(`DELETE FROM context_events WHERE id = ?`).run(id).changes };
   try { invalidateDayRead(); } catch { /* best-effort */ }
+  if (r.deleted) bumpTrainingDataVersion();
   return r;
 }
 

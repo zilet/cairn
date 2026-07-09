@@ -21,6 +21,7 @@ import { directiveFeedbackForCoach, directivesForCoach, getHealthSynthesis, heal
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
 // the existing coach↔intelligence import; resolved at call time, never at module init).
@@ -776,6 +777,7 @@ export function addCheckin(date: string, fields: CheckinInput = {}) {
       fields.note == null ? null : String(fields.note).trim().slice(0, 500) || null
     );
   invalidateDayRead(d); // a fresh subjective signal can change today's read
+  bumpTrainingDataVersion(); // keep the shared training version comprehensive for consumers
   return db.prepare(`SELECT * FROM checkins WHERE id = ?`).get(info.lastInsertRowid);
 }
 
@@ -1243,6 +1245,7 @@ export function recordDailyMetrics(source: string, date: string, metrics: DailyM
     num(metrics.resting_hr, 0, 250), num(metrics.hrv_ms, 0, 500), num(metrics.active_calories, 0, 20000),
     jsonOrNull(metrics.raw)
   );
+  bumpTrainingDataVersion(); // fresh recovery (in-place upsert) shifts program-state's deload read
   invalidateDayRead(); // fresh recovery data feeds today's Brief — recompute on next open
   return hydrateJson(db.prepare(`SELECT * FROM daily_metrics WHERE source = ? AND date = ?`).get(src, date));
 }

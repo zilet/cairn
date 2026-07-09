@@ -14,6 +14,7 @@
 import { db } from "../db.js";
 import { getEnduranceGoal } from "./profile.js";
 import { recordTestWeek } from "./muscle-trajectory.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
 
 // ---- allowed enum values ----
 const VALID_FOCUS = ["strength", "hypertrophy", "endurance-base", "peak"] as const;
@@ -159,6 +160,7 @@ export function createBlock(input: CreateBlockInput = {}): ProgramBlock {
     VALUES (?, ?, ?, ?, ?, ?, 'active')
   `).run(goal, focus, phase, week_index, total_weeks, started_at);
 
+  bumpTrainingDataVersion(); // the active periodization block is part of the training picture
   return hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(res.lastInsertRowid)
   )!;
@@ -282,6 +284,7 @@ export function updateBlock(id: number, fields: UpdateBlockInput): ProgramBlock 
     WHERE id = ?
   `).run(goal, focus, phase, week_index, total_weeks, started_at, status, id);
 
+  bumpTrainingDataVersion();
   return hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(id)
   );
@@ -319,6 +322,7 @@ export function advanceBlockWeek(id?: number): ProgramBlock | null {
     is_complete ? "completed" : "active",
     block.id,
   );
+  bumpTrainingDataVersion();
 
   // Auto-completing a PEAK block lands it in the realization phase — the test week
   // the block was built toward. Close the cadence loop on that completion (the
@@ -337,6 +341,7 @@ export function completeBlock(id: number): ProgramBlock | null {
   db.prepare(
     "UPDATE program_blocks SET status = 'completed' WHERE id = ?"
   ).run(id);
+  bumpTrainingDataVersion();
   const block = hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(id)
   );
@@ -355,6 +360,7 @@ export function abandonBlock(id: number): ProgramBlock | null {
   db.prepare(
     "UPDATE program_blocks SET status = 'abandoned' WHERE id = ?"
   ).run(id);
+  bumpTrainingDataVersion();
   return hydrateBlock(
     db.prepare("SELECT * FROM program_blocks WHERE id = ?").get(id)
   );

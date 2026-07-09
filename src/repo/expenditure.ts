@@ -8,6 +8,11 @@ import { db } from "../db.js";
 import { listContextEvents } from "./health.js";
 import { KCAL_PER_LB, getProfile, projectGoalPace } from "./profile.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import {
+  foodBackstopSignature,
+  registerTrainingCacheClear,
+  trainingBackstopSignature,
+} from "./training-cache.js";
 
 export interface ExpenditureEstimate {
   tdee: number | null;            // derived maintenance kcal, or null when too little data
@@ -32,7 +37,23 @@ export interface ExpenditureEstimate {
 // spanning enough calendar days, and an active travel/illness window (from
 // context_events) suppresses confidence — intake logging and the scale are both
 // disrupted then, so we lean conservative rather than re-target on noise.
+// MEMOIZED (repo/training-cache.ts): this JSON-parses every food note in the window
+// on each call, and the Energy Balance view + coach context both reach it. It's a pure
+// function of (windowDays, today, weigh-ins/profile/context [the training backstop] and
+// food notes [the food backstop]), so memoize on exactly that and serve a structuredClone.
+// Single-slot — the hot path is windowDays=21 for today.
+let expenditureCache: { key: string; value: ExpenditureEstimate } | null = null;
+registerTrainingCacheClear(() => { expenditureCache = null; });
+
 export function estimateExpenditure(windowDays = 21): ExpenditureEstimate {
+  const key = `${windowDays}|${localDateISO()}|${trainingBackstopSignature()}|${foodBackstopSignature()}`;
+  if (expenditureCache && expenditureCache.key === key) return structuredClone(expenditureCache.value);
+  const value = computeExpenditure(windowDays);
+  expenditureCache = { key, value };
+  return structuredClone(value);
+}
+
+function computeExpenditure(windowDays = 21): ExpenditureEstimate {
   const today = localDateISO();
   const since = addDaysISO(today, -Math.max(1, windowDays - 1)) ?? today;
   const nowDay = Date.parse(`${today}T00:00:00Z`) / 864e5;
