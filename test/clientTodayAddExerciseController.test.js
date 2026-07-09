@@ -279,6 +279,42 @@ test("Today add-exercise controller loads known exercises and appends off-plan c
   assert.equal(harness.btn.hidden, false);
 });
 
+test("Today add-exercise controller persists a brand-new off-plan exercise (reps, fire-and-forget)", async () => {
+  const harness = loadController();
+
+  await harness.controller.setupAddExercise(harness.deps);
+  harness.btn.click();
+  await flushAsync();
+
+  // A name not in the known set is a genuinely-new movement: it's POSTed so the
+  // exercises row exists immediately (which lets the background brain canonicalize
+  // it, write a guide, and generate art), while the off-plan card still renders.
+  harness.input.value = "Zercher squat";
+  harness.go.click();
+  await flushAsync();
+
+  assert.deepEqual(harness.modes, [{ name: "Zercher squat", mode: "reps" }], "new reps exercise is persisted");
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Zercher squat", mode: "reps" }]);
+  assert.equal(harness.deps.state.exModes["Zercher squat"], "reps", "marked known so a rapid re-add doesn't double-post");
+  assert.equal(harness.form.hidden, true);
+});
+
+test("Today add-exercise controller persists a brand-new TIMED off-plan exercise with its mode", async () => {
+  const harness = loadController();
+
+  await harness.controller.setupAddExercise(harness.deps);
+  harness.btn.click();
+  await flushAsync();
+
+  harness.input.value = "Copenhagen plank";
+  harness.modeWrap.querySelectorAll("[data-exmode]").find((button) => button.dataset.exmode === "timed").click();
+  harness.go.click();
+  await flushAsync();
+
+  assert.deepEqual(harness.modes, [{ name: "Copenhagen plank", mode: "timed" }], "new timed exercise is persisted with its mode");
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [{ name: "Copenhagen plank", mode: "timed" }]);
+});
+
 test("Today add-exercise controller restores skipped exercises and protects existing typed cards", async () => {
   const harness = loadController();
   const existing = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Push-up", mode: "reps" } }));

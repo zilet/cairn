@@ -91,8 +91,15 @@ type ExerciseDetailControllerDeps = {
     const svg = deps.art("exercise", name, row?.muscle_group);
     if (!row || !row.found) {
       deps.openDetailFrom(fromTile, () => {
-        deps.mountDetail(CairnExerciseDetailRender.missingHtml(name, svg, deps));
+        const el = deps.mountDetail(CairnExerciseDetailRender.missingHtml(name, svg, deps));
         deps.wireDetailCommon();
+        // Even without a stored row, offer the useful path: ask the coach. (The
+        // 'exercise' enrichment may still be building the guide in the background;
+        // reopening in a moment picks it up.)
+        el.querySelector("#askForm")?.addEventListener("click", () => {
+          deps.closeDetail(true);
+          deps.gotoChatWith(`How should I perform ${name} with good form? Flag anything for my injury constraints.`);
+        });
       });
       return;
     }

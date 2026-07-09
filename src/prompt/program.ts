@@ -78,6 +78,45 @@ EXERCISE DETAIL:
 ${JSON.stringify(ex)}`;
 }
 
+// Single-exercise classification for the background 'exercise' enrichment job
+// (src/enrich.ts). When an athlete adds an off-plan movement, the deterministic
+// canon already cleaned the name + guessed a group/mode; this refines that ONE
+// entry so the app can file it, write a how-to, and generate good art. It only
+// tidies metadata — it NEVER touches logged numbers, and it must NOT turn the
+// movement into a different exercise (a different implement/angle/grip IS a
+// different exercise). The apply path is conservative (fills gaps, never clobbers).
+const EXERCISE_ENRICH_SCHEMA = `{
+  "canonical": "<the clean, canonical Title-Case name of THIS SAME movement (fix casing/typos/junk, keep the implement + angle); return it unchanged if already clean>",
+  "muscle_group": "<primary muscle group, ONE of: chest, back, shoulders, biceps, triceps, quads, hamstrings, glutes, calves, core, forearms, rear delts, mobility — or null if genuinely unclear>",
+  "mode": "reps|timed",
+  "equipment": "<short phrase for the main implement, e.g. 'a cable machine', 'a barbell', 'dumbbells', 'a resistance band', 'bodyweight' — or null if unclear>"
+}`;
+
+export function buildExerciseEnrichPrompt(detail: any): string {
+  const ex = {
+    name: detail?.name ?? "",
+    muscle_group: detail?.muscle_group ?? null,
+    mode: detail?.mode ?? "reps",
+    constraint_note: detail?.constraint_note ?? null,
+  };
+  return `You are a strength-training data librarian tidying ONE exercise a user just added to their log.
+Classify this single movement so the app can file it cleanly. Do NOT invent or substitute a different exercise.
+
+RULES:
+- Return only one JSON object, no prose and no markdown fences.
+- "canonical": the cleanest real Title-Case name of THIS SAME movement — fix casing, typos, and junk words, but keep the implement and angle. If the name is already clean, return it unchanged. NEVER change it into a different movement.
+- "muscle_group": the primary muscle group it trains, from the allowed list, or null if genuinely unclear.
+- "mode": "timed" for a held position measured in seconds (plank, dead hang, wall sit, a stretch); "reps" for anything counted in reps.
+- "equipment": a short phrase naming the main implement, or null if unclear.
+- Plain words, no scores. Informational only; never diagnose or make clinical claims.
+
+OUTPUT CONTRACT:
+${EXERCISE_ENRICH_SCHEMA}
+
+EXERCISE:
+${JSON.stringify(ex)}`;
+}
+
 // Agentic exercise reconciliation — the clean-naming layer over the deterministic
 // canonicalizer (src/repo/exercise-canon.ts). Users (and chat/import) name the
 // same movement many ways and leave messy, descriptive titles ("incline db press

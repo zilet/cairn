@@ -90,7 +90,9 @@ planExercisesRouter.post("/exercises", (req, res) => {
   try {
     const b = req.body ?? {};
     if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: "name required" });
-    res.json(upsertExercise({ name: b.name, muscle_group: b.muscle_group, mode: b.mode }));
+    // A user-facing add: when this creates a brand-new exercise, queue the quiet
+    // background enrichment (canonicalize + classify + how-to guide + good art).
+    res.json(upsertExercise({ name: b.name, muscle_group: b.muscle_group, mode: b.mode }, { enrich: true }));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

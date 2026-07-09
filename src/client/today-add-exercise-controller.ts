@@ -188,7 +188,19 @@ type TodayAddExerciseDeps = {
         return;
       }
 
-      if (mode === "timed" && (deps.state.exModes || {})[name] !== "timed") {
+      const known = (deps.state.exModes || {})[name];
+      if (!known) {
+        // A genuinely-new off-plan movement. Persist it now so the exercises row
+        // exists immediately — that lets the background brain canonicalize it,
+        // write a how-to guide, and generate good art (the 'exercise' enrichment
+        // kind). Fire-and-forget: the card renders regardless, and a failed POST
+        // just means no enrichment this time. Optimistically mark it known so a
+        // rapid re-add doesn't double-post.
+        (deps.state.exModes ??= {})[name] = mode || "reps";
+        deps.postExerciseMode(name, mode || "reps").catch(() => {});
+      } else if (mode === "timed" && known !== "timed") {
+        // Known reps exercise being re-added as timed — await so the card renders
+        // with the right mode.
         try {
           await deps.postExerciseMode(name, "timed");
           (deps.state.exModes ??= {})[name] = "timed";
