@@ -221,6 +221,12 @@ function finalizeTurn(turnValue: unknown, messageValue?: unknown): void {
   appendFinalMessage(message, el);
   root.rememberChatFuelContext?.(message);
   if (el && el.isConnected) el.remove();
+  const applied = Array.isArray(chatTurnRecord(row.meta).applied) ? chatTurnRecord(row.meta).applied as Array<Record<string, unknown>> : [];
+  const hasBackgroundPlanUpdate = applied.some((entry) => entry.type === "plan_update" && chatTurnRecord(entry.result).background === true);
+  if (hasBackgroundPlanUpdate) {
+    state.plan = [];
+    swrInvalidate("plan");
+  }
   const drafts = Array.isArray(chatTurnRecord(row.meta).drafts) ? chatTurnRecord(row.meta).drafts as unknown[] : [];
   if (drafts.length) { state.plan = []; toast("Draft ready — Apply below"); }
   if (state.tab === "chat") root.loadChatFuel?.(pollToken);

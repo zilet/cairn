@@ -50,17 +50,17 @@ function wipe() {
 // ---------- profile ----------
 function profile() {
   repo.setProfile({
-    sex: "female",
+    sex: "male",
     age: 41,
-    height_cm: 167,
-    height_in: 65.7, // 167 cm — the modern lb/in field the risk read + BMI use
-    weight_lb: 149,
+    height_cm: 177.8,
+    height_in: 70,
+    weight_lb: 185,
     // Non-smoker, no antihypertensive, no statin — captured so the PREVENT read
     // renders as a confident (non-provisional) computed card out of the box.
     smoking: 0,
     bp_treated: 0,
     statin: 0,
-    goal_weight_lb: 142,
+    goal_weight_lb: 178,
     goal_date: iso(-77), // ~11 weeks out
     activity_factor: 1.45,
     notes: "Body recomposition + healthspan — steady fat loss, preserve lean mass. Not chasing a scale number.",
@@ -165,12 +165,12 @@ function trainingHistory(exId: Record<string, number>, planDayId: Record<number,
   } catch (e) { db.exec("ROLLBACK"); throw e; }
 }
 
-// ---------- bodyweight trend (lean-safe, ~0.65 lb/wk) ----------
+// ---------- bodyweight trend (lean-safe, ~0.9 lb/wk) ----------
 function bodyweight() {
-  const start = 156.2;
-  const perDay = (156.2 - 149.0) / 42; // ~0.17 lb/day
-  // ~3 weigh-ins/week with mild noise; ends near current 149
-  const noise = [0.4, -0.3, 0.2, -0.5, 0.3, -0.2, 0.5, -0.4, 0.1, -0.3, 0.4, -0.2, 0.3, -0.4, 0.2, -0.3];
+  const start = 190.5;
+  const perDay = (190.5 - 185.0) / 42; // ~0.13 lb/day, about 0.9 lb/week
+  // ~3 weigh-ins/week with mild noise; ends near current 185
+  const noise = [0.4, -0.3, 0.2, -0.5, 0.3, -0.2, 0.5, -0.4, 0.1, -0.3, 0.4, -0.2, 0.3, -0.4, 0, -0.3];
   let k = 0;
   for (let d = 42; d >= 0; d -= 3) {
     const w = start - perDay * (42 - d) + (noise[k % noise.length] || 0);
@@ -182,13 +182,13 @@ function bodyweight() {
 // ---------- tape sessions (Stand → Body: figure, ratios, then→now morph) ----------
 function bodyMetrics() {
   // Three sessions across the cut: waist easing toward the half-height guide
-  // (167cm → guide ≈ 32.9in) while lifts hold — the recomposition story the
+  // (70in → guide 35in) while the limbs hold — the recomposition story the
   // persona tells. Latest stays a touch above guide so the dashed optimal
   // trace and the "above guide" read show honestly.
   const sessions: Array<[number, Record<string, number>, string]> = [
-    [42, { waist_in: 34.6, hip_in: 41.2, chest_in: 37.0, shoulder_in: 41.2, upper_arm_in: 11.1, thigh_in: 23.2, calf_in: 14.4, neck_in: 12.6, forearm_in: 9.4 }, "baseline tape"],
-    [21, { waist_in: 33.9, hip_in: 40.8, chest_in: 36.8, shoulder_in: 41.2, upper_arm_in: 11.2, thigh_in: 23.0 }, "mid-cut check"],
-    [2, { waist_in: 33.2, hip_in: 40.4, chest_in: 36.6, shoulder_in: 41.3, upper_arm_in: 11.2, thigh_in: 22.8, calf_in: 14.3, neck_in: 12.5, forearm_in: 9.4 }, "monthly tape"],
+    [42, { waist_in: 37.2, hip_in: 41.2, chest_in: 42.0, shoulder_in: 46.0, upper_arm_in: 13.6, thigh_in: 23.8, calf_in: 15.7, neck_in: 15.6, forearm_in: 11.7 }, "baseline tape"],
+    [21, { waist_in: 36.5, hip_in: 40.8, chest_in: 42.1, shoulder_in: 46.1, upper_arm_in: 13.7, thigh_in: 23.9 }, "mid-cut check"],
+    [2, { waist_in: 35.8, hip_in: 40.5, chest_in: 42.2, shoulder_in: 46.2, upper_arm_in: 13.8, thigh_in: 24.0, calf_in: 15.8, neck_in: 15.5, forearm_in: 11.8 }, "monthly tape"],
   ];
   for (const [daysAgo, sites, note] of sessions) {
     repo.addBodyMeasurement(iso(daysAgo), sites, note, "manual", "in");
@@ -526,10 +526,10 @@ function quietLayer() {
     "Nice — logged it as 48 min easy trail. That's two cardio sessions this week on top of four lifts, and your recovery's been trending fine, so no flag. Want me to keep Saturday's long run easy again?",
     "claude", { actions: ["log_activity"] }
   );
-  repo.addChatMessage("user", "yeah keep it easy. also I'm down to 149");
+  repo.addChatMessage("user", "yeah keep it easy. also I'm down to 185");
   repo.addChatMessage(
     "assistant",
-    "Updated — 149 lb. You're tracking ~0.7 lb/week, right on the lean-safe line for your September goal, so I'd hold the deficit where it is. One thing on my radar: your last ferritin came back low, and you're running a lot — I've kept an iron-rich meal on your long-run days in the plan. Not medical advice, just worth a recheck.",
+    "Updated — 185 lb. You're tracking ~0.9 lb/week, right on the lean-safe line for your September goal, so I'd hold the deficit where it is. One thing on my radar: your last ferritin came back low, and you're running a lot — I've kept an iron-rich meal on your long-run days in the plan. Not medical advice, just worth a recheck.",
     "claude", { actions: ["set_profile"] }
   );
 }
@@ -648,6 +648,7 @@ export function seedDemo() {
   // clear seed's baseline session + example profile leftovers, keep plan/exercises
   db.prepare(`DELETE FROM logged_sets`).run();
   db.prepare(`DELETE FROM sessions`).run();
+  db.prepare(`DELETE FROM body_measurements`).run();
 
   const exId: Record<string, number> = {};
   for (const r of db.prepare(`SELECT id, name FROM exercises`).all() as any[]) exId[r.name] = r.id;

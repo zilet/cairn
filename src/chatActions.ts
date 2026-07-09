@@ -247,7 +247,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   },
   plan_update: {
     type: "plan_update",
-    applyMode: "draft",
+    applyMode: "immediate",
     shape: `{ "type": "plan_update", "summary": "...", "changes": [
       { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
       { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
@@ -255,7 +255,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
       { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] }`,
     guidance: [
-      `plan_update (target tweaks AND adding/swapping a movement on an existing day) is saved as a DRAFT for the user to review and apply — never assume it's live. A plan_update change whose exercise is already on that day TWEAKS it; a change whose exercise is NOT on that day yet ADDS it (include sets + rep_low/rep_high so it lands complete). Use plan_update to add ONE or a few movements to days that exist.`,
+      `plan_update is a SMALL, safety-checked background adjustment to the existing plan. Use it only when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. It lands quietly in the plan with its reason attached to the affected exercise; do NOT announce it in the reply unless the user asks about their plan. NEVER emit it for a food-only log, meal photo, or a general nutrition question. A change whose exercise is already on that day tweaks it; a change whose exercise is not on that day adds it (include sets + rep_low/rep_high so it lands complete).`,
     ],
   },
   plan_restructure: {

@@ -51,3 +51,10 @@ test("empty food days stay quiet in prompts", () => {
   assert.doesNotMatch(buildChatPrompt([], "How am I doing today?"), /TODAY'S FUEL/);
   assert.doesNotMatch(buildSessionPrompt(), /TODAY'S FUEL/);
 });
+
+test("a food-only chat turn is explicitly kept to food rather than an unrelated plan pitch", () => {
+  const prompt = buildChatPrompt([], "Lunch today: double chicken salad, no dressing. Estimate it.");
+  assert.match(prompt, /a meal log, plate photo, or nutrition question is a food moment/i);
+  assert.match(prompt, /Do NOT pivot into a lift, future\s+training change, or plan update from a food-only turn/i);
+  assert.match(prompt, /Do not narrate a background plan_update/i);
+});

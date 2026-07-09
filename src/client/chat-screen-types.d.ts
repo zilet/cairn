@@ -13,7 +13,7 @@ type ChatScreenMeta = {
   lab_confirms?: unknown;
   [key: string]: unknown;
 };
-type ChatScreenAppliedAction = { type?: unknown; error?: unknown };
+type ChatScreenAppliedAction = { type?: unknown; error?: unknown; result?: unknown };
 type ChatScreenDraft = {
   id?: unknown;
   kind?: unknown;

@@ -121,9 +121,20 @@ export function seed() {
   // to render out of the box.
   const goalDate = new Date(Date.now() + 84 * 864e5).toISOString().slice(0, 10);
   db.prepare(
-    `INSERT OR REPLACE INTO profile (id, sex, age, height_cm, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, updated_at)
-     VALUES (1, 'male', 35, 178.0, 185, 175, ?, 1.5, 'Example profile — edit this in your Profile (Settings → You) to match you.', datetime('now'))`
+    `INSERT OR REPLACE INTO profile (id, sex, age, height_cm, height_in, weight_lb, goal_weight_lb, goal_date, activity_factor, notes, updated_at)
+     VALUES (1, 'male', 35, 177.8, 70, 185, 175, ?, 1.5, 'Example profile — edit this in your Profile (Settings → You) to match you.', datetime('now'))`
   ).run(goalDate);
+
+  // A coherent neutral male baseline gives Stand → Body a useful first paint.
+  // At 70in, waist 35.8in and neck 15.5in produce a ~20% Navy tape estimate.
+  // The remaining circumferences are intentionally ordinary, not an aspirational
+  // physique and not derived targets; users replace them with their own tape.
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare(
+    `INSERT INTO body_measurements
+      (date, waist_in, hip_in, chest_in, shoulder_in, neck_in, thigh_in, upper_arm_in, calf_in, forearm_in, note, source)
+     VALUES (?, 35.8, 40.5, 42.2, 46.2, 15.5, 24.0, 13.8, 15.8, 11.8, 'Example average male tape — replace with your measurements.', 'seed')`
+  ).run(today);
 }
 
 export async function seedIfEmpty(): Promise<boolean> {

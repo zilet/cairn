@@ -129,20 +129,143 @@ function rowToUnit(row: BodyMeasurementRow, unit: MeasureUnit): BodyMeasurementR
   return out;
 }
 
-// --- coercion / clamping at the trust boundary --------------------------------
-function clampSite(value: unknown, unit: MeasureUnit = "in"): number | null {
+// --- coercion / validation at the trust boundary -------------------------------
+// Hard bounds are deliberately generous adult-human limits. Height-scaled bands
+// are softer: crossing one means "recheck the tape", not "your body is invalid".
+// That distinction prevents random 1–100 inputs without excluding uncommon but
+// real bodies.
+interface SitePlausibility {
+  min: number;
+  max: number;
+  typicalHeightMin: number;
+  typicalHeightMax: number;
+}
+
+const SITE_PLAUSIBILITY_IN: Record<MeasurementSite, SitePlausibility> = {
+  neck_in: { min: 8, max: 32, typicalHeightMin: 0.17, typicalHeightMax: 0.32 },
+  shoulder_in: { min: 25, max: 80, typicalHeightMin: 0.48, typicalHeightMax: 0.9 },
+  chest_in: { min: 20, max: 80, typicalHeightMin: 0.42, typicalHeightMax: 0.85 },
+  waist_in: { min: 16, max: 80, typicalHeightMin: 0.32, typicalHeightMax: 0.9 },
+  hip_in: { min: 20, max: 90, typicalHeightMin: 0.4, typicalHeightMax: 0.9 },
+  thigh_in: { min: 12, max: 45, typicalHeightMin: 0.24, typicalHeightMax: 0.5 },
+  calf_in: { min: 7, max: 30, typicalHeightMin: 0.15, typicalHeightMax: 0.3 },
+  upper_arm_in: { min: 6, max: 30, typicalHeightMin: 0.12, typicalHeightMax: 0.32 },
+  forearm_in: { min: 5, max: 24, typicalHeightMin: 0.1, typicalHeightMax: 0.25 },
+};
+
+export interface BodyMeasurementRange {
+  min: number;
+  max: number;
+  typical_min: number | null;
+  typical_max: number | null;
+}
+
+export interface BodyMeasurementIssue {
+  site: MeasurementSite;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface BodyMeasurementValidation {
+  errors: BodyMeasurementIssue[];
+  warnings: BodyMeasurementIssue[];
+}
+
+const displayMeasure = (inches: number, unit: MeasureUnit): number =>
+  Math.round((unit === "cm" ? inches * CM_PER_IN : inches) * 10) / 10;
+
+export function bodyMeasurementRange(site: MeasurementSite, heightIn: number | null, unit: MeasureUnit = "in"): BodyMeasurementRange {
+  const p = SITE_PLAUSIBILITY_IN[site];
+  return {
+    min: displayMeasure(p.min, unit),
+    max: displayMeasure(p.max, unit),
+    typical_min: heightIn != null ? displayMeasure(Math.max(p.min, heightIn * p.typicalHeightMin), unit) : null,
+    typical_max: heightIn != null ? displayMeasure(Math.min(p.max, heightIn * p.typicalHeightMax), unit) : null,
+  };
+}
+
+function siteInches(value: unknown, unit: MeasureUnit): number | null {
   const raw = Number(value);
   if (!Number.isFinite(raw)) return null;
-  const n = unit === "cm" ? raw / CM_PER_IN : raw;
-  // Generous plausibility bounds for any human circumference, in inches.
-  if (n < 1 || n > 100) return null;
+  return unit === "cm" ? raw / CM_PER_IN : raw;
+}
+
+function clampSite(site: MeasurementSite, value: unknown, unit: MeasureUnit = "in"): number | null {
+  const n = siteInches(value, unit);
+  const p = SITE_PLAUSIBILITY_IN[site];
+  if (n == null || n < p.min || n > p.max) return null;
   return Math.round(n * 10) / 10;
 }
 
 function pickSites(fields: Record<string, unknown> | null | undefined, unit: MeasureUnit = "in"): Record<MeasurementSite, number | null> {
   const out = {} as Record<MeasurementSite, number | null>;
-  for (const site of MEASUREMENT_SITES) out[site] = clampSite(fields?.[site], unit);
+  for (const site of MEASUREMENT_SITES) out[site] = clampSite(site, fields?.[site], unit);
   return out;
+}
+
+export function validateBodyMeasurementInput(
+  fields: Record<string, unknown> | null | undefined,
+  unit: MeasureUnit = "in",
+  profile?: any
+): BodyMeasurementValidation {
+  const errors: BodyMeasurementIssue[] = [];
+  const warnings: BodyMeasurementIssue[] = [];
+  const heightIn = effectiveHeightIn(profile);
+  const validInches: Partial<Record<MeasurementSite, number>> = {};
+  const suffix = unit === "cm" ? "cm" : "in";
+
+  for (const site of MEASUREMENT_SITES) {
+    const raw = fields?.[site];
+    if (raw == null || raw === "") continue;
+    const inches = siteInches(raw, unit);
+    const range = bodyMeasurementRange(site, heightIn, unit);
+    if (inches == null) {
+      errors.push({ site, severity: "error", message: `${SITE_LABELS[site]} must be a number.` });
+      continue;
+    }
+    const p = SITE_PLAUSIBILITY_IN[site];
+    if (inches < p.min || inches > p.max) {
+      errors.push({
+        site,
+        severity: "error",
+        message: `${SITE_LABELS[site]} should be between ${range.min} and ${range.max} ${suffix}.`,
+      });
+      continue;
+    }
+    validInches[site] = inches;
+    if (
+      range.typical_min != null &&
+      range.typical_max != null &&
+      (Number(raw) < range.typical_min || Number(raw) > range.typical_max)
+    ) {
+      warnings.push({
+        site,
+        severity: "warning",
+        message: `${SITE_LABELS[site]} looks unusual for your height. Recheck the tape before logging.`,
+      });
+    }
+  }
+
+  const relatedChecks: Array<{ site: MeasurementSite; other: MeasurementSite; min: number; max: number }> = [
+    { site: "thigh_in", other: "hip_in", min: 0.4, max: 0.78 },
+    { site: "calf_in", other: "thigh_in", min: 0.38, max: 0.85 },
+    { site: "forearm_in", other: "upper_arm_in", min: 0.45, max: 1 },
+    { site: "neck_in", other: "chest_in", min: 0.2, max: 0.6 },
+  ];
+  for (const check of relatedChecks) {
+    const value = validInches[check.site];
+    const other = validInches[check.other];
+    if (value == null || other == null || warnings.some((w) => w.site === check.site)) continue;
+    const ratio = value / other;
+    if (ratio < check.min || ratio > check.max) {
+      warnings.push({
+        site: check.site,
+        severity: "warning",
+        message: `${SITE_LABELS[check.site]} looks unusual next to ${SITE_LABELS[check.other].toLowerCase()}. Recheck both tape sites.`,
+      });
+    }
+  }
+  return { errors, warnings };
 }
 
 function hasAnySite(sites: Record<MeasurementSite, number | null>): boolean {
@@ -247,12 +370,12 @@ export function latestKnownMeasurement(days = 365): BodyMeasurementRow | null {
   return merged;
 }
 
-export function updateBodyMeasurement(id: number, patch: Record<string, unknown>): BodyMeasurementRow | null {
+export function updateBodyMeasurement(id: number, patch: Record<string, unknown>, unit: MeasureUnit = "in"): BodyMeasurementRow | null {
   const cur = getBodyMeasurement(id);
   if (!cur) return null;
   const sites = MEASUREMENT_SITES.map((site) => {
     const provided = site in patch;
-    const value = provided ? clampSite(patch[site]) : cur[site];
+    const value = provided ? clampSite(site, patch[site], unit) : cur[site];
     return { site, value };
   });
   const note = "note" in patch ? (patch.note != null ? String(patch.note).slice(0, 500) : null) : cur.note;
@@ -803,7 +926,7 @@ export interface BodyMetricsSummary {
   profile: { height_in: number | null; sex: string; weight_lb: number | null; goal_weight_lb: number | null };
   needs_height: boolean;
   unit: MeasureUnit;
-  sites: { key: MeasurementSite; label: string; hint: string }[];
+  sites: { key: MeasurementSite; label: string; hint: string; range: BodyMeasurementRange }[];
   comp: BodyCompFocus;
 }
 
@@ -825,7 +948,12 @@ export function getBodyMetricsSummary(days = 365, unit: MeasureUnit = "in"): Bod
     },
     needs_height: heightIn == null,
     unit,
-    sites: MEASUREMENT_SITES.map((key) => ({ key, label: SITE_LABELS[key], hint: SITE_HINTS[key] })),
+    sites: MEASUREMENT_SITES.map((key) => ({
+      key,
+      label: SITE_LABELS[key],
+      hint: SITE_HINTS[key],
+      range: bodyMeasurementRange(key, heightIn, unit),
+    })),
     comp: getBodyCompFocus(unit),
   };
 }
@@ -881,11 +1009,23 @@ export interface MeasurementActionResult {
   measurement: BodyMeasurementRow | null;
   height_in: number | null;
   indicators: BodyIndicator[];
+  issues?: BodyMeasurementIssue[];
   note?: string;
 }
 
 export function applyMeasurementAction(action: Record<string, unknown>): MeasurementActionResult {
   const unit = normalizeUnit(action.unit);
+  const validation = validateBodyMeasurementInput(action, unit);
+  if (validation.errors.length) {
+    return {
+      ok: false,
+      measurement: null,
+      height_in: effectiveHeightIn(),
+      indicators: getBodyIndicators(latestKnownMeasurement()),
+      issues: [...validation.errors, ...validation.warnings],
+      note: "measurement not logged",
+    };
+  }
   const sites = pickSites(action, unit);
   // Height: `height_cm` is always centimeters; `height_in` follows the action's unit
   // (so a cm-speaking user's "height 178" round-trips correctly). Stored as inches.
@@ -913,5 +1053,11 @@ export function applyMeasurementAction(action: Record<string, unknown>): Measure
     typeof action.note === "string" ? action.note : null,
     typeof action.source === "string" ? action.source : "chat"
   );
-  return { ok: true, measurement, height_in: heightIn, indicators: getBodyIndicators(measurement) };
+  return {
+    ok: true,
+    measurement,
+    height_in: heightIn,
+    indicators: getBodyIndicators(measurement),
+    ...(validation.warnings.length ? { issues: validation.warnings } : {}),
+  };
 }

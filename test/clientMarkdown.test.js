@@ -59,3 +59,11 @@ test("markdown renderer preserves structured chat formatting", () => {
   assert.match(html, /<td>ApoB<\/td>/);
   assert.match(html, /<pre><code>&lt;raw&gt;<\/code><\/pre>/);
 });
+
+test("markdown renderer keeps ordinary Unicode punctuation and accented text intact", () => {
+  const markdown = loadMarkdown();
+  const html = markdown.mdToHtml("Café · ~65 g protein — no dressing");
+
+  assert.match(html, /Café · ~65 g protein — no dressing/);
+  assert.doesNotMatch(html, /�/);
+});

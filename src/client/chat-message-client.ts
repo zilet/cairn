@@ -175,7 +175,9 @@ function appendMsg(
 
   const meta = chatMessageMeta(m.meta);
   let extra = "";
-  const applied = chatMessageApplied(meta.applied);
+  // A background plan adjustment is deliberately quiet here: its reason lives on
+  // the affected exercise, where it is useful when the athlete starts the session.
+  const applied = chatMessageApplied(meta.applied).filter((a) => chatMessageRecord((a as Record<string, unknown>).result).background !== true);
   if (applied.length) {
     extra += `<div class="bubble-meta">${applied.map((a) => `<span class="bubble-tag">✓ ${escHtml(String(a.type).replace(/_/g, " "))}${a.error ? " ⚠" : ""}</span>`).join("")}</div>`;
   }

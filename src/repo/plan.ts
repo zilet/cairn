@@ -294,6 +294,24 @@ function insertPlanItem(row: {
   );
 }
 
+// Preserve the coach's "why" at the exact exercise it changed. A plan item can
+// already carry a useful manual note, so a background adjustment appends a compact
+// rationale instead of overwriting it. Re-applying the same reason is idempotent.
+function addCoachAdjustmentNote(planDayId: number, exerciseName: string, reason: unknown): void {
+  const clean = String(reason ?? "").trim().replace(/\s+/g, " ").slice(0, 420);
+  if (!clean) return;
+  const row = db.prepare(
+    `SELECT pi.id, pi.note FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+      WHERE pi.plan_day_id = ? AND e.name = ?`
+  ).get(planDayId, exerciseName) as any;
+  if (!row) return;
+  const adjustment = `Coach note: ${clean}`;
+  const existing = String(row.note ?? "").trim();
+  if (existing.includes(adjustment)) return;
+  const note = [existing, adjustment].filter(Boolean).join("\n").slice(0, 500);
+  db.prepare(`UPDATE plan_items SET note = ? WHERE id = ?`).run(note || null, row.id);
+}
+
 // Apply ONE coach proposal change to the plan — an UPSERT, unlike updateTarget
 // (edit-only). It updates the matching prescription's target when the movement is
 // already on that day, and ADDS the movement to the day when it isn't yet. That
@@ -356,6 +374,7 @@ export function applyPlanChange(
 
   if (match) {
     const r = updateTarget(dayNumber, match.ex_name, tw, ts, opts) as any;
+    addCoachAdjustmentNote(day.id, match.ex_name, c.note ?? c.reason);
     return { action: "updated", day: dayNumber, exercise: match.ex_name, updated: r.updated, ...(r.clamped ? { clamped: r.clamped } : {}) };
   }
 
@@ -589,4 +608,3 @@ export function replacePlan(days: { day_number?: number; name?: string; focus?: 
   invalidateDayRead();
   return getPlan();
 }
-

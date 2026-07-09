@@ -1076,8 +1076,8 @@ test("chat action write contract stays typed and prompt-aligned", () => {
     chatActionPromptSpecs().map((spec) => spec.type),
     [...CHAT_ACTION_TYPES]
   );
-  assert.deepEqual(draftActions, ["plan_update", "plan_restructure"]);
-  assert.equal(immediateActions.includes("plan_update"), false);
+  assert.deepEqual(draftActions, ["plan_restructure"]);
+  assert.equal(immediateActions.includes("plan_update"), true);
   assert.equal(immediateActions.includes("plan_restructure"), false);
   assert.match(actionProse, /APPLIED immediately/);
   assert.match(actionProse, /DRAFTS for the user to review and apply/);

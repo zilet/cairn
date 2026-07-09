@@ -35,6 +35,28 @@ test("addBodyMeasurement round-trips and clamps implausible sites to null", () =
   assert.equal(list[0].id, row.id); // chronological
 });
 
+test("site-specific validation rejects impossible values and flags unusual proportions without excluding them", () => {
+  repo.setProfile({ height_in: 70, sex: "male" });
+
+  const normal = repo.validateBodyMeasurementInput({
+    neck_in: 15.5, shoulder_in: 46.2, chest_in: 42.2, waist_in: 35.8,
+    hip_in: 40.5, thigh_in: 24, calf_in: 15.8, upper_arm_in: 13.8, forearm_in: 11.8,
+  });
+  assert.equal(normal.errors.length, 0);
+  assert.equal(normal.warnings.length, 0);
+
+  const impossible = repo.validateBodyMeasurementInput({ neck_in: 3, waist_in: 120 });
+  assert.deepEqual(impossible.errors.map((i) => i.site).sort(), ["neck_in", "waist_in"]);
+
+  const unusual = repo.validateBodyMeasurementInput({ hip_in: 41, thigh_in: 15, calf_in: 11 });
+  assert.equal(unusual.errors.length, 0, "an unusual body remains loggable");
+  assert.ok(unusual.warnings.some((i) => i.site === "thigh_in"), "the likely thigh mistype asks for a recheck");
+
+  const range = repo.getBodyMetricsSummary().sites.find((s) => s.key === "thigh_in").range;
+  assert.deepEqual({ min: range.min, max: range.max }, { min: 12, max: 45 });
+  assert.ok(range.typical_min > 16 && range.typical_min < 17, `height-aware typical floor, got ${range.typical_min}`);
+});
+
 test("update and delete a measurement", () => {
   const row = repo.addBodyMeasurement("2026-06-01", { waist_in: 34 });
   const upd = repo.updateBodyMeasurement(row.id, { waist_in: 33.5, note: "fixed" });
@@ -192,6 +214,15 @@ test("applyMeasurementAction logs free-field sites and can set height in one cal
   const nothing = repo.applyMeasurementAction({ foo: 1 });
   assert.equal(nothing.ok, false);
   assert.equal(nothing.measurement, null);
+
+  const rejected = repo.applyMeasurementAction({ waist_in: 200 });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.measurement, null);
+  assert.ok(rejected.issues.some((i) => i.site === "waist_in" && i.severity === "error"));
+
+  const unusual = repo.applyMeasurementAction({ hip_in: 41, thigh_in: 15 });
+  assert.equal(unusual.ok, true, "soft plausibility warnings preserve an override path");
+  assert.ok(unusual.issues.some((i) => i.site === "thigh_in" && i.severity === "warning"));
 });
 
 // ---- coach-context slice (SEAM) ----------------------------------------------

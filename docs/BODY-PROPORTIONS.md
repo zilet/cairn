@@ -184,7 +184,60 @@ sexes; shoulders and hips are where they actually diverge.
 
 ---
 
-## §5 Sources
+### Neutral male baseline and measurement guardrails
+
+The unwarped male plate is intentionally an ordinary adult, not an anatomy-model ideal:
+**70 in, 185 lb, neck 15.5 in, shoulder circumference 46.2 in, chest 42.2 in, waist
+35.8 in, hips 40.5 in, thigh 24.0 in, calf 15.8 in, upper arm 13.8 in, forearm
+11.8 in**. The Navy equation puts this tape at approximately **20% body fat**. These are
+seed/demo values and rendering anchors only; they are never presented as physique targets.
+
+Input protection has two levels:
+
+- **Hard site bounds** are intentionally wide adult-human limits. Values outside them are rejected
+  without writing a partial tape session.
+- **Height-scaled and cross-site checks** are soft. They identify likely unit mistakes, misplaced
+  tapes, or transposed values, but an unusual real body remains loggable after an explicit recheck.
+
+Surface definition follows the tape body-fat estimate. Around 20%, the figure keeps clavicle,
+pectoral-envelope, patella and calf landmarks while suppressing visible abdominal segmentation;
+leaner bodies reveal somewhat more relief and higher estimates reveal less. This is a visual
+continuum, not a diagnostic claim.
+
+---
+
+## §5 Browser body-tracing options, and what Cairn should borrow
+
+There are good JavaScript/browser tools for **reading a photo**, but they should not be the
+primary renderer for the Stand tape figure:
+
+- **MediaPipe Pose Landmarker** is the best browser-native starting point for a future photo
+  capture/import flow: it runs in Web/JS, returns normalized landmarks plus 3D world landmarks,
+  exposes the BlazePose-style 33 landmark model, and can optionally output a person segmentation
+  mask. It is pose/posture intelligence, not a tape-measure renderer.
+- **TensorFlow.js pose/body-segmentation** is the adjacent ecosystem: MoveNet/PoseNet/BlazePose
+  keypoints plus segmentation models can identify foreground pixels and major joints in-browser.
+  This can trace a person or validate pose framing, but clothing, camera distance, lens distortion,
+  and perspective make raw circumference inference unreliable for Cairn's health UI.
+- **OpenCV.js contours** are useful after segmentation: threshold/mask -> `findContours` ->
+  simplify/smooth contour -> extract a clean outer body outline. This is a tracing step, not an
+  anatomy model; it needs landmarks and anthropometric constraints to avoid lumpy silhouettes.
+- **SMPL/STAR/BodyM-style statistical body models** are the serious path for measurement-to-body
+  realism: learned 3D body shape from scans, pose-dependent blend shapes, and datasets pairing
+  silhouettes with real measurements. They are too heavy/licensed/private for Cairn's offline PWA
+  baseline today, but the design principle is directly useful: map local measurements to a
+  constrained body model, then project to a clean front-view figure.
+
+**Product decision:** Cairn's Stand figure should stay deterministic and private: an authored
+anatomical SVG body, warped locally by the athlete's own tape ratios, with subtle surface anatomy
+relief and clinical waist guides. Borrow the **pipeline ideas** from pose/segmentation/SMPL
+(landmarks, contours, constrained shape space), not a black-box photo estimator. A future optional
+"trace my photo" feature could use MediaPipe/TFJS + OpenCV.js only to extract landmarks/contours,
+then reconcile them against the logged tape rather than replacing the tape as truth.
+
+---
+
+## §6 Sources
 
 **Loomis canon:**
 1. Kreated by Krause, "Andrew Loomis's 'Flat Diagram' — Part III" — https://kreatedbykrause.blogspot.com/2016/07/andrew-loomiss-flat-diagrampart-iii.html (8 horizontal divisions = 1 head each; diagram is 2⅓ heads wide; confirms male/female diagrams differ)
@@ -207,5 +260,14 @@ sexes; shoulders and hips are where they actually diverge.
 **Silhouette / art-anatomy landmark notes:**
 13. Kenhub, "Greater trochanter of femur" — https://www.kenhub.com/en/library/anatomy/greater-trochanter-of-femur — and Wikipedia, "Greater trochanter" — https://en.wikipedia.org/wiki/Greater_trochanter (confirms the greater trochanter, not the iliac crest, is the widest skeletal landmark of the hip — used to justify placing the hip-width bulge at trochanter height, not waist-adjacent iliac-crest height)
 14. Bardot Brush, "How to Draw Body Proportions" — https://bardotbrush.com/how-to-draw-body-proportions/ (calf widest point ≈⅓ of the way down the lower leg; ankle narrower than calf, only slightly wider than the heel in a relaxed pose)
+
+**Browser tracing / statistical body models:**
+15. Google MediaPipe Pose Landmarker for Web — https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker/web_js (Web/JavaScript setup, 33 landmarks, world landmarks, optional segmentation mask)
+16. TensorFlow.js `pose-detection` — https://github.com/tensorflow/tfjs-models/tree/master/pose-detection (MoveNet / BlazePose / PoseNet keypoint models; BlazePose keypoint map)
+17. TensorFlow.js `body-segmentation` — https://github.com/tensorflow/tfjs-models/tree/master/body-segmentation (browser-side person segmentation family)
+18. OpenCV.js contours tutorial — https://docs.opencv.org/4.x/d5/daa/tutorial_js_contours_begin.html (`findContours` / `drawContours`; contour = continuous boundary of a binary object)
+19. SMPL official site — https://smpl.is.tue.mpg.de/ (scan-learned 3D human body model, shape and pose blend shapes)
+20. STAR official site — https://star.is.tue.mpg.de/ (compact sparse local corrective body model; improved realism/generalization vs. SMPL)
+21. BodyM / Human Body Measurement Estimation with Adversarial Augmentation — https://adversarialbodysim.github.io/ (real silhouettes + measurements, SMPL-based adversarial simulation)
 
 **Numbers NOT found / explicitly flagged as unsourced in this research** (do not treat as sourced if reused elsewhere): exact head-unit position of the shoulder line in Loomis's own diagrams (text gives ⅙-of-the-way-down = 1.33 heads, but reproduced charts commonly show it closer to 1.5 — presented as a range); exact head-unit position of calf peak and ankle narrowing in Loomis (diagram-only, not stated in prose — used the widely-reproduced tutorial convention ~6.8 / ~7.8 heads instead, flagged as convention not primary-source); any real standing frontal-breadth measurement for mid-thigh or knee (no such field exists in ANSUR II or in any other source checked); a verified real-data ratio of head width to head height (no public field for frontal crown-to-chin head height); a precise numeric offset between the calf's medial and lateral peak heights (only a qualitative "outer is higher" rule was found, no numeric split).

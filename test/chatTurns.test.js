@@ -10,7 +10,7 @@
 //   - finish / fail / cancel state transitions + meta hydration
 //   - recoverChatTurns: interrupted 'running' → error (+ recovery note), queued re-listed
 //   - listChatMessagesBefore excludes the current + later messages
-//   - applyChatActions: a safe action applies; a plan_update becomes a DRAFT proposal
+//   - applyChatActions: safe actions apply; a signal-backed plan_update lands quietly
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
@@ -118,22 +118,35 @@ test("listChatMessagesBefore excludes the current message and anything after it"
   assert.deepEqual(history.map((h) => h.content), ["first", "reply to first"], "only what preceded m3");
 });
 
-test("applyChatActions applies a safe action and turns a plan_update into a DRAFT proposal", () => {
+test("applyChatActions applies a signal-backed plan_update quietly and preserves its rationale on the plan item", () => {
+  repo.savePlanDay(1, "Lower", "legs", [{ exercise: "Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 190 }]);
   const parsed = {
     reply: "logged + drafted",
     actions: [
       { type: "add_memory", content: "prefers evening training", kind: "preference" },
-      { type: "plan_update", summary: "bump squat", changes: [{ exercise: "Squat", target_weight: 230 }] },
+      { type: "plan_update", summary: "bump squat", changes: [{ day_number: 1, exercise: "Squat", target_weight: 200, reason: "Three crisp sessions at the top of the range." }] },
     ],
   };
-  const { applied, drafts } = applyChatActions(parsed, { agent: "stub" });
-  assert.equal(applied.length, 1, "the memory applied immediately");
+  const { applied, drafts } = applyChatActions(parsed, { agent: "stub", message: "My squat felt easy again today." });
+  assert.equal(applied.length, 2, "the memory and small plan adjustment applied immediately");
   assert.equal(applied[0].type, "add_memory");
-  assert.equal(drafts.length, 1, "the plan change became a draft, not an immediate apply");
-  // The draft is a real persisted proposal in 'draft' status (never auto-applied).
-  const prop = repo.getProposal(drafts[0].id);
-  assert.equal(prop.status, "draft");
+  assert.equal(applied[1].type, "plan_update");
+  assert.equal(applied[1].result.background, true);
+  assert.equal(drafts.length, 0, "small plan adjustments do not interrupt chat with a draft");
+  const prop = repo.getProposal(applied[1].result.proposal_id);
+  assert.equal(prop.status, "applied");
+  const squat = repo.getPlanDay(1).items.find((item) => item.exercise === "Squat");
+  assert.equal(squat.target_weight, 200);
+  assert.match(squat.note, /Three crisp sessions/);
   assert.ok(repo.listMemory(10).some((m) => /evening training/.test(m.content)), "memory landed in the store");
+});
+
+test("applyChatActions ignores a plan update hallucinated during a food-only turn", () => {
+  const { applied, drafts } = applyChatActions({
+    actions: [{ type: "plan_update", summary: "unrelated", changes: [{ day_number: 1, exercise: "Squat", target_weight: 230 }] }],
+  }, { agent: "stub", message: "Lunch today: double chicken salad, no dressing. Estimate it." });
+  assert.deepEqual(applied, []);
+  assert.deepEqual(drafts, []);
 });
 
 test("applyChatActions ignores unknown action types without throwing", () => {

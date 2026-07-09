@@ -140,11 +140,12 @@ type CbfWarpKind = "torso" | "arm";
   //   validated rule) · fingertips hu 4.82 (y385, wrist + ¾-head hand) · knee
   //   hu 5.88 (y466, between mid-patella 458 & Loomis 475) · outer calf peak
   //   hu 6.39 (y505, ⅓ down the lower leg) · ankle hu 7.58 (y596) · soles hu 8.
-  // Half-widths (px from x=130): head 27 (spec §2 .088) · neck ~13 (§2 upper-
-  // bound narrowed, §4 r10) · acromion trap ~71 (§2 biacromial .237) / deltoid
-  // 85 (§2 bideltoid .29) · chest 60 (fit-ref 39in girth /2.71) · waist 52
-  // (fit-ref 33in — visibly < chest) · trochanter hip 61 (fit-ref 37.5in ≈ §2
-  // hipbreadth) · ankle ~10 (§2 bimalleolar .043).
+  // Half-widths (px from x=130): head 27 (spec §2 .088) · neck ~14 (§2 upper-
+  // bound narrowed, §4 r10) · acromion trap ~74 (§2 biacromial .237) / deltoid
+  // 87 (§2 bideltoid .29) · chest 64 · waist 57 · trochanter hip 65 · ankle
+  // ~10 (§2 bimalleolar .043). The trunk widths are authored around Cairn's
+  // neutral male seed (5'10", ~185 lb, ~20% Navy tape estimate), so an average
+  // body is the unwarped starting point rather than an unusually lean physique.
   // Head = Loomis ball-and-jaw: cranium WIDEST at ear level (~y58), rounding UP
   // to the crown AND tapering DOWN to a soft flat chin — an oval head, not a
   // ball on a stem. The neck is SHORT (bare neck < 0.3 head; traps rise by
@@ -162,11 +163,11 @@ type CbfWarpKind = "torso" | "arm";
     [138, 17.5],                                                       // crown shoulder — round dome
     [147, 22], [153, 31],                                             // upper skull
     [156.5, 43],                                                      // skull widening
-    [157.5, 56], [157.5, 64],                                         // EAR/cheek band — WIDEST half 27.5, sustained
-    [154, 72],                                                        // cheek descending (half 24)
-    [149, 80],                                                        // GONION (jaw angle) — half 19 — densify corner
-    [145, 86],                                                        // jawline (half 15)
-    [140, 92],                                                        // chin (half 10) — densify
+    [158.5, 54], [159.5, 63], [157, 70],                              // subtle ear/temple break in the frontal outline
+    [154, 75],                                                        // cheek descending (half 24)
+    [150, 81],                                                        // GONION (jaw angle) — half 20 — densify corner
+    [145, 88],                                                        // jawline (half 15)
+    [140, 93],                                                        // chin (half 10) — densify
     [138, 94.5],                                                     // chin — soft FLAT terminus (half 8) — densify
     // neck — gentle concave under-jaw INTO near-parallel sides (half ~14, spec §4 r10);
     // the trap flare begins only AT the trap line, not at the chin
@@ -175,23 +176,23 @@ type CbfWarpKind = "torso" | "arm";
     [144, 112],                                                      // neck side — half 14 (still parallel)
     // trapezius: a convex knuckle off the neck, then FLATTENING into the acromial
     // shelf and a decisive corner at half ~74 (biacromial, spec §2)
-    [153, 114],                                                     // trap knuckle (convex) off the neck — densify
-    [174, 117],                                                     // trap rising, beginning to flatten
-    [196, 118],                                                     // acromial shelf (flattening)
-    [204, 119],                                                     // ACROMION corner — densify (deltoid ball springs below on ARM path)
-    // torso — under the deltoid -> armpit -> chest (nipple hu 2.0, half 60) -> waist (hu 2.90, half 52)
-    [199, 132],                                                      // under the acromion, tucking in steeply
-    [188, 154],                                                      // toward the armpit
-    [186, 168],                                                      // armpit — densify
-    [190, 180], [188, 202], [184, 222],                             // chest / pec -> rib taper
-    [182, 238],                                                      // natural waist — narrowest — densify
-    // pelvis — iliac crest (hu 3.16) -> greater trochanter, WIDEST hip half 61 @ y314 (spec §4 r1)
-    [184, 256], [188, 286],                                          // iliac crest -> upper hip filling
-    [191, 314],                                                      // greater trochanter — widest hip — densify
-    [189, 332],                                                      // hip -> outer thigh
+    [153, 115],                                                     // trap knuckle (convex) off the neck — densify
+    [173, 120],                                                     // trap descending toward the shoulder
+    [192, 123],                                                     // acromial shelf (flattening)
+    [204, 125],                                                     // ACROMION corner — densify (deltoid ball springs below on ARM path)
+    // torso — under the deltoid -> armpit -> chest (nipple hu 2.0, half 64) -> waist (hu 2.90, half 57)
+    [201, 132],                                                      // under the acromion, tucking in steeply
+    [191, 153],                                                      // toward the armpit
+    [189, 168],                                                      // armpit — densify
+    [194, 181], [193, 199], [189, 220],                             // pec / lower ribcage -> abdominal taper
+    [187, 238],                                                      // natural waist — narrowest — densify
+    // pelvis — iliac crest (hu 3.16) -> greater trochanter, WIDEST hip half 65 @ y314 (spec §4 r1)
+    [189, 257], [193, 286],                                          // iliac crest -> upper hip filling
+    [195, 314],                                                      // greater trochanter — widest hip — densify
+    [193, 333],                                                      // gluteal fold / outer upper thigh
     // right leg OUTER — thigh -> knee (hu 5.88) -> outer calf peak (hu 6.39, HIGHER §4 r7) -> ankle
-    [185, 352], [180, 386], [175, 422], [172, 448],                 // thigh sweep, dense taper
-    [170, 466],                                                     // outer knee — densify corner
+    [190, 352], [185, 386], [179, 422], [174, 448],                 // thigh sweep, dense taper
+    [171, 466],                                                     // outer knee — densify corner
     [173, 490],                                                     // below-knee tibial flare
     [177, 508],                                                     // OUTER calf peak — higher (§4 r7) — densify
     [173, 532], [166, 558], [161, 580],                            // gastrocnemius descending -> shin
@@ -207,35 +208,35 @@ type CbfWarpKind = "torso" | "arm";
     [141, 570], [140, 540],                                         // inner shin (gap ~22)
     [140, 518],                                                     // inner (medial) calf peak — LOWER than outer (§4 r7)
     [139, 494], [137, 466],                                         // toward inner knee — densify (gap ~14)
-    [135, 420], [134, 384],                                         // inner thigh (gap ~8)
-    [132, 352],                                                     // inner thigh top — thighs NEARLY TOUCH (gap ~4) — densify
+    [136, 420], [135, 384],                                         // inner thigh (gap ~10)
+    [133, 352],                                                     // inner thigh top — thighs NEARLY TOUCH (gap ~6) — densify
     [131, 337],                                                     // approach to the crotch V (gap ~2) — densify
   ];
   const CROTCH: CbfPt = [130, 328];
   const ARM_R: CbfPt[] = [
     // deltoid BALL — springs from just below the acromion corner, bulges to the
     // bideltoid max half ~85 @ y~140 (spec §2), the widest point of the figure
-    [202, 121],                                                     // inner-top, just under the acromion corner
-    [211, 129], [216, 142],                                        // deltoid rising -> BALL (widest, hu 1.62) — densify
-    [211, 162],                                                    // deltoid lower — rounds in under the ball
+    [198, 126],                                                     // upper deltoid, just under the acromion corner
+    [206, 129], [212, 138], [214, 148],                            // rounded deltoid cap, widest below the acromion
+    [212, 160], [209, 171],                                       // deltoid lower — rounds into the upper arm
     // upper arm -> elbow AT the navel/waist line (hu 2.97, spec §4 r3)
-    [209, 186], [205, 214],
-    [202, 240],                                                    // elbow — densify corner
+    [211, 190], [207, 214],
+    [203, 239],                                                    // lateral epicondyle — densify corner
     // forearm — gentle carrying angle out, to the wrist ON the crotch line (hu 4.08, spec §4 r4)
-    [205, 266], [204, 298], [200, 322],
+    [205, 251], [207, 274], [204, 301], [200, 322],
     [198, 330],                                                    // wrist — on the crotch line — densify
     // hand — back widens to knuckles, fingers taper to rounded tips (hu 4.82), thumb mass inner (director)
-    [202, 344], [203, 356],                                       // back of hand -> knuckle line (widest)
-    [199, 372],                                                   // fingers tapering
-    [192, 385],                                                  // fingertips — rounded — densify
-    [185, 376], [180, 360],                                      // finger inner -> thumb tip
-    [178, 346],                                                  // thenar / thumb-base bump (inner) — densify
+    [202, 342], [203, 354],                                       // back of hand -> knuckle line (widest)
+    [201, 368], [196, 382],                                      // fingers tapering
+    [191, 386],                                                  // fingertips — rounded — densify
+    [186, 379], [184, 367],                                      // little-finger edge
+    [178, 355], [176, 346],                                      // thumb tip -> thenar / thumb-base bump
     [180, 332],                                                  // wrist inner
     // inner forearm -> inner upper arm -> armpit
-    [182, 300], [183, 268],
-    [180, 240],                                                  // inner elbow
-    [179, 210], [179, 184], [177, 158],                         // inner arm toward the armpit
-    [181, 150],                                                  // armpit / inner deltoid — densify
+    [182, 300], [182, 269],
+    [178, 242],                                                  // inner elbow
+    [179, 218], [180, 194], [177, 172], [177, 158],             // inner arm toward the axilla
+    [181, 148], [187, 137], [194, 127],                         // axillary fold into the deltoid cap
   ];
 
   // ---------- muscles (right-side loops; mirror:true adds the left copy) ----------
@@ -335,13 +336,18 @@ type CbfWarpKind = "torso" | "arm";
       armL: loopD(a(mirrorPts(ARM_R))),
     };
   }
-  // Muscle paths: [{ group, d }] for 'front' | 'back'.
-  function muscles(sex: string, side: string): Array<{ group: string; d: string }> {
+  const ARM_GROUPS = new Set(["shoulders", "rear delts", "biceps", "triceps", "forearms"]);
+  const groupWarpKind = (group: string): CbfWarpKind => ARM_GROUPS.has(group) ? "arm" : "torso";
+
+  // Muscle paths: [{ group, d }] for 'front' | 'back'. Stand can pass ratios so
+  // subtle anatomy planes follow the same tape-bent outline as the silhouette.
+  function muscles(sex: string, side: string, ratios?: CbfSiteRatios): Array<{ group: string; d: string }> {
     const defs = side === "back" ? MUSCLES_BACK : MUSCLES_FRONT;
     const out: Array<{ group: string; d: string }> = [];
     for (const def of defs) {
       const prep = (pts: CbfPt[]): string => {
         let p = warp(pts, sex);
+        p = bodyWarp(p, ratios, groupWarpKind(def.g));
         // Female: the warp already re-seats loops in x by zone, so shrinking is
         // limited to the pecs (a gentle feminizing pull); everything else rides
         // the warp so nothing floats off the outline (spec §4 r15 / director).
@@ -354,8 +360,8 @@ type CbfWarpKind = "torso" | "arm";
     return out;
   }
   // Interior detail hairlines: [d strings].
-  function detailStrokes(sex: string, side: string): string[] {
-    return (side === "back" ? STROKES_BACK : STROKES_FRONT).map((pts) => openD(warp(pts, sex)));
+  function detailStrokes(sex: string, side: string, ratios?: CbfSiteRatios): string[] {
+    return (side === "back" ? STROKES_BACK : STROKES_FRONT).map((pts) => openD(bodyWarp(warp(pts, sex), ratios, "torso")));
   }
   // Warp a single [x, y] male-figure point for a sex (+ optional tape ratios).
   // kind: 'torso' (default) or 'arm' for points riding the arm paths.
@@ -364,8 +370,9 @@ type CbfWarpKind = "torso" | "arm";
   }
   // Dashed reference-waist chalk trace (right/left) — the OPTIMAL band, so it
   // warps by sex only, never by the athlete's current tape.
-  function waistTrace(sex: string, sign: 1 | -1): string {
-    const optHalf = 46 * (sex === "female" ? kOf(238) : 1);
+  function waistTrace(sex: string, sign: 1 | -1, guideScale = 1): string {
+    const scale = Math.min(1.18, Math.max(0.76, guideScale));
+    const optHalf = 57 * scale * (sex === "female" ? kOf(238) : 1);
     return openD([
       [130 + sign * (optHalf + 8), 210], [130 + sign * (optHalf + 2), 224], [130 + sign * optHalf, 238],
       [130 + sign * (optHalf + 2), 252], [130 + sign * (optHalf + 6), 266],

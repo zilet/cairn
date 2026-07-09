@@ -265,10 +265,37 @@ test("the elite Stand figure: measured sites become tap targets, selection glows
   assert.doesNotMatch(svg, /data-site="hip_in"/, "an untaped site gets no callout");
   assert.match(svg, /url\(#bmfig2-warn\)/, "a high waist-height ratio glows terracotta when selected");
   assert.match(svg, /stroke-dasharray="4.5 3.5"/, "the reference-waist chalk trace draws above the band");
+  assert.match(svg, /class="bmfig2-surface"/, "plain Stand body carries subtle anatomy planes");
+  assert.doesNotMatch(svg, /data-group=/, "the anatomy relief is not the tappable muscle map");
   assert.doesNotMatch(svg, /NaN/);
   assert.doesNotMatch(svg, /\b\d{1,3}\s*\/\s*100\b/, "no x/100 grade");
   const lean = bm.bmStandFigureSvg(F, bm.bmStandModel(mkData({ waist_in: 33 }), "in"), "waist_in");
   assert.doesNotMatch(lean, /stroke-dasharray="4.5 3.5"/, "a lean waist draws no target trace");
+});
+
+test("the neutral male Stand baseline is a complete average body and surface definition follows body fat", () => {
+  const { bm, F } = loadElite();
+  const data = mkData({
+    neck_in: 15.5, shoulder_in: 46.2, chest_in: 42.2, waist_in: 35.8,
+    hip_in: 40.5, thigh_in: 24, upper_arm_in: 13.8, forearm_in: 11.8, calf_in: 15.8,
+  }, { height_in: 70, weight_lb: 185 });
+  data.indicators = [{ key: "bodyfat", value: 20, unit: "%", tone: "info", label: "Body fat", zone: "average", read: "", estimate: true }];
+  const model = bm.bmStandModel(data, "in");
+  const svg = bm.bmStandFigureSvg(F, model, "waist_in");
+  assert.equal(model.bodyFatPct, 20);
+  assert.match(svg, /class="bmfig2-surface"/);
+  assert.match(svg, /<ellipse[^>]*rx="1\.7"[^>]*pointer-events="none"/, "the navel is a quiet anatomical landmark");
+  assert.doesNotMatch(svg, /NaN/);
+});
+
+test("tape input checks distinguish impossible values from unusual-but-confirmable values", () => {
+  const bm = loadBodyMetrics();
+  const range = { min: 12, max: 45, typical_min: 16.8, typical_max: 35 };
+  assert.equal(bm.bmTapeValueIssue(24, "Thigh", "in", range), null);
+  assert.equal(bm.bmTapeValueIssue(15, "Thigh", "in", range).kind, "warning");
+  assert.match(bm.bmTapeValueIssue(15, "Thigh", "in", range).message, /unusual for your height/i);
+  assert.equal(bm.bmTapeValueIssue(100, "Thigh", "in", range).kind, "error");
+  assert.match(bm.bmTapeValueIssue(100, "Thigh", "in", range).message, /between 12 and 45 in/i);
 });
 
 test("compSection uses the elite figure when the library is present, the legacy croquis when not", () => {

@@ -177,7 +177,7 @@ function clampNutritionTarget(nutrition: any): { nutrition: any; clamped: ClampA
   return { nutrition: out, clamped };
 }
 
-export function applyProposal(id: number) {
+export function applyProposal(id: number, opts: { supersedeSiblings?: boolean } = {}) {
   const p = getProposal(id);
   if (!p) throw new Error(`No proposal ${id}`);
   if (!p.parsed) throw new Error("Proposal has no parsed payload");
@@ -216,7 +216,7 @@ export function applyProposal(id: number) {
   if (Array.isArray(p.parsed.days)) {
     replacePlan(p.parsed.days);
     setProposalStatus(id, "applied");
-    supersedeSiblingTrainingDrafts(id);
+    if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
     return { ok: true, id, restructured: true, days: p.parsed.days.length };
   }
   // A proposal may carry strength `changes`, a week of run prescriptions (`cardio`),
@@ -278,7 +278,7 @@ export function applyProposal(id: number) {
     };
   }
   setProposalStatus(id, "applied");
-  supersedeSiblingTrainingDrafts(id);
+  if (opts.supersedeSiblings !== false) supersedeSiblingTrainingDrafts(id);
   // An applied target tweak / added movement / week of runs can change today's read —
   // bust the cached Brief so the next open reflects the change, not the stale plan.
   invalidateDayRead();

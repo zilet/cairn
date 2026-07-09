@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { agentCliPath, agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
@@ -886,6 +887,11 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
     }));
     let out = "";
     let err = "";
+    // stdout/stderr chunks are arbitrary byte boundaries. Decoding each Buffer
+    // independently turns a split UTF-8 character (for example `·` or `é`) into
+    // replacement glyphs before chat/markdown ever sees it.
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
@@ -900,14 +906,16 @@ function runAgentImpl(name: string, prompt: string, timeoutMs: number, signal?: 
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     const cleanup = () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort); };
 
-    child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += d.toString(); });
-    child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += d.toString(); });
+    child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += outDecoder.write(d); });
+    child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += errDecoder.write(d); });
     child.on("error", (e) => {
       cleanup();
       reject(new Error(`failed to launch "${def.command}": ${e.message}`));
     });
     child.on("close", (code) => {
       cleanup();
+      if (out.length < MAX_OUT) out += outDecoder.end();
+      if (err.length < MAX_OUT) err += errDecoder.end();
       const parsed = (extract ?? extractJson)(out);
       const usage = extractAgentUsage(`${out}\n${err}`);
       // Surface stderr (under DEBUG) when the run looks unhealthy: a non-zero exit,
@@ -1051,6 +1059,11 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
     let err = "";
     let buf = "";   // stdout line buffer (NDJSON)
     let meta = "";  // raw event snippets, used only for best-effort token/model telemetry
+    // Keep UTF-8 code points intact across arbitrary subprocess chunk boundaries.
+    // Without this, the NDJSON itself stays parseable but its text field can already
+    // contain U+FFFD replacement characters by the time streamDelta reads it.
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
@@ -1075,7 +1088,7 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
       try { onDelta?.(piece); } catch { /* a bad consumer must never kill the stream */ }
     };
     child.stdout.on("data", (d) => {
-      buf += d.toString();
+      buf += outDecoder.write(d);
       let nl: number;
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
@@ -1083,10 +1096,12 @@ export function runAgentStreaming(name: string, prompt: string, opts: StreamRunO
         consume(line);
       }
     });
-    child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += d.toString(); });
+    child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += errDecoder.write(d); });
     child.on("error", (e) => { cleanup(); reject(new Error(`failed to launch "${def.command}": ${e.message}`)); });
     child.on("close", (code) => {
       cleanup();
+      buf += outDecoder.end();
+      if (err.length < MAX_OUT) err += errDecoder.end();
       if (buf.trim()) consume(buf); // flush a trailing line with no newline
       const usage = extractAgentUsage(`${meta}\n${err}`);
       // Chat's success is non-empty text (not JSON); log stderr when the stream

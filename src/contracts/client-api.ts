@@ -1707,7 +1707,12 @@ export interface ClientBodyMetricsSummary {
   profile: { height_in: number | null; sex: string; weight_lb: number | null; goal_weight_lb: number | null };
   needs_height: boolean;
   unit: "in" | "cm";
-  sites: { key: string; label: string; hint: string }[];
+  sites: {
+    key: string;
+    label: string;
+    hint: string;
+    range: { min: number; max: number; typical_min: number | null; typical_max: number | null };
+  }[];
   comp: ClientBodyCompFocus;
 }
 

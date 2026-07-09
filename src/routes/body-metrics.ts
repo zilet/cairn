@@ -6,8 +6,10 @@ import {
   getBodyMeasurement,
   getBodyMetricTrends,
   getBodyMetricsSummary,
+  MEASUREMENT_SITES,
   normalizeUnit,
   updateBodyMeasurement,
+  validateBodyMeasurementInput,
 } from "../repo/body-metrics.js";
 import { setProfile } from "../repo/profile.js";
 
@@ -24,10 +26,25 @@ bodyMetricsRouter.get("/body-metrics", (req, res) => {
 // Log a measuring session. Body carries any subset of the sites (inches by default;
 // pass unit:"cm" to log centimeters), plus an optional note/source and — for
 // convenience — height_in (routed to the profile so BMI / body-fat light up from
-// the same call; it follows the same unit). Values are clamped in the repo.
+// the same call; it follows the same unit). Impossible values are rejected;
+// unusual-but-possible values return a warning and remain loggable.
 bodyMetricsRouter.post("/body-metrics", (req, res) => {
   const body = req.body ?? {};
   const unit = normalizeUnit(body.unit);
+  const validation = validateBodyMeasurementInput(body, unit);
+  if (validation.errors.length) {
+    res.status(400).json({
+      ok: false,
+      error: "Check the highlighted measurements before logging.",
+      issues: [...validation.errors, ...validation.warnings],
+    });
+    return;
+  }
+  const hasSite = MEASUREMENT_SITES.some((site) => body[site] != null && body[site] !== "");
+  if (!hasSite) {
+    res.status(400).json({ ok: false, error: "Fill in at least one measurement.", issues: [] });
+    return;
+  }
   let heightSet = false;
   if (body.height_in != null && body.height_in !== "") {
     const h = Number(body.height_in);
@@ -35,7 +52,13 @@ bodyMetricsRouter.post("/body-metrics", (req, res) => {
     heightSet = true;
   }
   const measurement = addBodyMeasurement(body.date, body, body.note, body.source ?? "manual", unit);
-  res.json({ ok: true, measurement, height_set: heightSet, summary: getBodyMetricsSummary(365, unit) });
+  res.json({
+    ok: true,
+    measurement,
+    height_set: heightSet,
+    issues: validation.warnings,
+    summary: getBodyMetricsSummary(365, unit),
+  });
 });
 
 // Per-site least-squares trends (plain-language + sparkline points), null-safe.
@@ -51,7 +74,14 @@ bodyMetricsRouter.get("/body-metrics/:id", (req, res) => {
 });
 
 bodyMetricsRouter.put("/body-metrics/:id", (req, res) => {
-  const updated = updateBodyMeasurement(Number(req.params.id), req.body ?? {});
+  const body = req.body ?? {};
+  const unit = normalizeUnit(body.unit);
+  const validation = validateBodyMeasurementInput(body, unit);
+  if (validation.errors.length) {
+    res.status(400).json({ ok: false, error: "Check the measurements before saving.", issues: validation.errors });
+    return;
+  }
+  const updated = updateBodyMeasurement(Number(req.params.id), body, unit);
   if (!updated) {
     res.status(404).json({ error: "not found" });
     return;

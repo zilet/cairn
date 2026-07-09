@@ -226,6 +226,30 @@ export function shouldCreatePhotoFoodPlaceholder(message: string | null | undefi
   return false;
 }
 
+// A meal is useful recovery/fuel context, but it is not by itself evidence that a
+// lift should change. This backstop prevents an overreaching chat model from
+// turning a food capture into a surprise training intervention. If the athlete
+// also reports a training, recovery, pain, or life signal, the targeted coaching
+// path remains available.
+const FOOD_TURN_RE = /\b(food|meal|breakfast|lunch|dinner|snack|plate|bowl|salad|chicken|restaurant|cafe|café|ate|eating|calor(?:y|ies)|macro|protein|carb|fat|fiber|portion|recipe|menu)\b/i;
+const TRAINING_SIGNAL_RE = /\b(workout|train(?:ing|ed)?|lift(?:ing|ed)?|session|exercise|bench|squat|deadlift|press|row|run|ride|cycle|pain|sore|soreness|injur(?:y|ed)|recovery|sleep|hrv|fatigue|travel|trip|ill|sick)\b/i;
+export function isFoodOnlyTurn(message: string | null | undefined, imagePath?: string | null): boolean {
+  const text = String(message ?? "");
+  return (Boolean(imagePath) || FOOD_TURN_RE.test(text)) && !TRAINING_SIGNAL_RE.test(text);
+}
+
+function applyBackgroundPlanUpdate(agent: string, summary: unknown, changes: unknown[]): unknown {
+  const proposal = repo.createProposal(agent, "background: chat signal", "", {
+    summary: String(summary ?? "Plan adjusted from a new coaching signal.").slice(0, 500),
+    changes,
+  });
+  // Keep an auditable applied proposal, but do not retire unrelated drafts the
+  // athlete may still be considering. This remains the shared clamped plan-write
+  // path, so background changes follow the same safety rules as reviewed ones.
+  const result = repo.applyProposal((proposal as any).id, { supersedeSiblings: false }) as any;
+  return { background: true, proposal_id: (proposal as any).id, ...result };
+}
+
 function logPhotoFood(actions: ChatAction[], turn: any): { id: number; [key: string]: unknown } | null {
   if (!turn.image_path) return null;
   // Pull out any log_food the agent emitted (it saw the photo) to seed the note.
@@ -803,7 +827,8 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
           break;
         case "plan_update":
-          drafts.push(repo.createProposal(ctx.agent, "chat: plan update", "", { summary: a.summary, changes: a.changes }));
+          if (isFoodOnlyTurn(message, ctx.imagePath)) break;
+          applied.push({ type: a.type, result: applyBackgroundPlanUpdate(ctx.agent, a.summary, a.changes) });
           break;
         case "plan_restructure":
           drafts.push(repo.createProposal(ctx.agent, "chat: restructure", "", { summary: a.summary, days: a.days }));

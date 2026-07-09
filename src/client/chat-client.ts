@@ -71,7 +71,7 @@ function chatShellHtml(): string {
           <textarea id="chatInput" rows="1" autocomplete="off" aria-label="Message Cairn" placeholder="Ask, log, or snap a plate…"></textarea>
           <button id="chatSend" class="logbtn" aria-label="Send">↑</button>
         </div>
-        <div class="chatnote">Logs save instantly. Plan changes arrive as drafts for you to apply.</div>
+        <div class="chatnote">Logs save instantly. Small coaching adjustments land quietly in your plan; bigger restructures wait for review.</div>
       </div>
     </div>`;
 }

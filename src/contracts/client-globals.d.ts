@@ -89,10 +89,10 @@ declare global {
     GLOWS: Record<string, Array<[number, number, number, number, string]>>;
     ARM_SITES: Set<string>;
     silhouette(sex: string, ratios?: Record<string, number>): { torso: string; armR: string; armL: string };
-    muscles(sex: string, side: CairnBodyFigureSide): Array<{ group: string; d: string }>;
-    detailStrokes(sex: string, side: CairnBodyFigureSide): string[];
+    muscles(sex: string, side: CairnBodyFigureSide, ratios?: Record<string, number>): Array<{ group: string; d: string }>;
+    detailStrokes(sex: string, side: CairnBodyFigureSide, ratios?: Record<string, number>): string[];
     warpPoint(pt: [number, number], sex: string, ratios?: Record<string, number>, kind?: "torso" | "arm"): [number, number];
-    waistTrace(sex: string, sign: 1 | -1): string;
+    waistTrace(sex: string, sign: 1 | -1, guideScale?: number): string;
     figureSvg(side: CairnBodyFigureSide, tones: Record<string, string>, opts?: CairnBodyFigureOpts): string;
     loopD(pts: Array<[number, number]>): string;
     openD(pts: Array<[number, number]>): string;
