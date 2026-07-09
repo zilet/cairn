@@ -248,6 +248,7 @@ export function validateBodyMeasurementInput(
 
   const relatedChecks: Array<{ site: MeasurementSite; other: MeasurementSite; min: number; max: number }> = [
     { site: "thigh_in", other: "hip_in", min: 0.4, max: 0.78 },
+    { site: "calf_in", other: "hip_in", min: 0.28, max: 0.58 },
     { site: "calf_in", other: "thigh_in", min: 0.38, max: 0.85 },
     { site: "forearm_in", other: "upper_arm_in", min: 0.45, max: 1 },
     { site: "neck_in", other: "chest_in", min: 0.2, max: 0.6 },
@@ -927,6 +928,7 @@ export interface BodyMetricsSummary {
   needs_height: boolean;
   unit: MeasureUnit;
   sites: { key: MeasurementSite; label: string; hint: string; range: BodyMeasurementRange }[];
+  measurement_issues: BodyMeasurementIssue[];
   comp: BodyCompFocus;
 }
 
@@ -934,11 +936,14 @@ export function getBodyMetricsSummary(days = 365, unit: MeasureUnit = "in"): Bod
   const p = getProfile();
   const measurements = listBodyMeasurements(days).map((m) => rowToUnit(m, unit));
   const latest = latestBodyMeasurement();
+  const latestKnown = latestKnownMeasurement(days);
   const heightIn = effectiveHeightIn(p);
+  const qualityInput = latestKnown ? rowToUnit(latestKnown, unit) : null;
+  const quality = qualityInput ? validateBodyMeasurementInput(qualityInput as unknown as Record<string, unknown>, unit, p) : { errors: [], warnings: [] };
   return {
     latest: latest ? rowToUnit(latest, unit) : null,
     measurements,
-    indicators: getBodyIndicators(latestKnownMeasurement(days), p),
+    indicators: getBodyIndicators(latestKnown, p),
     trends: getBodyMetricTrends(days, unit),
     profile: {
       height_in: heightIn,
@@ -954,6 +959,7 @@ export function getBodyMetricsSummary(days = 365, unit: MeasureUnit = "in"): Bod
       hint: SITE_HINTS[key],
       range: bodyMeasurementRange(key, heightIn, unit),
     })),
+    measurement_issues: [...quality.errors, ...quality.warnings],
     comp: getBodyCompFocus(unit),
   };
 }

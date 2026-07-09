@@ -1713,6 +1713,7 @@ export interface ClientBodyMetricsSummary {
     hint: string;
     range: { min: number; max: number; typical_min: number | null; typical_max: number | null };
   }[];
+  measurement_issues: Array<{ site: string; severity: "error" | "warning"; message: string }>;
   comp: ClientBodyCompFocus;
 }
 

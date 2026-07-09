@@ -51,10 +51,16 @@ test("site-specific validation rejects impossible values and flags unusual propo
   const unusual = repo.validateBodyMeasurementInput({ hip_in: 41, thigh_in: 15, calf_in: 11 });
   assert.equal(unusual.errors.length, 0, "an unusual body remains loggable");
   assert.ok(unusual.warnings.some((i) => i.site === "thigh_in"), "the likely thigh mistype asks for a recheck");
+  assert.ok(unusual.warnings.some((i) => i.site === "calf_in"), "the calf-to-hip mismatch asks for a recheck");
 
   const range = repo.getBodyMetricsSummary().sites.find((s) => s.key === "thigh_in").range;
   assert.deepEqual({ min: range.min, max: range.max }, { min: 12, max: 45 });
   assert.ok(range.typical_min > 16 && range.typical_min < 17, `height-aware typical floor, got ${range.typical_min}`);
+
+  repo.addBodyMeasurement("2026-07-09", { hip_in: 41, thigh_in: 15, calf_in: 11 });
+  const quality = repo.getBodyMetricsSummary().measurement_issues;
+  assert.ok(quality.some((i) => i.site === "thigh_in"));
+  assert.ok(quality.some((i) => i.site === "calf_in"));
 });
 
 test("update and delete a measurement", () => {
