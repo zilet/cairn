@@ -629,7 +629,7 @@ function getCoachContextFromSnapshot(): CoachContext {
   const groupsTrajectoryView = brainSignal(`groups_trajectory:${today}`, () => { try { return muscleGroupTrajectory(today, { programState: fullProgramState }); } catch { return null; } });
   const runVarietyView = brainSignal(`run_variety:${today}`, () => { try { return runVarietyRead(today); } catch { return null; } });
   const enduranceTestsView = brainSignal(`endurance_tests:${today}`, () => { try { return enduranceTestsDue(today); } catch { return []; } });
-  const trajectoryView = brainSignal("trajectory", () => getTrajectory());
+  const trajectoryView = brainSignal("trajectory", () => getTrajectory(undefined, { programState: fullProgramState }));
   const journeyView = brainSignal(`journey:${today}`, () => journeyRead(today));
   // The active life-context effect, the training-signals rollup and the active context
   // events, computed ONCE and shared by the person/training slices AND the conductor

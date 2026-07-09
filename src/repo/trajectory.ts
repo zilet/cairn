@@ -34,7 +34,7 @@ import {
   projectGoalPace,
 } from "./profile.js";
 import { blockForCoach, getActiveBlock } from "./program-blocks.js";
-import { getProgramState } from "./program-state.js";
+import { getProgramState, type ProgramState } from "./program-state.js";
 // forwardLook may not exist on every build of intelligence.js (it landed in a
 // later round). Import the namespace and feature-detect so this module builds
 // and runs against any version — never a hard dependency on a possibly-absent
@@ -164,7 +164,10 @@ function deriveTodayStep(date: string): string | null {
  * null-safe. Returns the quiet NULL-shape (line === null) when there is no goal,
  * no active block, and no race.
  */
-export function getTrajectory(date?: string): Trajectory {
+export function getTrajectory(
+  date?: string,
+  opts: { programState?: ProgramState } = {},
+): Trajectory {
   const today = isISODate(date) ? (date as string) : localDateISO();
 
   const empty: Trajectory = {
@@ -214,7 +217,12 @@ export function getTrajectory(date?: string): Trajectory {
       : null;
 
   // ---- the mesocycle's next deload milestone ----
-  const programState = safe<any>(() => getProgramState(today), null);
+  // Reuse a precomputed program-state when the caller has one (getCoachContext builds
+  // it ONCE and threads it in), otherwise compute it here. Behavior is identical.
+  const programState = safe<any>(
+    () => opts.programState ?? getProgramState(today),
+    null,
+  );
   const meso = programState?.mesocycle ?? null;
 
   // ---- the health synthesis "one change" as the lever milestone ----

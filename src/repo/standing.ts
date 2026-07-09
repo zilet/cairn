@@ -516,15 +516,27 @@ function goalModeOf(stats: any, profile: any): string {
 // The "this quarter" momentum — the wins in motion, framed as progress, never a score.
 // Exported so the Today salience arbiter can decide (pull, ranked) whether a momentum
 // card is worth a glance without recomputing the whole standing read.
-export function standingMomentum(opts: { markers?: any[]; profile?: any } = {}) {
+export function standingMomentum(
+  opts: {
+    markers?: any[];
+    profile?: any;
+    // Precomputed shared reads — healthStanding builds these once and threads them
+    // in so a single standing render doesn't recompute weeklyStats/weights/bodyComp/BP.
+    // Each falls back to its own compute when absent (the standalone Today caller).
+    weights?: any[];
+    weeklyStats?: any;
+    bodyComp?: any;
+    bp?: any;
+  } = {},
+) {
   const profile = opts.profile ?? getProfile() ?? {};
   const markers = opts.markers ?? (() => { try { return (prioritizeMarkers() as any).markers || []; } catch { return []; } })();
-  const weights = (() => { try { return listWeight(60); } catch { return []; } })();
+  const weights = opts.weights ?? (() => { try { return listWeight(60); } catch { return []; } })();
   const lastW = weights.length ? Number(weights[weights.length - 1]?.weight_lb) : Number.NaN;
   const currentWeight = Number.isFinite(lastW) ? lastW : plausibleNumber(profile.weight_lb, 60, 600);
-  const stats = (() => { try { return getWeeklyStats(); } catch { return null; } })() as any;
-  const comp = bodyCompositionRead(markers, currentWeight, new Date().toISOString());
-  const bp = bpRead((() => { try { return listBloodPressureReadings(12); } catch { return []; } })());
+  const stats = (opts.weeklyStats ?? (() => { try { return getWeeklyStats(); } catch { return null; } })()) as any;
+  const comp = opts.bodyComp ?? bodyCompositionRead(markers, currentWeight, new Date().toISOString());
+  const bp = opts.bp ?? bpRead((() => { try { return listBloodPressureReadings(12); } catch { return []; } })());
 
   const chips: { kind: string; text: string; dir: string }[] = [];
   if (comp?.fat_mass?.delta_lbs != null && comp.fat_mass.delta_lbs <= -1) {
@@ -660,7 +672,16 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
       : null);
 
   // The "this quarter" momentum (wins in motion) and the single highest-leverage lever.
-  const momentumRead = standingMomentum({ markers, profile });
+  // Thread the reads healthStanding already built (markers/weeklyStats/weights/bodyComp/BP)
+  // so standingMomentum doesn't recompute the same four inside one standing render.
+  const momentumRead = standingMomentum({
+    markers,
+    profile,
+    weights,
+    weeklyStats: stats,
+    bodyComp,
+    bp: bpInterp,
+  });
   const vo2Comp = comparisons.find((c) => c.key === "vo2max");
   if (vo2Comp && Number(vo2Comp.percentile) >= 60) {
     momentumRead.chips.push({ kind: "vo2", text: `VO2max strong for your ${vo2Comp.actual_age_band}`, dir: "good" });

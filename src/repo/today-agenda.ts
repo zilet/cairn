@@ -225,12 +225,12 @@ function standingMomentumCandidate(_date: string): TodayAgendaCandidate | null {
 // lift to push / deload, a group that's due, a missing pattern). Moderate, scaled
 // by how actionable the set is: a deload (back off, recover) or a missing-pattern
 // gap is more pressing than a steady earned overload. Reads programAdjustments. ----
-function adjustmentsCandidate(date: string): TodayAgendaCandidate | null {
+function adjustmentsCandidate(date: string, weeklyStats?: any): TodayAgendaCandidate | null {
   // Adjustments adapt an ACTIVE plan — on a blank slate (no plan yet) there's
   // nothing to evolve, and the volume landmarks would read every group as a "gap",
   // which would nag a brand-new user about "missing" work. Gate on having a plan
   // (mirrors weekAheadCandidate) — calm by default; no plan → silent.
-  const stats: any = getWeeklyStats(date);
+  const stats: any = weeklyStats ?? getWeeklyStats(date);
   if ((Number(stats?.week_planned) || 0) <= 0) return null;
   const rows = programAdjustments(programBalance(2, date), recentMuscleLoad(2, date));
   if (!Array.isArray(rows) || !rows.length) return null;
@@ -288,8 +288,8 @@ function insightCandidate(): TodayAgendaCandidate | null {
 // days. A forward look, never urgent — low priority so it sinks below anything
 // about today. There's no cheap repo read for the agentic week-ahead, so we gate it
 // on having a plan to sketch from (getWeeklyStats carries week_planned). ----
-function weekAheadCandidate(date: string): TodayAgendaCandidate | null {
-  const stats: any = getWeeklyStats(date);
+function weekAheadCandidate(date: string, weeklyStats?: any): TodayAgendaCandidate | null {
+  const stats: any = weeklyStats ?? getWeeklyStats(date);
   const planned = Number(stats?.week_planned) || 0;
   if (planned <= 0) return null; // no plan → nothing to sketch a week from
   return {
@@ -324,8 +324,8 @@ function runComplianceCandidate(date: string): TodayAgendaCandidate | null {
 // The lowest steady surface — always-there context, never something that needs
 // attention. It exists whenever there's recent training; gate it on the week having
 // any logged activity so a brand-new install's Today stays empty. ----
-function latelyCandidate(date: string): TodayAgendaCandidate | null {
-  const stats: any = getWeeklyStats(date);
+function latelyCandidate(date: string, weeklyStats?: any): TodayAgendaCandidate | null {
+  const stats: any = weeklyStats ?? getWeeklyStats(date);
   const did = (Number(stats?.week_done) || 0) + (Number(stats?.week_cardio) || 0);
   if (did <= 0) return null;
   return {
@@ -350,18 +350,24 @@ export function todayAgenda(date?: string): TodayAgenda {
   const candidates: TodayAgendaCandidate[] = [];
   const add = (c: TodayAgendaCandidate | null) => { if (c) candidates.push(c); };
 
+  // The weekly stats read is shared by three candidates below (adjustments/week-ahead/
+  // lately) — compute it ONCE and thread it in rather than recomputing per candidate.
+  // Null on failure (each candidate falls back to its own compute, then self-omits).
+  let weeklyStats: any = null;
+  try { weeklyStats = getWeeklyStats(d); } catch { weeklyStats = null; }
+
   add(safe(() => fuelCandidate(d)));
   add(safe(() => reconcileCandidate()));
   add(safe(() => planDraftCandidate()));
   add(safe(() => healthCandidate()));
-  if (showPlanForward) add(safe(() => adjustmentsCandidate(d)));
+  if (showPlanForward) add(safe(() => adjustmentsCandidate(d, weeklyStats)));
   add(safe(() => weeklyCandidate()));
   add(safe(() => insightCandidate()));
   if (showPlanForward) {
-    add(safe(() => weekAheadCandidate(d)));
+    add(safe(() => weekAheadCandidate(d, weeklyStats)));
     add(safe(() => runComplianceCandidate(d)));
   }
-  add(safe(() => latelyCandidate(d)));
+  add(safe(() => latelyCandidate(d, weeklyStats)));
 
   // The two NEW Era-2 candidate producers (sibling-built). They return a finished
   // candidate or null; still wrapped in safe() so a throw never breaks the agenda
