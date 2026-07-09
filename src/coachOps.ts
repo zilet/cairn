@@ -10,7 +10,7 @@
 import * as repo from "./repo.js";
 import { localDateISO } from "./repo/shared.js";
 import { INTERACTIVE_TIMEOUT_MS, agentInfo, listAgentModels, loadAgents } from "./agents.js";
-import { runChosen } from "./runChosen.js";
+import { runChosen, runChosenStreaming } from "./runChosen.js";
 import {
   buildCoachPrompt,
   buildProgramEvolutionPrompt,
@@ -97,6 +97,11 @@ export function agentStatusFor(result: {
 export interface OpHooks {
   signal?: AbortSignal;
   onPhase?: (phase: string, meta?: any) => void;
+  // Live prose tokens for the four prose-bearing ops (synthesis / session-suggest /
+  // nutrition check-in / weekly read), streamed into the waiting card. The agent-job
+  // worker wires this to a `delta` bus event; every other caller omits it, so those
+  // ops run exactly as before (runChosenStreaming with no onDelta === runChosen).
+  onDelta?: (chunk: string) => void;
 }
 
 // ---------- self-critique verify pass (Trust build V1) ----------
@@ -159,8 +164,9 @@ export async function suggestSession(
   }
   hooks?.onPhase?.("drafting your session");
   const prompt = buildSessionPrompt(undefined, opts);
-  // Interactive: a user is waiting on the request path — short the leash.
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "session_suggest", timeoutMs: INTERACTIVE_TIMEOUT_MS, signal: hooks?.signal });
+  // Interactive: a user is waiting on the request path — short the leash. Streams the
+  // session's "why" prose into the card when the chosen agent is stream-capable.
+  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: "session_suggest", timeoutMs: INTERACTIVE_TIMEOUT_MS, signal: hooks?.signal, onDelta: hooks?.onDelta });
   const p = result.parsed;
   const sane = p && typeof p === "object" && Array.isArray(p.items) && p.items.length > 0;
   if (!sane) {
@@ -510,7 +516,7 @@ export async function nutritionCheckin(agent: string | undefined, windowDays?: n
   hooks?.onPhase?.("reading your energy balance");
   const expenditure = repo.estimateExpenditure(Number.isFinite(windowDays as number) ? (windowDays as number) : 21);
   const prompt = buildNutritionCheckinPrompt(undefined, { windowDays });
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "nutrition_checkin", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: "nutrition_checkin", signal: hooks?.signal, onDelta: hooks?.onDelta });
   const p = result.parsed;
   if (!p || typeof p !== "object") {
     return { ok: false as const, error: "agent returned no usable check-in", agent: chosen, tried, expenditure };
@@ -621,7 +627,7 @@ export async function runHealthReview(agent: string | undefined, hooks?: OpHooks
 export async function synthesizeHealth(agent: string | undefined, hooks?: OpHooks) {
   hooks?.onPhase?.("reading your whole picture");
   const prompt = buildHealthSynthesisPrompt();
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: "health_synthesis", signal: hooks?.signal });
+  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: "health_synthesis", signal: hooks?.signal, onDelta: hooks?.onDelta });
   const synthesis = normalizeHealthSynthesis(result.parsed, { agent: chosen, generated_at: new Date().toISOString() });
   if (synthesis) {
     // Stamp the newest health-document date this synthesis was written against, so a
@@ -663,7 +669,10 @@ export async function generateInsight(
   }
   hooks?.onPhase?.(k === "weekly_read" ? "reading your week" : "looking for a connection");
   const prompt = k === "weekly_read" ? buildWeeklyReadPrompt() : buildInsightPrompt(undefined, recent);
-  const { agent: chosen, result, tried } = await runChosen(agent, prompt, { op: k === "weekly_read" ? "weekly_read" : "insight", signal: hooks?.signal });
+  // Only the weekly read is reshaped to the streaming contract + wired for deltas; a
+  // connection insight keeps the bare-JSON prompt and (with no onDelta) delegates
+  // straight to the one-shot rotation — unchanged.
+  const { agent: chosen, result, tried } = await runChosenStreaming(agent, prompt, { op: k === "weekly_read" ? "weekly_read" : "insight", signal: hooks?.signal, onDelta: hooks?.onDelta });
   const p: any = result.parsed;
   const text = p && typeof p === "object" ? String(p.text ?? "").trim() : "";
   if (!p || typeof p !== "object" || p.found === false || !text || repo.isDuplicateInsight(text, recent)) {

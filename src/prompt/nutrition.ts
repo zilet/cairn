@@ -13,6 +13,7 @@ import {
   renderEnduranceGoal,
   renderTrajectory,
   renderTodayFuel,
+  renderStreamingContract,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -466,8 +467,10 @@ ${CONTEXT_GUARDRAILS}
 ${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}
 USER: profile: ${JSON.stringify(profile)}
 
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${NUTRITION_CHECKIN_SCHEMA}`;
+${renderStreamingContract(
+    "write the ONE or two plain sentences you'd say to them — what the data shows and what you'd suggest, or (if nothing has meaningfully moved) why staying put is right (the same thing that goes in the JSON's \"summary\")",
+    NUTRITION_CHECKIN_SCHEMA,
+  )}`;
 }
 
 const SWAP_SCHEMA = `{ "name": "<dish>", "items": "<short ingredient list>", "kcal": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number> }`;
