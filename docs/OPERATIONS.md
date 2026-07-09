@@ -311,3 +311,28 @@ Prefer the VACUUM INTO snapshot (`/api/export/db`) which handles this automatica
 
 `runMigrations()` will run on boot and bring the schema up to date if the restored DB is
 from an older version.
+
+## Build & test tooling — validated decisions
+
+The dev loop's cost is the server `tsc` build, the per-file client transpile, the client
+typecheck, and the test suite — all incremental (`.tsbuildcache/*`) and parallel
+(`scripts/run-verify.mjs` runs independent gates in staged groups; `test/run.mjs` shards
+test files across worker processes). Alternatives were evaluated empirically so the
+question doesn't get re-litigated:
+
+- **Turborepo / Nx** — not applicable. Cairn is a single npm package, not a monorepo, so
+  there is no multi-package task graph to cache; the equivalent (parallel gates +
+  incremental `tsc` + a sharded test runner) is hand-rolled here and dependency-free.
+- **bun** as the runtime or test runner — impossible. Cairn is built on `node:sqlite`
+  (the unflagged Node 24 built-in); bun does not provide it, so the app and its tests can
+  only run under Node.
+- **pnpm** — marginal. ~11 direct deps; install is not a bottleneck, and switching only
+  churns the lockfile with no offsetting win. Keep npm + `package-lock.json`.
+
+The real wins were structural, not tooling swaps: the suite wipes the DB before every
+test (`test/_isolate.mjs`, injected via `--import`) so correctness is independent of
+worker count and file order, and the worker default scales with cores (`min(8, cores-1)`).
+
+One gotcha: the `npm run format` script hardcodes `biome format --write .` (the whole
+repo, which is not biome-clean at rest) — to format only the files you touched, run
+`./node_modules/.bin/biome format --write <files>` directly.
