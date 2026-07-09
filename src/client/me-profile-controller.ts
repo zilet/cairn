@@ -12,13 +12,14 @@
     deps: MeProfileControllerDeps,
     enduranceGoal: MeProfileEnduranceGoalDraft,
     initial: {
-      discipline: string; enduranceMode: string; goalMode: string;
+      discipline: string; enduranceMode: string; goalMode: string; sex: string;
       smoking: number | null; bpTreated: number | null; statin: number | null;
     },
   ): void {
     let pickedDisc = String(initial.discipline || "strength");
     let pickedEgMode = String(initial.enduranceMode || "none");
     let pickedGoalMode = String(initial.goalMode || "maintain");
+    let pickedSex = initial.sex === "female" ? "female" : "male";
     let pickedSmoking: number | null = initial.smoking;
     let pickedBpTreated: number | null = initial.bpTreated;
     let pickedStatin: number | null = initial.statin;
@@ -51,6 +52,7 @@
       const body = {
         name: deps.inputValue("#name").trim(),
         age: deps.numberValue("#age"),
+        sex: pickedSex,
         height_cm: deps.numberValue("#height_cm"),
         weight_lb: deps.numberValue("#weight_lb"),
         goal_weight_lb: deps.numberValue("#goal_weight_lb"),
@@ -87,6 +89,14 @@
       onSave: persistProfile,
       onDiscard: deps.renderProfile,
     });
+
+    deps.select<HTMLElement>("#sexSeg")?.querySelectorAll<HTMLElement>("[data-sex]").forEach((button) =>
+      button.addEventListener("click", () => {
+        pickedSex = button.dataset.sex === "female" ? "female" : "male";
+        setActiveButton(deps.select("#sexSeg"), ".segbtn", button);
+        profileBar.markDirty();
+      })
+    );
 
     deps.select<HTMLElement>("#discSeg")?.querySelectorAll<HTMLElement>("[data-disc]").forEach((button) =>
       button.addEventListener("click", () => {
@@ -166,6 +176,7 @@
     deps.wireSeg(deps.handlers);
     wireProfileForm(deps, enduranceGoal, {
       discipline, enduranceMode, goalMode,
+      sex: String(profile.sex || ""),
       smoking: profile.smoking == null ? null : Number(profile.smoking),
       bpTreated: profile.bp_treated == null ? null : Number(profile.bp_treated),
       statin: profile.statin == null ? null : Number(profile.statin),

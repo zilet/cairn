@@ -4,6 +4,7 @@
 type MeProfileControllerRecord = Record<string, unknown>;
 type MeProfileProfile = import("../contracts/client-api.js").ClientProfile & {
   age?: number | string | null;
+  sex?: string | null;
   height_cm?: number | string | null;
   endurance_goal_json?: string | null;
   endurance_sport?: string | null;
@@ -145,6 +146,14 @@ type MeProfileFormContext = {
       <p class="aboutme-hint">Stamped on the doctor report you export from Stand → Share with your doctor. Leave empty to fill it in on paper instead.</p>
       <input id="name" type="text" placeholder="e.g. Alex Rivera" maxlength="120" value="${deps.escapeAttr(profile.name || "")}" class="form-input"></div>
     ${n("age", "Age", profile.age)}
+    <div class="field" style="margin-bottom:9px">
+      <label>Sex</label>
+      <p class="aboutme-hint">Sets the baselines the math runs on — strength standards, tape-measure reads, body-fat and heart-risk equations — and the body figure. The clinical equations expect sex at birth.</p>
+      <div class="seg sex-seg" id="sexSeg" role="group" aria-label="Sex">
+        <button type="button" class="segbtn${String(profile.sex || "") === "female" ? " active" : ""}" data-sex="female">Female</button>
+        <button type="button" class="segbtn${String(profile.sex || "") === "female" ? "" : " active"}" data-sex="male">Male</button>
+      </div>
+    </div>
     ${n("height_cm", "Height (cm)", profile.height_cm, 0.1)}
     ${n("weight_lb", "Weight (lb)", profile.weight_lb, 0.1)}
     <div class="field" style="margin-bottom:9px">

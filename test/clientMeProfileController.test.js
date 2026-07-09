@@ -86,6 +86,7 @@ class FakeElement {
   matches(selector) {
     if (selector.startsWith("#")) return this.id === selector.slice(1);
     if (selector === "[data-disc]") return Object.hasOwn(this.dataset, "disc");
+    if (selector === "[data-sex]") return Object.hasOwn(this.dataset, "sex");
     if (selector === "[data-egmode]") return Object.hasOwn(this.dataset, "egmode");
     if (selector === "[data-goalmode]") return Object.hasOwn(this.dataset, "goalmode");
     if (selector.startsWith(".")) return this.classList.contains(selector.slice(1));
@@ -128,6 +129,7 @@ class FakeElement {
     const about = this._innerHTML.match(/<textarea\s+[^>]*id="about_me"[^>]*>([\s\S]*?)<\/textarea>/);
     if (about) ensure("about_me", "textarea").value = decodeAttr(about[1]);
 
+    this.attachButtons("sexSeg", "sex", ["female", "male"]);
     this.attachButtons("discSeg", "disc", ["strength", "endurance", "hybrid"]);
     this.attachButtons("endGoalMode", "egmode", ["none", "race", "standing"]);
     this.attachButtons("goalModeSeg", "goalmode", ["lose", "maintain", "gain"]);
@@ -323,6 +325,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   harness.rootEl.querySelectorAll("[data-disc]").find((button) => button.dataset.disc === "hybrid").click();
   harness.rootEl.querySelectorAll("[data-egmode]").find((button) => button.dataset.egmode === "standing").click();
   harness.rootEl.querySelectorAll("[data-goalmode]").find((button) => button.dataset.goalmode === "gain").click();
+  harness.rootEl.querySelectorAll("[data-sex]").find((button) => button.dataset.sex === "female").click();
 
   assert.equal(await harness.deps.saveOptions.onSave(), true);
 
@@ -331,6 +334,7 @@ test("Me Profile controller saves the typed payload and invalidates dependent su
   assert.deepEqual(harness.saved, {
     name: "Milos",
     age: 42,
+    sex: "female",
     height_cm: 182.5,
     weight_lb: 181.2,
     goal_weight_lb: 188,

@@ -31,7 +31,7 @@ function wipe() {
   db.exec("PRAGMA foreign_keys = OFF");
   const tables = [
     "logged_sets", "session_skips", "sessions", "plan_items", "plan_days", "exercises",
-    "bodyweight_log", "activities", "daily_metrics", "garmin_activities", "garmin_daily_metrics",
+    "bodyweight_log", "body_measurements", "activities", "daily_metrics", "garmin_activities", "garmin_daily_metrics",
     "garmin_sources", "health_documents", "health_reviews", "health_directives", "insights",
     "memory", "family_members", "context_events", "checkins", "meal_plans", "food_notes",
     "chat_messages", "day_reads", "suggestions", "plan_proposals", "evidence_cache",
@@ -170,6 +170,22 @@ function bodyweight() {
     const w = start - perDay * (42 - d) + (noise[k % noise.length] || 0);
     repo.logWeight(Math.round(w * 10) / 10, iso(d));
     k++;
+  }
+}
+
+// ---------- tape sessions (Stand → Body: figure, ratios, then→now morph) ----------
+function bodyMetrics() {
+  // Three sessions across the cut: waist easing toward the half-height guide
+  // (167cm → guide ≈ 32.9in) while lifts hold — the recomposition story the
+  // persona tells. Latest stays a touch above guide so the dashed optimal
+  // trace and the "above guide" read show honestly.
+  const sessions: Array<[number, Record<string, number>, string]> = [
+    [42, { waist_in: 34.6, hip_in: 41.2, chest_in: 37.0, shoulder_in: 41.2, upper_arm_in: 11.1, thigh_in: 23.2, calf_in: 14.4, neck_in: 12.6, forearm_in: 9.4 }, "baseline tape"],
+    [21, { waist_in: 33.9, hip_in: 40.8, chest_in: 36.8, shoulder_in: 41.2, upper_arm_in: 11.2, thigh_in: 23.0 }, "mid-cut check"],
+    [2, { waist_in: 33.2, hip_in: 40.4, chest_in: 36.6, shoulder_in: 41.3, upper_arm_in: 11.2, thigh_in: 22.8, calf_in: 14.3, neck_in: 12.5, forearm_in: 9.4 }, "monthly tape"],
+  ];
+  for (const [daysAgo, sites, note] of sessions) {
+    repo.addBodyMeasurement(iso(daysAgo), sites, note, "manual", "in");
   }
 }
 
@@ -627,6 +643,7 @@ export function seedDemo() {
   profile();
   trainingHistory(exId, planDayId);
   bodyweight();
+  bodyMetrics();
   recovery();
   activities();
   foodIntake();

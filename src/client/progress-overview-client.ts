@@ -206,8 +206,38 @@ function tovFigureLib(): CairnBodyFigureApi | null {
 // groups and dataAttrs stamps data-group so a tap on a muscle jumps to its row.
 function tovFigureSvg(side: "front" | "back", tones: Record<string, string>): string {
   const lib = tovFigureLib();
-  if (lib) return lib.figureSvg(side, tones, { pulseDue: true, dataAttrs: true });
+  if (lib) return tovPlateSvg(lib.figureSvg(side, tones, { pulseDue: true, dataAttrs: true }), side);
   return tovFigureSvgFallback(side, tones);
+}
+
+// The atelier plate: post-compose the library's figure (never edit the vendored
+// lib) so it reads as an object, not an icon — modeling light on the silhouette,
+// each muscle tone an airbrushed radial wash (dense at the belly, feathered at
+// the edge; per-path objectBoundingBox does this per muscle for free), and a
+// still-life ground shadow under the feet. IDs are side-suffixed because front
+// and back render as sibling inline SVGs in the same document.
+function tovPlateSvg(svg: string, side: string): string {
+  const p = `tovg-${side}`;
+  const swap = (s: string, from: string, to: string) => s.split(from).join(to);
+  const tone = (id: string, hex: string) =>
+    `<radialGradient id="${p}-${id}" cx="0.5" cy="0.42" r="0.78"><stop offset="0%" stop-color="${hex}"/><stop offset="62%" stop-color="${hex}" stop-opacity="0.85"/><stop offset="100%" stop-color="${hex}" stop-opacity="0.42"/></radialGradient>`;
+  const defs =
+    `<defs>` +
+    `<linearGradient id="${p}-relief" x1="0" y1="0" x2="0.7" y2="1"><stop offset="0%" stop-color="#f3ecdd"/><stop offset="48%" stop-color="#ede4d1"/><stop offset="100%" stop-color="#ddd0b5"/></linearGradient>` +
+    tone("due", "#b4552d") +
+    tone("ok", "#6e7f5c") +
+    tone("high", "#c9a86a") +
+    tone("recover", "#57503f") +
+    `<filter id="${p}-gblur" x="-40%" y="-160%" width="180%" height="420%"><feGaussianBlur stdDeviation="2.6"/></filter>` +
+    `</defs>` +
+    `<ellipse cx="130" cy="629" rx="60" ry="5.5" fill="#211d17" opacity="0.08" filter="url(#${p}-gblur)"/>`;
+  let out = svg.replace(/(<svg[^>]*>)/, `$1${defs}`);
+  out = swap(out, 'fill="#ede4d1"', `fill="url(#${p}-relief)"`);
+  out = swap(out, 'fill="#b4552d"', `fill="url(#${p}-due)"`);
+  out = swap(out, 'fill="#6e7f5c"', `fill="url(#${p}-ok)"`);
+  out = swap(out, 'fill="#c9a86a"', `fill="url(#${p}-high)"`);
+  out = swap(out, 'fill="#57503f"', `fill="url(#${p}-recover)"`);
+  return out;
 }
 
 function tovFigureSvgFallback(side: "front" | "back", tones: Record<string, string>): string {

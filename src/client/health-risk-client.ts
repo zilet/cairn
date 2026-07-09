@@ -101,12 +101,30 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     const p0 = pointForRisk(0, 0);
     const p10 = pointForRisk(10, ten);
     const p30 = pointForRisk(30, current30);
+    // Track E2: optimized path must bind to a real PREVENT counterfactual
+    // (prevent.projection / targets_met) when that DTO lands. Until then we keep
+    // a calm SVG ribbon only — do NOT invent a second clinical risk score for 3D.
+    // See docs/VIZ-3D-ATELIER.md §3 E2. The current visual gap is lever-shaped
+    // geometry (not a recompute); honesty copy below says so explicitly.
     const leverPressures = (data.projections ?? []).map(projectionPressure).filter((n): n is number => n != null);
     const leverPressure = leverPressures.length ? leverPressures.reduce((sum, n) => sum + n, 0) / leverPressures.length : 0;
     const enhancerPressure = clamp01((data.enhancers ?? []).length / 5);
-    const optimizedLift = Math.round((18 + leverPressure * 42 + enhancerPressure * 10) * 10) / 10;
-    const o10 = { x: p10.x, y: Math.min(164, p10.y + optimizedLift * 0.45) };
-    const o30 = { x: p30.x, y: Math.min(164, p30.y + optimizedLift) };
+    // Prefer a server counterfactual when present; else a temporary lever-shaped
+    // visual only (labeled non-clinical in the note below).
+    const cf = (prevent as { counterfactual?: { total_cvd?: { ten_year?: number | null; thirty_year?: number | null } } })
+      ?.counterfactual?.total_cvd;
+    const cf10 = finiteNumber(cf?.ten_year);
+    const cf30 = finiteNumber(cf?.thirty_year);
+    let o10: { x: number; y: number };
+    let o30: { x: number; y: number };
+    if (cf10 != null || cf30 != null) {
+      o10 = pointForRisk(10, cf10 ?? ten);
+      o30 = pointForRisk(30, cf30 ?? cf10 ?? current30);
+    } else {
+      const optimizedLift = Math.round((18 + leverPressure * 42 + enhancerPressure * 10) * 10) / 10;
+      o10 = { x: p10.x, y: Math.min(164, p10.y + optimizedLift * 0.45) };
+      o30 = { x: p30.x, y: Math.min(164, p30.y + optimizedLift) };
+    }
     const riskLine = `M ${p0.x} ${p0.y} C 76 ${p0.y - 2}, 118 ${p10.y + 8}, ${p10.x} ${p10.y} S 288 ${p30.y}, ${p30.x} ${p30.y}`;
     const optLine = `M ${p0.x} ${p0.y} C 76 ${p0.y}, 118 ${o10.y + 6}, ${o10.x} ${o10.y} S 288 ${o30.y}, ${o30.x} ${o30.y}`;
     const band = `${riskLine} L ${o30.x} ${o30.y} C 288 ${o30.y}, 214 ${o10.y}, ${o10.x} ${o10.y} S 76 ${p0.y}, ${p0.x} ${p0.y} Z`;
@@ -161,7 +179,11 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
       <span><i class="hrisk-viz-key hrisk-viz-key-current"></i>Current PREVENT path</span>
       <span><i class="hrisk-viz-key hrisk-viz-key-optimized"></i>Optimized lever path</span>
     </div>
-    <p class="hrisk-viz-note">The upper path is the computed PREVENT total-CVD read. The lower path is a visual counterfactual shaped by your current-to-target levers, not a separate clinical risk score.</p>
+    <p class="hrisk-viz-note">${
+      cf10 != null || cf30 != null
+        ? "The upper path is the computed PREVENT total-CVD read. The lower path is a PREVENT recompute under your lever targets (not a separate clinical score)."
+        : "The upper path is the computed PREVENT total-CVD read. The lower path is a provisional visual shaped by current-to-target levers until a full PREVENT counterfactual is available — not a separate clinical risk score."
+    }</p>
   </div>`;
   }
 

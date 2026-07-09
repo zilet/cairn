@@ -578,16 +578,6 @@ function bmFigureLib(): CairnBodyFigureApi | null {
   }
 }
 
-// Optional Track E progressive enhancement. The 2D figure remains first paint;
-// this guarded API can only promote after its own WebGL ready frame succeeds.
-function bmBody3DLib(): CairnBody3DApi | null {
-  try {
-    return (window as unknown as { CairnBody3D?: CairnBody3DApi }).CairnBody3D || null;
-  } catch {
-    return null;
-  }
-}
-
 // Which measurement site is being read (module state so a tap survives a repaint).
 let bmSelectedSite: BmSiteKey | null = null;
 
@@ -632,28 +622,6 @@ function bmStandModel(data: BmSummary, unit: BmUnit): BmStandModel {
     heightIn,
     unit,
     focus,
-  };
-}
-
-function bmBody3DModel(model: BmStandModel, selected: BmSiteKey | null): CairnBody3DModel {
-  const siteOf = (key: BmSiteKey): number | null => {
-    const raw = model.merged ? (model.merged[key] as number | null) : null;
-    return raw != null && Number.isFinite(raw) ? raw : null;
-  };
-  return {
-    female: model.female,
-    unit: model.unit,
-    heightIn: model.heightIn,
-    selected,
-    focus: model.focus,
-    sites: {
-      chest_in: siteOf("chest_in"),
-      waist_in: siteOf("waist_in"),
-      hip_in: siteOf("hip_in"),
-      shoulder_in: siteOf("shoulder_in"),
-      upper_arm_in: siteOf("upper_arm_in"),
-      thigh_in: siteOf("thigh_in"),
-    },
   };
 }
 
@@ -740,9 +708,34 @@ function bmSiteContext(model: BmStandModel, key: BmSiteKey): { chip: { text: str
 // guide trace + tappable measurement callouts. Coordinates: the library figure is
 // authored in a 0–260 space; a translate(80,0) group centers it in a 420-wide box,
 // leaving label rails on both sides. Callouts are drawn in the outer box space.
+// Reference-physique baselines (inches) per sex — the figure bends toward the
+// athlete's measured/baseline ratio at each site (the lib clamps the warp).
+const BM_FIGURE_BASE: Record<"male" | "female", Partial<Record<BmSiteKey, number>>> = {
+  male: { neck_in: 15, shoulder_in: 45, chest_in: 39, waist_in: 33, hip_in: 37.5, upper_arm_in: 12.5, forearm_in: 11, thigh_in: 21.5, calf_in: 15 },
+  female: { neck_in: 12.5, shoulder_in: 39, chest_in: 35, waist_in: 28, hip_in: 38, upper_arm_in: 10.5, forearm_in: 9.5, thigh_in: 21.5, calf_in: 14.5 },
+};
+const bmClampRatio = (r: number): number => Math.min(1.14, Math.max(0.88, r));
+
+// Lib-site-keyed measured/baseline ratios — the honest-figure input.
+function bmFigureRatios(model: BmStandModel): Record<string, number> {
+  const base = BM_FIGURE_BASE[model.female ? "female" : "male"];
+  const out: Record<string, number> = {};
+  for (const [libSite, key] of Object.entries(BM_STAND_SITE_OF)) {
+    const b = base[key];
+    const raw = model.merged ? (model.merged[key] as number | null) : null;
+    const v = bmInches(raw != null && Number.isFinite(raw) ? raw : null, model.unit);
+    if (b && v != null && v > 0) out[libSite] = v / b;
+  }
+  return out;
+}
+
 function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected: BmSiteKey | null): string {
   const sexKey = model.female ? "female" : "male";
-  const sil = lib.silhouette(sexKey);
+  // The silhouette is HONEST: each zone bends by the athlete's own tape ratio
+  // (clamped in the lib), so a 33in waist on 40in hips reads as that body.
+  const ratios = bmFigureRatios(model);
+  const kindOf = (site: string): "torso" | "arm" => (lib.ARM_SITES.has(site) ? "arm" : "torso");
+  const sil = lib.silhouette(sexKey, ratios);
   const col = lib.COLORS;
   const merged = model.merged;
   const rawVal = (k: BmSiteKey): number | null => {
@@ -762,14 +755,47 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     return read.chip.tone === "warn" ? "bmfig2-warn" : "bmfig2-sage";
   };
   let washes = "";
+  let tape = "";
   if (selected) {
     const name = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === selected);
     const glows = name ? lib.GLOWS[name] : null;
     if (glows) {
       const grad = gradFor(selected);
       const clipOf = (c: string) => (c === "aR" ? "bmfig2-clip-aR" : c === "aL" ? "bmfig2-clip-aL" : "bmfig2-clip-t");
+      const kind = name ? kindOf(name) : "torso";
       for (const [cx, cy, rx, ry, clip] of glows) {
-        washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
+        const [wcx] = lib.warpPoint([cx, cy], sexKey, ratios, clip === "t" ? "torso" : "arm");
+        washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${bmR(wcx)}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
+      }
+      // The tailor's tape: a fine band wrapped around the body at the selected
+      // site — front arc solid, back arc faint dashed (the wrap-around). Its
+      // center/width come from the site's own glow geometry, so the tape hugs
+      // the waist at the waist and the arm at the arm. Measuring = the tape.
+      const co = lib.CALLOUTS.find((c) => c.site === name);
+      const anchor = co ? lib.warpPoint(co.pt, sexKey, ratios, kind) : null;
+      const g = anchor
+        ? [...glows].sort((a, b) => Math.abs(a[0] - anchor[0]) - Math.abs(b[0] - anchor[0]))[0]
+        : glows[0];
+      if (g) {
+        const ty = anchor ? anchor[1] : g[1];
+        const [tcx] = lib.warpPoint([g[0], ty], sexKey, ratios, g[4] === "t" ? "torso" : "arm");
+        // Trunk sites hug the TRUE silhouette half-width at the anchor — warped
+        // per sex AND per the measured ratio, so the tape length visibly tracks
+        // the number it reports. Limb tapes ride the glow width the same way.
+        const trunkHalf: Partial<Record<BmSiteKey, number>> = { neck_in: 17, chest_in: 58, waist_in: 42, hip_in: 52 };
+        const authored = trunkHalf[selected];
+        const siteRatio = bmClampRatio(name && ratios[name] ? ratios[name] : 1);
+        const trx = authored != null
+          ? authored * (model.female ? lib.kOf(ty) : 1) * siteRatio + 4
+          : Math.max(12, g[2] * (model.female ? lib.kOf(ty) : 1) * siteRatio + 3);
+        const tryy = Math.max(3.5, trx * 0.16);
+        const L = `${bmR(tcx - trx)} ${bmR(ty)}`;
+        const R = `${bmR(tcx + trx)} ${bmR(ty)}`;
+        tape =
+          `<path class="bm-tape-back" d="M ${L} A ${bmR(trx)} ${bmR(tryy)} 0 0 1 ${R}" fill="none" stroke="#b4552d" stroke-width="1.1" stroke-dasharray="2 3.4" opacity="0.32"/>` +
+          `<path class="bm-tape" pathLength="100" d="M ${L} A ${bmR(trx)} ${bmR(tryy)} 0 0 0 ${R}" fill="none" stroke="#b4552d" stroke-width="1.7" stroke-linecap="round" opacity="0.92"/>` +
+          `<circle cx="${bmR(tcx - trx)}" cy="${bmR(ty)}" r="1.5" fill="#b4552d" opacity="0.85"/>` +
+          `<circle cx="${bmR(tcx + trx)}" cy="${bmR(ty)}" r="1.5" fill="#b4552d" opacity="0.85"/>`;
       }
     }
   }
@@ -784,11 +810,26 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     optTrace = `<path d="${lib.waistTrace(sexKey, 1)}" ${attrs}/><path d="${lib.waistTrace(sexKey, -1)}" ${attrs}/>`;
   }
 
+  // The atelier plate: the croquis reads as a shallow relief object, not a flat
+  // icon — gradient modeling light from the upper left, a soft inner form
+  // shadow along the lower-right contour (offset strokes clipped inside each
+  // part), a sternum sheen, and a still-life ground shadow under the feet.
+  const relief = (d: string, clip: string) =>
+    `<g clip-path="url(#${clip})">` +
+    `<g transform="translate(-1.7,-2.1)"><path d="${d}" fill="none" stroke="#fbf5e8" stroke-width="5" opacity="0.5" filter="url(#bmfig2-form)"/></g>` +
+    `<g transform="translate(1.7,2.3)"><path d="${d}" fill="none" stroke="#87735a" stroke-width="5.5" opacity="0.2" filter="url(#bmfig2-form)"/></g>` +
+    `</g>`;
+  // Arms draw BEHIND the torso (they emerge at the armpit like the classic
+  // croquis), each part's relief shading riding directly on its own fill.
   const group = `<g transform="translate(80,0)">
-      <path d="${sil.armL}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
-      <path d="${sil.armR}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
-      <path d="${sil.torso}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
-      ${washes}${optTrace}
+      <ellipse cx="130" cy="633" rx="84" ry="7.5" fill="#211d17" opacity="0.07" filter="url(#bmfig2-ground)"/>
+      <path d="${sil.armL}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
+      <path d="${sil.armR}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
+      ${relief(sil.armL, "bmfig2-clip-aL")}${relief(sil.armR, "bmfig2-clip-aR")}
+      <path d="${sil.torso}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
+      ${relief(sil.torso, "bmfig2-clip-t")}
+      <ellipse cx="130" cy="205" rx="30" ry="74" fill="url(#bmfig2-sheen)" clip-path="url(#bmfig2-clip-t)"/>
+      ${washes}${optTrace}${tape}
     </g>`;
 
   // Callouts: leader line + dot from the body anchor out to a label rail, wrapped
@@ -798,7 +839,7 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
   for (const c of lib.CALLOUTS) {
     const key = BM_STAND_SITE_OF[c.site];
     if (!key || !measured(key)) continue;
-    const [wx, wy] = lib.warpPoint(c.pt, sexKey);
+    const [wx, wy] = lib.warpPoint(c.pt, sexKey, ratios, kindOf(c.site));
     cos.push({ key, side: c.side, segY: c.y, ax: 80 + wx, ay: wy });
   }
   let callouts = "";
@@ -831,6 +872,12 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
       <clipPath id="bmfig2-clip-t"><path d="${sil.torso}"/></clipPath>
       <clipPath id="bmfig2-clip-aR"><path d="${sil.armR}"/></clipPath>
       <clipPath id="bmfig2-clip-aL"><path d="${sil.armL}"/></clipPath>
+      <linearGradient id="bmfig2-relief" x1="0" y1="0" x2="0.7" y2="1">
+        <stop offset="0%" stop-color="#f2ead8"/><stop offset="45%" stop-color="${col.standFill}"/><stop offset="100%" stop-color="#ddcfb2"/>
+      </linearGradient>
+      <radialGradient id="bmfig2-sheen"><stop offset="0%" stop-color="#fffdf8" stop-opacity="0.32"/><stop offset="100%" stop-color="#fffdf8" stop-opacity="0"/></radialGradient>
+      <filter id="bmfig2-form" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.6"/></filter>
+      <filter id="bmfig2-ground" x="-40%" y="-160%" width="180%" height="420%"><feGaussianBlur stdDeviation="3.4"/></filter>
     </defs>`;
   return `<svg class="bm-figure bm-figure2" viewBox="0 0 420 645" width="100%" role="img" aria-label="${escAttr(aria)}" style="display:block;max-width:440px;margin:0 auto;overflow:visible">${defs}${group}${callouts}</svg>`;
 }
@@ -923,7 +970,7 @@ function compSection(data: BmSummary, unit: BmUnit): string {
   return `<div class="sess bm-comp reveal" style="padding:16px 14px;margin-bottom:12px">
       <div class="bm-sechead" style="font-weight:600;margin-bottom:2px">Where you stand</div>
       ${sub}${heading}
-      <div class="bm-figure-slot" style="margin-top:8px" data-body3d="fallback:first-paint"><div class="bm-figure-fallback">${figure}</div></div>
+      <div class="bm-figure-slot" style="margin-top:8px"><div class="bm-figure-fallback">${figure}</div></div>
       ${detail}${focus}
       ${bmStandRatioRows(model, unit)}
     </div>`;
@@ -1262,24 +1309,6 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
   // Elite Stand hero: tap a measurement to read it in context. Wired
   // on the cached data so a re-select never refetches or resets the log form.
   if (data) bmWireStandHero(mount, data, unit);
-
-  // Optional 3D promotion: only for the fixed Stand figure path, never before
-  // the 2D fallback has painted, and never if the capability gate declines.
-  if (data && data.latest && bmFigureLib()) {
-    const body3d = bmBody3DLib();
-    const slot3d = mount.querySelector(".bm-figure-slot") as HTMLElement | null;
-    if (body3d && slot3d && !slot3d.querySelector(".bm-body3d")) {
-      const model = bmStandModel(data, unit);
-      const selected = bmResolveSelected(model);
-      body3d.enhance(slot3d, {
-        model: bmBody3DModel(model, selected),
-        onSelect: (site) => {
-          bmSelectedSite = site;
-          bmRepaintStandHero(mount, data, unit);
-        },
-      });
-    }
-  }
 
   // The then→now morph (LEGACY figure only — the elite fixed figure doesn't
   // morph): with two or more tape sessions the legacy croquis first draws at the
