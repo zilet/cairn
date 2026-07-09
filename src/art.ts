@@ -50,14 +50,36 @@ export function isArtKind(kind: string): kind is ArtKind {
   return (ART_KINDS as readonly string[]).includes(kind);
 }
 
+// Optional generation context. Only the exercise kind uses it today: a classified
+// muscle group + implement sharpens the clay-figurine prompt WITHOUT changing the
+// cache key (the key is still sha1(kind:name)), so the bare-name query still hits it.
+export interface ArtContext {
+  muscle_group?: string | null;
+  equipment?: string | null;
+}
+
+// A compact " — a <group> exercise using <equipment>" clause for the exercise
+// prompt when context is known; "" otherwise. Kept as a pure, exported helper so
+// the prompt variant is unit-testable and the no-context path is provably unchanged.
+export function exerciseContextClause(context?: ArtContext | null): string {
+  if (!context) return "";
+  const bits: string[] = [];
+  const mg = String(context.muscle_group ?? "").trim();
+  const eq = String(context.equipment ?? "").trim();
+  if (mg && mg.toLowerCase() !== "other") bits.push(`a ${mg} exercise`);
+  if (eq) bits.push(`using ${eq}`);
+  return bits.length ? ` — ${bits.join(" ")}` : "";
+}
+
 // Baked-in style prompts per kind. Caller text feeds the image prompt only —
-// it never influences the filesystem path beyond the sha1 cache key.
-function stylePrompt(kind: ArtKind, text: string): string {
+// it never influences the filesystem path beyond the sha1 cache key. `context`
+// (exercise only) enriches the prompt without touching that key.
+export function stylePrompt(kind: ArtKind, text: string, context?: ArtContext | null): string {
   switch (kind) {
     case "food":
       return `Professional studio food photography of ${text}. Plated on simple cream ceramic, centered, soft diffused natural light, photographed against a seamless warm cream studio background (#F4EFE6), gentle soft shadow beneath the dish, slightly elevated three-quarter angle, appetizing, hyper-detailed, no text, no hands, no props other than the dish. Square 1:1.`;
     case "exercise":
-      return `Hand-sculpted matte clay figurine of a person performing ${text}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
+      return `Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
     case "activity":
       return `Hand-sculpted matte clay figurine of a person doing ${text}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
   }
@@ -94,6 +116,7 @@ interface Job {
   key: string;
   kind: ArtKind;
   text: string;
+  context?: ArtContext | null; // exercise-only prompt enrichment; never affects `key`
 }
 
 const queue: Job[] = [];
@@ -116,6 +139,41 @@ export function requestArt(kind: ArtKind, text: string): boolean {
   queue.push({ key, kind, text });
   void drain();
   return true;
+}
+
+// Generate muscle-group/equipment-aware art for a just-classified exercise, under
+// the BARE-NAME cache key (so the PWA's plain `?q=<name>` request resolves straight
+// to it — no alias needed, no key drift). Called by the background 'exercise'
+// enrichment job. Degrades exactly like requestArt (no key / art disabled / known-
+// failed → no-op) and never double-pays: skips when the image already exists (a
+// recovery re-run, or the serve path beat it) or is in flight. Records the spend
+// ledger like the serve path. Returns true only when it generated a new image.
+export async function warmExerciseArt(name: string, context?: ArtContext | null): Promise<boolean> {
+  const text = String(name ?? "").trim();
+  if (!text) return false;
+  if (!getGeminiApiKey()) return false;
+  if (!getSettings().art_enabled) return false;
+  const key = cacheKey("exercise", text);
+  if (failed.has(key)) return false;
+  if (fs.existsSync(fileForKey(key))) return false; // already generated (enriched or name-only)
+  if (inFlight.has(key)) return false;              // the serve queue is already on it
+  inFlight.add(key);
+  try {
+    await generate({ key, kind: "exercise", text, context });
+    addArtAsset(key, "exercise", normalize(text));
+    recordArtUsage({
+      kind: "exercise", query: normalize(text), asset_key: key,
+      action: "generate", model: GEMINI_IMAGE_MODEL, est_cost_usd: IMAGE_COST_USD,
+    });
+    return true;
+  } catch (e: any) {
+    failed.add(key);
+    recordArtUsage({ kind: "exercise", query: normalize(text), action: "fail", model: GEMINI_IMAGE_MODEL });
+    console.warn(`[art] exercise art failed for "${text}": ${e?.message ?? e}`);
+    return false;
+  } finally {
+    inFlight.delete(key);
+  }
 }
 
 let draining = false;
@@ -414,7 +472,7 @@ async function generate(job: Job): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: stylePrompt(job.kind, job.text) }] }],
+        contents: [{ parts: [{ text: stylePrompt(job.kind, job.text, job.context) }] }],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
       }),
       signal: controller.signal,

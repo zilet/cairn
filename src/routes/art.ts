@@ -2,6 +2,7 @@ import { Router } from "express";
 import fs from "node:fs";
 import { isArtKind, cachedArtPath, requestArt, warmArt, artManifest } from "../art.js";
 import { getArtStats } from "../domain/operator/index.js";
+import { exerciseArtPending } from "../domain/training/index.js";
 
 export const artRouter = Router();
 
@@ -38,6 +39,11 @@ artRouter.get("/art", (req, res) => {
       })
       .pipe(res);
   }
+  // A just-added exercise whose background enrichment is still running will get
+  // muscle-group/equipment-aware art from that job, generated under THIS same cache
+  // key. Don't race it with a name-only generation here — defer (still a 204; the
+  // client just retries and finds the enriched image once the job lands it).
+  if (kind === "exercise" && exerciseArtPending(q)) return res.status(204).end();
   requestArt(kind, q); // no-op when unavailable; serial queue dedups in-flight keys
   res.status(204).end();
 });
