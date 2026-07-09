@@ -16,6 +16,7 @@ import {
 } from "../domain/health/index.js";
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime, isInlineMime } from "../uploadMime.js";
+import { streamEnrichRow } from "./enrich-stream.js";
 
 export const healthDocsRouter = Router();
 
@@ -23,12 +24,18 @@ healthDocsRouter.get("/", (req, res) =>
   res.json(listHealthDocuments(req.query.limit ? Number(req.query.limit) : 50))
 );
 
-// Single row (frontend polls this to watch enrichment_status).
+// Single row (poll fallback for watching enrichment_status).
 healthDocsRouter.get("/:id", (req, res) => {
   const d = getHealthDocument(Number(req.params.id));
   if (!d) return res.status(404).json({ error: "not found" });
   res.json(d);
 });
+
+// Live enrichment status for one health document (Server-Sent Events) — the
+// SSE-first path the PWA uses instead of polling; snapshot then transitions, close
+// on terminal. getHealthDocument returns the PUBLIC shape (never the raw file_path).
+// EventSource can't set headers, so the PWA reaches this with ?token=.
+healthDocsRouter.get("/:id/stream", streamEnrichRow("health", getHealthDocument));
 
 // Stream the original file. Only raster images / PDF are served inline.
 healthDocsRouter.get("/:id/file", (req, res) => {
