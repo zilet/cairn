@@ -131,6 +131,32 @@ function todayRailDeps() {
   return todayDeps().rail();
 }
 
+// ---- warm instant-paint for the Today plan surface (mirrors Stand/Train) ------
+// The fetch chain behind the plan surface is several network round trips deep
+// (session prep + brief, see the Promise.all above), so a bare re-entry — a cold
+// app load, or switching back from another tab — otherwise shows nothing useful
+// for that whole duration: switchTab's paintTabSkeleton() actually skips its own
+// skeleton once "plan" is SWR-warm, which leaves the PREVIOUS tab's stale markup
+// on screen rather than anything Today-shaped. Cache the exact wrapped HTML this
+// function last wrote, keyed by date, and repaint it immediately, before any
+// fetch; the normal fetch-then-write flow below still always runs afterward and
+// settles on the true content, so this is purely an earlier, best-effort paint —
+// never a substitute for it.
+const TODAY_PLAN_SNAP_KEY = "cairn.today.plan.v1";
+let todayPaintedRealFor: string | null = null; // date last given the REAL (non-snapshot) write this session
+
+function todaySaveSurfaceSnapshot(date: string, html: string): void {
+  try { sessionStorage.setItem(TODAY_PLAN_SNAP_KEY, JSON.stringify({ date, html })); } catch { /* quota — skip */ }
+}
+function todayLoadSurfaceSnapshot(date: string): string | null {
+  try {
+    const raw = sessionStorage.getItem(TODAY_PLAN_SNAP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { date?: unknown; html?: unknown } | null;
+    return parsed && parsed.date === date && typeof parsed.html === "string" ? parsed.html : null;
+  } catch { return null; }
+}
+
 async function renderToday(opts: any = {}) {
   const enteredDate = todayState.logDate;
   // A soft (background stale-while-revalidate) repaint must feel silent: keep the
@@ -138,9 +164,31 @@ async function renderToday(opts: any = {}) {
   // changed" refresh never flashes the whole screen or jumps under the reader.
   // Mirrors Stand's quietPaint and the Session surface's scroll capture/restore.
   const prevY = typeof window !== "undefined" ? window.scrollY : 0;
+
+  // Only for a genuine (non-soft) entry, and only when Today isn't ALREADY
+  // showing this exact date's real content (never paint stale snapshot markup
+  // OVER a live, fresher surface — the same hazard class as the instant-paint
+  // Stand/Train guards).
+  const showingFreshToday = todayPaintedRealFor === enteredDate && !!todayView.querySelector(".today-wrap");
+  if (!opts?.soft && !showingFreshToday && todayState.tab === "today") {
+    const snap = todayLoadSurfaceSnapshot(enteredDate);
+    if (snap) todayView.innerHTML = snap;
+  }
+
   const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
   const { soft, isToday } = todayData;
   const session: any = todayData.session;
+
+  // The Brief's day-read has no data dependency on the plan/session preparation
+  // below (it only needs logDate + any active override, not the prepared plan
+  // day/prescriptions) — kicking off both waves together instead of serially
+  // saves one full round-trip on cold entry. (See the Brief comment further
+  // down for what `loadBrief`'s fast mode does.)
+  const briefOverride = todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
+  const [prep, read] = await Promise.all([
+    todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday)),
+    loadBrief(todayState.logDate, briefOverride, { fast: true }),
+  ]);
   const {
     day,
     loggedByEx,
@@ -161,7 +209,7 @@ async function renderToday(opts: any = {}) {
     hasSyncedCardioToday,
     isRunDay,
     expectingRun,
-  } = await todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(session, isToday));
+  } = prep;
 
   const [stats, profile, exercises]: any[] = [todayData.stats, todayData.profile, todayData.exercises];
   if (profile) { setDiscipline(profile.primary_discipline); setEnduranceGoalSet(!!profile.endurance_goal_json); } // keep the emphasis globals warm for Progress/Today/Plan
@@ -186,13 +234,12 @@ async function renderToday(opts: any = {}) {
   // The plan/logging surface is revealed when the read says "train", when the
   // user has already logged on this date (they've committed), when they tapped
   // "train anyway"/"log these" (todayState.planReveal), or when reviewing a past date.
-  // Non-blocking Brief: fetch the read in FAST mode — the endpoint returns a warm
-  // cached read instantly, so the common case is immediate; a cold cache resolves
-  // to a provisional read (painted with the .is-thinking filament) and the real
-  // agentic read swaps in via upgradeBriefInPlace() once it lands. First paint
-  // never waits on agent:"auto". (Honors an active override.)
-  const briefOverride = todayState.brief && todayState.brief.date === todayState.logDate ? todayState.brief.override : "";
-  const read = await loadBrief(todayState.logDate, briefOverride, { fast: true });
+  // Non-blocking Brief: fetched above in FAST mode (in parallel with the plan/
+  // session prep) — the endpoint returns a warm cached read instantly, so the
+  // common case is immediate; a cold cache resolves to a provisional read
+  // (painted with the .is-thinking filament) and the real agentic read swaps in
+  // via upgradeBriefInPlace() once it lands. First paint never waits on
+  // agent:"auto". (Honors an active override.)
   const {
     hasLoggedSets,
     hasPlanDay,
@@ -321,8 +368,12 @@ async function renderToday(opts: any = {}) {
   // since the CSS `rise` animation fires on insertion. toggle() also clears it on
   // the next hard render so real entrances still animate.
   todayView.classList.toggle("today-soft", !!soft);
-  todayView.innerHTML = todayMainShell.wrapHtml(html, { railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
+  const todayWrappedHtml = todayMainShell.wrapHtml(html, { railHtml: `<aside class="today-rail" aria-busy="true"></aside>` });
+  todayView.innerHTML = todayWrappedHtml;
   if (soft) { try { window.scrollTo(0, prevY); } catch {} }
+  // Snapshot this REAL write for next entry's instant paint (see above).
+  todayPaintedRealFor = enteredDate;
+  todaySaveSurfaceSnapshot(enteredDate, todayWrappedHtml);
 
   // The lead entry: one tap opens the isolated Session destination.
   todayView.querySelector("#sessLaunch")?.addEventListener("click", () => openSession());
