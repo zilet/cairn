@@ -28,8 +28,11 @@ function missingExerciseDetailHtml(name: string, svg: string, deps: ExerciseDeta
   return `
         <div class="detail-art"><div class="detail-art-zoom">${deps.artImg("exercise", name, "artile-xl", svg)}</div></div>
         <h2 class="detail-title">${deps.escapeHtml(name)}</h2>
-        <div class="empty">No data for this exercise yet.</div>
-        <div class="detail-actions"><button class="pillbtn" data-close>Close</button></div>`;
+        <div class="empty">Still putting together the guide for this one. Ask the coach for form pointers, or check back in a moment.</div>
+        <div class="detail-actions">
+          <button class="pillbtn" id="askForm">Ask coach</button>
+          <button class="pillbtn" data-close>Close</button>
+        </div>`;
 }
 
 function exerciseDetailModalHtml(
