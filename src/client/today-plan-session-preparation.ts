@@ -164,7 +164,32 @@ type TodayPlanSessionPrepDataApi = {
 
     const day = todayPlanSessionModel.selectedPlanDay(deps.state, revealBlank);
     const items = todayPlanSessionModel.planItems(day);
-    const { allCardio, cardioEfforts, todaySettings } = await todayPlanSessionData.loadCardioContext(items, deps.isToday, deps);
+    const skips = (deps.session && deps.session.skips) || [];
+
+    // planEx/planNames/pendingOffPlan never actually depend on cardio-effort
+    // matching: a STRENGTH item's skip status only reads loggedByEx/skips
+    // (matchedCardio only changes whether a CARDIO item counts as skipped, and
+    // planEx excludes cardio items either way). Fold them against an empty
+    // matchedCardio map so the cardio-context fetch (/cardio + /settings) can run
+    // in the SAME wave as the last-set + prescription fetches, instead of gating
+    // them serially.
+    const NO_CARDIO_MATCH = new Map<TodayPlanSessionPrepPlanItem, TodayPlanSessionPrepCardioEffort>();
+    const early = todayPlanSessionModel.itemGroups({
+      items,
+      loggedByEx,
+      matchedCardio: NO_CARDIO_MATCH,
+      skips,
+      isCardioItem: deps.isCardioItem,
+      cardioLabel: deps.cardioLabel,
+    });
+    const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, early.planNames, loggedByEx);
+
+    const [{ allCardio, cardioEfforts, todaySettings }, lastSets, rxByEx] = await Promise.all([
+      todayPlanSessionData.loadCardioContext(items, deps.isToday, deps),
+      todayPlanSessionData.loadLastSets([...early.planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps),
+      todayPlanSessionData.loadPrescriptions(deps.state.day, early.planEx, deps),
+    ]);
+
     const matchedCardio = todayPlanSessionModel.matchCardioEfforts(allCardio, cardioEfforts, deps.cardioEffortMatches);
     const {
       planNames,
@@ -178,13 +203,10 @@ type TodayPlanSessionPrepDataApi = {
       items,
       loggedByEx,
       matchedCardio,
-      skips: (deps.session && deps.session.skips) || [],
+      skips,
       isCardioItem: deps.isCardioItem,
       cardioLabel: deps.cardioLabel,
     });
-    const pendingOffPlan = todayPlanSessionModel.prunePendingOffPlan(deps.state, planNames, loggedByEx);
-    const lastSets = await todayPlanSessionData.loadLastSets([...planEx, ...pendingOffPlan.map((item) => item.name)], loggedByEx, deps);
-    const rxByEx = await todayPlanSessionData.loadPrescriptions(deps.state.day, planEx, deps);
     const rxFor = (name: unknown) => (name ? rxByEx[String(name).toLowerCase()] || null : null);
     const prefillFor = (item: TodayPlanSessionPrepPlanItem): TodayPlanSessionPrepPrefill =>
       todayPlanSessionModel.prefillFor(item, loggedByEx, lastSets);

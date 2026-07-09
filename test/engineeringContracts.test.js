@@ -155,14 +155,17 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
 
     // Individual modules are no longer loaded directly — they ship inside a bundle.
     const url = `/${item.output.replace(/^public\//, "")}`;
+    // All script tags are `defer` (parse/first-paint isn't blocked on ~1.5MB of
+    // JS) — defer preserves document-order execution across every deferred
+    // script, root classics included, so this is still the exact same boot order.
     if (rootClassicOutputs.has(item.output)) {
       assert.ok(
-        index.includes(`<script src="${url}"></script>`),
-        `${url} is a root classic script — index.html must load it directly, before the bundles`
+        index.includes(`<script src="${url}" defer></script>`),
+        `${url} is a root classic script — index.html must load it directly (deferred), before the bundles`
       );
     } else {
       assert.ok(
-        !index.includes(`<script src="${url}"></script>`),
+        !index.includes(`<script src="${url}" defer></script>`) && !index.includes(`<script src="${url}"></script>`),
         `${url} must not be <script>-loaded directly by index.html; it belongs to a bundle`
       );
     }
@@ -184,7 +187,7 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   // The flattened bundle order reproduces the canonical boot order, and both the
   // index.html <script> graph and the sw precache load the bundles in manifest order.
   const bundleUrls = BUNDLES.map((bundle) => `/${bundle.output.replace(/^public\//, "")}`);
-  const indexScripts = [...index.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+  const indexScripts = [...index.matchAll(/<script src="([^"]+)" defer><\/script>/g)].map((m) => m[1]);
   const indexBundleScripts = indexScripts.filter((src) => src.startsWith("/js/"));
   assert.deepEqual(indexBundleScripts, bundleUrls, "index.html must load every bundle in manifest order and nothing else under /js");
   const swBundleScripts = [...sw.matchAll(/"(\/js\/[^"]+)"/g)].map((m) => m[1]);

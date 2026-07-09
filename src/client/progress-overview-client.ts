@@ -65,13 +65,31 @@ const TOV_GROUP_ORDER = [
 let tovData: TovData | null = null;
 let tovToken = 0;
 const TOV_SNAP_KEY = "cairn.train.v1";
+// Above this, skip the localStorage copy — a pathological payload shouldn't hog
+// a disproportionate share of the ~5MB quota shared with every other persisted
+// key (the sessionStorage copy below has no such ceiling; it's tab-scoped).
+const TOV_SNAP_MAX_BYTES = 200_000;
 
 function tovSaveSnapshot(data: TovData): void {
-  try { sessionStorage.setItem(TOV_SNAP_KEY, JSON.stringify(data)); } catch { /* quota — skip */ }
+  let json: string;
+  try { json = JSON.stringify(data); } catch { return; }
+  try { sessionStorage.setItem(TOV_SNAP_KEY, json); } catch { /* quota — skip */ }
+  // Unlike the plain SWR cache (which deliberately keeps health-prefixed keys
+  // memory/session-only, see swr-cache.ts), this is training/muscle-balance data,
+  // not health-sensitive lab/recovery data — persist it to localStorage too, the
+  // same way the Brief does, so the Train overview paints instantly on a genuine
+  // cold app launch (not just a same-session tab switch), not only mid-session.
+  if (json.length <= TOV_SNAP_MAX_BYTES) {
+    try { localStorage.setItem(TOV_SNAP_KEY, json); } catch { /* quota — skip */ }
+  }
 }
 function tovLoadSnapshot(): TovData | null {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem(TOV_SNAP_KEY) || "null");
+    // sessionStorage first (this tab's own last paint, always freshest when
+    // present); localStorage as the cold-launch fallback (a new tab/process has
+    // no sessionStorage yet, but may have a prior session's persisted copy).
+    const raw = sessionStorage.getItem(TOV_SNAP_KEY) || localStorage.getItem(TOV_SNAP_KEY) || "null";
+    const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" && "balance" in parsed ? parsed as TovData : null;
   } catch { return null; }
 }
