@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**232 routes** across 87 groups.
+**233 routes** across 87 groups.
 
 ## `/activities`
 
@@ -480,6 +480,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | POST | `/api/program/progression/apply` | Build a DRAFT plan proposal from the current day's per-lift prescriptions, via the same propose→apply path as /agent/run and /program/evolve. Never auto- applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed-failure signal — nothing wrong at the HTTP level, just nothing to do). |
 | POST | `/api/program/run-plan/apply` | Build a DRAFT plan proposal from this week's deterministic run mix, via the same propose→apply path as /program/progression/apply. Maps weeklyRunPlan(date).runs → parsed.cardio[] (applyProposal → setWeeklyRuns, keeping strength intact + carrying interval structure). Never auto-applied. Returns the designed ok:false at 200. |
 | POST | `/api/program/swap` | Draft a single-exercise SWAP (rotate `from` out for `to` on a day) as a DRAFT proposal via the propose→apply path — behind Today's "rotate one in" chips. Never auto-applied. Returns the designed { ok:false, error } at 200 on bad input. |
+| POST | `/api/program/swap/apply` | Swap AND apply in one tap — the in-session "rotate one in" chip. Unlike /program/swap (draft → review in Coach), this lands the swap in the plan immediately so the athlete can log against the new movement now; the plan adapts as they go. Returns { ok:true, swapped } or the designed { ok:false, error } at 200. |
 | GET | `/api/program/variations` | Exercise variations / alternatives (the plateau-break + "make it interesting" library). ?exercise= required; ?mode=alternatives with bodyweight=1 / avoid= for swaps. |
 
 ## `/program-state`

@@ -23,10 +23,14 @@ toward where you're going. Then it gets out of your way.**
 A cairn is a stone marker on a trail. It doesn't walk for you and it doesn't shout. It sits quietly
 and tells you *you're on the path; this way next*. That restraint is the product.
 
-It is a **buddy, not a boss**. A peer who happens to be very smart about health and longevity, who
-knows you, who's playing the decades-long game with you, and who only speaks up when it helps. It
-optimizes for the long run — sustainability over intensity, consistency over heroics. It would rather
-you do the right easy thing for ten years than the perfect brutal thing for three weeks.
+It is a **buddy, not a boss** — but a buddy with *elite competence*. Under the calm voice sit four
+professionals held to the highest standard: an **elite strength & endurance coach**, an **elite
+health/longevity professional**, an **elite wellness & lifestyle coach**, and a **clinician-informed
+reader of your labs**. It has the judgment of the best in each field and the manner of a peer who
+happens to know you — who's playing the decades-long game with you, and who only speaks up when it
+helps. It optimizes for the long run — sustainability over intensity, consistency over heroics. It
+would rather you do the right easy thing for ten years than the perfect brutal thing for three weeks.
+The caliber is elite; the delivery is calm.
 
 And **you drive.** It navigates; you steer. It proposes; you decide. It never auto-applies, never
 overrides you, never guilt-trips you toward compliance. The relationship is trust, not pressure.
@@ -124,6 +128,26 @@ a feature conflict, the principle wins.
     against recovery. The day's suggestion, the plan, progress, fueling, and the connected brain all
     reshape around the sport you're in — because the same calm pointing only earns trust when it's
     pointing in *your* terms. (Endurance is a modality to *program*, not merely a volume to cap.)
+
+14. **Always the next move — just in time, and it gets you ready.** The elite coach is *always working
+    in the background*: it observes, monitors, and treats **everything you do as a signal** — every log,
+    set, run, meal, weigh-in, watch metric, and felt note. From that, it always holds a view of the **one
+    smartest next move that advances you a stage** — the load to earn, the movement to rotate in, the
+    marker to nudge, the week to deload — kept fresh as reality changes. Two qualities make this feel like
+    a great coach rather than a nag:
+    - **Just-in-time, just-right.** Adaptation lands *in the moment it's useful* — the swap you make
+      mid-session takes effect now and the plan follows you; the target you earned is already reflected
+      next time; a signal that genuinely shifts things reshapes the picture immediately, not on a weekly
+      batch. Timely and proportionate, never late, never fussy.
+    - **It prepares you.** A coach doesn't only react — it gets you *ready* for what's next. Cairn looks
+      ahead and lays out what's coming so you can arrive prepared: today's session and how to approach it,
+      the week's shape, the retest that's due, the trip to train around. Anticipation, not just response.
+
+    This lives entirely *inside* the constitution: "always has the next move" means **always ready**, not
+    always talking. It is computed continuously but **surfaced pull-not-push** — the moment you engage, or
+    at the genuinely right time — routed through the salience arbiter (§12.1) so more intelligence never
+    becomes more noise. You still drive; nothing plan-affecting or clinical auto-applies; the smartest
+    move is pre-chosen and waiting, and the wheel is always yours.
 
 ---
 
@@ -769,10 +793,27 @@ modes (lose/maintain/gain) + a daily fuel review & edit (v41). Schema reached **
    (`evidenceSummary` / `getOutcomeLearnings` exist but are thin). Lives in **Me**, pull-only.
    *Restraint note:* a calm history you visit, never a notification; it explains, it doesn't grade.
 
-**How Era 2 honors the constitution.** Items 1, 4, and 5 all route *through* the salience arbiter, so
-adding intelligence cannot add noise — every new surface competes for the same scarce, ranked attention
-budget rather than claiming its own card. Item 2 makes a built capability honest and reachable. Item 3
-finishes a planned track. Nothing here pushes, scores, gamifies, or auto-applies.
+7. **In-the-moment adaptation & readiness — the coach that keeps up with you (§2.14).** Make "always the
+   next move, just in time" real end-to-end. *Two directions:*
+   - **Adapts as you go (in-the-moment).** When you deviate — swap a movement, go heavier, cut a session
+     short — the change takes effect *now* and the plan quietly follows, no review gate. ✅ *First step
+     shipped:* the in-session "rotate one in" chip now swaps the movement in **immediately** and re-renders
+     the session ready to log (`/program/swap/apply` → `buildAndApplySwap`), instead of drafting a proposal
+     to review in Coach. Next: the same immediacy for on-the-fly load/target and mid-session structure
+     changes.
+   - **Gets you ready (anticipatory).** Look ahead and prepare you: a brief "here's today's session and how
+     to approach it," a glance at the week's shape, the retest that's due, the trip to train around — so you
+     arrive primed. Built from data that already exists (day-read, plan, directives, context events),
+     surfaced *through the arbiter* (item 1).
+   *Restraint note:* in-the-moment changes are things *you* initiated (still you-driving), so they apply
+   without a gate; anything the brain proposes on its own stays a waiting draft. The readiness look-ahead is
+   one calm line/card, pull-only, never a countdown or a push. Nothing clinical ever auto-applies.
+
+**How Era 2 honors the constitution.** Items 1, 4, 5, and 7's readiness look-ahead all route *through* the
+salience arbiter, so adding intelligence cannot add noise — every new surface competes for the same scarce,
+ranked attention budget rather than claiming its own card. Item 2 makes a built capability honest and
+reachable. Item 3 finishes a planned track. Item 7's in-the-moment adaptation applies only *your own*
+deviations. Nothing here pushes, scores, gamifies, or auto-applies.
 
 ---
 

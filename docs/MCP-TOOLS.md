@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**190 tools.**
+**191 tools.**
 
 | Tool | Description |
 |---|---|
@@ -178,6 +178,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `suggest_variations` | Variation candidates for an exercise (same movement pattern, different bar path/implement) to break a plateau or keep training fresh; mode:'alternatives' returns equipment/injury-aware swaps. |
 | `supersede_memory` | Mark a memory note superseded (it CONTRADICTS/REPLACES an older one). Never hard-deletes — the old fact stays in history. Optionally supply a replacement content (a new row is created) or replacement_id. |
 | `swap_exercise` | Draft a single-exercise SWAP — rotate `from` out for a same-pattern `to` IN PLACE on a plan day — as a DRAFT proposal via the propose→apply path. Never auto-applies (review then apply_proposal). Returns { ok:true, proposal } or { ok:false, error } at 200. |
+| `swap_exercise_now` | Swap `from` out for a same-pattern `to` IN PLACE on a plan day AND APPLY it immediately (no review gate) — the in-session 'rotate one in' intent, so the new movement is ready to log against right away and the plan adapts as the athlete goes. Builds through the same tested swap → apply path, discarding the draft if the apply can't land. Returns { ok:true, swapped } or { ok:false, error } at 200. |
 | `swap_meal` | Agentically swap ONE meal in a drafted meal plan for a different dish, honoring an optional free-text hint (e.g. 'let's go with fish'). Keeps kcal/protein within ±10% unless the hint asks otherwise. |
 | `sync_garmin` | Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings). |
 | `synthesize_health` | Generate (and cache) the elite-coach whole-picture synthesis: reads labs + body composition + training load + recovery + nutrition + supplements + life as ONE story and names the few things that matter most right now and the highest-leverage move. Informational, not medical advice; pull — nothing is pushed. |

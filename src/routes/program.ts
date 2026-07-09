@@ -6,6 +6,7 @@ import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
+  buildAndApplySwap,
   buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
@@ -172,6 +173,16 @@ programRouter.post("/program/progression/apply", (req, res) => {
 programRouter.post("/program/swap", (req, res) => {
   const { day, from, to } = req.body ?? {};
   res.json(buildSwapProposal(Number(day), from, to));
+});
+
+// Swap AND apply in one tap — the in-session "rotate one in" chip. Unlike
+// /program/swap (draft → review in Coach), this lands the swap in the plan
+// immediately so the athlete can log against the new movement now; the plan
+// adapts as they go. Returns { ok:true, swapped } or the designed { ok:false,
+// error } at 200.
+programRouter.post("/program/swap/apply", (req, res) => {
+  const { day, from, to } = req.body ?? {};
+  res.json(buildAndApplySwap(Number(day), from, to));
 });
 
 programRouter.get("/proposals", (req, res) =>

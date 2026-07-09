@@ -1298,6 +1298,7 @@ export interface ClientProposalResult {
   ok?: boolean;
   proposal?: ClientProposal;
   applied?: unknown;
+  swapped?: unknown;
   error?: string;
 }
 
@@ -1771,6 +1772,7 @@ export interface ClientApiResponses {
   "/api/program/progression": ClientPrescription[];
   "/api/program/progression/apply": ClientProposalResult;
   "/api/program/swap": ClientProposalResult;
+  "/api/program/swap/apply": ClientProposalResult;
   "/api/program/balance": ClientProgramBalance;
   "/api/program/adjustments": ClientProgramAdjustment[];
   "/api/program/blocks": ClientProgramBlock[] | ClientProgramBlock;

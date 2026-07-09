@@ -6,6 +6,7 @@ import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
+  buildAndApplySwap,
   buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
@@ -202,6 +203,17 @@ export function registerProgramTools(server: McpToolRegistrar) {
       to: z.string().describe("the same-pattern movement to rotate in"),
     },
     async ({ day, from, to }) => asText(buildSwapProposal(day, from, to))
+  );
+
+  server.tool(
+    "swap_exercise_now",
+    "Swap `from` out for a same-pattern `to` IN PLACE on a plan day AND APPLY it immediately (no review gate) — the in-session 'rotate one in' intent, so the new movement is ready to log against right away and the plan adapts as the athlete goes. Builds through the same tested swap → apply path, discarding the draft if the apply can't land. Returns { ok:true, swapped } or { ok:false, error } at 200.",
+    {
+      day: z.number().int().describe("the plan day number"),
+      from: z.string().describe("the exact current exercise to rotate out"),
+      to: z.string().describe("the same-pattern movement to rotate in"),
+    },
+    async ({ day, from, to }) => asText(buildAndApplySwap(day, from, to))
   );
 
   server.tool(

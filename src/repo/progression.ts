@@ -22,7 +22,7 @@ import { getPlan } from "./plan.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
 // run-progression.ts does for buildRunPlanProposal) so REST + MCP share ONE proposal
 // builder instead of duplicating the change-shaping logic (and drifting).
-import { createProposal, getProfile, supersedeAutoProgressionDrafts } from "./profile.js";
+import { applyProposal, createProposal, getProfile, setProposalStatus, supersedeAutoProgressionDrafts } from "./profile.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
@@ -884,6 +884,34 @@ export function buildSwapProposal(day: number, from: string, to: string): { ok: 
   };
   const proposal = createProposal("exercise-swap", `swap ${f} → ${t}`, "", parsed);
   return { ok: true, proposal };
+}
+
+// Swap one exercise for another on a day AND APPLY it immediately — the in-session
+// "rotate one in" intent: the athlete taps a variation and it lands in the plan now,
+// so the very next render shows the new movement ready to log against. This is the
+// "adapts as I go" path (no Coach review gate); the plan quietly follows the athlete.
+// Builds through the same tested buildSwapProposal → applyProposal path so REST + MCP
+// never drift, and discards the draft if the apply can't land (e.g. `from` not on the
+// day) so nothing is left dangling. Returns the applied result or the designed
+// { ok:false, error } at 200.
+export function buildAndApplySwap(
+  day: number,
+  from: string,
+  to: string,
+): { ok: false; error: string } | { ok: true; swapped: any } {
+  const draft = buildSwapProposal(day, from, to);
+  if (!draft.ok) return draft;
+  try {
+    const applied = applyProposal(draft.proposal.id) as { ok?: boolean; error?: string };
+    if (!applied || applied.ok === false) {
+      setProposalStatus(draft.proposal.id, "discarded");
+      return { ok: false, error: applied?.error || "couldn't apply that swap" };
+    }
+    return { ok: true, swapped: applied };
+  } catch (e: any) {
+    setProposalStatus(draft.proposal.id, "discarded");
+    return { ok: false, error: e?.message || "couldn't apply that swap" };
+  }
 }
 
 // ---- program balance (volume per canonical group) ---------------------------

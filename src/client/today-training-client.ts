@@ -45,9 +45,9 @@ function exRxVaryMenuHtml(rx: ClientPrescriptionLike): string {
     ? rx.vary_options.filter((o) => o && typeof o === "object" && o.name)
     : [];
   if (!opts.length) return "";
-  // Each chip is ACTIONABLE: tapping it drafts a swap proposal (from → this option)
-  // through the propose→apply path (POST /program/swap → a DRAFT the user applies).
-  // Carries the from-exercise + the plan day so the delegated handler can build it.
+  // Each chip is ACTIONABLE: tapping it swaps this option in RIGHT NOW (from → this
+  // option) via /program/swap/apply — the plan adapts and the new movement is ready
+  // to log against immediately. Carries the from-exercise + the plan day for the handler.
   const from = rx?.exercise ? String(rx.exercise) : "";
   const day = rx?.day_number != null ? String(rx.day_number) : "";
   const swappable = !!from && !!day;
@@ -73,26 +73,57 @@ function exRxVaryMenuHtml(rx: ClientPrescriptionLike): string {
   return `<div class="ex-rx-vary-menu"><span class="ex-rx-vary-lbl lbl">rotate one in</span><div class="ex-rx-opts">${chips}</div></div>`;
 }
 
-// Draft the swap through the propose→apply path (nothing auto-applies). Best-effort:
-// uses the global api() + toast() when present, and fires a DOM event any proposals
-// surface can pick up. A no-op outside the browser (tests) or when api() is absent.
+// Swap the movement in RIGHT NOW — "adapts as I go", no Coach review gate. The swap
+// lands in the plan immediately (/program/swap/apply) and the surface the athlete is
+// looking at re-renders so the new movement's card is ready to log against. The plan
+// quietly follows what they actually do. Best-effort: uses the global api()/toast()
+// when present; a no-op outside the browser (tests) or when api() is absent.
 async function requestRxSwap(from: string, to: string, day: number | null): Promise<void> {
   if (typeof api !== "function" || !from || !to || day == null) return;
   try {
-    const r = (await api("/program/swap", { method: "POST", body: JSON.stringify({ day, from, to }) })) as
-      | { ok?: boolean; error?: string; proposal?: unknown }
+    const r = (await api("/program/swap/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day, from, to }),
+    })) as
+      | { ok?: boolean; error?: string }
       | null;
     if (r && r.ok) {
-      if (typeof toast === "function") toast(`Drafted a swap: ${from} → ${to}. Review it in Coach.`);
-      if (typeof document !== "undefined" && typeof CustomEvent === "function") {
-        document.dispatchEvent(new CustomEvent("cairn:proposal-drafted", { detail: r.proposal }));
-      }
+      if (typeof toast === "function") toast(`Swapped in ${to} — log your sets.`);
+      refreshAfterSwap(day);
     } else if (typeof toast === "function") {
-      toast((r && r.error) || "Couldn't draft that swap.");
+      toast((r && r.error) || "Couldn't make that swap.");
     }
   } catch {
-    if (typeof toast === "function") toast("Couldn't draft that swap.");
+    if (typeof toast === "function") toast("Couldn't make that swap.");
   }
+}
+
+// The swap changed the plan — drop the cached plan/prescriptions and re-render
+// wherever the athlete is (Session or Today) so the new movement appears in place,
+// ready to log. Mirrors the coach-apply refresh (state.plan = [] forces a fresh
+// /plan fetch). All guarded: a missing global is simply skipped.
+function refreshAfterSwap(day: number): void {
+  const g = globalThis as Record<string, unknown> & {
+    state?: { tab?: string; plan?: unknown[]; brief?: unknown };
+    swrInvalidate?(keyOrPrefix: string): void;
+    renderSession?(opts?: unknown): unknown;
+    reshapeToday?(): unknown;
+  };
+  try {
+    if (g.state) {
+      g.state.plan = [];
+      g.state.brief = null;
+    }
+    g.swrInvalidate?.("plan");
+    g.swrInvalidate?.("today");
+    g.swrInvalidate?.(`program:progression:${day}`);
+  } catch {}
+  try {
+    const tab = g.state && g.state.tab;
+    if (tab === "session" && typeof g.renderSession === "function") g.renderSession();
+    else if (typeof g.reshapeToday === "function") g.reshapeToday();
+  } catch {}
 }
 
 // Delegated, idempotent wiring for the swap chips (registered once at load). Guarded
