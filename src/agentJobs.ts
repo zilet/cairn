@@ -34,10 +34,15 @@ import { readToday } from "./domain/brain/day-read-use-case.js";
 // ---------- progress bus ----------
 // One emitter, one event name per job ("job:<id>"). The SSE handler subscribes
 // for the job it's streaming; the worker emits on every phase change and on the
-// terminal transition. Unlike chat there is NO `delta` — these are one-shot JSON
-// ops, so progress is phase captions (optionally with a determinate `frac`).
+// terminal transition. Progress is phase captions (optionally with a determinate
+// `frac`), PLUS — for the four prose-bearing ops (health synthesis, session-suggest,
+// nutrition check-in, weekly read) — live `delta` events carrying the athlete-facing
+// prose token by token, so it paints into the waiting card. Deltas are EPHEMERAL:
+// bus-only, never persisted to the agent_jobs row (a reconnecting client rebuilds
+// state from the row + gets the final result on `done`).
 export type JobEvent =
   | { type: "phase"; job: any }
+  | { type: "delta"; delta: string }
   | { type: "done"; job: any; result: any }
   | { type: "error"; job: any; message: string }
   | { type: "canceled"; job: any };
@@ -46,6 +51,19 @@ const jobBus = createProgressBus<JobEvent>("job");
 function emit(id: number, payload: JobEvent): void { jobBus.emit(id, payload); }
 export function onJobEvent(id: number, listener: (e: JobEvent) => void): () => void {
   return jobBus.on(id, listener);
+}
+
+// The job kinds whose coachOp writes athlete-facing prose worth streaming. Only these
+// wire an `onDelta` hook into the op; every other kind runs prose-free (or is
+// JSON-only) and streams nothing. Exported (with the predicate) so the wiring is
+// unit-testable and stays in lockstep with the reshaped prompts in prompt.ts.
+export const STREAM_DELTA_KINDS = new Set(["health_synthesis", "session_suggest", "nutrition_checkin", "weekly_read"]);
+export function jobStreamsDeltas(kind: string): boolean { return STREAM_DELTA_KINDS.has(kind); }
+
+// Push one live prose chunk onto a job's bus (the onDelta target for the streaming
+// kinds). Kept exported + thin so the delta path is exercisable via onJobEvent in tests.
+export function emitJobDelta(id: number, delta: string): void {
+  if (delta) emit(id, { type: "delta", delta });
 }
 
 // ---------- serial queue ----------
@@ -86,7 +104,12 @@ async function processAgentJob(id: number): Promise<void> {
     repo.setAgentJobPhase(id, phase, meta);
     emit(id, { type: "phase", job: repo.getAgentJob(id) });
   };
-  const hooks = { signal: controller.signal, onPhase };
+  // Prose-bearing kinds stream their reading into the card token by token; every other
+  // kind leaves onDelta undefined, so its op runs prose-free exactly as before.
+  const onDelta = jobStreamsDeltas(job.kind)
+    ? (delta: string) => { if (!controller.signal.aborted) emitJobDelta(id, delta); }
+    : undefined;
+  const hooks = { signal: controller.signal, onPhase, onDelta };
   const input = job.input ?? {};
   const agent: string | undefined = job.agent ?? input.agent ?? undefined;
 

@@ -114,6 +114,7 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
       path: "/health/synthesis",
       anchor: "#hSynthesis .hsyn",
       caption: ["reading your labs", "connecting it to your training & recovery", "finding what matters most", "writing your picture"],
+      stream: true,
       guard: () => !select(deps, "#hSynthesis")?.isConnected,
       render: (result) => {
         const payload = synthesisRecord(result) as HealthReadSynthesisPayload;

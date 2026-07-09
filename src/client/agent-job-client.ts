@@ -10,18 +10,24 @@ type AgentJobHandlers = {
   guard?: () => boolean;
   onSnapshot?: (job: AgentJob | null) => unknown;
   onPhase?: (job: AgentJob | null) => unknown;
+  onDelta?: (delta: string) => unknown;
   onDone?: (result: unknown, job: AgentJob | null) => unknown;
   onError?: (error?: unknown, job?: AgentJob | null) => unknown;
   onCanceled?: (job?: AgentJob | null) => unknown;
 };
 type AgentJobReconnector = (job?: AgentJob) => AgentJobHandlers | null | undefined;
-type AgentRunOptions = AgentJobHandlers & {
+type AgentRunOptions = Omit<AgentJobHandlers, "onDelta"> & {
   path?: string;
   anchor?: string;
   caption?: string | readonly string[];
   render?: (result: unknown, job?: AgentJob | null) => unknown;
   onFail?: (error?: unknown) => unknown;
   isFail?: (result: unknown) => boolean;
+  // Prose-bearing ops stream their reading into the anchor card token by token. Set
+  // `stream: true` for the built-in painter (accumulating escaped prose + a caret,
+  // swapped for the final render on done), or pass a custom `onDelta` for full control.
+  stream?: boolean;
+  onDelta?: (delta: string, accumulated: string, host: Element | null) => unknown;
 };
 
 (() => {
@@ -104,6 +110,15 @@ function openJobStream(jobId: AgentJobId, handlers: AgentJobHandlers = {}): void
     try { handlers.onPhase?.(agentJobRecords.job(row.job) || agentJobRecords.job(row)); } catch {}
   });
 
+  // Live prose chunk (the four prose-bearing ops). Ephemeral — never persisted; a
+  // reconnect mid-stream simply misses the earlier tokens and fills in on `done`.
+  es.addEventListener("delta", (event) => {
+    if (guard()) return;
+    const row = agentJobRecords.event(event);
+    const delta = row && typeof row.delta === "string" ? row.delta : "";
+    if (delta) { try { handlers.onDelta?.(delta); } catch {} }
+  });
+
   es.addEventListener("done", (event) => {
     if (guard()) return;
     const row = agentJobRecords.event(event);
@@ -165,6 +180,23 @@ function teardownJobs(pred?: ((jobId: string) => boolean) | unknown): void {
   }
 }
 
+// Built-in delta painter: accumulate the streamed prose into the anchor card as
+// escaped text with a blinking caret (mirrors chat's .stream-text/.stream-caret). The
+// done renderer swaps in the final structured card in place. Streamed chunks are
+// UNTRUSTED text, so everything goes through escHtml.
+function paintJobStream(host: Element | null, accumulated: string): void {
+  if (!(host instanceof HTMLElement)) return;
+  let box = host.querySelector(".job-stream");
+  if (!box) {
+    host.innerHTML = `<div class="job-stream"><div class="job-stream-text"></div></div>`;
+    box = host.querySelector(".job-stream");
+  }
+  const body = box?.querySelector(".job-stream-text");
+  if (body instanceof HTMLElement) {
+    body.innerHTML = `${escHtml(accumulated)}<span class="stream-caret" aria-hidden="true"></span>`;
+  }
+}
+
 async function runOp(_kind: string, body: Record<string, unknown>, opts: AgentRunOptions = {}): Promise<AgentJob | undefined> {
   const { path, anchor, render, onFail, caption, isFail, guard } = opts;
   if (!path) return undefined;
@@ -209,8 +241,28 @@ async function runOp(_kind: string, body: Record<string, unknown>, opts: AgentRu
     return undefined;
   }
 
+  // Live prose streaming: on the first delta, retire the filament + caption and paint
+  // the accumulating reading into the anchor (or hand it to a custom onDelta), then let
+  // the done renderer swap in the final card. Absent when neither stream nor onDelta is set.
+  let streamAcc = "";
+  let streamStarted = false;
+  const deltaHandler = (opts.stream || opts.onDelta)
+    ? (delta: string) => {
+        streamAcc += delta;
+        const streamHost = anchor ? document.querySelector(anchor) : null;
+        if (!streamStarted) {
+          streamStarted = true;
+          stopCaption();
+          clearFilament(streamHost);
+        }
+        if (opts.onDelta) { try { opts.onDelta(delta, streamAcc, streamHost); } catch {} }
+        else paintJobStream(streamHost, streamAcc);
+      }
+    : undefined;
+
   openJobStream(job.id, {
     guard: guardFn,
+    onDelta: deltaHandler,
     onPhase: (phaseJob) => {
       const h = anchor ? document.querySelector(anchor) : null;
       const frac = agentJobRecords.record(agentJobRecords.record(phaseJob).meta).frac;

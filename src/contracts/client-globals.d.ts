@@ -1048,6 +1048,10 @@ declare global {
     onDone?: (result: unknown) => void;
     onError?: (error?: unknown) => void;
     onCanceled?: () => void;
+    // Prose-bearing ops stream their reading into the anchor card: `stream: true` uses
+    // the built-in painter; a custom `onDelta` takes full control of the live chunk.
+    stream?: boolean;
+    onDelta?: (delta: string, accumulated: string, host: Element | null) => unknown;
   };
 
   type ClientAppRouterApi = {

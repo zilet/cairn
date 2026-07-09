@@ -48,6 +48,10 @@ function createCaptureReadJobsController(deps: CaptureReadJobsDeps): CaptureRead
     deps.runOp("weekly_read", { kind: "weekly_read" }, {
       path: "/insights/generate",
       anchor: "#weeklySlot",
+      // The weekly read is prose — stream it into the slot as the coach writes it;
+      // done swaps in the final weekly card. (A connection insight is JSON-only, so
+      // maybeGenerateInsight below does NOT stream.)
+      stream: true,
       guard: () => !deps.slot("#weeklySlot")?.isConnected,
       isFail: (r: unknown) => insightFailed(r as CaptureInsightResult | null),
       render: (r: unknown) => {

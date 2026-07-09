@@ -4,7 +4,52 @@
 // per-domain prompt modules and re-exported (with the public render* helpers +
 // COACHING_STANCE) through the src/prompt.ts barrel. Behavior-preserving split.
 import * as repo from "../repo.js";
+import { extractJson } from "../agents.js";
 import type { PartialCoachContext } from "../repo/coach-context.js";
+
+// ---- prose-first reply contract (shared by chat AND the streaming job ops) ----
+// The reply STREAMS, so the contract is prose-first: the model writes a marker, the
+// athlete-facing prose (rendered live, token by token), then a data marker, then the
+// structured JSON. Everything before the reply marker (an autonomous CLI's tool-step
+// narration) is dropped; everything after the data marker is the JSON the op parses.
+// These live here (a leaf module every prompt builder already imports) so ONE gate +
+// parser serves chat (parseChatReply) and jobs (extractMarkedJson / renderStreamingContract).
+export const CHAT_ACTION_SENTINEL = "===CAIRN_ACTIONS===";
+export const CHAT_REPLY_SENTINEL = "===CAIRN_REPLY===";
+
+// Marker-aware JSON extraction for the STREAMING job ops. The prose lives between the
+// reply and data markers; the JSON follows the data marker — so we extractJson ONLY on
+// the clean tail after the data marker, immune to a stray brace in the prose. Backward
+// compatible: an agent that ignores the contract and emits the bare JSON (no markers)
+// still parses via extractJson over the whole text, exactly the pre-contract behavior.
+export function extractMarkedJson(text: string): any | null {
+  const raw = (text ?? "").toString();
+  const rIdx = raw.lastIndexOf(CHAT_REPLY_SENTINEL);
+  const afterReply = rIdx !== -1 ? raw.slice(rIdx + CHAT_REPLY_SENTINEL.length) : raw;
+  const dIdx = afterReply.lastIndexOf(CHAT_ACTION_SENTINEL);
+  const jsonSource = dIdx !== -1 ? afterReply.slice(dIdx + CHAT_ACTION_SENTINEL.length) : afterReply;
+  return extractJson(jsonSource);
+}
+
+// Render the prose-first OUTPUT CONTRACT for a streaming job op. `proseGuide` names what
+// to write between the markers (the same reading that also goes in the JSON's prose
+// field, kept authoritative); `schema` is the op's existing JSON contract, emitted
+// verbatim after the data marker so the op's parse/sanity checks are unchanged. When an
+// op has a "nothing to say" answer (found:false), pass `emptyAnswer` so the model can
+// skip the prose entirely — extractMarkedJson still parses the bare object.
+export function renderStreamingContract(proseGuide: string, schema: string, opts: { emptyAnswer?: string } = {}): string {
+  const empty = opts.emptyAnswer
+    ? `\nIf there is genuinely nothing to say, skip the prose and both markers and emit only: ${opts.emptyAnswer}\n`
+    : "";
+  return `OUTPUT CONTRACT — write it in TWO parts so your reading streams into their card as you write it:
+1. Put this marker on its OWN line, exactly:
+${CHAT_REPLY_SENTINEL}
+2. AFTER it, ${proseGuide} — plain, warm prose only (no JSON, no code fence, no headers). This is shown to them live, word by word, so write it for a human.
+3. THEN put this marker on its OWN line, exactly:
+${CHAT_ACTION_SENTINEL}
+4. Immediately after it, ONE JSON object exactly as specified below — no prose, no fences:
+${schema}${empty}`;
+}
 
 // The ONE unified identity every coaching prompt opens with. Cairn is a single
 // intelligence — at once a longevity-minded coach, a preventive-medicine-literate

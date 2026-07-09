@@ -25,6 +25,7 @@ import {
   renderTodayFuel,
   renderTrainingSignals,
   renderTrajectory,
+  renderStreamingContract,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -323,8 +324,10 @@ ${renderDiscipline(context, "training")}${renderEnduranceGoal(context, "training
 WHAT THE USER ASKED FOR:
 ${wants.join("\n")}
 ` : ""}${swapMenu}
-OUTPUT CONTRACT: respond with ONE JSON object, no prose, no fences:
-${SESSION_SUGGEST_SCHEMA}
+${renderStreamingContract(
+    "write ONE or two plain sentences on why this session fits them today (the same thought that goes in the JSON's \"why\")",
+    SESSION_SUGGEST_SCHEMA,
+  )}
 
 DATA:
 ${JSON.stringify(context)}`;
@@ -422,10 +425,11 @@ THE CONSTITUTION (binding):
 - Grounded in their ACTUAL recent data only (training, recovery, nutrition, life context below).
 ${renderRunCompliance(context, "weekly")}
 ${renderTodayFuel(context)}
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
-Nothing worth saying: {"found": false}
-Otherwise:
-${WEEKLY_READ_SCHEMA}
+${renderStreamingContract(
+    "write how their week actually went in ONE or two warm plain sentences (the same reading that goes in the JSON's \"text\")",
+    WEEKLY_READ_SCHEMA,
+    { emptyAnswer: '{"found": false}' },
+  )}
 
 DATA:
 ${JSON.stringify(context)}`;

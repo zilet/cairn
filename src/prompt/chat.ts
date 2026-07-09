@@ -17,25 +17,22 @@ import {
   renderTodayFuel,
   renderTrainingSignals,
   CAIRN_PERSONA,
+  CHAT_ACTION_SENTINEL,
+  CHAT_REPLY_SENTINEL,
 } from "./shared.js";
+// CHAT_ACTION_SENTINEL / CHAT_REPLY_SENTINEL now live in shared.js (chat AND the
+// streaming job ops share them). The prompt.js barrel re-exports them via shared.js,
+// so existing `./prompt.js` imports (chatStreamFilter, tests) resolve unchanged.
 
 // ---- prose-first chat contract ----
-// The chat reply STREAMS, so its contract is prose-first: the model writes the
-// human answer as plain prose (rendered live, token by token), then — only when
-// it needs to log or change something — emits this sentinel on its own line
-// followed by ONE JSON object {"actions":[…]}. Everything before the sentinel is
-// the reply; everything after is parsed for actions. A pure-prose answer (a
-// question, no side effects) omits the sentinel entirely. parseChatReply tolerates
-// a missing/garbled actions block (reply still stands) AND the legacy {reply,
-// actions} JSON shape, so nothing breaks if a model ignores the contract.
-export const CHAT_ACTION_SENTINEL = "===CAIRN_ACTIONS===";
-// The user-facing reply begins AFTER this marker. Autonomous agents (e.g. the
-// gemini/antigravity CLI) narrate their tool steps ("I will query the … table") as
-// plain text BEFORE the real answer; the contract asks them to write this marker
-// right before the reply so we can drop everything prior. Fully backward-compatible:
-// a reply with no marker is taken whole and run through a conservative narration
-// stripper as a safety net for agents that ignore it.
-export const CHAT_REPLY_SENTINEL = "===CAIRN_REPLY===";
+// The chat reply STREAMS, so its contract is prose-first: the model writes the human
+// answer as plain prose (rendered live, token by token), then — only when it needs to
+// log or change something — emits CHAT_ACTION_SENTINEL on its own line followed by ONE
+// JSON object {"actions":[…]}. Everything before CHAT_REPLY_SENTINEL is dropped (an
+// autonomous CLI's tool-step narration); everything after the reply marker is the
+// reply; everything after the action sentinel is parsed for actions. A pure-prose
+// answer omits the action sentinel entirely. parseChatReply tolerates a missing/garbled
+// actions block (reply still stands) AND the legacy {reply, actions} JSON shape.
 
 // Safety net for agents that ignore the reply marker: strip ONLY the leading lines
 // that are unmistakable tool-step narration — an action verb AND a technical token

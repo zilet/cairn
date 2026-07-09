@@ -21,6 +21,7 @@ import {
   renderRunCompliance,
   renderRunPlan,
   renderRunZones,
+  renderStreamingContract,
   CAIRN_PERSONA,
 } from "./shared.js";
 
@@ -523,10 +524,11 @@ ${JSON.stringify(focus)}
 ${renderHealthDrivers(context)}
 ${CONTEXT_GUARDRAILS}
 ${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}${renderReactionModel(context)}${renderBodyComp(context)}
-OUTPUT CONTRACT: respond with ONE bare JSON object only — no prose, no markdown fences.
-If there's genuinely not enough health data yet: {"found": false}
-Otherwise:
-${HEALTH_SYNTHESIS_SCHEMA}
+${renderStreamingContract(
+    "give them the whole-picture reading in a few warm sentences — the ONE lead finding and the connected story of how their labs, body composition, training, recovery and nutrition relate (the same reading that goes in the JSON's \"headline\" and \"story\")",
+    HEALTH_SYNTHESIS_SCHEMA,
+    { emptyAnswer: '{"found": false}' },
+  )}
 
 DATA:
 ${JSON.stringify(context)}`;
