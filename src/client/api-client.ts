@@ -72,7 +72,9 @@ function openTokenSheet(): void {
   if (typeof document === "undefined") {
     // Non-DOM context (should not happen in the browser) — degrade to a reload so
     // the app-shell guard has a chance to run again once a token exists.
-    try { location.reload(); } catch {}
+    try {
+      location.reload();
+    } catch {}
     return;
   }
   if (document.querySelector(".token-sheet-ov")) return;
@@ -93,26 +95,40 @@ function openTokenSheet(): void {
   const save = (): void => {
     const value = (input?.value || "").trim();
     if (!value) {
-      if (errEl) { errEl.textContent = "Paste the token to continue."; errEl.hidden = false; }
+      if (errEl) {
+        errEl.textContent = "Paste the token to continue.";
+        errEl.hidden = false;
+      }
       input?.focus();
       return;
     }
-    try { localStorage.setItem("cairn_token", value); } catch {}
+    try {
+      localStorage.setItem("cairn_token", value);
+    } catch {}
     location.reload();
   };
   overlay.querySelector("[data-token-save]")?.addEventListener("click", save);
-  input?.addEventListener("keydown", (event: KeyboardEvent) => { if (event.key === "Enter") save(); });
+  input?.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key === "Enter") save();
+  });
 
   // Contain focus inside the sheet — the app is unusable without the token, so
   // there is deliberately no dismiss; Tab wraps between the input and Connect.
   overlay.addEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key !== "Tab") return;
-    const focusable = [...overlay.querySelectorAll<HTMLElement>("input,button")].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    const focusable = [...overlay.querySelectorAll<HTMLElement>("input,button")].filter(
+      (el) => el.offsetParent !== null || el === document.activeElement
+    );
     if (focusable.length < 2) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
   if (typeof setTimeout === "function") setTimeout(() => input?.focus(), 0);
   else input?.focus();
@@ -138,20 +154,183 @@ function deviceTimeZone(): string {
   }
 }
 
+// ============================================================================
+// api() in-flight dedupe + micro-TTL cache + GET timeout
+// ============================================================================
+// Several PWA modules independently re-fetch the same hot GETs during one
+// render burst (/settings, /profile, /stats, /coaching-focus), and a hung GET
+// had no timeout. The pure core (createApiCoalescer) is storage/DOM/fetch-free
+// — same shape as createOutbox above — so its dedupe/TTL/decision logic is
+// fully unit-testable; api() below is the only thing that wires it to fetch.
+
+type ApiFetchOutcome = { status: number; body?: unknown };
+type ApiCoalesceEntry<T> = { data: T; expires: number };
+type ApiCoalescer = {
+  isMicroCachePath(path: string): boolean;
+  peekFresh<T = unknown>(path: string): T | undefined;
+  store<T = unknown>(path: string, data: T): void;
+  invalidateAll(): void;
+  share<T>(path: string, start: () => Promise<T>): Promise<T>;
+  inFlightCount(): number;
+  cacheSize(): number;
+};
+
+const API_MICRO_TTL_MS = 1500;
+const API_MICRO_CACHE_PATHS: readonly string[] = ["/settings", "/profile", "/stats", "/coaching-focus"];
+const API_GET_TIMEOUT_MS = 20000;
+
+// structuredClone when available, else a JSON round-trip, else the value as-is
+// (never throw) — so neither a caller mutating a served body, nor us mutating
+// what we just stored, can poison the micro-cache.
+function cloneJson<T>(value: T): T {
+  try {
+    if (typeof structuredClone === "function") return structuredClone(value);
+  } catch {}
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+// ---------- pure core: dedupe map + TTL cache over injected time ----------
+function createApiCoalescer(
+  opts: { now?: () => number; ttlMs?: number; ttlPaths?: readonly string[] } = {}
+): ApiCoalescer {
+  const now = opts.now || (() => Date.now());
+  const ttlMs = opts.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : API_MICRO_TTL_MS;
+  const ttlPaths = new Set(opts.ttlPaths || API_MICRO_CACHE_PATHS);
+  const inFlight = new Map<string, Promise<unknown>>();
+  const ttlCache = new Map<string, ApiCoalesceEntry<unknown>>();
+
+  function isMicroCachePath(path: string): boolean {
+    return ttlPaths.has(path);
+  }
+  function peekFresh<T = unknown>(path: string): T | undefined {
+    const entry = ttlCache.get(path);
+    if (!entry) return undefined;
+    if (now() >= entry.expires) {
+      ttlCache.delete(path);
+      return undefined;
+    }
+    return cloneJson(entry.data) as T;
+  }
+  function store<T = unknown>(path: string, data: T): void {
+    if (!isMicroCachePath(path)) return;
+    ttlCache.set(path, { data: cloneJson(data), expires: now() + ttlMs });
+  }
+  function invalidateAll(): void {
+    ttlCache.clear();
+  }
+  // Concurrent callers for the SAME path share one in-flight promise. The map
+  // entry is cleared when `started` itself settles (fulfills OR rejects) — NOT
+  // when a caller's own transformed/returned promise settles. That distinction
+  // is what keeps a 401 from wedging this path forever: api() resolves `started`
+  // to a plain {status:401} outcome (never hangs), so the dedupe entry clears
+  // the instant the response arrives; each caller then independently decides
+  // (per its own chain) to hang on the never-resolving auth-prompt promise.
+  function share<T>(path: string, start: () => Promise<T>): Promise<T> {
+    const existing = inFlight.get(path);
+    if (existing) return existing as Promise<T>;
+    const started = start();
+    inFlight.set(path, started as Promise<unknown>);
+    started
+      .finally(() => {
+        if (inFlight.get(path) === started) inFlight.delete(path);
+      })
+      .catch(() => {}); // swallow on this derived chain only; `started` itself still rejects to callers
+    return started;
+  }
+  function inFlightCount(): number {
+    return inFlight.size;
+  }
+  function cacheSize(): number {
+    return ttlCache.size;
+  }
+
+  return { isMicroCachePath, peekFresh, store, invalidateAll, share, inFlightCount, cacheSize };
+}
+
+// ---------- pure decision helpers (no DOM) ----------
+// A caller-supplied `signal` or `cache` option is a request for real network
+// control, so it bypasses BOTH the dedupe and the micro-TTL cache entirely.
+function shouldBypassApiCache(opts: CairnApiOptions): boolean {
+  return opts.signal != null || opts.cache != null;
+}
+// GETs get a generous safety timeout unless the caller brought its own signal
+// — agentic ops are all background jobs now, so no legitimate GET runs long.
+function shouldArmGetTimeout(method: string, opts: CairnApiOptions): boolean {
+  return method.toUpperCase() === "GET" && opts.signal == null;
+}
+
+let apiCoalescerSingleton: ApiCoalescer | null = null;
+function apiCoalescer(): ApiCoalescer {
+  if (!apiCoalescerSingleton) apiCoalescerSingleton = createApiCoalescer({});
+  return apiCoalescerSingleton;
+}
+
+// ---------- runtime: fetch init for one attempt ----------
+// Arms a 20s AbortController ONLY for a timeout-eligible GET, and only when
+// AbortController/setTimeout actually exist in this environment. A non-GET (or
+// any caller-supplied signal) passes straight through untouched — long
+// health-doc uploads on a slow network are legitimate and must never time out.
+function buildFetchInit(
+  method: string,
+  opts: CairnApiOptions,
+  headers: Record<string, string>
+): { init: RequestInit; cleanup: () => void } {
+  let signal = opts.signal;
+  let cleanup = () => {};
+  if (shouldArmGetTimeout(method, opts) && typeof AbortController === "function") {
+    const controller = new AbortController();
+    signal = controller.signal;
+    if (typeof setTimeout === "function") {
+      const timer = setTimeout(() => controller.abort(), API_GET_TIMEOUT_MS);
+      cleanup = () => {
+        if (typeof clearTimeout === "function") clearTimeout(timer);
+      };
+    }
+  }
+  return { init: { ...opts, headers, signal }, cleanup };
+}
+
 function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<CairnApiResponse<Path>> {
+  const method = (opts.method || "GET").toUpperCase();
+  const isGet = method === "GET";
+  const bypass = shouldBypassApiCache(opts);
+  const coalescer = apiCoalescer();
+
+  if (!isGet) {
+    coalescer.invalidateAll(); // any write may change anything — never serve a stale read after it
+  } else if (!bypass) {
+    const cached = coalescer.peekFresh<CairnApiResponse<Path>>(p);
+    if (cached !== undefined) return Promise.resolve(cached);
+  }
+
   const t = authToken();
   const headers = { ...(opts.headers || {}) };
   if (t) headers["X-Cairn-Token"] = t;
   const tz = deviceTimeZone();
   if (tz) headers["X-Cairn-TZ"] = tz;
-  return fetch("/api" + p, { ...opts, headers })
-    .then((r) => {
-      if (r.status === 401) {
+
+  const attempt = (): Promise<ApiFetchOutcome> => {
+    const { init, cleanup } = buildFetchInit(method, opts, headers);
+    return fetch("/api" + p, init)
+      .then((r) => (r.status === 401 ? { status: 401 } : r.json().then((body) => ({ status: r.status, body }))))
+      .finally(cleanup);
+  };
+
+  const settled = isGet && !bypass ? coalescer.share(p, attempt) : attempt();
+
+  return settled
+    .then((result) => {
+      if (result.status === 401) {
         handleUnauthorized();
         return new Promise<CairnApiResponse<Path>>(() => {});
       }
       setOffline(false); // a real response landed, Cairn is reachable
-      return r.json() as Promise<CairnApiResponse<Path>>;
+      if (isGet && !bypass) coalescer.store(p, result.body);
+      return result.body as CairnApiResponse<Path>;
     })
     .catch((err) => {
       setOffline(true); // the network dropped, surface the calm hairline banner
@@ -191,7 +370,9 @@ function setOffline(on: unknown): void {
     document.body.classList.remove("is-offline");
     // We just regained a live connection (a real response landed, or `online`
     // fired): drain anything the outbox is holding, in order.
-    try { void flushOutbox(); } catch {}
+    try {
+      void flushOutbox();
+    } catch {}
   }
 }
 
@@ -218,7 +399,12 @@ const OUTBOX_KEY = "cairn.outbox.v1";
 const OUTBOX_MAX = 250;
 
 // ---------- pure core: a durable FIFO queue over injected storage ----------
-function createOutbox(opts: { storage: OutboxStore; now?: () => number; key?: string; max?: number }): OutboxController {
+function createOutbox(opts: {
+  storage: OutboxStore;
+  now?: () => number;
+  key?: string;
+  max?: number;
+}): OutboxController {
   const storage = opts.storage;
   const now = opts.now || (() => Date.now());
   const key = opts.key || OUTBOX_KEY;
@@ -227,7 +413,8 @@ function createOutbox(opts: { storage: OutboxStore; now?: () => number; key?: st
 
   function isItem(value: unknown): value is OutboxItem {
     return (
-      !!value && typeof value === "object" &&
+      !!value &&
+      typeof value === "object" &&
       typeof (value as OutboxItem).id === "string" &&
       typeof (value as OutboxItem).path === "string" &&
       typeof (value as OutboxItem).kind === "string"
@@ -309,7 +496,12 @@ function storageForOutbox(): OutboxStore {
   // Private-mode / disabled storage → an in-memory queue for this session, so a
   // log is at least held until the tab closes rather than dropped outright.
   const mem = new Map<string, string>();
-  return { getItem: (k) => (mem.has(k) ? (mem.get(k) as string) : null), setItem: (k, v) => { mem.set(k, String(v)); } };
+  return {
+    getItem: (k) => (mem.has(k) ? (mem.get(k) as string) : null),
+    setItem: (k, v) => {
+      mem.set(k, String(v));
+    },
+  };
 }
 
 let outboxController: OutboxController | null = null;
@@ -430,12 +622,29 @@ const CAIRN_OUTBOX = {
   renderBar: renderOutboxBar,
 };
 
+// Exposes the pure api() coalescer core for tests, mirroring CairnOutbox above.
+const CAIRN_API_CACHE = {
+  createApiCoalescer,
+  shouldBypassApiCache,
+  shouldArmGetTimeout,
+  MICRO_TTL_MS: API_MICRO_TTL_MS,
+  MICRO_CACHE_PATHS: API_MICRO_CACHE_PATHS,
+  GET_TIMEOUT_MS: API_GET_TIMEOUT_MS,
+};
+
 if (typeof window !== "undefined") {
   window.addEventListener("offline", () => setOffline(true));
-  window.addEventListener("online", () => { setOffline(false); void flushOutbox(); });
+  window.addEventListener("online", () => {
+    setOffline(false);
+    void flushOutbox();
+  });
   if (navigator.onLine === false) setOffline(true);
   // Boot: paint any leftover queue and try to drain what a previous session held.
-  if (typeof setTimeout === "function") setTimeout(() => { renderOutboxBar(); void flushOutbox(); }, 0);
+  if (typeof setTimeout === "function")
+    setTimeout(() => {
+      renderOutboxBar();
+      void flushOutbox();
+    }, 0);
 }
 
 Object.assign(globalThis, {
@@ -445,6 +654,7 @@ Object.assign(globalThis, {
   api,
   setOffline,
   CairnOutbox: CAIRN_OUTBOX,
+  CairnApiCache: CAIRN_API_CACHE,
   outboxEnqueue,
   flushOutbox,
   outboxCount,
