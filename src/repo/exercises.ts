@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { getSettings } from "./settings.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
@@ -22,6 +23,8 @@ export interface ExerciseRow {
   mode: string | null;
   created_at?: string;
   cues?: string | null;
+  equipment?: string | null;
+  enrichment_status?: string | null;
 }
 
 function validMode(mode: any): string | undefined {
@@ -91,7 +94,16 @@ export function findOrCreateExercise(name: string, muscle_group?: string, constr
 
 // Create-or-update by name: new exercises get the given fields; existing ones
 // only update fields that were explicitly provided.
-export function upsertExercise(input: { name: string; muscle_group?: string | null; mode?: string | null }): any {
+//
+// `opts.enrich` (set by the user-facing POST /api/exercises route, NOT by
+// seed/plan-import which call findOrCreateExercise directly): when this call
+// creates a genuinely-new exercise row, queue the background 'exercise'
+// enrichment job (canonicalize + classify + how-to guide + good art). It never
+// fires for an existing exercise or an alias/key resolution — only a real INSERT.
+export function upsertExercise(
+  input: { name: string; muscle_group?: string | null; mode?: string | null },
+  opts: { enrich?: boolean } = {},
+): any {
   const name = String(input.name ?? "").trim();
   if (!name) throw new Error("name required");
   const existing = findExercise(name);
@@ -105,7 +117,124 @@ export function upsertExercise(input: { name: string; muscle_group?: string | nu
       mode: input.mode ?? undefined,
     });
   }
-  return findOrCreateExercise(name, input.muscle_group ?? undefined, undefined, input.mode ?? undefined);
+  // findOrCreateExercise may still resolve to an EXISTING row (alias/key/clean-dupe
+  // match) rather than inserting. AUTOINCREMENT ids are monotonic, so an id above
+  // the pre-call max is the reliable "a new row was inserted" signal.
+  const beforeMax = maxExerciseId();
+  const row = findOrCreateExercise(name, input.muscle_group ?? undefined, undefined, input.mode ?? undefined);
+  const created = !!row && Number(row.id) > beforeMax;
+  if (created && opts.enrich) {
+    // Only queue when enrichment is enabled — otherwise record 'skipped' directly
+    // (no pending churn), mirroring addActivity/addFoodNote.
+    const status = getSettings().enrich_enabled ? "pending" : "skipped";
+    setExerciseEnrichStatus(Number(row.id), status);
+    if (status === "pending") {
+      // enrich.ts imports repo.ts, so import lazily to avoid a module-eval cycle.
+      import("../enrich.js").then((m) => m.enqueueEnrich("exercise", Number(row.id))).catch(() => {});
+    }
+    return getExercise(Number(row.id)); // re-read so enrichment_status rides along
+  }
+  return row;
+}
+
+function maxExerciseId(): number {
+  return Number((db.prepare(`SELECT COALESCE(MAX(id), 0) AS m FROM exercises`).get() as any)?.m ?? 0);
+}
+
+// Background 'exercise' enrichment status machine (pending → in_progress →
+// done/failed/skipped), mirroring the activity/food/health setters.
+export function setExerciseEnrichStatus(id: number, status: string) {
+  db.prepare(`UPDATE exercises SET enrichment_status = ? WHERE id = ?`).run(status, id);
+  return getExercise(id);
+}
+
+// Whether an exercise's background enrichment is still running — the art route
+// checks this to DEFER a name-only image so the enrichment job's muscle/equipment-
+// aware art (generated under the SAME cache key) wins without a wasted generation.
+export function exerciseArtPending(name: string): boolean {
+  const row = db.prepare(`SELECT enrichment_status FROM exercises WHERE name = ? COLLATE NOCASE`).get(name) as any;
+  const s = String(row?.enrichment_status ?? "");
+  return s === "pending" || s === "in_progress";
+}
+
+// Logged-set + plan-item reference counts for an exercise (both keyed by
+// exercise_id). Used to keep a background rename conservative — a movement the
+// athlete has already logged/planned under a name is never silently renamed.
+function exerciseReferenceCount(id: number): { logs: number; plan: number } {
+  const logs = Number((db.prepare(`SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?`).get(id) as any)?.c ?? 0);
+  const plan = Number((db.prepare(`SELECT COUNT(*) AS c FROM plan_items WHERE exercise_id = ?`).get(id) as any)?.c ?? 0);
+  return { logs, plan };
+}
+
+// Apply the background enrichment agent's classification to ONE exercise, safely.
+// NEVER touches logged numbers. Returns the exercise's final id + name (which can
+// change if it merged into / renamed to a cleaner canonical) so the caller warms
+// the guide + art under the right name.
+//
+// Conservative, in order:
+//   - canonical: if it names an EXISTING different movement → merge THIS into it
+//     (repoints FKs by id, deletes the dup, records the alias). If it's a cleaner
+//     name with no collision AND this row is still unreferenced (a freshly-added
+//     off-plan movement) → rename by id + record the alias. Otherwise leave the
+//     name and just record the alias so a future re-add resolves cleanly.
+//   - muscle_group: only fills a null/"other" group with a recognized value.
+//   - equipment: only fills an empty equipment tag.
+//   - mode: only when there are no logged sets yet (mode drives logging shape).
+export function applyExerciseEnrichment(
+  id: number,
+  fields: { canonical?: string | null; muscle_group?: string | null; mode?: string | null; equipment?: string | null },
+): { id: number; name: string } {
+  const cur = getExercise(id);
+  if (!cur) return { id, name: "" };
+  let workingId = id;
+  let name = String(cur.name);
+
+  const proposed = cleanExerciseName(String(fields.canonical ?? "").trim());
+  if (proposed && normalizeExerciseName(proposed) !== normalizeExerciseName(name)) {
+    const other = findExercise(proposed);
+    if (other && Number(other.id) !== id) {
+      const merged = mergeExercises(name, proposed);
+      if (merged.ok) {
+        setExerciseAlias(normalizeExerciseName(name), other.name);
+        workingId = Number(other.id);
+        name = String(other.name);
+      }
+    } else if (!other) {
+      // No collision — safe to rename by id, but ONLY while the row is still
+      // unreferenced (a freshly-added off-plan movement). Once it has logged sets
+      // or sits in the plan, keep the name the athlete has been using.
+      const refs = exerciseReferenceCount(id);
+      if (refs.logs === 0 && refs.plan === 0) {
+        db.prepare(`UPDATE exercises SET name = ? WHERE id = ?`).run(proposed, id);
+        setExerciseAlias(normalizeExerciseName(name), proposed);
+        name = proposed;
+      }
+    }
+  }
+
+  const ex = getExercise(workingId);
+  if (!ex) return { id: workingId, name };
+
+  const group = String(fields.muscle_group ?? "").trim();
+  const canonGroup = group ? canonicalGroup(group) : null;
+  if (canonGroup) {
+    const curGroup = String(ex.muscle_group ?? "").trim().toLowerCase();
+    if (!curGroup || curGroup === "other") {
+      db.prepare(`UPDATE exercises SET muscle_group = ? WHERE id = ?`).run(canonGroup, workingId);
+    }
+  }
+
+  const equip = String(fields.equipment ?? "").trim().slice(0, 60);
+  if (equip && !String(ex.equipment ?? "").trim()) {
+    db.prepare(`UPDATE exercises SET equipment = ? WHERE id = ?`).run(equip, workingId);
+  }
+
+  const mode = validMode(fields.mode ?? undefined);
+  if (mode && mode !== ex.mode && exerciseReferenceCount(workingId).logs === 0) {
+    db.prepare(`UPDATE exercises SET mode = ? WHERE id = ?`).run(mode, workingId);
+  }
+
+  return { id: workingId, name };
 }
 
 // Backfill / normalize muscle_group for ALL existing exercises. Idempotent:

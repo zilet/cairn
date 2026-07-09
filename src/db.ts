@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS exercises (
   unit TEXT DEFAULT 'lb',
   constraint_note TEXT,
   cues TEXT,
-  mode TEXT DEFAULT 'reps'                -- reps | timed (e.g. plank, dead hang)
+  mode TEXT DEFAULT 'reps',               -- reps | timed (e.g. plank, dead hang)
+  equipment TEXT,                         -- classified implement (e.g. 'a cable machine') — art/guide context
+  enrichment_status TEXT                  -- pending|in_progress|done|failed|skipped|null (background 'exercise' enrichment)
 );
 CREATE TABLE IF NOT EXISTS plan_days (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

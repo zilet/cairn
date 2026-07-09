@@ -559,6 +559,14 @@ export const MIGRATIONS: Migration[] = [
     addColumn(db, "profile", "bp_treated INTEGER");
     addColumn(db, "profile", "statin INTEGER");
   } },
+  // v58: an off-plan exercise the athlete adds now persists immediately and gets a
+  // background agentic tidy (canonicalize + classify + how-to guide + good art).
+  // `enrichment_status` drives that queue's status machine; `equipment` stores the
+  // classified implement (guide + muscle/equipment-aware art context).
+  { version: 58, name: "exercise-enrichment", up: (db) => {
+    addColumn(db, "exercises", "equipment TEXT");
+    addColumn(db, "exercises", "enrichment_status TEXT");
+  } },
 ];
 
 export function runMigrations(db: DatabaseSync) {
