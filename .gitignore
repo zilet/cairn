@@ -40,3 +40,7 @@ media/frames/
 *.log
 tmp-*.json
 .DS_Store
+build-assets/
+
+# Generated from src/client/cairn-body-figure.ts (npm run client:build)
+public/cairn-body-figure.js

@@ -87,10 +87,11 @@ declare global {
     TONES: Record<string, { fill: string; op: number }>;
     CALLOUTS: CairnBodyFigureCallout[];
     GLOWS: Record<string, Array<[number, number, number, number, string]>>;
-    silhouette(sex: string): { torso: string; armR: string; armL: string };
+    ARM_SITES: Set<string>;
+    silhouette(sex: string, ratios?: Record<string, number>): { torso: string; armR: string; armL: string };
     muscles(sex: string, side: CairnBodyFigureSide): Array<{ group: string; d: string }>;
     detailStrokes(sex: string, side: CairnBodyFigureSide): string[];
-    warpPoint(pt: [number, number], sex: string): [number, number];
+    warpPoint(pt: [number, number], sex: string, ratios?: Record<string, number>, kind?: "torso" | "arm"): [number, number];
     waistTrace(sex: string, sign: 1 | -1): string;
     figureSvg(side: CairnBodyFigureSide, tones: Record<string, string>, opts?: CairnBodyFigureOpts): string;
     loopD(pts: Array<[number, number]>): string;
@@ -99,33 +100,6 @@ declare global {
     warp(pts: Array<[number, number]>, sex: string): Array<[number, number]>;
     kOf(y: number): number;
     shrink(pts: Array<[number, number]>, f: number): Array<[number, number]>;
-  };
-
-  // Track E Body 3D progressive enhancement (src/client/body-3d-client.ts).
-  // The 2D CairnBodyFigure remains first paint and fallback; this API only
-  // promotes after WebGL capability checks and a nonblank ready frame.
-  type CairnBody3DReason = "ok" | "reduced_motion" | "hidden_document" | "no_canvas" | "no_webgl" | "offscreen" | "render_failed";
-  type CairnBody3DSiteKey = "chest_in" | "waist_in" | "hip_in" | "shoulder_in" | "upper_arm_in" | "thigh_in";
-  type CairnBody3DModel = {
-    female?: boolean;
-    unit?: "in" | "cm";
-    heightIn?: number | null;
-    selected?: string | null;
-    focus?: string | null;
-    sites?: Partial<Record<CairnBody3DSiteKey, number | null>>;
-  };
-  type CairnBody3DEnhancement = {
-    status: "skipped" | "waiting" | "ready";
-    reason: CairnBody3DReason;
-    destroy(): void;
-  };
-  type CairnBody3DApi = {
-    canEnhance(): { ok: boolean; reason: CairnBody3DReason };
-    enhance(slot: HTMLElement, opts: {
-      model: CairnBody3DModel;
-      onReady?: () => void;
-      onSelect?: (site: CairnBody3DSiteKey) => void;
-    }): CairnBody3DEnhancement;
   };
 
   type ProgressRecord = Record<string, unknown>;

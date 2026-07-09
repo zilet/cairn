@@ -127,6 +127,10 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   // The hand-written classic shim isn't a transpiled CLIENT_OUTPUT, but it is a
   // real constituent the bundles must carry.
   const handwrittenClassicScripts = new Set(["public/js/10-boot.js"]);
+  // Generated CLASSIC scripts that live at the public root and load BEFORE the
+  // bundles (the art/figure library pattern): direct <script> in index.html,
+  // precached individually, never bundled.
+  const rootClassicOutputs = new Set(["public/cairn-body-figure.js"]);
   const bundleOutputs = new Set(BUNDLES.map((bundle) => bundle.output));
   const publicScripts = readdirSync(path.join(root, "public/js"))
     .filter((file) => file.endsWith(".js"))
@@ -135,7 +139,10 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   for (const item of CLIENT_OUTPUTS) {
     assert.ok(item.source.startsWith("src/client/"), `${item.source} should be a client TypeScript source`);
     assert.ok(item.source.endsWith(".ts"), `${item.source} should be a TypeScript source`);
-    assert.ok(item.output.startsWith("public/js/"), `${item.output} should emit into public/js`);
+    assert.ok(
+      item.output.startsWith("public/js/") || rootClassicOutputs.has(item.output),
+      `${item.output} should emit into public/js (or be a declared root classic script)`
+    );
     assert.ok(item.output.endsWith(".js"), `${item.output} should be a served JavaScript output`);
     assert.ok(existsSync(path.join(root, item.source)), `${item.source} listed in CLIENT_OUTPUTS does not exist`);
     assert.ok(existsSync(path.join(root, item.output)), `${item.output} listed in CLIENT_OUTPUTS does not exist`);
@@ -148,15 +155,24 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
 
     // Individual modules are no longer loaded directly — they ship inside a bundle.
     const url = `/${item.output.replace(/^public\//, "")}`;
-    assert.ok(
-      !index.includes(`<script src="${url}"></script>`),
-      `${url} must not be <script>-loaded directly by index.html; it belongs to a bundle`
-    );
+    if (rootClassicOutputs.has(item.output)) {
+      assert.ok(
+        index.includes(`<script src="${url}"></script>`),
+        `${url} is a root classic script — index.html must load it directly, before the bundles`
+      );
+    } else {
+      assert.ok(
+        !index.includes(`<script src="${url}"></script>`),
+        `${url} must not be <script>-loaded directly by index.html; it belongs to a bundle`
+      );
+    }
   }
 
   // Every constituent (each CLIENT_OUTPUT plus the hand-written shim) lands in
   // EXACTLY ONE bundle, and bundles introduce nothing else.
-  const expectedConstituents = [...manifestOutputs, ...handwrittenClassicScripts].sort();
+  const expectedConstituents = [...manifestOutputs, ...handwrittenClassicScripts]
+    .filter((output) => !rootClassicOutputs.has(output))
+    .sort();
   const allInputs = BUNDLES.flatMap((bundle) => bundle.inputs);
   assert.equal(new Set(allInputs).size, allInputs.length, "no module may appear in more than one bundle");
   assert.deepEqual(
@@ -183,25 +199,14 @@ test("client build manifest owns generated browser outputs and cache wiring", ()
   assert.deepEqual(unownedPublicScripts, [], "public/js scripts must be generated, bundled, or explicitly classified");
 });
 
-test("Track E Body 3D scaffold is progressive and stays out of Today", () => {
-  const body3dSource = read("src/client/body-3d-client.ts");
+test("the 2D body figure is the one true Stand figure — no 3D remnants", () => {
+  // Track E's WebGL body was retired for elite 2D (docs/VIZ-3D-ATELIER.md
+  // epilogue) — nothing may quietly reintroduce a Three/WebGL body path.
   const bodyMetricsSource = read("src/client/body-metrics-client.ts");
-  const todayBundle = BUNDLES.find((bundle) => bundle.output === "public/js/bundle-02-today.js");
-  const progressBundle = BUNDLES.find((bundle) => bundle.output === "public/js/bundle-03-capture-progress.js");
-  assert.ok(todayBundle, "Today bundle should be declared");
-  assert.ok(progressBundle, "Progress/Stand bundle should be declared");
-  assert.ok(!todayBundle.inputs.includes("public/js/body-3d-client.js"), "Body 3D must not land in the Today bundle");
-  assert.ok(progressBundle.inputs.includes("public/js/body-3d-client.js"), "Body 3D should ship with the Progress/Stand bundle");
-  assert.ok(
-    progressBundle.inputs.indexOf("public/js/body-3d-client.js") < progressBundle.inputs.indexOf("public/js/body-metrics-client.js"),
-    "Body 3D global must load before body-metrics-client can read it"
-  );
-  assert.match(body3dSource, /prefers-reduced-motion: reduce/, "Body 3D must capability-gate reduced motion");
-  assert.match(body3dSource, /visibilityState/, "Body 3D must avoid hidden-document promotion");
-  assert.match(body3dSource, /readPixels/, "Body 3D must prove a nonblank first frame before promotion");
-  assert.doesNotMatch(body3dSource, /https?:\/\//, "Body 3D must not load CDN/network assets");
-  assert.match(bodyMetricsSource, /class="bm-figure-fallback"/, "2D body figure must remain first-paint fallback");
-  assert.match(bodyMetricsSource, /body3d\.enhance/, "Body metrics should only opt into the guarded enhancement API");
+  assert.match(bodyMetricsSource, /class="bm-figure-fallback"/, "2D body figure remains the Stand first paint");
+  assert.doesNotMatch(bodyMetricsSource, /Body3D|body-3d|bm-body3d/, "no 3D promotion wiring in body metrics");
+  const sources = BUNDLES.flatMap((bundle) => bundle.inputs);
+  assert.ok(!sources.some((s) => s.includes("body-3d")), "no body-3d module in any bundle");
 });
 
 test("background job kind contract covers API enqueue sites and worker handlers", () => {

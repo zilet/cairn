@@ -5311,7 +5311,7 @@ body[data-tab="session"] .tabbar{display:none}
 .tov-map{padding:16px 18px 14px}
 .tov-figs{display:flex;justify-content:center;gap:26px;margin:10px 0 4px}
 .tov-figs figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:6px}
-.tov-fig{width:116px;height:auto;display:block}
+.tov-fig{width:128px;height:auto;display:block}
 .tov-map [data-group]{cursor:pointer}
 .tov-map [data-group]:focus-visible,.bm-co2:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .tov-legend{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;padding:8px 0 2px}
@@ -5422,14 +5422,23 @@ body[data-tab="session"] .tabbar{display:none}
 .tov-sess-name{font-weight:600;color:var(--ink);font-size:.9rem;flex:1;min-width:0}
 .tov-sess-meta{font-size:.74rem;color:var(--muted);white-space:nowrap}
 @media (min-width:960px){
-  .tov-figs{gap:44px}
-  .tov-fig{width:132px}
+  .tov-figs{gap:52px}
+  .tov-fig{width:150px}
 }
 
 /* ---- Body figure: the focus wash breathes (body-metrics fitting sheet) ---- */
 @keyframes bm-pulse{0%,100%{opacity:.55}50%{opacity:1}}
 .bm-pulse{animation:bm-pulse 3.4s var(--ease, ease-in-out) infinite}
 @media (prefers-reduced-motion: reduce){ .bm-pulse{animation:none} }
+
+/* ---- The tailor's tape (body-metrics fitting sheet): selecting a site wraps
+   a fine band around the body at that measurement — the front arc draws in
+   once (pathLength-normalized), the back arc fades up behind it. ---- */
+@keyframes bm-tape-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+.bm-tape{stroke-dasharray:100;stroke-dashoffset:0;animation:bm-tape-draw .5s var(--ease, ease-out)}
+@keyframes bm-tape-back-in{from{opacity:0}}
+.bm-tape-back{animation:bm-tape-back-in .7s ease .25s backwards}
+@media (prefers-reduced-motion: reduce){ .bm-tape,.bm-tape-back{animation:none} }
 
 /* ---- Elite Train muscle figure (cairn-body-figure.js): only what is DUE
    breathes, and it stays sub-perceptual (motion rules, docs/DESIGN.md). ---- */

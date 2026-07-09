@@ -303,78 +303,145 @@ function bodyFigureSvg(inp: BmFigureInput): string {
   const thighR = limbRx(circ("thigh_in"));
   const calfR = limbRx(circ("calf_in"));
 
-  const thighCx = Math.max(hipR * 0.52, thighR * 0.9) + 0.5;
-  const kneeCx = hipR * 0.45 + 2;
+  // Vertical stations — real-adult anthropometry (ANSUR II, proportion-spec §1),
+  // NOT the idealized Loomis 8-head column, because this croquis is drawn for the
+  // ACTUAL user. The plate is fixed (crown y=CROWN, soles y=SOLE); only the widths
+  // above respond to the tape. y(frac-from-floor) = SOLE − frac·STAT, so every
+  // landmark sits at its measured fraction of stature. The old figure placed the
+  // crotch at ≈0.38 of stature (child/homunculus legs); the anthropometric crotch
+  // is 0.4817 — this is the load-bearing fix.
+  const CROWN = 11.5;
+  const SOLE = 224;
+  const STAT = SOLE - CROWN; // drawn stature = 212.5px
+  const yOf = (fracFloor: number) => SOLE - fracFloor * STAT;
+  const yChin = CROWN + STAT / 7.5; // head height ≈ stature/7.5 (real read, not idealized-8)
+  const yShoulder = yOf(0.8204); // acromion — 0.820, both sexes agree (§1, §4 r13)
+  const yChest = yOf(female ? 0.7195 : 0.7352); // nipple line (§1)
+  const yWaist = yOf(0.6016); // navel / natural waist — 0.602 (§1)
+  const yElbow = yOf(0.6297); // hanging-arm elbow — 0.630, ≈ waist (§1 derived, §4 r3)
+  const yHip = yOf(female ? 0.5191 : 0.513); // greater trochanter — widest hip (§1, §4 r1)
+  const yCrotch = yOf(female ? 0.4804 : 0.4817); // pubic line / mid-figure (§1) — THE fix
+  const yWrist = yOf(0.4826); // wrist ≈ crotch line (§4 r4, the most-validated alignment)
+  const yFinger = yOf(0.367); // fingertips — just below mid-thigh (§1 derived, §4 r5)
+  const yKnee = yOf(female ? 0.2757 : 0.2781); // mid-patella (§1)
+  const yAnkle = yOf(0.045); // lateral malleolus ≈ 0.045 stature (§2 note — leg minimum)
+  const yCalf = yKnee + (yAnkle - yKnee) * 0.33; // calf belly, upper third of the shank (§4 r7)
+
+  // Leg placement: splay the two legs for a natural stance but never let a thigh
+  // bulge past the trochanter — the hip stays the widest point (§4 r1).
+  const legCx = Math.min(hipR * 0.45 + 2, hipR - thighR + 1.5);
+  const thighCx = legCx;
+  const kneeCx = legCx;
   const kneeW = Math.max(3.5, (thighR + calfR) * 0.3);
   const ankleW = Math.max(2.5, calfR * 0.45);
-  const neckW = Math.min(neckR * 0.82, 8.2); // visibly narrower than the head
+  const neckW = Math.min(neckR * 0.82, 8.2); // visibly narrower than the head (§4 r10)
 
-  // The right-hand outline, head → neck → shoulder → chest → waist → hip →
-  // outer leg → foot → back up the inner leg (dx offsets from the centerline);
-  // the closed loop mirrors it through the head-top and crotch center points.
-  // Human landmarks matter more than smoothness here: a defined chin and a
-  // narrow under-jaw neck, a trapezius slope breaking at the acromion, an
-  // armpit, and feet that read as feet.
-  const side: Array<[number, number]> = [
-    [3.6, 12.2], // crown
-    [8.4, 15.5], // temple
-    [9.6, 23], // head widest
-    [8.5, 30.5], // cheek
-    [5.4, 36.5], // jaw
-    [3.1, 39.4], // chin corner
-    [neckW, 42.5], // under-jaw neck
-    [neckW * 1.04, 50], // neck base
-    [neckW + 3.2, 53.2], // trapezius rise
-    [shR * 0.86, 57.5], // trap → acromion
-    [shR, 62], // shoulder point
-    [chestR * 1.01, 69.5], // armpit
-    [chestR, 76], // chest widest
-    [(chestR + waistR) * 0.49, 90],
-    [waistR, 106], // natural waist
-    [(waistR + hipR) * 0.5, 119],
-    [hipR, 131], // hip widest
-    [hipR * 0.97, 138],
-    [thighCx + thighR, 155], // outer thigh
-    [kneeCx + kneeW, 186], // outer knee
-    [kneeCx + calfR, 199], // calf
-    [kneeCx + ankleW, 215], // ankle
-    [kneeCx + ankleW + 6.5, 222], // toe
-    [kneeCx - ankleW - 1.5, 224], // heel
-    [kneeCx - calfR * 0.8, 199], // inner calf
-    [kneeCx - kneeW * 0.85, 186], // inner knee
-    [thighCx - thighR * 0.85, 157], // inner thigh
-  ];
-  const corePath = bmLoopPath([
-    [CX, 11.5],
-    ...side.map(([dx, y]) => [CX + dx, y] as [number, number]),
-    [CX, 143],
-    ...[...side].reverse().map(([dx, y]) => [CX - dx, y] as [number, number]),
-  ]);
-  // Arms hang FROM THE SHOULDER along a slightly abducted axis — tilted out
-  // just enough that the forearm clears the waist and hip with a small gap, so
-  // the waistline stays readable without the arms reading as bolted on.
+  // Arm axis + the deltoid cap — defined BEFORE the outline so the torso shoulder
+  // and the arm share ONE cap point. Arms hang on a slightly abducted axis (tilted
+  // out just enough to clear the waist/hip so the waistline stays readable); the
+  // clearance solve keys off armT(y) so it tracks the stations. Elbow, wrist and
+  // fingertips sit on their anthro lines (§1): elbow ≈ waist, wrist ≈ crotch,
+  // fingertips just below mid-thigh.
+  const yDeltoid = yShoulder + 6; // arm pivot, just below the acromion
+  const armT = (y: number) => (y - yDeltoid) / (yWrist - yDeltoid); // 0 at deltoid → 1 at wrist
   const ax0 = shR * 0.8; // shoulder pivot x
   const ax1 = Math.max(
-    ax0 + (waistR + 1.5 + foreR * 0.85 - ax0) / 0.649, // clears the waist (y≈106)
-    ax0 + (hipR + 1.5 + foreR * 0.6 - ax0) / 0.986, // clears the hip (y≈131)
+    ax0 + (waistR + 1.5 + foreR * 0.85 - ax0) / armT(yWaist), // clears the waist
+    ax0 + (hipR + 1.5 + foreR * 0.6 - ax0) / armT(yHip), // clears the hip
     ax0 + 6
   ); // wrist-line x
-  const ax = (y: number) => ax0 + (ax1 - ax0) * ((y - 58) / 74);
+  const ax = (y: number) => ax0 + (ax1 - ax0) * armT(y);
+  // The deltoid cap: ONE rounded shoulder point the torso outline AND the arm path
+  // both pass through, sized to ENCLOSE the abducted arm so the cap is always the
+  // widest shoulder point — never a narrow torso tab beside a wider arm (that gap
+  // was the "pauldron"). A broad shoulder tape widens it further. It sits BELOW the
+  // neck-base trap origin, so the shoulder line rounds down-and-over it, no horn.
+  const capY = yShoulder + 8;
+  const capX = Math.max(shR, ax(72) + armR) + 1;
+
+  // The right-hand outline as (dx-from-centerline, y) stations: head → neck →
+  // shoulder → chest → waist → hip → outer leg → foot → back up the inner leg.
+  // The closed loop mirrors it through the crown and the crotch center. Human
+  // landmarks over smoothness — a cranial ball with a defined jaw + chin, a
+  // trapezius slope breaking at the deltoid cap, an armpit notch, and feet with a
+  // heel + forefoot. Points densify near intentional corners (jaw, chin, foot) so
+  // the Catmull-Rom smoothing keeps them.
+  const side: Array<[number, number]> = [
+    // Head — an OVAL WITH CHEEKS, not an inverted teardrop. Max breadth
+    // (≈ 0.73 × head height, §4 r11) is HELD from the parietal down through ear
+    // level (~mid-head) so the face carries full cheeks; the taper starts only
+    // BELOW the ear and still carries ~68% of max at the gonion (~75% down); only
+    // the final chin segment narrows to the soft terminus. Crown reads rounded,
+    // never a point. Head height (crown→chin) is unchanged — this is width
+    // redistribution: breadth ≈ 0.088 stature (§2, §4 r11), height ≈ stature/7.5.
+    [5.4, 12.7], // crown dome (broad + high → rounded cranium, never a spike)
+    [9.5, 15.0], // upper skull — widens quickly to dome the cranium
+    [10.5, 18.6], // parietal
+    [10.6, 22.8], // temple — max breadth (≈ 0.73 × head height)
+    [10.3, 26.2], // ear / cheekbone — held near max through mid-head (full cheeks)
+    [9.2, 29.8], // cheek — the taper begins here, below the ear
+    [7.2, 33.0], // jaw angle / gonion (~75% down) — still ~68% of max breadth
+    [5.4, 36.6], // jawline descending to the chin
+    [3.8, yChin + 0.6], // chin — a soft rounded terminus (~0.35 head-width), never narrower than the neck
+    [neckW * 0.96, yChin + 3.2], // under-jaw shadow flowing into the neck (gentle concave)
+    [neckW, 46.8], // mid neck
+    // Shoulders — one continuous line: the neck flares into the trapezius in a
+    // smooth CONCAVE sweep (evenly spaced points → tangent flow, no corner), which
+    // then rounds down-and-over the deltoid cap (capX, capY) sitting BELOW the neck
+    // base. Nothing rises above the neck base (no horn); the torso passes through
+    // the SAME cap as the arm, then dives under the deltoid toward the chest — the
+    // arm continues the outer line down, no notch.
+    [neckW + 2.7, 49.3], // neck base — flares into the trapezius (evenly spaced → no kink)
+    [capX * 0.52, yShoulder + 2], // trapezius — concave sweep out of the neck
+    [capX * 0.86, yShoulder + 5.4], // convex, rounding over the deltoid
+    [capX, capY], // deltoid cap — widest, shared with the arm path
+    [chestR * 1.06, capY + 6], // dives under the deltoid toward the chest (arm takes the outer line)
+    [chestR, yChest], // chest / nipple line
+    [(chestR + waistR) * 0.49, (yChest + yWaist) / 2], // lower ribs
+    [waistR, yWaist], // natural waist
+    [(waistR + hipR) * 0.5, (yWaist + yHip) / 2], // iliac flare
+    [hipR, yHip], // greater trochanter — widest hip
+    [Math.min(hipR * 0.99, thighCx + thighR), yHip + 7], // hip turning into the thigh
+    [Math.min(hipR * 0.98, thighCx + thighR), (yCrotch + yKnee) / 2], // outer mid-thigh
+    [kneeCx + kneeW, yKnee], // outer knee
+    [kneeCx + calfR, yCalf], // outer calf peak
+    [kneeCx + ankleW, yAnkle], // ankle — leg's true minimum (§4 r9)
+    [kneeCx + ankleW + 3.4, yAnkle + 5.5], // ball of foot (widening)
+    [kneeCx + ankleW + 7, SOLE - 1.5], // toe (rounded, foreshortened front view, §4 r12)
+    [kneeCx - ankleW - 1, SOLE], // heel (inner-back, on the sole line)
+    [kneeCx - ankleW * 0.7, yAnkle + 1.5], // inner ankle / achilles
+    [kneeCx - calfR * 0.78, yCalf], // inner calf
+    [kneeCx - kneeW * 0.82, yKnee], // inner knee
+    [thighCx - thighR * 0.82, (yCrotch + yKnee) / 2 + 2], // inner thigh → crotch
+  ];
+  const corePath = bmLoopPath([
+    [CX, CROWN],
+    ...side.map(([dx, y]) => [CX + dx, y] as [number, number]),
+    [CX, yCrotch],
+    ...[...side].reverse().map(([dx, y]) => [CX - dx, y] as [number, number]),
+  ]);
+  // The arm outline. Its deltoid IS the shared cap point (capX, capY), so the arm
+  // rises out from under the torso exactly at the cap and tapers down — the union
+  // of torso + arm reads as one flowing shoulder→arm line, not a plate bolted on.
   const armSide: Array<[number, number]> = [
-    [shR * 0.55, 55], // tucked under the trap (covered by the torso)
-    [ax(66) + armR * 1.05, 67], // deltoid
-    [ax(80) + armR * 0.9, 80],
-    [ax(97) + armR * 0.72, 97], // outer elbow
-    [ax(110) + foreR * 0.95, 110], // forearm
-    [ax(126) + foreR * 0.55, 126], // wrist
-    [ax(138) + foreR * 0.5, 138], // palm
-    [ax(146) + 1.5, 146], // fingertips
-    [ax(140) - foreR * 0.5, 141],
-    [ax(127) - foreR * 0.5, 128], // inner wrist
-    [ax(110) - foreR * 0.85, 110], // inner forearm
-    [ax(98) - armR * 0.7, 98], // inner elbow
+    [capX * 0.5, capY - 5], // inner-top, tucked under the torso (hidden)
+    [capX, capY], // deltoid cap — the SAME point the torso outline passes through
+    [ax(72) + armR * 0.8, 72], // upper arm (tapers in from the cap)
+    [ax(yElbow) + armR * 0.72, yElbow], // outer elbow
+    [ax(105) + foreR * 0.95, 105], // forearm
+    [ax(116) + foreR * 0.6, 116], // lower forearm
+    [ax(yWrist) + foreR * 0.55, yWrist], // wrist (narrowing)
+    [ax(yWrist + 6) + foreR * 0.74, yWrist + 6], // knuckles — widest of the hand
+    [ax(yWrist + 15) + foreR * 0.62, yWrist + 15], // fingers (held width, not a taper)
+    [ax(yFinger) + foreR * 0.3, yFinger], // fingertip outer (rounded)
+    [ax(yFinger + 0.5) - foreR * 0.06, yFinger + 0.5], // fingertip base of the round end
+    [ax(yFinger - 1) - foreR * 0.36, yFinger - 1], // inner fingertip
+    [ax(yWrist + 10) - foreR * 0.74, yWrist + 10], // thumb web (inner bump — a thumb hint)
+    [ax(yWrist + 2) - foreR * 0.48, yWrist + 2], // inner wrist
+    [ax(105) - foreR * 0.85, 105], // inner forearm
+    [ax(yElbow) - armR * 0.7, yElbow], // inner elbow
     [ax(78) - armR * 0.8, 78], // inner upper arm
-    [ax(66) - armR * 0.6, 64], // armpit
+    [capX * 0.44, capY - 2], // armpit — tucked under the torso
   ];
   const armPath = (sign: 1 | -1) => bmLoopPath(armSide.map(([dx, y]) => [CX + sign * dx, y] as [number, number]));
   // Arms first, torso over them: the core path's fill hides the arm strokes at
@@ -391,10 +458,11 @@ function bodyFigureSvg(inp: BmFigureInput): string {
   const washFor = (region: string, grad: string): string => {
     const e = (cx: number, cy: number, rx: number, ry: number, clip: string) =>
       `<g clip-path="url(#${clip})"><ellipse class="bm-pulse" cx="${bmR(cx)}" cy="${cy}" rx="${bmR(rx)}" ry="${ry}" fill="url(#${grad})"/></g>`;
-    if (region === "waist") return e(CX, 106, waistR + 14, 26, "bmfig-clip-core");
-    if (region === "chest") return e(CX, 72, chestR + 12, 24, "bmfig-clip-core");
-    if (region === "arms") return e(CX - ax(98), 98, armR + 10, 50, "bmfig-clip-arms") + e(CX + ax(98), 98, armR + 10, 50, "bmfig-clip-arms");
-    if (region === "legs") return e(CX - thighCx, 186, thighR + 12, 56, "bmfig-clip-core") + e(CX + thighCx, 186, thighR + 12, 56, "bmfig-clip-core");
+    const yThigh = (yCrotch + yKnee) / 2;
+    if (region === "waist") return e(CX, yWaist, waistR + 14, 26, "bmfig-clip-core");
+    if (region === "chest") return e(CX, yChest, chestR + 12, 22, "bmfig-clip-core");
+    if (region === "arms") return e(CX - ax(105), 105, armR + 10, 46, "bmfig-clip-arms") + e(CX + ax(105), 105, armR + 10, 46, "bmfig-clip-arms");
+    if (region === "legs") return e(CX - thighCx, yThigh, thighR + 12, 52, "bmfig-clip-core") + e(CX + thighCx, yThigh, thighR + 12, 52, "bmfig-clip-core");
     return "";
   };
   const glowStops = (hex: string, peak: number) =>
@@ -412,10 +480,11 @@ function bodyFigureSvg(inp: BmFigureInput): string {
   let marks = "";
   const chevron = (cx: number, y: number) =>
     `<path d="M${bmR(cx - 4)} ${bmR(y + 5)} L${bmR(cx)} ${bmR(y)} L${bmR(cx + 4)} ${bmR(y + 5)}" fill="none" stroke="${BM_FIG_SAGE_DEEP}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>`;
+  const yThighMark = (yCrotch + yKnee) / 2;
   for (const w of winRegions) {
-    if (w === "chest") marks += chevron(CX, 68);
-    if (w === "arms") marks += chevron(CX - ax(72), 72) + chevron(CX + ax(72), 72);
-    if (w === "legs") marks += chevron(CX - thighCx, 150) + chevron(CX + thighCx, 150);
+    if (w === "chest") marks += chevron(CX, yChest - 4);
+    if (w === "arms") marks += chevron(CX - ax(74), 74) + chevron(CX + ax(74), 74);
+    if (w === "legs") marks += chevron(CX - thighCx, yThighMark) + chevron(CX + thighCx, yThighMark);
   }
 
   // The optimal-waistline ghost: a dashed sage indent traced INSIDE the outline
@@ -430,9 +499,9 @@ function bodyFigureSvg(inp: BmFigureInput): string {
   let optTrace = "";
   if (showOpt) {
     const tracePts = (sign: 1 | -1): Array<[number, number]> => [
-      [CX + sign * (chestR + optR) * 0.48, 88],
-      [CX + sign * optR, 106],
-      [CX + sign * (optR + hipR) * 0.5, 118],
+      [CX + sign * (chestR + optR) * 0.48, yWaist - 10],
+      [CX + sign * optR, yWaist],
+      [CX + sign * (optR + hipR) * 0.5, yWaist + 11],
     ];
     const traceAttrs = `fill="none" stroke="${BM_FIG_SAGE_DEEP}" stroke-width="1.5" stroke-dasharray="4 3" stroke-linecap="round" opacity="0.95"`;
     optTrace = `<path d="${bmOpenPath(tracePts(1))}" ${traceAttrs}/><path d="${bmOpenPath(tracePts(-1))}" ${traceAttrs}/>`;
@@ -458,16 +527,16 @@ function bodyFigureSvg(inp: BmFigureInput): string {
     if (!measured(k)) return;
     cos.push({ side, segY, x1: side === "R" ? CX + edge + 3 : CX - edge - 3, name, val: dispVal(k), dir: arrow(k), d: deltaFor(k), site: k, accent: k === "waist_in" && inp.focus === "waist" });
   };
-  add("chest_in", "R", 71, chestR, "chest");
-  add("waist_in", "R", 106, waistR, "waist");
-  if (showOpt) cos.push({ side: "R", segY: 112, x1: CX + optR + 2, name: "optimal", val: bmFmt(inp.unit === "cm" ? (optWaistIn as number) * 2.54 : (optWaistIn as number)), dir: "", sage: true });
-  add("hip_in", "R", 131, hipR, "hip");
-  add("thigh_in", "R", 159, thighCx + thighR, "thigh");
-  add("calf_in", "R", 205, kneeCx + calfR, "calf");
-  add("neck_in", "L", 46, neckW + 1, "neck");
-  add("shoulder_in", "L", 60, shR + 1.5, "shoulder");
-  add("upper_arm_in", "L", 76, ax(76) + armR, "arm");
-  add("forearm_in", "L", 114, ax(114) + foreR, "forearm");
+  add("chest_in", "R", yChest, chestR, "chest");
+  add("waist_in", "R", yWaist, waistR, "waist");
+  if (showOpt) cos.push({ side: "R", segY: yWaist + 6, x1: CX + optR + 2, name: "optimal", val: bmFmt(inp.unit === "cm" ? (optWaistIn as number) * 2.54 : (optWaistIn as number)), dir: "", sage: true });
+  add("hip_in", "R", yHip, hipR, "hip");
+  add("thigh_in", "R", (yCrotch + yKnee) / 2, thighCx + thighR, "thigh");
+  add("calf_in", "R", yCalf, kneeCx + calfR, "calf");
+  add("neck_in", "L", 45, neckW + 1, "neck");
+  add("shoulder_in", "L", capY, capX + 1.5, "shoulder");
+  add("upper_arm_in", "L", 78, ax(78) + armR, "arm");
+  add("forearm_in", "L", 108, ax(108) + foreR, "forearm");
 
   // A move since the last tape reads as "↓1.5" next to the value; without one,
   // the 6-month trend arrow stands in. Thresholds keep tape noise quiet.
@@ -578,16 +647,6 @@ function bmFigureLib(): CairnBodyFigureApi | null {
   }
 }
 
-// Optional Track E progressive enhancement. The 2D figure remains first paint;
-// this guarded API can only promote after its own WebGL ready frame succeeds.
-function bmBody3DLib(): CairnBody3DApi | null {
-  try {
-    return (window as unknown as { CairnBody3D?: CairnBody3DApi }).CairnBody3D || null;
-  } catch {
-    return null;
-  }
-}
-
 // Which measurement site is being read (module state so a tap survives a repaint).
 let bmSelectedSite: BmSiteKey | null = null;
 
@@ -632,28 +691,6 @@ function bmStandModel(data: BmSummary, unit: BmUnit): BmStandModel {
     heightIn,
     unit,
     focus,
-  };
-}
-
-function bmBody3DModel(model: BmStandModel, selected: BmSiteKey | null): CairnBody3DModel {
-  const siteOf = (key: BmSiteKey): number | null => {
-    const raw = model.merged ? (model.merged[key] as number | null) : null;
-    return raw != null && Number.isFinite(raw) ? raw : null;
-  };
-  return {
-    female: model.female,
-    unit: model.unit,
-    heightIn: model.heightIn,
-    selected,
-    focus: model.focus,
-    sites: {
-      chest_in: siteOf("chest_in"),
-      waist_in: siteOf("waist_in"),
-      hip_in: siteOf("hip_in"),
-      shoulder_in: siteOf("shoulder_in"),
-      upper_arm_in: siteOf("upper_arm_in"),
-      thigh_in: siteOf("thigh_in"),
-    },
   };
 }
 
@@ -740,9 +777,34 @@ function bmSiteContext(model: BmStandModel, key: BmSiteKey): { chip: { text: str
 // guide trace + tappable measurement callouts. Coordinates: the library figure is
 // authored in a 0–260 space; a translate(80,0) group centers it in a 420-wide box,
 // leaving label rails on both sides. Callouts are drawn in the outer box space.
+// Reference-physique baselines (inches) per sex — the figure bends toward the
+// athlete's measured/baseline ratio at each site (the lib clamps the warp).
+const BM_FIGURE_BASE: Record<"male" | "female", Partial<Record<BmSiteKey, number>>> = {
+  male: { neck_in: 15, shoulder_in: 45, chest_in: 39, waist_in: 33, hip_in: 37.5, upper_arm_in: 12.5, forearm_in: 11, thigh_in: 21.5, calf_in: 15 },
+  female: { neck_in: 12.5, shoulder_in: 39, chest_in: 35, waist_in: 28, hip_in: 38, upper_arm_in: 10.5, forearm_in: 9.5, thigh_in: 21.5, calf_in: 14.5 },
+};
+const bmClampRatio = (r: number): number => Math.min(1.14, Math.max(0.88, r));
+
+// Lib-site-keyed measured/baseline ratios — the honest-figure input.
+function bmFigureRatios(model: BmStandModel): Record<string, number> {
+  const base = BM_FIGURE_BASE[model.female ? "female" : "male"];
+  const out: Record<string, number> = {};
+  for (const [libSite, key] of Object.entries(BM_STAND_SITE_OF)) {
+    const b = base[key];
+    const raw = model.merged ? (model.merged[key] as number | null) : null;
+    const v = bmInches(raw != null && Number.isFinite(raw) ? raw : null, model.unit);
+    if (b && v != null && v > 0) out[libSite] = v / b;
+  }
+  return out;
+}
+
 function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected: BmSiteKey | null): string {
   const sexKey = model.female ? "female" : "male";
-  const sil = lib.silhouette(sexKey);
+  // The silhouette is HONEST: each zone bends by the athlete's own tape ratio
+  // (clamped in the lib), so a 33in waist on 40in hips reads as that body.
+  const ratios = bmFigureRatios(model);
+  const kindOf = (site: string): "torso" | "arm" => (lib.ARM_SITES.has(site) ? "arm" : "torso");
+  const sil = lib.silhouette(sexKey, ratios);
   const col = lib.COLORS;
   const merged = model.merged;
   const rawVal = (k: BmSiteKey): number | null => {
@@ -762,14 +824,47 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     return read.chip.tone === "warn" ? "bmfig2-warn" : "bmfig2-sage";
   };
   let washes = "";
+  let tape = "";
   if (selected) {
     const name = Object.keys(BM_STAND_SITE_OF).find((n) => BM_STAND_SITE_OF[n] === selected);
     const glows = name ? lib.GLOWS[name] : null;
     if (glows) {
       const grad = gradFor(selected);
       const clipOf = (c: string) => (c === "aR" ? "bmfig2-clip-aR" : c === "aL" ? "bmfig2-clip-aL" : "bmfig2-clip-t");
+      const kind = name ? kindOf(name) : "torso";
       for (const [cx, cy, rx, ry, clip] of glows) {
-        washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
+        const [wcx] = lib.warpPoint([cx, cy], sexKey, ratios, clip === "t" ? "torso" : "arm");
+        washes += `<g clip-path="url(#${clipOf(clip)})"><ellipse class="bm-pulse" cx="${bmR(wcx)}" cy="${cy}" rx="${rx}" ry="${ry}" fill="url(#${grad})"/></g>`;
+      }
+      // The tailor's tape: a fine band wrapped around the body at the selected
+      // site — front arc solid, back arc faint dashed (the wrap-around). Its
+      // center/width come from the site's own glow geometry, so the tape hugs
+      // the waist at the waist and the arm at the arm. Measuring = the tape.
+      const co = lib.CALLOUTS.find((c) => c.site === name);
+      const anchor = co ? lib.warpPoint(co.pt, sexKey, ratios, kind) : null;
+      const g = anchor
+        ? [...glows].sort((a, b) => Math.abs(a[0] - anchor[0]) - Math.abs(b[0] - anchor[0]))[0]
+        : glows[0];
+      if (g) {
+        const ty = anchor ? anchor[1] : g[1];
+        const [tcx] = lib.warpPoint([g[0], ty], sexKey, ratios, g[4] === "t" ? "torso" : "arm");
+        // Trunk sites hug the TRUE silhouette half-width at the anchor — warped
+        // per sex AND per the measured ratio, so the tape length visibly tracks
+        // the number it reports. Limb tapes ride the glow width the same way.
+        const trunkHalf: Partial<Record<BmSiteKey, number>> = { neck_in: 17, chest_in: 58, waist_in: 42, hip_in: 52 };
+        const authored = trunkHalf[selected];
+        const siteRatio = bmClampRatio(name && ratios[name] ? ratios[name] : 1);
+        const trx = authored != null
+          ? authored * (model.female ? lib.kOf(ty) : 1) * siteRatio + 4
+          : Math.max(12, g[2] * (model.female ? lib.kOf(ty) : 1) * siteRatio + 3);
+        const tryy = Math.max(3.5, trx * 0.16);
+        const L = `${bmR(tcx - trx)} ${bmR(ty)}`;
+        const R = `${bmR(tcx + trx)} ${bmR(ty)}`;
+        tape =
+          `<path class="bm-tape-back" d="M ${L} A ${bmR(trx)} ${bmR(tryy)} 0 0 1 ${R}" fill="none" stroke="#b4552d" stroke-width="1.1" stroke-dasharray="2 3.4" opacity="0.32"/>` +
+          `<path class="bm-tape" pathLength="100" d="M ${L} A ${bmR(trx)} ${bmR(tryy)} 0 0 0 ${R}" fill="none" stroke="#b4552d" stroke-width="1.7" stroke-linecap="round" opacity="0.92"/>` +
+          `<circle cx="${bmR(tcx - trx)}" cy="${bmR(ty)}" r="1.5" fill="#b4552d" opacity="0.85"/>` +
+          `<circle cx="${bmR(tcx + trx)}" cy="${bmR(ty)}" r="1.5" fill="#b4552d" opacity="0.85"/>`;
       }
     }
   }
@@ -784,11 +879,26 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
     optTrace = `<path d="${lib.waistTrace(sexKey, 1)}" ${attrs}/><path d="${lib.waistTrace(sexKey, -1)}" ${attrs}/>`;
   }
 
+  // The atelier plate: the croquis reads as a shallow relief object, not a flat
+  // icon — gradient modeling light from the upper left, a soft inner form
+  // shadow along the lower-right contour (offset strokes clipped inside each
+  // part), a sternum sheen, and a still-life ground shadow under the feet.
+  const relief = (d: string, clip: string) =>
+    `<g clip-path="url(#${clip})">` +
+    `<g transform="translate(-1.7,-2.1)"><path d="${d}" fill="none" stroke="#fbf5e8" stroke-width="5" opacity="0.5" filter="url(#bmfig2-form)"/></g>` +
+    `<g transform="translate(1.7,2.3)"><path d="${d}" fill="none" stroke="#87735a" stroke-width="5.5" opacity="0.2" filter="url(#bmfig2-form)"/></g>` +
+    `</g>`;
+  // Arms draw BEHIND the torso (they emerge at the armpit like the classic
+  // croquis), each part's relief shading riding directly on its own fill.
   const group = `<g transform="translate(80,0)">
-      <path d="${sil.armL}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
-      <path d="${sil.armR}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
-      <path d="${sil.torso}" fill="${col.standFill}" stroke="${col.standLine}" stroke-width="1.3"/>
-      ${washes}${optTrace}
+      <ellipse cx="130" cy="633" rx="84" ry="7.5" fill="#211d17" opacity="0.07" filter="url(#bmfig2-ground)"/>
+      <path d="${sil.armL}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
+      <path d="${sil.armR}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
+      ${relief(sil.armL, "bmfig2-clip-aL")}${relief(sil.armR, "bmfig2-clip-aR")}
+      <path d="${sil.torso}" fill="url(#bmfig2-relief)" stroke="${col.standLine}" stroke-width="1.3"/>
+      ${relief(sil.torso, "bmfig2-clip-t")}
+      <ellipse cx="130" cy="205" rx="30" ry="74" fill="url(#bmfig2-sheen)" clip-path="url(#bmfig2-clip-t)"/>
+      ${washes}${optTrace}${tape}
     </g>`;
 
   // Callouts: leader line + dot from the body anchor out to a label rail, wrapped
@@ -798,7 +908,7 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
   for (const c of lib.CALLOUTS) {
     const key = BM_STAND_SITE_OF[c.site];
     if (!key || !measured(key)) continue;
-    const [wx, wy] = lib.warpPoint(c.pt, sexKey);
+    const [wx, wy] = lib.warpPoint(c.pt, sexKey, ratios, kindOf(c.site));
     cos.push({ key, side: c.side, segY: c.y, ax: 80 + wx, ay: wy });
   }
   let callouts = "";
@@ -831,6 +941,12 @@ function bmStandFigureSvg(lib: CairnBodyFigureApi, model: BmStandModel, selected
       <clipPath id="bmfig2-clip-t"><path d="${sil.torso}"/></clipPath>
       <clipPath id="bmfig2-clip-aR"><path d="${sil.armR}"/></clipPath>
       <clipPath id="bmfig2-clip-aL"><path d="${sil.armL}"/></clipPath>
+      <linearGradient id="bmfig2-relief" x1="0" y1="0" x2="0.7" y2="1">
+        <stop offset="0%" stop-color="#f2ead8"/><stop offset="45%" stop-color="${col.standFill}"/><stop offset="100%" stop-color="#ddcfb2"/>
+      </linearGradient>
+      <radialGradient id="bmfig2-sheen"><stop offset="0%" stop-color="#fffdf8" stop-opacity="0.32"/><stop offset="100%" stop-color="#fffdf8" stop-opacity="0"/></radialGradient>
+      <filter id="bmfig2-form" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.6"/></filter>
+      <filter id="bmfig2-ground" x="-40%" y="-160%" width="180%" height="420%"><feGaussianBlur stdDeviation="3.4"/></filter>
     </defs>`;
   return `<svg class="bm-figure bm-figure2" viewBox="0 0 420 645" width="100%" role="img" aria-label="${escAttr(aria)}" style="display:block;max-width:440px;margin:0 auto;overflow:visible">${defs}${group}${callouts}</svg>`;
 }
@@ -923,7 +1039,7 @@ function compSection(data: BmSummary, unit: BmUnit): string {
   return `<div class="sess bm-comp reveal" style="padding:16px 14px;margin-bottom:12px">
       <div class="bm-sechead" style="font-weight:600;margin-bottom:2px">Where you stand</div>
       ${sub}${heading}
-      <div class="bm-figure-slot" style="margin-top:8px" data-body3d="fallback:first-paint"><div class="bm-figure-fallback">${figure}</div></div>
+      <div class="bm-figure-slot" style="margin-top:8px"><div class="bm-figure-fallback">${figure}</div></div>
       ${detail}${focus}
       ${bmStandRatioRows(model, unit)}
     </div>`;
@@ -1262,24 +1378,6 @@ function wire(mount: HTMLElement, unit: BmUnit, data?: BmSummary): void {
   // Elite Stand hero: tap a measurement to read it in context. Wired
   // on the cached data so a re-select never refetches or resets the log form.
   if (data) bmWireStandHero(mount, data, unit);
-
-  // Optional 3D promotion: only for the fixed Stand figure path, never before
-  // the 2D fallback has painted, and never if the capability gate declines.
-  if (data && data.latest && bmFigureLib()) {
-    const body3d = bmBody3DLib();
-    const slot3d = mount.querySelector(".bm-figure-slot") as HTMLElement | null;
-    if (body3d && slot3d && !slot3d.querySelector(".bm-body3d")) {
-      const model = bmStandModel(data, unit);
-      const selected = bmResolveSelected(model);
-      body3d.enhance(slot3d, {
-        model: bmBody3DModel(model, selected),
-        onSelect: (site) => {
-          bmSelectedSite = site;
-          bmRepaintStandHero(mount, data, unit);
-        },
-      });
-    }
-  }
 
   // The then→now morph (LEGACY figure only — the elite fixed figure doesn't
   // morph): with two or more tape sessions the legacy croquis first draws at the

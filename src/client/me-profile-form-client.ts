@@ -268,6 +268,14 @@ type MeProfileFormContext = {
 
     const bodySection = sectionHtml(deps, "Body & goal", `
       ${n("age", "Age", profile.age)}
+      <div class="field" style="margin-bottom:9px">
+        <label>Sex</label>
+        <p class="aboutme-hint">Sets the baselines the math runs on — strength standards, tape-measure reads, body-fat and heart-risk equations — and the body figure. The clinical equations expect sex at birth.</p>
+        <div class="seg sex-seg" id="sexSeg" role="group" aria-label="Sex">
+          <button type="button" class="segbtn${String(profile.sex || "") === "female" ? " active" : ""}" data-sex="female">Female</button>
+          <button type="button" class="segbtn${String(profile.sex || "") === "female" ? "" : " active"}" data-sex="male">Male</button>
+        </div>
+      </div>
       ${heightField}
       ${weightField}
       <div class="field" style="margin-bottom:9px">

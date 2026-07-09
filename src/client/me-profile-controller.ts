@@ -17,12 +17,13 @@
     deps: MeProfileControllerDeps,
     enduranceGoal: MeProfileEnduranceGoalDraft,
     initial: {
-      discipline: string; enduranceMode: string; goalMode: string; unit: "in" | "cm";
+      discipline: string; enduranceMode: string; goalMode: string; unit: "in" | "cm"; sex: string;
     },
   ): void {
     let pickedDisc = String(initial.discipline || "strength");
     let pickedEgMode = String(initial.enduranceMode || "none");
     let pickedGoalMode = String(initial.goalMode || "maintain");
+    let pickedSex = initial.sex === "female" ? "female" : "male";
     // The active display unit (in ⇒ imperial, cm ⇒ metric). The toggle converts
     // the body inputs in place; storage always writes imperial (height_in / lb).
     let activeUnit: "in" | "cm" = initial.unit === "cm" ? "cm" : "in";
@@ -86,6 +87,7 @@
       const body = {
         name: deps.inputValue("#name").trim(),
         age: deps.numberValue("#age"),
+        sex: pickedSex,
         height_in: heightIn,
         height_cm: heightCm,
         weight_lb: readMassLb("#weight_val"),
@@ -120,6 +122,14 @@
       onSave: persistProfile,
       onDiscard: deps.renderProfile,
     });
+
+    deps.select<HTMLElement>("#sexSeg")?.querySelectorAll<HTMLElement>("[data-sex]").forEach((button) =>
+      button.addEventListener("click", () => {
+        pickedSex = button.dataset.sex === "female" ? "female" : "male";
+        setActiveButton(deps.select("#sexSeg"), ".segbtn", button);
+        profileBar.markDirty();
+      })
+    );
 
     deps.select<HTMLElement>("#discSeg")?.querySelectorAll<HTMLElement>("[data-disc]").forEach((button) =>
       button.addEventListener("click", () => {
@@ -263,7 +273,7 @@
     const draw = () => {
       deps.root.innerHTML = CairnMeProfileForm.html(deps, profile, goal, { discipline, enduranceGoal, enduranceMode, goalMode, unit });
       deps.wireSeg(deps.handlers);
-      wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode, unit });
+      wireProfileForm(deps, enduranceGoal, { discipline, enduranceMode, goalMode, unit, sex: String(profile.sex || "") });
     };
     if (opts.animate) await deps.skeletonSwap(draw);
     else draw();
