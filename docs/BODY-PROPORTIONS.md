@@ -1,5 +1,12 @@
 # Human figure proportion spec — Loomis canon + real anthropometry
 
+> **Status.** The shipped figure (`src/client/cairn-body-figure.ts`) is now vendored from the
+> **"Body Visualizations" Claude Design project** (approved options 2a/2b, plus the tape-driven
+> measured model 3a/3b): one authored drawing, male/female via a per-zone x-warp, and the Stand
+> figure re-proportioned per body zone from real circumferences against a height-derived
+> reference physique (`measuredSilhouette`). This document remains the anthropometric research
+> reference the design work drew on; the design project is the source of truth for the shapes.
+
 Grounds an SVG body illustration (`viewBox 0 0 260 640`, crown at `y=16`, soles at `y=628`,
 centerline `x=130`) in two complementary sources: **Andrew Loomis's idealized 8-head
 canon** (the "Renaissance painter's figure" read — perfect, legible, adaptable) and **real
@@ -199,10 +206,14 @@ Input protection has two levels:
 - **Height-scaled and cross-site checks** are soft. They identify likely unit mistakes, misplaced
   tapes, or transposed values, but an unusual real body remains loggable after an explicit recheck.
 
-Surface definition follows the tape body-fat estimate. Around 20%, the figure keeps clavicle,
-pectoral-envelope, patella and calf landmarks while suppressing visible abdominal segmentation;
-leaner bodies reveal somewhat more relief and higher estimates reveal less. This is a visual
-continuum, not a diagnostic claim.
+The Stand plate is the design-approved calm flat croquis: the athlete's MEASURED silhouette —
+every body zone scaled from a real circumference against the height-derived reference physique
+(reference waist just under half height; classical balance elsewhere, neck ≈ arm ≈ calf) — drawn
+over that reference as a dashed sage ghost. Circumference maps to frontal width through per-site
+exponents (limbs ≈ 1:1, waist lowest at 0.7 since abdominal change goes disproportionately to
+depth) with smooth tanh compression, so extreme tapes stay plausible and monotone. Measurements
+flagged by the shared plausibility checks remain visible as recorded data but are held neutral in
+the silhouette until re-taped. References, never mandates.
 
 ---
 

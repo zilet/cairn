@@ -86,7 +86,7 @@ Three lights only. No HDRI environment maps (payload + neon risk).
 ### Camera & framing
 
 - Fixed orthographic-feel perspective: mild FOV (~28–32°), almost no perspective distortion so proportions read like the 2D croquis.  
-- Framing matches `.bm-figure-slot` aspect **420∶645** (already used by scaffold canvas).  
+- Framing matches `.bm-figure-slot` aspect **420∶645** (the shipped 2D measured figure’s box).  
 - Idle: **no continuous orbit**. Optional 4° yaw ease on first promote only (respects reduced-motion → skip).  
 - Drag orbit is **out of scope for E1** (keeps interaction identical to 2D: tap region → detail).
 
