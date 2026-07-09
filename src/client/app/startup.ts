@@ -28,6 +28,7 @@
     // job's host through the registered reconnector for that job kind.
     setTimeout(() => { jobReconnect(); }, 0);
     installMobileViewportGuards();
+    installDayRolloverWatcher();
   }
 
   Object.assign(globalThis, { startAppShell });

@@ -432,12 +432,20 @@ function pictureDeps(): ClientHealthPictureControllerDeps {
     root: view,
     state,
     api,
+    runOp,
     toast,
     switchHealthSeg: (seg, opts) => { if (seg === "records") showRecords(opts || {}); else showOverview(); },
     onHealthReadView: () => state.tab === "stand" && state.standSeg === "connections",
     pollToken: () => pollToken,
     escapeHtml: escHtml,
   };
+}
+
+// Reattach an in-flight whole-picture review job after a reload (registered app-side
+// for the "health_review" job kind). Binds the picture deps; the controller bails
+// unless the user is actually on the connections view.
+function reconnectHealthReview(_job?: unknown): ClientAgentOpHandlers | null {
+  return CairnHealthPictureController.reconnectHealthReview(pictureDeps());
 }
 
 function recordsDeps(): ClientHealthRecordsControllerDeps {
@@ -1099,7 +1107,7 @@ async function renderStand(): Promise<void> {
 }
 
 const CAIRN_STAND = { renderStand };
-Object.assign(globalThis, { CairnStand: CAIRN_STAND, renderStand });
+Object.assign(globalThis, { CairnStand: CAIRN_STAND, renderStand, reconnectHealthReview });
 if (typeof window !== "undefined") {
   (window as unknown as { CairnStand: typeof CAIRN_STAND }).CairnStand = CAIRN_STAND;
 }

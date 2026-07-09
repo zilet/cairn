@@ -10,7 +10,8 @@ type AppJobReconnectKind =
   | "day_read_override"
   | "nutrition_checkin"
   | "insight"
-  | "proposal";
+  | "proposal"
+  | "health_review";
 type AppJobReconnectFactory = (job?: unknown) => unknown;
 type AppJobReconnectEntry = {
   kind: AppJobReconnectKind;
@@ -27,6 +28,7 @@ const APP_JOB_RECONNECTORS: AppJobReconnectEntry[] = [
   { kind: "nutrition_checkin", factoryName: "reconnectNutritionCheckin" },
   { kind: "insight", factoryName: "reconnectInsight" },
   { kind: "proposal", factoryName: "reconnectProposal" },
+  { kind: "health_review", factoryName: "reconnectHealthReview" },
 ];
 
 function registerAppJobReconnectors(): void {

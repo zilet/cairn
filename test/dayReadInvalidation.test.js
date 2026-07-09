@@ -12,6 +12,7 @@ beforeEach(() =>
   resetTables(
     "context_events", "sessions", "logged_sets", "exercises",
     "plan_items", "plan_days", "plan_proposals", "day_reads",
+    "bodyweight_log", "profile",
   ),
 );
 
@@ -39,6 +40,10 @@ test("resolveContextEvent busts today's Brief", () => {
 
 test("setSessionFeedback busts today's Brief", () => {
   bustsCache(() => repo.setSessionFeedback(TODAY(), { soreness: 3 }));
+});
+
+test("logWeight busts today's Brief (A2 — the last unwired brain signal)", () => {
+  bustsCache(() => repo.logWeight(181.4, TODAY()));
 });
 
 test("savePlanDay busts today's Brief", () => {

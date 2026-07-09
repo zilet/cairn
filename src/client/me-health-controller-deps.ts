@@ -118,6 +118,7 @@ function makeHealthPictureDeps(ctx: ClientMeHealthDependenciesContext): ClientHe
     root: ctx.root,
     state: ctx.state,
     api: ctx.api,
+    runOp: ctx.runOp,
     toast: ctx.toast,
     switchHealthSeg: ctx.switchHealthSeg,
     onHealthReadView: ctx.onHealthReadView,

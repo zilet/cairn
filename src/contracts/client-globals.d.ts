@@ -826,6 +826,7 @@ declare global {
     root: ParentNode;
     state: Pick<ClientAppState, "healthReview">;
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
     toast(message: string): void;
     switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
     onHealthReadView(): boolean;
@@ -1485,6 +1486,8 @@ declare global {
   declare function registerJobReconnector(kind: string, factory: (job?: unknown) => unknown): void;
   declare function registerAppJobReconnectors(): void;
   declare function installMobileViewportGuards(): void;
+  declare function installDayRolloverWatcher(): void;
+  declare function dayRolloverTarget(current: string, measured: string, dayPicked: boolean): string | null;
   declare function reconnectSessionSuggest(job?: unknown): unknown;
   declare function reconnectMealPlan(job?: unknown): unknown;
   declare function reconnectMealSwap(job?: unknown): unknown;
@@ -1493,6 +1496,7 @@ declare global {
   declare function reconnectNutritionCheckin(job?: unknown): unknown;
   declare function reconnectInsight(job?: unknown): unknown;
   declare function reconnectProposal(job?: unknown): unknown;
+  declare function reconnectHealthReview(job?: unknown): ClientAgentOpHandlers | null;
   declare function registerServiceWorkerLifecycle(): void;
   declare function primeDiscipline(): void;
   declare function maybeOnboard(): Promise<void>;
@@ -1546,6 +1550,7 @@ declare global {
     CairnRoutes?: ClientRoutesApi;
     registerAppJobReconnectors(): void;
     installMobileViewportGuards(): void;
+    installDayRolloverWatcher(): void;
     registerServiceWorkerLifecycle(): void;
     primeDiscipline(): void;
     maybeOnboard(): Promise<void>;
@@ -2021,6 +2026,7 @@ declare global {
       isHealthReviewRunning(): boolean;
       paintHealthPicture(deps: ClientHealthPictureControllerDeps): void;
       runHealthReview(deps: ClientHealthPictureControllerDeps): Promise<void>;
+      reconnectHealthReview(deps: ClientHealthPictureControllerDeps): ClientAgentOpHandlers | null;
       loadHealthPicture(token: number, docsPromise: Promise<unknown>, deps: ClientHealthPictureControllerDeps): Promise<void>;
     };
 

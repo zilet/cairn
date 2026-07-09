@@ -27,6 +27,7 @@ function loadJobReconnectors() {
     reconnectNutritionCheckin: namedFactory("reconnectNutritionCheckin"),
     reconnectInsight: namedFactory("reconnectInsight"),
     reconnectProposal: namedFactory("reconnectProposal"),
+    reconnectHealthReview: namedFactory("reconnectHealthReview"),
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/app-job-reconnectors.js"), "utf8"), context);
@@ -50,5 +51,6 @@ test("app job reconnector module registers every factory in boot order", () => {
     { kind: "nutrition_checkin", factoryName: "reconnectNutritionCheckin" },
     { kind: "insight", factoryName: "reconnectInsight" },
     { kind: "proposal", factoryName: "reconnectProposal" },
+    { kind: "health_review", factoryName: "reconnectHealthReview" },
   ]);
 });
