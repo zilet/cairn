@@ -132,7 +132,10 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       muscle_group: z.string().nullable().optional(),
       mode: z.enum(["reps", "timed"]).optional(),
     },
-    async (exercise) => asText(upsertExercise(exercise))
+    // A user-facing create (via the coach/MCP client) opts into the same quiet
+    // background enrichment the REST route does — canonicalize + classify + guide
+    // + art on a genuine new exercise. Mirrors POST /api/exercises.
+    async (exercise) => asText(upsertExercise(exercise, { enrich: true }))
   );
 
   server.tool(

@@ -6,8 +6,9 @@ import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import * as repo from "./repo.js";
 import { extractJson, runAgentWithFallback } from "./agents.js";
-import { buildEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
-import { reconcileMarkers, synthesizeHealth } from "./coachOps.js";
+import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt } from "./prompt.js";
+import { explainExercise, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
+import { warmExerciseArt } from "./art.js";
 import { LB_PER_KG, round2_5 } from "./repo/shared.js";
 
 const execFileP = promisify(execFile);
@@ -30,7 +31,12 @@ const execFileP = promisify(execFile);
 // instead of re-parsing free text it hands a VISION agent the absolute image path
 // (same trick as the 'health' kind) to estimate the plate's macros. id is the
 // food_notes row id; it shares food_notes' enrichment_status machine.
-type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_strength";
+// 'exercise' is a NEW off-plan movement the athlete just added: the job canonicalizes
+// the name, classifies muscle group / mode / equipment, warms the how-to guide
+// (ai_cache), and pregenerates muscle/equipment-aware art. id is the exercises row id;
+// it shares exercises' enrichment_status machine. Enqueued only on a genuine create
+// from the user-facing route — never for seed/plan-import.
+type Kind = "activity" | "food" | "food_photo" | "health" | "review" | "garmin_strength" | "exercise";
 interface Job {
   kind: Kind;
   id: number;
@@ -237,6 +243,7 @@ function markStatus(job: Job, status: string): void {
   if (job.kind === "activity") repo.setActivityEnrichStatus(job.id, status);
   // food_photo shares the food_notes row + its status column with food.
   else if (job.kind === "food" || job.kind === "food_photo") repo.setFoodNoteEnrichStatus(job.id, status);
+  else if (job.kind === "exercise") repo.setExerciseEnrichStatus(job.id, status);
   else repo.setHealthDocEnrichStatus(job.id, status);
 }
 
@@ -270,6 +277,7 @@ async function processJob(job: Job): Promise<void> {
   if (job.kind === "review") return processReviewJob();
   if (job.kind === "garmin_strength") return processGarminStrengthJob(job.id);
   if (job.kind === "food_photo") return processFoodPhotoJob(job.id);
+  if (job.kind === "exercise") return processExerciseJob(job.id);
 
   // Check enablement BEFORE picking an agent: pickAgentOrder() advances the
   // round-robin cursor as a side effect, so calling it for a job we then skip
@@ -690,6 +698,72 @@ async function processGarminStrengthJob(garminActivityId: number): Promise<void>
     agent,
   });
   if (logged) console.log(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
+}
+
+// ---- new off-plan exercise → canonical + classify + guide + art ----------------
+// The athlete added a movement that wasn't in the plan (e.g. "Single-Arm Lat
+// Pulldown"). The deterministic canon already cleaned the name + guessed a
+// group/mode at insert; here the agent refines that ONE entry, then we warm its
+// how-to guide (so the first ⓘ tap is instant) and pregenerate muscle/equipment-
+// aware art (so its tile shows a real image, not the name-only fallback). NEVER
+// touches logged numbers. Degrades cleanly end-to-end: enrichment off / no agent →
+// 'skipped' (art still attempted from the deterministic group, self-degrading); a
+// wrong-shape reply → the deterministic classification stands and we mark 'done'.
+// Exported so the offline test can drive the graceful-degradation paths directly.
+export async function processExerciseJob(id: number): Promise<void> {
+  const ex = repo.getExercise(id) as any;
+  if (!ex) return; // deleted while queued — nothing to enrich, no status to set
+
+  const settings = repo.getSettings();
+  if (!settings.enrich_enabled) {
+    repo.setExerciseEnrichStatus(id, "skipped");
+    return;
+  }
+
+  const order = repo.pickAgentOrder();
+  let finalName = String(ex.name);
+  let group: string | null = ex.muscle_group ?? null;
+  let equipment: string | null = ex.equipment ?? null;
+
+  if (order.length) {
+    // Mark in-progress BEFORE the first await so a crash leaves a recoverable
+    // marker (recoverPendingEnrich re-enqueues 'in_progress' too), and the art
+    // route keeps deferring name-only generation while the job runs.
+    repo.setExerciseEnrichStatus(id, "in_progress");
+    let parsed: any = null;
+    try {
+      const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(repo.getExerciseDetail(ex.name)), ENRICH_TIMEOUT_MS);
+      parsed = fb.result?.parsed ?? null;
+    } catch {
+      parsed = null;
+    }
+    if (parsed && typeof parsed === "object") {
+      // Apply the classification safely (canonical merge/rename, fill-only group/
+      // equipment/mode); the returned id/name reflect any merge or rename.
+      const applied = repo.applyExerciseEnrichment(id, {
+        canonical: asStr(parsed.canonical),
+        muscle_group: asStr(parsed.muscle_group ?? parsed.group),
+        mode: asStr(parsed.mode),
+        equipment: asStr(parsed.equipment),
+      });
+      finalName = applied.name || finalName;
+      const updated = repo.getExercise(applied.id) as any;
+      group = updated?.muscle_group ?? group;
+      equipment = updated?.equipment ?? equipment;
+    }
+    // Warm the how-to guide into ai_cache so the first ⓘ tap serves instantly.
+    try { await explainExercise("auto", finalName); } catch { /* best-effort */ }
+  }
+
+  // Muscle/equipment-aware art under the bare-name key (self-degrades: no key /
+  // art disabled / already cached / known-failed → no-op). Runs EVEN with no CLI
+  // agent — the art call is a direct Gemini request keyed off the deterministic group.
+  try { await warmExerciseArt(finalName, { muscle_group: group, equipment }); } catch { /* best-effort */ }
+
+  // 'done' whenever an agent was available (the deterministic row already stands, so
+  // even a soft agent miss leaves a usable exercise — the guide hydrates lazily and
+  // art was attempted); 'skipped' only when there was no agent at all.
+  repo.setExerciseEnrichStatus(id, order.length ? "done" : "skipped");
 }
 
 // ---- food photo → macros (vision) ----------------------------------------------
@@ -1393,7 +1467,7 @@ function applyStructured(job: Job, structured: any): boolean {
 // Crash recovery: re-enqueue every row left 'pending' (queued, never started) or
 // 'in_progress' (started but interrupted by a restart). Called once at startup
 // from server.ts. A re-run ends in 'done' or 'failed', so jobs don't loop.
-export function recoverPendingEnrich(): { activities: number; food: number; health: number } {
+export function recoverPendingEnrich(): { activities: number; food: number; health: number; exercises: number } {
   const acts = db
     .prepare(`SELECT id FROM activities WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
@@ -1406,11 +1480,15 @@ export function recoverPendingEnrich(): { activities: number; food: number; heal
   const health = db
     .prepare(`SELECT id FROM health_documents WHERE enrichment_status IN ('pending','in_progress')`)
     .all() as any[];
+  const exercises = db
+    .prepare(`SELECT id FROM exercises WHERE enrichment_status IN ('pending','in_progress')`)
+    .all() as any[];
   for (const a of acts) enqueueEnrich("activity", a.id);
   for (const f of foods) enqueueEnrich(f.image_path ? "food_photo" : "food", f.id);
   for (const h of health) enqueueEnrich("health", h.id);
-  if (acts.length || foods.length || health.length) {
-    console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health pending job(s).`);
+  for (const x of exercises) enqueueEnrich("exercise", x.id);
+  if (acts.length || foods.length || health.length || exercises.length) {
+    console.log(`[enrich] recovered ${acts.length} activity + ${foods.length} food + ${health.length} health + ${exercises.length} exercise pending job(s).`);
   }
-  return { activities: acts.length, food: foods.length, health: health.length };
+  return { activities: acts.length, food: foods.length, health: health.length, exercises: exercises.length };
 }
