@@ -40,12 +40,45 @@ function hasProgressEnduranceRecord(value: unknown): value is ProgressEnduranceR
   return !!value && typeof value === "object";
 }
 
+// Snapshot instant-paint, mirroring the Train overview's sessionStorage pattern
+// (progress-overview-client.ts): re-entering Endurance used to show a full
+// spinner every time (zero caching), even though this data barely changes
+// between visits. Cache the last-fetched fan-out and paint it immediately on
+// entry, then revalidate quietly behind it and repaint only if it changed.
+type ProgressEnduranceSnapshot = {
+  end: unknown;
+  prs: ProgressEndurancePRRows | null;
+  goal: ProgressEnduranceGoalRow | null;
+  compliance: ProgressEnduranceCompliance | null;
+  settings: unknown;
+  runPlan: ProgressEnduranceRunPlan | null;
+  programState: ProgressEnduranceProgramState | null;
+};
+const PROGRESS_ENDURANCE_SNAP_KEY = "cairn.endurance.v1";
+
+function progressEnduranceSaveSnapshot(data: ProgressEnduranceSnapshot): void {
+  try { sessionStorage.setItem(PROGRESS_ENDURANCE_SNAP_KEY, JSON.stringify(data)); } catch { /* quota — skip */ }
+}
+function progressEnduranceLoadSnapshot(): ProgressEnduranceSnapshot | null {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(PROGRESS_ENDURANCE_SNAP_KEY) || "null");
+    return parsed && typeof parsed === "object" && "end" in parsed ? parsed as ProgressEnduranceSnapshot : null;
+  } catch { return null; }
+}
+
 async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): Promise<void> {
   deps.headerTitle.textContent = "Endurance";
   deps.state.progressSeg = "endurance";
   const token = deps.nextToken();
-  deps.view.innerHTML = deps.segmentHtml("endurance") + `<div id="endBody">${deps.loading("Reading your week...")}</div>`;
+  const snap = progressEnduranceLoadSnapshot();
+  deps.view.innerHTML = deps.segmentHtml("endurance") + `<div id="endBody"></div>`;
   deps.wireSegments();
+  if (snap) {
+    paintProgressEnduranceBody(snap.end, snap.prs, snap.goal, snap.compliance, snap.settings, snap.runPlan, snap.programState, deps);
+  } else {
+    const body = deps.view.querySelector("#endBody");
+    if (body) body.innerHTML = deps.loading("Reading your week...");
+  }
 
   let stats: unknown = null;
   let prs: ProgressEndurancePRRows | null = null;
@@ -75,8 +108,16 @@ async function renderProgressEndurance(deps: ProgressEnduranceControllerDeps): P
     stats = null;
   }
   if (!deps.isCurrent(token) || !deps.view.querySelector("#endBody")) return;
+  // A failed fan-out (stats stays null only on a caught exception) must never
+  // clobber a good cached paint with the empty state — keep showing the snapshot
+  // and let the next successful revalidate settle it, same as cachedApi's
+  // fallback-on-failure elsewhere.
+  if (stats == null && snap) return;
   const statsRow = progressEnduranceRecord(stats);
-  paintProgressEnduranceBody(statsRow.endurance || null, prs, goal, compliance, settings, runPlan, programState, deps);
+  const fresh: ProgressEnduranceSnapshot = { end: statsRow.endurance || null, prs, goal, compliance, settings, runPlan, programState };
+  const changed = !snap || JSON.stringify(snap) !== JSON.stringify(fresh);
+  progressEnduranceSaveSnapshot(fresh);
+  if (changed) paintProgressEnduranceBody(fresh.end, fresh.prs, fresh.goal, fresh.compliance, fresh.settings, fresh.runPlan, fresh.programState, deps);
 }
 
 function paintProgressEnduranceBody(

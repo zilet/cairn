@@ -118,5 +118,10 @@ test("progress endurance controller keeps stale reads from repainting", async ()
 
   await controller.render(deps);
 
-  assert.equal(view.querySelector("#endBody").innerHTML, "");
+  // No cached snapshot in this environment (no sessionStorage global in the vm
+  // sandbox) -> the synchronous pre-fetch loading placeholder is what's showing.
+  // The contract under test is that the FETCHED real content (hero/empty state)
+  // never overwrites it once the read is stale — not that the placeholder itself
+  // is blank.
+  assert.equal(view.querySelector("#endBody").innerHTML, "loading:Reading your week...");
 });
