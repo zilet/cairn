@@ -335,7 +335,7 @@ version deliberately when you want to bump them:
 
 ```bash
 docker compose exec -u app cairn cairn-update-agent-clis
-docker compose exec -u app -e CLAUDE_CODE_VERSION=2.1.201 -e CODEX_CLI_VERSION=0.142.5 cairn cairn-update-agent-clis
+docker compose exec -u app -e CLAUDE_CODE_VERSION=2.1.205 -e CODEX_CLI_VERSION=0.143.0 cairn cairn-update-agent-clis
 ```
 
 Or **Settings → Agents → Update CLI tools**.
@@ -345,8 +345,8 @@ Force fresh CLI install on image rebuild:
 ```bash
 docker compose build \
   --build-arg AGENT_CLI_CACHE_BUST="$(date +%s)" \
-  --build-arg CLAUDE_CODE_VERSION=2.1.201 \
-  --build-arg CODEX_CLI_VERSION=0.142.5 \
+  --build-arg CLAUDE_CODE_VERSION=2.1.205 \
+  --build-arg CODEX_CLI_VERSION=0.143.0 \
   cairn
 docker compose up -d
 ```

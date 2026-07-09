@@ -155,11 +155,11 @@ run_cli_update() {
 }
 
 if [ "${UPDATE_CLAUDE:-1}" = "1" ]; then
-  install_npm_cli claude @anthropic-ai/claude-code "${CLAUDE_CODE_VERSION:-2.1.201}"
+  install_npm_cli claude @anthropic-ai/claude-code "${CLAUDE_CODE_VERSION:-2.1.205}"
 fi
 
 if [ "${UPDATE_CODEX:-1}" = "1" ]; then
-  install_npm_cli codex @openai/codex "${CODEX_CLI_VERSION:-0.142.5}" --include=optional
+  install_npm_cli codex @openai/codex "${CODEX_CLI_VERSION:-0.143.0}" --include=optional
 fi
 
 if [ "${UPDATE_ANTIGRAVITY:-1}" = "1" ]; then

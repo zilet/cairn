@@ -57,8 +57,8 @@ test("agent CLI install script uses pinned npm package versions by default", () 
 
   assert.equal(res.status, 0, `${res.stdout}\n${res.stderr}`);
   const npmCalls = fs.readFileSync(npmLog, "utf8");
-  assert.match(npmCalls, /i -g @anthropic-ai\/claude-code@2\.1\.201/);
-  assert.match(npmCalls, /i -g @openai\/codex@0\.142\.5 --include=optional/);
+  assert.match(npmCalls, /i -g @anthropic-ai\/claude-code@2\.1\.205/);
+  assert.match(npmCalls, /i -g @openai\/codex@0\.143\.0 --include=optional/);
 }));
 
 test("agent CLI install script refuses moving npm tags unless explicitly allowed", () => withTempDir((dir) => {
