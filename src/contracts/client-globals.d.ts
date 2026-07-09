@@ -1459,7 +1459,7 @@ declare global {
   declare function enrichBadge(status: unknown): string;
   declare function activityLine(activity: ClientActivity & Record<string, unknown>): string;
   declare function pollEnrichment(
-    path: "/activities" | "/food-notes" | string,
+    path: "/activities" | "/food-notes" | "/health-docs" | string,
     id: number,
     options?: {
       tab?: string;
@@ -1468,7 +1468,7 @@ declare global {
       interval?: number;
       onUpdate?: (row: ClientActivity & Record<string, unknown>) => void;
     },
-  ): void;
+  ): Promise<(ClientActivity & Record<string, unknown>) | null>;
   declare function enrichmentActive(status: unknown): boolean;
   declare function healthKindLabel(kind: unknown): string;
   declare function parsedDoc(doc: unknown): { markers?: Array<Record<string, unknown>>; clinical_facts?: unknown[]; type?: unknown } | null;

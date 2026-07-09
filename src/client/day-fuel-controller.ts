@@ -14,6 +14,9 @@ type DayFuelControllerOptions = {
 (() => {
   const DAY_FUEL_ASK = "How's my eating shaping up today, and does it fit my goal?";
   const EMPTY_TOTALS = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
+  // Ids we already have a live enrichment watcher for — one per pending food note,
+  // cleared when the watch resolves, so a re-render never opens a duplicate stream.
+  const _fuelWatched = new Set<number>();
 
   function dayFuelCacheKey(): string {
     return `food:day:${state.logDate || "today"}`;
@@ -83,6 +86,56 @@ type DayFuelControllerOptions = {
       render: (day) => renderDayFuel(token, day as DayFuelControllerDay, options),
     });
     if (!result && !peek && fuelStillCurrent(token, root, options)) slot.innerHTML = "";
+    watchFuelPending(token, options);
+  }
+
+  function fuelMacroValue(value: unknown): number | null {
+    if (value === null || value === undefined || value === "") return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  // A just-logged food note enriches in the background; its Fuel row shows an
+  // "· estimating…" badge until the macros land. Watch each still-pending entry
+  // (SSE-first, poll fallback — pollEnrichment handles both) and, the moment it
+  // settles, patch the entry in place so the badge clears and the estimate folds
+  // into the running totals — no full reload, no flicker. pollEnrichment's own
+  // stale-tab guard means onUpdate never fires after the surface re-renders.
+  function watchFuelPending(token: number, options: DayFuelControllerOptions = {}): void {
+    // Guarded like the rest of the shell's cross-module globals: if the enrichment
+    // helpers aren't loaded (e.g. a minimal test host), skip watching — the Fuel
+    // card still renders, it just won't live-clear the badge.
+    if (typeof enrichmentActive !== "function" || typeof pollEnrichment !== "function") return;
+    const day = state._dayFuel as DayFuelControllerDay | null | undefined;
+    const entries = day && Array.isArray(day.entries) ? day.entries : [];
+    for (const entry of entries) {
+      const id = Number(entry.id);
+      if (!id || !enrichmentActive(entry.enrichment_status)) continue;
+      if (_fuelWatched.has(id)) continue;
+      _fuelWatched.add(id);
+      pollEnrichment("/food-notes", id, {
+        tab: state.tab,
+        token,
+        onUpdate: (row) => {
+          if (enrichmentActive(row.enrichment_status)) return; // still cooking
+          const parsed = (row as { parsed?: Record<string, unknown> }).parsed || {};
+          const rawOutput = (row as { raw_output?: unknown }).raw_output;
+          const patch: Partial<DayFuelControllerEntry> = {
+            summary: String(parsed.summary ?? rawOutput ?? entry.summary ?? "").trim() || "Food",
+            kcal: fuelMacroValue(parsed.kcal),
+            protein_g: fuelMacroValue(parsed.protein_g),
+            carbs_g: fuelMacroValue(parsed.carbs_g),
+            fat_g: fuelMacroValue(parsed.fat_g),
+            fiber_g: fuelMacroValue(parsed.fiber_g),
+            enrichment_status: (row.enrichment_status ?? null) as string | null,
+          };
+          const next = withFuelEntry(state._dayFuel as DayFuelControllerDay, id, patch);
+          renderDayFuel(token, next, options);
+        },
+      }).finally(() => {
+        _fuelWatched.delete(id);
+      });
+    }
   }
 
   function withFuelEntry(day: DayFuelControllerDay | null, id: number, patch: Partial<DayFuelControllerEntry> | null): DayFuelControllerDay {
