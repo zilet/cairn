@@ -32,7 +32,8 @@ import {
 import { symptomMarkerLinks } from "./symptom-links.js";
 import { getProgress, getRecentSessions, getRunCompliance } from "./sessions.js";
 import { localDateISO, nowContext } from "./shared.js";
-import { bumpTrainingDataVersion } from "./training-cache.js";
+import { bumpTrainingDataVersion, currentTrainingDataVersion, registerTrainingCacheClear } from "./training-cache.js";
+import { currentMarkerDataVersion } from "./marker-cache.js";
 import type { CoachContext, CoachDayIntake, CoachProgramState } from "./coach-context.js";
 // The "knows-me" layer — additive context keys (function-level cycle, same shape as
 // the existing coach↔intelligence import; resolved at call time, never at module init).
@@ -995,9 +996,32 @@ function getCoachContextFromSnapshot(): CoachContext {
 // The CONDUCTOR as a standalone pull read (for the PWA + MCP): one sequenced
 // whole-athlete focus. Reuses the canonical getCoachContext assembly so it can never
 // drift from what the prompts see. On-demand only; degrades to {available:false}.
+//
+// Cross-request MEMO (same pattern as getProgramState/getWeeklyStats): the standalone
+// GET builds the ENTIRE coach context just to pluck one key — ~400ms on a Pi — and the
+// PWA asks for it from three surfaces (Today thread, Stand, Program). Keyed on the
+// training + marker write counters and the local date, with a short TTL backstop for
+// the few signals outside both counters (e.g. a directive status flip). PROMPTS are
+// untouched — getCoachContext itself is never memoized, so coaching always sees fresh.
+let coachingFocusMemo: { key: string; at: number; value: unknown } | null = null;
+const COACHING_FOCUS_MEMO_TTL_MS = 120_000;
+registerTrainingCacheClear(() => {
+  coachingFocusMemo = null;
+});
+
 export function getCoachingFocus() {
+  const key = `${currentTrainingDataVersion()}:${currentMarkerDataVersion()}:${localDateISO()}`;
+  if (
+    coachingFocusMemo &&
+    coachingFocusMemo.key === key &&
+    Date.now() - coachingFocusMemo.at < COACHING_FOCUS_MEMO_TTL_MS
+  ) {
+    return coachingFocusMemo.value;
+  }
   try {
-    return getCoachContext().coaching_focus;
+    const value = getCoachContext().coaching_focus;
+    coachingFocusMemo = { key, at: Date.now(), value };
+    return value;
   } catch {
     return {
       available: false,

@@ -126,3 +126,14 @@ test("coachingFocus carries the block's temporal placement in plain words", () =
   // Constitution: descriptive words only — no score/grade language.
   assert.ok(!/\bscore|grade\b/i.test(String(withBlock.block_line)));
 });
+
+test("getCoachingFocus memoizes across requests and invalidates on a data write", async () => {
+  const { repo } = await import("./_seed.js");
+  const first = repo.getCoachingFocus();
+  const second = repo.getCoachingFocus();
+  assert.equal(second, first, "identity-equal inside the version window (memo hit)");
+
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5 }); // bumps the training version
+  const third = repo.getCoachingFocus();
+  assert.notEqual(third, first, "a training write invalidates the conductor memo");
+});
