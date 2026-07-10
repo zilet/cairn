@@ -38,6 +38,8 @@ type FamilyControllerApi = {
 
 (() => {
   const FAMILY_CACHE_KEY = "me:family";
+  const activeEditMutations = new Map<string, Promise<unknown>>();
+  const activeDeletes = new Set<string>();
 
   function isRecord(value: unknown): value is FamilyControllerRecord {
     return !!value && typeof value === "object";
@@ -223,8 +225,9 @@ type FamilyControllerApi = {
       const name = value(".fe-name");
       if (!name) { box.querySelector<HTMLInputElement>(".fe-name")?.focus(); return; }
       const body = { name, relationship: value(".fe-rel"), birthdate: value(".fe-birth"), color: editColor, notes: value(".fe-notes"), allergies: value(".fe-allergy"), dietary_restrictions: value(".fe-diet") };
+      let mutation: Promise<unknown> | null = null;
       try {
-        await optimisticMutation<FamilyControllerMember[]>({
+        mutation = optimisticMutation<FamilyControllerMember[]>({
           key: FAMILY_CACHE_KEY,
           apply: (current) => rows<FamilyControllerMember>(current).map((member) => String(member.id) === id ? { ...member, ...body } : member),
           rollback: cachedFamilyRows(),
@@ -239,7 +242,12 @@ type FamilyControllerApi = {
           },
           onChange: () => repaintCachedFamily(deps),
         });
+        activeEditMutations.set(id, mutation);
+        await mutation;
       } catch { deps.toast("Couldn't save that — try again."); return; }
+      finally {
+        if (mutation && activeEditMutations.get(id) === mutation) activeEditMutations.delete(id);
+      }
       deps.toast("Updated");
     };
     box.querySelector<HTMLButtonElement>(".fe-save")?.addEventListener("click", save);
@@ -258,16 +266,24 @@ type FamilyControllerApi = {
     if (!(row instanceof HTMLElement)) return;
     const id = row.dataset.fam;
     if (!id) return;
-    deps.armDelete(btn, () => {
-      optimisticMutation<FamilyControllerMember[]>({
-        key: FAMILY_CACHE_KEY,
-        apply: (current) => rows<FamilyControllerMember>(current).filter((member) => String(member.id) !== id),
-        rollback: cachedFamilyRows(),
-        request: () => deps.api(`/family/${id}`, { method: "DELETE" }),
-        onChange: () => repaintCachedFamily(deps),
-      })
-        .then(() => { deps.toast("Removed"); })
-        .catch(() => deps.toast("Couldn't remove that — try again."));
+    deps.armDelete(btn, async () => {
+      if (activeDeletes.has(id)) return;
+      activeDeletes.add(id);
+      try {
+        try { await activeEditMutations.get(id); } catch {}
+        await optimisticMutation<FamilyControllerMember[]>({
+          key: FAMILY_CACHE_KEY,
+          apply: (current) => rows<FamilyControllerMember>(current).filter((member) => String(member.id) !== id),
+          rollback: cachedFamilyRows(),
+          request: () => deps.api(`/family/${id}`, { method: "DELETE" }),
+          onChange: () => repaintCachedFamily(deps),
+        });
+        deps.toast("Removed");
+      } catch {
+        deps.toast("Couldn't remove that — try again.");
+      } finally {
+        activeDeletes.delete(id);
+      }
     });
   }
 

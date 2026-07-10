@@ -428,3 +428,50 @@ test("family controller edits and deletes existing family members", async () => 
   assert.equal(h.toasts.at(-1), "Removed");
   assert.deepEqual(h.people, []);
 });
+
+test("family delete waits for a deferred edit commit so the member cannot be restored", async () => {
+  const h = harness([{ id: 7, name: "Mara", relationship: "daughter", color: "#b4552d" }]);
+  await h.context.CairnFamilyController.render(h.deps);
+  await tick();
+
+  const originalApi = h.deps.api;
+  let releaseEdit;
+  const editResponse = new Promise((resolve) => { releaseEdit = resolve; });
+  h.deps.api = async (path, opts) => {
+    const result = await originalApi(path, opts);
+    if (path === "/family/7" && opts?.method === "PUT") await editResponse;
+    return result;
+  };
+
+  const card = h.deps.view.querySelector("#flist").querySelector(".fam-card");
+  h.context.CairnFamilyController.startEdit(card, h.deps);
+  const edit = card.querySelector(".fam-edit");
+  edit.querySelector(".fe-notes").value = "server saved, client commit deferred";
+  const savePromise = edit.querySelector(".fe-save").click();
+  await tick();
+
+  const editedCard = h.deps.view.querySelector("#flist").querySelector(".fam-card");
+  const deleteButton = editedCard.querySelector("[data-fdel]");
+  h.context.CairnFamilyController.startDelete(deleteButton, h.deps);
+  h.context.CairnFamilyController.startDelete(deleteButton, h.deps);
+  await tick();
+  assert.equal(
+    h.requests.filter((request) => request.path === "/family/7" && request.opts?.method === "DELETE").length,
+    0,
+    "delete is serialized behind the active edit instead of racing its late commit",
+  );
+
+  releaseEdit();
+  await savePromise;
+  await tick();
+  await tick();
+
+  assert.equal(
+    h.requests.filter((request) => request.path === "/family/7" && request.opts?.method === "DELETE").length,
+    1,
+    "duplicate confirmations collapse into one delete request",
+  );
+  assert.deepEqual(h.people, []);
+  assert.equal(h.deps.view.querySelector("#flist").querySelector(".fam-card"), null);
+  assert.equal(h.toasts.at(-1), "Removed");
+});
