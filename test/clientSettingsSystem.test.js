@@ -15,6 +15,9 @@ test("System health is lazy, explicitly windowed, and isolated from Settings edi
   assert.match(screen, /api\("\/ready", \{ cache: "no-store", acceptErrorBody: true \}\)/);
   assert.match(screen, /readinessStatus: "idle"/);
   assert.match(screen, /typeof readiness\.ok === "boolean"/);
+  const renderer = readFileSync(join(root, "src/client/settings-client.ts"), "utf8");
+  assert.match(renderer, /currentBuild\.scope === "current_build"/);
+  assert.match(renderer, /const pulse = hasCurrentBuild \? currentBuild : row/);
   assert.match(screen, /status: "idle"/);
   assert.match(screen, /status = "unavailable"/);
   assert.match(screen, /system: renderSystemSlice/);

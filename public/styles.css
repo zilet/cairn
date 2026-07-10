@@ -1545,6 +1545,10 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .sysdiag-tone-error .sysdiag-state-icon{background:rgba(161,67,52,.11);color:var(--warn)}
 .sysdiag-window{color:var(--muted);font-size:.7rem;white-space:nowrap;font-variant-numeric:lining-nums}
 .sysdiag-privacy{color:var(--muted);margin:9px 0 12px;line-height:1.45}
+.sysdiag-build-scope{display:flex;flex-direction:column;gap:3px;margin:0 0 11px;padding:9px 11px;
+  border-left:3px solid var(--line-2);background:var(--card-2);border-radius:0 8px 8px 0;font-size:.7rem}
+.sysdiag-build-scope b{color:var(--ink-2);overflow-wrap:anywhere}
+.sysdiag-build-scope span{color:var(--muted);line-height:1.45}
 .sysdiag-state{display:flex;align-items:flex-start;gap:11px;margin-top:13px;color:var(--ink-2)}
 .sysdiag-state p{margin:4px 0 10px;color:var(--muted);font-size:.8rem;line-height:1.45}
 .sysdiag-section-title{margin-top:15px;color:var(--muted);font-family:var(--font-ui);font-size:.62rem;

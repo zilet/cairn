@@ -374,3 +374,65 @@ test("readiness truth overrides a zero diagnostic count and renders optional ope
   assert.match(dbDown, /Database is unavailable/);
   assert.match(dbDown, /Runtime errors need a look/);
 });
+
+test("current-build diagnostics determine health while prior-build incidents remain historical", () => {
+  const settings = loadSettingsClient();
+  const readiness = {
+    ok: true,
+    database: "ok",
+    scheduler: { status: "fresh", age_sec: 5 },
+    queues: {
+      agent_jobs: { queued: 0, running: 0, oldest_age_sec: null, failed_24h: 0 },
+      chat_turns: { queued: 0, running: 0, oldest_age_sec: null, failed_24h: 0 },
+    },
+  };
+  const cleanDeploy = settings.diagnosticsCard(
+    {
+      window_days: 7,
+      total: 10,
+      issues: [{ source: "api", kind: "old_build_error", level: "error", count: 10 }],
+      recent: [{ source: "api", kind: "old_build_error", level: "error" }],
+      slow: [],
+      current_build: {
+        scope: "current_build",
+        build_id: `abc<123>`,
+        release: `1.1.0<rc>`,
+        total: 0,
+        prior_build_total: 10,
+        issues: [],
+        recent: [],
+        slow: [],
+      },
+    },
+    { readinessStatus: "ready", readiness }
+  );
+  assert.match(cleanDeploy, /System is ready/);
+  assert.match(cleanDeploy, /Healthy zero-event response/);
+  assert.match(cleanDeploy, /Current build 1\.1\.0&lt;rc&gt; @ abc&lt;123&gt;/);
+  assert.match(cleanDeploy, /10 earlier-build events remain as history and do not affect current health/);
+  assert.doesNotMatch(cleanDeploy, /old build error|Runtime errors need a look/);
+
+  const currentWarning = settings.diagnosticsCard(
+    {
+      window_days: 7,
+      total: 10,
+      issues: [],
+      recent: [],
+      slow: [],
+      current_build: {
+        scope: "current_build",
+        build_id: "new-build",
+        release: "1.1.0",
+        total: 1,
+        prior_build_total: 9,
+        issues: [{ source: "api", kind: "current_slow", level: "warning", count: 1, route: "/api/today" }],
+        recent: [],
+        slow: [],
+      },
+    },
+    { readinessStatus: "ready", readiness }
+  );
+  assert.match(currentWarning, /Operational warnings captured/);
+  assert.match(currentWarning, /current slow/);
+  assert.match(currentWarning, /9 earlier-build events remain/);
+});

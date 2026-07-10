@@ -448,10 +448,17 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
   const status = options.status || "ready";
   const privacy = "Request bodies, health values, chat text, and credentials are never collected.";
   const row = settingsClientRecord(data);
-  const issues = Array.isArray(row.issues) ? row.issues.map(settingsClientRecord) : [];
-  const recent = Array.isArray(row.recent) ? row.recent.map(settingsClientRecord) : [];
-  const slow = Array.isArray(row.slow) ? row.slow.map(settingsClientRecord) : [];
-  const total = Math.max(0, Number(row.total) || 0);
+  const currentBuild = settingsClientRecord(row.current_build);
+  const hasCurrentBuild = currentBuild.scope === "current_build";
+  const pulse = hasCurrentBuild ? currentBuild : row;
+  const issues = Array.isArray(pulse.issues) ? pulse.issues.map(settingsClientRecord) : [];
+  const recent = Array.isArray(pulse.recent) ? pulse.recent.map(settingsClientRecord) : [];
+  const slow = Array.isArray(pulse.slow) ? pulse.slow.map(settingsClientRecord) : [];
+  const total = Math.max(0, Number(pulse.total) || 0);
+  const priorBuildTotal = hasCurrentBuild ? Math.max(0, Number(currentBuild.prior_build_total) || 0) : 0;
+  const currentBuildLabel = hasCurrentBuild
+    ? [String(currentBuild.release || "").trim(), String(currentBuild.build_id || "").trim()].filter(Boolean).join(" @ ")
+    : "";
   const days = Math.max(1, Number(row.window_days) || requestedDays);
   const sourceFilter = String(options.source || "all");
   const severityFilter = String(options.severity || "all");
@@ -542,6 +549,7 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
     : status === "unavailable"
       ? `<div class="sysdiag-state sysdiag-unavailable"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Diagnostics unavailable</b><p>Cairn could not load the local diagnostics pulse. This is different from a valid zero-event response.</p><button class="btn-sm" data-system-retry type="button">Try again</button></div></div>`
       : `<p class="sess-line sysdiag-privacy">${total} diagnostic event${total === 1 ? "" : "s"} captured · ${privacy}</p>
+        ${hasCurrentBuild ? `<div class="sysdiag-build-scope"><b>${currentBuildLabel ? `Current build ${escHtml(currentBuildLabel)}` : "Current build"}</b><span>${total} current-build event${total === 1 ? "" : "s"}.${priorBuildTotal ? ` ${priorBuildTotal} earlier-build event${priorBuildTotal === 1 ? " remains" : "s remain"} as history and do not affect current health.` : " No earlier-build events are in this window."}</span></div>` : ""}
         <div class="sysdiag-controls" aria-label="System health filters" data-save-ignore>
           <div class="sysdiag-window-buttons" role="group" aria-label="Diagnostics window">
             ${([1, 7, 30] as const).map((n) => `<button type="button" class="btn-sm${days === n ? " active" : ""}" data-diag-days="${n}" aria-pressed="${days === n}">${n === 1 ? "24h" : `${n}d`}</button>`).join("")}
@@ -552,7 +560,7 @@ function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}
         ${noMatches ? `<div class="sysdiag-empty">No diagnostics match these filters.</div>` : ""}
         ${filteredIssues.length ? `<div class="sysdiag-section"><h3>Grouped issues <span>${filteredIssues.length}</span></h3><div class="sysdiag-list">${issueRows}</div>${settingsDiagnosticPager("issues", issuePage, filteredIssues.length, pageSize)}</div>` : ""}
         ${combinedRecent.length ? `<div class="sysdiag-section"><h3>Recent events <span>${combinedRecent.length}</span></h3><div class="sysdiag-list">${recentRows}</div>${settingsDiagnosticPager("recent", recentPage, combinedRecent.length, pageSize)}</div>` : ""}
-        ${total === 0 && !combinedRecent.length ? `<div class="sysdiag-empty${tone === "healthy" ? " sysdiag-healthy-empty" : ""}"><b>${tone === "healthy" ? "Healthy zero-event response" : "No diagnostic events"}</b><span>No errors, warnings, or slow requests were captured in the ${escHtml(windowLabel)}.</span></div>` : ""}`;
+        ${total === 0 && !combinedRecent.length ? `<div class="sysdiag-empty${tone === "healthy" ? " sysdiag-healthy-empty" : ""}"><b>${tone === "healthy" ? "Healthy zero-event response" : "No diagnostic events"}</b><span>No errors, warnings, or slow requests were captured${hasCurrentBuild ? " for the current build" : ""} in the ${escHtml(windowLabel)}.</span></div>` : ""}`;
   return `<section class="sess sysdiag-card sysdiag-tone-${tone}" aria-labelledby="sysdiag-title"${pending ? ` aria-busy="true"` : ""}>
     <div class="sysdiag-heading"><div><div class="lbl" id="sysdiag-title">System health</div><div class="sysdiag-headline"><span class="sysdiag-state-icon" aria-hidden="true">${tone === "healthy" ? "✓" : tone === "warning" ? "!" : "×"}</span><b>${headline}</b></div></div><span class="sysdiag-window">${escHtml(windowLabel)}</span></div>
     ${readiness.html}
