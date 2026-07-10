@@ -935,7 +935,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_build_created ON agent_runs(build_id, created_at);
 
 -- Local-first diagnostic spine for browser/API/process failures. Every write is
 -- bounded + sanitized before it reaches this table; payload bodies, query values,
@@ -1046,6 +1045,8 @@ runMigrations(db);
 // Indexes that reference migrated columns must be created after migrations so
 // older local databases can boot and then add the columns they need.
 db.exec(`
+CREATE INDEX IF NOT EXISTS idx_agent_runs_build_created
+  ON agent_runs(build_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_source_external
   ON activities(source, external_id)
   WHERE source IS NOT NULL AND external_id IS NOT NULL;

@@ -984,6 +984,14 @@ test("chat session index is created only after the v49 column migration", () => 
   assert.match(migrations, /CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages\(session_id\)/);
 });
 
+test("agent build index is created only after the build-id migration", () => {
+  const schema = read("src/db.ts");
+  const migrationCall = schema.indexOf("runMigrations(db);");
+  const buildIndex = schema.indexOf("CREATE INDEX IF NOT EXISTS idx_agent_runs_build_created");
+  assert.ok(migrationCall >= 0, "db boot must run migrations");
+  assert.ok(buildIndex > migrationCall, "the build-scoped agent index must not reference build_id before v62 adds it");
+});
+
 test("PWA API calls are covered by shared client contracts or explicit waivers", () => {
   const contractSource = [
     "src/contracts/client.ts",
