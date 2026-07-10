@@ -251,25 +251,49 @@ test("the block calendar never attaches to a non-training lead; compact card car
   assert.doesNotMatch(noBlock, /Week 3 of 5/);
 });
 
-test("a recovery lead carries the one-tap recovery-week draft action", () => {
+test("action buttons render only with options.actions, gated per lead", () => {
   const { focus } = loadCoachingFocus();
-  const recovery = focus.coachingFocusCardHtml({
+  const recoveryLead = {
     ...richFocus,
     lead: { domain: "recovery", title: "Take an earned recovery week", why: "Seven loaded weeks without a reset." },
-  });
+  };
+  const swapLead = {
+    ...richFocus,
+    lead: {
+      domain: "training",
+      title: "Break <plateau>",
+      why: "Bench stalled",
+      swap: { from: "Barbell <bench>", to: ["Incline <press>", "Floor <press>", "Third variation"] },
+    },
+  };
+
+  // actions:false (the default — navigate-only surfaces like the Standing slot)
+  // renders NO action button, even for recovery/swap leads (they'd be dead there).
+  assert.doesNotMatch(focus.coachingFocusCardHtml(recoveryLead), /data-cfocus-act/);
+  assert.doesNotMatch(focus.coachingFocusCardHtml(swapLead), /data-cfocus-act/);
+  assert.doesNotMatch(focus.coachingFocusCardHtml(recoveryLead, { actions: false }), /data-cfocus-act/);
+
+  // actions:true renders the recovery button.
+  const recovery = focus.coachingFocusCardHtml(recoveryLead, { actions: true });
   assert.match(recovery, /data-cfocus-act="recovery-week"/);
   assert.match(recovery, /Draft my recovery week/);
 
-  // Only the recovery lever is draft-actionable, and the compact card (Stand)
-  // stays quiet — the action lives where the program does.
-  assert.doesNotMatch(focus.coachingFocusCardHtml(richFocus), /data-cfocus-act/);
-  assert.doesNotMatch(
-    focus.coachingFocusCompactHtml({
-      ...richFocus,
-      lead: { domain: "recovery", title: "Take an earned recovery week", why: "w" },
-    }),
-    /data-cfocus-act/
-  );
+  // actions:true on a training swap lead renders up to two escaped swap buttons.
+  const swap = focus.coachingFocusCardHtml(swapLead, { actions: true });
+  const swapButtons = swap.match(/data-cfocus-act="swap"/g) || [];
+  assert.equal(swapButtons.length, 2, "capped at two variation buttons");
+  assert.match(swap, /data-swap-from="Barbell &lt;bench&gt;"/);
+  assert.match(swap, /data-swap-to="Incline &lt;press&gt;"/);
+  assert.match(swap, /Rotate in Incline &lt;press&gt;/);
+  assert.doesNotMatch(swap, /Third variation/); // beyond the two-button cap
+  assert.doesNotMatch(swap, /<bench>|<press>/); // raw angle brackets never leak
+
+  // A training lead without a swap renders no swap button, and richFocus's plain
+  // training lead is not recovery either → no action button at all.
+  assert.doesNotMatch(focus.coachingFocusCardHtml(richFocus, { actions: true }), /data-cfocus-act/);
+
+  // The compact card (Stand overview) never carries actions.
+  assert.doesNotMatch(focus.coachingFocusCompactHtml(recoveryLead), /data-cfocus-act/);
 });
 
 test("routing to the screen you're already on settles instead of re-rendering", () => {
@@ -289,4 +313,67 @@ test("routing to the screen you're already on settles instead of re-rendering", 
   state.tab = "today";
   focus.cfocusRoute("recovery");
   assert.deepEqual(activated, ["progress"]);
+});
+
+test("a parallel training lever carries the swap buttons too (the live plateau-alongside-recovery case)", () => {
+  const { focus } = loadCoachingFocus();
+  const plateauAlongside = {
+    ...richFocus,
+    lead: { domain: "recovery", title: "Take an earned recovery week", why: "Seven loaded weeks." },
+    parallel: [
+      {
+        domain: "training",
+        title: "Break the plateau on your chest",
+        why: "Bench has stalled.",
+        swap: { from: "Barbell Bench Press", to: ["DB Bench Press", "Incline Bench Press"] },
+      },
+    ],
+  };
+  const withActions = focus.coachingFocusCardHtml(plateauAlongside, { actions: true });
+  assert.match(withActions, /data-swap-from="Barbell Bench Press"/);
+  assert.match(withActions, /Rotate in DB Bench Press/);
+  assert.match(withActions, /Rotate in Incline Bench Press/);
+  // Navigate-only surfaces stay button-free.
+  assert.doesNotMatch(focus.coachingFocusCardHtml(plateauAlongside), /data-cfocus-act/);
+});
+
+test("the literal 'program' route (retest chip) settles when already on Program", () => {
+  const { focus, state, activated } = loadCoachingFocus();
+  state.tab = "progress";
+  state.progressSeg = "program";
+  focus.cfocusRoute("program");
+  assert.deepEqual(activated, [], "the Next check-in chip never re-flashes the screen it lives on");
+  state.tab = "today";
+  focus.cfocusRoute("program");
+  assert.deepEqual(activated, ["progress"], "from elsewhere it still navigates");
+});
+
+test("a recovery lead with a waiting draft renders a review LINK, not the draft button again", () => {
+  const { focus } = loadCoachingFocus();
+  const drafted = {
+    ...richFocus,
+    lead: {
+      domain: "recovery",
+      title: "Take an earned recovery week",
+      why: "Seven loaded weeks without a reset.",
+      move: "Your recovery week is drafted — review and apply it when you're ready.",
+      draft_pending: true,
+    },
+  };
+  const html = focus.coachingFocusCardHtml(drafted, { actions: true });
+  assert.doesNotMatch(html, /data-cfocus-act="recovery-week"/, "the ask never re-renders once the draft landed");
+  assert.doesNotMatch(html, /Draft my recovery week/);
+  assert.match(html, /Review your recovery week/);
+  assert.match(html, /data-cfocus-go="plan-coach"/, "pure navigation — needs no per-surface wiring");
+  // Navigate-only surfaces (no actions) still render neither button nor link.
+  assert.doesNotMatch(focus.coachingFocusCardHtml(drafted), /Review your recovery week/);
+});
+
+test("the plan-coach route lands on the Plan tab's Coach section (the waiting draft)", () => {
+  const { focus, state, activated } = loadCoachingFocus();
+  state.tab = "progress";
+  state.progressSeg = "program";
+  focus.cfocusRoute("plan-coach");
+  assert.deepEqual(activated, ["plan"], "navigates to Plan");
+  assert.equal(state.planJump, "coach", "jumps straight to the Coach/proposals section");
 });

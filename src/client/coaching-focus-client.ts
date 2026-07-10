@@ -35,11 +35,30 @@ function cfocusBlockDomains(domain: unknown): boolean {
   return domain === "training" || domain === "running" || domain === "recovery";
 }
 
+// One-tap variation swaps for a stalled lift (same movement pattern): rotate the
+// stalled lift out for a fresh stimulus. Up to two. Shared by the LEAD block and
+// the parallel Alongside rows — on real data the plateau often rides alongside a
+// recovery lead, and the tap must work wherever the lever renders. Callers gate
+// on options.actions (only the Program view wires [data-cfocus-act]).
+function cfocusSwapButtonsHtml(item: ClientCoachingFocusItem): string {
+  if (item.domain !== "training" || !item.swap || !Array.isArray(item.swap.to)) return "";
+  const from = item.swap.from || "";
+  let html = "";
+  for (const to of item.swap.to.slice(0, 2)) {
+    if (!to) continue;
+    html += `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="swap" data-swap-from="${escAttr(from)}" data-swap-to="${escAttr(to)}">Rotate in ${escHtml(to)}</button>`;
+  }
+  return html;
+}
+
 // options.blockLine=false omits the calendar line — for the Program view, which
 // already owns block truth via its own "Current block · week N of M" card.
+// options.actions=true renders the [data-cfocus-act] buttons — only where they
+// are wired (Program). Every navigate-only surface (the Standing slot) keeps the
+// default, so an action button never renders dead.
 function coachingFocusCardHtml(
   focus: ClientCoachingFocus | null | undefined,
-  options: { blockLine?: boolean } = {}
+  options: { blockLine?: boolean; actions?: boolean } = {}
 ): string {
   if (!focus || !focus.available || !focus.lead) return "";
   const lead = focus.lead;
@@ -58,12 +77,24 @@ function coachingFocusCardHtml(
   html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
   if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
   if (lead.move) html += `<p class="cfocus-lead-move"><span class="lbl">Move</span>${escHtml(lead.move)}</p>`;
-  // A recovery lead is ACTIONABLE, not just navigable: one tap drafts next week
-  // as a recovery week (a reviewable proposal via the propose→apply loop — the
-  // same durable /program/evolve job as "Evolve my plan", never auto-applied).
-  // Wired where the card lives on Program; routing surfaces still navigate here.
-  if (lead.domain === "recovery") {
-    html += `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
+  // Action buttons render ONLY when options.actions — they are wired where the
+  // card lives (Program); a navigate-only surface would render them dead. The
+  // surrounding lead row still navigates (focusRouteTarget ignores [data-cfocus-act]).
+  if (options.actions) {
+    // A recovery lead is ACTIONABLE: one tap drafts next week as a recovery week
+    // (a reviewable proposal via the propose→apply loop — the same durable
+    // /program/evolve job as "Evolve my plan", never auto-applied). Once the draft
+    // has landed (draft_pending), the button gives way to a review LINK — state,
+    // not a repeatable ask. Pure navigation via data-cfocus-go (the document-level
+    // cfocusRoute listener), so it needs no per-surface wiring.
+    if (lead.domain === "recovery") {
+      // role="link" so the keydown navigator resolves the BUTTON's target
+      // (plan-coach), not the surrounding lead row's.
+      html += lead.draft_pending
+        ? `<button class="draftbtn cfocus-review" type="button" role="link" data-cfocus-go="plan-coach">Review your recovery week →</button>`
+        : `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
+    }
+    html += cfocusSwapButtonsHtml(lead);
   }
   html += `</div>`;
 
@@ -75,6 +106,7 @@ function coachingFocusCardHtml(
       html += `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`;
       if (item.why) html += `<span class="cfocus-along-why">${escHtml(item.why)}</span>`;
       if (item.move) html += `<span class="cfocus-along-move">${escHtml(item.move)}</span>`;
+      if (options.actions) html += cfocusSwapButtonsHtml(item);
       html += `</div>`;
     }
     html += `</div>`;
@@ -229,10 +261,19 @@ function cfocusRoute(go: unknown): void {
       state.standSeg = "markers";
       activateTab("stand");
       break;
+    case "plan-coach":
+      // The waiting recovery-week draft (and any future "review it in Coach" link).
+      state.planJump = "coach";
+      activateTab("plan");
+      break;
     default:
       if (isCoachingFocusDomain(go)) {
         cfocusDomainRoute(go);
       } else {
+        // The literal "program" targets (retest chip, full-plan link) get the
+        // same already-there guard as the training/recovery domain leads — the
+        // retest chip RENDERS on Program, so without this it re-flashes it.
+        if (cfocusSettleIfThere("progress", "program")) break;
         state.progressSeg = "program";
         activateTab("progress");
       }

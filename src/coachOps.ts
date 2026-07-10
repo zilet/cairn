@@ -314,6 +314,11 @@ export async function evolveProgram(
   hooks?.onPhase?.("drafting how your plan should evolve");
   const { agent: chosen, result, tried } = await runChosen(agent, prompt, { signal: hooks?.signal });
   const proposal = repo.createProposal(chosen, instruction ?? "evolve program", result.raw, result.parsed);
+  // A fresh recovery-week draft retires the prior one (same one-tap ask — the newest
+  // read wins), so repeated taps never stack duplicate drafts in the Coach list.
+  if (proposal?.id != null && String(instruction ?? "").startsWith(repo.RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
+    repo.supersedeRecoveryWeekDrafts(Number(proposal.id));
+  }
   return {
     proposal,
     state,

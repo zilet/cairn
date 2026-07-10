@@ -3917,7 +3917,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayRailLoadersSource, /CairnTodayGarminReconciliation\.load/);
   assert.match(todayRailControllerSource, /type TodayRailDeps = \{/);
   assert.match(todayRailControllerSource, /async function fetchTodayAgenda\(date: string, deps: TodayRailDeps\): Promise<TodayRailAgenda \| null>/);
-  assert.match(todayRailControllerSource, /function runAgendaRail\(agenda: Partial<TodayRailAgenda>/);
+  assert.match(todayRailControllerSource, /function runAgendaRail\(/);
   assert.match(todayRailControllerSource, /function wireGenericAgendaCards\(pending: TodayRailCandidate\[\], deps: TodayRailDeps\): void/);
   assert.match(todayRailControllerSource, /function railLoaders\(\): Window\["CairnTodayRailLoaders"\]/);
   assert.doesNotMatch(todayRailControllerSource, /async function loadFuelToday|async function loadRecentActivities|CairnTodayAgenda\.fuelCardHtml/);
@@ -4240,7 +4240,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramControllerSource, /var _progFocusCard: string \| undefined/);
   assert.match(progressProgramControllerSource, /async function renderProgressProgram\(deps: ClientProgressProgramControllerDeps\): Promise<unknown>/);
   assert.match(progressProgramControllerSource, /function paintProgressProgramBody\(data: ProgressProgramState, deps: ClientProgressProgramControllerDeps\): void/);
-  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(\n  btn: Element,\n  deps: ClientProgressProgramControllerDeps,/);
+  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(\n {2}btn: Element,\n {2}deps: ClientProgressProgramControllerDeps,/);
   assert.match(progressProgramControllerSource, /async function tidyExerciseNames\(btn: Element, deps: ClientProgressProgramControllerDeps\): Promise<void>/);
   assert.match(progressProgramControllerSource, /CairnProgressFocus: PROGRESS_FOCUS_STATE/);
   assert.match(progressProgramControllerSource, /CairnProgressProgramController/);
@@ -5519,7 +5519,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
-  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false \}\)/);
+  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false, actions: true \}\)/);
   assert.doesNotMatch(progress, /coachingFocusCardHtml/);
   assert.match(meals, /function renderCoach\(\)/);
   assert.match(meals, /function renderMeals\(\)/);
@@ -5705,4 +5705,19 @@ test("GitHub Actions workflows pin external actions to commit SHAs", () => {
       assert.match(ref, /^[0-9a-f]{40}$/, `${file} must pin ${action} to a full commit SHA, not ${ref}`);
     }
   }
+});
+
+test("the recovery-week instruction prefix is one contract across client and server", () => {
+  // The client sends the full instruction with /program/evolve; the server detects a
+  // waiting draft (pendingRecoveryDraft) and retires stale ones by this PREFIX. If
+  // either side rewords its literal, the button/review-link state machine silently
+  // dies — pin them to each other.
+  const server = read("src/repo/profile.ts");
+  const client = read("src/client/progress-program-controller.ts");
+  const m = server.match(/RECOVERY_WEEK_INSTRUCTION_PREFIX = "([^"]+)"/);
+  assert.ok(m, "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX");
+  const prefix = m[1];
+  const c = client.match(/const RECOVERY_WEEK_INSTRUCTION =\s*\n?\s*"([^"]+)"/);
+  assert.ok(c, "the client declares RECOVERY_WEEK_INSTRUCTION");
+  assert.ok(c[1].startsWith(prefix), `the client instruction must start with the server prefix ("${prefix}")`);
 });

@@ -106,6 +106,9 @@ function depsFor(_context, overrides = {}) {
     querySelector() {
       return null;
     },
+    querySelectorAll() {
+      return [];
+    },
   };
   const invalidated = [];
   const toasts = [];
@@ -193,6 +196,9 @@ test("progress program controller paints stacked program read and wires actions"
         if (selector === "#progEvolveBtn") return evolve;
         if (selector === "#progTidyBtn") return tidy;
         return null;
+      },
+      querySelectorAll() {
+        return [];
       },
     },
   });

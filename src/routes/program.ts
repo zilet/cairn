@@ -6,7 +6,7 @@ import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
-  buildAndApplySwap,
+  applySwapSmart,
   buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
@@ -135,13 +135,15 @@ programRouter.get("/program/progression", (req, res) => {
     const cached = getCachedDayRead(localToday());
     const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
     const days = getPlan();
-    const strengthDays = days.filter((d: any) =>
-      Array.isArray(d.items) && d.items.some((it: any) => it.kind !== "cardio" && it.exercise)
+    const strengthDays = days.filter(
+      (d: any) => Array.isArray(d.items) && d.items.some((it: any) => it.kind !== "cardio" && it.exercise)
     );
     if (strengthDays.length) {
       const matched = focus
         ? strengthDays.find((d: any) => {
-            const f = String(d.focus || d.name || "").toLowerCase().trim();
+            const f = String(d.focus || d.name || "")
+              .toLowerCase()
+              .trim();
             return f && (f === focus || f.includes(focus) || focus.includes(f));
           })
         : null;
@@ -182,12 +184,16 @@ programRouter.post("/program/swap", (req, res) => {
 // error } at 200.
 programRouter.post("/program/swap/apply", (req, res) => {
   const { day, from, to } = req.body ?? {};
-  res.json(buildAndApplySwap(Number(day), from, to));
+  // applySwapSmart owns the whole rotate-in intent: an explicit day is used
+  // verbatim; otherwise the slot resolves through the tiered ladder (exact →
+  // key → movement family — the plan's implement spelling never blocks the
+  // athlete's logged one), and when `from` isn't represented at all, the
+  // variation is ADDED to the day already training that muscle group. The
+  // response `message` says what actually happened.
+  res.json(applySwapSmart(from, to, Number.isFinite(Number(day)) ? Number(day) : null));
 });
 
-programRouter.get("/proposals", (req, res) =>
-  res.json(listProposals(req.query.limit ? Number(req.query.limit) : 20))
-);
+programRouter.get("/proposals", (req, res) => res.json(listProposals(req.query.limit ? Number(req.query.limit) : 20)));
 
 programRouter.post("/proposals/:id/apply", (req, res) => {
   try {

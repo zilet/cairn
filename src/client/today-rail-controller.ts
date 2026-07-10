@@ -58,7 +58,7 @@ type TodayRailDeps = {
   async function fetchTodayAgenda(date: string, deps: TodayRailDeps): Promise<TodayRailAgenda | null> {
     try {
       const agenda = await deps.api("/today-agenda?date=" + encodeURIComponent(date || deps.state.logDate));
-      const row = agenda && typeof agenda === "object" ? agenda as Partial<TodayRailAgenda> : null;
+      const row = agenda && typeof agenda === "object" ? (agenda as Partial<TodayRailAgenda>) : null;
       if (!row || !Array.isArray(row.primary) || !Array.isArray(row.more)) return null;
       return row as TodayRailAgenda;
     } catch {
@@ -81,7 +81,11 @@ type TodayRailDeps = {
   </aside>`;
   }
 
-  function runAgendaRail(agenda: Partial<TodayRailAgenda> | null | undefined, genericPending: TodayRailCandidate[], deps: TodayRailDeps): void {
+  function runAgendaRail(
+    agenda: Partial<TodayRailAgenda> | null | undefined,
+    genericPending: TodayRailCandidate[],
+    deps: TodayRailDeps
+  ): void {
     const called = new Set<() => unknown>();
     const loaders = loaderMap(deps);
     const buckets = CairnTodayAgenda.renderableBuckets(agenda);
@@ -91,7 +95,9 @@ type TodayRailDeps = {
       const loader = loaders[key];
       if (!loader || called.has(loader)) continue;
       called.add(loader);
-      try { loader(); } catch {}
+      try {
+        loader();
+      } catch {}
     }
     wireGenericAgendaCards(genericPending, deps);
   }
@@ -99,7 +105,9 @@ type TodayRailDeps = {
   function runFallbackRail(isToday: boolean, deps: TodayRailDeps): void {
     railLoaders().loadRecentActivities(deps);
     if (!isToday) return;
-    try { deps.loadTodayReads(); } catch {}
+    try {
+      deps.loadTodayReads();
+    } catch {}
     railLoaders().loadGarminReconcile(deps);
     railLoaders().loadWeekAhead(deps);
     railLoaders().loadProgramAdjustmentsBanner(deps);
@@ -164,13 +172,17 @@ type TodayRailDeps = {
           // Retire only this semantic presentation revision. The active health
           // directives continue shaping meals/training in the background; new or
           // materially changed evidence gets a new revision and can surface again.
-          void deps
-            .api("/today-agenda/ack", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id: candidate?.id || id, revision: candidate?.revision || null }),
-            })
-            .catch(() => {});
+          // Only a revision-carrying candidate acks — other candidates (since-last)
+          // reuse this kind and must NOT fire a bogus ack (mirrors the dismiss guard).
+          if (candidate?.revision) {
+            void deps
+              .api("/today-agenda/ack", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: candidate?.id || id, revision: candidate.revision }),
+              })
+              .catch(() => {});
+          }
           // The whole-picture read lives on the Stand overview now.
           deps.state.standSeg = null;
           deps.activateTab("stand");

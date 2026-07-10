@@ -86,6 +86,24 @@ test("coachingFocus leads with recovery when a deload is due (won't push into fa
   assert.match(out.lead.title, /recovery|lighter|deload/i);
 });
 
+test("a recovery lead speaks STATE once its one-tap draft is waiting (draft_pending)", () => {
+  const base = {
+    programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
+    recovery: {},
+  };
+  const fresh = coachingFocus(base);
+  assert.equal(fresh.lead.domain, "recovery");
+  assert.notEqual(fresh.lead.draft_pending, true, "no flag while nothing is drafted");
+
+  const pending = coachingFocus({ ...base, recoveryDraftPending: true });
+  assert.equal(pending.lead.draft_pending, true);
+  assert.match(String(pending.lead.move), /drafted/i, "the move points at the waiting draft, not the same ask again");
+
+  // Strict boolean at the trust boundary — a truthy non-boolean never flips it.
+  const sloppy = coachingFocus({ ...base, recoveryDraftPending: "yes" });
+  assert.notEqual(sloppy.lead.draft_pending, true);
+});
+
 test("coachingFocus promotes an act-now health lever to lead when training is steady", () => {
   const out = coachingFocus({
     goalMode: "maintain",
@@ -125,6 +143,48 @@ test("coachingFocus carries the block's temporal placement in plain words", () =
   assert.equal(coachingFocus(richInput()).block_line, null);
   // Constitution: descriptive words only — no score/grade language.
   assert.ok(!/\bscore|grade\b/i.test(String(withBlock.block_line)));
+});
+
+test("a stalled training lead carries a one-tap swap payload {from, to[]}", () => {
+  const out = coachingFocus(richInput());
+  assert.equal(out.lead.domain, "training");
+  assert.ok(out.lead.swap, "the stalled lead carries an actionable swap payload");
+  assert.equal(out.lead.swap.from, "Overhead Press", "swap.from is the stalled lead lift");
+  assert.ok(Array.isArray(out.lead.swap.to), "swap.to is a list of same-pattern options");
+  assert.ok(out.lead.swap.to.includes("Push Press"), "swap.to names the real variation");
+  assert.ok(out.lead.swap.to.length >= 1 && out.lead.swap.to.length <= 2, "swap.to stays bounded to 2 options");
+});
+
+test("a capacity-laggard training lead carries no swap payload (nothing stalled to rotate)", () => {
+  const out = coachingFocus({
+    goalMode: "maintain",
+    programState: { mesocycle: { phase: "accumulation" } },
+    recovery: { delta: { hrv: 0, rhr: 0 } },
+    // A laggard lever leads, but no muscle group is STALLING → no rotation to offer.
+    performance: { lever: { headline: "Bring up your overhead press", why: "furthest-behind lift" }, endurance: { tone: "steady" } },
+  });
+  assert.equal(out.lead.domain, "training");
+  assert.match(out.lead.title, /overhead press/i);
+  assert.equal(out.lead.swap, undefined, "a laggard lead has no swap payload");
+});
+
+test("the swap payload is trimmed and clamped through item sanitization", () => {
+  const out = coachingFocus({
+    groupsTrajectory: {
+      groups: [
+        {
+          verdict: "stalling",
+          label: "Chest",
+          lead_lift: "  Barbell Bench Press  ", // untrimmed → sanitizer trims it
+          vary_options: [{ name: " DB Bench Press " }, { name: "Incline Bench Press" }, { name: "Floor Press" }],
+        },
+      ],
+    },
+  });
+  assert.ok(out.lead.swap, "swap survives sanitization");
+  assert.equal(out.lead.swap.from, "Barbell Bench Press", "swap.from is trimmed");
+  assert.equal(out.lead.swap.to.length, 2, "swap.to is capped at 2 options");
+  assert.deepEqual(out.lead.swap.to, ["DB Bench Press", "Incline Bench Press"], "swap.to entries are trimmed, capped, non-empty");
 });
 
 test("getCoachingFocus memoizes across requests and invalidates on a data write", async () => {

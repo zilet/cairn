@@ -82,6 +82,42 @@ async function triggerProgramEvolve(
   });
 }
 
+// The conductor's stalled-lift lead may carry a one-tap variation swap. Applied
+// DETERMINISTICALLY via /program/swap/apply (no agent turn) — the plan follows
+// immediately. Double-taps are guarded while the request is in flight.
+async function applyCoachingFocusSwap(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void> {
+  const el = btn instanceof HTMLElement ? btn : null;
+  if (el?.dataset.busy === "1") return;
+  if (el) el.dataset.busy = "1";
+  const from = btn.getAttribute("data-swap-from") || "";
+  const to = btn.getAttribute("data-swap-to") || "";
+  const restore = deps.busy(btn, "Rotating it in…");
+  let result: { ok?: boolean; error?: string; message?: string } | null = null;
+  try {
+    result = (await deps.api("/program/swap/apply", {
+      method: "POST",
+      // Content-Type is MANDATORY here — api() does not auto-set it (a past bug).
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to }),
+    })) as { ok?: boolean; error?: string; message?: string } | null;
+  } catch {
+    result = null;
+  }
+  if (result?.ok) {
+    // The server says what actually happened ("Rotated X in for the plan's Y slot" /
+    // "added to day N") — surface its words, not a generic line.
+    deps.toast(result.message ? String(result.message) : "Rotated in — your plan follows you");
+    deps.invalidate("progress:program");
+    deps.invalidate("plan:coach");
+    deps.invalidate("plan:proposals");
+    if (deps.state.tab === "progress") deps.renderSelf();
+    return;
+  }
+  deps.toast(result?.error || "Couldn't rotate that in right now.");
+  restore();
+  if (el) el.dataset.busy = "";
+}
+
 async function renderProgressProgram(deps: ClientProgressProgramControllerDeps): Promise<unknown> {
   deps.headerTitle.textContent = "Program";
   deps.state.progressSeg = "program";
@@ -98,7 +134,7 @@ async function renderProgressProgram(deps: ClientProgressProgramControllerDeps):
       // card's "Current block · week N of M"; stating the week twice is noise.
       const card =
         typeof coachingFocusCardHtml === "function"
-          ? coachingFocusCardHtml(focus as ClientCoachingFocus | null | undefined, { blockLine: false })
+          ? coachingFocusCardHtml(focus as ClientCoachingFocus | null | undefined, { blockLine: false, actions: true })
           : "";
       const prev = _progFocusCard;
       _progFocusCard = card;
@@ -260,6 +296,14 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
         toast: "Recovery week drafted — review it in your Plan",
       });
     });
+
+  // The conductor's stalled-lift lead: one tap rotates a variation into the plan
+  // (deterministic apply; the surrounding lead row still navigates).
+  deps.view.querySelectorAll<HTMLElement>('[data-cfocus-act="swap"]').forEach((swapBtn) => {
+    swapBtn.addEventListener("click", () => {
+      void applyCoachingFocusSwap(swapBtn, deps);
+    });
+  });
 
   const tidyBtn = deps.view.querySelector("#progTidyBtn");
   if (tidyBtn)

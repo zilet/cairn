@@ -28,6 +28,7 @@
 // active block) via opts, so a single getCoachContext build never recomputes
 // the program state — mirroring performanceStanding(date, { programState, ... }).
 // ============================================================================
+import { db } from "../db.js";
 import { localDateISO } from "./shared.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getAttentionSchedule } from "./attention.js";
@@ -109,6 +110,22 @@ function activeInjuryAreas(): string[] {
   return [...out].slice(0, 12);
 }
 
+// Every exercise name currently on a plan day — the exclusion list for vary_options
+// (never suggest rotating in something already programmed). Null-safe, never throws.
+function planExerciseNames(): string[] {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT e.name AS name
+         FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id`
+      )
+      .all() as any[];
+    return rows.map((r) => String(r?.name ?? "")).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 // Resolve a lift's canonical group (stored group wins, else classify by name).
 function liftGroup(l: LiftState): MuscleGroup | null {
   return canonicalGroup(l.muscle_group) ?? classifyMuscleGroup(l.exercise);
@@ -148,6 +165,11 @@ export function muscleGroupTrajectory(
   }
 
   const injuryAreas = activeInjuryAreas();
+  // Movements already programmed are never offered as a rotation — "rotate in DB
+  // Bench Press" is a dead suggestion when DB Bench Press already sits on a plan
+  // day (variety means something NEW). Plan-wide, not per-day: rotating in a lift
+  // another day already runs would just double it.
+  const plannedNames = planExerciseNames();
   const groups: MuscleGroupRead[] = [];
 
   // Walk the canonical taxonomy order so the strip reads in a stable, sensible
@@ -183,7 +205,7 @@ export function muscleGroupTrajectory(
       const lead = stalled[0];
       lead_lift = lead.exercise;
       stalled_signal = lead.stall_signals[0] ?? lead.why ?? null;
-      vary_options = suggestAlternatives(lead.exercise, { limit: 3, injuryAreas })
+      vary_options = suggestAlternatives(lead.exercise, { limit: 3, injuryAreas, excludeNames: plannedNames })
         .map((v) => ({ name: v.name, why: v.why }));
       const wk = lead.weeks_static ? ` (flat ~${lead.weeks_static} wk)` : "";
       note = vary_options.length

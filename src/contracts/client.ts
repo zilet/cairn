@@ -89,6 +89,13 @@ export interface ClientCoachingFocusItem {
   why: string;
   move?: string;
   based_on?: string[];
+  // One-tap rotation for a stalled lead lift: rotate `from` out for one of the
+  // `to` variations (same movement pattern). Rendered as action buttons only
+  // where the swap is wired (Program); other surfaces just navigate.
+  swap?: { from: string; to: string[] };
+  // A recovery lead whose one-tap draft already landed in Coach: the Program card
+  // renders a "Review your recovery week →" link instead of the draft button.
+  draft_pending?: boolean;
 }
 
 export interface ClientCoachingRetest {

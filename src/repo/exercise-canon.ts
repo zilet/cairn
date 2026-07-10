@@ -88,6 +88,22 @@ export function normalizedExerciseKey(name: string): string {
   return (kept.length ? kept : tokens).join(" ");
 }
 
+// The SWAP-SLOT key: additionally strips implement/equipment tokens so a lift and its
+// re-implemented sibling ("Barbell Bench Press" ↔ "DB Bench Press") resolve to the
+// same PLAN SLOT — the plan often names one implement while the athlete logs another,
+// and a rotate-in must still find where that movement lives. Deliberately looser than
+// normalizedExerciseKey and used ONLY for swap-target resolution, never for
+// dedup/merges (barbell vs dumbbell stay distinct lifts everywhere else).
+const IMPLEMENT_TOKENS = new Set([
+  "barbell", "bb", "dumbbell", "dumbbells", "db", "kettlebell", "kb",
+  "machine", "smith", "cable", "ez", "trap", "hex", "bar", "landmine", "band", "banded",
+]);
+export function movementKey(name: string): string {
+  const tokens = normalizeExerciseName(name).split(" ").filter(Boolean);
+  const kept = tokens.filter((t) => !IMPLEMENT_TOKENS.has(t) && !NON_DISTINGUISHING.has(t));
+  return (kept.length ? kept : tokens).join(" ");
+}
+
 // ---- legacy / free-form group → canonical group -----------------------------
 // Folds the inconsistent values already in the DB onto the taxonomy. legs→quads
 // (knee-dominant default), posterior→hamstrings, abs→core, grip→forearms, etc.

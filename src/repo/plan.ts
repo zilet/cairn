@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
-import { constraintLimitsLoad, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
+import { constraintLimitsLoad, movementKey, normalizeExerciseName, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise, findOrCreateExercise, recentWorkingWeight } from "./exercises.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO } from "./shared.js";
@@ -491,9 +491,15 @@ function applyPlanSwap(
   ).all(dayId) as any[];
   const fromNorm = normalizeExerciseName(fromName);
   const fromKey = normalizedExerciseKey(fromName);
+  // Tier 3 (movementKey): the plan may name a different IMPLEMENT for the same slot
+  // ("DB Bench Press" on the plan, "Barbell Bench Press" in the logs) — the swap
+  // still targets that slot rather than erroring on a lift the athlete demonstrably
+  // trains. Exact/normalized matches always win first.
+  const fromMove = movementKey(fromName);
   const match =
     dayItems.find((r) => normalizeExerciseName(r.ex_name) === fromNorm) ??
-    dayItems.find((r) => normalizedExerciseKey(r.ex_name) === fromKey);
+    dayItems.find((r) => normalizedExerciseKey(r.ex_name) === fromKey) ??
+    dayItems.find((r) => movementKey(r.ex_name) === fromMove);
   if (!match) throw new Error(`"${fromName}" is not on day ${dayNumber} to swap out`);
 
   // Resolve (or create) the incoming movement — its group + mode auto-classify from
@@ -505,6 +511,30 @@ function applyPlanSwap(
     `UPDATE plan_items SET exercise_id = ?, target_weight = NULL, target_seconds = ?, note = ? WHERE id = ?`
   ).run(toEx.id, timed ? (match.target_seconds ?? null) : null, note, match.id);
   return { action: "swapped", day: dayNumber, exercise: toEx.name, from: match.ex_name, updated: Number(info.changes) };
+}
+
+// Append one exercise to an existing plan day — the graceful landing for a rotate-in
+// whose `from` isn't represented anywhere on the plan (nothing to swap out, but the
+// athlete asked for the movement, so it lands on the day that already trains that
+// area instead of dead-ending). Conservative slot defaults (3×8-12 / 30s hold,
+// no target load — start light, log actual). Null when the day doesn't exist.
+export function addExerciseToPlanDay(
+  dayNumber: number,
+  name: string,
+  note?: string | null,
+): { day: number; exercise: string } | null {
+  const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(Number(dayNumber)) as any;
+  if (!day) return null;
+  const ex = findOrCreateExercise(String(name ?? "").trim());
+  const pos = (db.prepare(`SELECT COALESCE(MAX(position), 0) + 1 AS p FROM plan_items WHERE plan_day_id = ?`).get(day.id) as any).p;
+  const timed = ex.mode === "timed";
+  db.prepare(
+    `INSERT INTO plan_items (plan_day_id, position, exercise_id, sets, rep_low, rep_high, target_weight, note, target_seconds)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+  ).run(day.id, pos, ex.id, 3, timed ? null : 8, timed ? null : 12, note ? String(note).slice(0, 500) : null, timed ? 30 : null);
+  bumpTrainingDataVersion();
+  invalidateDayRead();
+  return { day: Number(dayNumber), exercise: ex.name };
 }
 
 // ---------- plan editing (manual + restructure) ----------

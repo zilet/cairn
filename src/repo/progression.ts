@@ -15,17 +15,40 @@
 // ============================================================================
 import { db } from "../db.js";
 import { emitBrainEvent } from "../brainEvents.js";
-import { canonicalGroup, classifyConstraint, classifyMuscleGroup, type MuscleGroup, MUSCLE_LANDMARKS } from "./exercise-canon.js";
-import { type Equipment, effectiveVolumeByGroup, examplesForGroup, parseEquipment, suggestAlternatives, type VolumeSet } from "./exercise-variations.js";
+import {
+  canonicalGroup,
+  classifyConstraint,
+  classifyMuscleGroup,
+  movementKey,
+  type MuscleGroup,
+  MUSCLE_LANDMARKS,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+  resolveGroup,
+} from "./exercise-canon.js";
+import {
+  type Equipment,
+  effectiveVolumeByGroup,
+  examplesForGroup,
+  parseEquipment,
+  suggestAlternatives,
+  type VolumeSet,
+} from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
-import { getPlan } from "./plan.js";
+import { addExerciseToPlanDay, getPlan } from "./plan.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
 // run-progression.ts does for buildRunPlanProposal) so REST + MCP share ONE proposal
 // builder instead of duplicating the change-shaping logic (and drifting).
-import { applyProposal, createProposal, getProfile, setProposalStatus, supersedeAutoProgressionDrafts } from "./profile.js";
+import {
+  applyProposal,
+  createProposal,
+  getProfile,
+  setProposalStatus,
+  supersedeAutoProgressionDrafts,
+} from "./profile.js";
 import { type LiftState, getProgramState } from "./program-state.js";
 import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
@@ -45,30 +68,24 @@ export { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js"
 // 5 lb ceiling, isolation work 2.5 lb (a sane minimum plate jump), and the
 // fraction (10%) keeps very light loads from ever leaping. Clamping happens
 // here so a prescription is always safe BEFORE it ever reaches propose→apply.
-const STEP_FRAC = 0.1;            // ≤10% of the current load…
-const STEP_CEIL_COMPOUND = 5;     // …or ≤5 lb on a compound, whichever is smaller
-const STEP_CEIL_ISOLATION = 2.5;  // …or ≤2.5 lb on an isolation lift
+const STEP_FRAC = 0.1; // ≤10% of the current load…
+const STEP_CEIL_COMPOUND = 5; // …or ≤5 lb on a compound, whichever is smaller
+const STEP_CEIL_ISOLATION = 2.5; // …or ≤2.5 lb on an isolation lift
 // Timed holds progress by a RELATIVE step — a fraction of the current hold, clamped to
 // a sane floor/ceiling — so a 20s plank and a 120s dead hang each progress proportionally
 // (a flat +N is trivial on a long hold and a huge jump on a short one). Timed work moves
 // in SECONDS, never load.
-const SECONDS_STEP_FRAC = 0.1;    // ~10% of the current hold…
-const SECONDS_STEP_MIN = 3;       // …never smaller than 3s (a real nudge on a short hold)
-const SECONDS_STEP_MAX = 20;      // …never larger than 20s in one step (a long hold doesn't leap)
-const DELOAD_FRAC = 0.1;          // a deload backs the load off ~10%
+const SECONDS_STEP_FRAC = 0.1; // ~10% of the current hold…
+const SECONDS_STEP_MIN = 3; // …never smaller than 3s (a real nudge on a short hold)
+const SECONDS_STEP_MAX = 20; // …never larger than 20s in one step (a long hold doesn't leap)
+const DELOAD_FRAC = 0.1; // a deload backs the load off ~10%
 // A movement run this long (steady, not stalled) is ripe for PROACTIVE variety —
 // introduce a fresh variation before staleness sets in, at a block boundary, rather
 // than waiting for a measured plateau. Tenure = weeks since the lift was first logged.
 const INTRODUCE_TENURE_WEEKS = 12;
 
 // Isolation groups get the smaller (2.5 lb) plate jump; compounds get 5 lb.
-const ISOLATION_GROUPS = new Set([
-  "biceps",
-  "triceps",
-  "rear delts",
-  "calves",
-  "forearms",
-]);
+const ISOLATION_GROUPS = new Set(["biceps", "triceps", "rear delts", "calves", "forearms"]);
 
 export type ProgressionAction = "overload" | "hold" | "deload" | "vary" | "introduce";
 
@@ -76,7 +93,7 @@ export interface PrescriptionTarget {
   sets: number;
   rep_low?: number;
   rep_high?: number;
-  weight?: number | null;   // null = bodyweight; negative = assist
+  weight?: number | null; // null = bodyweight; negative = assist
   seconds?: number;
 }
 
@@ -85,16 +102,16 @@ export interface Prescription {
   mode: "reps" | "timed";
   action: ProgressionAction;
   suggested: PrescriptionTarget;
-  current: PrescriptionTarget | null;  // from the plan item, when planned
-  delta_text: string;                  // plain words: "+5 lb", "hold 50", "−10%", "+5s"
+  current: PrescriptionTarget | null; // from the plan item, when planned
+  delta_text: string; // plain words: "+5 lb", "hold 50", "−10%", "+5s"
   why: string;
-  reground?: boolean;                  // the plan target was behind logged reality — applying re-grounds it
-  vary_to?: string;                    // a concrete same-pattern variation to rotate in (action "vary")
+  reground?: boolean; // the plan target was behind logged reality — applying re-grounds it
+  vary_to?: string; // a concrete same-pattern variation to rotate in (action "vary")
   vary_options?: { name: string; why: string }[]; // a MENU of same-pattern swaps (action "vary"); vary_to is the lead
-  plan_item_id?: number;               // set by planDayProgression for the apply path
-  day_number?: number;                 // set by planDayProgression — the day the lift sits on (for the swap apply path)
-  autoregulated?: boolean;             // recovery signals braked this step (overload→hold / hold→deload) — informational
-  rep_step?: boolean;                  // double-progression REP advance (load held, reps climb in-range) — no plan change
+  plan_item_id?: number; // set by planDayProgression for the apply path
+  day_number?: number; // set by planDayProgression — the day the lift sits on (for the swap apply path)
+  autoregulated?: boolean; // recovery signals braked this step (overload→hold / hold→deload) — informational
+  rep_step?: boolean; // double-progression REP advance (load held, reps climb in-range) — no plan change
 }
 
 // ---- autoregulation + acute-recovery gate -----------------------------------
@@ -107,9 +124,9 @@ export interface Prescription {
 // joint loads that lift. Constitution: kind, plain words, no scores; a brake, not
 // a penalty.
 export interface AutoregSignals {
-  soreness: number | null;    // most recent 1-5
+  soreness: number | null; // most recent 1-5
   performance: number | null; // most recent 1-5
-  joint_pain: string | null;  // most recent free-text ("left knee")
+  joint_pain: string | null; // most recent free-text ("left knee")
   date: string | null;
 }
 
@@ -122,17 +139,26 @@ export function recentAutoregulation(days = AUTOREG_WINDOW_DAYS, date = localDat
   const since = addDaysISO(today, -(Math.max(1, days) - 1)) ?? today;
   const out: AutoregSignals = { soreness: null, performance: null, joint_pain: null, date: null };
   try {
-    const rows = db.prepare(
-      `SELECT date, soreness, performance, joint_pain FROM sessions
+    const rows = db
+      .prepare(
+        `SELECT date, soreness, performance, joint_pain FROM sessions
         WHERE date >= ? AND date <= ? ORDER BY date DESC`
-    ).all(since, today) as any[];
+      )
+      .all(since, today) as any[];
     for (const r of rows) {
       if (out.soreness == null && r.soreness != null) out.soreness = Number(r.soreness);
       if (out.performance == null && r.performance != null) out.performance = Number(r.performance);
-      if (out.joint_pain == null && r.joint_pain != null && String(r.joint_pain).trim()) out.joint_pain = String(r.joint_pain).trim();
-      if (out.date == null && (r.soreness != null || r.performance != null || (r.joint_pain && String(r.joint_pain).trim()))) out.date = String(r.date);
+      if (out.joint_pain == null && r.joint_pain != null && String(r.joint_pain).trim())
+        out.joint_pain = String(r.joint_pain).trim();
+      if (
+        out.date == null &&
+        (r.soreness != null || r.performance != null || (r.joint_pain && String(r.joint_pain).trim()))
+      )
+        out.date = String(r.date);
     }
-  } catch { /* sessions columns absent → no signal */ }
+  } catch {
+    /* sessions columns absent → no signal */
+  }
   return out;
 }
 
@@ -165,7 +191,7 @@ function autoregBrake(
   group: MuscleGroup | null,
   hasHistory: boolean,
   autoreg: AutoregSignals | null,
-  recentLoad: Map<MuscleGroup, RecentLoad> | null,
+  recentLoad: Map<MuscleGroup, RecentLoad> | null
 ): BrakeResult {
   if (!autoreg && !recentLoad) return null;
   const heavyAcute = group && recentLoad ? recentLoad.get(group)?.heavy === true : false;
@@ -177,10 +203,16 @@ function autoregBrake(
   // A named sore joint is the strongest brake — one step toward safety.
   if (jointHit) {
     if (action === "overload") {
-      return { action: "hold", why: `Your last check-in flagged a sore joint this lift loads — holding the load today rather than adding; earn a clean, pain-free session first.` };
+      return {
+        action: "hold",
+        why: `Your last check-in flagged a sore joint this lift loads — holding the load today rather than adding; earn a clean, pain-free session first.`,
+      };
     }
     if (action === "hold" && hasHistory) {
-      return { action: "deload", why: `A sore joint this lift loads is still flagged — easing the load a touch so it can settle before you build again.` };
+      return {
+        action: "deload",
+        why: `A sore joint this lift loads is still flagged — easing the load a touch so it can settle before you build again.`,
+      };
     }
     return null;
   }
@@ -188,8 +220,13 @@ function autoregBrake(
   if (highStrain && action === "overload") {
     const reason = heavyAcute
       ? "this muscle got a heavy dose recently"
-      : soreHigh ? "recent soreness is running high" : "recent sessions felt flat";
-    return { action: "hold", why: `Holding the load today — ${reason}, so this isn't the session to push. Recovery informs the plan; it's a brake, not a penalty.` };
+      : soreHigh
+        ? "recent soreness is running high"
+        : "recent sessions felt flat";
+    return {
+      action: "hold",
+      why: `Holding the load today — ${reason}, so this isn't the session to push. Recovery informs the plan; it's a brake, not a penalty.`,
+    };
   }
   return null;
 }
@@ -201,9 +238,13 @@ function autoregBrake(
 export function movementTenureWeeks(name: string, date = localDateISO()): number | null {
   const ex = findExercise(name);
   if (!ex) return null;
-  const first = (db.prepare(
-    `SELECT MIN(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id WHERE ls.exercise_id = ?`
-  ).get(ex.id) as any)?.d;
+  const first = (
+    db
+      .prepare(
+        `SELECT MIN(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id WHERE ls.exercise_id = ?`
+      )
+      .get(ex.id) as any
+  )?.d;
   if (!first) return null;
   const days = daysBetweenISO(String(date || localDateISO()).slice(0, 10), String(first).slice(0, 10));
   if (days == null || days < 0) return 0;
@@ -213,7 +254,11 @@ export function movementTenureWeeks(name: string, date = localDateISO()): number
 // The athlete's available equipment, parsed from the persisted profile.equipment
 // free-text field. Empty → no constraint (rank neutrally).
 export function availableEquipment(): Equipment[] {
-  try { return parseEquipment((getProfile() as any)?.equipment ?? null); } catch { return []; }
+  try {
+    return parseEquipment((getProfile() as any)?.equipment ?? null);
+  } catch {
+    return [];
+  }
 }
 
 // Read/write the persisted equipment/preference profile (profile.equipment free
@@ -221,7 +266,13 @@ export function availableEquipment(): Equipment[] {
 // profile upsert stays untouched — setProfile never lists equipment, so it never
 // clobbers it. Returns the stored text + the parsed Equipment types.
 export function getEquipmentProfile(): { equipment: string | null; parsed: Equipment[] } {
-  const eq = (() => { try { return (getProfile() as any)?.equipment ?? null; } catch { return null; } })();
+  const eq = (() => {
+    try {
+      return (getProfile() as any)?.equipment ?? null;
+    } catch {
+      return null;
+    }
+  })();
   return { equipment: eq, parsed: parseEquipment(eq) };
 }
 
@@ -244,13 +295,15 @@ function timedStep(seconds: number, modifier?: CoachPersonalModifier | null): nu
   const raw = Math.round(Math.abs(seconds) * SECONDS_STEP_FRAC);
   const standard = Math.min(SECONDS_STEP_MAX, Math.max(SECONDS_STEP_MIN, raw));
   if (!modifier) return standard;
-  return Math.round(applyPersonalResponseModifier({
-    base: standard,
-    modifier,
-    min: SECONDS_STEP_MIN,
-    max: SECONDS_STEP_MAX,
-    safety_ceiling: SECONDS_STEP_MAX,
-  }));
+  return Math.round(
+    applyPersonalResponseModifier({
+      base: standard,
+      modifier,
+      min: SECONDS_STEP_MIN,
+      max: SECONDS_STEP_MAX,
+      safety_ceiling: SECONDS_STEP_MAX,
+    })
+  );
 }
 
 // The step ceiling for a lift, by group (compound vs isolation).
@@ -270,9 +323,10 @@ function trainingModifierFor(
   const globalLearning = response.learnings.find((learning) => learning.subject_key == null);
   const key = matchingLearning?.key ?? globalLearning?.key ?? null;
   if (!key) return null;
-  return response.modifiers.find(
-    (modifier) => modifier.target === "training_progression_step" && modifier.key === key
-  ) ?? null;
+  return (
+    response.modifiers.find((modifier) => modifier.target === "training_progression_step" && modifier.key === key) ??
+    null
+  );
 }
 
 // Clamp a desired LOADED step to the safe cap, rounded to a sane plate. Only
@@ -338,6 +392,156 @@ function planItemFor(name: string): {
   return null;
 }
 
+// The PLAN SLOT a lift resolves to, matched with the same tiered ladder applyPlanSwap
+// uses (exact normalized name → conservative key → movementKey) — so a surface with
+// only a lift name (e.g. the conductor's swap payload, which names the LOGGED lift)
+// finds the slot even when the plan spells the movement with a different implement
+// ("Barbell Bench Press" logged, "DB Bench Press" planned). Lowest day_number within
+// the winning tier; tiers never mix (an exact match elsewhere always beats a
+// movement-family match). Null when nothing on the plan trains that movement.
+export function resolvePlanSwapSlot(name: string): { day: number; plan_name: string } | null {
+  const raw = String(name ?? "").trim();
+  if (!raw) return null;
+  try {
+    const rows = db
+      .prepare(
+        `SELECT pd.day_number AS d, e.name AS ex_name
+         FROM plan_items pi
+         JOIN plan_days pd ON pd.id = pi.plan_day_id
+         JOIN exercises e ON e.id = pi.exercise_id
+        ORDER BY pd.day_number, pi.position`
+      )
+      .all() as any[];
+    const norm = normalizeExerciseName(raw);
+    const key = normalizedExerciseKey(raw);
+    const move = movementKey(raw);
+    const hit =
+      rows.find((r) => normalizeExerciseName(r.ex_name) === norm) ??
+      rows.find((r) => normalizedExerciseKey(r.ex_name) === key) ??
+      rows.find((r) => movementKey(r.ex_name) === move);
+    if (!hit || !Number.isFinite(Number(hit.d))) return null;
+    return { day: Number(hit.d), plan_name: String(hit.ex_name) };
+  } catch {
+    return null;
+  }
+}
+
+// Back-compat day-only view of resolvePlanSwapSlot (existing callers + MCP).
+export function findPlanDayForExercise(name: string): number | null {
+  return resolvePlanSwapSlot(name)?.day ?? null;
+}
+
+// The plan day best suited to host a movement of `group` — the day already doing the
+// most work for that muscle group (ties → the earliest day). Null when no plan day
+// trains it at all.
+function bestPlanDayForGroup(group: MuscleGroup): number | null {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT pd.day_number AS d, e.name AS ex_name, e.muscle_group AS mg
+         FROM plan_items pi
+         JOIN plan_days pd ON pd.id = pi.plan_day_id
+         JOIN exercises e ON e.id = pi.exercise_id`
+      )
+      .all() as any[];
+    const counts = new Map<number, number>();
+    for (const r of rows) {
+      if (resolveGroup(String(r.ex_name ?? ""), r.mg) !== group) continue;
+      const d = Number(r.d);
+      if (!Number.isFinite(d)) continue;
+      counts.set(d, (counts.get(d) ?? 0) + 1);
+    }
+    let best: number | null = null;
+    for (const [d, n] of counts) {
+      if (best == null || n > (counts.get(best) ?? 0) || (n === (counts.get(best) ?? 0) && d < best)) best = d;
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+// The full "rotate one in" intent behind one tap: resolve WHERE the outgoing lift
+// lives (tiered — the plan's implement spelling never blocks the athlete's), swap
+// that slot, and when the movement isn't represented anywhere, ADD the incoming
+// variation to the day already training that muscle group instead of dead-ending.
+// The message says what actually happened, in the plan's own names. REST + MCP both
+// call this so the surfaces never drift.
+export function applySwapSmart(
+  from: string,
+  to: string,
+  day?: number | null,
+): { ok: false; error: string } | { ok: true; mode: "swapped" | "added"; day: number; from?: string; exercise: string; message: string; swapped?: any } {
+  const f = String(from ?? "").trim();
+  const t = String(to ?? "").trim();
+  if (!f) return { ok: false, error: "from exercise required" };
+  if (!t) return { ok: false, error: "to exercise required" };
+
+  // day == null must stay NaN so the slot resolution runs — Number(null) is 0,
+  // which reads as a (nonexistent) explicit day 0 and breaks the whole ladder.
+  let d = day == null ? Number.NaN : Number(day);
+  let planName = f;
+  if (!Number.isFinite(d)) {
+    const slot = resolvePlanSwapSlot(f);
+    if (slot) {
+      d = slot.day;
+      planName = slot.plan_name;
+    } else {
+      // Nothing on the plan trains this movement — land the variation on the day
+      // that already works the muscle group (the athlete asked for it; an error
+      // toast would just make them do this by hand from the Plan tab).
+      const group = groupForName(f) ?? groupForName(t);
+      const hostDay = group ? bestPlanDayForGroup(group) : null;
+      if (hostDay == null) return { ok: false, error: `couldn't find ${f} — or a day that trains it — on your plan` };
+      const added = addExerciseToPlanDay(
+        hostDay,
+        t,
+        `Added as a fresh variation for ${f} — start light, log your actual working weight.`,
+      );
+      if (!added) return { ok: false, error: `couldn't add ${t} to your plan` };
+      emitBrainEvent({
+        kind: "exercise_swapped",
+        domain: "training",
+        date: localDateISO(),
+        subject_key: `${f} -> ${t} (added)`.slice(0, 160),
+      });
+      return {
+        ok: true,
+        mode: "added",
+        day: added.day,
+        exercise: added.exercise,
+        message: `${f} isn't on your plan — added ${added.exercise} to day ${added.day} instead (nothing removed)`,
+      };
+    }
+  }
+  // Pass the RESOLVED plan spelling as `from` so the apply hits its exact-match tier.
+  const applied = buildAndApplySwap(d, planName, t);
+  if (!applied.ok) return applied;
+  const renamed = planName.toLowerCase() !== f.toLowerCase();
+  return {
+    ok: true,
+    mode: "swapped",
+    day: d,
+    from: planName,
+    exercise: t,
+    message: renamed
+      ? `Rotated ${t} in for ${planName} (your plan's slot for ${f}) on day ${d}`
+      : `Rotated ${t} in for ${planName} on day ${d}`,
+    swapped: applied.swapped,
+  };
+}
+
+// The canonical muscle group for a lift name — stored group when the exercise
+// exists, else classified from the name.
+function groupForName(name: string): MuscleGroup | null {
+  try {
+    const row = db.prepare(`SELECT muscle_group FROM exercises WHERE LOWER(name) = LOWER(?)`).get(name) as any;
+    return resolveGroup(name, row?.muscle_group ?? null);
+  } catch {
+    return classifyMuscleGroup(name);
+  }
+}
+
 function currentTarget(plan: ReturnType<typeof planItemFor>, mode: "reps" | "timed"): PrescriptionTarget | null {
   if (!plan) return null;
   if (mode === "timed") {
@@ -353,30 +557,46 @@ function currentTarget(plan: ReturnType<typeof planItemFor>, mode: "reps" | "tim
 
 // The latest logged TOP set for a lift (heaviest est-1RM day's top set + its
 // RIR) — the deterministic read of "what they actually did last time".
-function latestTopSet(name: string): { weight: number | null; reps: number | null; rir: number | null; duration_sec: number | null; date: string } | null {
+function latestTopSet(
+  name: string
+): {
+  weight: number | null;
+  reps: number | null;
+  rir: number | null;
+  duration_sec: number | null;
+  date: string;
+} | null {
   const ex = findExercise(name);
   if (!ex) return null;
   // Most recent session that logged this lift; within it, the top set by est-1RM
   // (reps) or by duration (timed). RIR comes off that top set when present.
-  const latestDate = (db.prepare(
-    `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+  const latestDate = (
+    db
+      .prepare(
+        `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
       WHERE ls.exercise_id = ? AND (ls.reps IS NOT NULL OR ls.duration_sec IS NOT NULL)`
-  ).get(ex.id) as any)?.d;
+      )
+      .get(ex.id) as any
+  )?.d;
   if (!latestDate) return null;
-  const sets = db.prepare(
-    `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec
+  const sets = db
+    .prepare(
+      `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec
        FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
       WHERE ls.exercise_id = ? AND s.date = ?`
-  ).all(ex.id, latestDate) as any[];
+    )
+    .all(ex.id, latestDate) as any[];
   if (!sets.length) return null;
   // Top set: max (weight×(1+reps/30)) for reps; max duration for timed.
   let top = sets[0];
   let bestScore = -Infinity;
   for (const s of sets) {
-    const score = s.duration_sec != null
-      ? Number(s.duration_sec)
-      : (Number(s.weight) || 0) * (1 + (Number(s.reps) || 0) / 30);
-    if (score > bestScore) { bestScore = score; top = s; }
+    const score =
+      s.duration_sec != null ? Number(s.duration_sec) : (Number(s.weight) || 0) * (1 + (Number(s.reps) || 0) / 30);
+    if (score > bestScore) {
+      bestScore = score;
+      top = s;
+    }
   }
   return {
     weight: top.weight ?? null,
@@ -394,16 +614,22 @@ function latestTopSet(name: string): { weight: number | null; reps: number | nul
 function latestWorkingSets(name: string): { weight: number | null; reps: number | null; rir: number | null }[] {
   const ex = findExercise(name);
   if (!ex) return [];
-  const latestDate = (db.prepare(
-    `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+  const latestDate = (
+    db
+      .prepare(
+        `SELECT MAX(s.date) AS d FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
       WHERE ls.exercise_id = ? AND ls.reps IS NOT NULL`
-  ).get(ex.id) as any)?.d;
+      )
+      .get(ex.id) as any
+  )?.d;
   if (!latestDate) return [];
-  const rows = db.prepare(
-    `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+  const rows = db
+    .prepare(
+      `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
       WHERE ls.exercise_id = ? AND s.date = ? AND ls.reps IS NOT NULL`
-  ).all(ex.id, latestDate) as any[];
+    )
+    .all(ex.id, latestDate) as any[];
   if (!rows.length) return [];
   // The working weight is the hardest (largest signed) loaded weight in the session;
   // sets at it are the working sets. If nothing carries a weight, it's a bodyweight
@@ -457,12 +683,14 @@ function loadedDeltaText(current: number | null, next: number | null): string {
 function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: string }[] {
   const equip = ctx?.availableEquipment ?? [];
   const exclude = ctx?.excludeNames ?? [];
-  return (suggestAlternatives(name, {
-    limit: 3,
-    preferCompound: true,
-    availableEquipment: equip.length ? equip : undefined,
-    excludeNames: exclude.length ? exclude : undefined,
-  }) as { name: string; why: string }[]).map((v) => ({ name: v.name, why: v.why }));
+  return (
+    suggestAlternatives(name, {
+      limit: 3,
+      preferCompound: true,
+      availableEquipment: equip.length ? equip : undefined,
+      excludeNames: exclude.length ? exclude : undefined,
+    }) as { name: string; why: string }[]
+  ).map((v) => ({ name: v.name, why: v.why }));
 }
 
 // ---- the per-lift prescription ----------------------------------------------
@@ -472,14 +700,18 @@ function rankedVaryOptions(name: string, ctx?: PrescCtx): { name: string; why: s
 // pre-built `states` map when iterating many lifts (avoids recomputing the whole
 // program-state per lift).
 export interface PrescriptionOpts {
-  autoreg?: AutoregSignals | null;               // latest 1-tap session feedback (soreness/perf/joint)
+  autoreg?: AutoregSignals | null; // latest 1-tap session feedback (soreness/perf/joint)
   recentLoad?: Map<MuscleGroup, RecentLoad> | null; // acute per-group load (a just-smoked group)
-  availableEquipment?: Equipment[] | null;       // rank variation candidates by what the athlete can load
-  excludeNames?: string[] | null;                // movements already on the day — don't re-suggest them
+  availableEquipment?: Equipment[] | null; // rank variation candidates by what the athlete can load
+  excludeNames?: string[] | null; // movements already on the day — don't re-suggest them
   personalModifier?: CoachPersonalModifier | null; // learned step size; never overrides constraints/recovery
 }
 
-export function nextPrescription(exerciseName: string, states?: Map<string, LiftState>, opts?: PrescriptionOpts): Prescription | null {
+export function nextPrescription(
+  exerciseName: string,
+  states?: Map<string, LiftState>,
+  opts?: PrescriptionOpts
+): Prescription | null {
   const ex = findExercise(exerciseName);
   const mode: "reps" | "timed" = ex?.mode === "timed" ? "timed" : "reps";
   const group: string | null = ex?.muscle_group ?? null;
@@ -490,9 +722,8 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   const recentLoad = opts && "recentLoad" in opts ? (opts.recentLoad ?? null) : recentMuscleLoad(2);
   const equip = opts && "availableEquipment" in opts ? (opts.availableEquipment ?? []) : availableEquipment();
   const excludeNames = (opts?.excludeNames ?? []).filter(Boolean);
-  const personalModifier = opts && "personalModifier" in opts
-    ? (opts.personalModifier ?? null)
-    : trainingModifierFor(exerciseName);
+  const personalModifier =
+    opts && "personalModifier" in opts ? (opts.personalModifier ?? null) : trainingModifierFor(exerciseName);
   const tenureWeeks = movementTenureWeeks(exerciseName);
   // Only a LOAD-limiting constraint (pain/strain under load) freezes load. A form/
   // grip/ROM cue ("neutral grip only, no supinated curls") does NOT — the athlete
@@ -509,8 +740,17 @@ export function nextPrescription(exerciseName: string, states?: Map<string, Lift
   // Nothing logged and nothing planned → genuinely nothing to read.
   if (!last && !plan) return null;
 
-  const brakeCtx: PrescCtx = { canonGroup, autoreg, recentLoad, tenureWeeks, availableEquipment: equip, excludeNames, personalModifier };
-  if (mode === "timed") return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
+  const brakeCtx: PrescCtx = {
+    canonGroup,
+    autoreg,
+    recentLoad,
+    tenureWeeks,
+    availableEquipment: equip,
+    excludeNames,
+    personalModifier,
+  };
+  if (mode === "timed")
+    return timedPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
   return repsPrescription(exerciseName, group, loadConstrained, plan, cur, last, state, brakeCtx);
 }
 
@@ -544,14 +784,22 @@ function repsPrescription(
   const recentWorking = recentWorkingWeight(name);
   let baseWeight: number | null;
   if (planWeight != null && recentWorking != null) baseWeight = Math.max(planWeight, recentWorking);
-  else baseWeight = planWeight != null ? planWeight : (recentWorking != null ? recentWorking : (last?.weight != null ? Number(last.weight) : null));
+  else
+    baseWeight =
+      planWeight != null
+        ? planWeight
+        : recentWorking != null
+          ? recentWorking
+          : last?.weight != null
+            ? Number(last.weight)
+            : null;
   // The plan target is BEHIND what they're actually lifting → the prescription also
   // RE-GROUNDS the plan: the displayed "current" reflects reality, and applying lands
   // the plan target on what they truly handle ("gradually adjust the plan from logs").
   const planBehind = planWeight != null && recentWorking != null && recentWorking > planWeight + 0.1;
 
-  const repLow = plan?.rep_low ?? (cur?.rep_low ?? undefined);
-  const repHigh = plan?.rep_high ?? (cur?.rep_high ?? undefined);
+  const repLow = plan?.rep_low ?? cur?.rep_low ?? undefined;
+  const repHigh = plan?.rep_high ?? cur?.rep_high ?? undefined;
   const sets = plan?.sets || 3;
 
   // The decision. Order matters: an injury constraint HOLDS load before anything
@@ -561,7 +809,7 @@ function repsPrescription(
   let nextWeight: number | null = baseWeight;
   let varyTo: string | undefined;
   let varyOptions: { name: string; why: string }[] | undefined;
-  let repStep = false;  // a DOUBLE-PROGRESSION rep advance (load held, reps climb in-range)
+  let repStep = false; // a DOUBLE-PROGRESSION rep advance (load held, reps climb in-range)
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx);
@@ -577,7 +825,9 @@ function repsPrescription(
   const hasRange = repLow != null && repHigh != null;
   const workingSets = latestWorkingSets(name);
   const topReps = last?.reps != null ? Number(last.reps) : null;
-  const setsAtTop = hasRange ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repHigh as number)).length : 0;
+  const setsAtTop = hasRange
+    ? workingSets.filter((s) => s.reps != null && (s.reps as number) >= (repHigh as number)).length
+    : 0;
   const allSetsAtTop = hasRange && workingSets.length > 0 && setsAtTop === workingSets.length;
   const roomInRange = hasRange && topReps != null && topReps < (repHigh as number);
   // "Strong" = the work earned progression: last top set at RIR ≥ 2, OR the program-state
@@ -590,7 +840,8 @@ function repsPrescription(
   if (loadConstrained) {
     action = "hold";
     nextWeight = baseWeight;
-    why = "This lift has a load-limiting note — hold the weight where you're working and earn clean reps and range first.";
+    why =
+      "This lift has a load-limiting note — hold the weight where you're working and earn clean reps and range first.";
   } else if (status === "regressing") {
     action = "deload";
     nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
@@ -628,7 +879,7 @@ function repsPrescription(
     why = "Nothing logged yet — start where the plan sits and log your actual sets.";
   } else if (
     !loadConstrained &&
-    (state?.status === "maintaining") &&
+    state?.status === "maintaining" &&
     (brakeCtx?.tenureWeeks ?? 0) >= INTRODUCE_TENURE_WEEKS &&
     varyCandidates.length > 0
   ) {
@@ -663,13 +914,20 @@ function repsPrescription(
       const ceil = stepCeiling(group);
       const standardStep = Math.min(Math.abs(baseWeight) * STEP_FRAC, ceil);
       const step = brakeCtx?.personalModifier
-        ? applyPersonalResponseModifier({ base: standardStep, modifier: brakeCtx.personalModifier, min: 0, max: ceil, safety_ceiling: ceil })
+        ? applyPersonalResponseModifier({
+            base: standardStep,
+            modifier: brakeCtx.personalModifier,
+            min: 0,
+            max: ceil,
+            safety_ceiling: ceil,
+          })
         : standardStep;
       const reduced = round5(baseWeight + step); // toward 0
       nextWeight = reduced >= 0 ? null : reduced; // crossed to bodyweight → null
-      why = nextWeight == null
-        ? "You're nearly off the assist — try the next session at bodyweight."
-        : "You capped the range — peel a little assist off; you're getting stronger.";
+      why =
+        nextWeight == null
+          ? "You're nearly off the assist — try the next session at bodyweight."
+          : "You capped the range — peel a little assist off; you're getting stronger.";
     } else {
       nextWeight = clampedOverload(baseWeight, group, brakeCtx?.personalModifier);
       why = hasRange
@@ -690,8 +948,10 @@ function repsPrescription(
   // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
   if (planBehind && baseWeight != null) {
     const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
-    if (action === "overload" && !repStep) why = `Your plan was behind what you're actually lifting — stepping up from your real working weight (${lbl}).`;
-    else if (action === "hold" && !loadConstrained) why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
+    if (action === "overload" && !repStep)
+      why = `Your plan was behind what you're actually lifting — stepping up from your real working weight (${lbl}).`;
+    else if (action === "hold" && !loadConstrained)
+      why = `Your plan was behind what you're lifting — re-grounding it to your real working weight (${lbl}); earn a clean extra rep before adding.`;
   }
 
   // AUTOREGULATION GATE — one step toward safety on high soreness / low performance /
@@ -699,7 +959,9 @@ function repsPrescription(
   // progressive overload by more than a step. Applied last so it wins over the earned
   // step (an earned overload the morning after a sore knee becomes a hold/deload).
   let autoregulated = false;
-  const brake = brakeCtx ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad) : null;
+  const brake = brakeCtx
+    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad)
+    : null;
   if (brake) {
     autoregulated = true;
     action = brake.action;
@@ -723,8 +985,12 @@ function repsPrescription(
   // The displayed "current" reflects REALITY when the plan was behind, so the card
   // reads "50 → 52.5", never "27 → …" off a number the athlete left behind weeks ago.
   const displayCurrent: PrescriptionTarget | null = cur
-    ? (planBehind ? { ...cur, weight: baseWeight } : cur)
-    : (baseWeight != null ? { sets, rep_low: repLow ?? undefined, rep_high: repHigh ?? undefined, weight: baseWeight } : null);
+    ? planBehind
+      ? { ...cur, weight: baseWeight }
+      : cur
+    : baseWeight != null
+      ? { sets, rep_low: repLow ?? undefined, rep_high: repHigh ?? undefined, weight: baseWeight }
+      : null;
 
   return {
     exercise: ex_name(name),
@@ -753,9 +1019,7 @@ function timedPrescription(
   brakeCtx?: PrescCtx
 ): Prescription {
   const baseSeconds: number | null =
-    plan?.seconds != null ? plan.seconds
-    : last?.duration_sec != null ? Math.round(Number(last.duration_sec))
-    : null;
+    plan?.seconds != null ? plan.seconds : last?.duration_sec != null ? Math.round(Number(last.duration_sec)) : null;
   const sets = plan?.sets || 1;
 
   let action: ProgressionAction;
@@ -796,7 +1060,9 @@ function timedPrescription(
   // just-smoked group holds/eases the duration rather than extending. Timed work
   // eases in SECONDS, never load. Applied last so it wins over the earned extension.
   let autoregulated = false;
-  const brake = brakeCtx ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad) : null;
+  const brake = brakeCtx
+    ? autoregBrake(action, brakeCtx.canonGroup, !!last, brakeCtx.autoreg, brakeCtx.recentLoad)
+    : null;
   if (brake) {
     autoregulated = true;
     action = brake.action;
@@ -842,11 +1108,13 @@ function ex_name(name: string): string {
 export function planDayProgression(dayNumber: number, opts: { forNextSession?: boolean } = {}): Prescription[] {
   const day = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(dayNumber) as any;
   if (!day) return [];
-  const items = db.prepare(
-    `SELECT pi.id AS plan_item_id, pi.kind AS kind, e.name AS name
+  const items = db
+    .prepare(
+      `SELECT pi.id AS plan_item_id, pi.kind AS kind, e.name AS name
        FROM plan_items pi LEFT JOIN exercises e ON e.id = pi.exercise_id
       WHERE pi.plan_day_id = ? ORDER BY pi.position`
-  ).all(day.id) as any[];
+    )
+    .all(day.id) as any[];
   const states = buildLiftStateMap(); // compute the program-state ONCE for the day
   // Autoregulation + acute-load read computed ONCE for the whole day and threaded in,
   // so the one-tap apply proposal built from these is gated too (no overload the
@@ -866,7 +1134,13 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
     if (it.kind === "cardio" || !it.name) continue; // skip cardio + label-only rows
     const excludeNames = dayMovements.filter((n) => n.toLowerCase() !== String(it.name).toLowerCase());
     const personalModifier = trainingModifierFor(String(it.name), personalResponse);
-    const p = nextPrescription(it.name, states, { autoreg, recentLoad, availableEquipment: equip, excludeNames, personalModifier });
+    const p = nextPrescription(it.name, states, {
+      autoreg,
+      recentLoad,
+      availableEquipment: equip,
+      excludeNames,
+      personalModifier,
+    });
     if (p) out.push({ ...p, plan_item_id: it.plan_item_id, day_number: dayNumber });
   }
   return out;
@@ -881,7 +1155,10 @@ export function planDayProgression(dayNumber: number, opts: { forNextSession?: b
 // "hold" (including an autoregulation-braked hold) is by definition no change → dropped.
 // Returns the designed { ok:false, error } (status 200 at the surface) when there's
 // nothing to propose.
-export function buildProgressionProposal(day: number, opts: { forNextSession?: boolean } = {}): { ok: false; error: string } | { ok: true; proposal: any } {
+export function buildProgressionProposal(
+  day: number,
+  opts: { forNextSession?: boolean } = {}
+): { ok: false; error: string } | { ok: true; proposal: any } {
   if (!Number.isFinite(day)) return { ok: false, error: "day required" };
   const prescriptions = planDayProgression(day, opts);
   const changes: Record<string, any>[] = [];
@@ -892,7 +1169,11 @@ export function buildProgressionProposal(day: number, opts: { forNextSession?: b
     if (p.action === "vary" || p.action === "introduce") {
       const to = p.vary_to ?? p.vary_options?.[0]?.name ?? null;
       if (!to) continue; // no candidate → nothing to swap to (skip, never a no-op)
-      changes.push({ day_number: day, swap: { from: p.exercise, to }, reason: p.why || `Rotate a variation in for ${p.exercise}.` });
+      changes.push({
+        day_number: day,
+        swap: { from: p.exercise, to },
+        reason: p.why || `Rotate a variation in for ${p.exercise}.`,
+      });
       continue;
     }
     const c: Record<string, any> = {
@@ -927,7 +1208,11 @@ export function buildProgressionProposal(day: number, opts: { forNextSession?: b
 // propose→apply path behind Today's "rotate one in" chips (and MCP swap_exercise).
 // Never auto-applies; the swap only lands when the athlete taps Apply. Returns the
 // designed { ok:false, error } (status 200 at the surface) on bad input.
-export function buildSwapProposal(day: number, from: string, to: string): { ok: false; error: string } | { ok: true; proposal: any } {
+export function buildSwapProposal(
+  day: number,
+  from: string,
+  to: string
+): { ok: false; error: string } | { ok: true; proposal: any } {
   const d = Number(day);
   if (!Number.isFinite(d)) return { ok: false, error: "day required" };
   const f = String(from ?? "").trim();
@@ -953,15 +1238,18 @@ export function buildSwapProposal(day: number, from: string, to: string): { ok: 
 export function buildAndApplySwap(
   day: number,
   from: string,
-  to: string,
+  to: string
 ): { ok: false; error: string } | { ok: true; swapped: any } {
   const draft = buildSwapProposal(day, from, to);
   if (!draft.ok) return draft;
   try {
-    const applied = applyProposal(draft.proposal.id) as { ok?: boolean; error?: string };
+    const applied = applyProposal(draft.proposal.id) as { ok?: boolean; error?: string; skipped?: Array<{ error?: string }> };
     if (!applied || applied.ok === false) {
       setProposalStatus(draft.proposal.id, "discarded");
-      return { ok: false, error: applied?.error || "couldn't apply that swap" };
+      // Prefer the per-change error (e.g. '"X" is not on day N to swap out') over
+      // the apply layer's generic line — the surface toasts this verbatim.
+      const detail = Array.isArray(applied?.skipped) ? applied.skipped.find((s) => s?.error)?.error : undefined;
+      return { ok: false, error: detail || applied?.error || "couldn't apply that swap" };
     }
     // savePlanDay already emitted plan_changed; the explicit swap kind carries
     // WHICH movement rotated out/in so the review can speak to the rotation.
@@ -981,9 +1269,9 @@ export function buildAndApplySwap(
 // ---- program balance (volume per canonical group) ---------------------------
 export interface GroupBalance {
   group: string;
-  sets: number;                       // working sets over the window (per week, rounded)
+  sets: number; // working sets over the window (per week, rounded)
   band: "low" | "productive" | "high";
-  last_trained: string | null;       // ISO date of the most recent set in that group
+  last_trained: string | null; // ISO date of the most recent set in that group
   status: "due" | "ok" | "high";
 }
 export interface ProgramBalance {
@@ -1006,13 +1294,15 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
   const today = String(date || localDateISO()).slice(0, 10);
   const since = addDaysISO(today, -(weeks * 7 - 1)) ?? today;
 
-  const rows = db.prepare(
-    `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
+  const rows = db
+    .prepare(
+      `SELECT e.muscle_group AS muscle_group, e.name AS exercise, s.date AS date,
             ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
        FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
        JOIN sessions s ON s.id = ls.session_id
       WHERE s.date >= ? AND s.date <= ?`
-  ).all(since, today) as any[];
+    )
+    .all(since, today) as any[];
 
   // ONE honest-volume truth: warmups excluded, RIR-weighted, indirect credit, canon
   // taxonomy (mobility never counts). Shared with muscleVolume + getVolumeByMuscle.
@@ -1043,13 +1333,15 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
   const plannedGroups = new Set([...plannedMovesByGroup().keys()].filter((g) => MUSCLE_LANDMARKS[g]));
   if (plannedGroups.size) {
     const lastByGroup = new Map<string, string>();
-    const lastRows = db.prepare(
-      `SELECT e.muscle_group AS muscle_group, e.name AS exercise, MAX(s.date) AS last_date
+    const lastRows = db
+      .prepare(
+        `SELECT e.muscle_group AS muscle_group, e.name AS exercise, MAX(s.date) AS last_date
          FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
          JOIN sessions s ON s.id = ls.session_id
         WHERE s.date <= ?
         GROUP BY e.id`
-    ).all(today) as any[];
+      )
+      .all(today) as any[];
     for (const r of lastRows) {
       const g = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(r.exercise);
       if (!g || g === "mobility" || !MUSCLE_LANDMARKS[g]) continue;
@@ -1084,7 +1376,8 @@ export function programBalance(weeks = 2, date = localDateISO()): ProgramBalance
 }
 
 function buildBalanceSummary(groups: GroupBalance[], due: string[], over: string[], broadLow: boolean): string {
-  if (!groups.length) return "Not enough logged yet to read your volume balance — keep training and it'll come into focus.";
+  if (!groups.length)
+    return "Not enough logged yet to read your volume balance — keep training and it'll come into focus.";
   // Broad-low → one calm line instead of listing every group. Name the 1-2 groups
   // that have gone LONGEST without work (the genuinely-neglected standouts) so it
   // stays actionable, never a wall of "everything's behind".
@@ -1136,7 +1429,7 @@ export interface ProgramAdjustment {
 export function programAdjustments(
   balArg?: ProgramBalance,
   recentArg?: Map<MuscleGroup, RecentLoad>,
-  opts?: { runPlan?: WeeklyRunPlan | null; dexa?: DexaTargeting | null; testWeek?: TestWeekDue | null },
+  opts?: { runPlan?: WeeklyRunPlan | null; dexa?: DexaTargeting | null; testWeek?: TestWeekDue | null }
 ): ProgramAdjustment[] {
   const out: ProgramAdjustment[] = [];
   const seen = new Set<string>();
@@ -1155,9 +1448,22 @@ export function programAdjustments(
   const overloads: ProgramAdjustment[] = [];
   for (const d of days) {
     for (const p of planDayProgression(d.day_number)) {
-      if (p.action === "deload") deloads.push({ kind: "deload", title: `Deload ${p.exercise}`, why: p.why, exercise: p.exercise });
-      else if (p.action === "vary") varies.push({ kind: "progression", title: `Rotate a variation for ${p.exercise}`, why: p.why, exercise: p.exercise });
-      else if (p.action === "overload") overloads.push({ kind: "progression", title: `${p.exercise} — ${p.delta_text}`, why: p.why, exercise: p.exercise });
+      if (p.action === "deload")
+        deloads.push({ kind: "deload", title: `Deload ${p.exercise}`, why: p.why, exercise: p.exercise });
+      else if (p.action === "vary")
+        varies.push({
+          kind: "progression",
+          title: `Rotate a variation for ${p.exercise}`,
+          why: p.why,
+          exercise: p.exercise,
+        });
+      else if (p.action === "overload")
+        overloads.push({
+          kind: "progression",
+          title: `${p.exercise} — ${p.delta_text}`,
+          why: p.why,
+          exercise: p.exercise,
+        });
     }
   }
   // Lead with the WINS — an earned step-up is the most motivating, actionable thing a
@@ -1173,7 +1479,9 @@ export function programAdjustments(
     if (st.mesocycle?.phase === "deload-due") {
       push({ kind: "deload", title: "A deload week is about due", why: st.mesocycle.note });
     }
-  } catch { /* program-state unavailable → skip */ }
+  } catch {
+    /* program-state unavailable → skip */
+  }
 
   // 3) Balance: groups that are due (under-volume or not trained recently) —
   //    reconciled against ACUTE recovery so a just-smoked muscle is never put up as
@@ -1197,7 +1505,10 @@ export function programAdjustments(
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
     const rl = recent.get(g as MuscleGroup);
-    if (rl?.heavy) { recovering.push({ group: g, rl }); continue; }
+    if (rl?.heavy) {
+      recovering.push({ group: g, rl });
+      continue;
+    }
     if (planned.has(g)) {
       // Already in the plan — honest read: get those sessions in, don't add more.
       const moves = plannedMoves.get(g) ?? [];
@@ -1211,7 +1522,13 @@ export function programAdjustments(
         programmed: true,
       });
     } else {
-      push({ kind: "balance", title: `${cap(g)} is due`, why: `${cap(g)} is ${reason} — work it in this week.`, group: g, suggestions: examplesForGroup(g, 3) });
+      push({
+        kind: "balance",
+        title: `${cap(g)} is due`,
+        why: `${cap(g)} is ${reason} — work it in this week.`,
+        group: g,
+        suggestions: examplesForGroup(g, 3),
+      });
     }
   }
   // ONE consolidated recovering note, right after the fresh due groups — so the
@@ -1233,7 +1550,12 @@ export function programAdjustments(
     });
   }
   for (const g of bal.over.slice(0, 2)) {
-    push({ kind: "balance", title: `${cap(g)} is running high`, why: `${cap(g)} volume is above its productive range — there's room to redirect some of it to a due group.`, group: g });
+    push({
+      kind: "balance",
+      title: `${cap(g)} is running high`,
+      why: `${cap(g)} volume is above its productive range — there's room to redirect some of it to a due group.`,
+      group: g,
+    });
   }
 
   // 4) Missing-pattern GAPS — the elite-coach floors this athlete is missing.
@@ -1244,9 +1566,24 @@ export function programAdjustments(
   // nag-wall — these are gentle floors worth rounding the program out with, not failures
   // (constitution: calm, never shaming). They sit BELOW the earned wins + due focus above.
   for (const [group, title, why, suggestions] of [
-    ["core", "Add a little core", "No anti-extension / anti-rotation core work is programmed — a loaded carry or a plank/pallof variation underpins everything else.", ["Pallof Press", "Farmer's Walk", "Hanging Leg Raise"]],
-    ["forearms", "Work in some grip", "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull.", ["Farmer's Walk", "Suitcase Carry", "Dead Hang"]],
-    ["mobility", "A little mobility prep", "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner.", ["Ankle Rocker", "90/90 Hip Switch", "World's Greatest Stretch"]],
+    [
+      "core",
+      "Add a little core",
+      "No anti-extension / anti-rotation core work is programmed — a loaded carry or a plank/pallof variation underpins everything else.",
+      ["Pallof Press", "Farmer's Walk", "Hanging Leg Raise"],
+    ],
+    [
+      "forearms",
+      "Work in some grip",
+      "No grip work is programmed — dead hangs or loaded carries build grip, protect the elbow, and carry over to every pull.",
+      ["Farmer's Walk", "Suitcase Carry", "Dead Hang"],
+    ],
+    [
+      "mobility",
+      "A little mobility prep",
+      "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner.",
+      ["Ankle Rocker", "90/90 Hip Switch", "World's Greatest Stretch"],
+    ],
   ] as const) {
     if (!planned.has(group)) {
       push({ kind: "gap", title, why, group, suggestions: [...suggestions] });
@@ -1265,7 +1602,9 @@ export function programAdjustments(
         why: rp.why || (Array.isArray(rp.rationale) ? rp.rationale.join(" ") : ""),
       });
     }
-  } catch { /* run plan unavailable → skip */ }
+  } catch {
+    /* run plan unavailable → skip */
+  }
 
   // 6) DEXA — the body scan's training targets as gentle "From your DEXA" items
   //    (bias + concrete moves). Nutrition targets stay in the nutrition prompts.
@@ -1282,7 +1621,9 @@ export function programAdjustments(
         });
       }
     }
-  } catch { /* dexa unavailable → skip */ }
+  } catch {
+    /* dexa unavailable → skip */
+  }
 
   // 7) TEST WEEK — a cadenced re-test invitation (block realization / ~7-week
   //    cadence), naming the benchmark lifts to re-anchor true capacity.
@@ -1295,7 +1636,9 @@ export function programAdjustments(
         why: `${tw.why} Worth re-testing: ${tw.key_lifts.join(", ")}.`,
       });
     }
-  } catch { /* test-week unavailable → skip */ }
+  } catch {
+    /* test-week unavailable → skip */
+  }
 
   return out.slice(0, 8);
 }
@@ -1306,14 +1649,16 @@ export function programAdjustments(
 // both the per-group moves and the plan's programmed-group set (its keys).
 type PlannedMove = { exercise: string; day: number; day_name: string | null };
 function plannedMovesByGroup(): Map<string, PlannedMove[]> {
-  const rows = db.prepare(
-    `SELECT DISTINCT e.name AS name, e.muscle_group AS mg, pd.day_number AS day, pd.name AS day_name
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT e.name AS name, e.muscle_group AS mg, pd.day_number AS day, pd.name AS day_name
        FROM plan_items pi
        JOIN exercises e ON e.id = pi.exercise_id
        JOIN plan_days pd ON pd.id = pi.plan_day_id
       WHERE (pi.kind IS NULL OR pi.kind != 'cardio')
       ORDER BY pd.day_number, pi.position`
-  ).all() as any[];
+    )
+    .all() as any[];
   const map = new Map<string, PlannedMove[]>();
   for (const r of rows) {
     const g = canonicalGroup(r.mg) ?? classifyMuscleGroup(r.name);
@@ -1371,14 +1716,18 @@ export function programEvolutionTrigger(
     testWeek?: TestWeekDue;
     enduranceTests?: { exercise?: string; kind?: string; why?: string }[];
     trainingPlaybook?: TrainingPlaybookRead | null;
-  } = {},
+  } = {}
 ): ProgramEvolutionTrigger {
   const reasons: string[] = [];
   const sigParts: string[] = [];
 
   let ps = opts.programState;
   if (ps === undefined) {
-    try { ps = getProgramState(date); } catch { ps = { lifts: [] }; }
+    try {
+      ps = getProgramState(date);
+    } catch {
+      ps = { lifts: [] };
+    }
   }
   const lifts = Array.isArray(ps?.lifts) ? ps.lifts : [];
   // Enough logged history to read a real trajectory (plateau/vary already imply
@@ -1398,7 +1747,7 @@ export function programEvolutionTrigger(
     reasons.push(
       wantsVary.length === 1
         ? `${wantsVary[0]} has stalled — time to rotate a variation in.`
-        : `${wantsVary.slice(0, 3).join(", ")} have stalled — time to rotate variations in.`,
+        : `${wantsVary.slice(0, 3).join(", ")} have stalled — time to rotate variations in.`
     );
     sigParts.push(`vary:${wantsVary.join(",")}`);
   }
@@ -1408,7 +1757,11 @@ export function programEvolutionTrigger(
   //     weak-point clause so it can also satisfy the "actively training" gate.
   let tw = opts.testWeek;
   if (tw === undefined) {
-    try { tw = testWeekDue(date, { programState: ps }); } catch { tw = undefined; }
+    try {
+      tw = testWeekDue(date, { programState: ps });
+    } catch {
+      tw = undefined;
+    }
   }
   const twDue = !!tw?.due;
 
@@ -1426,20 +1779,33 @@ export function programEvolutionTrigger(
     sigParts.push(`endurance-ramp:${Math.round(enduranceAcwr * 100)}`);
   }
   if (endurance?.suggested_action === "add-quality") {
-    reasons.push("Running has turned into one steady stimulus — add a quality or long-run variation instead of just repeating the same run.");
+    reasons.push(
+      "Running has turned into one steady stimulus — add a quality or long-run variation instead of just repeating the same run."
+    );
     sigParts.push("run-plateau:add-quality");
   } else if (endurance?.pace_trend === "declining") {
-    reasons.push("Run pace is drifting the wrong way — treat this as a recovery/programming problem before adding more mileage.");
+    reasons.push(
+      "Run pace is drifting the wrong way — treat this as a recovery/programming problem before adding more mileage."
+    );
     sigParts.push("run-plateau:pace-decline");
   }
-  if (mileageRamp && (hybrid?.next_strength?.advice === "swap-or-upper" || hybrid?.next_strength?.advice === "hold-load")) {
-    reasons.push(`Mileage is ramping into ${hybrid.next_strength.day_name || "the next strength day"} — sequence lower-body work or deload it instead of forcing both.`);
+  if (
+    mileageRamp &&
+    (hybrid?.next_strength?.advice === "swap-or-upper" || hybrid?.next_strength?.advice === "hold-load")
+  ) {
+    reasons.push(
+      `Mileage is ramping into ${hybrid.next_strength.day_name || "the next strength day"} — sequence lower-body work or deload it instead of forcing both.`
+    );
     sigParts.push(`hybrid-interference:${hybrid.next_strength.advice}:${hybrid.next_strength.day_number ?? "next"}`);
   }
 
   let et = opts.enduranceTests;
   if (et === undefined) {
-    try { et = enduranceTestsDue(date); } catch { et = undefined; }
+    try {
+      et = enduranceTestsDue(date);
+    } catch {
+      et = undefined;
+    }
   }
   const enduranceTestKeys = (Array.isArray(et) ? et : [])
     .map((t) => String(t?.exercise || "").trim())
@@ -1452,7 +1818,11 @@ export function programEvolutionTrigger(
 
   let playbook = opts.trainingPlaybook;
   if (playbook === undefined) {
-    try { playbook = trainingPlaybook(date, { programState: ps }); } catch { playbook = null; }
+    try {
+      playbook = trainingPlaybook(date, { programState: ps });
+    } catch {
+      playbook = null;
+    }
   }
   const plays = Array.isArray(playbook?.plateau_plays) ? playbook!.plateau_plays : [];
   for (const play of plays) {
@@ -1464,8 +1834,12 @@ export function programEvolutionTrigger(
     sigParts.push(`playbook:${play.kind}:${play.exercise || play.title}`);
   }
   if (playbook?.adherence && playbook.adherence.status !== "clear") {
-    reasons.push(`${playbook.adherence.pattern} Suggest a smaller or shorter template instead of letting the plan silently fail.`);
-    sigParts.push(`adherence:${playbook.adherence.status}:${playbook.adherence.missed_planned_sessions}:${playbook.adherence.skipped_exercises}`);
+    reasons.push(
+      `${playbook.adherence.pattern} Suggest a smaller or shorter template instead of letting the plan silently fail.`
+    );
+    sigParts.push(
+      `adherence:${playbook.adherence.status}:${playbook.adherence.missed_planned_sessions}:${playbook.adherence.skipped_exercises}`
+    );
   }
 
   // (3) A muscle group running UNDER its productive volume range (or untrained
@@ -1473,12 +1847,16 @@ export function programEvolutionTrigger(
   //     with real training history (else a blank new plan reads everything "due").
   let bal = opts.balance;
   if (bal === undefined) {
-    try { bal = programBalance(2, date); } catch { bal = undefined; }
+    try {
+      bal = programBalance(2, date);
+    } catch {
+      bal = undefined;
+    }
   }
   const dueGroups = [...(Array.isArray(bal?.due) ? bal!.due : [])].sort();
   if (dueGroups.length && (hasHistory || wantsVary.length || twDue)) {
     reasons.push(
-      `${dueGroups.slice(0, 3).join(", ")} ${dueGroups.length === 1 ? "is" : "are"} under-trained — worth building up.`,
+      `${dueGroups.slice(0, 3).join(", ")} ${dueGroups.length === 1 ? "is" : "are"} under-trained — worth building up.`
     );
     sigParts.push(`due:${dueGroups.join(",")}`);
   }
