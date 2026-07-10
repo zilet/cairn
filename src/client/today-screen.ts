@@ -242,7 +242,6 @@ async function renderToday(opts: any = {}) {
   // agent:"auto". (Honors an active override.)
   const {
     hasLoggedSets,
-    hasPlanDay,
     hasGarmin,
     showPlan,
     showDone,
@@ -308,7 +307,7 @@ async function renderToday(opts: any = {}) {
 
   let html = todayMainShell.leadHtml({
     isToday,
-    briefHtml: briefHtml(read, { showPlan, hasPlanDay, isToday }),
+    briefHtml: briefHtml(read, { showPlan, showDone, isToday }),
     conductorHtml: "",
     conductorLeads: false,
     goalLineHtml: "",

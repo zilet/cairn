@@ -97,13 +97,14 @@ test("Today Brief shows the forward plan link on train AND done reads (not rest)
 
 test("Today Brief handles done, provisional, and offline states", () => {
   const brief = loadTodayBrief();
+  // The finished-session "Log more" card already covers entry — no action needed.
   const done = brief.briefHtml({
     kind: "done",
     headline: "Training logged",
     why: "Top set in",
     est_minutes: null,
     signals: {},
-  }, { isToday: true });
+  }, { isToday: true, showDone: true });
   const provisional = brief.briefHtml(brief.provisionalRead(), { isToday: true, reducedMotion: false });
   const offline = brief.briefHtml({
     kind: "train",
@@ -128,6 +129,67 @@ test("Today Brief handles done, provisional, and offline states", () => {
   assert.match(provisional, /is-thinking/);
   assert.match(offline, /showing the deterministic read/);
   assert.doesNotMatch(dismissed, /showing the deterministic read/);
+});
+
+test("Today Brief offers one quiet entry on a done read with nothing below to start training from", () => {
+  const brief = loadTodayBrief();
+  const doneRead = {
+    kind: "done",
+    headline: "Long run done",
+    why: "Nice work",
+    est_minutes: null,
+    signals: {},
+  };
+
+  // A logged activity alone (no session row, no revealed plan) leaves neither
+  // the finished-session card nor the plan surface on screen — the Brief must
+  // be the one way in.
+  const stranded = brief.briefHtml(doneRead, { isToday: true, showPlan: false, showDone: false });
+  assert.match(stranded, /data-redirect="start-session"/);
+  assert.match(stranded, /Log training/);
+  // Exactly one entry action, not the primary "Start session" launch styling.
+  assert.doesNotMatch(stranded, /brief-redirect-primary/);
+  assert.doesNotMatch(stranded, /data-redirect="ask-session"/);
+
+  // The finished-session "Log more" card already provides entry — no duplicate action.
+  const withDoneCard = brief.briefHtml(doneRead, { isToday: true, showPlan: false, showDone: true });
+  assert.doesNotMatch(withDoneCard, /data-redirect=/);
+
+  // A revealed/launchable plan surface already provides entry — no duplicate action.
+  const withPlan = brief.briefHtml(doneRead, { isToday: true, showPlan: true, showDone: false });
+  assert.doesNotMatch(withPlan, /data-redirect=/);
+});
+
+test("Today Brief train/easy/rest actions are unaffected by the done-state entry fix", () => {
+  const brief = loadTodayBrief();
+
+  const train = brief.briefHtml({ kind: "train", headline: "Push day", why: "", signals: {} }, { isToday: true, showPlan: false, showDone: false });
+  assert.match(train, /data-redirect="start-session"/);
+  assert.match(train, /brief-redirect-primary/);
+  assert.match(train, /Start session/);
+  assert.doesNotMatch(train, /Log training/);
+
+  const easy = brief.briefHtml({ kind: "easy", headline: "Easy day", why: "", signals: {} }, { isToday: true, showPlan: false });
+  assert.match(easy, /data-redirect="reveal-plan"/);
+  assert.match(easy, /Train anyway/);
+  assert.match(easy, /data-redirect="ask-session"/);
+
+  const rest = brief.briefHtml({ kind: "rest", headline: "Rest day", why: "", signals: {} }, { isToday: true, showPlan: false });
+  assert.match(rest, /data-redirect="reveal-plan"/);
+  assert.match(rest, /data-redirect="ask-session"/);
+});
+
+test("Today Brief stops the thinking shimmer once a fetch has terminally failed", () => {
+  const brief = loadTodayBrief();
+  const stillLoading = brief.briefHtml(brief.provisionalRead(), { isToday: true, reducedMotion: false });
+  const failed = brief.briefHtml({ ...brief.provisionalRead(), _failed: true }, { isToday: true, reducedMotion: false });
+
+  assert.match(stillLoading, /is-thinking/);
+  assert.match(stillLoading, /aria-busy="true"/);
+  assert.doesNotMatch(failed, /is-thinking/);
+  assert.doesNotMatch(failed, /aria-busy="true"/);
+  // Today's train-kind fallback content stays intact and clickable.
+  assert.match(failed, /data-redirect="start-session"/);
 });
 
 test("Today signal summary preserves plain-language framing", () => {

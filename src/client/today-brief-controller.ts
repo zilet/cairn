@@ -6,6 +6,10 @@ type TodayBriefControllerDayRead = import("../contracts/client.js").ClientDayRea
   // Painted instantly from the last-known real read for this date (localStorage);
   // reconciled silently against the network fetch post-render.
   _cached?: boolean;
+  // Set once the /today-read fetch has definitively failed (network error or a
+  // malformed response), distinguishing a terminal fallback from a placeholder
+  // that's still genuinely in flight — see loadBrief's fetchRead.
+  _failed?: boolean;
   override?: string | null;
 };
 
@@ -130,7 +134,7 @@ type TodayBriefControllerDeps = {
       } catch {
         read = null;
       }
-      if (!read || !read.kind) read = provisionalRead(date);
+      if (!read || !read.kind) read = { ...provisionalRead(date), _failed: true };
       persistCachedBrief(date, override || "", read);
       return read;
     })();
@@ -191,6 +195,12 @@ type TodayBriefControllerDeps = {
     if (!read || read._provisional) {
       // Refetch failed / not ready — keep whatever's painted (cached read stands).
       briefEl?.classList.remove("is-thinking");
+      // If nothing real was cached (the paint IS the placeholder) and this was a
+      // genuine terminal failure, adopt it so a later re-render doesn't re-add
+      // the shimmer for a fetch that's already given up.
+      if (read?._failed && shown && shown._provisional) {
+        deps.state.brief = { date, override: inflight.override || "", read };
+      }
       return;
     }
     // A cached paint that matches the network truth: adopt the fresh read into
@@ -212,11 +222,10 @@ type TodayBriefControllerDeps = {
     }
     const live = deps.root.querySelector(".brief");
     if (!live) return;
-    const day = deps.state.plan.find((d) => d.day_number === (deps.state as { day?: unknown }).day) || deps.state.plan[0] || { items: [] };
-    const hasPlanDay = (day.items || []).length > 0;
     const showPlan = !!deps.root.querySelector(".plansurface");
+    const showDone = !!deps.root.querySelector(".sessiondone");
     const tmp = document.createElement("div");
-    tmp.innerHTML = briefHtml(read, { showPlan, hasPlanDay, isToday }, deps);
+    tmp.innerHTML = briefHtml(read, { showPlan, showDone, isToday }, deps);
     const fresh = tmp.firstElementChild;
     if (!fresh) {
       live.classList.remove("is-thinking");
@@ -252,12 +261,13 @@ type TodayBriefControllerDeps = {
 
   function briefHtml(
     read: TodayBriefControllerDayRead | null | undefined,
-    options: { showPlan?: unknown; hasPlanDay?: unknown; isToday?: unknown } = {},
+    options: { showPlan?: unknown; showDone?: unknown; isToday?: unknown } = {},
     deps: TodayBriefControllerDeps,
   ): string {
     const activeOverride = deps.state.brief && deps.state.brief.date === deps.state.logDate ? deps.state.brief.override : "";
     return CairnTodayBrief.briefHtml(read, {
       showPlan: !!options.showPlan,
+      showDone: !!options.showDone,
       isToday: !!options.isToday,
       activeOverride,
       morph: !!deps.state._briefMorph,
