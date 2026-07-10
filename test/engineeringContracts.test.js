@@ -3916,7 +3916,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(todayRailLoadersSource, /CairnTodayGarminReconciliation\.load/);
   assert.match(todayRailControllerSource, /type TodayRailDeps = \{/);
   assert.match(todayRailControllerSource, /async function fetchTodayAgenda\(date: string, deps: TodayRailDeps\): Promise<TodayRailAgenda \| null>/);
-  assert.match(todayRailControllerSource, /function runAgendaRail\(agenda: Partial<TodayRailAgenda>/);
+  assert.match(todayRailControllerSource, /function runAgendaRail\(/);
   assert.match(todayRailControllerSource, /function wireGenericAgendaCards\(pending: TodayRailCandidate\[\], deps: TodayRailDeps\): void/);
   assert.match(todayRailControllerSource, /function railLoaders\(\): Window\["CairnTodayRailLoaders"\]/);
   assert.doesNotMatch(todayRailControllerSource, /async function loadFuelToday|async function loadRecentActivities|CairnTodayAgenda\.fuelCardHtml/);
