@@ -5590,3 +5590,10 @@ body[data-tab="session"] .tabbar{display:none}
 @keyframes cbf-pulse{0%,100%{opacity:.10}50%{opacity:.42}}
 .cbf-pulse{animation:cbf-pulse 3.4s var(--ease, ease-in-out) infinite}
 @media (prefers-reduced-motion: reduce){ .cbf-pulse{animation:none} }
+
+/* ---- Always-available "start training" entries (round: lead-and-start) ---- */
+/* Plan editor: per-day "Train this day" stacks above "Edit day" in the read view. */
+.prog-head-actions{display:flex;flex-direction:column;gap:6px;flex:0 0 auto;align-items:flex-end}
+.prog-head-actions .ghostbtn{margin-top:0}
+/* Train overview: the calm "Start today's training" CTA under the week masthead. */
+.tov-start{margin:4px 0 12px}

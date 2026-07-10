@@ -318,6 +318,10 @@ test("planDayProgression covers every strength item and skips cardio", () => {
 });
 
 test("MCP apply_progression mirrors REST proposal shape and supersedes stale same-day drafts", async () => {
+  // apply_progression now routes through the autonomy layer; pin review_everything so the
+  // proposals PARK as drafts (autonomy inert) and this stays a pure builder-shape + same-day
+  // dedup contract. The lead-mode auto-apply routing is covered in brainAutonomyPlanPaths.test.js.
+  repo.setSettings({ lead_mode: "review_everything" });
   makeExercise("Bench Press", { muscle_group: "chest" });
   makeExercise("Overhead Press", { muscle_group: "shoulders" });
   repo.savePlanDay(1, "Push", "Push", [

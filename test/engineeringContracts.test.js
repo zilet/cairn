@@ -629,9 +629,11 @@ test("generated API docs include mounted route modules", () => {
   assert.match(programRoutes, /backgroundOp\(res,\s*"proposal"/);
   assert.match(programRoutes, /backgroundOp\(res,\s*"evolve_program"/);
   assert.match(programRoutes, /localToday\(\)/);
-  // The auto-progression apply now routes through the shared buildProgressionProposal
-  // (supersede + createProposal moved into it so REST + MCP can't drift).
-  assert.match(programRoutes, /buildProgressionProposal/);
+  // The auto-progression apply now routes through the shared autonomy wrapper
+  // (buildProgressionWithAutonomy = buildProgressionProposal + applyProposalWithAutonomy),
+  // so under lead_mode a bounded target nudge quiet-applies at its natural boundary while
+  // REST + MCP share the ONE wrapper and can't drift.
+  assert.match(programRoutes, /buildProgressionWithAutonomy/);
   assert.match(api, /api\.use\("\/",\s*trainingLogRouter\)/);
   assert.doesNotMatch(
     api,

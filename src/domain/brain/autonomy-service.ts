@@ -15,6 +15,7 @@ import { insertBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { deleteNutritionTarget, getActiveNutritionTarget, setNutritionTarget } from "../../repo/nutrition.js";
 import { getPlan, replacePlan } from "../../repo/plan.js";
 import { applyProposal, getProposal } from "../../repo/profile.js";
+import { buildProgressionProposal } from "../../repo/progression.js";
 import { getSettings } from "../../repo/settings.js";
 import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
@@ -182,14 +183,25 @@ function domainIsDemoted(domain: BrainDomain): boolean {
   );
 }
 
-function materialChangesThisWeek(domain: BrainDomain): number {
+// Material changes in this domain this week, by status set. The default counts every
+// COMMITMENT — applied, announced, AND pending: a quiet-apply waiting for its boundary is
+// already a committed material change, and leaving 'pending' out let a pending progression
+// AND a same-week evolution both get scheduled (a budget of one means one). The boundary
+// pass instead counts only what has LANDED (['applied']): due-but-unlanded siblings must
+// not mutually block the pass — the oldest lands first, flips to 'applied', and THEN
+// blocks the rest of the week's queue.
+function materialChangesThisWeek(
+  domain: BrainDomain,
+  statuses: readonly string[] = ["applied", "announced", "pending"]
+): number {
+  const placeholders = statuses.map(() => "?").join(",");
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM brain_decisions
-      WHERE domain = ? AND status IN ('applied','announced') AND autonomy_tier IN ('quiet_apply','announce')
+      WHERE domain = ? AND status IN (${placeholders}) AND autonomy_tier IN ('quiet_apply','announce')
         AND date(created_at) >= date('now','-6 days')`
     )
-    .get(domain) as any;
+    .get(domain, ...statuses) as any;
   return Number(row?.n ?? 0);
 }
 
@@ -354,16 +366,43 @@ export function applyProposalWithAutonomy(
   return { ...result, tier: "quiet_apply", decision: updated };
 }
 
+// Build the deterministic per-day auto-progression draft, then route it through the
+// autonomy layer — THE shared REST+MCP entry so the two surfaces can't drift (MCP ⊆
+// REST). Under lead_mode='lead' a bounded, reversible target nudge (buildProgression
+// only ever emits `changes`, i.e. kind 'training_target') quiet-applies at its natural
+// boundary with the decision + Undo bookkeeping applyProposalWithAutonomy already owns;
+// under 'announce_first' it announces first; under 'review_everything' the layer returns
+// tier 'ask' and the draft stays a plain reviewable draft (no decision recorded), exactly
+// as before. `requested_tier:'quiet_apply'` mirrors the brain-review boundary path
+// (executeBrainReviewAction) and never LOOSENS policy — decideAutonomyTier only ever
+// clamps to a MORE restrictive tier. A designed ok:false (nothing to propose) passes
+// straight through unchanged.
+export function buildProgressionWithAutonomy(
+  day: number
+): { ok: false; error: string } | { ok: true; proposal: any; autonomy: any } {
+  const built = buildProgressionProposal(day);
+  if (!built.ok) return built;
+  const autonomy = applyProposalWithAutonomy(Number(built.proposal.id), { requested_tier: "quiet_apply" });
+  return { ok: true, proposal: built.proposal, autonomy };
+}
+
 export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: number[]; failed: number[] } {
   const due = [
     ...listBrainDecisions({ status: "announced", limit: 100 }),
     ...listBrainDecisions({ status: "pending", limit: 100 }).filter(
       (decision) => decision.autonomy_tier === "quiet_apply"
     ),
-  ].filter(
-    (decision) =>
-      !!decision.effective_date && decision.effective_date <= asOf && Number((decision.action as any)?.proposal_id) > 0
-  );
+  ]
+    .filter(
+      (decision) =>
+        !!decision.effective_date &&
+        decision.effective_date <= asOf &&
+        Number((decision.action as any)?.proposal_id) > 0
+    )
+    // OLDEST first (listBrainDecisions returns id DESC): when several decisions share a
+    // boundary the newest read must land LAST and win — otherwise a stale restructure
+    // could overwrite a fresher one that happened to sort earlier.
+    .sort((a, b) => Number(a.id) - Number(b.id));
   const applied: number[] = [];
   const failed: number[] = [];
   // A decision that cannot apply must reach a terminal/reviewable status here.
@@ -390,14 +429,26 @@ export function applyDueAnnouncedDecisions(asOf = localDateISO()): { applied: nu
         parkForReview(announced, "the linked proposal no longer exists");
         continue;
       }
-      if (proposal.status === "applied") {
-        // Someone already applied the underlying proposal (e.g. a manual apply);
-        // the announcement is moot and must not re-apply at the boundary.
+      if (proposal.status !== "draft") {
+        // The proposal is no longer live: applied elsewhere (a manual apply), discarded
+        // (the user's explicit veto), or superseded by a fresher draft. The announcement
+        // is moot and must NEVER apply at the boundary — a boundary pass re-applying a
+        // vetoed replacePlan would be the worst possible surprise.
         transitionBrainDecision(announced.id!, "canceled");
         failed.push(announced.id!);
         continue;
       }
       const shape = proposalShape(proposal);
+      // Re-check the surprise budget at the boundary against what has LANDED this week:
+      // the world may have moved since the decision was recorded — an earlier decision in
+      // this same pass, or a mid-week quiet apply, already used this domain's budget.
+      // Counting 'applied' only (not other pending/announced siblings) keeps two due
+      // decisions from mutually blocking each other: the oldest lands, becomes 'applied',
+      // and then blocks the rest.
+      if (!surpriseBudgetAllows(materialChangesThisWeek(shape.domain, ["applied"]))) {
+        parkForReview(announced, "weekly surprise budget already used; review this change before applying");
+        continue;
+      }
       const createdAt = Date.parse(String(proposal.created_at ?? ""));
       const freshnessDays = shape.kind === "training_structure" ? 14 : 7;
       const ageDays = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 86_400_000) : Infinity;

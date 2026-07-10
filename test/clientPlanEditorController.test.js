@@ -60,6 +60,9 @@ class FakeElement {
     for (const match of html.matchAll(/data-editday="([^"]+)"/g)) {
       this.append(new FakeElement("button", { dataset: { editday: match[1] } }));
     }
+    for (const match of html.matchAll(/data-trainday="([^"]+)"/g)) {
+      this.append(new FakeElement("button", { dataset: { trainday: match[1] } }));
+    }
 
     const dayBlocks = html.split(/(?=<div class="pday" data-d=")/g).filter((block) => block.startsWith('<div class="pday"'));
     for (const block of dayBlocks) {
@@ -145,9 +148,12 @@ function loadPlanEditorController(plan) {
   const documentEl = new FakeElement("document");
   const requests = [];
   const invalidations = [];
+  const openSessionCalls = [];
   let dirtyCount = 0;
   let saveOptions = null;
   const context = {
+    openSession: (date) => { openSessionCalls.push(date); },
+    localISO: () => "2026-07-10",
     Array,
     Math,
     Number,
@@ -213,6 +219,7 @@ function loadPlanEditorController(plan) {
     view,
     requests,
     invalidations,
+    openSessionCalls,
     get dirtyCount() { return dirtyCount; },
     get saveOptions() { return saveOptions; },
   };
@@ -318,4 +325,23 @@ test("the Plan recovery banner announces a reshaped week — drafted asks, appli
   // Null / malformed: the plan renders untouched.
   assert.equal(banner(null), "");
   assert.equal(banner({ state: "someday" }), "");
+});
+
+test("plan editor controller 'Train this day' starts logging the selected day today", async () => {
+  const harness = loadPlanEditorController([
+    { day_number: 1, name: "Upper", focus: "Push", items: [{ kind: "strength", exercise: "Bench", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }] },
+    { day_number: 4, name: "Lower", focus: "Squat", items: [{ kind: "strength", exercise: "Squat", sets: 4, rep_low: 5, rep_high: 5, target_weight: 245 }] },
+  ]);
+
+  await harness.context.renderPlanEditor();
+
+  // The second day's "Train this day" preselects that plan day (day_number 4),
+  // marks the pick explicit, and opens the isolated Session surface for today.
+  const trainButtons = harness.view.querySelectorAll("[data-trainday]");
+  assert.equal(trainButtons.length, 2, "one Train this day per plan day");
+  trainButtons[1].click();
+
+  assert.equal(harness.context.state.day, 4);
+  assert.equal(harness.context.state.dayPicked, true);
+  assert.deepEqual(harness.openSessionCalls, ["2026-07-10"], "opens the Session surface logged against today");
 });
