@@ -4,6 +4,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { agentCliPath, agentDataDir, buildAgentSpawnOptions, promptReferencesDataDir } from "./agentExecution.js";
+import { telemetryModelName } from "./telemetry-privacy.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -535,18 +536,30 @@ function firstTokenCount(obj: any, keys: string[]): number | null {
   return null;
 }
 
-function recognizedModelName(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const model = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$/.test(model)) return null;
-  return /^(?:(?:anthropic|openai|google|xai)\/)?(?:(?:claude|gpt|gemini|grok|codex)(?:[-.:/][A-Za-z0-9][A-Za-z0-9_.:/-]*)|o[134](?:[-.:/][A-Za-z0-9][A-Za-z0-9_.:/-]*)?)$/i.test(model)
-    ? model
-    : null;
+function usageEnvelope(obj: any): { usage: any; model: unknown } | null {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  // Only provider/CLI protocol envelopes are telemetry. A coaching result is
+  // arbitrary business JSON and root fields such as model/input_tokens may be
+  // user-authored domain data, even when they happen to look provider-shaped.
+  if (obj.type === "result" && typeof obj.subtype === "string" && obj.usage && typeof obj.usage === "object")
+    return { usage: obj.usage, model: obj.model ?? obj.usage.model };
+  if (obj.type === "message_start" && obj.message && typeof obj.message === "object")
+    return { usage: obj.message.usage, model: obj.message.model };
+  if (obj.type === "message_delta" && obj.usage && typeof obj.usage === "object")
+    return { usage: obj.usage, model: obj.model ?? obj.usage.model };
+  if (obj.type === "turn.completed" && obj.usage && typeof obj.usage === "object")
+    return { usage: obj.usage, model: obj.model ?? obj.usage.model };
+  if (obj.type === "response.completed" && obj.response && typeof obj.response === "object")
+    return { usage: obj.response.usage, model: obj.response.model };
+  if (obj.type === "usage" && obj.data && typeof obj.data === "object")
+    return { usage: obj.data, model: obj.data.model };
+  return null;
 }
 
 function usageFromObject(obj: any): AgentUsage {
-  if (!obj || typeof obj !== "object") return {};
-  const usage = obj.usageMetadata ?? obj.usage ?? obj.token_usage ?? obj.tokenUsage ?? obj.metrics ?? obj;
+  const envelope = usageEnvelope(obj);
+  if (!envelope?.usage || typeof envelope.usage !== "object") return {};
+  const usage = envelope.usage;
   const input = firstTokenCount(usage, [
     "input_tokens",
     "inputTokens",
@@ -563,12 +576,7 @@ function usageFromObject(obj: any): AgentUsage {
     "candidatesTokenCount",
     "outputTokenCount",
   ]);
-  const model =
-    recognizedModelName(obj.model) ??
-    recognizedModelName(obj.model_name) ??
-    recognizedModelName(obj.modelName) ??
-    recognizedModelName(usage.model) ??
-    recognizedModelName(usage.model_name);
+  const model = telemetryModelName(envelope.model) ?? telemetryModelName(usage.model) ?? telemetryModelName(usage.model_name);
   return { model, input_tokens: input, output_tokens: output };
 }
 

@@ -207,6 +207,15 @@ test("diagnostic retention removes events older than 30 days", () => {
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM diagnostic_events WHERE fingerprint = 'old'").get().n, 0);
 });
 
+test("diagnostic row cap remains enforced during a same-hour write storm", () => {
+  db.exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < 20001)
+    INSERT INTO diagnostic_events (source,kind,level,fingerprint,release)
+    SELECT 'worker','storm','error','seed-' || x,'old@build' FROM n`);
+  for (let i = 0; i < 250; i++)
+    recordDiagnosticEvent({ source: "worker", kind: "storm", level: "error", fingerprint: `live-${i}`, release: "new@build" });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM diagnostic_events").get().n <= 20_000, true);
+});
+
 test("client batches use the server release fallback and tolerate malformed stored metadata", () => {
   ingestClientDiagnosticEvents(
     [
@@ -344,6 +353,10 @@ test("matched templates discard named values and SSE/probes stay outside product
   assert.equal(isOrdinaryProductRequest(sse, "/api/turns/:id/stream"), false);
   assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/health"), false);
   assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/ready"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/diagnostics"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/agent-stats"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/telemetry/client"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/art/stats"), false);
   assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/plan"), true);
 
   const streamReq = { method: "GET", baseUrl: "/api", route: { path: "/turns/:id/stream" } };
@@ -385,4 +398,19 @@ test("diagnostic coalescing never crosses or relabels releases", () => {
     { release: "1.0.0@build-b", occurrence_count: 1 },
   ]);
   assert.equal(getDiagnostics().issues.length, 2);
+});
+
+test("diagnostics preserve history but mark and isolate the current build", () => {
+  const initial = getDiagnostics();
+  const release = `${initial.build.version}@${initial.build.build_id}`;
+  recordDiagnosticEvent({ source: "worker", kind: "failure", level: "error", fingerprint: "current", release });
+  recordDiagnosticEvent({ source: "worker", kind: "failure", level: "error", fingerprint: "prior", release: "0.9.0@prior-build" });
+  const stats = getDiagnostics();
+  assert.equal(stats.total, 2);
+  assert.equal(stats.issues.length, 2);
+  assert.equal(stats.current_build.scope, "current_build");
+  assert.equal(stats.current_build.release, release);
+  assert.equal(stats.current_build.total, 1);
+  assert.equal(stats.current_build.prior_build_total, 1);
+  assert.deepEqual(stats.current_build.issues.map((issue) => issue.fingerprint), ["current"]);
 });

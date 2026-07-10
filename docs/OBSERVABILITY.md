@@ -25,7 +25,10 @@ separately from product throughput. Buckets are retained for 30
 
 `GET /api/diagnostics` and MCP `get_diagnostics` return the build identity,
 release-scoped grouped issues, recent sanitized events, slow operations,
-current-build performance aggregates, and storage limits. `GET /api/ready` adds
+current-build performance aggregates, and storage limits. The response preserves
+all-build history while `current_build` isolates the running build's issue count,
+groups, recent events, and slow requests so an older release cannot color current
+deployment health. `GET /api/ready` adds
 queue age, recent terminal failures, and
 scheduler-heartbeat freshness. Optional coaching agents never gate readiness.
 

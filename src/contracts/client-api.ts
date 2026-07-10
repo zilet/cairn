@@ -121,6 +121,16 @@ export interface ClientDiagnosticsResponse {
   issues: ClientDiagnosticIssue[];
   recent: ClientDiagnosticEvent[];
   slow: ClientDiagnosticEvent[];
+  current_build: {
+    scope: "current_build";
+    build_id: string;
+    release: string;
+    total: number;
+    prior_build_total: number;
+    issues: ClientDiagnosticIssue[];
+    recent: ClientDiagnosticEvent[];
+    slow: ClientDiagnosticEvent[];
+  };
   performance: {
     build_id: string; window_days: number; requests: number; avg_ms: number | null;
     p50_ms: number | null; p95_ms: number | null; max_ms: number | null;

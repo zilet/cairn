@@ -11,6 +11,10 @@ import {
 } from "./telemetry-privacy.js";
 
 const DEFAULT_SLOW_REQUEST_MS = 2_000;
+const INTERNAL_TELEMETRY_ROUTES = new Set([
+  "/api/health", "/api/ready", "/api/diagnostics", "/api/agent-stats",
+  "/api/brain-diagnostics", "/api/art/stats", "/api/telemetry/client",
+]);
 const requestIds = new WeakMap<Request, string>();
 const unexpectedErrorRequests = new WeakSet<Request>();
 
@@ -42,7 +46,7 @@ function requestRoute(req: Request): string {
 export function isOrdinaryProductRequest(res: Pick<Response, "getHeader">, route: string): boolean {
   const contentType = String(res.getHeader("Content-Type") || "").toLowerCase();
   if (contentType.startsWith("text/event-stream")) return false;
-  return route !== "/api/health" && route !== "/api/ready";
+  return !INTERNAL_TELEMETRY_ROUTES.has(route);
 }
 
 function isEventStream(res: Pick<Response, "getHeader">): boolean {

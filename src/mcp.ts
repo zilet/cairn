@@ -22,7 +22,7 @@ import { registerBodyMetricsTools } from "./surfaces/mcp/body-metrics.js";
 import { registerJourneyTools } from "./surfaces/mcp/journey.js";
 import { getBuildInfo, getBuildStamp } from "./build-info.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
-import { normalizeMcpMetricOperation, recordRequestMetric, registerMcpMetricOperation } from "./repo/request-metrics.js";
+import { isInternalMcpMetricOperation, normalizeMcpMetricOperation, recordRequestMetric, registerMcpMetricOperation } from "./repo/request-metrics.js";
 import { telemetryErrorName, telemetryIdentifier, telemetryStackFrames } from "./telemetry-privacy.js";
 
 const KNOWN_MCP_METHODS = new Map([
@@ -82,6 +82,7 @@ export async function handleMcpPost(req: Request, res: Response) {
       route: tool,
       status: res.statusCode,
       duration_ms: Math.max(0, Math.round(performance.now() - started)),
+      scope: isInternalMcpMetricOperation(tool) ? "internal" : "product",
     });
   });
   try {
@@ -112,7 +113,7 @@ export async function handleMcpPost(req: Request, res: Response) {
 }
 
 export function methodNotAllowed(_req: Request, res: Response) {
-  recordRequestMetric({ protocol: "mcp", method: _req.method, route: "unknown", status: 405, duration_ms: 0 });
+  recordRequestMetric({ protocol: "mcp", method: _req.method, route: "unknown", status: 405, duration_ms: 0, scope: "internal" });
   recordDiagnosticEvent({
     source: "mcp",
     kind: "http_error",

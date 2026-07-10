@@ -134,7 +134,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_diagnostics",
-    "Get bounded current-build local diagnostics: release-scoped browser/API/MCP/process/scheduler/worker failures, sanitized recent events, product API/MCP throughput and approximate p50/p95 latency, separately counted internal probes, storage caps, and slow routes. SSE lifetime is excluded. Never includes prompts, bodies, credentials, health values, or raw agent output.",
+    "Get bounded local diagnostics: preserved release-scoped history plus a marked current-build issue/recent/slow subset, product API/MCP throughput and approximate p50/p95 latency, separately counted internal telemetry, and storage caps. SSE lifetime is excluded. Never includes prompts, bodies, credentials, health values, or raw agent output.",
     { recent: z.number().int().min(1).max(200).optional(), days: z.number().int().min(1).max(30).optional() },
     async ({ recent, days }) => asText(getDiagnostics({ recent, days }))
   );

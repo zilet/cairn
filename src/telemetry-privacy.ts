@@ -18,6 +18,19 @@ export function telemetryIdentifier(value: unknown, max = 80, fallback = "unknow
   return safe || fallback;
 }
 
+/** Provider model identifiers only; reject provider-prefixed domain labels. */
+export function telemetryModelName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const model = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9.:/-]{0,119}$/.test(model)) return null;
+  const bare = model.replace(/^(?:anthropic|openai|google|xai)\//i, "");
+  if (/^o[134](?:[-.:/][A-Za-z0-9][A-Za-z0-9.:/-]*)?$/i.test(bare)) return model;
+  if (/^codex-mini-latest$/i.test(bare)) return model;
+  return /^(?:claude|gpt|gemini|grok|codex)(?=[-.:/].*\d)[-.:/][A-Za-z0-9][A-Za-z0-9.:/-]*$/i.test(bare)
+    ? model
+    : null;
+}
+
 export function telemetryErrorName(error: unknown): string {
   if (!(error instanceof Error)) return "Error";
   const name = String(error.name || "").trim();

@@ -68,6 +68,7 @@ const DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const DIAGNOSTIC_RETENTION_DAYS = 30;
 const DIAGNOSTIC_ROW_CAP = 20_000;
 const COALESCE_MINUTES = 5;
+const WRITES_PER_CAP_CHECK = 250;
 const SENSITIVE_KEY =
   /(?:authorization|cookie|credential|password|passwd|secret|token|api[_-]?key|prompt|chat|health|request[_-]?body|response[_-]?body|raw[_-]?output|input[_-]?tokens?|output[_-]?tokens?)/i;
 
@@ -238,6 +239,8 @@ const coalesceDiagnosticEvent = db.prepare(
 );
 
 let nextDiagnosticPruneAt = 0;
+let writesUntilCapCheck = WRITES_PER_CAP_CHECK;
+let capPressure = false;
 
 function normalizeDiagnosticEvent(input: DiagnosticEventInput): NormalizedDiagnosticEvent {
   const source = SOURCES.has(input.source) ? input.source : "process";
@@ -260,19 +263,26 @@ function normalizeDiagnosticEvent(input: DiagnosticEventInput): NormalizedDiagno
   ];
 }
 
-function maybePruneDiagnosticEvents(now = Date.now()): void {
-  if (now < nextDiagnosticPruneAt) return;
-  pruneDiagnosticEvents(now);
+function maybePruneDiagnosticEvents(writes = 1, now = Date.now()): void {
+  writesUntilCapCheck -= Math.max(1, writes);
+  if (capPressure) pruneDiagnosticEvents(now);
+  else if (writesUntilCapCheck <= 0) {
+    writesUntilCapCheck = WRITES_PER_CAP_CHECK;
+    pruneDiagnosticEvents(now);
+  } else if (now >= nextDiagnosticPruneAt) pruneDiagnosticEvents(now);
 }
 
 /** Best-effort retention; exposed separately for deterministic maintenance/tests. */
 export function pruneDiagnosticEvents(now = Date.now()): void {
   try {
     db.prepare(`DELETE FROM diagnostic_events WHERE created_at < datetime('now', ?)`).run(`-${DIAGNOSTIC_RETENTION_DAYS} days`);
-    db.prepare(
+    const capped = db.prepare(
       `DELETE FROM diagnostic_events WHERE id NOT IN
        (SELECT id FROM diagnostic_events ORDER BY created_at DESC,id DESC LIMIT ?)`
     ).run(DIAGNOSTIC_ROW_CAP);
+    if (Number(capped.changes) > 0) capPressure = true;
+    else if (capPressure)
+      capPressure = Number((db.prepare(`SELECT COUNT(*) AS n FROM diagnostic_events`).get() as any)?.n ?? 0) >= DIAGNOSTIC_ROW_CAP;
   } catch {
     /* diagnostics must never break product paths */
   } finally {
@@ -305,7 +315,7 @@ export function recordDiagnosticEvent(input: DiagnosticEventInput): void {
   } catch {
     /* diagnostics must never break product paths */
   } finally {
-    maybePruneDiagnosticEvents();
+    maybePruneDiagnosticEvents(1);
   }
 }
 
@@ -327,7 +337,7 @@ export function recordDiagnosticEvents(inputs: DiagnosticEventInput[]): void {
     }
     /* diagnostics must never break product paths */
   } finally {
-    maybePruneDiagnosticEvents();
+    maybePruneDiagnosticEvents(inputs.length);
   }
 }
 
@@ -507,8 +517,45 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
       )
       .all(since, recent) as any[]
   ).map(rowToEvent);
+  const build = getBuildInfo();
+  const currentRelease = `${build.version}@${build.build_id}`.slice(0, 80);
+  const currentTotal = Number(
+    (db.prepare(`SELECT COALESCE(SUM(occurrence_count),0) AS n FROM diagnostic_events
+                  WHERE created_at >= datetime('now', ?) AND release = ?`).get(since, currentRelease) as any)?.n ?? 0
+  );
+  const currentIssues = db
+    .prepare(
+      `WITH scoped AS (
+         SELECT * FROM diagnostic_events WHERE created_at >= datetime('now', ?) AND release = ?
+       ), grouped AS (
+         SELECT fingerprint, SUM(occurrence_count) AS count, MIN(COALESCE(first_seen,created_at)) AS first_seen,
+                MAX(created_at) AS last_seen, MAX(id) AS latest_id
+           FROM scoped GROUP BY fingerprint
+       )
+       SELECT grouped.fingerprint, latest.source, latest.kind, latest.level,
+              latest.route, latest.operation, latest.status, grouped.count,
+              grouped.first_seen, grouped.last_seen, latest.message, latest.release
+         FROM grouped JOIN scoped latest ON latest.id = grouped.latest_id
+        ORDER BY CASE latest.level WHEN 'error' THEN 0 ELSE 1 END,
+                 grouped.last_seen DESC, grouped.count DESC LIMIT 100`
+    )
+    .all(since, currentRelease)
+    .map((row: any) => ({
+      fingerprint: row.fingerprint, source: row.source, kind: row.kind, level: row.level,
+      route: row.route ?? null, operation: row.operation ?? null,
+      status: row.status == null ? null : Number(row.status), count: Number(row.count),
+      first_seen: row.first_seen, last_seen: row.last_seen, message: row.message ?? null,
+      release: row.release ?? null,
+    }));
+  const currentRecent = (db.prepare(`SELECT * FROM diagnostic_events
+      WHERE created_at >= datetime('now', ?) AND release = ? ORDER BY id DESC LIMIT ?`)
+    .all(since, currentRelease, recent) as any[]).map(rowToEvent);
+  const currentSlow = (db.prepare(`SELECT * FROM diagnostic_events
+      WHERE created_at >= datetime('now', ?) AND release = ? AND kind = 'slow_request'
+      ORDER BY duration_ms DESC, id DESC LIMIT ?`)
+    .all(since, currentRelease, recent) as any[]).map(rowToEvent);
   return {
-    build: getBuildInfo(),
+    build,
     window_days: days,
     total,
     by_source: recordMap(bySource, "source"),
@@ -517,6 +564,16 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
     issues,
     recent: recentEvents,
     slow,
+    current_build: {
+      scope: "current_build",
+      build_id: build.build_id,
+      release: currentRelease,
+      total: currentTotal,
+      prior_build_total: Math.max(0, total - currentTotal),
+      issues: currentIssues,
+      recent: currentRecent,
+      slow: currentSlow,
+    },
     performance: getRequestPerformance(days),
     storage: {
       diagnostic_events: {

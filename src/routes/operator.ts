@@ -78,6 +78,6 @@ export function diagnosticsHandler(req: Request, res: Response) {
 operatorRouter.post("/telemetry/client", clientTelemetryHandler);
 
 // Local operator issue pulse: current-build browser/API/MCP/process/scheduler
-// and worker failures, release-scoped groups, sanitized recent events, product
-// latency, separately counted internal probes, and enforceable storage caps.
+// and worker failures, release-scoped history plus a marked current-build subset,
+// product latency, separately counted internal telemetry, and enforceable caps.
 operatorRouter.get("/diagnostics", diagnosticsHandler);

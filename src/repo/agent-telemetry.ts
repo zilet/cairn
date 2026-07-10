@@ -1,19 +1,25 @@
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
-import { agentErrorClass, telemetryIdentifier } from "../telemetry-privacy.js";
+import { agentErrorClass, telemetryIdentifier, telemetryModelName } from "../telemetry-privacy.js";
 
 const AGENT_RUN_RETENTION_DAYS = 30;
 const AGENT_RUN_ROW_CAP = 20_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
+const WRITES_PER_CAP_CHECK = 250;
 let nextPruneAt = 0;
+let writesUntilCapCheck = WRITES_PER_CAP_CHECK;
+let capPressure = false;
 
-export function pruneAgentRuns(now = Date.now()): void {
-  if (now < nextPruneAt) return;
+export function pruneAgentRuns(now = Date.now(), force = false): void {
+  if (!force && now < nextPruneAt) return;
   try {
     db.prepare(`DELETE FROM agent_runs WHERE created_at < datetime('now', ?)`).run(`-${AGENT_RUN_RETENTION_DAYS} days`);
-    db.prepare(`DELETE FROM agent_runs WHERE id NOT IN (SELECT id FROM agent_runs ORDER BY id DESC LIMIT ?)`).run(
+    const capped = db.prepare(`DELETE FROM agent_runs WHERE id NOT IN (SELECT id FROM agent_runs ORDER BY id DESC LIMIT ?)`).run(
       AGENT_RUN_ROW_CAP
     );
+    if (Number(capped.changes) > 0) capPressure = true;
+    else if (capPressure)
+      capPressure = Number((db.prepare(`SELECT COUNT(*) AS n FROM agent_runs`).get() as any)?.n ?? 0) >= AGENT_RUN_ROW_CAP;
   } catch {
     /* telemetry maintenance is failure-safe */
   } finally {
@@ -64,14 +70,19 @@ export function recordAgentRun(r: {
       classifiedError,
       classifiedError ? `${classifiedError}: agent attempt failed` : null,
       Number.isFinite(exitCode) ? Math.round(exitCode) : null,
-      typeof r.model === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$/.test(r.model) ? r.model : null,
+      telemetryModelName(r.model),
       Number.isFinite(inputTokens) ? Math.round(inputTokens) : null,
       Number.isFinite(outputTokens) ? Math.round(outputTokens) : null
     );
   } catch {
     /* telemetry is best-effort — never break the loop on a write error */
   } finally {
-    pruneAgentRuns();
+    writesUntilCapCheck--;
+    if (capPressure) pruneAgentRuns(Date.now(), true);
+    else if (writesUntilCapCheck <= 0) {
+      writesUntilCapCheck = WRITES_PER_CAP_CHECK;
+      pruneAgentRuns(Date.now(), true);
+    } else pruneAgentRuns();
   }
 }
 

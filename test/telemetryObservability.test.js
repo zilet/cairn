@@ -5,7 +5,7 @@ import { extractAgentUsage } from "../dist/agents.js";
 import { resolveBuildInfo } from "../dist/build-info.js";
 import { buildMcpServer, mcpMetricOperation } from "../dist/mcp.js";
 import { getAgentStats, recordAgentRun, pruneAgentRuns } from "../dist/repo/agent-telemetry.js";
-import { getRequestPerformance, normalizeServerMetricRoute, recordRequestMetric } from "../dist/repo/request-metrics.js";
+import { getRequestPerformance, isInternalMcpMetricOperation, normalizeServerMetricRoute, recordRequestMetric } from "../dist/repo/request-metrics.js";
 import { installSmokeLifetime, smokeMaxRuntimeMs } from "../dist/smoke-lifetime.js";
 
 test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
@@ -40,6 +40,15 @@ test("agent telemetry retention removes old attempts", () => {
   db.prepare("UPDATE agent_runs SET created_at=datetime('now','-31 days')").run();
   pruneAgentRuns(Number.MAX_SAFE_INTEGER);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM agent_runs").get().n, 0);
+});
+
+test("agent-run row cap remains enforced during a same-hour write storm", () => {
+  db.exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < 20001)
+    INSERT INTO agent_runs (build_id,op,agent,ok,parsed,tried_json)
+    SELECT 'old-build','seed','stub',1,1,0 FROM n`);
+  for (let i = 0; i < 250; i++)
+    recordAgentRun({ op: "storm", agent: "stub", ok: true, parsed: true, latency_ms: 1, tried_json: false });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM agent_runs").get().n <= 20_000, true);
 });
 
 test("hourly request histograms provide bounded API and MCP percentiles", () => {
@@ -77,12 +86,28 @@ test("MCP metrics accept registered tools only and bound arbitrary names to unkn
   assert.equal(mcpMetricOperation({ method: "tools/call", params: { name: "PrivateApoBTool" } }), "unknown");
   assert.equal(normalizeServerMetricRoute("mcp", "PrivateApoBTool"), "/mcp/unknown");
   assert.equal(mcpMetricOperation({ method: "unbounded/private" }), "unknown");
+  assert.equal(isInternalMcpMetricOperation("get_diagnostics"), true);
+  assert.equal(isInternalMcpMetricOperation("get_agent_stats"), true);
+  assert.equal(isInternalMcpMetricOperation("get_profile"), false);
   await server.close();
 });
 
 test("agent usage ignores domain-shaped model fields", () => {
   assert.equal(extractAgentUsage('{"model":"apob_high","input_tokens":7}').model ?? null, null);
-  assert.equal(extractAgentUsage('{"usage":{"input_tokens":7},"model":"claude-3-7-sonnet"}').model, "claude-3-7-sonnet");
+  assert.deepEqual(extractAgentUsage('{"model":"gpt-private_apob_plan","input_tokens":987,"output_tokens":654}'), {
+    model: null,
+    input_tokens: null,
+    output_tokens: null,
+  });
+  assert.deepEqual(extractAgentUsage('{"usage":{"input_tokens":7,"output_tokens":3},"model":"claude-3-7-sonnet"}'), {
+    model: null,
+    input_tokens: null,
+    output_tokens: null,
+  });
+  assert.deepEqual(
+    extractAgentUsage('{"type":"result","subtype":"success","usage":{"input_tokens":7,"output_tokens":3},"model":"claude-3-7-sonnet"}'),
+    { model: "claude-3-7-sonnet", input_tokens: 7, output_tokens: 3 }
+  );
 });
 
 test("build identity prefers a validated environment SHA and has a safe fallback", () => {

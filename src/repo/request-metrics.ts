@@ -9,6 +9,10 @@ const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 let nextPruneAt = 0;
 let writesUntilForcedPrune = 250;
 const knownMcpMetricOperations = new Set(["initialize", "initialized", "tools_list", "ping"]);
+const INTERNAL_MCP_OPERATIONS = new Set([
+  "initialize", "initialized", "tools_list", "ping",
+  "get_diagnostics", "get_agent_stats", "get_brain_diagnostics", "get_art_stats",
+]);
 
 export function registerMcpMetricOperation(value: unknown): void {
   const name = telemetryIdentifier(value, 100, "unknown");
@@ -18,6 +22,10 @@ export function registerMcpMetricOperation(value: unknown): void {
 export function normalizeMcpMetricOperation(value: unknown): string {
   const name = telemetryIdentifier(value, 100, "unknown");
   return knownMcpMetricOperations.has(name) ? name : "unknown";
+}
+
+export function isInternalMcpMetricOperation(value: unknown): boolean {
+  return INTERNAL_MCP_OPERATIONS.has(normalizeMcpMetricOperation(value));
 }
 
 const insertRequestMetric = db.prepare(

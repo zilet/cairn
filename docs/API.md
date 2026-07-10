@@ -181,7 +181,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/diagnostics` | Local operator issue pulse: current-build browser/API/MCP/process/scheduler and worker failures, release-scoped groups, sanitized recent events, product latency, separately counted internal probes, and enforceable storage caps. |
+| GET | `/api/diagnostics` | Local operator issue pulse: current-build browser/API/MCP/process/scheduler and worker failures, release-scoped history plus a marked current-build subset, product latency, separately counted internal telemetry, and enforceable caps. |
 
 ## `/directives`
 
