@@ -311,3 +311,41 @@ test("a throwing producer is isolated — the agenda still returns the rest", ()
     if (ddl && ddl.sql) db.exec(ddl.sql); // restore the table verbatim for sibling suites
   }
 });
+
+// ---- the surprise budget: one NEW attention item inline per day -------------
+test("the surprise budget introduces at most one brand-new attention item inline per day", () => {
+  // Seed three first-time attention items that would all like a Today slot:
+  // a pressing health revision (~80), a waiting plan draft (~78), a weekly read (~54).
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+  ]);
+  repo.deriveDirectives();
+  repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
+  repo.addInsight({ kind: "weekly_read", text: "Solid week — held three sessions." });
+
+  const NEWCOMERS = ["health-focus", "draft-proposals", "weekly-read"];
+  const first = repo.todayAgenda();
+  const inlineNew = first.primary.map((c) => c.id).filter((id) => NEWCOMERS.includes(id));
+  assert.deepEqual(inlineNew, ["health-focus"], "exactly the highest-priority newcomer is introduced inline");
+  // The deferred newcomers still exist — waiting behind the quiet disclosure, never gone.
+  const allIds = [...first.primary, ...first.more].map((c) => c.id);
+  assert.ok(allIds.includes("draft-proposals") && allIds.includes("weekly-read"));
+
+  // A second fetch the same day: the introduced item keeps its slot; the others
+  // still wait (one new thing per DAY, not per fetch).
+  const second = repo.todayAgenda();
+  const secondNew = second.primary.map((c) => c.id).filter((id) => NEWCOMERS.includes(id));
+  assert.deepEqual(secondNew, ["health-focus"]);
+});
+
+test("the surprise budget never shapes a routed historical date", () => {
+  seedHealthDoc("2025-12-01", [marker("LDL-C", 190, { unit: "mg/dL", flag: "high" })]);
+  repo.deriveDirectives();
+  repo.createProposal("stub", "auto: weekly review", "", { changes: [] });
+
+  // A historical route renders archival state; nothing is introduced or deferred,
+  // and the intro ledger stays untouched.
+  repo.todayAgenda("2026-01-07");
+  assert.equal(repo.getAppState("today_agenda_intro"), null, "no introductions recorded for a routed date");
+});

@@ -80,6 +80,73 @@ export type TodayAgenda = {
 // everything else with a positive priority collapses behind the quiet "more".
 export const TODAY_PRIMARY_MAX = 2;
 
+// ---- the surprise budget: one NEW thing inline per day ---------------------
+// The brain already budgets material coaching changes (~1/domain/week); this is
+// the SURFACE-level counterpart. At most ONE never-before-surfaced attention
+// item — a new health revision, a fresh insight or weekly read, a waiting plan
+// draft — is introduced INLINE per local day. Later newcomers wait behind the
+// quiet "more" disclosure (pull, never push) and take the inline slot on a
+// later day. Routine state cards (fuel, reconcile, lately, week-ahead…), the
+// hero, and announced brain changes (accountability must never be hidden by
+// presentation) are never budgeted. The ledger lives in app_state as a bounded
+// { "<id>:<revision|title>": "YYYY-MM-DD introduced" } map.
+const TODAY_INTRO_KEY = "today_agenda_intro";
+const SURPRISE_IDS = new Set(["health-focus", "connection-insight", "weekly-read", "draft-proposals"]);
+const INTRO_LEDGER_MAX_AGE_DAYS = 60;
+
+function introSig(c: TodayAgendaCandidate): string {
+  return `${c.id}:${c.revision ?? c.title ?? ""}`;
+}
+
+function loadIntroLedger(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(getAppState(TODAY_INTRO_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Decide which candidates to HOLD OUT of the inline tier this pass, and record
+// the single introduction the day's allowance covers. Walks the sorted order
+// simulating the inline slots, so a deferred newcomer's slot backfills with the
+// next routine candidate and the inline tier never starves.
+function applySurpriseBudget(ordered: TodayAgendaCandidate[], today: string, maxInline: number): Set<string> {
+  const deferred = new Set<string>();
+  const ledger = loadIntroLedger();
+  let allowance = Object.values(ledger).some((v) => v === today) ? 0 : 1;
+  let slots = maxInline;
+  let dirty = false;
+  for (const c of ordered) {
+    if (slots <= 0) break;
+    if (SURPRISE_IDS.has(c.id) && !(introSig(c) in ledger)) {
+      if (allowance > 0) {
+        allowance -= 1;
+        ledger[introSig(c)] = today;
+        dirty = true;
+        slots -= 1;
+      } else {
+        deferred.add(c.id);
+      }
+    } else {
+      slots -= 1;
+    }
+  }
+  if (dirty) {
+    const cutoff = Date.parse(`${today}T00:00:00Z`) - INTRO_LEDGER_MAX_AGE_DAYS * 86_400_000;
+    for (const [key, value] of Object.entries(ledger)) {
+      const t = Date.parse(`${String(value)}T00:00:00Z`);
+      if (!Number.isFinite(t) || t < cutoff) delete ledger[key];
+    }
+    try {
+      setAppState(TODAY_INTRO_KEY, JSON.stringify(ledger));
+    } catch {
+      /* the budget is presentation-only; a failed write just re-introduces tomorrow */
+    }
+  }
+  return deferred;
+}
+
 // Run a producer that may throw / return null without ever breaking the agenda.
 function safe(fn: () => TodayAgendaCandidate | null): TodayAgendaCandidate | null {
   try {
@@ -371,6 +438,9 @@ function weeklyCandidate(): TodayAgendaCandidate | null {
     tier: "primary",
     priority: fresh ? 54 : 48,
     client_card: "weekly-read",
+    // The insight row id versions this attention item, so NEXT week's read is a
+    // genuinely new thing to the surprise budget while re-fetches of this one aren't.
+    revision: String(weekly.id ?? ""),
   };
 }
 
@@ -388,6 +458,9 @@ function insightCandidate(): TodayAgendaCandidate | null {
     tier: "primary",
     priority: fresh ? 44 : 38,
     client_card: "connection-insight",
+    // Versioned by the insight row id — a NEW connection is a new thing to the
+    // surprise budget; re-fetching the same one is not.
+    revision: String(conn.id ?? ""),
   };
 }
 
@@ -496,11 +569,26 @@ export function todayAgenda(date?: string): TodayAgenda {
   indexed.sort((a, b) => b.c.priority - a.c.priority || a.i - b.i);
   const ordered = indexed.map((x) => x.c);
 
+  // The surprise budget only shapes the LIVE today surface — a routed historical
+  // date renders archival state and introduces nothing.
+  let heldOut = new Set<string>();
+  if (d === localDateISO()) {
+    try {
+      heldOut = applySurpriseBudget(ordered, d, TODAY_PRIMARY_MAX);
+    } catch {
+      heldOut = new Set();
+    }
+  }
+
   // Budget: the top TODAY_PRIMARY_MAX become `primary` (rendered inline); the rest
   // become `more` (collapsed behind one quiet disclosure). The arbiter may DEMOTE a
   // producer's suggested tier here, never promote it — placement is the arbiter's.
-  const primary = ordered.slice(0, TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "primary" as const }));
-  const more = ordered.slice(TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "more" as const }));
+  // A held-out newcomer skips the inline tier (its slot backfills) but keeps its
+  // sorted position among "more" — waiting, never gone.
+  const inline = ordered.filter((c) => !heldOut.has(c.id));
+  const primary = inline.slice(0, TODAY_PRIMARY_MAX).map((c) => ({ ...c, tier: "primary" as const }));
+  const primaryIds = new Set(primary.map((c) => c.id));
+  const more = ordered.filter((c) => !primaryIds.has(c.id)).map((c) => ({ ...c, tier: "more" as const }));
 
   return { hero, primary, more, total: ordered.length };
 }

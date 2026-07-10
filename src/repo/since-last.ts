@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { recordedClientTimeZone } from "./client-tz.js";
 import { latestJourneyMilestoneSince } from "./journey.js";
 import { localDateISO } from "./shared.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
@@ -79,8 +80,16 @@ function newLabChange(stampSql: string): Change | null {
       (db.prepare(`SELECT COUNT(*) AS n FROM health_documents WHERE created_at > ?`).get(stampSql) as any)?.n ?? 0
     );
     const kind = String(row.kind ?? "").toLowerCase();
-    const label = kind === "bloodwork" ? "Your latest bloodwork" : kind === "dexa" ? "Your DEXA scan" : kind === "ecg" ? "Your Garmin ECG" : "A new health document";
-    const phrase = count > 1 ? `${label} and ${count - 1} more result${count - 1 === 1 ? "" : "s"} came in` : `${label} came in`;
+    const label =
+      kind === "bloodwork"
+        ? "Your latest bloodwork"
+        : kind === "dexa"
+          ? "Your DEXA scan"
+          : kind === "ecg"
+            ? "Your Garmin ECG"
+            : "A new health document";
+    const phrase =
+      count > 1 ? `${label} and ${count - 1} more result${count - 1 === 1 ? "" : "s"} came in` : `${label} came in`;
     return { weight: 90, phrase };
   } catch {
     return null;
@@ -191,6 +200,41 @@ function appliedPlanChange(stampSql: string): Change | null {
   }
 }
 
+// ---- source: training actually done since the stamp ----
+// The quiet backbone of continuity: before anything about labs or plans, the
+// braid acknowledges the WORK. Counts distinct lifting days (a session with sets
+// logged in the window) plus endurance activities. Words, never a streak.
+const COUNT_WORDS = ["", "A", "Two", "Three", "Four", "Five", "Six"];
+
+function trainingDoneChange(stampSql: string): Change | null {
+  try {
+    const liftDays = Number(
+      (
+        db
+          .prepare(
+            `SELECT COUNT(DISTINCT s.date) AS n FROM sessions s
+              WHERE EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id AND l.created_at > ?)`
+          )
+          .get(stampSql) as any
+      )?.n ?? 0
+    );
+    const cardio = Number(
+      (
+        db
+          .prepare(`SELECT COUNT(*) AS n FROM activities WHERE created_at > ? AND type IN ('run','ride','swim','hike')`)
+          .get(stampSql) as any
+      )?.n ?? 0
+    );
+    const total = liftDays + cardio;
+    if (total <= 0) return null;
+    const word = total > 6 ? "A stack of" : COUNT_WORDS[total];
+    const phrase = total === 1 ? "A session went in the books" : `${word} sessions went in the books`;
+    return { weight: 45, phrase };
+  } catch {
+    return null;
+  }
+}
+
 // ---- source: a body-composition journey milestone since the stamp ----
 function journeyMilestoneChange(stampSql: string): Change | null {
   try {
@@ -199,6 +243,32 @@ function journeyMilestoneChange(stampSql: string): Change | null {
     return { weight: m.priority || 64, phrase: `You crossed ${m.label.toLowerCase()}` };
   } catch {
     return null;
+  }
+}
+
+// ---- the kicker: name the real day when it reads naturally ----
+// "SINCE TUESDAY" carries more continuity than a generic label — but only claim
+// a day when it's unambiguous (yesterday, or a weekday within the last week).
+// Same-day, long-gap, or any parse doubt falls back to the honest generic.
+function sinceKicker(stampSql: string): string {
+  const generic = "SINCE YOU LAST LOOKED";
+  try {
+    const ms = parseSqlTs(stampSql);
+    if (ms == null) return generic;
+    const tz = recordedClientTimeZone();
+    const tzOpt = tz ? { timeZone: tz } : {};
+    const stampDay = new Date(ms).toLocaleDateString("en-CA", tzOpt);
+    const today = localDateISO();
+    if (stampDay === today) return generic;
+    const diffDays = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${stampDay}T00:00:00Z`)) / 86_400_000);
+    if (diffDays === 1) return "SINCE YESTERDAY";
+    if (diffDays >= 2 && diffDays <= 6) {
+      const weekday = new Date(ms).toLocaleDateString("en-US", { weekday: "long", ...tzOpt });
+      return weekday ? `SINCE ${weekday.toUpperCase()}` : generic;
+    }
+    return generic;
+  } catch {
+    return generic;
   }
 }
 
@@ -216,15 +286,27 @@ export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate |
   if (!stampSql || !parseSqlTs(stampSql)) return null;
 
   const changes: Change[] = [];
-  for (const src of [newLabChange, resolvedDirectiveChange, journeyMilestoneChange, appliedPlanChange, newInsightChange, recentPrChange]) {
+  for (const src of [
+    newLabChange,
+    resolvedDirectiveChange,
+    journeyMilestoneChange,
+    appliedPlanChange,
+    newInsightChange,
+    recentPrChange,
+    trainingDoneChange,
+  ]) {
     const c = src(stampSql);
     if (c && c.phrase) changes.push(c);
   }
   if (!changes.length) return null;
 
-  // Lead with the single most notable change; the rest fold into plain words.
+  // Lead with the single most notable change; the rest BRAID into the body in
+  // plain words — this line is the connective tissue between the horizons, so
+  // it names what moved instead of hiding it behind a count.
   changes.sort((a, b) => b.weight - a.weight);
   const lead = changes[0];
+  const named = changes.slice(1, 3);
+  const unnamed = changes.length - 1 - named.length;
   const extra = changes.length - 1;
 
   // Priority scales modestly with the lead's notability + how much changed — a
@@ -233,18 +315,18 @@ export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate |
   const base = Math.round(lead.weight * 0.4); // ~20..36 for our weights
   const priority = Math.min(48, base + Math.min(extra, 3) * 3);
 
-  const title =
-    extra > 0
-      ? `${lead.phrase} — and ${extra} other thing${extra === 1 ? "" : "s"} moved`
-      : lead.phrase;
+  const body = named.length
+    ? `${named.map((c) => c.phrase).join(" · ")}${unnamed > 0 ? " · and more" : ""}`
+    : undefined;
 
   return {
     id: "since-last",
     kind: "continuity",
     tier: "primary",
     priority,
-    kicker: "SINCE YOU LAST LOOKED",
-    title,
+    kicker: sinceKicker(stampSql),
+    title: lead.phrase,
+    ...(body ? { body } : {}),
     dismissible: true,
   };
 }

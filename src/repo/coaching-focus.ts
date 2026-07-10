@@ -22,11 +22,7 @@
 // {available:false} on a thin athlete.
 // ============================================================================
 
-import {
-  type FocusCandidate,
-  type FocusDomain,
-  focusScore,
-} from "./focus-candidate.js";
+import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
 export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
@@ -59,6 +55,10 @@ export interface CoachingFocus {
   // joint / reduce-load window, the conductor either demotes it or annotates it. Plain
   // words, never a gate — "work the leg plateau AROUND your knee, pain-free only".
   caveat: string | null;
+  // Temporal placement inside the active program block, plain words — "Week 3 of
+  // 5 — building volume." Descriptive calendar truth, never a score or a gate.
+  // Null when no block is active.
+  block_line: string | null;
 }
 
 interface CoachingDisciplineInput {
@@ -241,10 +241,20 @@ export interface CoachingFocusInput {
   // ---- external producers the conductor arbitrates (K3) ---------------------
   // Each is a plain read the orchestrator supplies (coach.ts), so this stays a PURE
   // function. Adapted into FocusCandidates + folded into the one ranking below.
-  journeyMilestones?: unknown;   // JourneyMilestone[] — calm body-composition moments
+  journeyMilestones?: unknown; // JourneyMilestone[] — calm body-composition moments
   benchmarkMilestones?: unknown; // TrainingMilestoneCandidate[] — near a strength/endurance standard
-  dueAttention?: unknown;        // AttentionScheduleEntry[] — K5 re-checks due (labs/DEXA/lifts)
-  cardioRisk?: unknown;          // cardiovascularRiskRead() — the PREVENT clinical risk read
+  dueAttention?: unknown; // AttentionScheduleEntry[] — K5 re-checks due (labs/DEXA/lifts)
+  cardioRisk?: unknown; // cardiovascularRiskRead() — the PREVENT clinical risk read
+  // The active program block's calendar summary (repo/program-blocks blockForCoach()),
+  // so "This block" can say WHERE in the block the athlete is. Null when no block.
+  programBlock?: ProgramBlockSummaryInput | null;
+}
+
+interface ProgramBlockSummaryInput {
+  goal?: unknown;
+  focus?: unknown;
+  phase?: unknown;
+  week_of?: unknown;
 }
 
 interface Candidate {
@@ -262,7 +272,9 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 function lc(s: unknown): string {
-  return String(s ?? "").trim().toLowerCase();
+  return String(s ?? "")
+    .trim()
+    .toLowerCase();
 }
 function clip(s: unknown, n: number): string {
   const t = String(s ?? "").trim();
@@ -282,7 +294,10 @@ function byScore(a: Candidate, b: Candidate): number {
   return candScore(b) - candScore(a);
 }
 function cleanEvidence(lines: unknown): string[] | undefined {
-  const out = inputArray<unknown>(lines).map((line) => clip(line, 110)).filter(Boolean).slice(0, 3);
+  const out = inputArray<unknown>(lines)
+    .map((line) => clip(line, 110))
+    .filter(Boolean)
+    .slice(0, 3);
   return out.length ? out : undefined;
 }
 function cleanFocusItem(item: FocusItem | null): FocusItem | null {
@@ -301,7 +316,25 @@ function varyOptionName(option: unknown): string | null {
 // group would aggravate an active problem. Small, conservative, plain words (mirrors
 // the BODY_AREAS spirit in health.ts, kept local so the conductor stays self-contained).
 const GROUP_BODY_WORDS: Record<string, string[]> = {
-  legs: ["knee", "quad", "hamstring", "hip", "glute", "ankle", "calf", "leg", "squat", "lunge", "shin", "patell", "acl", "mcl", "meniscus", "groin", "adductor"],
+  legs: [
+    "knee",
+    "quad",
+    "hamstring",
+    "hip",
+    "glute",
+    "ankle",
+    "calf",
+    "leg",
+    "squat",
+    "lunge",
+    "shin",
+    "patell",
+    "acl",
+    "mcl",
+    "meniscus",
+    "groin",
+    "adductor",
+  ],
   quads: ["knee", "quad", "leg", "squat", "patell"],
   hamstrings: ["hamstring", "knee", "hip", "leg", "posterior"],
   glutes: ["glute", "hip", "leg", "groin"],
@@ -317,8 +350,8 @@ const GROUP_BODY_WORDS: Record<string, string[]> = {
 };
 
 interface FlaggedContext {
-  words: string[];     // lowercased injury/sore-joint texts to match against a lever
-  phrase: string;      // the human name of the flagged area for the caveat line
+  words: string[]; // lowercased injury/sore-joint texts to match against a lever
+  phrase: string; // the human name of the flagged area for the caveat line
   reduceLoad: boolean; // an active reduce-load window is on
   any: boolean;
 }
@@ -332,10 +365,16 @@ function flaggedContext(inp: CoachingFocusInput): FlaggedContext {
   for (const inj of inputArray<InjuryInput>(inp.injuries)) {
     if (inj?.likely_resolved) continue; // a healed injury no longer caveats
     const txt = `${lc(inj?.title)} ${lc(inj?.area)} ${lc(inj?.detail)}`.trim();
-    if (txt) { words.push(txt); phrases.push(String(inj?.title || inj?.area || "an injury").trim()); }
+    if (txt) {
+      words.push(txt);
+      phrases.push(String(inj?.title || inj?.area || "an injury").trim());
+    }
   }
   const jp = lc(inp.autoregulation?.joint_pain);
-  if (jp) { words.push(jp); phrases.push(`${jp} (a joint you flagged)`); }
+  if (jp) {
+    words.push(jp);
+    phrases.push(`${jp} (a joint you flagged)`);
+  }
   const reduceLoad = !!inp.contextToday?.reduce_load;
   return { words, phrase: phrases[0] ?? "", reduceLoad, any: words.length > 0 };
 }
@@ -376,7 +415,10 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       why:
         (meso?.note ? String(meso.note) : "") ||
         "Your recent load and recovery signals say a lighter week now pays off — back volume off ~40%, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
-      based_on: ["Mesocycle says deload is due", recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated"],
+      based_on: [
+        "Mesocycle says deload is due",
+        recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated",
+      ],
     },
   };
 }
@@ -409,7 +451,10 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
         title: `Break the plateau on your ${label}`,
         why: `${stalled.lead_lift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.${caveat ? ` (${caveat})` : ""}`,
         move: opts.length ? `Rotate in ${opts.join(" or ")} for a few weeks.` : undefined,
-        based_on: [`${stalled.lead_lift || label} is marked stalling`, stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat"],
+        based_on: [
+          `${stalled.lead_lift || label} is marked stalling`,
+          stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat",
+        ],
       },
     };
   }
@@ -455,7 +500,12 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
           (inp.runPlan?.why ? String(inp.runPlan.why) : "") ||
           `You're in the ${phase} phase — this week's mix matters: the quality session drives fitness, the long run builds durability, the easy runs protect recovery.`,
         move: inp.runPlan?.quality_focus ? `This week's quality focus: ${lc(inp.runPlan.quality_focus)}.` : undefined,
-        based_on: [`Race goal is in ${phase} phase`, inp.runPlan?.quality_focus ? `Run plan quality focus: ${inp.runPlan.quality_focus}` : "Weekly run plan is available"],
+        based_on: [
+          `Race goal is in ${phase} phase`,
+          inp.runPlan?.quality_focus
+            ? `Run plan quality focus: ${inp.runPlan.quality_focus}`
+            : "Weekly run plan is available",
+        ],
       },
     };
   }
@@ -470,7 +520,12 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
         title: "Lift your aerobic base",
         why: "VO2max is the biggest single lever you have for both endurance and longevity — one weekly quality session moves it while the easy runs build the engine underneath.",
         move: inp.runPlan?.quality_focus ? `Start with ${lc(inp.runPlan.quality_focus)} this week.` : undefined,
-        based_on: ["Performance endurance read is watch-level", inp.runPlan?.quality_focus ? `Run plan quality focus: ${inp.runPlan.quality_focus}` : "Aerobic base is the limiting lever"],
+        based_on: [
+          "Performance endurance read is watch-level",
+          inp.runPlan?.quality_focus
+            ? `Run plan quality focus: ${inp.runPlan.quality_focus}`
+            : "Aerobic base is the limiting lever",
+        ],
       },
     };
   }
@@ -483,7 +538,10 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
       item: {
         domain: "running",
         title: `This week's quality run: ${lc(inp.runPlan.quality_focus)}`,
-        why: clip(inp.runPlan.why || inp.runPlan.mix_summary || "Keep the easy runs easy so the one quality session lands.", 200),
+        why: clip(
+          inp.runPlan.why || inp.runPlan.mix_summary || "Keep the easy runs easy so the one quality session lands.",
+          200
+        ),
         based_on: ["Weekly run plan is available", `Quality focus: ${inp.runPlan.quality_focus}`],
       },
     };
@@ -580,7 +638,11 @@ function lift(fc: FocusCandidate, leverage: number, slot: Candidate["slot"], key
   };
 }
 
-interface RiskEnhancerInput { key?: unknown; label?: unknown; lever?: unknown; }
+interface RiskEnhancerInput {
+  key?: unknown;
+  label?: unknown;
+  lever?: unknown;
+}
 // The cardiovascular risk read (cardiovascularRiskRead) → one health/nutrition lever.
 // A clinical risk % is allowed (it's an evidence-defined, patient-facing number, NOT a
 // banned internal 0-100 grade); always framed informational-not-medical-advice with the
@@ -604,7 +666,9 @@ function riskCandidate(inp: CoachingFocusInput): Candidate | null {
   const slot: Candidate["slot"] = elevated ? "lead" : "parallel";
   const whyBits: string[] = [];
   if (primary10 != null) {
-    whyBits.push(`AHA PREVENT puts your 10-year ${ascvd10 != null ? "ASCVD" : "cardiovascular"} risk around ${primary10}%${vascular != null ? ` (heart age ~${vascular})` : ""}`);
+    whyBits.push(
+      `AHA PREVENT puts your 10-year ${ascvd10 != null ? "ASCVD" : "cardiovascular"} risk around ${primary10}%${vascular != null ? ` (heart age ~${vascular})` : ""}`
+    );
   }
   if (topEnh?.label) whyBits.push(`${lc(topEnh.label)} is the main modifiable lever`);
   const why = `${clip(whyBits.join(" — ") || "Your cardiovascular levers are worth a look.", 200)} Informational, not medical advice.`;
@@ -614,13 +678,24 @@ function riskCandidate(inp: CoachingFocusInput): Candidate | null {
     headline: elevated ? "Lower your cardiovascular risk" : "Keep your cardiovascular risk low",
     why,
     move: topEnh?.lever ? String(topEnh.lever) : undefined,
-    priority_inputs: ["AHA PREVENT 2023 risk read", ...enhancers.slice(0, 2).map((e) => String(e?.label ?? "")).filter(Boolean)],
+    priority_inputs: [
+      "AHA PREVENT 2023 risk read",
+      ...enhancers
+        .slice(0, 2)
+        .map((e) => String(e?.label ?? ""))
+        .filter(Boolean),
+    ],
     action: { kind: "open_health", label: "Open cardiovascular risk" },
   };
   return lift(fc, leverage, slot, "risk-cardiovascular");
 }
 
-interface JourneyMilestoneInput { label?: unknown; detail?: unknown; kind?: unknown; priority?: unknown; }
+interface JourneyMilestoneInput {
+  label?: unknown;
+  detail?: unknown;
+  kind?: unknown;
+  priority?: unknown;
+}
 // A body-composition journey milestone (journeyMilestones) → a calm parallel note.
 // Celebrations stay quiet, one at a time (constitution); low leverage so it never
 // crowds a real lever, but it's arbitrated through the one conductor like everything else.
@@ -634,14 +709,22 @@ function journeyCandidate(inp: CoachingFocusInput): Candidate | null {
     domain,
     kind: "journey-milestone",
     headline: String(top.label),
-    why: top.detail ? String(top.detail) : "A milestone on your journey worth a quiet nod — keep the approach that got you here.",
+    why: top.detail
+      ? String(top.detail)
+      : "A milestone on your journey worth a quiet nod — keep the approach that got you here.",
     priority_inputs: ["Body-composition journey milestone"],
     action: { kind: "open_progress", label: "See your journey" },
   };
   return lift(fc, 2.0, "parallel", "journey-milestone");
 }
 
-interface BenchmarkMilestoneInput { title?: unknown; why?: unknown; suggested_test?: unknown; target?: unknown; priority?: unknown; }
+interface BenchmarkMilestoneInput {
+  title?: unknown;
+  why?: unknown;
+  suggested_test?: unknown;
+  target?: unknown;
+  priority?: unknown;
+}
 // A strength/endurance benchmark milestone (benchmarkMilestones) → a training lever
 // within reach of a recognized standard. A motivating near-term target, arbitrated as
 // a parallel item (it rides alongside whatever leads).
@@ -671,24 +754,66 @@ function laterCandidates(inp: CoachingFocusInput): Candidate[] {
   const out: Candidate[] = [];
   // Mono-stimulus running → add variety, but only once the lead/parallel is set.
   if (inp.runVariety?.note) {
-    out.push({ key: "later-run-variety", leverage: 1.6, slot: "later", item: { domain: "running", title: "Add variety to your runs", why: clip(inp.runVariety.note, 180), based_on: ["Run variety read"] } });
+    out.push({
+      key: "later-run-variety",
+      leverage: 1.6,
+      slot: "later",
+      item: {
+        domain: "running",
+        title: "Add variety to your runs",
+        why: clip(inp.runVariety.note, 180),
+        based_on: ["Run variety read"],
+      },
+    });
   }
   // A second stalled/building group beyond the lead.
   const groups = inputArray<MuscleGroupTrajectoryInput>(inp.groupsTrajectory?.groups);
   const stalledOthers = groups.filter((g) => lc(g?.verdict) === "stalling");
   if (stalledOthers.length > 1) {
     const g = stalledOthers[1];
-    out.push({ key: "later-group", leverage: 1.5, slot: "later", item: { domain: "training", title: `Then revisit your ${lc(g.label || g.group)}`, why: "Address it after the lead lift is moving again — one plateau at a time.", based_on: ["Another muscle group is stalling"] } });
+    out.push({
+      key: "later-group",
+      leverage: 1.5,
+      slot: "later",
+      item: {
+        domain: "training",
+        title: `Then revisit your ${lc(g.label || g.group)}`,
+        why: "Address it after the lead lift is moving again — one plateau at a time.",
+        based_on: ["Another muscle group is stalling"],
+      },
+    });
   }
   // The widest strength imbalance (rounding-out work, deferred).
   const imb = inputArray<PerformanceImbalanceInput>(inp.performance?.imbalances)[0] ?? null;
   if (imb?.title) {
-    out.push({ key: "later-imbalance", leverage: 1.4, slot: "later", item: { domain: "training", title: clip(imb.title, 60), why: clip(imb.why || "", 180), based_on: ["Performance imbalance read"] } });
+    out.push({
+      key: "later-imbalance",
+      leverage: 1.4,
+      slot: "later",
+      item: {
+        domain: "training",
+        title: clip(imb.title, 60),
+        why: clip(imb.why || "", 180),
+        based_on: ["Performance imbalance read"],
+      },
+    });
   }
   // A "due" muscle group from the balance digest.
-  const dueAdj = inputArray<ProgramAdjustmentInput>(inp.programAdjustments).find((a) => a?.kind === "balance" && /due/i.test(String(a?.title || "")));
+  const dueAdj = inputArray<ProgramAdjustmentInput>(inp.programAdjustments).find(
+    (a) => a?.kind === "balance" && /due/i.test(String(a?.title || ""))
+  );
   if (dueAdj) {
-    out.push({ key: "later-due", leverage: 1.3, slot: "later", item: { domain: "training", title: clip(dueAdj.title, 60), why: clip(dueAdj.why || "", 180), based_on: ["Program adjustment digest"] } });
+    out.push({
+      key: "later-due",
+      leverage: 1.3,
+      slot: "later",
+      item: {
+        domain: "training",
+        title: clip(dueAdj.title, 60),
+        why: clip(dueAdj.why || "", 180),
+        based_on: ["Program adjustment digest"],
+      },
+    });
   }
   return out;
 }
@@ -702,31 +827,52 @@ function buildConnections(lead: FocusItem | null, parallel: FocusItem[], inp: Co
   const titles = all.map((x) => lc(x.title)).join(" ");
 
   // Lipids/metabolic via diet, while a deficit is also running → one change, two wins.
-  if (has("nutrition") && /lipid|cholesterol|apob|glucose|hba1c|triglyceride|metabolic/.test(`${titles} ${lc(inp.healthFocus?.lead?.group)}`) && lc(inp.goalMode) === "lose") {
-    out.push("The higher-fiber, oily-fish eating that runs your deficit is the same lever that moves your lipids — one change, two wins.");
+  if (
+    has("nutrition") &&
+    /lipid|cholesterol|apob|glucose|hba1c|triglyceride|metabolic/.test(
+      `${titles} ${lc(inp.healthFocus?.lead?.group)}`
+    ) &&
+    lc(inp.goalMode) === "lose"
+  ) {
+    out.push(
+      "The higher-fiber, oily-fish eating that runs your deficit is the same lever that moves your lipids — one change, two wins."
+    );
   }
   // Aerobic work doubles as the biggest longevity lever.
   if (has("running")) {
-    out.push("Your aerobic work is doing double duty here — it's race/endurance fitness AND the single biggest longevity lever you have.");
+    out.push(
+      "Your aerobic work is doing double duty here — it's race/endurance fitness AND the single biggest longevity lever you have."
+    );
   }
   // DEXA-flagged low lean ↔ the leg/strength work that's leading.
   if (has("training") && inp.dexa?.available && /lean/.test(lc(inp.dexa?.lead?.signal))) {
-    out.push("The strength work leading this block also rebuilds the lean mass your DEXA flagged — same effort, two payoffs.");
+    out.push(
+      "The strength work leading this block also rebuilds the lean mass your DEXA flagged — same effort, two payoffs."
+    );
   }
   // Strength leads, running rides alongside as easy volume.
   if (lead?.domain === "training" && has("running") && out.length < 2) {
-    out.push("Strength leads this block; the running sits alongside as mostly-easy aerobic volume so it builds you without stealing recovery from the lifts.");
+    out.push(
+      "Strength leads this block; the running sits alongside as mostly-easy aerobic volume so it builds you without stealing recovery from the lifts."
+    );
   }
   return out.slice(0, 2);
 }
 
 // ---- the unified retest checkpoint (batched, not four separate nag feeds) ----
 
-interface DueAttentionInput { signal_key?: unknown; domain?: unknown; reason?: unknown; }
+interface DueAttentionInput {
+  signal_key?: unknown;
+  domain?: unknown;
+  reason?: unknown;
+}
 // A due-attention entry (listDueAttention / K5) → a short, readable checkpoint label.
 // A lab/DEXA re-check and a lift re-test batch into the SAME calm checkpoint.
 function attentionLabel(e: DueAttentionInput): string | null {
-  const tail = String(e?.signal_key ?? "").split(":").pop() ?? "";
+  const tail =
+    String(e?.signal_key ?? "")
+      .split(":")
+      .pop() ?? "";
   const label = tail.replace(/[-_]+/g, " ").trim();
   if (!label) return null;
   return label.replace(/\b\w/g, (ch) => ch.toUpperCase());
@@ -762,6 +908,27 @@ function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
     focus: dedup,
     why: "Batch these into one check-in window so labs, scans and lift re-tests land together every ~6–8 weeks — enough to see real change, not so often it interrupts the work.",
   };
+}
+
+// ---- temporal placement: the block's calendar truth, plain words -------------
+// "This block" without WHERE in the block reads like a sticky note. One line:
+// week N of M plus what the phase means for effort — descriptive, never a gate.
+function blockPlacementLine(b: ProgramBlockSummaryInput | null | undefined): string | null {
+  const weekOf = String(b?.week_of ?? "").trim();
+  if (!weekOf) return null;
+  const wk = weekOf.charAt(0).toUpperCase() + weekOf.slice(1);
+  const phase = lc(b?.phase);
+  const tail =
+    phase === "deload"
+      ? "a deload week — absorb the work you've put in"
+      : phase === "realization"
+        ? "test week — express what the block built"
+        : phase === "intensification"
+          ? "pushing intensity; the deload is in sight"
+          : phase === "accumulation"
+            ? "building volume"
+            : "";
+  return tail ? `${wk} — ${tail}.` : `${wk}.`;
 }
 
 // ---- the conductor ----------------------------------------------------------
@@ -805,9 +972,9 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   const conflictedLever = candidates.find((c) => c.caveat);
   const caveat = lead?.caveat
     ? lead.caveat
-    : (conflictedLever && conflictedLever.key !== leadKey
-        ? `Held off leading with "${conflictedLever.item.title}" this block — ${conflictedLever.caveat}`
-        : null);
+    : conflictedLever && conflictedLever.key !== leadKey
+      ? `Held off leading with "${conflictedLever.item.title}" this block — ${conflictedLever.caveat}`
+      : null;
 
   // PARALLEL: up to 2 of the rest, on a DIFFERENT lever than the lead (so they can
   // genuinely be worked simultaneously — e.g. diet handles lipids while you train).
@@ -837,7 +1004,10 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     headline = where || "Log a few sessions and Cairn will set your focus for the block.";
   } else {
     const tail = parallelItems.length
-      ? ` — with ${parallelItems.map((p) => lc(p.domain)).filter((d, i, a) => a.indexOf(d) === i).join(" + ")} handled alongside`
+      ? ` — with ${parallelItems
+          .map((p) => lc(p.domain))
+          .filter((d, i, a) => a.indexOf(d) === i)
+          .join(" + ")} handled alongside`
       : "";
     const stem = `This block, ${lc(leadItem.title)} leads${tail}.`;
     headline = where ? `${where}. ${stem}` : stem;
@@ -853,5 +1023,6 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     retest,
     horizon_weeks,
     caveat: caveat ? clip(caveat, 220) : null,
+    block_line: blockPlacementLine(input.programBlock),
   };
 }

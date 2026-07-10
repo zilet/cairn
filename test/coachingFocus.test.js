@@ -107,3 +107,22 @@ test("coachingFocus degrades to {available:false} on a thin athlete", () => {
   assert.deepEqual(out.later, []);
   assert.equal(out.retest, null);
 });
+
+test("coachingFocus carries the block's temporal placement in plain words", () => {
+  const withBlock = coachingFocus({
+    ...richInput(),
+    programBlock: { goal: "Build the squat", focus: "strength", phase: "accumulation", week_of: "week 3 of 5" },
+  });
+  assert.equal(withBlock.block_line, "Week 3 of 5 — building volume.");
+
+  const deload = coachingFocus({ ...richInput(), programBlock: { phase: "deload", week_of: "week 5 of 5" } });
+  assert.match(String(deload.block_line), /^Week 5 of 5 — a deload week/);
+
+  const testWeek = coachingFocus({ ...richInput(), programBlock: { phase: "realization", week_of: "week 6 of 6" } });
+  assert.match(String(testWeek.block_line), /test week — express/);
+
+  // No active block → no placement line (and never a fabricated one).
+  assert.equal(coachingFocus(richInput()).block_line, null);
+  // Constitution: descriptive words only — no score/grade language.
+  assert.ok(!/\bscore|grade\b/i.test(String(withBlock.block_line)));
+});

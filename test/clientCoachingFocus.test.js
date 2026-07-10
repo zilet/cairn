@@ -207,3 +207,18 @@ test("coaching focus delegated listeners share the route bridge", () => {
   assert.equal(prevented, true);
   assert.deepEqual(activated.at(-1), "progress");
 });
+
+test("the block's temporal placement renders in the card and leads the thread context", () => {
+  const { focus } = loadCoachingFocus();
+  const withBlock = { ...richFocus, block_line: "Week 3 of 5 — building volume." };
+
+  const card = focus.coachingFocusCardHtml(withBlock);
+  assert.match(card, /cfocus-blockline/);
+  assert.match(card, /Week 3 of 5 — building volume\./);
+
+  const thread = focus.coachingFocusThreadHtml(withBlock);
+  assert.match(thread, /Week 3 of 5 — building volume\. Bench needs a new stimulus/);
+
+  // No block → no placement anywhere (never fabricated).
+  assert.doesNotMatch(focus.coachingFocusCardHtml(richFocus), /cfocus-blockline/);
+});

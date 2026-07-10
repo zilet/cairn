@@ -53,14 +53,27 @@ type TodayBriefHtmlOptions = {
   }
 
   function todayBriefProvisionalRead(): ClientDayRead & { _provisional: boolean } {
-    return { kind: "train", headline: "Today", why: "", focus: null, est_minutes: null, signals: {}, source: "deterministic", _provisional: true };
+    return {
+      kind: "train",
+      headline: "Today",
+      why: "",
+      focus: null,
+      est_minutes: null,
+      signals: {},
+      source: "deterministic",
+      _provisional: true,
+    };
   }
 
   function todayBriefRedirect(action: unknown, label: unknown, primary?: boolean): string {
     return `<button class="brief-redirect${primary ? " brief-redirect-primary" : ""}" data-redirect="${escAttr(action)}">${escHtml(label)}</button>`;
   }
 
-  function todayBriefVisibleOverrides(args: { kind?: unknown; estMinutes?: unknown; activeOverride?: unknown }): TodayBriefOverride[] {
+  function todayBriefVisibleOverrides(args: {
+    kind?: unknown;
+    estMinutes?: unknown;
+    activeOverride?: unknown;
+  }): TodayBriefOverride[] {
     const kind = String(args.kind || "");
     const activeOverride = String(args.activeOverride || "");
     const estMinutes = args.estMinutes == null ? null : Number(args.estMinutes);
@@ -79,9 +92,10 @@ type TodayBriefHtmlOptions = {
 
   function todayBriefAgentOfflineNoticeHtml(status: unknown, dismissed?: boolean): string {
     if (dismissed || !todayBriefAgentOffline(status)) return "";
-    const line = status === "unconfigured"
-      ? "Coaching is offline — connect an agent in Settings for the agentic read."
-      : "Couldn't reach a coaching agent just now — showing the deterministic read.";
+    const line =
+      status === "unconfigured"
+        ? "Coaching is offline — connect an agent in Settings for the agentic read."
+        : "Couldn't reach a coaching agent just now — showing the deterministic read.";
     return `<div class="agent-offline" role="note">
       <span class="agent-offline-dot" aria-hidden="true"></span>
       <span class="agent-offline-text">${escHtml(line)}</span>
@@ -93,11 +107,14 @@ type TodayBriefHtmlOptions = {
     const kind = todayBriefKind(read);
     const meta = todayBriefMeta(read);
     const focus = read?.focus ? escHtml(read.focus) : "";
-    const estMinutes = read?.est_minutes != null && Number(read.est_minutes) > 0 ? Math.round(Number(read.est_minutes)) : null;
+    const estMinutes =
+      read?.est_minutes != null && Number(read.est_minutes) > 0 ? Math.round(Number(read.est_minutes)) : null;
     const est = estMinutes != null ? `${estMinutes} min` : "";
     const headline = escHtml(read?.headline || meta.lead);
     const why = read?.why ? escHtml(read.why) : "";
-    const forward = read?.forward && kind === "train" ? escHtml(read.forward) : "";
+    // The forward line rides on train days AND done days — after the work is in,
+    // "Next: …" is the so-what that replaces the retired Start-session controls.
+    const forward = read?.forward && (kind === "train" || kind === "done") ? escHtml(read.forward) : "";
     const arc = read?.arc && !forward ? escHtml(read.arc) : "";
 
     const actions: string[] = [];
@@ -113,9 +130,12 @@ type TodayBriefHtmlOptions = {
     const overrides = todayBriefVisibleOverrides({ kind, estMinutes, activeOverride });
     let steer = "";
     if (options.isToday && kind !== "done" && (overrides.length || steered)) {
-      const optBtns = overrides.map((option) =>
-        `<button class="brief-steer-opt" data-override="${escAttr(option.intent)}">${escHtml(option.label)}</button>`
-      ).join(`<span class="brief-steer-dot" aria-hidden="true">·</span>`);
+      const optBtns = overrides
+        .map(
+          (option) =>
+            `<button class="brief-steer-opt" data-override="${escAttr(option.intent)}">${escHtml(option.label)}</button>`
+        )
+        .join(`<span class="brief-steer-dot" aria-hidden="true">·</span>`);
       const reset = steered ? `<button class="brief-steer-reset" data-steerreset>back to today's read</button>` : "";
       steer = `<div class="brief-steer">
         <span class="brief-steer-lead">${steered ? "Changed your mind?" : "Not quite right?"}</span>
@@ -149,7 +169,10 @@ type TodayBriefHtmlOptions = {
   // athlete would SEE? Compares only the visible fields (kind/headline/why/focus/
   // est_minutes) so an identical read reconciled behind a cached paint touches no
   // DOM and never animates a "swap" of unchanged content. Pure + trivially tested.
-  function todayBriefMateriallyDiffers(a: TodayBriefRead | null | undefined, b: TodayBriefRead | null | undefined): boolean {
+  function todayBriefMateriallyDiffers(
+    a: TodayBriefRead | null | undefined,
+    b: TodayBriefRead | null | undefined
+  ): boolean {
     if (!a || !b) return true;
     const str = (value: unknown): string => (value == null ? "" : String(value).trim());
     if (str(a.kind) !== str(b.kind)) return true;
@@ -165,7 +188,7 @@ type TodayBriefHtmlOptions = {
   }
 
   function todayBriefSignalsText(read: TodayBriefRead | null | undefined): string {
-    const signals = read?.signals && typeof read.signals === "object" ? read.signals as Record<string, unknown> : {};
+    const signals = read?.signals && typeof read.signals === "object" ? (read.signals as Record<string, unknown>) : {};
     const bits: string[] = [];
     const days = Number(signals.consecutive_training_days);
     if (Number.isFinite(days) && days > 0) {

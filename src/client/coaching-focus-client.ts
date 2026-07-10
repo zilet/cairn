@@ -19,7 +19,9 @@ function isCoachingFocusDomain(domain: unknown): domain is ClientCoachingFocusDo
 }
 
 function cfocusDomainTag(domain: unknown): string {
-  return isCoachingFocusDomain(domain) ? `<span class="cfocus-dom lbl">${escHtml(CFOCUS_DOMAIN_LABEL[domain])}</span>` : "";
+  return isCoachingFocusDomain(domain)
+    ? `<span class="cfocus-dom lbl">${escHtml(CFOCUS_DOMAIN_LABEL[domain])}</span>`
+    : "";
 }
 
 function focusItems(items: unknown): ClientCoachingFocusItem[] {
@@ -37,6 +39,7 @@ function coachingFocusCardHtml(focus: ClientCoachingFocus | null | undefined): s
   let html = `<div class="cfocus settle-in">`;
   html += `<span class="cfocus-mast lbl">Where to focus</span>`;
   if (focus.headline) html += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
+  if (focus.block_line) html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
 
   html += `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
   html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
@@ -103,11 +106,14 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   if (!title) return "";
   const domain = isCoachingFocusDomain(focus.lead.domain) ? focus.lead.domain : "stand";
   const why = focus.lead.why ? String(focus.lead.why) : "";
+  // The block's calendar placement leads the context line, so the thread reads
+  // like a coach with a calendar: "Week 3 of 5 — building volume. <why>".
+  const context = [focus.block_line ? String(focus.block_line) : "", why].filter(Boolean).join(" ");
   return `<button class="cfocus-thread" type="button" data-cfocus-go="${escAttr(domain)}">
     <span class="cfocus-thread-arrow" aria-hidden="true">↳</span>
     <span class="cfocus-thread-copy">
       <span class="cfocus-thread-top"><span class="cfocus-thread-lbl lbl">This block</span><span class="cfocus-thread-txt">${escHtml(title)}</span></span>
-      ${why ? `<span class="cfocus-thread-why">${escHtml(why)}</span>` : ""}
+      ${context ? `<span class="cfocus-thread-why">${escHtml(context)}</span>` : ""}
     </span>
     <span class="cfocus-thread-go" aria-hidden="true">→</span>
   </button>`;

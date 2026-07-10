@@ -48,7 +48,9 @@ test("a new lab since the stamp → a calm continuity candidate", () => {
   assert.equal(c.id, "since-last");
   assert.equal(c.kind, "continuity");
   assert.equal(c.tier, "primary");
-  assert.equal(c.kicker, "SINCE YOU LAST LOOKED");
+  // A 2h-old stamp is usually the same local day; a run just after midnight
+  // legitimately reads "yesterday" — both are honest.
+  assert.match(String(c.kicker), /^SINCE (YOU LAST LOOKED|YESTERDAY)$/);
   assert.ok(c.priority > 0, "priority should be positive");
   assert.ok(typeof c.title === "string" && c.title.length > 0, "a calm title");
   // Constitution: no counter / "N days" / score language in the line.
@@ -88,16 +90,41 @@ test("a strength PR since the stamp → continuity candidate", () => {
   assert.ok(/best|bench/i.test(c.title), "the line names the lift's new best");
 });
 
-test("the most notable change leads; extras fold into plain words", () => {
+test("the most notable change leads; the rest braid into the body by name", () => {
   repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
-  // A new lab (high notability) + an insight (lower) — the lab should lead.
+  // A new lab (high notability) + an insight (lower) — the lab should lead and
+  // the insight should be NAMED in the body (connective tissue, not a count).
   seedHealthDoc("2026-06-23", [marker("ApoB", 92, { unit: "mg/dL" })], "bloodwork");
   repo.addInsight({ kind: "connection", text: "Sleep dipped the weeks you ran more.", status: "new" });
 
   const c = repo.sinceLastLookedCandidate();
   assert.ok(c);
   assert.ok(/bloodwork|result/i.test(c.title), "the lab leads the line");
-  assert.ok(/other thing/i.test(c.title), "extras fold into plain words, not a count badge");
+  assert.ok(!/other thing/i.test(c.title), "the title never hides substance behind a count");
+  assert.ok(/connection is waiting/i.test(String(c.body)), "the braid names what else moved");
+});
+
+test("training done since the stamp joins the braid", () => {
+  repo.setAppState(KEY, sqlAgo(2 * 60 * 60 * 1000));
+  seedHealthDoc("2026-06-23", [marker("ApoB", 92, { unit: "mg/dL" })], "bloodwork");
+  repo.logSetByName({ exercise: "Back Squat", weight: 225, reps: 5 });
+
+  const c = repo.sinceLastLookedCandidate();
+  assert.ok(c);
+  assert.ok(/bloodwork/i.test(c.title), "the lab still leads");
+  assert.ok(/in the books/i.test(String(c.body)), "the work is acknowledged in the braid");
+  assert.ok(!/\b\d+\b/.test(String(c.body)), "counts render as words, never digits");
+});
+
+test("a multi-day gap names the real day in the kicker", () => {
+  // 3 full days back at the current wall-clock time is always a 2-6 day-diff
+  // window regardless of when the suite runs → the kicker names a weekday.
+  repo.setAppState(KEY, sqlAgo(3 * 24 * 60 * 60 * 1000));
+  seedHealthDoc("2026-06-23", [marker("ApoB", 92, { unit: "mg/dL" })], "bloodwork");
+
+  const c = repo.sinceLastLookedCandidate();
+  assert.ok(c);
+  assert.match(String(c.kicker), /^SINCE (MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY)$/);
 });
 
 test("markTodaySeen is debounced inside the window", () => {

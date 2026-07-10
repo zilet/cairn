@@ -5139,6 +5139,8 @@ button.hmk-row:active{background:var(--card-2)}
 .cfocus-headline{font-family:var(--font-display);font-weight:560;
   font-variation-settings:"opsz" 48;font-size:1.12rem;line-height:1.3;
   color:var(--ink);margin:0 0 13px}
+/* the block's calendar placement — quiet temporal context under the headline */
+.cfocus-blockline{font-size:.8rem;line-height:1.4;color:var(--muted);margin:-8px 0 13px}
 
 /* domain tag — a quiet reused label, no new glyph vocabulary */
 .cfocus-dom{flex:0 0 auto;color:var(--muted);letter-spacing:.1em}

@@ -103,6 +103,9 @@ export interface ClientCoachingFocus {
   connections: string[];
   retest: ClientCoachingRetest | null;
   horizon_weeks: number | null;
+  // Temporal placement inside the active program block, plain words
+  // ("Week 3 of 5 — building volume."). Absent/null when no block is active.
+  block_line?: string | null;
 }
 
 export interface ClientMacroTotals {
@@ -193,9 +196,9 @@ export interface ClientPrescription {
   vary_to?: string;
   vary_options?: ClientPrescriptionVariation[];
   plan_item_id?: number;
-  day_number?: number;        // the plan day this lift sits on (for the swap apply path)
-  autoregulated?: boolean;    // recovery braked this step (informational)
-  rep_step?: boolean;         // double-progression rep advance (load held, reps climb in-range)
+  day_number?: number; // the plan day this lift sits on (for the swap apply path)
+  autoregulated?: boolean; // recovery braked this step (informational)
+  rep_step?: boolean; // double-progression rep advance (load held, reps climb in-range)
 }
 
 export interface ClientSessionSuggestionItem {

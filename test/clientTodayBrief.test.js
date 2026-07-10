@@ -75,7 +75,7 @@ test("Today Brief suppresses irrelevant steer chips and exposes reset when steer
   assert.match(html, /Changed your mind\?/);
 });
 
-test("Today Brief only shows the forward plan link on train reads", () => {
+test("Today Brief shows the forward plan link on train AND done reads (not rest)", () => {
   const brief = loadTodayBrief();
   const read = {
     kind: "rest",
@@ -88,6 +88,11 @@ test("Today Brief only shows the forward plan link on train reads", () => {
 
   assert.doesNotMatch(brief.briefHtml(read, { isToday: true }), /Next: Hinge/);
   assert.match(brief.briefHtml({ ...read, kind: "train" }, { isToday: true }), /Next: Hinge/);
+  // After the work is in, "Next: …" is the so-what that replaces the retired
+  // Start-session controls — a DONE day is never a dead end.
+  const done = brief.briefHtml({ ...read, kind: "done", headline: "Long run done" }, { isToday: true });
+  assert.match(done, /Next: Hinge/);
+  assert.doesNotMatch(done, /Start session/);
 });
 
 test("Today Brief handles done, provisional, and offline states", () => {

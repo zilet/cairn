@@ -917,6 +917,15 @@ function getCoachContextFromSnapshot(): CoachContext {
         benchmarkMilestones: benchmarkMilestonesView,
         dueAttention: dueAttentionView,
         cardioRisk: cardioRiskView,
+        // Temporal placement: where the athlete is inside the active block, so
+        // "This block" carries its calendar ("week 3 of 5 — building volume").
+        programBlock: (() => {
+          try {
+            return blockForCoach();
+          } catch {
+            return null;
+          }
+        })(),
       });
     } catch {
       return {
@@ -929,6 +938,7 @@ function getCoachContextFromSnapshot(): CoachContext {
         retest: null,
         horizon_weeks: null,
         caveat: null,
+        block_line: null,
       };
     }
   });
@@ -998,6 +1008,8 @@ export function getCoachingFocus() {
       connections: [],
       retest: null,
       horizon_weeks: null,
+      caveat: null,
+      block_line: null,
     };
   }
 }
