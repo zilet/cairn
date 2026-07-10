@@ -13,6 +13,7 @@ import {
   completeBlock,
   createBlock,
   ensureActiveBlock,
+  findPlanDayForExercise,
   getActiveBlock,
   getEquipmentProfile,
   getPlan,
@@ -135,13 +136,15 @@ programRouter.get("/program/progression", (req, res) => {
     const cached = getCachedDayRead(localToday());
     const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
     const days = getPlan();
-    const strengthDays = days.filter((d: any) =>
-      Array.isArray(d.items) && d.items.some((it: any) => it.kind !== "cardio" && it.exercise)
+    const strengthDays = days.filter(
+      (d: any) => Array.isArray(d.items) && d.items.some((it: any) => it.kind !== "cardio" && it.exercise)
     );
     if (strengthDays.length) {
       const matched = focus
         ? strengthDays.find((d: any) => {
-            const f = String(d.focus || d.name || "").toLowerCase().trim();
+            const f = String(d.focus || d.name || "")
+              .toLowerCase()
+              .trim();
             return f && (f === focus || f.includes(focus) || focus.includes(f));
           })
         : null;
@@ -182,12 +185,23 @@ programRouter.post("/program/swap", (req, res) => {
 // error } at 200.
 programRouter.post("/program/swap/apply", (req, res) => {
   const { day, from, to } = req.body ?? {};
-  res.json(buildAndApplySwap(Number(day), from, to));
+  // The conductor's swap chip carries `from`/`to` but not the plan day. When `day`
+  // is missing/non-finite, resolve it from `from`'s plan placement; if the lift isn't
+  // on the plan, return the designed { ok:false, error } at 200. An explicit day is
+  // used verbatim (unchanged behavior).
+  let d = Number(day);
+  if (!Number.isFinite(d)) {
+    const resolved = findPlanDayForExercise(String(from ?? ""));
+    if (resolved == null) {
+      res.json({ ok: false, error: `couldn't find ${String(from ?? "").trim() || "that exercise"} on your plan` });
+      return;
+    }
+    d = resolved;
+  }
+  res.json(buildAndApplySwap(d, from, to));
 });
 
-programRouter.get("/proposals", (req, res) =>
-  res.json(listProposals(req.query.limit ? Number(req.query.limit) : 20))
-);
+programRouter.get("/proposals", (req, res) => res.json(listProposals(req.query.limit ? Number(req.query.limit) : 20)));
 
 programRouter.post("/proposals/:id/apply", (req, res) => {
   try {

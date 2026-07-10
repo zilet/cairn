@@ -12,6 +12,7 @@ import {
   buildSwapProposal,
   createBlock,
   ensureActiveBlock,
+  findPlanDayForExercise,
   getActiveBlock,
   getEquipmentProfile,
   getPlan,
@@ -53,7 +54,10 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "draft_plan_update",
     "Run a coaching agent over recent logs to produce a DRAFT plan-update proposal. Does not change the plan; review then apply_proposal.",
     {
-      agent: z.string().optional().describe("agent name from list_agents; omit or 'auto' to use the configured rotation"),
+      agent: z
+        .string()
+        .optional()
+        .describe("agent name from list_agents; omit or 'auto' to use the configured rotation"),
       instruction: z.string().optional().describe("optional extra guidance"),
     },
     async ({ agent, instruction }) => {
@@ -66,12 +70,21 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "evolve_program",
     "Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize. Returns a DRAFT proposal (review then apply_proposal) plus the program-state snapshot. Does not change the plan.",
     {
-      agent: z.string().optional().describe("agent name from list_agents; omit or 'auto' to use the configured rotation"),
+      agent: z
+        .string()
+        .optional()
+        .describe("agent name from list_agents; omit or 'auto' to use the configured rotation"),
       instruction: z.string().optional().describe("optional extra guidance (e.g. 'focus on my bench plateau')"),
     },
     async ({ agent, instruction }) => {
       const result = await evolveProgram(agent, instruction);
-      return asText({ proposal: result.proposal, state: result.state, ok: result.ok, agent: result.agent, tried: result.tried });
+      return asText({
+        proposal: result.proposal,
+        state: result.state,
+        ok: result.ok,
+        agent: result.agent,
+        tried: result.tried,
+      });
     }
   );
 
@@ -162,13 +175,15 @@ export function registerProgramTools(server: McpToolRegistrar) {
         const cached = getCachedDayRead(localToday());
         const focus = cached?.focus ? String(cached.focus).toLowerCase().trim() : null;
         const days = getPlan();
-        const strengthDays = (days as any[]).filter((d: any) =>
-          Array.isArray(d.items) && d.items.some((item: any) => item.kind !== "cardio" && item.exercise)
+        const strengthDays = (days as any[]).filter(
+          (d: any) => Array.isArray(d.items) && d.items.some((item: any) => item.kind !== "cardio" && item.exercise)
         );
         if (strengthDays.length) {
           const matched = focus
             ? strengthDays.find((d: any) => {
-                const f = String(d.focus || d.name || "").toLowerCase().trim();
+                const f = String(d.focus || d.name || "")
+                  .toLowerCase()
+                  .trim();
                 return f && (f === focus || f.includes(focus) || focus.includes(f));
               })
             : null;
@@ -207,13 +222,28 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "swap_exercise_now",
-    "Swap `from` out for a same-pattern `to` IN PLACE on a plan day AND APPLY it immediately (no review gate) — the in-session 'rotate one in' intent, so the new movement is ready to log against right away and the plan adapts as the athlete goes. Builds through the same tested swap → apply path, discarding the draft if the apply can't land. Returns { ok:true, swapped } or { ok:false, error } at 200.",
+    "Swap `from` out for a same-pattern `to` IN PLACE on a plan day AND APPLY it immediately (no review gate) — the in-session 'rotate one in' intent, so the new movement is ready to log against right away and the plan adapts as the athlete goes. Builds through the same tested swap → apply path, discarding the draft if the apply can't land. `day` is optional — when omitted it's resolved from `from`'s plan placement. Returns { ok:true, swapped } or { ok:false, error } at 200.",
     {
-      day: z.number().int().describe("the plan day number"),
+      day: z.number().int().optional().describe("the plan day number; omit to resolve it from `from`'s plan placement"),
       from: z.string().describe("the exact current exercise to rotate out"),
       to: z.string().describe("the same-pattern movement to rotate in"),
     },
-    async ({ day, from, to }) => asText(buildAndApplySwap(day, from, to))
+    async ({ day, from, to }) => {
+      // Mirror the REST /program/swap/apply resolution so MCP ⊆ REST stays true: an
+      // explicit day is used verbatim; a missing day resolves from `from`'s plan day.
+      let d = day;
+      if (d == null || !Number.isFinite(d)) {
+        const resolved = findPlanDayForExercise(from);
+        if (resolved == null) {
+          return asText({
+            ok: false,
+            error: `couldn't find ${String(from ?? "").trim() || "that exercise"} on your plan`,
+          });
+        }
+        d = resolved;
+      }
+      return asText(buildAndApplySwap(d, from, to));
+    }
   );
 
   server.tool(

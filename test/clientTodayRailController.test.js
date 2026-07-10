@@ -240,6 +240,11 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
   const readBtn = rootEl.appendChild(new FakeElement("button", {
     dataset: { agendaAct: "me-health-read", agendaId: "read" },
   }));
+  // Another candidate (since-last) reuses the me-health-read kind but carries no
+  // revision — it navigates to Stand and must NOT fire a bogus ack.
+  const sinceBtn = rootEl.appendChild(new FakeElement("button", {
+    dataset: { agendaAct: "me-health-read", agendaId: "since" },
+  }));
   const tabBtn = rootEl.appendChild(new FakeElement("button", {
     dataset: { agendaAct: "tab:progress", agendaId: "tab" },
   }));
@@ -254,6 +259,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     { id: "coach", action: { label: "Plan", kind: "plan-coach" } },
     { id: "standing", action: { label: "Standing", kind: "me-health-standing" } },
     { id: "read", revision: "health-v1", action: { label: "Read", kind: "me-health-read" } },
+    { id: "since", action: { label: "Read", kind: "me-health-read" } },
     { id: "tab", action: { label: "Progress", kind: "tab:progress" } },
   ];
 
@@ -262,6 +268,7 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
   coachBtn.click();
   standingBtn.click();
   readBtn.click();
+  sinceBtn.click();
   tabBtn.click();
   dismissBtn.click();
 
@@ -269,8 +276,9 @@ test("Today rail controller wires generic agenda navigation and dismiss controls
     ["chat", "Explain this"],
     ["tab", "plan"],
     ["tab", "stand"],
-    ["api", "/today-agenda/ack"],
+    ["api", "/today-agenda/ack"], // revision-carrying read acks
     ["tab", "stand"],
+    ["tab", "stand"], // since-last (no revision) navigates but does NOT ack
     ["tab", "progress"],
     ["collapse", card],
   ]);

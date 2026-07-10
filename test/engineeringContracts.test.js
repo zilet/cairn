@@ -4239,7 +4239,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramControllerSource, /var _progFocusCard: string \| undefined/);
   assert.match(progressProgramControllerSource, /async function renderProgressProgram\(deps: ClientProgressProgramControllerDeps\): Promise<unknown>/);
   assert.match(progressProgramControllerSource, /function paintProgressProgramBody\(data: ProgressProgramState, deps: ClientProgressProgramControllerDeps\): void/);
-  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(\n  btn: Element,\n  deps: ClientProgressProgramControllerDeps,/);
+  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(\n {2}btn: Element,\n {2}deps: ClientProgressProgramControllerDeps,/);
   assert.match(progressProgramControllerSource, /async function tidyExerciseNames\(btn: Element, deps: ClientProgressProgramControllerDeps\): Promise<void>/);
   assert.match(progressProgramControllerSource, /CairnProgressFocus: PROGRESS_FOCUS_STATE/);
   assert.match(progressProgramControllerSource, /CairnProgressProgramController/);
@@ -5518,7 +5518,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(capture, /function loadTodayReads/);
   assert.match(capture, /function reconnectInsight/);
   assert.match(progressEnergySource, /CairnUi\.jobCaptionHtml\(\{ text: "reading your trend/);
-  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false \}\)/);
+  assert.match(progressProgramControllerClient, /coachingFocusCardHtml\(focus[^)]*\{ blockLine: false, actions: true \}\)/);
   assert.doesNotMatch(progress, /coachingFocusCardHtml/);
   assert.match(meals, /function renderCoach\(\)/);
   assert.match(meals, /function renderMeals\(\)/);

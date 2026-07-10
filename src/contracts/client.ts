@@ -89,6 +89,10 @@ export interface ClientCoachingFocusItem {
   why: string;
   move?: string;
   based_on?: string[];
+  // One-tap rotation for a stalled lead lift: rotate `from` out for one of the
+  // `to` variations (same movement pattern). Rendered as action buttons only
+  // where the swap is wired (Program); other surfaces just navigate.
+  swap?: { from: string; to: string[] };
 }
 
 export interface ClientCoachingRetest {

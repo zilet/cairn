@@ -34,6 +34,10 @@ export interface FocusItem {
   move?: string;
   /** Plain-language inputs that caused this lever to surface. Bounded, no scores. */
   based_on?: string[];
+  // One-tap rotation for a stalled lead lift: rotate `from` out for one of the `to`
+  // variations (same movement pattern). Mirrors ClientCoachingFocusItem.swap — the
+  // surface resolves the plan day and wires the apply; the conductor stays PURE (no DB).
+  swap?: { from: string; to: string[] };
 }
 
 export interface CoachingRetest {
@@ -300,10 +304,26 @@ function cleanEvidence(lines: unknown): string[] | undefined {
     .slice(0, 3);
   return out.length ? out : undefined;
 }
+// Sanitize the one-tap swap payload: `from` a trimmed non-empty string, `to` up to
+// two trimmed non-empty strings. Anything short of that (no from, no options) omits
+// swap entirely rather than emitting a half-formed action.
+function cleanSwap(swap: FocusItem["swap"]): FocusItem["swap"] | undefined {
+  const from = String(swap?.from ?? "").trim();
+  const to = inputArray<unknown>(swap?.to)
+    .map((t) => String(t ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  return from && to.length ? { from, to } : undefined;
+}
 function cleanFocusItem(item: FocusItem | null): FocusItem | null {
   if (!item) return null;
   const based_on = cleanEvidence(item.based_on);
-  return based_on ? { ...item, based_on } : { ...item };
+  const out: FocusItem = based_on ? { ...item, based_on } : { ...item };
+  // Whitelist the swap payload through the clamp (or drop it if half-formed).
+  const swap = cleanSwap(item.swap);
+  if (swap) out.swap = swap;
+  else delete out.swap;
+  return out;
 }
 
 function varyOptionName(option: unknown): string | null {
@@ -455,6 +475,10 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
           `${stalled.lead_lift || label} is marked stalling`,
           stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat",
         ],
+        // Actionable payload: a concrete lift to rotate out + same-pattern options to
+        // rotate in. Only when we know WHICH lift stalled and have real options — the
+        // surface resolves the plan day (the conductor never touches the DB).
+        swap: stalled.lead_lift && opts.length ? { from: String(stalled.lead_lift), to: opts } : undefined,
       },
     };
   }

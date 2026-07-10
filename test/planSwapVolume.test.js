@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { db, repo, isoDaysAgo } from "./_seed.js";
 import { effectiveVolumeByGroup } from "../dist/repo/exercise-variations.js";
 import { getVolumeByMuscle } from "../dist/repo/sessions.js";
-import { buildProgressionProposal } from "../dist/repo/progression.js";
+import { buildAndApplySwap, buildProgressionProposal, findPlanDayForExercise } from "../dist/repo/progression.js";
 
 function reset() {
   for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "program_blocks", "plan_proposals", "activities"]) {
@@ -87,6 +87,49 @@ test("C4: buildProgressionProposal turns a stalled 'vary' into a swap change, no
   assert.ok(swap.swap.to && swap.swap.to !== swap.swap.from, "swaps to a genuinely different movement");
   // No confusing same-exercise held-weight write survives.
   assert.ok(!prop.proposal.parsed.changes.some((c) => !c.swap && c.exercise === "Leg Press" && c.target_weight === 400), "no held no-op change");
+});
+
+// ── swap day-resolution: the conductor's chip carries from/to but not the day ──
+test("findPlanDayForExercise resolves the day a lift sits on, case-insensitively", () => {
+  repo.savePlanDay(2, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }]);
+  repo.savePlanDay(3, "Pull", "Pull", [{ exercise: "Barbell Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 135 }]);
+  assert.equal(findPlanDayForExercise("Bench Press"), 2, "resolves the exact name");
+  assert.equal(findPlanDayForExercise("bench press"), 2, "matches case-insensitively");
+  assert.equal(findPlanDayForExercise("BARBELL ROW"), 3, "resolves a different day");
+});
+
+test("findPlanDayForExercise returns null for an unknown lift and blank input", () => {
+  repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }]);
+  assert.equal(findPlanDayForExercise("Overhead Press"), null, "not on any plan day → null");
+  assert.equal(findPlanDayForExercise("  "), null, "blank input → null, never throws");
+});
+
+test("findPlanDayForExercise resolves the LOWEST day when a lift appears on several", () => {
+  repo.savePlanDay(4, "Full B", "Full", [{ exercise: "Deadlift", sets: 3, rep_low: 3, rep_high: 5, target_weight: 315 }]);
+  repo.savePlanDay(2, "Full A", "Full", [{ exercise: "Deadlift", sets: 3, rep_low: 3, rep_high: 5, target_weight: 315 }]);
+  assert.equal(findPlanDayForExercise("Deadlift"), 2, "lowest day_number wins");
+});
+
+// The route/MCP day-optional swap path (no HTTP): resolve the day from `from`,
+// then apply through the same buildAndApplySwap the surfaces call.
+test("a day-less swap resolves the plan day from `from` and applies in place", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 },
+    { exercise: "Overhead Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 95 },
+  ]);
+  const day = findPlanDayForExercise("Bench Press"); // mirrors the surface's day resolution
+  assert.equal(day, 2);
+  const r = buildAndApplySwap(day, "Bench Press", "DB Bench Press");
+  assert.equal(r.ok, true, "the resolved-day swap applies");
+  const names = repo.getPlanDay(2).items.map((it) => it.exercise);
+  assert.ok(names.includes("DB Bench Press"), "the new movement is on the day");
+  assert.ok(!names.includes("Bench Press"), "the old movement was rotated out");
+  assert.ok(names.includes("Overhead Press"), "the rest of the day is untouched");
+});
+
+test("a day-less swap for a lift not on the plan resolves to null (the surface then returns the designed error)", () => {
+  repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }]);
+  assert.equal(findPlanDayForExercise("Incline Bench Press"), null, "unknown lift → no day; the surface answers { ok:false, error } at 200");
 });
 
 // ── C6: the honest volume model ───────────────────────────────────────────────
