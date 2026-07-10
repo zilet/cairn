@@ -113,4 +113,10 @@ Status: implemented and integrated locally.
   per-member mutation serialization plus duplicate-delete protection and a
   deferred-response regression. The final rebased `npm run release:check` passed
   end to end on local `main` commit `c214a2a0` plus the telemetry wave.
+- The follow-up quality pass moved browser batches into one SQLite transaction,
+  reused the prepared insert, amortized retention maintenance to once per hour,
+  deduplicated handled 500s, and made malformed stored metadata fail soft. A
+  local 2,000-event batch benchmark improved from 122.1 ms to 20.3 ms.
+- Scheduler boundaries now use the same bounded, sanitized diagnostic sink, and
+  permanently invalid browser queue entries can no longer block newer reports.
 - No Pi deployment or public release was requested or performed in this wave.

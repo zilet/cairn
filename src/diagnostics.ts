@@ -4,9 +4,11 @@ import { getVersion } from "./version.js";
 import { normalizeDiagnosticRoute, recordDiagnosticEvent } from "./repo/diagnostics.js";
 
 const DEFAULT_SLOW_REQUEST_MS = 2_000;
+const requestIds = new WeakMap<Request, string>();
+const unexpectedErrorRequests = new WeakSet<Request>();
 
 export function requestId(req: Request): string {
-  return String((req as any).cairnRequestId || "");
+  return requestIds.get(req) || "";
 }
 
 /** Error names are useful operator context; arbitrary Error.message is not. */
@@ -35,7 +37,7 @@ function requestRoute(req: Request): string | null {
 /** Mounted before auth so every /api response, including a 401, is correlated. */
 export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextFunction): void {
   const id = randomUUID();
-  (req as any).cairnRequestId = id;
+  requestIds.set(req, id);
   res.setHeader("X-Request-ID", id);
   const started = performance.now();
   let finished = false;
@@ -49,7 +51,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
     const slowMs = Number.isFinite(configured) && configured >= 100 ? configured : DEFAULT_SLOW_REQUEST_MS;
     // Auth failures are intentionally excluded from durable HTTP-error telemetry.
     // They still receive X-Request-ID and remain visible to the caller.
-    if (status >= 400 && status !== 401 && status !== 403) {
+    if (status >= 400 && status !== 401 && status !== 403 && !unexpectedErrorRequests.has(req)) {
       recordDiagnosticEvent({
         source: "api",
         kind: "http_error",
@@ -84,6 +86,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
 }
 
 export function recordUnexpectedApiError(error: unknown, req: Request): void {
+  unexpectedErrorRequests.add(req);
   const errorName = diagnosticErrorName(error);
   recordDiagnosticEvent({
     source: "api",
@@ -95,6 +98,28 @@ export function recordUnexpectedApiError(error: unknown, req: Request): void {
     request_id: requestId(req),
     fingerprint: `api:server_exception:${req.method}:${requestRoute(req) || "unknown"}:${errorName}`,
     message: `${errorName}: server operation failed`,
+    stack: diagnosticStackFrames(error),
+    release: getVersion(),
+  });
+}
+
+/** Shared privacy-safe sink for every background scheduler boundary. */
+export function recordSchedulerFailure(
+  operation: string,
+  error: unknown,
+  sink: typeof recordDiagnosticEvent = recordDiagnosticEvent
+): void {
+  const safeOperation = String(operation || "scheduler_task")
+    .replace(/[^A-Za-z0-9_.:-]/g, "_")
+    .slice(0, 80);
+  const errorName = diagnosticErrorName(error);
+  sink({
+    source: "scheduler",
+    kind: "task_failure",
+    level: "error",
+    operation: safeOperation,
+    fingerprint: `scheduler:task_failure:${safeOperation}:${errorName}`,
+    message: `${errorName}: scheduled operation failed`,
     stack: diagnosticStackFrames(error),
     release: getVersion(),
   });

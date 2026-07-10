@@ -7,6 +7,7 @@ import { checkForUpdate } from "./updateCheck.js";
 import { evaluateMatureExpectations } from "./brainEvaluator.js";
 import { applyDueAnnouncedDecisions } from "./domain/brain/autonomy-service.js";
 import { enqueueAgentJob } from "./agentJobs.js";
+import { recordSchedulerFailure } from "./diagnostics.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
 // reconciliation. Lazy-imported in the tick so this module stays decoupled.
 
@@ -93,6 +94,7 @@ export function startScheduler() {
       // Keep today's stamp: per-decision failures are isolated inside
       // applyDueAnnouncedDecisions, so a pass-level throw is an anomaly —
       // retrying it every 60s would just repeat the same failure all day.
+      recordSchedulerFailure("announced_change_boundary", e);
       console.error(`[brain] announced-change boundary pass failed: ${e?.message ?? e}`);
     }
   };
@@ -148,6 +150,7 @@ export function startScheduler() {
       );
     } catch (e: any) {
       repo.setAppState("brain_revision_check_date", "");
+      recordSchedulerFailure("brain_revision_check", e);
       console.error(`[brain] revision conference check failed: ${e?.message ?? e}`);
     } finally {
       revisionBusy = false;
@@ -176,6 +179,7 @@ export function startScheduler() {
       repo.createProposal(agent, "auto: weekly review", result.raw, result.parsed);
       console.log(`Auto-coach drafted a proposal via ${agent} (parsed=${!!result.parsed}).`);
     } catch (e: any) {
+      recordSchedulerFailure("weekly_coach_draft", e);
       console.error(`Auto-coach failed: ${e.message}`);
     } finally {
       coachBusy = false;
@@ -252,6 +256,7 @@ export function startScheduler() {
             console.log(`[proactive] refreshed training benchmark attention (${entries.length} signal(s)).`);
           }
         } catch (e: any) {
+          recordSchedulerFailure("benchmark_attention_refresh", e);
           console.error(`[proactive] benchmark attention refresh failed: ${e?.message ?? e}`);
         }
       }
@@ -277,6 +282,7 @@ export function startScheduler() {
             }
           }
         } catch (e: any) {
+          recordSchedulerFailure("training_block_advance", e);
           console.error(`[proactive] block advance failed: ${e?.message ?? e}`);
         }
       }
@@ -291,6 +297,7 @@ export function startScheduler() {
             r.ok ? `[proactive] stored a quiet insight.` : `[proactive] no genuine insight tonight (calm no-op).`
           );
         } catch (e: any) {
+          recordSchedulerFailure("quiet_insight", e);
           console.error(`[proactive] insight pass failed: ${e?.message ?? e}`);
         }
       }
@@ -301,6 +308,7 @@ export function startScheduler() {
             r.ok ? `[proactive] stored the weekly read.` : `[proactive] no weekly read this week (calm no-op).`
           );
         } catch (e: any) {
+          recordSchedulerFailure("weekly_read", e);
           console.error(`[proactive] weekly read failed: ${e?.message ?? e}`);
         }
         // Refresh the whole-picture health synthesis weekly too, so it absorbs
@@ -312,6 +320,7 @@ export function startScheduler() {
             r.ok ? `[proactive] refreshed the health synthesis.` : `[proactive] health synthesis steady (calm no-op).`
           );
         } catch (e: any) {
+          recordSchedulerFailure("health_synthesis", e);
           console.error(`[proactive] health synthesis failed: ${e?.message ?? e}`);
         }
       }
@@ -326,6 +335,7 @@ export function startScheduler() {
                 : `[proactive] nutrition check-in unavailable (calm no-op).`
           );
         } catch (e: any) {
+          recordSchedulerFailure("nutrition_checkin", e);
           console.error(`[proactive] nutrition check-in failed: ${e?.message ?? e}`);
         }
       }
@@ -359,6 +369,7 @@ export function startScheduler() {
             );
           }
         } catch (e: any) {
+          recordSchedulerFailure("program_evolution", e);
           console.error(`[proactive] plan evolution failed: ${e?.message ?? e}`);
         }
       }
@@ -398,6 +409,7 @@ export function startScheduler() {
             console.log(`[proactive] training shifted but already drafted / within cooldown (calm no-op).`);
           }
         } catch (e: any) {
+          recordSchedulerFailure("program_evolution_trigger", e);
           console.error(`[proactive] evolution trigger failed: ${e?.message ?? e}`);
         }
       }
@@ -424,8 +436,12 @@ export function startScheduler() {
       garminDueAt = Date.now() + GARMIN_INTERVAL_MS;
       const r = await syncGarmin(); // records garmin_last_sync_at/status itself
       if (r.ok) console.log(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
-      else console.error(`[garmin] auto-sync failed: ${r.error}`);
+      else {
+        recordSchedulerFailure("garmin_auto_sync", new Error(String(r.error || "sync failed")));
+        console.error(`[garmin] auto-sync failed: ${r.error}`);
+      }
     } catch (e: any) {
+      recordSchedulerFailure("garmin_auto_sync", e);
       console.error(`[garmin] auto-sync error: ${e?.message ?? e}`);
     } finally {
       garminBusy = false;
@@ -452,6 +468,7 @@ export function startScheduler() {
       await precomputeDayRead(stamp);
       console.log(`[brief] precomputed today's day-read for ${stamp}.`);
     } catch (e: any) {
+      recordSchedulerFailure("day_read_precompute", e);
       console.error(`[brief] nightly precompute failed: ${e?.message ?? e}`);
     } finally {
       precomputeBusy = false;
@@ -485,6 +502,7 @@ export function startScheduler() {
         if (rec.learnings > 0)
           console.log(`[memory] reconciled ${rec.reconciled} suggestions → ${rec.learnings} learnings.`);
       } catch (e: any) {
+        recordSchedulerFailure("memory_reconcile", e);
         console.error(`[memory] reconcile failed: ${e?.message ?? e}`);
       }
       // 1a. Mature generalized expectations before rebuilding the response model,
@@ -495,6 +513,7 @@ export function startScheduler() {
           console.log(`[brain] evaluated ${evaluated.evaluated}/${evaluated.scanned} matured expectation(s).`);
         }
       } catch (e: any) {
+        recordSchedulerFailure("maturity_evaluation", e);
         console.error(`[brain] maturity evaluation failed: ${e?.message ?? e}`);
       }
       // 1b. Rebuild the PERSONAL-RESPONSE model (deterministic) from the freshly
@@ -503,6 +522,7 @@ export function startScheduler() {
       try {
         repo.saveReactionModel();
       } catch (e: any) {
+        recordSchedulerFailure("reaction_model_rebuild", e);
         console.error(`[memory] reaction-model rebuild failed: ${e?.message ?? e}`);
       }
       // 1c. Write the plain-language NARRATIVE over the freshly rebuilt patterns
@@ -513,6 +533,7 @@ export function startScheduler() {
         const rn: any = await refreshReactionNarrative("auto");
         if (rn.ok && rn.narrative) console.log(`[memory] refreshed the reaction-model narrative.`);
       } catch (e: any) {
+        recordSchedulerFailure("reaction_narrative_refresh", e);
         console.error(`[memory] reaction-model narrative refresh failed: ${e?.message ?? e}`);
       }
       // 2. Agentic consolidation + about-me growth — best-effort, lazy-imported.
@@ -524,6 +545,7 @@ export function startScheduler() {
         const g = await growAboutMe("auto");
         if (g.ok && (g as any).changed) console.log(`[memory] grew about_me from memory.`);
       } catch (e: any) {
+        recordSchedulerFailure("memory_consolidation", e);
         console.error(`[memory] nightly consolidation failed: ${e?.message ?? e}`);
       }
       // 3. Agentic exercise-name tidy — best-effort, pull-never-push. Messy /
@@ -535,6 +557,7 @@ export function startScheduler() {
         if (x.ok && x.applied)
           console.log(`[memory] tidied exercise names: ${x.applied} alias(es) across ${x.aligned} movement(s).`);
       } catch (e: any) {
+        recordSchedulerFailure("exercise_reconciliation", e);
         console.error(`[memory] nightly exercise tidy failed: ${e?.message ?? e}`);
       }
     } finally {
@@ -564,6 +587,7 @@ export function startScheduler() {
         console.log(`[update] a newer Cairn is available: ${r.latest} (running ${r.current}) — see Settings → Data.`);
       else console.log(`[update] up to date (${r.current}).`);
     } catch (e: any) {
+      recordSchedulerFailure("update_check", e);
       console.error(`[update] check error: ${e?.message ?? e}`);
     } finally {
       updateCheckBusy = false;
@@ -602,7 +626,7 @@ export function startScheduler() {
     if (!repo.getCachedDayRead(today)) {
       precomputeDayRead(today)
         .then(() => console.log(`[brief] warmed today's day-read for ${today}.`))
-        .catch(() => {});
+        .catch((error) => recordSchedulerFailure("day_read_boot_warm", error));
     }
   }, 15_000);
 }

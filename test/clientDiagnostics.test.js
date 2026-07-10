@@ -116,6 +116,20 @@ test("failed telemetry delivery is silent, persisted, and nonrecursive", async (
   assert.equal(reporter.pending().length, 1, "the original event remains for a later retry");
 });
 
+test("a permanently invalid queued event cannot block later diagnostics", async () => {
+  const loaded = loadDiagnostics();
+  const reporter = loaded.context.CairnClientDiagnosticsCore.createClientDiagnosticReporter({
+    storage: loaded.context.localStorage,
+    schedule: () => {},
+    fetch: async () => ({ status: 400 }),
+  });
+  reporter.report({ kind: "render_error", level: "error", message: "first" });
+  reporter.report({ kind: "unhandled_error", level: "error", message: "second" });
+  await reporter.flush();
+  assert.equal(reporter.pending().length, 1);
+  assert.equal(reporter.pending()[0].kind, "unhandled_error");
+});
+
 test("global handlers avoid persisting arbitrary rejection content and tab boundary reports render errors", () => {
   const loaded = loadDiagnostics();
   const reporter = loaded.context.CairnClientDiagnostics;

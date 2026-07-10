@@ -546,7 +546,7 @@ type OutboxItem = {
 };
 type OutboxStore = Pick<Storage, "getItem" | "setItem">;
 type OutboxDrainResult = { sent: number; remaining: number; needsAttention: number };
-type OutboxSendResult = void | "needs_attention";
+type OutboxSendResult = undefined | "needs_attention";
 type OutboxController = {
   enqueue(entry: { kind: string; path: string; body: unknown }): OutboxItem;
   list(): OutboxItem[];

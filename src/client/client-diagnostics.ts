@@ -38,13 +38,14 @@ const CLIENT_DIAGNOSTIC_MAX = 50;
 const CLIENT_DIAGNOSTIC_BATCH = 20;
 const CLIENT_DIAGNOSTIC_DEDUPE_MS = 30_000;
 const CLIENT_DIAGNOSTIC_FLUSH_MS = 750;
+const PERMANENT_PAYLOAD_FAILURES = new Set([400, 413, 422]);
 
 function clientDiagnosticBound(value: unknown, max: number): string {
-  return String(value ?? "")
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+  const withoutControls = Array.from(String(value ?? ""), (char) => {
+    const code = char.charCodeAt(0);
+    return code <= 31 || code === 127 ? " " : char;
+  }).join("");
+  return withoutControls.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
 function clientDiagnosticNormalizeRoute(value: unknown): string {
@@ -180,11 +181,13 @@ function createClientDiagnosticReporter(
   function report(input: ClientDiagnosticInput): boolean {
     try {
       const event = normalize(input);
+      const timestamp = now();
       const seen = recent.get(event.fingerprint) || 0;
-      if (now() - seen < CLIENT_DIAGNOSTIC_DEDUPE_MS) return false;
-      if (read().some((queued) => queued.fingerprint === event.fingerprint)) return false;
-      recent.set(event.fingerprint, now());
-      write([...read(), event]);
+      if (timestamp - seen < CLIENT_DIAGNOSTIC_DEDUPE_MS) return false;
+      const queued = read();
+      if (queued.some((item) => item.fingerprint === event.fingerprint)) return false;
+      recent.set(event.fingerprint, timestamp);
+      write([...queued, event]);
       scheduleFlush();
       return true;
     } catch {
@@ -225,8 +228,15 @@ function createClientDiagnosticReporter(
         keepalive: true,
       });
       if (response.status >= 200 && response.status < 300) {
-        write(read().slice(batch.length));
-        if (read().length) scheduleFlush();
+        const remaining = read().slice(batch.length);
+        write(remaining);
+        if (remaining.length) scheduleFlush();
+      } else if (PERMANENT_PAYLOAD_FAILURES.has(response.status)) {
+        // A stale or corrupt first item must not poison the durable queue
+        // forever. Drop only that item so the rest can still be delivered.
+        const remaining = read().slice(1);
+        write(remaining);
+        if (remaining.length) scheduleFlush();
       }
     } catch {
       // Reporting is intentionally silent. The persisted bounded queue retries

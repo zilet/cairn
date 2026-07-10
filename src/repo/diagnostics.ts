@@ -44,6 +44,7 @@ const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "unhandled_error",
   "unhandled_rejection",
 ]);
+const DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const SENSITIVE_KEY =
   /(?:authorization|cookie|credential|password|passwd|secret|token|api[_-]?key|prompt|chat|health|request[_-]?body|response[_-]?body|raw[_-]?output|input[_-]?tokens?|output[_-]?tokens?)/i;
 
@@ -140,54 +141,100 @@ function defaultFingerprint(event: DiagnosticEventInput): string {
     .slice(0, 120);
 }
 
+type NormalizedDiagnosticEvent = [
+  source: DiagnosticSource,
+  kind: string,
+  level: DiagnosticLevel,
+  operation: string | null,
+  route: string | null,
+  status: number | null,
+  duration: number | null,
+  requestId: string | null,
+  fingerprint: string,
+  message: string | null,
+  stack: string | null,
+  metadata: string | null,
+  release: string | null,
+];
+
+const insertDiagnosticEvent = db.prepare(
+  `INSERT INTO diagnostic_events
+    (source, kind, level, operation, route, status, duration_ms, request_id,
+     fingerprint, message, stack, metadata_json, release)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+);
+
+let nextDiagnosticPruneAt = 0;
+
+function normalizeDiagnosticEvent(input: DiagnosticEventInput): NormalizedDiagnosticEvent {
+  const source = SOURCES.has(input.source) ? input.source : "process";
+  const kind = boundedIdentifier(input.kind, 64) || "unknown_error";
+  const level = LEVELS.has(input.level) ? input.level : "error";
+  return [
+    source,
+    kind,
+    level,
+    sanitizeDiagnosticText(input.operation, 100),
+    normalizeDiagnosticRoute(input.route),
+    finiteInteger(input.status, 100, 599),
+    finiteInteger(input.duration_ms, 0, 3_600_000),
+    boundedIdentifier(input.request_id, 80),
+    boundedIdentifier(input.fingerprint, 120) || defaultFingerprint({ ...input, source, kind }),
+    sanitizeDiagnosticText(input.message, 320),
+    sanitizeDiagnosticText(input.stack, 1800),
+    sanitizeMetadata(input.metadata),
+    boundedIdentifier(input.release, 80),
+  ];
+}
+
+function maybePruneDiagnosticEvents(now = Date.now()): void {
+  if (now < nextDiagnosticPruneAt) return;
+  pruneDiagnosticEvents(now);
+}
+
 /** Best-effort retention; exposed separately for deterministic maintenance/tests. */
-export function pruneDiagnosticEvents(): void {
+export function pruneDiagnosticEvents(now = Date.now()): void {
   try {
     db.prepare(`DELETE FROM diagnostic_events WHERE created_at < datetime('now', '-30 days')`).run();
   } catch {
     /* diagnostics must never break product paths */
+  } finally {
+    // Retention is maintenance, not part of every request's write cost. Advance
+    // even after a failure so a broken telemetry table cannot become a hot loop.
+    nextDiagnosticPruneAt = now + DIAGNOSTIC_PRUNE_INTERVAL_MS;
   }
 }
 
 /** Failure-safe write. The real operation always wins over telemetry. */
 export function recordDiagnosticEvent(input: DiagnosticEventInput): void {
   try {
-    const source = SOURCES.has(input.source) ? input.source : "process";
-    const kind = boundedIdentifier(input.kind, 64) || "unknown_error";
-    const level = LEVELS.has(input.level) ? input.level : "error";
-    const operation = sanitizeDiagnosticText(input.operation, 100);
-    const route = normalizeDiagnosticRoute(input.route);
-    const status = finiteInteger(input.status, 100, 599);
-    const duration = finiteInteger(input.duration_ms, 0, 3_600_000);
-    const requestId = boundedIdentifier(input.request_id, 80);
-    const fingerprint = boundedIdentifier(input.fingerprint, 120) || defaultFingerprint({ ...input, source, kind });
-    const message = sanitizeDiagnosticText(input.message, 320);
-    const stack = sanitizeDiagnosticText(input.stack, 1800);
-    const metadata = sanitizeMetadata(input.metadata);
-    const release = boundedIdentifier(input.release, 80);
-    db.prepare(
-      `INSERT INTO diagnostic_events
-        (source, kind, level, operation, route, status, duration_ms, request_id,
-         fingerprint, message, stack, metadata_json, release)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      source,
-      kind,
-      level,
-      operation,
-      route,
-      status,
-      duration,
-      requestId,
-      fingerprint,
-      message,
-      stack,
-      metadata,
-      release
-    );
-    pruneDiagnosticEvents();
+    insertDiagnosticEvent.run(...normalizeDiagnosticEvent(input));
   } catch {
     /* diagnostics must never break product paths */
+  } finally {
+    maybePruneDiagnosticEvents();
+  }
+}
+
+/** One atomic SQLite transaction for a browser batch; never leaks failure to callers. */
+export function recordDiagnosticEvents(inputs: DiagnosticEventInput[]): void {
+  if (!inputs.length) return;
+  let transactionStarted = false;
+  try {
+    db.exec("BEGIN");
+    transactionStarted = true;
+    for (const input of inputs) insertDiagnosticEvent.run(...normalizeDiagnosticEvent(input));
+    db.exec("COMMIT");
+    transactionStarted = false;
+  } catch {
+    if (transactionStarted) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {}
+    }
+    /* diagnostics must never break product paths */
+  } finally {
+    maybePruneDiagnosticEvents();
   }
 }
 
@@ -237,9 +284,9 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
   return parsed;
 }
 
-export function ingestClientDiagnosticEvents(events: ClientDiagnosticEvent[]): void {
-  for (const event of events) {
-    recordDiagnosticEvent({
+export function ingestClientDiagnosticEvents(events: ClientDiagnosticEvent[], releaseFallback?: string): void {
+  recordDiagnosticEvents(
+    events.map((event) => ({
       source: "client",
       kind: event.kind,
       level: event.level,
@@ -252,8 +299,18 @@ export function ingestClientDiagnosticEvents(events: ClientDiagnosticEvent[]): v
       message: event.message,
       stack: event.stack,
       metadata: { tab: event.tab, online: event.online },
-      release: event.release,
-    });
+      release: event.release || releaseFallback,
+    }))
+  );
+}
+
+function parseDiagnosticMetadata(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -271,7 +328,7 @@ function rowToEvent(row: any) {
     fingerprint: row.fingerprint,
     message: row.message ?? null,
     stack: row.stack ?? null,
-    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
+    metadata: parseDiagnosticMetadata(row.metadata_json),
     release: row.release ?? null,
     created_at: row.created_at,
   };

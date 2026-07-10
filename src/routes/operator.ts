@@ -12,6 +12,7 @@ import {
 } from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
 import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatch } from "../repo/diagnostics.js";
+import { getVersion } from "../version.js";
 
 export const operatorRouter = Router();
 
@@ -61,7 +62,7 @@ operatorRouter.get("/brain-diagnostics", (req, res) =>
 export function clientTelemetryHandler(req: Request, res: Response) {
   const events = parseClientDiagnosticBatch(req.body);
   if (!events) return res.status(400).json({ error: "invalid telemetry batch" });
-  ingestClientDiagnosticEvents(events);
+  ingestClientDiagnosticEvents(events, getVersion());
   return res.status(204).end();
 }
 

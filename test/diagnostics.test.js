@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { apiErrorHandler } from "../dist/api.js";
-import { apiDiagnosticMiddleware, registerProcessDiagnosticHandlers } from "../dist/diagnostics.js";
+import {
+  apiDiagnosticMiddleware,
+  recordSchedulerFailure,
+  registerProcessDiagnosticHandlers,
+} from "../dist/diagnostics.js";
 import { db } from "../dist/db.js";
 import {
   getDiagnostics,
@@ -108,7 +112,7 @@ test("operator telemetry endpoint validates batches and returns 204", () => {
   assert.equal(accepted.body, undefined);
 });
 
-test("request correlation returns generic 500 and persists the bounded real error", () => {
+test("request correlation returns generic 500 and records one bounded issue", () => {
   const request = {
     method: "GET",
     originalUrl: "/api/test-error?token=do-not-store",
@@ -141,11 +145,11 @@ test("request correlation returns generic 500 and persists the bounded real erro
   assert.doesNotMatch(exception.stack, /do-not-store/);
   assert.match(logs.join(" "), new RegExp(`${id}.*TypeError`));
   assert.doesNotMatch(logs.join(" "), new RegExp(privateText));
-  const httpError = db
-    .prepare("SELECT * FROM diagnostic_events WHERE kind = 'http_error' ORDER BY id DESC LIMIT 1")
-    .get();
-  assert.equal(httpError.request_id, id);
-  assert.equal(httpError.message, "HTTP 500");
+  const rows = db.prepare("SELECT kind FROM diagnostic_events WHERE request_id = ?").all(id);
+  assert.deepEqual(
+    rows.map((row) => row.kind),
+    ["server_exception"]
+  );
 });
 
 test("diagnostic rollups group issues and expose recent and slow events", () => {
@@ -191,6 +195,27 @@ test("diagnostic retention removes events older than 30 days", () => {
   db.prepare("UPDATE diagnostic_events SET created_at = datetime('now', '-31 days') WHERE fingerprint = 'old'").run();
   pruneDiagnosticEvents();
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM diagnostic_events WHERE fingerprint = 'old'").get().n, 0);
+});
+
+test("client batches use the server release fallback and tolerate malformed stored metadata", () => {
+  ingestClientDiagnosticEvents(
+    [
+      {
+        source: "client",
+        kind: "render_error",
+        level: "error",
+        message: "render failed",
+        fingerprint: "render:release-fallback",
+      },
+    ],
+    "v9.9.9"
+  );
+  db.prepare("UPDATE diagnostic_events SET metadata_json = '{broken' WHERE fingerprint = ?").run(
+    "render:release-fallback"
+  );
+  const stats = getDiagnostics({ days: 1, recent: 1 });
+  assert.equal(stats.recent[0].release, "v9.9.9");
+  assert.equal(stats.recent[0].metadata, null);
 });
 
 test("fresh schema includes diagnostic table and query indexes", () => {
@@ -269,4 +294,16 @@ test("process handler records rejections and exits after uncaught exceptions", (
   assert.doesNotMatch(JSON.stringify(captured), new RegExp(privateText));
   assert.match(logs.join(" "), /TypeError|Error/);
   assert.doesNotMatch(logs.join(" "), new RegExp(privateText));
+});
+
+test("scheduler failures share the bounded diagnostic contract", () => {
+  const captured = [];
+  const privateText = "private health plan and API token=secret";
+  recordSchedulerFailure("nightly health pass", new TypeError(privateText), (event) => captured.push(event));
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].source, "scheduler");
+  assert.equal(captured[0].kind, "task_failure");
+  assert.equal(captured[0].operation, "nightly_health_pass");
+  assert.equal(captured[0].message, "TypeError: scheduled operation failed");
+  assert.doesNotMatch(JSON.stringify(captured), /private health plan|secret/);
 });
