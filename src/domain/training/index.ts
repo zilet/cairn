@@ -5,6 +5,7 @@ export * from "../../repo/exercises.js";
 export * from "../../repo/muscle-trajectory.js";
 export * from "../../repo/performance.js";
 export * from "../../repo/plan.js";
+export * from "./plan-upcoming.js";
 export {
   applyProposal,
   createProposal,

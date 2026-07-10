@@ -100,6 +100,54 @@ function fmtDate(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
+// "lands Monday" for something inside the week, else "Mon, Jul 21" further out —
+// a plain YYYY-MM-DD local day (the decision's effective_date).
+function upcomingWhenLabel(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ""));
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Math.round((d.getTime() - today.getTime()) / 86400000);
+  if (days >= 0 && days <= 6) return d.toLocaleDateString(undefined, { weekday: "long" });
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+// The calm forward look: queued training/recovery changes the brain will land
+// soon, one quiet line each. Pull-never-push — a heads-up that a reshaped week is
+// coming, never a retrospective "what your team did" feed. Capped at 2.
+function planUpcomingNoteHtml(note: import("../contracts/client.js").ClientPlanUpcomingNote): string {
+  const items = note && Array.isArray(note.items) ? note.items.slice(0, 2) : [];
+  const rows = items
+    .map((it) => {
+      const summary = String(it?.summary ?? "").trim();
+      if (!summary) return "";
+      const when = upcomingWhenLabel(String(it?.effective_date ?? ""));
+      return `<div class="plan-upcoming-item">
+        <p class="plan-upcoming-line">${when ? `<span class="plan-upcoming-when">${escHtml(when)}</span> — ` : ""}${escHtml(summary)}</p>
+      </div>`;
+    })
+    .join("");
+  if (!rows.trim()) return "";
+  return `<div class="plan-upcoming reveal">
+    <span class="lbl plan-upcoming-mast">Coming up</span>
+    ${rows}
+  </div>`;
+}
+
+// Shared by the Plan edit segment and the endurance segment (both under the
+// "plan" tab) — paints into whichever slot the caller owns.
+function loadPlanUpcomingNote(token: number, slotSel = "#planUpcomingSlot"): void {
+  void api("/plan/upcoming")
+    .then((note) => {
+      if (token !== pollToken || state.tab !== "plan") return;
+      const slot = $(slotSel);
+      if (!slot) return;
+      slot.innerHTML = planUpcomingNoteHtml(note as import("../contracts/client.js").ClientPlanUpcomingNote);
+    })
+    .catch(() => {});
+}
+
 function loadPlanRecoveryBanner(token: number): void {
   void api("/plan/recovery-status")
     .then((rs) => {
@@ -139,11 +187,12 @@ async function renderPlanEditor(): Promise<void> {
 
   const icsUrl = withToken("/api/plan.ics");
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
-  view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planedit"></div>
+  view.innerHTML = segBar("edit", planSeg()) + `<div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planedit"></div>
     <button id="addDay" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:8px">+ Add day</button>
     <div id="planstatus" style="margin-top:8px;color:var(--muted);font-size:.82rem"></div>${calFooter}`;
   wireSeg(PLAN_HANDLERS);
   loadPlanRecoveryBanner(token);
+  loadPlanUpcomingNote(token);
 
   const model: PlanEditorControllerModelDay[] = (Array.isArray(plan) ? plan : []).map((day) => helpers.dayModelFromPlan(day));
   const editing = new Set<number>();
@@ -160,6 +209,20 @@ async function renderPlanEditor(): Promise<void> {
   function draw(): void {
     const root = planEditorRoot();
     if (!root) return;
+    // Empty plan: still offer the always-available "just start" entry alongside
+    // "+ Add day" — mirrors the Train tab's start entry (dayPicked=false →
+    // openSession on today) so an empty plan is never a dead end.
+    if (!model.length) {
+      root.innerHTML = `<div class="plan-empty reveal">
+        <p class="plan-empty-line">No days in your plan yet — build one below, or just start training and log as you go.</p>
+        <button class="draftbtn plan-empty-start" type="button" id="planEmptyStart">Start training anyway →</button>
+      </div>`;
+      root.querySelector("#planEmptyStart")?.addEventListener("click", () => {
+        state.dayPicked = false;
+        if (typeof openSession === "function") openSession(localISO());
+      });
+      return;
+    }
     root.innerHTML = model.map((day, dayIndex) => editing.has(dayIndex) ? helpers.pdayHtml(day, dayIndex) : helpers.progDayHtml(day, dayIndex)).join("");
     wireGuides(root);
 
@@ -308,10 +371,12 @@ const CAIRN_PLAN_EDITOR_CONTROLLER = {
 Object.assign(globalThis, {
   CairnPlanEditorController: CAIRN_PLAN_EDITOR_CONTROLLER,
   renderPlanEditor,
+  loadPlanUpcomingNote,
 });
 
 if (typeof window !== "undefined") {
   window.CairnPlanEditorController = CAIRN_PLAN_EDITOR_CONTROLLER;
   window.renderPlanEditor = renderPlanEditor;
+  window.loadPlanUpcomingNote = loadPlanUpcomingNote;
 }
 })();

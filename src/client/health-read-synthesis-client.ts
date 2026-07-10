@@ -61,7 +61,7 @@ type HealthReadSynthesisPayload = HealthReadSynthesisRecord & {
           </div>
           ${p.why_it_matters ? `<p class="hsyn-pwhy">${deps.escapeHtml(p.why_it_matters)}</p>` : ""}
           ${p.the_move ? `<div class="hsyn-pmove"><span class="hsyn-pmove-k lbl">Do</span> ${deps.escapeHtml(p.the_move)}</div>` : ""}
-          ${p.recheck ? `<span class="hsyn-precheck lbl">${deps.escapeHtml(p.recheck)}</span>` : ""}
+          ${p.recheck ? `<div class="hsyn-precheck"><span class="hsyn-precheck-k lbl">Recheck</span>${deps.escapeHtml(p.recheck)}</div>` : ""}
         </div>`).join("")}</div>` : ""}
       ${s.one_change ? `<div class="hsyn-onechange well-accent-sm"><span class="lbl">If you change one thing</span><span>${deps.escapeHtml(s.one_change)}</span></div>` : ""}
       <div class="hsyn-foot">

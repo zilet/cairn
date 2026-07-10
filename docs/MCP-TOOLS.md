@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**201 tools.**
+**202 tools.**
 
 | Tool | Description |
 |---|---|
@@ -99,6 +99,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_plan` | Get the full weekly training plan: every day with its exercises, sets, rep ranges, target weights, and injury notes. |
 | `get_plan_day` | Get one training day by its number (1-5) with prescribed exercises and targets. |
 | `get_plan_ics` | Export the training plan as an iCalendar (.ics) feed — each plan day as a weekly-recurring all-day event. Pull-not-push: subscribe in a calendar app. Day 1 maps to Monday by default; pass start_weekday (0=Sun..6=Sat) to shift. |
+| `get_plan_upcoming` | The calm forward look for the Plan surface: queued training/recovery changes the brain will land soon (e.g. a recovery week landing Monday, a bounded target change), each with its summary and effective_date. Deduped against the recovery-week draft; returns null when nothing is waiting. |
 | `get_priority_markers` | Markers re-ranked by impact: distance from the OPTIMAL zone (not just the lab's normal range), most-actionable first, flagged (low/high) markers always on top, and a marker HEADING out of optimal ranked above a stably-borderline one. Each marker carries optimal/distance/in_optimal/actionable, its health group (group/group_label), a least-squares trend ({dir: rising\|falling\|stable, change, span_days, n, slope_per_week, projection}) and a forecast ({direction: improving\|worsening\|stable, eta_text, crossing}) — eta_text is a PLAIN-LANGUAGE projection vs optimal ('trending toward optimal, roughly 6 weeks out'); never a score. The top-level `groups` lists the canonical-ordered groups present. Informational, not medical advice — the internal impact_score is an ordering signal only, never a user-facing grade. |
 | `get_profile` | Get the user's profile (age, height, weight, goal). |
 | `get_program_adjustments` | The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. Pull-never-push: the user reviews these; nothing auto-applies. |
