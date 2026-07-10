@@ -63,6 +63,14 @@ function fin(x: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// For readings that are physiologically impossible at ≤0 (ALMI, FFMI): a zero
+// almost always means the extraction was missing lean mass or height, not a real
+// value — treat it as absent rather than surfacing "ALMI 0 reads light for you".
+function finPos(x: any): number | null {
+  const n = fin(x);
+  return n != null && n > 0 ? n : null;
+}
+
 function fmt(n: number): string {
   return (Math.round(n * 10) / 10).toString();
 }
@@ -118,18 +126,24 @@ function loadRegional(opts?: { regional?: DexaRegional | null }): DexaRegional |
 
 // ── the engine ───────────────────────────────────────────────────────────────
 
-export function dexaTargeting(
-  opts?: { regional?: DexaRegional | null; profile?: any }
-): DexaTargeting {
+export function dexaTargeting(opts?: { regional?: DexaRegional | null; profile?: any }): DexaTargeting {
   const regional = loadRegional(opts);
   if (!regional) return { available: false, targets: [], lead: null, next_dexa_focus: null };
 
-  const profile = opts?.profile ?? (() => { try { return getProfile() ?? {}; } catch { return {}; } })();
+  const profile =
+    opts?.profile ??
+    (() => {
+      try {
+        return getProfile() ?? {};
+      } catch {
+        return {};
+      }
+    })();
   const sex = String(profile?.sex ?? "male").toLowerCase();
   const runner = isRunner(profile);
 
-  const almi = fin(regional.almi);
-  const ffmi = fin(regional.ffmi);
+  const almi = finPos(regional.almi);
+  const ffmi = finPos(regional.ffmi);
   const tScore = fin(regional.t_score);
   const zScore = fin(regional.z_score);
   const visceral = fin(regional.visceral_fat_lbs);
@@ -226,8 +240,7 @@ export function dexaTargeting(
           bias: "add pulling and pressing volume for the upper body",
           moves: movesFor(["back", "biceps", "shoulders"], 3),
           domain: "training",
-          path:
-            "8-12 weeks weighted toward upper-body pulling and pressing typically evens the split a re-scan can read.",
+          path: "8-12 weeks weighted toward upper-body pulling and pressing typically evens the split a re-scan can read.",
           groups: ["back", "biceps", "shoulders", "chest"],
           informational: false,
         },
@@ -240,8 +253,11 @@ export function dexaTargeting(
   // Android/gynoid above the central-fat band, when visceral isn't measured directly.
   const agHigh = visceral == null && ag != null && ag > (sex === "female" ? 0.9 : 1.0);
   const trunkDominant =
-    fat.trunk != null && fat.legs != null && fat.arms != null &&
-    fat.trunk >= 25 && fat.trunk - Math.min(fat.legs, fat.arms) >= 4;
+    fat.trunk != null &&
+    fat.legs != null &&
+    fat.arms != null &&
+    fat.trunk >= 25 &&
+    fat.trunk - Math.min(fat.legs, fat.arms) >= 4;
   if (viscHigh || agHigh || trunkDominant) {
     const sig = viscHigh
       ? `Visceral fat reads elevated (${fmt(visceral!)} lb) — the metabolically active kind.`

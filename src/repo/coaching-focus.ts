@@ -1009,7 +1009,11 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
           .filter((d, i, a) => a.indexOf(d) === i)
           .join(" + ")} handled alongside`
       : "";
-    const stem = `This block, ${lc(leadItem.title)} leads${tail}.`;
+    // Colon form, title case preserved: lead titles are often imperative phrases
+    // ("Take an earned recovery week"), and "This block, take an earned recovery
+    // week leads" reads broken. "This block: <title> — with X handled alongside."
+    // reads right for imperative and noun titles alike.
+    const stem = `This block: ${leadItem.title}${tail}.`;
     headline = where ? `${where}. ${stem}` : stem;
   }
 

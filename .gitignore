@@ -24,6 +24,11 @@ files.zip
 # disk, never published.
 CLAUDE.local.md
 
+# machine-specific agent tooling (local dev-server launch config; the shared
+# .claude/skills/ stays committed)
+.claude/launch.json
+.claude/worktrees/
+
 # personal, local-only files — kept on disk, never published. One folder holds
 # everything you use privately, mirroring the repo layout:
 #   .local/scripts/   deploy-rpi.sh, rpi-bootstrap.sh, rpi-https.sh, rpi-backup.sh
