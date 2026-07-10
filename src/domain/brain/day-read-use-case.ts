@@ -52,13 +52,16 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     arc = null;
   }
 
+  // The forward line rides on done days too: forwardLook() already resolves
+  // "next" as the day AFTER today's logged work, so it's the honest so-what
+  // that replaces the retired Start-session controls — a prospective line
+  // about TOMORROW, never a second recommendation for today (focus and
+  // est_minutes stay null on done; that contract is enforced upstream).
   let forward: string | null = null;
-  if (read?.kind !== "done") {
-    try {
-      forward = forwardLook(readDate).text || null;
-    } catch {
-      forward = null;
-    }
+  try {
+    forward = forwardLook(readDate).text || null;
+  } catch {
+    forward = null;
   }
 
   return { ...read, forward, arc } as DayReadResult;

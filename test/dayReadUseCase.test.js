@@ -151,3 +151,29 @@ test("an unchanged Garmin re-sync leaves the cached day read alone; a material c
   repo.upsertGarminActivity({ ...input, duration_min: 55 }); // provider enriched the effort
   assert.equal(repo.getCachedDayRead(date), null, "a materially changed effort must retire the cached read");
 });
+
+test("a done read still carries the day-ahead forward line (the so-what after the work)", async () => {
+  resetTables(
+    "day_reads",
+    "suggestions",
+    "activities",
+    "plan_days",
+    "plan_items",
+    "sessions",
+    "logged_sets",
+    "profile"
+  );
+  const date = localDaysAgo(0);
+  repo.setProfile({ primary_discipline: "hybrid" });
+  repo.savePlanDay(1, "Push", "Chest", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 185 }]);
+  repo.savePlanDay(2, "Pull", "Back", [{ exercise: "Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 135 }]);
+  db.prepare(
+    `INSERT INTO activities (date, type, duration_min, distance_km, source) VALUES (?, 'run', 30, 5, 'garmin')`
+  ).run(date);
+
+  const read = await readToday({ date });
+
+  assert.equal(read.kind, "done");
+  assert.equal(read.focus, null, "done never carries a same-day prescription");
+  assert.match(String(read.forward || ""), /Next: /, "the forward line names tomorrow's lean");
+});
