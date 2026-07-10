@@ -7,10 +7,12 @@ import vm from "node:vm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function loadDiagnostics() {
+function loadDiagnostics(options = {}) {
   const storage = new Map();
+  if (options.stored) storage.set("cairn.diagnostics.v1", JSON.stringify(options.stored));
   const listeners = {};
   const timers = [];
+  const calls = [];
   const context = {
     window: {
       addEventListener: (type, fn) => {
@@ -23,7 +25,10 @@ function loadDiagnostics() {
       setItem: (key, value) => storage.set(key, String(value)),
     },
     Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "America/New_York" }) }) },
-    fetch: async () => ({ status: 204 }),
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return options.fetch ? options.fetch(url, init) : { status: 204 };
+    },
     setTimeout: (fn, delay) => {
       timers.push({ fn, delay });
       return timers.length;
@@ -41,8 +46,30 @@ function loadDiagnostics() {
   };
   context.window.window = context.window;
   vm.runInNewContext(readFileSync(join(root, "public/js/client-diagnostics.js"), "utf8"), context);
-  return { context, storage, listeners, timers };
+  return { context, storage, listeners, timers, calls };
 }
+
+test("reporter startup asynchronously flushes a persisted diagnostic queue", async () => {
+  const loaded = loadDiagnostics({
+    stored: [{
+      kind: "api_failure",
+      level: "error",
+      message: "GET failed",
+      route: "/today",
+      method: "GET",
+      status: 500,
+      fingerprint: "persisted-event",
+    }],
+  });
+  assert.equal(loaded.calls.length, 0, "startup does not synchronously block on delivery");
+  const startup = loaded.timers.find((timer) => timer.delay === 0);
+  assert.ok(startup, "startup replay is scheduled");
+  startup.fn();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(loaded.calls.length, 1);
+  assert.equal(loaded.calls[0].url, "/api/telemetry/client");
+  assert.equal(loaded.context.CairnClientDiagnostics.pending().length, 0);
+});
 
 test("client diagnostics sanitize query values and credentials, dedupe, and batch directly", async () => {
   const loaded = loadDiagnostics();

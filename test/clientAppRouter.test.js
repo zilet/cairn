@@ -23,7 +23,7 @@ const deps = {
   standSections: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
   meSections: [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"]],
   healthSections: [["read", "Read"], ["records", "Records"], ["markers", "Markers"]],
-  settingsSections: [["agents", "Agents"], ["data", "Data"]],
+  settingsSections: [["agents", "Agents"], ["system", "System"], ["data", "Data"]],
 };
 
 test("app router derives tab names from the route contract", () => {
@@ -91,6 +91,12 @@ test("app router applies canonical route state without rendering", () => {
     "me",
   );
   assert.equal(state.meSeg, "profile");
+
+  assert.equal(
+    router.applyRouteState({ tab: "settings", section: "system" }, { state, ...deps }),
+    "settings",
+  );
+  assert.equal(state.setSeg, "system");
 });
 
 test("app router derives current route state from app state", () => {
@@ -131,6 +137,21 @@ test("app router derives current route state from app state", () => {
   });
 
   assert.deepEqual(plain(meRoute), { tab: "me", section: "profile" });
+
+  const settingsRoute = router.currentRouteState({
+    state: {
+      tab: "settings",
+      day: null,
+      dayPicked: false,
+      plan: [],
+      today: {},
+      logDate: "2026-06-29",
+      setSeg: "system",
+    },
+    ...deps,
+    defaultProgressSection: "sessions",
+  });
+  assert.deepEqual(plain(settingsRoute), { tab: "settings", section: "system" });
 });
 
 test("app router syncs canonical URLs through push and replace history", () => {

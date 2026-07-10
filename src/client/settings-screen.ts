@@ -21,15 +21,14 @@ const { garminStatusLine, agentHealthCard, agentOpLabel, agentActivityCard, noti
 const SETTINGS_SCREEN_CACHE_KEY = "settings:screen";
 
 async function fetchSettingsBundle(): Promise<SettingsScreenBundle> {
-  const [rawData, rawArtStats, agentStats, learnings, brainDiagnostics, diagnostics] = await Promise.all([
+  const [rawData, rawArtStats, agentStats, learnings, brainDiagnostics] = await Promise.all([
     api("/settings"),
     api("/art/stats").catch(() => null),
-    api("/agent-stats").catch(() => null), // 404s on a backend without telemetry -> degrade silently
+    api("/agent-stats?recent=12&days=7").catch(() => null), // explicit seven-day health window
     api("/learnings").catch(() => null),   // outcome learnings -> "What Cairn has noticed"; absent on older backends
     api("/brain-diagnostics").catch(() => null), // operator-only accountable brain/tool trace
-    api("/diagnostics?recent=40&days=7").catch(() => null), // local-first grouped browser/server issue pulse
   ]);
-  return { rawData, rawArtStats, agentStats, learnings, brainDiagnostics, diagnostics };
+  return { rawData, rawArtStats, agentStats, learnings, brainDiagnostics };
 }
 
 function settingsBundleSame(a: unknown, b: unknown): boolean {
@@ -70,7 +69,7 @@ async function renderSettings(): Promise<void> {
 }
 
 function renderSettingsBundle(bundle: SettingsScreenBundle): void {
-  const { rawData, rawArtStats, agentStats, learnings, brainDiagnostics, diagnostics } = bundle;
+  const { rawData, rawArtStats, agentStats, learnings, brainDiagnostics } = bundle;
   const data = CairnSettingsSurface.settingsData(rawData);
   const artStats = rawArtStats ? (rawArtStats as SettingsScreenArtStats) : null;
   const s = data.settings;
@@ -86,13 +85,22 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   // re-render of the Agents slice doesn't re-hit the network for what we already have.
   const agentInfo: Record<string, SettingsScreenAgentInfo> = {};   // name → {version, model_current, update_available}
   const agentModels: Record<string, unknown[]> = {}; // name → [..]
+  const diagnosticsState: SettingsDiagnosticsUiState = {
+    status: "idle",
+    data: null,
+    days: 7,
+    source: "all",
+    severity: "all",
+    issuePage: 0,
+    recentPage: 0,
+    requestToken: 0,
+  };
 
   // Side cards (built once; folded into the Agents slice). All degrade to "" when the
   // backing endpoint is absent/empty.
   const agentHealthHtml = agentHealthCard(agentStats);
   const agentActivityHtml =
     agentActivityCard(agentStats) +
-    CairnSettingsClient.diagnosticsCard(diagnostics, { relTime, absDate }) +
     CairnSettingsClient.brainDiagnosticsCard(brainDiagnostics);
   const noticedHtml = noticedCard(learnings);
   const artSpendHtml = artStats ? CairnSettingsSurface.artSpendCardHtml(artStats) : "";
@@ -234,6 +242,92 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     CairnSettingsDataController.render(settingsDataDeps());
   }
 
+  async function loadSystemDiagnostics(): Promise<void> {
+    const requestToken = ++diagnosticsState.requestToken;
+    const days = diagnosticsState.days;
+    try {
+      const result = await api(`/diagnostics?recent=100&days=${days}`, { cache: "no-store" });
+      if (requestToken !== diagnosticsState.requestToken) return;
+      diagnosticsState.data = result as import("../contracts/client-api.js").ClientDiagnosticsResponse;
+      diagnosticsState.status = "ready";
+    } catch {
+      if (requestToken !== diagnosticsState.requestToken) return;
+      diagnosticsState.data = null;
+      diagnosticsState.status = "unavailable";
+    }
+    if (state.tab === "settings" && state.setSeg === "system") renderSystemSlice();
+  }
+
+  function renderSystemSlice(): void {
+    const slot = slice();
+    if (diagnosticsState.status === "idle") {
+      diagnosticsState.status = "loading";
+      void loadSystemDiagnostics();
+    }
+    slot.innerHTML = `<div class="reveal">${CairnSettingsClient.diagnosticsCard(diagnosticsState.data, {
+      status: diagnosticsState.status,
+      days: diagnosticsState.days,
+      source: diagnosticsState.source,
+      severity: diagnosticsState.severity,
+      issuePage: diagnosticsState.issuePage,
+      recentPage: diagnosticsState.recentPage,
+      relTime,
+      absDate,
+    })}</div>`;
+    slot.querySelectorAll<HTMLButtonElement>("[data-diag-days]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const days = Number(button.dataset.diagDays);
+        if (days !== 1 && days !== 7 && days !== 30) return;
+        diagnosticsState.days = days;
+        diagnosticsState.source = "all";
+        diagnosticsState.severity = "all";
+        diagnosticsState.issuePage = 0;
+        diagnosticsState.recentPage = 0;
+        diagnosticsState.data = null;
+        diagnosticsState.status = "loading";
+        renderSystemSlice();
+        void loadSystemDiagnostics();
+      }),
+    );
+    optionalEl<HTMLSelectElement>("#sysDiagSource")?.addEventListener("change", (event) => {
+      diagnosticsState.source = (event.currentTarget as HTMLSelectElement).value || "all";
+      diagnosticsState.issuePage = 0;
+      diagnosticsState.recentPage = 0;
+      renderSystemSlice();
+    });
+    optionalEl<HTMLSelectElement>("#sysDiagSeverity")?.addEventListener("change", (event) => {
+      diagnosticsState.severity = (event.currentTarget as HTMLSelectElement).value || "all";
+      diagnosticsState.issuePage = 0;
+      diagnosticsState.recentPage = 0;
+      renderSystemSlice();
+    });
+    optionalEl<HTMLButtonElement>("#sysDiagRetry")?.addEventListener("click", () => {
+      diagnosticsState.status = "loading";
+      renderSystemSlice();
+      void loadSystemDiagnostics();
+    });
+    slot.querySelectorAll<HTMLButtonElement>("[data-diag-page]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const delta = Number(button.dataset.diagDelta) || 0;
+        if (button.dataset.diagPage === "issues") diagnosticsState.issuePage = Math.max(0, diagnosticsState.issuePage + delta);
+        if (button.dataset.diagPage === "recent") diagnosticsState.recentPage = Math.max(0, diagnosticsState.recentPage + delta);
+        renderSystemSlice();
+      }),
+    );
+    slot.querySelectorAll<HTMLButtonElement>("[data-copy-request]").forEach((button) =>
+      button.addEventListener("click", async () => {
+        const requestId = button.dataset.copyRequest || "";
+        if (!requestId) return;
+        try {
+          await navigator.clipboard.writeText(requestId);
+          toast("Request ID copied");
+        } catch {
+          toast("Select the request ID to copy it");
+        }
+      }),
+    );
+  }
+
   // "You" — the about-you & context home (Profile, Family, Life, Memory). These are
   // low-frequency, set-once surfaces; they open their existing detail views.
   function renderYouSlice() {
@@ -257,7 +351,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       }));
   }
 
-  const SLICES: Record<SettingsScreenSliceKey, () => void> = { you: renderYouSlice, agents: renderAgentsSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
+  const SLICES: Record<SettingsScreenSliceKey, () => void> = { you: renderYouSlice, agents: renderAgentsSlice, system: renderSystemSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
   const paintSlice = (key: ClientSettingsSection | undefined): void => (SLICES[key || "agents"] || renderAgentsSlice)();
 
   // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no

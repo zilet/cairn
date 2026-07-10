@@ -30,7 +30,7 @@ type SettingsAutomationSliceOptions = {
   researchEligible: SettingsSurfaceRouteEligibility;
 };
 
-const SETTINGS_SURFACE_SEGMENTS: readonly ClientSegment[] = [["you", "You"], ["agents", "Agents"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
+const SETTINGS_SURFACE_SEGMENTS: readonly ClientSegment[] = [["you", "You"], ["agents", "Agents"], ["system", "System"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"]];
 
 function settingsSurfaceRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};

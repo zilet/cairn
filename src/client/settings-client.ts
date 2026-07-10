@@ -6,6 +6,15 @@ type SettingsDateFns = {
   absDate?: (value: string) => string;
 };
 
+type SettingsDiagnosticsOptions = SettingsDateFns & {
+  status?: "loading" | "ready" | "unavailable";
+  days?: 1 | 7 | 30;
+  source?: string;
+  severity?: string;
+  issuePage?: number;
+  recentPage?: number;
+};
+
 type SettingsUpdateOptions = { updateCheckEnabled: boolean };
 type SettingsChipState = { cls: string; label: string };
 
@@ -87,12 +96,12 @@ function agentHealthCard(stats: unknown): string {
   const rate = statsRow.ok_rate != null ? Number(statsRow.ok_rate) : null;
   const okLine =
     rate == null
-      ? runWord
+      ? `In the last 7 days · ${runWord}`
       : rate >= 0.9
-        ? `Recent runs have been completing cleanly · ${runWord}`
+        ? `In the last 7 days, runs completed cleanly · ${runWord}`
         : rate >= 0.6
-          ? `Most recent runs completed — a few needed a retry · ${runWord}`
-          : `Several recent runs needed a retry · ${runWord}`;
+          ? `In the last 7 days, most runs completed — a few needed a retry · ${runWord}`
+          : `In the last 7 days, several runs needed a retry · ${runWord}`;
   const byAgent = Array.isArray(statsRow.by_agent) ? statsRow.by_agent : [];
   const rows = byAgent
     .map(settingsClientRecord)
@@ -126,7 +135,7 @@ function agentHealthCard(stats: unknown): string {
     .join("");
   return `
     <div class="sess agenthealth" style="margin-top:14px">
-      <div class="lbl" style="margin-bottom:6px">Agent health</div>
+      <div class="lbl" style="margin-bottom:6px">Agent health · last 7 days</div>
       <div class="sess-line">${okLine}</div>
       ${rows ? `<div class="agenthealth-rows">${rows}</div>` : ""}
       ${opRows ? `<div class="agentop-rows">${opRows}</div>` : ""}
@@ -267,46 +276,150 @@ function brainDiagnosticsCard(data: unknown): string {
   </details>`;
 }
 
-function diagnosticsCard(data: unknown, options: SettingsDateFns = {}): string {
+function settingsDiagnosticLevel(value: unknown): string {
+  const level = String(value || "info").toLowerCase();
+  return level === "error" || level === "warning" || level === "warn" ? (level === "warn" ? "warning" : level) : "info";
+}
+
+function settingsDiagnosticTime(value: unknown, options: SettingsDateFns): string {
+  const raw = String(value || "");
+  if (!raw) return "—";
+  const iso = raw.includes("T") ? raw : `${raw.replace(" ", "T")}Z`;
+  const rel = options.relTime ? options.relTime(iso) : raw;
+  let absolute = raw;
+  try {
+    absolute = new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+  } catch {
+    absolute = options.absDate ? options.absDate(raw.slice(0, 10)) : raw;
+  }
+  return `<time datetime="${escAttr(iso)}" title="${escAttr(absolute)}"><span>${escHtml(rel)}</span><span class="sysdiag-absolute">${escHtml(absolute)}</span></time>`;
+}
+
+function settingsDiagnosticValue(label: string, value: unknown, cls = ""): string {
+  if (value == null || String(value).trim() === "") return "";
+  return `<div class="sysdiag-field${cls ? ` ${escAttr(cls)}` : ""}"><dt>${escHtml(label)}</dt><dd>${escHtml(String(value))}</dd></div>`;
+}
+
+function settingsDiagnosticPager(kind: "issues" | "recent", page: number, total: number, pageSize: number): string {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1) return "";
+  const safePage = Math.min(Math.max(0, page), pages - 1);
+  return `<nav class="sysdiag-pager" aria-label="${kind === "issues" ? "Grouped issues" : "Recent events"} pages">
+    <button class="btn-sm" type="button" data-diag-page="${kind}" data-diag-delta="-1"${safePage === 0 ? " disabled" : ""}>Previous</button>
+    <span>Page ${safePage + 1} of ${pages}</span>
+    <button class="btn-sm" type="button" data-diag-page="${kind}" data-diag-delta="1"${safePage + 1 >= pages ? " disabled" : ""}>Next</button>
+  </nav>`;
+}
+
+function diagnosticsCard(data: unknown, options: SettingsDiagnosticsOptions = {}): string {
+  const requestedDays = options.days || 7;
+  const status = options.status || "ready";
+  const privacy = "Request bodies, health values, chat text, and credentials are never collected.";
+  if (status === "loading") {
+    return `<section class="sess sysdiag-card" aria-labelledby="sysdiag-title" aria-busy="true">
+      <div class="lbl" id="sysdiag-title">System health</div>
+      <div class="sysdiag-state"><span class="sync-dot pulse" aria-hidden="true"></span><div><b>Checking system health…</b><p>Loading diagnostics from the last ${requestedDays === 1 ? "24 hours" : `${requestedDays} days`}.</p></div></div>
+    </section>`;
+  }
+  if (status === "unavailable") {
+    return `<section class="sess sysdiag-card" aria-labelledby="sysdiag-title">
+      <div class="lbl" id="sysdiag-title">System health</div>
+      <div class="sysdiag-state sysdiag-unavailable"><span class="sysdiag-state-icon" aria-hidden="true">!</span><div><b>Diagnostics unavailable</b><p>Cairn could not load the local diagnostics pulse. This is different from a healthy zero-event response.</p><button class="btn-sm" id="sysDiagRetry" type="button">Try again</button></div></div>
+    </section>`;
+  }
+
   const row = settingsClientRecord(data);
   const issues = Array.isArray(row.issues) ? row.issues.map(settingsClientRecord) : [];
+  const recent = Array.isArray(row.recent) ? row.recent.map(settingsClientRecord) : [];
   const slow = Array.isArray(row.slow) ? row.slow.map(settingsClientRecord) : [];
   const total = Math.max(0, Number(row.total) || 0);
-  if (!total && !issues.length && !slow.length) return "";
-  const days = Math.max(1, Number(row.window_days) || 7);
-  const issueRows = issues
-    .slice(0, 8)
+  const days = Math.max(1, Number(row.window_days) || requestedDays);
+  const sourceFilter = String(options.source || "all");
+  const severityFilter = String(options.severity || "all");
+  const matches = (item: Record<string, unknown>): boolean =>
+    (sourceFilter === "all" || String(item.source || "system") === sourceFilter) &&
+    (severityFilter === "all" || settingsDiagnosticLevel(item.level) === severityFilter);
+  const filteredIssues = issues.filter(matches);
+  const combinedRecent = [
+    ...recent,
+    ...slow
+      .filter((item) => item.id == null || !recent.some((entry) => entry.id != null && String(entry.id) === String(item.id)))
+      .map((item): Record<string, unknown> => ({
+        ...item,
+        level: settingsDiagnosticLevel(item.level) === "info" ? "warning" : item.level,
+      })),
+  ].filter(matches);
+  const sources = [...new Set([...issues, ...recent, ...slow].map((item) => String(item.source || "system")))].sort();
+  const hasErrors = issues.some((item) => settingsDiagnosticLevel(item.level) === "error");
+  const hasWarnings = issues.some((item) => settingsDiagnosticLevel(item.level) === "warning") || slow.length > 0;
+  const tone = hasErrors ? "error" : hasWarnings ? "warning" : "healthy";
+  const headline = total === 0 ? "No issues captured" : hasErrors ? "Errors need a look" : hasWarnings ? "Warnings captured" : "No active warning pattern";
+  const windowLabel = days === 1 ? "last 24 hours" : `last ${days} days`;
+  const pageSize = 8;
+  const issuePages = Math.max(1, Math.ceil(filteredIssues.length / pageSize));
+  const recentPages = Math.max(1, Math.ceil(combinedRecent.length / pageSize));
+  const issuePage = Math.min(Math.max(0, Number(options.issuePage) || 0), issuePages - 1);
+  const recentPage = Math.min(Math.max(0, Number(options.recentPage) || 0), recentPages - 1);
+  const issueRows = filteredIssues
+    .slice(issuePage * pageSize, issuePage * pageSize + pageSize)
     .map((issue) => {
-      const source = String(issue.source || "system").replaceAll("_", " ");
+      const level = settingsDiagnosticLevel(issue.level);
+      const source = String(issue.source || "system");
       const kind = String(issue.kind || "issue").replaceAll("_", " ");
-      const where = String(issue.route || issue.operation || "");
+      const where = String(issue.route || issue.operation || "unknown route");
       const count = Math.max(1, Number(issue.count) || 1);
-      const status = issue.status == null ? "" : ` · ${Number(issue.status)}`;
-      const lastSeen = String(issue.last_seen || "");
-      const when = lastSeen
-        ? options.relTime
-          ? options.relTime(lastSeen.includes("T") ? lastSeen : `${lastSeen.replace(" ", "T")}Z`)
-          : lastSeen
-        : "";
-      const title = [String(issue.message || ""), issue.release ? `release ${String(issue.release)}` : ""]
-        .filter(Boolean)
-        .join(" · ");
-      return `<div class="actlog-row">
-      <span class="actlog-op" title="${escAttr(title)}">${escHtml(kind)}</span>
-      <span class="actlog-meta">${escHtml(source)}${where ? ` · ${escHtml(where)}` : ""}${escHtml(status)}${when ? ` · ${escHtml(when)}` : ""}</span>
-      <span class="actlog-flag ${String(issue.level) === "error" ? "actlog-retry" : "actlog-clean"}">${count}×</span>
-    </div>`;
+      return `<details class="sysdiag-item sysdiag-${level}">
+        <summary><span class="actlog-flag actlog-${level}">${escHtml(level)}</span><span class="sysdiag-summary-main"><b>${escHtml(kind)}</b><span>${escHtml(where)}</span></span><span class="sysdiag-count">${count}×</span></summary>
+        <dl class="sysdiag-fields">
+          ${settingsDiagnosticValue("Source", source)}${settingsDiagnosticValue("Kind", String(issue.kind || "issue"))}
+          ${settingsDiagnosticValue("Route", issue.route, "sysdiag-break")}${settingsDiagnosticValue("Operation", issue.operation)}
+          ${settingsDiagnosticValue("Status", issue.status)}${settingsDiagnosticValue("Release", issue.release)}
+          ${settingsDiagnosticValue("Message", issue.message, "sysdiag-wide sysdiag-break")}
+          <div class="sysdiag-field"><dt>First seen</dt><dd>${settingsDiagnosticTime(issue.first_seen, options)}</dd></div>
+          <div class="sysdiag-field"><dt>Last seen</dt><dd>${settingsDiagnosticTime(issue.last_seen, options)}</dd></div>
+        </dl>
+      </details>`;
     })
     .join("");
-  const slowLine = slow.length
-    ? `<div class="sess-line" style="color:var(--muted);margin-top:8px">${slow.length} recent slow request${slow.length === 1 ? "" : "s"} captured with route and duration only.</div>`
-    : "";
-  return `<details class="sess agentactivity" style="margin-top:14px">
-    <summary class="lbl">System diagnostics</summary>
-    <div class="sess-line" style="color:var(--muted);margin:7px 0">${total} diagnostic event${total === 1 ? "" : "s"} in the last ${days} day${days === 1 ? "" : "s"}. Request bodies, health values, chat text, and credentials are never collected.</div>
-    ${issueRows ? `<div class="actlog-rows">${issueRows}</div>` : ""}
-    ${slowLine}
-  </details>`;
+  const recentRows = combinedRecent
+    .slice(recentPage * pageSize, recentPage * pageSize + pageSize)
+    .map((event) => {
+      const level = settingsDiagnosticLevel(event.level);
+      const kind = String(event.kind || "event").replaceAll("_", " ");
+      const where = String(event.route || event.operation || "unknown route");
+      const duration = event.duration_ms == null ? "" : settingsLatency(event.duration_ms);
+      const requestId = String(event.request_id || "");
+      return `<details class="sysdiag-item sysdiag-${level}">
+        <summary><span class="actlog-flag actlog-${level}">${escHtml(level)}</span><span class="sysdiag-summary-main"><b>${escHtml(kind)}</b><span>${escHtml(where)}</span></span>${duration ? `<span class="sysdiag-duration">${escHtml(duration)}</span>` : ""}</summary>
+        <dl class="sysdiag-fields">
+          ${settingsDiagnosticValue("Source", event.source || "system")}${settingsDiagnosticValue("Kind", event.kind || "event")}
+          ${settingsDiagnosticValue("Route", event.route, "sysdiag-break")}${settingsDiagnosticValue("Operation", event.operation)}
+          ${settingsDiagnosticValue("Status", event.status)}${settingsDiagnosticValue("Duration", duration)}
+          ${settingsDiagnosticValue("Release", event.release)}
+          <div class="sysdiag-field"><dt>Captured</dt><dd>${settingsDiagnosticTime(event.created_at, options)}</dd></div>
+          ${requestId ? `<div class="sysdiag-field sysdiag-wide sysdiag-break"><dt>Request ID</dt><dd><code>${escHtml(requestId)}</code><button class="btn-sm sysdiag-copy" type="button" data-copy-request="${escAttr(requestId)}" aria-label="Copy request ID">Copy</button></dd></div>` : ""}
+          ${settingsDiagnosticValue("Message", event.message, "sysdiag-wide sysdiag-break")}
+          ${settingsDiagnosticValue("Stack", event.stack, "sysdiag-wide sysdiag-break")}
+        </dl>
+      </details>`;
+    })
+    .join("");
+  const noMatches = !filteredIssues.length && !combinedRecent.length && (sourceFilter !== "all" || severityFilter !== "all");
+  return `<section class="sess sysdiag-card sysdiag-tone-${tone}" aria-labelledby="sysdiag-title">
+    <div class="sysdiag-heading"><div><div class="lbl" id="sysdiag-title">System health</div><div class="sysdiag-headline"><span class="sysdiag-state-icon" aria-hidden="true">${tone === "healthy" ? "✓" : tone === "warning" ? "!" : "×"}</span><b>${headline}</b></div></div><span class="sysdiag-window">${escHtml(windowLabel)}</span></div>
+    <p class="sess-line sysdiag-privacy">${total} diagnostic event${total === 1 ? "" : "s"} captured · ${privacy}</p>
+    <div class="sysdiag-controls" aria-label="System health filters" data-save-ignore>
+      <div class="sysdiag-window-buttons" role="group" aria-label="Diagnostics window">
+        ${([1, 7, 30] as const).map((n) => `<button type="button" class="btn-sm${days === n ? " active" : ""}" data-diag-days="${n}" aria-pressed="${days === n}">${n === 1 ? "24h" : `${n}d`}</button>`).join("")}
+      </div>
+      <label>Source<select id="sysDiagSource"><option value="all">All sources</option>${sources.map((source) => `<option value="${escAttr(source)}"${source === sourceFilter ? " selected" : ""}>${escHtml(source.replaceAll("_", " "))}</option>`).join("")}</select></label>
+      <label>Severity<select id="sysDiagSeverity"><option value="all">All severities</option>${["error", "warning", "info"].map((level) => `<option value="${level}"${level === severityFilter ? " selected" : ""}>${level[0].toUpperCase() + level.slice(1)}</option>`).join("")}</select></label>
+    </div>
+    ${noMatches ? `<div class="sysdiag-empty">No diagnostics match these filters.</div>` : ""}
+    ${filteredIssues.length ? `<div class="sysdiag-section"><h3>Grouped issues <span>${filteredIssues.length}</span></h3><div class="sysdiag-list">${issueRows}</div>${settingsDiagnosticPager("issues", issuePage, filteredIssues.length, pageSize)}</div>` : ""}
+    ${combinedRecent.length ? `<div class="sysdiag-section"><h3>Recent events <span>${combinedRecent.length}</span></h3><div class="sysdiag-list">${recentRows}</div>${settingsDiagnosticPager("recent", recentPage, combinedRecent.length, pageSize)}</div>` : ""}
+    ${total === 0 && !combinedRecent.length ? `<div class="sysdiag-empty sysdiag-healthy-empty"><b>Healthy zero-event response</b><span>No errors, warnings, or slow requests were captured in the ${escHtml(windowLabel)}.</span></div>` : ""}
+  </section>`;
 }
 
 function agentChipState(agent: Record<string, unknown>): SettingsChipState {

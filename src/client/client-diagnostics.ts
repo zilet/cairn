@@ -283,7 +283,12 @@ const CairnClientDiagnostics = createClientDiagnosticReporter({
   release: () => String((globalThis as { CAIRN_VERSION?: unknown }).CAIRN_VERSION || ""),
 });
 
-if (typeof window !== "undefined") CairnClientDiagnostics.installGlobalHandlers(window);
+if (typeof window !== "undefined") {
+  CairnClientDiagnostics.installGlobalHandlers(window);
+  // Let app boot finish before replaying the persisted, bounded queue. Delivery is
+  // already failure-silent/nonrecursive; scheduling also keeps startup rendering free.
+  setTimeout(() => void CairnClientDiagnostics.flush(), 0);
+}
 
 Object.assign(globalThis, {
   CairnClientDiagnostics,

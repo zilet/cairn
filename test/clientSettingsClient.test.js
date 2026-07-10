@@ -19,7 +19,7 @@ function escAttr(v) {
 }
 
 function loadSettingsClient() {
-  const context = { Math, Number, String, Object, Array, escHtml, escAttr };
+  const context = { Math, Number, String, Object, Array, Set, Date, Intl, escHtml, escAttr };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-client.js"), "utf8"), context);
   return context.CairnSettingsClient;
@@ -53,7 +53,8 @@ test("settings agent health and activity stay qualitative and escaped", () => {
     ],
     by_op: [{ op: "chat", runs: 2, ok: 1, fail: 1 }],
   });
-  assert.match(health, /Most recent runs completed/);
+  assert.match(health, /Agent health · last 7 days/);
+  assert.match(health, /In the last 7 days, most runs completed/);
   assert.match(health, /mostly clean · 1.3s typical · 1 connect · 1.5k tok/);
   assert.match(health, /answered in chat · 2 · 1 fallback/);
   assert.match(health, /&lt;Claude&gt;/);
@@ -170,36 +171,103 @@ test("settings agent chips and update card render stable operator states", () =>
   assert.match(html, /docker compose pull &amp;&amp; docker compose up -d/);
 });
 
-test("system diagnostics card renders grouped issues compactly and escapes fields", () => {
+test("system health distinguishes loading, unavailable, healthy zero, warning, and error", () => {
   const settings = loadSettingsClient();
+  assert.match(settings.diagnosticsCard(null, { status: "loading", days: 1 }), /Checking system health/);
+  assert.match(settings.diagnosticsCard(null, { status: "loading", days: 1 }), /last 24 hours/);
+  const unavailable = settings.diagnosticsCard(null, { status: "unavailable" });
+  assert.match(unavailable, /Diagnostics unavailable/);
+  assert.match(unavailable, /different from a healthy zero-event response/);
+  assert.match(unavailable, /id="sysDiagRetry"/);
+
+  const healthy = settings.diagnosticsCard({ window_days: 7, total: 0, issues: [], recent: [], slow: [] });
+  assert.match(healthy, /No issues captured/);
+  assert.match(healthy, /Healthy zero-event response/);
+  assert.doesNotMatch(healthy, /Diagnostics unavailable/);
+
+  const warning = settings.diagnosticsCard({
+    window_days: 7,
+    total: 1,
+    issues: [{ source: "server", kind: "slow_request", level: "warning", count: 1, route: "/api/today" }],
+    recent: [],
+    slow: [],
+  });
+  assert.match(warning, /Warnings captured/);
+  assert.match(warning, /actlog-warning/);
+
+  const error = settings.diagnosticsCard({
+    window_days: 7,
+    total: 1,
+    issues: [{ source: "server", kind: "request_error", level: "error", count: 1 }],
+    recent: [],
+    slow: [],
+  });
+  assert.match(error, /Errors need a look/);
+  assert.match(error, /actlog-error/);
+});
+
+test("system health renders actionable bounded details and escapes contract fields", () => {
+  const settings = loadSettingsClient();
+  const issues = Array.from({ length: 10 }, (_, index) => ({
+    source: index === 9 ? "client" : "server",
+    kind: `api_failure_${index}`,
+    level: index === 9 ? "error" : "warning",
+    route: `/api/route-${index}`,
+    operation: "GET diagnostics",
+    status: 503,
+    count: index + 1,
+    first_seen: "2026-07-09 10:00:00",
+    last_seen: "2026-07-10 12:00:00",
+    message: index === 9 ? "<script>server failed</script>" : "slow",
+    release: "1.0.0",
+  }));
   const html = settings.diagnosticsCard(
     {
       window_days: 7,
-      total: 9,
-      issues: [
+      total: 12,
+      issues,
+      recent: [
         {
           source: "client",
           kind: "api_failure",
           level: "error",
           route: "/api/<settings>",
           status: 503,
-          count: 4,
-          last_seen: "2026-07-10 12:00:00",
+          duration_ms: 15225,
+          request_id: `req-<bad>"`,
+          created_at: "2026-07-10 12:00:00",
           message: "<script>server failed</script>",
           release: "1.0.0",
         },
       ],
       slow: [{ route: "/api/stats", duration_ms: 2100 }],
     },
-    { relTime: () => "just now" }
+    { relTime: () => "just now", source: "all", severity: "all" }
   );
 
-  assert.match(html, /System diagnostics/);
-  assert.match(html, /9 diagnostic events in the last 7 days/);
-  assert.match(html, /api failure/);
-  assert.match(html, /client · \/api\/&lt;settings&gt; · 503 · just now/);
-  assert.match(html, /4×/);
-  assert.match(html, /1 recent slow request/);
+  assert.match(html, /System health/);
+  assert.match(html, /data-save-ignore/);
+  assert.match(html, /12 diagnostic events captured/);
+  assert.match(html, /Grouped issues/);
+  assert.match(html, /Recent events/);
+  assert.match(html, /15\.2s/);
+  assert.match(html, /\/api\/stats/);
+  assert.match(html, /2\.1s/);
+  assert.match(html, /Request ID/);
+  assert.match(html, /data-copy-request="req-&lt;bad&gt;&quot;"/);
+  assert.match(html, /Release/);
+  assert.match(html, /First seen/);
+  assert.match(html, /Last seen/);
+  assert.match(html, /sysdiag-absolute/);
+  assert.match(html, /Page 1 of 2/);
+  assert.equal((html.match(/<details class="sysdiag-item/g) || []).length, 10, "eight grouped and two recent rows bound the DOM");
   assert.match(html, /Request bodies, health values, chat text, and credentials are never collected/);
   assert.doesNotMatch(html, /<script>/);
+
+  const filtered = settings.diagnosticsCard(
+    { window_days: 7, total: 10, issues, recent: [], slow: [] },
+    { source: "client", severity: "error" }
+  );
+  assert.match(filtered, /api failure 9/);
+  assert.doesNotMatch(filtered, /api failure 0/);
 });

@@ -27,7 +27,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       stand: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
       me: ["standing", "profile", "memory", "health", "life", "family"],
       health: ["read", "markers", "records", "share", "learned"],
-      settings: ["you", "agents", "sources", "automation", "data"],
+      settings: ["you", "agents", "system", "sources", "automation", "data"],
     },
   } as const satisfies ClientRouteDefinitions;
   const APP_PATH_SEGMENT = cleanSegment(CLIENT_ROUTE_DEFINITIONS.appBasePath);

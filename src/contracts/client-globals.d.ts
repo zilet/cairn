@@ -2646,7 +2646,16 @@ declare global {
       brainDiagnosticsCard(data: unknown): string;
       diagnosticsCard(
         data: unknown,
-        options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
+        options?: {
+          relTime?: (value: string) => string;
+          absDate?: (value: string) => string;
+          status?: "loading" | "ready" | "unavailable";
+          days?: 1 | 7 | 30;
+          source?: string;
+          severity?: string;
+          issuePage?: number;
+          recentPage?: number;
+        }
       ): string;
       agentChipState(agent: Record<string, unknown>): { cls: string; label: string };
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;

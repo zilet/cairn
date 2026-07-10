@@ -77,5 +77,15 @@ type SettingsScreenBundle = {
   agentStats: unknown;
   learnings: unknown;
   brainDiagnostics: unknown;
-  diagnostics: unknown;
+};
+
+type SettingsDiagnosticsUiState = {
+  status: "idle" | "loading" | "ready" | "unavailable";
+  data: import("../contracts/client-api.js").ClientDiagnosticsResponse | null;
+  days: 1 | 7 | 30;
+  source: string;
+  severity: string;
+  issuePage: number;
+  recentPage: number;
+  requestToken: number;
 };

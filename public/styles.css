@@ -1523,11 +1523,79 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .actlog-flag{flex:0 0 auto;font-family:var(--font-ui);font-size:.56rem;font-weight:700;
   letter-spacing:.1em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:nowrap}
 .actlog-clean{color:var(--sage);background:var(--sage-bg)}
+.actlog-info{color:var(--ink-2);background:var(--card-2);border:1px solid var(--line)}
+.actlog-warning{color:var(--gold-deep);background:rgba(184,132,35,.12);border:1px solid rgba(184,132,35,.24)}
+.actlog-error{color:var(--warn);background:rgba(161,67,52,.11);border:1px solid rgba(161,67,52,.23)}
 .actlog-auth{color:var(--rust);background:rgba(150,81,56,.12);border:1px solid rgba(150,81,56,.22)}
 .actlog-retry{color:var(--ink-2);background:var(--card-2);border:1px solid var(--line-2)}
 @media (max-width:440px){
   .actlog-row{flex-wrap:wrap;gap:4px 8px}
   .actlog-op{flex:1 1 100%}
+}
+
+/* Settings → System health. Diagnostics are local, calm, and explicit about healthy
+   zero vs an unavailable endpoint. Details stay bounded and thumb-friendly. */
+.sysdiag-card{margin-top:2px;padding:16px}
+.sysdiag-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.sysdiag-headline{display:flex;align-items:center;gap:7px;margin-top:7px;color:var(--ink)}
+.sysdiag-state-icon{display:inline-grid;place-items:center;width:21px;height:21px;border-radius:50%;
+  background:var(--sage-bg);color:var(--sage);font-family:var(--font-ui);font-weight:800;font-size:.72rem}
+.sysdiag-tone-warning .sysdiag-state-icon,.sysdiag-unavailable .sysdiag-state-icon{
+  background:rgba(184,132,35,.12);color:var(--gold-deep)}
+.sysdiag-tone-error .sysdiag-state-icon{background:rgba(161,67,52,.11);color:var(--warn)}
+.sysdiag-window{color:var(--muted);font-size:.7rem;white-space:nowrap;font-variant-numeric:lining-nums}
+.sysdiag-privacy{color:var(--muted);margin:9px 0 12px;line-height:1.45}
+.sysdiag-state{display:flex;align-items:flex-start;gap:11px;margin-top:13px;color:var(--ink-2)}
+.sysdiag-state p{margin:4px 0 10px;color:var(--muted);font-size:.8rem;line-height:1.45}
+.sysdiag-controls{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap;padding:11px 0;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.sysdiag-window-buttons{display:flex;gap:5px;margin-right:auto}
+.sysdiag-window-buttons .btn-sm.active{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.sysdiag-controls label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:.62rem;
+  font-family:var(--font-ui);font-weight:650;text-transform:uppercase;letter-spacing:.08em}
+.sysdiag-controls select{min-width:128px;max-width:190px;border:1px solid var(--line-2);border-radius:9px;
+  background:var(--card);color:var(--ink);padding:7px 28px 7px 9px;font:inherit;text-transform:none;letter-spacing:0}
+.sysdiag-section{margin-top:15px}
+.sysdiag-section h3{display:flex;align-items:baseline;gap:6px;margin:0 2px 7px;font-size:.76rem;color:var(--ink)}
+.sysdiag-section h3 span{color:var(--muted);font-size:.64rem;font-weight:500}
+.sysdiag-list{border-top:1px solid var(--line)}
+.sysdiag-item{border-bottom:1px solid var(--line)}
+.sysdiag-item>summary{display:flex;align-items:center;gap:9px;min-height:44px;padding:5px 2px;cursor:pointer;
+  list-style:none;touch-action:manipulation}
+.sysdiag-item>summary::-webkit-details-marker{display:none}
+.sysdiag-item>summary::after{content:"›";color:var(--muted);font-size:.76rem;transition:transform var(--dur-1) var(--ease)}
+.sysdiag-item[open]>summary::after{transform:rotate(90deg)}
+.sysdiag-summary-main{display:flex;flex:1 1 auto;min-width:0;flex-direction:column;gap:2px}
+.sysdiag-summary-main b{font-size:.78rem;color:var(--ink);font-weight:650}
+.sysdiag-summary-main span{font-size:.69rem;color:var(--muted);overflow-wrap:anywhere}
+.sysdiag-count,.sysdiag-duration{color:var(--ink-2);font-size:.7rem;white-space:nowrap;font-variant-numeric:lining-nums}
+.sysdiag-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px;margin:0 0 11px;
+  padding:11px 12px;background:var(--card-2);border-radius:10px}
+.sysdiag-field{min-width:0}
+.sysdiag-field dt{color:var(--muted);font-size:.58rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.sysdiag-field dd{margin:3px 0 0;color:var(--ink-2);font-size:.74rem;line-height:1.4}
+.sysdiag-field time{display:flex;flex-direction:column;gap:1px}
+.sysdiag-absolute{color:var(--muted);font-size:.66rem;font-variant-numeric:lining-nums}
+.sysdiag-wide{grid-column:1/-1}
+.sysdiag-break dd,.sysdiag-break code{overflow-wrap:anywhere;word-break:break-word;white-space:pre-wrap}
+.sysdiag-copy{margin-left:8px;min-height:32px;vertical-align:middle}
+.sysdiag-pager{display:flex;justify-content:flex-end;align-items:center;gap:9px;margin-top:9px;color:var(--muted);font-size:.68rem}
+.sysdiag-empty{display:flex;flex-direction:column;gap:3px;margin-top:12px;padding:14px;border:1px dashed var(--line-2);
+  border-radius:10px;color:var(--muted);font-size:.78rem}
+.sysdiag-healthy-empty b{color:var(--sage)}
+@media (max-width:560px){
+  .sysdiag-card{padding:14px 12px}
+  .sysdiag-heading{gap:8px}
+  .sysdiag-controls{align-items:stretch}
+  .sysdiag-window-buttons{width:100%;margin-right:0}
+  .sysdiag-window-buttons .btn-sm{flex:1;min-height:38px}
+  .sysdiag-controls label{flex:1 1 calc(50% - 5px);min-width:0}
+  .sysdiag-controls select{width:100%;max-width:none;min-height:40px}
+  .sysdiag-fields{grid-template-columns:1fr}
+  .sysdiag-wide{grid-column:auto}
+  .sysdiag-item>summary{align-items:flex-start;padding:8px 1px}
+  .sysdiag-item>summary .actlog-flag{margin-top:2px}
+  .sysdiag-pager{justify-content:space-between}
 }
 /* "What Cairn has noticed" (F2) — gentle outcome-learning observations. A calm,
    editorial list; the sage dot keeps it quiet and un-alarming, never a metric. */

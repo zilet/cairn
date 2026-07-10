@@ -28,6 +28,9 @@ function loadSettingsSurface() {
 
 test("settings surface normalizes API data into the working model", () => {
   const surface = loadSettingsSurface();
+  assert.deepEqual(JSON.parse(JSON.stringify(surface.SET_SEG)), [
+    ["you", "You"], ["agents", "Agents"], ["system", "System"], ["sources", "Sources"], ["automation", "Automation"], ["data", "Data"],
+  ]);
   const data = surface.settingsData({
     settings: {
       agent_strategy: "priority",

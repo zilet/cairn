@@ -146,6 +146,7 @@ for (const evt of ["input", "change"]) {
       if (!saveCtx || saveCtx.dirty || saveCtx.busy) return;
       if (!saveCtx.sentinel?.isConnected) return;
       if (!saveCtx.fields || !(event.target instanceof Node) || !saveCtx.fields.contains(event.target)) return;
+      if (event.target instanceof Element && event.target.closest("[data-save-ignore]")) return;
       if (controlAtDefault(event.target)) return;
       setSaveDirty();
     },

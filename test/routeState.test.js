@@ -36,6 +36,9 @@ test("route-state parses canonical deep links", () => {
   assert.deepEqual(plain(routes.parseRoute("/app/settings/data")), {
     tab: "settings", section: "data", healthSection: null, date: null, id: null, session: null, jump: null,
   });
+  assert.deepEqual(plain(routes.parseRoute("/app/settings/system")), {
+    tab: "settings", section: "system", healthSection: null, date: null, id: null, session: null, jump: null,
+  });
 });
 
 test("route-state serializes stable canonical links", () => {
@@ -46,6 +49,7 @@ test("route-state serializes stable canonical links", () => {
   assert.equal(routes.routeToUrl({ tab: "plan", section: "food", date: "2026-06-28" }), "/app/plan/food?date=2026-06-28");
   assert.equal(routes.routeToUrl({ tab: "today", date: "2026-06-29" }), "/app/today?date=2026-06-29");
   assert.equal(routes.routeToUrl({ tab: "chat", session: "chat_17" }), "/app/chat?session=chat_17");
+  assert.equal(routes.routeToUrl({ tab: "settings", section: "system" }), "/app/settings/system");
 });
 
 test("route-state normalizes invalid or legacy-ish input safely", () => {

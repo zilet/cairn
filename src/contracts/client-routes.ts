@@ -16,7 +16,7 @@ export const CLIENT_ROUTE_DEFINITIONS = {
     stand: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age"],
     me: ["standing", "profile", "memory", "health", "life", "family"],
     health: ["read", "markers", "records", "share", "learned"],
-    settings: ["you", "agents", "sources", "automation", "data"],
+    settings: ["you", "agents", "system", "sources", "automation", "data"],
   },
 } as const;
 
