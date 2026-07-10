@@ -267,10 +267,13 @@ test("a handled rotation never suppresses the capacity-laggard training lead", (
 });
 
 test("an unrelated structural decision is never dressed up as the recovery week", () => {
-  const out = coachingFocus({
+  const base = {
     programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
     recovery: {},
     leadMode: "lead",
+  };
+  const out = coachingFocus({
+    ...base,
     upcoming: [
       { kind: "training_structure", domain: "training", summary: "Move to a 4-day upper/lower split.", effective_date: "2026-07-13" },
     ],
@@ -278,6 +281,67 @@ test("an unrelated structural decision is never dressed up as the recovery week"
   assert.equal(out.lead.domain, "recovery");
   assert.doesNotMatch(String(out.lead.move), /lands \w+day/i, "no weekday claim off an unrelated decision");
   assert.match(String(out.lead.move), /automatically at the week boundary/i);
+  // The match is STRUCTURAL (domain stamped at write time) — prose that merely says
+  // "lighter"/"deload" in another sense can never qualify.
+  const prose = coachingFocus({
+    ...base,
+    upcoming: [
+      {
+        kind: "training_structure",
+        domain: "training",
+        summary: "Redistribute the split so your legs get a lighter midweek touch.",
+        effective_date: "2026-07-13",
+      },
+    ],
+  });
+  assert.doesNotMatch(String(prose.lead.move), /lands \w+day/i, "substring prose never trips the weekday claim");
+});
+
+test("under lead mode the stall lead speaks state — never an athlete-directed rotate ask without a button", () => {
+  const stallInput = {
+    groupsTrajectory: {
+      groups: [{ verdict: "stalling", label: "Shoulders", lead_lift: "Overhead Press", vary_options: [{ name: "Push Press" }, { name: "Z-Press" }] }],
+    },
+    plannedNames: ["Overhead Press"],
+  };
+  const lead = coachingFocus({ ...stallInput, leadMode: "lead" });
+  assert.match(lead.lead.title, /plateau/i);
+  assert.equal(lead.lead.swap, undefined);
+  assert.doesNotMatch(String(lead.lead.move), /rotate in/i, "no orphaned ask when the buttons are stripped");
+  assert.match(String(lead.lead.move), /your coach will rotate/i);
+  // Athlete-driven modes keep the actionable copy + payload together.
+  const review = coachingFocus({ ...stallInput, leadMode: "review_everything" });
+  assert.match(String(review.lead.move), /rotate in/i);
+  assert.ok(review.lead.swap);
+});
+
+test("plan membership is judged by movement slot, not exact spelling", () => {
+  // The plan spells the slot "Dumbbell Bench Press"; the logged/stalled lift reads
+  // "DB Bench Press" — same movement slot, so the plateau lead must still surface.
+  const out = coachingFocus({
+    groupsTrajectory: {
+      groups: [{ verdict: "stalling", label: "Chest", lead_lift: "DB Bench Press", vary_options: [{ name: "Incline DB Press" }] }],
+    },
+    plannedNames: ["Dumbbell Bench Press", "Back Squat"],
+  });
+  assert.match(String(out.lead.title), /plateau/i, "implement-spelling divergence never hides a live plateau");
+});
+
+test("lead posture without background coaching keeps the athlete-driven asks (no empty promises)", () => {
+  const input = {
+    programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
+    recovery: {},
+    groupsTrajectory: {
+      groups: [{ verdict: "stalling", label: "Chest", lead_lift: "Bench Press", vary_options: [{ name: "Incline Bench Press" }] }],
+    },
+    plannedNames: ["Bench Press"],
+    leadMode: "lead",
+    proactiveEnabled: false,
+  };
+  const out = coachingFocus(input);
+  // With the scheduler off, the coach cannot act unattended — buttons come back.
+  assert.equal(out.acts, true);
+  assert.doesNotMatch(String(out.lead.move ?? ""), /automatically/i, "never promise unattended work the scheduler can't do");
 });
 
 test("lead mode strips the one-tap swap payload and reports acts:false; other modes keep it", () => {
@@ -302,7 +366,7 @@ test("under lead mode a due recovery week speaks STATE — the coach sets it up,
     ...base,
     leadMode: "lead",
     upcoming: [
-      { kind: "training_structure", domain: "training", summary: "Recovery deload week — volume halves.", effective_date: "2026-07-13" },
+      { kind: "training_structure", domain: "recovery", summary: "Recovery deload week — volume halves.", effective_date: "2026-07-13" },
     ],
   });
   assert.equal(named.acts, false);

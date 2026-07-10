@@ -368,3 +368,33 @@ test("the boundary re-checks the budget: the oldest due change lands, the second
   assert.match(String(parked.context.apply_error ?? ""), /surprise budget/i);
   assert.equal(repo.getPlanDay(1).items[0].target_weight, 190, "only the first change reached the plan");
 });
+
+test("the canonical recovery-week draft is stamped domain 'recovery' at write time", () => {
+  seedOneDayPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const proposal = repo.createProposal("stub", repo.RECOVERY_WEEK_INSTRUCTION, "", {
+    summary: "Next week backs the volume off so the adaptation lands.",
+    days: [
+      { day_number: 1, name: "Full (light)", focus: "Full", items: [{ exercise: "Barbell Bench Press", sets: 2, rep_low: 6, rep_high: 8, target_weight: 95 }] },
+    ],
+  });
+  const out = applyProposalWithAutonomy(proposal.id);
+  assert.equal(out.tier, "announce", "a structural restructure announces under lead mode");
+  const announced = repo.listBrainDecisions({ status: "announced" });
+  assert.equal(announced.length, 1);
+  assert.equal(announced[0].domain, "recovery", "structural marker, never inferred from the summary prose");
+  assert.equal(announced[0].kind, "training_structure");
+
+  // A non-recovery restructure keeps domain 'training' even when its prose says "lighter".
+  const other = repo.createProposal("stub", "restructure the split", "", {
+    summary: "Redistribute so legs get a lighter midweek touch.",
+    days: [
+      { day_number: 1, name: "Upper", focus: "Upper", items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }] },
+    ],
+  });
+  const out2 = applyProposalWithAutonomy(other.id);
+  assert.equal(out2.tier, "announce");
+  const all = repo.listBrainDecisions({ status: "announced" });
+  const split = all.find((d) => d.id !== announced[0].id);
+  assert.equal(split.domain, "training", "prose containing 'lighter' never earns the recovery stamp");
+});

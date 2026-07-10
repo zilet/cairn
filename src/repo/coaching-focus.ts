@@ -22,6 +22,7 @@
 // {available:false} on a thin athlete.
 // ============================================================================
 
+import { movementKey } from "./exercise-canon.js";
 import { type FocusCandidate, type FocusDomain, focusScore } from "./focus-candidate.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
@@ -276,6 +277,11 @@ export interface CoachingFocusInput {
   // Under 'lead' the coach applies bounded plan changes itself at natural
   // boundaries, so the conductor drops its one-tap asks and speaks state instead.
   leadMode?: unknown;
+  // Whether background coaching (the scheduler's proactive tick) is on. The
+  // auto-draft/auto-rotate mechanisms live there — with it OFF, lead mode cannot
+  // actually act unattended, so the conductor must keep the athlete-driven asks
+  // rather than promise background work that will never run.
+  proactiveEnabled?: unknown;
   // Exercise rotations the brain (or the athlete) already applied — a stalled lead
   // whose lift was rotated out is ALREADY HANDLED, so the conductor speaks to the
   // new stimulus instead of re-offering the same swap. [{ from, to, date }].
@@ -506,7 +512,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   }
   if (!deloadDue && !recoveringDown) return null;
   const draftPending = inp.recoveryDraftPending === true;
-  const leads = lc(inp.leadMode) === "lead";
+  const leads = coachLeads(inp);
   // The recovery lead's next-step line adapts to posture. Under LEAD mode the coach
   // sets the recovery week up itself at the week boundary, so the line speaks STATE
   // — never a one-tap ask — and names the weekday when an upcoming recovery/structure
@@ -514,20 +520,20 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   // draft points at the review, an un-drafted one leaves the button to the surface.
   let move: string | undefined;
   if (leads) {
+    // Only a decision STRUCTURALLY marked recovery may claim "lands Monday" — the
+    // domain is stamped at write time (proposalShape recognizes the canonical
+    // recovery-week instruction), never inferred from agent prose, so an unrelated
+    // restructure whose summary happens to say "lighter" can't trip it.
+    const soon = inputArray<UpcomingDecisionInput>(inp.upcoming).find((d) => lc(d?.domain) === "recovery");
+    const weekday = soon ? weekdayOf(soon.effective_date) : null;
     if (draftPending) {
-      move = "Recovery week is queued — it lands automatically. Undo any time from Plan.";
+      move = weekday
+        ? `Recovery week is queued — it lands ${weekday}. Undo any time from Plan.`
+        : "Recovery week is queued — it lands automatically. Undo any time from Plan.";
     } else {
-      // Only a decision that is genuinely ABOUT recovery may claim "a lighter week
-      // lands Monday" — an unrelated structural restructure must never be dressed
-      // up as one (it would attribute the wrong change to the wrong promise).
-      const soon = inputArray<UpcomingDecisionInput>(inp.upcoming).find(
-        (d) =>
-          lc(d?.domain) === "recovery" ||
-          (lc(d?.kind) === "training_structure" && /deload|recovery|lighter/i.test(String(d?.summary ?? "")))
-      );
-      const weekday = soon ? weekdayOf(soon.effective_date) : null;
-      // The scheduler's recovery auto-draft (lead mode, ≤1×/day) is what makes the
-      // undrafted copy honest — the coach genuinely will set this up on its own.
+      // The scheduler's recovery auto-draft (lead mode + background coaching on,
+      // ≤1×/day) is what makes the undrafted copy honest — the coach genuinely
+      // will set this up on its own.
       move = weekday
         ? `A lighter recovery week lands ${weekday} — your coach set it up; undo any time from Plan.`
         : "Your coach sets this up automatically at the week boundary.";
@@ -559,14 +565,28 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   };
 }
 
+// The coach owns the actions only when it can genuinely act unattended: lead
+// posture AND background coaching on. Proactive off means no scheduler ticks —
+// promising "your coach sets this up automatically" would be a lie, so the
+// athlete-driven asks come back.
+function coachLeads(inp: CoachingFocusInput): boolean {
+  return lc(inp.leadMode) === "lead" && inp.proactiveEnabled !== false;
+}
+
 function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
   const flagged = flaggedContext(inp);
-  // Under LEAD mode the coach rotates at the boundary itself, so the conductor emits
+  // When the coach leads it rotates at the boundary itself, so the conductor emits
   // no one-tap swap payload (`acts` false). Otherwise the athlete drives the swap.
-  const acts = lc(inp.leadMode) !== "lead";
-  const plannedNames = inputArray<unknown>(inp.plannedNames)
-    .map((n) => lc(n))
-    .filter(Boolean);
+  const acts = !coachLeads(inp);
+  // Membership is judged by movement SLOT (movementKey strips implement tokens),
+  // the same ladder applyPlanSwap resolves with — a lift still on the plan under a
+  // different implement spelling ("DB Bench Press" vs a logged "Dumbbell Bench
+  // Press") must read as programmed, or a live plateau lead silently vanishes.
+  const plannedKeys = new Set(
+    inputArray<unknown>(inp.plannedNames)
+      .map((n) => movementKey(String(n ?? "")))
+      .filter(Boolean)
+  );
   const rotations = inputArray<AppliedRotationInput>(inp.recentRotations);
   // A genuinely STALLED canonical group with a concrete swap menu is the most
   // coach-like training lead (the athlete's own "which groups stall" framing).
@@ -582,7 +602,7 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
     // rotation speaks separately via rotationHandledCandidate (a calm parallel note),
     // so this producer never re-offers the swap that just happened.
     const rotation = leadLiftLc ? rotations.find((r) => lc(r?.from) === leadLiftLc) : undefined;
-    const unprogrammed = plannedNames.length > 0 && leadLiftLc !== "" && !plannedNames.includes(leadLiftLc);
+    const unprogrammed = plannedKeys.size > 0 && leadLift !== "" && !plannedKeys.has(movementKey(leadLift));
     if (!rotation && !unprogrammed) {
       // vary_options are {name, why} objects — pull the movement NAME (a bare
       // String(o) renders "[object Object]"). Tolerate a plain-string option too.
@@ -603,7 +623,14 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
           domain: "training",
           title: `Break the plateau on your ${label}`,
           why: `${leadLift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.${caveat ? ` (${caveat})` : ""}`,
-          move: opts.length ? `Rotate in ${opts.join(" or ")} for a few weeks.` : undefined,
+          // The move line matches who acts: the athlete-directed "Rotate in X" only
+          // rides with real buttons; when the coach leads, it speaks STATE (the
+          // data-triggered evolution drafts the rotation and it lands via autonomy).
+          move: acts
+            ? opts.length
+              ? `Rotate in ${opts.join(" or ")} for a few weeks.`
+              : undefined
+            : "Your coach will rotate a fresh variation in at the next natural boundary.",
           based_on: [
             `${leadLift || label} is marked stalling`,
             stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat",
@@ -1215,9 +1242,10 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   return {
     available: leadItem != null,
     headline: clip(headline, 240),
-    // Lead mode owns the actions server-side: under 'lead' the coach applies bounded
-    // changes itself, so the surface offers no one-tap swap/draft ask.
-    acts: lc(input.leadMode) !== "lead",
+    // The coach owns the actions server-side only when it can genuinely act
+    // unattended (lead posture + background coaching on) — then the surface offers
+    // no one-tap swap/draft ask. Otherwise the athlete keeps the buttons.
+    acts: !coachLeads(input),
     lead: leadItem,
     parallel: parallelItems,
     later,
