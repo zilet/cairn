@@ -53,13 +53,49 @@ async function runOpenSmoke(ctx) {
   const base = ctx.base;
   // 1) Health — the readiness gate and a basic shape check.
   {
-    const { status, body } = await getJson(base, "/api/health");
+    const health = await fetch(`${base}/api/health`);
+    const status = health.status;
+    const body = await health.json();
     ok(status === 200, "GET /api/health → 200", `got ${status}`);
     ok(body && body.ok === true, "health body has ok:true", JSON.stringify(body));
     ok(body && "auth_required" in body, "health reports auth_required", JSON.stringify(body));
+    ok(!!health.headers.get("x-request-id"), "health response carries a request id");
   }
 
-  // 2) The Brief — the deterministic day-read always returns a REAL read, even
+  // 2) Readiness + diagnostic ingestion — prove the local operator spine over
+  //    real HTTP, including the exact browser event namespace.
+  {
+    const ready = await getJson(base, "/api/ready");
+    ok(ready.status === 200 && ready.body?.ok === true, "GET /api/ready proves SQLite readiness");
+    ok(ready.body?.queues?.agent_jobs, "readiness reports compact durable queue counts");
+
+    const ingested = await fetch(`${base}/api/telemetry/client`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        events: [{
+          kind: "api_failure",
+          level: "warning",
+          message: "http: Cairn request failed (409)",
+          route: "/api/plan",
+          method: "POST",
+          status: 409,
+          duration_ms: 12,
+          request_id: "smoke-request",
+          fingerprint: "smoke:client:plan:409",
+        }],
+      }),
+    });
+    ok(ingested.status === 204, "POST /api/telemetry/client accepts a browser batch", `got ${ingested.status}`);
+    const diagnostics = await getJson(base, "/api/diagnostics?days=1&recent=10");
+    ok(diagnostics.status === 200 && diagnostics.body?.total >= 1, "GET /api/diagnostics returns captured events");
+    ok(
+      diagnostics.body?.issues?.some((issue) => issue.fingerprint === "smoke:client:plan:409"),
+      "diagnostics groups the ingested browser issue"
+    );
+  }
+
+  // 3) The Brief — the deterministic day-read always returns a REAL read, even
   //    with no agent reachable (it falls back to the deterministic floor).
   {
     const { status, body } = await getJson(base, "/api/today-read");

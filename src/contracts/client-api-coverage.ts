@@ -14,6 +14,7 @@ export interface ClientApiBroadResponseWaiver {
 
 export const CLIENT_API_CONTRACT_PATHS = [
   "/health",
+  "/ready",
   "/version",
   "/update-status",
   "/update-check",
@@ -21,6 +22,8 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/agents",
   "/agent-stats",
   "/brain-diagnostics",
+  "/diagnostics",
+  "/telemetry/client",
   "/brain/decisions",
   "/brain/decisions/:id/revert",
   "/agent-clis/update",

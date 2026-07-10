@@ -32,6 +32,8 @@ export function readinessHandler(_req: Request, res: Response) {
   }
 }
 
+// Readiness is stronger than liveness: prove SQLite is readable and expose only
+// compact durable queue counts. Optional coaching providers never gate readiness.
 systemRouter.get("/ready", readinessHandler);
 
 // The running version, and whether a newer Cairn release exists. The status is

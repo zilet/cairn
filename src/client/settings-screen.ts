@@ -90,8 +90,10 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   // Side cards (built once; folded into the Agents slice). All degrade to "" when the
   // backing endpoint is absent/empty.
   const agentHealthHtml = agentHealthCard(agentStats);
-  const diagnosticsCard = (CairnSettingsClient as typeof CairnSettingsClient & { diagnosticsCard(data: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string }).diagnosticsCard;
-  const agentActivityHtml = agentActivityCard(agentStats) + diagnosticsCard(diagnostics, { relTime, absDate }) + CairnSettingsClient.brainDiagnosticsCard(brainDiagnostics);
+  const agentActivityHtml =
+    agentActivityCard(agentStats) +
+    CairnSettingsClient.diagnosticsCard(diagnostics, { relTime, absDate }) +
+    CairnSettingsClient.brainDiagnosticsCard(brainDiagnostics);
   const noticedHtml = noticedCard(learnings);
   const artSpendHtml = artStats ? CairnSettingsSurface.artSpendCardHtml(artStats) : "";
 

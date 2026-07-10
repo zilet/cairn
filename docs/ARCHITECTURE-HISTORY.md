@@ -4,6 +4,27 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+A **local-first diagnostic telemetry** round (new `diagnostic_events` table via
+`CREATE TABLE IF NOT EXISTS`; no migration; `sw.js` up to `cairn-v456`) added a
+single privacy-bounded incident spine across the PWA, REST server, and Node
+process. Every API response now carries `X-Request-ID`; unexpected server errors
+return a generic correlated body while durable operator records keep only route,
+status, duration, validated error class, and stack frames. `POST
+/api/telemetry/client` ingests a strict 1-20 browser batch through a direct,
+nonrecursive reporter with bounded local retry/dedupe; global browser errors,
+unhandled rejections, tab render failures, HTTP failures, invalid JSON, and
+timeouts are classified without collecting bodies, query values, chat/health
+text, credentials, prompts, or raw agent output. The shared API client now rejects
+non-2xx responses, preserves designed `200 + {ok:false}` outcomes, marks offline
+only for real connectivity failures, and caches only successful GETs. Durable
+capture outbox replay retains transient failures and marks permanent rejections
+for attention instead of silently dropping them, carrying a stable idempotency
+key. `GET /api/diagnostics` powers a compact Settings operator card with grouped
+issues/recent slow calls; `GET /api/ready` proves SQLite readability and reports
+only queue counts. Uncaught process exceptions record generic diagnostics and
+exit for container restart instead of continuing in uncertain state. Raw events
+prune after 30 days; all writes remain failure-safe.
+
 An **Elite Brain accountability and autonomy** round (migrations **v59** `settings-lead-mode` and **v60** `evidence-governance`) closed the observe → decide → safely act → evaluate → learn loop. Material decisions now live in a generalized ledger with source links, falsifiable expectations, deterministic maturity evaluation, preserved inconclusive history, exact rollback snapshots for autonomous training changes, and bounded personal-response modifiers that now affect real nutrition and progression recommendations without overriding injury, allergy, clinical, or lean-safe floors. A coalesced signal router turns finished sessions and material nutrition corrections into durable background reviews: the next-session progression can quietly land after the completed-session boundary; nutrition changes wait for the next local day. Food-only chat turns cannot mutate training or goal identity, surprise budgets and veto-rate demotion limit autonomy, and direct/manual actions never claim Undo without a server-owned snapshot. Multidisciplinary case conferences share a pinned snapshot, require every deterministic conflict to be resolved or explicitly deferred, and can emit typed plan proposals through the same autonomy/safety path; advice-only conferences cannot become inert announcements. Nine bounded server-executed history reads use strict allowlists, call/round/byte/deadline limits, sanitized telemetry, and ambient-MCP denial. The standing whole-person trajectory now reaches coach context, weekly reads, REST, and MCP; lifestyle learning includes repeated explicit alcohol/late-caffeine response against next-sleep comparisons. Clinical evidence carries scope/version/review/expiry/freshness/verification/effective-confidence metadata and exposes it in the PWA. All user-facing agentic REST and MCP mutations use durable jobs instead of holding requests open. Settings diagnostics aggregate expectation/evaluation coverage, verdicts, reversals, demotions, bounded-read failures/budgets, and conference availability without exposing prompts, private files, chain-of-thought, or user-facing scores. The reported split UTF-8 replacement glyph is guarded in subprocess streaming, and affected training items explain autonomous changes with one-tap Undo.
 
 A **Cairn v1 completion** round (migrations **v56** `profile-journey-baseline` and **v57** `profile-cv-risk-flags`; `sw.js` up to `cairn-v439`; package version `1.0.0`) finished the connected-athlete release line by integrating the last plan tracks through small worker branches and central merge verification. The release adds a request-scoped brain snapshot and attention budget, the Journey arc (baseline + phase read + milestones + nutrition prompt context + Progress overview UI), an AHA PREVENT 2023 cardiovascular-risk read with profile inputs, enhancer honesty, Stand heart-age/risk display, and a data-bound SVG risk ribbon, plus a doctor-facing loop (`/api/health/outcomes`, outcome recording, doctor packet export, MCP parity) that stays review-only and clinician-framed. Training gained benchmark milestones, K5/retest attention, and a deterministic plateau/adherence playbook that feeds program evolution signals without auto-applying. The UI/cold-path track added instant optimistic/SWR cache mutation helpers across Food/Memory/Family, a guarded optimistic Family save state, a `/api/today?date=` aggregate to prime Today caches on cold open, and a direct-WebGL Body 3D progressive-enhancement scaffold that never blocks the existing 2D body figure. Infrastructure pinned the TS7 compiler path, regenerated endpoint docs, kept MCP⊆REST contracts green, and finished with `npm run release:check` (verify + built server smoke + dependency-free browser smoke) passing.

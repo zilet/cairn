@@ -71,5 +71,10 @@ export function diagnosticsHandler(req: Request, res: Response) {
   res.json(getDiagnostics({ recent, days }));
 }
 
+// Best-effort browser error/API-failure ingestion. Accepts only the bounded,
+// privacy-scrubbed client diagnostic contract; never request bodies or app data.
 operatorRouter.post("/telemetry/client", clientTelemetryHandler);
+
+// Local operator issue pulse: grouped browser/server/process failures, recent
+// sanitized events, and slow API requests over a bounded time window.
 operatorRouter.get("/diagnostics", diagnosticsHandler);

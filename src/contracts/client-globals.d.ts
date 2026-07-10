@@ -2644,8 +2644,27 @@ declare global {
         options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
       ): string;
       brainDiagnosticsCard(data: unknown): string;
+      diagnosticsCard(
+        data: unknown,
+        options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }
+      ): string;
       agentChipState(agent: Record<string, unknown>): { cls: string; label: string };
       updateCardHtml(status: unknown, options: { updateCheckEnabled: boolean }): string;
+    };
+
+    CairnClientDiagnostics: {
+      report(input: Record<string, unknown>): boolean;
+      reportError(kind: string, error: unknown, extra?: Record<string, unknown>): boolean;
+      flush(): Promise<void>;
+      pending(): Array<Record<string, unknown>>;
+      installGlobalHandlers(target?: Window): void;
+    };
+
+    CairnClientDiagnosticsCore: {
+      createClientDiagnosticReporter(options?: Record<string, unknown>): unknown;
+      normalizeRoute(value: unknown): string;
+      sanitize(value: unknown, max?: number): string;
+      hash(value: string): string;
     };
 
     CairnSettingsSurface: {

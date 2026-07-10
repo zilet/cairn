@@ -6,7 +6,7 @@ All routes are mounted under **`/api`** (e.g. `GET /api/plan`). When `CAIRN_AUTH
 is set, every route except `GET /api/health` requires the token (`Authorization: Bearer …`,
 `X-Cairn-Token: …`, or `?token=…`). See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**242 routes** across 90 groups.
+**245 routes** across 93 groups.
 
 ## `/activities`
 
@@ -176,6 +176,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/dexa-targeting` | DEXA-driven targeting: the body scan's regional read → concrete training + nutrition targets, each with a "path to your next scan". {available:false} w/o DEXA. |
+
+## `/diagnostics`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/diagnostics` | Local operator issue pulse: grouped browser/server/process failures, recent sanitized events, and slow API requests over a bounded time window. |
 
 ## `/directives`
 
@@ -526,6 +532,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 |---|---|---|
 | GET | `/api/reaction-model` | All read-only, plain words, no scores: the personal coaching team, surfaced for the PWA. |
 
+## `/ready`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/ready` | Readiness is stronger than liveness: prove SQLite is readable and expose only compact durable queue counts. Optional coaching providers never gate readiness. |
+
 ## `/recent-training`
 
 | Method | Path | Notes |
@@ -631,6 +643,12 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/symptom-links` | Symptom <-> marker connections: a symptom the user logged (in a life event or a check-in note) co-occurring with a genuinely out-of-optimal marker: a quiet "worth mentioning to your clinician" read. Informational, never diagnostic; [] when nothing co-occurs. The connected brain reaching ACROSS the logs. |
+
+## `/telemetry`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/telemetry/client` | Best-effort browser error/API-failure ingestion. Accepts only the bounded, privacy-scrubbed client diagnostic contract; never request bodies or app data. |
 
 ## `/test-week`
 

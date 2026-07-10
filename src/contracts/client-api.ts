@@ -57,6 +57,59 @@ export interface ClientHealthResponse {
   version: string;
 }
 
+export interface ClientReadinessResponse {
+  ok: boolean;
+  database: "ok" | "unavailable";
+  queues?: {
+    agent_jobs: { queued: number; running: number };
+    chat_turns: { queued: number; running: number };
+  };
+}
+
+export interface ClientDiagnosticEvent {
+  id: number;
+  source: string;
+  kind: string;
+  level: string;
+  operation: string | null;
+  route: string | null;
+  status: number | null;
+  duration_ms: number | null;
+  request_id: string | null;
+  fingerprint: string;
+  message: string | null;
+  stack: string | null;
+  metadata: Record<string, unknown> | null;
+  release: string | null;
+  created_at: string;
+}
+
+export interface ClientDiagnosticIssue {
+  fingerprint: string;
+  source: string;
+  kind: string;
+  level: string;
+  route: string | null;
+  operation: string | null;
+  status: number | null;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  message: string | null;
+  release: string | null;
+}
+
+export interface ClientDiagnosticsResponse {
+  window_days: number;
+  total: number;
+  by_source: Record<string, number>;
+  by_kind: Record<string, number>;
+  by_route: Array<{ route: string; count: number }>;
+  issues: ClientDiagnosticIssue[];
+  recent: ClientDiagnosticEvent[];
+  slow: ClientDiagnosticEvent[];
+}
+
 export interface ClientVersionResponse {
   version: string;
 }
@@ -1757,6 +1810,7 @@ export interface ClientBodyMetricsSummary {
 
 export interface ClientApiResponses {
   "/api/health": ClientHealthResponse;
+  "/api/ready": ClientReadinessResponse;
   "/api/version": ClientVersionResponse;
   "/api/update-status": ClientUpdateStatus;
   "/api/update-check": ClientUpdateStatus;
@@ -1764,6 +1818,8 @@ export interface ClientApiResponses {
   "/api/agents": ClientAgentConfig;
   "/api/agent-stats": ClientAgentStats;
   "/api/brain-diagnostics": ClientBrainDiagnostics;
+  "/api/diagnostics": ClientDiagnosticsResponse;
+  "/api/telemetry/client": undefined;
   "/api/brain/decisions": ClientBrainDecisionSummary[];
   "/api/agent-clis/update": ClientAgentCliUpdateStatus;
   "/api/art/manifest": ClientArtManifestResponse;
