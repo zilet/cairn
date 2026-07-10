@@ -90,7 +90,11 @@ async function runOpenSmoke(ctx) {
     const diagnostics = await getJson(base, "/api/diagnostics?days=1&recent=10");
     ok(diagnostics.status === 200 && diagnostics.body?.total >= 1, "GET /api/diagnostics returns captured events");
     ok(
-      diagnostics.body?.issues?.some((issue) => issue.fingerprint === "smoke:client:plan:409"),
+      diagnostics.body?.issues?.some((issue) =>
+        issue.fingerprint === "client:api_failure:POST:/api/plan:409" &&
+        issue.source === "client" && issue.kind === "api_failure" &&
+        issue.route === "/api/plan" && issue.status === 409
+      ),
       "diagnostics groups the ingested browser issue"
     );
   }
