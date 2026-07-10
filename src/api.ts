@@ -21,7 +21,7 @@ import { personContextRouter } from "./routes/person-context.js";
 import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
-import { recordUnexpectedApiError, requestId } from "./diagnostics.js";
+import { diagnosticErrorName, recordUnexpectedApiError, requestId } from "./diagnostics.js";
 
 export const api = Router();
 
@@ -53,7 +53,7 @@ api.use("/health-docs", healthDocsRouter);
 // calls r.json() and would break on HTML).
 export function apiErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   recordUnexpectedApiError(err, req);
-  console.error(`[api] request ${requestId(req) || "unknown"} failed`);
+  console.error(`[api] request ${requestId(req) || "unknown"} failed (${diagnosticErrorName(err)})`);
   res.status(500).json({ error: "internal error", request_id: requestId(req) || null });
 }
 

@@ -118,7 +118,15 @@ test("request correlation returns generic 500 and persists the bounded real erro
   apiDiagnosticMiddleware(request, response, () => {});
   const id = response.headers["x-request-id"];
   assert.ok(id);
-  apiErrorHandler(new Error("database password=hunter2 failed at /Users/me/private.ts"), request, response, () => {});
+  const privateText = "Milos private Friday meal and family plan\nsecond private health line";
+  const logs = [];
+  const originalError = console.error;
+  console.error = (message) => logs.push(String(message));
+  try {
+    apiErrorHandler(new TypeError(privateText), request, response, () => {});
+  } finally {
+    console.error = originalError;
+  }
   assert.equal(response.statusCode, 500);
   assert.deepEqual(response.body, { error: "internal error", request_id: id });
   response.emit("finish");
@@ -128,7 +136,11 @@ test("request correlation returns generic 500 and persists the bounded real erro
     .get();
   assert.equal(exception.request_id, id);
   assert.equal(exception.route, "/api/test-error");
-  assert.doesNotMatch(exception.message, /hunter2|\/Users\/|do-not-store/);
+  assert.equal(exception.message, "TypeError: server operation failed");
+  assert.doesNotMatch(exception.stack, new RegExp(privateText));
+  assert.doesNotMatch(exception.stack, /do-not-store/);
+  assert.match(logs.join(" "), new RegExp(`${id}.*TypeError`));
+  assert.doesNotMatch(logs.join(" "), new RegExp(privateText));
   const httpError = db
     .prepare("SELECT * FROM diagnostic_events WHERE kind = 'http_error' ORDER BY id DESC LIMIT 1")
     .get();
@@ -240,8 +252,9 @@ test("process handler records rejections and exits after uncaught exceptions", (
     log: (message) => logs.push(message),
     exit: (code) => exits.push(code),
   });
-  emitter.emit("unhandledRejection", new Error("token=secret rejected"));
-  emitter.emit("uncaughtException", new Error("password=hunter2 crashed"));
+  const privateText = "private ApoB discussion with family travel details\nsecond private line";
+  emitter.emit("unhandledRejection", new TypeError(privateText));
+  emitter.emit("uncaughtException", new Error(privateText));
   remove();
   assert.deepEqual(
     captured.map((event) => event.kind),
@@ -249,5 +262,11 @@ test("process handler records rejections and exits after uncaught exceptions", (
   );
   assert.deepEqual(exits, [1]);
   assert.equal(emitter.listenerCount("uncaughtException"), 0);
-  assert.doesNotMatch(logs.join(" "), /secret|hunter2/);
+  assert.deepEqual(
+    captured.map((event) => event.message),
+    ["TypeError: process failure", "Error: process failure"]
+  );
+  assert.doesNotMatch(JSON.stringify(captured), new RegExp(privateText));
+  assert.match(logs.join(" "), /TypeError|Error/);
+  assert.doesNotMatch(logs.join(" "), new RegExp(privateText));
 });

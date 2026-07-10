@@ -1,12 +1,31 @@
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { getVersion } from "./version.js";
-import { normalizeDiagnosticRoute, recordDiagnosticEvent, sanitizeDiagnosticText } from "./repo/diagnostics.js";
+import { normalizeDiagnosticRoute, recordDiagnosticEvent } from "./repo/diagnostics.js";
 
 const DEFAULT_SLOW_REQUEST_MS = 2_000;
 
 export function requestId(req: Request): string {
   return String((req as any).cairnRequestId || "");
+}
+
+/** Error names are useful operator context; arbitrary Error.message is not. */
+export function diagnosticErrorName(error: unknown): string {
+  if (!(error instanceof Error)) return "Error";
+  const name = String(error.name || "").trim();
+  return /^[A-Za-z][A-Za-z0-9_.-]{0,63}Error$/.test(name) || name === "Error" ? name : "Error";
+}
+
+/** V8's first stack line repeats Error.message, so retain frames only. */
+function diagnosticStackFrames(error: unknown): string | null {
+  if (!(error instanceof Error) || !error.stack) return null;
+  const frames = error.stack
+    .split(/\r?\n/)
+    .slice(1)
+    .filter((line) => /^\s*at\s+/.test(line))
+    .join("\n")
+    .trim();
+  return frames || null;
 }
 
 function requestRoute(req: Request): string | null {
@@ -65,7 +84,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
 }
 
 export function recordUnexpectedApiError(error: unknown, req: Request): void {
-  const err = error instanceof Error ? error : null;
+  const errorName = diagnosticErrorName(error);
   recordDiagnosticEvent({
     source: "api",
     kind: "server_exception",
@@ -74,9 +93,9 @@ export function recordUnexpectedApiError(error: unknown, req: Request): void {
     route: requestRoute(req),
     status: 500,
     request_id: requestId(req),
-    fingerprint: `api:server_exception:${req.method}:${requestRoute(req) || "unknown"}:${err?.name || "Error"}`,
-    message: err ? `${err.name}: ${err.message}` : "Non-Error exception",
-    stack: err?.stack,
+    fingerprint: `api:server_exception:${req.method}:${requestRoute(req) || "unknown"}:${errorName}`,
+    message: `${errorName}: server operation failed`,
+    stack: diagnosticStackFrames(error),
     release: getVersion(),
   });
 }
@@ -102,23 +121,23 @@ export function registerProcessDiagnosticHandlers(options: ProcessDiagnosticOpti
   const sink = options.sink ?? recordDiagnosticEvent;
 
   const capture = (kind: "unhandled_rejection" | "uncaught_exception", reason: unknown) => {
-    const error = reason instanceof Error ? reason : null;
-    const message = error ? `${error.name}: ${error.message}` : `Non-Error ${kind}`;
+    const errorName = diagnosticErrorName(reason);
+    const message = `${errorName}: process failure`;
     try {
       sink({
         source: "process",
         kind,
         level: "error",
         operation: "node_process",
-        fingerprint: `process:${kind}:${error?.name || "non_error"}`,
+        fingerprint: `process:${kind}:${errorName}`,
         message,
-        stack: error?.stack,
+        stack: diagnosticStackFrames(reason),
         release: getVersion(),
       });
     } catch {
       /* injected sinks may throw; process handling must still be decisive */
     }
-    log(`[server] ${kind}: ${sanitizeDiagnosticText(message, 320) || "unknown error"}`);
+    log(`[server] ${kind}: ${errorName}`);
   };
 
   const onRejection = (reason: unknown) => capture("unhandled_rejection", reason);
