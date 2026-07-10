@@ -267,6 +267,48 @@ function brainDiagnosticsCard(data: unknown): string {
   </details>`;
 }
 
+function diagnosticsCard(data: unknown, options: SettingsDateFns = {}): string {
+  const row = settingsClientRecord(data);
+  const issues = Array.isArray(row.issues) ? row.issues.map(settingsClientRecord) : [];
+  const slow = Array.isArray(row.slow) ? row.slow.map(settingsClientRecord) : [];
+  const total = Math.max(0, Number(row.total) || 0);
+  if (!total && !issues.length && !slow.length) return "";
+  const days = Math.max(1, Number(row.window_days) || 7);
+  const issueRows = issues
+    .slice(0, 8)
+    .map((issue) => {
+      const source = String(issue.source || "system").replaceAll("_", " ");
+      const kind = String(issue.kind || "issue").replaceAll("_", " ");
+      const where = String(issue.route || issue.operation || "");
+      const count = Math.max(1, Number(issue.count) || 1);
+      const status = issue.status == null ? "" : ` · ${Number(issue.status)}`;
+      const lastSeen = String(issue.last_seen || "");
+      const when = lastSeen
+        ? options.relTime
+          ? options.relTime(lastSeen.includes("T") ? lastSeen : `${lastSeen.replace(" ", "T")}Z`)
+          : lastSeen
+        : "";
+      const title = [String(issue.message || ""), issue.release ? `release ${String(issue.release)}` : ""]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="actlog-row">
+      <span class="actlog-op" title="${escAttr(title)}">${escHtml(kind)}</span>
+      <span class="actlog-meta">${escHtml(source)}${where ? ` · ${escHtml(where)}` : ""}${escHtml(status)}${when ? ` · ${escHtml(when)}` : ""}</span>
+      <span class="actlog-flag ${String(issue.level) === "error" ? "actlog-retry" : "actlog-clean"}">${count}×</span>
+    </div>`;
+    })
+    .join("");
+  const slowLine = slow.length
+    ? `<div class="sess-line" style="color:var(--muted);margin-top:8px">${slow.length} recent slow request${slow.length === 1 ? "" : "s"} captured with route and duration only.</div>`
+    : "";
+  return `<details class="sess agentactivity" style="margin-top:14px">
+    <summary class="lbl">System diagnostics</summary>
+    <div class="sess-line" style="color:var(--muted);margin:7px 0">${total} diagnostic event${total === 1 ? "" : "s"} in the last ${days} day${days === 1 ? "" : "s"}. Request bodies, health values, chat text, and credentials are never collected.</div>
+    ${issueRows ? `<div class="actlog-rows">${issueRows}</div>` : ""}
+    ${slowLine}
+  </details>`;
+}
+
 function agentChipState(agent: Record<string, unknown>): SettingsChipState {
   if (agent.present === false) return { cls: "agent-chip-absent", label: "Not installed" };
   if (agent.configured === true) return { cls: "agent-chip-ok", label: "✓ Connected" };
@@ -311,6 +353,7 @@ Object.assign(globalThis, {
     agentActivityCard,
     noticedCard,
     brainDiagnosticsCard,
+    diagnosticsCard,
     agentChipState,
     updateCardHtml,
   },

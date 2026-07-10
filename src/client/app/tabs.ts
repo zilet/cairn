@@ -85,6 +85,10 @@ type TabSwitchOptions = {
     Promise.resolve(withViewTransition(() => paintTabSkeleton(next))).finally(() => {
       Promise.resolve(renderTab(next)).catch((err) => {
         console.error("[cairn] render failed", err);
+        try {
+          (globalThis as { CairnClientDiagnostics?: { reportError?(kind: string, error: unknown, extra?: unknown): unknown } })
+            .CairnClientDiagnostics?.reportError?.("render_error", err, { tab: next, level: "error" });
+        } catch {}
         tabErrorState(next);
       });
     });

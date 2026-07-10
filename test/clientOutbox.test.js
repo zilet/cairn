@@ -109,7 +109,11 @@ test("outbox trims to the max, dropping the oldest", () => {
   for (let i = 1; i <= 5; i++) box.enqueue({ kind: "set", path: "/sets", body: { n: i } });
   const items = box.list();
   assert.equal(items.length, 3);
-  assert.deepEqual(items.map((it) => it.body.n), [3, 4, 5], "keeps the newest 3");
+  assert.deepEqual(
+    items.map((it) => it.body.n),
+    [3, 4, 5],
+    "keeps the newest 3"
+  );
 });
 
 test("outbox is resilient to corrupt storage", () => {
@@ -131,4 +135,40 @@ test("outbox remove and clear prune the queue", () => {
   assert.equal(box.list()[0].body.n, 2);
   box.clear();
   assert.equal(box.count(), 0);
+});
+
+test("outbox retains permanent failures as needs-attention without retry-looping", async () => {
+  const { createOutbox } = loadOutbox();
+  const box = createOutbox({ storage: fakeStorage() });
+  box.enqueue({ kind: "set", path: "/sets", body: { reps: 8 } });
+  box.enqueue({ kind: "weight", path: "/bodyweight", body: { weight_lb: 180 } });
+  let calls = 0;
+
+  const first = await box.drain(async (item) => {
+    calls++;
+    if (item.kind === "set") return "needs_attention";
+  });
+  assert.equal(first.sent, 1);
+  assert.equal(first.needsAttention, 1);
+  assert.equal(box.list()[0].state, "needs_attention");
+
+  const second = await box.drain(async () => {
+    calls++;
+  });
+  assert.equal(second.sent, 0);
+  assert.equal(second.needsAttention, 1);
+  assert.equal(calls, 2, "the permanent failure was not sent again");
+});
+
+test("outbox stops on transient rejection and keeps FIFO items pending", async () => {
+  const { createOutbox } = loadOutbox();
+  const box = createOutbox({ storage: fakeStorage() });
+  box.enqueue({ kind: "activity", path: "/activities", body: {} });
+  box.enqueue({ kind: "food", path: "/food-notes", body: {} });
+  const result = await box.drain(async () => {
+    throw new Error("network");
+  });
+  assert.equal(result.sent, 0);
+  assert.equal(result.remaining, 2);
+  assert.equal(result.needsAttention, 0);
 });

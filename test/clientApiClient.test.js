@@ -155,7 +155,7 @@ test("api client surfaces and clears the offline hairline", async () => {
     throw new Error("offline");
   };
 
-  await assert.rejects(loaded.context.api("/health"), /offline/);
+  await assert.rejects(loaded.context.api("/health"), /Could not reach Cairn/);
   assert.equal(loaded.body.classList.contains("is-offline"), true);
   assert.equal(loaded.getOfflineBar().classList.contains("show"), true);
 
@@ -344,7 +344,7 @@ test("api() timing out aborts the fetch and reads exactly like a network drop (o
   assert.equal(loaded.timers.length, 1);
   loaded.timers[0].fn(); // simulate the 20s elapsing
 
-  await assert.rejects(pending, /aborted/i);
+  await assert.rejects(pending, /timed out/i);
   assert.equal(
     loaded.body.classList.contains("is-offline"),
     true,
@@ -367,4 +367,94 @@ test("api() never arms a timeout for a non-GET call", async () => {
 
   await loaded.context.api("/sets", { method: "POST", body: "{}" });
   assert.equal(loaded.timers.length, 0, "a slow health-doc-style upload must never be timed out");
+});
+
+test("api() classifies reachable HTTP failures without marking Cairn offline", async () => {
+  const loaded = loadApiClient();
+  loaded.context.fetch = async () => ({
+    status: 503,
+    headers: { get: (name) => (name.toLowerCase() === "x-request-id" ? "req-503" : null) },
+    json: async () => ({ error: "internal error" }),
+  });
+
+  await assert.rejects(loaded.context.api("/today?private=value"), (error) => {
+    assert.equal(error.name, "CairnApiError");
+    assert.equal(error.kind, "http");
+    assert.equal(error.status, 503);
+    assert.equal(error.route, "/today");
+    assert.equal(error.requestId, "req-503");
+    return true;
+  });
+  assert.equal(loaded.body.classList.contains("is-offline"), false);
+});
+
+test("api() classifies invalid successful JSON and does not cache it", async () => {
+  const loaded = loadApiClient();
+  let calls = 0;
+  loaded.context.fetch = async () => {
+    calls++;
+    return {
+      status: 200,
+      headers: { get: () => "req-json" },
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    };
+  };
+
+  await assert.rejects(loaded.context.api("/settings"), (error) => {
+    assert.equal(error.kind, "invalid_json");
+    assert.equal(error.requestId, "req-json");
+    return true;
+  });
+  await assert.rejects(loaded.context.api("/settings"));
+  assert.equal(calls, 2, "an invalid response never enters the successful GET cache");
+  assert.equal(loaded.body.classList.contains("is-offline"), false);
+});
+
+test("api() preserves designed HTTP-200 ok:false outcomes", async () => {
+  const loaded = loadApiClient();
+  loaded.context.fetch = async () => ({
+    status: 200,
+    headers: { get: () => "req-app" },
+    json: async () => ({ ok: false, error: "try another agent" }),
+  });
+  assert.deepEqual(await loaded.context.api("/session-suggest"), { ok: false, error: "try another agent" });
+  assert.equal(loaded.body.classList.contains("is-offline"), false);
+});
+
+test("api() reports bounded failure metadata without query or payload content", async () => {
+  const loaded = loadApiClient();
+  const events = [];
+  loaded.context.CairnClientDiagnostics = { report: (event) => events.push(event) };
+  loaded.context.fetch = async () => ({
+    status: 422,
+    headers: { get: () => "req-safe" },
+    json: async () => ({ error: "private response body" }),
+  });
+
+  await assert.rejects(
+    loaded.context.api("/health?token=private", { method: "POST", body: JSON.stringify({ chat: "private body" }) })
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0].route, "/health");
+  assert.equal(events[0].method, "POST");
+  assert.equal(events[0].status, 422);
+  assert.equal(events[0].request_id, "req-safe");
+  assert.doesNotMatch(JSON.stringify(events[0]), /private|token=|chat/);
+});
+
+test("runtime outbox marks permanent HTTP failures and sends its stable idempotency key", async () => {
+  const loaded = loadApiClient();
+  let sentInit;
+  loaded.context.fetch = async (_url, init) => {
+    sentInit = init;
+    return { status: 400, headers: { get: () => "req-outbox" }, json: async () => ({ error: "invalid" }) };
+  };
+  const item = loaded.context.outboxEnqueue("set", "/sets", { reps: 8 });
+  await loaded.context.flushOutbox();
+  const stored = JSON.parse(loaded.storage.get("cairn.outbox.v1"));
+  assert.equal(stored[0].state, "needs_attention");
+  assert.equal(stored[0].failure_status, 400);
+  assert.equal(sentInit.headers["X-Idempotency-Key"], item.id);
 });

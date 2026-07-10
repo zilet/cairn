@@ -77,4 +77,5 @@ type SettingsScreenBundle = {
   agentStats: unknown;
   learnings: unknown;
   brainDiagnostics: unknown;
+  diagnostics: unknown;
 };

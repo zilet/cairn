@@ -163,7 +163,14 @@ function deviceTimeZone(): string {
 // — same shape as createOutbox above — so its dedupe/TTL/decision logic is
 // fully unit-testable; api() below is the only thing that wires it to fetch.
 
-type ApiFetchOutcome = { status: number; body?: unknown };
+type CairnApiErrorKind = "http" | "invalid_json" | "network" | "timeout";
+type ApiFetchOutcome = {
+  status: number;
+  body?: unknown;
+  invalidJson?: boolean;
+  durationMs: number;
+  requestId?: string;
+};
 type ApiCoalesceEntry<T> = { data: T; expires: number };
 type ApiCoalescer = {
   isMicroCachePath(path: string): boolean;
@@ -178,6 +185,90 @@ type ApiCoalescer = {
 const API_MICRO_TTL_MS = 1500;
 const API_MICRO_CACHE_PATHS: readonly string[] = ["/settings", "/profile", "/stats", "/coaching-focus"];
 const API_GET_TIMEOUT_MS = 20000;
+
+class CairnApiError extends Error {
+  kind: CairnApiErrorKind;
+  method: string;
+  route: string;
+  status: number | null;
+  durationMs: number;
+  requestId: string | null;
+
+  constructor(options: {
+    kind: CairnApiErrorKind;
+    method: string;
+    route: string;
+    status?: number | null;
+    durationMs?: number;
+    requestId?: string | null;
+    cause?: unknown;
+  }) {
+    const statusSuffix = options.status == null ? "" : ` (${options.status})`;
+    const label =
+      options.kind === "http"
+        ? `Cairn request failed${statusSuffix}`
+        : options.kind === "invalid_json"
+          ? "Cairn returned an invalid response"
+          : options.kind === "timeout"
+            ? "Cairn request timed out"
+            : "Could not reach Cairn";
+    super(label, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "CairnApiError";
+    this.kind = options.kind;
+    this.method = options.method;
+    this.route = normalizeApiRoute(options.route);
+    this.status = options.status == null ? null : options.status;
+    this.durationMs = Math.max(0, Math.round(options.durationMs || 0));
+    this.requestId = options.requestId || null;
+  }
+}
+
+function normalizeApiRoute(path: string): string {
+  const reporter = (globalThis as { CairnClientDiagnosticsCore?: { normalizeRoute?: (value: unknown) => string } })
+    .CairnClientDiagnosticsCore;
+  if (reporter?.normalizeRoute) return reporter.normalizeRoute(path);
+  return String(path || "")
+    .split(/[?#]/, 1)[0]
+    .slice(0, 160);
+}
+
+function responseRequestId(response: Response | { headers?: unknown }): string {
+  try {
+    const headers = response.headers as Headers | { get?(name: string): string | null } | undefined;
+    return String(headers?.get?.("X-Request-ID") || "")
+      .trim()
+      .slice(0, 100);
+  } catch {
+    return "";
+  }
+}
+
+function reportApiError(error: CairnApiError): void {
+  try {
+    (globalThis as { CairnClientDiagnostics?: { report?(event: unknown): unknown } }).CairnClientDiagnostics?.report?.({
+      kind: "api_failure",
+      level: error.kind === "http" && error.status != null && error.status < 500 ? "warning" : "error",
+      message: `${error.kind}: ${error.message}`,
+      route: error.route,
+      method: error.method,
+      status: error.status ?? undefined,
+      duration_ms: error.durationMs,
+      request_id: error.requestId || undefined,
+      online: typeof navigator === "undefined" ? undefined : navigator.onLine,
+    });
+  } catch {}
+}
+
+function isTransientApiFailure(error: unknown): boolean {
+  if (!(error instanceof CairnApiError)) return true;
+  return (
+    error.kind === "network" ||
+    error.kind === "timeout" ||
+    error.status === 408 ||
+    error.status === 429 ||
+    (error.status != null && error.status >= 500)
+  );
+}
 
 // structuredClone when available, else a JSON round-trip, else the value as-is
 // (never throw) — so neither a caller mutating a served body, nor us mutating
@@ -315,8 +406,37 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
 
   const attempt = (): Promise<ApiFetchOutcome> => {
     const { init, cleanup } = buildFetchInit(method, opts, headers);
+    const started =
+      typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+    const elapsed = (): number => {
+      const ended =
+        typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+      return Math.max(0, ended - started);
+    };
     return fetch("/api" + p, init)
-      .then((r) => (r.status === 401 ? { status: 401 } : r.json().then((body) => ({ status: r.status, body }))))
+      .then(async (r) => {
+        const base = { status: r.status, durationMs: elapsed(), requestId: responseRequestId(r) };
+        if (r.status === 401 || r.status === 204) return base;
+        try {
+          return { ...base, body: await r.json() };
+        } catch {
+          return { ...base, invalidJson: true };
+        }
+      })
+      .catch((cause) => {
+        const error = new CairnApiError({
+          kind:
+            cause && typeof cause === "object" && (cause as { name?: unknown }).name === "AbortError"
+              ? "timeout"
+              : "network",
+          method,
+          route: p,
+          durationMs: elapsed(),
+          cause,
+        });
+        reportApiError(error);
+        throw error;
+      })
       .finally(cleanup);
   };
 
@@ -329,11 +449,37 @@ function api<Path extends string>(p: Path, opts: CairnApiOptions = {}): Promise<
         return new Promise<CairnApiResponse<Path>>(() => {});
       }
       setOffline(false); // a real response landed, Cairn is reachable
+      if (result.status < 200 || result.status >= 300) {
+        const error = new CairnApiError({
+          kind: "http",
+          method,
+          route: p,
+          status: result.status,
+          durationMs: result.durationMs,
+          requestId: result.requestId,
+        });
+        reportApiError(error);
+        throw error;
+      }
+      if (result.invalidJson) {
+        const error = new CairnApiError({
+          kind: "invalid_json",
+          method,
+          route: p,
+          status: result.status,
+          durationMs: result.durationMs,
+          requestId: result.requestId,
+        });
+        reportApiError(error);
+        throw error;
+      }
       if (isGet && !bypass) coalescer.store(p, result.body);
       return result.body as CairnApiResponse<Path>;
     })
     .catch((err) => {
-      setOffline(true); // the network dropped, surface the calm hairline banner
+      // A reachable HTTP/protocol failure must never claim Cairn is offline.
+      // Only fetch/abort/connectivity failures get the calm offline hairline.
+      if (err instanceof CairnApiError && (err.kind === "network" || err.kind === "timeout")) setOffline(true);
       throw err;
     });
 }
@@ -383,16 +529,25 @@ function setOffline(on: unknown): void {
 // network — so its replay/ordering logic is fully testable. The runtime layer
 // below wires it to the live api() + the "N to sync" affordance.
 
-type OutboxItem = { id: string; ts: number; kind: string; path: string; body: unknown };
+type OutboxItem = {
+  id: string;
+  ts: number;
+  kind: string;
+  path: string;
+  body: unknown;
+  state?: "pending" | "needs_attention";
+  failure_status?: number;
+};
 type OutboxStore = Pick<Storage, "getItem" | "setItem">;
-type OutboxDrainResult = { sent: number; remaining: number };
+type OutboxDrainResult = { sent: number; remaining: number; needsAttention: number };
+type OutboxSendResult = void | "needs_attention";
 type OutboxController = {
   enqueue(entry: { kind: string; path: string; body: unknown }): OutboxItem;
   list(): OutboxItem[];
   count(): number;
   remove(id: string): void;
   clear(): void;
-  drain(send: (item: OutboxItem) => Promise<unknown>): Promise<OutboxDrainResult>;
+  drain(send: (item: OutboxItem) => Promise<OutboxSendResult>): Promise<OutboxDrainResult>;
 };
 
 const OUTBOX_KEY = "cairn.outbox.v1";
@@ -470,19 +625,35 @@ function createOutbox(opts: {
   // every one after it for the next flush). Items enqueued DURING a drain (the
   // network dropped again mid-replay) land at the tail and survive, because
   // remove() always re-reads the freshly-stored queue.
-  async function drain(send: (item: OutboxItem) => Promise<unknown>): Promise<OutboxDrainResult> {
+  async function drain(send: (item: OutboxItem) => Promise<OutboxSendResult>): Promise<OutboxDrainResult> {
     let sent = 0;
+    let needsAttention = 0;
     const queue = read();
     for (const item of queue) {
+      if (item.state === "needs_attention") {
+        needsAttention++;
+        continue;
+      }
+      let result: OutboxSendResult;
       try {
-        await send(item);
+        result = await send(item);
       } catch {
         break;
+      }
+      if (result === "needs_attention") {
+        const current = read();
+        const index = current.findIndex((row) => row.id === item.id);
+        if (index >= 0) {
+          current[index] = { ...current[index], state: "needs_attention", failure_status: item.failure_status };
+          write(current);
+        }
+        needsAttention++;
+        continue;
       }
       remove(item.id);
       sent++;
     }
-    return { sent, remaining: count() };
+    return { sent, remaining: count(), needsAttention };
   }
 
   return { enqueue, list, count, remove, clear, drain };
@@ -515,6 +686,9 @@ let outboxFlushing = false;
 function renderOutboxBar(): void {
   if (typeof document === "undefined") return;
   const pending = outbox().count();
+  const attention = outbox()
+    .list()
+    .filter((item) => item.state === "needs_attention").length;
   const offline = typeof navigator !== "undefined" && navigator.onLine === false;
   let bar = document.querySelector<HTMLElement>(".outbox-bar");
   // While offline the warm `.offline-bar` already promises the logs are saved and
@@ -531,7 +705,7 @@ function renderOutboxBar(): void {
     bar.setAttribute("aria-live", "polite");
     document.body.appendChild(bar);
   }
-  const label = outboxFlushing ? "Syncing" : "Waiting to sync";
+  const label = attention ? "Needs attention" : outboxFlushing ? "Syncing" : "Waiting to sync";
   bar.innerHTML = `<span class="outbox-dot" aria-hidden="true"></span><span class="outbox-txt">${label} · ${pending} log${pending === 1 ? "" : "s"}</span>`;
   const shown = bar;
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => shown.classList.add("show"));
@@ -577,18 +751,20 @@ async function flushOutbox(): Promise<void> {
 
   outboxFlushing = true;
   renderOutboxBar();
-  let result: OutboxDrainResult = { sent: 0, remaining: box.count() };
+  let result: OutboxDrainResult = { sent: 0, remaining: box.count(), needsAttention: 0 };
   try {
     result = await box.drain(async (item) => {
-      // api() resolves the body on ANY HTTP status and only REJECTS on a network
-      // failure, so reaching the resolve means the server received the write. A
-      // server-side {error} won't be cured by re-sending, so delivery counts as
-      // done either way — drain drops the item and moves to the next.
-      await api(item.path as string, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(item.body),
-      });
+      try {
+        await api(item.path as string, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Idempotency-Key": item.id },
+          body: JSON.stringify(item.body),
+        });
+      } catch (error) {
+        if (isTransientApiFailure(error)) throw error;
+        if (error instanceof CairnApiError && error.status != null) item.failure_status = error.status;
+        return "needs_attention";
+      }
       renderOutboxBar();
     });
   } finally {
@@ -630,6 +806,9 @@ const CAIRN_API_CACHE = {
   MICRO_TTL_MS: API_MICRO_TTL_MS,
   MICRO_CACHE_PATHS: API_MICRO_CACHE_PATHS,
   GET_TIMEOUT_MS: API_GET_TIMEOUT_MS,
+  ApiError: CairnApiError,
+  isTransientApiFailure,
+  normalizeRoute: normalizeApiRoute,
 };
 
 if (typeof window !== "undefined") {
@@ -655,6 +834,7 @@ Object.assign(globalThis, {
   setOffline,
   CairnOutbox: CAIRN_OUTBOX,
   CairnApiCache: CAIRN_API_CACHE,
+  CairnApiError,
   outboxEnqueue,
   flushOutbox,
   outboxCount,

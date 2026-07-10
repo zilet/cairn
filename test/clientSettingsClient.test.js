@@ -169,3 +169,37 @@ test("settings agent chips and update card render stable operator states", () =>
   assert.match(html, /href="https:\/\/example\.com\/&quot;notes&quot;"/);
   assert.match(html, /docker compose pull &amp;&amp; docker compose up -d/);
 });
+
+test("system diagnostics card renders grouped issues compactly and escapes fields", () => {
+  const settings = loadSettingsClient();
+  const html = settings.diagnosticsCard(
+    {
+      window_days: 7,
+      total: 9,
+      issues: [
+        {
+          source: "client",
+          kind: "api_failure",
+          level: "error",
+          route: "/api/<settings>",
+          status: 503,
+          count: 4,
+          last_seen: "2026-07-10 12:00:00",
+          message: "<script>server failed</script>",
+          release: "1.0.0",
+        },
+      ],
+      slow: [{ route: "/api/stats", duration_ms: 2100 }],
+    },
+    { relTime: () => "just now" }
+  );
+
+  assert.match(html, /System diagnostics/);
+  assert.match(html, /9 diagnostic events in the last 7 days/);
+  assert.match(html, /api failure/);
+  assert.match(html, /client · \/api\/&lt;settings&gt; · 503 · just now/);
+  assert.match(html, /4×/);
+  assert.match(html, /1 recent slow request/);
+  assert.match(html, /Request bodies, health values, chat text, and credentials are never collected/);
+  assert.doesNotMatch(html, /<script>/);
+});

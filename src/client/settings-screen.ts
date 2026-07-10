@@ -21,14 +21,15 @@ const { garminStatusLine, agentHealthCard, agentOpLabel, agentActivityCard, noti
 const SETTINGS_SCREEN_CACHE_KEY = "settings:screen";
 
 async function fetchSettingsBundle(): Promise<SettingsScreenBundle> {
-  const [rawData, rawArtStats, agentStats, learnings, brainDiagnostics] = await Promise.all([
+  const [rawData, rawArtStats, agentStats, learnings, brainDiagnostics, diagnostics] = await Promise.all([
     api("/settings"),
     api("/art/stats").catch(() => null),
     api("/agent-stats").catch(() => null), // 404s on a backend without telemetry -> degrade silently
     api("/learnings").catch(() => null),   // outcome learnings -> "What Cairn has noticed"; absent on older backends
     api("/brain-diagnostics").catch(() => null), // operator-only accountable brain/tool trace
+    api("/diagnostics?recent=40&days=7").catch(() => null), // local-first grouped browser/server issue pulse
   ]);
-  return { rawData, rawArtStats, agentStats, learnings, brainDiagnostics };
+  return { rawData, rawArtStats, agentStats, learnings, brainDiagnostics, diagnostics };
 }
 
 function settingsBundleSame(a: unknown, b: unknown): boolean {
@@ -69,7 +70,7 @@ async function renderSettings(): Promise<void> {
 }
 
 function renderSettingsBundle(bundle: SettingsScreenBundle): void {
-  const { rawData, rawArtStats, agentStats, learnings, brainDiagnostics } = bundle;
+  const { rawData, rawArtStats, agentStats, learnings, brainDiagnostics, diagnostics } = bundle;
   const data = CairnSettingsSurface.settingsData(rawData);
   const artStats = rawArtStats ? (rawArtStats as SettingsScreenArtStats) : null;
   const s = data.settings;
@@ -89,7 +90,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   // Side cards (built once; folded into the Agents slice). All degrade to "" when the
   // backing endpoint is absent/empty.
   const agentHealthHtml = agentHealthCard(agentStats);
-  const agentActivityHtml = agentActivityCard(agentStats) + CairnSettingsClient.brainDiagnosticsCard(brainDiagnostics);
+  const diagnosticsCard = (CairnSettingsClient as typeof CairnSettingsClient & { diagnosticsCard(data: unknown, options?: { relTime?: (value: string) => string; absDate?: (value: string) => string }): string }).diagnosticsCard;
+  const agentActivityHtml = agentActivityCard(agentStats) + diagnosticsCard(diagnostics, { relTime, absDate }) + CairnSettingsClient.brainDiagnosticsCard(brainDiagnostics);
   const noticedHtml = noticedCard(learnings);
   const artSpendHtml = artStats ? CairnSettingsSurface.artSpendCardHtml(artStats) : "";
 
