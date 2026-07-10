@@ -19,8 +19,12 @@ import {
   canonicalGroup,
   classifyConstraint,
   classifyMuscleGroup,
+  movementKey,
   type MuscleGroup,
   MUSCLE_LANDMARKS,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+  resolveGroup,
 } from "./exercise-canon.js";
 import {
   type Equipment,
@@ -32,7 +36,7 @@ import {
 } from "./exercise-variations.js";
 import { findExercise, recentWorkingWeight } from "./exercises.js";
 import { loadPhrase, recentMuscleLoad, type RecentLoad } from "./hybrid-load.js";
-import { getPlan } from "./plan.js";
+import { addExerciseToPlanDay, getPlan } from "./plan.js";
 import type { CoachPersonalModifier, CoachWhatWorksForYou } from "../brain/coach-context-contract.js";
 import { applyPersonalResponseModifier, whatWorksForYou } from "./reaction-model.js";
 // createProposal + the auto-progression dedup live in profile.js; imported here (as
@@ -388,29 +392,153 @@ function planItemFor(name: string): {
   return null;
 }
 
-// The plan day (lowest day_number) a lift sits on, matched case-insensitively on the
-// exercise name — so a surface with only the lift name (e.g. the conductor's swap
-// payload) can resolve the day for the in-session swap apply path. Null when the lift
-// isn't on any plan day. Null-safe, never throws.
-export function findPlanDayForExercise(name: string): number | null {
-  const n = String(name ?? "")
-    .trim()
-    .toLowerCase();
-  if (!n) return null;
+// The PLAN SLOT a lift resolves to, matched with the same tiered ladder applyPlanSwap
+// uses (exact normalized name → conservative key → movementKey) — so a surface with
+// only a lift name (e.g. the conductor's swap payload, which names the LOGGED lift)
+// finds the slot even when the plan spells the movement with a different implement
+// ("Barbell Bench Press" logged, "DB Bench Press" planned). Lowest day_number within
+// the winning tier; tiers never mix (an exact match elsewhere always beats a
+// movement-family match). Null when nothing on the plan trains that movement.
+export function resolvePlanSwapSlot(name: string): { day: number; plan_name: string } | null {
+  const raw = String(name ?? "").trim();
+  if (!raw) return null;
   try {
-    const row = db
+    const rows = db
       .prepare(
-        `SELECT MIN(pd.day_number) AS d
+        `SELECT pd.day_number AS d, e.name AS ex_name
          FROM plan_items pi
          JOIN plan_days pd ON pd.id = pi.plan_day_id
          JOIN exercises e ON e.id = pi.exercise_id
-        WHERE LOWER(e.name) = ?`
+        ORDER BY pd.day_number, pi.position`
       )
-      .get(n) as any;
-    const d = row?.d;
-    return d != null && Number.isFinite(Number(d)) ? Number(d) : null;
+      .all() as any[];
+    const norm = normalizeExerciseName(raw);
+    const key = normalizedExerciseKey(raw);
+    const move = movementKey(raw);
+    const hit =
+      rows.find((r) => normalizeExerciseName(r.ex_name) === norm) ??
+      rows.find((r) => normalizedExerciseKey(r.ex_name) === key) ??
+      rows.find((r) => movementKey(r.ex_name) === move);
+    if (!hit || !Number.isFinite(Number(hit.d))) return null;
+    return { day: Number(hit.d), plan_name: String(hit.ex_name) };
   } catch {
     return null;
+  }
+}
+
+// Back-compat day-only view of resolvePlanSwapSlot (existing callers + MCP).
+export function findPlanDayForExercise(name: string): number | null {
+  return resolvePlanSwapSlot(name)?.day ?? null;
+}
+
+// The plan day best suited to host a movement of `group` — the day already doing the
+// most work for that muscle group (ties → the earliest day). Null when no plan day
+// trains it at all.
+function bestPlanDayForGroup(group: MuscleGroup): number | null {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT pd.day_number AS d, e.name AS ex_name, e.muscle_group AS mg
+         FROM plan_items pi
+         JOIN plan_days pd ON pd.id = pi.plan_day_id
+         JOIN exercises e ON e.id = pi.exercise_id`
+      )
+      .all() as any[];
+    const counts = new Map<number, number>();
+    for (const r of rows) {
+      if (resolveGroup(String(r.ex_name ?? ""), r.mg) !== group) continue;
+      const d = Number(r.d);
+      if (!Number.isFinite(d)) continue;
+      counts.set(d, (counts.get(d) ?? 0) + 1);
+    }
+    let best: number | null = null;
+    for (const [d, n] of counts) {
+      if (best == null || n > (counts.get(best) ?? 0) || (n === (counts.get(best) ?? 0) && d < best)) best = d;
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+// The full "rotate one in" intent behind one tap: resolve WHERE the outgoing lift
+// lives (tiered — the plan's implement spelling never blocks the athlete's), swap
+// that slot, and when the movement isn't represented anywhere, ADD the incoming
+// variation to the day already training that muscle group instead of dead-ending.
+// The message says what actually happened, in the plan's own names. REST + MCP both
+// call this so the surfaces never drift.
+export function applySwapSmart(
+  from: string,
+  to: string,
+  day?: number | null,
+): { ok: false; error: string } | { ok: true; mode: "swapped" | "added"; day: number; from?: string; exercise: string; message: string; swapped?: any } {
+  const f = String(from ?? "").trim();
+  const t = String(to ?? "").trim();
+  if (!f) return { ok: false, error: "from exercise required" };
+  if (!t) return { ok: false, error: "to exercise required" };
+
+  // day == null must stay NaN so the slot resolution runs — Number(null) is 0,
+  // which reads as a (nonexistent) explicit day 0 and breaks the whole ladder.
+  let d = day == null ? Number.NaN : Number(day);
+  let planName = f;
+  if (!Number.isFinite(d)) {
+    const slot = resolvePlanSwapSlot(f);
+    if (slot) {
+      d = slot.day;
+      planName = slot.plan_name;
+    } else {
+      // Nothing on the plan trains this movement — land the variation on the day
+      // that already works the muscle group (the athlete asked for it; an error
+      // toast would just make them do this by hand from the Plan tab).
+      const group = groupForName(f) ?? groupForName(t);
+      const hostDay = group ? bestPlanDayForGroup(group) : null;
+      if (hostDay == null) return { ok: false, error: `couldn't find ${f} — or a day that trains it — on your plan` };
+      const added = addExerciseToPlanDay(
+        hostDay,
+        t,
+        `Added as a fresh variation for ${f} — start light, log your actual working weight.`,
+      );
+      if (!added) return { ok: false, error: `couldn't add ${t} to your plan` };
+      emitBrainEvent({
+        kind: "exercise_swapped",
+        domain: "training",
+        date: localDateISO(),
+        subject_key: `${f} -> ${t} (added)`.slice(0, 160),
+      });
+      return {
+        ok: true,
+        mode: "added",
+        day: added.day,
+        exercise: added.exercise,
+        message: `${f} isn't on your plan — added ${added.exercise} to day ${added.day} instead (nothing removed)`,
+      };
+    }
+  }
+  // Pass the RESOLVED plan spelling as `from` so the apply hits its exact-match tier.
+  const applied = buildAndApplySwap(d, planName, t);
+  if (!applied.ok) return applied;
+  const renamed = planName.toLowerCase() !== f.toLowerCase();
+  return {
+    ok: true,
+    mode: "swapped",
+    day: d,
+    from: planName,
+    exercise: t,
+    message: renamed
+      ? `Rotated ${t} in for ${planName} (your plan's slot for ${f}) on day ${d}`
+      : `Rotated ${t} in for ${planName} on day ${d}`,
+    swapped: applied.swapped,
+  };
+}
+
+// The canonical muscle group for a lift name — stored group when the exercise
+// exists, else classified from the name.
+function groupForName(name: string): MuscleGroup | null {
+  try {
+    const row = db.prepare(`SELECT muscle_group FROM exercises WHERE LOWER(name) = LOWER(?)`).get(name) as any;
+    return resolveGroup(name, row?.muscle_group ?? null);
+  } catch {
+    return classifyMuscleGroup(name);
   }
 }
 
@@ -1115,10 +1243,13 @@ export function buildAndApplySwap(
   const draft = buildSwapProposal(day, from, to);
   if (!draft.ok) return draft;
   try {
-    const applied = applyProposal(draft.proposal.id) as { ok?: boolean; error?: string };
+    const applied = applyProposal(draft.proposal.id) as { ok?: boolean; error?: string; skipped?: Array<{ error?: string }> };
     if (!applied || applied.ok === false) {
       setProposalStatus(draft.proposal.id, "discarded");
-      return { ok: false, error: applied?.error || "couldn't apply that swap" };
+      // Prefer the per-change error (e.g. '"X" is not on day N to swap out') over
+      // the apply layer's generic line — the surface toasts this verbatim.
+      const detail = Array.isArray(applied?.skipped) ? applied.skipped.find((s) => s?.error)?.error : undefined;
+      return { ok: false, error: detail || applied?.error || "couldn't apply that swap" };
     }
     // savePlanDay already emitted plan_changed; the explicit swap kind carries
     // WHICH movement rotated out/in so the review can speak to the rotation.

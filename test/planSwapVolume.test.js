@@ -9,7 +9,13 @@ import assert from "node:assert/strict";
 import { db, repo, isoDaysAgo } from "./_seed.js";
 import { effectiveVolumeByGroup } from "../dist/repo/exercise-variations.js";
 import { getVolumeByMuscle } from "../dist/repo/sessions.js";
-import { buildAndApplySwap, buildProgressionProposal, findPlanDayForExercise } from "../dist/repo/progression.js";
+import {
+  applySwapSmart,
+  buildAndApplySwap,
+  buildProgressionProposal,
+  findPlanDayForExercise,
+  resolvePlanSwapSlot,
+} from "../dist/repo/progression.js";
 
 function reset() {
   for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "program_blocks", "plan_proposals", "activities"]) {
@@ -130,6 +136,100 @@ test("a day-less swap resolves the plan day from `from` and applies in place", (
 test("a day-less swap for a lift not on the plan resolves to null (the surface then returns the designed error)", () => {
   repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }]);
   assert.equal(findPlanDayForExercise("Incline Bench Press"), null, "unknown lift → no day; the surface answers { ok:false, error } at 200");
+});
+
+// ── the plan/reality bridge: the conductor names the LOGGED lift, the plan may
+//    spell the same slot with a different implement ──────────────────────────────
+test("resolvePlanSwapSlot bridges implement spellings — a logged Barbell Bench Press finds the plan's DB Bench Press slot", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "DB Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70 },
+    { exercise: "Incline DB Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 55 },
+  ]);
+  const slot = resolvePlanSwapSlot("Barbell Bench Press");
+  assert.ok(slot, "the movement family resolves");
+  assert.equal(slot.day, 2);
+  assert.equal(slot.plan_name, "DB Bench Press", "resolves to the plan's own spelling of the slot");
+  assert.equal(findPlanDayForExercise("Barbell Bench Press"), 2, "the day-only view agrees");
+});
+
+test("resolvePlanSwapSlot: an exact-name match anywhere always beats a movement-family match", () => {
+  repo.savePlanDay(2, "Push A", "Push", [{ exercise: "DB Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70 }]);
+  repo.savePlanDay(4, "Push B", "Push", [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 5, target_weight: 185 }]);
+  const slot = resolvePlanSwapSlot("Barbell Bench Press");
+  assert.equal(slot.day, 4, "the exact tier wins even though the family match sits on an earlier day");
+  assert.equal(slot.plan_name, "Barbell Bench Press");
+});
+
+test("applySwapSmart swaps the movement-family slot and says what actually happened", () => {
+  repo.savePlanDay(2, "Push", "Push", [
+    { exercise: "DB Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70 },
+    { exercise: "Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 20 },
+  ]);
+  // day: null exactly as the REST route passes it — Number(null) is 0, and a
+  // coercion slip here once sent the swap to a nonexistent day 0 (live bug).
+  const r = applySwapSmart("Barbell Bench Press", "Incline Bench Press", null);
+  assert.equal(r.ok, true, "the swap lands");
+  assert.equal(r.mode, "swapped");
+  assert.equal(r.day, 2);
+  assert.match(r.message, /Incline Bench Press/, "names the incoming movement");
+  assert.match(r.message, /DB Bench Press/, "names the plan's own slot that rotated out");
+  const names = repo.getPlanDay(2).items.map((it) => it.exercise);
+  assert.ok(names.includes("Incline Bench Press"), "the new movement is on the day");
+  assert.ok(!names.includes("DB Bench Press"), "the family-matched slot rotated out");
+  assert.ok(names.includes("Lateral Raise"), "the rest of the day is untouched");
+});
+
+test("applySwapSmart with a from that isn't represented ADDS the variation to the muscle group's day instead of erroring", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads" });
+  repo.upsertExercise({ name: "Leg Extension", muscle_group: "quads" });
+  repo.savePlanDay(1, "Legs", "Legs", [
+    { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 },
+    { exercise: "Leg Extension", sets: 3, rep_low: 10, rep_high: 12, target_weight: 110 },
+  ]);
+  const r = applySwapSmart("Hack Squat", "Leg Press");
+  assert.equal(r.ok, true, "no dead-end — the athlete asked for the movement");
+  assert.equal(r.mode, "added");
+  assert.equal(r.day, 1, "lands on the day already training that muscle group");
+  assert.match(r.message, /isn't on your plan/i, "honest about what happened");
+  assert.match(r.message, /nothing removed/i, "explicit that no slot was displaced");
+  const names = repo.getPlanDay(1).items.map((it) => it.exercise);
+  assert.ok(names.includes("Leg Press"), "the variation was appended");
+  assert.ok(names.includes("Back Squat") && names.includes("Leg Extension"), "existing slots untouched");
+  const added = repo.getPlanDay(1).items.find((it) => it.exercise === "Leg Press");
+  assert.equal(added.target_weight, null, "starts light — log actual");
+  assert.match(String(added.note || ""), /start light/i);
+});
+
+test("applySwapSmart still errors honestly when neither the movement nor its muscle group is on the plan", () => {
+  repo.savePlanDay(1, "Legs", "Legs", [{ exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 5, target_weight: 225 }]);
+  const r = applySwapSmart("Lat Pulldown", "Wide-Grip Pulldown");
+  assert.equal(r.ok, false, "no back day exists — adding would invent program structure");
+  assert.match(r.error, /Lat Pulldown/);
+});
+
+// ── the recovery-week draft lifecycle: state, not a repeatable ask ─────────────
+test("recovery-week drafts: pending detection, fresh-draft supersession, failed runs never 'pending'", () => {
+  const instr = `${repo.RECOVERY_WEEK_INSTRUCTION_PREFIX} (deload) week: cut working-set volume roughly in half.`;
+  assert.equal(repo.pendingRecoveryDraft(), null, "nothing drafted yet");
+
+  const p1 = repo.createProposal("claude", instr, "", { summary: "recovery week", days: {} });
+  assert.equal(repo.pendingRecoveryDraft()?.id, p1.id, "a parseable recovery draft is pending review");
+
+  // A second tap's fresh draft retires the prior one (evolveProgram calls this).
+  const p2 = repo.createProposal("codex", instr, "", { summary: "recovery week v2", days: {} });
+  repo.supersedeRecoveryWeekDrafts(p2.id);
+  assert.equal(repo.pendingRecoveryDraft()?.id, p2.id, "the newest read wins");
+  assert.equal(repo.getProposal(p1.id).status, "superseded", "system-retired, not user-discarded");
+
+  // A non-recovery draft is never touched or counted.
+  const other = repo.createProposal("claude", "evolve program", "", { summary: "weekly evolution", changes: [] });
+  repo.supersedeRecoveryWeekDrafts();
+  assert.equal(repo.pendingRecoveryDraft(), null, "recovery drafts all retired");
+  assert.equal(repo.getProposal(other.id).status, "draft", "unrelated drafts untouched");
+
+  // A failed agent run persists an UNPARSEABLE row — a retry case, never "pending review".
+  repo.createProposal("claude", instr, "raw agent noise", null);
+  assert.equal(repo.pendingRecoveryDraft(), null);
 });
 
 // ── C6: the honest volume model ───────────────────────────────────────────────

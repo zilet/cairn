@@ -75,6 +75,18 @@ test("a stalled group offers a MENU of same-pattern vary options to break the pl
   assert.ok(chest.vary_options.every((o) => o.name && o.why), "each option names a movement + why it helps");
 });
 
+test("vary options never offer a movement already on the plan — variety means something NEW", () => {
+  [35, 28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 5, rir: 1, date: back(d) }));
+  // Baseline: the menu includes DB Bench Press for a stalled bench.
+  const before = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "chest");
+  assert.ok(before.vary_options.some((o) => /db bench press/i.test(o.name)), "DB Bench Press is a natural option when un-programmed");
+  // Program it → it must drop out of the menu ("rotate in what you already have" is a dead suggestion).
+  repo.savePlanDay(2, "Push", "Push", [{ exercise: "DB Bench Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70 }]);
+  const after = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "chest");
+  assert.equal(after.verdict, "stalling");
+  assert.ok(!after.vary_options.some((o) => /db bench press/i.test(o.name)), "an already-programmed movement is excluded");
+});
+
 test("muscleGroupTrajectory is quiet when nothing is logged", () => {
   const t = repo.muscleGroupTrajectory(REF);
   assert.equal(t.available, false);

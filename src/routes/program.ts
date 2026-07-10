@@ -6,14 +6,13 @@ import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
-  buildAndApplySwap,
+  applySwapSmart,
   buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
   completeBlock,
   createBlock,
   ensureActiveBlock,
-  findPlanDayForExercise,
   getActiveBlock,
   getEquipmentProfile,
   getPlan,
@@ -185,20 +184,13 @@ programRouter.post("/program/swap", (req, res) => {
 // error } at 200.
 programRouter.post("/program/swap/apply", (req, res) => {
   const { day, from, to } = req.body ?? {};
-  // The conductor's swap chip carries `from`/`to` but not the plan day. When `day`
-  // is missing/non-finite, resolve it from `from`'s plan placement; if the lift isn't
-  // on the plan, return the designed { ok:false, error } at 200. An explicit day is
-  // used verbatim (unchanged behavior).
-  let d = Number(day);
-  if (!Number.isFinite(d)) {
-    const resolved = findPlanDayForExercise(String(from ?? ""));
-    if (resolved == null) {
-      res.json({ ok: false, error: `couldn't find ${String(from ?? "").trim() || "that exercise"} on your plan` });
-      return;
-    }
-    d = resolved;
-  }
-  res.json(buildAndApplySwap(d, from, to));
+  // applySwapSmart owns the whole rotate-in intent: an explicit day is used
+  // verbatim; otherwise the slot resolves through the tiered ladder (exact →
+  // key → movement family — the plan's implement spelling never blocks the
+  // athlete's logged one), and when `from` isn't represented at all, the
+  // variation is ADDED to the day already training that muscle group. The
+  // response `message` says what actually happened.
+  res.json(applySwapSmart(from, to, Number.isFinite(Number(day)) ? Number(day) : null));
 });
 
 programRouter.get("/proposals", (req, res) => res.json(listProposals(req.query.limit ? Number(req.query.limit) : 20)));

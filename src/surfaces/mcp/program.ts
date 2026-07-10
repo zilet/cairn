@@ -6,13 +6,12 @@ import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
-  buildAndApplySwap,
+  applySwapSmart,
   buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
   createBlock,
   ensureActiveBlock,
-  findPlanDayForExercise,
   getActiveBlock,
   getEquipmentProfile,
   getPlan,
@@ -222,28 +221,14 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "swap_exercise_now",
-    "Swap `from` out for a same-pattern `to` IN PLACE on a plan day AND APPLY it immediately (no review gate) — the in-session 'rotate one in' intent, so the new movement is ready to log against right away and the plan adapts as the athlete goes. Builds through the same tested swap → apply path, discarding the draft if the apply can't land. `day` is optional — when omitted it's resolved from `from`'s plan placement. Returns { ok:true, swapped } or { ok:false, error } at 200.",
+    "Swap `from` out for a same-pattern `to` IN PLACE on a plan day AND APPLY it immediately (no review gate) — the in-session 'rotate one in' intent, so the new movement is ready to log against right away and the plan adapts as the athlete goes. `day` is optional — when omitted the slot resolves through a tiered ladder (exact name → conservative key → movement family, so 'Barbell Bench Press' finds the plan's 'DB Bench Press' slot), and when `from` isn't on the plan at all, `to` is ADDED to the day already training that muscle group instead of erroring. Returns { ok:true, mode:'swapped'|'added', message } or { ok:false, error } at 200.",
     {
       day: z.number().int().optional().describe("the plan day number; omit to resolve it from `from`'s plan placement"),
-      from: z.string().describe("the exact current exercise to rotate out"),
+      from: z.string().describe("the current exercise to rotate out (the athlete's logged spelling is fine)"),
       to: z.string().describe("the same-pattern movement to rotate in"),
     },
-    async ({ day, from, to }) => {
-      // Mirror the REST /program/swap/apply resolution so MCP ⊆ REST stays true: an
-      // explicit day is used verbatim; a missing day resolves from `from`'s plan day.
-      let d = day;
-      if (d == null || !Number.isFinite(d)) {
-        const resolved = findPlanDayForExercise(from);
-        if (resolved == null) {
-          return asText({
-            ok: false,
-            error: `couldn't find ${String(from ?? "").trim() || "that exercise"} on your plan`,
-          });
-        }
-        d = resolved;
-      }
-      return asText(buildAndApplySwap(d, from, to));
-    }
+    // Mirror of REST /program/swap/apply (MCP ⊆ REST) — one shared smart apply.
+    async ({ day, from, to }) => asText(applySwapSmart(from, to, day != null && Number.isFinite(day) ? day : null))
   );
 
   server.tool(
