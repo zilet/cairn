@@ -168,6 +168,18 @@ async function renderPlanEditor(): Promise<void> {
       editing.add(form.datasetNumber(button, "editday"));
       draw();
     }));
+    // "Train this day": jump into the isolated Session logging surface with THIS
+    // plan day preselected, logged against today. Reuses the shared openSession()
+    // + the state.day/dayPicked mechanism the Session surface already honors —
+    // no parallel routing. sync() first so any in-progress edits aren't lost.
+    view.querySelectorAll<HTMLElement>("[data-trainday]").forEach((button) => button.addEventListener("click", () => {
+      sync();
+      const day = model[form.datasetNumber(button, "trainday")];
+      if (!day) return;
+      state.day = form.dayNumber(day);
+      state.dayPicked = true;
+      if (typeof openSession === "function") openSession(localISO());
+    }));
     view.querySelectorAll<HTMLElement>("[data-doneday]").forEach((button) => button.addEventListener("click", () => {
       sync();
       editing.delete(form.datasetNumber(button, "doneday"));

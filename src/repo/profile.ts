@@ -76,6 +76,14 @@ function hydrateProposal(row: any) {
 export function setProposalStatus(id: number, status: string) {
   db.prepare(`UPDATE plan_proposals SET status = ? WHERE id = ?`).run(status, id);
   bumpTrainingDataVersion(); // proposal state feeds the conductor's memoized read
+  // A retired draft (the user's explicit discard, or a fresher draft superseding it)
+  // makes any standing announced/pending brain decision pointing at it MOOT — cancel
+  // those decisions NOW so the boundary pass can never apply a proposal that is no
+  // longer live (re-applying a vetoed replacePlan would be the worst surprise).
+  // 'applied' is deliberately NOT handled here: the authoritative apply flow
+  // (applyProposal) already cancels around its own decision, passing the applying
+  // decision as the exception.
+  if (status === "discarded" || status === "superseded") cancelAnnouncementsForProposal(id);
   const proposal = getProposal(id);
   if (proposal && status !== "applied") recordProposalStatusDecision(proposal, status);
   return proposal;
@@ -98,9 +106,9 @@ function supersedeSiblingTrainingDrafts(appliedId: number) {
       /* keep null */
     }
     if (kind === "nutrition_target") continue; // different category — leave it
-    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
-    const proposal = getProposal(Number(d.id));
-    if (proposal) recordProposalStatusDecision(proposal, "superseded");
+    // Through setProposalStatus so any standing announced/pending decision on the
+    // retired draft is canceled too (the boundary pass must never apply it).
+    setProposalStatus(Number(d.id), "superseded");
   }
 }
 
@@ -116,9 +124,8 @@ export function supersedeAutoEvolutionDrafts(exceptId?: number) {
   let retired = 0;
   for (const d of drafts) {
     if (exceptId != null && Number(d.id) === Number(exceptId)) continue;
-    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
-    const proposal = getProposal(Number(d.id));
-    if (proposal) recordProposalStatusDecision(proposal, "superseded");
+    // Through setProposalStatus so a standing announced/pending decision is canceled too.
+    setProposalStatus(Number(d.id), "superseded");
     retired++;
   }
   return retired;
@@ -152,9 +159,8 @@ export function supersedeRecoveryWeekDrafts(exceptId?: number) {
   let retired = 0;
   for (const d of drafts) {
     if (exceptId != null && Number(d.id) === Number(exceptId)) continue;
-    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
-    const proposal = getProposal(Number(d.id));
-    if (proposal) recordProposalStatusDecision(proposal, "superseded");
+    // Through setProposalStatus so a standing announced/pending decision is canceled too.
+    setProposalStatus(Number(d.id), "superseded");
     retired++;
   }
   return retired;
@@ -219,9 +225,8 @@ export function supersedeAutoRunPlanDrafts() {
     .all() as any[];
   let retired = 0;
   for (const d of drafts) {
-    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
-    const proposal = getProposal(Number(d.id));
-    if (proposal) recordProposalStatusDecision(proposal, "superseded");
+    // Through setProposalStatus so a standing announced/pending decision is canceled too.
+    setProposalStatus(Number(d.id), "superseded");
     retired++;
   }
   return retired;
@@ -247,9 +252,8 @@ export function supersedeAutoProgressionDrafts(dayNumber: number) {
       /* keep NaN — an unparseable draft is left alone */
     }
     if (dn === Number(dayNumber)) {
-      db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
-      const proposal = getProposal(Number(d.id));
-      if (proposal) recordProposalStatusDecision(proposal, "superseded");
+      // Through setProposalStatus so a standing announced/pending decision is canceled too.
+      setProposalStatus(Number(d.id), "superseded");
       retired++;
     }
   }

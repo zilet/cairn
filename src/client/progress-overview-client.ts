@@ -399,6 +399,24 @@ function tovCapitalize(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
+// The always-available "just start training" entry on the Train tab. Routes into
+// the isolated Session logging surface via the shared openSession() — the same
+// path the Today Brief uses — so there is no parallel start-session flow. dayPicked
+// is reset on the way in (see wireTovStart) so it lands on today's calm suggested
+// plan day, not a day left selected from elsewhere.
+function tovStartHtml(): string {
+  return `<button class="draftbtn tov-start reveal" type="button" id="tovStart" style="${stagger(1)}">Start today's training →</button>`;
+}
+
+function wireTovStart(): void {
+  const btn = view.querySelector<HTMLElement>("#tovStart");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    state.dayPicked = false;
+    if (typeof openSession === "function") openSession(localISO());
+  });
+}
+
 function tovFocusHtml(data: TovData): string {
   const focus = data.focus || {};
   const lead = (focus.lead || null) as TovFocusItem | null;
@@ -469,14 +487,17 @@ function paintTrainOverview(data: TovData): void {
   if (!hasAny) {
     view.innerHTML = head + `<div class="tov-empty">` +
       journey +
+      tovStartHtml() +
       emptyStateHtml(art("exercise", "barbell row"), "Log a session and this becomes your training map — what's trained, what's due, and where to push next.") +
       `</div>`;
     wireSeg(PROGRESS_HANDLERS);
+    wireTovStart();
     CairnProgressJourney?.wire?.(view);
     return;
   }
   view.innerHTML = head +
     tovMastHtml(data, rows) +
+    tovStartHtml() +
     journey +
     tovMapHtml(rows) +
     tovFocusHtml(data) +
@@ -484,6 +505,7 @@ function paintTrainOverview(data: TovData): void {
     tovMovesHtml(data) +
     tovSessionsHtml(data);
   wireSeg(PROGRESS_HANDLERS);
+  wireTovStart();
   CairnProgressJourney?.wire?.(view);
   runCountUps(view);
   view.querySelectorAll<HTMLElement>("[data-tovgo]").forEach((el) =>

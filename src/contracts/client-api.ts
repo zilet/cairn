@@ -1423,11 +1423,28 @@ export interface ClientProposal {
   [key: string]: unknown;
 }
 
+// The autonomy layer's outcome riding on a proposal-creating response (lead round):
+// applied now (lead mode, `applied` is the change list), waiting for its natural
+// boundary (`pending`/`announced` with `applied:false`), or left a reviewable draft
+// (tier 'ask' / review_required). Loose on purpose — the server shape is the truth.
+export interface ClientProposalAutonomy {
+  ok?: boolean;
+  tier?: string;
+  applied?: unknown; // false when held; the applied-change list when it landed now
+  pending?: boolean;
+  announced?: boolean;
+  review_required?: boolean;
+  effective_date?: string;
+  reasons?: string[];
+  [key: string]: unknown;
+}
+
 export interface ClientProposalResult {
   ok?: boolean;
   proposal?: ClientProposal;
   applied?: unknown;
   swapped?: unknown;
+  autonomy?: ClientProposalAutonomy | null;
   error?: string;
 }
 

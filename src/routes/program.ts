@@ -1,13 +1,12 @@
 import { Router } from "express";
 import { draftCoachProposal, evolveProgram } from "../coachOps.js";
 import { localToday } from "../dayread.js";
-import { applyProposalWithAutonomy, getCachedDayRead } from "../domain/brain/index.js";
+import { applyProposalWithAutonomy, buildProgressionWithAutonomy, getCachedDayRead } from "../domain/brain/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
   applySwapSmart,
-  buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
   completeBlock,
@@ -53,9 +52,12 @@ programRouter.post("/agent/run", async (req, res) => {
   }
 });
 
-// Adaptive program evolution: read the program-state and draft a plan EVOLUTION
-// (progress / deload / rotate-a-variation / periodize) as a DRAFT proposal for
-// review — same propose→apply path as /agent/run, driven by the trend analysis.
+// Adaptive program evolution: read the program-state, draft a plan EVOLUTION
+// (progress / deload / rotate-a-variation / periodize), then route it through the
+// autonomy layer. Under lead_mode='lead' a bounded, reversible evolution quiet-applies
+// at its natural boundary and a structural restructure announces first (one-tap Undo,
+// surprise budget honored); under 'review_everything' it parks as a DRAFT proposal for
+// review — same propose→apply path as /agent/run. The `autonomy` field says which.
 programRouter.post("/program/evolve", async (req, res) => {
   const { agent, instruction } = req.body ?? {};
   // Long agentic call → a durable background job by default (the PWA streams the
@@ -158,15 +160,16 @@ programRouter.get("/program/progression", (req, res) => {
 // groups that are due, missing-pattern gaps. Plain words, most-actionable first.
 programRouter.get("/program/adjustments", (_req, res) => res.json(programAdjustments()));
 
-// Build a DRAFT plan proposal from the current day's per-lift prescriptions, via
-// the same propose→apply path as /agent/run and /program/evolve. Never auto-
-// applied. Returns { ok:true, proposal } or { ok:false, error } at 200 (the
+// Build a DRAFT plan proposal from the current day's per-lift prescriptions, then
+// route it through the autonomy layer (buildProgressionWithAutonomy, shared with MCP
+// so the two never drift). Under lead_mode='lead' a bounded target nudge quiet-applies
+// at its natural boundary with a decision + one-tap Undo; under 'review_everything' the
+// draft stays a plain reviewable draft (autonomy tier 'ask'). A "hold" (incl. an
+// autoregulation-braked hold) is still dropped; a "vary" becomes a real {swap:{from,to}}
+// change. Returns { ok:true, proposal, autonomy } or { ok:false, error } at 200 (the
 // designed-failure signal — nothing wrong at the HTTP level, just nothing to do).
 programRouter.post("/program/progression/apply", (req, res) => {
-  // ONE shared builder (buildProgressionProposal) with MCP so the two never drift. A
-  // "hold" (incl. an autoregulation-braked hold) is dropped; a "vary" becomes a real
-  // {swap:{from,to}} change instead of the old no-op same-exercise write.
-  res.json(buildProgressionProposal(Number((req.body ?? {}).day)));
+  res.json(buildProgressionWithAutonomy(Number((req.body ?? {}).day)));
 });
 
 // Draft a single-exercise SWAP (rotate `from` out for `to` on a day) as a DRAFT

@@ -38,6 +38,7 @@ import {
 import { researchEnabled, gatherReviewGrounding, researchEvidence } from "./research.js";
 import { normalizeHealthSynthesis } from "./health-synthesis.js";
 import { clampNutritionFloors } from "./repo/nutrition-safety.js";
+import { applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
 
 // runChosen is the shared agent-dispatch helper (see ./runChosen.ts). It's
 // re-exported here because api.ts / mcp.ts import it from coachOps as the
@@ -319,9 +320,29 @@ export async function evolveProgram(
   if (proposal?.id != null && String(instruction ?? "").startsWith(repo.RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
     repo.supersedeRecoveryWeekDrafts(Number(proposal.id));
   }
+  // Route the fresh draft through the autonomy layer (the same machinery the brain-review
+  // and case-conference paths use). Under lead_mode='lead' a bounded, reversible evolution
+  // (target/volume nudges → kind 'training_target') quiet-applies at its natural boundary
+  // with a decision + one-tap Undo, while a structural restructure (parsed.days → kind
+  // 'training_structure') ANNOUNCES first and lands at the boundary pass via repo.applyProposal
+  // (so the recovery-week stamp + supersession still fire); under 'announce_first' bounded
+  // changes also announce; under 'review_everything' the layer returns tier 'ask' and the draft
+  // stays a plain reviewable draft (no decision recorded) — exactly today's behavior. No
+  // requested_tier: decideAutonomyTier derives the default from the proposal shape and never
+  // loosens. Only a genuinely parsed proposal has something to apply; a failed/unparsed draft
+  // is left as a raw draft. Never throws — a bookkeeping failure never breaks the draft return.
+  let autonomy: any = null;
+  if (proposal?.id != null && result.parsed) {
+    try {
+      autonomy = applyProposalWithAutonomy(Number(proposal.id));
+    } catch {
+      autonomy = null;
+    }
+  }
   return {
     proposal,
     state,
+    autonomy,
     ok: !!result.parsed,
     agent: chosen,
     tried,

@@ -95,6 +95,10 @@ test("plan editor calendar footer and read-only day cards escape dynamic content
   assert.match(html, /keep it nasal &lt;easy&gt;/);
   assert.match(html, /data-guide="Bench%20%3Cpress%3E"/);
   assert.doesNotMatch(html, /<push>|<press>|<rep>|<easy>/);
+  // Every plan day in the read view offers a "Train this day" entry into logging,
+  // keyed by the day's array index (mirrors data-editday).
+  assert.match(html, /<button class="ghostbtn prog-train" data-trainday="0">Train this day<\/button>/);
+  assert.match(html, /data-editday="0"/);
 });
 
 test("plan editor editable rows preserve selectors, ordering controls, and escaped values", () => {

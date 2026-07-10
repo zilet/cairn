@@ -200,6 +200,24 @@ function createTodayScreenRuntime(input: TodayScreenRuntimeInput): TodayScreenRu
     if (!response || response.ok === false) { restore(); toast("Couldn't draft that just now — try again in a bit."); return; }
     swrInvalidate("plan:coach");
     swrInvalidate("plan:proposals");
+    // The autonomy layer says what actually happened — narrate THAT, never a stock line.
+    // Applied now (lead mode): the plan already follows; jumping to Coach would show an
+    // applied row, not a draft to review. Scheduled (pending/announced): it lands at the
+    // next natural boundary. Anything else (ask / review_everything): today's draft flow.
+    const autonomy = response.autonomy;
+    const appliedNow = !!autonomy && autonomy.ok === true && autonomy.applied !== false &&
+      !autonomy.pending && !autonomy.announced;
+    const scheduled = !!autonomy && autonomy.applied === false && (autonomy.pending === true || autonomy.announced === true);
+    if (appliedNow) {
+      restore();
+      toast("Applied — your plan follows you (Undo is on the exercise card)");
+      return;
+    }
+    if (scheduled) {
+      restore();
+      toast("Set — it lands at your next natural boundary");
+      return;
+    }
     toast("Drafted — review it in your Plan");
     input.state.planJump = "coach";
     activateTab("plan");

@@ -1,13 +1,12 @@
 import { z } from "zod";
 import { draftCoachProposal, evolveProgram } from "../../coachOps.js";
 import { localToday } from "../../dayread.js";
-import { applyProposalWithAutonomy, getCachedDayRead } from "../../domain/brain/index.js";
+import { applyProposalWithAutonomy, buildProgressionWithAutonomy, getCachedDayRead } from "../../domain/brain/index.js";
 import { dexaTargeting } from "../../domain/health/index.js";
 import {
   advanceBlockWeek,
   applyProposal,
   applySwapSmart,
-  buildProgressionProposal,
   buildRunPlanProposal,
   buildSwapProposal,
   createBlock,
@@ -67,7 +66,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "evolve_program",
-    "Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize. Returns a DRAFT proposal (review then apply_proposal) plus the program-state snapshot. Does not change the plan.",
+    "Read the deterministic program-state (per-lift trend + plateau/stall) and draft a plan EVOLUTION — progress what's working, deload/rotate what's stalled, introduce novelty, periodize — then route it through the autonomy layer. Under lead_mode='lead' a bounded, reversible evolution quiet-applies at its natural boundary and a structural restructure announces first (with one-tap Undo); under 'review_everything' it stays a DRAFT to review then apply_proposal. Returns the proposal + the program-state snapshot + the autonomy outcome.",
     {
       agent: z
         .string()
@@ -80,6 +79,9 @@ export function registerProgramTools(server: McpToolRegistrar) {
       return asText({
         proposal: result.proposal,
         state: result.state,
+        // The autonomy outcome (quiet-applied / announced / left as a reviewable draft under
+        // the active lead_mode) — mirrors the REST /program/evolve body so MCP ⊆ REST holds.
+        autonomy: result.autonomy,
         ok: result.ok,
         agent: result.agent,
         tried: result.tried,
@@ -203,9 +205,9 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "apply_progression",
-    "Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression) via the existing propose→apply path — never auto-applied, never a gate. A stalled lift's 'vary' becomes a real swap change; an autoregulation-braked hold is dropped. Returns { ok:true, proposal } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose).",
+    "Build a DRAFT plan proposal from the current day's per-lift prescriptions (planDayProgression), then route it through the autonomy layer (shared with REST so the two never drift). Under lead_mode='lead' a bounded target nudge quiet-applies at its natural boundary with a decision + one-tap Undo; under 'review_everything' it stays a plain reviewable draft. A stalled lift's 'vary' becomes a real swap change; an autoregulation-braked hold is dropped. Returns { ok:true, proposal, autonomy } or { ok:false, error } at 200 (the designed failure signal when there's nothing to propose).",
     { day: z.number().int().describe("the plan day number to build prescriptions for") },
-    async ({ day }) => asText(buildProgressionProposal(day))
+    async ({ day }) => asText(buildProgressionWithAutonomy(day))
   );
 
   server.tool(
