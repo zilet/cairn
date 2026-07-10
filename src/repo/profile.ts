@@ -46,6 +46,9 @@ export function createProposal(agent: string, instruction: string, raw: string, 
   const info = db
     .prepare(`INSERT INTO plan_proposals (agent, instruction, raw_output, parsed_json) VALUES (?, ?, ?, ?)`)
     .run(agent, instruction || "", raw || "", parsed ? JSON.stringify(parsed) : null);
+  // Proposal state feeds the conductor (a pending recovery draft flips its button
+  // into a review link) — invalidate the version-keyed memos on every write.
+  bumpTrainingDataVersion();
   return getProposal(Number(info.lastInsertRowid));
 }
 
@@ -71,6 +74,7 @@ function hydrateProposal(row: any) {
 
 export function setProposalStatus(id: number, status: string) {
   db.prepare(`UPDATE plan_proposals SET status = ? WHERE id = ?`).run(status, id);
+  bumpTrainingDataVersion(); // proposal state feeds the conductor's memoized read
   const proposal = getProposal(id);
   if (proposal && status !== "applied") recordProposalStatusDecision(proposal, status);
   return proposal;
@@ -108,6 +112,42 @@ export function supersedeAutoEvolutionDrafts(exceptId?: number) {
   const drafts = db
     .prepare(`SELECT id FROM plan_proposals WHERE status = 'draft' AND instruction = ?`)
     .all(AUTO_EVOLUTION_INSTRUCTION) as any[];
+  let retired = 0;
+  for (const d of drafts) {
+    if (exceptId != null && Number(d.id) === Number(exceptId)) continue;
+    db.prepare(`UPDATE plan_proposals SET status = 'superseded' WHERE id = ?`).run(d.id);
+    const proposal = getProposal(Number(d.id));
+    if (proposal) recordProposalStatusDecision(proposal, "superseded");
+    retired++;
+  }
+  return retired;
+}
+
+// The conductor's one-tap "Draft my recovery week" is tagged by this instruction
+// PREFIX (the client sends the full instruction; the prefix is the stable contract —
+// test/engineeringContracts.test.js pins the client text to it). Two consumers:
+// pendingRecoveryDraft() flips the Program button into a "Review your recovery
+// week →" link while a draft waits, and supersedeRecoveryWeekDrafts() retires the
+// prior draft when a fresh one lands so repeated taps never pile up drafts.
+export const RECOVERY_WEEK_INSTRUCTION_PREFIX = "Reshape next week into a RECOVERY";
+
+export function pendingRecoveryDraft(): { id: number } | null {
+  // parsed_json IS NOT NULL: a failed agent run persists an unparseable draft row —
+  // that is a retry case, not a reviewable recovery week.
+  const row = db
+    .prepare(
+      `SELECT id FROM plan_proposals
+        WHERE status = 'draft' AND parsed_json IS NOT NULL AND instruction LIKE ?
+        ORDER BY id DESC LIMIT 1`
+    )
+    .get(`${RECOVERY_WEEK_INSTRUCTION_PREFIX}%`) as any;
+  return row ? { id: Number(row.id) } : null;
+}
+
+export function supersedeRecoveryWeekDrafts(exceptId?: number) {
+  const drafts = db
+    .prepare(`SELECT id FROM plan_proposals WHERE status = 'draft' AND instruction LIKE ?`)
+    .all(`${RECOVERY_WEEK_INSTRUCTION_PREFIX}%`) as any[];
   let retired = 0;
   for (const d of drafts) {
     if (exceptId != null && Number(d.id) === Number(exceptId)) continue;

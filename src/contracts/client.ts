@@ -93,6 +93,9 @@ export interface ClientCoachingFocusItem {
   // `to` variations (same movement pattern). Rendered as action buttons only
   // where the swap is wired (Program); other surfaces just navigate.
   swap?: { from: string; to: string[] };
+  // A recovery lead whose one-tap draft already landed in Coach: the Program card
+  // renders a "Review your recovery week →" link instead of the draft button.
+  draft_pending?: boolean;
 }
 
 export interface ClientCoachingRetest {

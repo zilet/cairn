@@ -92,19 +92,21 @@ async function applyCoachingFocusSwap(btn: Element, deps: ClientProgressProgramC
   const from = btn.getAttribute("data-swap-from") || "";
   const to = btn.getAttribute("data-swap-to") || "";
   const restore = deps.busy(btn, "Rotating it in…");
-  let result: { ok?: boolean; error?: string } | null = null;
+  let result: { ok?: boolean; error?: string; message?: string } | null = null;
   try {
     result = (await deps.api("/program/swap/apply", {
       method: "POST",
       // Content-Type is MANDATORY here — api() does not auto-set it (a past bug).
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ from, to }),
-    })) as { ok?: boolean; error?: string } | null;
+    })) as { ok?: boolean; error?: string; message?: string } | null;
   } catch {
     result = null;
   }
   if (result?.ok) {
-    deps.toast("Rotated in — your plan follows you");
+    // The server says what actually happened ("Rotated X in for the plan's Y slot" /
+    // "added to day N") — surface its words, not a generic line.
+    deps.toast(result.message ? String(result.message) : "Rotated in — your plan follows you");
     deps.invalidate("progress:program");
     deps.invalidate("plan:coach");
     deps.invalidate("plan:proposals");

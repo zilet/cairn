@@ -86,6 +86,24 @@ test("coachingFocus leads with recovery when a deload is due (won't push into fa
   assert.match(out.lead.title, /recovery|lighter|deload/i);
 });
 
+test("a recovery lead speaks STATE once its one-tap draft is waiting (draft_pending)", () => {
+  const base = {
+    programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
+    recovery: {},
+  };
+  const fresh = coachingFocus(base);
+  assert.equal(fresh.lead.domain, "recovery");
+  assert.notEqual(fresh.lead.draft_pending, true, "no flag while nothing is drafted");
+
+  const pending = coachingFocus({ ...base, recoveryDraftPending: true });
+  assert.equal(pending.lead.draft_pending, true);
+  assert.match(String(pending.lead.move), /drafted/i, "the move points at the waiting draft, not the same ask again");
+
+  // Strict boolean at the trust boundary — a truthy non-boolean never flips it.
+  const sloppy = coachingFocus({ ...base, recoveryDraftPending: "yes" });
+  assert.notEqual(sloppy.lead.draft_pending, true);
+});
+
 test("coachingFocus promotes an act-now health lever to lead when training is steady", () => {
   const out = coachingFocus({
     goalMode: "maintain",

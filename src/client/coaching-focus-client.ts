@@ -83,9 +83,16 @@ function coachingFocusCardHtml(
   if (options.actions) {
     // A recovery lead is ACTIONABLE: one tap drafts next week as a recovery week
     // (a reviewable proposal via the propose→apply loop — the same durable
-    // /program/evolve job as "Evolve my plan", never auto-applied).
+    // /program/evolve job as "Evolve my plan", never auto-applied). Once the draft
+    // has landed (draft_pending), the button gives way to a review LINK — state,
+    // not a repeatable ask. Pure navigation via data-cfocus-go (the document-level
+    // cfocusRoute listener), so it needs no per-surface wiring.
     if (lead.domain === "recovery") {
-      html += `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
+      // role="link" so the keydown navigator resolves the BUTTON's target
+      // (plan-coach), not the surrounding lead row's.
+      html += lead.draft_pending
+        ? `<button class="draftbtn cfocus-review" type="button" role="link" data-cfocus-go="plan-coach">Review your recovery week →</button>`
+        : `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
     }
     html += cfocusSwapButtonsHtml(lead);
   }
@@ -253,6 +260,11 @@ function cfocusRoute(go: unknown): void {
     case "markers":
       state.standSeg = "markers";
       activateTab("stand");
+      break;
+    case "plan-coach":
+      // The waiting recovery-week draft (and any future "review it in Coach" link).
+      state.planJump = "coach";
+      activateTab("plan");
       break;
     default:
       if (isCoachingFocusDomain(go)) {

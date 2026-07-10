@@ -38,6 +38,10 @@ export interface FocusItem {
   // variations (same movement pattern). Mirrors ClientCoachingFocusItem.swap — the
   // surface resolves the plan day and wires the apply; the conductor stays PURE (no DB).
   swap?: { from: string; to: string[] };
+  // A recovery lead whose one-tap draft already landed: the surface renders a review
+  // link into Coach instead of the (now-stale) draft button. State in, state out —
+  // the conductor never queries; the assembler passes recoveryDraftPending.
+  draft_pending?: boolean;
 }
 
 export interface CoachingRetest {
@@ -252,6 +256,10 @@ export interface CoachingFocusInput {
   // The active program block's calendar summary (repo/program-blocks blockForCoach()),
   // so "This block" can say WHERE in the block the athlete is. Null when no block.
   programBlock?: ProgramBlockSummaryInput | null;
+  // Whether a one-tap recovery-week draft is already waiting in Coach — the recovery
+  // lead then speaks STATE ("drafted — review and apply it") instead of re-offering
+  // the action, and the Program surface renders a review link, not the draft button.
+  recoveryDraftPending?: unknown;
 }
 
 interface ProgramBlockSummaryInput {
@@ -323,6 +331,8 @@ function cleanFocusItem(item: FocusItem | null): FocusItem | null {
   const swap = cleanSwap(item.swap);
   if (swap) out.swap = swap;
   else delete out.swap;
+  // draft_pending is a strict boolean flag — anything else drops.
+  if (out.draft_pending !== true) delete out.draft_pending;
   return out;
 }
 
@@ -425,6 +435,10 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   const rhr = num(inp.recovery?.delta?.rhr);
   const recoveringDown = hrv != null && hrv < 0 && rhr != null && rhr > 2;
   if (!deloadDue && !recoveringDown) return null;
+  // When the one-tap draft already landed, the lead speaks the STATE — "drafted,
+  // review it" — instead of re-offering the same action (an elite coach tells you
+  // where the plan is, not to ask twice).
+  const draftPending = inp.recoveryDraftPending === true;
   return {
     key: "recovery-deload",
     leverage: 5,
@@ -435,6 +449,9 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       why:
         (meso?.note ? String(meso.note) : "") ||
         "Your recent load and recovery signals say a lighter week now pays off — back volume off ~40%, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
+      ...(draftPending
+        ? { draft_pending: true, move: "Your recovery week is drafted — review and apply it when you're ready." }
+        : {}),
       based_on: [
         "Mesocycle says deload is due",
         recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated",

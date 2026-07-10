@@ -347,3 +347,33 @@ test("the literal 'program' route (retest chip) settles when already on Program"
   focus.cfocusRoute("program");
   assert.deepEqual(activated, ["progress"], "from elsewhere it still navigates");
 });
+
+test("a recovery lead with a waiting draft renders a review LINK, not the draft button again", () => {
+  const { focus } = loadCoachingFocus();
+  const drafted = {
+    ...richFocus,
+    lead: {
+      domain: "recovery",
+      title: "Take an earned recovery week",
+      why: "Seven loaded weeks without a reset.",
+      move: "Your recovery week is drafted — review and apply it when you're ready.",
+      draft_pending: true,
+    },
+  };
+  const html = focus.coachingFocusCardHtml(drafted, { actions: true });
+  assert.doesNotMatch(html, /data-cfocus-act="recovery-week"/, "the ask never re-renders once the draft landed");
+  assert.doesNotMatch(html, /Draft my recovery week/);
+  assert.match(html, /Review your recovery week/);
+  assert.match(html, /data-cfocus-go="plan-coach"/, "pure navigation — needs no per-surface wiring");
+  // Navigate-only surfaces (no actions) still render neither button nor link.
+  assert.doesNotMatch(focus.coachingFocusCardHtml(drafted), /Review your recovery week/);
+});
+
+test("the plan-coach route lands on the Plan tab's Coach section (the waiting draft)", () => {
+  const { focus, state, activated } = loadCoachingFocus();
+  state.tab = "progress";
+  state.progressSeg = "program";
+  focus.cfocusRoute("plan-coach");
+  assert.deepEqual(activated, ["plan"], "navigates to Plan");
+  assert.equal(state.planJump, "coach", "jumps straight to the Coach/proposals section");
+});

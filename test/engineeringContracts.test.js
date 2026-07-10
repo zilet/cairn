@@ -5705,3 +5705,18 @@ test("GitHub Actions workflows pin external actions to commit SHAs", () => {
     }
   }
 });
+
+test("the recovery-week instruction prefix is one contract across client and server", () => {
+  // The client sends the full instruction with /program/evolve; the server detects a
+  // waiting draft (pendingRecoveryDraft) and retires stale ones by this PREFIX. If
+  // either side rewords its literal, the button/review-link state machine silently
+  // dies — pin them to each other.
+  const server = read("src/repo/profile.ts");
+  const client = read("src/client/progress-program-controller.ts");
+  const m = server.match(/RECOVERY_WEEK_INSTRUCTION_PREFIX = "([^"]+)"/);
+  assert.ok(m, "profile.ts exports RECOVERY_WEEK_INSTRUCTION_PREFIX");
+  const prefix = m[1];
+  const c = client.match(/const RECOVERY_WEEK_INSTRUCTION =\s*\n?\s*"([^"]+)"/);
+  assert.ok(c, "the client declares RECOVERY_WEEK_INSTRUCTION");
+  assert.ok(c[1].startsWith(prefix), `the client instruction must start with the server prefix ("${prefix}")`);
+});
