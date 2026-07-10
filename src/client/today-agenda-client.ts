@@ -11,13 +11,13 @@ type TodayAgendaBuckets = { primary: ClientTodayAgendaCandidate[]; more: ClientT
 // candidate naming a card not in here is a forward card the client can't yet draw
 // (a sibling shipped server-side but not in this build) and is skipped gracefully.
 const TODAY_RAIL_SLOTS: Record<string, string> = {
-  fuel: `<div id="fuelSlot" class="fuel-slot"></div>`,
-  "week-ahead": `<div id="weekAheadSlot" class="weekahead-slot"></div>`,
-  "program-adjustments": `<div id="adjustSlot" class="adjust-slot"></div>`,
-  "weekly-read": `<div id="weeklySlot" class="weekly-slot"></div>`,
-  "connection-insight": `<div id="insightSlot" class="insight-slot"></div>`,
-  "garmin-reconcile": `<div id="garminReconcileSlot" class="garmin-reconcile-slot"></div>`,
-  lately: `<div id="qlRecent" class="ql-recent lately-slot"></div>`,
+  fuel: `<div id="fuelSlot" class="fuel-slot card-stack-item"></div>`,
+  "week-ahead": `<div id="weekAheadSlot" class="weekahead-slot card-stack-item"></div>`,
+  "program-adjustments": `<div id="adjustSlot" class="adjust-slot card-stack-item"></div>`,
+  "weekly-read": `<div id="weeklySlot" class="weekly-slot card-stack-item"></div>`,
+  "connection-insight": `<div id="insightSlot" class="insight-slot card-stack-item"></div>`,
+  "garmin-reconcile": `<div id="garminReconcileSlot" class="garmin-reconcile-slot card-stack-item"></div>`,
+  lately: `<div id="qlRecent" class="ql-recent lately-slot card-stack-item"></div>`,
 };
 const TODAY_PRIMARY_CLIENT_MAX = 2;
 
@@ -61,7 +61,7 @@ function todayAgendaGenericCardHtml(candidate: ClientTodayAgendaCandidate, revea
   const dismiss = candidate.dismissible
     ? `<button class="xbtn agenda-x" type="button" data-agenda-dismiss="${escAttr(candidate.id || "")}" aria-label="Dismiss">✕</button>`
     : "";
-  return `<div class="agenda-card reveal" data-agenda-card="${escAttr(candidate.id || "")}" data-agenda-kind="${escAttr(candidate.kind || "")}" style="${stagger(revealIdx || 0)}">
+  return `<div class="agenda-card card-stack-item reveal" data-agenda-card="${escAttr(candidate.id || "")}" data-agenda-kind="${escAttr(candidate.kind || "")}" style="${stagger(revealIdx || 0)}">
       ${dismiss}
       ${kicker}${title}${body}
       ${act ? `<div class="agenda-foot">${act}</div>` : ""}
@@ -89,16 +89,16 @@ function todayAgendaRailHtml(
     nWaiting > 0 ? `<span class="today-more-new">· ${nWaiting === 1 ? "one new" : "new things"} inside</span>` : "";
   const moreHtml =
     n > 0 && moreCards
-      ? `<details class="today-more" id="todayMore">
+      ? `<details class="today-more card-stack-item" id="todayMore">
         <summary class="today-more-sum"><span class="today-more-lbl">${n === 1 ? "1 more" : `${n} more`}</span>${waitingCue}<span class="today-more-chev" aria-hidden="true">▾</span></summary>
-        <div class="today-more-body">${moreCards}</div>
+        <div class="today-more-body card-stack">${moreCards}</div>
       </details>`
       : "";
   if (!primaryHtml && !moreHtml) return "";
   const mast = primaryHtml
     ? `<div class="rail-mast"><span class="rail-mast-mark" aria-hidden="true">✦</span><span class="rail-mast-lbl lbl">Also worth a look</span></div>`
     : "";
-  return `<aside class="today-rail">${mast}${primaryHtml}${moreHtml}</aside>`;
+  return `<aside class="today-rail card-stack">${mast}${primaryHtml}${moreHtml}</aside>`;
 }
 
 function todayFuelCardHtml(day: ClientDayIntake | null | undefined): string {

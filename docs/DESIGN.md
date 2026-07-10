@@ -40,6 +40,7 @@ listed here are load-bearing — change them in all three places or not at all.
 --shadow-md: 0 2px 4px rgba(72,58,35,.08), 0 14px 36px rgba(72,58,35,.11);
 --radius: 18px;
 --radius-sm: 12px;
+--space-card: 10px; /* standard vertical gap between sibling cards */
 ```
 
 Theme-color / manifest background: `#f4efe7`. Color-scheme: light. Status bar: `default`.
@@ -113,6 +114,12 @@ New/changed components (CSS must implement, the client JS must emit):
   own circle). Sizes: `.artile-lg` (96px), `.artile-md` (64px), `.artile-sm` (44px).
 - `.lbl` — tracked caps label (see Typography).
 - `.numeral` — display serif numeral; `.numeral-xl` (2.6rem), `.numeral-lg` (1.6rem).
+- `.card-stack` / `.card-stack-item` — the required vertical-list primitive for sibling cards,
+  including async slots. The parent owns `gap:var(--space-card)` and empty items collapse; card
+  components must not supply inter-card margins. Mark every direct sibling/slot as
+  `.card-stack-item`. A card may still use margins internally, but the stack normalizes the first
+  and last child edges. Do not concatenate heterogeneous cards and rely on each family to happen
+  to carry matching `margin-bottom` values.
 - Stat strip: `.statstrip` / `.stat` / `.stat-n` (display serif numeral) / `.stat-l` (`.lbl` style).
 - Today exercise card `.ex`: art thumb `.ex-art` (`.artile-sm/md`) left of `.ex-name`
   (display serif, ~1.15rem, weight 540); target weight as `.ex-target` display numeral;

@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import vm from "node:vm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const styles = readFileSync(join(root, "public/styles.css"), "utf8");
+const design = readFileSync(join(root, "docs/DESIGN.md"), "utf8");
 
 function escHtml(v) {
   return String(v ?? "")
@@ -89,9 +91,21 @@ test("Today rail HTML collects generic cards and uses one quiet more disclosure"
 
   assert.match(html, /id="fuelSlot"/);
   assert.match(html, /id="weekAheadSlot"/);
+  assert.match(html, /class="today-rail card-stack"/);
+  assert.match(html, /class="fuel-slot card-stack-item"/);
+  assert.match(html, /class="today-more card-stack-item"/);
+  assert.match(html, /class="today-more-body card-stack"/);
   assert.match(html, /2 more/);
   assert.equal(pending.length, 1);
   assert.equal(pending[0].id, "generic");
+});
+
+test("Today rail card spacing is stack-owned and documented", () => {
+  assert.match(styles, /--space-card:\s*10px/);
+  assert.match(styles, /\.card-stack\{display:flex;flex-direction:column;gap:var\(--space-card\)\}/);
+  assert.match(styles, /\.card-stack>\.card-stack-item:empty\{display:none\}/);
+  assert.match(design, /\.card-stack` \/ `\.card-stack-item`/);
+  assert.match(design, /card\s+components must not supply inter-card margins/i);
 });
 
 test("Today fuel card stays quiet when empty and links only to review/edit", () => {

@@ -44,6 +44,7 @@
   --shadow-lg: 0 6px 16px rgba(72,58,35,.12), 0 28px 64px rgba(72,58,35,.18);
   --radius: 18px;
   --radius-sm: 12px;
+  --space-card: 10px; /* one vertical rhythm between sibling cards */
 
   /* motion tokens — one easing family, three speeds. Nothing snaps. */
   --ease:  cubic-bezier(.22,1,.36,1);
@@ -167,6 +168,15 @@ main{max-width:680px;margin:0 auto;padding:0 18px;position:relative}
 /* springy press for tappable entry cards (buttons already compress) */
 .tappable{cursor:pointer}
 .tappable:active{transform:var(--press-lg)}
+
+/* Card stacks own the space BETWEEN cards. Individual cards own only their
+   internal layout, so mixed and asynchronously hydrated card families cannot
+   accidentally touch or double their margins. Empty async slots collapse. */
+.card-stack{display:flex;flex-direction:column;gap:var(--space-card)}
+.card-stack>.card-stack-item{margin-block:0}
+.card-stack>.card-stack-item:empty{display:none}
+.card-stack>.card-stack-item>:first-child{margin-top:0}
+.card-stack>.card-stack-item>:last-child{margin-bottom:0}
 
 /* view transitions: same easing family, no slow crossfades */
 ::view-transition-old(root),::view-transition-new(root){animation-duration:var(--dur-2)}
@@ -5171,7 +5181,7 @@ button.hmk-row:active{background:var(--card-2)}
    Pull, never push: calm rail cards, a dismissible ✕, no badge. ── */
 /* The rail masthead — one quiet identity over the coach's ranked "also" reads, so
    they read as a continued voice beneath the Brief, not loose floating features. */
-.rail-mast{display:flex;align-items:center;gap:7px;margin:2px 0 11px;padding-bottom:9px;
+.rail-mast{display:flex;align-items:center;gap:7px;margin:2px 0 0;padding-bottom:9px;
   border-bottom:1px solid var(--line)}
 .rail-mast-mark{color:var(--sage);font-size:.66rem;line-height:1}
 .rail-mast-lbl{color:var(--muted)}
@@ -5200,7 +5210,7 @@ button.hmk-row:active{background:var(--card-2)}
 .today-more-new{color:var(--sage-text);font-weight:560}
 .today-more-chev{transition:transform .2s ease}
 .today-more[open] .today-more-chev{transform:rotate(180deg)}
-.today-more-body{display:flex;flex-direction:column;gap:10px;padding-top:4px}
+.today-more-body{padding-top:4px}
 @media (prefers-reduced-motion: reduce){ .today-more-chev{transition:none} }
 
 /* ── Meals view: today's fuel — review + quick-edit of what's logged ── */
