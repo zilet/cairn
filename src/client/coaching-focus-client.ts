@@ -58,6 +58,13 @@ function coachingFocusCardHtml(
   html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
   if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
   if (lead.move) html += `<p class="cfocus-lead-move"><span class="lbl">Move</span>${escHtml(lead.move)}</p>`;
+  // A recovery lead is ACTIONABLE, not just navigable: one tap drafts next week
+  // as a recovery week (a reviewable proposal via the propose→apply loop — the
+  // same durable /program/evolve job as "Evolve my plan", never auto-applied).
+  // Wired where the card lives on Program; routing surfaces still navigate here.
+  if (lead.domain === "recovery") {
+    html += `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
+  }
   html += `</div>`;
 
   if (parallel.length) {
@@ -157,6 +164,25 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   </button>`;
 }
 
+// Already standing on the destination? Re-activating would tear down and
+// repaint the very screen the user is reading (a pointless "flash"). Settle
+// the eye on the conductor card instead — no re-render, no scroll jump race.
+function cfocusSettleIfThere(tab: string, seg?: string | null): boolean {
+  const here =
+    state.tab === tab &&
+    (seg === undefined ||
+      (tab === "progress"
+        ? (state.progressSeg ?? null) === seg
+        : tab === "stand"
+          ? (state.standSeg ?? null) === seg
+          : true));
+  if (!here) return false;
+  const card = document.querySelector(".cfocus, .cfocus-compact");
+  const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  card?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  return true;
+}
+
 function cfocusDomainRoute(domain: ClientCoachingFocusDomain): void {
   switch (domain) {
     case "running":
@@ -169,11 +195,13 @@ function cfocusDomainRoute(domain: ClientCoachingFocusDomain): void {
       activateTab("plan");
       return;
     case "health":
+      if (cfocusSettleIfThere("stand", null)) return;
       state.standSeg = null;
       activateTab("stand");
       return;
     case "training":
     case "recovery":
+      if (cfocusSettleIfThere("progress", "program")) return;
       state.progressSeg = "program";
       activateTab("progress");
       return;
@@ -214,6 +242,8 @@ function cfocusRoute(go: unknown): void {
 
 function focusRouteTarget(event: Event): string | null {
   const target = event.target instanceof Element ? event.target : null;
+  // An action button inside a navigable block acts — it never also navigates.
+  if (target?.closest("[data-cfocus-act]")) return null;
   const element = target?.closest("[data-cfocus-go]");
   if (!element) return null;
   return element instanceof HTMLElement ? element.dataset.cfocusGo || "" : element.getAttribute("data-cfocus-go") || "";
@@ -227,6 +257,8 @@ document.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") return;
   const target = event.target instanceof Element ? event.target : null;
+  // A focused action button acts on Enter/Space — it never also navigates.
+  if (target?.closest("[data-cfocus-act]")) return;
   const element = target?.closest('[data-cfocus-go][role="link"]');
   if (!element) return;
   event.preventDefault();

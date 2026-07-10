@@ -250,3 +250,43 @@ test("the block calendar never attaches to a non-training lead; compact card car
   const noBlock = focus.coachingFocusCardHtml({ ...richFocus, block_line: "Week 3 of 5 — building volume." }, { blockLine: false });
   assert.doesNotMatch(noBlock, /Week 3 of 5/);
 });
+
+test("a recovery lead carries the one-tap recovery-week draft action", () => {
+  const { focus } = loadCoachingFocus();
+  const recovery = focus.coachingFocusCardHtml({
+    ...richFocus,
+    lead: { domain: "recovery", title: "Take an earned recovery week", why: "Seven loaded weeks without a reset." },
+  });
+  assert.match(recovery, /data-cfocus-act="recovery-week"/);
+  assert.match(recovery, /Draft my recovery week/);
+
+  // Only the recovery lever is draft-actionable, and the compact card (Stand)
+  // stays quiet — the action lives where the program does.
+  assert.doesNotMatch(focus.coachingFocusCardHtml(richFocus), /data-cfocus-act/);
+  assert.doesNotMatch(
+    focus.coachingFocusCompactHtml({
+      ...richFocus,
+      lead: { domain: "recovery", title: "Take an earned recovery week", why: "w" },
+    }),
+    /data-cfocus-act/
+  );
+});
+
+test("routing to the screen you're already on settles instead of re-rendering", () => {
+  const { focus, state, activated } = loadCoachingFocus();
+
+  state.tab = "progress";
+  state.progressSeg = "program";
+  focus.cfocusRoute("recovery");
+  assert.deepEqual(activated, [], "no re-activation flash when already on Program");
+
+  state.tab = "stand";
+  state.standSeg = null;
+  focus.cfocusRoute("health");
+  assert.deepEqual(activated, [], "no re-activation flash when already on the Stand overview");
+
+  // From anywhere else the route still navigates.
+  state.tab = "today";
+  focus.cfocusRoute("recovery");
+  assert.deepEqual(activated, ["progress"]);
+});

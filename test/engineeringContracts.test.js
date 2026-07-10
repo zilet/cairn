@@ -4239,7 +4239,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(progressProgramControllerSource, /var _progFocusCard: string \| undefined/);
   assert.match(progressProgramControllerSource, /async function renderProgressProgram\(deps: ClientProgressProgramControllerDeps\): Promise<unknown>/);
   assert.match(progressProgramControllerSource, /function paintProgressProgramBody\(data: ProgressProgramState, deps: ClientProgressProgramControllerDeps\): void/);
-  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(btn: Element, deps: ClientProgressProgramControllerDeps\): Promise<void>/);
+  assert.match(progressProgramControllerSource, /async function triggerProgramEvolve\(\n  btn: Element,\n  deps: ClientProgressProgramControllerDeps,/);
   assert.match(progressProgramControllerSource, /async function tidyExerciseNames\(btn: Element, deps: ClientProgressProgramControllerDeps\): Promise<void>/);
   assert.match(progressProgramControllerSource, /CairnProgressFocus: PROGRESS_FOCUS_STATE/);
   assert.match(progressProgramControllerSource, /CairnProgressProgramController/);

@@ -27,11 +27,26 @@ if (typeof window !== "undefined") {
   window.CairnProgressFocus = PROGRESS_FOCUS_STATE;
 }
 
+// The one-tap recovery-week draft: the conductor's recovery lead carries a real
+// action — reshape next week as an earned deload for REVIEW (propose→apply; the
+// instruction rides the same durable /program/evolve job as "Evolve my plan").
+const RECOVERY_WEEK_INSTRUCTION =
+  "Reshape next week into a RECOVERY (deload) week: cut working-set volume roughly in half, " +
+  "keep every movement pattern, keep efforts easy and crisp (3-4 reps in reserve), no new " +
+  "exercises and no load PRs — an earned reset after sustained loading, so the athlete comes back stronger.";
+
 // "Evolve my plan" button - POSTs to /api/program/evolve through durable runOp.
-// The draft lands in Plan proposals for review; nothing auto-applies.
-async function triggerProgramEvolve(btn: Element, deps: ClientProgressProgramControllerDeps): Promise<void> {
-  const foot = btn.closest(".prog-evolve-foot") || btn.parentElement;
-  const restore = deps.busy(btn, "Drafting your plan…");
+// The draft lands in Plan proposals for review; nothing auto-applies. `opts`
+// focuses the same flow (the recovery-week draft passes its instruction +
+// its own anchor/copy); default is the open-ended evolution.
+async function triggerProgramEvolve(
+  btn: Element,
+  deps: ClientProgressProgramControllerDeps,
+  opts: { instruction?: string; busy?: string; anchor?: string; caption?: string[]; toast?: string } = {}
+): Promise<void> {
+  const anchor = opts.anchor || ".prog-evolve-foot";
+  const foot = btn.closest(anchor) || btn.parentElement;
+  const restore = deps.busy(btn, opts.busy || "Drafting your plan…");
   let cap = foot && foot.querySelector(".prog-evolve-cap");
   if (foot && !cap) {
     cap = document.createElement("div");
@@ -42,33 +57,29 @@ async function triggerProgramEvolve(btn: Element, deps: ClientProgressProgramCon
     restore();
     cap?.remove();
   };
-  await deps.runOp(
-    "evolve_program",
-    {},
-    {
-      path: "/program/evolve",
-      anchor: ".prog-evolve-foot",
-      caption: [
-        "reading how your lifts are trending",
-        "spotting what's stalled",
-        "drafting how your plan should evolve",
-        "checking it against your constraints",
-      ],
-      guard: () => !document.querySelector(".prog-evolve-foot")?.isConnected,
-      render: () => {
-        cleanup();
-        deps.toast("Drafted — review it in your Plan");
-        deps.invalidate("progress:program");
-        deps.invalidate("plan:coach");
-        deps.invalidate("plan:proposals");
-        if (deps.state.tab === "progress") deps.renderSelf();
-      },
-      onFail: () => {
-        cleanup();
-        deps.toast("Couldn't draft right now — try again in a bit.");
-      },
-    }
-  );
+  await deps.runOp("evolve_program", opts.instruction ? { instruction: opts.instruction } : {}, {
+    path: "/program/evolve",
+    anchor,
+    caption: opts.caption || [
+      "reading how your lifts are trending",
+      "spotting what's stalled",
+      "drafting how your plan should evolve",
+      "checking it against your constraints",
+    ],
+    guard: () => !document.querySelector(anchor)?.isConnected,
+    render: () => {
+      cleanup();
+      deps.toast(opts.toast || "Drafted — review it in your Plan");
+      deps.invalidate("progress:program");
+      deps.invalidate("plan:coach");
+      deps.invalidate("plan:proposals");
+      if (deps.state.tab === "progress") deps.renderSelf();
+    },
+    onFail: () => {
+      cleanup();
+      deps.toast("Couldn't draft right now — try again in a bit.");
+    },
+  });
 }
 
 async function renderProgressProgram(deps: ClientProgressProgramControllerDeps): Promise<unknown> {
@@ -228,6 +239,26 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   if (evolveBtn)
     evolveBtn.addEventListener("click", () => {
       void triggerProgramEvolve(evolveBtn, deps);
+    });
+
+  // The conductor's recovery lead: one tap drafts next week as a recovery week
+  // (a reviewable proposal — the button acts, the surrounding lead row still
+  // navigates; focusRouteTarget ignores [data-cfocus-act] clicks).
+  const recoveryBtn = deps.view.querySelector('[data-cfocus-act="recovery-week"]');
+  if (recoveryBtn)
+    recoveryBtn.addEventListener("click", () => {
+      void triggerProgramEvolve(recoveryBtn, deps, {
+        instruction: RECOVERY_WEEK_INSTRUCTION,
+        busy: "Drafting your recovery week…",
+        anchor: ".cfocus-lead",
+        caption: [
+          "reading the load you've accumulated",
+          "halving the working volume, keeping the patterns",
+          "drafting your recovery week",
+          "checking it against your constraints",
+        ],
+        toast: "Recovery week drafted — review it in your Plan",
+      });
     });
 
   const tidyBtn = deps.view.querySelector("#progTidyBtn");

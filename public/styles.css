@@ -5145,6 +5145,8 @@ button.hmk-row:active{background:var(--card-2)}
 .cfocus-blockline{font-size:.8rem;line-height:1.4;color:var(--muted);margin:-8px 0 13px}
 /* compact conductor (Stand overview) — one lead, then a quiet path to the full plan */
 .cfocus-compact .cfocus-lead{margin-bottom:4px}
+/* the recovery lead's one-tap draft action — a real button inside the lead row */
+.cfocus-act{margin-top:10px}
 .cfocus-full-link{display:block;background:none;border:none;padding:6px 0 0;cursor:pointer;
   font-size:.78rem;font-weight:600;color:var(--sage-text);text-align:left;
   transition:transform .15s ease,color .15s ease}
