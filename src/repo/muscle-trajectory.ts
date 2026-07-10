@@ -48,6 +48,7 @@ import {
   type ProgramState,
 } from "./program-state.js";
 import { listContextEvents } from "./health.js";
+import { recentAppliedRotations } from "./brain-decisions.js";
 import { getProgress } from "./sessions.js";
 
 // ============================================================================
@@ -81,6 +82,10 @@ export interface MuscleGroupTrajectory {
 
 export interface MuscleTrajectoryOpts {
   programState?: ProgramState; // injected to avoid a recompute
+  // Recently applied rotations (recentAppliedRotations) — their rotated-OUT lifts are
+  // excluded from the vary menu too, so a lift the brain just rotated away from is
+  // never offered straight back. Defaults to reading them live; injectable for tests.
+  recentRotations?: { from: string }[];
 }
 
 // Active-injury free-text areas, so the variation MENU skips a movement that
@@ -112,7 +117,7 @@ function activeInjuryAreas(): string[] {
 
 // Every exercise name currently on a plan day — the exclusion list for vary_options
 // (never suggest rotating in something already programmed). Null-safe, never throws.
-function planExerciseNames(): string[] {
+export function planExerciseNames(): string[] {
   try {
     const rows = db
       .prepare(
@@ -170,6 +175,13 @@ export function muscleGroupTrajectory(
   // day (variety means something NEW). Plan-wide, not per-day: rotating in a lift
   // another day already runs would just double it.
   const plannedNames = planExerciseNames();
+  // A lift the brain just rotated OUT is excluded from the menu too — offering it
+  // straight back would undo the rotation the coach just made. Read live unless the
+  // caller injects the reads (the conductor builds them once per context).
+  const rotatedOut = (opts.recentRotations ?? recentAppliedRotations())
+    .map((r) => String(r?.from ?? "").trim())
+    .filter(Boolean);
+  const excludeNames = [...plannedNames, ...rotatedOut];
   const groups: MuscleGroupRead[] = [];
 
   // Walk the canonical taxonomy order so the strip reads in a stable, sensible
@@ -205,7 +217,7 @@ export function muscleGroupTrajectory(
       const lead = stalled[0];
       lead_lift = lead.exercise;
       stalled_signal = lead.stall_signals[0] ?? lead.why ?? null;
-      vary_options = suggestAlternatives(lead.exercise, { limit: 3, injuryAreas, excludeNames: plannedNames })
+      vary_options = suggestAlternatives(lead.exercise, { limit: 3, injuryAreas, excludeNames })
         .map((v) => ({ name: v.name, why: v.why }));
       const wk = lead.weeks_static ? ` (flat ~${lead.weeks_static} wk)` : "";
       note = vary_options.length

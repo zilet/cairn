@@ -56,6 +56,11 @@ export interface CoachingRetest {
 export interface CoachingFocus {
   available: boolean;
   headline: string; // where you are + the through-line, one sentence
+  // Whether the surface should offer one-tap ACTIONS (the swap / draft-recovery
+  // buttons). False under lead mode — the coach applies bounded changes itself at
+  // natural boundaries, so the card speaks STATE, not an ask. Absent is treated as
+  // true (the legacy navigate-and-act behavior on the non-lead surfaces).
+  acts?: boolean;
   lead: FocusItem | null; // THE single highest-leverage lever this block
   parallel: FocusItem[]; // 1-2 handled simultaneously, usually via a different lever
   later: { domain: FocusDomain; title: string }[]; // explicitly deferred — the sequence
@@ -266,6 +271,37 @@ export interface CoachingFocusInput {
   // Whether the applied recovery week is RUNNING right now — the lead becomes a calm
   // confirmation ("recovery week is on, absorb the work") with no action at all.
   recoveryWeekActive?: unknown;
+  // ---- autonomy-awareness (lead-by-default) ---------------------------------
+  // The server lead posture ('lead' | 'announce_first' | 'review_everything').
+  // Under 'lead' the coach applies bounded plan changes itself at natural
+  // boundaries, so the conductor drops its one-tap asks and speaks state instead.
+  leadMode?: unknown;
+  // Exercise rotations the brain (or the athlete) already applied — a stalled lead
+  // whose lift was rotated out is ALREADY HANDLED, so the conductor speaks to the
+  // new stimulus instead of re-offering the same swap. [{ from, to, date }].
+  recentRotations?: unknown;
+  // Every exercise name currently on a plan day — a stalled lift no longer here has
+  // been rotated out; the stale plateau read is dropped rather than offering to
+  // rotate out a lift that isn't there. string[].
+  plannedNames?: unknown;
+  // Announced / quiet-pending brain decisions landing soon (upcomingBrainDecisions)
+  // — lets a recovery lead name the weekday its auto-set recovery week arrives.
+  upcoming?: unknown;
+}
+
+// An applied exercise rotation the brain/athlete already made (recentAppliedRotations).
+interface AppliedRotationInput {
+  from?: unknown;
+  to?: unknown;
+  date?: unknown;
+}
+
+// A brain decision landing soon (upcomingBrainDecisions) — the conductor reads its
+// weekday to name when an auto-set recovery week arrives.
+interface UpcomingDecisionInput {
+  kind?: unknown;
+  domain?: unknown;
+  effective_date?: unknown;
 }
 
 interface ProgramBlockSummaryInput {
@@ -341,6 +377,14 @@ function cleanFocusItem(item: FocusItem | null): FocusItem | null {
   if (out.draft_pending !== true) delete out.draft_pending;
   if (out.recovery_active !== true) delete out.recovery_active;
   return out;
+}
+
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+// The weekday an ISO date falls on, plain words ("Monday") — null when unparseable.
+// Noon UTC so a date-only string never slips a day under a negative timezone.
+function weekdayOf(iso: unknown): string | null {
+  const t = Date.parse(`${String(iso ?? "").slice(0, 10)}T12:00:00Z`);
+  return Number.isFinite(t) ? WEEKDAY_NAMES[new Date(t).getUTCDay()] : null;
 }
 
 function varyOptionName(option: unknown): string | null {
@@ -460,10 +504,31 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
     };
   }
   if (!deloadDue && !recoveringDown) return null;
-  // When the one-tap draft already landed, the lead speaks the STATE — "drafted,
-  // review it" — instead of re-offering the same action (an elite coach tells you
-  // where the plan is, not to ask twice).
   const draftPending = inp.recoveryDraftPending === true;
+  const leads = lc(inp.leadMode) === "lead";
+  // The recovery lead's next-step line adapts to posture. Under LEAD mode the coach
+  // sets the recovery week up itself at the week boundary, so the line speaks STATE
+  // — never a one-tap ask — and names the weekday when an upcoming recovery/structure
+  // decision is already scheduled. Off lead mode, the athlete drives it: a waiting
+  // draft points at the review, an un-drafted one leaves the button to the surface.
+  let move: string | undefined;
+  if (leads) {
+    if (draftPending) {
+      move = "Recovery week is queued — it lands automatically. Undo any time from Plan.";
+    } else {
+      const soon = inputArray<UpcomingDecisionInput>(inp.upcoming).find(
+        (d) => lc(d?.kind) === "training_structure" || lc(d?.domain) === "recovery"
+      );
+      const weekday = soon ? weekdayOf(soon.effective_date) : null;
+      move = weekday
+        ? `A lighter recovery week lands ${weekday} — your coach set it up; undo any time from Plan.`
+        : "Your coach sets this up automatically at the week boundary.";
+    }
+  } else if (draftPending) {
+    // Off lead mode, once the one-tap draft has landed the lead speaks STATE
+    // ("drafted, review it") instead of re-offering the same action.
+    move = "Your recovery week is drafted — review and apply it when you're ready.";
+  }
   return {
     key: "recovery-deload",
     leverage: 5,
@@ -474,9 +539,10 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       why:
         (meso?.note ? String(meso.note) : "") ||
         "Your recent load and recovery signals say a lighter week now pays off — back volume off ~40%, keep the intensity crisp, and you'll come back stronger. This is the performance-building choice, not a step back.",
-      ...(draftPending
-        ? { draft_pending: true, move: "Your recovery week is drafted — review and apply it when you're ready." }
-        : {}),
+      // draft_pending drives the review LINK (navigation) on every posture; the move
+      // copy above is what changes between lead mode and the athlete-driven surfaces.
+      ...(draftPending ? { draft_pending: true } : {}),
+      ...(move ? { move } : {}),
       based_on: [
         "Mesocycle says deload is due",
         recoveringDown ? "HRV and resting HR are drifting down together" : "Recent training load has accumulated",
@@ -487,42 +553,80 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
 
 function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
   const flagged = flaggedContext(inp);
+  // Under LEAD mode the coach rotates at the boundary itself, so the conductor emits
+  // no one-tap swap payload (`acts` false). Otherwise the athlete drives the swap.
+  const acts = lc(inp.leadMode) !== "lead";
+  const plannedNames = inputArray<unknown>(inp.plannedNames)
+    .map((n) => lc(n))
+    .filter(Boolean);
+  const rotations = inputArray<AppliedRotationInput>(inp.recentRotations);
   // A genuinely STALLED canonical group with a concrete swap menu is the most
   // coach-like training lead (the athlete's own "which groups stall" framing).
   const groups = inputArray<MuscleGroupTrajectoryInput>(inp.groupsTrajectory?.groups);
   const stalled = groups.find((g) => lc(g?.verdict) === "stalling" && (g?.lead_lift || g?.label));
   if (stalled) {
-    // vary_options are {name, why} objects — pull the movement NAME (a bare
-    // String(o) renders "[object Object]"). Tolerate a plain-string option too.
-    const opts = inputArray<unknown>(stalled.vary_options)
-      .slice(0, 2)
-      .map(varyOptionName)
-      .filter((name): name is string => name != null);
+    const leadLift = String(stalled.lead_lift ?? "").trim();
+    const leadLiftLc = lc(leadLift);
     const label = lc(stalled.label || stalled.group);
-    const conflicts = leverLoadsFlagged(label, String(stalled.lead_lift ?? ""), flagged);
-    const caveat = conflicts
-      ? `Ease this AROUND the ${flagged.phrase || "flagged area"} — work the plateau with pain-free variations only, don't push loaded reps through it.`
-      : undefined;
-    return {
-      key: "training-stall",
-      leverage: 4.2,
-      slot: "lead",
-      caveat,
-      item: {
-        domain: "training",
-        title: `Break the plateau on your ${label}`,
-        why: `${stalled.lead_lift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.${caveat ? ` (${caveat})` : ""}`,
-        move: opts.length ? `Rotate in ${opts.join(" or ")} for a few weeks.` : undefined,
-        based_on: [
-          `${stalled.lead_lift || label} is marked stalling`,
-          stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat",
-        ],
-        // Actionable payload: a concrete lift to rotate out + same-pattern options to
-        // rotate in. Only when we know WHICH lift stalled and have real options — the
-        // surface resolves the plan day (the conductor never touches the DB).
-        swap: stalled.lead_lift && opts.length ? { from: String(stalled.lead_lift), to: opts } : undefined,
-      },
-    };
+    // Has the brain already HANDLED this plateau? A matching applied rotation means
+    // the stalled lift was rotated out — speak to the new stimulus (a calm alongside
+    // note), never re-offer the swap that just happened (or the lift just removed).
+    const rotation = leadLiftLc ? rotations.find((r) => lc(r?.from) === leadLiftLc) : undefined;
+    if (rotation) {
+      const to = String(rotation.to ?? "").trim();
+      const on = String(rotation.date ?? "").slice(0, 10);
+      return {
+        key: "training-stall-handled",
+        leverage: 2.2,
+        slot: "parallel",
+        item: {
+          domain: "training",
+          title: `New stimulus in for your ${label}`,
+          why: `${leadLift || "Your main lift"} stalled, so ${to || "a fresh variation"} rotated in — give it a few weeks to read before judging it.`,
+          based_on: [
+            `${leadLift || label} was rotated out`,
+            on ? `Rotated in on ${on}` : `${to || "A variation"} is the new stimulus`,
+          ],
+        },
+      };
+    }
+    // The stalled lift is off every plan day with no rotation record on file — the
+    // plateau read is stale (it can't be rotated out; it isn't there). Fall through
+    // to the capacity laggard rather than offering to rotate a lift that's gone.
+    const unprogrammed = plannedNames.length > 0 && leadLiftLc !== "" && !plannedNames.includes(leadLiftLc);
+    if (!unprogrammed) {
+      // vary_options are {name, why} objects — pull the movement NAME (a bare
+      // String(o) renders "[object Object]"). Tolerate a plain-string option too.
+      const opts = inputArray<unknown>(stalled.vary_options)
+        .slice(0, 2)
+        .map(varyOptionName)
+        .filter((name): name is string => name != null);
+      const conflicts = leverLoadsFlagged(label, leadLift, flagged);
+      const caveat = conflicts
+        ? `Ease this AROUND the ${flagged.phrase || "flagged area"} — work the plateau with pain-free variations only, don't push loaded reps through it.`
+        : undefined;
+      return {
+        key: "training-stall",
+        leverage: 4.2,
+        slot: "lead",
+        caveat,
+        item: {
+          domain: "training",
+          title: `Break the plateau on your ${label}`,
+          why: `${leadLift || label} has stalled${stalled.stalled_signal ? ` (${lc(stalled.stalled_signal)})` : ""} — change the stimulus rather than grinding the same load.${caveat ? ` (${caveat})` : ""}`,
+          move: opts.length ? `Rotate in ${opts.join(" or ")} for a few weeks.` : undefined,
+          based_on: [
+            `${leadLift || label} is marked stalling`,
+            stalled.stalled_signal ? `Stall signal: ${stalled.stalled_signal}` : "Muscle-group trajectory is flat",
+          ],
+          // Actionable payload: a concrete lift to rotate out + same-pattern options to
+          // rotate in. Only when actions are offered (non-lead mode), we know WHICH lift
+          // stalled, and have real options — the surface resolves the plan day (the
+          // conductor never touches the DB).
+          swap: acts && leadLift && opts.length ? { from: leadLift, to: opts } : undefined,
+        },
+      };
+    }
   }
   // Else the capacity laggard (the one lift furthest behind for the athlete's age).
   const lever = inp.performance?.lever;
@@ -1086,6 +1190,9 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   return {
     available: leadItem != null,
     headline: clip(headline, 240),
+    // Lead mode owns the actions server-side: under 'lead' the coach applies bounded
+    // changes itself, so the surface offers no one-tap swap/draft ask.
+    acts: lc(input.leadMode) !== "lead",
     lead: leadItem,
     parallel: parallelItems,
     later,
