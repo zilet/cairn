@@ -21,7 +21,7 @@ import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 
 type ProposalShape = {
-  kind: "nutrition_target" | "training_structure" | "training_target";
+  kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
   domain: "nutrition" | "training";
   risk: "low" | "moderate";
 };
@@ -31,6 +31,11 @@ function proposalShape(proposal: any): ProposalShape {
     return { kind: "nutrition_target", domain: "nutrition", risk: "low" };
   if (Array.isArray(proposal?.parsed?.days))
     return { kind: "training_structure", domain: "training", risk: "moderate" };
+  // A changes[] payload carrying a swap is an exercise rotation, not a bare target
+  // tweak — classify it as such for the ledger. It stays low-risk/quiet_apply and
+  // shares training_target's next-boundary + freshness handling (kind !== structure).
+  if (Array.isArray(proposal?.parsed?.changes) && proposal.parsed.changes.some((change: any) => change?.swap))
+    return { kind: "exercise_rotation", domain: "training", risk: "low" };
   return { kind: "training_target", domain: "training", risk: "low" };
 }
 

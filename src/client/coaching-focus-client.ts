@@ -62,6 +62,10 @@ function coachingFocusCardHtml(
 ): string {
   if (!focus || !focus.available || !focus.lead) return "";
   const lead = focus.lead;
+  // Lead mode owns the actions server-side (focus.acts === false): the coach applies
+  // bounded changes itself, so the card offers no one-tap swap/draft ask, only state
+  // and a review LINK. Absent → true (the legacy navigate-and-act surfaces).
+  const acts = focus.acts !== false;
   const parallel = focusItems(focus.parallel);
   const later = Array.isArray(focus.later) ? focus.later.filter((item) => item && item.title) : [];
   const connections = Array.isArray(focus.connections) ? focus.connections.filter(Boolean) : [];
@@ -73,31 +77,39 @@ function coachingFocusCardHtml(
   if (focus.block_line && options.blockLine !== false)
     html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
 
-  html += `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
-  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
+  // A RUNNING recovery week is a confirmation, not a destination — the lead renders
+  // non-interactive (no navigation, no arrow); every other lead keeps its route.
+  const leadConfirm = lead.domain === "recovery" && lead.recovery_active === true;
+  html += leadConfirm
+    ? `<div class="cfocus-lead cfocus-confirm">`
+    : `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
+  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3>${leadConfirm ? "" : `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`}</div>`;
   if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
   if (lead.move) html += `<p class="cfocus-lead-move"><span class="lbl">Move</span>${escHtml(lead.move)}</p>`;
   // Action buttons render ONLY when options.actions — they are wired where the
   // card lives (Program); a navigate-only surface would render them dead. The
   // surrounding lead row still navigates (focusRouteTarget ignores [data-cfocus-act]).
   if (options.actions) {
-    // A recovery lead is ACTIONABLE: one tap drafts next week as a recovery week
-    // (a reviewable proposal via the propose→apply loop — the same durable
-    // /program/evolve job as "Evolve my plan"; under lead mode the autonomy layer
-    // may apply it at a natural boundary — see autonomy-service). Once the draft
-    // has landed (draft_pending), the button gives way to a review LINK — state,
-    // not a repeatable ask. Pure navigation via data-cfocus-go (the document-level
-    // cfocusRoute listener), so it needs no per-surface wiring.
+    // A recovery lead is ACTIONABLE off lead mode: one tap drafts next week as a
+    // recovery week (a reviewable proposal via the propose→apply loop — the same
+    // durable /program/evolve job as "Evolve my plan"). Once the draft has landed
+    // (draft_pending) — or under lead mode where the coach set it up itself — the
+    // button gives way to a review LINK: state, not a repeatable ask. The link is
+    // pure navigation via data-cfocus-go, so it renders in every posture.
     if (lead.domain === "recovery" && !lead.recovery_active) {
       // recovery_active renders NOTHING — the week is running, the lead is a
       // confirmation, and re-offering the draft would be the same ask twice.
       // role="link" so the keydown navigator resolves the BUTTON's target
       // (plan-coach), not the surrounding lead row's.
-      html += lead.draft_pending
-        ? `<button class="draftbtn cfocus-review" type="button" role="link" data-cfocus-go="plan-coach">Review your recovery week →</button>`
-        : `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
+      if (lead.draft_pending) {
+        html += `<button class="draftbtn cfocus-review" type="button" role="link" data-cfocus-go="plan-coach">Review your recovery week →</button>`;
+      } else if (acts) {
+        html += `<button class="draftbtn cfocus-act" type="button" data-cfocus-act="recovery-week">Draft my recovery week</button>`;
+      }
     }
-    html += cfocusSwapButtonsHtml(lead);
+    // Swap asks only where the athlete drives them (non-lead mode) — under lead the
+    // coach rotates at the boundary itself, so the server also emits no swap payload.
+    if (acts) html += cfocusSwapButtonsHtml(lead);
   }
   html += `</div>`;
 
@@ -109,7 +121,7 @@ function coachingFocusCardHtml(
       html += `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`;
       if (item.why) html += `<span class="cfocus-along-why">${escHtml(item.why)}</span>`;
       if (item.move) html += `<span class="cfocus-along-move">${escHtml(item.move)}</span>`;
-      if (options.actions) html += cfocusSwapButtonsHtml(item);
+      if (options.actions && acts) html += cfocusSwapButtonsHtml(item);
       html += `</div>`;
     }
     html += `</div>`;
@@ -151,8 +163,12 @@ function coachingFocusCompactHtml(focus: ClientCoachingFocus | null | undefined)
   if (focus.headline) html += `<p class="cfocus-headline">${escHtml(focus.headline)}</p>`;
   if (focus.block_line && cfocusBlockDomains(lead.domain))
     html += `<p class="cfocus-blockline">${escHtml(focus.block_line)}</p>`;
-  html += `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
-  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3><span class="cfocus-go-arrow" aria-hidden="true">→</span></div>`;
+  // A RUNNING recovery week leads as a confirmation, not a route (see the full card).
+  const leadConfirm = lead.domain === "recovery" && lead.recovery_active === true;
+  html += leadConfirm
+    ? `<div class="cfocus-lead cfocus-confirm">`
+    : `<div class="cfocus-lead cfocus-go" data-cfocus-go="${escAttr(lead.domain || "")}" role="link" tabindex="0">`;
+  html += `<div class="cfocus-lead-top">${cfocusDomainTag(lead.domain)}<h3 class="cfocus-lead-title">${escHtml(lead.title || "")}</h3>${leadConfirm ? "" : `<span class="cfocus-go-arrow" aria-hidden="true">→</span>`}</div>`;
   if (lead.why) html += `<p class="cfocus-lead-why">${escHtml(lead.why)}</p>`;
   html += `</div>`;
   html += `<button class="cfocus-full-link" type="button" data-cfocus-go="program">The full focus plan →</button>`;

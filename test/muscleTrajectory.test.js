@@ -87,6 +87,20 @@ test("vary options never offer a movement already on the plan — variety means 
   assert.ok(!after.vary_options.some((o) => /db bench press/i.test(o.name)), "an already-programmed movement is excluded");
 });
 
+test("vary options also exclude a lift the brain just rotated OUT — never offer it straight back", () => {
+  [35, 28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 5, rir: 1, date: back(d) }));
+  // Baseline (no rotations): DB Bench Press is a natural same-pattern option.
+  const baseline = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "chest");
+  assert.ok(baseline.vary_options.some((o) => /db bench press/i.test(o.name)), "DB Bench Press is a natural option");
+  // Inject a recent rotation OUT of DB Bench Press — it must drop from the menu
+  // (offering it back would undo the rotation the coach just made).
+  const injected = repo
+    .muscleGroupTrajectory(REF, { recentRotations: [{ from: "DB Bench Press" }] })
+    .groups.find((g) => g.group === "chest");
+  assert.equal(injected.verdict, "stalling");
+  assert.ok(!injected.vary_options.some((o) => /db bench press/i.test(o.name)), "a just-rotated-out lift is excluded");
+});
+
 test("muscleGroupTrajectory is quiet when nothing is logged", () => {
   const t = repo.muscleGroupTrajectory(REF);
   assert.equal(t.available, false);

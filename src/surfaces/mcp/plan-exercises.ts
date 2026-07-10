@@ -10,6 +10,7 @@ import {
   listExerciseAliases,
   listExercises,
   mergeExercises,
+  planUpcomingNote,
   reconcileExerciseGroups,
   replacePlan,
   savePlanDay,
@@ -67,6 +68,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "Get one training day by its number (1-5) with prescribed exercises and targets.",
     { day_number: z.number().int().describe("1 through 5") },
     async ({ day_number }) => asText(getPlanDay(day_number))
+  );
+
+  server.tool(
+    "get_plan_upcoming",
+    "The calm forward look for the Plan surface: queued training/recovery changes the brain will land soon (e.g. a recovery week landing Monday, a bounded target change), each with its summary and effective_date. Deduped against the recovery-week draft; returns null when nothing is waiting.",
+    {},
+    async () => asText(planUpcomingNote())
   );
 
   server.tool(

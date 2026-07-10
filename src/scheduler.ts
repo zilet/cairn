@@ -237,6 +237,13 @@ export function startScheduler() {
     //     interval — rule 2a. Without this pass the entries never exist and the reads
     //     fall back to the legacy cadence.
     const benchmarkAttnDue = repo.getAppState("benchmark_attention_date") !== localToday(now);
+    // (g) LEAD-MODE recovery auto-draft (≤1×/day). When the conductor's lead is the
+    //     recovery-deload ASK (due, not running, nothing drafted) and the athlete has
+    //     chosen lead posture, the coach drafts the recovery week ITSELF — the draft
+    //     rides the exact one-tap path (evolveProgram → autonomy → announce → lands
+    //     at the week boundary, Undo from Plan). This is the mechanism behind the
+    //     conductor's "your coach sets this up automatically" line.
+    const recoveryAutoDue = repo.getAppState("recovery_auto_draft_date") !== localToday(now);
 
     if (
       !insightDue &&
@@ -245,7 +252,8 @@ export function startScheduler() {
       !evolutionDue &&
       !blockAdvanceDue &&
       !triggerCheckDue &&
-      !benchmarkAttnDue
+      !benchmarkAttnDue &&
+      !recoveryAutoDue
     )
       return;
     proactiveBusy = true;
@@ -376,6 +384,30 @@ export function startScheduler() {
         } catch (e: any) {
           recordSchedulerFailure("program_evolution", e);
           console.error(`[proactive] plan evolution failed: ${e?.message ?? e}`);
+        }
+      }
+      if (recoveryAutoDue) {
+        // Stamp first (≤1×/day even when nothing drafts) so it can't re-run every tick.
+        repo.setAppState("recovery_auto_draft_date", localToday(now));
+        try {
+          const focus: any = repo.getCoachingFocus();
+          const draft = repo.shouldAutoDraftRecoveryWeek({
+            lead_mode: s.lead_mode,
+            focus_lead_domain: focus?.available ? focus?.lead?.domain : null,
+            recovery_active: focus?.lead?.recovery_active,
+            status: repo.recoveryWeekStatus(),
+          });
+          if (draft) {
+            const r: any = await evolveProgram("auto", repo.RECOVERY_WEEK_INSTRUCTION);
+            console.log(
+              r.ok
+                ? `[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`
+                : `[proactive] recovery auto-draft unavailable (calm no-op).`
+            );
+          }
+        } catch (e: any) {
+          recordSchedulerFailure("recovery_auto_draft", e);
+          console.error(`[proactive] recovery auto-draft failed: ${e?.message ?? e}`);
         }
       }
       if (triggerCheckDue) {

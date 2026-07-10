@@ -207,6 +207,121 @@ test("the swap payload is trimmed and clamped through item sanitization", () => 
   assert.deepEqual(out.lead.swap.to, ["DB Bench Press", "Incline Bench Press"], "swap.to entries are trimmed, capped, non-empty");
 });
 
+// ── autonomy-awareness: a handled plateau, and lead-mode acts gating ───────────
+
+test("a stalled lead lift no longer on the plan (rotated out) does NOT lead — the stale plateau read is dropped", () => {
+  const out = coachingFocus({
+    goalMode: "maintain",
+    programState: { mesocycle: { phase: "accumulation" } },
+    recovery: { delta: { hrv: 0, rhr: 0 } },
+    performance: { lever: { headline: "Bring up your overhead press", why: "furthest-behind lift" }, endurance: { tone: "steady" } },
+    groupsTrajectory: { groups: [{ verdict: "stalling", label: "Chest", lead_lift: "Barbell Bench Press", vary_options: [{ name: "DB Bench Press" }] }] },
+    // The plan no longer runs Barbell Bench Press, and there's no rotation record — the
+    // stall can't be acted on, so the conductor falls through to the capacity laggard.
+    plannedNames: ["Back Squat", "Deadlift"],
+  });
+  assert.equal(out.lead.domain, "training");
+  assert.match(out.lead.title, /overhead press/i, "the capacity laggard leads, not the stale plateau");
+  assert.doesNotMatch(out.lead.title, /plateau/i);
+  assert.equal(out.lead.swap, undefined, "no swap for a lift that isn't on the plan");
+});
+
+test("a stalled lift the brain already rotated out becomes a calm 'handled' note, not a fresh ask", () => {
+  const out = coachingFocus({
+    programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
+    recovery: {},
+    groupsTrajectory: { groups: [{ verdict: "stalling", label: "Chest", lead_lift: "Barbell Bench Press", vary_options: [{ name: "DB Bench Press" }] }] },
+    recentRotations: [{ from: "Barbell Bench Press", to: "Incline Bench Press", date: "2026-07-08" }],
+    plannedNames: ["Incline Bench Press"],
+  });
+  // Recovery leads; the handled plateau rides alongside as a calm note (no ask).
+  assert.equal(out.lead.domain, "recovery");
+  const handled = out.parallel.find((p) => /new stimulus/i.test(p.title));
+  assert.ok(handled, "the handled plateau surfaces as a parallel note");
+  assert.equal(handled.domain, "training");
+  assert.match(handled.why, /rotated in/i);
+  assert.match(handled.why, /Incline Bench Press/);
+  assert.equal(handled.swap, undefined, "no swap ask — it's already handled");
+  // The stale plateau LEAD never appears anywhere.
+  const stall = [out.lead, ...out.parallel].find((i) => /break the plateau/i.test(String(i.title || "")));
+  assert.equal(stall, undefined, "no stall lead once the rotation is on record");
+});
+
+test("a handled rotation never suppresses the capacity-laggard training lead", () => {
+  const out = coachingFocus({
+    performance: {
+      lever: { headline: "Bring up your overhead press", why: "Furthest behind for your age.", target: "Add one focused OHP day." },
+    },
+    groupsTrajectory: {
+      groups: [{ verdict: "stalling", label: "Chest", lead_lift: "Barbell Bench Press", vary_options: [{ name: "DB Bench Press" }] }],
+    },
+    recentRotations: [{ from: "Barbell Bench Press", to: "Incline Bench Press", date: "2026-07-08" }],
+    plannedNames: ["Incline Bench Press"],
+  });
+  // The live lever still LEADS; the handled plateau does not swallow training.
+  assert.equal(out.lead.domain, "training");
+  assert.match(out.lead.title, /overhead press/i);
+  // The handled note still exists in the read (parallel or later — never the lead).
+  const everywhere = [...out.parallel.map((p) => p.title), ...out.later.map((l) => l.title)];
+  assert.ok(everywhere.some((t) => /new stimulus/i.test(String(t))), "handled note rides along");
+});
+
+test("an unrelated structural decision is never dressed up as the recovery week", () => {
+  const out = coachingFocus({
+    programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } },
+    recovery: {},
+    leadMode: "lead",
+    upcoming: [
+      { kind: "training_structure", domain: "training", summary: "Move to a 4-day upper/lower split.", effective_date: "2026-07-13" },
+    ],
+  });
+  assert.equal(out.lead.domain, "recovery");
+  assert.doesNotMatch(String(out.lead.move), /lands \w+day/i, "no weekday claim off an unrelated decision");
+  assert.match(String(out.lead.move), /automatically at the week boundary/i);
+});
+
+test("lead mode strips the one-tap swap payload and reports acts:false; other modes keep it", () => {
+  const lead = coachingFocus({ ...richInput(), leadMode: "lead" });
+  assert.equal(lead.acts, false, "lead mode owns the actions server-side");
+  assert.equal(lead.lead.domain, "training");
+  assert.equal(lead.lead.swap, undefined, "no swap ask under lead mode — the coach rotates itself");
+  // The plateau read still speaks (title/why) — only the ACTION is withheld.
+  assert.match(lead.lead.title, /plateau|shoulder/i);
+
+  const review = coachingFocus({ ...richInput(), leadMode: "review_everything" });
+  assert.equal(review.acts, true);
+  assert.ok(review.lead.swap, "off lead mode the athlete-driven swap payload stays");
+  // Absent leadMode defaults to acts:true (legacy behavior).
+  assert.equal(coachingFocus(richInput()).acts, true);
+});
+
+test("under lead mode a due recovery week speaks STATE — the coach sets it up, no ask", () => {
+  const base = { programState: { mesocycle: { phase: "deload-due", note: "Time for a lighter week." } }, recovery: {} };
+  // With an upcoming RECOVERY-shaped decision, name the weekday it lands (2026-07-13 is a Monday).
+  const named = coachingFocus({
+    ...base,
+    leadMode: "lead",
+    upcoming: [
+      { kind: "training_structure", domain: "training", summary: "Recovery deload week — volume halves.", effective_date: "2026-07-13" },
+    ],
+  });
+  assert.equal(named.acts, false);
+  assert.equal(named.lead.domain, "recovery");
+  assert.match(String(named.lead.move), /lands Monday/, "names the weekday the auto-set week arrives");
+  assert.match(String(named.lead.move), /undo any time/i);
+
+  // No upcoming decision → the generic auto-boundary note.
+  const generic = coachingFocus({ ...base, leadMode: "lead" });
+  assert.match(String(generic.lead.move), /automatically at the week boundary/i);
+  assert.notEqual(generic.lead.draft_pending, true);
+
+  // A queued draft under lead mode → the "queued, lands automatically" copy (the review
+  // link still renders client-side via draft_pending).
+  const queued = coachingFocus({ ...base, leadMode: "lead", recoveryDraftPending: true });
+  assert.equal(queued.lead.draft_pending, true);
+  assert.match(String(queued.lead.move), /queued/i);
+});
+
 test("getCoachingFocus memoizes across requests and invalidates on a data write", async () => {
   const { repo } = await import("./_seed.js");
   const first = repo.getCoachingFocus();

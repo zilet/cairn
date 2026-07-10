@@ -110,7 +110,12 @@ function paintPlanEndurance(
   const leadHtml = goal
     ? `<p class="end-lead">Your running plan — the build, this week's runs, and a quick way to shape them.</p>`
     : "";
-  body.innerHTML = goalHtml + leadHtml + rampHtml + standingNote + runsSection + composer;
+  body.innerHTML = `<div id="endUpcomingSlot"></div>` + goalHtml + leadHtml + rampHtml + standingNote + runsSection + composer;
+
+  // The same calm forward look the Plan edit segment shows — a reshaped/lighter
+  // week announces itself here too (running changes are ledgered under the
+  // 'training' domain, so there's no separate 'running' filter to apply).
+  if (typeof loadPlanUpcomingNote === "function") loadPlanUpcomingNote(pollToken, "#endUpcomingSlot");
 
   body.querySelector("#endEditRuns")?.addEventListener("click", () => renderPlanEditor());
   if (syncHtml && typeof wireCardioSync === "function") wireCardioSync(body, () => renderPlanEndurance());

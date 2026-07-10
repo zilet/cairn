@@ -14,6 +14,7 @@ import {
   listExerciseAliases,
   listExercises,
   mergeExercises,
+  planUpcomingNote,
   reconcileExerciseGroups,
   recoveryWeekStatus,
   replacePlan,
@@ -34,6 +35,12 @@ planExercisesRouter.get("/plan", (_req, res) => res.json(getPlan()));
 // null. The Plan tab's banner reads this so a reshaped week announces itself —
 // heads-up + what changed — instead of arriving silently.
 planExercisesRouter.get("/plan/recovery-status", (_req, res) => res.json(recoveryWeekStatus()));
+
+// A calm forward look for the Plan surface: the training/recovery changes the
+// brain will land soon (a recovery week landing Monday, a bounded target
+// change), so a reshaped week announces itself instead of arriving silently.
+// Deduped against the recovery banner's draft; null when nothing is waiting.
+planExercisesRouter.get("/plan/upcoming", (_req, res) => res.json(planUpcomingNote()));
 
 // Subscribe-able iCal of the training template — pull-not-push. Each plan day is
 // a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to

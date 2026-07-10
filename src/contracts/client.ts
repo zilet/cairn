@@ -108,6 +108,18 @@ export type ClientRecoveryWeekStatus =
   | { state: "applied"; applied_on: string; until: string; summary: string | null }
   | null;
 
+// The calm forward look for the Plan surface (GET /api/plan/upcoming): the
+// training/recovery changes the brain will land soon, each with a summary and
+// the day it takes effect. Deduped against the recovery banner's draft; null
+// when nothing is waiting. Pull-never-push — a heads-up, never a retrospective feed.
+export interface ClientPlanUpcomingItem {
+  summary: string;
+  effective_date: string;
+  kind: string;
+  domain: string;
+}
+export type ClientPlanUpcomingNote = { items: ClientPlanUpcomingItem[] } | null;
+
 export interface ClientCoachingRetest {
   in_weeks: number | null;
   focus: string[];
@@ -117,6 +129,10 @@ export interface ClientCoachingRetest {
 export interface ClientCoachingFocus {
   available: boolean;
   headline: string;
+  // Whether the surface should offer one-tap ACTIONS (swap / draft-recovery buttons).
+  // False under lead mode — the coach applies bounded changes itself, so the card
+  // speaks state, not an ask. Absent is treated as true (the legacy behavior).
+  acts?: boolean;
   lead: ClientCoachingFocusItem | null;
   parallel: ClientCoachingFocusItem[];
   later: Array<{ domain: ClientCoachingFocusDomain; title: string }>;

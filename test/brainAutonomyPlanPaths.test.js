@@ -208,6 +208,30 @@ function seedOneDayPlan() {
   ]);
 }
 
+test("a changes[]-with-swap proposal classifies as an exercise rotation (quiet_apply, low risk)", () => {
+  // A lived-in session today forces the bounded change to WAIT — the pending path
+  // records the decision with the classified kind, independent of the swap apply.
+  repo.upsertExercise({ name: "Plank", muscle_group: "core", mode: "timed" });
+  const plank = repo.getOrCreateSession(localDateISO(), null);
+  dbInsertSet(plank.id, repo.findExercise("Plank").id, { set_number: 1, duration_sec: 60 });
+  repo.setSettings({ lead_mode: "lead" });
+
+  const proposal = repo.createProposal("stub", "rotate the stalled bench out", "", {
+    summary: "Rotate DB Bench Press in for Barbell Bench Press",
+    changes: [{ day_number: 1, exercise: "Barbell Bench Press", swap: "DB Bench Press" }],
+  });
+  const out = applyProposalWithAutonomy(proposal.id);
+  assert.equal(out.tier, "quiet_apply", "a reversible rotation quiet-applies under lead mode");
+  assert.equal(out.pending, true, "held for the boundary behind the lived-in session");
+
+  const rotations = repo.listBrainDecisions({ kind: "exercise_rotation" });
+  assert.equal(rotations.length, 1, "the swap proposal is ledgered as an exercise rotation");
+  assert.equal(rotations[0].domain, "training");
+  assert.equal(rotations[0].risk_class, "low");
+  // A swap must NOT read as a bare target tweak.
+  assert.equal(repo.listBrainDecisions({ kind: "training_target" }).length, 0);
+});
+
 test("a discarded proposal's standing announcement cancels at once and the boundary never applies it", () => {
   seedOneDayPlan();
   repo.setSettings({ lead_mode: "lead" });

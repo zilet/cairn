@@ -5,6 +5,10 @@ type ClientDayRead = import("../contracts/client.js").ClientDayRead;
 
 type TodayBriefRead = Partial<ClientDayRead> & {
   _provisional?: unknown;
+  // Set once loadBrief's fetch has definitively failed (not merely still in
+  // flight) — lets the shimmer stop even though the fallback content stays
+  // provisional (never persisted as the real read).
+  _failed?: unknown;
   override?: unknown;
 };
 
@@ -22,6 +26,10 @@ type TodayBriefOverride = {
 
 type TodayBriefHtmlOptions = {
   showPlan?: boolean;
+  // Whether the plan/logging surface below is rendering the finished-session
+  // "Log more" done card. On a `done` read, when neither showPlan nor showDone
+  // is true nothing below the Brief offers a way in — see the entry action below.
+  showDone?: boolean;
   isToday?: boolean;
   activeOverride?: unknown;
   morph?: boolean;
@@ -120,7 +128,15 @@ type TodayBriefHtmlOptions = {
     const actions: string[] = [];
     if (kind === "train") {
       actions.push(todayBriefRedirect("start-session", "Start session", true));
-    } else if (kind !== "done" && !options.showPlan) {
+    } else if (kind === "done") {
+      // A logged activity alone (no session row) can flip the read to "done"
+      // with neither the finished-session card nor a revealed plan below —
+      // stranding the athlete with no way to log training. Offer one quiet
+      // way in only when nothing else already does.
+      if (!options.showPlan && !options.showDone) {
+        actions.push(todayBriefRedirect("start-session", "Log training", false));
+      }
+    } else if (!options.showPlan) {
       actions.push(todayBriefRedirect("reveal-plan", "Train anyway", false));
     }
     if (kind !== "done") actions.push(todayBriefRedirect("ask-session", "Ask for a session", false));
@@ -147,8 +163,12 @@ type TodayBriefHtmlOptions = {
     const morph = options.morph ? " brief-morph" : "";
     const enter = options.morph ? "" : " reveal";
     const provisional = !!read?._provisional;
-    const thinking = provisional && !options.reducedMotion ? " is-thinking" : "";
-    const busy = provisional ? ` aria-busy="true"` : "";
+    // A terminal fetch failure still paints the provisional fallback content
+    // (there's nothing truer to show) but must not shimmer forever — only a
+    // genuinely in-flight placeholder does.
+    const failed = !!read?._failed;
+    const thinking = provisional && !failed && !options.reducedMotion ? " is-thinking" : "";
+    const busy = provisional && !failed ? ` aria-busy="true"` : "";
     const offline = provisional ? "" : todayBriefAgentOfflineNoticeHtml(read?.agent_status, options.offlineDismissed);
     return `<section class="brief brief-${kind}${morph}${enter}${thinking}" style="--i:0" aria-live="polite"${busy}>
       ${offline}
