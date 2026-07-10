@@ -535,6 +535,15 @@ function firstTokenCount(obj: any, keys: string[]): number | null {
   return null;
 }
 
+function recognizedModelName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const model = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$/.test(model)) return null;
+  return /^(?:(?:anthropic|openai|google|xai)\/)?(?:(?:claude|gpt|gemini|grok|codex)(?:[-.:/][A-Za-z0-9][A-Za-z0-9_.:/-]*)|o[134](?:[-.:/][A-Za-z0-9][A-Za-z0-9_.:/-]*)?)$/i.test(model)
+    ? model
+    : null;
+}
+
 function usageFromObject(obj: any): AgentUsage {
   if (!obj || typeof obj !== "object") return {};
   const usage = obj.usageMetadata ?? obj.usage ?? obj.token_usage ?? obj.tokenUsage ?? obj.metrics ?? obj;
@@ -555,12 +564,11 @@ function usageFromObject(obj: any): AgentUsage {
     "outputTokenCount",
   ]);
   const model =
-    typeof obj.model === "string" ? obj.model :
-    typeof obj.model_name === "string" ? obj.model_name :
-    typeof obj.modelName === "string" ? obj.modelName :
-    typeof usage.model === "string" ? usage.model :
-    typeof usage.model_name === "string" ? usage.model_name :
-    null;
+    recognizedModelName(obj.model) ??
+    recognizedModelName(obj.model_name) ??
+    recognizedModelName(obj.modelName) ??
+    recognizedModelName(usage.model) ??
+    recognizedModelName(usage.model_name);
   return { model, input_tokens: input, output_tokens: output };
 }
 

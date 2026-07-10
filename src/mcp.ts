@@ -22,11 +22,31 @@ import { registerBodyMetricsTools } from "./surfaces/mcp/body-metrics.js";
 import { registerJourneyTools } from "./surfaces/mcp/journey.js";
 import { getBuildInfo, getBuildStamp } from "./build-info.js";
 import { recordDiagnosticEvent } from "./repo/diagnostics.js";
-import { recordRequestMetric } from "./repo/request-metrics.js";
+import { normalizeMcpMetricOperation, recordRequestMetric, registerMcpMetricOperation } from "./repo/request-metrics.js";
 import { telemetryErrorName, telemetryIdentifier, telemetryStackFrames } from "./telemetry-privacy.js";
 
+const KNOWN_MCP_METHODS = new Map([
+  ["initialize", "initialize"], ["notifications/initialized", "initialized"], ["tools/list", "tools_list"], ["ping", "ping"],
+]);
+
+function instrumentTelemetry(server: McpServer): McpServer {
+  const tool = server.tool.bind(server) as (...values: unknown[]) => unknown;
+  server.tool = ((...args: unknown[]) => {
+    registerMcpMetricOperation(args[0]);
+    return tool(...args);
+  }) as McpServer["tool"];
+  return server;
+}
+
+export function mcpMetricOperation(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
+  const request = body as { method?: unknown; params?: { name?: unknown } };
+  if (request.method === "tools/call") return normalizeMcpMetricOperation(request.params?.name);
+  return typeof request.method === "string" ? KNOWN_MCP_METHODS.get(request.method) || "unknown" : "unknown";
+}
+
 export function buildMcpServer(): McpServer {
-  const server = new McpServer({ name: "cairn", version: getBuildInfo().version });
+  const server = instrumentTelemetry(new McpServer({ name: "cairn", version: getBuildInfo().version }));
   registerSystemTools(server);
   registerChatTools(server);
   registerConnectedBrainTools(server);
@@ -53,7 +73,8 @@ export function buildMcpServer(): McpServer {
 // Stateless Streamable HTTP handler: fresh server+transport per request.
 export async function handleMcpPost(req: Request, res: Response) {
   const started = performance.now();
-  const tool = telemetryIdentifier(req.body?.params?.name ?? req.body?.method, 100, "request");
+  const server = buildMcpServer();
+  const tool = mcpMetricOperation(req.body);
   res.once("finish", () => {
     recordRequestMetric({
       protocol: "mcp",
@@ -64,7 +85,6 @@ export async function handleMcpPost(req: Request, res: Response) {
     });
   });
   try {
-    const server = buildMcpServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       transport.close();
@@ -92,7 +112,7 @@ export async function handleMcpPost(req: Request, res: Response) {
 }
 
 export function methodNotAllowed(_req: Request, res: Response) {
-  recordRequestMetric({ protocol: "mcp", method: _req.method, route: "request", status: 405, duration_ms: 0 });
+  recordRequestMetric({ protocol: "mcp", method: _req.method, route: "unknown", status: 405, duration_ms: 0 });
   recordDiagnosticEvent({
     source: "mcp",
     kind: "http_error",

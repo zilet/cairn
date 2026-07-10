@@ -12,7 +12,7 @@ import {
 } from "../domain/operator/index.js";
 import { researchAutoEligible } from "../research.js";
 import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatch } from "../repo/diagnostics.js";
-import { getVersion } from "../version.js";
+import { getBuildStamp } from "../build-info.js";
 
 export const operatorRouter = Router();
 
@@ -62,7 +62,7 @@ operatorRouter.get("/brain-diagnostics", (req, res) =>
 export function clientTelemetryHandler(req: Request, res: Response) {
   const events = parseClientDiagnosticBatch(req.body);
   if (!events) return res.status(400).json({ error: "invalid telemetry batch" });
-  ingestClientDiagnosticEvents(events, getVersion());
+  ingestClientDiagnosticEvents(events, getBuildStamp());
   return res.status(204).end();
 }
 
@@ -73,9 +73,11 @@ export function diagnosticsHandler(req: Request, res: Response) {
 }
 
 // Best-effort browser error/API-failure ingestion. Accepts only the bounded,
-// privacy-scrubbed client diagnostic contract; never request bodies or app data.
+// privacy-scrubbed client diagnostic contract. The server derives fingerprint,
+// route family, tab and build identity; it never trusts those client values.
 operatorRouter.post("/telemetry/client", clientTelemetryHandler);
 
-// Local operator issue pulse: grouped browser/server/process failures, recent
-// sanitized events, and slow API requests over a bounded time window.
+// Local operator issue pulse: current-build browser/API/MCP/process/scheduler
+// and worker failures, release-scoped groups, sanitized recent events, product
+// latency, separately counted internal probes, and enforceable storage caps.
 operatorRouter.get("/diagnostics", diagnosticsHandler);

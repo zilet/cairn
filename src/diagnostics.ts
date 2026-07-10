@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { getBuildStamp } from "./build-info.js";
-import { normalizeDiagnosticRoute, recordDiagnosticEvent } from "./repo/diagnostics.js";
-import { recordRequestMetric } from "./repo/request-metrics.js";
+import { recordDiagnosticEvent } from "./repo/diagnostics.js";
+import { normalizeServerApiRouteTemplate, recordRequestMetric } from "./repo/request-metrics.js";
 import {
   genericFailureMessage,
   telemetryErrorName,
@@ -28,8 +28,25 @@ function diagnosticStackFrames(error: unknown): string | null {
   return telemetryStackFrames(error);
 }
 
-function requestRoute(req: Request): string | null {
-  return normalizeDiagnosticRoute(req.originalUrl || req.url);
+export function matchedApiRoute(req: Pick<Request, "baseUrl" | "route">): string {
+  const routePath = typeof req.route?.path === "string" ? req.route.path : null;
+  if (!routePath) return "/api/unknown";
+  const base = typeof req.baseUrl === "string" && req.baseUrl.startsWith("/api") ? req.baseUrl : "/api";
+  return normalizeServerApiRouteTemplate(`${base.replace(/\/$/, "")}/${routePath.replace(/^\//, "")}`);
+}
+
+function requestRoute(req: Request): string {
+  return matchedApiRoute(req);
+}
+
+export function isOrdinaryProductRequest(res: Pick<Response, "getHeader">, route: string): boolean {
+  const contentType = String(res.getHeader("Content-Type") || "").toLowerCase();
+  if (contentType.startsWith("text/event-stream")) return false;
+  return route !== "/api/health" && route !== "/api/ready";
+}
+
+function isEventStream(res: Pick<Response, "getHeader">): boolean {
+  return String(res.getHeader("Content-Type") || "").toLowerCase().startsWith("text/event-stream");
 }
 
 /** Mounted before auth so every /api response, including a 401, is correlated. */
@@ -47,7 +64,11 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
     const status = res.statusCode;
     const configured = Number(process.env.CAIRN_SLOW_REQUEST_MS);
     const slowMs = Number.isFinite(configured) && configured >= 100 ? configured : DEFAULT_SLOW_REQUEST_MS;
-    recordRequestMetric({ protocol: "api", method: req.method, route, status, duration_ms: duration });
+    const ordinaryProductRequest = isOrdinaryProductRequest(res, route);
+    if (!isEventStream(res)) {
+      recordRequestMetric({ protocol: "api", method: req.method, route, status, duration_ms: duration,
+        scope: ordinaryProductRequest ? "product" : "internal" });
+    }
     // Auth failures are intentionally excluded from durable HTTP-error telemetry.
     // They still receive X-Request-ID and remain visible to the caller.
     if (status >= 400 && status !== 401 && status !== 403 && !unexpectedErrorRequests.has(req)) {
@@ -63,9 +84,10 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
         fingerprint: `api:http_error:${req.method}:${route || "unknown"}:${status}`,
         message: `HTTP ${status}`,
         release: getBuildStamp(),
+        trusted_route_template: true,
       });
     }
-    if (duration >= slowMs) {
+    if (ordinaryProductRequest && duration >= slowMs) {
       recordDiagnosticEvent({
         source: "api",
         kind: "slow_request",
@@ -78,6 +100,7 @@ export function apiDiagnosticMiddleware(req: Request, res: Response, next: NextF
         fingerprint: `api:slow_request:${req.method}:${route || "unknown"}`,
         message: `Request exceeded ${slowMs} ms`,
         release: getBuildStamp(),
+        trusted_route_template: true,
       });
     }
   });
@@ -99,6 +122,7 @@ export function recordUnexpectedApiError(error: unknown, req: Request): void {
     message: `${errorName}: server operation failed`,
     stack: diagnosticStackFrames(error),
     release: getBuildStamp(),
+    trusted_route_template: true,
   });
 }
 

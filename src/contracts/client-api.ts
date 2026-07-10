@@ -51,19 +51,29 @@ export interface ClientAgentJobEnvelope {
   job: ClientAgentJob;
 }
 
+export interface ClientBuildInfo {
+  version: string;
+  build_sha: string | null;
+  build_source: "environment" | "git" | "fallback";
+  build_id: string;
+}
+
 export interface ClientHealthResponse {
   ok: true;
   auth_required: boolean;
   version: string;
+  build: ClientBuildInfo;
 }
 
 export interface ClientReadinessResponse {
   ok: boolean;
   database: "ok" | "unavailable";
   queues?: {
-    agent_jobs: { queued: number; running: number };
-    chat_turns: { queued: number; running: number };
+    agent_jobs: { queued: number; running: number; oldest_age_sec: number | null; failed_24h: number };
+    chat_turns: { queued: number; running: number; oldest_age_sec: number | null; failed_24h: number };
   };
+  build?: ClientBuildInfo;
+  scheduler?: { status: "starting" | "fresh" | "stale"; last_at: string | null; age_sec: number | null };
 }
 
 export interface ClientDiagnosticEvent {
@@ -81,6 +91,8 @@ export interface ClientDiagnosticEvent {
   stack: string | null;
   metadata: Record<string, unknown> | null;
   release: string | null;
+  occurrence_count: number;
+  first_seen: string;
   created_at: string;
 }
 
@@ -100,6 +112,7 @@ export interface ClientDiagnosticIssue {
 }
 
 export interface ClientDiagnosticsResponse {
+  build: ClientBuildInfo;
   window_days: number;
   total: number;
   by_source: Record<string, number>;
@@ -108,10 +121,24 @@ export interface ClientDiagnosticsResponse {
   issues: ClientDiagnosticIssue[];
   recent: ClientDiagnosticEvent[];
   slow: ClientDiagnosticEvent[];
+  performance: {
+    build_id: string; window_days: number; requests: number; avg_ms: number | null;
+    p50_ms: number | null; p95_ms: number | null; max_ms: number | null;
+    observed_hours: number; throughput_per_hour: number;
+    traffic: { product: number; internal: number };
+    by_protocol: Record<string, number>;
+    top_routes: Array<{ protocol: string; method: string; route: string; requests: number; errors: number;
+      avg_ms: number | null; p50_ms: number | null; p95_ms: number | null; max_ms: number }>;
+  };
+  storage: {
+    diagnostic_events: { rows: number; retention_days: number; row_cap: number };
+    request_metric_buckets: { rows: number; retention_days: number; row_cap: number };
+  };
 }
 
 export interface ClientVersionResponse {
   version: string;
+  build: ClientBuildInfo;
 }
 
 export interface ClientUpdateStatus {
@@ -172,6 +199,7 @@ export interface ClientSettingsResponse {
 }
 
 export interface ClientAgentStats {
+  build_id?: string;
   runs?: number;
   ok_rate?: number | null;
   by_agent?: Array<Record<string, unknown>>;

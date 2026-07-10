@@ -113,7 +113,7 @@ test("client diagnostics sanitize query values and credentials, dedupe, and batc
   );
   assert.equal(reporter.pending().length, 1);
   const event = reporter.pending()[0];
-  assert.equal(event.route, "/health");
+  assert.equal(event.route, "/api/health");
   assert.equal(event.method, "GET");
   assert.equal(event.tab, "settings");
   assert.doesNotMatch(JSON.stringify(event), /supersecret|abc123|private words/);

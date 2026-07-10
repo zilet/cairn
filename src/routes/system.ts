@@ -8,14 +8,25 @@ import { getBuildInfo } from "../build-info.js";
 
 export const systemRouter = Router();
 
+// Liveness only: process identity plus exact build provenance. It deliberately
+// does not probe optional coaching CLIs or other external providers.
 systemRouter.get("/health", (_req, res) =>
   res.json({ ok: true, auth_required: authEnabled, version: getVersion(), build: getBuildInfo() })
 );
 
-function ageSeconds(value: unknown): number | null {
+function ageSeconds(value: unknown, nowMs = Date.now()): number | null {
   if (typeof value !== "string" || !value) return null;
   const time = Date.parse(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
-  return Number.isFinite(time) ? Math.max(0, Math.round((Date.now() - time) / 1_000)) : null;
+  return Number.isFinite(time) ? Math.max(0, Math.round((nowMs - time) / 1_000)) : null;
+}
+
+export function schedulerReadiness(lastAt: unknown, options: { now_ms?: number; uptime_sec?: number; stale_after_sec?: number } = {}) {
+  const age_sec = ageSeconds(lastAt, options.now_ms ?? Date.now());
+  const staleAfter = options.stale_after_sec ?? 180;
+  const status = age_sec == null
+    ? ((options.uptime_sec ?? process.uptime()) < staleAfter ? "starting" : "stale")
+    : (age_sec <= staleAfter ? "fresh" : "stale");
+  return { status, age_sec, ok: status !== "stale" } as const;
 }
 
 export function readinessHandler(_req: Request, res: Response) {
@@ -40,16 +51,14 @@ export function readinessHandler(_req: Request, res: Response) {
       return counts;
     };
     const heartbeat = db.prepare(`SELECT value,updated_at FROM app_state WHERE key='scheduler_heartbeat'`).get() as any;
-    const heartbeatAge = ageSeconds(heartbeat?.value ?? heartbeat?.updated_at);
-    const bootGrace = process.uptime() < 180;
-    const schedulerStatus = heartbeatAge == null ? (bootGrace ? "starting" : "stale") : heartbeatAge <= 180 ? "fresh" : "stale";
-    const ok = schedulerStatus !== "stale";
+    const scheduler = schedulerReadiness(heartbeat?.value ?? heartbeat?.updated_at);
+    const ok = scheduler.ok;
     return res.status(ok ? 200 : 503).json({
       ok,
       database: "ok",
       build: getBuildInfo(),
       queues: { agent_jobs: queue("agent_jobs"), chat_turns: queue("chat_turns") },
-      scheduler: { status: schedulerStatus, last_at: heartbeat?.value ?? null, age_sec: heartbeatAge },
+      scheduler: { status: scheduler.status, last_at: heartbeat?.value ?? null, age_sec: scheduler.age_sec },
     });
   } catch {
     return res.status(503).json({ ok: false, database: "unavailable" });
@@ -57,13 +66,14 @@ export function readinessHandler(_req: Request, res: Response) {
 }
 
 // Readiness is stronger than liveness: prove SQLite is readable and expose only
-// compact durable queue counts. Optional coaching providers never gate readiness.
+// compact durable queue counts/ages/failures plus scheduler freshness and build
+// provenance. Optional coaching providers never gate readiness.
 systemRouter.get("/ready", readinessHandler);
 
-// The running version, and whether a newer Cairn release exists. The status is
-// served from the app_state cache; the scheduler keeps it fresh, and POST forces
-// an explicit operator-pulled check.
+// Semantic version plus exact build SHA/build id for deploy correlation.
 systemRouter.get("/version", (_req, res) => res.json({ version: getVersion(), build: getBuildInfo() }));
+// Cached release status; the scheduler refreshes it and POST performs an
+// explicit operator-pulled check.
 systemRouter.get("/update-status", (_req, res) => res.json(getUpdateStatus()));
 systemRouter.post("/update-check", async (_req, res) => {
   // checkForUpdate never throws; network failures fold into status.error.

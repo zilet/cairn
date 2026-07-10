@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { getBuildInfo } from "../build-info.js";
 import { agentErrorClass, telemetryIdentifier } from "../telemetry-privacy.js";
 
 const AGENT_RUN_RETENTION_DAYS = 30;
@@ -48,10 +49,11 @@ export function recordAgentRun(r: {
     const outputTokens = Number(r.output_tokens);
     db.prepare(
       `INSERT INTO agent_runs (
-         op, agent, ok, parsed, latency_ms, tried_json,
+         build_id, op, agent, ok, parsed, latency_ms, tried_json,
          status, error_class, error_message, exit_code, model, input_tokens, output_tokens
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
+      getBuildInfo().build_id,
       telemetryIdentifier(r.op, 60),
       telemetryIdentifier(r.agent, 60),
       r.ok ? 1 : 0,
@@ -80,8 +82,9 @@ export function recordAgentRun(r: {
 export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
   const recentN = Math.min(Math.max(Number(opts.recent) || 25, 1), 200);
   const days = Number.isFinite(opts.days) && (opts.days as number) > 0 ? (opts.days as number) : null;
-  const where = days ? `WHERE created_at >= datetime('now', ?)` : ``;
-  const bind: any[] = days ? [`-${days} days`] : [];
+  const buildId = getBuildInfo().build_id;
+  const where = `WHERE build_id = ?${days ? ` AND created_at >= datetime('now', ?)` : ""}`;
+  const bind: any[] = days ? [buildId, `-${days} days`] : [buildId];
 
   const totalRow = db.prepare(
     `SELECT COUNT(*) AS runs, COALESCE(SUM(ok), 0) AS ok FROM agent_runs ${where}`
@@ -134,10 +137,11 @@ export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
   }));
 
   const recent = db.prepare(
-    `SELECT op, agent, ok, parsed, latency_ms, tried_json, status, error_class,
+    `SELECT build_id, op, agent, ok, parsed, latency_ms, tried_json, status, error_class,
             error_message, exit_code, model, input_tokens, output_tokens, created_at
        FROM agent_runs ${where} ORDER BY id DESC LIMIT ?`
   ).all(...bind, recentN).map((r: any) => ({
+    build_id: r.build_id,
     op: r.op,
     agent: r.agent,
     ok: !!r.ok,
@@ -155,6 +159,7 @@ export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
   }));
 
   return {
+    build_id: buildId,
     runs,
     ok_rate: runs ? Number((okCount / runs).toFixed(3)) : null,
     by_agent,

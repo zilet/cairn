@@ -181,7 +181,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/diagnostics` | Local operator issue pulse: grouped browser/server/process failures, recent sanitized events, and slow API requests over a bounded time window. |
+| GET | `/api/diagnostics` | Local operator issue pulse: current-build browser/API/MCP/process/scheduler and worker failures, release-scoped groups, sanitized recent events, product latency, separately counted internal probes, and enforceable storage caps. |
 
 ## `/directives`
 
@@ -302,7 +302,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/health` |  |
+| GET | `/api/health` | Liveness only: process identity plus exact build provenance. It deliberately does not probe optional coaching CLIs or other external providers. |
 | GET | `/api/health/doctor-loop` | Doctor-loop read: missing-workup recommendations plus lab/DEXA retest attention rows derived through the adaptive attention engine. Informational, not medical advice. |
 | GET | `/api/health/doctor-packet` | Export-ready doctor packet: current prioritized health focus, active directives, doctor-loop retest/missing-workup plan, PREVENT cardiovascular-risk read, and latest intervention-outcome annotations. Informational, not medical advice. |
 | GET | `/api/health/focus` | The elite-coach synthesis layer: the deterministic TIERED focus (priorities, not a flat directive flood) + the latest cached agentic health-story narrative. Both informational, no scores. The narrative is regenerated via POST below. |
@@ -536,7 +536,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/ready` | Readiness is stronger than liveness: prove SQLite is readable and expose only compact durable queue counts. Optional coaching providers never gate readiness. |
+| GET | `/api/ready` | Readiness is stronger than liveness: prove SQLite is readable and expose only compact durable queue counts/ages/failures plus scheduler freshness and build provenance. Optional coaching providers never gate readiness. |
 
 ## `/recent-training`
 
@@ -648,7 +648,7 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/telemetry/client` | Best-effort browser error/API-failure ingestion. Accepts only the bounded, privacy-scrubbed client diagnostic contract; never request bodies or app data. |
+| POST | `/api/telemetry/client` | Best-effort browser error/API-failure ingestion. Accepts only the bounded, privacy-scrubbed client diagnostic contract. The server derives fingerprint, route family, tab and build identity; it never trusts those client values. |
 
 ## `/test-week`
 
@@ -692,13 +692,13 @@ is set, every route except `GET /api/health` requires the token (`Authorization:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/update-status` |  |
+| GET | `/api/update-status` | Cached release status; the scheduler refreshes it and POST performs an explicit operator-pulled check. |
 
 ## `/version`
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/version` | The running version, and whether a newer Cairn release exists. The status is served from the app_state cache; the scheduler keeps it fresh, and POST forces an explicit operator-pulled check. |
+| GET | `/api/version` | Semantic version plus exact build SHA/build id for deploy correlation. |
 
 ## `/volume`
 

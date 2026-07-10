@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
-import { getRequestPerformance, REQUEST_METRIC_LIMITS } from "./request-metrics.js";
+import { getRequestPerformance, normalizeServerApiRouteTemplate, REQUEST_METRIC_LIMITS } from "./request-metrics.js";
 
 export type DiagnosticSource = "client" | "api" | "mcp" | "process" | "scheduler" | "worker";
 export type DiagnosticLevel = "warning" | "error";
@@ -19,6 +19,8 @@ export interface DiagnosticEventInput {
   stack?: string | null;
   metadata?: Record<string, unknown> | null;
   release?: string | null;
+  /** Internal-only: route came from Express's matched route template. */
+  trusted_route_template?: boolean;
 }
 
 export interface ClientDiagnosticEvent {
@@ -45,6 +47,22 @@ const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "render_error",
   "unhandled_error",
   "unhandled_rejection",
+]);
+const CLIENT_TABS = new Set(["today", "progress", "stand", "plan", "chat", "settings", "session", "me"]);
+const CLIENT_API_CATEGORIES = new Set([
+  "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "art", "blood-pressure",
+  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "cardio", "chat", "chat-images",
+  "checkins", "coach", "coaching-focus", "context-effect", "context-events", "dexa-targeting", "diagnostics",
+  "directives", "endurance-goal", "endurance-prs", "evidence", "exercise", "exercises", "export", "family",
+  "food-notes", "frequent-foods", "garmin", "goal", "goal-checkin", "guidelines", "health", "health-docs",
+  "health-export", "health-metrics", "health-report", "injury-impacts", "insights", "journey", "last-set",
+  "learned-timeline", "learnings", "markers", "meal-plans", "mealplans", "memory", "muscle-load",
+  "muscle-trajectory", "next-step", "nutrition", "onboard", "performance", "plan", "profile", "program",
+  "program-state", "progress", "proposals", "reaction-model", "ready", "recent-training", "recovery", "research",
+  "reset", "run-compliance", "run-plan", "run-zones", "search", "session-suggest", "sessions", "sets", "settings",
+  "since-last", "stats", "suggestions", "supplements", "symptom-links", "telemetry", "test-week", "today",
+  "today-agenda", "today-read", "trajectory", "turns", "update-check", "update-status", "version", "volume",
+  "week-ahead", "whole-person-trajectory",
 ]);
 const DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const DIAGNOSTIC_RETENTION_DAYS = 30;
@@ -117,6 +135,13 @@ function boundedIdentifier(value: unknown, max: number): string | null {
   return safe || null;
 }
 
+function boundedRelease(value: unknown): string | null {
+  const text = scalarText(value)?.trim();
+  if (!text) return null;
+  const safe = text.replace(/[^A-Za-z0-9_.:@/-]/g, "_").slice(0, 80);
+  return safe || null;
+}
+
 export function normalizeDiagnosticRoute(value: unknown): string | null {
   const raw = scalarText(value)?.trim();
   if (!raw) return null;
@@ -126,13 +151,28 @@ export function normalizeDiagnosticRoute(value: unknown): string | null {
   } catch {
     pathname = raw.split("?", 1)[0] || "";
   }
-  pathname = pathname
-    .replace(/\/{2,}/g, "/")
-    .replace(/\/[0-9]+(?=\/|$)/g, "/:id")
-    .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}(?=\/|$)/gi, "/:id")
-    .replace(/\/[A-Za-z0-9_-]{32,}(?=\/|$)/g, "/:id");
-  if (!pathname.startsWith("/api")) return null;
-  return pathname.slice(0, 180);
+  pathname = pathname.replace(/\/{2,}/g, "/");
+  if (pathname === "/api" || pathname === "/api/") return "/api";
+  const [root, category] = pathname.split("/").slice(1);
+  if (root !== "api" || !category || !CLIENT_API_CATEGORIES.has(category)) return null;
+  return `/api/${category}`;
+}
+
+function normalizedClientTab(value: unknown): string | null {
+  if (value == null) return null;
+  const tab = scalarText(value)?.trim().toLowerCase();
+  return tab && CLIENT_TABS.has(tab) ? tab : "unknown";
+}
+
+function normalizedClientRequestId(value: unknown): string | null {
+  const requestId = scalarText(value)?.trim();
+  if (!requestId) return null;
+  return /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|req-[0-9]{1,12})$/i.test(requestId)
+    ? requestId : null;
+}
+
+function clientFingerprint(event: { kind: ClientDiagnosticEvent["kind"]; method?: string | null; route?: string | null; status?: number | null }): string {
+  return `client:${event.kind}:${event.method || "none"}:${event.route || "none"}:${event.status ?? "none"}`.slice(0, 120);
 }
 
 function finiteInteger(value: unknown, min: number, max: number): number | null {
@@ -189,9 +229,10 @@ const coalesceDiagnosticEvent = db.prepare(
   `UPDATE diagnostic_events
       SET occurrence_count=COALESCE(occurrence_count,1)+1, created_at=datetime('now'),
           duration_ms=COALESCE(?,duration_ms), status=COALESCE(?,status),
-          request_id=COALESCE(?,request_id), release=COALESCE(?,release)
+          request_id=COALESCE(?,request_id)
     WHERE id=(SELECT id FROM diagnostic_events
                WHERE source=? AND kind=? AND fingerprint=?
+                 AND release IS ?
                  AND created_at >= datetime('now', ?)
                ORDER BY id DESC LIMIT 1)`
 );
@@ -207,7 +248,7 @@ function normalizeDiagnosticEvent(input: DiagnosticEventInput): NormalizedDiagno
     kind,
     level,
     sanitizeDiagnosticText(input.operation, 100),
-    normalizeDiagnosticRoute(input.route),
+    input.trusted_route_template ? normalizeServerApiRouteTemplate(input.route) : normalizeDiagnosticRoute(input.route),
     finiteInteger(input.status, 100, 599),
     finiteInteger(input.duration_ms, 0, 3_600_000),
     boundedIdentifier(input.request_id, 80),
@@ -215,7 +256,7 @@ function normalizeDiagnosticEvent(input: DiagnosticEventInput): NormalizedDiagno
     sanitizeDiagnosticText(input.message, 320),
     sanitizeDiagnosticText(input.stack, 1800),
     sanitizeMetadata(input.metadata),
-    boundedIdentifier(input.release, 80),
+    boundedRelease(input.release),
   ];
 }
 
@@ -248,10 +289,10 @@ function writeDiagnosticEvent(input: DiagnosticEventInput): void {
     duration,
     status,
     requestId,
-    release,
     source,
     kind,
     fingerprint,
+    release,
     `-${COALESCE_MINUTES} minutes`
   );
   if (Number(updated.changes) === 0) insertDiagnosticEvent.run(...normalized);
@@ -301,35 +342,36 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
     if (!CLIENT_KINDS.has(event.kind as ClientDiagnosticEvent["kind"])) return null;
     if (!LEVELS.has(event.level as DiagnosticLevel)) return null;
     if (typeof event.message !== "string" || typeof event.fingerprint !== "string") return null;
-    const fingerprint = boundedIdentifier(event.fingerprint, 120);
-    if (!fingerprint || !event.message.trim()) return null;
+    if (!event.message.trim()) return null;
     if (event.stack != null && typeof event.stack !== "string") return null;
     if (event.route != null && (typeof event.route !== "string" || !normalizeDiagnosticRoute(event.route))) return null;
     if (event.method != null && (typeof event.method !== "string" || !/^[A-Za-z]{3,10}$/.test(event.method)))
       return null;
     if (event.status != null && finiteInteger(event.status, 100, 599) == null) return null;
     if (event.duration_ms != null && finiteInteger(event.duration_ms, 0, 3_600_000) == null) return null;
-    if (event.request_id != null && (typeof event.request_id !== "string" || !boundedIdentifier(event.request_id, 80)))
-      return null;
-    if (event.tab != null && (typeof event.tab !== "string" || !boundedIdentifier(event.tab, 60))) return null;
+    if (event.request_id != null && typeof event.request_id !== "string") return null;
+    if (event.tab != null && typeof event.tab !== "string") return null;
     if (event.online != null && typeof event.online !== "boolean") return null;
-    if (event.release != null && (typeof event.release !== "string" || !boundedIdentifier(event.release, 80)))
+    if (event.release != null && (typeof event.release !== "string" || !boundedRelease(event.release)))
       return null;
+    const route = event.route == null ? null : normalizeDiagnosticRoute(event.route);
+    const method = event.method == null ? null : String(event.method).toUpperCase();
+    const status = event.status == null ? null : finiteInteger(event.status, 100, 599);
     parsed.push({
       source: "client",
       kind: event.kind as ClientDiagnosticEvent["kind"],
       level: event.level as DiagnosticLevel,
       message: clientDiagnosticMessage(event.kind as ClientDiagnosticEvent["kind"]),
-      fingerprint,
+      fingerprint: clientFingerprint({ kind: event.kind as ClientDiagnosticEvent["kind"], route, method, status }),
       stack: event.stack == null ? null : clientStackFrames(event.stack),
-      route: event.route == null ? null : normalizeDiagnosticRoute(event.route),
-      method: event.method == null ? null : String(event.method).toUpperCase(),
-      status: event.status == null ? null : finiteInteger(event.status, 100, 599),
+      route,
+      method,
+      status,
       duration_ms: event.duration_ms == null ? null : finiteInteger(event.duration_ms, 0, 3_600_000),
-      request_id: event.request_id == null ? null : boundedIdentifier(event.request_id, 80),
-      tab: event.tab == null ? null : boundedIdentifier(event.tab, 60),
+      request_id: normalizedClientRequestId(event.request_id),
+      tab: normalizedClientTab(event.tab),
       online: event.online == null ? null : event.online === true,
-      release: event.release == null ? null : boundedIdentifier(event.release, 80),
+      release: event.release == null ? null : boundedRelease(event.release),
     });
   }
   return parsed;
@@ -424,9 +466,9 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
       `WITH scoped AS (
          SELECT * FROM diagnostic_events WHERE created_at >= datetime('now', ?)
        ), grouped AS (
-         SELECT fingerprint, SUM(occurrence_count) AS count, MIN(COALESCE(first_seen,created_at)) AS first_seen,
+         SELECT fingerprint, release, SUM(occurrence_count) AS count, MIN(COALESCE(first_seen,created_at)) AS first_seen,
                 MAX(created_at) AS last_seen, MAX(id) AS latest_id
-           FROM scoped GROUP BY fingerprint
+           FROM scoped GROUP BY fingerprint, release
        )
        SELECT grouped.fingerprint, latest.source, latest.kind, latest.level,
               latest.route, latest.operation, latest.status, grouped.count,

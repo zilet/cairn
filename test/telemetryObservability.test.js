@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { db } from "../dist/db.js";
+import { extractAgentUsage } from "../dist/agents.js";
 import { resolveBuildInfo } from "../dist/build-info.js";
-import { recordAgentRun, pruneAgentRuns } from "../dist/repo/agent-telemetry.js";
-import { getRequestPerformance, recordRequestMetric } from "../dist/repo/request-metrics.js";
+import { buildMcpServer, mcpMetricOperation } from "../dist/mcp.js";
+import { getAgentStats, recordAgentRun, pruneAgentRuns } from "../dist/repo/agent-telemetry.js";
+import { getRequestPerformance, normalizeServerMetricRoute, recordRequestMetric } from "../dist/repo/request-metrics.js";
 import { installSmokeLifetime, smokeMaxRuntimeMs } from "../dist/smoke-lifetime.js";
 
 test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
@@ -24,8 +26,13 @@ test("agent telemetry persists taxonomy only and never raw CLI detail", () => {
   assert.equal(row.op, "health_synthesis");
   assert.equal(row.error_class, "invalid_json");
   assert.equal(row.error_message, "invalid_json: agent attempt failed");
+  assert.ok(row.build_id);
   assert.equal(row.model, null);
   assert.doesNotMatch(JSON.stringify(row), /private ApoB|Users|secret|raw stdout/);
+  db.prepare(`INSERT INTO agent_runs (build_id,op,agent,ok,parsed,tried_json) VALUES ('old-build','test','stub',1,1,0)`).run();
+  const stats = getAgentStats();
+  assert.equal(stats.build_id, row.build_id);
+  assert.equal(stats.runs, 1);
 });
 
 test("agent telemetry retention removes old attempts", () => {
@@ -40,23 +47,42 @@ test("hourly request histograms provide bounded API and MCP percentiles", () => 
     recordRequestMetric({
       protocol: "api",
       method: "GET",
-      route: "/api/plan/123?token=secret",
+      route: "/api/plan/:id",
       status: 200,
       duration_ms,
     });
   }
-  recordRequestMetric({ protocol: "api", method: "GET", route: "/api/plan/999", status: 500, duration_ms: 300 });
-  recordRequestMetric({ protocol: "mcp", method: "POST", route: "get_diagnostics", status: 200, duration_ms: 80 });
+  recordRequestMetric({ protocol: "api", method: "GET", route: "/api/plan/:id", status: 500, duration_ms: 300 });
+  recordRequestMetric({ protocol: "mcp", method: "POST", route: "ping", status: 200, duration_ms: 80 });
+  recordRequestMetric({ protocol: "api", method: "GET", route: "/api/health", status: 200, duration_ms: 1, scope: "internal" });
   const performance = getRequestPerformance(1);
   assert.equal(performance.requests, 8);
+  assert.deepEqual(performance.traffic, { product: 8, internal: 1 });
+  assert.equal(performance.observed_hours, 1);
+  assert.equal(performance.throughput_per_hour, 8);
   assert.equal(performance.by_protocol.api, 7);
   assert.equal(performance.by_protocol.mcp, 1);
   assert.equal(performance.p50_ms, 100);
   assert.equal(performance.p95_ms, 5000);
   assert.equal(performance.top_routes[0].route, "/api/plan/:id");
   assert.equal(performance.top_routes[0].errors, 1);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM request_metric_buckets").get().n < 8, true);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM request_metric_buckets").get().n < 9, true);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM request_metric_buckets WHERE route LIKE '%secret%'").get().n, 0);
+  assert.ok(db.prepare("SELECT build_id FROM request_metric_buckets LIMIT 1").get().build_id);
+});
+
+test("MCP metrics accept registered tools only and bound arbitrary names to unknown", async () => {
+  const server = buildMcpServer();
+  assert.equal(mcpMetricOperation({ method: "tools/call", params: { name: "get_diagnostics" } }), "get_diagnostics");
+  assert.equal(mcpMetricOperation({ method: "tools/call", params: { name: "PrivateApoBTool" } }), "unknown");
+  assert.equal(normalizeServerMetricRoute("mcp", "PrivateApoBTool"), "/mcp/unknown");
+  assert.equal(mcpMetricOperation({ method: "unbounded/private" }), "unknown");
+  await server.close();
+});
+
+test("agent usage ignores domain-shaped model fields", () => {
+  assert.equal(extractAgentUsage('{"model":"apob_high","input_tokens":7}').model ?? null, null);
+  assert.equal(extractAgentUsage('{"usage":{"input_tokens":7},"model":"claude-3-7-sonnet"}').model, "claude-3-7-sonnet");
 });
 
 test("build identity prefers a validated environment SHA and has a safe fallback", () => {

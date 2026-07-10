@@ -97,7 +97,7 @@ test("v49 backfills stable chat session ids for archived conversations", () => {
   d.close();
 });
 
-test("v61 clears legacy agent detail and upgrades diagnostic coalescing", () => {
+test("v61-v62 clear legacy dynamic telemetry and add build-scoped storage", () => {
   const d = new DatabaseSync(":memory:");
   d.exec("CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, error_message TEXT);");
   d.exec("INSERT INTO agent_runs (id,error_message) VALUES (1,'private raw CLI output');");
@@ -108,9 +108,11 @@ test("v61 clears legacy agent detail and upgrades diagnostic coalescing", () => 
   d.exec("PRAGMA user_version=60;");
   runMigrations(d);
   assert.equal(d.prepare("SELECT error_message FROM agent_runs").get().error_message, null);
-  const row = d.prepare("SELECT occurrence_count,first_seen FROM diagnostic_events").get();
-  assert.equal(row.occurrence_count, 1);
-  assert.equal(row.first_seen, "2026-07-10 10:00:00");
+  assert.equal(d.prepare("SELECT COUNT(*) AS n FROM diagnostic_events").get().n, 0);
+  assert.ok(new Set(d.prepare("PRAGMA table_info(agent_runs)").all().map((row) => row.name)).has("build_id"));
+  const metricColumns = new Set(d.prepare("PRAGMA table_info(request_metric_buckets)").all().map((row) => row.name));
+  assert.ok(metricColumns.has("build_id"));
+  assert.ok(metricColumns.has("scope"));
   d.close();
 });
 

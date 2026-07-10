@@ -4,6 +4,8 @@ import { test } from "node:test";
 import { apiErrorHandler } from "../dist/api.js";
 import {
   apiDiagnosticMiddleware,
+  isOrdinaryProductRequest,
+  matchedApiRoute,
   recordSchedulerFailure,
   recordAsyncFailure,
   registerProcessDiagnosticHandlers,
@@ -18,7 +20,7 @@ import {
   sanitizeDiagnosticText,
 } from "../dist/repo/diagnostics.js";
 import { clientTelemetryHandler } from "../dist/routes/operator.js";
-import { readinessHandler } from "../dist/routes/system.js";
+import { readinessHandler, schedulerReadiness } from "../dist/routes/system.js";
 
 function responseDouble() {
   const res = new EventEmitter();
@@ -28,6 +30,7 @@ function responseDouble() {
   res.setHeader = (name, value) => {
     res.headers[String(name).toLowerCase()] = String(value);
   };
+  res.getHeader = (name) => res.headers[String(name).toLowerCase()];
   res.status = (status) => {
     res.statusCode = status;
     return res;
@@ -68,8 +71,9 @@ test("diagnostic storage scrubs sensitive detail and normalizes routes", () => {
   ingestClientDiagnosticEvents(parsed);
 
   const row = db.prepare("SELECT * FROM diagnostic_events").get();
-  assert.equal(row.route, "/api/health-docs/:id");
-  assert.equal(row.operation, "POST /api/health-docs/:id");
+  assert.equal(row.route, "/api/health-docs");
+  assert.equal(row.operation, "POST /api/health-docs");
+  assert.equal(row.fingerprint, "client:api_failure:POST:/api/health-docs:500");
   assert.equal(row.message, "Client API request failed");
   assert.doesNotMatch(row.stack, /\/private\/tmp/);
   assert.doesNotMatch(row.metadata_json, /health|unknown_body/i);
@@ -116,6 +120,8 @@ test("operator telemetry endpoint validates batches and returns 204", () => {
 test("request correlation returns generic 500 and records one bounded issue", () => {
   const request = {
     method: "GET",
+    baseUrl: "/api",
+    route: { path: "/test-error" },
     originalUrl: "/api/test-error?token=do-not-store",
     url: "/test-error?token=do-not-store",
   };
@@ -159,7 +165,8 @@ test("diagnostic rollups group issues and expose recent and slow events", () => 
       source: "api",
       kind: "http_error",
       level: "error",
-      route: "/api/plan/123?private=x",
+      route: "/api/plan/:id",
+      trusted_route_template: true,
       status: 500,
       fingerprint: "api:plan:500",
       message: "HTTP 500",
@@ -170,6 +177,7 @@ test("diagnostic rollups group issues and expose recent and slow events", () => 
     kind: "slow_request",
     level: "warning",
     route: "/api/plan",
+    trusted_route_template: true,
     status: 200,
     duration_ms: 2500,
     fingerprint: "api:slow:plan",
@@ -210,13 +218,11 @@ test("client batches use the server release fallback and tolerate malformed stor
         fingerprint: "render:release-fallback",
       },
     ],
-    "v9.9.9"
+    "v9.9.9@abc123def456"
   );
-  db.prepare("UPDATE diagnostic_events SET metadata_json = '{broken' WHERE fingerprint = ?").run(
-    "render:release-fallback"
-  );
+  db.prepare("UPDATE diagnostic_events SET metadata_json = '{broken' WHERE kind = 'render_error'").run();
   const stats = getDiagnostics({ days: 1, recent: 1 });
-  assert.equal(stats.recent[0].release, "v9.9.9");
+  assert.equal(stats.recent[0].release, "v9.9.9@abc123def456");
   assert.equal(stats.recent[0].metadata, null);
 });
 
@@ -321,4 +327,62 @@ test("scheduler failures share the bounded diagnostic contract", () => {
   assert.equal(captured[0].operation, "nightly_health_pass");
   assert.equal(captured[0].message, "TypeError: scheduled operation failed");
   assert.doesNotMatch(JSON.stringify(captured), /private health plan|secret/);
+});
+
+test("scheduler readiness is deterministic and optional providers never gate it", () => {
+  const now = Date.parse("2026-07-10T12:00:00Z");
+  assert.deepEqual(schedulerReadiness(null, { now_ms: now, uptime_sec: 30 }), { status: "starting", age_sec: null, ok: true });
+  assert.deepEqual(schedulerReadiness("2026-07-10T11:59:00Z", { now_ms: now, uptime_sec: 999 }), { status: "fresh", age_sec: 60, ok: true });
+  assert.deepEqual(schedulerReadiness("2026-07-10T11:50:00Z", { now_ms: now, uptime_sec: 999 }), { status: "stale", age_sec: 600, ok: false });
+});
+
+test("matched templates discard named values and SSE/probes stay outside product latency", () => {
+  assert.equal(matchedApiRoute({ baseUrl: "/api", route: { path: "/exercises/:name" } }), "/api/exercises/:name");
+  assert.equal(matchedApiRoute({ baseUrl: "/api", route: undefined }), "/api/unknown");
+  const sse = responseDouble();
+  sse.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  assert.equal(isOrdinaryProductRequest(sse, "/api/turns/:id/stream"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/health"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/ready"), false);
+  assert.equal(isOrdinaryProductRequest(responseDouble(), "/api/plan"), true);
+
+  const streamReq = { method: "GET", baseUrl: "/api", route: { path: "/turns/:id/stream" } };
+  const streamRes = responseDouble();
+  apiDiagnosticMiddleware(streamReq, streamRes, () => {});
+  streamRes.setHeader("Content-Type", "text/event-stream");
+  streamRes.emit("finish");
+  const probeReq = { method: "GET", baseUrl: "/api", route: { path: "/ready" } };
+  const probeRes = responseDouble();
+  apiDiagnosticMiddleware(probeReq, probeRes, () => {});
+  probeRes.emit("finish");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM request_metric_buckets WHERE route LIKE '%stream%'").get().n, 0);
+  assert.deepEqual(db.prepare("SELECT scope,route FROM request_metric_buckets").all().map((row) => ({ ...row })), [
+    { scope: "internal", route: "/api/ready" },
+  ]);
+});
+
+test("client identifiers are server-derived and adversarial values never persist", () => {
+  const parsed = parseClientDiagnosticBatch({ events: [{ kind: "api_failure", level: "error",
+    message: "ignored private text", fingerprint: "MilosPrivateApoBPlan",
+    request_id: "PrivateFamilyRequestIdentifier", tab: "FamilyVacationSecret",
+    route: "/api/exercises/NamedPrivateExercise", method: "GET", status: 500 }] });
+  assert.ok(parsed);
+  ingestClientDiagnosticEvents(parsed, "1.0.0@build-a");
+  const stored = db.prepare("SELECT fingerprint,route,request_id,metadata_json FROM diagnostic_events").get();
+  assert.equal(stored.fingerprint, "client:api_failure:GET:/api/exercises:500");
+  assert.equal(stored.route, "/api/exercises");
+  assert.equal(stored.request_id, null);
+  assert.deepEqual(JSON.parse(stored.metadata_json), { tab: "unknown", online: null });
+  assert.doesNotMatch(JSON.stringify(stored), /Milos|ApoB|Vacation|NamedPrivate/);
+});
+
+test("diagnostic coalescing never crosses or relabels releases", () => {
+  for (const release of ["1.0.0@build-a", "1.0.0@build-a", "1.0.0@build-b"])
+    recordDiagnosticEvent({ source: "worker", kind: "failure", level: "error", fingerprint: "same", release });
+  const rows = db.prepare("SELECT release,occurrence_count FROM diagnostic_events ORDER BY id").all().map((row) => ({ ...row }));
+  assert.deepEqual(rows, [
+    { release: "1.0.0@build-a", occurrence_count: 2 },
+    { release: "1.0.0@build-b", occurrence_count: 1 },
+  ]);
+  assert.equal(getDiagnostics().issues.length, 2);
 });

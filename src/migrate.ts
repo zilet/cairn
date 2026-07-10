@@ -616,9 +616,41 @@ export const MIGRATIONS: Migration[] = [
         db.exec(`UPDATE chat_messages SET meta=json_remove(meta,'$.agent_attempts')
                   WHERE json_valid(meta) AND json_type(meta,'$.agent_attempts') IS NOT NULL`);
       } catch {}
+      // Pre-v61 route telemetry used concrete URLs. It is regenerable and cannot
+      // be reliably scrubbed after dynamic segments have lost their schema.
+      try { db.exec(`DELETE FROM diagnostic_events`); } catch {}
+      try { db.exec(`DELETE FROM request_metric_buckets`); } catch {}
       addColumn(db, "diagnostic_events", "occurrence_count INTEGER NOT NULL DEFAULT 1");
       addColumn(db, "diagnostic_events", "first_seen TEXT");
       try { db.exec(`UPDATE diagnostic_events SET first_seen = COALESCE(first_seen, created_at)`); } catch {}
+    },
+  },
+  {
+    version: 62,
+    name: "telemetry-route-privacy-and-build-scope",
+    up: (db) => {
+      // Telemetry is regenerable. Historical rows predate the closed route
+      // contract and may contain user-authored path segments.
+      try { db.exec(`DELETE FROM diagnostic_events`); } catch {}
+      addColumn(db, "agent_runs", "build_id TEXT");
+      try { db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_build_created ON agent_runs(build_id, created_at)`); } catch {}
+      try { db.exec(`DROP TABLE IF EXISTS request_metric_buckets`); } catch {}
+      db.exec(`CREATE TABLE request_metric_buckets (
+        hour TEXT NOT NULL,
+        build_id TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'product',
+        protocol TEXT NOT NULL,
+        method TEXT NOT NULL,
+        route TEXT NOT NULL,
+        status_class TEXT NOT NULL,
+        latency_bucket_ms INTEGER NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        total_duration_ms INTEGER NOT NULL DEFAULT 0,
+        max_duration_ms INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(hour, build_id, scope, protocol, method, route, status_class, latency_bucket_ms)
+      )`);
+      db.exec(`CREATE INDEX idx_request_metric_hour ON request_metric_buckets(hour DESC)`);
+      db.exec(`CREATE INDEX idx_request_metric_route ON request_metric_buckets(build_id, protocol, route, hour DESC)`);
     },
   },
 ];

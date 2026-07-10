@@ -8,20 +8,25 @@ or raw agent stdout/stderr.
 ## Durable signals
 
 - `diagnostic_events`: coalesced final failures and slow requests. Identical
-  component/kind/error-class fingerprints merge for five minutes. Raw rows are
-  retained for 30 days and capped at 20,000.
-- `agent_runs`: one classified attempt per coaching CLI invocation. Error detail
+  component/kind/error-class fingerprints within the same build merge for five
+  minutes. Raw rows are retained for 30 days and capped at 20,000.
+- `agent_runs`: one classified, build-scoped attempt per coaching CLI invocation. Error detail
   is taxonomy-only (`invalid_json`, `timeout`, `auth_required`, etc.); raw CLI
   output is never accepted by the write path. Rows are retained for 30 days and
   capped at 20,000.
-- `request_metric_buckets`: hourly API/MCP counters over normalized routes,
+- `request_metric_buckets`: hourly, build-scoped API/MCP counters over Express
+  route templates or registered MCP operations,
   status class, and latency buckets. This provides throughput plus approximate
-  p50/p95 without retaining successful request rows. Buckets are retained for 30
+p50/p95 without retaining successful request rows. Browser-reported concrete
+paths are collapsed to a closed API route family; server-side paths use matched
+templates. SSE lifetime is excluded, while health/readiness probes are counted
+separately from product throughput. Buckets are retained for 30
   days and capped at 50,000.
 
 `GET /api/diagnostics` and MCP `get_diagnostics` return the build identity,
-grouped issues, recent sanitized events, slow operations, performance aggregates,
-and storage limits. `GET /api/ready` adds queue age, recent terminal failures, and
+release-scoped grouped issues, recent sanitized events, slow operations,
+current-build performance aggregates, and storage limits. `GET /api/ready` adds
+queue age, recent terminal failures, and
 scheduler-heartbeat freshness. Optional coaching agents never gate readiness.
 
 ## Build identity

@@ -39,6 +39,21 @@ const CLIENT_DIAGNOSTIC_BATCH = 20;
 const CLIENT_DIAGNOSTIC_DEDUPE_MS = 30_000;
 const CLIENT_DIAGNOSTIC_FLUSH_MS = 750;
 const PERMANENT_PAYLOAD_FAILURES = new Set([400, 413, 422]);
+const CLIENT_API_ROUTE_FAMILIES = new Set([
+  "activities", "agent", "agent-clis", "agent-jobs", "agent-stats", "agents", "art", "blood-pressure",
+  "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "cardio", "chat", "chat-images",
+  "checkins", "coach", "coaching-focus", "context-effect", "context-events", "dexa-targeting", "diagnostics",
+  "directives", "endurance-goal", "endurance-prs", "evidence", "exercise", "exercises", "export", "family",
+  "food-notes", "frequent-foods", "garmin", "goal", "goal-checkin", "guidelines", "health", "health-docs",
+  "health-export", "health-metrics", "health-report", "injury-impacts", "insights", "journey", "last-set",
+  "learned-timeline", "learnings", "markers", "meal-plans", "mealplans", "memory", "muscle-load",
+  "muscle-trajectory", "next-step", "nutrition", "onboard", "performance", "plan", "profile", "program",
+  "program-state", "progress", "proposals", "reaction-model", "ready", "recent-training", "recovery", "research",
+  "reset", "run-compliance", "run-plan", "run-zones", "search", "session-suggest", "sessions", "sets", "settings",
+  "since-last", "stats", "suggestions", "supplements", "symptom-links", "telemetry", "test-week", "today",
+  "today-agenda", "today-read", "trajectory", "turns", "update-check", "update-status", "version", "volume",
+  "week-ahead", "whole-person-trajectory",
+]);
 
 function clientDiagnosticBound(value: unknown, max: number): string {
   const withoutControls = Array.from(String(value ?? ""), (char) => {
@@ -53,9 +68,11 @@ function clientDiagnosticNormalizeRoute(value: unknown): string {
   if (!raw) return "";
   try {
     const parsed = new URL(raw, "https://cairn.invalid");
-    return clientDiagnosticBound(parsed.pathname.replace(/\/{2,}/g, "/"), 160);
+    const segments = parsed.pathname.replace(/\/{2,}/g, "/").split("/").filter(Boolean);
+    const family = segments[0] === "api" ? segments[1] : segments[0];
+    return CLIENT_API_ROUTE_FAMILIES.has(family) ? `/api/${family}` : "";
   } catch {
-    return clientDiagnosticBound(raw.split(/[?#]/, 1)[0], 160);
+    return "";
   }
 }
 

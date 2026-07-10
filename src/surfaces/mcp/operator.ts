@@ -120,7 +120,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_agent_stats",
-    "Get agent-run telemetry for the coaching loop: total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and the most recent attempts. An operator/health view of which CLI backends are working — NOT a user-facing score. Optional recent (last N attempts, default 25) and days (window the roll-up).",
+    "Get current-build agent-run telemetry for the coaching loop: build id, total runs, overall ok-rate, per-agent reliability (ok/fail) + median latency, and recent attempts. Older/unknown builds remain separate. An operator/health view — NOT a user-facing score. Optional recent and days bound the read.",
     { recent: z.number().int().optional(), days: z.number().int().optional() },
     async ({ recent, days }) => asText(getAgentStats({ recent, days }))
   );
@@ -134,7 +134,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_diagnostics",
-    "Get bounded local operator diagnostics: build identity, grouped failures, recent sanitized events, API/MCP throughput and approximate p50/p95 latency, storage caps, and slow routes. Never includes prompts, bodies, credentials, health values, or raw agent output.",
+    "Get bounded current-build local diagnostics: release-scoped browser/API/MCP/process/scheduler/worker failures, sanitized recent events, product API/MCP throughput and approximate p50/p95 latency, separately counted internal probes, storage caps, and slow routes. SSE lifetime is excluded. Never includes prompts, bodies, credentials, health values, or raw agent output.",
     { recent: z.number().int().min(1).max(200).optional(), days: z.number().int().min(1).max(30).optional() },
     async ({ recent, days }) => asText(getDiagnostics({ recent, days }))
   );
