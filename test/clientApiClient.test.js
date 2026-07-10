@@ -437,7 +437,8 @@ test("api() reports bounded failure metadata without query or payload content", 
     loaded.context.api("/health?token=private", { method: "POST", body: JSON.stringify({ chat: "private body" }) })
   );
   assert.equal(events.length, 1);
-  assert.equal(events[0].route, "/health");
+  assert.equal(events[0].route, "/api/health");
+  assert.match(events[0].route, /^\/api(?:\/|$)/, "the ingest contract accepts only normalized API routes");
   assert.equal(events[0].method, "POST");
   assert.equal(events[0].status, 422);
   assert.equal(events[0].request_id, "req-safe");

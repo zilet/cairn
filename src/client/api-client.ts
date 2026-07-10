@@ -232,6 +232,12 @@ function normalizeApiRoute(path: string): string {
     .slice(0, 160);
 }
 
+function diagnosticApiRoute(path: string): string {
+  const route = normalizeApiRoute(path);
+  if (route === "/api" || route.startsWith("/api/")) return route;
+  return `/api${route.startsWith("/") ? route : `/${route}`}`;
+}
+
 function responseRequestId(response: Response | { headers?: unknown }): string {
   try {
     const headers = response.headers as Headers | { get?(name: string): string | null } | undefined;
@@ -249,7 +255,7 @@ function reportApiError(error: CairnApiError): void {
       kind: "api_failure",
       level: error.kind === "http" && error.status != null && error.status < 500 ? "warning" : "error",
       message: `${error.kind}: ${error.message}`,
-      route: error.route,
+      route: diagnosticApiRoute(error.route),
       method: error.method,
       status: error.status ?? undefined,
       duration_ms: error.durationMs,
@@ -809,6 +815,7 @@ const CAIRN_API_CACHE = {
   ApiError: CairnApiError,
   isTransientApiFailure,
   normalizeRoute: normalizeApiRoute,
+  diagnosticRoute: diagnosticApiRoute,
 };
 
 if (typeof window !== "undefined") {
